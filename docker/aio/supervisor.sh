@@ -536,13 +536,18 @@ stream_buffer_seconds() {
 	read_state_uint liquidsoap_stream_buffer_seconds.txt 22
 }
 
-# read_state_num, as a plain decimal: at most six digits (anything longer is the
-# fallback), and leading zeros read as decimal, as the controller and radio.liq
-# read them, never as bash arithmetic's octal. Every value that reaches
+# A handoff number as a plain decimal, read the way radio.liq reads the same
+# files: surrounding whitespace trimmed (its string.trim, so a CRLF or padded
+# hand-edit hands liquidsoap the bitrate it would have read itself, not the
+# fallback), at most six digits (anything longer is the fallback), and leading
+# zeros as decimal, never as bash arithmetic's octal. Every value that reaches
 # stream-mounts.json is one, so the marker always holds valid JSON numbers.
 read_state_uint() {
 	local v
-	v=$(read_state_num "$1" "$2")
+	v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
+	v=${v#"${v%%[![:space:]]*}"}
+	v=${v%"${v##*[![:space:]]}"}
+	case "$v" in ''|*[!0-9]*) v=$2 ;; esac
 	[ "${#v}" -le 6 ] || v=$2
 	echo "$(( 10#$v ))"
 }

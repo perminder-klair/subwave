@@ -307,6 +307,24 @@ for (const s of SUPERVISORS) {
     assert.equal(renderedBufferSeconds(r.marker), 22);
   });
 
+  test(`${s.name}: a padded or CRLF handoff hands liquidsoap what radio.liq would have read`, () => {
+    // radio.liq string.trims these files. Read untrimmed, '128\r\n' was the
+    // fallback here, and handing that on would move the encoder off the
+    // operator's 128 to 192, where before only the burst was wrong.
+    const r = render(s.path, s.lib, newDir(), {
+      files: {
+        'liquidsoap_stream_bitrate.txt': '128 \r\n',
+        'liquidsoap_opus_bitrate.txt': ' 192\n',
+        'liquidsoap_stream_buffer_seconds.txt': '\t40 \r\n',
+      },
+    });
+    assert.equal(r.status, 0, r.out);
+    assert.equal(r.handed.mp3, '128');
+    assert.equal(r.handed.opus, '192');
+    assert.equal(xmlBursts(r.xml)['/stream.mp3'], 40 * 128 * 125);
+    assert.equal(renderedBufferSeconds(r.marker), 40);
+  });
+
   test(`${s.name}: the buffer is clamped to 60 s and the marker says so`, () => {
     const r = render(s.path, s.lib, newDir(), { files: { 'liquidsoap_stream_buffer_seconds.txt': '90' } });
     assert.equal(r.status, 0, r.out);
