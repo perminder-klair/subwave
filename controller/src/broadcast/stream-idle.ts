@@ -182,9 +182,12 @@ export function createStreamIdleMonitor(overrides: Partial<{
           `programme idle-paused — no listeners for ${idleAfterMin} min (mounts stay up, resumes on connect)`,
         );
       } else if (action === 'resume') {
-        const sentAt = deps.clock();
+        // Ended as the command goes out, not when the mixer answers: it can
+        // resume first, and a /state read landing in between must not see the
+        // pause still running. One the mixer does not confirm is withdrawn
+        // below.
+        if (state.idle && pauseWindow) pauseWindow.endedAt = deps.clock();
         await deps.idleOff();
-        if (state.idle && pauseWindow) pauseWindow.endedAt = sentAt;
         restampOnReassert = false;
         // Warm the tts-heavy sidecar (#1579): a cold Chatterbox reload is
         // 30-60s, audible if it lands on the first link after the room fills.

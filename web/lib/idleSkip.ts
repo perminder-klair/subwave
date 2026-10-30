@@ -50,6 +50,9 @@
 //     sent, after the first audio arrived, which is after Icecast accepted it.
 //     A station still paused when the read was answered is counted as
 //     resuming at that moment, since this listener's own connection wakes it.
+//     That holds because the controller publishes the pause as ended the
+//     moment its idle_off goes out, before the mixer (which can resume first)
+//     answers, so "still paused" means the command had not been sent.
 // A read sent before the first audio arrived cannot vouch for the burst, so it
 // skips nothing, and so does anything missing or malformed: the listener hears
 // today's behaviour.

@@ -20,6 +20,8 @@ function fixture(opts: { status?: Promise<boolean>; failOn?: boolean } = {}) {
   let enabled = true;
   let failOn = opts.failOn ?? false;
   let failOff = false;
+  // While set, idle_off's answer waits for it (holdOff).
+  let offAnswer: Promise<void> | null = null;
   // The MP3 mount's stream_start as the last committed poll saw it.
   let mounts: string | null = MOUNT_A;
   // What the coming refresh() polls will see, in order; none queued, unchanged.
@@ -34,6 +36,7 @@ function fixture(opts: { status?: Promise<boolean>; failOn?: boolean } = {}) {
     },
     idleOff: async () => {
       now += 30;
+      if (offAnswer) await offAnswer;
       if (failOff) throw new Error('telnet unavailable');
     },
     refresh: async () => {
@@ -51,6 +54,12 @@ function fixture(opts: { status?: Promise<boolean>; failOn?: boolean } = {}) {
     enable: (on: boolean) => { enabled = on; },
     failOn: (fail: boolean) => { failOn = fail; },
     failOff: (fail: boolean) => { failOff = fail; },
+    // Holds idle_off's answer until the returned release is called.
+    holdOff: () => {
+      let release = () => {};
+      offAnswer = new Promise<void>(resolve => { release = resolve; });
+      return () => { offAnswer = null; release(); };
+    },
     mounts: (m: string | null) => { mounts = m; },
     nextPolls: (...m: (string | null)[]) => { polls.push(...m); },
   };
@@ -99,6 +108,42 @@ test('a pause is aged from the mixer acknowledging it, its resume from the comma
   // A re-assert or a live tick moves nothing.
   await f.monitor.tick();
   assert.deepEqual(f.monitor.idleWindow(), { startedMsAgo: 612_030, endedMsAgo: 12_030 });
+});
+
+test('a resume reads as ended while idle_off still awaits the mixer\'s answer', async () => {
+  // The mixer resumes ~0.25s after the command and may answer up to the 2s
+  // telnet timeout later. A /state read in between that saw the pause still
+  // running would count the resume from itself, after the music started.
+  const f = fixture();
+  await f.monitor.initialize();
+  await pauseNow(f);
+  f.advance(600_000);
+  f.listeners(1);
+  let release = f.holdOff();
+  let resuming = f.monitor.tick();
+  await new Promise(r => setImmediate(r));
+  f.advance(1_750);
+  assert.deepEqual(f.monitor.idleWindow(), { startedMsAgo: 601_780, endedMsAgo: 1_780 });
+  release();
+  await resuming;
+  assert.equal(f.monitor.isIdle(), false);
+  assert.deepEqual(f.monitor.idleWindow(), { startedMsAgo: 601_780, endedMsAgo: 1_780 });
+
+  // One the mixer never confirms is withdrawn once the command fails.
+  const g = fixture();
+  await g.monitor.initialize();
+  await pauseNow(g);
+  g.advance(600_000);
+  g.listeners(1);
+  release = g.holdOff();
+  resuming = g.monitor.tick();
+  await new Promise(r => setImmediate(r));
+  assert.equal(g.monitor.idleWindow()?.endedMsAgo, 30);
+  g.failOff(true);
+  release();
+  await resuming;
+  assert.equal(g.monitor.isIdle(), true);
+  assert.equal(g.monitor.idleWindow(), null);
 });
 
 test('a new pause replaces the last window', async () => {
