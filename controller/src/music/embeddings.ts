@@ -19,9 +19,17 @@ import {
 } from '../llm/provider.js';
 import type { EmbeddingCfg, EmbeddingTextPrefixes } from '../llm/provider.js';
 import { moodVocab } from '../settings.js';
+import { LLM_PROVIDER_CATALOG } from '../schemas/providers.js';
 import crypto from 'node:crypto';
 
 const LYRIC_EXCERPT_CHARS = 400; // cap lyrics before they bloat the embedding text
+
+// The chat-only help's cloud row, from the catalogue so a new embedding
+// gateway is listed without a copy edit.
+const CLOUD_EMBEDDING_LABELS = LLM_PROVIDER_CATALOG
+  .filter((p) => p.kind === 'cloud' && p.embedding)
+  .map((p) => p.label)
+  .join(' / ');
 
 export interface SongMeta {
   title?: string | null;
@@ -394,7 +402,7 @@ function actionableMessage(
         `  library tagger can't use it. (The DJ still works on "${provider}".)\n` +
         `  Pick an embedding-capable provider in /admin/settings → Embedding:\n` +
         `    • Ollama   — local + free (ollama pull nomic-embed-text; auto-pulled)\n` +
-        `    • OpenAI / Google / OpenRouter — cloud (needs the matching API key)\n` +
+        `    • ${CLOUD_EMBEDDING_LABELS} — cloud (needs the matching API key)\n` +
         `    • locca / openai-compatible — your own embedding server`
       );
     case 'not_embedding_model':

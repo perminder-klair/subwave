@@ -828,7 +828,9 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
       )}
       <span className="min-w-0 flex-1 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
-        <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
+        {/* whileTap makes motion give the span tabIndex 0 unless one is set,
+            which would put a dead Tab stop before Save. */}
+        <m.span whileTap={{ scale: 0.97 }} tabIndex={-1} className="inline-flex flex-1 sm:flex-none">
           <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>
       </span>
