@@ -248,7 +248,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
       ? undefined
       : routerMode
         ? 'The picker has no music without the music router. Check the router service is running (docker compose ps router) and its logs.'
-        : 'The picker has no music source without Navidrome. Check the URL / username / password in Settings → Music source, and that Navidrome is up.',
+        : 'The picker has no music source without Navidrome. Check the URL / username / password in Admin → Music sources → Sources, and that Navidrome is up.',
   });
 
   // Router mode: the router answering says nothing about the library behind
@@ -322,11 +322,11 @@ async function checkMusicRouter(): Promise<Finding[]> {
         label: 'router selection',
         status: 'fail',
         detail: status.configError,
-        hint: 'The router refused the saved selection and kept serving the previous one. Fix it in Settings → Music source.',
+        hint: 'The router refused the saved selection and kept serving the previous one. Fix it in Admin → Music sources → Sources.',
       });
     }
     if (!status.active.length) {
-      out.push({ label: 'music source', status: 'fail', detail: 'no source selected', hint: 'Choose one in Settings → Music source.' });
+      out.push({ label: 'music source', status: 'fail', detail: 'no source selected', hint: 'Choose one in Admin → Music sources → Sources.' });
     }
     for (const a of status.active) {
       const st = a.health.stats;
@@ -336,7 +336,7 @@ async function checkMusicRouter(): Promise<Finding[]> {
         detail: a.health.state === 'healthy'
           ? (st ? `${st.songs.toLocaleString('en-GB')} songs · ${st.albums.toLocaleString('en-GB')} albums · ${st.artists.toLocaleString('en-GB')} artists` : 'answering')
           : a.health.error || a.health.state,
-        hint: a.health.state === 'healthy' ? undefined : `The router cannot reach ${a.label}. Check its URL and credentials in Settings → Music source, and that the server is up.`,
+        hint: a.health.state === 'healthy' ? undefined : `The router cannot reach ${a.label}. Check its URL and credentials in Admin → Music sources → Sources, and that the server is up.`,
       });
     }
     const broken = status.plugins.filter((pl) => pl.error);
@@ -345,7 +345,7 @@ async function checkMusicRouter(): Promise<Finding[]> {
         label: 'plugins',
         status: 'warn',
         detail: broken.map((pl) => `${pl.name}: ${pl.error}`).join('; '),
-        hint: 'These installed plugins failed to load and cannot be selected. See Settings → Music source.',
+        hint: 'These installed plugins failed to load and cannot be selected. See Admin → Music sources → Plugins.',
       });
     }
   } catch (err: any) {
