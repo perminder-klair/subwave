@@ -347,13 +347,15 @@ A store build prints nothing a listener can reach, so it keeps the last 300
 `plog` lines (`src/hooks/usePlayer.ts`) in memory instead: the playback state
 events and errors, iOS route changes, and every hold and reload
 `src/lib/stream-recovery.ts` decides, with its reason. Ask a listener with a
-playback problem for **About SUB/WAVE → Share playback log** (Copy is in the
-share sheet) before they kill the app, which empties it.
+playback problem for **About SUB/WAVE → Share playback log** (the share sheet
+has Copy on iOS and Android 10+; older Android sends it to a mail or notes app)
+before they kill the app, which empties it.
 
 The first line names the app version, the JS bundle (`OTA <id>` or
 `built-in <id>`, and the channel) and the OS. Times are the phone's clock in
-UTC. Each `reload [reason]` line should match one new `/stream.mp3?t=…` in the
-station's Icecast access log. Lines are redacted before they are stored
+UTC. Each `reload [reason] #n` line should match one new stream request (its
+`t=` cache-buster) in the station's Icecast access log; a `skipped` line loads
+nothing. Lines are redacted before they are stored
 (`src/lib/playback-log.ts`): URLs keep only scheme, host and path, the station
 password, Station login and `Authorization` values are gone, and a route lists
 port types without device names.
