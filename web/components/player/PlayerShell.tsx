@@ -3,7 +3,7 @@
 // Skin precedence: listener override, station default, built-in fallback. Contained showcases
 // follow the remote station.
 
-import { Suspense, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useThemeSwitcher } from '@/components/ThemeProvider';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -14,6 +14,7 @@ import {
   loadSkinOverride,
   saveSkinOverride,
 } from '@/lib/skin';
+import { skinLocked } from '@/lib/skinLock';
 import {
   DEFAULT_SKIN_COMPONENT,
   DEFAULT_SKIN_ID,
@@ -59,6 +60,12 @@ function RevealWhenMounted({ ready }: { ready: boolean }) {
 /** True when the keypress landed inside an open modal. */
 function targetInsideDialog(e?: KeyboardEvent): boolean {
   return e?.target instanceof HTMLElement && e.target.closest('[role="dialog"]') != null;
+}
+
+/** True when the keypress landed in the shell or on nothing in particular, the two a skin's window
+ *  listener takes. A drawer portaled to <body> and a showcase's host page keep their own keys. */
+function targetInsideShell(e: KeyboardEvent, root: HTMLElement | null): boolean {
+  return e.target === document.body || (e.target instanceof Node && root?.contains(e.target) === true);
 }
 
 function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boolean }) {
@@ -146,6 +153,20 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   // ever reveal the shell around it.
   useEffect(() => { if (hydrated && hideFace) revealShell(); }, [hydrated, hideFace]);
 
+  // inert stops taps and focus but not a key handler on window, and TTY's takes keys out of the
+  // password field itself. A layout effect, so this listener is registered ahead of every skin's
+  // effect: Cipher listens in the capture phase as well, and the first one registered wins.
+  const locked = !hideFace && skinLocked(auth.required, auth.phase);
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
+  useLayoutEffect(() => {
+    const swallow = (e: KeyboardEvent) => {
+      if (lockedRef.current && targetInsideShell(e, rootRef.current)) e.stopImmediatePropagation();
+    };
+    window.addEventListener('keydown', swallow, true);
+    return () => window.removeEventListener('keydown', swallow, true);
+  }, []);
+
   return (
     <SkinSelectionProvider value={selection}>
       <div
@@ -165,11 +186,15 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
         ) : (
           <>
             <audio ref={attachAudio} crossOrigin="anonymous" preload="auto" />
-            {/* Contain skin suspension here so the landing page does not replay its reveal and remain at opacity 0. */}
-            <Suspense fallback={null}>
-              <Skin contained={contained} portalNode={portalNode} />
-              <RevealWhenMounted ready={hydrated} />
-            </Suspense>
+            {/* No box of its own until the prompt is drawn, so a skin renders as if this weren't here.
+                Under the prompt it holds every z-index the skin uses below the gate's. */}
+            <div className={auth.phase === 'prompt' ? 'absolute inset-0 isolate' : 'contents'} inert={locked}>
+              {/* Contain skin suspension here so the landing page does not replay its reveal and remain at opacity 0. */}
+              <Suspense fallback={null}>
+                <Skin contained={contained} portalNode={portalNode} />
+                <RevealWhenMounted ready={hydrated} />
+              </Suspense>
+            </div>
             <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid={false} />
           </>
         )}

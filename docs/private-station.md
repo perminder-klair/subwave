@@ -60,8 +60,10 @@ every listener connect, so:
 
 - **Web player** — asks for the password once and remembers it in the
   browser. If the private player is on too, the single prompt unlocks both the
-  interface and the audio. Under the hood it rides a `?auth=PASSWORD` token on
-  the stream URL (browsers can't attach basic auth to an `<audio>` element).
+  interface and the audio. Until the password is accepted, the player behind
+  the prompt ignores taps and keys, so the first tap can't tune in without it.
+  Under the hood it rides a `?auth=PASSWORD` token on the stream URL (browsers
+  can't attach basic auth to an `<audio>` element).
   A typed password is saved only when the station accepts it. The saved one is
   checked again on each visit and forgotten only when the station itself
   refuses it. If the check gets no answer from the station (a network blip, the
