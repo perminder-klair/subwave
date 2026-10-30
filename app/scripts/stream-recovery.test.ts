@@ -433,6 +433,22 @@ test('a hung station whose load plays with no Playing event starts its backoff o
   assert.deepEqual(since, [0, WATCHDOG_MS, 2 * WATCHDOG_MS], `reloads at +${since.join(', +')}`);
 });
 
+test('a hold on a stale Error starts the backoff over too', async (t) => {
+  const h = setup(t);
+  await hungDeep(h);
+  // The latest load plays, but the last state JS hears is a stale Error.
+  h.clock.run();
+  h.recovery.onState('error');
+  await h.tick(retryDelay(6));
+  assert.ok(h.logs.some((l) => l.startsWith('hold [error] state=error')));
+  h.recovery.onState('buffering');
+  h.clock.freeze();
+  await h.tick(WATCHDOG_MS - 250);
+  assert.equal(h.reloads.length, 7);
+  await h.tick(500);
+  assert.equal(h.reloads[7], 'watchdog');
+});
+
 test('a retune starts the backoff over', async (t) => {
   const h = setup(t);
   await hungDeep(h);
@@ -482,12 +498,38 @@ test('a link regained during a call starts the backoff over when the call ends',
   assert.equal(h.reloads[7], 'watchdog');
 });
 
+test('a retune during a call starts the backoff over when the call ends', async (t) => {
+  const h = setup(t);
+  await hungDeep(h);
+  h.recovery.onDuck(true);
+  h.recovery.retune();
+  await settle();
+  assert.equal(h.reloads[7], 'format', 'a listener load still runs during the call');
+  h.recovery.onDuck(false);
+  await h.tick(WATCHDOG_MS - 250);
+  assert.equal(h.reloads.length, 8);
+  await h.tick(500);
+  assert.equal(h.reloads[8], 'watchdog');
+});
+
 test('an interruption is no listener action: the check after it waits out the backoff', async (t) => {
   const h = setup(t);
   await hungDeep(h);
   h.recovery.onDuck(true);
   h.recovery.onDuck(false);
   await h.tick(watchdogDelay(6) - 250);
+  assert.equal(h.reloads.length, 7);
+  await h.tick(500);
+  assert.equal(h.reloads[7], 'watchdog');
+});
+
+test('a Playing over an interruption whose end was missed starts the backoff over', async (t) => {
+  const h = setup(t);
+  await hungDeep(h);
+  h.recovery.onDuck(true); // iOS doesn't promise the end
+  h.recovery.onState('playing');
+  h.recovery.onState('buffering');
+  await h.tick(WATCHDOG_MS - 250);
   assert.equal(h.reloads.length, 7);
   await h.tick(500);
   assert.equal(h.reloads[7], 'watchdog');
@@ -536,6 +578,7 @@ test('a remote Play starts the backoff over (#2139)', async (t) => {
 });
 
 for (const [name, reason, ask] of [
+  ['tune-in', 'tune', (r: StreamRecovery) => r.tuneIn()],
   ['remote Play', 'remote', (r: StreamRecovery) => r.tuneIn('remote')],
   ['retune', 'format', (r: StreamRecovery) => r.retune()],
 ] as const) {
@@ -590,6 +633,20 @@ test('an automatic reload skipped behind one in flight is no failure', async (t)
   assert.deepEqual(h.reloads, ['tune', 'error']);
   h.held[1].resolve();
   await settle();
+});
+
+test('an automatic reload skipped during an interruption is no failure', async (t) => {
+  const h = setup(t);
+  await onAir(h);
+  h.recovery.onDuck(true);
+  h.clock.freeze();
+  h.recovery.linkRegained(); // no check pending, so it asks for a reload
+  await settle();
+  assert.ok(h.logs.some((l) => l.startsWith('reload [link] skipped: audio interrupted')));
+  h.recovery.onDuck(false);
+  h.recovery.onError();
+  await h.tick(RECONNECT_BASE_MS);
+  assert.deepEqual(h.reloads, ['tune', 'error']);
 });
 
 test('a churn reload is a failure until it plays: an error retries one step along', async (t) => {
