@@ -38,6 +38,16 @@ export const SECRET_ENV_KEYS = [
   'LISTENBRAINZ_API_URL',
 ];
 
+// A key with a control character in it (one pasted across a line wrap, say)
+// can't go in an HTTP header: fetch throws, and its message quotes the whole
+// header value, key included. Every route that probes a key asks this before
+// the probe, so the operator gets this answer instead of the key on screen.
+export function secretValueIssue(value: string): string | null {
+  return /[\x00-\x1F\x7F]/.test(value)
+    ? 'The key has a line break or other control character in it. Paste it again as one line.'
+    : null;
+}
+
 // An unquoted value carrying a `#`: dotenv truncates there (correct .env
 // semantics), which is also how a secret containing a `#` loses its tail. Warned
 // rather than silently accepted. Only a hand edit can produce this shape —

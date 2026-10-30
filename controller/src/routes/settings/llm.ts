@@ -7,7 +7,7 @@ import * as settings from '../../settings.js';
 import * as llmProvider from '../../llm/provider.js';
 import { probeEmbeddingConfig } from '../../music/embeddings.js';
 import { requireAdmin } from '../../middleware/auth.js';
-import { SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { SECRET_ENV_KEYS, secretValueIssue } from '../../setup/secrets.js';
 import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway } from '../../schemas/providers.js';
 import { applyCustomHeadersPatch } from '../../settings/vocab.js';
 import type { EmbeddingCfg } from '../../llm/provider.js';
@@ -251,6 +251,8 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
     }
     targetValue = envValue;
   }
+  const issue = secretValueIssue(targetValue);
+  if (issue) return res.json({ ok: false, message: issue, latencyMs: 0 });
   const t0 = Date.now();
   try {
     const result = await probeKey(
@@ -602,6 +604,8 @@ router.post('/settings/embedding/probe', requireAdmin, async (req, res) => {
     const v = (req.body || {})[k];
     if (typeof v === 'string' && v.trim()) overrides[k] = v.trim();
   }
+  const keyIssue = overrides.apiKey ? secretValueIssue(overrides.apiKey) : null;
+  if (keyIssue) return res.json({ ok: false, dim: null, code: 'invalid', message: keyIssue });
   if ((req.body || {}).headers !== undefined) {
     try {
       const saved = settings.get().embedding?.headers || {};
