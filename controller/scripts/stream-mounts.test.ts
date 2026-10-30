@@ -452,7 +452,7 @@ test('/now-playing and the voice webhooks advertise the rendered burst, not the 
   const express = (await import('express')).default;
   const settings = await import('../src/settings.js');
   const { router } = await import('../src/routes/public.js');
-  const { notifyQueued } = await import('../src/broadcast/voice-events.js');
+  const { notifyQueued, notifySpoken } = await import('../src/broadcast/voice-events.js');
   const { listen } = await import('./test-utils/http.js');
 
   // Loopback only: the weather lookup must fail fast rather than reach out.
@@ -480,7 +480,7 @@ test('/now-playing and the voice webhooks advertise the rendered burst, not the 
       ...loaded,
       stream: { ...loaded.stream, bufferSeconds: 22 },
       webhooks: [{
-        id: 'test_hook', url: `${hooks.url}/hook`, events: ['voice.queued'], enabled: true, authHeader: '',
+        id: 'test_hook', url: `${hooks.url}/hook`, events: ['voice.queued', 'voice.start'], enabled: true, authHeader: '',
       }],
     });
     writeFileSync(config.liquidsoap.streamMountsFile, JSON.stringify(mp3({ burstSeconds: 40, burstBytes: 40 * 192 * 125 })));
@@ -489,10 +489,12 @@ test('/now-playing and the voice webhooks advertise the rendered burst, not the 
     assert.equal(np.stream.bufferSeconds, 40);
 
     notifyQueued({ voiceId: 'v1', kind: 'link', channel: 'intro', text: 'deeper', durationMs: 900, estimatedAirInMs: 500 });
+    notifySpoken({ voiceId: 'v1', kind: 'link', channel: 'intro', text: 'deeper', durationMs: 900, airedAt: Date.now(), legacy: false });
     const deadline = Date.now() + 3_000;
-    while (!received.length && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
-    assert.equal(received[0]?.event, 'voice.queued');
-    assert.equal(received[0]?.streamBufferSeconds, 40);
+    while (received.length < 2 && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+    const byEvent = Object.fromEntries(received.map(b => [b.event, b]));
+    assert.equal(byEvent['voice.queued']?.streamBufferSeconds, 40);
+    assert.equal(byEvent['voice.start']?.streamBufferSeconds, 40);
   } finally {
     globalThis.fetch = realFetch;
     hooks.server.closeAllConnections();
