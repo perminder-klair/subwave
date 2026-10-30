@@ -220,6 +220,31 @@ test('/station-auth gives up on a 401 whose body never arrives, and keeps the pa
   assert.equal(result, 'unavailable');
 });
 
+test('/station-auth still hears a refusal that lands just inside the timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      body = controller;
+    },
+  });
+  stubFetch(t, () => new Response(stream, { status: 401 }));
+  const check = createApi('https://radio.example', LOGIN).checkStationAuth('station-pw');
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+  body.enqueue(new TextEncoder().encode('{"ok":false}'));
+  body.close();
+  assert.equal(await check, 'denied');
+});
+
+test('/station-auth leaves no timer running once a 401 is read', async (t) => {
+  const armed = t.mock.method(globalThis, 'setTimeout');
+  const cleared = t.mock.method(globalThis, 'clearTimeout');
+  stubFetch(t, () => Response.json({ ok: false }, { status: 401 }));
+  assert.equal(await createApi('https://radio.example', LOGIN).checkStationAuth('station-pw'), 'denied');
+  assert.equal(cleared.mock.callCount(), armed.mock.callCount());
+});
+
 test('the stream URL never carries the login; the station password rides as ?auth=', () => {
   assert.equal(createApi('https://radio.example', LOGIN).streamUrl(), 'https://radio.example/stream.mp3');
   assert.equal(createApi('https://dj:secret@radio.example').streamUrl('ogg'), 'https://radio.example/stream.ogg');
