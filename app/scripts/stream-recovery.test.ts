@@ -392,6 +392,26 @@ test('a hung station that comes back is watched at WATCHDOG_MS again', async (t)
   assert.equal(h.reloads.length, loads + 1);
 });
 
+test('a hung station whose load plays with no Playing event starts its backoff over', async (t) => {
+  const h = setup(t);
+  h.recovery.tuneIn();
+  await settle();
+  h.recovery.onState('loading');
+  await h.tick(33_000); // reloads at 6, 12, 18, 24 and 32s: five failures
+  assert.equal(h.reloads.length, 6);
+  // The latest load plays, but JS never hears Playing: the check at 48s holds.
+  h.clock.run();
+  await h.tick(29_000);
+  assert.equal(h.reloads.length, 6);
+  assert.ok(h.logs.some((l) => l.startsWith('hold [watchdog] state=loading')));
+  // It hangs again. The hold was a sign of playback, so the reloads come
+  // WATCHDOG_MS apart, not 32s.
+  h.clock.freeze();
+  await h.tick(20_000);
+  const since = h.reloadAt.slice(6).map((ms) => ms - h.reloadAt[6]);
+  assert.deepEqual(since, [0, WATCHDOG_MS, 2 * WATCHDOG_MS], `reloads at +${since.join(', +')}`);
+});
+
 test('a remote Play reloads at once over a stream that plays, with no clock check (#2139)', async (t) => {
   const h = setup(t);
   await onAir(h);
