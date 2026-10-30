@@ -235,6 +235,10 @@ export interface StationState {
   /** Whether the operator has the Lyrics panel on; GET /lyrics/current
    *  refuses while it is off. Absent on an older controller = off. */
   lyrics?: { enabled?: boolean };
+  /** The latest idle pause as ages in ms when the server answered (#2072),
+   *  the web player's idle-skip input. The ages change on every poll, so the
+   *  feed drops it (lib/feed-state.ts). */
+  streamIdleWindow?: { startedMsAgo: number; endedMsAgo: number | null } | null;
 }
 
 /** One line of `GET /lyrics/current`. `startMs` is on the PLAYED timeline

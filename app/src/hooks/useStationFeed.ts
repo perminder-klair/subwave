@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
+import { feedState } from '@/lib/feed-state';
 import { pollAsync } from '@/lib/poll';
 import { DEFAULT_STATION_LOCALE, type StationLocale } from '@/lib/format';
 import { MAX_LEAD_SECONDS, splitAudibleTurns } from '@/lib/sessionFeed';
@@ -271,7 +272,7 @@ export function useStationFeed(
       if (np.status === 'fulfilled') {
         applyNowPlaying(np.value, st.status === 'fulfilled' ? st.value?.current : undefined);
       }
-      if (st.status === 'fulfilled') setIfChanged('state', st.value, setState);
+      if (st.status === 'fulfilled') setIfChanged('state', feedState(st.value), setState);
       applySessionPayload(se);
     };
     const stopPolling = pollAsync(tick, background ? 30000 : 5000);
