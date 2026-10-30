@@ -535,11 +535,23 @@ test('no timer or listener outlives a request, however it ends', async (t) => {
 test('only a body that is read has a deadline: one nobody reads keeps its request', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const timers = liveTimers(t);
-  const sent = stubFetch(t, (signal) => new Response(stalledBody(signal, 'never settles')));
-  assert.deepEqual(await createApi('https://radio.example', LOGIN).probeHealth(), { ok: true });
+  let status = 200;
+  const sent = stubFetch(t, (signal) => new Response(stalledBody(signal, 'never settles'), { status }));
+  const api = createApi('https://radio.example', LOGIN);
+  assert.deepEqual(await api.probeHealth(), { ok: true });
+  assert.equal(timers.size, 0);
+  // A failed getJson throws on its status: an abort here would close the
+  // connection under a healthy error body, on every poll of an outage.
+  status = 500;
+  const failed = watch(api.state());
+  await settle();
+  assert.deepEqual(failed.outcome, { failed: true });
   assert.equal(timers.size, 0);
   t.mock.timers.tick(FETCH_TIMEOUT_MS * 2);
-  assert.equal(sent[0].signal.aborted, false);
+  assert.deepEqual(
+    sent.map((s) => s.signal.aborted),
+    [false, false],
+  );
 });
 
 test('the stream URL never carries the login; the station password rides as ?auth=', () => {
