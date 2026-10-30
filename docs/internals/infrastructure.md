@@ -60,6 +60,15 @@ that changes the encoder (#2138) changes the answer, and a later image cannot
 carry a stale claim. It exists for the web idle skip, which may treat a
 byte-sized Opus burst as seconds only on a running mount that says `cbr`.
 
+`opus_encoding` and `controller/scripts/opus-cbr.test.ts` read a file the same
+way, and `scripts/test-utils/opus-cbr-table.ts` holds both to one table of edits
+to the real `radio.liq` (#2164): both comment forms are cut, whichever starts
+first, and `vbr='none'` and `%opus (…)` count. Every doubt reads as not `cbr`.
+That covers no `vbr` at all or a bare `%opus` (2.4.6 defaults to constrained VBR,
+byte for byte), `vbr` given twice (the last one wins), and an `%ffmpeg` libopus
+encoder. Neither reader is a lexer. A `#` or `#<` in a string reads as a comment,
+and a block comment's nesting is ignored, though 2.4.6 nests them.
+
 **The bitrate each burst is sized for is the bitrate liquidsoap encodes at
 (#2143).** The renderer used to read `liquidsoap_stream_bitrate.txt` to size the
 burst and liquidsoap read the same file seconds later, so a save in between

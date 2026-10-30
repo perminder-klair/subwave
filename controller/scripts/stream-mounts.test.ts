@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test, { after } from 'node:test';
+import { NOT_CBR, STILL_CBR } from './test-utils/opus-cbr-table.js';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = createTempDir(join(tmpdir(), 'subwave-stream-mounts-'));
@@ -120,7 +121,7 @@ const SUPERVISORS = [
 // The functions both copies must carry. Compared as `declare -f` prints them,
 // so indentation and comments may differ but the code may not.
 const SHARED = [
-  'read_state_uint', 'read_state_kbps', 'burst_kbps', 'opus_encoding', 'emit_stream_mount',
+  'read_state_uint', 'read_state_kbps', 'burst_kbps', 'liq_code', 'opus_encoding', 'emit_stream_mount',
   'write_state_marker', 'write_stream_mounts_marker', 'render_stream_mounts',
 ];
 
@@ -185,6 +186,18 @@ function render(
     marker: existsSync(markerPath) ? JSON.parse(readFileSync(markerPath, 'utf8')) : null,
     handed: Object.fromEntries(handedLine.split(' ').filter(Boolean).map(kv => kv.split('=') as [string, string])),
   };
+}
+
+// What opus_encoding() in `script` says of a radio.liq holding `body`, under
+// `set -eu`: a non-zero exit here would abort the render.
+function opusEncoding(script: string, lib: string, body: string) {
+  const liq = join(shellTmp, `radio-${caseNo++}.liq`);
+  writeFileSync(liq, body);
+  return execFileSync(
+    'bash',
+    ['-c', `set -eu; ${lib}=1 source "$1"; opus_encoding "$2"`, 'bash', script, liq],
+    { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } },
+  ).trim();
 }
 
 // What a marker's write left beside it.
@@ -467,6 +480,7 @@ for (const s of SUPERVISORS) {
     // Nor is DTX, which can stop sending silent frames under vbr="none" too.
     assert.equal(enc(OPUS_CBR.replace('vbr="none")', 'vbr="none", dtx=true)')), 'vbr');
     assert.equal(enc(OPUS_CBR.replace('vbr="none")', 'vbr="none", dtx=false)')), 'cbr');
+    assert.equal(enc(OPUS_CBR.replace('vbr="none")', 'vbr="none", xdtx=true)')), 'cbr');
     // A comment is not an encoder.
     assert.equal(enc(`${OPUS_CBR}\n# %opus(bitrate=128, vbr="constrained")\n`), 'cbr');
     // Nothing to read: the field is absent, never a guess.
@@ -478,12 +492,34 @@ for (const s of SUPERVISORS) {
     assert.equal('encoding' in missing.marker!.mounts['/stream.mp3'], false);
   });
 
+  // The rows opus-cbr.test.ts holds radio.liq to, read the marker's way.
+  for (const [name, source] of Object.entries(STILL_CBR)) {
+    test(`${s.name}: the Opus encoding stays cbr with ${name}`, () => {
+      assert.equal(opusEncoding(s.path, s.lib, source()), 'cbr');
+    });
+  }
+
+  for (const [name, source] of Object.entries(NOT_CBR)) {
+    test(`${s.name}: the Opus encoding is not cbr on ${name}`, () => {
+      assert.equal(opusEncoding(s.path, s.lib, source()), 'vbr');
+    });
+  }
+
+  test(`${s.name}: the Opus encoding of what has no %opus to read`, () => {
+    // A name that only starts with %opus is no encoder.
+    assert.equal(opusEncoding(s.path, s.lib, '%opus_x(bitrate=96)\n'), '');
+    // Comments hold none either, in either form.
+    assert.equal(opusEncoding(s.path, s.lib, '# %opus\n#<\n%opus(bitrate=96)\n>#\n'), '');
+    assert.equal(opusEncoding(s.path, s.lib, ''), '');
+    // libopus is an encoder too, and nothing here can read it as CBR.
+    assert.equal(opusEncoding(s.path, s.lib, '%ffmpeg(%audio(codec="libopus"))\n'), 'vbr');
+  });
+
   test(`${s.name}: the real radio.liq's Opus encoders are readable`, () => {
-    // Whatever the encoder is today (#2138 changes it), the classifier must
-    // still find it: an unreadable radio.liq would silently drop the field.
+    // Hard CBR since #2157. An unreadable radio.liq would silently drop the field.
     const r = render(s.path, s.lib, newDir());
     assert.equal(r.status, 0, r.out);
-    assert.ok(['cbr', 'vbr'].includes(r.marker!.mounts['/stream.opus']?.encoding ?? ''), JSON.stringify(r.marker));
+    assert.equal(r.marker!.mounts['/stream.opus']?.encoding, 'cbr', JSON.stringify(r.marker));
   });
 
   test(`${s.name}: an unwritable state dir warns and still renders the mounts`, () => {

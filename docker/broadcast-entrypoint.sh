@@ -154,20 +154,48 @@ burst_kbps() {
     echo "$(( v ))"
 }
 
+# Liquidsoap source $1 on one line, with its comments out. Whichever form starts
+# first wins, as in the lexer, so a `#<` inside a `#` comment opens nothing. Not
+# a lexer: a `#` in a string cuts too. scripts/opus-cbr.test.ts cuts the same way,
+# and both answer to one table (scripts/test-utils/opus-cbr-table.ts).
+liq_code() {
+    awk '{
+line = $0
+while ((i = index(line, block ? ">#" : "#"))) {
+    if (block) {
+        block = 0
+        line = substr(line, i + 2)
+    } else if (substr(line, i, 2) == "#<") {
+        block = 1
+        code = code substr(line, 1, i - 1) " "
+        line = substr(line, i + 2)
+    } else {
+        line = substr(line, 1, i - 1)
+        break
+    }
+}
+print code (block ? "" : line)
+code = ""
+}' "$1" 2>/dev/null | tr '\n' ' '
+}
+
 # The Opus mount's encoding, read from the radio.liq liquidsoap is about to load:
 # `cbr` only when EVERY %opus encoder in it says vbr="none" (hard CBR, whose
 # byte-sized burst holds the seconds it was sized for), `vbr` when any does not,
 # and nothing when there is none to read. Taken from the encoder line itself,
 # not declared beside it, so the answer changes in the same edit as the encoder
 # (#2138) and cannot outlive it. A client may treat the Opus burst as seconds
-# only on `cbr` (#2142); every doubt reads as not-CBR, and so does dtx=true,
-# which can stop sending silent frames whatever the vbr mode.
+# only on `cbr` (#2142); every doubt reads as not-CBR:
+# - no vbr at all, or a bare %opus: the 2.4.6 default is constrained VBR;
+# - dtx=true, which can stop sending silent frames whatever the vbr mode;
+# - vbr given twice: the last one wins, so one saying "none" proves nothing;
+# - libopus, an %ffmpeg encoder this cannot read.
 opus_encoding() {
-    local calls
-    calls=$(sed 's/#.*//' "$1" 2>/dev/null | tr '\n' ' ' | grep -o '%opus([^)]*)' || true)
+    local calls key='[^[:alnum:]_]' eq='[[:space:]]*=[[:space:]]*'
+    calls=$(liq_code "$1" | grep -oE 'libopus|%opus([[:space:]]*\([^)]*\)|[^[:alnum:]_])' || true)
     [ -n "$calls" ] || return 0
-    if printf '%s\n' "$calls" | grep -qv 'vbr *= *"none"' \
-        || printf '%s\n' "$calls" | grep -q 'dtx *= *true'; then
+    if printf '%s\n' "$calls" | grep -qvE "${key}vbr$eq[\"']none[\"']" \
+        || printf '%s\n' "$calls" | grep -qE "libopus|${key}dtx${eq}true|${key}vbr$eq.*${key}vbr$eq"; then
         echo vbr
     else
         echo cbr
