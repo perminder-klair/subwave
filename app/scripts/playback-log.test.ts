@@ -445,9 +445,12 @@ test('no rule slows down on a long line built to make it rescan', () => {
     `bearer ${fill('a')}${fill('=')}`,
     fill(' auth='),
   ]) {
-    const start = performance.now();
-    redactPlaybackLine(line);
-    const ms = performance.now() - start;
+    // The best of three, so a stall on a busy machine can't read as a slow rule.
+    const ms = Math.min(...[1, 2, 3].map(() => {
+      const start = performance.now();
+      redactPlaybackLine(line);
+      return performance.now() - start;
+    }));
     assert.ok(ms < 300, `${ms.toFixed(0)} ms on ${JSON.stringify(line.slice(0, 40))}…`);
   }
 });
