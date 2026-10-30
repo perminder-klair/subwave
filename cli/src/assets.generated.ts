@@ -1240,6 +1240,16 @@ SITE_URL=
 # directly lets a single spoofed header defeat every limit listed above.
 # TRUST_CF_CONNECTING_IP=1
 
+# The admin brute-force lockout: ten DIFFERENT wrong passwords lock sign-in for
+# 15 minutes, and the right password is refused until it lifts. A client
+# re-sending one old password counts once, so a forgotten tab can't trip it.
+# The lock is held in memory: \`docker compose restart controller\` clears it now.
+#
+# Set this to turn the lockout off altogether, on a station that can't be reached
+# from the internet. Nothing then limits password guesses, so ADMIN_PASS alone
+# guards the admin API. Compose reads it at recreate, not at restart.
+# ADMIN_LOCKOUT=off
+
 # Offline GeoIP database for the Stats page's listener-country rollup.
 #
 # Stats reads CF-IPCountry first, then whatever header you name in

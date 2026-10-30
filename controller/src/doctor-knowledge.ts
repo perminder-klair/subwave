@@ -30,6 +30,9 @@ when a control is hidden.
   servers are all supported; pick one in Settings → LLM provider.
 - Three root .env vars boot the stack: ADMIN_USER, ADMIN_PASS, SITE_URL. Env always
   wins over wizard/settings.
+- Ten different wrong admin passwords lock sign-in for 15 minutes (429, the right
+  password is refused too). Restarting the controller clears it at once; setting
+  ADMIN_LOCKOUT=off in .env and recreating the controller turns the lock off.
 
 ## Chain-of-thought (Settings → LLM provider → Reasoning)
 - Lets "thinking" models emit a reasoning chain before answering. Costs latency and
