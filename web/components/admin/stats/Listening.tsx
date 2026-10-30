@@ -1,6 +1,6 @@
 'use client';
 
-// 03 Who's listening: the audience over the chosen range, when it listens, where
+// Who's listening: the audience over the chosen range, when it listens, where
 // it came from and who is connected now. The listener line is drawn as steps,
 // because a count holds until it changes, and breaks where the controller could
 // not read (a gap in the per-minute history is an outage, not zero listeners).
@@ -343,8 +343,8 @@ export function Listening({ range, onRange, rangeLabel, samples, listenersLoaded
   const top = busiestHour(hours);
   return (
     <Section
-      n="03"
       title="Who's listening"
+      id="stats-audience"
       sub={`audience and sources · last ${rangeLabel}`}
       right={<Seg value={range} options={RANGE_OPTIONS} onChange={onRange} aria-label="Range" />}
     >

@@ -265,7 +265,7 @@ grep -E '^(ADMIN_USER|ADMIN_PASS)=' .env
 docker compose logs controller | grep -i 'auth'
 ```
 
-Three things to check:
+Four things to check:
 
 1. **Are they set at all?** In production the controller refuses to start
    without both and says so:
@@ -292,8 +292,35 @@ Three things to check:
    confirm the diagnosis, then pick a permanent one that survives the round
    trip.
 
-On AIO/Unraid the same two values are container environment variables in the
-template rather than lines in a `.env`.
+4. **Is sign-in locked?** Ten different wrong passwords lock sign-in for 15
+   minutes. The sign-in form says so and counts down, and the right password is
+   refused until it lifts. It's a timed lock, not a ban: it's held in memory, it
+   lifts by itself, and restarting the controller clears it at once. The music
+   keeps playing while you do:
+
+   ```bash
+   docker compose restart controller
+   ```
+
+   A client re-sending one old password counts once, however often it tries, so
+   a forgotten tab or an integration still holding the old `ADMIN_PASS` can't
+   trip it.
+
+   The final say is yours. If the station can't be reached from the internet and
+   you'd rather not have the lock, add this to `.env` and recreate the controller:
+
+   ```bash
+   ADMIN_LOCKOUT=off
+   docker compose up -d --force-recreate controller
+   ```
+
+   Nothing then limits password guesses, so `ADMIN_PASS` alone guards the admin
+   API. The controller logs a warning at every boot while it's off. Don't use this
+   on a station exposed to the internet.
+
+On AIO/Unraid the same values are container environment variables in the
+template rather than lines in a `.env`, and restarting the container clears a
+lock, though that restarts the stream too.
 
 ### The stream is silent but containers are healthy
 

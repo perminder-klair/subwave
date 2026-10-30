@@ -1,6 +1,6 @@
 'use client';
 
-// 05 Engine room: the DJ's model and voice since boot. Latency reads on a tuner
+// Engine room: the DJ's model and voice since boot. Latency reads on a tuner
 // scale against what it has to beat: the agent deadline for model calls (past
 // it a pick falls back), and the slowest render for speech.
 
@@ -276,7 +276,7 @@ function TtsPanel({ tts }: { tts: TtsStats }) {
 
 export function EngineRoom({ llm, tts }: { llm: LlmStats | null; tts: TtsStats | null }) {
   return (
-    <Section n="05" title="Engine room" sub="the DJ's brain and voice · since boot">
+    <Section title="Engine room" sub="the DJ's brain and voice · since boot" id="stats-engine">
       {llm ? <LlmPanel llm={llm} /> : <Panel className="p-[18px]"><Hint>connecting…</Hint></Panel>}
       {tts ? <TtsPanel tts={tts} /> : null}
     </Section>

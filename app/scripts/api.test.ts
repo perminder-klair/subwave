@@ -289,6 +289,129 @@ test("/station-auth reads only the controller's own 401 as a wrong password (#21
   }
 });
 
+test("/station-auth reads only the controller's own 200 as a right password (#2164)", async (t) => {
+  // The controller's pass is `200 {"ok":true}` on every version that has the
+  // route. A forward-auth proxy's login page is a 200 too, for any password.
+  const cases: [reply: () => Response, result: StationAuthResult][] = [
+    [() => Response.json({ ok: true }), 'ok'],
+    [() => Response.json({ ok: true, expires: 60 }), 'ok'],
+    [
+      () =>
+        new Response('<html><head><title>Sign in</title></head></html>', {
+          status: 200,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      'unavailable',
+    ],
+    [() => new Response('', { status: 200 }), 'unavailable'],
+    [() => new Response('ok', { status: 200 }), 'unavailable'],
+    [() => Response.json({}), 'unavailable'],
+    [() => Response.json({ ok: false }), 'unavailable'],
+    [() => Response.json({ ok: 'true' }), 'unavailable'],
+    // Only a 200 can pass: the status says as much as the body.
+    [() => Response.json({ ok: true }, { status: 201 }), 'unavailable'],
+    [() => Response.json({ ok: true }, { status: 401 }), 'unavailable'],
+  ];
+  let reply = cases[0][0];
+  stubFetch(t, () => reply());
+  const api = createApi('https://radio.example', LOGIN);
+  for (const [r, result] of cases) {
+    reply = r;
+    assert.equal(await api.checkStationAuth('station-pw'), result, (await r().text()) || '(empty)');
+  }
+});
+
+test('/station-auth gives up on a 200 whose body never arrives, and proves nothing', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  stubFetch(t, () => new Response(new ReadableStream(), { status: 200 }));
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  let result: StationAuthResult | undefined;
+  void createApi('https://radio.example', LOGIN)
+    .checkStationAuth('station-pw')
+    .then((r) => {
+      result = r;
+    });
+  await settle();
+  assert.equal(result, undefined, 'still reading the body');
+  t.mock.timers.tick(FETCH_TIMEOUT_MS);
+  await settle();
+  assert.equal(result, 'unavailable');
+});
+
+test('/station-auth still hears a pass that lands just inside the timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      body = controller;
+    },
+  });
+  stubFetch(t, () => new Response(stream, { status: 200 }));
+  const check = createApi('https://radio.example', LOGIN).checkStationAuth('station-pw');
+  await new Promise((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+  body.enqueue(new TextEncoder().encode('{"ok":true}'));
+  body.close();
+  assert.equal(await check, 'ok');
+});
+
+test('/station-auth leaves no timer running once a 200 is read', async (t) => {
+  const armed = t.mock.method(globalThis, 'setTimeout');
+  const cleared = t.mock.method(globalThis, 'clearTimeout');
+  stubFetch(t, () => Response.json({ ok: true }));
+  assert.equal(await createApi('https://radio.example', LOGIN).checkStationAuth('station-pw'), 'ok');
+  assert.equal(cleared.mock.callCount(), armed.mock.callCount());
+});
+
+test("/station-auth's 429 says when to ask again, and the next answer lifts it (#2164)", async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  const limited = (retryAfter?: string) =>
+    Response.json({ ok: false, error: 'too many attempts' }, {
+      status: 429,
+      headers: retryAfter === undefined ? {} : { 'Retry-After': retryAfter },
+    });
+  let reply = () => limited('300');
+  stubFetch(t, () => reply());
+  const api = createApi('https://radio.example', LOGIN);
+  assert.equal(api.stationAuthHeldUntil(), 0, 'nothing held before the first answer');
+
+  assert.equal(await api.checkStationAuth('station-pw'), 'rate-limited');
+  assert.equal(api.stationAuthHeldUntil(), 1_000_000 + 300_000);
+
+  reply = () => limited();
+  await api.checkStationAuth('station-pw');
+  assert.equal(api.stationAuthHeldUntil(), 0, 'a 429 with no Retry-After holds nothing: the gap still applies');
+
+  reply = () => limited('300');
+  await api.checkStationAuth('station-pw');
+  reply = () => Response.json({ ok: true });
+  assert.equal(await api.checkStationAuth('station-pw'), 'ok');
+  assert.equal(api.stationAuthHeldUntil(), 0, 'it got through: a new address, or the window moved on');
+});
+
+test('/station-auth keeps a hold through a network error, which says nothing', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  let reply: () => Response = () =>
+    Response.json({ ok: false }, { status: 429, headers: { 'Retry-After': '300' } });
+  stubFetch(t, () => reply());
+  const api = createApi('https://radio.example', LOGIN);
+  await api.checkStationAuth('station-pw');
+  reply = () => {
+    throw new TypeError('Network request failed');
+  };
+  assert.equal(await api.checkStationAuth('station-pw'), 'unavailable');
+  assert.equal(api.stationAuthHeldUntil(), 1_000_000 + 300_000);
+});
+
+test("one station's hold does not reach another's client", async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  stubFetch(t, () => Response.json({ ok: false }, { status: 429, headers: { 'Retry-After': '300' } }));
+  await createApi('https://radio.example', LOGIN).checkStationAuth('station-pw');
+  assert.equal(createApi('https://other.example', LOGIN).stationAuthHeldUntil(), 0);
+});
+
 test('/station-auth gives up on a 401 whose body never arrives, and keeps the password', async (t) => {
   // On a device fetch resolves on the headers, so the fetch's own timer has
   // stopped by the time the body is read. A body that stalls there must not

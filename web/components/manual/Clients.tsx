@@ -122,6 +122,17 @@ export default function Clients() {
             saved login, because the receiver cannot send that header.
           </p>
         </div>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">SEND A PLAYBACK LOG</div>
+          <p>
+            If the sound drops out or plays twice in the app, open the back panel, tap{' '}
+            <strong>SUB/WAVE</strong> under About, then{' '}
+            <strong>Share playback log</strong>, and add it to your bug report. Do this
+            before you fully close the app: the log lives in memory and holds the last 300
+            lines of playback events, with passwords and logins taken out first. It
+            leaves your phone only when you share it.
+          </p>
+        </div>
       </section>
 
       <section className="bs-section">

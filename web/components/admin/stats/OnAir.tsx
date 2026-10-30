@@ -1,6 +1,6 @@
 'use client';
 
-// 04 On air: what aired (most played, from the durable play history) and what
+// On air: what aired (most played, from the durable play history) and what
 // the DJ did (the booth log since boot, as LED ladders), with the transitions
 // record summarised in one line that opens its detail under Diagnostics.
 
@@ -121,7 +121,7 @@ export function OnAir({ recap, djLog, transitions, onTransitions }: {
   onTransitions: () => void;
 }) {
   return (
-    <Section n="04" title="On air" sub="what aired and what the DJ did">
+    <Section title="On air" sub="what aired and what the DJ did" id="stats-on-air">
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(360px,100%),1fr))] items-start gap-4">
         <MostPlayed recap={recap} />
         {djLog ? (

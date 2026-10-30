@@ -83,38 +83,53 @@ export function stationReadsOpen(privacy: StationPrivacy | null | undefined, pha
 
 /** `POST /station-auth` outcomes. That route fails CLOSED (401) whenever a lock
  *  is on and the password is wrong; 429 is its rate limit. Anything else —
- *  a network error, a 5xx, an older controller's 404, a 401 from something
- *  in front of the controller — says nothing about the password. */
+ *  a network error, a 5xx, an older controller's 404, a 401 or a 200 from
+ *  something in front of the controller — says nothing about the password. */
 export type StationAuthResult = 'ok' | 'denied' | 'rate-limited' | 'unavailable';
 
-/** What came with the status, which tells the controller's 401 from a proxy's. */
+/** What came with the status, which tells the controller's answer from a proxy's. */
 export interface StationAuthReply {
   /** The response carried a `WWW-Authenticate` challenge. */
   challenged?: boolean;
-  /** The 401's body, parsed as JSON; absent when it was not JSON. */
+  /** The 200's or 401's body, parsed as JSON; absent when it was not JSON. */
   body?: unknown;
 }
 
-/** A 401 is 'denied' only when the controller sent it: its body is the
- *  controller's own `{ ok: false }`, which every controller with this route
- *  has sent since #478, and it carries no challenge, which the controller
- *  never sends here. Anything else in front of the controller can answer 401
- *  first: a proxy refusing the Station login challenges (#1873), and a
- *  forward-auth proxy (oauth2-proxy in API mode, some Authelia setups) may
- *  not. Neither request reached the password check, and read as 'denied'
- *  either would make the gate forget a station password that is right. Any
- *  challenge scheme counts here, where loginRefused counts only Basic:
- *  whatever the proxy asks for, the password never got past it. */
+/** A 200 is 'ok' and a 401 is 'denied' only when the controller sent it. Its
+ *  body is its own `{ ok: true }` or `{ ok: false }`, which every controller
+ *  with this route has sent since #478, and its 401 carries no challenge,
+ *  which the controller never sends here. Anything else in front of the
+ *  controller can answer first: a proxy refusing the Station login challenges
+ *  (#1873), a forward-auth proxy (oauth2-proxy in API mode, some Authelia
+ *  setups) may not, and a login page answers 200 with HTML. None of those
+ *  requests reached the password check. Read as 'denied', a 401 would make the
+ *  gate forget a station password that is right; read as 'ok', a 200 would
+ *  save a wrong one and hide what is really refusing the player. 'unavailable'
+ *  does neither: a saved password is kept, as when offline, and a typed one is
+ *  not saved. Any challenge scheme counts here, where loginRefused counts only
+ *  Basic: whatever the proxy asks for, the password never got past it. */
 export function stationAuthResult(status: number | null, reply: StationAuthReply = {}): StationAuthResult {
-  if (status === 200) return 'ok';
-  if (status === 401) return controllerDenied(reply) ? 'denied' : 'unavailable';
+  if (status === 200) return okField(reply.body) === true ? 'ok' : 'unavailable';
+  if (status === 401) return !reply.challenged && okField(reply.body) === false ? 'denied' : 'unavailable';
   if (status === 429) return 'rate-limited';
   return 'unavailable';
 }
 
-function controllerDenied({ challenged = false, body }: StationAuthReply): boolean {
-  if (challenged || !body || typeof body !== 'object') return false;
-  return (body as { ok?: unknown }).ok === false;
+function okField(body: unknown): unknown {
+  return body && typeof body === 'object' ? (body as { ok?: unknown }).ok : undefined;
+}
+
+// The route's own window: the controller never asks for longer, so a longer
+// wait is something else's, and a stuck player must not go quiet on its say-so.
+export const RATE_LIMIT_MAX_WAIT_MS = 15 * 60_000;
+
+/** When a 429's `Retry-After` says to ask again, or 0 when it gives no count
+ *  of seconds. Capped here, as a fixed time, so a re-armed check can't push it
+ *  back. */
+export function rateLimitedUntil(retryAfter: string | null, now: number): number {
+  const sec = Number(retryAfter);
+  if (!Number.isFinite(sec) || sec <= 0) return 0;
+  return now + Math.min(sec * 1000, RATE_LIMIT_MAX_WAIT_MS);
 }
 
 export interface StoredPasswordVerdict {

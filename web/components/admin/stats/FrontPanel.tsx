@@ -1,6 +1,6 @@
 'use client';
 
-// 01 At a glance: is anyone listening, is the station healthy, and how much of
+// At a glance: is anyone listening, is the station healthy, and how much of
 // today's token allowance is gone, before any tables. The VU meter and the
 // budget dial are SVG drawn in a uniformly scaled viewBox; the figures a reader
 // needs are also printed in HTML beside them.
@@ -367,7 +367,7 @@ export function FrontPanel({ listeners, llm, tts, requests, host, statsDown }: {
 }) {
   const rows = llm && tts && requests ? healthRows(llm, tts, requests, host) : null;
   return (
-    <Section n="01" title="At a glance" sub="listeners, health and spend">
+    <Section title="At a glance" id="stats-glance" bare>
       <Panel className="overflow-hidden">
         <CellGrid min={260}>
           <ListenersTile {...listeners} />

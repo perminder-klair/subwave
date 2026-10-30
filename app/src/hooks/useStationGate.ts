@@ -133,6 +133,7 @@ export function useStationGate({
         return api.checkStationAuth(password);
       },
       lastCheckAt: () => lastCheckRef.current,
+      heldUntil: () => api.stationAuthHeldUntil(),
       current: () => apiRef.current === api,
       onDenied: () => {
         // Before forgetting it, which already brings the prompt up (above).

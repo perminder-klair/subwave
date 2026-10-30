@@ -1,6 +1,6 @@
 'use client';
 
-// 07 Diagnostics: the detail an operator opens when something is off. Each row
+// Diagnostics: the detail an operator opens when something is off. Each row
 // is a one-line summary with its breakdown folded underneath; the open state is
 // the page's, so the On air transitions line can open its row.
 
@@ -206,14 +206,14 @@ export function Diagnostics({ requests, llm, trackSelection, transitions, open, 
 }) {
   if (!requests || !llm) {
     return (
-      <Section n="07" title="Diagnostics" sub="open when something's off" id="stats-diagnostics">
+      <Section title="Diagnostics" sub="open when something's off" id="stats-diagnostics">
         <Panel className="p-[18px]"><Hint>connecting…</Hint></Panel>
       </Section>
     );
   }
   const hasTransitions = transitions !== undefined;
   return (
-    <Section n="07" title="Diagnostics" sub="open when something's off" id="stats-diagnostics">
+    <Section title="Diagnostics" sub="open when something's off" id="stats-diagnostics">
       <Panel>
         <Row
           title="Requests"
