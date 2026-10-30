@@ -15,25 +15,32 @@ import { SETTINGS_OPUS_BITRATES } from '../src/schemas/settings.js';
 
 const RADIO_PATH = new URL('../../liquidsoap/radio.liq', import.meta.url);
 
-function opusEncoders() {
-  const code = readFileSync(RADIO_PATH, 'utf8')
+function radioCode() {
+  return readFileSync(RADIO_PATH, 'utf8')
     .split('\n')
     .filter(line => !line.trimStart().startsWith('#'))
     .join('\n');
-  return [...code.matchAll(/%opus\(([^)]*)\)/g)].map(m => m[1]!);
+}
+
+// A bare %opus takes the encoder's defaults, which are VBR, so it counts as an
+// encoder with no parameters.
+function opusEncoders() {
+  return [...radioCode().matchAll(/%opus\b(?:\(([^)]*)\))?/g)].map(m => m[1] ?? '');
 }
 
 test('every Opus encoder radio.liq builds is hard CBR', () => {
   const encoders = opusEncoders();
   assert.ok(encoders.length > 0, 'radio.liq builds an Opus encoder');
   for (const params of encoders) {
-    assert.match(params, /\bvbr="none"/, `%opus(${params}) must be CBR`);
+    assert.match(params, /\bvbr\s*=\s*"none"/, `%opus(${params}) must be CBR`);
     // DTX would shrink silence to a byte or two again, CBR or not.
-    assert.doesNotMatch(params, /\bdtx=true/, `%opus(${params}) must not use DTX`);
+    assert.doesNotMatch(params, /\bdtx\s*=\s*true/, `%opus(${params}) must not use DTX`);
   }
+  // An %ffmpeg libopus encoder would escape the checks above.
+  assert.ok(!radioCode().includes('libopus'), 'build the Opus encoder with %opus');
 });
 
 test('there is one Opus branch per bitrate the settings allow', () => {
-  const bitrates = opusEncoders().map(params => Number(/\bbitrate=(\d+)/.exec(params)?.[1]));
+  const bitrates = opusEncoders().map(params => Number(/\bbitrate\s*=\s*(\d+)/.exec(params)?.[1]));
   assert.deepEqual([...bitrates].sort((a, b) => a - b), [...SETTINGS_OPUS_BITRATES].sort((a, b) => a - b));
 });
