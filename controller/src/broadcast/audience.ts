@@ -150,6 +150,21 @@ function topList<K extends string>(
     .map(([k, count]) => ({ [keyName]: k, count }) as Record<K, string> & { count: number });
 }
 
+// The stored day-buckets, oldest first, without the in-memory dedupe set. The
+// weekly recap compares two windows and needs each referrer's first day.
+export interface AudienceDay {
+  date: string;
+  sessions: number;
+  referrers: Record<string, number>;
+  countries: Record<string, number>;
+}
+
+export function days(): AudienceDay[] {
+  return [...buckets.values()]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(b => ({ date: b.date, sessions: b.sessions, referrers: { ...b.referrers }, countries: { ...b.countries } }));
+}
+
 export interface AudienceSummary {
   sinceMinutes: number;
   sessions: number;

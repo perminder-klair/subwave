@@ -10,12 +10,16 @@ import {
 } from '../../modules/airplay-route-picker';
 import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
+import { playbackLog } from '@/lib/playback-log';
+import { claimRemotePlay } from '@/lib/remote-play';
 import { StreamRecovery } from '@/lib/stream-recovery';
 import type { StreamFormat } from '@/lib/streamFormat';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
-// Dev-build only; no-op in Release.
+// Every build keeps the line, redacted, in the playback log a listener can
+// share from the About sheet (#2140); dev builds print it as well.
 function plog(msg: string) {
+  playbackLog.add(msg);
   if (__DEV__) console.log(`[player ${new Date().toISOString().slice(11, 23)}] ${msg}`);
 }
 
@@ -54,9 +58,10 @@ export function usePlayer(
   useEffect(() => { formatRef.current = streamFormat; }, [streamFormat]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
 
-  // Every reload (tune-in, retune, watchdog, churn, error backoff, regained
-  // link) goes through this: one at a time, and never over audio the native
-  // clock shows is still playing (#2114, #1936). The events below only report.
+  // Every reload (tune-in, a remote Play, retune, watchdog, churn, error
+  // backoff, regained link) goes through this: one at a time, and an automatic
+  // one never over audio the native clock shows is still playing (#2114,
+  // #1936). The events below only report.
   const recoveryRef = useRef<StreamRecovery | null>(null);
   useEffect(() => {
     const recovery = new StreamRecovery({
@@ -77,6 +82,20 @@ export function usePlayer(
       recoveryRef.current = null;
     };
   }, []);
+
+  // A Play from the lock screen, a headset, CarPlay or Bluetooth reaches
+  // service.ts, which hands it here while this hook is mounted (#2139): a
+  // tune-in through the recovery, with the current stream URL and login.
+  useEffect(() => claimRemotePlay(() => {
+    const recovery = recoveryRef.current;
+    if (!apiRef.current || !recovery) return false;
+    // Flipped synchronously, so the coming Playing can't adopt it as foreign.
+    tunedInRef.current = true;
+    setTunedIn(true);
+    setStatus('connecting');
+    recovery.tuneIn('remote');
+    return true;
+  }), []);
 
   useEffect(() => { setupPlayer().catch(() => {}); }, []);
 
@@ -145,10 +164,10 @@ export function usePlayer(
       const state = event.state;
       if (state === State.Playing) {
         setStatus('playing');
-        // A lock-screen Play resumes via service.ts without touching this
-        // hook; re-adopt so the UI matches the audio. getLastLiveMeta() is
-        // null after an in-app stop, so a stale Playing event can't resurrect
-        // tunedIn.
+        // Audio this hook didn't start (service.ts reloaded it while the hook
+        // wasn't mounted, as after Android destroys the activity); re-adopt so
+        // the UI matches the audio. getLastLiveMeta() is null after an in-app
+        // stop, so a stale Playing event can't resurrect tunedIn.
         if (!tunedInRef.current && getLastLiveMeta()) {
           tunedInRef.current = true;
           setTunedIn(true);
@@ -177,8 +196,8 @@ export function usePlayer(
       setTunedIn(false);
       setStatus('idle');
       // stop(), not pause: unloads the item so the Icecast connection drops.
-      // lastLiveMeta survives (only teardown clears it) so a later Play
-      // resumes at the live edge via service.ts.
+      // lastLiveMeta survives (only teardown clears it) so a later remote
+      // Play resumes at the live edge (src/lib/remote-play.ts).
       TrackPlayer.stop().catch(() => {});
     });
     return () => sub?.remove();

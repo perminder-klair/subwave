@@ -83,13 +83,13 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - **A gate's failure direction is deliberate; never unify two.** `POST /listener-auth` fails open while listener auth is off, while `POST /station-auth` and `middleware/station-auth.ts` fail closed. The listener-count gates fail open on an unknown count, while `presentListeners()` fails closed, and the idle wake probe (`peekListeners()`) commits nothing and acts only on a positive reading. `validate*Strict` throws and `normalize*` repairs or drops, and neither restates a rule.
 - **A validated shape is defined once**, in `controller/src/schemas/<feature>.ts`, and mirrored to `web/lib/schemas.generated.ts` by `npm run gen:schemas` (CI diffs it; never hand-edit it). Those files import only `zod`; impure rules go in a `*-server.ts` sibling.
 - **A behaviour-preserving refactor preserves behaviour, accidental leniency included.** Tightening it is a separate PR, stated as a behaviour change (`schemas.md`, on the patch registry).
-- **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and four tests drive both copies), so fix one, fix both.
+- **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and six tests drive both copies), so fix one, fix both.
 - **State bootstrap is never fatal.** Guard each step and warn; Icecast and the dead-air guard must still come up.
 - **The listener-country chain fails open link by link** (`broadcast/listener-country.ts`). A later link runs when an earlier one misses (`XX`/`T1`), not only when it is absent.
 
 **Timing** (`broadcast.md`)
-- **Published timestamps are live-edge**, and listeners sit `stream.bufferSeconds` (22 s) behind. Listener surfaces add the offset (`useStationFeed.leadMs`, which is less whatever the web player skipped); operator surfaces don't. `<burst-size>` is bytes, computed per mount. Never judge the cushion with `buffered.end − currentTime`.
-- **The web player skips only stale idle silence, never music, and only on the MP3 mount** (`web/lib/idleSkip.ts`). Opus's VBR burst reaches back past the pause, so it cannot be sized.
+- **Published timestamps are live-edge**, and listeners sit `stream.bufferSeconds` (22 s) behind. What `/now-playing` advertises is the burst the running mounts were rendered with (`stream-mounts.json`), never a setting saved since. Listener surfaces add the offset (`useStationFeed.leadMs`, which is less whatever the web player skipped); operator surfaces don't. `<burst-size>` is bytes, computed per mount from the bitrate liquidsoap is handed. Never judge the cushion with `buffered.end − currentTime`.
+- **The web player skips only stale idle silence, never music, and only on the MP3 mount** (`web/lib/idleSkip.ts`). Opus is CBR since #2138, but an older broadcast image's VBR Opus burst reaches back past the pause, and the player cannot tell which one it is tuned to.
 - **Every scheduled spoken segment is a row in one slot table** (`broadcast/talk-scheduler.ts`), driven by one per-minute `talkTick`, one talker per minute. A slot is a window, and a held row postpones, never cancels. A second talk cron is the bug.
 - **The one sanctioned exception is the over-music jingle ID** (`jinglePlacement: over | both`): the now-playing watcher offers it once per song, at the opening, and it stands down to any speech rather than taking a slot (`broadcast.md`).
 - **A rendered segment is placed, not trimmed**: the lever at a boundary is which boundary it takes (`broadcast/vocal-runway.ts`).
@@ -105,6 +105,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Ducking is `smooth_add`, never an RMS follower; `p` is the fraction of the music left up.
 - Every transition effect runs on Liquidsoap's single streaming thread, so its cost is its shape: the dissolve sums its combs and subtracts the dry once, never per tap.
 - Both sides of a rendered seam are gained by `music/loudness.ts` `resolveGainDb`, never from the analyzer's LUFS.
+- The Opus encoder is hard CBR (`vbr="none"`): `<burst-size>` is bytes, and VBR idle silence stretched a new listener's burst back past the pause (#2138).
 
 **Library, picker, LLM, TTS** (`music.md`, `broadcast.md`)
 - Write `genres`, never `genre` (a generated column); `subsonic.songGenres()` is the one ingest normaliser. Genre matching is one-directional.

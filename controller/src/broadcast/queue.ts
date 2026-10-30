@@ -1746,14 +1746,29 @@ class Queue {
     if (remaining == null || idx === 0) return remaining;
     for (const ahead of this.upcoming.slice(0, idx)) {
       if (!ahead.sent) continue; // unsent ahead items drain first anyway
-      let d = Number(ahead.track?.duration) || 0;
-      if (!d && ahead.track?.id) d = Number(library.get(ahead.track.id)?.durationSec) || 0;
-      if (!d) return null;
-      const playable = playableDurationSec(d, ahead.cueOutSec ?? null, ahead.cueInSec ?? null);
+      const playable = this.playableSecOf(ahead);
       if (playable == null) return null;
       remaining += playable;
     }
     return remaining;
+  }
+
+  // The seconds ITEM will air, or null when its length is unknown: the track's
+  // own duration, else its library row's (agent picks carry no length), after
+  // any cue already stamped. An unsent item has no cap or trim-tail cue yet,
+  // since the drain stamps those, so its span is the tagged length until then.
+  // The one duration ladder every queue clock uses.
+  playableSecOf(item: QueueItem): number | null {
+    let d = Number(item.track?.duration) || 0;
+    if (!d && item.track?.id) d = Number(library.get(item.track.id)?.durationSec) || 0;
+    if (!d) return null;
+    return playableDurationSec(d, item.cueOutSec ?? null, item.cueInSec ?? null);
+  }
+
+  // Seconds of hidden timeline (a bed, a pause-and-talk silence) that play
+  // immediately ahead of ITEM itself.
+  private ownHiddenDelaySec(item: QueueItem): number {
+    return (Number(item.bedDelaySec) || 0) + (Number(item.pauseDelaySec) || 0);
   }
 
   // Seconds of hidden music-timeline items that remainingUntilItemAirs cannot
@@ -1763,10 +1778,10 @@ class Queue {
   hiddenDelayBeforeItemAirs(item: QueueItem): number {
     const idx = this.upcoming.indexOf(item);
     if (idx < 0) return 0;
-    let delay = (Number(item.bedDelaySec) || 0) + (Number(item.pauseDelaySec) || 0);
+    let delay = this.ownHiddenDelaySec(item);
     for (const ahead of this.upcoming.slice(0, idx)) {
       if (!ahead.sent) continue;
-      delay += (Number(ahead.bedDelaySec) || 0) + (Number(ahead.pauseDelaySec) || 0);
+      delay += this.ownHiddenDelaySec(ahead);
     }
     return delay;
   }
@@ -4521,18 +4536,27 @@ class Queue {
   // under-report the overrun, which reads as "this fits" when it does not.
   airForecastSec(item: QueueItem): number | null {
     const idx = this.upcoming.indexOf(item);
-    if (idx < 0) return null;
-    let remaining = this.remainingSecOnAir();
-    if (remaining == null) return null;
-    for (const ahead of this.upcoming.slice(0, idx)) {
-      let d = Number(ahead.track?.duration) || 0;
-      if (!d && ahead.track?.id) d = Number(library.get(ahead.track.id)?.durationSec) || 0;
-      if (!d) return null;
-      const playable = playableDurationSec(d, ahead.cueOutSec ?? null, ahead.cueInSec ?? null);
-      if (playable == null) return null;
-      remaining += playable;
-    }
-    return remaining + this.hiddenDelayBeforeItemAirs(item);
+    return idx < 0 ? null : this.upcomingTiming()[idx].airsInSec;
+  }
+
+  // The running order's clock: for each `upcoming` item, its playable length
+  // and how many seconds until it airs. This IS airForecastSec's walk, done
+  // once for the whole queue (airForecastSec reads its row), so GET /state's
+  // `airsAt` and the listener wait notice can never disagree. An item's own
+  // hidden delay always counts, and a SENT item's also delays everything
+  // behind it, exactly as hiddenDelayBeforeItemAirs sums them. One unknown
+  // length makes every later forecast unknown (null), never short.
+  upcomingTiming(): { durationSec: number | null; airsInSec: number | null }[] {
+    let clock = this.remainingSecOnAir();
+    let sentHidden = 0;
+    return this.upcoming.map((item) => {
+      const own = this.ownHiddenDelaySec(item);
+      const durationSec = this.playableSecOf(item);
+      const airsInSec = clock == null ? null : clock + sentHidden + own;
+      if (item.sent) sentHidden += own;
+      clock = clock == null || durationSec == null ? null : clock + durationSec;
+      return { durationSec, airsInSec };
+    });
   }
 
   // Tracks played in the last `hours` hours — used by the picker to block
@@ -5079,9 +5103,25 @@ class Queue {
       // definitive, not a prediction; absent = plain crossfade.
       stemSeam: i.stemSeam || undefined,
     });
+    // Running-order timing. `duration` is the playable span in seconds,
+    // the same measure as /now-playing's; `airsAt` is the upcoming item's
+    // forecast start, live-edge like `startedAt` (operator surfaces show it as
+    // is; a listener surface would add stream.bufferSeconds). Both are ABSENT
+    // when unmeasured, never zeroed, so a client reads "unknown" for itself.
+    const nowMs = Date.now();
+    const seconds = (sec: number | null) => (sec == null ? undefined : Math.round(sec * 10) / 10);
+    const timing = this.upcomingTiming();
     return {
-      current: this.current ? mapItem(this.current) : null,
-      upcoming: this.upcoming.map(mapItem),
+      current: this.current
+        ? { ...mapItem(this.current), duration: seconds(this.playableSecOf(this.current)) }
+        : null,
+      upcoming: this.upcoming.map((item, n) => ({
+        ...mapItem(item),
+        duration: seconds(timing[n].durationSec),
+        airsAt: timing[n].airsInSec == null
+          ? undefined
+          : new Date(nowMs + timing[n].airsInSec * 1000).toISOString(),
+      })),
       history: this.history.map(mapItem),
       // One operator-facing answer for the imminent FINALISED seam. Effect
       // flags live on opposite sides of the pair and remain proposals until

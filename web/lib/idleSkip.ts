@@ -19,25 +19,27 @@
 // The shed starts at the head of the burst, so the head must be silence too:
 // the pause must predate the connection by more than any burst the mounts can
 // render (MAX_BURST_SECONDS), not just the advertised one. `/now-playing`
-// advertises the setting, but Icecast's <burst-size> is rendered when the
-// broadcast pair starts (a container start or a mixer restart). An operator who
-// LOWERS bufferSeconds without that restart advertises less than a connection
-// gets, and checking the pause against the advertised figure would
-// fast-forward the music before the pause. The cost is that a listener who
-// tunes in within a minute of the pause engaging skips nothing. That is rare,
-// since the pause itself engages only after a minute or more of empty room.
+// advertises the burst the running mounts were rendered with (#2142), but
+// against a broadcast image older than that it falls back to the setting, which
+// is saved at once while Icecast's <burst-size> is rendered when the broadcast
+// pair starts. An operator there who LOWERS bufferSeconds without a restart
+// advertises less than a connection gets, and checking the pause against the
+// advertised figure would fast-forward the music before the pause. The cost is
+// that a listener who tunes in within a minute of the pause engaging skips
+// nothing. That is rare, since the pause itself engages only after a minute or
+// more of empty room.
 //
 // Known limits, both from the mounts bursting something other than advertised:
-//   - A RAISED bufferSeconds without that restart advertises more than a
-//     connection gets. A woken listener's shed then runs on to the live edge,
-//     and the start of the music their connection resumed passes fast before
-//     `waiting` stops it.
+//   - On a broadcast image older than #2142, a RAISED bufferSeconds without a
+//     restart advertises more than a connection gets. A woken listener's shed
+//     then runs on to the live edge, and the start of the music their
+//     connection resumed passes fast before `waiting` stops it.
 //   - A burst longer than MAX_BURST_SECONDS can still put music at the head.
 //     The entrypoint caps the seconds it multiplies by a bitrate, and an
 //     ICECAST_STREAM_BITRATE above the encoder's sizes the MP3 burst for a
 //     faster stream than the one it holds (60 s at 320 against a 192k encoder
-//     is a 100 s burst). A saved bitrate cannot do it: every mixer launch
-//     re-renders the burst from the same files the encoder reads.
+//     is a 100 s burst). A saved bitrate cannot do it: the renderer reads it
+//     once and hands the same value to the encoder (#2143).
 //
 // The server's inputs are ages measured on its own clock when it answered
 // (`GET /state`'s `streamIdleWindow`), and the client's are readings of one

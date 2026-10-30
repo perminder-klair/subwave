@@ -8,18 +8,67 @@ the matching section here before changing any of them.
 
 The recurring trap: **`docker/broadcast-entrypoint.sh` and the AIO supervisor's
 `render_icecast()` / `bootstrap_state_dirs` must stay in lockstep.** Six things
-live in both — per-mount burst/queue sizing, the listener-auth blocks, the
-trusted-proxy list (and the marker recording it), the state-dir bootstrap,
-`resolve_max_clients`, and the Icecast secrets resolver — and a fix applied to
-one is a bug in the other.
+live in both — per-mount burst/queue sizing (with the `stream-mounts.json`
+marker recording it and the bitrate handoff to liquidsoap), the listener-auth
+blocks, the trusted-proxy list (and the marker recording it), the state-dir
+bootstrap, `resolve_max_clients`, and the Icecast secrets resolver — and a fix
+applied to one is a bug in the other. The burst sizing is one function,
+`render_stream_mounts`, in each, and `scripts/stream-mounts.test.ts` drives both
+from one table and compares the two copies' shared functions as `declare -f`
+prints them.
 
 Covers: the analyzer service and its two flavours, public persona disclosure,
 real listener IPs, the non-fatal state bootstrap, and multi-station profiles.
 
 `settings.stream.bufferSeconds` is the single source of truth for listener
 delay. Both Icecast renderers read the controller-written handoff file; neither
-accepts an environment override, because the controller would keep advertising
-the stored value and every listener-facing timestamp would drift.
+accepts an environment override. One would silently outrank the operator's
+saved setting, and a controller older than the `stream-mounts.json` marker below
+would keep advertising the stored value, so every listener-facing timestamp
+would drift.
+
+**What listeners are told is what was rendered, not what was saved (#2142).**
+`<burst-size>` is rendered when the broadcast pair starts, while the setting
+saves at once, so between a save and the next mixer restart the two disagree.
+`render_stream_mounts` (the same function in both renderers) therefore records
+each mount's burst in `state/stream-mounts.json` on every render:
+`{mounts: {"/stream.mp3": {kbps, burstSeconds, burstBytes}, …}, at}`, written
+through a temp file and a rename, mode 644. `broadcast/stream-mounts.ts` reads it
+(2 s memo) and `/now-playing`'s `stream.bufferSeconds` and the voice webhooks'
+`streamBufferSeconds` advertise the MP3 mount's `burstSeconds`. An absent,
+malformed or self-contradicting marker (bytes that are not seconds x kbps x 125)
+is unknown and falls back to the setting, which is exactly the pre-marker
+behaviour on a broadcast image older than it. A failed write warns, never
+aborts, and removes the previous render's marker, so a stale one can never
+outlive the mounts it describes. The file lives in the active station's dir,
+like `trusted-proxies.json`, and `duplicateAction` leaves it behind: a new
+station has not been rendered yet.
+
+The Opus mount's entry also carries `encoding`: `cbr` only when every `%opus`
+encoder in the `radio.liq` liquidsoap is about to load says `vbr="none"` and none
+sets `dtx=true` (DTX can drop silent frames in any mode), `vbr` otherwise, and
+absent when there is no encoder to read (`opus_encoding`). It is
+read from the encoder line itself rather than declared beside it, so the edit
+that changes the encoder (#2138) changes the answer, and a later image cannot
+carry a stale claim. It exists for the web idle skip, which may treat a
+byte-sized Opus burst as seconds only on a running mount that says `cbr`.
+
+**The bitrate each burst is sized for is the bitrate liquidsoap encodes at
+(#2143).** The renderer used to read `liquidsoap_stream_bitrate.txt` to size the
+burst and liquidsoap read the same file seconds later, so a save in between
+sized the burst for the old encoder (320 → 64 kbps at 60 s is a ~300 s burst).
+`render_stream_mounts` now reads each setting once and exports the MP3, Opus and
+AAC bitrates as `SUBWAVE_{STREAM,OPUS,AAC}_BITRATE`, which `radio.liq`'s
+`burst_bitrate` takes before its own file read; run without them (by hand, or by
+an older supervisor) it reads the file as before. The renderer reads each file
+the way radio.liq does, because what it hands on replaces radio.liq's own read:
+surrounding whitespace is trimmed (radio.liq's `string.trim`, so a CRLF
+hand-edit keeps its bitrate rather than handing on the fallback), a bitrate
+radio.liq would refuse (0) falls back to the default, and leading zeros read as
+decimal, never as bash's octal. `ICECAST_{STREAM,OPUS,AAC}_BITRATE`
+still re-size only the burst and are never handed on: the encoder has always
+taken the setting, and handing it the override would change a configured
+station's audio on upgrade.
 
 `settings.stream.maxListeners` takes the **opposite** precedence, deliberately.
 Both renderers resolve it through `resolve_max_clients`, which prefers

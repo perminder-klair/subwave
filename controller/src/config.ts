@@ -210,6 +210,13 @@ export const config = {
     // Lets admin → Listeners say why it is showing the edge's address. Absent (an
     // older broadcast image) is UNKNOWN and surfaces nothing.
     trustedProxiesFile: `${STATE_DIR}/trusted-proxies.json`,
+    // The same renderers' record of each stream mount's burst, on every render
+    // (#2142): {mounts: {"/stream.mp3": {kbps, burstSeconds, burstBytes}, …},
+    // at}, plus the Opus mount's `encoding` (cbr|vbr) read from radio.liq. It is
+    // what /now-playing advertises as stream.bufferSeconds, since the setting can
+    // be saved ahead of the next render. Absent (an older broadcast image) falls
+    // back to the setting. Read via broadcast/stream-mounts.ts.
+    streamMountsFile: `${STATE_DIR}/stream-mounts.json`,
   },
   session: {
     // The live DJ session (chat-history JSON); archived into `dir` on roll.
