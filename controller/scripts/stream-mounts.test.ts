@@ -366,6 +366,9 @@ for (const s of SUPERVISORS) {
     assert.equal(enc(`${OPUS_CBR}\n%opus(bitrate=128, vbr="constrained")\n`), 'vbr');
     // No vbr argument is the encoder's default, which is not a CBR promise.
     assert.equal(enc('%opus(bitrate=96, samplerate=48000)\n'), 'vbr');
+    // Nor is DTX, which can stop sending silent frames under vbr="none" too.
+    assert.equal(enc(OPUS_CBR.replace('vbr="none")', 'vbr="none", dtx=true)')), 'vbr');
+    assert.equal(enc(OPUS_CBR.replace('vbr="none")', 'vbr="none", dtx=false)')), 'cbr');
     // A comment is not an encoder.
     assert.equal(enc(`${OPUS_CBR}\n# %opus(bitrate=128, vbr="constrained")\n`), 'cbr');
     // Nothing to read: the field is absent, never a guess.

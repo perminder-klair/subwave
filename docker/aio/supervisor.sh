@@ -568,12 +568,14 @@ read_state_kbps() {
 # and nothing when there is none to read. Taken from the encoder line itself,
 # not declared beside it, so the answer changes in the same edit as the encoder
 # (#2138) and cannot outlive it. A client may treat the Opus burst as seconds
-# only on `cbr` (#2142); every doubt reads as not-CBR.
+# only on `cbr` (#2142); every doubt reads as not-CBR, and so does dtx=true,
+# which can stop sending silent frames whatever the vbr mode.
 opus_encoding() {
 	local calls
 	calls=$(sed 's/#.*//' "$1" 2>/dev/null | tr '\n' ' ' | grep -o '%opus([^)]*)' || true)
 	[ -n "$calls" ] || return 0
-	if printf '%s\n' "$calls" | grep -qv 'vbr *= *"none"'; then
+	if printf '%s\n' "$calls" | grep -qv 'vbr *= *"none"' \
+		|| printf '%s\n' "$calls" | grep -q 'dtx *= *true'; then
 		echo vbr
 	else
 		echo cbr
