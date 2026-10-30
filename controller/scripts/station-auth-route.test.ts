@@ -1,8 +1,9 @@
 // POST /station-auth's answers are a contract with every app already on a
-// phone (#2164), so they are pinned here at the HTTP layer, through a real
-// Express app. The app keeps a saved password unless it hears the controller
-// itself, and tells the controller from whatever sits in front of it by these
-// exact shapes (stationAuthResult, app/src/lib/station-password.ts):
+// phone (#2164) and with the web gate (#2176), so they are pinned here at the
+// HTTP layer, through a real Express app. Both keep a saved password unless
+// they hear the controller itself, and tell the controller from whatever sits
+// in front of it by these exact shapes (stationAuthResult, one copy each in
+// app/src/lib/station-password.ts and web/lib/stationAuth.ts):
 //
 // - 200 {"ok":true} proves the password. A login page's 200 does not.
 // - 401 {"ok":false} with no WWW-Authenticate is a wrong password. A proxy's
@@ -10,7 +11,8 @@
 // - 429 carries Retry-After, which the stuck-password check waits out.
 //
 // Adding a field is safe. Changing a status, the type of `ok`, or adding a
-// challenge makes released apps stop unlocking or stop noticing a rotation.
+// challenge makes released apps stop unlocking or stop noticing a rotation, and
+// does the same to the web player until it is rebuilt.
 
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';

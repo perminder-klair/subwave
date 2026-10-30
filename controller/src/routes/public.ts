@@ -542,8 +542,8 @@ router.post(
 // The web player's gate (#478). Same password as /listener-auth, opposite
 // failure mode: fails CLOSED whenever either privacy lock is on. Rate-limited,
 // since the caller is an arbitrary browser. The password is never logged.
-// Installed apps read these exact answers, so they are a contract
-// (scripts/station-auth-route.test.ts).
+// Installed apps and the web gate read these exact answers, so they are a
+// contract (scripts/station-auth-route.test.ts).
 router.post(
   '/station-auth',
   express.json({ limit: '10kb' }),
