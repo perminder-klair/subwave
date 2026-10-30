@@ -66,7 +66,12 @@ every listener connect, so:
   checked again on each visit and forgotten only when the station itself
   refuses it. If the check gets no answer from the station (a network blip, the
   rate limit, a proxy's 401 or login page), the password is kept and the player
-  opens with it, because the stream still checks it on every connect.
+  opens with it, because the stream still checks it on every connect. If the
+  player then can't connect, it asks the station again, at most every two
+  minutes, and waits out the rate limit. Once the station refuses the password,
+  usually because you changed it, the player stops and asks for the new one,
+  saying the saved password was not accepted. Changing the password never drops
+  anyone who is already listening; it reaches them the next time they reconnect.
 - **Radio apps / VLC / Sonos / hardware** — use a credentialed URL:
   `https://listener:PASSWORD@your-station.example/stream.mp3`
   (any username works; only the password is checked).

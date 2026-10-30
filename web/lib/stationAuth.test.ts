@@ -4,8 +4,10 @@ import type { AddressInfo } from 'node:net';
 import { test, type TestContext } from 'node:test';
 import {
   RATE_LIMIT_MAX_WAIT_MS,
+  SAVED_REJECTED_COPY,
   STATION_AUTH_TIMEOUT_MS,
   checkStationAuth,
+  createStationAuthClient,
   rateLimitedUntil,
   stationAuthFailureCopy,
   stationAuthResult,
@@ -115,6 +117,10 @@ test('a rate limit says how long is left, rounded up', () => {
   assert.match(stationAuthFailureCopy('rate-limited', now, now), /Wait a few minutes/);
 });
 
+test("a refused stored password says so in the app's words", () => {
+  assert.equal(SAVED_REJECTED_COPY, 'The saved password was not accepted.');
+});
+
 function stubFetch(t: TestContext, reply: () => Response) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
@@ -205,6 +211,52 @@ test("a 429 is read from its headers alone: a proxy's page still says when to as
     headers: { 'Content-Type': 'text/html', 'Retry-After': '30' },
   }));
   assert.deepEqual(await checkStationAuth('/api', 'pw'), { result: 'rate-limited', retryAt: 1_030_000 });
+});
+
+test('a 429 holds every check on the client, whoever took it, and nothing goes out until it ends', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  let reply = () => Response.json({ ok: false }, { status: 429, headers: { 'Retry-After': '300' } });
+  const calls = stubFetch(t, () => reply());
+  const client = createStationAuthClient('/api');
+
+  // The visit check takes it.
+  assert.deepEqual(await client.check('stored'), { result: 'rate-limited', retryAt: 1_300_000 });
+  assert.equal(client.heldUntil(), 1_300_000);
+  assert.equal(calls.length, 1);
+
+  // A typed press and the watcher, a moment before the wait is up.
+  t.mock.timers.setTime(1_299_999);
+  assert.deepEqual(await client.check('typed'), { result: 'rate-limited', retryAt: 1_300_000 });
+  assert.equal(calls.length, 1, 'a full bucket refuses the right password too');
+  assert.equal(client.lastCheckAt(), 1_000_000, 'a check that never went out is not a check');
+
+  // And once it is.
+  reply = () => Response.json({ ok: true });
+  t.mock.timers.setTime(1_300_000);
+  assert.deepEqual(await client.check('typed'), { result: 'ok', retryAt: 0 });
+  assert.equal(calls.length, 2);
+  assert.equal(client.heldUntil(), 0, 'an answer that is not a 429 lifts it');
+});
+
+test('every check that goes out is stamped when it starts, whatever it hears', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  t.mock.method(globalThis, 'fetch', async () => {
+    t.mock.timers.setTime(1_005_000);
+    throw new TypeError('Failed to fetch');
+  });
+  const client = createStationAuthClient('/api');
+  assert.equal(client.lastCheckAt(), 0);
+  await client.check('pw');
+  assert.equal(client.lastCheckAt(), 1_000_000);
+});
+
+test("each station's client keeps its own hold", async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  const calls = stubFetch(t, () => Response.json({ ok: false }, { status: 429, headers: { 'Retry-After': '300' } }));
+  const [a, b] = [createStationAuthClient('/a'), createStationAuthClient('/b')];
+  await a.check('pw');
+  await b.check('pw');
+  assert.deepEqual(calls.map(c => c.url), ['/a/station-auth', '/b/station-auth']);
 });
 
 const realSetTimeout = globalThis.setTimeout;

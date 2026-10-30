@@ -95,6 +95,8 @@ const FAILURE_COPY: Record<Exclude<StationAuthResult, 'ok'>, string> = {
   unavailable: 'Could not reach the station. Check your connection and try again.',
 };
 
+export const SAVED_REJECTED_COPY = 'The saved password was not accepted.';
+
 function waitCopy(ms: number): string {
   const sec = Math.ceil(ms / 1000);
   if (sec < 60) return `${sec} ${sec === 1 ? 'second' : 'seconds'}`;
@@ -146,4 +148,33 @@ export async function checkStationAuth(apiBase: string, password: string): Promi
   } finally {
     clearTimeout(timer);
   }
+}
+
+export interface StationAuthClient {
+  check(password: string): Promise<StationAuthCheck>;
+  /** When the last check that went out began; 0 for none. */
+  lastCheckAt(): number;
+  /** When the latest answer said to ask again: a 429's `Retry-After`, or 0 for none. */
+  heldUntil(): number;
+}
+
+// One per station, the web's half of the app's api.checkStationAuth and stationAuthHeldUntil. The
+// visit check, a typed press and the stuck-password watcher all ask through it, because the limit
+// covers the whole address: a 429 holds whichever check saw it, and every other one too.
+export function createStationAuthClient(apiBase: string): StationAuthClient {
+  let lastCheckAt = 0;
+  let heldUntil = 0;
+  return {
+    check: async password => {
+      const now = Date.now();
+      // A full bucket refuses the right password too, so asking before the wait is up proves nothing.
+      if (now < heldUntil) return { result: 'rate-limited', retryAt: heldUntil };
+      lastCheckAt = now;
+      const check = await checkStationAuth(apiBase, password);
+      heldUntil = check.retryAt;
+      return check;
+    },
+    lastCheckAt: () => lastCheckAt,
+    heldUntil: () => heldUntil,
+  };
 }
