@@ -16,12 +16,28 @@
 // than the cushion. Closing up later is fine: the answer shrinks as `now`
 // moves on, so a caller asks again each time it checks.
 //
-// Known limit: the floor holds only while the mounts burst what is advertised.
-// `/now-playing` advertises the setting, but Icecast's <burst-size> is rendered
-// when the broadcast container starts, so an operator who raises bufferSeconds
-// without that restart advertises more than a connection gets. A woken
-// listener's shed then runs on to the live edge, and the start of the music
-// their connection resumed passes fast before `waiting` stops it.
+// The shed starts at the head of the burst, so the head must be silence too:
+// the pause must predate the connection by more than any burst the mounts can
+// render (MAX_BURST_SECONDS), not just the advertised one. `/now-playing`
+// advertises the setting, but Icecast's <burst-size> is rendered when the
+// broadcast pair starts (a container start or a mixer restart). An operator who
+// LOWERS bufferSeconds without that restart advertises less than a connection
+// gets, and checking the pause against the advertised figure would
+// fast-forward the music before the pause. The cost is that a listener who
+// tunes in within a minute of the pause engaging skips nothing. That is rare,
+// since the pause itself engages only after a minute or more of empty room.
+//
+// Known limits, both from the mounts bursting something other than advertised:
+//   - A RAISED bufferSeconds without that restart advertises more than a
+//     connection gets. A woken listener's shed then runs on to the live edge,
+//     and the start of the music their connection resumed passes fast before
+//     `waiting` stops it.
+//   - A burst longer than MAX_BURST_SECONDS can still put music at the head.
+//     The entrypoint caps the seconds it multiplies by a bitrate, and an
+//     ICECAST_STREAM_BITRATE above the encoder's sizes the MP3 burst for a
+//     faster stream than the one it holds (60 s at 320 against a 192k encoder
+//     is a 100 s burst). A saved bitrate cannot do it: every mixer launch
+//     re-renders the burst from the same files the encoder reads.
 //
 // The server's inputs are ages measured on its own clock when it answered
 // (`GET /state`'s `streamIdleWindow`), and the client's are readings of one
@@ -38,8 +54,13 @@
 // skips nothing, and so does anything missing or malformed: the listener hears
 // today's behaviour.
 
+import { STREAM_BUFFER_SECONDS_BOUNDS } from './schemas.generated';
 import type { IdleWindow } from './types';
 
+/** The longest burst the mounts can render, whatever is advertised: the
+ *  setting's upper bound, which docker/broadcast-entrypoint.sh (and the AIO's
+ *  render_icecast()) also clamps the rendered seconds to. */
+export const MAX_BURST_SECONDS = STREAM_BUFFER_SECONDS_BOUNDS.max;
 /** Silence kept ahead of the listener after a skip: their stall cushion. */
 export const SKIP_CUSHION_SECONDS = 5;
 /** How far short of the first music (either side of the pause) a skip stops. */
@@ -76,8 +97,10 @@ export function idleSkipSeconds(input: IdleSkipInput): number {
   if (![requestedAt, firstAudioAt, readSentAt, readReceivedAt, now].every(Number.isFinite)) return 0;
   if (firstAudioAt < requestedAt || readSentAt < firstAudioAt || readReceivedAt < readSentAt || now < readReceivedAt) return 0;
 
+  // Against the longest burst the mounts can render, never the advertised one,
+  // which can be shorter than the running mounts' (header).
   const pausedBeforeConnect = (window.startedMsAgo - (readReceivedAt - requestedAt)) / 1000;
-  if (pausedBeforeConnect < buffer + MUSIC_MARGIN_SECONDS) return 0;
+  if (pausedBeforeConnect < Math.max(buffer, MAX_BURST_SECONDS) + MUSIC_MARGIN_SECONDS) return 0;
 
   const resumedAgo = ((ended ?? 0) + (now - readSentAt)) / 1000;
   const keep = Math.max(SKIP_CUSHION_SECONDS, resumedAgo + MUSIC_MARGIN_SECONDS);

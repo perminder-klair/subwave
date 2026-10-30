@@ -2,11 +2,12 @@
 // While idle the mounts serve blank(), so a fresh connection's burst is
 // stream.bufferSeconds of silence ahead of the programme it wakes. The player
 // may close up on the live edge through that silence, down to a 5s cushion,
-// but never past the first music on either side of the pause.
+// but never past the first music on either side of the pause, including when
+// the mounts burst more than is advertised.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MIN_SKIP_SECONDS, MUSIC_MARGIN_SECONDS, SKIP_CUSHION_SECONDS, idleSkipSeconds, type IdleSkipInput } from './idleSkip';
+import { MAX_BURST_SECONDS, MIN_SKIP_SECONDS, MUSIC_MARGIN_SECONDS, SKIP_CUSHION_SECONDS, idleSkipSeconds, type IdleSkipInput } from './idleSkip';
 
 const BUFFER = 22;
 // One connection on the local clock: the stream request, its first audio, and
@@ -26,6 +27,8 @@ test('the constants are the shipped ones', () => {
   assert.equal(SKIP_CUSHION_SECONDS, 5);
   assert.equal(MUSIC_MARGIN_SECONDS, 1);
   assert.equal(MIN_SKIP_SECONDS, 1);
+  // The entrypoint's clamp on the rendered burst, through the settings bound.
+  assert.equal(MAX_BURST_SECONDS, 60);
 });
 
 test('a fully silent burst keeps only the cushion', () => {
@@ -57,13 +60,32 @@ test('a station that is not waking skips nothing', () => {
 });
 
 test('a pause that began inside the burst skips nothing: its head is music', () => {
-  // The pause must predate the connection by the buffer plus the margin. It is
-  // timed from the read's arrival back to the stream request (260ms), so a
-  // slow read can only make it look younger.
-  near(idleSkipSeconds(input({ window: { startedMsAgo: 23_260, endedMsAgo: null } })), 17);
-  assert.equal(idleSkipSeconds(input({ window: { startedMsAgo: 23_159, endedMsAgo: null } })), 0);
+  // The pause must predate the connection by the longest burst the mounts can
+  // render plus the margin. It is timed from the read's arrival back to the
+  // stream request (260ms), so a slow read can only make it look younger.
+  near(idleSkipSeconds(input({ window: { startedMsAgo: 61_260, endedMsAgo: null } })), 17);
+  assert.equal(idleSkipSeconds(input({ window: { startedMsAgo: 61_159, endedMsAgo: null } })), 0);
   assert.equal(idleSkipSeconds(input({ window: { startedMsAgo: 2_000, endedMsAgo: null } })), 0);
   assert.equal(idleSkipSeconds(input({ window: { startedMsAgo: 20_000, endedMsAgo: 5_000 } })), 0);
+});
+
+test('a tune-in 30s into a pause on a default station skips nothing', () => {
+  // A 22s burst is all silence by then, but the planner cannot know the mounts
+  // burst only 22s (next test), so it waits out the longest burst they can.
+  assert.equal(idleSkipSeconds(input({ window: { startedMsAgo: 30_260, endedMsAgo: null } })), 0);
+});
+
+test('a burst longer than advertised never fast-forwards the music before the pause', () => {
+  // bufferSeconds lowered from 22 to 10 and saved, the broadcast not yet
+  // restarted: /now-playing advertises 10 while Icecast still bursts 22s. A
+  // tune-in 15s into the pause gets 7s of the frozen track ahead of the
+  // silence, and the shed starts at the head of the burst.
+  const lowered = { bufferSeconds: 10, window: { startedMsAgo: 15_260, endedMsAgo: null } };
+  assert.equal(idleSkipSeconds(input(lowered)), 0);
+  // Any burst the mounts can render: the setting tops out at MAX_BURST_SECONDS.
+  assert.equal(idleSkipSeconds(input({ ...lowered, window: { startedMsAgo: MAX_BURST_SECONDS * 1000, endedMsAgo: null } })), 0);
+  // Once the pause predates that, the advertised figure sizes the skip as before.
+  near(idleSkipSeconds(input({ ...lowered, window: { startedMsAgo: 61_260, endedMsAgo: null } })), 10 - SKIP_CUSHION_SECONDS);
 });
 
 test('a stale /state read skips nothing, and a late answer skips less', () => {
@@ -96,7 +118,7 @@ test('clock skew between server and client cannot move the answer', () => {
   for (const window of [
     { startedMsAgo: LONG_PAUSE, endedMsAgo: null },
     { startedMsAgo: LONG_PAUSE, endedMsAgo: 10_000 },
-    { startedMsAgo: 23_000, endedMsAgo: null },
+    { startedMsAgo: 61_000, endedMsAgo: null },
   ]) {
     const base = idleSkipSeconds(input({ window }));
     for (const skew of [3_600_000, -3_600_000, 37_000, -37_000]) {
