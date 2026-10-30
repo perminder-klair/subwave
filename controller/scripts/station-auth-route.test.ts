@@ -28,6 +28,11 @@ const { router } = await import('../src/routes/public.js');
 
 const PW = 'hunter2-correct-horse';
 const WINDOW_SECONDS = 15 * 60;
+const LOCKS = [
+  { privatePlayer: true, listenerAuth: false },
+  { privatePlayer: false, listenerAuth: true },
+  { privatePlayer: true, listenerAuth: true },
+];
 
 const app = express();
 app.use(router);
@@ -56,11 +61,7 @@ async function lock(privacy: { privatePlayer: boolean; listenerAuth: boolean }) 
 }
 
 test('the right password answers 200 {"ok":true}, on either lock', async () => {
-  for (const privacy of [
-    { privatePlayer: true, listenerAuth: false },
-    { privatePlayer: false, listenerAuth: true },
-    { privatePlayer: true, listenerAuth: true },
-  ]) {
+  for (const privacy of LOCKS) {
     await lock(privacy);
     const r = await post('203.0.113.1', { password: PW });
     assert.equal(r.status, 200, JSON.stringify(privacy));
@@ -75,13 +76,16 @@ test('a station with no lock answers 200 {"ok":true} to any password', async () 
   assert.deepEqual(r.body, { ok: true });
 });
 
-test('a wrong password answers 401 {"ok":false} with no WWW-Authenticate', async () => {
-  await lock({ privatePlayer: false, listenerAuth: true });
-  for (const body of [{ password: 'wrong' }, { password: '' }, { password: 42 }, {}]) {
-    const r = await post('203.0.113.3', body);
-    assert.equal(r.status, 401, JSON.stringify(body));
-    assert.deepEqual(r.body, { ok: false }, JSON.stringify(body));
-    assert.equal(r.headers.get('www-authenticate'), null, JSON.stringify(body));
+test('a wrong password answers 401 {"ok":false} with no WWW-Authenticate, on either lock', async () => {
+  for (const privacy of LOCKS) {
+    await lock(privacy);
+    for (const body of [{ password: 'wrong' }, { password: '' }, { password: 42 }, {}]) {
+      const r = await post('203.0.113.3', body);
+      const label = JSON.stringify({ privacy, body });
+      assert.equal(r.status, 401, label);
+      assert.deepEqual(r.body, { ok: false }, label);
+      assert.equal(r.headers.get('www-authenticate'), null, label);
+    }
   }
 });
 
