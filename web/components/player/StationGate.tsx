@@ -1,15 +1,20 @@
 'use client';
 
 // privatePlayer replaces the UI; listenerAuth overlays it and adds the stored token to the stream
-// URL. Validate with fail-closed /station-auth; /listener-auth can fail open.
+// URL. Validate with fail-closed /station-auth; /listener-auth can fail open. Only the controller's
+// own answers count (lib/stationAuth.ts): a stored token is forgotten on its refusal alone, and a
+// typed one is saved on its pass alone.
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useStationOrigin } from '@/lib/stationOrigin';
 import {
   checkStationAuth,
   clearStationAuthToken,
   getStationAuthToken,
   setStationAuthToken,
+  stationAuthFailureCopy,
+  storedPasswordVerdict,
+  type StationAuthCheck,
 } from '@/lib/stationAuth';
 import { usePlayerFeed } from './PlayerCore';
 
@@ -17,13 +22,14 @@ type AuthPhase = 'checking' | 'prompt' | 'ok';
 
 // Is a stored token still good? Exported so the shell can decide whether to
 // render the player at all before this component mounts.
-export function useStationAuth(): { required: boolean; phase: AuthPhase; unlock: (pw: string) => Promise<boolean> } {
+export function useStationAuth(): { required: boolean; phase: AuthPhase; unlock: (pw: string) => Promise<StationAuthCheck> } {
   const { state } = usePlayerFeed();
   const { apiUrl } = useStationOrigin();
   const required =
     state.privacy?.privatePlayer === true || state.privacy?.listenerAuth === true;
 
   const [phase, setPhase] = useState<AuthPhase>('checking');
+  const heldUntil = useRef(0);
 
   useEffect(() => {
     if (!required) return;
@@ -33,25 +39,25 @@ export function useStationAuth(): { required: boolean; phase: AuthPhase; unlock:
       setPhase('prompt');
       return;
     }
-    checkStationAuth(apiUrl, stored).then(ok => {
+    checkStationAuth(apiUrl, stored).then(({ result }) => {
       if (cancelled) return;
-      if (ok) {
-        setPhase('ok');
-      } else {
-        clearStationAuthToken();
-        setPhase('prompt');
-      }
+      const verdict = storedPasswordVerdict(result);
+      if (verdict.clearStored) clearStationAuthToken();
+      setPhase(verdict.phase);
     });
     return () => { cancelled = true; };
   }, [required, apiUrl]);
 
-  const unlock = async (pw: string) => {
-    const ok = await checkStationAuth(apiUrl, pw);
-    if (ok) {
+  const unlock = async (pw: string): Promise<StationAuthCheck> => {
+    // A full bucket refuses the right password too, so asking before the wait is up proves nothing.
+    if (Date.now() < heldUntil.current) return { result: 'rate-limited', retryAt: heldUntil.current };
+    const check = await checkStationAuth(apiUrl, pw);
+    heldUntil.current = check.retryAt;
+    if (check.result === 'ok') {
       setStationAuthToken(pw);
       setPhase('ok');
     }
-    return ok;
+    return check;
   };
 
   return { required, phase, unlock };
@@ -65,7 +71,7 @@ export function StationPasswordGate({
   solid,
 }: {
   phase: AuthPhase;
-  unlock: (pw: string) => Promise<boolean>;
+  unlock: (pw: string) => Promise<StationAuthCheck>;
   solid: boolean;
 }) {
   const [input, setInput] = useState('');
@@ -80,9 +86,9 @@ export function StationPasswordGate({
     if (!pass || busy) return;
     setBusy(true);
     setError('');
-    const ok = await unlock(pass);
+    const { result, retryAt } = await unlock(pass);
     setBusy(false);
-    if (!ok) setError('That password was not accepted.');
+    if (result !== 'ok') setError(stationAuthFailureCopy(result, retryAt, Date.now()));
   };
 
   return (

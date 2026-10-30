@@ -62,6 +62,11 @@ every listener connect, so:
   browser. If the private player is on too, the single prompt unlocks both the
   interface and the audio. Under the hood it rides a `?auth=PASSWORD` token on
   the stream URL (browsers can't attach basic auth to an `<audio>` element).
+  A typed password is saved only when the station accepts it. The saved one is
+  checked again on each visit and forgotten only when the station itself
+  refuses it. If the check gets no answer from the station (a network blip, the
+  rate limit, a proxy's 401 or login page), the password is kept and the player
+  opens with it, because the stream still checks it on every connect.
 - **Radio apps / VLC / Sonos / hardware** — use a credentialed URL:
   `https://listener:PASSWORD@your-station.example/stream.mp3`
   (any username works; only the password is checked).
