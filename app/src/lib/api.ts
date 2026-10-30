@@ -147,8 +147,8 @@ function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
 
 /** A refusal's JSON body, or undefined when it is not JSON or has not arrived
  *  within FETCH_TIMEOUT_MS. fetch resolves on the headers, so fetchWithTimeout's
- *  timer has already stopped, and aborting would not help: expo/fetch's native
- *  text() settles only on a complete body. */
+ *  timer has already stopped, and aborting would not help: on iOS, expo/fetch's
+ *  native text() settles only on a complete body. */
 async function refusalBody(res: Response): Promise<unknown> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const giveUp = new Promise<undefined>((resolve) => {
@@ -161,7 +161,7 @@ async function refusalBody(res: Response): Promise<unknown> {
   }
 }
 
-type StationRequestInit =Omit<RequestInit, 'headers'> & { headers?: Record<string, string> };
+type StationRequestInit = Omit<RequestInit, 'headers'> & { headers?: Record<string, string> };
 
 export function createApi(
   rawBase: string,
