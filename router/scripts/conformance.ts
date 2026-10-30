@@ -228,6 +228,12 @@ export async function runConformance(dir: string, opts: ConformanceOptions = {})
     const list = await a.similarSongs(song.id, 5);
     return list.length ? 'pass' : ['warn', 'no similar songs for the first track'];
   });
+  await optional('sonicSimilarity', 'sonicSimilar answers with publishable ids', async () => {
+    const list = await a.sonicSimilar(song.id, 5);
+    if (!list.length) return ['warn', 'no sonic neighbours for the first track'];
+    const bad = idProblems(list.map((s) => s.id));
+    if (bad.length) return ['fail', `unpublishable ids: ${bad.slice(0, 3).join(', ')}`];
+  });
   await optional('topSongs', 'topSongs answers', async () => {
     await a.topSongs(song.artist, 5);
   });

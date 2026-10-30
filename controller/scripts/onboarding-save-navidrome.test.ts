@@ -22,6 +22,7 @@ import { createTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-onboarding-save-'));
 process.env.STATE_DIR = stateRoot;
+process.env.MUSIC_ROUTER_URL = 'http://127.0.0.1:9';
 delete process.env.ADMIN_USER;
 delete process.env.ADMIN_PASS;
 delete process.env.NAVIDROME_URL;
@@ -34,7 +35,7 @@ const STORED = { url: 'http://127.0.0.1:9', user: 'radio', pass: 's3cret' };
 const express = (await import('express')).default;
 const { router } = await import('../src/routes/onboarding.js');
 const { config } = await import('../src/config.js');
-const { loadNavidromeConfig } = await import('../src/setup/config.js');
+const { loadNavidromeConfig, syncRouterConfig } = await import('../src/setup/config.js');
 
 const app = express();
 app.use(express.json());
@@ -42,11 +43,14 @@ app.use(router);
 const { server, url: base } = await listenHttp(app);
 server.unref();
 
-function seedStored() {
-  writeFileSync(SETUP, JSON.stringify({ navidrome: STORED, setupCompletedAt: '2026-01-01T00:00:00.000Z' }));
-  config.navidrome.url = STORED.url;
-  config.navidrome.user = STORED.user;
-  config.navidrome.password = STORED.pass;
+async function seedStored(mode: 'navidrome' | 'router' = 'navidrome') {
+  writeFileSync(SETUP, JSON.stringify({
+    navidrome: STORED,
+    setupCompletedAt: '2026-01-01T00:00:00.000Z',
+    ...(mode === 'navidrome' ? { music: { mode, merge: false, sources: [] } } : {}),
+  }));
+  await syncRouterConfig();
+  await loadNavidromeConfig();
 }
 
 async function save(body: unknown) {
@@ -59,7 +63,7 @@ async function save(body: unknown) {
 }
 
 test('a skipped Navidrome step leaves stored credentials, live and on disk', async () => {
-  seedStored();
+  await seedStored();
   const r = await save({ navidrome: { url: '', user: '', pass: '' }, station: 'Test FM' });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.status.needsSetup, false);
@@ -81,13 +85,13 @@ test('a skipped Navidrome step leaves stored credentials, live and on disk', asy
 });
 
 test('whitespace-only fields count as blank too', async () => {
-  seedStored();
+  await seedStored();
   await save({ navidrome: { url: '  ', user: ' ', pass: '' } });
   assert.deepEqual(JSON.parse(readFileSync(SETUP, 'utf8')).navidrome, STORED);
 });
 
 test('a partial block changes only the fields it carries', async () => {
-  seedStored();
+  await seedStored();
   const r = await save({ navidrome: { url: 'http://127.0.0.2:9/', user: '', pass: '' } });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const onDisk = JSON.parse(readFileSync(SETUP, 'utf8'));
@@ -98,8 +102,25 @@ test('a partial block changes only the fields it carries', async () => {
 
 test('a full block on a fresh install is still saved', async () => {
   writeFileSync(SETUP, '{}');
+  await syncRouterConfig();
+  await loadNavidromeConfig();
   const r = await save({ navidrome: STORED });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.status.needsSetup, false);
   assert.deepEqual(JSON.parse(readFileSync(SETUP, 'utf8')).navidrome, STORED);
+});
+
+test('skipping Navidrome preserves the default routed connection across a boot', async () => {
+  await seedStored('router');
+  const routed = { ...config.navidrome };
+  const r = await save({ navidrome: { url: '', user: '', pass: '' } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.status.needsSetup, false);
+  assert.deepEqual(JSON.parse(readFileSync(SETUP, 'utf8')).navidrome, STORED);
+  assert.deepEqual(config.navidrome, routed);
+  await syncRouterConfig();
+  await loadNavidromeConfig();
+  assert.deepEqual(config.navidrome, routed);
+  const routerConfig = JSON.parse(readFileSync(path.join(stateRoot, 'router/config.json'), 'utf8'));
+  assert.deepEqual(routerConfig.sources[0].config, { url: STORED.url, user: STORED.user, password: STORED.pass });
 });

@@ -2,11 +2,14 @@
 // the controller owns about the SUB/WAVE music router.
 //
 // The selection lives in the station's setup-config.json (`music`). In
-// `navidrome` mode — the default, and what an absent block means — nothing here
-// changes behaviour. In `router` mode config.navidrome points at the router
-// with credentials the controller generated, so every Subsonic call (and every
-// stream URL handed to Liquidsoap and the analyzer) goes through the router
-// and nothing downstream of music/subsonic.ts learns the difference.
+// `router` mode — the default, and what an absent block means —
+// config.navidrome points at the router with credentials the controller
+// generated, so every Subsonic call (and every stream URL handed to Liquidsoap
+// and the analyzer) goes through the router and nothing downstream of
+// music/subsonic.ts learns the difference. The default serves the station's own
+// Navidrome as a raw-id source, so its ids are the ones a direct connection
+// published. `navidrome` mode is that direct connection: an escape hatch, and
+// what the failover falls back to (music/source-failover.ts).
 //
 // state/router/config.json is install-level and has exactly one writer: this
 // module, in the main controller process (maintenance children only read it).
@@ -22,6 +25,7 @@ import { envInt, envUrl } from '../util/env.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import {
   DEFAULT_MUSIC_SELECTION,
+  STATION_NAVIDROME_PLUGIN,
   musicSecretKeys,
   musicSelectionSchema,
   routerActivitySchema,
@@ -58,9 +62,32 @@ export interface RouterAuth {
 
 // --- selection ----------------------------------------------------------------
 
-/** The selection a setup-config.json carries; absent or damaged → direct Navidrome. */
+/**
+ * The selection a setup-config.json carries; absent or damaged → the router
+ * serving the station's own Navidrome (DEFAULT_MUSIC_SELECTION). A router
+ * selection with nothing in it reads the same way, and the built-in navidrome
+ * source never carries settings of its own — it plays the station's connection
+ * (stationSources), so an older save that stored some has them ignored.
+ */
 export function readSelection(setupConfig: { music?: unknown } | null | undefined): MusicSelection {
-  return musicSelectionSchema.parse(setupConfig?.music ?? DEFAULT_MUSIC_SELECTION);
+  const sel = musicSelectionSchema.parse(setupConfig?.music ?? DEFAULT_MUSIC_SELECTION);
+  if (sel.mode === 'router' && sel.sources.length === 0) return { ...DEFAULT_MUSIC_SELECTION, sources: [...DEFAULT_MUSIC_SELECTION.sources] };
+  return { ...sel, sources: sel.sources.map((s) => (s.plugin === STATION_NAVIDROME_PLUGIN ? { ...s, config: {} } : s)) };
+}
+
+export interface StationNavidrome {
+  url: string;
+  user: string;
+  password: string;
+}
+
+export const navidromeComplete = (nav: StationNavidrome | null | undefined) => Boolean(nav?.url && nav.user && nav.password);
+
+/** Router sources as the router must receive them: the navidrome source gets the station's connection. */
+export function stationSources(sources: readonly MusicSourceEntry[], nav: StationNavidrome): MusicSourceEntry[] {
+  return sources.map((s) =>
+    s.plugin === STATION_NAVIDROME_PLUGIN ? { ...s, config: { url: nav.url, user: nav.user, password: nav.password } } : s,
+  );
 }
 
 // The live selection, for the synchronous readers (/state's needsSetup, the
@@ -85,9 +112,23 @@ export function setCurrentSelection(sel: MusicSelection): void {
   currentSince = Date.now();
 }
 
-/** A router-mode station is set up once it has a source to play from. */
-export function routerSelectionComplete(sel: MusicSelection): boolean {
-  return sel.mode === 'router' && sel.sources.length > 0;
+/** A router-mode station is set up once it has a source to play from — and, when that is its Navidrome, a complete connection. */
+export function routerSelectionComplete(sel: MusicSelection, stationNavidromeComplete: boolean): boolean {
+  if (sel.mode !== 'router' || sel.sources.length === 0) return false;
+  return stationNavidromeComplete || !sel.sources.some((s) => s.plugin === STATION_NAVIDROME_PLUGIN);
+}
+
+// Whether the station's stored Navidrome connection is complete, for the
+// synchronous readers (/state's needsSetup). Set wherever that connection is
+// loaded or saved.
+let stationNavidromeKnownComplete = false;
+
+export function noteStationNavidrome(nav: StationNavidrome): void {
+  stationNavidromeKnownComplete = navidromeComplete(nav);
+}
+
+export function stationNavidromeIsComplete(): boolean {
+  return stationNavidromeKnownComplete;
 }
 
 // --- router credentials and config.json ---------------------------------------
@@ -105,26 +146,27 @@ export function readRouterAuth(): RouterAuth | null {
   return null;
 }
 
-function routerConfigFor(sel: MusicSelection, auth: RouterAuth) {
+function routerConfigFor(sel: MusicSelection, auth: RouterAuth, nav: StationNavidrome) {
   return {
     version: 1,
     auth,
     merge: sel.merge,
-    // Navidrome mode leaves the router idle: it keeps its credentials and
-    // serves nothing, so switching back to router mode is a config write.
-    sources: sel.mode === 'router' ? sel.sources : [],
+    // Direct mode leaves the router idle: it keeps its credentials and serves
+    // nothing, so moving back behind it is a config write.
+    sources: sel.mode === 'router' ? stationSources(sel.sources, nav) : [],
   };
 }
 
 /**
  * Write state/router/config.json for this selection, generating the router's
  * credentials on first use (as the Icecast secrets are) and keeping them after.
- * Skips the write when nothing changed, so a boot does not touch the file the
- * router polls. Main controller process only.
+ * `nav` is the station's Navidrome connection, which the navidrome source
+ * plays. Skips the write when nothing changed, so a boot does not touch the
+ * file the router polls. Main controller process only.
  */
-export async function writeRouterConfig(sel: MusicSelection): Promise<RouterAuth> {
+export async function writeRouterConfig(sel: MusicSelection, nav: StationNavidrome): Promise<RouterAuth> {
   const auth = readRouterAuth() ?? { user: ROUTER_USER, pass: randomBytes(24).toString('hex') };
-  const next = JSON.stringify(routerConfigFor(sel, auth), null, 2);
+  const next = JSON.stringify(routerConfigFor(sel, auth, nav), null, 2);
   let prev = '';
   try {
     prev = readFileSync(ROUTER_CONFIG_PATH, 'utf8');
@@ -170,6 +212,19 @@ export async function handRouterState(): Promise<void> {
       handOverWarned = true;
       console.warn(`[music-source] could not hand state/router to uid ${ROUTER_UID} (${err?.code || err?.message}); config.json is world-readable instead`);
     }
+  }
+}
+
+/** The router can serve: up, and with a source built (not refusing its config). Never throws. */
+export async function routerServing(timeoutMs = 3_000): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const resp = await fetch(`${ROUTER_URL}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!resp.ok) return { ok: false, reason: `HTTP ${resp.status}` };
+    const body = (await resp.json()) as { serving?: string | null };
+    return body.serving ? { ok: true } : { ok: false, reason: 'serving no source' };
+  } catch (err) {
+    const e = err as { name?: string; cause?: { code?: string } };
+    return { ok: false, reason: e?.cause?.code || e?.name || 'unreachable' };
   }
 }
 

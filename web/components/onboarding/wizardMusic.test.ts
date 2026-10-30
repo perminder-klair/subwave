@@ -1,6 +1,6 @@
 // The wizard's music step against the station's saved selection (#1827
-// review): choosing Navidrome on a router station used to store credentials
-// and leave the station on the router, while Review said "Navidrome".
+// review): choosing Navidrome on a station playing another source used to
+// store credentials and leave it there, while Review said "Navidrome".
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,16 +17,26 @@ test('a station on one router source opens on it', () => {
   assert.deepEqual(musicSaveBody(m, creds), { music: { mode: 'router', merge: false, sources: [{ plugin: 'jellyfin', config: { url: 'http://jf' } }] } });
 });
 
-test('choosing Navidrome on a router station switches it back', () => {
+test('choosing Navidrome on a station playing another source sends it back to the default', () => {
   const m = musicFromSaved(fresh, { mode: 'router', merge: false, sources: [jf] }, 'Jellyfin');
   const chosen: WizardMusic = { ...m, mode: 'navidrome', label: '' };
-  assert.deepEqual(musicSaveBody(chosen, creds), { navidrome: creds, music: { mode: 'navidrome' } });
+  // Its Navidrome, through the music router — not the direct escape hatch.
+  assert.deepEqual(musicSaveBody(chosen, creds), {
+    navidrome: creds,
+    music: { mode: 'router', merge: false, sources: [{ plugin: 'navidrome', config: {} }] },
+  });
 });
 
-test('a Navidrome station sends credentials only, exactly as before', () => {
-  const m = musicFromSaved(fresh, { mode: 'navidrome', merge: false, sources: [] }, '');
-  assert.equal(m.saved, 'navidrome');
-  assert.deepEqual(musicSaveBody(m, creds), { navidrome: creds });
+test('a station on its own Navidrome opens on Navidrome and sends credentials only', () => {
+  // The default: its Navidrome behind the router.
+  const dflt = musicFromSaved(fresh, { mode: 'router', merge: false, sources: [{ plugin: 'navidrome', config: {}, rawIds: true, secretsSet: [] }] }, 'Navidrome');
+  assert.equal(dflt.mode, 'navidrome');
+  assert.equal(dflt.saved, 'navidrome');
+  assert.deepEqual(musicSaveBody(dflt, creds), { navidrome: creds });
+  // Direct mode keeps its mode too.
+  const direct = musicFromSaved(fresh, { mode: 'navidrome', merge: false, sources: [] }, '');
+  assert.equal(direct.saved, 'navidrome');
+  assert.deepEqual(musicSaveBody(direct, creds), { navidrome: creds });
   // And when the saved selection could not be read.
   assert.deepEqual(musicSaveBody(fresh, creds), { navidrome: creds });
 });

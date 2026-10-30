@@ -12,7 +12,7 @@ This file loads into every session, so it holds the map, the commands and one li
 | `liquidsoap/radio.liq` | [`liquidsoap/CLAUDE.md`](liquidsoap/CLAUDE.md) |
 | `web/**` | [`web/CLAUDE.md`](web/CLAUDE.md) |
 | `app/**` | [`app/CLAUDE.md`](app/CLAUDE.md) |
-| `router/**`, music sources beyond Navidrome, plugins | [`router/CLAUDE.md`](router/CLAUDE.md) + [`docs/internals/music-sources.md`](docs/internals/music-sources.md) |
+| `router/**`, music sources, plugins, the router failover | [`router/CLAUDE.md`](router/CLAUDE.md) + [`docs/internals/music-sources.md`](docs/internals/music-sources.md) |
 | queue, talk scheduling, speech timing, transitions, TTS, personas | [`docs/internals/broadcast.md`](docs/internals/broadcast.md) |
 | show changes and sign-off/greeting handoffs | [`docs/internals/show-boundary-handoffs.md`](docs/internals/show-boundary-handoffs.md) |
 | library, tagging, picker, requests, blocklist | [`docs/internals/music.md`](docs/internals/music.md) |
@@ -46,7 +46,7 @@ Use `gh pr create --base develop`. `main` is the release branch, and `enforce-ma
 
 ## Architecture
 
-The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeScript), Web (Next.js), the native app and the music router (`router/`, #692), a sidecar that serves the Subsonic API `music/subsonic.ts` already speaks, answered by music-source plugins. Controller and Liquidsoap share the `state/` dir (`/var/sub-wave` in containers) and must mount the same host path. Data passes as files in it; control (reloads, restart, skip, probes) goes over Liquidsoap's telnet on `broadcast:1234` (`broadcast/liquidsoap-control.ts`).
+The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeScript), Web (Next.js), the native app and the music router (`router/`, #692), a sidecar that serves the Subsonic API `music/subsonic.ts` already speaks, answered by music-source plugins. Every station plays through it by default, its own Navidrome served as a raw-id source so the ids match a direct connection; while the router is down, `music/source-failover.ts` points `config.navidrome` at Navidrome directly. Controller and Liquidsoap share the `state/` dir (`/var/sub-wave` in containers) and must mount the same host path. Data passes as files in it; control (reloads, restart, skip, probes) goes over Liquidsoap's telnet on `broadcast:1234` (`broadcast/liquidsoap-control.ts`).
 
 **Controller → Liquidsoap.** Liquidsoap reads; the controller only writes. The five polled files are written only by `Queue` methods, each through its own serialised `writeHandoff` chain, which waits for Liquidsoap to consume the previous write. Each poll interval caps the latency it adds.
 
@@ -111,7 +111,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Judge era with `resolveEraYear` and `yearUntrusted`, never raw `year`, and keep the JS and SQL era filters in agreement.
 - Silence trim measures against an absolute floor, and `music/silence-trim.ts` owns every onset shift.
 - Library coverage never counts on the read path; only `refresh()` counts it.
-- A new music backend is a router plugin, never a branch in the controller, and every plugin id goes through `router/src/host/ids.ts`. A source switch carries rows across through the existing adoption journal (`music/source-switch.ts`), never a second id-migration path (`docs/internals/music-sources.md`).
+- A new music backend is a router plugin, never a branch in the controller, and every plugin id goes through `router/src/host/ids.ts`. A source switch carries rows across through the existing adoption journal (`music/source-switch.ts`), never a second id-migration path. The built-in `navidrome` source has no settings of its own: it plays the station's Navidrome connection, so direct mode, the router and the failover never disagree about the server (`docs/internals/music-sources.md`).
 - Anything going to Liquidsoap uses `getAnnotatedUri`.
 - The tagger's own `moods`/`energy` never enter the embed text. Bump `TAGGER_CONTRACT_VERSION` (`music/tagger-core.ts`) when the prompt asks for something different.
 - CLAP cosines are not comparable across moods, so calibrate per mood.

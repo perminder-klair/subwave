@@ -45,6 +45,8 @@ export interface PluginInfo {
   error: string | null;
   /** From the last time this plugin was built (active or tested); null if not since the router started. */
   capabilities: Capabilities | null;
+  /** Development and tests only (the manifest's `devOnly`). Still loaded and served; hiding it is the controller's call. */
+  devOnly: boolean;
 }
 
 export interface ActiveInfo {
@@ -86,6 +88,7 @@ function pluginInfos(): PluginInfo[] {
       envLocked: m ? resolveConfig(m, {}).envLocked : [],
       error: p.error ?? null,
       capabilities: m ? lastSeenCapabilities(m.name) : null,
+      devOnly: m?.devOnly === true,
     };
   });
 }

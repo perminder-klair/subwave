@@ -1,5 +1,5 @@
-// Draft state for the music-source forms (admin Settings → Music source and
-// the onboarding wizard). Pure, so the rules the forms enforce — when a draft
+// Draft state for the music-source forms (Admin → Music sources and the
+// onboarding wizard). Pure, so the rules the forms enforce — when a draft
 // is dirty, when it changes the station's track ids, what is sent — are
 // tested without a browser.
 //
@@ -7,7 +7,14 @@
 // secret keys are on file (`secretsSet`), and a blank secret in the draft
 // means "keep the stored one".
 
-import { missingMusicFields, musicSelectionIdentity, type MusicConfigField, type MusicMode, type MusicPluginInfo } from '../../../lib/schemas.generated';
+import {
+  STATION_NAVIDROME_PLUGIN,
+  missingMusicFields,
+  musicSelectionIdentity,
+  type MusicConfigField,
+  type MusicMode,
+  type MusicPluginInfo,
+} from '../../../lib/schemas.generated';
 
 export type ConfigValue = string | number | boolean | null;
 
@@ -59,7 +66,9 @@ function isBlank(v: ConfigValue | undefined): boolean {
  * schema mirror), returned as fields so the form can name them.
  */
 export function missingFields(source: DraftSource, plugin: MusicPluginInfo | undefined): MusicConfigField[] {
-  if (!plugin) return [];
+  // The Navidrome source plays the station's Navidrome connection, which is
+  // checked as a whole (it has its own card), never through the draft.
+  if (!plugin || source.plugin === STATION_NAVIDROME_PLUGIN) return [];
   const stored = source.secretsSet.filter((k) => plugin.config.some((f) => f.key === k && f.type === 'secret'));
   const missing = missingMusicFields(source, plugin, stored);
   return plugin.config.filter((f) => missing.includes(f.key));

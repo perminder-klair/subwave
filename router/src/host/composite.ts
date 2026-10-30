@@ -154,6 +154,7 @@ export function createComposite(children: HostSource[]): HostSource {
     artist: async (id) => owner(id)?.artist(id),
     artistInfo: async (id, count) => owner(id)?.artistInfo(id, count),
     similarSongs: async (id, count) => (await owner(id)?.similarSongs(id, count)) ?? [],
+    sonicSimilar: async (id, count) => (await owner(id)?.sonicSimilar(id, count)) ?? [],
     stream: async (id, range) => owner(id)?.stream(id, range),
     coverArt: async (id, size) => owner(id)?.coverArt(id, size),
     lyrics: async (id) => {

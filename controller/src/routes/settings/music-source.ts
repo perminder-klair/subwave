@@ -8,7 +8,8 @@
 
 import express from 'express';
 import { requireAdmin } from '../../middleware/auth.js';
-import { loadSetupConfig } from '../../setup/config.js';
+import { loadSetupConfig, storedNavidromeView } from '../../setup/config.js';
+import { failoverState } from '../../music/source-failover.js';
 import {
   ROUTER_URL,
   RouterUnavailableError,
@@ -22,9 +23,20 @@ import {
 } from '../../setup/music-source.js';
 import { applySelection, prepareSelection } from '../../setup/music-source-save.js';
 import { firstMessage } from '../../util/zod-error.js';
-import { musicSourceTestSchema, type RouterStatus } from '../../schemas/music-source.js';
+import { musicSourceTestSchema, type MusicSelection, type RouterStatus } from '../../schemas/music-source.js';
 
 export const router = express.Router();
+
+// Dev-only plugins (the demo library) are for development and tests; an
+// operator sees one only when it is already selected, or with
+// SUBWAVE_DEV_PLUGINS=1. Presentation only: a save may still name one.
+const SHOW_DEV_PLUGINS = process.env.SUBWAVE_DEV_PLUGINS === '1';
+
+function forOperator(status: RouterStatus | null, sel: MusicSelection): RouterStatus | null {
+  if (!status || SHOW_DEV_PLUGINS) return status;
+  const selected = new Set(sel.sources.map((s) => s.plugin));
+  return { ...status, plugins: status.plugins.filter((p) => !p.devOnly || selected.has(p.name)) };
+}
 
 async function statusOrError(): Promise<{ status: RouterStatus | null; error: string | null }> {
   try {
@@ -41,8 +53,12 @@ router.get('/settings/music-source', requireAdmin, async (_req, res) => {
   res.json({
     ...maskSelection(selection, status?.plugins ?? []),
     routerUrl: ROUTER_URL,
-    router: status,
+    router: forOperator(status, selection),
     routerError: error,
+    // The station's own Navidrome connection: what the navidrome source plays,
+    // what direct mode uses, and what the failover falls back to.
+    navidrome: await storedNavidromeView(),
+    failover: failoverState(),
   });
 });
 
@@ -61,7 +77,7 @@ router.post('/settings/music-source', requireAdmin, async (req, res) => {
       reconcile: result.reconcile,
       // A refused save changed nothing, so it reports what is still stored.
       ...maskSelection(result.routerError ? prev : prepared.selection, plugins),
-      router: result.router,
+      router: forOperator(result.router, result.routerError ? prev : prepared.selection),
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err?.message || 'save failed' });
@@ -89,7 +105,7 @@ router.post('/settings/music-source/test', requireAdmin, async (req, res) => {
 router.post('/settings/music-source/rescan', requireAdmin, async (_req, res) => {
   try {
     const status = await routerReload();
-    res.json({ ok: true, router: status });
+    res.json({ ok: true, router: forOperator(status, readSelection(await loadSetupConfig())) });
   } catch (err: any) {
     res.status(503).json({ ok: false, error: err?.message || 'the music router is not reachable' });
   }

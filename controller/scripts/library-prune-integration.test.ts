@@ -21,9 +21,13 @@ const song = (id: string) => ({ id, title: `Fresh ${id}`, artist: 'Fixture', dur
 const server = createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
   const endpoint = url.pathname.split('/').at(-1) || '';
-  requests.push(endpoint);
+  // The connection check before a direct read is not part of the walk.
+  if (endpoint !== 'ping') requests.push(endpoint);
   let sub: Record<string, unknown> = { status: 'ok' };
   switch (endpoint) {
+    // No music router runs here, so a maintenance run checks this server
+    // answers before reading it directly (setup/config.ts loadMaintenanceConnection).
+    case 'ping': break;
     case 'getScanStatus': sub.scanStatus = { scanning }; break;
     case 'getAlbumList2':
       sub.albumList2 = { album: walk === 'empty' ? [] : [{ id: 'a' }, { id: 'b' }] };

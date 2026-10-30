@@ -55,8 +55,7 @@ including things you might not expect, like `library.db` — is per-station.
 ## Caveats
 
 - **Every station configures its own Navidrome connection.** Set its URL,
-  username and password through `/onboarding` or Admin → Settings → Music
-  source. In a multi-station install, `NAVIDROME_URL`, `NAVIDROME_USER` and
+  username and password through `/onboarding` or Admin → Music sources. In a multi-station install, `NAVIDROME_URL`, `NAVIDROME_USER` and
   `NAVIDROME_PASS` neither supply nor override a station's connection. A new
   or duplicated station needs setup even if those variables are present.
   Single-station installs retain environment configuration until conversion.

@@ -41,10 +41,16 @@ export interface WrapOptions {
   opTimeoutMs?: number;
 }
 
+// A plugin with no `sonicSimilar` op may still claim the extension through the
+// older `capabilities.sonicSimilarity` flag, served by `similarSongs` (the
+// mock does). The op wins when both are present.
+const legacySonic = (plugin: SourcePlugin) =>
+  typeof plugin.sonicSimilar !== 'function' && Boolean(plugin.capabilities?.sonicSimilarity) && typeof plugin.similarSongs === 'function';
+
 export function introspect(plugin: SourcePlugin): Capabilities {
   const has = (op: keyof SourcePlugin) => typeof plugin[op] === 'function';
   return {
-    sonicSimilarity: Boolean(plugin.capabilities?.sonicSimilarity) && has('similarSongs'),
+    sonicSimilarity: has('sonicSimilar') || legacySonic(plugin),
     artists: has('artists'),
     artistInfo: has('artistInfo'),
     similarSongs: has('similarSongs'),
@@ -206,6 +212,14 @@ export function wrapPlugin(plugin: SourcePlugin, opts: WrapOptions): HostSource 
       const native = codec.decode(id);
       if (native === undefined || !plugin.similarSongs) return [];
       return list(await timed('similarSongs', () => plugin.similarSongs!(native, count)), song);
+    },
+
+    async sonicSimilar(id, count) {
+      const native = codec.decode(id);
+      if (native === undefined) return [];
+      if (plugin.sonicSimilar) return list(await timed('sonicSimilar', () => plugin.sonicSimilar!(native, count)), song);
+      if (legacySonic(plugin)) return list(await timed('similarSongs', () => plugin.similarSongs!(native, count)), song);
+      return [];
     },
 
     async topSongs(artistName, count) {

@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as subsonicLog from '../music/subsonic-log.js';
 import { currentSelection, routerStatus } from '../setup/music-source.js';
+import { failoverState } from '../music/source-failover.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
@@ -225,7 +226,18 @@ export async function checkLlm(
 
 export async function checkNavidrome(): Promise<Finding[]> {
   const out: Finding[] = [];
-  const routerMode = currentSelection().mode === 'router';
+  const failover = failoverState();
+  // While failed over, the live connection is the station's Navidrome directly.
+  const routerMode = currentSelection().mode === 'router' && !failover.active;
+
+  if (failover.active) {
+    out.push({
+      label: 'failover',
+      status: 'warn',
+      detail: `music router down since ${failover.since} (${failover.reason}) — playing Navidrome directly`,
+      hint: 'The station keeps playing, with the same track ids. Check the router service (docker compose ps router) and its logs; it moves back on its own once the router answers.',
+    });
+  }
 
   const p = await subsonic.ping();
   out.push({
@@ -236,7 +248,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
       ? undefined
       : routerMode
         ? 'The picker has no music without the music router. Check the router service is running (docker compose ps router) and its logs.'
-        : 'The picker has no music source without Navidrome. Check the URL / username / password in Settings → Music source, and that Navidrome is up.',
+        : 'The picker has no music source without Navidrome. Check the URL / username / password in Admin → Music sources → Sources, and that Navidrome is up.',
   });
 
   // Router mode: the router answering says nothing about the library behind
@@ -310,11 +322,11 @@ async function checkMusicRouter(): Promise<Finding[]> {
         label: 'router selection',
         status: 'fail',
         detail: status.configError,
-        hint: 'The router refused the saved selection and kept serving the previous one. Fix it in Settings → Music source.',
+        hint: 'The router refused the saved selection and kept serving the previous one. Fix it in Admin → Music sources → Sources.',
       });
     }
     if (!status.active.length) {
-      out.push({ label: 'music source', status: 'fail', detail: 'no source selected', hint: 'Choose one in Settings → Music source.' });
+      out.push({ label: 'music source', status: 'fail', detail: 'no source selected', hint: 'Choose one in Admin → Music sources → Sources.' });
     }
     for (const a of status.active) {
       const st = a.health.stats;
@@ -324,7 +336,7 @@ async function checkMusicRouter(): Promise<Finding[]> {
         detail: a.health.state === 'healthy'
           ? (st ? `${st.songs.toLocaleString('en-GB')} songs · ${st.albums.toLocaleString('en-GB')} albums · ${st.artists.toLocaleString('en-GB')} artists` : 'answering')
           : a.health.error || a.health.state,
-        hint: a.health.state === 'healthy' ? undefined : `The router cannot reach ${a.label}. Check its URL and credentials in Settings → Music source, and that the server is up.`,
+        hint: a.health.state === 'healthy' ? undefined : `The router cannot reach ${a.label}. Check its URL and credentials in Admin → Music sources → Sources, and that the server is up.`,
       });
     }
     const broken = status.plugins.filter((pl) => pl.error);
@@ -333,7 +345,7 @@ async function checkMusicRouter(): Promise<Finding[]> {
         label: 'plugins',
         status: 'warn',
         detail: broken.map((pl) => `${pl.name}: ${pl.error}`).join('; '),
-        hint: 'These installed plugins failed to load and cannot be selected. See Settings → Music source.',
+        hint: 'These installed plugins failed to load and cannot be selected. See Admin → Music sources → Plugins.',
       });
     }
   } catch (err: any) {
