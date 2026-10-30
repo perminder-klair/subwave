@@ -68,7 +68,9 @@ first, and `vbr='none'` and `%opus (…)` count. Every doubt reads as not `cbr`.
 That covers no `vbr` at all or a bare `%opus` (2.4.6 defaults to constrained VBR,
 byte for byte), `vbr` given twice (the last one wins), a `(` inside the call (the
 first `)` then need not close it, and `bitrate=(96), dtx=true` is DTX on 2.4.6),
-and an `%ffmpeg` libopus encoder. Neither reader is a lexer. A `#` or `#<` in a string reads as a comment,
+a `#<` that never closes (2.4.6 refuses that file unless the `#<` sat in a string,
+and then what follows is real code), and an `%ffmpeg` libopus encoder. Neither
+reader is a lexer. A `#` or `#<` in a string reads as a comment,
 and a block comment's nesting is ignored, though 2.4.6 nests them.
 
 **The bitrate each burst is sized for is the bitrate liquidsoap encodes at

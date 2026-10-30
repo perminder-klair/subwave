@@ -36,6 +36,9 @@ export const NOT_CBR: Record<string, () => string> = {
     radioWith(BRANCH_96, `# a line comment naming #<\n  ${BRANCH_96.replace('none', 'constrained')}\n  # and one naming >#`),
   'a VBR encoder after a closed block comment': () =>
     radioWith(BRANCH_96, `#< closed ># ${BRANCH_96.replace('none', 'constrained')}`),
+  // Boots on 2.4.6, as this VBR encoder: the #< sits in a string, so nothing closes it.
+  'a VBR encoder after a #< in a string': () =>
+    `${RADIO.trimEnd()}\nignore("#<")\nignore(%opus(bitrate=96, vbr="constrained"))\n`,
   'a bare %opus': () => radioWith(BRANCH_96, '%opus'),
   'a bare %opus ending the file with no newline': () => `${RADIO.trimEnd()}\n%opus`,
   'a bare %opus with a comment between it and the next name': () => radioWith(BRANCH_96, '%opus#< x >#samplerate'),

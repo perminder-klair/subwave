@@ -156,8 +156,11 @@ burst_kbps() {
 
 # Liquidsoap source $1 on one line, with its comments out. Whichever form starts
 # first wins, as in the lexer, so a `#<` inside a `#` comment opens nothing. Not
-# a lexer: a `#` in a string cuts too. scripts/opus-cbr.test.ts cuts the same way,
-# and both answer to one table (scripts/test-utils/opus-cbr-table.ts).
+# a lexer: a `#` in a string cuts too. A `#<` that never closes leaves a bare
+# %opus behind, which reads as doubt: Liquidsoap refuses such a file unless the
+# `#<` sat in a string, and then what it cut is real code. scripts/opus-cbr.test.ts
+# cuts the same way, and both answer to one table
+# (scripts/test-utils/opus-cbr-table.ts).
 liq_code() {
     awk '{
 line = $0
@@ -176,7 +179,8 @@ while ((i = index(line, block ? ">#" : "#"))) {
 }
 print code (block ? "" : line)
 code = ""
-}' "$1" 2>/dev/null | tr '\n' ' '
+}
+END { if (block) print "%opus" }' "$1" 2>/dev/null | tr '\n' ' '
 }
 
 # The Opus mount's encoding, read from the radio.liq liquidsoap is about to load:

@@ -16,12 +16,13 @@ import { NOT_CBR, RADIO, STILL_CBR } from './test-utils/opus-cbr-table.js';
 // Both comment forms Liquidsoap has go first, whole: a vbr="none" left in a
 // comment inside a multi-line %opus( would read as the encoder's own (#2164).
 // Whichever form starts first wins, as in the lexer, so a #< inside a # comment
-// opens nothing, and a #< with no ># cuts to the end, as the lexer refuses it.
-// A string's `#{…}` is cut too, which costs nothing: a %opus that shared its
-// line would lose its bitrate and fail the branch check below. docker's
-// liq_code() cuts the same way.
+// opens nothing. A #< with no ># leaves a bare %opus, which reads as doubt: the
+// lexer refuses such a file unless the #< sat in a string, and then what it cut
+// is real code. A string's `#{…}` is cut too, which costs nothing: a %opus that
+// shared its line would lose its bitrate and fail the branch check below.
+// docker's liq_code() cuts the same way.
 function code(source: string) {
-  return source.replace(/#<[\s\S]*?(?:>#|$)|#.*/g, ' ');
+  return source.replace(/#<[\s\S]*?(>#|$)|#.*/g, (_, closer) => (closer === '' ? ' %opus ' : ' '));
 }
 
 // A bare %opus takes the encoder's defaults, which are constrained VBR (measured
