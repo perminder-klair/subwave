@@ -14,6 +14,7 @@ set -u
 SECRETS=/var/sub-wave/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
+RADIO_LIQ=/etc/liquidsoap/radio.liq
 
 # Multi-station pointer (kept in lockstep with docker/broadcast-entrypoint.sh).
 # Called at the top of run_broadcast so every mixer relaunch re-resolves.
@@ -532,7 +533,162 @@ read_state_num() {
 # override here would make the Icecast burst disagree with /now-playing and
 # voice-event timing even though all four processes share this container.
 stream_buffer_seconds() {
-	read_state_num liquidsoap_stream_buffer_seconds.txt 22
+	read_state_uint liquidsoap_stream_buffer_seconds.txt 22
+}
+
+# read_state_num, as a plain decimal: at most six digits (anything longer is the
+# fallback), and leading zeros read as decimal, as the controller and radio.liq
+# read them, never as bash arithmetic's octal. Every value that reaches
+# stream-mounts.json is one, so the marker always holds valid JSON numbers.
+read_state_uint() {
+	local v
+	v=$(read_state_num "$1" "$2")
+	[ "${#v}" -le 6 ] || v=$2
+	echo "$(( 10#$v ))"
+}
+
+# A bitrate a burst can be sized for. Zero is junk here because radio.liq
+# refuses it too (`v > 0`): a burst sized for 0 kbps holds nothing, while the
+# encoder runs at its default.
+read_state_kbps() {
+	local v
+	v=$(read_state_uint "$1" "$2")
+	[ "$v" -gt 0 ] || v=$2
+	echo "$v"
+}
+
+# The Opus mount's encoding, read from the radio.liq liquidsoap is about to load:
+# `cbr` only when EVERY %opus encoder in it says vbr="none" (hard CBR, whose
+# byte-sized burst holds the seconds it was sized for), `vbr` when any does not,
+# and nothing when there is none to read. Taken from the encoder line itself,
+# not declared beside it, so the answer changes in the same edit as the encoder
+# (#2138) and cannot outlive it. A client may treat the Opus burst as seconds
+# only on `cbr` (#2142); every doubt reads as not-CBR.
+opus_encoding() {
+	local calls
+	calls=$(sed 's/#.*//' "$1" 2>/dev/null | tr '\n' ' ' | grep -o '%opus([^)]*)' || true)
+	[ -n "$calls" ] || return 0
+	if printf '%s\n' "$calls" | grep -qv 'vbr *= *"none"'; then
+		echo vbr
+	else
+		echo cbr
+	fi
+	return 0
+}
+
+# Appends one stream mount to the icecast.xml fragment $1, and its entry to the
+# caller's STREAM_MOUNTS_JSON. $2 = mount path, $3 = kbps this mount's burst is
+# sized for, $4 = listener-auth URL already XML-escaped ('' = auth off), $5 =
+# extra marker fields (',"key":"value"' or '').
+emit_stream_mount() {
+	local xml=$1 mount=$2 kbps=$3 auth_url=$4 extra=${5:-} burst queue
+	burst=$(( BUFFER_SECONDS * kbps * 125 ))
+	queue=$(( burst * 4 ))
+	[ "$queue" -ge 2097152 ] || queue=2097152
+	state_log "  $mount @ ${kbps}kbps → burst-size ${burst}B, queue-size ${queue}B"
+	{
+		echo '    <mount type="normal">'
+		echo "        <mount-name>$mount</mount-name>"
+		echo "        <burst-size>$burst</burst-size>"
+		echo "        <queue-size>$queue</queue-size>"
+		if [ -n "$auth_url" ]; then
+			echo '        <authentication type="url">'
+			echo "            <option name=\"listener_add\" value=\"$auth_url\"/>"
+			echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
+			# The station has ONE shared password and the username is ignored, so many
+			# listeners present the same name (docs suggest `listener`). icecast-kh admits
+			# one connection per username unless told otherwise: the second gets a 403,
+			# or hangs unanswered when it arrives while the first is still closing, which
+			# is what an iOS player's range probe followed by its real request does.
+			echo '            <option name="allow_duplicate_users" value="1"/>'
+			echo '        </authentication>'
+		fi
+		echo '    </mount>'
+	} >> "$xml"
+	STREAM_MOUNTS_JSON="$STREAM_MOUNTS_JSON,\"$mount\":{\"kbps\":$kbps,\"burstSeconds\":$BUFFER_SECONDS,\"burstBytes\":$burst$extra}"
+	return 0
+}
+
+# $STATE_DIR/stream-mounts.json: what this render gave each mount (#2142).
+# /now-playing advertises the MP3 mount's burstSeconds to listeners, so the
+# marker is rewritten on EVERY render and can never describe mounts icecast is
+# not running. A failed write removes the old one rather than leave it
+# describing an earlier render (the controller then advertises the setting), and
+# is never fatal, same rule as the state bootstrap above.
+write_stream_mounts_marker() {
+	# $1 = the mounts JSON object
+	local dir=${STATE_DIR:-}
+	[ -n "$dir" ] || return 0
+	local marker=$dir/stream-mounts.json
+	local tmp=$marker.tmp
+	if printf '{"mounts":%s,"at":%s}\n' "$1" "$(date +%s)" > "$tmp" 2>/dev/null \
+		&& mv -f "$tmp" "$marker" 2>/dev/null; then
+		chmod 644 "$marker" 2>/dev/null || true
+	else
+		rm -f "$tmp" "$marker" 2>/dev/null || true
+		state_warn "could not write $marker — the station is unaffected, but listeners are told the saved buffer setting, which may not be the burst these mounts were rendered with"
+	fi
+	return 0
+}
+
+# Listener buffer depth (<burst-size>, #993/#1114) for every stream mount, ALWAYS
+# rendered (not just under auth). burst-size is a BYTE count, so it is sized in
+# SECONDS and converted per mount's bitrate: one global figure sized for MP3 is
+# a different depth everywhere else (22s of mp3-192k is ~43s of opus-96k, ~6s of
+# FLAC). Each <queue-size> is 4x its burst, floored at 2 MB, or a client is
+# evicted the moment it falls behind its own primed buffer (#993).
+#
+# Every setting is read ONCE, here (#2143). The same bitrates are handed to
+# liquidsoap as SUBWAVE_{STREAM,OPUS,AAC}_BITRATE, which radio.liq takes before
+# its own file read, so a save landing between this render and liquidsoap's
+# start cannot size a burst for one encoder and build another. What was
+# rendered goes to stream-mounts.json, because listeners must be told the burst
+# these mounts hold, not a setting saved since (#2142). A change applies on the
+# next pair launch.
+#
+#   render_stream_mounts $1=XML fragment path, $2=listener-auth URL already
+#   XML-escaped ('' = auth off), $3=the radio.liq liquidsoap will load.
+#
+# Sets BUFFER_SECONDS, STREAM_BITRATE, OPUS_BITRATE, AAC_BITRATE,
+# FLAC_BITRATE_EST, and the global <limits> ICECAST_BURST_SIZE /
+# ICECAST_QUEUE_SIZE (sized for MP3).
+#
+# docker/broadcast-entrypoint.sh carries the same functions and the same
+# messages; scripts/stream-mounts.test.ts drives both from one table.
+render_stream_mounts() {
+	local xml=$1 auth_url=$2 radio_liq=$3 opus_enc STREAM_MOUNTS_JSON=''
+	BUFFER_SECONDS=$(stream_buffer_seconds)
+	[ "$BUFFER_SECONDS" -le 60 ] || BUFFER_SECONDS=60
+	SUBWAVE_STREAM_BITRATE=$(read_state_kbps liquidsoap_stream_bitrate.txt 192)
+	SUBWAVE_OPUS_BITRATE=$(read_state_kbps liquidsoap_opus_bitrate.txt 96)
+	SUBWAVE_AAC_BITRATE=$(read_state_kbps liquidsoap_aac_bitrate.txt 192)
+	export SUBWAVE_STREAM_BITRATE SUBWAVE_OPUS_BITRATE SUBWAVE_AAC_BITRATE
+	# ICECAST_*_BITRATE re-size a mount's burst and nothing else; the encoder
+	# keeps the setting, as it always has.
+	STREAM_BITRATE=${ICECAST_STREAM_BITRATE:-$SUBWAVE_STREAM_BITRATE}
+	OPUS_BITRATE=${ICECAST_OPUS_BITRATE:-$SUBWAVE_OPUS_BITRATE}
+	AAC_BITRATE=${ICECAST_AAC_BITRATE:-$SUBWAVE_AAC_BITRATE}
+	case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
+	case "$OPUS_BITRATE" in *[!0-9]*|'') OPUS_BITRATE=96 ;; esac
+	case "$AAC_BITRATE" in *[!0-9]*|'') AAC_BITRATE=192 ;; esac
+	# FLAC is VBR with no bitrate setting — ~900 kbps is a typical average for
+	# 44.1/16 stereo, close enough for a buffer depth.
+	FLAC_BITRATE_EST=900
+
+	# kbps → bytes/sec is bitrate * 1000 / 8 = bitrate * 125.
+	ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
+	ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
+	[ "$ICECAST_QUEUE_SIZE" -ge 2097152 ] || ICECAST_QUEUE_SIZE=2097152
+
+	opus_enc=$(opus_encoding "$radio_liq")
+	state_log "listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps / opus ${OPUS_BITRATE}kbps (${opus_enc:-unknown encoding}) / aac ${AAC_BITRATE}kbps / flac ~${FLAC_BITRATE_EST}kbps"
+	: > "$xml"
+	emit_stream_mount "$xml" /stream.mp3  "$STREAM_BITRATE"   "$auth_url"
+	emit_stream_mount "$xml" /stream.opus "$OPUS_BITRATE"     "$auth_url" "${opus_enc:+,\"encoding\":\"$opus_enc\"}"
+	emit_stream_mount "$xml" /stream.flac "$FLAC_BITRATE_EST" "$auth_url"
+	emit_stream_mount "$xml" /stream.aac  "$AAC_BITRATE"      "$auth_url"
+	write_stream_mounts_marker "{${STREAM_MOUNTS_JSON#,}}"
+	return 0
 }
 
 # Concurrent-listener ceiling — the same function, for the same reasons, as
@@ -687,79 +843,27 @@ render_icecast() {
 	ICECAST_MAX_CLIENTS="${MAX_CLIENTS_LINE%% *}"
 	log "max listeners $ICECAST_MAX_CLIENTS (from ${MAX_CLIENTS_LINE#* })"
 
-	# Listener buffer depth — same contract as docker/broadcast-entrypoint.sh
-	# (#1114): burst-size is a byte count, derived from
-	# settings.stream.bufferSeconds x each mount's bitrate.
-	local STREAM_BITRATE BUFFER_SECONDS OPUS_BITRATE AAC_BITRATE FLAC_BITRATE_EST
-	STREAM_BITRATE="${ICECAST_STREAM_BITRATE:-$(read_state_num liquidsoap_stream_bitrate.txt 192)}"
-	BUFFER_SECONDS="$(stream_buffer_seconds)"
-	case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
-	case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
-	[ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60
-	OPUS_BITRATE="${ICECAST_OPUS_BITRATE:-$(read_state_num liquidsoap_opus_bitrate.txt 96)}"
-	AAC_BITRATE="${ICECAST_AAC_BITRATE:-$(read_state_num liquidsoap_aac_bitrate.txt 192)}"
-	case "$OPUS_BITRATE" in *[!0-9]*|'') OPUS_BITRATE=96 ;; esac
-	case "$AAC_BITRATE" in *[!0-9]*|'') AAC_BITRATE=192 ;; esac
-	# FLAC is VBR — ~900 kbps is a typical average for 44.1/16 stereo.
-	FLAC_BITRATE_EST=900
-
-	# Global <limits> fallback, sized for the MP3 mount (kbps x 125 = bytes/s).
-	local ICECAST_BURST_SIZE ICECAST_QUEUE_SIZE
-	ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
-	ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
-	[ "$ICECAST_QUEUE_SIZE" -lt 2097152 ] && ICECAST_QUEUE_SIZE=2097152
-	log "listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps / opus ${OPUS_BITRATE}kbps / aac ${AAC_BITRATE}kbps / flac ~${FLAC_BITRATE_EST}kbps"
-
 	# Listener auth (#478) — same contract as docker/broadcast-entrypoint.sh:
 	# only a literal 'true' in the controller-written flag enables. The
 	# controller runs in-process here, so the callback goes over loopback.
 	local FLAG=$STATE_DIR/icecast_listener_auth.txt
 	local AUTH_URL="${LISTENER_AUTH_URL:-http://localhost:7701/listener-auth}"
 	# Escaped once: it lands inside an XML attribute, and a query string's `&`
-	# is legitimate in a URL but not in icecast.xml.
-	local AUTH_URL_XML
-	AUTH_URL_XML=$(xml_escape "$AUTH_URL")
-	local LISTENER_AUTH=false
+	# is legitimate in a URL but not in icecast.xml. Empty renders no auth blocks.
+	local MOUNT_AUTH_URL_XML=''
 	if [ "$(cat "$FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
-		LISTENER_AUTH=true
+		MOUNT_AUTH_URL_XML=$(xml_escape "$AUTH_URL")
 		log "listener auth ON — mounts require credentials via $AUTH_URL"
 	fi
 
-	# One <mount> block per stream mount, ALWAYS rendered: each carries its
-	# own burst/queue sized for its own bitrate (the global <limits> value
-	# only fits MP3), plus the auth block when the toggle is on.
+	# One <mount> block per stream mount, each burst sized for its own bitrate
+	# (the global <limits> value only fits MP3), and the bitrates handed to
+	# liquidsoap — see render_stream_mounts above. Its globals land in these
+	# locals.
+	local STREAM_BITRATE BUFFER_SECONDS OPUS_BITRATE AAC_BITRATE FLAC_BITRATE_EST
+	local ICECAST_BURST_SIZE ICECAST_QUEUE_SIZE
 	local MOUNTS_XML=/etc/icecast2/stream-mounts.xml
-	: > "$MOUNTS_XML"
-	emit_mount() {
-		# $1 = mount path, $2 = kbps used to size this mount's burst
-		local _burst _queue
-		_burst=$(( BUFFER_SECONDS * $2 * 125 ))
-		_queue=$(( _burst * 4 ))
-		[ "$_queue" -lt 2097152 ] && _queue=2097152
-		{
-			echo '    <mount type="normal">'
-			echo "        <mount-name>$1</mount-name>"
-			echo "        <burst-size>$_burst</burst-size>"
-			echo "        <queue-size>$_queue</queue-size>"
-			if [ "$LISTENER_AUTH" = true ]; then
-				echo '        <authentication type="url">'
-				echo "            <option name=\"listener_add\" value=\"$AUTH_URL_XML\"/>"
-				echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
-				# The station has ONE shared password and the username is ignored, so many
-				# listeners present the same name (docs suggest `listener`). icecast-kh admits
-				# one connection per username unless told otherwise: the second gets a 403,
-				# or hangs unanswered when it arrives while the first is still closing, which
-				# is what an iOS player's range probe followed by its real request does.
-				echo '            <option name="allow_duplicate_users" value="1"/>'
-				echo '        </authentication>'
-			fi
-			echo '    </mount>'
-		} >> "$MOUNTS_XML"
-	}
-	emit_mount /stream.mp3  "$STREAM_BITRATE"
-	emit_mount /stream.opus "$OPUS_BITRATE"
-	emit_mount /stream.flac "$FLAC_BITRATE_EST"
-	emit_mount /stream.aac  "$AAC_BITRATE"
+	render_stream_mounts "$MOUNTS_XML" "$MOUNT_AUTH_URL_XML" "$RADIO_LIQ"
 
 	# Trusted reverse proxies — see render_trusted_proxies above. Caddy is in
 	# THIS container, so the peer is always loopback; both forms are emitted
@@ -831,7 +935,7 @@ run_broadcast() {
 	# TEMPORARY (re-harden later): run liquidsoap as root — same reason as
 	# docker/broadcast-entrypoint.sh (the savonet base bump changed the
 	# liquidsoap uid, making persisted state files unwritable).
-	liquidsoap /etc/liquidsoap/radio.liq &
+	liquidsoap "$RADIO_LIQ" &
 	local lq=$!
 
 	wait -n "$ic" "$lq"

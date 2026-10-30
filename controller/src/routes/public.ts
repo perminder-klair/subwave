@@ -16,6 +16,7 @@ import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { idleWindow, isIdle } from '../broadcast/stream-idle.js';
 import { currentStarve } from '../broadcast/music-starve.js';
+import { advertisedBufferSeconds } from '../broadcast/stream-mounts.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
 import { composeBoothFeed } from '../broadcast/booth-carry.js';
@@ -276,8 +277,9 @@ router.get('/now-playing', async (req, res) => {
         // Seconds a listener sits behind the live edge; every timestamp here is
         // live-edge, so players subtract this for listener-time (#1114). Never
         // measure it as `buffered.end - currentTime` (that is the demux window).
-        // Operator surfaces (admin, MCP) intentionally keep live edge.
-        bufferSeconds: stationSettings.stream?.bufferSeconds ?? 22,
+        // Operator surfaces (admin, MCP) intentionally keep live edge. The burst
+        // the running mounts were rendered with, not a setting saved since (#2142).
+        bufferSeconds: advertisedBufferSeconds(),
         opusEnabled: stationSettings.stream?.opusEnabled === true,
         flacEnabled: stationSettings.stream?.flacEnabled === true,
         aacEnabled: stationSettings.stream?.aacEnabled === true,

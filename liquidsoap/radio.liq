@@ -174,11 +174,24 @@ if file.exists("#{state_dir}/liquidsoap_archive_bitrate.txt") then
   if v > 0 then archive_bitrate := v end
 end
 
-if file.exists("#{state_dir}/liquidsoap_stream_bitrate.txt") then
-  raw = string.trim(file.contents("#{state_dir}/liquidsoap_stream_bitrate.txt"))
-  v = int_of_string(default=192, raw)
-  if v > 0 then stream_bitrate := v end
+# The bitrates that size the mounts' Icecast bursts. The broadcast supervisor
+# reads each one once, renders <burst-size> from it and hands the same value
+# here (SUBWAVE_*_BITRATE, #2143), so a save landing between that render and
+# this read cannot size a burst for one encoder and build another. Without the
+# handoff (run by hand, or under an older supervisor) the file is read as before.
+def burst_bitrate(env_name, file_name, fallback) =
+  handed = int_of_string(default=0, environment.get(default="", env_name))
+  if handed > 0 then
+    handed
+  elsif file.exists("#{state_dir}/#{file_name}") then
+    v = int_of_string(default=fallback, string.trim(file.contents("#{state_dir}/#{file_name}")))
+    if v > 0 then v else fallback end
+  else
+    fallback
+  end
 end
+
+stream_bitrate := burst_bitrate("SUBWAVE_STREAM_BITRATE", "liquidsoap_stream_bitrate.txt", 192)
 
 # Opt IN to the Ogg-Opus mount (costs a continuous encoder + a 44.1->48k
 # resample). Only Blink clients ever select it (web/hooks/usePlayer.ts).
@@ -187,11 +200,7 @@ if file.exists("#{state_dir}/liquidsoap_opus_enabled.txt") then
   opus_enabled := (raw == "true")
 end
 
-if file.exists("#{state_dir}/liquidsoap_opus_bitrate.txt") then
-  raw = string.trim(file.contents("#{state_dir}/liquidsoap_opus_bitrate.txt"))
-  v = int_of_string(default=96, raw)
-  if v > 0 then opus_bitrate := v end
-end
+opus_bitrate := burst_bitrate("SUBWAVE_OPUS_BITRATE", "liquidsoap_opus_bitrate.txt", 96)
 
 # Opt IN to the AAC-LC mount — for external players that decode AAC but not
 # Opus. No resample.
@@ -200,11 +209,7 @@ if file.exists("#{state_dir}/liquidsoap_aac_enabled.txt") then
   aac_enabled := (raw == "true")
 end
 
-if file.exists("#{state_dir}/liquidsoap_aac_bitrate.txt") then
-  raw = string.trim(file.contents("#{state_dir}/liquidsoap_aac_bitrate.txt"))
-  v = int_of_string(default=192, raw)
-  if v > 0 then aac_bitrate := v end
-end
+aac_bitrate := burst_bitrate("SUBWAVE_AAC_BITRATE", "liquidsoap_aac_bitrate.txt", 192)
 
 # Opt IN to the Ogg-FLAC mount — a lossless capture of the PROCESSED bus at the
 # source 44.1 kHz. ~800-900 kbps, hence off by default; external players only.
