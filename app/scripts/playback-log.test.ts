@@ -276,6 +276,19 @@ test('a URL is found whatever sits before its ://', () => {
   }
 });
 
+test('a URL in JSON that backslashes its slashes loses its userinfo and query too', () => {
+  const url = 'https://sam:hunter2@radio.example.com/stream.mp3?auth=hunter3';
+  const escaped = url.replaceAll('/', '\\/');
+  assert.equal(
+    redactPlaybackLine(`{"url":"${escaped}"}`),
+    '{"url":"https:\\/\\/radio.example.com\\/stream.mp3"}',
+  );
+  // Nested once more, each backslash is escaped in its turn.
+  const nested = JSON.stringify({ a: `{"url":"${escaped}"}` });
+  const out = redactPlaybackLine(nested);
+  assert.ok(!out.includes('sam') && !out.includes('hunter'), out);
+});
+
 test("a URL's query never takes a header's name and leaves its value behind", () => {
   for (const [line, want] of [
     ['https://radio.example.com/stream.mp3?x-station-auth: hunter2', 'https://radio.example.com/stream.mp3 [redacted]'],
@@ -401,6 +414,10 @@ test('no rule slows down on a long line built to make it rescan', () => {
     fill('://'),
     fill('x://a@'),
     fill('x://a?'),
+    fill(':\\/\\/'),
+    fill(':\\/\\/a@'),
+    `:${fill('\\')}`,
+    fill(`:${'\\'.repeat(997)}`),
     fill('proxy-'),
     fill('x-station-'),
     fill('x-station-auth '),

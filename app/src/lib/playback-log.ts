@@ -33,14 +33,15 @@ const REDACTED = '[redacted]';
 // :// and leave the scheme where it is: looking for a scheme means scanning to
 // the end of the line from every . + and - in it, which took 3.8 s on a 100 KB
 // `a.a.a…`. They're two rules because a path can hold another URL, whose
-// userinfo a single rule would take for path and keep.
+// userinfo a single rule would take for path and keep. A slash may be
+// backslashed: Apple's JSONSerialization writes https:\/\/ by default.
 // The app encodes every secret it puts in a URL (credentialedBase,
 // withStreamAuth), so a raw / ? # or @ can't sit inside userinfo or the query.
 // encodeURIComponent leaves ' ( ) ! * ~ as they are, so neither the query nor
 // an auth= value below may stop at one: a station password "it's" would leave
 // "'s" behind.
-const URL_USERINFO_RE = /:\/\/[^\s/?#]*@/g;
-const URL_QUERY_RE = /(:\/\/[^\s?#"'<>]*)(?:[?#][^\s"<>]*)?/g;
+const URL_USERINFO_RE = /(:\\*\/\\*\/)[^\s/?#]*@/g;
+const URL_QUERY_RE = /(:\\*\/\\*\/[^\s?#"'<>]*)(?:[?#][^\s"<>]*)?/g;
 // The separator takes in what wraps a value, so the value that follows is still
 // the secret: a Java map's [ ], Swift's Optional( ) and Java's Optional[ ], and
 // the backslashed quotes of JSON inside a JSON string. A scheme is found behind
@@ -79,7 +80,7 @@ export function redactPlaybackLine(msg: string): string {
     .replace(CREDENTIAL_RE, (m, scheme: string, token: string) =>
       token.length < CREDENTIAL_MIN || CREDENTIAL_PROSE.test(token) ? m : `${scheme} ${REDACTED}`,
     )
-    .replace(URL_USERINFO_RE, '://')
+    .replace(URL_USERINFO_RE, '$1')
     .replace(URL_QUERY_RE, '$1')
     .replace(AUTH_PARAM_RE, (_m, before: string) => `${before}auth=${REDACTED}`)
     .replace(ROUTE_OUTPUTS_RE, (_m, outputs: string) => `outputs=${portTypes(outputs)}`);
