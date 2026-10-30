@@ -78,6 +78,20 @@ test('the station password never reaches the log: ?auth= on the stream URL goes'
   ]);
 });
 
+test("a station password with a ' ( ) ! * or ~, which encodeURIComponent keeps, goes whole", () => {
+  for (const password of ["it's-mine", 'pa(ss)word!', "a'b*c~d"]) {
+    const url = `${withStreamAuth('https://radio.example.com/stream.mp3', password)}&t=1730322245`;
+    assert.equal(
+      redactPlaybackLine(`event playback-error msg=Unable to connect to ${url}`),
+      'event playback-error msg=Unable to connect to https://radio.example.com/stream.mp3',
+    );
+    assert.equal(
+      redactPlaybackLine(`GET stream.mp3${url.slice(url.indexOf('?'))} failed`),
+      'GET stream.mp3?auth=[redacted]&t=1730322245 failed',
+    );
+  }
+});
+
 test('an auth= outside a URL, and an x-station-auth header, are redacted', () => {
   assert.equal(
     redactPlaybackLine('msg=bad request (stream.mp3?auth=hunter2&t=1)'),

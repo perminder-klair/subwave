@@ -27,12 +27,14 @@ const REDACTED = '[redacted]';
 
 // scheme://[userinfo@]host[:port][path][?query][#fragment]. The app encodes
 // every secret it puts in a URL (credentialedBase, withStreamAuth), so a raw
-// / ? # or @ can't sit inside userinfo or the query.
-const URL_RE = /\b([a-z][a-z0-9+.-]*):\/\/(?:[^\s/?#]*@)?([^\s/?#"'<>]*)([^\s?#"'<>]*)(?:[?#][^\s"'<>]*)?/gi;
+// / ? # or @ can't sit inside userinfo or the query. encodeURIComponent leaves
+// ' ( ) ! * ~ as they are, so neither the query nor an auth= value below may
+// stop at one: a station password "it's" would leave "'s" behind.
+const URL_RE = /\b([a-z][a-z0-9+.-]*):\/\/(?:[^\s/?#]*@)?([^\s/?#"'<>]*)([^\s?#"'<>]*)(?:[?#][^\s"<>]*)?/gi;
 const HEADER_RE =
   /\b((?:proxy-)?authorization|x-station-auth)(["']?\s*[:=]\s*["']?)(?:(basic|bearer|digest)\s+)?[^\s"',;)}\]]*/gi;
 // Not after a hyphen: x-station-auth is the header rule's.
-const AUTH_PARAM_RE = /(^|[^\w-])auth=[^\s&#"',;)}\]]*/gi;
+const AUTH_PARAM_RE = /(^|[^\w-])auth=[^\s&#"<>,;}\]]*/gi;
 const ROUTE_OUTPUTS_RE = /\boutputs=(.*)$/;
 
 /** `msg` with every secret the rules above know of removed. */
