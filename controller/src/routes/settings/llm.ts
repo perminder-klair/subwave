@@ -12,6 +12,7 @@ import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway } from '../../schem
 import { applyCustomHeadersPatch } from '../../settings/vocab.js';
 import type { EmbeddingCfg } from '../../llm/provider.js';
 import { listenbrainzApiBase } from '../../broadcast/scrobble.js';
+import { isKeenableKey } from '../../skills/web-search.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -152,7 +153,7 @@ async function probeKey(
       if (provider === 'keenable') {
         // keenableSearch sends only a keen_ value and runs keyless otherwise,
         // so any other key is not a rejected key, just one that goes unused.
-        if (!value.startsWith('keen_')) {
+        if (!isKeenableKey(value)) {
           return { ok: false, message: 'Not a Keenable key (they start with keen_) — searches run keyless without one' };
         }
         const r = await fetch('https://api.keenable.ai/v1/search', {

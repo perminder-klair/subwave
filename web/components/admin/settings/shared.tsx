@@ -599,6 +599,8 @@ export interface SettingsData {
   };
   search?: {
     providers?: string[];
+    // Where the key a Keenable search sends comes from; null when it runs keyless.
+    keenableKeySource?: 'settings' | 'env' | null;
   };
   defaults?: {
     search?: Partial<SearchForm>;
@@ -842,9 +844,11 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
 interface KeyStatusProps {
   envVar: string;
   present: boolean;
+  /** Replaces the found-key sentence, for a provider where "ready to use" says nothing. */
+  detail?: ReactNode;
 }
 
-export function KeyStatus({ envVar, present }: KeyStatusProps) {
+export function KeyStatus({ envVar, present, detail }: KeyStatusProps) {
   const toneClass = present
     ? 'border-[var(--accent)] text-[color:var(--accent)]'
     : 'border-[var(--danger)] text-[var(--danger)]';
@@ -867,7 +871,7 @@ export function KeyStatus({ envVar, present }: KeyStatusProps) {
         </span>
         <span className="text-[14px] leading-[1.5] text-muted">
           {present ? (
-            <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
+            detail ?? <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (
             <>
               <code>{envVar}</code> is not set. Paste the key in the field above and save,

@@ -44,8 +44,17 @@ async function memo(
   return val;
 }
 
+// The one key slot every keyed backend reads: the saved settings.search.apiKey,
+// else SEARCH_API_KEY from the environment. `source` says which, for the admin.
+export function searchKeySlot(): { key: string; source: 'settings' | 'env' | null } {
+  const saved = settings.get().search?.apiKey;
+  if (saved) return { key: saved, source: 'settings' };
+  const env = process.env.SEARCH_API_KEY || config.search.apiKey;
+  return env ? { key: env, source: 'env' } : { key: '', source: null };
+}
+
 export async function tavilySearch(query: string): Promise<SearchResponse> {
-  const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
+  const apiKey = searchKeySlot().key;
   const res = await fetchWithTimeout(TAVILY_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -225,7 +234,7 @@ export async function braveSearch(
   query: string,
   recency?: 'day' | 'week' | 'month',
 ): Promise<SearchResponse> {
-  const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
+  const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('Brave Search API key not configured');
 
   const url = new URL(BRAVE_ENDPOINT);
@@ -315,12 +324,26 @@ export async function keenableSearch(
   query: string,
   recency?: 'day' | 'week' | 'month',
 ): Promise<SearchResponse> {
-  const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
+  const apiKey = searchKeySlot().key;
   const { url, init } = buildKeenableRequest({ query, apiKey, recency });
   const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
   if (!res.ok) throw new Error(`Keenable HTTP ${res.status}`);
   const data = await res.json();
   return parseKeenableResponse(data);
+}
+
+// The one test for "is this a Keenable key": the request builder, the admin
+// key probe and keenableKeySource all ask it.
+export function isKeenableKey(key: string): boolean {
+  return key.trim().startsWith('keen_');
+}
+
+// Where the key a Keenable search would send comes from, or null when it runs
+// keyless. SEARCH_API_KEY being set can't say whose key it is, so GET
+// /settings serves this to show a Keenable key that lives only in .env.
+export function keenableKeySource(): 'settings' | 'env' | null {
+  const { key, source } = searchKeySlot();
+  return isKeenableKey(key) ? source : null;
 }
 
 // Pure request builder for a Keenable search. Exported alongside
@@ -335,7 +358,7 @@ export function buildKeenableRequest(opts: {
   now?: Date;
 }): { url: string; init: RequestInit } {
   const apiKey = (opts.apiKey || '').trim();
-  const keyed = apiKey.startsWith('keen_');
+  const keyed = isKeenableKey(apiKey);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Keenable-Title': 'subwave',
@@ -416,5 +439,5 @@ export function searchReady(): boolean {
   if (provider === 'duckduckgo' || provider === 'keenable') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
   // tavily / brave (and any future keyed provider)
-  return !!(s?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey);
+  return !!searchKeySlot().key;
 }
