@@ -157,6 +157,22 @@ test('the Station login never reaches the log: what wraps an Authorization value
   }
 });
 
+test('the Station login never reaches the log: a wrapper no rule names hides nothing', () => {
+  for (const [line, want] of [
+    [`Authorization: <${BASIC}>`, 'Authorization: Basic [redacted]'],
+    [`Authorization: {${BASIC}}`, 'Authorization: Basic [redacted]}'],
+    [`Authorization: Some(${BASIC})`, 'Authorization: Basic [redacted])'],
+    [`Authorization=SecretString(${BASIC})`, 'Authorization=Basic [redacted])'],
+    [`Authorization: Optional<String>.some(${BASIC})`, 'Authorization: Basic [redacted])'],
+    ['Authorization: `' + BASIC + '`', 'Authorization: Basic [redacted]'],
+    [`Proxy-Authorization: *Bearer abc.def-ghi*`, 'Proxy-Authorization: Bearer [redacted]'],
+    // Too short for the bare credential rule, so only the header rule can catch it.
+    ['Authorization: <Basic YTpi>', 'Authorization: Basic [redacted]'],
+  ]) {
+    assert.equal(redactPlaybackLine(line), want);
+  }
+});
+
 test('the station password never reaches the log: what wraps an x-station-auth value hides nothing', () => {
   for (const line of [
     '{"x-station-auth":["hunter2"]}',
@@ -380,6 +396,8 @@ test('no rule slows down on a long line built to make it rescan', () => {
     `authorization=${fill('[')}`,
     `authorization=${fill('\\"')}`,
     `authorization=${fill('optional(')}`,
+    `authorization=${fill('-basic')}`,
+    `authorization=${fill('(basic')}`,
     fill('authorization=optional'),
     `basic${fill(' ')}`,
     fill(`basic${' '.repeat(997)}`),

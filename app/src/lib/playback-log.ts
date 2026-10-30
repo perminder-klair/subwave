@@ -43,9 +43,11 @@ const URL_USERINFO_RE = /:\/\/[^\s/?#]*@/g;
 const URL_QUERY_RE = /(:\/\/[^\s?#"'<>]*)(?:[?#][^\s"<>]*)?/g;
 // The separator takes in what wraps a value, so the value that follows is still
 // the secret: a Java map's [ ], Swift's Optional( ) and Java's Optional[ ], and
-// the backslashed quotes of JSON inside a JSON string.
+// the backslashed quotes of JSON inside a JSON string. A scheme is found behind
+// any other wrapper too (<Basic …>, Some(Basic …)): taken for the value, it
+// would leave the credential after it with no word to be found by.
 const HEADER_RE =
-  /\b((?:proxy-)?authorization|x-station-auth)(\\*["']?\s*[:=](?:\s*(?:optional)?[\\"'[(]+)*\s*)(?:(basic|bearer|digest)\s+)?[^\s"',;)}\]]*/gi;
+  /\b((?:proxy-)?authorization|x-station-auth)(\\*["']?\s*[:=](?:\s*(?:optional)?[\\"'[(]+)*\s*)(?:[^\s"',;)}\]]*?\b(basic|bearer|digest)\s+)?[^\s"',;)}\]]*/gi;
 // A credential with no header name to find it by, which only its shape gives
 // away. That shape is also a sentence's, so it costs some readability and a
 // little coverage: CREDENTIAL_MIN keeps "Basic realm" and "bearer token" but
