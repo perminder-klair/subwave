@@ -1611,7 +1611,8 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                     closer to live and shorten idle wake-up on radios and apps (the web player
                     skips most of it on MP3 in Chrome and Firefox), but leave less immediate cushion
                     for network stalls; 0 disables the connect burst. Applies on the next
-                    broadcast restart. Current: {data?.values?.stream?.bufferSeconds ?? '—'}
+                    broadcast restart; until then listeners keep, and players are told, the
+                    buffer the stream started with. Saved: {data?.values?.stream?.bufferSeconds ?? '—'}
                     {' '}seconds.
                   </div>
                 </div>
