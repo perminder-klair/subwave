@@ -60,7 +60,7 @@ Icecast falls through to the Next.js catch-all and 404s. On one hostname:
 | Path | Upstream | Notes |
 |---|---|---|
 | `/api/listener-auth*` | — | Return 404 at the edge, matched as a case-insensitive prefix (the controller also answers a trailing slash and any case). Icecast calls it directly over the internal network; exposed publicly it's an unthrottled password oracle (#478). This rule must win before the general `/api/*` rule. |
-| `/stream.mp3` `/stream.opus` `/stream.flac` `/stream.aac` | Icecast `:7702` | Opus/FLAC/AAC are off by default but **still need routing** — enabling one in admin must not also need a proxy edit. Disable response buffering on these (Caddy `flush_interval -1`, nginx `proxy_buffering off`) or the audio arrives in lumps. |
+| `/stream.mp3` `/stream.opus` `/stream.flac` `/stream.aac` | Icecast `:7702` | Opus/FLAC/AAC are off by default but **still need routing** — enabling one in admin must not also need a proxy edit. Disable response buffering on these (Caddy `flush_interval -1`, nginx `proxy_buffering off`) or the audio arrives in lumps. Drop `WWW-Authenticate` from the response only for a client that can't answer it: see [the stream's 401 challenge](reverse-proxy.md#the-streams-401-challenge). |
 | `/listen.pls` `/listen.m3u` | Controller `:7701` | Playlist files for hardware radios / VLC. Keep the path unchanged: they are controller routes served at the **root**, not under `/api`. |
 | `/api/*` | Controller `:7701` | Strip the `/api` prefix (Caddy `handle_path`). |
 | everything else | Web `:7700` | |
