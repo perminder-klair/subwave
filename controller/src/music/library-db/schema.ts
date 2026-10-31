@@ -521,6 +521,8 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
   if (ensureSearchKeys(d) && userVersion < 29) fillSearchKeys();
   ensureSearchIndex(d);
 
+  ensureFileInfoColumns(d);
+
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
   // embedding_meta, which is written separately by the tagger and can lag.
@@ -639,4 +641,18 @@ function vecTableDim(d: Database.Database): number | null {
 // behind --reseed.
 function vecCount(d: Database.Database): number {
   return (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as { n: number }).n;
+}
+
+// The file as Navidrome reports it, kept by the library walk: path, format,
+// size in bytes and bitrate in kbps. Added by name when missing rather than as
+// a numbered migration, so it can't collide with a user_version a parallel
+// change claims; idempotent, and a few MB on a 76k-track library.
+function ensureFileInfoColumns(d: Database.Database): void {
+  const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));
+  const wanted: Array<[string, string]> = [
+    ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
+  ];
+  for (const [name, type] of wanted) {
+    if (!have.has(name)) d.exec(`ALTER TABLE tracks ADD COLUMN ${name} ${type}`);
+  }
 }

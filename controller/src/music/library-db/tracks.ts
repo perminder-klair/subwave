@@ -166,13 +166,19 @@ export function textVectorDirtyIds(): string[] {
     .all() as Array<{ id: string }>).map(r => r.id);
 }
 
+function positiveInt(v: unknown): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+}
+
 export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   const eraBefore = storedEra(id);
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec,
+                          file_path, file_suffix, file_size, bit_rate)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -206,7 +212,12 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
         is_compilation = COALESCE(excluded.is_compilation, tracks.is_compilation),
         era_untrusted  = COALESCE(excluded.era_untrusted, tracks.era_untrusted),
         genres       = COALESCE(excluded.genres, tracks.genres),
-        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
+        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
+        -- File facts: only the walk has them; any other writer passes NULL.
+        file_path    = COALESCE(excluded.file_path, tracks.file_path),
+        file_suffix  = COALESCE(excluded.file_suffix, tracks.file_suffix),
+        file_size    = COALESCE(excluded.file_size, tracks.file_size),
+        bit_rate     = COALESCE(excluded.bit_rate, tracks.bit_rate)
     `,
     )
     .run(
@@ -223,6 +234,10 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.eraUntrusted == null ? null : meta.eraUntrusted ? 1 : 0,
       meta.genres?.length ? JSON.stringify(meta.genres) : null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
+      typeof meta.filePath === 'string' && meta.filePath !== '' ? meta.filePath : null,
+      typeof meta.fileSuffix === 'string' && meta.fileSuffix !== '' ? meta.fileSuffix.toLowerCase() : null,
+      positiveInt(meta.fileSize),
+      positiveInt(meta.bitRate),
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);
 }

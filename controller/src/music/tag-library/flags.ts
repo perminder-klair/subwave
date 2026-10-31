@@ -103,6 +103,22 @@ function informativeAlbumYear(song: {
 // Walk the whole Navidrome catalogue, upserting each song's metadata and
 // collecting the live id set. Shared by the full tagger run and
 // --reconcile-only. Metadata only: no embeddings, no LLM.
+// The file facts a Subsonic child carries, for the library status exports:
+// `path` is the real file path only when the client has "Report Real Path" on in
+// Navidrome (otherwise one built from the tags), `size` is bytes, `bitRate` kbps.
+export function walkFileInfo(song: any): {
+  filePath: string | null; fileSuffix: string | null; fileSize: number | null; bitRate: number | null;
+} {
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v : null);
+  const num = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  return {
+    filePath: str(song?.path),
+    fileSuffix: str(song?.suffix),
+    fileSize: num(song?.size),
+    bitRate: num(song?.bitRate),
+  };
+}
+
 export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }> {
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
@@ -133,6 +149,7 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
       eraUntrusted: song.albumEraUntrusted ?? null,
       genres: subsonic.songGenres(song),
       duration: song.duration,
+      ...walkFileInfo(song),
     });
     liveIds.add(song.id);
     if (song.albumEraUntrusted && song.albumEraReason) {
