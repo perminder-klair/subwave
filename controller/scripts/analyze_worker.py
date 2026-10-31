@@ -1527,6 +1527,63 @@ def stems_dir_to_write(stems_dir, require_marker):
     return None
 
 
+# The analyzer image runs as an unprivileged user with umask 022, so a plain
+# makedirs/open leaves what it shares with the controller at 755/644. Where the
+# controller is another user on that share (a remote analyzer, or NFS squashing
+# root to nobody), it then cannot delete inside stems/<id>/ when it evicts the
+# track. Shared folders get 777 and shared files 666, the state bootstrap's
+# rule (docker/broadcast-entrypoint.sh), set explicitly so no umask can narrow them.
+# A refused chmod never stops a write, on a folder or a file: the entrypoint's
+# own rule (state_prepare_file's `chmod ... || true`), because the shares this is
+# for (ACL-only NFS, some NAS exports, FUSE) answer a mode change on SETATTR
+# with EPERM, ENOTSUP or ENOSYS. The item then keeps the mount's mode, and the
+# analyzer says so once per process, naming the path, so a cache that stays
+# 755 is explained in its own log.
+SHARED_DIR_MODE = 0o777
+SHARED_FILE_MODE = 0o666
+_shared_chmod_logged = False
+
+
+def _shared_chmod(path, mode):
+    global _shared_chmod_logged
+    try:
+        os.chmod(path, mode)
+    except OSError as err:
+        if not _shared_chmod_logged:
+            _shared_chmod_logged = True
+            log(f"could not set mode {oct(mode)} on {path} ({err.strerror or err}): "
+                "it keeps the mount's mode, and the write goes ahead (logged once)")
+
+
+def make_shared_dir(path):
+    """makedirs + an explicit 777 on the leaf. makedirs gives any missing
+    parent the umask's mode; the roots (stems/, transitions/, a relocated
+    STEMS_DIR) are created 777 by the broadcast entrypoint and the
+    controller's marker setup, and stems_require_marker makes sure they exist,
+    so only an older controller that sends no marker flag ever reaches here
+    with one missing."""
+    os.makedirs(path, exist_ok=True)
+    _shared_chmod(path, SHARED_DIR_MODE)
+
+
+@contextlib.contextmanager
+def shared_output(path):
+    """Yields the temp path to write; on success sets 666 and renames it into
+    place atomically (the chmod comes first, so the final name never appears
+    at the umask's mode). On any failure, the write's or the rename's, the
+    temp file is removed so a partial file never counts against the cache
+    budget, and the error goes up to the caller, which degrades."""
+    tmp = path + ".tmp"
+    try:
+        yield tmp
+        _shared_chmod(tmp, SHARED_FILE_MODE)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
+
+
 def write_stems(stems, window, dest_dir):
     """Persist a separate() result as 16-bit FLAC at DEMUCS_SR into dest_dir
     as <window>-<stem>.flac (feature: stem-blend transitions — the cache that
@@ -1535,12 +1592,11 @@ def write_stems(stems, window, dest_dir):
     the render op to trust. Raises on failure; callers degrade."""
     import soundfile as sf
 
-    os.makedirs(dest_dir, exist_ok=True)
+    make_shared_dir(dest_dir)
     for name, data in stems.items():
         path = os.path.join(dest_dir, f"{window}-{name}.flac")
-        tmp = path + ".tmp"
-        sf.write(tmp, data.T, DEMUCS_SR, subtype="PCM_16", format="FLAC")
-        os.replace(tmp, path)
+        with shared_output(path) as tmp:
+            sf.write(tmp, data.T, DEMUCS_SR, subtype="PCM_16", format="FLAC")
 
 
 def write_tail_meta(dest_dir, tail_start_s, duration_s):
@@ -1551,13 +1607,11 @@ def write_tail_meta(dest_dir, tail_start_s, duration_s):
     the borrowed drum loop off the downbeat — so the true offset rides with
     the stems and a render without it is a clean cache miss."""
     path = os.path.join(dest_dir, "tail-meta.json")
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with shared_output(path) as tmp, open(tmp, "w") as f:
         json.dump({
             "tail_start_sec": round(float(tail_start_s), 3),
             "duration_sec": round(float(duration_s), 3),
         }, f)
-    os.replace(tmp, path)
 
 
 def render_transition(req):
@@ -1768,11 +1822,10 @@ def render_transition(req):
     mix_buf[:e] *= ramp
     mix_buf[-e:] *= ramp[::-1]
 
-    os.makedirs(out_dir, exist_ok=True)
+    make_shared_dir(out_dir)
     out_path = os.path.join(out_dir, os.path.basename(clip_name))
-    tmp = out_path + ".tmp"
-    sf.write(tmp, mix_buf, sr, subtype="PCM_16", format="WAV")
-    os.replace(tmp, out_path)
+    with shared_output(out_path) as tmp:
+        sf.write(tmp, mix_buf, sr, subtype="PCM_16", format="WAV")
     return {
         "ok": True,
         "path": out_path,

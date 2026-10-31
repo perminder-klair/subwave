@@ -281,7 +281,7 @@ It has to stay split, because Navidrome credentials are per-station: two
 stations can index different libraries, and this cache is keyed by track id
 alone.
 
-Three things to know before you do it:
+Before you do it, know this:
 
 - **Mount it in the controller *and* the analyzer, at the identical path.**
   The controller hands the analyzer a filesystem *path*, not audio (the same
@@ -295,6 +295,14 @@ Three things to know before you do it:
   every boot, exactly as it already did for `voice/`, `sfx/` and the rest —
   and, when `STEMS_DIR` is set, the relocated root as well, which the in-state
   loop never reaches.
+- **What the analyzer writes inside the cache stays deletable.** The
+  per-track folders (`stems/<id>/`), the stem files and the rendered
+  transition clips are created 777 / 666 whatever the analyzer's umask, so a
+  controller that is a different user on the share (a remote analyzer, or NFS
+  squashing root to `nobody`) can still evict them. Before, they came out
+  755 / 644 and eviction failed with `dir delete(s) failed — check
+  ownership/permissions on state/stems`; a `umask 0000` override on the
+  analyzer's command was the workaround, and can go.
 - **A mount that refuses `chmod` no longer stops the station.** Read-only
   binds, some NFS exports and exFAT/NTFS disks won't take the permission
   change. That used to abort the broadcast entrypoint before Icecast started,
