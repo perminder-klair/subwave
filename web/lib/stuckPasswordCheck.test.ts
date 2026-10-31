@@ -71,9 +71,9 @@ test("the gaps are the app's", () => {
 });
 
 test('tuned in and not playing is stuck, through every reconnect of a refused stream', () => {
-  // On Firefox a 401 at the mount runs connecting -> error -> idle for the backoff -> connecting.
-  // The hook keys its watcher on this, so one that moved with `status` would never reach its first
-  // check there.
+  // On Firefox a 401 at the mount is an element error, and `usePlayer` once rested on 'idle' for
+  // the backoff. The hook keys its watcher on this, so one that moved with `status` would never
+  // reach its first check if the player ever shows anything but 'playing' while it retries.
   for (const status of ['connecting', 'idle', 'connecting', 'idle'] as const) {
     assert.equal(stuckConnecting(true, status), true, status);
   }

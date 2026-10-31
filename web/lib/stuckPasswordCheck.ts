@@ -23,12 +23,12 @@ import type { StationAuthResult } from './stationAuth';
 export const STUCK_RECHECK_MS = 15_000;
 export const RECHECK_MIN_GAP_MS = 120_000;
 
-/** Tuned in and hearing nothing. Unlike the app's player, this one can rest on 'idle' between
- *  reconnects: Firefox reports a refused connect as an element error, which drops `status` for the
- *  backoff, up to a minute, and 'connecting' lasts only as long as the refusal takes. (Chromium
- *  parks a same-origin connect on the 401's Basic challenge, behind its own sign-in dialog, and
- *  stays on 'connecting'.) Keyed on 'connecting' alone, Firefox's watcher is replaced before its
- *  first check ever comes due. */
+/** Tuned in and hearing nothing. Keyed on "not playing" rather than 'connecting', so the watcher
+ *  doesn't depend on which status the player shows while it retries: `usePlayer` holds 'connecting'
+ *  through the backoff now, but it used to drop to 'idle' on Firefox's refused connect (an element
+ *  error), and a watcher keyed on 'connecting' was replaced before its first check came due.
+ *  (Chromium parks a same-origin connect on the 401's Basic challenge, behind its own sign-in
+ *  dialog, and stays on 'connecting'.) */
 export function stuckConnecting(tunedIn: boolean, status: PlayerStatus): boolean {
   return tunedIn && status !== 'playing';
 }
