@@ -24,9 +24,16 @@
 // A connection cut just past it cycles in about STAYED_UP_MS + 0.6 s, the base
 // delay plus the connect, so the worst case is about 12 a minute (measured 8-11
 // at 4.2 s), what a source flapping 3 s up and 1 s down already costs. A cut after
-// 5 s stays at 7-8 a minute, with sound 93% of the time. The price is a connection
-// that closes inside the threshold just after a long outage: it waits the outage's
-// delay, up to a minute, because nothing here can tell it from a proxy's cut.
+// 5 s stays at 7-8 a minute, with sound 93% of the time.
+//
+// An early close after `playing` waits at most PLAYED_MAX_MS. That connection
+// proved the station is up, so only load argues for a longer wait, and 16 s
+// already holds a 1 s cut to about 3.5 connects a minute, about one healthy
+// listener's worth of bursts (37 with no rule, 1 at the full curve's minute). It
+// also bounds the price of the rule: a connection that closes inside the threshold
+// just after a long outage, which nothing here can tell from a proxy's cut, waits
+// 16 s rather than the outage's minute (measured 17 s to the next connect). The
+// count still climbs, so a refused connect after it takes the full curve.
 //
 // A mount that loses its source is not a close. Icecast-KH holds the listener's
 // socket open for about 15 s, so the connection stalls and the watchdog replaces
@@ -44,6 +51,8 @@ export const RECONNECT_BASE_MS = 500;
 export const RECONNECT_MAX_MS = 60_000;
 /** How long after `playing` a connection must close to count as having stayed up. */
 export const STAYED_UP_MS = 4000;
+/** The most a connection that reached `playing` waits after an early close. */
+export const PLAYED_MAX_MS = 16_000;
 
 export interface Backoff {
   /** Failed connections in a row. Drives the next delay. */
@@ -56,8 +65,8 @@ export interface Backoff {
 
 export const NO_BACKOFF: Backoff = { retries: 0, heldRetries: 0, playingSince: null };
 
-function delayFor(retries: number): number {
-  return Math.min(RECONNECT_BASE_MS * 2 ** retries, RECONNECT_MAX_MS);
+function delayFor(retries: number, max: number): number {
+  return Math.min(RECONNECT_BASE_MS * 2 ** retries, max);
 }
 
 /** A new connection starts. What the last one played says nothing about this one,
@@ -81,5 +90,6 @@ export function connectionClosed(backoff: Backoff, now: number): { delayMs: numb
   const { playingSince } = backoff;
   let retries = backoff.retries;
   if (playingSince !== null) retries = now - playingSince < STAYED_UP_MS ? backoff.heldRetries : 0;
-  return { delayMs: delayFor(retries), next: { ...backoff, retries: retries + 1 } };
+  const max = playingSince !== null ? PLAYED_MAX_MS : RECONNECT_MAX_MS;
+  return { delayMs: delayFor(retries, max), next: { ...backoff, retries: retries + 1 } };
 }

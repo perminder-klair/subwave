@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   NO_BACKOFF,
+  PLAYED_MAX_MS,
   RECONNECT_BASE_MS,
   RECONNECT_MAX_MS,
   STAYED_UP_MS,
@@ -59,15 +60,28 @@ test('the curve: quick first retry, doubling to a minute, and it stays there', (
   assert.equal(RECONNECT_MAX_MS, 60_000);
 });
 
-test('a connection that plays for a moment and closes grows the backoff', () => {
+test('a connection that plays for a moment and closes grows the backoff, to 16 s', () => {
   for (const played of [250, 1000, STAYED_UP_MS - 1]) {
     const l = listener();
     const delays = Array.from({ length: 8 }, () => {
       l.plays(played);
       return l.closes();
     });
-    assert.deepEqual(delays, [500, 1000, 2000, 4000, 8000, 16_000, 32_000, 60_000], `played ${played}`);
+    assert.deepEqual(delays, [500, 1000, 2000, 4000, 8000, 16_000, 16_000, 16_000], `played ${played}`);
   }
+  assert.equal(PLAYED_MAX_MS, 16_000);
+});
+
+test('the count climbs past the 16 s ceiling, so a refused connect takes the full curve', () => {
+  const l = listener();
+  for (let i = 0; i < 7; i += 1) {
+    l.plays(1000);
+    l.closes();
+  }
+  l.refused();
+  assert.equal(l.closes(), 60_000);
+  l.plays(1000);
+  assert.equal(l.closes(), 16_000);
 });
 
 test('a connection that stays up keeps the first reconnect quick, every time', () => {
@@ -135,14 +149,14 @@ test('a long outage: the wait outlives it as it always has, and a good connectio
   assert.equal(l.closes(), 500);
 });
 
-test('a connection that dies right after a long outage waits the outage\'s delay', () => {
+test('a connection that dies right after a long outage waits 16 s, not the outage\'s minute', () => {
   const l = listener();
   for (let i = 0; i < 10; i += 1) {
     l.refused();
     l.closes();
   }
   l.plays(1000);
-  assert.equal(l.closes(), 60_000);
+  assert.equal(l.closes(), 16_000);
 });
 
 test('the watchdog replacing a connection leaves the reset standing', () => {
