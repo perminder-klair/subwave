@@ -60,13 +60,20 @@ every listener connect, so:
 
 - **Web player** — asks for the password once and remembers it in the
   browser. If the private player is on too, the single prompt unlocks both the
-  interface and the audio. Under the hood it rides a `?auth=PASSWORD` token on
-  the stream URL (browsers can't attach basic auth to an `<audio>` element).
+  interface and the audio. Until the password is accepted, the player behind
+  the prompt ignores taps and keys, so the first tap can't tune in without it.
+  Under the hood it rides a `?auth=PASSWORD` token on the stream URL (browsers
+  can't attach basic auth to an `<audio>` element).
   A typed password is saved only when the station accepts it. The saved one is
   checked again on each visit and forgotten only when the station itself
   refuses it. If the check gets no answer from the station (a network blip, the
   rate limit, a proxy's 401 or login page), the password is kept and the player
-  opens with it, because the stream still checks it on every connect.
+  opens with it, because the stream still checks it on every connect. If the
+  player then can't connect, it asks the station again, at most every two
+  minutes, and waits out the rate limit. Once the station refuses the password,
+  usually because you changed it, the player stops and asks for the new one,
+  saying the saved password was not accepted. Changing the password never drops
+  anyone who is already listening; it reaches them the next time they reconnect.
 - **Radio apps / VLC / Sonos / hardware** — use a credentialed URL:
   `https://listener:PASSWORD@your-station.example/stream.mp3`
   (any username works; only the password is checked).
