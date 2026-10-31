@@ -86,6 +86,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and six tests drive both copies), so fix one, fix both.
 - **State bootstrap is never fatal.** Guard each step and warn; Icecast and the dead-air guard must still come up.
 - **The admin lockout counts distinct guesses, never requests**, and `ADMIN_LOCKOUT=off` (env only) is the operator's final say (`infrastructure.md`). The web console sends `X-Subwave-Console` so it is never answered with a Basic challenge.
+- **The edge drops Icecast's Basic challenge only for a client that can't answer it** (`?auth=`, or `Sec-Fetch-Dest: audio|video` from the same origin), in both Caddyfiles and every `docs/reverse-proxy.md` recipe. Unconditional either way is the bug: stripped, ffmpeg and mpv can't log in; kept, the browser's "Sign in" dialog covers the player (`infrastructure.md`).
 - **The listener-country chain fails open link by link** (`broadcast/listener-country.ts`). A later link runs when an earlier one misses (`XX`/`T1`), not only when it is absent.
 
 **Timing** (`broadcast.md`)

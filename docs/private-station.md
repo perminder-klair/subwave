@@ -50,7 +50,10 @@ every listener connect, so:
 > `docker-compose.byo.yml` with your own Traefik/nginx/Caddy, block that path
 > too — as a case-insensitive prefix, since the controller also answers a
 > trailing slash and any case
-> ([recipes](reverse-proxy.md#the-route-contract)). As backstops, the
+> ([recipes](reverse-proxy.md#the-route-contract)). Replicate
+> [the stream's 401 challenge](reverse-proxy.md#the-streams-401-challenge) rule
+> too, or listeners with an out-of-date password get the browser's native
+> "Sign in" dialog over the player. As backstops, the
 > controller refuses any call carrying a proxy's forwarding headers
 > (`X-Forwarded-For` and the like — Icecast's own call has none) and slows
 > repeated failed attempts (correct passwords are never delayed), but not
@@ -62,8 +65,8 @@ every listener connect, so:
   browser. If the private player is on too, the single prompt unlocks both the
   interface and the audio. Until the password is accepted, the player behind
   the prompt ignores taps and keys, so the first tap can't tune in without it.
-  Under the hood it rides a `?auth=PASSWORD` token on the stream URL (browsers
-  can't attach basic auth to an `<audio>` element).
+  Under the hood it rides a `?auth=PASSWORD` token on the stream URL (Chromium
+  ignores a `user:pass@` login on an `<audio>` element).
   A typed password is saved only when the station accepts it. The saved one is
   checked again on each visit and forgotten only when the station itself
   refuses it. If the check gets no answer from the station (a network blip, the
@@ -74,12 +77,21 @@ every listener connect, so:
   usually because you changed it, the player stops and asks for the new one,
   saying the saved password was not accepted. Changing the password never drops
   anyone who is already listening; it reaches them the next time they reconnect.
+  The player can't answer the stream's password challenge, so the bundled proxy
+  holds it back from the station's own page, and the browser's own "Sign in"
+  dialog doesn't cover it.
 - **Radio apps / VLC / Sonos / hardware** — use a credentialed URL:
   `https://listener:PASSWORD@your-station.example/stream.mp3`
   (any username works; only the password is checked).
   Several listeners can use the same username at once.
+  Many of these send the password only after the stream challenges them, and it
+  does, so don't add `?auth=` to this kind of URL: a request with a token gets
+  no challenge, and the password in the address is never sent.
 - **Anything that can't do userinfo URLs** — append the token instead:
   `https://your-station.example/stream.mp3?auth=PASSWORD`.
+  A wrong token gets a plain 401, with no password prompt. Use this form for an
+  `<audio>` element on your own web page too: Chromium ignores a `user:pass@`
+  login there.
 - **SUB/WAVE app** — asks for the password when it opens a station with
   either lock on, checks it with the station, and keeps it in the device's
   secure storage (separate from any **Station login**). Like the web player it

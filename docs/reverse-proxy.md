@@ -26,7 +26,7 @@ Every split-service proxy must apply these rules in this order:
 | Public path | Upstream | Path sent upstream | Required handling |
 |---|---|---|---|
 | `/api/listener-auth` and anything starting with it | none | none | Return 404 or otherwise deny it before the general API rule. Match it as a case-insensitive prefix: the controller also answers `/listener-auth/` and any case variant, so an exact-path rule leaves those routed. Icecast calls this password callback over the private Compose network; it must not be public. |
-| `/stream*` | Icecast on `:7702` | unchanged | Disable response buffering, caching, and compression. Match the prefix so optional Opus, FLAC, and AAC mounts work without another proxy edit. |
+| `/stream*` | Icecast on `:7702` | unchanged | Disable response buffering, caching, and compression. Match the prefix so optional Opus, FLAC, and AAC mounts work without another proxy edit. Drop `WWW-Authenticate` from the response for a client that can't answer it, and only then: see [The stream's 401 challenge](#the-streams-401-challenge). |
 | `/listen.pls`, `/listen.m3u` | Controller on `:7701` | unchanged | These tune-in files are controller routes, not Icecast routes. |
 | `/api/*` | Controller on `:7701` | strip `/api` | `/api/health` must reach the controller as `/health`. Keep streaming responses such as diagnosis events unbuffered. Pass error responses through unchanged, with no custom error pages (nginx `proxy_intercept_errors`, a Traefik `errors` middleware): the web player and the app read the controller's own `/api/station-auth` answers to tell a right or wrong station password from a proxy's 401 or login page. |
 | everything else | Web on `:7700` | unchanged | Player, admin, onboarding, manual, and static assets. |
@@ -34,6 +34,49 @@ Every split-service proxy must apply these rules in this order:
 The examples use the default ports and a proxy on the same host. Replace
 `127.0.0.1` with an address or Docker service name reachable from your proxy
 when it runs elsewhere.
+
+### The stream's 401 challenge
+
+With the [stream password](private-station.md#stream-password-the-real-boundary)
+on, Icecast refuses a listener with a 401 carrying `WWW-Authenticate: Basic`.
+That challenge has to reach some clients and must not reach others:
+
+- **ffmpeg, mpv, GStreamer, wget and the like need it.** With a
+  `https://listener:PASSWORD@host/stream.mp3` address they send no password
+  until they are challenged, so a 401 without one is the end of the connection.
+  Firefox does the same for an `<audio>` element on another site.
+- **The web player can't use it.** Chrome and Firefox both answer the challenge
+  on the station's own page by putting a native "Sign in" dialog over all of it.
+  The listener can't reach the player, and the dialog stays until the player's
+  own password check comes round, up to two minutes later.
+
+So drop `WWW-Authenticate` from a `/stream*` response when the request has either
+of these, and only then:
+
+- an `auth` query parameter. The web player, the app and Google Cast all ride
+  `?auth=`, and none of them can answer a challenge.
+- `Sec-Fetch-Dest: audio` or `video` together with `Sec-Fetch-Site: same-origin`.
+  That is the station's own player before it has a token. Browsers send these
+  headers to https and localhost only, so on a plain-http address such a tap can
+  still raise the dialog once.
+
+Drop only the header. The 401 and its body stay, and a 200 is untouched. A
+browser tab on the stream URL sends `Sec-Fetch-Dest: document`, so it keeps its
+native prompt.
+
+Every recipe below does this. Running your own Caddy? Copy the `@streams`
+matcher and its `handle` block from [`docker/Caddyfile`](../docker/Caddyfile).
+
+The nginx and Traefik recipes give these requests a route of their own, so
+anything you add to the stream route has to go on both. nginx runs `return 418`
+before access checks, so an `auth_basic`, `allow`/`deny` or `limit_req` left in
+`location ^~ /stream` alone is skipped by any request with `?auth=`. The same goes
+for a Traefik middleware on `subwave-stream` alone.
+
+If your proxy can't make this conditional, leave the header alone. **Never strip
+it for every client.** Leaving it costs listeners with an out-of-date password
+that dialog until the player's check clears it. Stripping it locks every client
+in the first list out, with no error that says why.
 
 ### Optional: a listener-country header
 
@@ -70,7 +113,25 @@ location ~* ^/api/listener-auth {
 
 # All present and future stream mounts keep their original path.
 location ^~ /stream {
+    # A client that can't answer Icecast's 401 challenge takes the route below.
+    error_page 418 = @stream-media;
+    set $stream_fetch "$http_sec_fetch_site:$http_sec_fetch_dest";
+    if ($arg_auth) { return 418; }
+    if ($stream_fetch ~ ^same-origin:(audio|video)$) { return 418; }
+
     proxy_pass http://127.0.0.1:7702;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    gzip off;
+}
+
+# The same stream, minus the challenge. proxy_hide_header can't sit inside an
+# `if`, which is why this needs a route of its own. Repeat here any auth_basic,
+# allow/deny or limit_req you add above, or `?auth=` skips it.
+location @stream-media {
+    proxy_pass http://127.0.0.1:7702;
+    proxy_hide_header WWW-Authenticate;
     proxy_buffering off;
     proxy_cache off;
     proxy_read_timeout 1h;
@@ -154,7 +215,21 @@ location ~* ^/api/listener-auth {
 }
 
 location ^~ /stream {
+    error_page 418 = @stream-media;
+    set $stream_fetch "$http_sec_fetch_site:$http_sec_fetch_dest";
+    if ($arg_auth) { return 418; }
+    if ($stream_fetch ~ ^same-origin:(audio|video)$) { return 418; }
+
     proxy_pass http://SUBWAVE_HOST:7702;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    gzip off;
+}
+
+location @stream-media {
+    proxy_pass http://SUBWAVE_HOST:7702;
+    proxy_hide_header WWW-Authenticate;
     proxy_buffering off;
     proxy_cache off;
     proxy_read_timeout 1h;
@@ -178,7 +253,9 @@ location /api/ {
 
 NPM's generated `/` location continues to send the web UI to the Proxy Host's
 port `7700`. The Advanced locations override only the API, tune-in files, and
-stream mounts.
+stream mounts. `@stream-media` is
+[the stream without its 401 challenge](#the-streams-401-challenge), so repeat
+there anything you add to `location ^~ /stream`.
 
 Set `ICECAST_TRUSTED_PROXY_IPS` for real listener IPs here too — the NPM
 container's own address, exactly as in [nginx](#nginx) above.
@@ -210,6 +287,16 @@ services:
       traefik.http.routers.subwave-stream.priority: "20"
       traefik.http.routers.subwave-stream.service: subwave-stream
       traefik.http.services.subwave-stream.loadbalancer.server.port: "7702"
+      # The same stream, minus Icecast's 401 challenge, for a client that can't
+      # answer it. An empty value removes the header.
+      traefik.http.middlewares.subwave-no-challenge.headers.customresponseheaders.WWW-Authenticate: ""
+      traefik.http.routers.subwave-stream-media.rule: "Host(`radio.example.com`) && PathPrefix(`/stream`) && (QueryRegexp(`auth`, `.+`) || (HeaderRegexp(`Sec-Fetch-Dest`, `^(audio|video)$`) && Header(`Sec-Fetch-Site`, `same-origin`)))"
+      traefik.http.routers.subwave-stream-media.entrypoints: websecure
+      traefik.http.routers.subwave-stream-media.tls: "true"
+      traefik.http.routers.subwave-stream-media.tls.certresolver: letsencrypt
+      traefik.http.routers.subwave-stream-media.priority: "30"
+      traefik.http.routers.subwave-stream-media.middlewares: subwave-no-challenge
+      traefik.http.routers.subwave-stream-media.service: subwave-stream
 
   controller:
     networks:
@@ -280,8 +367,9 @@ Without this every row in Admin → Listeners shows Traefik's container address
 instead of the listener's; the Listeners card says so when nothing was trusted.
 
 Traefik forwards response bodies as they arrive unless a buffering middleware
-is added, so the stream router needs no buffering option. Do not attach
-Traefik's `Buffering` or `Compress` middleware to `subwave-stream`; if either is
+is added, so the stream routers need no buffering option. `subwave-stream-media`
+exists for [the stream's 401 challenge](#the-streams-401-challenge). Do not attach
+Traefik's `Buffering` or `Compress` middleware to either router; if either is
 configured on the `websecure` entrypoint, it applies to every router on that
 entrypoint and cannot be exempted per router. Remove the global middleware or
 give the stream router a dedicated entrypoint without it. Start SUB/WAVE with
@@ -516,3 +604,15 @@ always return 403; they do not accept credentials. Verify the stream itself
 with `curl -u listener:PASSWORD "$BASE/stream.mp3"` (any username works) or
 append `?auth=PASSWORD`. See
 [Private station mode](private-station.md#tuning-in-with-a-password).
+
+With the stream password on, also check
+[the 401 challenge](#the-streams-401-challenge). Both requests below are 401s;
+only the first may carry it:
+
+```bash
+# Expect one line: WWW-Authenticate: Basic …
+curl -sS -o /dev/null -D - --max-time 5 "$BASE/stream.mp3" | grep -i '^www-authenticate:'
+
+# Expect no output. A wrong token gets no challenge.
+curl -sS -o /dev/null -D - --max-time 5 "$BASE/stream.mp3?auth=wrong" | grep -i '^www-authenticate:'
+```
