@@ -192,7 +192,7 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
       >
         {hideFace ? (
           // Live-flipped by the /state poll, like themes and skins.
-          <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid />
+          <StationPasswordGate phase={auth.phase} unlock={auth.unlock} savedRejected={auth.savedRejected} solid />
         ) : (
           <>
             <audio ref={attachAudio} crossOrigin="anonymous" preload="auto" />
@@ -205,7 +205,7 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
                 <RevealWhenMounted ready={hydrated} />
               </Suspense>
             </div>
-            <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid={false} />
+            <StationPasswordGate phase={auth.phase} unlock={auth.unlock} savedRejected={auth.savedRejected} solid={false} />
           </>
         )}
       </div>

@@ -19,6 +19,8 @@
 // - A denial that lands after the stall ended is still reported. It is the
 //   controller's answer about the stored password, not about the stall, and a
 //   stop while the check was out must still lead to the prompt that says why.
+//
+// web/lib/stuckPasswordCheck.ts mirrors this; a change goes in both.
 
 import type { StationAuthResult } from './station-password';
 
