@@ -7,13 +7,14 @@
 // listener is hearing audio, and re-setting src would cut it for nothing (#1232).
 //
 // A clock that moved says nothing about whether it is still moving. Firefox with
-// the bytes gone can creep on a little past the `stalled`, then sit there at
-// readyState 4 and paused false with no further event: no `waiting`, no `ended`,
-// no `error` (measured, 2 of 4 stall runs, on Icecast with the socket left open).
+// the bytes gone plays on through what it holds, past that first fire on a 22 s
+// burst, then sits at readyState 4 and paused false with no further event: no
+// `waiting`, no `ended`, no `error` (measured on Icecast with the socket left open).
 // So a fire that finds the clock moved looks again, and each look after the first
-// is judged on the clock alone: a healthy mount costs one timer for as long as
-// the stall stays unresolved, and only a clock that stood still for a whole
-// window reconnects. `playing` clears the timer, which is the clean way out.
+// is judged on the clock alone: only a clock that stood still for a whole window
+// reconnects. `playing` clears the timer, but a stall the buffer covers never
+// fires one, so after a stall that healed the looks run on for as long as the
+// stream plays, at the cost of one timer every 5 s.
 //
 // A later look stands down on a paused element. The OS can pause the element
 // without telling the player (a call, AirPods coming out), and a look that
