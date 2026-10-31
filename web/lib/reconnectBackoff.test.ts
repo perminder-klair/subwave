@@ -80,6 +80,18 @@ test('a connection that stays up keeps the first reconnect quick, every time', (
   }
 });
 
+test('the line sits between the measured rows', () => {
+  // The tests around this one read STAYED_UP_MS, so they follow it wherever it moves.
+  // A 3 s cut must grow; a 4.2 s cut has sound 90% of the time and must not.
+  const cutAfter = (played: number) => {
+    const l = listener({ retries: 3, heldRetries: 0, playingSince: null });
+    l.plays(played);
+    return l.closes();
+  };
+  assert.equal(cutAfter(3000), 4000);
+  assert.equal(cutAfter(4200), 500);
+});
+
 test('one outage on a listener who has been up: as quick as ever, then the curve', () => {
   const l = listener();
   l.plays(3_600_000);
