@@ -62,6 +62,36 @@ const server: Server = createServer((req, res) => {
     res.end(rss(0, 'Story'));
     return;
   }
+  if (path === '/dated') {
+    // Two fresh, one undated, two stale (a search feed ignoring its window).
+    const day = 86_400_000;
+    const at = (daysAgo: number) => new Date(Date.now() - daysAgo * day).toUTCString();
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(`<?xml version="1.0"?><rss version="2.0"><channel><title>Dated</title>`
+      + `<item><title>Old festival</title><pubDate>${at(90)}</pubDate></item>`
+      + `<item><title>Tonight's talk</title><pubDate>${at(1)}</pubDate></item>`
+      + `<item><title>Undated notice</title></item>`
+      + `<item><title>Last spring</title><pubDate>${at(200)}</pubDate></item>`
+      + `<item><title>Film festival</title><pubDate>${at(3)}</pubDate></item>`
+      + `</channel></rss>`);
+    return;
+  }
+  if (path === '/late') {
+    // 22:30 UTC on the 30th is already the 31st in Athens (UTC+2).
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(`<?xml version="1.0"?><rss version="2.0"><channel><title>Late</title>`
+      + `<item><title>Late story</title><pubDate>Fri, 30 Oct 2026 22:30:00 GMT</pubDate></item>`
+      + `</channel></rss>`);
+    return;
+  }
+  if (path === '/local') {
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    // "Story 2" repeats an item of /other: merged, it must appear once.
+    res.end(`<?xml version="1.0"?><rss version="2.0"><channel><title>Local</title>`
+      + `<item><title>Local 1</title></item><item><title>Story 2</title></item><item><title>Local 2</title></item>`
+      + `</channel></rss>`);
+    return;
+  }
   if (path === '/boom') {
     res.writeHead(500);
     res.end('nope');
@@ -172,6 +202,7 @@ const { loadSkills, readTemplate } = await import('../src/skills/loader.js');
 const { buildSegmentTools, fetchSegmentData } = await import('../src/llm/internal/tools/segment-tools.js');
 const { resolveFeedConfig, makeFeedTool, FEED_ITEMS_PER_FIRE } = await import('../src/skills/feed.js');
 const { requiresGrounding, standDownReason } = await import('../src/skills/abstain-policy.js');
+const { setStationTimezone } = await import('../src/time.js');
 
 const caps = await loadSkills();
 const capOf = (kind: string) => caps.find(c => c.kind === kind);
@@ -194,7 +225,10 @@ test('a feed: line alone earns the skill a skill_<name> fetch tool', async () =>
 
 test('the operator knobs are offered even before a value exists', () => {
   const cap = capOf('giveaway');
-  assert.deepEqual(cap.configFields.map((f: any) => f.key), ['feed', 'feedMaxItems']);
+  assert.deepEqual(cap.configFields.map((f: any) => f.key), ['feed', 'feedMaxItems', 'feedMaxAgeDays', 'feed2', 'feed3']);
+  const age = cap.configFields.find((f: any) => f.key === 'feedMaxAgeDays');
+  assert.deepEqual({ type: age.type, min: age.min, max: age.max, integer: age.integer },
+    { type: 'number', min: 1, max: 365, integer: true });
   const max = cap.configFields.find((f: any) => f.key === 'feedMaxItems');
   assert.deepEqual({ type: max.type, min: max.min, max: max.max, integer: max.integer },
     { type: 'number', min: 1, max: 50, integer: true });
@@ -371,5 +405,94 @@ test('a skill with no tool.mjs and no feed: stays prompt-only', () => {
   // It is still OFFERED the feed knobs: the edit sheet is where an operator
   // sets the first feed, so a form that appears only once a value exists is a
   // form nobody can use to create one.
-  assert.deepEqual(briefOnly.configFields.map((f: any) => f.key), ['feed', 'feedMaxItems']);
+  assert.deepEqual(briefOnly.configFields.map((f: any) => f.key), ['feed', 'feedMaxItems', 'feedMaxAgeDays', 'feed2', 'feed3']);
+});
+
+// ---------------------------------------------------------------------------
+// Item age and further feeds (fork: a Google News search ignored its own
+// `when:7d` on a long query, 47 of 65 items were older, and an old event could
+// air as upcoming; one local feed alone was too thin).
+// ---------------------------------------------------------------------------
+
+test('feedMaxAgeDays drops stale items before the cap, keeps undated ones, and hands the date on', async () => {
+  const tool = makeFeedTool('dated', { url: feedUrl('/dated'), maxItems: 3, maxAgeDays: 7 });
+  const result: any = await tool({}, {});
+  // The cap of 3 counts only what survives the age filter.
+  assert.deepEqual(result.headlines.map((h: any) => h.title), ["Tonight's talk", 'Undated notice', 'Film festival']);
+  assert.match(result.headlines[0].published, /^\d{4}-\d{2}-\d{2}$/, 'a dated item carries its day');
+  assert.equal('published' in result.headlines[1], false, 'an undated item carries no date key');
+});
+
+test('without feedMaxAgeDays every item is offered, as before', async () => {
+  const tool = makeFeedTool('dated-all', { url: feedUrl('/dated'), maxItems: 10 });
+  const result: any = await tool({}, {});
+  assert.equal(result.headlines.length, 5);
+});
+
+test('a tighter window keeps only what is inside it, plus the undated item', async () => {
+  const tool = makeFeedTool('dated-two', { url: feedUrl('/dated'), maxItems: 10, maxAgeDays: 2 });
+  const result: any = await tool({}, {});
+  assert.deepEqual(result.headlines.map((h: any) => h.title), ["Tonight's talk", 'Undated notice']);
+});
+
+test('the merged list is capped at feedMaxItems in total', async () => {
+  const tool = makeFeedTool('merged-cap', { url: feedUrl('/other'), maxItems: 3, extraUrls: [feedUrl('/local')] });
+  const result: any = await tool({}, {});
+  assert.deepEqual(result.headlines.map((h: any) => h.title), ['Story 1', 'Local 1', 'Story 2']);
+});
+
+test("an item's day is the station's, not UTC's", async () => {
+  try {
+    setStationTimezone('Europe/Athens');
+    const athens: any = await makeFeedTool('late-athens', { url: feedUrl('/late'), maxItems: 5 })({}, {});
+    assert.equal(athens.headlines[0].published, '2026-10-31');
+    setStationTimezone('UTC');
+    const utc: any = await makeFeedTool('late-utc', { url: feedUrl('/late'), maxItems: 5 })({}, {});
+    assert.equal(utc.headlines[0].published, '2026-10-30');
+  } finally {
+    setStationTimezone('');
+  }
+});
+
+test('further feeds merge round-robin, a repeated headline appears once', async () => {
+  const tool = makeFeedTool('merged', { url: feedUrl('/other'), maxItems: 10, extraUrls: [feedUrl('/local')] });
+  const result: any = await tool({}, {});
+  assert.deepEqual(result.headlines.map((h: any) => h.title), ['Story 1', 'Local 1', 'Story 2', 'Story 3', 'Local 2']);
+});
+
+test('one failing feed is skipped while another answers, and is reported once until it recovers', async () => {
+  const warnings: string[] = [];
+  const some = makeFeedTool('half', { url: feedUrl('/boom'), maxItems: 10, extraUrls: [feedUrl('/local')] }, m => warnings.push(m));
+  const ok: any = await some({}, {});
+  assert.deepEqual(ok.headlines.map((h: any) => h.title), ['Local 1', 'Story 2', 'Local 2']);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /127\.0\.0\.1:\d+\/boom failed and was skipped.*HTTP 500/);
+  await some({}, {});
+  assert.equal(warnings.length, 1, 'the same failure is not repeated on every fire');
+});
+
+test('a failing feed is the answer when the feeds that answered have none', async () => {
+  const tool = makeFeedTool('hidden', { url: feedUrl('/boom'), maxItems: 10, extraUrls: [feedUrl('/empty')] });
+  await assert.rejects(() => tool({}, {}), /HTTP 500/, 'not { available: false, reason: "the feed has no items" }');
+});
+
+test('all feeds failing is the fetch error', async () => {
+  const none = makeFeedTool('none', { url: feedUrl('/boom'), maxItems: 10, extraUrls: [feedUrl('/boom')] });
+  await assert.rejects(() => none({}, {}), /HTTP 500/);
+});
+
+test('resolveFeedConfig reads the age cap and further feeds, warning on bad values', () => {
+  const ok = resolveFeedConfig({ feed: 'https://a.test/rss', feed2: 'https://b.test/rss', feed3: 'https://a.test/rss', feedMaxAgeDays: '7' });
+  assert.deepEqual(ok.feed, { url: 'https://a.test/rss', maxItems: 10, extraUrls: ['https://b.test/rss'], maxAgeDays: 7 });
+  assert.deepEqual(ok.warnings, []);
+
+  const bad = resolveFeedConfig({ feed: 'https://a.test/rss', feed2: 'ftp://b.test/x', feedMaxAgeDays: '0' });
+  assert.deepEqual(bad.feed, { url: 'https://a.test/rss', maxItems: 10 }, 'bad extras and age fall back to the old shape');
+  assert.equal(bad.warnings.length, 2);
+  assert.match(bad.warnings.join(' '), /feed2: .* skipped/);
+  assert.match(bad.warnings.join(' '), /feedMaxAgeDays: .* no age limit/);
+
+  const orphan = resolveFeedConfig({ feed2: 'https://b.test/rss' });
+  assert.equal(orphan.feed, null, 'a further feed without a first one is no feed');
+  assert.match(orphan.warnings[0], /feed2: set, but "feed" is empty/);
 });

@@ -86,6 +86,8 @@ context: time, festival   # OPTIONAL: "right now" fields it may mention (see bel
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; unset → stays inert
 feed: https://…/rss.xml   # OPTIONAL: a feed to read before speaking (see below)
 feedMaxItems: 10          # OPTIONAL: how much of it per fire (1–50, default 10)
+feedMaxAgeDays: 7         # OPTIONAL: skip items older than this (1–365 days)
+feed2: https://…/rss.xml  # OPTIONAL: a second feed (feed3: a third), merged
 ---
 If tonight's moon is at a notable phase, work it into one short, in-character
 line, the way a late-night presenter might glance out the window. Skip it when
@@ -137,6 +139,18 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           <li>
             <code className="bs-code-inline">feedMaxItems</code> (1–50, default 10) caps how
             much of the feed is read per fire.
+          </li>
+          <li>
+            <code className="bs-code-inline">feedMaxAgeDays</code> (1–365, default no limit)
+            skips items published longer ago than that, and each dated item reaches the DJ
+            with its day. Search feeds need it: they mix in items months old. Undated items
+            are kept.
+          </li>
+          <li>
+            <code className="bs-code-inline">feed2</code> and{' '}
+            <code className="bs-code-inline">feed3</code> add further feeds, merged
+            round-robin with the first; a headline in two of them is offered once, and one
+            failing feed is skipped while another answers.
           </li>
           <li>
             Items are <strong>burned on read</strong>: at most six fresh ones reach a

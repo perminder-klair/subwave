@@ -453,7 +453,7 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     const { feed, warnings } = resolveFeedConfig(data);
     for (const warning of warnings) queue.log('warn', `[skills] "${slug}" ${warning}`);
     if (feed) {
-      cap.toolFn = makeFeedTool(name, feed);
+      cap.toolFn = makeFeedTool(name, feed, (message) => queue.log('warn', `[skills] "${slug}" ${message}`));
       cap.toolName = toolNameFor(name);
       cap.toolDesc = (data.toolDescription || '').trim()
         || `Fetch the latest items from the ${label} feed before speaking. Returns only items not already used on air, or { available: false } when none are left.`;
