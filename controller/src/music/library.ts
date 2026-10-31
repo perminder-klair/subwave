@@ -188,6 +188,15 @@ export function candidateFilterTracks() {
   return loaded ? db.candidateFilterTracks() : [];
 }
 
+export function songsByLanguage(language: string | null | undefined): db.LanguagePoolRecord[] {
+  if (!language || !loaded) return [];
+  return blocklist.rejectBlocked(db.songsByLanguage(language));
+}
+
+export function languagesByIds(ids: readonly string[]): Map<string, db.LanguageTagProjection> {
+  return loaded ? db.languagesByIds(ids) : new Map();
+}
+
 // One library row in the same slim shape every pool source hands back, so
 // blocklist.matchOf reaches its exact id tiers (get()'s projection carries no
 // ids and parses the heavy acoustic blobs). null when there is no row.

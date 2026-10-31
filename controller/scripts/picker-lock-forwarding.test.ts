@@ -134,7 +134,7 @@ test('pickViaSelectionRoute builds ONE scope and hands it over unpacked', () => 
 
 test('buildTools passes the scope straight through — no per-field re-listing', () => {
   const src = read('../src/broadcast/dj-agent/agents.ts');
-  assert.match(src, /buildTools:\s*\(\{\s*scope\s*\}\)\s*=>\s*\{\s*const \{ tools, seen \} = buildPickerTools\(scope\);/,
+  assert.match(src, /buildTools:\s*\(\{\s*scope\s*\}\)\s*=>\s*\{\s*const \{ tools, seen, failures \} = buildPickerTools\(scope\);/,
     'pickerAgent.buildTools must forward the scope object itself; re-listing its '
     + 'fields is the shape that let a lock go missing (see the header).');
 });
