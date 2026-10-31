@@ -161,7 +161,8 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   lockedRef.current = locked;
   useLayoutEffect(() => {
     const swallow = (e: KeyboardEvent) => {
-      if (lockedRef.current && targetInsideShell(e, rootRef.current)) e.stopImmediatePropagation();
+      // In a showcase a drawer portals into the shell, and it stays usable there too.
+      if (lockedRef.current && targetInsideShell(e, rootRef.current) && !targetInsideDialog(e)) e.stopImmediatePropagation();
     };
     // A key left to a drawer or a host page ends at the document: all that lies past it is the
     // window, and a skin's listener there would tune in on it.
