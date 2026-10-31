@@ -22,6 +22,7 @@ import { communitySkillConfig } from '../community/registry.js';
 import {
   builtinSkillFileSchema,
   customSkillFileSchema,
+  normalizeSkillVoice,
   skillCreateSchema,
   skillFieldsFrom,
   type SkillFileParsed,
@@ -78,6 +79,7 @@ interface SkillFields {
   configKeys?: string[];
   tags?: string[];
   brief?: string;
+  voice?: { engine: string; voice: string; cloudProvider: string } | null;
 }
 
 // Read off the LOADED capability, never off the kind string: hardcoding the kind
@@ -445,6 +447,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         cronInvalid: !!data.cron?.trim() && !cron.validate(data.cron.trim()),
         cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
         cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
+        voice: normalizeSkillVoice(data as Record<string, unknown>),
         configFields,
         config: readConfigValues(configFields, data),
         tags: parseTags(data.tags),
@@ -463,6 +466,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         cooldown: msToCooldownStr(cat?.cooldownMs || 0),
         context: (cat?.contextFields || []).join(', '),
         cohosts: !!cat?.cohosts,
+        voice: null,
         knownContextFields: [...dj.CONTEXT_FIELDS],
         configFields,
         config: readConfigValues(configFields, loadedConfig(kind)),
@@ -498,6 +502,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       cronInvalid: !!data.cron?.trim() && !cron.validate(data.cron.trim()),
       cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
       cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
+      voice: normalizeSkillVoice(data as Record<string, unknown>),
       tags: parseTags(data.tags),
       hasTool: await skillHasTool(kind),
       toolPending: await hasPendingTool(kind),

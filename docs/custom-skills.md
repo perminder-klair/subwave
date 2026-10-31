@@ -66,6 +66,7 @@ cooldown: 6h              # hard min gap between autonomous firings — "90m" | 
 cron: 0 * * * *           # OPTIONAL: fire on a fixed schedule instead of/alongside the cooldown gate (see below)
 cronOnly: true            # OPTIONAL: with a cron: set, withhold this skill from random autonomous picks entirely
 cohosts: true             # OPTIONAL: host + every active guest each speak in their own voice (see below)
+voiceEngine: remote       # OPTIONAL: this skill's own TTS voice — with voiceId / voiceProvider (see below)
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
@@ -195,6 +196,33 @@ cohosts: true
 Find one well-sourced historical case and have the hosts discuss the outcome and
 investigation. Give every host a distinct perspective; do not write name labels.
 ```
+
+### `voiceEngine:` / `voiceId:` / `voiceProvider:` — the skill's own voice
+
+Absent everything, a skill airs in the on-air DJ's voice. Set these three and
+it always speaks in its own — the same engine + voice picker personas use
+(`/admin/skills → Edit → Voice`, with a sample button to audition before
+saving).
+
+```yaml
+---
+name: early-bulletin
+label: Early bulletin
+cooldown: 3h
+voiceEngine: remote
+voiceId: newsreader
+---
+```
+
+`voiceId` is engine-shaped like a persona's: a Kokoro id, a `.wav` clone
+reference, a cloud voice id, or free text for `remote` — empty means that
+engine's default. `voiceProvider` matters only for `cloud` (default `openai`).
+A co-hosted skill ignores its voice: every contribution speaks in its roster
+persona's own voice. A hand-edited bad engine — or a path-like voice id —
+reads as "no override" so the skill still loads; the admin form refuses it
+loudly instead. A voice does not travel through the community catalog — clone
+references and server-specific ids are station-local — but a zip export
+carries it, arriving disabled for review like everything else.
 
 ### `context:` — what the segment is allowed to mention
 
