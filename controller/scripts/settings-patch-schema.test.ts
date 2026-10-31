@@ -563,6 +563,7 @@ test('the converted keys are exactly the ones with schemas', () => {
     'djTalkOnlyBetweenTracks', 'ducking', 'fadeAtShowEnd', 'festivals',
     'handover', 'jinglePlacement', 'jingleRatio', 'jingleRotate', 'likes',
     'locale', 'loudness', 'lyrics', 'maxTrackLengthMode', 'maxTrackSeconds', 'moodSchedule', 'moods',
+    'musicSource',
     'pauseTalkMinSeconds', 'personas',
     'picker',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',

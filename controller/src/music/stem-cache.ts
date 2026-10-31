@@ -532,6 +532,38 @@ function withPriorities(
   }));
 }
 
+// Drop the stem dirs of tracks whose file was replaced at the same path
+// (library-db.clearTrackAudio cleared their stamps): the render is cache-hit-
+// only (hasWindow), so stems cut from the old audio would otherwise keep
+// playing under the new file. Never touches an offline root (an unmounted
+// share). Best-effort, like the sweep: a dir that refuses is counted, and its
+// cleared stamp has the backfill separate the track again either way.
+export async function forgetStems(trackIds: readonly string[]): Promise<{ removed: number; failed: number; offline?: string }> {
+  if (trackIds.length === 0) return { removed: 0, failed: 0 };
+  const root = await stemsRootStatus({ readOnly: true });
+  if (!root.online) return { removed: 0, failed: 0, offline: root.message };
+  let removed = 0;
+  let failed = 0;
+  for (const id of trackIds) {
+    const dir = dirFor(id);
+    const there = await stat(dir).then(() => true, () => false);
+    if (!there) continue;
+    try {
+      await rm(dir, { recursive: true, force: true });
+      removed += 1;
+    } catch { failed += 1; }
+  }
+  // The usage snapshot still counts those dirs' bytes, which would size the
+  // backfill too small (headroomTracks) until the next full walk. The walk
+  // runs in the tagger's process, so the snapshot file goes, not an
+  // in-memory flag: whichever process sweeps next walks again.
+  if (removed > 0) {
+    snapshotUntrusted = true;
+    await rm(snapshotPath(), { force: true }).catch(() => {});
+  }
+  return { removed, failed };
+}
+
 // Evict by ascending stem priority, then mtime, until the byte budget fits. Report failedDirs
 // and overBudgetBytes so callers can expose deletion failures; retry failed deletions next
 // sweep. #1257.

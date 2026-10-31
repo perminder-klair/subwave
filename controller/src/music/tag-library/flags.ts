@@ -10,6 +10,7 @@ import { loadSecretsIntoEnv } from '../../setup/secrets.js';
 import { loadNavidromeConfig } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
 import { logEvent } from './log.js';
+import { changedAfterMeasure, decideReplacedClear } from '../replaced-file-policy.js';
 import { backfillOriginalYears, pendingOriginalYearIds } from './enrich.js';
 
 function parseIntFlag(args: string[], name: string): number | null {
@@ -103,15 +104,38 @@ function informativeAlbumYear(song: {
 // Walk the whole Navidrome catalogue, upserting each song's metadata and
 // collecting the live id set. Shared by the full tagger run and
 // --reconcile-only. Metadata only: no embeddings, no LLM.
-export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }> {
+// The file facts a Subsonic child carries, for the library status exports:
+// `path` is the real file path only when the client has "Report Real Path" on in
+// Navidrome (otherwise one built from the tags), `size` is bytes, `bitRate` kbps.
+export function walkFileInfo(song: any): {
+  filePath: string | null; fileSuffix: string | null; fileSize: number | null; bitRate: number | null;
+} {
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v : null);
+  const num = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  return {
+    filePath: str(song?.path),
+    fileSuffix: str(song?.suffix),
+    fileSize: num(song?.size),
+    bitRate: num(song?.bitRate),
+  };
+}
+
+export async function walkNavidrome(
+  { confirmReplaced = process.argv.includes('--confirm-replaced') }: { confirmReplaced?: boolean } = {},
+): Promise<{ walked: number; liveIds: Set<string> }> {
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
   // Blast radius of the era gate, reported once at the end so an operator sees
   // it in the log rather than as a show that stopped picking (#1418).
   const eraReasons = new Map<string, number>();
+  // Files replaced at the same path (same id): candidates from both signals,
+  // cleared together after the walk behind a mass hold. id -> the walked size
+  // (the size signal) or null (the change-time signal).
+  const candidates = new Map<string, number | null>();
   for await (const song of subsonic.iterateAllSongs({ requireComplete: true })) {
-    db.upsertTrackMeta(song.id, {
+    const fileInfo = walkFileInfo(song);
+    const fileReplaced = db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
       album: song.album,
@@ -133,7 +157,9 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
       eraUntrusted: song.albumEraUntrusted ?? null,
       genres: subsonic.songGenres(song),
       duration: song.duration,
+      ...fileInfo,
     });
+    if (fileReplaced) candidates.set(song.id, fileInfo.fileSize);
     liveIds.add(song.id);
     if (song.albumEraUntrusted && song.albumEraReason) {
       eraReasons.set(song.albumEraReason, (eraReasons.get(song.albumEraReason) ?? 0) + 1);
@@ -145,6 +171,47 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
     }
   }
   logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
+  // A repaired file can keep its exact size: Navidrome's own change time
+  // catches it (replaced-file-policy.changedAfterMeasure). Navidrome-only and
+  // best-effort: null = the size check alone.
+  // An empty walk (an outage that listed nothing) asks nothing more of the server.
+  const fileChanges = walked === 0 ? null
+    : await import('../file-changes.js').then(m => m.changedFiles(db.earliestMeasuredAt())).catch(() => null);
+  const sizeCandidates = candidates.size;
+  if (fileChanges) {
+    for (const c of fileChanges.changes) {
+      if (candidates.has(c.id) || !liveIds.has(c.id)) continue;
+      if (!changedAfterMeasure(c.updatedAt, db.lastMeasuredAt(c.id))) continue;
+      candidates.set(c.id, null);
+    }
+  }
+  // One line per walk on the change-time signal, whatever it found.
+  logEvent('info', walked === 0 ? 'Replaced-file check: skipped (empty walk)'
+    : !fileChanges ? 'Replaced-file check: size only (the music server reports no change times)'
+      : `Replaced-file check: ${fileChanges.changes.length.toLocaleString('en-GB')} change(s) read since `
+        + `${fileChanges.since ?? 'the start'}${fileChanges.complete ? '' : ' (partial: the server stopped answering part-way, the mark stays)'}`
+        + (fileChanges.futureDated ? `, ${fileChanges.futureDated} future-dated file(s) skipped (a wrong clock on the files)` : '')
+        + `; ${sizeCandidates} by size, ${candidates.size - sizeCandidates} by change time`);
+  const decision = decideReplacedClear({ candidates: candidates.size, knownTracks: walked, confirmed: confirmReplaced });
+  if (!decision.clear) logEvent('warning', decision.message);
+  const replaced = decision.clear ? [...candidates.keys()] : [];
+  for (const [id, size] of decision.clear ? candidates : []) db.clearTrackAudio(id, size);
+  if (replaced.length > 0) {
+    const stems = await import('../stem-cache.js')
+      .then(m => m.forgetStems(replaced))
+      .catch((err: unknown) => ({ removed: 0, failed: replaced.length, offline: String((err as Error)?.message ?? err) }));
+    logEvent(
+      'info',
+      `${replaced.length.toLocaleString('en-GB')} file(s) replaced at the same path since they were measured: ` +
+        'their audio analysis is due again' +
+        (stems.removed ? `, ${stems.removed} stem set(s) dropped` : '') +
+        (stems.failed ? `, ${stems.failed} stem dir(s) could not be removed` : '') +
+        (stems.offline ? ` (stem cache offline: ${stems.offline})` : ''),
+    );
+  }
+  // Only once acted on: a walk that dies before here, or a held clear, asks
+  // again from the old mark.
+  if (fileChanges?.complete && decision.clear) await import('../file-changes.js').then(m => m.saveMark(fileChanges.newest)).catch(() => {});
   const suspect = [...eraReasons.values()].reduce((a, b) => a + b, 0);
   if (suspect) {
     const breakdown = [...eraReasons.entries()]
