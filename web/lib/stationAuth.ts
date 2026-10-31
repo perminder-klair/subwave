@@ -167,9 +167,10 @@ export interface StationAuthClient {
   heldUntil(): number;
 }
 
-// One per station, the web's half of the app's api.checkStationAuth and stationAuthHeldUntil. The
-// visit check, a typed press and the stuck-password watcher all ask through it, because the limit
-// covers the whole address: a 429 holds whichever check saw it, and every other one too.
+// One per mounted player, the web's half of the app's api.checkStationAuth and stationAuthHeldUntil.
+// The visit check, a typed press and the stuck-password watcher all ask through it, because the limit
+// covers the whole address: a 429 holds whichever check saw it, and every other one too. A showcase
+// switch remounts the player, so the stamp and the hold stay behind: one more check per switch.
 export function createStationAuthClient(apiBase: string): StationAuthClient {
   let lastCheckAt = 0;
   let heldUntil = 0;
