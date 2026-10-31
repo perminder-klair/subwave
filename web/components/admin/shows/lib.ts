@@ -47,6 +47,12 @@ export function hydrateShow(s: Partial<Show>): Show {
     programme: m.programme ?? false,
     segmentSkill: m.segmentSkill ?? '',
     preparationSkill: m.preparationSkill ?? '',
+    ...(m.generation ? {
+      generation: {
+        ...m.generation,
+        guestCount: { ...m.generation.guestCount },
+      },
+    } : {}),
     tags: Array.isArray(m.tags) ? m.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
   };
 }
@@ -96,7 +102,8 @@ export function showPayload(s: Show) {
     personaId: s.personaId,
     // Host can be switched after guests were picked; the server rejects a
     // guest duplicating the host, so filter it here too.
-    guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
+    guestPersonaIds: (s.guestPersonaIds || []).filter(id =>
+      (s.generation?.mode === 'generated' && s.generation.hostMode === 'random') || id !== s.personaId),
     // Banter only means something with guests in the studio.
     banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
     pauseTalk: s.pauseTalk === true,
@@ -126,6 +133,7 @@ export function showPayload(s: Show) {
     // A skill pin only means something in programme mode.
     segmentSkill: s.programme ? (s.segmentSkill || '') : '',
     preparationSkill: s.preparationSkill || '',
+    ...(s.generation ? { generation: s.generation } : {}),
     // No conditional: a tag is filing, so it survives every other field clearing.
     tags: s.tags || [],
   };

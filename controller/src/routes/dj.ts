@@ -1,3 +1,5 @@
+import { skillNotebookStatus, resetSkillNotebook } from '../skills/notebook.js';
+import { notebookResetSchema } from '../skills/notebook-schema.js';
 import { showPreparation } from '../broadcast/show-preparation.js';
 // Admin-gated DJ command center behind /admin/dash. Manual triggers are an
 // operator override: they bypass the shouldFire frequency gate and cooldowns.
@@ -228,6 +230,20 @@ router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res)
     queue.log('error', `POST /dj/skills/community/${slug}/install failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Notebook state is operator-only; skill exports contain no airing memory.
+router.get('/dj/skills/:slug/notebook', requireAdmin, (req, res) => {
+  if (!loadedCapabilities().some(cap => cap.skill === req.params.slug)) return res.status(404).json({ error: 'no such skill' });
+  try { res.json(skillNotebookStatus(req.params.slug)); }
+  catch (error) { res.status(409).json({ error: (error as Error).message }); }
+});
+router.post('/dj/skills/:slug/notebook/reset', requireAdmin, (req, res) => {
+  if (!loadedCapabilities().some(cap => cap.skill === req.params.slug)) return res.status(404).json({ error: 'no such skill' });
+  const parsed = notebookResetSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: firstMessage(parsed.error) });
+  try { res.json({ notebook: resetSkillNotebook(req.params.slug, parsed.data.expectedRevision, parsed.data.expectedOccurrenceId, parsed.data.discardCorrupt) }); }
+  catch (error) { res.status(409).json({ error: (error as Error).message }); }
 });
 
 // Download a skill as a .zip (SKILL.md + tool.mjs), files at the archive root.
@@ -767,12 +783,17 @@ router.post('/dj/segment', requireAdmin, async (req, res) => {
   }
 });
 
+// Hold through generation and delivery, including when a client retries a slow request.
+const manualSkillRuns = new Set<string>();
 // Run a named skill on demand (operator override).
 router.post('/dj/skill', requireAdmin, async (req, res) => {
   const name = req.body?.name;
   if (!name || typeof name !== 'string') {
     return res.status(400).json({ error: 'name is required' });
   }
+  const key = loadedCapabilities().find(cap => cap.kind === name || cap.skill === name)?.kind || name;
+  if (manualSkillRuns.has(key)) return res.status(409).json({ error: 'This skill is already running; wait for it to finish.' });
+  manualSkillRuns.add(key);
   try {
     // `aired: false` is a 200, not an error: the skill ran and had nothing worth
     // saying (#1412), and the operator gets the reason.
@@ -789,6 +810,8 @@ router.post('/dj/skill', requireAdmin, async (req, res) => {
   } catch (err) {
     queue.log('error', `/dj/skill ${name} failed: ${err.message}`);
     res.status(500).json({ error: err.message });
+  } finally {
+    manualSkillRuns.delete(key);
   }
 });
 

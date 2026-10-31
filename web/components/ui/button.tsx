@@ -18,14 +18,14 @@ const buttonVariants = cva(
         solid:
           "border border-ink bg-ink text-bg hover:opacity-85",
         accent:
-          "border border-[var(--accent)] bg-[var(--accent)] text-white hover:opacity-90",
+          "border border-[var(--accent-fill)] bg-[var(--accent-fill)] text-white hover:opacity-90",
         destructive:
           "border border-[var(--destructive)] bg-[var(--destructive)] text-white hover:opacity-90",
         secondary:
           "border border-ink bg-secondary text-ink hover:bg-[var(--ink-soft)]",
         ghost:
           "border border-[color:var(--separator-strong)] bg-transparent text-[color:var(--muted)] hover:bg-[var(--ink-soft)]",
-        link: "text-[var(--accent)] underline-offset-4 hover:underline",
+        link: "text-[var(--accent-text)] underline-offset-4 hover:underline",
       },
       size: {
         default: "px-3.5 py-[7px]",

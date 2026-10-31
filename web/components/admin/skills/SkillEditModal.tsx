@@ -790,13 +790,23 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                         </label>
                       </div>
                       <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
-                        Uses the current show&apos;s host plus every guest co-host, with each contribution spoken in that persona&apos;s own voice. It runs only while a co-hosted show is active; the show roster, not this skill, chooses the participants.
+                        Uses the current show&apos;s host and scheduled guests, each speaking in their own voice. To invite another persona, add a Special Guest directive as described below.
                       </div>
                     </>
                   );
                 }}
               />
             </div>
+
+            <section className="sw-section" aria-labelledby={`${uid}-special-guest-heading`}>
+              <h3 id={`${uid}-special-guest-heading`} style={{ ...sectionLabel, margin: 0 }}>SPECIAL GUEST</h3>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
+                <p className="mt-0 mb-2">Enable Co-Hosted Discussion, then add this line on its own in the skill prompt, using an existing persona&apos;s exact name:</p>
+                <code className="block break-words text-ink">{'Special guest: <Full Persona Name>'}</code>
+                <p className="mb-2">Describe their role in the rest of the prompt. For a fixed structure, use numbered steps starting with Host, Special guest or a participant’s name. Adding a fifth host-reaction step adds a fifth turn. Discussions support up to 16 turns. The guest joins the current host and scheduled guests for this segment only, including during a solo show.</p>
+                <p className="mb-0">A name mentioned elsewhere does not invite anyone. If no persona matches, or more than one matches, the skill stays silent. For random or dynamic guests, an explicit participant list from <code>tool.mjs</code> takes precedence.</p>
+              </div>
+            </section>
 
             {custom && (
               <div className="sw-section">

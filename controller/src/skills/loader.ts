@@ -7,7 +7,7 @@ import { loadedCapabilities as readCapabilities, replaceLoadedCapabilities } fro
 //     SKILL.md     frontmatter (→ metadata) + body (→ the agent's brief)
 //     tool.mjs     OPTIONAL: a data fetcher the segment director calls first
 //
-// The seven built-ins are not special at load time: they are *seeded* into
+// Shipped built-ins are not special at load time: they are *seeded* into
 // state/skills on first boot from read-only templates that ship in the image
 // (src/skills/builtins/<kind>/, see scaffold.js → seedBuiltinSkills), then loaded
 // exactly like an operator skill. The only residue of "built-in" is the
@@ -61,6 +61,8 @@ import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
+import { registerSkillNotebook } from './notebook.js';
+import { specialGuestNames } from './special-guest.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
 import { parseConfigFields, type SkillConfigField } from './config-fields.js';
 import { FEED_CONFIG_FIELDS, makeFeedTool, resolveFeedConfig } from './feed.js';
@@ -397,7 +399,11 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
     // Disk loading stays lenient: only the literal YAML/string true opts in.
     // False, absent and malformed values preserve the historical solo path.
-    cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
+    cohosts: String(data.cohosts).trim().toLowerCase() === 'true' || data.cast === 'tool',
+    // Trusted operator tools may request a per-segment cast, without changing the show roster.
+    toolCast: data.cast === 'tool',
+    specialGuestNames: specialGuestNames(body),
+    notebook: data.notebook === 'show',
     // Operator-editable knobs this skill declares for itself (tool.mjs
     // `configFields`, or the generic feed pair for a skill without a tool.mjs).
     // Drives the admin editor's settings section — see config-fields.ts. Empty
@@ -463,6 +469,7 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     }
   }
 
+  registerSkillNotebook(name, dir, cap.notebook);
   return cap;
 }
 

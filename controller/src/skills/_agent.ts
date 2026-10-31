@@ -15,6 +15,7 @@ import { preparationSkillAt, prepareEpisodeContext } from '../broadcast/show-pre
 // frequency-derived floor on the gap between ANY two segments, disabled or
 // persona-unowned capabilities, and window/provider gating.
 
+import { lookAheadSourceMeta } from './look-ahead.js';
 import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
@@ -25,7 +26,7 @@ import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase, onAirLocat
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
-import { skillEligible } from './eligibility.js';
+import { skillAllowedForShow, skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
 import * as sfx from '../broadcast/sfx.js';
@@ -193,7 +194,8 @@ function frequencyFloorMs(freq: string) {
 function availableCapabilities(ctx, now: Date) {
   const s = settings.get();
   const enabled = s.skills?.enabled || {};
-  const { host: persona, guests } = settings.getOnAirRoster(now);
+  const { host: persona, guests, show } = settings.getOnAirRoster(now);
+  const eligibleSkillNames = settings.subShowSkillAllowlist(show?.id);
   const out: ReturnType<typeof allCapabilities> = [];
   for (const cap of allCapabilities()) {
     // Enabled + host-owned + roster-compatible. In skills/eligibility.ts
@@ -205,7 +207,8 @@ function availableCapabilities(ctx, now: Date) {
       skill: cap.skill,
       enabled,
       personaSkills: persona?.skills,
-      requiresCohosts: !!cap.cohosts,
+      eligibleSkillNames,
+      requiresCohosts: !!cap.cohosts && !cap.toolCast && !cap.specialGuestNames?.length,
       hasCohosts: !!persona && guests.length > 0,
     }).allowed) continue;
     // cronOnly withholds the skill from the director entirely: it fires only
@@ -279,10 +282,10 @@ export const directorAgent = defineAgent({
   timeoutMs: segmentDeadline,
   buildSystem: ({ persona, caps, freq, sfxCatalog }) =>
     directorSystem(persona, caps, freq, sfxCatalog),
-  buildTools: ({ ctx, segmentState, caps }) => ({
+  buildTools: ({ ctx, segmentState, caps, persona }) => ({
     // Co-hosted skills run their own cast-shaped tool loop after selection.
     // Their data tools must not be called in this generic selection pass.
-    tools: buildSegmentTools(ctx, segmentState, caps.filter((cap) => !cap.cohosts)),
+    tools: buildSegmentTools(ctx, segmentState, caps.filter((cap) => !cap.cohosts && !cap.notebook), { speakerPersonaId: persona?.id }),
   }),
 });
 
@@ -400,9 +403,9 @@ async function deadlinedSegmentObject(args: Record<string, unknown>) {
 async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
   const cap = chooseCapability(caps, ctx);
   if (!cap) return { seg: null, exchange: null, reason: 'nothing fresh to say' };
-  if (cap.cohosts) {
+  if (cap.cohosts || cap.notebook) {
     const { host, guests } = settings.getOnAirRoster();
-    if (!host || !guests.length) return { seg: null, exchange: null, reason: 'requires a co-hosted show' };
+    if (!host || (cap.cohosts && !guests.length && !cap.toolCast && !cap.specialGuestNames?.length)) return { seg: null, exchange: null, reason: 'requires a co-hosted show' };
     const result = await runCohostedCapability({
       capability: cap, host, guests, context: ctx,
       situation: buildCohostedSituation(ctx, cap),
@@ -412,12 +415,12 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     else lastUnavailable.set(cap.kind, Date.now());
     return {
       seg: null,
-      exchange: result.aired ? { kind: cap.kind, lines: result.lines || [], castNames: [host, ...guests].map(p => p.name) } : null,
+      exchange: result.aired ? { kind: cap.kind, lines: result.lines || [], castNames: (result.lines || []).map(line => line.persona.name || line.persona.id) } : null,
       reason: result.reason || undefined,
       skippedBeforeLlm: undefined,
     };
   }
-  const data = await fetchSegmentData(cap, ctx, segmentState);
+  const data = await fetchSegmentData(cap, ctx, segmentState, { speakerPersonaId: speaker?.id });
   const blocked = standDownReason(cap, data);
   if (blocked || data?.error) {
     lastUnavailable.set(cap.kind, Date.now());
@@ -483,7 +486,7 @@ export async function agenticTick(ctx) {
     const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
 
     let seg: { kind: string; text: string; sfx: string | null } | null = null;
-    let exchange: { kind: string; lines: Array<{ persona: any; text: string }>; castNames: string[] } | null = null;
+    let exchange: { kind: string; lines: Array<{ persona: any; text: string; meta?: Record<string, unknown> }>; castNames: string[] } | null = null;
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
     if (settings.get().llm?.segmentRuntime === 'direct') {
@@ -503,9 +506,9 @@ export async function agenticTick(ctx) {
       silentReason = object?.reason;
       const selectedKind = seg?.kind;
       const selected = selectedKind ? caps.find(c => c.kind === selectedKind) : null;
-      if (selected?.cohosts) {
+      if (selected && (selected.cohosts || selected.notebook)) {
         const { host, guests } = settings.getOnAirRoster();
-        if (!host || !guests.length) {
+        if (!host || (selected.cohosts && !guests.length && !selected.toolCast && !selected.specialGuestNames?.length)) {
           seg = null;
           silentReason = 'requires a co-hosted show';
         } else {
@@ -514,7 +517,7 @@ export async function agenticTick(ctx) {
             situation: buildCohostedSituation(ctx, selected),
             segmentState, forced: false,
           });
-          exchange = result.aired ? { kind: selected.kind, lines: result.lines || [], castNames: [host, ...guests].map(p => p.name) } : null;
+          exchange = result.aired ? { kind: selected.kind, lines: result.lines || [], castNames: (result.lines || []).map(line => line.persona.name || line.persona.id) } : null;
           if (result.aired) lastUnavailable.delete(selected.kind);
           else lastUnavailable.set(selected.kind, Date.now());
           seg = null;
@@ -524,7 +527,7 @@ export async function agenticTick(ctx) {
     }
 
     if (exchange) {
-      const aired = await queue.announceExchange(exchange.lines, exchange.kind, { castNames: exchange.castNames });
+      const aired = await queue.announceExchange(exchange.lines.map(line => ({ ...line, meta: { ...line.meta, ...lookAheadSourceMeta(ctx, exchange.kind) } })), exchange.kind, { castNames: exchange.castNames });
       if (!aired) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
       lastFired.set(exchange.kind, Date.now());
       segmentState.lastAnySegment = Date.now();
@@ -559,7 +562,7 @@ export async function agenticTick(ctx) {
     // turn as theirs rather than the host's own words.
     const delivery = await queue.announce(seg.text.trim(), seg.kind, {
       persona: speaker,
-      meta: { personaId: speaker?.id, personaName: speaker?.name },
+      meta: { personaId: speaker?.id, personaName: speaker?.name, ...lookAheadSourceMeta(ctx, seg.kind) },
       pauseTalkEligible: true,
       sfx: selectedSfx,
       hostSpeech,
@@ -656,8 +659,8 @@ function defineForcedAgent(mayAbstain: boolean) {
     timeoutMs: segmentDeadline,
     buildSystem: ({ persona, cap, sfxCatalog }) =>
       forcedSystem(persona, cap, sfxCatalog, { mayAbstain }),
-    buildTools: ({ ctx, segmentState, cap, onData }) => ({
-      tools: buildSegmentTools(ctx, segmentState, [cap], { onResult: onData }),
+    buildTools: ({ ctx, segmentState, cap, onData, persona }) => ({
+      tools: buildSegmentTools(ctx, segmentState, [cap], { onResult: onData, speakerPersonaId: persona?.id }),
     }),
   });
 }
@@ -681,7 +684,8 @@ export interface CapabilityRun {
 // Forced capability core shared by POST /dj/skill, per-skill crons and the
 // programme feature beat. All bypass cooldowns, the frequency floor, persona
 // ownership and the enable toggle; automatic callers opt into host-epoch
-// ownership while the operator route deliberately remains unstamped. Programme
+// ownership and the Sub/Shows eligibility list; the operator route remains
+// unstamped and bypasses that list. Programme
 // beats also pass `brief` (the episode feature topic) and `persona` (the rotated
 // speaker, keeping voice, prompt seat and attribution together).
 //
@@ -696,6 +700,12 @@ export async function runCapability(
 ): Promise<CapabilityRun> {
   const cap = allCapabilities().find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
+  if (automaticHostSpeech) {
+    const { show } = settings.getOnAirRoster(session.contextDate(ctx));
+    if (!skillAllowedForShow({ skill: cap.skill, eligibleSkillNames: settings.subShowSkillAllowlist(show?.id) })) {
+      return { aired: false, queued: false, deferred: false, text: null, reason: 'not eligible for Sub/Shows' };
+    }
+  }
   if (automaticHostSpeech && cap.skill === preparationSkillAt(ctx)) {
     return { aired: false, queued: false, deferred: false, text: null, reason: 'reserved for episode preparation' };
   }
@@ -715,12 +725,12 @@ export async function runCapability(
     throw new Error(`skill "${cap.skill}" is not ready${hint}`);
   }
 
-  if (cap.cohosts) {
+  if (cap.cohosts || cap.notebook) {
     const { host, guests } = settings.getOnAirRoster();
     // A solo hour is a normal, transient state, not a misconfiguration, so it
     // reports `{aired: false, reason}` and Run now answers 200. Contrast
     // cap.ready() above, which throws because a missing key needs fixing.
-    if (!host || !guests.length) {
+    if (!host || (cap.cohosts && !guests.length && !cap.toolCast && !cap.specialGuestNames?.length)) {
       const reason = 'requires a co-hosted show';
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
       return { aired: false, queued: false, deferred: false, text: null, reason };
@@ -734,7 +744,7 @@ export async function runCapability(
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
       return { aired: false, queued: false, deferred: false, text: null, reason };
     }
-    const aired = await queue.announceExchange(result.lines, cap.kind, { castNames: [host, ...guests].map(p => p.name) });
+    const aired = await queue.announceExchange(result.lines.map(line => ({ ...line, meta: { ...line.meta, ...lookAheadSourceMeta(ctx, cap.kind) } })), cap.kind, { castNames: (result.lines || []).map(line => line.persona.name || line.persona.id) });
     if (!aired) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
     lastFired.set(cap.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
@@ -771,7 +781,7 @@ export async function runCapability(
     // writes from the moment survives a failed fetch (it writes from the brief
     // and the moment alone); a GROUNDED skill does not, since its whole segment
     // was to be about what the fetch didn't return, so there is no model call.
-    const data = await fetchSegmentData(cap, ctx, segmentState);
+    const data = await fetchSegmentData(cap, ctx, segmentState, { speakerPersonaId: speaker?.id });
     const blocked = standDownReason(cap, data);
     if (blocked) return standDown(blocked);
     object = await deadlinedSegmentObject({
@@ -828,12 +838,12 @@ export async function runCapability(
   const delivery = await queue.announce(text, cap.kind, (persona || automaticHostSpeech)
     ? {
         persona: speaker,
-        meta: { personaId: speaker?.id, personaName: speaker?.name },
+        meta: { personaId: speaker?.id, personaName: speaker?.name, ...lookAheadSourceMeta(ctx, cap.kind) },
         pauseTalkEligible,
         sfx: selectedSfx,
         hostSpeech: speechOwner.hostSpeech,
       }
-    : { pauseTalkEligible, sfx: selectedSfx });
+    : { pauseTalkEligible, sfx: selectedSfx, meta: lookAheadSourceMeta(ctx, cap.kind) });
   if (!delivery.accepted) {
     const reason = 'the station could not queue the rendered segment';
     queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
@@ -920,6 +930,9 @@ export function skillCatalog() {
       // Freeform tags from SKILL.md frontmatter, for the admin list filter.
       tags: c.tags || [],
       cohosts: !!c.cohosts,
+      toolCast: !!c.toolCast,
+      hasSpecialGuest: !!c.specialGuestNames?.length,
+      notebook: !!c.notebook,
     };
   });
 }

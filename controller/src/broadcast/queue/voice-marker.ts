@@ -60,6 +60,11 @@ const _waiters = new Map<string, Waiter>();
 const _recent = new Map<string, { airedAt: number; seenAt: number }>();
 let _timer: ReturnType<typeof setInterval> | null = null;
 let _lastVoiceId = '';
+const observers = new Set<(marker: VoiceMarker) => void>();
+export function observeVoiceAir(observer: (marker: VoiceMarker) => void) {
+  observers.add(observer); startPoller();
+  return () => observers.delete(observer);
+}
 
 function rememberRecent(voiceId: string, airedAt: number) {
   _recent.set(voiceId, { airedAt, seenAt: Date.now() });
@@ -86,6 +91,10 @@ export function pollVoiceMarker(): VoiceMarker | null {
   // every tick re-reads the last clip's marker and only a NEW id is an edge.
   if (!marker || marker.voiceId === _lastVoiceId) return null;
   _lastVoiceId = marker.voiceId;
+  // Durable consumers commit before another voice can overwrite the marker.
+  for (const observer of observers) {
+    try { observer(marker); } catch (error) { console.error('[voice] air observer failed:', (error as Error).message); }
+  }
 
   const waiter = _waiters.get(marker.voiceId);
   if (waiter) {

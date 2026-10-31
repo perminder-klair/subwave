@@ -24,8 +24,10 @@ import {
   SHOWS_LIMIT,
   migrateLegacyShowFields,
   repairShowForLoad,
+  repairSubShowsSettings,
   showSchema,
   type ShowParsed,
+  type SubShowsSettings,
   type ShowSchemaContext,
 } from '../schemas/show.js';
 import { resolveShowIds } from '../schemas/show-server.js';
@@ -270,6 +272,10 @@ export function normalizeShows(raw: unknown, personaIds: string[]): NormalizedSh
   }
   // Same minting and de-duplication the strict path runs, from the same module.
   return resolveShowIds(rows) as NormalizedShow[];
+}
+
+export function normalizeSubShowsSettings(raw: unknown, personaIds: string[]): SubShowsSettings {
+  return repairSubShowsSettings(raw, personaIds);
 }
 
 // Lenient load-path counterpart of validateScheduleStrict. The RULES are the

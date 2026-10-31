@@ -20,6 +20,7 @@ import {
 } from './vocab.js';
 import { DEFAULTS, coerceMaxTrackSeconds, coerceMinTrackLengthSeconds } from './defaults.js';
 import { get, peek } from './store.js';
+import { generatedShowAt } from '../broadcast/generated-show-registry.js';
 
 // DJ mode makes a persona behave like a working radio DJ rather than a
 // between-track narrator: it back-announces AND teases what's next, runs
@@ -188,7 +189,7 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     const pinnedId = takeoverShowId(ov);
     const pinned = pinnedId ? s.shows?.find(x => x.id === pinnedId) : null;
     // A dangling showId (show deleted mid-takeover) voids the override.
-    if (pinned) return resolveShowShape(pinned, s);
+    if (pinned) return resolveShowShape(pinned, s, date, { source: 'takeover', startsAt: ov.startedAt });
   }
   // Station-zone wall clock, not process-local — schedule slots fire at the
   // hours the operator painted them in (issue #353).
@@ -197,7 +198,7 @@ export function resolveActiveShow(date = new Date(), s = get()) {
   if (!showId) return null;
   const show = s.shows?.find(x => x.id === showId);
   if (!show) return null;
-  return resolveShowShape(show, s);
+  return resolveShowShape(show, s, date, { source: 'scheduled' });
 }
 
 // A stored show by id, in the same resolved shape the pick paths read — for
@@ -224,28 +225,35 @@ export function getScheduleOverride(now = Date.now()) {
 
 // A stored show, resolved to the consumer-facing shape (persona/guests
 // hydrated, filters coerced). Shared by the grid path and the takeover path.
-function resolveShowShape(show, s) {
-  const persona = s.personas?.find(p => p.id === show.personaId) || null;
+function resolveShowShape(show, s, date?: Date, occurrence?: { source: 'scheduled' | 'takeover'; startsAt?: number }) {
+  const generated = date ? generatedShowAt(show.id, date.getTime(), occurrence?.source, occurrence?.startsAt) : null;
+  const generatedHost = generated ? s.personas?.find(p => p.id === generated.hostPersonaId) : null;
+  const useGeneratedCast = !!generatedHost;
+  const generatedPlan = generated?.kind === 'ready' && useGeneratedCast ? generated.plan : null;
+  const moodNames = new Set((s.moods ?? []).map((m: { name?: unknown }) => m?.name).filter((m: unknown): m is string => typeof m === 'string'));
+  const generatedMoods = generatedPlan ? generatedPlan.moods.filter(mood => moodNames.has(mood)) : undefined;
+  const persona = generatedHost || s.personas?.find(p => p.id === show.personaId) || null;
+  const guestPersonaIds = useGeneratedCast ? generated!.guestPersonaIds : show.guestPersonaIds;
   return {
     id: show.id,
-    name: show.name,
-    topic: show.topic,
+    name: generatedPlan?.name ?? show.name,
+    topic: generatedPlan?.topic ?? show.topic,
     // Optional music-steering filters (soft lean), each a multi-value list
     // (#929): OR within the attribute, AND across attributes. Surfaced for the
     // picker and DJ agent; empty list means "no constraint". The stored shows
     // are already migrated to plural arrays by normalizeShows, but re-coerce
     // here so a stale in-memory shape can never leak singular fields out.
-    moods: coerceShowMoods(show),
-    genres: coerceShowGenres(show),
-    eras: coerceShowEras(show),
-    energies: coerceShowEnergies(show),
+    moods: generatedMoods ?? coerceShowMoods(show),
+    genres: generatedPlan?.genres ?? coerceShowGenres(show),
+    eras: generatedPlan?.eras ?? coerceShowEras(show),
+    energies: generatedPlan?.energies ?? coerceShowEnergies(show),
     // Instrumental / vocal steering, backed by Demucs vocal ranges. '' = no
     // constraint. Single-valued: the two states are mutually exclusive.
     vocals: coerceShowVocals(show),
     // When true, every set music filter (mood, genre, era, energy) is a hard
     // filter on the pick pool instead of a soft lean; off-filter tracks only
     // survive as a never-starve fallback. Defaults off.
-    filtersStrict: show.filtersStrict === true,
+    filtersStrict: generatedPlan?.filtersStrict ?? show.filtersStrict === true,
     // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
     maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,
@@ -288,7 +296,7 @@ function resolveShowShape(show, s) {
       : null,
     // Guest co-hosts, resolved to live personas (a guest deleted after the
     // show was saved simply vanishes from the roster). Empty = solo show.
-    guests: (Array.isArray(show.guestPersonaIds) ? show.guestPersonaIds : [])
+    guests: (Array.isArray(guestPersonaIds) ? guestPersonaIds : [])
       .map(gid => s.personas?.find(p => p.id === gid))
       .filter(Boolean)
       .map(p => ({ id: p.id, name: p.name, avatar: p.avatar || '' })),
@@ -300,6 +308,15 @@ function resolveShowShape(show, s) {
     segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
     preparationSkill: typeof show.preparationSkill === 'string' ? show.preparationSkill : '',
   };
+}
+
+// null leaves regular shows unrestricted; [] disables automatic DJ Skills
+// during a Sub/Show. Explicit operator Run now remains an override.
+export function subShowSkillAllowlist(showId: string | null | undefined): string[] | null {
+  const station = get();
+  const show = station.shows?.find(item => item.id === showId);
+  return show?.generation?.mode === 'generated'
+    ? station.subShows?.eligibleSkillNames ?? null : null;
 }
 
 // The persona that should be on air right now: the current show's owner if a

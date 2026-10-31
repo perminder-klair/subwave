@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { SessionTurn } from '../../../lib/types';
-import { AdminResponseError, adminJson, type AdminFetch } from '../../../lib/admin-query';
-import type { ScheduleOverride } from '../../../lib/schemas.generated';
+import { AdminResponseError, adminJson, useAdminMutation, type AdminFetch } from '../../../lib/admin-query';
+import type { GeneratedShowPlan, ShowGenerationConfig, ScheduleOverride } from '../../../lib/schemas.generated';
 import {
   UNKNOWN_TRUSTED_PROXIES,
   type ActResponse,
@@ -12,6 +12,8 @@ import {
   type QueueState,
   type RequestEntry,
 } from './types';
+import { showKeys } from '../shows/keys';
+import { settingsKeys } from '../settings/queries';
 import { scheduleKeys, type ScheduleLiveData } from '../schedule/queries';
 import { toConnectionsState } from './connections';
 
@@ -120,6 +122,7 @@ export async function runDashAction(
 export interface TakeoverShow {
   id: string;
   name: string;
+  generation?: Pick<ShowGenerationConfig, 'mode' | 'template'>;
 }
 
 export interface TakeoverData {
@@ -162,11 +165,12 @@ export function writeTakeoverOverride(
 /** Patch the Dashboard picker when Shows returns its authoritative roster. */
 export function writeTakeoverShows(
   client: QueryClient,
-  rawShows: Array<{ id?: string; name?: string }>,
+  rawShows: Array<{ id?: string; name?: string; generation?: TakeoverShow['generation'] }>,
 ): void {
   const shows = rawShows.flatMap(show => (
     typeof show?.id === 'string' && show.id
-      ? [{ id: show.id, name: typeof show.name === 'string' ? show.name : '' }]
+      ? [{ id: show.id, name: typeof show.name === 'string' ? show.name : '',
+        ...(show.generation ? { generation: { mode: show.generation.mode, template: show.generation.template } } : {}) }]
       : []
   ));
   client.setQueryData<TakeoverData>(dashKeys.takeover(), current => (
@@ -178,13 +182,50 @@ export async function fetchTakeover(fetcher: AdminFetch, signal: AbortSignal): P
   const body = await adminJson<{
     shows?: TakeoverShow[];
     override?: ScheduleOverride | null;
-  }>(fetcher, '/schedule', undefined, signal);
+  }>(fetcher, '/shows/takeover', undefined, signal);
   return {
     shows: Array.isArray(body.shows)
       ? body.shows.filter(show => show && typeof show.id === 'string' && show.id)
       : [],
     override: body.override ?? null,
   };
+}
+
+export interface TakeoverPreviewRequest {
+  showId: null;
+  template: ShowGenerationConfig['template'];
+  until: 'fixed' | 'schedule-change';
+  minutes?: number;
+  expectedEndsAt?: number;
+}
+export interface TakeoverPreview {
+  token: string; expiresAt: number; plan: GeneratedShowPlan;
+  host: { id: string; name: string }; guests: Array<{ id: string; name: string }>;
+}
+export function usePrepareTakeoverMutation(adminFetch: AdminFetch) {
+  return useAdminMutation<TakeoverPreview, { request: TakeoverPreviewRequest; signal: AbortSignal }>({
+    adminFetch, toastOnError: false,
+    request: ({ request, signal }, fetcher) => adminJson(fetcher, '/schedule/takeover/prepare', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request),
+    }, signal),
+  });
+}
+export function useActivateTakeoverMutation(adminFetch: AdminFetch) {
+  return useAdminMutation<{ override: ScheduleOverride; shows: TakeoverShow[] }, string>({
+    adminFetch, toastOnError: false,
+    request: (token, fetcher) => adminJson(fetcher, '/schedule/takeover/activate', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }),
+    }),
+    onDone: async (data, _token, client) => {
+      writeTakeoverShows(client, data.shows);
+      writeTakeoverOverride(client, data.override);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: dashKeys.takeover() }),
+        client.invalidateQueries({ queryKey: settingsKeys.detail(), exact: true }),
+        client.invalidateQueries({ queryKey: showKeys.generated(), exact: true }),
+      ]);
+    },
+  });
 }
 
 export interface NavidromeStatus {

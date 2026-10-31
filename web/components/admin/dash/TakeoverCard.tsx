@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { Controller } from 'react-hook-form';
 import type { z } from 'zod';
 import Link from 'next/link';
+import { ShowGenerationDialog, ShowGenerationNotice } from '../shows/ShowGenerationNotice';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { useAdminMutation, useAdminQuery } from '../../../lib/admin-query';
 import { notify, errorMessage } from '../../../lib/notify';
@@ -15,7 +16,7 @@ import { useZodForm, applyServerFieldErrors } from '@/lib/form';
 import { TextField } from '@/lib/form-fields';
 import { Card, Btn, Pill, Seg } from '../ui';
 import { ColorChip, SlotMenu } from '../schedule/bits';
-import { SHOW_COLORS } from '../schedule/lib';
+import { programmingGroups, generatedShowColor, GENERATED_SHOW_TEMPLATES, SHOW_COLORS } from '../schedule/lib';
 // The pin's shape and its minute bounds come from the shared schema, and POST
 // /schedule/override runs the same rule at the route.
 import {
@@ -30,6 +31,10 @@ import {
   dashKeys,
   fetchTakeover,
   fetchTakeoverWindow,
+  usePrepareTakeoverMutation,
+  useActivateTakeoverMutation,
+  type TakeoverPreview,
+  type TakeoverPreviewRequest,
   writeTakeoverOverride,
   type TakeoverData,
   type TakeoverWindow,
@@ -69,7 +74,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   // The 30s tick refreshes `shows` and `override`, never the form -- a poll must
   // not clobber a half-typed window, which is why there is no `values` prop.
 
-  // GET /schedule carries the roster and the pin in force. Query success also
+  // GET /shows/takeover carries the roster and the pin in force. Query success also
   // advances the "min left" clock.
   const takeoverQuery = useAdminQuery<TakeoverData>({
     key: dashKeys.takeover(),
@@ -81,11 +86,14 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   });
   const shows = takeoverQuery.data?.shows ?? [];
   const override = takeoverQuery.data?.override ?? null;
+  const { regularShows } = programmingGroups(shows, locale);
 
   // The resolved end time for "until the schedule changes", fetched only while
   // that option is selected: the controller's scan walks a minute at a time
   // across twelve hours.
   const minutes = form.watch('minutes');
+  const chosenId = form.watch('showId');
+  const chosenTemplate = GENERATED_SHOW_TEMPLATES.find(template => chosenId === `template:${template.id}`);
   const untilSchedule = form.watch('until') === 'schedule-change';
   const windowQuery = useAdminQuery<TakeoverWindow>({
     key: dashKeys.takeoverWindow(),
@@ -174,10 +182,54 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       await client.invalidateQueries({ queryKey: dashKeys.takeover() });
     },
   });
-  const busy = pinMutation.isPending || cancelMutation.isPending;
+  const prepareMutation = usePrepareTakeoverMutation(adminFetch);
+  const activateMutation = useActivateTakeoverMutation(adminFetch);
+  const prepare = prepareMutation.mutateAsync;
+  const [retryVersion, setRetryVersion] = useState(0);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [preparation, setPreparation] = useState<{
+    key: string; status: 'generating' | 'ready' | 'failed'; preview?: TakeoverPreview; error?: string;
+  } | null>(null);
+  const previewKey = chosenTemplate && hydrated && !needsAuth && !live
+    && (untilSchedule ? !!resolvedWindow : Number.isInteger(Number(minutes))
+      && Number(minutes) >= OVERRIDE_MIN_MINUTES && Number(minutes) <= OVERRIDE_MAX_MINUTES)
+    ? JSON.stringify({ showId: null, template: chosenTemplate.id,
+      until: untilSchedule ? 'schedule-change' : 'fixed',
+      ...(untilSchedule ? { expectedEndsAt: resolvedWindow!.expiresAt } : { minutes: Number(minutes) }) })
+    : null;
+  useEffect(() => {
+    if (!previewKey) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    setPreparation({ key: previewKey, status: 'generating' });
+    // Avoid a model call for each digit while editing a custom duration.
+    const timer = window.setTimeout(() => {
+      void prepare({ request: JSON.parse(previewKey) as TakeoverPreviewRequest, signal: controller.signal })
+        .then(preview => { if (!cancelled) setPreparation({ key: previewKey, status: 'ready', preview }); })
+        .catch(error => {
+          if (!cancelled) {
+            const message = errorMessage(error);
+            setPreparation({ key: previewKey, status: 'failed', error: message });
+            setGenerationError(message);
+          }
+        });
+    }, 500);
+    return () => { cancelled = true; window.clearTimeout(timer); controller.abort(); };
+  }, [previewKey, retryVersion, prepare]);
+  const currentPreparation = preparation?.key === previewKey ? preparation : null;
+  const readyPreview = currentPreparation?.status === 'ready' && currentPreparation.preview
+    && currentPreparation.preview.expiresAt > now ? currentPreparation.preview : null;
+  const generating = !!previewKey && (!currentPreparation || currentPreparation.status === 'generating');
+  const busy = pinMutation.isPending || cancelMutation.isPending || activateMutation.isPending;
 
   const pin = form.handleSubmit(async (values) => {
     try {
+      if (chosenTemplate) {
+        if (!readyPreview) return;
+        await activateMutation.mutateAsync(readyPreview.token);
+        notify.ok(`“${readyPreview.plan.name}” takes over — the switch airs on the next track.`);
+        return;
+      }
       await pinMutation.mutateAsync(values);
       const chosenId = takeoverShowId(values);
       if (isDefaultTakeover(values)) {
@@ -188,7 +240,12 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       }
     } catch (e) {
       if (e instanceof TakeoverError) applyServerFieldErrors(form, e.fieldErrors);
-      notify.err(errorMessage(e));
+      if (chosenTemplate && previewKey) {
+        const message = errorMessage(e);
+        setPreparation({ key: previewKey, status: 'failed', error: message });
+        setGenerationError(message);
+      }
+      else notify.err(errorMessage(e));
     }
   });
 
@@ -230,6 +287,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
         </span>
       }
     >
+      <ShowGenerationDialog message={generationError} onDismiss={() => setGenerationError(null)} />
       {live && (pinned || defaultTakeover) ? (
         <div className="grid gap-2.5">
           <div className="grid gap-1 border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-2.5 py-2">
@@ -239,7 +297,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
                 className="size-[11px] self-center"
               />
               <span className="min-w-0 truncate text-[13px] font-bold text-ink">
-                {pinned?.name ?? 'Default programming'}
+                {pinned?.name ?? 'Default Programming'}
               </span>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] text-muted">
@@ -253,15 +311,8 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
             {busy ? 'cancelling…' : 'Cancel takeover'}
           </Btn>
         </div>
-      ) : shows.length === 0 ? (
-        <div className="text-muted italic">
-          no shows to pin —{' '}
-          <Link href="/admin/shows" className="underline hover:text-ink">
-            build one first
-          </Link>
-        </div>
       ) : (
-        <div className="@container grid gap-4">
+        <fieldset disabled={busy} aria-label="Takeover programming" className="@container grid gap-4">
           <Controller
             control={form.control}
             name="showId"
@@ -278,16 +329,17 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
                   label={(
                     <span className="min-w-0 flex-1 truncate text-left">
                       {isDefaultTakeover(chosen)
-                        ? 'Default programming'
-                        : (chosenId && showById(chosenId)?.name) || 'Choose programming…'}
+                        ? 'Default Programming'
+                        : chosenTemplate?.label || (chosenId && showById(chosenId)?.name) || 'Choose programming…'}
                     </span>
                   )}
                   chipColor={isDefaultTakeover(chosen)
                     ? null
-                    : chosenId ? colorOf(chosenId) : undefined}
+                    : chosenTemplate ? generatedShowColor(chosenTemplate.id) : chosenId ? colorOf(chosenId) : undefined}
                   options={[
-                    { key: null, label: 'Default programming', chipColor: null },
-                    ...shows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id) })),
+                    { key: null, label: 'Default Programming', chipColor: null },
+                    ...regularShows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id), group: 'Regular Shows' })),
+                    ...GENERATED_SHOW_TEMPLATES.map(template => ({ key: `template:${template.id}`, label: template.label, chipColor: generatedShowColor(template.id), group: 'Sub/Shows' })),
                   ]}
                   onSelect={field.onChange}
                 />
@@ -336,25 +388,44 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
           {untilSchedule && (
             <div className="mono-num text-[10px] text-muted">
               {windowQuery.isError
-                ? 'could not read the schedule — the window is resolved again when you start it'
+                ? chosenTemplate ? 'could not read the schedule — retry before generating' : 'could not read the schedule — the window is resolved again when you start it'
                 : resolvedWindow
                   ? `ends ${fmtClock(resolvedWindow.expiresAt, tz, locale)} · ${resolvedWindow.minutes} min · ${WINDOW_REASON[resolvedWindow.source]}`
                   : 'reading the schedule…'}
+            </div>
+          )}
+          {chosenTemplate && (
+            <div role="status" aria-live="polite" className="grid gap-1 text-[12px] text-muted">
+              {readyPreview ? <>
+                <span className="font-semibold text-ink">{readyPreview.plan.name}</span>
+                <span>Host · {readyPreview.host.name}{readyPreview.guests.length ? ` · with ${readyPreview.guests.map(guest => guest.name).join(', ')}` : ' · no guests'}</span>
+                <span>Ready to take over.</span>
+              </> : generating ? <span>Preparing a show with a random host and 0–3 random guests…</span>
+                : currentPreparation?.status === 'failed' ? <>
+                  <ShowGenerationNotice message={currentPreparation.error || 'Show generation failed. Please try again.'} />
+                  <Btn sm onClick={() => setRetryVersion(version => version + 1)}>Retry</Btn>
+                </> : currentPreparation?.status === 'ready' ? <>
+                  <span>This preview has expired.</span>
+                  <Btn sm onClick={() => setRetryVersion(version => version + 1)}>Retry</Btn>
+                </> : untilSchedule && windowQuery.isError ? <>
+                  <span>Could not read the takeover window.</span>
+                  <Btn sm onClick={() => void windowQuery.refetch()}>Retry</Btn>
+                </> : <span>{untilSchedule ? 'Reading the schedule…' : 'Choose a valid duration to prepare the show.'}</span>}
             </div>
           )}
           <Btn
             tone="accent"
             sm
             className="w-full"
-            disabled={busy || !form.formState.isValid}
+            disabled={busy || !form.formState.isValid || (!!chosenTemplate && !readyPreview)}
             onClick={pin}
           >
-            {busy ? 'starting…' : 'Take over →'}
+            {busy ? 'starting…' : generating ? 'Generating…' : 'Take over →'}
           </Btn>
           <div className="text-[10px] text-muted">
             the switch airs on the next track · the schedule picks up again after
           </div>
-        </div>
+        </fieldset>
       )}
     </Card>
   );

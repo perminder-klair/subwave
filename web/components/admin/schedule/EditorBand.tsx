@@ -7,7 +7,7 @@ import { cn } from '../../../lib/cn';
 import { Button } from '../../ui/button';
 import { DayPills, DayPresets, Mu, SlotMenu } from './bits';
 import type { ScheduleShow } from './lib';
-import { HOURS, dayName, hhmm } from './lib';
+import { HOURS, dayName, hhmm, programmingGroups } from './lib';
 
 export interface EditorLine {
   day: number;
@@ -43,7 +43,8 @@ export interface LineEditorProps {
   currentName: string | null;
   colorOf: (id: string | null | undefined) => string;
   onLineChange: (patch: Partial<EditorLine>) => void;
-  onLineShow: (id: string) => void;
+  onLineShow: (id: string | null) => void;
+  locale?: string;
   onToggleLineDay: (day: number) => void;
   /** Replace the day set outright — the weekday/weekend/every-day presets. */
   onSetLineDays: (days: number[]) => void;
@@ -56,8 +57,9 @@ export interface LineEditorProps {
  *  ranges, other shows and multi-day writes. */
 export function LineEditor({
   shows, line, lineShowId, lineDays, currentName, colorOf,
-  onLineChange, onLineShow, onToggleLineDay, onSetLineDays, onAir, onQuiet, orderNo,
+  onLineChange, onLineShow, onToggleLineDay, onSetLineDays, onAir, onQuiet, orderNo, locale,
 }: LineEditorProps) {
+  const { regularShows, subShows } = programmingGroups(shows, locale);
   const lineShow = shows.find(s => s.id === lineShowId) ?? null;
   return (
     <div className="min-w-0">
@@ -75,11 +77,14 @@ export function LineEditor({
           <span>Put</span>
           <SlotMenu
             ariaLabel="Show to put on the air"
-            label={lineShow ? lineShow.name : 'a show…'}
+            label={lineShow ? lineShow.name : lineShowId === null ? 'Default Programming' : 'a show…'}
             chipColor={lineShow ? colorOf(lineShow.id) : null}
-            options={shows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id) }))}
+            options={[
+              { key: null, label: 'Default Programming', chipColor: null },
+              ...regularShows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id), group: 'Regular Shows' })),
+              ...subShows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id), group: 'Sub/Shows' })),
+            ]}
             onSelect={onLineShow}
-            disabled={shows.length === 0}
           />
           <span>on</span>
           <SlotMenu
@@ -119,7 +124,7 @@ export function LineEditor({
               size="sm"
               className="min-h-9 sm:min-h-0"
               onClick={onAir}
-              disabled={!lineShow}
+              disabled={lineShowId !== null && !lineShow}
             >
               Add to schedule
             </Button>

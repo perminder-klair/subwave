@@ -8,6 +8,7 @@
 // Withholding the place here (#2099) reaches that copy, an edited one and a
 // custom skill alike, without replacing an operator-owned file.
 
+import { rememberLookAheadSource } from '../../../skills/look-ahead.js';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { buildStationServices } from './station-services.js';
@@ -24,9 +25,9 @@ export function buildSegmentTools(
   ctx: any,
   state: any,
   caps: any[],
-  { onResult }: { onResult?: (kind: string, data: any) => void } = {},
+  { onResult, speakerPersonaId }: { onResult?: (kind: string, data: any) => void; speakerPersonaId?: string | null } = {},
 ) {
-  const services = buildStationServices();
+  const services = buildStationServices({ speakerPersonaId });
   const toolCtx = spokenContext(ctx);
   const tools: any = {};
 
@@ -58,6 +59,7 @@ export function buildSegmentTools(
         // grounding check exists for. A throwing observer must not turn a
         // usable tool result into a tool error.
         data = repairLegacySkillData(cap, data, input || {});
+        rememberLookAheadSource(ctx, cap.kind, data);
         try { onResult?.(cap.kind, data); } catch { /* observation is never fatal */ }
         return data;
       },
@@ -74,12 +76,14 @@ export function buildSegmentTools(
 // the agent-facing wrapper above, so a slow or throwing skill yields
 // `{ error }` rather than hanging the tick. Inputs are the skill's own
 // defaults ({} — the agent-steerable `inputs` params are a tool-loop nicety).
-export async function fetchSegmentData(cap: any, ctx: any, state: any): Promise<any> {
+export async function fetchSegmentData(cap: any, ctx: any, state: any, { speakerPersonaId = null }: { speakerPersonaId?: string | null } = {}): Promise<any> {
   if (typeof cap?.toolFn !== 'function') return null;
-  const services = buildStationServices();
+  const services = buildStationServices({ speakerPersonaId, notebookSnapshot: cap.notebookSnapshot });
   try {
     const p = Promise.resolve(cap.toolFn(spokenContext(ctx), state, services, cap.config, {}));
-    return repairLegacySkillData(cap, await withTimeout(p, 8000));
+    const data = repairLegacySkillData(cap, await withTimeout(p, 8000));
+    rememberLookAheadSource(ctx, cap.kind, data);
+    return data;
   } catch (err: any) {
     return { error: err?.message || String(err) };
   }

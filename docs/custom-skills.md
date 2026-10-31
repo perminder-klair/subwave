@@ -1,5 +1,8 @@
 # Custom skills
 
+For an operator introduction to conversations, temporary guests, Look Ahead and
+show-airing memory, see [the skill features guide](skill-features-guide.md).
+
 SUB/WAVE's **skills** are the things the AI DJ does *between* tracks — a weather
 check, a headline, a dig on the song playing. The built-in ones ship as
 read-only templates under `controller/src/skills/builtins/<kind>/` and are
@@ -157,12 +160,12 @@ something else, read `config.feed` yourself via
 
 `cohosts: true` turns the skill from one DJ line into a co-hosted discussion. It
 uses the **active scheduled show's roster**: the show's host followed by every
-resolved `guestPersonaIds` co-host. A skill cannot choose arbitrary personas, and
-the existing enable toggle and persona assignment remain keyed to the host.
+resolved `guestPersonaIds` co-host. The separate `cast: tool` option below allows temporary segment guests. The
+existing enable toggle and persona assignment remain keyed to the host.
 
-The discussion contains exactly one contribution per live roster member, in that
-order. The model is instructed to give each person **2–5 short sentences**, in
-that persona's own character, as one coherent conversation. Do not put labels
+The discussion follows the number and order of turns requested in the skill
+brief, up to 16 turns. Every selected presenter must speak at least once, in
+their own character, as one coherent conversation. Do not put labels
 such as `Mara:` in the brief or returned speech: speaker identity is structured
 metadata, and each contribution is rendered through that persona's own TTS
 configuration and fallback. The clips are pre-rendered as a complete exchange
@@ -700,3 +703,246 @@ tries up to five artists from Navidrome's artist index. Research is optional in
 the example: no search results means the DJ must stick to supplied library facts.
 Existing custom tools that return arbitrary data need this result envelope to
 serve as preparation skills.
+
+### Show skill notebook
+
+Add `notebook: show` to SKILL.md frontmatter for controller-owned memory scoped
+to this skill and the current show airing. It survives restarts and starts fresh
+for the next occurrence. The writer receives the committed topic and recent
+contributions automatically; a tool can read them with `services.notebook.read()`.
+Generation proposes `memoryUpdate` separately from speech, and the controller
+commits each update only when its associated turn reaches air.
+
+The file is `notebook.json` alongside the skill's other files. Tools must not
+write it. Skill exports omit runtime memory; station backups include committed
+memory. Default programming without a scheduled show or takeover has no show
+notebook and stands down. Resuming the same interrupted scheduled occurrence
+resumes its notebook; a takeover has a separate one.
+
+#### Memory update contract
+
+The controller supplies the output schema in the same generation call as speech.
+An aired segment returns a `memoryUpdate` object separately from `text` or `lines`:
+
+```json
+{
+  "topic": { "value": "Can a cover change how you hear the original?", "turn": 1 },
+  "contributions": [
+    { "turn": 2, "contributor": "A listener", "summary": "A different arrangement can reveal a melody." }
+  ]
+}
+```
+
+The first topic must be spoken verbatim in its referenced turn. Once committed,
+it is fixed for the airing; later updates normally use `"topic": null`. Turn
+references are 1-based: solo speech has only turn 1, while discussions reference
+the returned lines. Record only new opinions actually voiced in this segment;
+introductions, invitations and repeated questions are not contributions. Empty
+contribution arrays are valid. Do not copy previous notebook history into updates.
+Fictional contributors require explicit permission in the skill brief. A quoted
+contributor must be named in the referenced speech; a presenter’s own opinion
+may use that turn’s full persona name without a spoken self-introduction. Name
+matching ignores case, punctuation and a leading “Listener” label. An exact
+contributor-and-summary duplicate in retained history or the current update is
+rejected; a new opinion from the same contributor is allowed. These checks do
+not detect paraphrased repetition or establish that an opinion matches its summary.
+
+Limits are 500 characters for the topic, 100 for a contributor and 240 for a
+summary, with at most 16 new contributions per segment. The notebook retains the
+latest 24 summaries and a cumulative count, across at most 16 airing entries.
+Invalid updates prevent playback; structural validation cannot establish whether
+a valid summary truthfully describes its referenced speech.
+
+Each turn commits when the mixer confirms that its clip started, so partially
+aired discussions remember only confirmed turns. Only one run per skill/airing
+may generate or wait for air; its lease expires after 20 minutes or at the end
+of the airing. Restarts recover confirmed receipts and rendered unpublished
+turns. A published turn with uncertain delivery is not replayed automatically.
+Already published audio cannot be recalled.
+
+#### Inspect or reset memory
+
+Admin-authenticated `GET /dj/skills/<skill>/notebook` returns `{notebook, pending}`
+for the current airing. A tool reads a snapshot with `services.notebook.read()`;
+this returns null outside a notebook-enabled run, including a tool's `ready()`
+check. Tools must not write the file or generate their own memory summaries.
+
+To reset the current airing, send `POST /dj/skills/<skill>/notebook/reset` with
+`{"expectedOccurrenceId":"<notebook.occurrence.id>","expectedRevision":3}`, using
+the values returned by GET. A changed airing or revision is rejected. Corrupt
+files fail closed; an explicit reset with
+`{"expectedRevision":0,"discardCorrupt":true}` moves the corrupt file aside and
+resets its memory. Skill saves and rescans do not reset notebooks. There is no
+notebook reset UI.
+
+### Special guests from the prompt
+
+Enable **Co-Hosted Discussion** and add one standalone line to the prompt body:
+
+```text
+Special guest: <Full Persona Name>
+```
+
+Replace `<Full Persona Name>` with the full name of a persona in your own
+station. The name must resolve to one existing persona (an exact persona ID also works).
+Matching names is case-insensitive. The controller keeps the current host and
+scheduled guests, then adds the special guest without duplicating them. The
+show roster is unchanged; this also runs on a solo show. Prompt-selected casts support at most four participants. Use the rest of the
+prompt to specify the number and order of turns (up to 16) and the guest's role.
+A fifth host reaction is allowed; there is no fixed alternating sequence.
+For an enforced sequence, use one numbered list whose steps start with `Host`,
+`Special guest` or an unambiguous participant name, for example:
+
+```text
+1. The host asks for a joke.
+2. The special guest gives the setup.
+3. The host asks why.
+4. The special guest gives the punchline.
+5. The host reacts.
+```
+
+The controller resolves these steps once and validates the exact turn count and
+speaker order before playback. Changing the list changes the enforced sequence;
+the model still writes the dialogue in one call. Invalid or ambiguous speaker
+steps stand down. Without a speaker-labelled list, the conversation remains
+free in structure within the 16-turn limit. Recent speech is repetition context,
+not a previous exchange to continue.
+
+Missing, ambiguous or host-identical guests, empty names and multiple directive
+lines stand the segment down. Fenced examples, quotations and ordinary prose
+mentions do not invite anyone. The directive is active only when Co-Hosted
+Discussion is enabled. If a tool returns an explicit `speakerIds` list, that
+list takes precedence, including over an invalid or unresolved prompt guest.
+For a tool-selected cast without a prompt directive, use `cast: tool` below.
+No additional model call is needed to resolve the participant.
+
+### `cast: tool` — temporary segment guests
+
+This opt-in frontmatter setting uses the existing exchange renderer with a cast
+chosen by the operator's trusted `tool.mjs`. The controller fetches the data
+once before generation in either segment runtime. The result must include
+`speakerIds`: one to four distinct existing persona IDs identifying the cast;
+the prompt determines their speaking order.
+The current host need not be included; a solo guest promo can use one other persona. Unknown IDs or unusable data stand the segment down. A one-person
+cast uses the simple `air`/`text` output contract, then delivers a normal solo
+contribution; a larger cast uses structured speaker lines and produces one
+conversation using the selected personas’ own souls and TTS voices.
+A tool can also return `turnCount` (an integer from 1 to 16) as a suggested
+length when the prompt does not specify a structure. The prompt takes priority.
+All discussions follow the prompt's turn count and order, with every selected
+presenter speaking at least once and a ceiling of 16 turns. Solo casts still
+use a single speech segment.
+The show roster is unchanged. A scheduled guest is only included if the tool
+explicitly requests them. Host skill ownership, enablement, cooldown and
+Sub/Shows eligibility still apply; a solo show can use this option.
+
+This is separate from `cohosts: true`, which still uses the full scheduled
+roster. Tools should request only the participants needed for their segment;
+the model cannot choose additional speakers. Put the intended roles and format
+in the skill brief and returned data. `cast: tool` is preserved when saving in
+the skill editor; it currently has no dedicated UI switch.
+
+### Persona lookup for skill tools
+
+`services.personas.find(nameOrId)` returns only `{id, name}` for an exact ID or
+a unique case-insensitive name; missing or ambiguous names return null.
+`services.personas.onAirHost()` returns the current host identity or null.
+The controller, rather than the tool, resolves the full souls and voices.
+A future random-guest tool can choose from names or IDs and use the same lookup.
+
+Choose names or IDs from the operator's own roster, or expose a setting in the
+skill for the operator to supply them. Shared skills must not depend on a
+particular station's persona names or IDs. For a prompt-only discussion, use
+the Special Guest directive above instead of a tool. No separate guest switch
+or dropdown is needed.
+
+### Look Ahead schedule data
+
+The `docs/examples/skills/look-ahead` skill provides editable instructions and
+a data tool for later-today show teases. `services.schedule.laterToday()` reads
+the station’s local day, resolves scheduled occurrences and accepted Sub/Show
+plans, and returns only prepared future shows beyond the next scheduled show.
+It never generates a plan. A live takeover suppresses the schedule it covers;
+a show resuming after the takeover uses its effective resumption time.
+
+Each entry includes its exact title, local start time, host and guest identities,
+and editorial brief. Solo segment runs bind the actual speaking persona into
+the service, including guest voice rotation and manual speaker overrides.
+`speakerRole` is `host`, `guest`, `neither` or `unknown`; first-person wording
+must follow that identity, not the current programme’s host. Co-hosted exchanges
+use the returned presenter identities for each voice.
+
+The example tool selects up to two shows, preferring occurrences not previously
+offered to this skill, then the least recently offered shows in this skill’s
+cross-tick state. Rotation resets on a new local date; cross-tick ordering also
+resets on a controller restart or skill reload. Durable recall still preserves
+first-offer preference across restarts. Markers record tool offers, not
+confirmed airings. The prompt requires both selected shows to be mentioned,
+with exact supplied start times and no relative day or time-of-day wording. With no qualifying shows it returns `available: false`.
+Look Ahead uses `cast: tool`. Normally the current host teases both selected
+shows. With `GUEST_PROMO_PERCENT` (default 33) in `tool.mjs`, it instead picks
+one selected show with a different host. Only that upcoming host voices the
+promo, and only their show is returned as source data. There is no current-DJ
+introduction or second show in promo mode. The upcoming host receives their own
+soul and voice. With no different host available, the current DJ delivers the
+full tease. Change the constant to 0 for current-DJ teases only, or 100 for
+promos whenever possible. This setting is intentionally absent from the UI.
+Only the shows actually returned are marked as offered for rotation.
+
+Look Ahead requests `speechFormat: 'look-ahead'`: one model call returns flat
+`firstSummary` and `secondSummary` fields, each bound to that source show's
+brief. The controller inserts each show's exact time, title and cast in source
+order. Promo mode supplies only one show. Summaries containing broadcast-time
+claims are rejected before TTS. This keeps facts out of free-form announcement
+writing; no extra summarisation or show-generation call is needed.
+
+Overlapping manual requests for the same skill return 409 while its generation
+or delivery is still running. They do not start a second generation.
+
+`lookAheadStamp` is a controller-created schedule fingerprint. The tool must
+return it unchanged. Segment wrappers carry it into speech metadata, and the
+queue rechecks it immediately before publishing rendered audio, including
+deferred speech. A changed title, brief, cast, start time, next-show position
+or station-local date drops the stale tease. The check conservatively covers
+the whole remaining schedule; an unrelated upcoming edit may also invalidate
+it. Look Ahead remains ordinary speech rather than reserving a pause-and-talk
+silence, so stale audio can be dropped safely. Speech already committed to the
+mixer cannot be recalled.
+
+To install, copy the example’s `tool.mjs` beside your editable SKILL.md, rebuild
+the controller with this schedule service, then rescan Skills. The tool reports
+not ready on older controllers. Enable it station-wide and assign it to the
+DJs who should use it. For Sub/Show slots, include it in Sub/Shows’ eligible
+skills too. Installation does not enable or run it automatically.
+
+### Sub/Show Talking Point
+
+The bundled `sub-show-talking-point` skill is installed automatically with both
+SKILL.md and tool.mjs, but is **disabled by default**, including after upgrading
+an existing station. Its source lives in
+`controller/src/skills/builtins/sub-show-talking-point`. Enable it in Skills,
+choose which DJs run it, and permit it in Sub/Shows' eligible skills if that
+list is restricted. Installation does not add persona assignments. An existing
+"all skills" persona choice retains its normal meaning. Explicit enabled states,
+assignments and edited files survive upgrades; missing files alone are restored.
+
+It provides a grounded co-hosted discussion using the current brief's explicit `Talking point (optional thread):`
+label and `services.nowPlaying()`. Its tool returns `available: false` when the
+label, identified track, track-level genres or direct genre wording connection
+is missing. If queue metadata lacks genres, it reads the current album and uses
+only the song with the exact current track ID. It rechecks the on-air track ID
+after collecting metadata. No search or invented examples are used.
+
+The relevance check is deliberately conservative text/genre matching, not audio
+analysis or a semantic guarantee. General musical questions with no matching
+genre wording will stand down. An admitted genre connection does not establish
+instruments, lyrics, credits or history; the brief requires a second stand-down
+if the question needs unsupported facts, and prohibits naming any other track
+or artist. It uses the normal on-air cast, with at most two turns per persona;
+solo shows skip through the existing co-host eligibility rule. With
+`requiresData: true`, unavailable tool results also stand down on manual runs.
+
+Its brief welcomes subjective taste, discovery, listening habits and hypothetical
+associations, while allowing occasional persona-led differences of opinion.
+It does not require a debate or agreement at the end. Hypothetical reactions do
+not license invented memories or factual claims about the current recording.

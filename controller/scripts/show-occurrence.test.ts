@@ -43,3 +43,31 @@ test('a show pinned for the entire week rolls its preparation at Sunday midnight
   assert.equal(occurrence('2026-10-10T20:00Z', schedule)?.startsAt, iso('2026-10-04T00:00Z'));
   assert.notEqual(occurrence('2026-10-10T20:00Z', schedule)?.id, occurrence('2026-10-11T00:00Z', schedule)?.id);
 });
+
+test('spring-forward occurrences count elapsed airtime and skip a nonexistent local hour', () => {
+  const schedule = week();
+  schedule[0][0] = schedule[0][1] = schedule[0][2] = 's_artist';
+  const first = occurrence('2026-03-29T00:10Z', schedule, 'Europe/London');
+  assert.equal(first?.startsAt, iso('2026-03-29T00:00Z'));
+  assert.equal(first?.endsAt, iso('2026-03-29T02:00Z'));
+  assert.equal(first?.id, occurrence('2026-03-29T01:10Z', schedule, 'Europe/London')?.id);
+  const missing = week(); missing[0][1] = 's_artist';
+  assert.equal(occurrence('2026-03-29T00:10Z', missing, 'Europe/London'), null);
+  assert.equal(occurrence('2026-03-29T01:10Z', missing, 'Europe/London'), null);
+});
+
+test('a single repeated local hour is one two-hour airing, not two generated episodes', () => {
+  const schedule = week(); schedule[0][1] = 's_artist';
+  const first = occurrence('2026-10-25T00:10Z', schedule, 'Europe/London');
+  const second = occurrence('2026-10-25T01:10Z', schedule, 'Europe/London');
+  assert.equal(first?.id, second?.id);
+  assert.equal(first?.startsAt, iso('2026-10-25T00:00Z'));
+  assert.equal(first?.endsAt, iso('2026-10-25T02:00Z'));
+});
+
+test('quarter-hour timezone offsets retain exact local slot boundaries', () => {
+  const schedule = week(); schedule[1][9] = 's_artist';
+  const show = occurrence('2026-10-26T03:30Z', schedule, 'Asia/Kathmandu');
+  assert.equal(show?.startsAt, iso('2026-10-26T03:15Z'));
+  assert.equal(show?.endsAt, iso('2026-10-26T04:15Z'));
+});

@@ -17,6 +17,7 @@ import {
   migrateLegacyShowFields,
   repairEraWindow,
   type EraWindow,
+  type ShowGenerationConfig,
 } from '../schemas/show.js';
 import { SKILL_SLUG_RE as SKILL_SLUG_PATTERN } from '../schemas/skill.js';
 import {
@@ -883,6 +884,8 @@ export interface NormalizedShow {
   programme: boolean;
   segmentSkill: string;
   preparationSkill: string;
+  /** Present only for generated-show slots; absent remains an ordinary show. */
+  generation?: ShowGenerationConfig;
   moods: string[];
   themeId: string;
   genres: string[];

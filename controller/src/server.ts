@@ -1,3 +1,4 @@
+import { recoverSkillNotebooks } from './skills/notebook.js';
 import { showPreparation } from './broadcast/show-preparation.js';
 // Controller HTTP API — thin entry point: wires middleware, mounts routes/ and
 // starts the background services.
@@ -290,8 +291,8 @@ app.listen(config.server.port, async (err?: Error) => {
   // Open or resume the DJ session before the watcher dispatches track changes —
   // the queue and scheduler append turns into it.
   try {
-    const ctx = await getFullContext();
     await showPreparation.recover();
+    const ctx = await getFullContext();
     const s = await session.recover(ctx);
     console.log(`[session] ${s.id} (${s.kind}/${s.key})`);
   } catch (err) {
@@ -300,7 +301,11 @@ app.listen(config.server.port, async (err?: Error) => {
 
   // Before the watcher starts, so tracks already handed to Liquidsoap stay
   // tracked across a restart.
+  let notebookSpeech: Awaited<ReturnType<typeof recoverSkillNotebooks>> = [];
+  try { notebookSpeech = await recoverSkillNotebooks(); }
+  catch (error) { console.error('[skills] notebook recovery failed:', (error as Error).message); }
   queue.recover();
+  queue.restoreNotebookSpeech(notebookSpeech);
 
   // Terminate a tagger/analyzer child orphaned by a restart: it is detached and
   // keeps running, so a second Start would double-write the library DB.

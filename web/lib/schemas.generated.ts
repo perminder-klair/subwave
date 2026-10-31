@@ -4303,6 +4303,9 @@ export function isGeminiLibraryLanguage(raw: unknown): boolean {
 
 // ─── from controller/src/schemas/show-preparation.ts ─────────────────────
 
+// 30 days of a densely programmed 168-slot week plus a small takeover buffer.
+export const GENERATED_SHOW_RECORDS_MAX = 1024;
+
 export const preparationResultSchema = z.discriminatedUnion('available', [
   z.object({ available: z.literal(false), reason: z.string().max(500).optional() }),
   z.object({
@@ -4318,6 +4321,46 @@ export const preparationOccurrenceSchema = z.object({
   source: z.enum(['scheduled', 'takeover']),
   startsAt: z.number().finite(), endsAt: z.number().finite(),
 });
+
+// Keep these limits aligned with schemas/show.ts (name/topic, filter-list,
+// genre and year bounds). This store schema remains zod-only so the browser
+// mirror can recover the persisted episode shape too.
+export const generatedShowPlanSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  topic: z.string().trim().min(1).max(2000),
+  moods: z.array(z.string().trim().min(1).max(64)).max(15),
+  genres: z.array(z.string().trim().min(1).max(64)).max(15),
+  eras: z.array(z.object({
+    fromYear: z.number().int().min(1900).max(2100).nullable(),
+    toYear: z.number().int().min(1900).max(2100).nullable(),
+  }).refine(era => era.fromYear != null || era.toYear != null)
+    .refine(era => era.fromYear == null || era.toYear == null || era.fromYear <= era.toYear)).max(15),
+  energies: z.array(z.enum(['low', 'medium', 'high'])).max(15),
+  filtersStrict: z.boolean(),
+  rationale: z.string().trim().max(500),
+});
+
+export const generatedShowRecordSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('ready'), occurrence: preparationOccurrenceSchema, configuration: z.string(),
+    castSeed: z.string().max(100).optional(),
+    castOrigin: z.string().max(200).optional(),
+    sourceSettings: z.object({
+      playlistIds: z.array(z.string()), playlistStrict: z.boolean(),
+      excludedPlaylistIds: z.array(z.string()), maxTrackSeconds: z.number().nullable(),
+      minTrackLengthSeconds: z.number().nullable(), vocals: z.enum(['', 'instrumental', 'vocal']),
+    }).optional(),
+    template: z.string(), hostPersonaId: z.string().min(1), guestPersonaIds: z.array(z.string()).max(3),
+    plan: generatedShowPlanSchema, generatedAt: z.number().finite(),
+  }),
+  z.object({
+    kind: z.literal('failed'), occurrence: preparationOccurrenceSchema, configuration: z.string(),
+    castSeed: z.string().max(100).optional(),
+    castOrigin: z.string().max(200).optional(),
+    template: z.string(), hostPersonaId: z.string().min(1), guestPersonaIds: z.array(z.string()).max(3),
+    reason: z.string().max(500), attempts: z.number().int().min(1), retryAt: z.number().nullable(),
+  }),
+]);
 
 const preparationRecordBase = z.object({
   occurrence: preparationOccurrenceSchema,
@@ -4336,11 +4379,23 @@ export const preparationRecordSchema = z.discriminatedUnion('kind', [
     kind: z.literal('ready'), result: preparationResultSchema.options[1], preparedAt: z.number(),
   }),
 ]);
-export const preparationStoreSchema = z.object({ version: z.literal(1), records: z.array(preparationRecordSchema).max(256) });
+const preparationStoreV2Schema = z.object({
+  version: z.literal(2),
+  records: z.array(preparationRecordSchema).max(256),
+  generated: z.array(generatedShowRecordSchema).max(GENERATED_SHOW_RECORDS_MAX).default([]),
+});
+
+export const preparationStoreSchema = z.preprocess((raw) => {
+  if (!raw || typeof raw !== 'object') return raw;
+  const value = raw as Record<string, unknown>;
+  return value.version === 1 ? { ...value, version: 2, generated: [] } : value;
+}, preparationStoreV2Schema);
 export type PreparationResult = z.output<typeof preparationResultSchema>;
 export type AcceptedPreparation = Extract<PreparationResult, { available: true }>;
 export type PreparationOccurrence = z.output<typeof preparationOccurrenceSchema>;
 export type PreparationRecord = z.output<typeof preparationRecordSchema>;
+export type GeneratedShowPlan = z.output<typeof generatedShowPlanSchema>;
+export type GeneratedShowRecord = z.output<typeof generatedShowRecordSchema>;
 
 export const preparationStatusSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unconfigured') }),
@@ -4384,6 +4439,13 @@ export const SHOWS_LIMIT = 64;
 export const SHOW_NAME_MAX = 60;
 export const SHOW_TOPIC_MAX = 2000;
 export const GUESTS_PER_SHOW = 3;
+// Keep this in step with schemas/persona.ts's PERSONA_LIMIT. A show may choose
+// from the full roster, but the stored candidate list still needs a hard cap.
+export const SHOW_GENERATION_CANDIDATES_MAX = 48;
+export const SUB_SHOW_SKILLS_MAX = 128;
+export const SHOW_GENERATION_PROMPT_MAX = SHOW_TOPIC_MAX;
+export const SHOW_GENERATION_TEMPLATES = ['dj-choice', 'common-ground', 'deep-discovery', 'outside-comfort-zone', 'time-capsule'] as const;
+export const SHOW_GENERATION_MODES = ['fixed', 'generated'] as const;
 export const PLAYLISTS_PER_SHOW = 10;
 export const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 // Per-attribute ceiling on the multi-value music filters (#929).
@@ -4638,6 +4700,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .default(''),
       ),
       preparationSkill: z.preprocess(nullToUndefined, z.string().trim().max(SHOW_SEGMENT_SKILL_MAX).default('')),
+      generation: showGenerationSchema().optional(),
       // Empty means "Any": the autonomous dominantMood chain applies on air.
       moods: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
@@ -4777,7 +4840,18 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       if (c.value.preparationSkill && c.value.preparationSkill === c.value.segmentSkill) {
         c.issues.push({ code: 'custom', input: c.value.segmentSkill, path: ['segmentSkill'], message: 'must differ from the show preparation skill' });
       }
-      if (c.value.guestPersonaIds.includes(c.value.personaId)) {
+      if (c.value.generation?.mode === 'generated' && c.value.preparationSkill) {
+        c.issues.push({ code: 'custom', input: c.value.preparationSkill, path: ['preparationSkill'], message: 'cannot be combined with generated show planning yet' });
+      }
+      if (c.value.generation?.mode === 'generated' && c.value.generation.template === 'outside-comfort-zone' && c.value.guestPersonaIds.length) {
+        c.issues.push({ code: 'custom', input: c.value.guestPersonaIds, path: ['guestPersonaIds'], message: 'Outside the Comfort Zone does not use guests' });
+      }
+      if (c.value.generation?.mode === 'generated' && c.value.generation.template === 'common-ground'
+        && c.value.generation.guestMode === 'fixed' && c.value.guestPersonaIds.length !== 1) {
+        c.issues.push({ code: 'custom', input: c.value.guestPersonaIds, path: ['guestPersonaIds'], message: 'Common Ground requires exactly one selected guest' });
+      }
+      if (c.value.guestPersonaIds.includes(c.value.personaId)
+        && !(c.value.generation?.mode === 'generated' && c.value.generation.hostMode === 'random')) {
         c.issues.push({
           code: 'custom',
           input: c.value.guestPersonaIds,
@@ -4788,12 +4862,114 @@ function showObjectSchema(ctx: ShowSchemaContext) {
     })
     .transform((s) => ({
       ...s,
-      guestPersonaIds: [...new Set(s.guestPersonaIds)].filter((id) => id !== s.personaId),
+      programme: s.generation?.mode === 'generated' ? false : s.programme,
+      guestPersonaIds: [...new Set(s.guestPersonaIds)].filter((id) =>
+        (s.generation?.mode === 'generated' && s.generation.hostMode === 'random') || id !== s.personaId),
     }));
+}
+
+const generationGuestCountSchema = z.object({
+  min: z.number().int().min(0).max(GUESTS_PER_SHOW).default(0),
+  max: z.number().int().min(0).max(GUESTS_PER_SHOW).default(0),
+}).check((c) => {
+  if (c.value.min > c.value.max) {
+    c.issues.push({ code: 'custom', input: c.value.min, path: ['min'], message: 'must be less than or equal to max' });
+  }
+});
+
+function showGenerationSchema() {
+  const schema = z.object({
+    // Missing generation config is a legacy/ordinary fixed show.
+    mode: z.enum(SHOW_GENERATION_MODES).default('fixed'),
+    template: z.enum(SHOW_GENERATION_TEMPLATES).default('dj-choice'),
+    // Episode titles are generated by default; custom titles are reused for
+    // each airing of this saved variant.
+    nameMode: z.enum(['random', 'custom']).default('random'),
+    customName: z.preprocess(
+      nullToUndefined,
+      z.string().trim().max(SHOW_NAME_MAX, `must be ${SHOW_NAME_MAX} characters or fewer`).default(''),
+    ),
+    planningPrompt: z.preprocess(
+      nullToUndefined,
+      z.string().trim().max(SHOW_GENERATION_PROMPT_MAX, `must be ${SHOW_GENERATION_PROMPT_MAX} characters or fewer`).default(''),
+    ),
+    // Fixed uses personaId; random draws from the station-wide Sub/Shows pool.
+    hostMode: z.enum(['fixed', 'random']).default('fixed'),
+    // Fixed uses guestPersonaIds; random draws a bounded count from the station-wide pool.
+    guestMode: z.enum(['none', 'fixed', 'random']).default('fixed'),
+    guestCount: generationGuestCountSchema.default({ min: 0, max: 0 }),
+    // null means no minimum. No numeric default was agreed in the proposal.
+    minimumCoverage: z.preprocess(
+      nullToUndefined,
+      z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().default(null),
+    ),
+  }).check((c) => {
+    if (c.value.mode !== 'generated') return;
+    if (c.value.template === 'outside-comfort-zone' && (c.value.guestMode !== 'none' || c.value.guestCount.min !== 0 || c.value.guestCount.max !== 0)) {
+      c.issues.push({ code: 'custom', input: c.value.guestMode, path: ['guestMode'], message: 'Outside the Comfort Zone requires a solo host' });
+    }
+    if (c.value.template === 'common-ground' && (c.value.guestMode === 'none'
+      || (c.value.guestMode === 'random' && (c.value.guestCount.min !== 1 || c.value.guestCount.max !== 1)))) {
+      c.issues.push({ code: 'custom', input: c.value.guestMode, path: ['guestMode'], message: 'Common Ground requires one random guest or one selected guest' });
+    }
+    if (c.value.nameMode === 'custom' && !c.value.customName) {
+      c.issues.push({ code: 'custom', input: c.value.customName, path: ['customName'], message: 'enter a custom episode name' });
+    }
+  });
+  return z.preprocess(raw => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+    const value = raw as Record<string, unknown>;
+    if (value.template === 'outside-comfort-zone') return { ...value, guestMode: value.guestMode ?? 'none', guestCount: value.guestCount ?? { min: 0, max: 0 } };
+    return value.template === 'common-ground' ? {
+      ...value, guestMode: value.guestMode ?? 'random', guestCount: value.guestCount ?? { min: 1, max: 1 },
+    } : raw;
+  }, schema);
+}
+
+/** Station-wide pools used by generated Sub/Shows. null means all options. */
+export function subShowsSettingsSchema(personaIds: string[] | null = null) {
+  const personaPool = z.array(z.string().regex(SHOW_ID_RE, 'must be a valid persona id'))
+    .max(SHOW_GENERATION_CANDIDATES_MAX, `must have at most ${SHOW_GENERATION_CANDIDATES_MAX} entries`)
+    .transform(ids => [...new Set(ids)])
+    .nullable()
+    .default(null)
+    .check(c => {
+      if (c.value && personaIds && c.value.some(id => !personaIds.includes(id))) {
+        c.issues.push({ code: 'custom', input: c.value, message: 'must reference existing personas' });
+      }
+    });
+  return z.object({
+    eligibleHostPersonaIds: personaPool,
+    eligibleGuestPersonaIds: personaPool,
+    eligibleSkillNames: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,48}$/, 'must be a valid DJ Skill name'))
+      .max(SUB_SHOW_SKILLS_MAX, `must have at most ${SUB_SHOW_SKILLS_MAX} entries`)
+      .transform(names => [...new Set(names)])
+      .nullable()
+      .default(null),
+  });
+}
+
+export type SubShowsSettings = z.output<ReturnType<typeof subShowsSettingsSchema>>;
+export function repairSubShowsSettings(raw: unknown, personaIds: string[]): SubShowsSettings {
+  const value = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const repairList = (items: unknown, valid: (item: string) => boolean, max: number): string[] | null => {
+    if (items === null) return null;
+    if (!Array.isArray(items)) return null;
+    return [...new Set(items.filter((item): item is string => typeof item === 'string' && valid(item)))].slice(0, max);
+  };
+  const parsed = subShowsSettingsSchema(null).safeParse({
+    eligibleHostPersonaIds: repairList(value.eligibleHostPersonaIds, id => SHOW_ID_RE.test(id) && personaIds.includes(id), SHOW_GENERATION_CANDIDATES_MAX),
+    eligibleGuestPersonaIds: repairList(value.eligibleGuestPersonaIds, id => SHOW_ID_RE.test(id) && personaIds.includes(id), SHOW_GENERATION_CANDIDATES_MAX),
+    eligibleSkillNames: repairList(value.eligibleSkillNames, name => /^[a-z0-9][a-z0-9-]{0,48}$/.test(name), SUB_SHOW_SKILLS_MAX),
+  });
+  return parsed.success ? parsed.data : { eligibleHostPersonaIds: null, eligibleGuestPersonaIds: null, eligibleSkillNames: null };
 }
 
 export type ShowParsed = z.output<ReturnType<typeof showSchema>>;
 export type Show = ShowParsed & { id: string };
+export type ShowGenerationConfig = z.output<ReturnType<typeof showGenerationSchema>>;
 
 export function showsSchema(ctx: ShowSchemaContext) {
   // Explicit array-level error, phrased WITHOUT the key because both callers
@@ -4864,6 +5040,35 @@ export function repairShowTags(raw: unknown): string[] | undefined {
   return out;
 }
 
+/** Repair generated-show settings without losing the ordinary show on load. */
+function repairShowGeneration(raw: unknown, hasPreparationSkill: boolean): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const value = raw as Record<string, unknown>;
+  const hostMode = value.hostMode === 'random' ? 'random' : 'fixed';
+  const rawCount = value.guestCount && typeof value.guestCount === 'object'
+    ? value.guestCount as Record<string, unknown>
+    : {};
+  const min = rawCount.min;
+  const max = rawCount.max;
+  const validCount = Number.isInteger(min) && Number.isInteger(max)
+    && Number(min) >= 0 && Number(max) <= GUESTS_PER_SHOW && Number(min) <= Number(max);
+  const minimumCoverage = value.minimumCoverage;
+  const guestMode = value.guestMode === 'none' || value.guestMode === 'random' ? value.guestMode : 'fixed';
+  return {
+    // Artist preparation is not composable with generated planning yet, so a
+    // malformed stored combination keeps the show in its ordinary mode.
+    mode: hasPreparationSkill ? 'fixed' : SHOW_GENERATION_MODES.includes(value.mode as typeof SHOW_GENERATION_MODES[number]) ? value.mode : 'fixed',
+    template: SHOW_GENERATION_TEMPLATES.includes(value.template as typeof SHOW_GENERATION_TEMPLATES[number]) ? value.template : 'dj-choice',
+    nameMode: value.nameMode === 'custom' && typeof value.customName === 'string' && value.customName.trim() ? 'custom' : 'random',
+    customName: typeof value.customName === 'string' ? value.customName.trim().slice(0, SHOW_NAME_MAX) : '',
+    planningPrompt: typeof value.planningPrompt === 'string' ? value.planningPrompt.slice(0, SHOW_GENERATION_PROMPT_MAX) : '',
+    hostMode,
+    guestMode: value.template === 'outside-comfort-zone' ? 'none' : value.template === 'common-ground' ? value.guestMode === 'fixed' ? 'fixed' : 'random' : guestMode,
+    guestCount: value.template === 'outside-comfort-zone' ? { min: 0, max: 0 } : value.template === 'common-ground' ? { min: 1, max: 1 } : validCount ? { min: Number(min), max: Number(max) } : { min: 0, max: 0 },
+    minimumCoverage: Number.isSafeInteger(minimumCoverage) && Number(minimumCoverage) >= 0 ? Number(minimumCoverage) : null,
+  };
+}
+
 /**
  * Every per-field repair the load path applies before parsing. `undefined` lets
  * the schema's own default apply; each repair lands on a value the strict path
@@ -4878,6 +5083,8 @@ export function repairShowForLoad(
   personaIds: string[] | null,
 ): Record<string, unknown> {
   const host = typeof raw.personaId === 'string' ? raw.personaId : '';
+  const generation = repairShowGeneration(raw.generation,
+    typeof raw.preparationSkill === 'string' && !!raw.preparationSkill.trim());
   return {
     ...raw,
     id: typeof raw.id === 'string' && SHOW_ID_RE.test(raw.id) ? raw.id : undefined,
@@ -4887,6 +5094,10 @@ export function repairShowForLoad(
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
     preparationSkill: typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX) : undefined,
+    generation,
+    // Sub/Shows use the normal talk scheduler, including legacy saved slots
+    // that were automatically created with Programme mode enabled.
+    programme: generation?.mode === 'generated' ? false : raw.programme,
     themeId: typeof raw.themeId === 'string'
       ? raw.themeId.trim().slice(0, SHOW_THEME_ID_MAX)
       : undefined,
@@ -4913,10 +5124,10 @@ export function repairShowForLoad(
           .filter((w): w is EraWindow => w != null)
           .slice(0, SHOW_FILTER_VALUES_MAX)
       : undefined,
-    guestPersonaIds: Array.isArray(raw.guestPersonaIds)
+    guestPersonaIds: generation?.mode === 'generated' && generation.template === 'outside-comfort-zone' ? [] : Array.isArray(raw.guestPersonaIds)
       ? raw.guestPersonaIds
           .filter((g): g is string =>
-            typeof g === 'string' && g !== host && (personaIds == null || personaIds.includes(g)))
+            typeof g === 'string' && ((generation?.mode === 'generated' && generation.hostMode === 'random') || g !== host) && (personaIds == null || personaIds.includes(g)))
           .slice(0, GUESTS_PER_SHOW)
       : undefined,
     // Lenient twin of the strict `tags` field: an invalid tag is DROPPED rather

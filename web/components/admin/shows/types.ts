@@ -15,6 +15,8 @@ import {
   SHOW_YEAR_MIN,
   TAGS_PER_SHOW_LIMIT,
   validEraYear,
+  type ShowGenerationConfig,
+  type SubShowsSettings,
 } from '@/lib/schemas.generated';
 
 export const NAME_MAX = SHOW_NAME_MAX;
@@ -92,6 +94,8 @@ export interface Show {
    *  Only used with programme on. */
   segmentSkill: string;
   preparationSkill: string;
+  /** Present only for generated shows; managed from the schedule. */
+  generation?: ShowGenerationConfig;
   /** Operator organisation tags. They filter and group this list and nothing
    *  else -- picker, DJ agent and public routes are blind to them. */
   tags: string[];
@@ -242,6 +246,8 @@ export interface SettingsResponse {
     shows?: Array<Partial<Show>>;
     schedule?: Schedule;
     personas?: Persona[];
+    subShows?: SubShowsSettings;
+    timezone?: string;
     /** Crossfade-relative floor for a non-zero per-show cap or minimum track
      *  length (server-computed). */
     minTrackSeconds?: number;

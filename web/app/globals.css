@@ -100,6 +100,9 @@
     --ink: #161412;
     --muted: #6d675e; /* ~5.6:1 on the cream — raised from #7a736a (~4.6:1) */
     --accent: oklch(0.62 0.22 25); /* ~ #d94b2a hot vermilion */
+    /* Keep the station accent, with stronger contrast for small action labels. */
+    --accent-fill: color-mix(in oklab, var(--accent) 88%, black);
+    --accent-text: color-mix(in oklab, var(--accent) 72%, var(--ink));
     --soft-border: rgba(0, 0, 0, 0.08);
     --separator-soft: rgba(0, 0, 0, 0.08);
     --separator-strong: rgba(0, 0, 0, 0.1);
@@ -3326,6 +3329,8 @@ header.bs-masthead-lift {
        --muted sits ~3.5:1 on the card, under the readable floor for a dense
        control panel. Derived from --ink/--bg so it tracks the palette. */
     --muted: color-mix(in oklab, var(--ink) 62%, var(--bg));
+    --color-muted: var(--muted);
+    --color-vermilion: var(--accent-text);
     --muted-2: color-mix(in oklab, var(--muted) 75%, var(--bg));
     /* --card-bg / --page-bg and the shadcn --sidebar-* family live at :root (see
        the note there) and are inherited; only --muted is overridden locally. */

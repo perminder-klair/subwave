@@ -94,15 +94,17 @@ async function previousAngle(showId: string): Promise<string | null> {
   return null;
 }
 
-// The capability menu the producer may build features from: enabled, ready,
-// owned by the host persona, and co-hosted skills only when the episode has
-// guests. A kind the beat cannot run plans an hour that falls to straight talk.
-export function featureKindMenu(host: { skills?: string[] } | null | undefined, hasCohosts: boolean, preparationSkill: string | null = null): { kind: string; desc: string }[] {
+// Enabled, ready, host-owned capabilities compatible with the guest roster.
+export function featureKindMenu(
+  host: { skills?: string[] } | null | undefined,
+  hasCohosts: boolean,
+  preparationSkill: string | null = null,
+): { kind: string; desc: string }[] {
   try {
     return skillCatalog()
       .filter((c) => c.enabled && c.ready)
       .filter((c) => !host?.skills || host.skills.includes(c.name))
-      .filter((c) => skillEligible({ seeded: false, skill: c.name, enabled: { [c.name]: true }, personaSkills: host?.skills, requiresCohosts: c.cohosts, hasCohosts, preparationSkill }).allowed)
+      .filter((c) => skillEligible({ seeded: false, skill: c.name, enabled: { [c.name]: true }, personaSkills: host?.skills, requiresCohosts: c.cohosts && !c.toolCast && !c.hasSpecialGuest, hasCohosts, preparationSkill }).allowed)
       .map((c) => ({ kind: c.kind, desc: c.description || c.label }));
   } catch {
     return [];
@@ -131,6 +133,7 @@ async function fillPlan(
   { generateProgrammePlan = dj.generateProgrammePlan }: PlanDeps = {},
 ): Promise<void> {
   ctx = await prepareEpisodeContext(ctx);
+  show = settings.resolveActiveShow(now) ?? show;
   if (!programmeIsOwned(prog)) return;
   const occurrence = showPreparation.occurrence({ context: ctx });
   if (occurrence) {
@@ -373,13 +376,12 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
   // offered (featureKindMenu: enabled, ready, host-owned, cohost-eligible), at
   // air time: the plan lives in session.json for the whole episode, so a skill
   // the operator disabled mid-show must not still air at the next feature beat.
-  // The show's own pinned segmentSkill is the operator's choice and is not
-  // second-guessed here.
+  // Ordinary programmes retain their operator-pinned skill.
   if (kind && !pinned) {
     const roster = settings.getOnAirRoster(now);
     const menu = featureKindMenu(roster.host, roster.guests.length > 0, preparationSkillAt(ctx));
     if (!menu.some((k) => k.kind === kind)) {
-      queue.log('scheduler', `Programme feature capability "${kind}" is not on this show's capability menu (disabled, not ready, or not the host's) — airing straight talk instead`);
+      queue.log('scheduler', `Programme feature capability "${kind}" is not on this show's capability menu (disabled, not ready, not eligible, or not the host's) — airing straight talk instead`);
       kind = null;
     }
   }

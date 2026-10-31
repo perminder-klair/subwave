@@ -389,6 +389,7 @@ export default function ShowsPanel() {
   }
 
   const shows = watch('shows');
+  const regularShows = shows.filter(show => show.generation?.mode !== 'generated');
   // focusIdx can briefly point past the end after a removal.
   const focused = focusIdx != null ? (shows[focusIdx] ?? null) : null;
   // Same type-only cast as `control`/`setValue` above.
@@ -399,8 +400,9 @@ export default function ShowsPanel() {
   // what focusShow, Save show and delete key off (shows/roster-order.ts).
   const filter = { query, tags: tagSel, personaId: hostSel };
   const filterOn = showFilterActive(filter);
-  const allTags = showTagVocabulary(shows);
-  const entries = orderShowRoster(shows, { sort, filter, personas, hoursFor: countHours });
+  const allTags = showTagVocabulary(regularShows);
+  const entries = orderShowRoster(shows, { sort, filter, personas, hoursFor: countHours })
+    .filter(entry => entry.show.generation?.mode !== 'generated');
   const clearFilters = () => { setQuery(''); setTagSel([]); setHostSel(''); };
   // Suggestions come from the WHOLE list, not the filtered view: a filtered list
   // hides exactly the tags worth reusing.
@@ -413,10 +415,10 @@ export default function ShowsPanel() {
           <div>
             <Eyebrow className="text-vermilion">show plan · the rundown</Eyebrow>
             <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-              Build your shows here. Put them on the air on the Rundown.
+              Build your regular shows here. Put them on the air on the Rundown.
             </div>
             <div className="mt-1 max-w-[62ch] text-[11px] leading-[1.6] text-muted">
-              This page is the roster — each show&apos;s name, host, brief, and
+              This page is the regular show roster — each show&apos;s name, host, brief, and
               sound. The Rundown is the week itself: the board and the on-air
               listing, hour by hour.
             </div>
@@ -428,6 +430,9 @@ export default function ShowsPanel() {
             </div>
             <Button asChild variant="accent" size="sm" className="min-h-9 sm:min-h-0">
               <Link href="/admin/shows/schedule">Open the schedule →</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="min-h-9 sm:min-h-0">
+              <Link href="/admin/shows/templates">Sub/Shows</Link>
             </Button>
           </div>
         </div>
@@ -442,7 +447,7 @@ export default function ShowsPanel() {
       )}
 
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
-        <span className="caption">show definitions · {shows.length}/{SHOWS_MAX} shows</span>
+        <span className="caption">regular show definitions · {regularShows.length}</span>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
           <Btn
             className="min-h-9 sm:min-h-0"
@@ -460,12 +465,13 @@ export default function ShowsPanel() {
             className="min-h-9 sm:min-h-0"
             onClick={addShow}
             disabled={shows.length >= SHOWS_MAX || personas.length === 0}
+            title={shows.length >= SHOWS_MAX ? 'The station show limit includes template variants' : undefined}
           >
             + Add show
           </Btn>
         </div>
       </div>
-      {shows.length > 5 && (
+      {regularShows.length > 5 && (
         <RosterToolbar<ShowSort>
           query={query}
           onQueryChange={setQuery}
@@ -480,7 +486,7 @@ export default function ShowsPanel() {
           onClear={clearFilters}
           view={view}
           onViewChange={setView}
-          summary={filterOn ? `${entries.length} of ${shows.length}` : undefined}
+          summary={filterOn ? `${entries.length} of ${regularShows.length}` : undefined}
           extraFilters={personas.length > 1 && (
             <Select value={hostSel || ANY_HOST} onValueChange={v => setHostSel(v === ANY_HOST ? '' : v)}>
               <SelectTrigger className="min-w-0 flex-1 sm:w-[170px] sm:flex-none" aria-label="Filter by host">
@@ -496,21 +502,26 @@ export default function ShowsPanel() {
           )}
         />
       )}
-      {shows.length > 0 && shows.length <= 5 && (
+      {regularShows.length > 0 && regularShows.length <= 5 && (
         <div className="flex justify-end">
           <RosterViewToggle view={view} onChange={setView} />
         </div>
       )}
 
-      {shows.length === 0 && (
+      {regularShows.length === 0 && (
         <EmptyState
           art="calendar"
-          title="No shows scheduled"
-          description="Add one to start programming the week."
+          title="No regular shows"
+          description="Generated show variants are managed in Sub/Shows."
+          action={(
+            <Button asChild variant="outline" size="sm">
+              <Link href="/admin/shows/templates">Open Sub/Shows</Link>
+            </Button>
+          )}
         />
       )}
 
-      {shows.length > 0 && entries.length === 0 && (
+      {regularShows.length > 0 && entries.length === 0 && (
         <EmptyState
           title="No shows match"
           description="Nothing fits the current filters."

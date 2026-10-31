@@ -1,3 +1,7 @@
+import type { NotebookSnapshot } from '../../../skills/notebook.js';
+import * as settings from '../../../settings.js';
+import { findSkillPersona, type PersonaIdentity } from '../../../skills/special-guest.js';
+import { laterTodayProgramming } from '../../../skills/look-ahead.js';
 import { randomLibraryArtist } from '../../../music/episode-source.js';
 // Station services — the curated facade a skill's data tool (a built-in or an
 // operator's custom tool.mjs) gets to look at the world before the DJ speaks.
@@ -23,6 +27,9 @@ import { fetchHeadlines, hashHeadline } from '../../../skills/feed.js';
 import { getArtist, getAlbum, searchArtists } from '../../../music/subsonic.js';
 
 export interface StationServices {
+  notebook: { read: () => NotebookSnapshot | null };
+  personas: { find: (query: string) => PersonaIdentity | null; onAirHost: () => PersonaIdentity | null };
+  schedule: { laterToday: () => ReturnType<typeof laterTodayProgramming> };
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /
   // Brave / SearXNG / Keenable). `searchReady()` is false when no provider is
   // usable.
@@ -50,10 +57,19 @@ let cached: StationServices | null = null;
 
 // Build (once) the services facade. The wrappers are stateless — `nowPlaying`,
 // `recentPlays` etc. read live from the queue each call — so a single cached
-// instance is safe to reuse across ticks.
-export function buildStationServices(): StationServices {
-  if (cached) return cached;
-  cached = {
+// base instance is safe to reuse across ticks. A per-call schedule overlay
+// binds the actual speaker without sharing voice identity between runs.
+export function buildStationServices({ speakerPersonaId = null, notebookSnapshot = null }: { speakerPersonaId?: string | null; notebookSnapshot?: NotebookSnapshot | null } = {}): StationServices {
+  cached ??= {
+    notebook: { read: () => null },
+    personas: {
+      find: findSkillPersona,
+      onAirHost: () => {
+        const host = settings.getOnAirRoster().host;
+        return host ? { id: host.id, name: host.name } : null;
+      },
+    },
+    schedule: { laterToday: () => laterTodayProgramming() },
     searchWeb,
     searchReady,
     nowPlaying: () => queue.current?.track ?? null,
@@ -65,5 +81,8 @@ export function buildStationServices(): StationServices {
     recall: { seen: (key: string) => curiositySeen(key), remember: (key: string) => recordCuriosity(key) },
     log: (msg: string) => queue.log('scheduler', `[skill] ${msg}`),
   };
-  return cached;
+  return speakerPersonaId || notebookSnapshot ? { ...cached,
+    schedule: { laterToday: () => laterTodayProgramming(speakerPersonaId) },
+    notebook: { read: () => notebookSnapshot ? structuredClone(notebookSnapshot) : null },
+  } : cached;
 }

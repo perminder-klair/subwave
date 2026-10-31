@@ -3,6 +3,8 @@
 // GET/POST /settings, and settings.update() stays the validation chokepoint.
 
 import express from 'express';
+import { createHash, randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody, validateBodyAsync } from '../middleware/validate.js';
@@ -19,6 +21,8 @@ import { readCommunityShow } from '../shows/community.js';
 import { SLUG_RE } from '../skills/loader.js';
 import { queue } from '../broadcast/queue.js';
 import { rollSessionNow } from '../broadcast/scheduler.js';
+import { GeneratedShowRegenerationError, prepareUpcomingGeneratedShows, showPreparation } from '../broadcast/show-preparation.js';
+import { activateTakeoverPreview, prepareTakeoverPreview, takeoverPreviewRequestSchema } from '../broadcast/takeover-generation.js';
 import { resolveTakeoverWindowNow } from '../broadcast/takeover-window.js';
 import { diagnoseShowCandidates } from '../music/show-candidates.js';
 import { isInOrderShow } from '../music/playlist-order.js';
@@ -44,6 +48,161 @@ async function showPostContext() {
 router.post('/shows/candidates', requireAdmin, validateBodyAsync(showPostContext), async (req, res) => {
   try { res.json(await diagnoseShowCandidates(req.body.show)); }
   catch (err: any) { queue.log('error', 'POST /shows/candidates failed: ' + err.message); res.status(500).json({ error: err.message }); }
+});
+
+// A stable new identity makes saving an episode idempotent without altering it.
+const savedEpisodeId = (id: string) => `s_episode_${createHash('sha256').update(id).digest('hex').slice(0, 20)}`;
+const occurrenceBody = z.object({ occurrenceId: z.string().min(1).max(200) });
+const pendingEpisodeSaves = new Map<string, Promise<unknown>>();
+
+router.post('/shows/generated/save-draft', requireAdmin, validateBody(occurrenceBody), async (req, res) => {
+  try {
+    await settings.load();
+    const record = (await showPreparation.generatedRecords()).find(r => r.occurrence.id === req.body.occurrenceId);
+    if (!record || record.kind !== 'ready') return res.status(404).json({ error: 'This episode has no accepted plan to save.' });
+    const id = savedEpisodeId(record.occurrence.id);
+    const existing = settings.get().shows?.find(show => show.id === id);
+    const source = settings.get().shows?.find(show => show.id === record.occurrence.showId);
+    // These immutable inputs were recorded with the plan, including playlist
+    // restrictions; do not substitute later edits to the recurring slot.
+    const inputs = record.configuration ? JSON.parse(record.configuration) : null;
+    // Older past records intentionally discarded their fingerprint. Preserve
+    // non-sensitive source settings separately for new episodes; legacy ones
+    // can only fall back to the surviving recurring show.
+    const sourceSettings = record.sourceSettings ?? (inputs ? {
+      playlistIds: inputs[7] ?? [], playlistStrict: inputs[8] ?? false,
+      excludedPlaylistIds: inputs[9] ?? [], maxTrackSeconds: inputs[10] ?? null,
+      minTrackLengthSeconds: inputs[11] ?? null, vocals: inputs[12] ?? '',
+    } : {});
+    const show = existing ?? {
+      ...source, ...record.plan, id,
+      personaId: record.hostPersonaId, guestPersonaIds: record.guestPersonaIds,
+      generation: undefined, programme: false, preparationSkill: '', segmentSkill: '',
+      ...sourceSettings,
+    };
+    res.json({ show, saved: !!existing, generatedAt: record.generatedAt });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/shows/generated/save', requireAdmin, validateBodyAsync(async () =>
+  (await showPostContext()).extend({ occurrenceId: occurrenceBody.shape.occurrenceId, generatedAt: z.number().finite() })
+), async (req, res) => {
+  const id = savedEpisodeId(req.body.occurrenceId);
+  try {
+    const save = async () => {
+      await settings.load();
+      const shows = settings.get().shows ?? [];
+      const existing = shows.find(show => show.id === id);
+      if (existing) return { show: existing, shows };
+      const record = (await showPreparation.generatedRecords()).find(r => r.occurrence.id === req.body.occurrenceId);
+      if (!record || record.kind !== 'ready' || record.generatedAt !== req.body.generatedAt) {
+        throw new GeneratedShowRegenerationError('The episode changed. Close and reopen Save before trying again.', 'conflict');
+      }
+      if (req.body.show.id !== id || req.body.show.generation?.mode === 'generated') {
+        throw new GeneratedShowRegenerationError('Save requires a new regular show.', 'conflict');
+      }
+      if (shows.length >= settings.SHOWS_LIMIT) throw new GeneratedShowRegenerationError('The show list is full. Remove a show first.', 'conflict');
+      await settings.update({ shows: [...shows, req.body.show] });
+      const next = settings.get().shows ?? [];
+      return { show: next.find(show => show.id === id), shows: next };
+    };
+    let operation = pendingEpisodeSaves.get(id);
+    if (!operation) {
+      operation = save().finally(() => pendingEpisodeSaves.delete(id));
+      pendingEpisodeSaves.set(id, operation);
+    }
+    res.json(await operation);
+  } catch (err: any) { res.status(err instanceof GeneratedShowRegenerationError ? 409 : 400).json({ error: err.message }); }
+});
+
+router.post('/shows/generated/shuffle', requireAdmin, validateBody(occurrenceBody), async (req, res) => {
+  try {
+    await settings.load();
+    const record = (await showPreparation.generatedRecords()).find(r => r.occurrence.id === req.body.occurrenceId);
+    if (!record) return res.status(404).json({ error: 'This episode is no longer available.' });
+    const show = settings.get().shows?.find(show => show.id === record.occurrence.showId);
+    if (show?.generation?.hostMode !== 'random' && show?.generation?.guestMode !== 'random') {
+      return res.status(409).json({ error: 'This slot has no random host or guest options.' });
+    }
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const castSeed = randomUUID();
+      const cast = await showPreparation.previewGeneratedCast(req.body.occurrenceId, castSeed);
+      if (cast.hostPersonaId !== record.hostPersonaId || [...cast.guestPersonaIds].sort().join(',') !== [...record.guestPersonaIds].sort().join(',')) {
+        return res.json({ castSeed, ...cast });
+      }
+    }
+    res.status(409).json({ error: 'No different cast was found in the eligible pools. Adjust the host or guest options and try again.' });
+  } catch (err: any) { res.status(err instanceof GeneratedShowRegenerationError && err.code === 'not-found' ? 404 : 409).json({ error: err.message }); }
+});
+
+// Dashboard programming choices need template identity, not persona prompts.
+router.get('/shows/takeover', requireAdmin, async (_req, res) => {
+  try {
+    await settings.load();
+    const active = settings.resolveActiveShow();
+    res.json({
+      shows: (settings.get().shows ?? []).map(show => ({
+        id: show.id, name: active && active.id === show.id ? active.name : show.name,
+        ...(show.generation ? { generation: { mode: show.generation.mode, template: show.generation.template } } : {}),
+      })),
+      override: settings.getScheduleOverride(),
+    });
+  } catch (err: unknown) { res.status(500).json({ error: err instanceof Error ? err.message : String(err) }); }
+});
+
+// Generated episode history deliberately omits the saved configuration string,
+// which carries persona prompt material used to decide the plan.
+router.get('/shows/generated', requireAdmin, async (req, res) => {
+  try {
+    await settings.load();
+    const requested = Number.parseInt(String(req.query.limit ?? ''), 10);
+    const limit = Number.isFinite(requested) ? Math.min(100, Math.max(1, requested)) : 50;
+    const episodes = (await showPreparation.generatedRecords()).slice(0, limit).map(record => ({
+      occurrence: record.occurrence,
+      template: record.template,
+      hostPersonaId: record.hostPersonaId,
+      guestPersonaIds: record.guestPersonaIds,
+      status: record.kind,
+      savedShowId: settings.get().shows?.some(show => show.id === savedEpisodeId(record.occurrence.id)) ? savedEpisodeId(record.occurrence.id) : null,
+      canShuffle: settings.get().shows?.some(show => show.id === record.occurrence.showId
+        && (show.generation?.hostMode === 'random' || show.generation?.guestMode === 'random')) ?? false,
+      ...(record.kind === 'ready'
+        ? { plan: record.plan, generatedAt: record.generatedAt }
+        : { reason: record.reason, attempts: record.attempts }),
+    }));
+    res.json({ episodes });
+  } catch (err: any) {
+    queue.log('error', `GET /shows/generated failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/shows/generated/regenerate', requireAdmin, validateBody(z.object({
+  occurrenceId: z.string().min(1).max(200),
+  castSeed: z.string().uuid().optional(),
+  cast: z.object({ hostPersonaId: z.string(), guestPersonaIds: z.array(z.string()).max(3) }).optional(),
+})), async (req, res) => {
+  try {
+    await settings.load();
+    if (req.body.castSeed) {
+      const cast = await showPreparation.previewGeneratedCast(req.body.occurrenceId, req.body.castSeed);
+      if (!req.body.cast || cast.hostPersonaId !== req.body.cast.hostPersonaId
+        || JSON.stringify(cast.guestPersonaIds) !== JSON.stringify(req.body.cast.guestPersonaIds)) {
+        return res.status(409).json({ error: 'Casting options changed. Shuffle again to preview the current cast.' });
+      }
+    }
+    const record = await showPreparation.regenerateGenerated(req.body.occurrenceId, req.body.castSeed);
+    if (!record) return res.status(409).json({ error: 'The slot started or changed while generating. Refresh the episode list.' });
+    if (record.kind === 'failed') return res.status(502).json({ error: record.reason });
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    const status = err instanceof GeneratedShowRegenerationError
+      ? err.code === 'not-found' ? 404 : 409
+      : 502;
+    queue.log('error', `POST /shows/generated/regenerate failed: ${message}`);
+    res.status(status).json({ error: message });
+  }
 });
 
 router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => {
@@ -210,6 +369,10 @@ router.post('/shows', requireAdmin, validateBodyAsync(showPostContext), async (r
     const next = settings.get().shows || [];
     const saved = (id && next.find((s: any) => s.id === id)) || next[next.length - 1] || null;
     queue.log('scheduler', `[shows] "${saved?.id || id}" ${idx >= 0 ? 'edited' : 'added'} via admin editor`);
+    if (saved?.generation?.mode === 'generated') {
+      void prepareUpcomingGeneratedShows({ showId: saved.id })
+        .catch(err => queue.log('error', `[shows] generated show preparation failed after edit: ${err.message}`));
+    }
     res.json({ shows: next, show: saved });
   } catch (err: any) {
     queue.log('error', `POST /shows failed: ${err.message}`);
@@ -228,6 +391,26 @@ router.get('/schedule/next-change', requireAdmin, async (_req, res) => {
   } catch (err: any) {
     queue.log('error', `GET /schedule/next-change failed: ${err.message}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Preparation is a command with no schedule side effects. Activation consumes
+// the accepted draft, never a second model generation.
+router.post('/schedule/takeover/prepare', requireAdmin, validateBody(takeoverPreviewRequestSchema), async (req, res) => {
+  try { res.json(await prepareTakeoverPreview(req.body)); }
+  catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    queue.log('error', `Takeover preparation failed: ${message}`);
+    res.status(502).json({ error: message });
+  }
+});
+router.post('/schedule/takeover/activate', requireAdmin, validateBody(z.object({ token: z.string().uuid() })), async (req, res) => {
+  try {
+    const result = await activateTakeoverPreview(req.body.token);
+    if (result.newlyActivated) void rollSessionNow({ manual: true, reason: 'prepared Sub/Show takeover started' });
+    res.json(result);
+  } catch (err: unknown) {
+    res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -251,6 +434,10 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
   const show = pinnedId ? (settings.get().shows || []).find((s: any) => s.id === pinnedId) : null;
   if (!isDefaultTakeover(req.body) && !show) {
     return res.status(404).json({ error: `no such show: ${showId}` });
+  }
+
+  if (show?.generation?.mode === 'generated') {
+    return res.status(409).json({ error: 'Prepare a Sub/Show template before starting its takeover.' });
   }
 
   const startedAt = Date.now();
@@ -316,6 +503,8 @@ router.put('/schedule', requireAdmin, validateBody(scheduleSaveSchema), async (r
   try {
     await settings.update({ schedule });
     queue.log('scheduler', `[shows] schedule saved via admin editor${dropped ? ` (${dropped} orphan slot(s) dropped)` : ''}`);
+    void prepareUpcomingGeneratedShows()
+      .catch(err => queue.log('error', `[shows] generated show preparation failed after schedule save: ${err.message}`));
     res.json({ schedule: settings.get().schedule, dropped });
   } catch (err: any) {
     queue.log('error', `PUT /schedule failed: ${err.message}`);
