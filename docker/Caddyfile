@@ -47,6 +47,25 @@
 	# disables buffering so the audio stays live.
 	@streams path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	handle @streams {
+		# Icecast refuses a listener with a 401 carrying WWW-Authenticate: Basic.
+		# ffmpeg, mpv and GStreamer send `user:pass@` only once challenged, so the
+		# header stays by default. A media element can't answer it: the browser
+		# raises its native "Sign in" dialog over the whole page, which blocks the
+		# player until the station gate's next check. So drop it for a request
+		# that marks itself as one of those: a token on the URL (web player, app,
+		# Cast), or a media destination (the same, before a token exists; browsers
+		# send that one to https and localhost only). Only the header goes: the
+		# 401 and its body stay, and a 200 has none to lose. The delete is deferred
+		# to the response, so it sees what Icecast sent. In lockstep with
+		# docker/aio/Caddyfile.
+		@stream_token query auth=*
+		@stream_element {
+			header Sec-Fetch-Dest audio
+			header Sec-Fetch-Dest video
+		}
+		header @stream_token -WWW-Authenticate
+		header @stream_element -WWW-Authenticate
+
 		reverse_proxy broadcast:7702 {
 			flush_interval -1
 			transport http {
