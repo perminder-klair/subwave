@@ -367,6 +367,46 @@ export async function checkBroadcast(): Promise<Finding[]> {
   return out;
 }
 
+// Co-hosted shows whose hosts have no rescue voice of their own (#2029). When a
+// host's engine fails mid-render the line is rescued in the station's fallback
+// voice — one voice for every host, so a co-host can air sounding like the
+// other. Static configuration only: nothing here knows whether a voice
+// "belongs" to another host. Null when no show has two or more hosts, so a solo
+// station sees no new finding.
+export function coHostRescueFinding(s: StationSettings | null): Finding | null {
+  const personas = Array.isArray(s?.personas) ? s.personas : [];
+  const shows = Array.isArray(s?.shows) ? s.shows : [];
+  const byId = new Map(personas.filter((p) => p?.id).map((p) => [p.id, p]));
+  let coHosted = 0;
+  const missing: string[] = [];
+  for (const show of shows) {
+    const ids = [show?.personaId, ...(Array.isArray(show?.guestPersonaIds) ? show.guestPersonaIds : [])];
+    const hosts = [...new Set(ids)]
+      .map((id) => (typeof id === 'string' ? byId.get(id) : undefined))
+      .filter((p): p is NonNullable<typeof p> => !!p);
+    if (hosts.length < 2) continue;
+    coHosted++;
+    const bare = hosts.filter((p) => !p.fallbackVoice || typeof p.fallbackVoice !== 'object');
+    if (bare.length) {
+      missing.push(`${show.name || 'Untitled show'}: ${bare.map((p) => p.name || p.id).join(', ')}`);
+    }
+  }
+  if (!coHosted) return null;
+  if (!missing.length) {
+    return {
+      label: 'co-host rescue voices',
+      status: 'ok',
+      detail: `every host on ${coHosted} co-hosted show${coHosted === 1 ? '' : 's'} has a rescue voice`,
+    };
+  }
+  return {
+    label: 'co-host rescue voices',
+    status: 'warn',
+    detail: `no rescue voice — ${missing.join('; ')}`,
+    hint: "If a host's engine fails mid-render, their lines are rescued in the station's fallback voice — the same voice for every host, which can make one host sound like another. Set a Rescue voice for each host in Personas → Voice.",
+  };
+}
+
 export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
 
@@ -408,6 +448,9 @@ export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
         : `${spoken.engine ?? 'piper'}`,
     });
   } catch { /* routing snapshot is best-effort */ }
+
+  const coHost = coHostRescueFinding(s);
+  if (coHost) out.push(coHost);
 
   return out;
 }

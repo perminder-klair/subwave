@@ -2,18 +2,21 @@
 // Bind the whole TTS slot because changing engines resets the voice and server errors name the slot.
 import { useId } from 'react';
 import { useController, type Control } from 'react-hook-form';
-import type { Persona, PersonasFormValues, SettingsResponse } from './types';
+import type { Persona, PersonaFallbackVoice, PersonasFormValues, SettingsResponse } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { fieldAria } from '@/lib/form';
 import { TextareaField } from '@/lib/form-fields';
 import { Field, FieldLabel, FieldError } from '@/components/ui/field';
-import { Card } from '../ui';
+import { Card, Seg } from '../ui';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { effectiveTts } from './helpers';
 import { Label } from '../../ui/label';
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
 import { PERSONA_VOICE_STYLE_MAX, composeTtsControlSpeeds } from '../../../lib/schemas.generated';
+
+// What turning a rescue voice On starts from: the always-available local floor.
+const RESCUE_SEED: PersonaFallbackVoice = { engine: 'piper', cloudProvider: 'openai', voice: '' };
 
 interface PersonaVoiceCardProps {
   persona: Persona; // read-only: language (preview) + on-screen labels only
@@ -32,6 +35,19 @@ export function PersonaVoiceCard({
   const tts = field.value;
   const uid = useId();
   const aria = fieldAria(`${uid}-tts`, fieldState.error);
+
+  // The persona's own rescue voice (#2029), tried before the station Fallback
+  // voice when this persona's engine fails. null = none.
+  const { field: rescueField, fieldState: rescueState } = useController({
+    control, name: `personas.${index}.fallbackVoice`,
+  });
+  const rescue = rescueField.value;
+  const rescueAria = fieldAria(`${uid}-rescue`, rescueState.error);
+  // Checked per provider, as on the station Fallback card: a cloud rescue whose
+  // provider has no key is skipped at rescue time.
+  const rescueCloudUnconfigured = rescue?.engine === 'cloud'
+    && rescue.cloudProvider !== 'openai-compatible'
+    && data?.tts?.available?.cloudByProvider?.[rescue.cloudProvider] === false;
 
   const gain = tts.gainDb ?? 0;
   const gainLabel = !gain
@@ -176,6 +192,66 @@ export function PersonaVoiceCard({
           </div>
         </div>
       </div>
+
+      <Field
+        data-invalid={rescueAria.invalid || undefined}
+        {...rescueAria.groupProps}
+        className="mt-6 min-w-0 border-t border-[var(--ink-soft)] pt-4"
+      >
+        <FieldLabel asChild className="caption" {...rescueAria.labelledByProps}>
+          <span>Rescue voice</span>
+        </FieldLabel>
+        <Seg
+          aria-label="Rescue voice"
+          value={rescue ? 'on' : 'off'}
+          options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+          onChange={v => rescueField.onChange(v === 'on' ? (rescue ?? RESCUE_SEED) : null)}
+        />
+        <div className="field-hint max-w-[70ch]">
+          Used only when this persona&apos;s own engine fails, and tried before the
+          station&apos;s <strong>Fallback voice</strong>. Off, a failed line is
+          rescued in the station&apos;s fallback voice, which is the same for every
+          persona. On a co-hosted show, give each host a rescue voice of their own
+          so one host never airs sounding like the other. Keys and servers come
+          from <strong>Settings → TTS voice</strong>.
+        </div>
+        {rescue && (
+          <div className="mt-4 max-w-[560px]">
+            <EngineVoiceFields
+              value={rescue}
+              onChange={patch => rescueField.onChange({ ...rescue, ...patch })}
+              data={data}
+              adminFetch={adminFetch}
+              previewLanguage={persona.language}
+              engineHint={<>
+                Pick an engine that doesn&apos;t share this persona&apos;s point of
+                failure — a local engine is the safest rescue.
+              </>}
+              unavailableNote={engine => (
+                <>{ENGINE_UNAVAILABLE[engine]} A rescue voice that can&apos;t speak
+                  is skipped, so this persona drops to the station&apos;s{' '}
+                  <strong>Fallback voice</strong> instead.</>
+              )}
+              cloudIssue={rescueCloudUnconfigured && (
+                <>
+                  <strong>This rescue voice won’t play.</strong> No API key is
+                  configured for that cloud provider. Until then it is skipped,
+                  and this persona drops to the station&apos;s{' '}
+                  <strong>Fallback voice</strong>.
+                </>
+              )}
+              previewHint={<>
+                Plays a short sample in the rescue voice. You&apos;ll normally only
+                hear it when something has already gone wrong.
+              </>}
+            />
+          </div>
+        )}
+        <FieldError
+          {...rescueAria.errorProps}
+          errors={rescueState.error ? [rescueState.error] : undefined}
+        />
+      </Field>
     </Card>
   );
 }

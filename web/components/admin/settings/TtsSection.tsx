@@ -1641,7 +1641,9 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             rescues the segment so the DJ never goes silent. Off, it rescues onto
             the default engine above and whatever voice that engine happens to
             carry. On, it uses the engine <em>and voice</em> you pick here first,
-            and only falls through to Piper if that can’t speak either.
+            and only falls through to Piper if that can’t speak either. A
+            persona with its own <strong>Rescue voice</strong> (Personas → Voice)
+            tries that first, so co-hosts don’t all share this one voice.
           </div>
         </div>
 
