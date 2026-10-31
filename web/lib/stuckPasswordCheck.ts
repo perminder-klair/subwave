@@ -25,9 +25,10 @@ export const RECHECK_MIN_GAP_MS = 120_000;
 
 /** Tuned in and hearing nothing. Unlike the app's player, this one can rest on 'idle' between
  *  reconnects: Firefox reports a refused connect as an element error, which drops `status` for the
- *  backoff, up to a minute, and 'connecting' lasts only as long as the refusal takes. (Chromium just
- *  stalls, and stays on 'connecting'.) Keyed on 'connecting' alone, Firefox's watcher is replaced
- *  before its first check ever comes due. */
+ *  backoff, up to a minute, and 'connecting' lasts only as long as the refusal takes. (Chromium
+ *  parks a same-origin connect on the 401's Basic challenge, behind its own sign-in dialog, and
+ *  stays on 'connecting'.) Keyed on 'connecting' alone, Firefox's watcher is replaced before its
+ *  first check ever comes due. */
 export function stuckConnecting(tunedIn: boolean, status: PlayerStatus): boolean {
   return tunedIn && status !== 'playing';
 }

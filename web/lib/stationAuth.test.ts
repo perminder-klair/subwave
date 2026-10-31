@@ -6,6 +6,7 @@ import {
   RATE_LIMIT_MAX_WAIT_MS,
   SAVED_REJECTED_COPY,
   STATION_AUTH_TIMEOUT_MS,
+  answerForStored,
   checkStationAuth,
   createStationAuthClient,
   rateLimitedUntil,
@@ -115,6 +116,20 @@ test('a rate limit says how long is left, rounded up', () => {
   assert.equal(copy(RATE_LIMIT_MAX_WAIT_MS), 'Too many attempts. Try again in 15 minutes.');
   // A wait that has run out names no time at all.
   assert.match(stationAuthFailureCopy('rate-limited', now, now), /Wait a few minutes/);
+});
+
+test('a refusal counts against the password it was sent with, not one saved since', () => {
+  // Another tab took the new password while this check was out.
+  assert.equal(answerForStored('denied', 'old', 'new'), 'unavailable');
+  assert.equal(storedPasswordVerdict(answerForStored('denied', 'old', 'new')).clearStored, false);
+  // Still the one asked about, so it stands.
+  assert.equal(answerForStored('denied', 'old', 'old'), 'denied');
+  // Another tab forgot it: nothing to protect, and the prompt must not wait for another check.
+  assert.equal(answerForStored('denied', 'old', ''), 'denied');
+  // Only a refusal is reread.
+  for (const result of ['ok', 'rate-limited', 'unavailable'] as const) {
+    assert.equal(answerForStored(result, 'old', 'new'), result);
+  }
 });
 
 test("a refused stored password says so in the app's words", () => {

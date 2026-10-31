@@ -89,6 +89,15 @@ export function storedPasswordVerdict(result: StationAuthResult): StoredPassword
   return result === 'denied' ? { phase: 'prompt', clearStored: true } : { phase: 'ok', clearStored: false };
 }
 
+// A refusal is of the password that was sent. localStorage is shared between tabs, and another one
+// can save a new password while the check is out: that one is unverified, not refused, and acting on
+// the old answer would sign the listener out of the right password. `stored` is what is there now.
+// The app has no twin of this: one store, no second tab, and it only types at the prompt, where no
+// check of the stored password runs.
+export function answerForStored(result: StationAuthResult, asked: string, stored: string): StationAuthResult {
+  return result === 'denied' && stored && stored !== asked ? 'unavailable' : result;
+}
+
 const FAILURE_COPY: Record<Exclude<StationAuthResult, 'ok'>, string> = {
   denied: 'That password was not accepted.',
   'rate-limited': 'Too many attempts. Wait a few minutes, then try again.',

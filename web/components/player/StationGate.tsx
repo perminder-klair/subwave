@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useStationOrigin } from '@/lib/stationOrigin';
 import {
   SAVED_REJECTED_COPY,
+  answerForStored,
   clearStationAuthToken,
   createStationAuthClient,
   getStationAuthToken,
@@ -17,6 +18,7 @@ import {
   stationAuthFailureCopy,
   storedPasswordVerdict,
   type StationAuthCheck,
+  type StationAuthClient,
 } from '@/lib/stationAuth';
 import { stuckConnecting, watchStuckPassword } from '@/lib/stuckPasswordCheck';
 import { usePlayerActions, usePlayerAudio, usePlayerFeed } from './PlayerCore';
@@ -45,8 +47,13 @@ export function useStationAuth(): {
   const [savedRejected, setSavedRejected] = useState(false);
   const client = useMemo(() => createStationAuthClient(apiUrl), [apiUrl]);
   // A check answers for the station it was asked about, so one that lands after a switch is dropped.
-  const clientRef = useRef(client);
-  useEffect(() => { clientRef.current = client; }, [client]);
+  // A showcase switch remounts this hook rather than changing `client`, and the token is one key for
+  // every station, so leaving counts: a late answer must not save or forget anything under the next.
+  const clientRef = useRef<StationAuthClient | null>(client);
+  useEffect(() => {
+    clientRef.current = client;
+    return () => { clientRef.current = null; };
+  }, [client]);
 
   useEffect(() => {
     if (!required) return;
@@ -59,7 +66,7 @@ export function useStationAuth(): {
     }
     client.check(stored).then(({ result }) => {
       if (cancelled) return;
-      const verdict = storedPasswordVerdict(result);
+      const verdict = storedPasswordVerdict(answerForStored(result, stored, getStationAuthToken()));
       if (verdict.clearStored) clearStationAuthToken();
       setSavedRejected(verdict.clearStored);
       setPhase(verdict.phase);
@@ -86,7 +93,7 @@ export function useStationAuth(): {
         // Another tab's denial forgot it, and the stream now connects with nothing. The app's store
         // tells its gate about that; localStorage tells nobody here, so only this brings the prompt.
         if (!password) return 'denied';
-        return (await client.check(password)).result;
+        return answerForStored((await client.check(password)).result, password, getStationAuthToken());
       },
       lastCheckAt: client.lastCheckAt,
       heldUntil: client.heldUntil,
@@ -103,6 +110,7 @@ export function useStationAuth(): {
   const unlock = async (pw: string): Promise<StationAuthCheck> => {
     setSavedRejected(false);
     const check = await client.check(pw);
+    if (clientRef.current !== client) return { result: 'unavailable', retryAt: 0 };
     if (check.result === 'ok') {
       setStationAuthToken(pw);
       setPhase('ok');
