@@ -18,10 +18,11 @@
 # NEXT_PUBLIC_STREAM_URL (baked at build time).
 #
 # On /stream*, drop WWW-Authenticate from the response when the request has an
-# `auth` query parameter or Sec-Fetch-Dest: audio|video, and ONLY then. Browsers
-# answer Icecast's 401 challenge with a native dialog over the whole player, but
-# ffmpeg, mpv and GStreamer send `user:pass@` only once challenged, so a blanket strip
-# locks them out. docs/reverse-proxy.md has the recipes.
+# `auth` query parameter, or Sec-Fetch-Dest: audio|video with Sec-Fetch-Site:
+# same-origin, and ONLY then. Browsers answer Icecast's 401 challenge with a native
+# dialog over the whole player, but ffmpeg, mpv and GStreamer send `user:pass@` only
+# once challenged, so a blanket strip locks them out. docs/reverse-proxy.md has the
+# recipes.
 #
 # Block /api/listener-auth at your proxy: it is Icecast's URL-auth callback and
 # answers 200/401 on the shared privacy.password, so routing it hands the

@@ -44,19 +44,21 @@ That challenge has to reach some clients and must not reach others:
 - **ffmpeg, mpv, GStreamer, wget and the like need it.** With a
   `https://listener:PASSWORD@host/stream.mp3` address they send no password
   until they are challenged, so a 401 without one is the end of the connection.
+  Firefox does the same for an `<audio>` element on another site.
 - **The web player can't use it.** Chrome and Firefox both answer the challenge
-  on an `<audio>` element by putting a native "Sign in" dialog over the whole
-  page. The listener can't reach the player, and the dialog stays until the
-  player's own password check comes round, up to two minutes later.
+  on the station's own page by putting a native "Sign in" dialog over all of it.
+  The listener can't reach the player, and the dialog stays until the player's
+  own password check comes round, up to two minutes later.
 
 So drop `WWW-Authenticate` from a `/stream*` response when the request has either
 of these, and only then:
 
 - an `auth` query parameter. The web player, the app and Google Cast all ride
   `?auth=`, and none of them can answer a challenge.
-- `Sec-Fetch-Dest: audio` or `video`. That is a media element before it has a
-  token. Browsers send this header to https and localhost only, so on a
-  plain-http address such a tap can still raise the dialog once.
+- `Sec-Fetch-Dest: audio` or `video` together with `Sec-Fetch-Site: same-origin`.
+  That is the station's own player before it has a token. Browsers send these
+  headers to https and localhost only, so on a plain-http address such a tap can
+  still raise the dialog once.
 
 Drop only the header. The 401 and its body stay, and a 200 is untouched. A
 browser tab on the stream URL sends `Sec-Fetch-Dest: document`, so it keeps its
@@ -107,8 +109,9 @@ location ~* ^/api/listener-auth {
 location ^~ /stream {
     # A client that can't answer Icecast's 401 challenge takes the route below.
     error_page 418 = @stream-media;
+    set $stream_fetch "$http_sec_fetch_site:$http_sec_fetch_dest";
     if ($arg_auth) { return 418; }
-    if ($http_sec_fetch_dest ~ ^(audio|video)$) { return 418; }
+    if ($stream_fetch ~ ^same-origin:(audio|video)$) { return 418; }
 
     proxy_pass http://127.0.0.1:7702;
     proxy_buffering off;
@@ -206,8 +209,9 @@ location ~* ^/api/listener-auth {
 
 location ^~ /stream {
     error_page 418 = @stream-media;
+    set $stream_fetch "$http_sec_fetch_site:$http_sec_fetch_dest";
     if ($arg_auth) { return 418; }
-    if ($http_sec_fetch_dest ~ ^(audio|video)$) { return 418; }
+    if ($stream_fetch ~ ^same-origin:(audio|video)$) { return 418; }
 
     proxy_pass http://SUBWAVE_HOST:7702;
     proxy_buffering off;
@@ -278,7 +282,7 @@ services:
       # The same stream, minus Icecast's 401 challenge, for a client that can't
       # answer it. An empty value removes the header.
       traefik.http.middlewares.subwave-no-challenge.headers.customresponseheaders.WWW-Authenticate: ""
-      traefik.http.routers.subwave-stream-media.rule: "Host(`radio.example.com`) && PathPrefix(`/stream`) && (QueryRegexp(`auth`, `.+`) || HeaderRegexp(`Sec-Fetch-Dest`, `^(audio|video)$`))"
+      traefik.http.routers.subwave-stream-media.rule: "Host(`radio.example.com`) && PathPrefix(`/stream`) && (QueryRegexp(`auth`, `.+`) || (HeaderRegexp(`Sec-Fetch-Dest`, `^(audio|video)$`) && Header(`Sec-Fetch-Site`, `same-origin`)))"
       traefik.http.routers.subwave-stream-media.entrypoints: websecure
       traefik.http.routers.subwave-stream-media.tls: "true"
       traefik.http.routers.subwave-stream-media.tls.certresolver: letsencrypt

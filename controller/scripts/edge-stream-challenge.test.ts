@@ -2,15 +2,18 @@
 // Caddyfiles — docker/Caddyfile and the AIO's docker/aio/Caddyfile, in lockstep —
 // keep that challenge for a client that answers it and drop it for one that
 // can't. ffmpeg, mpv, GStreamer and wget send `user:pass@` only after being
-// challenged, so a blanket strip locks them out of a private station. A media
-// element can't answer: the browser raises its native "Sign in" dialog over the
+// challenged, so a blanket strip locks them out of a private station, and Firefox
+// does the same for another site's `<audio src="user:pass@…">`. The station's own
+// `<audio>` can't answer: the browser raises its native "Sign in" dialog over the
 // whole page instead.
 //
 // The matcher below restates the Caddy rules the drop relies on — `query k=*`
 // means the key is present, its name case-sensitive; `header` values are exact,
-// and repeated lines for one field in a matcher are OR'd — rather than running
-// Caddy, which CI does not have. Checked against caddy:2 directly, along with
-// nginx and Traefik for the recipes pinned at the end.
+// repeated lines for one field in a matcher are OR'd, and different fields AND'd
+// — rather than running Caddy, which CI does not have. Checked against
+// subwave-caddy (v2.11.7) directly, along with nginx and Traefik for the recipes
+// pinned at the end. Caddy also refuses a query Go can't parse (`%zz`, a `;`), so
+// such a request keeps the challenge; every client that rides the token encodes it.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,7 +24,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const FILES = ['docker/Caddyfile', 'docker/aio/Caddyfile'];
 
 type Rule = { query: string[]; headers: Record<string, string[]> };
-type Request = { query?: string; dest?: string };
+type Request = { query?: string; dest?: string; site?: string };
 
 // The lines of `handle @streams { … }`, comments and blanks gone.
 function streamBlock(file: string): string[] {
@@ -67,7 +70,8 @@ function matchers(block: string[]): Map<string, Rule> {
 function ruleMatches(rule: Rule, req: Request): boolean {
   const keys = (req.query ?? '').split('&').map((pair) => pair.split('=')[0]);
   const query = rule.query.every((k) => keys.includes(k));
-  const headers = Object.entries(rule.headers).every(([field, values]) => field === 'sec-fetch-dest' && values.includes(req.dest ?? ''));
+  const sent: Record<string, string | undefined> = { 'sec-fetch-dest': req.dest, 'sec-fetch-site': req.site };
+  const headers = Object.entries(rule.headers).every(([field, values]) => values.includes(sent[field] ?? ''));
   return query && headers;
 }
 
@@ -87,8 +91,13 @@ function challengeDropped(block: string[], req: Request): boolean {
 const KEEPS: Array<[string, Request]> = [
   ['ffmpeg, mpv, GStreamer, wget: no token, no fetch metadata', {}],
   ['a token-less URL with other parameters', { query: 't=1' }],
-  ['a browser tab on the stream URL', { dest: 'document' }],
-  ['a page fetch', { dest: 'empty' }],
+  ['a browser tab on the stream URL', { dest: 'document', site: 'none' }],
+  ['a page fetch', { dest: 'empty', site: 'same-origin' }],
+  // Firefox sends the login in the src once challenged, on any of these.
+  ['another site\'s <audio>', { dest: 'audio', site: 'cross-site' }],
+  ['another subdomain\'s <audio>', { dest: 'audio', site: 'same-site' }],
+  ['another site\'s <video>', { dest: 'video', site: 'cross-site' }],
+  ['a media destination with no origin to judge', { dest: 'audio' }],
   ['a parameter that only resembles the token', { query: 'xauth=x' }],
   ['the token name in another case, which the controller ignores', { query: 'Auth=x' }],
 ];
@@ -97,8 +106,9 @@ const DROPS: Array<[string, Request]> = [
   ['the web player, the app and Cast riding the token', { query: 'auth=stale' }],
   ['the web player: its cache-buster first', { query: 't=1&auth=stale' }],
   ['a token on a plain http origin, where browsers send no fetch metadata', { query: 'auth=stale' }],
-  ['an <audio> tap before the token exists', { dest: 'audio' }],
-  ['a <video> element', { dest: 'video' }],
+  ['a token from another site', { query: 'auth=stale', dest: 'audio', site: 'cross-site' }],
+  ['an <audio> tap before the token exists', { dest: 'audio', site: 'same-origin' }],
+  ['a <video> element on the station\'s own page', { dest: 'video', site: 'same-origin' }],
 ];
 
 for (const file of FILES) {
@@ -138,12 +148,15 @@ test('the nginx recipes hide the challenge only on the media route', () => {
     const location = (name: string) => block.slice(block.indexOf(name)).split('\n}\n')[0];
     const stream = location('location ^~ /stream');
     const media = location('location @stream-media');
-    assert.doesNotMatch(stream, /proxy_hide_header/);
+    // Once, on the media route: anywhere else a location inherits it, and that's the blanket strip.
+    assert.equal(block.match(/^\s*proxy_hide_header\s/gm)?.length, 1);
+    assert.match(media, /proxy_hide_header WWW-Authenticate;/);
     assert.match(stream, /error_page 418 = @stream-media;/);
     assert.match(stream, /if \(\$arg_auth\) \{\s*return 418;/);
-    assert.match(stream, /if \(\$http_sec_fetch_dest ~ \^\(audio\|video\)\$\) \{\s*return 418;/);
-    assert.match(media, /proxy_hide_header WWW-Authenticate;/);
-    // The internal route still has to be a live stream route.
+    assert.match(stream, /set \$stream_fetch "\$http_sec_fetch_site:\$http_sec_fetch_dest";/);
+    assert.match(stream, /if \(\$stream_fetch ~ \^same-origin:\(audio\|video\)\$\) \{\s*return 418;/);
+    // The internal route still has to be a live stream route, on the same upstream.
+    assert.equal(media.match(/proxy_pass \S+;/)?.[0], stream.match(/proxy_pass \S+;/)?.[0]);
     for (const directive of ['proxy_buffering off;', 'proxy_cache off;', 'proxy_read_timeout 1h;', 'gzip off;']) {
       assert.ok(media.includes(directive), directive);
     }
@@ -159,7 +172,14 @@ test('the Traefik recipe drops the challenge on a second router, never the first
   assert.equal(label('traefik.http.middlewares.subwave-no-challenge.headers.customresponseheaders.WWW-Authenticate'), '""');
   assert.equal(label('traefik.http.routers.subwave-stream-media.middlewares'), 'subwave-no-challenge');
   assert.equal(label('traefik.http.routers.subwave-stream-media.service'), 'subwave-stream');
-  assert.match(label('traefik.http.routers.subwave-stream-media.rule') ?? '', /QueryRegexp\(`auth`, `\.\+`\).*HeaderRegexp\(`Sec-Fetch-Dest`, `\^\(audio\|video\)\$`\)/);
+  const rule = (router: string) => label(`traefik.http.routers.${router}.rule`)?.replace(/^"|"$/g, '') ?? '';
+  assert.ok(rule('subwave-stream-media').startsWith(`${rule('subwave-stream')} && `), 'the media rule narrows the stream rule');
+  assert.ok(rule('subwave-stream-media').endsWith('(QueryRegexp(`auth`, `.+`) || (HeaderRegexp(`Sec-Fetch-Dest`, `^(audio|video)$`) && Header(`Sec-Fetch-Site`, `same-origin`)))'));
+  // A router without these never matches, and every request quietly keeps its challenge.
+  for (const field of ['entrypoints', 'tls', 'tls.certresolver']) {
+    assert.ok(label(`traefik.http.routers.subwave-stream-media.${field}`), field);
+    assert.equal(label(`traefik.http.routers.subwave-stream-media.${field}`), label(`traefik.http.routers.subwave-stream.${field}`), field);
+  }
   const priority = (router: string) => Number(label(`traefik.http.routers.${router}.priority`)?.replace(/"/g, ''));
   assert.ok(priority('subwave-stream-media') > priority('subwave-stream'), 'the media router wins');
 });
