@@ -66,6 +66,7 @@ export interface Show {
   filtersStrict: boolean;
   /** Per-show track-length cap (seconds). null = inherit station default,
    *  0 = unlimited, >0 = this show's cap. */
+  flowAllowAboveMax?: boolean | null;
   maxTrackSeconds: number | null;
   /** Per-show minimum track length (seconds) (#1573). null = inherit, 0 = no
    *  floor. A SELECTION filter, unlike the cap: a short track can't be grown. */
@@ -115,6 +116,7 @@ export interface CommunityShow {
   programme: boolean;
   segmentSkill: string;
   preparationSkill: string;
+  flowAllowAboveMax?: boolean | null;
   maxTrackSeconds: number | null;
   minTrackLengthSeconds: number | null;
   submittedBy?: string;   // GitHub login of the contributor who submitted it

@@ -13,6 +13,11 @@ import { echoesRecentRequest } from '../../util/request-guard.js';
 import { speechPaceScale } from '../../audio/tts.js';
 import { normalizeForDisplay, normalizeForSpeech, spokenWordScale, stripSpeakerLabel } from '../../audio/speech-text.js';
 import { introMsOf } from './runs.js';
+import * as subFlows from '../../music/sub-flow.js';
+import { discardFlow } from '../../music/sub-flow-playback.js';
+import { flowForPrompt } from '../../music/sub-flow-selection.js';
+import { flowPlaybackStatus } from '../liquidsoap-control.js';
+import { VOCAL_RUNWAY_FLOOR_MS } from '../vocal-runway.js';
 
 export interface GeneratedHostLink {
   link: string | null;
@@ -29,7 +34,7 @@ export async function generatePickLink(
 ): Promise<GeneratedHostLink> {
   const hostSpeech = session.captureHostSpeech();
   const introPersona = session.onAirPersona();
-  const generated = await generate({ ...args, persona: introPersona });
+  const generated = await generate({ ...args, flow: flowForPrompt((args.current as any)?.subFlow), persona: introPersona });
   return {
     link: hostSpeech && !session.isHostSpeechCurrent(hostSpeech) ? null : generated,
     introPersona,
@@ -85,8 +90,11 @@ export function trimLinkToIntro(text: string | null | undefined, song: any, pers
   // Budget the words that will air, using the author captured at generation.
   const clean = stripSpeakerLabel(stripThinking(raw), speaker?.name ? [speaker.name] : []);
   const display = normalizeForDisplay(clean);
-  // Non-DJ personas skip the budget but not the cleanup.
-  if (!speaker?.djMode) return display || null;
+  // Flow links may use only the actual entry's safe opening, never a companion's.
+  const flowRunway = song?.subFlow
+    ? Math.max(0, Number(song.duration ?? song.duration_sec) - settings.get().picker.flowProtectBeforeSec - 4) * 1000 : null;
+  if (flowRunway != null && flowRunway < VOCAL_RUNWAY_FLOOR_MS) return null;
+  if (!speaker?.djMode && flowRunway == null) return display || null;
   // A DURATION budget, so it is counted on the words the engine will read.
   // spokenWordScale folds the display/spoken difference into the pace scale, so
   // the ceiling stays a spoken-word ceiling while the trim lands on the display
@@ -94,7 +102,7 @@ export function trimLinkToIntro(text: string | null | undefined, song: any, pers
   // vocal entry leaves no runway.
   const spoken = normalizeForSpeech(clean, settings.get().tts?.corrections, String(speaker.language || ''));
   const pace = speechPaceScale('link', speaker) * spokenWordScale(display, spoken);
-  return dj.enforceIntroBudget(display, introMsOf(song), pace, dj.firstVocalMsFor(song)) || null;
+  return dj.enforceIntroBudget(display, flowRunway == null ? introMsOf(song) : Math.min(flowRunway, introMsOf(song) ?? flowRunway), pace, dj.firstVocalMsFor(song)) || null;
 }
 
 // `link` is attached to the queued item so the queue airs it at the transition
@@ -133,7 +141,7 @@ export async function enqueuePick(
   if (dissolve) track.dissolve = true;
   if (chop) track.chop = true;
   if (loop) track.loop = true;
-  const pos = await queue.push({
+  const queueOptions = {
     track,
     requestedBy: null,
     intent: reason || 'ai pick',
@@ -150,7 +158,22 @@ export async function enqueuePick(
     linkPrev,
     linkClockAt,
     selectionShowAt: showAt,
-  });
+  };
+  let pos: number;
+  if (song.subFlow) {
+    let prepared: Awaited<ReturnType<typeof subFlows.preparePlayback>> | null = null;
+    try {
+      await flowPlaybackStatus();
+      prepared = await subFlows.preparePlayback(song.subFlow.id, song.subFlow.revision);
+      pos = await queue.queueFlow(prepared, { ...queueOptions, automatic: true });
+    } catch (error) {
+      if (prepared) await discardFlow(prepared);
+      queue.log('picker', `Flow “${song.subFlow.name}” refused: ${error instanceof Error ? error.message : String(error)}`);
+      return -1;
+    }
+  } else {
+    pos = await queue.push(queueOptions);
+  }
   if (pos === -2) {
     // Never-play blocklist refused the pick (library-db candidates can slip
     // past the subsonic filter). Same "didn't queue" signal as dedup.

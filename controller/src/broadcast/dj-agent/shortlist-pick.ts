@@ -4,6 +4,7 @@
 // supplied by music/shortlist.ts. The model chooses only from their ids and
 // supplies a musical reason and transition. Link generation happens separately.
 
+import { flowForPrompt } from '../../music/sub-flow-selection.js';
 import { z } from 'zod';
 import { djObject, modelTolerant } from '../../llm/sdk.js';
 import { pickSchemaBase, pickSystem, transitionChoiceNudge } from './schemas.js';
@@ -167,6 +168,7 @@ export function shortlistCandidateForPick(candidate: PickerCandidate): Record<st
   const introMs = typeof intro_ms === 'number' && Number.isFinite(intro_ms) && intro_ms >= 0 ? intro_ms : undefined;
   return Object.fromEntries(Object.entries({
     id, title, artist, album, year, genre, moods, energy, instrumental,
+    flow: flowForPrompt(candidate.subFlow),
     bpm, key, pace, sections, similarity, unaired, duration_sec, play_count, last_played_days_ago,
     intro_ms: introMs,
     artist_play_count, artist_last_played_days_ago,

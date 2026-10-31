@@ -5,6 +5,7 @@ import { router as scenesRoutes } from './library/scenes.js';
 import { router as observatoryRoutes } from './library/observatory.js';
 import { router as maintenanceRoutes } from './library/maintenance.js';
 import { router as blocklistRoutes } from './library/blocklist.js';
+import { router as subFlowRoutes } from './library/sub-flow.js';
 
 export const router = express.Router();
 router.use(browseRoutes);
@@ -12,3 +13,4 @@ router.use(scenesRoutes);
 router.use(observatoryRoutes);
 router.use(maintenanceRoutes);
 router.use(blocklistRoutes);
+router.use(subFlowRoutes);

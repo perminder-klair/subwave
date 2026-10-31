@@ -340,13 +340,76 @@ protocol.add(temporary=true, syntax="subhttp:<full url>", doc="Navidrome stream 
 dj_queue = request.queue(id="dj_queue")
 jingle_now_queue = request.queue(id="jingle_now_queue")
 
+# A prepared Flow is one finite local request, with metadata-only member events.
+# All timing below uses the output audio clock, which freezes during idle.
+flow_pending_id = ref("")
+flow_waiting_uri = ref("")
+flow_pending_at = ref(0.)
+flow_entry_clear = ref(true)
+flow_last_busy = ref(-10.)
+flow_output_id = ref("")
+flow_clock = ref(0.)
+flow_origin = ref(-1.)
+flow_offsets = ref([0.])
+flow_before = ref(5.)
+flow_after = ref(5.)
+flow_trailing_until = ref(-1.)
+flow_last_event = ref("")
+flow_started_id = ref("")
+
+def flow_fits(clip_sec) =
+  if flow_pending_id() != "" then false
+  elsif flow_clock() < flow_trailing_until() then false
+  elsif flow_origin() < 0. then true
+  elsif (idle_mode() or not stream_on()) and not list.for_all(fun(offset) -> flow_clock() >= flow_origin() + offset + flow_after(), flow_offsets()) then false
+  else
+    list.for_all(fun(offset) ->
+      flow_clock() >= flow_origin() + offset + flow_after() + 0.05 or
+      (clip_sec > 0. and flow_clock() + clip_sec + 1.2 < flow_origin() + offset - flow_before()),
+      flow_offsets())
+  end
+end
+
+server.register("subflow.status", fun(_) -> json.stringify(compact=true, {
+  version=2, pending=flow_pending_id(), playing=flow_output_id()
+}))
+server.register("subflow.can_air", fun(arg) -> string(flow_fits(float_of_string(default=0., arg))))
+server.register("subflow.cancel", fun(occurrence) -> begin
+  if occurrence != "" and occurrence == flow_pending_id() and flow_waiting_uri() != "" then
+    flow_waiting_uri := ""
+    flow_pending_id := ""
+    "OK"
+  else "NOT WAITING" end
+end)
+
 def poll_queue() =
-  if file.exists("#{state_dir}/next.txt") then
+  if flow_waiting_uri() != "" then
+    if flow_entry_clear() and time() > flow_pending_at() + 0.5 then
+      prepared = request.create(flow_waiting_uri())
+      if request.resolve(timeout=5., content_type=blank(), prepared) then
+        ignore(dj_queue.push(prepared))
+      else
+        request.destroy(prepared)
+        log(level=2, "Prepared Sub/Flow could not resolve; refused the complete occurrence")
+        flow_pending_id := ""
+      end
+      flow_waiting_uri := ""
+    end
+  elsif file.exists("#{state_dir}/next.txt") then
     contents = string.trim(file.contents("#{state_dir}/next.txt"))
-    file.remove("#{state_dir}/next.txt")
-    if contents != "" then
+    occurrence = list.assoc(default="", 1, string.extract(pattern="subwave_flow=\\\"([^\\\"]+)\\\"", contents))
+    if occurrence == "" or (not bed_on_air() and not pause_talk_on_air()) then
+      file.remove("#{state_dir}/next.txt")
+      if contents != "" then
       log("Queueing: #{redact_subhttp_uri(contents)}")
-      ignore(dj_queue.push(request.create(contents)))
+      if occurrence != "" then
+        flow_pending_id := occurrence
+        flow_pending_at := time()
+        flow_waiting_uri := contents
+      else
+        ignore(dj_queue.push(request.create(contents)))
+      end
+      end
     end
   end
 end
@@ -539,6 +602,37 @@ music = fallback(
   [dj_queue, auto_slot]
 )
 
+# Insert member metadata without creating internal track marks. The request's
+# own start/end remain intact for the ordinary outer crossfades and jingles.
+flow_input = music
+flow_metadata = ref([])
+flow_member = ref(0)
+flow_input.on_metadata(synchronous=true, fun(m) -> begin
+  previous = flow_metadata()
+  if m["subwave_flow"] != previous["subwave_flow"] or m["subwave_flow"] == "" then
+    flow_metadata := m
+    flow_member := 0
+  end
+end)
+music = insert_metadata(flow_input)
+flow_input.on_frame(synchronous=true, fun() -> begin
+  m = flow_metadata()
+  index = flow_member() + 1
+  count = int_of_string(default=0, m["subwave_flow_count"])
+  offset = float_of_string(default=1e12, m["subwave_flow_#{index}_offset"])
+  if m["subwave_flow"] != "" and index < count and source.elapsed(flow_input) >= offset then
+    flow_member := index
+    music.insert_metadata(new_track=false, list.append([
+      ("title", m["subwave_flow_#{index}_title"]),
+      ("artist", m["subwave_flow_#{index}_artist"]),
+      ("album", m["subwave_flow_#{index}_album"]),
+      ("subsonic_id", m["subwave_flow_#{index}_id"]),
+      ("subwave_flow", m["subwave_flow"]),
+      ("subwave_flow_index", "#{index}")
+    ], list.filter(fun(pair) -> not list.mem(fst(pair), ["title", "artist", "album", "subsonic_id", "subwave_flow_index", "subwave_flow"]), m)))
+  end
+end)
+
 # HARD TRACK-LENGTH CAP (#447) — the controller stamps liq_cue_out on autonomous
 # picks and auto.m3u entries when a max-track-length is set; listener requests
 # are deliberately UN-stamped. On 2.4.x liq_cue_in/liq_cue_out are applied at
@@ -601,7 +695,7 @@ def cross_stamps(m) =
     lead = float_of_string(default=-1., m["liq_clip_lead"])
     own = if lead >= 0. then lead + clip_seam_slack else own end
     stamps = [
-      ("liq_cross_start_duration", string(cross_prev_end())),
+      ("liq_cross_start_duration", string(min(cross_prev_end(), float_of_string(default=cross_prev_end(), m["subwave_flow_entry"])))),
       ("liq_cross_end_duration", string(own)),
       ("liq_cross_duration", "")
     ]
@@ -683,7 +777,8 @@ end
 def dj_transition(a, b) =
   stamp = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_end_duration"])
   buffered = min(source.remaining(a.source), source.remaining(b.source))
-  d = if buffered > 0. and buffered < 600. then buffered else stamp end
+  d = if b.metadata["subwave_flow"] != "" and float_of_string(default=1., b.metadata["subwave_flow_entry"]) <= 0. then 0.
+      elsif buffered > 0. and buffered < 600. then buffered else stamp end
   if abs(d - stamp) > 0.25 then
     log(label="cross.size", level=2, "transition buffer #{d}s differs from the outgoing stamp #{stamp}s — fading over the buffer")
   end
@@ -773,7 +868,7 @@ def dj_transition(a, b) =
   # and over a mid-record cut there is no ending for any of that to describe.
   # They cannot merely be left alone: forcing washing/looping false would ARM
   # the `b` gestures on seams where the outgoing one used to suppress them.
-  boundary_fading = a.metadata["liq_show_fade"] == "true"
+  boundary_fading = a.metadata["liq_show_fade"] == "true" or a.metadata["subwave_flow"] != "" or b.metadata["subwave_flow"] != ""
   jingle_out = a.metadata["subwave_jingle"] == "true"
   jingle_in = b.metadata["subwave_jingle"] == "true"
   washing = a.metadata["liq_washout"] == "true" and not boundary_fading
@@ -1386,11 +1481,18 @@ def dj_transition(a, b) =
   # to have a tail of its own keeps its last words, into a track or into another
   # jingle. This is the one seam the INVARIANT above does not describe.
   seam =
-    if jingle_in or jingle_out then
+    if b.metadata["subwave_flow"] != "" and float_of_string(default=1., b.metadata["subwave_flow_entry"]) <= 0. then
+      (sequence([a.source, b.source]) : source)
+    elsif jingle_in or jingle_out then
       (sequence([(if jingle_out then a.source else a_source end), b.source]) : source)
     else
       add(normalize=false, [a_source, b_source])
     end
+  # add normally gives outgoing metadata precedence. A Flow needs its entry
+  # clock at the first incoming sample, not at a later companion event.
+  seam = if a.metadata["subwave_flow"] != "" or b.metadata["subwave_flow"] != "" then
+    metadata.map(update=false, fun(_) -> b.metadata, seam)
+  else seam end
   strip_cross_stamps(seam)
 end
 
@@ -1612,6 +1714,38 @@ music = cross(
   music
 )
 
+# Metadata crossing this point follows the actual audio through cross's buffer.
+# Companion events are published here rather than from the pre-cross capture.
+flow_output = music
+# source.time follows the shared clock even when idle_gate stops pulling this
+# branch. Count emitted frames instead, so a pause cannot move the windows.
+flow_output.on_frame(synchronous=true, fun() -> flow_clock := flow_clock() + frame.duration())
+flow_output.on_metadata(synchronous=true, fun(m) -> begin
+  occurrence = m["subwave_flow"]
+  index = int_of_string(default=0, m["subwave_flow_index"])
+  if occurrence != "" and index == 0 and flow_started_id() != occurrence then
+    # A long trailing window can outlast the previous Flow's final member.
+    if flow_origin() >= 0. then
+      flow_trailing_until := list.fold(fun(until, offset) ->
+        if flow_clock() >= flow_origin() + offset then max(until, flow_origin() + offset + flow_after()) else until end,
+        flow_trailing_until(), flow_offsets())
+    end
+    flow_started_id := occurrence
+    flow_origin := flow_clock()
+    legacy_buffer = float_of_string(default=5., m["subwave_flow_buffer"])
+    flow_before := float_of_string(default=legacy_buffer, m["subwave_flow_before"])
+    flow_after := float_of_string(default=legacy_buffer, m["subwave_flow_after"])
+    count = int_of_string(default=2, m["subwave_flow_count"])
+    flow_offsets := list.map(fun(i) -> float_of_string(default=1e12, m["subwave_flow_#{i}_offset"]), list.init(count - 1, fun(i) -> i + 1))
+    flow_pending_id := ""
+    flow_output_id := occurrence
+  elsif occurrence == "" then
+    flow_output_id := ""
+    # A skip/failure can end the group before future joins ever occur.
+    flow_offsets := list.filter(fun(offset) -> flow_clock() >= flow_origin() + offset, flow_offsets())
+  end
+end)
+
 # DJ VOICE — TTS clips dropped as paths into say.txt / intro.txt.
 # voice_queue = solo voice (heavy duck: station IDs, hourly, request
 # back-announce); intro_queue = talk-over links (light duck).
@@ -1803,6 +1937,21 @@ intro_queue.on_metadata(synchronous=false, voice_marker("intro", intro_tmp_dir))
 # mic-chained: the audio is already produced.
 sfx_queue = request.queue(id="sfx_queue")
 
+# Let already-started clips and their duck recovery finish before admitting
+# the Flow. Once pending is set, the pollers cannot start another clip.
+thread.run(every=0.2, fun() -> begin
+  clear = time() > voice_until() and
+    source.remaining(voice_queue) <= 0. and list.length(voice_queue.queue()) == 0 and
+    source.remaining(intro_queue) <= 0. and list.length(intro_queue.queue()) == 0 and
+    source.remaining(sfx_queue) <= 0. and list.length(sfx_queue.queue()) == 0
+  if not clear then flow_last_busy := time() end
+  flow_entry_clear := clear and time() >= flow_last_busy() + 1.2
+  if music_starved() and not source.is_ready(flow_output) and flow_output_id() != "" then
+    flow_output_id := ""
+    flow_origin := -1.
+  end
+end)
+
 # Silent lead-in clip, pushed immediately before each speech file: smooth_add
 # ducks over the silence so the dip completes BEFORE the DJ's first word.
 # request.queue plays the two pushes gaplessly.
@@ -1814,9 +1963,17 @@ else
   log("No #{leadin_path} — DJ voice will duck without a pre-roll lead-in")
 end
 
+def flow_channel_fits(channel_empty, clip_sec, padding) =
+  flow_fits(if clip_sec > 0. then clip_sec + padding else 0. end) and
+  (flow_origin() < 0. or list.for_all(fun(offset) -> flow_clock() >= flow_origin() + offset + flow_after(), flow_offsets()) or
+   channel_empty)
+end
+
 def poll_voice() =
   if file.exists("#{state_dir}/say.txt") then
     contents = string.trim(file.contents("#{state_dir}/say.txt"))
+    clip_sec = jingle_duration(contents)
+    if flow_channel_fits(source.remaining(voice_queue) <= 0. and list.length(voice_queue.queue()) == 0, clip_sec, 3.) then
     file.remove("#{state_dir}/say.txt")
     if contents != "" then
       log("DJ says: #{contents}")
@@ -1825,6 +1982,7 @@ def poll_voice() =
       end
       ignore(voice_queue.push(request.create(contents)))
       write_pause_voice_accepted(contents)
+    end
     end
   end
 end
@@ -1844,6 +2002,8 @@ end
 def poll_intro() =
   if file.exists("#{state_dir}/intro.txt") then
     contents = string.trim(file.contents("#{state_dir}/intro.txt"))
+    clip_sec = jingle_duration(contents)
+    if flow_channel_fits(source.remaining(intro_queue) <= 0. and list.length(intro_queue.queue()) == 0, clip_sec, 3.) then
     file.remove("#{state_dir}/intro.txt")
     overlay = string.contains(substring='subwave_jingle_overlay="true"', contents)
     song_stamp = list.assoc(default="", 1, string.extract(pattern="subwave_overlay_track_at=\\\"([0-9]+)\\\"", contents))
@@ -1868,6 +2028,7 @@ def poll_intro() =
       end
       ignore(intro_queue.push(request.create(contents)))
     end
+    end
   end
 end
 thread.run(every=0.5, poll_intro)
@@ -1875,11 +2036,14 @@ thread.run(every=0.5, poll_intro)
 def poll_sfx() =
   if file.exists("#{state_dir}/sfx.txt") then
     contents = string.trim(file.contents("#{state_dir}/sfx.txt"))
+    clip_sec = jingle_duration(contents)
+    if flow_channel_fits(source.remaining(sfx_queue) <= 0. and list.length(sfx_queue.queue()) == 0, clip_sec, 1.) then
     file.remove("#{state_dir}/sfx.txt")
     if contents != "" then
       log("DJ sound effect: #{contents}")
       # No lead-in: a stinger must start promptly to land under the voice.
       ignore(sfx_queue.push(request.create(contents)))
+    end
     end
   end
 end
@@ -2246,6 +2410,8 @@ def on_meta(m) =
       album = album,
       subsonic_id = subsonic_id,
       filename = filename,
+      flowId = m["subwave_flow"],
+      flowIndex = int_of_string(default=0, m["subwave_flow_index"]),
       timestamp = ts
     })
     # atomic=true — the controller re-reads this every 1.5s and treats ANY parse
@@ -2274,7 +2440,16 @@ end
 # on_metadata rather than on_track, because on_track gets swallowed by source
 # switches (request queue -> auto playlist). synchronous=false: on_meta does
 # file I/O, so it runs on the task queue, not the streaming thread.
-music_meta.on_metadata(synchronous=false, on_meta)
+music_meta.on_metadata(synchronous=false, fun(m) -> begin
+  if m["subwave_flow"] == "" or int_of_string(default=0, m["subwave_flow_index"]) == 0 then on_meta(m) end
+end)
+flow_output.on_metadata(synchronous=false, fun(m) -> begin
+  token = "#{m[\"subwave_flow\"]}:#{m[\"subwave_flow_index\"]}"
+  if m["subwave_flow"] != "" and int_of_string(default=0, m["subwave_flow_index"]) > 0 and flow_last_event() != token then
+    flow_last_event := token
+    on_meta(m)
+  end
+end)
 
 # OUTPUT — broadcast to Icecast.
 #

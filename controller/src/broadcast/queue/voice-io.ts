@@ -8,6 +8,8 @@ import { isUtf8 } from 'node:buffer';
 import { config } from '../../config.js';
 import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
+import { sendCommand } from '../liquidsoap-control.js';
+import { flowPlaybackExpected } from '../../music/sub-flow-playback.js';
 import { sleep, type Interposed } from './pure.js';
 import { awaitVoiceAir } from './voice-marker.js';
 import { mpegLayer3Frame, mp3FrameOffset } from '../../audio/mp3-frames.js';
@@ -183,6 +185,14 @@ export async function airVoice(
       // A jingle stinger may be on air (or inside the cross buffer) right now —
       // it plays outside this serialiser, so wait it out before handing over.
       await waitForJingleClear();
+      // The mixer owns the audio clock. Recheck freshness only after this
+      // wait, so a held clock/ident can still be declined by beforeWrite.
+      while (flowPlaybackExpected() && beforeWrite()) {
+        const answer = await sendCommand(`subflow.can_air ${holdMs / 1000}`).catch(() => 'false');
+        // Older mixers have no Flow support and cannot accept a Queue Flow.
+        if (answer.trim() === 'true' || /unknown command|no such command|not found/i.test(answer)) break;
+        await sleep(250);
+      }
       return writeHandoff(path, uri, { beforeWrite });
     });
   // Registered when the handoff resolves, so the timeout measures the wait for

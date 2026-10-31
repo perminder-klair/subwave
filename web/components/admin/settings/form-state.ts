@@ -320,6 +320,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       },
     },
     picker: {
+      flowAllowAboveMax: v.picker?.flowAllowAboveMax === true,
       // 0 = off, and that IS the shipped default — an absent key must read as
       // off rather than inventing a cooldown the operator never asked for.
       albumHours: String(typeof v.picker?.albumHours === 'number' ? v.picker.albumHours : 0),

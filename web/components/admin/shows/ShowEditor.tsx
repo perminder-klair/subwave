@@ -60,6 +60,7 @@ const FIELD_LABELS: Record<string, string> = {
   maxTrackSeconds: 'track length cap',
   minTrackLengthSeconds: 'minimum track length',
   fadeAtShowEnd: 'fade at show end',
+  flowAllowAboveMax: 'Flow track length override',
   segmentSkill: 'feature skill',
   preparationSkill: 'episode preparation skill',
   playlistIds: 'playlists',
@@ -181,6 +182,7 @@ export function ShowEditor({
   const genresCtl = useController({ control, name: path('genres') });
   const maxTrackSecondsCtl = useController({ control, name: path('maxTrackSeconds') });
   const minTrackLengthSecondsCtl = useController({ control, name: path('minTrackLengthSeconds') });
+  const flowAllowAboveMaxCtl = useController({ control, name: path('flowAllowAboveMax') });
   const fadeAtShowEndCtl = useController({ control, name: path('fadeAtShowEnd') });
   const tagsCtl = useController({ control, name: path('tags') });
 
@@ -280,6 +282,7 @@ export function ShowEditor({
     minTrackLengthSecondsCtl.fieldState.error,
     { hasDescription: true },
   );
+  const flowAllowAboveMaxAria = fieldAria(`${uid}-${path('flowAllowAboveMax')}`, flowAllowAboveMaxCtl.fieldState.error, { hasDescription: true });
   const fadeAtShowEndAria = fieldAria(`${uid}-${path('fadeAtShowEnd')}`, fadeAtShowEndCtl.fieldState.error, {
     hasDescription: true,
   });
@@ -1011,6 +1014,26 @@ export function ShowEditor({
                 }
               />
             </div>
+          </div>
+          <div className="field">
+            <Label {...flowAllowAboveMaxAria.labelProps}>Flow tracks above the maximum track length</Label>
+            <Select
+              value={flowAllowAboveMaxCtl.field.value == null ? INHERIT_SENTINEL : String(flowAllowAboveMaxCtl.field.value)}
+              onValueChange={val => flowAllowAboveMaxCtl.field.onChange(val === INHERIT_SENTINEL ? null : val === 'true')}
+            >
+              <SelectTrigger {...flowAllowAboveMaxAria.controlProps} onBlur={flowAllowAboveMaxCtl.field.onBlur} ref={flowAllowAboveMaxCtl.field.ref}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent><SelectGroup>
+                <SelectItem value={INHERIT_SENTINEL}>Station default</SelectItem>
+                <SelectItem value="true">Allow longer Flow tracks</SelectItem>
+                <SelectItem value="false">Apply the track limit</SelectItem>
+              </SelectGroup></SelectContent>
+            </Select>
+            <FieldDescription {...flowAllowAboveMaxAria.descriptionProps}>
+              Applies to each track, not the combined length. A Flow always plays whole and must fit before a firm show finish.
+            </FieldDescription>
+            <FieldError {...flowAllowAboveMaxAria.errorProps} errors={flowAllowAboveMaxCtl.fieldState.error ? [flowAllowAboveMaxCtl.fieldState.error] : undefined} />
           </div>
           <div className="field">
             <Label {...fadeAtShowEndAria.labelProps}>fade out at the show change</Label>

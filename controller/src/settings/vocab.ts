@@ -896,6 +896,7 @@ export interface NormalizedShow {
    *  default, 0 = no floor. See settings/persona.effectiveMinTrackSec. */
   minTrackLengthSeconds: number | null;
   fadeAtShowEnd: boolean | null;
+  flowAllowAboveMax?: boolean | null;
   playlistIds: string[];
   playlistStrict: boolean;
   /** Full rotation (#1612): with playlistStrict on, every track in the anchor

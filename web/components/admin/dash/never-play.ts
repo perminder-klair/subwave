@@ -35,6 +35,7 @@ export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot' | 'behind-jin
  * the dialog is up blocks what the operator was looking at, not its successor.
  */
 export interface SkipTarget {
+  flowLabel?: string;
   /** Absent for a track outside the library: it can be skipped, never blocked. */
   id?: string;
   title: string;

@@ -24,6 +24,7 @@ import { migrateImportedPersona } from '../personas/import-migration.js';
 import { requireAdmin } from '../middleware/auth.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as sfx from '../broadcast/sfx.js';
+import * as subFlows from '../music/sub-flow.js';
 import {
   SKILL_BUNDLE_MAX_BYTES,
   restoreSkillMembers,
@@ -43,7 +44,7 @@ const RESTORABLE = new Set<string>([...INCLUDE_FILES, ...INCLUDE_DIRS]);
 // those modules apply to a bundled or uploaded file — and jingles.m3u is not
 // read at all: it is regenerated from the restored jingles.json. skills/** goes
 // through the skill import's guards, so any tool.mjs arrives quarantined.
-const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json']);
+const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json', 'sub-flows.json']);
 
 // manifest.json, settings.json, a theme and a sidecar are read into memory, so
 // each is bounded by its DECLARED size before it is inflated. Generous: a
@@ -156,6 +157,12 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
   // The routed members, read and checked before anything is written, so a bad
   // one refuses the restore rather than landing half of it.
   const sidecars: { file: 'jingles.json' | 'sfx.json'; data: unknown }[] = [];
+  const flowBackup = readJsonMember(zip, 'sub-flows.json');
+  if (flowBackup && 'error' in flowBackup) return { ok: false, status: 400, error: `${flowBackup.error} in backup` };
+  if (flowBackup && 'data' in flowBackup) {
+    try { subFlows.validateBackup(flowBackup.data); }
+    catch { return { ok: false, status: 400, error: 'invalid sub-flows.json in backup' }; }
+  }
   for (const file of ['jingles.json', 'sfx.json'] as const) {
     const read = readJsonMember(zip, file);
     if (!read) continue;
@@ -207,6 +214,10 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
         : await sfx.restoreMeta(data);
       for (const name of dropped) skipped.push(`${file}: "${name}" is not a usable entry`);
       restored.push(file);
+    }
+    if (flowBackup && 'data' in flowBackup) {
+      subFlows.restore(flowBackup.data);
+      restored.push('sub-flows.json');
     }
 
     // 1c) Skills through the import's guards: any tool.mjs not already live

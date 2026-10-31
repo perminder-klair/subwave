@@ -4,6 +4,8 @@ import type { ArtistEpisodeSource } from './episode-source.js';
 // library sources in buildCandidates(), one LLM call to pick one. Fallback for the session DJ agent.
 
 import * as subsonic from './subsonic.js';
+import { selectionFlows, flowForPrompt, type FlowSelection } from './sub-flow-selection.js';
+import { pickerScope, type PickerScope } from '../llm/tools.js';
 import { clearPickerSourceCache } from '../llm/tools.js';
 import { shortlistOffers } from './shortlist-offers.js';
 import * as library from './library.js';
@@ -31,6 +33,7 @@ import { groundPickNote } from '../broadcast/dj-agent/pick-note.js';
 // Raw Subsonic child, slimTrack library row, or Last.fm stub. A structural
 // superset of show-filter's FilterTrack and recency's CandidateLike.
 interface Candidate {
+  subFlow?: FlowSelection;
   id?: string;
   title?: string;
   artist?: string;
@@ -234,7 +237,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtistRoots: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, lengthLimits: { minTrackSec: number | null; maxTrackSec: number | null } = { minTrackSec: null, maxTrackSec: null }, exhaustiveRotation = false, excludedIds: Set<string> | null = null, episodeSource: ArtistEpisodeSource | null = null, hasPlaylistAnchor = false) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtistRoots: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, lengthLimits: { minTrackSec: number | null; maxTrackSec: number | null } = { minTrackSec: null, maxTrackSec: null }, exhaustiveRotation = false, excludedIds: Set<string> | null = null, episodeSource: ArtistEpisodeSource | null = null, hasPlaylistAnchor = false, flowScope: PickerScope | null = null) {
   await library.load();
   const { minTrackSec, maxTrackSec } = lengthLimits;
   // Prohibited rows must not consume a source's finite sampling slots.
@@ -539,6 +542,8 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     if (inPl.length) selectionPool = inPl;
   }
 
+  if (flowScope) selectionPool = selectionFlows(selectionPool, flowScope);
+
   // Strict filters re-applied to the FINAL merged pool: lean() never-starves per
   // source, so a zero-match source passed its whole result through. starve:false
   // is per dimension, so one empty tag class can't undo the others' purity.
@@ -560,7 +565,10 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
   // Minimum track length (#1573) — a SELECTION filter, unlike the max cap's
   // cue_out cut. never-starve here: the wider scope behind the agent's hard floor.
-  const longEnough = applyTrackFloor(applyKnownTrackCeiling(selectionPool, maxTrackSec), minTrackSec, { starve: false });
+  const ceiling = flowScope?.maxTrackSec ?? maxTrackSec;
+  const underCeiling = selectionPool.filter(track => track.subFlow || applyKnownTrackCeiling([track], ceiling).length);
+  const normalFloor = new Set(applyTrackFloor(underCeiling, minTrackSec, { starve: false }));
+  const longEnough = underCeiling.filter(track => track.subFlow || normalFloor.has(track));
   const final = filterPickerCandidates(softRankByCompat(longEnough, curAnalysis, library.lastAiredInfo()), {
     recentIds,
     recentKeys,
@@ -709,12 +717,27 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtistRoots, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, { minTrackSec, maxTrackSec }, noRepeat.exhaustive, excludedIds, episodeSource, !!activeShow?.playlistIds?.length);
+  const flowScope = pickerScope({
+      automaticFlows: true,
+      flowUnavailable: !!queue.current?.flow || !!queue.upcoming?.some(item => item.flow),
+      flowStartMs: ctx?.flowStartMs ?? Date.now(),
+      flowMaxTrackSec: settings.effectiveMaxTrackSec(activeShow),
+      flowAvoidArtistRoots: new Set([...recentArtistRoots, ...blockedArtists]),
+      flowRecentAlbums: recentAlbums,
+      flowAllowAboveMax: activeShow?.flowAllowAboveMax ?? settings.get().picker.flowAllowAboveMax,
+      recentIds, recentKeys, hardRecentIds, hardRecentKeys, excludedIds, episodeSource,
+      minTrackSec, maxTrackSec,
+      playlistLock: playlistStrict && playlistPool ? new Set(playlistPool.tracks.map(track => track.id)) : null,
+      ...(activeShow?.filtersStrict ? {
+        genreLock: strictGenreResolution.genres, eraLock: activeShow.eras,
+        moodLock: activeShow.moods, energyLock: activeShow.energies,
+        vocalLock: activeShow.vocals as VocalMode,
+      } : {}),
+  });
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtistRoots, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, { minTrackSec, maxTrackSec: flowScope.flowAllowAboveMax ? null : maxTrackSec }, noRepeat.exhaustive, excludedIds, episodeSource, !!activeShow?.playlistIds?.length, flowScope);
 
   // Excluded playlists: hard drop, no never-starve fallback.
-  const candidates = excludedIds
-    ? rawCandidates.filter((t) => t?.id && !excludedIds.has(t.id))
-    : rawCandidates;
+  const candidates = excludedIds ? rawCandidates.filter(track => track.id && !excludedIds.has(track.id)) : rawCandidates;
 
   if (candidates.length === 0) {
     const avoided = [opts.avoidArtist, opts.avoidAnchorArtist].filter(Boolean).join('", "');
@@ -810,6 +833,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // Seconds. The CAP is an on-air cue_out cut, never a pool filter
           // (#447), so the model is the only place the upper end is weighed.
           secs: c.duration ?? rec?.duration_sec ?? undefined,
+          flow: flowForPrompt(c.subFlow),
           bpm: a.bpm ?? undefined,
           key: a.key ?? undefined,
           // Perceptual energy 0..1 (mean pace), decoupled from BPM.

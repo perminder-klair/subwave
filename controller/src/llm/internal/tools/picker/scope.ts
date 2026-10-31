@@ -9,10 +9,18 @@ import { applyKnownTrackCeiling } from '../../../../music/track-duration.js';
 import { applyTrackFloor } from '../../../../music/track-floor.js';
 import { freshnessBiasedOrder } from '../../../../music/airing.js';
 import { SEED_NOT_A_PICK_CLAUSE } from '../../../../util/pick-seed.js';
+import { selectionFlows } from '../../../../music/sub-flow-selection.js';
 import { slim } from './slim.js';
 import { intersectEpisodeSource, type ArtistEpisodeSource } from '../../../../music/episode-source.js';
 
 export interface PickerScope {
+  automaticFlows: boolean;
+  flowUnavailable: boolean;
+  flowStartMs: number | null;
+  flowMaxTrackSec: number | null;
+  flowAllowAboveMax: boolean;
+  flowAvoidArtistRoots: Set<string>;
+  flowRecentAlbums: Set<string>;
   // Resolved once through the cached OpenSubsonic extension probe. False on
   // requests and unsupported servers, so no discovery pass hits a dead tool.
   sonicSimilarity: boolean;
@@ -84,6 +92,8 @@ export interface PickerScope {
 // Every field defaults to "no constraint". Spread over a partial so there is
 // exactly one place a new field's default lives.
 const NO_SCOPE: PickerScope = {
+  automaticFlows: false, flowUnavailable: false, flowStartMs: null, flowMaxTrackSec: null, flowAllowAboveMax: false,
+  flowAvoidArtistRoots: new Set(), flowRecentAlbums: new Set(),
   sonicSimilarity: false,
   episodeSource: null,
   recentIds: new Set(),
@@ -194,7 +204,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     // history this is a plain shuffle. recentByArtist keeps source order so
     // its newest eligible releases survive the cap.
     const items: any[] = Array.isArray(list) ? list : [];
-    const source = intersectEpisodeSource(items, scope.episodeSource);
+    const source = selectionFlows(intersectEpisodeSource(items, scope.episodeSource), scope);
     const ordered = opts.order === 'source' ? source : freshnessBiasedOrder(source, library.lastAiredInfo(), Date.now());
     let pool = applyStrictLocks(ordered, {
       genres: genreLock, eras: eraLock, moods: moodLock, energies: energyLock, vocals: vocalLock,
@@ -202,8 +212,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     // Minimum track length (#1573): hard, and BEFORE the playlist lock, so a
     // pinned playlist's own 40-second interlude drops too — the floor is about
     // what the station will AIR, not which source a track came from.
-    pool = applyKnownTrackCeiling(pool, maxTrackSec);
-    pool = applyTrackFloor(pool, minTrackSec, { starve: true });
+    pool = pool.filter(track => track.subFlow || (applyKnownTrackCeiling([track], maxTrackSec).length && applyTrackFloor([track], minTrackSec, { starve: true }).length));
     if (playlistLock) pool = pool.filter((s: any) => s?.id && playlistLock.has(s.id));
     // Blocklisted playlists drop AFTER the playlist lock, so exclusion overrides
     // the anchor. No never-starve: a show that excludes its whole pool leaves

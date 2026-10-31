@@ -95,6 +95,7 @@ export function slim(s: any) {
     ? { kind: evidence.kind, reference: evidence.reference, score: evidence.score } : null;
   return {
     ...base,
+    ...(s.subFlow ? { subFlow: s.subFlow } : {}),
     ...(similarity ? { similarity } : {}),
     ...(moods.length ? { moods } : {}),
     ...(energy != null ? { energy } : {}),

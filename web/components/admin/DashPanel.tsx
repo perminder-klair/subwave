@@ -255,7 +255,9 @@ export default function DashPanel() {
   const openSkip = () => {
     const cur = status?.nowPlaying;
     if (!cur?.title) return;
-    setSkipTarget({ id: cur.subsonic_id || undefined, title: cur.title, artist: cur.artist || undefined, album: cur.album || undefined });
+    const playing = status?.queue?.current;
+    setSkipTarget({ id: cur.subsonic_id || undefined, title: cur.title, artist: cur.artist || undefined, album: cur.album || undefined,
+      flowLabel: cur.subsonic_id && playing?.subsonic_id === cur.subsonic_id ? playing.flow?.label : undefined });
     setSkipChoice('skip');
     setConfirmSkip(true);
   };
@@ -427,7 +429,7 @@ export default function DashPanel() {
     await removeQueuedRow(queryClient, id);
     try {
       await cancelQueueItem.mutateAsync(id);
-      notify.ok(`removed from queue: ${t.title || 'track'}`);
+      notify.ok(t.flow ? `cancelled Flow: ${t.flow.label}` : `removed from queue: ${t.title || 'track'}`);
     } catch (e) {
       // A 409 usually means the row crossed the live boundary. Never restore the
       // old full envelope over a newer poll; ask both owners for truth.
@@ -572,7 +574,14 @@ export default function DashPanel() {
                           {t.title} <span className="text-muted">— {t.artist}</span>
                         </QueueItemContent>
                         {/* stemSeam belongs to the successor track. */}
-                        {t.stemSeam ? (
+                        {t.flow ? (
+                          <span
+                            title={`${t.flow.label} · track ${t.flow.index + 1} of ${t.flow.size} · protected joins`}
+                            className="shrink-0 text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-vermilion/80 uppercase"
+                          >
+                            Flow
+                          </span>
+                        ) : t.stemSeam ? (
                           <span
                             title="Arrives via a rendered blend mixed from cached stems"
                             className="shrink-0 text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-vermilion/80 uppercase"
@@ -616,8 +625,8 @@ export default function DashPanel() {
                             <QueueItemAction
                               onClick={() => cancelQueued(t)}
                               disabled={busy === `cancel:${t.subsonic_id}`}
-                              title="Remove from queue"
-                              aria-label={`Remove ${t.title || 'track'} from queue`}
+                              title={t.flow ? 'Cancel the whole queued Flow' : 'Remove from queue'}
+                              aria-label={t.flow ? `Cancel Flow ${t.flow.label}` : `Remove ${t.title || 'track'} from queue`}
                               className="size-5 rounded-none text-muted hover:bg-vermilion/10 hover:text-vermilion"
                             >
                               <X className="h-3 w-3" />
@@ -978,14 +987,14 @@ export default function DashPanel() {
       <V3AlertDialog
         open={confirmSkip}
         onOpenChange={setConfirmSkip}
-        title="Skip current track"
+        title={skipTarget?.flowLabel ? 'Skip current Flow' : 'Skip current track'}
         description={skipTarget
-          ? `Skip “${skipTarget.title}”${skipTarget.artist ? ` — ${skipTarget.artist}` : ''} for everyone tuned in, keep it off the air for good, or both.`
+          ? `Skip “${skipTarget.title}”${skipTarget.artist ? ` — ${skipTarget.artist}` : ''} for everyone tuned in, keep it off the air for good, or both.${skipTarget.flowLabel ? ` Skipping ends the whole Flow “${skipTarget.flowLabel}”, including its remaining tracks.` : ''}`
           : ''}
         details={skipTarget && <SkipChoices target={skipTarget} value={skipChoice} onChange={setSkipChoice} />}
         altLabel={skipChoice === 'skip' ? undefined : 'block, let it finish'}
         onAlt={() => { if (skipChoice !== 'skip') void doNeverPlay(skipChoice, false); }}
-        confirmLabel={skipChoice === 'skip' ? 'skip track' : 'block + skip now'}
+        confirmLabel={skipChoice === 'skip' ? skipTarget?.flowLabel ? 'skip Flow' : 'skip track' : 'block + skip now'}
         danger
         onConfirm={() => void (skipChoice === 'skip' ? doSkip() : doNeverPlay(skipChoice, true))}
       />

@@ -35,6 +35,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     // Unrecognised reads as no constraint, matching the schema's vocals field.
     vocals: m.vocals === 'instrumental' || m.vocals === 'vocal' ? m.vocals : '',
     filtersStrict: m.filtersStrict ?? false,
+    flowAllowAboveMax: m.flowAllowAboveMax ?? null,
     maxTrackSeconds: m.maxTrackSeconds ?? null,
     minTrackLengthSeconds: m.minTrackLengthSeconds ?? null,
     // Tri-state: only an explicit boolean is an opinion; anything else inherits.
@@ -108,6 +109,7 @@ export function showPayload(s: Show) {
     vocals: s.vocals || '',
     // Strict only means something with at least one music filter set.
     filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
+    flowAllowAboveMax: s.flowAllowAboveMax ?? null,
     maxTrackSeconds: s.maxTrackSeconds,
     minTrackLengthSeconds: s.minTrackLengthSeconds,
     // null rides through as null: "inherit", not "off".

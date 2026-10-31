@@ -6,8 +6,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { basename } from 'node:path';
 import { config } from '../config.js';
-import { writeFileAtomic } from '../util/atomic-file.js';
+import { createSerialFileWriter, writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
+import { flowSelectionFits } from '../music/sub-flow-selection.js';
+import { discardFlow, expectFlowPlayback, flowPlaybackUri, sweepFlowAudio, type FlowPlayback } from '../music/sub-flow-playback.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import * as lyricsSources from '../music/lyrics-sources.js';
@@ -400,6 +402,11 @@ const HANDOFF_BOUNDARY_WAIT_MS = 2 * 60_000;
 const STEM_BLEND_EXIT_KEYS = ['washout', 'washoutAuto', 'washoutDelay', 'loop', 'loopBar', 'crossSec'] as const;
 
 // transitions far more often — a working DJ talks across most of them.
+function flowHandoffPresent(occurrence: string) {
+  try { return readFileSync(config.liquidsoap.queueFile, 'utf8').includes(`subwave_flow=${JSON.stringify(occurrence)}`); }
+  catch { return false; }
+}
+
 class Queue {
   upcoming: QueueItem[] = [];  // request items pushed by listeners, not yet playing
   current: QueueItem | null = null;    // what's broadcasting right now (request or auto)
@@ -621,22 +628,30 @@ class Queue {
     this._persistTimer = setTimeout(async () => {
       this._persistTimer = null;
       try {
-        await writeFileAtomic(config.queue.file, JSON.stringify({
-          upcoming: this.upcoming,
-          current: this.current,
-          history: this.history,
-          pendingHandoff: pendingHandoffSnapshot(this._pendingVoice),
-          // Persist the absolute rotate count so controller restarts do not reset the jingle interval.
-          // #1619.
-          tracksSinceJingle: this._tracksSinceJingle,
-          tracksSinceOverlay: this._tracksSinceOverlay,
-          lastRotateJingle: this._lastRotateJingle,
-          savedAt: new Date().toISOString(),
-        }, null, 2));
+        await this.persistNow();
       } catch (err) {
         console.error('[queue] persist failed:', (err as Error).message);
       }
     }, 500);
+  }
+
+  _writeQueue = createSerialFileWriter(config.queue.file);
+  _flowAdmission = false;
+  persistNow() {
+    if (this._persistTimer) { clearTimeout(this._persistTimer); this._persistTimer = null; }
+    const payload = JSON.stringify({
+      upcoming: this.upcoming,
+      current: this.current,
+      history: this.history,
+      pendingHandoff: pendingHandoffSnapshot(this._pendingVoice),
+      // Persist the absolute rotate count so controller restarts do not reset the jingle interval.
+      // #1619.
+      tracksSinceJingle: this._tracksSinceJingle,
+      tracksSinceOverlay: this._tracksSinceOverlay,
+      lastRotateJingle: this._lastRotateJingle,
+      savedAt: new Date().toISOString(),
+    }, null, 2);
+    return this._writeQueue(payload);
   }
 
   // Write the rolling recent-plays sidecar. Separate from `persist()` because
@@ -665,8 +680,9 @@ class Queue {
       // resurrecting tracks as permanent "Up next" zombies.
       const cutoff = Date.now() - 2 * 60 * 60 * 1000;
       this.upcoming = (Array.isArray(stored.upcoming) ? stored.upcoming : [])
-        .filter((i: QueueItem) => i?.track?.title && new Date(i.queuedAt || 0).getTime() > cutoff);
+        .filter((i: QueueItem) => i?.track?.title && (i.flow ? existsSync(i.flow.path) : new Date(i.queuedAt || 0).getTime() > cutoff));
       this.current = stored.current || null;
+      expectFlowPlayback(!!this.current?.flow || this.upcoming.some(item => item.flow));
       this.history = Array.isArray(stored.history) ? stored.history : [];
       // Older snapshots named the outgoing cue blendStartSec. It was already
       // the stamped cue, so migrate the name without adding another overlap.
@@ -717,6 +733,8 @@ class Queue {
     // or track transition.
     this.armHandoffGenerationFallback();
     this.recoverPauseTalk();
+    void sweepFlowAudio([...this.upcoming, ...(this.current ? [this.current] : [])]
+      .flatMap(item => item.flow ? [item.flow.path] : [])).catch(() => {});
     if (existsSync(config.queue.recentPlaysFile)) {
       try {
         const arr = JSON.parse(readFileSync(config.queue.recentPlaysFile, 'utf8'));
@@ -1057,6 +1075,71 @@ class Queue {
     // the on-air hook tries again. Fire-and-forget, gated inside.
     lyricsSources.onTrackQueued(track.id || null);
     return this.upcoming.length;
+  }
+
+  async queueFlow(flow: FlowPlayback, options: { automatic?: boolean } & Partial<Pick<QueueItem,
+    'intent' | 'introScript' | 'introLabelChecked' | 'introKind' | 'introPersona' | 'introHostSpeech' | 'linkPrev' | 'linkClockAt'>> & { selectionShowAt?: Date | number | null } = {}) {
+    if ((flow.protectBeforeSec ?? 5) !== 5 || (flow.protectAfterSec ?? 5) !== 5) {
+      const status = await liquidsoapControl.flowPlaybackStatus();
+      if (status.version < 2) throw new Error('Rebuild the broadcast service to use custom Flow protection times.');
+    }
+    // One prepared occurrence at a time. Members are
+    // committed together, before the sender can see any of them.
+    if (this.current?.flow || this.upcoming.some(item => item.flow)) throw new Error('A Flow is already queued or playing.');
+    if (flow.members.some(track => blocklist.hitOf(track))) throw new Error('A Flow track is now blocked.');
+    const queued = this.queuedIds();
+    if (flow.members.some(track => queued.has(track.id) || this.current?.track.id === track.id)) throw new Error('A Flow track is already queued or playing.');
+    const at = options.selectionShowAt instanceof Date ? options.selectionShowAt.getTime() : options.selectionShowAt;
+    const show = settings.resolveActiveShow(new Date(Math.max(Date.now(), at ?? 0)));
+    if (options.automatic) {
+      const rejection = this.automaticFlowRejection(flow, show, this.flowQueueStartMs());
+      if (rejection) throw new Error(rejection);
+    }
+    const items: QueueItem[] = flow.members.map((track, index) => ({
+      track: { ...track, crossSec: index < flow.members.length - 1 ? 0 : undefined },
+      ...(index === 0 ? {
+        intent: options.intent, introScript: options.introScript, introKind: options.introKind,
+        introLabelChecked: options.introLabelChecked, introPersona: options.introPersona,
+        introHostSpeech: options.introHostSpeech,
+        linkPrev: options.linkPrev,
+        linkClockAt: options.linkClockAt == null ? null : new Date(options.linkClockAt).getTime(),
+        introSessionKey: options.introScript ? session.getSession()?.key ?? null : null,
+      } : {}),
+      requestedBy: options.automatic ? null : 'studio', operator: !options.automatic,
+      aiPicked: !!options.automatic, showKey: showKeyAt(at ?? Date.now()),
+      selectionShowAt: at ?? null,
+      queuedAt: new Date().toISOString(), sent: false,
+      flow: { ...flow, index },
+    }));
+    this._flowAdmission = true;
+    expectFlowPlayback(true);
+    this.upcoming.push(...items);
+    try { await this.persistNow(); }
+    catch (error) { this.upcoming = this.upcoming.filter(item => !items.includes(item)); expectFlowPlayback(false); throw error; }
+    finally { this._flowAdmission = false; }
+    this.log('queued', `Sub/Flow “${flow.label}” — ${items.length} tracks, protected joins`);
+    void this.drainToLiquidsoap();
+    return this.upcoming.length;
+  }
+
+  flowQueueStartMs(): number | null {
+    let seconds = this.current ? this.remainingSecOnAir() : 0;
+    if (seconds == null) return null;
+    for (const item of this.upcoming) {
+      const duration = Number(item.track.duration);
+      if (!(duration > 0)) return null;
+      seconds += duration + (item.bedDelaySec ?? 0) + (item.pauseDelaySec ?? 0);
+    }
+    return Date.now() + seconds * 1000;
+  }
+
+  automaticFlowRejection(flow: FlowPlayback, show: ReturnType<typeof settings.resolveActiveShow>, startMs: number | null): string | null {
+    const allow = show?.flowAllowAboveMax ?? settings.get().picker.flowAllowAboveMax;
+    const max = settings.effectiveMaxTrackSec(show);
+    if (!allow && max && flow.members.some(track => track.duration > max)) return 'A Flow member exceeds the maximum track length.';
+    if (startMs == null && settings.effectiveFadeAtShowEnd(show)) return 'The Flow start time is unknown at a firm show boundary.';
+    if (startMs != null && !flowSelectionFits(flow.members.reduce((sum, track) => sum + track.duration, 0), startMs)) return 'The complete Flow does not fit before the show boundary.';
+    return null;
   }
 
   // A request the MIXER will silently eat (#1594). Log only — nothing is
@@ -1945,7 +2028,7 @@ class Queue {
   }
 
   aboveAutomaticCeiling(item: QueueItem, preparing = false): boolean {
-    return !item.requestedBy && !item.sent && !item.lengthPolicyCommitted && (preparing || (!item.bedded && item.pauseDelaySec == null))
+    return !item.flow && !item.requestedBy && !item.sent && !item.lengthPolicyCommitted && (preparing || (!item.bedded && item.pauseDelaySec == null))
       && aboveKnownTrackCeiling(item.track, this.selectionMaxSecFor(item));
   }
 
@@ -1999,6 +2082,7 @@ class Queue {
   }
 
   async drainToLiquidsoap(force = false) {
+    if (this._flowAdmission) return;
     this.invalidateObsoleteHostSpeech();
     if (this.senderBusy) {
       // A forced drain (the clip-as-track recovery) must not vanish into a
@@ -2012,6 +2096,10 @@ class Queue {
     this.senderBusy = true;
     try {
       while (true) {
+        // Do not overwrite the Flow handoff with its successor while the mixer
+        // waits for existing speech to finish and starts the first member.
+        const pendingFlow = this.upcoming.find(candidate => candidate.flow && candidate.sent);
+        if (pendingFlow?.flow && this.current?.flow?.occurrenceId !== pendingFlow.flow.occurrenceId) break;
         // A successor also contributes audio to a rendered seam. Validate the
         // entire unsent queue, not only its head, before preparing linked work.
         for (const queued of [...this.upcoming]) await this.dropAboveCeiling(queued);
@@ -2020,6 +2108,61 @@ class Queue {
         if (await this.dropAboveCeiling(item)) continue;
 
         const idx = this.upcoming.indexOf(item);
+        if (item.flow) {
+          try {
+            // Publish near the entry boundary, so waiting speech is not held for
+            // minutes while unrelated queued music plays ahead of the Flow.
+            if (idx !== 0) break;
+            const mixer = await liquidsoapControl.flowPlaybackStatus().catch(() => null);
+            if (!mixer) break;
+            if (mixer.pending === item.flow.occurrenceId || mixer.playing === item.flow.occurrenceId
+                || (item.flow.deliveryStartedAt && flowHandoffPresent(item.flow.occurrenceId))) {
+              this.upcoming.filter(member => member.flow?.occurrenceId === item.flow!.occurrenceId)
+                .forEach(member => { member.sent = true; member.flow!.handedAt = Date.now(); });
+              await this.persistNow();
+              continue;
+            }
+            if (item.flow.deliveryStartedAt) {
+              // Delivery intent was durable before the handoff. If both mixer
+              // and controller restarted, absence is ambiguous: never replay.
+              const lost = item.flow;
+              this.upcoming = this.upcoming.filter(member => member.flow?.occurrenceId !== lost.occurrenceId);
+              expectFlowPlayback(!!this.current?.flow);
+              await this.persistNow();
+              await discardFlow(lost);
+              this.log('error', `Sub/Flow “${lost.label}” delivery could not be confirmed; cancelled without replaying it.`);
+              continue;
+            }
+            const remaining = this.remainingUntilItemAirs(item);
+            if (!force && remaining != null && remaining > Number(settings.get().crossfadeDuration || 10) + 10) break;
+            const members = this.upcoming.filter(candidate => candidate.flow?.occurrenceId === item.flow!.occurrenceId);
+            const show = settings.resolveActiveShow(new Date(Date.now() + (remaining ?? 0) * 1000));
+            const rejected = item.aiPicked ? this.automaticFlowRejection(item.flow, show, remaining == null ? null : Date.now() + (remaining + this.hiddenDelayBeforeItemAirs(item)) * 1000) : null;
+            if (rejected) this.log('picker', `Flow “${item.flow.label}” refused at delivery: ${rejected}`);
+            if (rejected || members.length !== item.flow.members.length || item.flow.index !== 0 || !existsSync(item.flow.path)
+                || members.some(member => blocklist.hitOf(member.track))) {
+              this.upcoming = this.upcoming.filter(candidate => !members.includes(candidate));
+              this.log('error', `Sub/Flow “${item.flow.label}” could not be delivered intact; cancelled the whole occurrence.`);
+              expectFlowPlayback(!!this.current?.flow);
+              await discardFlow(item.flow);
+              this.persist();
+              continue;
+            }
+            const uri = flowPlaybackUri(item.flow, Number(settings.get().crossfadeDuration) || 0);
+            members.forEach(member => { member.flow!.deliveryStartedAt = Date.now(); });
+            await this.persistNow();
+            const written = await writeHandoff(config.liquidsoap.queueFile, uri, {
+              maxWaitMs: 5000, beforeWrite: () => members.every(member => this.upcoming.includes(member)),
+            });
+            if (!written) continue;
+            members.forEach(member => { member.sent = true; member.flow!.handedAt = Date.now(); });
+            await this.persistNow();
+            continue;
+          } catch (error) {
+            this.log('error', `Sub/Flow delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+            break;
+          }
+        }
         const hasSuccessor = idx >= 0 && idx + 1 < this.upcoming.length;
         // The clock that governs THIS item's drain is the end of the track it
         // will FOLLOW — the on-air track extended past any sent-but-unaired
@@ -2148,7 +2291,7 @@ class Queue {
         let successor: QueueItem | null = null;
         if (action === 'send-pair') {
           successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
-          if (successor) {
+          if (successor && !successor.flow) {
             this.applyPairStamps(item, successor);
             // Stem-blend seam (feature: stem-blend transitions): with the
             // pair known, try to upgrade this seam to a pre-rendered blend.
@@ -2391,7 +2534,9 @@ class Queue {
   // THIS track is the operator's intent — and the caller reports the miss
   // honestly. Never throws: a skip must not fail on its safety net.
   async commitBeforeSkip(): Promise<{ pending: boolean; committed: boolean; waitedMs: number }> {
-    if (skipPrepAction(this.upcoming.length) === 'skip-now') {
+    const playingFlow = this.current?.flow?.occurrenceId;
+    const successor = () => this.upcoming.find(item => !playingFlow || item.flow?.occurrenceId !== playingFlow);
+    if (skipPrepAction(successor() ? 1 : 0) === 'skip-now') {
       return { pending: false, committed: false, waitedMs: 0 };
     }
     const t0 = Date.now();
@@ -2401,7 +2546,7 @@ class Queue {
     let headSentAt: number | null = null;
     const deadline = t0 + SKIP_COMMIT_WAIT_MS;
     while (true) {
-      const head = this.upcoming[0];
+      const head = successor();
       if (!head) {
         // Everything aired or was cancelled while waiting — nothing left to
         // protect, the skip falls through honestly.
@@ -2530,7 +2675,9 @@ class Queue {
       }
       const handoff = await this._airVoice(targetFile, wavPath, safeText, voiceGainDb(kind, persona), {
         onQueued: q => this.onQueued(q, seg),
+        beforeWrite: () => !hostSpeech || session.isHostSpeechCurrent(hostSpeech),
       });
+      if (!handoff) return { accepted: false, deferred: false, completed: Promise.resolve(false) };
       // Bookkeeping runs when the words reach the stream, not at handoff
       // (#1382). A mixer that writes no marker resolves immediately with a null
       // stamp, which is the old timing byte for byte.
@@ -3325,11 +3472,12 @@ class Queue {
       };
       const handoff = await this._airVoice(targetFile, item.introWav, item.introScript || '', voiceGainDb(kind, item.introPersona || undefined), {
         onQueued: q => this.onQueued(q, seg),
+        beforeWrite: () => !item.flow || (this.current?.flow?.occurrenceId === item.flow.occurrenceId && this.current?.flow?.index === 0),
       });
       // Not deferred: introAired is already set and the queue state has to reach
       // disk whether or not the words are audible yet.
       this.persist();
-      this.onSpoken(handoff, seg);
+      if (handoff) this.onSpoken(handoff, seg);
     } catch (err) {
       this.log('error', `Air intro failed: ${(err as Error).message}`);
     }
@@ -3731,6 +3879,15 @@ class Queue {
       this.log('playing', `${np.title} — ${np.artist}`, { source: 'auto' });
     }
 
+    const outgoingFlow = this.history[0]?.flow;
+    if (outgoingFlow && outgoingFlow.occurrenceId !== this.current?.flow?.occurrenceId) {
+      const interrupted = this.upcoming.some(item => item.flow?.occurrenceId === outgoingFlow.occurrenceId);
+      this.upcoming = this.upcoming.filter(item => item.flow?.occurrenceId !== outgoingFlow.occurrenceId);
+      if (interrupted) this.log('scheduler', `Sub/Flow “${outgoingFlow.label}” was interrupted; cancelled its remaining members.`);
+      setTimeout(() => { void discardFlow(outgoingFlow).catch(() => {}); }, 30_000).unref();
+    }
+    expectFlowPlayback(!!this.current?.flow || this.upcoming.some(item => item.flow));
+
     // Every real music start can confirm an overdue handoff, including an
     // untracked auto-playlist fallback. The runner waits for a tracked intro's
     // complete publication before taking the voice chain behind it.
@@ -3936,6 +4093,7 @@ class Queue {
   // show, requests exempt), so the pick look-ahead and the drain agree on how
   // long the anchor plays. Null when its length is unknown.
   heldPlayableSec(item: QueueItem): number | null {
+    if (item.flow) return Number(item.track.duration) || null;
     const trim = silenceTrim.resolveSilenceTrim(item.track);
     return heldAnchorPlayableSec({
       durationSec: knownDurationSec(item.track),
@@ -4246,7 +4404,9 @@ class Queue {
   // next poll (up to 1s after writeHandoff). An empty dj_queue is handled
   // separately — see the consecutive-empty-reads guard below.
   async reconcileWithDjQueue() {
-    const sentItems = this.upcoming.filter(i => i.sent);
+    // All companion rows are represented by one mixer request. Never treat
+    // their absence from dj_queue as independent failed handoffs.
+    const sentItems = this.upcoming.filter(i => i.sent && !i.flow);
     if (sentItems.length === 0) {
       this._emptyDjQueueStreak = 0;
       return;
@@ -4269,7 +4429,7 @@ class Queue {
         this._emptyDjQueueStreak++;
         if (this._emptyDjQueueStreak >= EMPTY_DJ_QUEUE_CLEAR_THRESHOLD) {
           const cleared = sentItems.length;
-          this.upcoming = this.upcoming.filter(i => !i.sent);
+          this.upcoming = this.upcoming.filter(i => !i.sent || i.flow);
           this._emptyDjQueueStreak = 0;
           this.log('scheduler',
             `Cleared ${cleared} stale queue item(s) — dj_queue reported empty for ${EMPTY_DJ_QUEUE_CLEAR_THRESHOLD} consecutive checks (Liquidsoap restarted or queue desynced)`);
@@ -4291,6 +4451,7 @@ class Queue {
       // Pass 2: drop only items that were confirmed-present and are now gone.
       const beforeCount = this.upcoming.length;
       this.upcoming = this.upcoming.filter(item => {
+        if (item.flow) return true;
         if (!item.sent) return true;
         if (!item.confirmedInLiquidsoap) return true;  // grace period — keep
         const id = item.track?.id;
@@ -4307,6 +4468,29 @@ class Queue {
     } catch (err) {
       this.log('error', `reconcileWithDjQueue failed: ${(err as Error).message}`);
     }
+  }
+
+  _flowReconciling = false;
+  async reconcileFlowPlayback() {
+    if (this._flowReconciling) return;
+    const item = this.upcoming.find(candidate => candidate.flow && candidate.sent)
+      ?? (this.current?.flow ? this.current : null);
+    const flow = item?.flow;
+    if (!flow || !flow.handedAt || Date.now() - flow.handedAt < 8000) return;
+    this._flowReconciling = true;
+    try {
+      const status = await liquidsoapControl.flowPlaybackStatus();
+      if (status.pending === flow.occurrenceId || status.playing === flow.occurrenceId || flowHandoffPresent(flow.occurrenceId)) return;
+      // A mixer restart or failed prepared request never replays completed
+      // members. Cancel its remainder and let the ordinary fallback cover it.
+      this.upcoming = this.upcoming.filter(candidate => candidate.flow?.occurrenceId !== flow.occurrenceId);
+      if (this.current?.flow?.occurrenceId === flow.occurrenceId) delete this.current.flow;
+      expectFlowPlayback(false);
+      await this.persistNow();
+      await discardFlow(flow);
+      this.log('error', `Sub/Flow “${flow.label}” is no longer in the mixer; cancelled without replaying its members.`);
+    } catch { /* An unavailable status is not evidence that playback stopped. */ }
+    finally { this._flowReconciling = false; }
   }
 
   // Remove a not-yet-aired track from the upcoming queue (operator cancel).
@@ -4397,6 +4581,24 @@ class Queue {
   // both stem cascades stay here, in one place, for both callers.
   async removeUpcomingItem(item: QueueItem, reason = 'operator'): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
     if (!this.upcoming.includes(item)) return { ok: false, reason: 'not-queued' };
+    if (item.flow) {
+      const flow = item.flow;
+      if (this.current?.flow?.occurrenceId === flow.occurrenceId) return { ok: false, reason: 'already-playing' };
+      if (item.sent) {
+        const waiting = await liquidsoapControl.sendCommand(`subflow.cancel ${flow.occurrenceId}`).catch(() => '');
+        if (waiting.trim() !== 'OK') {
+        const { rid } = await liquidsoapControl.resolveDjQueueRidWithBed(flow.members[0]!.id);
+        if (!rid || !await liquidsoapControl.removeFromDjQueue(rid)) return { ok: false, reason: 'already-playing' };
+        }
+      }
+      this.upcoming = this.upcoming.filter(candidate => candidate.flow?.occurrenceId !== flow.occurrenceId);
+      expectFlowPlayback(!!this.current?.flow);
+      await this.persistNow();
+      await discardFlow(flow);
+      this.log('scheduler', `${reason} cancelled Sub/Flow “${flow.label}” as a whole`);
+      void this.drainToLiquidsoap();
+      return { ok: true };
+    }
     const trackId = item.track?.id || '';
     await this.discardUnpublishedBlend(item);
 
@@ -5060,6 +5262,7 @@ class Queue {
       this._nowPlaying = await this.readNowPlayingFromDisk();
       this._nowPlayingFresh = true;
       this.onTrackStarted(this._nowPlaying);
+      void this.reconcileFlowPlayback();
       // Beds ride the same tick rather than a poller of their own — a bed's
       // start is a track-boundary event like any other, and the 1.5s cadence is
       // already inside the head budget bed-policy sizes the bed with.
@@ -5097,6 +5300,7 @@ class Queue {
       // its own index/size rather than being counted here, so a block half
       // played still reads "9 of 11" instead of shrinking with the queue.
       block: i.block || undefined,
+      flow: i.flow ? { id: i.flow.occurrenceId, label: i.flow.label, index: i.flow.index, size: i.flow.members.length } : undefined,
       // The track arrives via a pre-rendered stem blend rather than a plain
       // crossfade (#1257 — the admin queue badges the seam type). Stamped at
       // pair drain, cleared if the clip is pulled with a cancel, so it's

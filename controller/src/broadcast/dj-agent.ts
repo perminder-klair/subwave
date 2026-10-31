@@ -1,6 +1,8 @@
 // Run pick and request agents over the session. Disabled or failed agents fall back to the
 // stateless picker and link generator; both paths update the session.
 
+import * as subFlows from '../music/sub-flow.js';
+import { selectionFlows } from '../music/sub-flow-selection.js';
 import { z } from 'zod';
 import * as settings from '../settings.js';
 import * as session from './session.js';
@@ -403,6 +405,13 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
   // to the discovery tools without being unpacked on the way (see PickerRunArgs
   // in dj-agent/agents.ts for why that matters).
   const scope = pickerScope({
+    automaticFlows: true,
+    flowUnavailable: !!queue.current?.flow || !!queue.upcoming?.some(item => item.flow),
+    flowStartMs: showAt?.getTime() ?? Date.now(),
+    flowMaxTrackSec: settings.effectiveMaxTrackSec(activeShow),
+    flowAvoidArtistRoots: episodeSource ? new Set() : queue.neighbourArtistRoots(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
+    flowRecentAlbums: queue.recentAlbumKeys(settings.get().picker.albumHours),
+    flowAllowAboveMax: activeShow?.flowAllowAboveMax ?? settings.get().picker.flowAllowAboveMax,
     sonicSimilarity: await subsonic.supportsSonicSimilarity(),
     episodeSource,
     recentIds,
@@ -1052,6 +1061,15 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     }
   }
 
+  // Resolve again after corrective guards; no old member-specific link/effect survives.
+  if (song.subFlow || subFlows.list().some(flow => flow.enabled && flow.tracks.some(track => track.id === song.id))) {
+    const { scope: freshScope } = await livePickerScope(queue, { showAt, context: ctx });
+    const resolved = selectionFlows([song], freshScope)[0];
+    if (!resolved) return false;
+    song = resolved;
+    object.transition = 'normal';
+  }
+
   // The Shortlist model's note must never describe an earlier choice after a
   // corrective artist/album repick. Replace an unsafe note at the final-track
   // boundary, before either Booth/session text or queue metadata can see it.
@@ -1304,7 +1322,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
   // run's current waypoint vector, drifting the pool toward the destination.
   ctx = await prepareEpisodeContext(ctx);
-  const result = await picker.pickViaPool(queue, ctx, rankTarget, audioWaypoint, opts);
+  const result = await picker.pickViaPool(queue, { ...ctx, flowStartMs: showAt?.getTime() ?? Date.now() }, rankTarget, audioWaypoint, opts);
   if (!result) {
     queue.log('picker', 'pool produced no pick');
     return 'empty';
@@ -1322,6 +1340,12 @@ async function enqueueSelected(
   result: { song: any; reason?: string | null; source?: string | null; transition?: string | null },
   { wantLink, pickAnchor, showAt = null }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null },
 ): Promise<'queued' | 'collision'> {
+  if (result.source !== 'show-playlist-order' && (result.song.subFlow || subFlows.list().some(flow => flow.enabled && flow.tracks.some(track => track.id === result.song.id)))) {
+    const { scope } = await livePickerScope(queue, { showAt, context: ctx });
+    const resolved = selectionFlows([result.song], scope)[0];
+    if (!resolved) return 'collision';
+    result = { ...result, song: resolved, transition: resolved.subFlow ? 'normal' : result.transition };
+  }
   // Build the between-track link BEFORE enqueueing so it can ride on the queued
   // item and air when the pick starts. It back-announces the captured
   // `pickAnchor` and leads into the pick — that track is the selection's

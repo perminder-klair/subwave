@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { cn } from '../../lib/cn';
 
@@ -47,12 +47,24 @@ export function V3AlertDialog({
   onAlt,
 }: V3AlertDialogProps) {
   const [latch] = useState(actionLatch);
+  const opener = useRef<HTMLElement | null>(null);
   useEffect(() => { if (open) latch.arm(); }, [open, latch]);
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="v3-alert-overlay fixed inset-0 z-[60] bg-overlay [backdrop-filter:blur(6px)_saturate(1.05)] [-webkit-backdrop-filter:blur(6px)_saturate(1.05)]" />
         <AlertDialog.Content
+          onOpenAutoFocus={() => {
+            opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          }}
+          onCloseAutoFocus={event => {
+            // Controlled dialogs have no Radix Trigger to restore focus to.
+            // Keep an intentional destination chosen by the caller (e.g. after deletion).
+            event.preventDefault();
+            if (document.activeElement === document.body || document.activeElement?.closest('[role="alertdialog"]')) {
+              if (opener.current?.isConnected) opener.current.focus();
+            }
+          }}
           className={cn(
             'v3-alert-content fixed top-1/2 left-1/2 z-[70] w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 border border-ink bg-bg text-ink shadow-drawer outline-none',
           )}
@@ -68,7 +80,7 @@ export function V3AlertDialog({
             </AlertDialog.Description>
             {details}
           </div>
-          <div className="flex justify-end gap-2 border-t border-ink px-5 py-3">
+          <div className="flex justify-end gap-2 border-t border-ink px-5 py-3 max-sm:[&_button]:min-h-11 max-sm:[&_button]:min-w-11 [@media(pointer:coarse)]:[&_button]:min-h-11 [@media(pointer:coarse)]:[&_button]:min-w-11">
             <AlertDialog.Cancel className="v3-eyebrow v3-focus cursor-pointer border border-ink bg-transparent px-3.5 py-1.5 text-[10px] text-ink">
               {cancelLabel}
             </AlertDialog.Cancel>
