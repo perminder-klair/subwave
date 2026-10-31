@@ -64,8 +64,14 @@ Drop only the header. The 401 and its body stay, and a 200 is untouched. A
 browser tab on the stream URL sends `Sec-Fetch-Dest: document`, so it keeps its
 native prompt.
 
-Every recipe below does this. Running your own Caddy? Copy the whole
-`handle @streams` block from [`docker/Caddyfile`](../docker/Caddyfile).
+Every recipe below does this. Running your own Caddy? Copy the `@streams`
+matcher and its `handle` block from [`docker/Caddyfile`](../docker/Caddyfile).
+
+The nginx and Traefik recipes give these requests a route of their own, so
+anything you add to the stream route has to go on both. nginx runs `return 418`
+before access checks, so an `auth_basic`, `allow`/`deny` or `limit_req` left in
+`location ^~ /stream` alone is skipped by any request with `?auth=`. The same goes
+for a Traefik middleware on `subwave-stream` alone.
 
 If your proxy can't make this conditional, leave the header alone. **Never strip
 it for every client.** Leaving it costs listeners with an out-of-date password
@@ -121,7 +127,8 @@ location ^~ /stream {
 }
 
 # The same stream, minus the challenge. proxy_hide_header can't sit inside an
-# `if`, which is why this needs a route of its own.
+# `if`, which is why this needs a route of its own. Repeat here any auth_basic,
+# allow/deny or limit_req you add above, or `?auth=` skips it.
 location @stream-media {
     proxy_pass http://127.0.0.1:7702;
     proxy_hide_header WWW-Authenticate;
@@ -247,7 +254,8 @@ location /api/ {
 NPM's generated `/` location continues to send the web UI to the Proxy Host's
 port `7700`. The Advanced locations override only the API, tune-in files, and
 stream mounts. `@stream-media` is
-[the stream without its 401 challenge](#the-streams-401-challenge).
+[the stream without its 401 challenge](#the-streams-401-challenge), so repeat
+there anything you add to `location ^~ /stream`.
 
 Set `ICECAST_TRUSTED_PROXY_IPS` for real listener IPs here too — the NPM
 container's own address, exactly as in [nginx](#nginx) above.
