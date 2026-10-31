@@ -84,6 +84,7 @@ import * as liquidsoapControl from './liquidsoap-control.js';
 import {
   cueProbeBudgetMs,
   drainAction,
+  forecastQueue,
   introRenderBudgetSec,
   playableDurationSec,
   remainingSec,
@@ -4547,16 +4548,13 @@ class Queue {
   // behind it, exactly as hiddenDelayBeforeItemAirs sums them. One unknown
   // length makes every later forecast unknown (null), never short.
   upcomingTiming(): { durationSec: number | null; airsInSec: number | null }[] {
-    let clock = this.remainingSecOnAir();
-    let sentHidden = 0;
-    return this.upcoming.map((item) => {
-      const own = this.ownHiddenDelaySec(item);
-      const durationSec = this.playableSecOf(item);
-      const airsInSec = clock == null ? null : clock + sentHidden + own;
-      if (item.sent) sentHidden += own;
-      clock = clock == null || durationSec == null ? null : clock + durationSec;
-      return { durationSec, airsInSec };
-    });
+    const rows = this.upcoming.map((item) => ({
+      playableSec: this.playableSecOf(item),
+      hiddenSec: this.ownHiddenDelaySec(item),
+      sent: !!item.sent,
+    }));
+    const airs = forecastQueue(this.remainingSecOnAir(), rows);
+    return rows.map((row, n) => ({ durationSec: row.playableSec, airsInSec: airs[n] }));
   }
 
   // Tracks played in the last `hours` hours — used by the picker to block

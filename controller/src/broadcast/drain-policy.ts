@@ -28,6 +28,34 @@ export function playableDurationSec(
   return Math.max(0, Math.min(dur, cueOut ?? dur) - cueIn);
 }
 
+// One row of the running order, as the forecast walk below sees it.
+export interface ForecastRow {
+  /** Seconds this row will air (playableDurationSec), or null when unknown. */
+  playableSec: number | null;
+  /** Hidden timeline airing just before this row: its bed or pause silence. */
+  hiddenSec: number;
+  /** Handed to the mixer already. */
+  sent: boolean;
+}
+
+// The running order's clock: for each row, seconds until it airs, or null once
+// the on-air clock or any length ahead is unknown (never short). A row's own
+// hidden delay always counts. A SENT row's also delays every row behind it,
+// because its bed is already in next.txt; an unsent row's is decided at its
+// own drain, so it adds nothing behind it yet. queue.upcomingTiming() feeds this
+// the live queue (GET /state's airsAt, the listener wait notice) and
+// broadcast/marker-policy.ts reasons over it, so the two cannot disagree.
+export function forecastQueue(remainingSec: number | null, rows: ForecastRow[]): (number | null)[] {
+  let clock = remainingSec;
+  let sentHidden = 0;
+  return rows.map((row) => {
+    const airsIn = clock == null ? null : clock + sentHidden + row.hiddenSec;
+    if (row.sent) sentHidden += row.hiddenSec;
+    clock = clock == null || row.playableSec == null ? null : clock + row.playableSec;
+    return airsIn;
+  });
+}
+
 // Seconds left before the on-air track's EFFECTIVE end (playable span after
 // both cue points), so a capped or trimmed track ends when Liquidsoap does.
 // Null when unknowable; callers treat null as "cannot schedule" and drain
