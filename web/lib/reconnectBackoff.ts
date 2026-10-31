@@ -2,12 +2,15 @@
 // errored. hooks/usePlayer.ts owns the timer, the media listeners and the
 // reconnect itself; this decides the delay and when the count starts over.
 //
-// A `playing` alone proves little. Something in front of Icecast (a proxy with a
-// short timeout, a broken middlebox) can cut every connection a moment into the
-// audio, and every reconnect costs a full Icecast burst, about 22 s of audio.
-// When `playing` reset the count for good, a cut after 1 s of audio ran at 25-26
-// connects a minute per listener and a cut after 0.25 s at 49-61 (Chromium and
-// Firefox, a real Icecast behind a cutting proxy).
+// A `playing` alone proves little. Something in front of Icecast (a proxy that
+// stops a response after so many bytes, a broken middlebox) can cut every
+// connection a moment into the audio, and every reconnect costs a full Icecast
+// burst, about 22 s of audio. When `playing` reset the count for good, a cut after
+// 1 s of audio ran at 25-37 connects a minute per listener and a cut after 0.25 s
+// at 49-61 (Chromium and Firefox, a real Icecast behind a cutting proxy). A proxy
+// with a short timeout is not this: its cut lands after the burst has, so the
+// listener hears the burst out and `ended` comes long past the threshold (a cut
+// 1 s in runs at 2.4 a minute with sound 98% of the time, measured).
 //
 // So the reset on `playing` is provisional. A connection that closes within
 // STAYED_UP_MS of it takes the reset back and counts as one more failure; one
@@ -70,9 +73,10 @@ export function reachedPlaying(backoff: Backoff, now: number): Backoff {
 }
 
 /** The connection closed or errored: how long to wait, and the state to keep.
- *  Safe to call twice for one connection, as Firefox's reset does (`error` while
- *  the buffer is audible, `ended` once it runs out). Each call judges the
- *  connection afresh, and the one failure is counted once. */
+ *  Safe to call twice for a connection that reached `playing`, as Firefox's reset
+ *  does (`error` while the buffer is audible, `ended` once it runs out). Each call
+ *  judges it afresh, so a listener who heard a whole burst out counts as up by
+ *  `ended`, and the one failure is counted once. */
 export function connectionClosed(backoff: Backoff, now: number): { delayMs: number; next: Backoff } {
   const { playingSince } = backoff;
   let retries = backoff.retries;
