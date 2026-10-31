@@ -24,6 +24,8 @@
 
 // HTMLMediaElement.HAVE_FUTURE_DATA, read as a constant so the checks work on a detached element.
 export const HAVE_FUTURE_DATA = 3;
+// How long the media clock may stand still before the watchdog reconnects.
+export const WATCHDOG_MS = 5000;
 
 export type WatchdogCall = 'reconnect' | 'keep-watching' | 'stand-down';
 
