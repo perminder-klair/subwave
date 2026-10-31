@@ -1,7 +1,8 @@
-// Station-wide scrobbling — Last.fm + ListenBrainz + Navidrome, driven from
-// Queue.onTrackStarted. Each backend is independent (own enable flag,
-// credentials, failure mode); every call is fire-and-forget with a 5s timeout and
-// no retry queue.
+// Scrobbling — Last.fm + ListenBrainz + Navidrome. Station-wide submissions are
+// driven from Queue.onTrackStarted; personal submissions are driven by verified
+// admin-browser playback reports. Each backend is independent (own enable flag,
+// credentials, failure mode); every call is fire-and-forget with a 5s timeout
+// and no retry queue.
 //
 // Listener gating fails CLOSED (unknown count → skip): polluting a real profile
 // during a monitoring blip is worse than missing entries. Navidrome (#1298) runs
@@ -26,6 +27,11 @@ import {
   planNavidrome,
   type ScrobbleTrackLike,
 } from './scrobble-pure.js';
+import {
+  PersonalScrobbleTracker,
+  type PersonalAiring,
+  type PersonalPlaybackResult,
+} from './personal-scrobble.js';
 
 const TIMEOUT_MS = 5000;
 
@@ -58,9 +64,9 @@ interface LastfmCreds {
   sessionKey: string;
 }
 
-function lastfmCreds(): LastfmCreds | null {
+function lastfmCreds(requireStationEnabled = true): LastfmCreds | null {
   const s: any = settings.get()?.scrobble?.lastfm || {};
-  if (!s.enabled) return null;
+  if (requireStationEnabled && !s.enabled) return null;
   const apiKey = resolveLastfmApiKey();
   const apiSecret = resolveLastfmApiSecret();
   const sessionKey = resolveLastfmSessionKey();
@@ -68,9 +74,9 @@ function lastfmCreds(): LastfmCreds | null {
   return { apiKey, apiSecret, sessionKey };
 }
 
-function listenbrainzToken(): string | null {
+function listenbrainzToken(requireStationEnabled = true): string | null {
   const s: any = settings.get()?.scrobble?.listenbrainz || {};
-  if (!s.enabled) return null;
+  if (requireStationEnabled && !s.enabled) return null;
   const token = process.env.LISTENBRAINZ_USER_TOKEN || s.userToken || '';
   return token || null;
 }
@@ -294,6 +300,56 @@ async function listenbrainzSubmit(track: ScrobbleTrack, startedAt: string, token
     token,
     'submit_listens',
   );
+}
+
+export type PersonalScrobbleProvider = 'lastfm' | 'listenbrainz';
+
+function personalLastfmCreds(): LastfmCreds | null {
+  if (settings.get()?.scrobble?.lastfm?.enabled) return null;
+  return lastfmCreds(false);
+}
+
+function personalListenbrainzToken(): string | null {
+  if (settings.get()?.scrobble?.listenbrainz?.enabled) return null;
+  return listenbrainzToken(false);
+}
+
+// Personal mode is per authenticated browser, so the station-wide enable flags
+// select the OPPOSITE route: only a configured-but-disabled backend is eligible.
+// That is how an operator keeps aggregate station scrobbling off while tracking
+// their own listening, and it prevents the two paths submitting the same play.
+// Credentials still never leave this module or an admin-only response.
+export function personalScrobbleProviders(): PersonalScrobbleProvider[] {
+  const providers: PersonalScrobbleProvider[] = [];
+  if (personalLastfmCreds()) providers.push('lastfm');
+  if (personalListenbrainzToken()) providers.push('listenbrainz');
+  return providers;
+}
+
+const personalTracker = new PersonalScrobbleTracker({
+  onNowPlaying(track) {
+    const lf = personalLastfmCreds();
+    const lb = personalListenbrainzToken();
+    if (lf) void lastfmUpdateNowPlaying(track, lf);
+    if (lb) void listenbrainzPlayingNow(track, lb);
+  },
+  onSubmit(track, listenedAt) {
+    const lf = personalLastfmCreds();
+    const lb = personalListenbrainzToken();
+    const backends = [lf && 'last.fm', lb && 'listenbrainz'].filter(Boolean).join('+');
+    console.log(`[scrobble] personal submit → ${backends}: "${track.title}" — ${track.artist}`);
+    if (lf) void lastfmScrobble(track, listenedAt, lf);
+    if (lb) void listenbrainzSubmit(track, listenedAt, lb);
+  },
+});
+
+export function reportPersonalPlayback(input: {
+  playbackId: string;
+  playing: boolean;
+  airing: PersonalAiring | null;
+  nowMs?: number;
+}): PersonalPlaybackResult {
+  return personalTracker.report(input);
 }
 
 // Navidrome goes through music/subsonic.ts, inheriting its salt+token auth,
