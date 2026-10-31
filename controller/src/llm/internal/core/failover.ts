@@ -166,7 +166,7 @@ const STICKY_WINDOW_MS: Record<StickyState['kind'], number> = {
 const STICKY_PROBE_EVERY_MS = 30_000;
 
 function stickyKey(leg: Leg): string {
-  return `${leg.label}|${legEndpoint(leg)}`;
+  return `${leg.baseLabel ?? leg.label}|${legEndpoint(leg)}`;
 }
 
 function isCurrentPrimary(leg: Leg): boolean {
@@ -376,7 +376,7 @@ export async function withFailover<T>(
   );
   throwIfCancelled(signal);
   if (pin) {
-    const leg = pin === 'fallback' ? fallbackLeg() : primaryLeg();
+    const leg = pin === 'fallback' ? fallbackLeg() : primaryLeg(kind);
     if (!leg) throw new Error(`withFailover: pinned leg "${pin}" is not configured`);
     const started = Date.now();
     try {
@@ -389,7 +389,7 @@ export async function withFailover<T>(
       throw err;
     }
   }
-  const primary = primaryLeg();
+  const primary = primaryLeg(kind);
   // Sticky: a primary marked down by the last real failure is not re-tried
   // while the window holds — the backup takes the call without paying
   // detection again. With no configured backup there is nowhere to route, so
