@@ -1,3 +1,4 @@
+import {speechBudgetPrompt} from '../../../broadcast/speech-budget.js';
 // Generate the exchange in one call, then queue.announceExchange renders each
 // persona's voice through the serialized chain. Speaker enums stay strict;
 // repairing ids could air the wrong voice. castSpeakerIdRule mitigates rejection (#1512).
@@ -58,7 +59,7 @@ Rules:
 // masquerade as banter).
 export async function generateBanter({
   host, guests, show = null, current = null,
-  context = null, recap = null, recentOpeners = null,
+  context = null, recap = null, recentOpeners = null, speechBudget = null,
 }: any) {
   const cast = [host, ...guests];
   const ids = cast.map((p: any) => p.id);
@@ -72,7 +73,7 @@ export async function generateBanter({
   // The host's on-air language governs the room — co-hosts on one show share
   // a broadcast language, same rule as the rest of the station. banterSystem
   // owns the language and spoken-name policy so pure prompt tests cover it.
-  const system = banterSystem({ host, guests, show });
+  const system = banterSystem({ host, guests, show })+(speechBudget?'\n'+speechBudgetPrompt(speechBudget):'');
 
   const ctxLines = buildContextLines(context, { contextFields: BANTER_CONTEXT_FIELDS });
   if (current?.title) ctxLines.push(`On air right now: "${current.title}" by ${current.artist || 'unknown'}`);

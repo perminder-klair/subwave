@@ -27,6 +27,8 @@ export function getTaggedAt(id: string): string | null {
 }
 
 export interface TrackLite {
+  artistId?: string | null;
+  albumId?: string | null;
   genres: string[];
   genre: string | null;
   bpm: number | null;
@@ -51,10 +53,12 @@ export interface TrackLite {
 // blobs on better-sqlite3's single synchronous thread (#723).
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
-    .prepare(`SELECT genres, genre, bpm, musical_key, moods, energy, year, original_year, is_compilation, era_untrusted, duration_sec, lead_silence_ms, tail_silence_ms, tail_start_ms FROM tracks WHERE id = ?`)
-    .get(id) as Pick<TrackRow, 'genres' | 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'original_year' | 'is_compilation' | 'era_untrusted' | 'duration_sec' | 'lead_silence_ms' | 'tail_silence_ms' | 'tail_start_ms'> | undefined;
+    .prepare(`SELECT artist_id, album_id, genres, genre, bpm, musical_key, moods, energy, year, original_year, is_compilation, era_untrusted, duration_sec, lead_silence_ms, tail_silence_ms, tail_start_ms FROM tracks WHERE id = ?`)
+    .get(id) as Pick<TrackRow, 'artist_id' | 'album_id' | 'genres' | 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'original_year' | 'is_compilation' | 'era_untrusted' | 'duration_sec' | 'lead_silence_ms' | 'tail_silence_ms' | 'tail_start_ms'> | undefined;
   if (!row) return null;
   return {
+    artistId: row.artist_id ?? null,
+    albumId: row.album_id ?? null,
     genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre ?? null,
     bpm: row.bpm ?? null,

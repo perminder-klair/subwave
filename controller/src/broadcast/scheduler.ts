@@ -1,3 +1,6 @@
+import { captureSpeechBudget } from './speech-timing.js';
+import { fitsSpeechBudget } from './speech-budget.js';
+import { spokenWordCount } from '../audio/tts-measurements.js';
 import { prepareEpisodeContext, showPreparation, onPreparationChange, preparationIdentity, preparationSkillAt } from './show-preparation.js';
 import { autoPlaylistShowKey } from './auto-playlist-show.js';
 // Scheduler: the auto-playlist refresh, the per-minute talk tick over
@@ -48,7 +51,7 @@ import { talkTickPlan, type TalkKind, type TalkPlan } from './talk-scheduler.js'
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
-import { agenticTick, skillCatalog, runCapability } from '../skills/_agent.js';
+import { agenticTick, skillCatalog, runCapability, runAutomaticSleeveNotesSegment } from '../skills/_agent.js';
 import { loadedCapabilities } from '../skills/loader.js';
 import { skillEligible } from '../skills/eligibility.js';
 import { getStationTimezone, onStationTimezoneChange } from '../time.js';
@@ -778,25 +781,61 @@ export async function runLink() {
 // Banter: one structured LLM call writes a host/co-host exchange, which
 // announceExchange renders per speaker and airs back-to-back.
 //
-// Gate-free runner — also the /dj/segment operator override, which is why it
-// ignores the show's banter toggle; only the roster is non-negotiable, since a
-// one-person exchange can't exist.
-export async function runBanter() {
+// The /dj/segment operator override stays gate-free and always requests banter.
+// The scheduler has already gated automatic calls; those first offer the slot
+// to Sleeve Notes. Both paths require a guest roster for the banter fallback.
+export async function runBanter({ automatic = false } = {}) {
   return withTrace({ kind: 'banter' }, async () => {
     const { host, guests, show } = settings.getOnAirRoster();
     if (!host || !guests.length) {
       throw new Error('banter needs a show with guest co-hosts on air');
     }
+    if (automatic) {
+      try {
+        if (await runAutomaticSleeveNotesSegment())
+          return 'Sleeve Notes segment queued in place of banter';
+      } catch (error) {
+        queue.log(
+          'error',
+          `Sleeve Notes replacement failed — falling back to banter: ${(error as Error).message}`,
+        );
+      }
+    }
+    const speechBudget = automatic ? captureSpeechBudget([host, ...guests]) : null;
+    if (speechBudget && speechBudget.maxWords < speechBudget.minWords) {
+      queue.log('scheduler', 'Banter skipped — not enough track time remains');
+      return null;
+    }
     const ctx = await prepareEpisodeContext(await getFullContext());
     const lines = await dj.generateBanter({
-      host, guests, show,
+      host,
+      guests,
+      show,
+      speechBudget,
       current: queue.current?.track || null,
       context: ctx,
       recap: queue.getDjRecap(),
       recentOpeners: queue.getRecentOpeners(),
     });
     if (!lines) throw new Error('banter generation returned no usable exchange');
-    const ok = await queue.announceExchange(lines, 'banter', { castNames: [host, ...guests].map(p => p.name) });
+    if (
+      speechBudget &&
+      !fitsSpeechBudget(
+        speechBudget,
+        lines.reduce((sum, line) => sum + spokenWordCount(line.text), 0),
+        lines.length,
+      )
+    ) {
+      queue.log(
+        'scheduler',
+        'Banter skipped — the exchange no longer fits the remaining track time',
+      );
+      return null;
+    }
+    const ok = await queue.announceExchange(lines, 'banter', {
+      castNames: [host, ...guests].map(p => p.name),
+      speechDeadline: speechBudget,
+    });
     if (!ok) throw new Error('banter exchange failed to render');
     return lines.map(l => `${l.persona.name}: ${l.text}`).join('\n');
   });
@@ -1021,7 +1060,7 @@ async function runTalkSlotInner(plan: Extract<TalkPlan, { act: 'fire' }>, rolled
         await runStationId({ atNextTrack: plan.air === 'next-track', automatic: true });
         return;
       case 'banter':
-        await runBanter();
+        await runBanter({ automatic: true });
         return;
       case 'segment':
         await runSegmentTick();

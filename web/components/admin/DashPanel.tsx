@@ -42,12 +42,15 @@ import { Suggestion, Suggestions } from '../ai-elements/suggestion';
 import { Message, MessageContent } from '../ai-elements/message';
 import type { ChatStatus } from 'ai';
 import { ScrollArea, ScrollBar } from '../ui/scroll-area';
-import { RefreshCw, X } from 'lucide-react';
+import { BookOpen, RefreshCw, X } from 'lucide-react';
 import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
+import DashSleeveNotes from './dash/DashSleeveNotes';
+import {useSettingsQuery} from './settings/queries';
+import type {SettingsData} from './settings/shared';
 import {
   blockPlayingTrack,
   neverPlayToast,
@@ -202,7 +205,13 @@ export default function DashPanel() {
     adminFetch,
     toastOnError: false,
     request: ({ path, body }, fetcher) => runDashAction(fetcher, path, body),
-    onDone: (_data, _vars, client) => client.invalidateQueries({ queryKey: dashKeys.status() }),
+    onDone: async (_data, { path }, client) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: dashKeys.status() }),
+        ...(path === '/sleeve-notes/segment/run'
+          ? [client.invalidateQueries({ queryKey: ['sleeve-notes'] })] : []),
+      ]);
+    },
   });
 
   const act = async (
@@ -214,7 +223,10 @@ export default function DashPanel() {
     setBusy(key);
     try {
       const j = await actionMutation.mutateAsync({ path, body });
-      notify.ok(j.spoken ? `on air: “${j.spoken}”` : `${label} done`);
+      if (path === '/sleeve-notes/segment/run') {
+        if (j.queued) notify.ok(j.deferred ? 'Sleeve Notes segment queued for the next break.' : 'Sleeve Notes segment submitted to broadcast.');
+        else notify.info(`Sleeve Notes stayed silent — ${j.reason || 'nothing usable to speak from'}`);
+      } else notify.ok(j.spoken ? `on air: “${j.spoken}”` : `${label} done`);
       return j;
     } catch (e) {
       notify.err(`${label}: ${errorMessage(e)}`);
@@ -441,6 +453,8 @@ export default function DashPanel() {
     }
   };
 
+  const featureSettings=useSettingsQuery<SettingsData>({adminFetch,enabled:ready});
+  const sleeveEnabled=featureSettings.data?.values?.djBehaviour?.extendedSleeveNotes===true;
   const np = status?.nowPlaying;
   // one lookup per track: asked for by its id, never re-polled once known (a
   // file's format does not change), and an answer about another track is ignored.
@@ -530,8 +544,10 @@ export default function DashPanel() {
 
       {err && <ErrorState error={err} />}
 
-      <div className="stack-mobile grid grid-cols-[1.4fr_1fr] gap-4">
-        <div className="grid grid-rows-[auto_1fr] gap-4">
+      {/* Share rows only while Sleeve Notes is visible; otherwise Booth log fills below Queue. */}
+      <div data-dash-layout className="stack-mobile grid grid-cols-[1.4fr_1fr] gap-4">
+        <div data-dash-column className="grid min-h-0 grid-rows-[auto_1fr] gap-4">
+          <div className="flex flex-col justify-between gap-4">
           <Card
             title="Queue"
             sub={`${upcoming.length} upcoming`}
@@ -669,10 +685,13 @@ export default function DashPanel() {
             </Queue>
           </Card>
 
+          {sleeveEnabled&&<DashSleeveNotes adminFetch={adminFetch} trackId={np?.subsonic_id??null} />}
+          </div>
+
           <Card
             title="Booth log"
             sub={`${booth.length} session turns${tz ? ` · times in ${tz}` : ''}`}
-            className="flex min-h-0 flex-col"
+            className="flex min-h-0 flex-1 flex-col"
             bodyClass="flex flex-1 flex-col min-h-0"
           >
             {booth.length === 0 ? (
@@ -720,7 +739,7 @@ export default function DashPanel() {
           </Card>
         </div>
 
-        <div className="grid gap-4">
+        <div data-dash-column className="grid gap-4">
           <Card title="Manual voice DJ" sub="speak now">
             <div className="mb-2.5 flex items-center gap-1.5">
               <div className="min-w-0 flex-1">
@@ -788,8 +807,9 @@ export default function DashPanel() {
             </PromptInput>
           </Card>
 
-          <Card title="DJ segments" sub="fire on demand">
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="grid content-start gap-4">
+          <Card title="DJ segments" sub="fire on demand" bodyClass="loose">
+            <div className="grid auto-rows-fr grid-cols-[repeat(auto-fit,minmax(90px,1fr))] gap-2">
               {[...SEGMENTS, ...((status?.activeShow?.guests?.length ?? 0) > 0 ? [BANTER_SEGMENT] : [])].map(s => {
                 const k = `seg:${s.type}`;
                 return (
@@ -803,6 +823,15 @@ export default function DashPanel() {
                   />
                 );
               })}
+              {sleeveEnabled&&<SegmentButton
+                label="Sleeve Notes"
+                icon={BookOpen}
+                busyHere={busy === 'seg:sleeve-notes'}
+                busyLabel="working"
+                anyBusy={!!busy || !status?.nowPlaying?.subsonic_id}
+                title="Run Sleeve Notes for the on-air track, bypassing automatic enablement, DJ assignments and cooldowns."
+                onFire={() => act('seg:sleeve-notes', '/sleeve-notes/segment/run', null, 'Sleeve Notes')}
+              />}
             </div>
           </Card>
 
@@ -841,6 +870,7 @@ export default function DashPanel() {
               </div>
             </div>
           </Card>
+          </div>
         </div>
       </div>
 

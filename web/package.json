@@ -59,6 +59,7 @@
     "piri": "^1.3.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "react-force-graph-2d": "^1.29.2",
     "react-hook-form": "^7.89.0",
     "shiki": "^4.5.0",
     "sonner": "^2.0.8",

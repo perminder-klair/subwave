@@ -94,6 +94,20 @@ export function introBudgetPhrase(introMs: number | null | undefined, firstVocal
 // When measured and ≥2500 it IS the runway (that's the definition of
 // "before the vocals"); un-measured (null/undefined — includes analysed
 // instrumentals) keeps today's behaviour byte-for-byte.
+export function introWordBudget(
+  introMs: number | null | undefined,
+  paceScale = 1,
+  firstVocalMs?: number | null,
+): number | null {
+  const measured = measuredVocalMs(firstVocalMs);
+  if (measured != null && measured < VOCAL_RUNWAY_FLOOR_MS) return 0;
+  const runway = measured ?? introMs;
+  if (!runway || runway < VOCAL_RUNWAY_FLOOR_MS || runway >= VOCAL_RUNWAY_CEILING_MS) return null;
+  const BASE_WORDS_PER_SEC = 2.5;
+  const pace = (Number.isFinite(paceScale) && paceScale > 0) ? paceScale : 1;
+  return Math.max(3, Math.floor((runway / 1000) * BASE_WORDS_PER_SEC * pace));
+}
+
 export function enforceIntroBudget(
   text: string,
   introMs: number | null | undefined,
@@ -102,13 +116,9 @@ export function enforceIntroBudget(
 ): string {
   const t = (text || '').trim();
   if (!t) return t;
-  const measured = measuredVocalMs(firstVocalMs);
-  if (measured != null && measured < VOCAL_RUNWAY_FLOOR_MS) return '';
-  const runway = measured ?? introMs;
-  if (!runway || runway < VOCAL_RUNWAY_FLOOR_MS || runway >= VOCAL_RUNWAY_CEILING_MS) return t;
-  const BASE_WORDS_PER_SEC = 2.5;
-  const pace = (Number.isFinite(paceScale) && paceScale > 0) ? paceScale : 1;
-  const maxWords = Math.max(3, Math.floor((runway / 1000) * BASE_WORDS_PER_SEC * pace));
+  const maxWords = introWordBudget(introMs, paceScale, firstVocalMs);
+  if (maxWords == null) return t;
+  if (maxWords === 0) return '';
   const words = t.split(/\s+/);
   if (words.length <= maxWords) return t;
 

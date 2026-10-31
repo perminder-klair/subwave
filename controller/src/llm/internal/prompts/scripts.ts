@@ -4,7 +4,13 @@
 // djText. Provider-agnostic; the model is resolved downstream.
 
 import * as settings from '../../../settings.js';
+import type {Track} from '../../../broadcast/queue/types.js';
+import { djObject } from '../strategy/object.js';
+import { stripThinking } from '../core/pure.js';
+import { storySparkPacket, sparkSpeechWordBudget, sparkLinkSchema } from './story-spark.js';
+import { detectClaimSignal } from '../../../sleeve-notes/claim-signal.js';
 import { djText } from '../strategy/text.js';
+import { approvedAiringGuidance } from '../../../sleeve-notes/airing-review.js';
 import { djSystem, lengthPhrase } from './system.js';
 import { onAirLocationGrounding } from './grounding.js';
 import { buildContextLines, decoratePrompt, pickTimePhrase, randomSeed } from './context.js';
@@ -17,6 +23,7 @@ import { trackFeelSuffix } from './track-feel.js';
 import { announceLine, nextAnnounceForm } from '../../../broadcast/announce-line.js';
 import * as library from '../../../music/library.js';
 import { contextSleeveNotesFor, releaseYearMentionEligible, selectSleeveNotes, stationHistoryNoteFor } from './sleeve-notes.js';
+import { extendedSleeveNoteAllowedForVocalRunway, recordExtendedSleeveNoteSupplied, selectExtendedSleeveNote, markExtendedSleeveNoteContextPass, markExtendedSleeveNoteQualityRejection, releaseExtendedSleeveNoteReservation } from '../../../sleeve-notes/link-selection.js';
 import { stripRecapSpokenTags, stripSpokenTags } from './recent-speech.js';
 
 // The feel note appended to a track line (track-feel.ts) is a STEER, not copy.
@@ -87,9 +94,12 @@ export const REQUESTER_GREETING_CLAUSE = ' When the request comes with a name, s
   + ' — greet them by name once, naturally, as part of the line rather than tacked on.';
 
 
-const PERSONA_GROUNDING_RULE = 'FACTUAL GROUNDING: Treat supplied facts, including Sleeve Notes, as the factual ground truth for the current task. For factual claims about music, supplied facts are your only source of truth. Do not supplement them with your own knowledge of an artist, track, album or music history, even when you believe that knowledge is correct. You may naturally rephrase supplied facts, but do not expand, strengthen, upgrade or generalise them into unsupported claims, explanations, causes, relationships or historical context. “First station play” is not a premiere or a world premiere, and an album title does not make that album belong to the station or presenter. Do not invent or assume release dates, albums, chart history, credits, artist biography, lyrics, instrumentation, production details or other music trivia unless supplied. Sleeve Notes are optional material for natural conversation, not a checklist. Use only what helps the current on-air line. You do not need to mention them at all. You may freely express subjective, in-character reactions and musical impressions provided they are not presented as additional facts; describe the presenter’s response to the music, not an invented world around the station. Do not invent weather, season, date, clock time, programme state, people being present or events around the station. If approximate air time is supplied, you may infer the corresponding time of day but never make it more precise than supplied. Style or Tone instructions never override these factual-grounding rules. Use local colour, time, weather or other contextual texture only when the necessary information has been supplied.';
-
-function verifiedContextPacket(context: any, current: any = null, clockIsAirTime = false): string {
+function verifiedContextPacket(context: {
+  date?: {dayLabel?: string; iso?: string};
+  clock?: {hhmm?: string; display?: string};
+  activeShow?: {name?: string};
+  showHandover?: {phase?: string; nextShow?: {name?: string; presenter?: string; startsAt?: string}};
+} | null | undefined, current: Track | null = null, clockIsAirTime = false, includeSleeves = true): string {
   const moment: string[] = [];
   const day = String(context?.date?.dayLabel || "").trim();
   if (day) moment.push("Day: " + day + ".");
@@ -99,7 +109,7 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
   if (showName) moment.push("Current show: \"" + showName + "\".");
   const handover = context?.showHandover;
   const hasFollowingShow = handover?.phase === "final-quarter-hour" && handover?.nextShow?.name && handover?.nextShow?.presenter;
-  if (hasFollowingShow) {
+  if (hasFollowingShow && handover?.nextShow) {
     moment.push("Current show is approaching its scheduled close.");
     const startsAt = clockIsAirTime ? String(handover.nextShow.startsAt || "").trim() : "";
     moment.push("Following show: " + String(handover.nextShow.presenter).trim() + " presents \"" + String(handover.nextShow.name).trim() + "\"" + (startsAt ? ", starting " + startsAt : "") + ".");
@@ -108,7 +118,7 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
   // timezone. Anchor the year-based first-play window to that date, not the
   // controller host's clock; noon avoids any UTC date-boundary shift.
   const stationDate = /^\d{4}-\d{2}-\d{2}$/.test(String(context?.date?.iso ?? ''))
-    ? Date.parse(`${context.date.iso}T12:00:00.000Z`)
+    ? Date.parse(`${context?.date?.iso}T12:00:00.000Z`)
     : Date.now();
   const stationHistoryNote = current
     ? stationHistoryNoteFor(current, library.lastAiredInfo(), stationDate)
@@ -122,7 +132,7 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
     "Verified Facts:",
     "Current Context:\n" + (moment.length ? moment.map((fact) => "- " + fact).join("\n") : "- No additional verified moment facts."),
   ];
-  sections.push("Sleeve Notes:\n" + (sleeves.length ? sleeves.map((fact) => "- " + fact).join("\n") : "- None selected for this line."));
+  if (includeSleeves) sections.push("Sleeve Notes:\n" + (sleeves.length ? sleeves.map((fact) => "- " + fact).join("\n") : "- None selected for this line."));
   if (current?.title || current?.artist) {
     sections.push("Track on air:\n- " + String(current?.title || "Unknown") + " by " + String(current?.artist || "unknown") + ".");
   }
@@ -357,20 +367,23 @@ export function linkPrompt({
   persona = null,
   includeIntroBudget = true,
   guestContribution = null,
+  extendedSleeveNote = null,
+  structuredSpark = false,
 }: any): string {
   const speaker = persona || settings.getEffectivePersona();
   const rules = [
-    'Output only the words to be spoken on air.',
-    'The named track is already playing. Focus on it and do not refer to the previous track.',
-    'Treat supplied sleeve notes as verified facts, but do not add or infer further music-history claims.',
-    'The supplied day of week is for accuracy, not generic atmosphere. Mention it only when it adds something specific and natural; do not use it as a default opener or repeat it from link to link.',
-    'Music facts are limited to the exact entries in Verified facts and the supplied episode source data: do not use remembered or learned album, release, chart, reputation, influence, relationship or history information.',
-    'Never strengthen an approved station-history fact: “First station play” is not a premiere or a world premiere, and an album fact never means the album belongs to the station or presenter.',
-    'Do not describe instrumentation, production, lyrics or other audio properties unless they are explicitly supplied. Subjective reaction is welcome, but do not present it as observation.',
-    'Prefer a plain, accurate introduction to invented atmosphere. Do not add weather, season, local scenery, programme progress or station activity unless it appears in Current Context.',
+    structuredSpark
+      ? 'Put only the words to be spoken on air in speech. Keep the private Spark decision and its reason separate; follow the required response shape.'
+      : 'Output only the words to be spoken on air.',
+    'The named track is already playing. Give a natural introduction in the presenter’s voice that identifies the supplied artist and track title, keeping their roles distinct. Focus on this track and do not refer to the previous track.',
+    'FACTUAL GROUNDING: Music facts are limited to the supplied Verified Facts, Sleeve Notes, Story Spark and episode source data. Use no remembered artist, recording, album, release, chart, reputation, influence or history information. Preserve meaning, relationships, attribution and qualifiers when paraphrasing; never add causes, intent, chronology or other unsupported detail.',
+    'Preserve the time framing of supplied facts. If a fact describes a past event, retain past-tense wording and any explicit date. Do not recast a historical event as a recent development.',
+    '“First station play” is not a premiere or a world premiere. An album fact never means the album belongs to the station or presenter.',
+    'The supplied day of week is for accuracy, not generic atmosphere. Mention it only when it adds something specific and natural.',
+    'Do not describe instrumentation, production, lyrics or other audio properties unless explicitly supplied. A subjective in-character response is welcome without implying an observed audio property.',
+    'Prefer a plain, accurate introduction to invented atmosphere. Weather, season, local scenery, people, programme progress and station activity require supplied Current Context. Style and tone cannot override factual grounding.',
     'Do not output brackets except for a supported performance cue. A cue is optional, may appear at most twice, must describe only the delivery of immediately following spoken words, and must never describe music, a track, a fade, a pause, a transition, timing or a scene, and must never be a closing or end-of-segment tag.',
     'Intro-runway guidance is production-only: never mention seconds, a countdown, vocals entering or when the track will arrive.',
-    PERSONA_GROUNDING_RULE,
     lengthPhrase('link', speaker) + '.',
   ];
   // Automatic links are attached to the track start, where measured intro and
@@ -382,7 +395,7 @@ export function linkPrompt({
     : '';
   if (budget) rules.push(budget);
 
-  const facts = verifiedContextPacket(context, current, clockIsAirTime);
+  const facts = verifiedContextPacket(context, current, clockIsAirTime, true);
   if (clockIsAirTime && fuzzyAirTime(context?.clock)) {
     rules.push("If you mention the time, use only the approximate phrase supplied in Current Context; do not turn it into an exact minute.");
   } else {
@@ -390,9 +403,11 @@ export function linkPrompt({
   }
 
   const sections = [
-    'Task: Give a brief spoken introduction to the track now playing.',
-    `Rules:\n${rules.map((rule) => `- ${rule}`).join('\n')}`,
+    'Task: Write a natural, brief DJ introduction to the track now playing. Identify the supplied artist and track; any Story Spark is optional material to weave into that link, not a script to read out.',
     facts,
+    extendedSleeveNote?.wording ? storySparkPacket(extendedSleeveNote,
+      sparkSpeechWordBudget(current, speaker, includeIntroBudget), speaker?.scriptLength === 'one-liner', current) : '',
+    `Rules:\n${rules.map((rule) => `- ${rule}`).join('\n')}`,
     context?.episodeEditorial || '',
   ];
   if (guestContribution?.name) {
@@ -405,7 +420,7 @@ export function linkPrompt({
     sections.push('Recent opening words used by this presenter. Start differently:\n'
       + recentOpeners.slice(0, 6).map((opener: string) => `- ${stripSpokenTags(opener)}`).join('\n'));
   }
-  return sections.join('\n\n');
+  return sections.filter(Boolean).join('\n\n');
 }
 
 // Announce mode normally never needs a model: announceLine composes the fixed
@@ -458,15 +473,55 @@ export async function generateLink(args: any) {
       kind: 'generateAnnounceLinkFallback',
     });
   }
-  return djText({
-    system: djSystem(speaker),
-    prompt: linkPrompt({ ...args, persona: speaker }),
-    temperature: 0.95,
-    topP: 0.92,
-    repeatPenalty: 1.2,
-    seed: randomSeed(),
-    kind: 'generateLink',
-  });
+  let extendedSleeveNote: ReturnType<typeof selectExtendedSleeveNote> = null;
+  try {
+    if (!args.suppressExtendedSleeveNote && extendedSleeveNoteAllowedForVocalRunway(firstVocalMsFor(args.current))) {
+      extendedSleeveNote = selectExtendedSleeveNote(args.current);
+    }
+  } catch {
+    // Sleeve Notes are opportunistic context: a local-store error must never
+    // prevent or delay the ordinary track link.
+  }
+  const prompt = linkPrompt({ ...args, persona: speaker, extendedSleeveNote, structuredSpark: !!extendedSleeveNote });
+  let decision: 'use' | 'pass' | 'quality-concern' = 'use';
+  let reason: string | null = null;
+  let script: string;
+  if (extendedSleeveNote) {
+    // One generation produces both speech and private disposition. No separate
+    // critic/rewrite call; provider failover remains owned by djObject.
+    const result = sparkLinkSchema.parse(await djObject({
+      system: djSystem(speaker) + approvedAiringGuidance() + '\n\nFor this task, any spoken-only or prose-format instruction applies to the speech field. Follow the required response shape and keep the private Spark decision and reason out of speech.',
+      prompt, schema: sparkLinkSchema,
+      temperature: 0.95, maxOutputTokens: settings.resolveMaxOutputTokens(4000), kind: 'generateLink',
+    }));
+    script = stripThinking(result.speech);
+    decision = result.sparkDecision;
+    reason = result.reason;
+  } else {
+    script = await djText({
+      system: djSystem(speaker), prompt, temperature: 0.95,
+      topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(), kind: 'generateLink',
+    });
+  }
+  if (extendedSleeveNote) {
+    try {
+      const assessment=detectClaimSignal(script,extendedSleeveNote.wording,[args.current?.artist,args.current?.title,args.current?.album]);
+      const useId = recordExtendedSleeveNoteSupplied(extendedSleeveNote, script, 'generateLink');
+      // A private verdict never overrides concrete evidence that the writer
+      // actually expressed the fact, or bins a fact it just used.
+      const expressed = !!script.trim() && assessment.status === 'detected';
+      if (!expressed && decision === 'pass') {
+        markExtendedSleeveNoteContextPass(useId, reason || 'The DJ passed on the Spark for this link.');
+      } else if (!expressed && decision === 'quality-concern') {
+        markExtendedSleeveNoteQualityRejection(useId, reason || 'The DJ found the supplied claim unclear.');
+      }
+      if (!script.trim()) releaseExtendedSleeveNoteReservation(useId);
+      if (typeof args.onSleeveNoteUse === 'function') args.onSleeveNoteUse(useId);
+    } catch {
+      // Repetition bookkeeping must not turn a successful link into a failure.
+    }
+  }
+  return script;
 }
 
 // The time clause of the hourly check — the one sentence that fixes what the

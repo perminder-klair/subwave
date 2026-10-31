@@ -10,6 +10,10 @@ const audit = path.resolve(import.meta.dirname, 'audit-admin-query.mjs');
 // The production audit deliberately fails stale imperative entries, so an
 // isolated ownership fixture supplies one exact call for every classification.
 const validImperativeFixtures = {
+  'NotesPanel.tsx': `export async function run(adminFetch) {
+  // admin-query-imperative: wikipedia-refresh-preview
+  return adminJson(adminFetch, '/sleeve-notes/wikipedia-refresh-preview');
+}\n`,
   'AdminShell.tsx': `export async function run() {
   // admin-query-imperative: first-run-redirect
   return fetch('/api/onboarding/status');
@@ -47,6 +51,10 @@ const validImperativeFixtures = {
   'debug/LlmCalls.tsx': `export async function run(adminFetch, format) {
   // admin-query-imperative: llm-call-export
   return adminResponse(adminFetch, \`/debug/llm-calls/export?format=\${format}\`);
+}\n`,
+  'connections/ExternalDiscoveries.tsx': `export async function run(adminFetch) {
+  // admin-query-imperative: explicit-discoveries-refresh
+  return adminJson(adminFetch, '/sleeve-notes/connections/discoveries?refresh=1');
 }\n`,
   'connect/ConnectPanel.tsx': `export async function run(adminFetch, catalog) {
   // admin-query-imperative: openapi-download

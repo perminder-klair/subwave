@@ -114,10 +114,17 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       previewNextShow: v.djBehaviour?.previewNextShow !== false,
       sameHostAcknowledgement: v.djBehaviour?.sameHostAcknowledgement === true,
       extendedSleeveNotes: v.djBehaviour?.extendedSleeveNotes === true,
+      sleeveNotesCollectionPaused: v.djBehaviour?.sleeveNotesCollectionPaused === true,
+      sleeveNotesMaintenanceWhenEmpty: v.djBehaviour?.sleeveNotesMaintenanceWhenEmpty === true,
       releaseYearMentions: v.djBehaviour?.releaseYearMentions ?? 'regular',
       recapLimit: String(v.djBehaviour?.recapLimit ?? 10),
       recapMinutes: String(v.djBehaviour?.recapMinutes ?? 120),
       recapChars: String(v.djBehaviour?.recapChars ?? 140),
+    },
+    sleeveNotes: {
+      providers: {
+        genius: { enabled: v.sleeveNotes?.providers?.genius?.enabled !== false },
+      },
     },
     weather: {
       lat: String(v.weather?.lat ?? ''),

@@ -4,6 +4,7 @@
 //
 // Part of the doctor/ split - see ../doctor.ts for the section runner.
 
+import { recentHealthCalls } from '../llm/internal/core/deferred.js';
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as subsonicLog from '../music/subsonic-log.js';
@@ -124,7 +125,7 @@ export async function checkLlm(
   }
 
   // Recent error rate from the in-memory ring.
-  const recent = recentCalls.slice(0, 20);
+  const recent = recentHealthCalls(recentCalls);
   if (recent.length) {
     const fails = recent.filter((c) => c && c.ok === false).length;
     const rate = Math.round((fails / recent.length) * 100);
@@ -138,7 +139,7 @@ export async function checkLlm(
           : undefined,
     });
   } else {
-    out.push({ label: 'recent calls', status: 'skip', detail: 'no calls yet' });
+    out.push({ label: 'recent calls', status: 'skip', detail: 'no completed calls yet' });
   }
 
   // Structured-output health — the silent failure mode behind "the model
@@ -249,7 +250,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
         fix: rate > 0 ? { id: 'subsonic-reset', label: 'Reset stats' } : undefined,
       });
     } else {
-      out.push({ label: 'call errors', status: 'skip', detail: 'no calls yet' });
+      out.push({ label: 'call errors', status: 'skip', detail: 'no completed calls yet' });
     }
   } catch { /* tracker is best-effort */ }
 

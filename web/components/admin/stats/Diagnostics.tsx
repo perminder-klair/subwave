@@ -74,7 +74,7 @@ function requestsSummary(r: RequestsStats): string {
 function RequestsDetail({ r }: { r: RequestsStats }) {
   const okByPath = new Map(r.byPath.map(p => [p.path, p]));
   // The path that resolves least often, when one falls short.
-  const weakest = [...r.byPath].filter(p => p.ok < p.count).sort((a, b) => a.ok / a.count - b.ok / b.count)[0];
+  const weakest = [...r.byPath].filter(p => p.ok < p.count - (p.deferred ?? 0)).sort((a, b) => a.ok / (a.count - (a.deferred ?? 0)) - b.ok / (b.count - (b.deferred ?? 0)))[0];
   return (
     <CellGrid min={280}>
       <Cell className="gap-[9px] px-[18px] py-3.5">
@@ -83,12 +83,15 @@ function RequestsDetail({ r }: { r: RequestsStats }) {
           rows={r.byPath.map(p => ({ label: p.path, count: p.count }))}
           trailing={row => {
             const p = okByPath.get(row.label);
-            return p ? `${p.ok}/${p.count}` : fmtInt(row.count);
+            if (!p) return fmtInt(row.count);
+            const completed = p.count - (p.deferred ?? 0);
+            const resolved = completed ? `${p.ok}/${completed}` : '—';
+            return p.deferred ? `${resolved} · ${p.deferred} deferred` : resolved;
           }}
         />
         <span className={SUB}>
           p95 resolve {fmtSec(r.latency.p95)}
-          {weakest && ` · ${weakest.path} resolves ${weakest.ok} of ${weakest.count}`}
+          {weakest && ` · ${weakest.path} resolves ${weakest.ok} of ${weakest.count - (weakest.deferred ?? 0)}`}
         </span>
       </Cell>
       <BarGroup

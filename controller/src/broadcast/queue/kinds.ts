@@ -1,6 +1,6 @@
 // Recap fixed voice kinds plus skills registered at load. Include handoffs so the next segment
 // does not repeat its greeting.
-export const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'handoff', 'banter']);
+export const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'handoff', 'banter', 'sleeve-notes']);
 // The intro channels tied to a track start rather than the wall clock — the
 // standalone-talk-break clock (getLastTalkBreakAt) skips them.
 export const TRACK_TIED_KINDS = new Set(['dj-speak', 'link']);
