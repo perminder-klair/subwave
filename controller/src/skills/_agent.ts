@@ -564,7 +564,13 @@ export async function agenticTick(ctx) {
       sfx: selectedSfx,
       hostSpeech,
     });
-    if (!delivery.accepted) return;
+    if (!delivery.accepted) {
+      // A stand-in means the skill had nothing to say: back off like the
+      // "nothing to say" stand-down, or the segment row re-runs the director
+      // and the skill model every few minutes for a line dropped again.
+      if (delivery.reason === 'stand-in') lastUnavailable.set(seg.kind, Date.now());
+      return;
+    }
 
     // Reserve the kind as soon as it owns an air path so a held segment is not
     // generated twice. Durable "aired" facts wait for the voice lifecycle.
@@ -835,6 +841,12 @@ export async function runCapability(
       }
     : { pauseTalkEligible, sfx: selectedSfx });
   if (!delivery.accepted) {
+    if (delivery.reason === 'stand-in') {
+      // Nothing was rendered: the model wrote a stand-in, not speech. Same
+      // backoff as a skill with nothing to say.
+      lastUnavailable.set(cap.kind, Date.now());
+      return standDown('the DJ wrote a stand-in, not a line, so nothing aired');
+    }
     const reason = 'the station could not queue the rendered segment';
     queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
     return { aired: false, queued: false, deferred: false, text: null, reason };
