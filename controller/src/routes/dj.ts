@@ -890,6 +890,8 @@ function toAdminRow(s: AdminSong) {
     eraUntrusted: tag?.eraUntrusted ?? null,
     genre: s.genre ?? null,
     duration: s.duration ?? null,
+    language: tag?.language ?? null,
+    languages: tag?.language?.languages ?? [],
     // Lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH is mounted.
     path: s.path ?? null,
     // Deliberately NOT `?? null`: an absent key drops out of the JSON round trip

@@ -7,6 +7,7 @@ import { cn } from '../../../lib/cn';
  
 import { SkeletonText } from '@/components/ui/skeleton';
 import type { Track } from './types';
+import { languageLabel } from './language-labels';
 
 const ENERGY_SEG: { id: string; label: string }[] = [
   { id: 'none', label: 'none' },
@@ -48,12 +49,14 @@ export function ManualTagEditor(props: {
   track: Track;
   vocab: string[];
   busy: boolean;
+  languageBusy: boolean;
   eraBusy: boolean;
   onSave: (moods: string[], energy: string | null, applyToAlbum: boolean) => void;
+  onSaveLanguage: (language: string | null, applyToAlbum: boolean) => void;
   onSaveEraYear: (originalYear: number | null, applyToAlbum: boolean) => void;
   onCancel: () => void;
 }) {
-  const { track, vocab, busy, eraBusy } = props;
+  const { track, vocab, busy, languageBusy, eraBusy } = props;
   const [sel, setSel] = useState<string[]>((track.moods || []).slice(0, 3));
   const [energy, setEnergy] = useState<string>(track.energy || 'none');
   const [applyToAlbum, setApplyToAlbum] = useState(false);
@@ -61,6 +64,9 @@ export function ManualTagEditor(props: {
   // prefilled guess gets "confirmed" into an override that outranks every later fix.
   const [eraInput, setEraInput] = useState<string>(
     track.originalYearSource === 'manual' && track.originalYear != null ? String(track.originalYear) : '',
+  );
+  const [languageInput, setLanguageInput] = useState<string>(
+    track.language?.source === 'manual' ? track.language.primaryLanguage ?? '' : '',
   );
 
   const toggle = (m: string) =>
@@ -71,6 +77,8 @@ export function ManualTagEditor(props: {
   const eraParsed = /^\d{4}$/.test(eraTyped) ? Number(eraTyped) : null;
   const eraValid = eraParsed != null && eraParsed >= 1900 && eraParsed <= new Date().getFullYear() + 1;
   const hasOverride = track.originalYearSource === 'manual';
+  const hasLanguageOverride = track.language?.source === 'manual';
+  const languageTyped = languageInput.trim();
 
   return (
     // Renders as a sibling of .lib-row, so the testid is the only way to scope to it.
@@ -102,6 +110,32 @@ export function ManualTagEditor(props: {
       <div className="grid gap-1.5">
         <Eyebrow>energy</Eyebrow>
         <div><Seg value={energy} options={ENERGY_SEG} onChange={setEnergy} /></div>
+      </div>
+      <div className="grid gap-1.5">
+        <Eyebrow>language · ISO 639-3 or name</Eyebrow>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            aria-label="manual language"
+            placeholder={track.language?.primaryLanguage ? `automatic: ${languageLabel(track.language.primaryLanguage)}` : 'e.g. eng, hin, Scots'}
+            value={languageInput}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => setLanguageInput(e.target.value)}
+            disabled={languageBusy}
+            className="w-[15rem] rounded border border-ink bg-transparent px-2 py-1 text-[12px] text-ink"
+          />
+          <Btn
+            sm
+            tone="accent"
+            onClick={() => props.onSaveLanguage(languageTyped || null, applyToAlbum)}
+            disabled={languageBusy || busy || eraBusy || (!languageTyped && !hasLanguageOverride)}
+          >
+            {languageBusy ? 'Saving…' : languageTyped ? 'Set language' : 'Clear override'}
+          </Btn>
+        </div>
+        <p className="mt-1 max-w-[68ch] text-[11px] leading-[1.6] text-muted">
+          Manual language wins over automatic detection. Use a standard name or
+          code; it is stored as ISO 639-3 and can be cleared later.
+        </p>
       </div>
       <div className="grid gap-1.5">
         <Eyebrow>original year · era</Eyebrow>
@@ -141,20 +175,19 @@ export function ManualTagEditor(props: {
           type="checkbox"
           checked={applyToAlbum}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setApplyToAlbum(e.target.checked)}
-          disabled={busy || eraBusy}
+          disabled={busy || languageBusy || eraBusy}
         />
         apply to whole album{track.album ? ` “${track.album}”` : ''}
       </label>
       <div className="flex flex-wrap items-center gap-2">
-        <Btn sm tone="accent" onClick={() => props.onSave(sel, energyVal, applyToAlbum)} disabled={busy || eraBusy || sel.length === 0}>
+        <Btn sm tone="accent" onClick={() => props.onSave(sel, energyVal, applyToAlbum)} disabled={busy || languageBusy || eraBusy || sel.length === 0}>
           {busy ? 'Saving…' : 'Save tags'}
         </Btn>
-        <Btn sm tone="danger" onClick={() => props.onSave([], null, applyToAlbum)} disabled={busy || eraBusy}>
+        <Btn sm tone="danger" onClick={() => props.onSave([], null, applyToAlbum)} disabled={busy || languageBusy || eraBusy}>
           Clear tags
         </Btn>
-        <Btn sm onClick={props.onCancel} disabled={busy || eraBusy}>Cancel</Btn>
+        <Btn sm onClick={props.onCancel} disabled={busy || languageBusy || eraBusy}>Cancel</Btn>
       </div>
     </div>
   );
 }
-

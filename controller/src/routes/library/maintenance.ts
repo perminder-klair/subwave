@@ -20,11 +20,23 @@ import {
 } from '../../broadcast/tagger.js';
 import { validateBodyAsync } from '../../middleware/validate.js';
 import { manualTagSchema, originalYearSchema } from '../../schemas/library.js';
-import type { z } from 'zod';
+import { z } from 'zod';
+import { canonicalLanguage } from '../../music/request-normalize.js';
+import { LANGUAGE_TAG_CONTRACT_VERSION } from '../../music/language-tagger.js';
+import { isInstrumental } from '../../music/lyric-vocal.js';
 import { parseIntSafe, encodeCursor, decodeCursor } from './params.js';
 
 type ManualTagBody = z.output<ReturnType<typeof manualTagSchema>>;
 type OriginalYearBody = z.output<ReturnType<typeof originalYearSchema>>;
+const manualLanguageSchema = z.object({
+  id: z.string().min(1, 'id is required'),
+  language: z.preprocess(
+    value => value === null ? null : typeof value === 'string' ? value.trim() : value,
+    z.string().min(1, 'language is required').max(80, 'language is too long').nullable(),
+  ),
+  applyToAlbum: z.unknown().optional().transform(value => value === true),
+});
+type ManualLanguageBody = z.output<typeof manualLanguageSchema>;
 interface LibrarySong {
   id: string;
   albumId?: string;
@@ -37,7 +49,18 @@ interface LibrarySong {
   isCompilation?: boolean | null;
   eraUntrusted?: boolean | null;
   genre?: string | null;
+  language?: unknown;
+  languages?: string[];
   duration?: number | null;
+  moods?: string[];
+  energy?: string | null;
+  source?: string | null;
+  taggedAt?: string | null;
+  bpm?: number | null;
+  musicalKey?: string | null;
+  loudnessLufs?: number | null;
+  paceMean?: number | null;
+  instrumental?: boolean | null;
 }
 
 export const router = express.Router();
@@ -46,8 +69,15 @@ export const router = express.Router();
 // null only at the end of the walk. A page that spends its scan budget before
 // filling `limit` still hands back a cursor (possibly with no rows), so a
 // tagged stretch longer than the budget never reads as "nothing untagged".
+// `scope=language` uses the same Navidrome walk but includes rows without a
+// completed language result, even when their mood tags are already present.
+// `scope=needs` is the combined Needs-tags view: a row is included when either
+// its mood tags or its language result is missing.
 router.get('/library/untagged', requireAdmin, async (req, res) => {
   await library.load();
+  const scope = req.query?.scope === 'language' || req.query?.scope === 'needs'
+    ? req.query.scope
+    : 'mood';
   const limit = Math.min(Math.max(parseIntSafe(req.query?.limit, 50) ?? 50, 1), 100);
   const cursor = decodeCursor(typeof req.query?.cursor === 'string' ? req.query.cursor : '');
   const startAlbumOffset = cursor.albumOffset;
@@ -85,8 +115,20 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
           }
           const s = songs[j];
           visited++;
-          if (library.has(s.id)) continue;
-          const era = library.get(s.id);
+          const stored = scope === 'mood' ? null : library.get(s.id);
+          const moodTagged = scope === 'language' ? true : library.has(s.id);
+          // An explicit unknown result is still unresolved from an operator's
+          // perspective. Keep it in the language and combined Needs-tags
+          // queues so the operator can review or set it manually. Instrumental
+          // is a valid terminal result and remains complete.
+          const languageTagged = !!stored?.language && stored.language.mode !== 'unknown';
+          const needsTag = scope === 'mood'
+            ? !moodTagged
+            : scope === 'language'
+              ? !languageTagged
+              : !moodTagged || !languageTagged;
+          if (!needsTag) continue;
+          const era = stored ?? library.get(s.id);
           rows.push({
             id: s.id,
             title: s.title,
@@ -98,7 +140,18 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
             isCompilation: era?.isCompilation ?? null,
             eraUntrusted: era?.eraUntrusted ?? null,
             genre: s.genre ?? null,
+            language: era?.language ?? null,
+            languages: era?.language?.languages ?? [],
             duration: s.duration ?? null,
+            moods: era?.moods ?? [],
+            energy: era?.energy ?? null,
+            source: era?.source ?? null,
+            taggedAt: era?.taggedAt ?? null,
+            bpm: era?.bpm ?? null,
+            musicalKey: era?.musicalKey ?? null,
+            loudnessLufs: era?.loudnessLufs ?? null,
+            paceMean: era?.paceMean ?? null,
+            instrumental: era ? isInstrumental(era.vocalRanges, era.vocalRangesInvalid) : null,
           });
           if (rows.length >= limit) {
             nextCursor = encodeCursor({
@@ -279,6 +332,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
 
     let lastfmTags: string[] | null = null;
     let lyricExcerpt: string | null = null;
+    let lyricLanguage: string | null = null;
     if (lastfmEnabled && song.artist) {
       try {
         // Same source as the bulk tagger: direct Last.fm when a key is present,
@@ -290,8 +344,9 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     }
     if (lyricsEnabled) {
       try {
-        const raw = await subsonic.getLyrics(id);
-        if (typeof raw === 'string' && raw.trim()) lyricExcerpt = raw.trim();
+        const evidence = await subsonic.getLyricsEvidence(id);
+        if (typeof evidence?.text === 'string' && evidence.text.trim()) lyricExcerpt = evidence.text.trim();
+        lyricLanguage = evidence?.taggedLanguage || null;
       } catch (err) {
         queue.log('warn', `/library/retag enrich(lyrics) ${id}: ${err.message}`);
       }
@@ -300,6 +355,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       db.upsertTrackEnrichment(id, {
         lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
         lyricExcerpt,
+        lyricLanguage,
       });
     }
 
@@ -458,6 +514,75 @@ router.post(
       });
     } catch (err) {
       queue.log('error', `/library/manual-tag failed: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// Operator-set language evidence. The input accepts a display name or an ISO
+// code, but storage always uses a validated ISO 639-3 code. `null` clears only
+// a manual override; automatic results are never destroyed by this endpoint.
+router.post(
+  '/library/manual-language',
+  requireAdmin,
+  validateBodyAsync(() => manualLanguageSchema, { messages: 'verbatim' }),
+  async (req, res) => {
+    const { id, language, applyToAlbum } = req.body as ManualLanguageBody;
+    const code = language === null ? null : (canonicalLanguage(language) ?? null);
+    if (language !== null && code === null) return res.status(400).json({ error: 'language must be a valid ISO 639 language name or code' });
+    try {
+      await library.load();
+      let song: LibrarySong | null = null;
+      try { song = await subsonic.getSong(id); } catch {}
+      if (!song) {
+        const row = db.getTrack(id);
+        if (row) song = { id: row.id, title: row.title, artist: row.artist, album: row.album, year: row.year, genre: row.genre, duration: row.durationSec };
+      }
+      if (!song) return res.status(404).json({ error: 'track not found' });
+
+      let targets: LibrarySong[] = [song];
+      if (applyToAlbum) {
+        if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
+        targets = await subsonic.getAlbum(song.albumId);
+        if (!targets.length) return res.status(404).json({ error: 'album has no tracks' });
+      }
+      for (const t of targets) {
+        db.upsertTrackMeta(t.id, {
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          year: t.year ?? null,
+          genres: subsonic.songGenres(t),
+          duration: t.duration ?? null,
+        });
+        if (code === null) {
+          db.clearManualTrackLanguage(t.id);
+        } else {
+          const mode = code === 'zxx' ? 'instrumental' : code === 'und' || code === 'xxx' ? 'unknown' : 'single';
+          db.upsertTrackLanguage(t.id, {
+            primaryLanguage: mode === 'single' ? code : null,
+            languages: mode === 'single' ? [code] : [],
+            mode,
+            source: 'manual',
+            confidence: 'high',
+            contractVersion: LANGUAGE_TAG_CONTRACT_VERSION,
+            model: null,
+          });
+        }
+      }
+      const scope = applyToAlbum ? `album "${song.album}" (${targets.length} tracks)` : `"${song.title}"`;
+      queue.log('info', code === null
+        ? `manual-language: cleared override on ${scope}`
+        : `manual-language: ${scope} → ${code}`);
+      res.json({
+        ok: true,
+        updated: targets.length,
+        cleared: code === null,
+        language: code,
+        tracks: targets.map(t => ({ id: t.id, language: code })),
+      });
+    } catch (err) {
+      queue.log('error', `/library/manual-language failed: ${err.message}`);
       res.status(500).json({ error: err.message });
     }
   },

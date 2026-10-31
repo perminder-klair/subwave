@@ -36,6 +36,7 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
       moods,
       energy: typeof q.energy === 'string' && q.energy ? q.energy : null,
       genre: typeof q.genre === 'string' && q.genre ? q.genre : null,
+      language: typeof q.language === 'string' && q.language ? q.language : null,
       vocal,
       yearFrom,
       yearTo,
@@ -68,6 +69,10 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
         byMood: stats.byMood,
         byEnergy: stats.byEnergy,
         byGenre: stats.byGenre,
+        byLanguage: stats.byLanguage,
+        languageUnknown: stats.languageUnknown,
+        languageMixed: stats.languageMixed,
+        languageInstrumental: stats.languageInstrumental,
         updatedAt: stats.updatedAt,
       },
     });
@@ -116,6 +121,8 @@ router.get('/library/liked', requireAdmin, async (req, res) => {
         isCompilation: rec?.isCompilation ?? null,
         eraUntrusted: rec?.eraUntrusted ?? null,
         genre: rec?.genre ?? snap.genre ?? null,
+        language: rec?.language ?? null,
+        languages: rec?.language?.languages ?? [],
         duration: snap.duration ?? rec?.durationSec ?? null,
         moods: rec?.moods ?? [],
         energy: rec?.energy ?? null,
@@ -176,27 +183,32 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
     const results = hits
       .filter((t) => !subsonic.isStationArchive(t))
       .slice(0, limit)
-      .map((t) => ({
-        id: t.id,
-        title: t.title ?? null,
-        artist: t.artist ?? null,
-        album: t.album ?? null,
-        year: t.year ?? null,
-        originalYear: t.originalYear ?? null,
-        originalYearSource: t.originalYearSource ?? null,
-        isCompilation: t.isCompilation ?? null,
-        eraUntrusted: t.eraUntrusted ?? null,
-        genre: t.genre ?? null,
-        duration: t.durationSec ?? null,
-        moods: t.moods ?? [],
-        energy: t.energy ?? null,
-        source: t.source ?? null,
-        bpm: t.bpm ?? null,
-        musicalKey: t.musicalKey ?? null,
-        loudnessLufs: t.loudnessLufs ?? null,
-        instrumental: isInstrumental(t.vocalRanges, t.vocalRangesInvalid),
-        similarity: typeof t._similarity === 'number' ? t._similarity : null,
-      }));
+      .map((t) => {
+        const tag = library.get(t.id);
+        return {
+          language: tag?.language ?? null,
+          languages: tag?.language?.languages ?? [],
+          id: t.id,
+          title: t.title ?? null,
+          artist: t.artist ?? null,
+          album: t.album ?? null,
+          year: t.year ?? null,
+          originalYear: t.originalYear ?? null,
+          originalYearSource: t.originalYearSource ?? null,
+          isCompilation: t.isCompilation ?? null,
+          eraUntrusted: t.eraUntrusted ?? null,
+          genre: t.genre ?? null,
+          duration: t.durationSec ?? null,
+          moods: t.moods ?? [],
+          energy: t.energy ?? null,
+          source: t.source ?? null,
+          bpm: t.bpm ?? null,
+          musicalKey: t.musicalKey ?? null,
+          loudnessLufs: t.loudnessLufs ?? null,
+          instrumental: isInstrumental(t.vocalRanges, t.vocalRangesInvalid),
+          similarity: typeof t._similarity === 'number' ? t._similarity : null,
+        };
+      });
     res.json({ results: blocklist.annotate(results) });
   } catch (err) {
     res.status(500).json({ error: err.message });

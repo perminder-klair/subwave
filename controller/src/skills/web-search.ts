@@ -13,8 +13,8 @@ const DDG_ENDPOINT = 'https://api.duckduckgo.com/';
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const KEENABLE_ENDPOINT = 'https://api.keenable.ai/v1/search';
 
-type SearchResult = { title: string; content: string };
-type SearchResponse = { answer: string; results: SearchResult[] };
+export type SearchResult = { title: string; content: string };
+export type SearchResponse = { answer: string; results: SearchResult[] };
 
 // 30-min TTL cache keyed by `${provider}:${query}`. BOUNDED: the request path's
 // identifyRequestedTrack searches on a listener's free-text description, so the

@@ -53,6 +53,7 @@ import {
 } from './tag-library/flags.js';
 import { llmTagInBatches, resolveTagConsumers } from './tag-library/tag.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
+import { phaseLanguage } from './tag-library/language.js';
 
 
 // Close (TRUNCATE-checkpoints the WAL) on every exit path; this CLI bails via
@@ -99,39 +100,46 @@ async function main() {
     return;
   }
 
+  // Language tagging is a first-class phase, not a side effect of mood
+  // embeddings. A library can therefore run the language pass while its
+  // embedding provider is disabled, offline, or being replaced.
+  let embeddingReady = false;
+  let embeddingDim = embeddings.resolveEmbeddingDim();
   if (!embeddings.isAvailable()) {
-    logEvent('error', 'Embeddings not available — set settings.embedding.enabled / provider');
-    process.exit(1);
+    logEvent('warning', 'Embeddings unavailable — continuing with language/enrichment phases only');
+  } else {
+    // Preflight before opening the DB or walking Navidrome (#174, #319). The
+    // probe reports the dimension measured from a real vector, which beats the
+    // name→dim guess, so an arbitrarily-named embedding model works.
+    const probe = await embeddings.ensureReady();
+    if (probe.code !== 'ok') {
+      logEvent('warning', `Embedding preflight failed (${probe.code}): ${probe.message}; continuing with language phases only`);
+    } else {
+      embeddingReady = true;
+      embeddingDim = probe.dim ?? embeddingDim;
+    }
   }
-
-  // Preflight before opening the DB or walking Navidrome (#174, #319). The probe
-  // reports the dimension measured from a real vector, which beats the name→dim
-  // guess, so an arbitrarily-named embedding model works.
-  const probe = await embeddings.ensureReady();
-  if (probe.code !== 'ok') {
-    logEvent('error', `Embedding preflight failed (${probe.code}): ${probe.message}`);
-    process.exit(1);
-  }
-  const embeddingDim = probe.dim ?? embeddings.resolveEmbeddingDim();
 
   // reseed lets open() recover from a model/dim swap instead of throwing the
   // dim-mismatch before the --reseed logic below runs (#307). Same-dim: no-op.
-  await db.open({ embeddingDim, reseed: flags.reseed });
+  await db.open({ embeddingDim, reseed: embeddingReady && flags.reseed });
 
   // Task-prefix mode this run embeds documents in. A reseed re-embeds
   // everything so it adopts the active model's preferred mode; otherwise stay
   // consistent with the stored vectors, since query embeds must match the
   // documents (a legacy meta row with no mode = embedded bare).
-  const textMode = flags.reseed
-    ? embeddings.preferredTextMode()
-    : embeddings.resolveIndexTextMode(db.getEmbeddingMeta()?.textMode, db.vectorCount());
+  const textMode = !embeddingReady
+    ? 'plain'
+    : flags.reseed
+      ? embeddings.preferredTextMode()
+      : embeddings.resolveIndexTextMode(db.getEmbeddingMeta()?.textMode, db.vectorCount());
   // Embed-text shape the index carries (#1246), same "describe what's stored"
   // rule as textMode: stays at the older format until a reseed rebuilds it.
-  const textFormat = embeddings.resolveIndexTextFormat(
-    db.getEmbeddingMeta()?.textFormat, db.vectorCount(), flags.reseed,
-  );
-  db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim, textMode, textFormat);
-  if (textMode === 'plain' && embeddings.preferredTextMode() === 'prefixed') {
+  const textFormat = embeddingReady
+    ? embeddings.resolveIndexTextFormat(db.getEmbeddingMeta()?.textFormat, db.vectorCount(), flags.reseed)
+    : 1;
+  if (embeddingReady) db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim, textMode, textFormat);
+  if (embeddingReady && textMode === 'plain' && embeddings.preferredTextMode() === 'prefixed') {
     logEvent(
       'info',
       `${embeddings.activeModelLabel()} retrieves better with task prefixes — run ` +
@@ -202,7 +210,7 @@ async function main() {
 
   logEvent('info', `Starting up — ${db.allTaggedIds().length.toLocaleString('en-GB')} tracks already tagged`);
   logEvent('info', `Tagging model — ${activeModelLabel()}`);
-  logEvent('info', `Embedding model — ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
+  if (embeddingReady) logEvent('info', `Embedding model — ${embeddings.activeModelLabel()} (dim=${embeddingDim})`);
   console.log(
     `[tag] batch=${tagBatchSize} maxRounds=${maxRounds} knnK=${knnK} ` +
       `moodVote=${moodVoteThreshold} confidence=${confidenceThreshold} ` +
@@ -222,7 +230,7 @@ async function main() {
   // Only a re-scan re-embed needs this snapshot; a normal --reseed rebuilds as
   // part of its forward pass.
   let reembedIds: string[] = [];
-  if (flags.reseed) {
+  if (flags.reseed && embeddingReady) {
     // A same-dim reseed still has the old vectors here, so this captures the
     // already-embedded population. A dim-change reseed already had
     // track_vectors dropped inside open(), so it comes back empty.
@@ -233,14 +241,16 @@ async function main() {
     // that now needs a vector — otherwise the pass rebuilds 0 on exactly the
     // model swap it advertises.
     if (flags.rescan && reembedIds.length === 0) reembedIds = db.unembeddedIds();
+  } else if (flags.reseed) {
+    console.log('[tag] --reseed: embeddings unavailable, leaving existing vectors untouched');
   }
 
-  const promptHash = embeddings.promptVocabHash(TAGGER_CONTRACT_VERSION);
+  const promptHash = embeddingReady ? embeddings.promptVocabHash(TAGGER_CONTRACT_VERSION) : '';
   const modelLabel = activeModelLabel();
 
   // Single- vs dual-LLM tagging: probed once here, not per phase, so the banner
   // prints once.
-  const tagConsumers = await resolveTagConsumers();
+  const tagConsumers = embeddingReady ? await resolveTagConsumers() : [];
   const byLeg: Record<string, number> = {};
   const mergeByLeg = (m: Record<string, number>) => {
     for (const [k, v] of Object.entries(m)) byLeg[k] = (byLeg[k] || 0) + v;
@@ -279,11 +289,17 @@ async function main() {
   // --limit. A re-scan's forward scope is empty — each re-* pass below redoes
   // only tracks that already carry that artifact, never the remainder.
   const allUntagged = db.untaggedIds();
+  const allLanguagePending = db.languagePendingIds(flags.reLanguage);
   const targetUntagged = flags.rescan
     ? []
     : flags.limit === Infinity
       ? allUntagged
-      : allUntagged.slice(0, flags.limit);
+        : allUntagged.slice(0, flags.limit);
+  const targetLanguage = flags.rescan && !flags.reLanguage
+    ? []
+    : flags.limit === Infinity
+      ? allLanguagePending
+      : allLanguagePending.slice(0, flags.limit);
   if (flags.rescan) {
     console.log(
       `[tag] re-scan mode: redoing selected passes for already-done tracks ` +
@@ -317,9 +333,19 @@ async function main() {
     }
     await phaseEnrich(enrichIds, flags.reEnrich);
   } else if (flags.skipEnrich) {
-    console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
+    logEvent('info', 'Metadata enrichment skipped — not fetching Last.fm tags or lyrics');
   }
   lap('enrich');
+
+  // Independent language pass. It has its own scope and completion marker, so
+  // enabling it on an already mood-tagged library does not spend embeddings or
+  // re-run mood decisions.
+  if (plan.language) {
+    await phaseLanguage(targetLanguage, flags.reLanguage);
+  } else if (flags.skipLanguages) {
+    logEvent('info', 'Language tagging skipped — language detection was disabled for this run');
+  }
+  lap('language');
 
   // Phases 1-4 (embed → seed → propagate → active-learn), the "Tag moods" step.
   // A re-scan suppresses them and runs the scoped re-embed / re-decide passes
@@ -327,7 +353,7 @@ async function main() {
   // when tagging is skipped.
   let llmCalls = 0;
   let llmTagged = 0;
-  if (plan.forwardTag) {
+  if (plan.forwardTag && embeddingReady) {
     await phaseEmbed(targetUntagged, tagBatchSize, textMode);
     lap('embed');
 
@@ -505,13 +531,15 @@ async function main() {
     } catch (err: any) {
       console.log(`[tag] audio energy pass failed: ${err?.message || err}`);
     }
+  } else if (plan.forwardTag && !embeddingReady) {
+    logEvent('warning', 'Mood tagging skipped — embeddings are unavailable');
   } else if (flags.skipTag) {
-    console.log('[tag] --skip-tag: skipping embed + mood tagging (phases 1-4)');
+    logEvent('info', 'Mood tagging skipped — embeddings and mood tagging were disabled for this run');
   }
 
   // Re-scan RE-EMBED: rebuild vectors under the new embedding model, from the
   // scope resolved above, so the KNN graph the existing tags anchor is restored.
-  if (plan.reEmbed) {
+  if (plan.reEmbed && embeddingReady) {
     console.log(`[tag] re-embed: rebuilding ${reembedIds.length} vectors from scratch`);
     await phaseEmbed(reembedIds, tagBatchSize, textMode);
     lap('embed');
@@ -519,7 +547,7 @@ async function main() {
 
   // Re-scan RE-DECIDE: re-LLM-tag tagged rows whose prompt or model went stale
   // (never manual). Scoped to the tagged set, never the untagged remainder.
-  if (plan.reDecide) {
+  if (plan.reDecide && embeddingReady) {
     const stale = db.staleTaggedIds(
       promptHash,
       modelLabel,
@@ -555,6 +583,8 @@ async function main() {
     } catch (err: any) {
       logEvent('warning', `Acoustic analysis phase failed (non-fatal): ${err?.message || err}`);
     }
+  } else if (flags.skipAnalyze) {
+    logEvent('info', 'Acoustic analysis skipped — disabled for this run');
   }
   lap('analyze');
 

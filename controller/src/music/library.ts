@@ -9,6 +9,7 @@ import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
 import { artistRootKey, setKnownActsProvider, trackKey, type CandidateLike } from './recency.js';
 import { isInstrumental } from './lyric-vocal.js';
+import type { TrackRecord } from './library-db/types.js';
 
 let loaded = false;
 
@@ -76,6 +77,7 @@ export function get(songId: string): any {
     title: t.title,
     artist: t.artist,
     album: t.album,
+    musicBrainzId: t.musicBrainzId,
     year: t.year,
     // Era-year surface (#842, #1418): resolveEraYear reads the composed
     // `yearUntrusted`; `isCompilation` rides along as the raw Navidrome fact.
@@ -91,6 +93,7 @@ export function get(songId: string): any {
     // show-filter.trackAllTags (blocklist `tag` rules) resolves these through
     // this projection for Subsonic-sourced rows.
     lastfmTags: t.lastfmTags,
+    language: t.language,
     energy: t.energy,
     source: t.source,
     confidence: t.confidence,
@@ -191,7 +194,7 @@ export function candidateFilterTracks() {
 // One library row in the same slim shape every pool source hands back, so
 // blocklist.matchOf reaches its exact id tiers (get()'s projection carries no
 // ids and parses the heavy acoustic blobs). null when there is no row.
-export function slimById(songId: string): any {
+export function slimById(songId: string): LibraryTrack | null {
   if (!loaded || !songId) return null;
   const t = db.getTrack(songId);
   return t ? slimTrack(t) : null;
@@ -298,7 +301,25 @@ export function sectionCount(t: { structure?: any[] | null } | null | undefined)
   return Array.isArray(t?.structure) && t.structure.length ? t.structure.length : null;
 }
 
-function slimTrack(r: db.EnergyPoolRecord) {
+type SlimTrackInput = Pick<TrackRecord,
+  'id' | 'title' | 'artist' | 'album' | 'albumId' | 'artistId' | 'year' |
+  'originalYear' | 'isCompilation' | 'yearUntrusted' | 'genres' | 'genre' |
+  'moods' | 'energy' | 'durationSec'> & {
+  language: TrackRecord['language'] | string | null;
+  languages?: string[];
+  audioMoods?: string[];
+  bpm?: number | null;
+  musicalKey?: string | null;
+  introMs?: number | null;
+  loudnessLufs?: number | null;
+  structure?: TrackRecord['structure'];
+  vocalRanges?: TrackRecord['vocalRanges'];
+  vocalRangesInvalid?: boolean;
+  pace?: TrackRecord['pace'];
+};
+
+function slimTrack(r: SlimTrackInput) {
+  const languageTag = typeof r.language === 'object' && r.language ? r.language : null;
   return {
     id: r.id,
     title: r.title,
@@ -318,6 +339,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     yearUntrusted: r.yearUntrusted,
     genres: r.genres,
     genre: r.genre,
+    language: typeof r.language === 'string' ? r.language : r.language?.primaryLanguage ?? null,
+    languages: Array.isArray(r.languages) ? r.languages : languageTag?.languages ?? [],
     moods: r.moods,
     // Sound-derived moods (music/audio-moods.ts), [] until scored. Kept
     // separate from the editorial `moods`.
@@ -338,6 +361,13 @@ function slimTrack(r: db.EnergyPoolRecord) {
   };
 }
 
+export type LibraryTrack = ReturnType<typeof slimTrack>;
+export type LibraryCandidateTrack = Omit<LibraryTrack, 'title' | 'artist' | 'album'> & {
+  title?: string;
+  artist?: string;
+  album?: string;
+};
+
 // Ids only, for callers that sample a bucket rather than read it: no row
 // mapping, no JSON parsing. Not blocklist-filtered — check what you keep.
 export function idsByEnergy(energy: string | null | undefined): string[] {
@@ -351,16 +381,25 @@ export function isBlockedId(id: string): boolean {
   return !!t && blocklist.isBlocked(slimTrack(t));
 }
 
-export function songsByEnergy(energy: string | null | undefined): any[] {
+export function songsByEnergy(energy: string | null | undefined): LibraryTrack[] {
   if (!energy || !loaded) return [];
   if (energy !== 'low' && energy !== 'medium' && energy !== 'high') return [];
   return blocklist.rejectBlocked(db.songsByEnergy(energy).map(slimTrack));
 }
 
+export function songsByLanguage(language: string | null | undefined): LibraryTrack[] {
+  if (!language || !loaded) return [];
+  return blocklist.rejectBlocked(db.songsByLanguage(language).map(t => ({
+    ...slimTrack(t),
+    language: t.language?.primaryLanguage ?? null,
+    languages: t.language?.languages ?? [],
+  })));
+}
+
 // KNN over the text embedding space. `seed` is normally a track id, but the
 // picker agent often passes a title — an id miss retries the string as a
 // title. No embedding and no title match gives [], and callers fall back.
-export function tracksLikeThis(seed: string, k: number, opts: db.KnnOpts = {}): any[] {
+export function tracksLikeThis(seed: string, k: number, opts: db.KnnOpts = {}): Array<LibraryCandidateTrack & { _similarity?: number }> {
   if (!loaded || !seed) return [];
   let hits = db.knnById(seed, k, opts);
   if (hits.length === 0) {
@@ -370,10 +409,19 @@ export function tracksLikeThis(seed: string, k: number, opts: db.KnnOpts = {}): 
       if (hits.length) break;
     }
   }
-  const out: any[] = [];
+  const out: Array<LibraryCandidateTrack & { _similarity?: number }> = [];
   for (const hit of hits) {
     const t = db.getTrack(hit.id);
-    if (t) out.push({ ...slimTrack(t), _similarity: hit.similarity });
+    if (t) {
+      const track = slimTrack(t);
+      out.push({
+        ...track,
+        title: track.title ?? undefined,
+        artist: track.artist ?? undefined,
+        album: track.album ?? undefined,
+        _similarity: hit.similarity,
+      });
+    }
   }
   return blocklist.rejectBlocked(out);
 }
@@ -581,7 +629,7 @@ export function pickStats(): db.PickStats {
 
 export function stats(opts: { fresh?: boolean } = {}) {
   if (!loaded) {
-    return { total: 0, mirrorTotal: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null, embeddingMeta: null };
+    return { total: 0, mirrorTotal: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, byLanguage: {}, languageUnknown: 0, languageMixed: 0, languageInstrumental: 0, updatedAt: null, embeddingMeta: null };
   }
   const s = db.stats(opts);
   return {
@@ -593,6 +641,10 @@ export function stats(opts: { fresh?: boolean } = {}) {
     byMood: s.byMood,
     byEnergy: s.byEnergy,
     byGenre: s.byGenre,
+    byLanguage: s.byLanguage,
+    languageUnknown: s.languageUnknown,
+    languageMixed: s.languageMixed,
+    languageInstrumental: s.languageInstrumental,
     bySource: s.bySource,
     withEmbedding: s.withEmbedding,
     withAudioEmbedding: s.withAudioEmbedding,
@@ -660,6 +712,7 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
+  language?: string | null;
   vocal?: 'instrumental' | 'vocal' | null;
   yearFrom?: number | null;
   yearTo?: number | null;
@@ -685,6 +738,7 @@ export interface FilteredRow {
   eraUntrusted?: boolean | null;
   genres?: string[];
   genre?: string | null;
+  language?: db.TrackLanguageTag | null;
   duration?: number | null;
   moods: string[];
   energy: string | null;
@@ -718,6 +772,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       eraUntrusted: r.eraUntrusted,
       genres: r.genres,
       genre: r.genre,
+      language: r.language,
       duration: r.durationSec,
       moods: r.moods,
       energy: r.energy,

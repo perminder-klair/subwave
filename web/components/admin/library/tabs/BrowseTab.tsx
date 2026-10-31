@@ -21,6 +21,7 @@ export interface BrowseTabProps {
   energy: Energy; setEnergy: (e: Energy) => void;
   vocal: Vocal; setVocal: (v: Vocal) => void;
   genre: string; setGenre: (g: string) => void;
+  language: string; setLanguage: (l: string) => void;
   yearFrom: string; setYearFrom: (y: string) => void;
   yearTo: string; setYearTo: (y: string) => void;
   q: string; setQ: (q: string) => void;
@@ -30,7 +31,7 @@ export interface BrowseTabProps {
 }
 
 export default function BrowseTab({
-  moods, setMoods, energy, setEnergy, vocal, setVocal, genre, setGenre,
+  moods, setMoods, energy, setEnergy, vocal, setVocal, genre, setGenre, language, setLanguage,
   yearFrom, setYearFrom, yearTo, setYearTo, q, setQ, sort, setSort, libStats,
 }: BrowseTabProps) {
   const { seedVocab } = useLibrary();
@@ -42,7 +43,7 @@ export default function BrowseTab({
   const [debouncedQ] = useDebounceValue(q, 250);
 
   const filters: BrowseKeyFilters = {
-    moods, energy, vocal, genre, yearFrom, yearTo, q: debouncedQ.trim(), sort, page,
+    moods, energy, vocal, genre, language, yearFrom, yearTo, q: debouncedQ.trim(), sort, page,
   };
 
   // No AbortController needed: the response is keyed to the filters that asked
@@ -55,6 +56,7 @@ export default function BrowseTab({
       if (energy !== 'any') params.set('energy', energy);
       if (vocal !== 'any') params.set('vocal', vocal);
       if (genre) params.set('genre', genre);
+      if (language) params.set('language', language);
       if (yearFrom) params.set('yearFrom', yearFrom);
       if (yearTo) params.set('yearTo', yearTo);
       if (debouncedQ.trim()) params.set('q', debouncedQ.trim());
@@ -79,7 +81,7 @@ export default function BrowseTab({
   });
   const genreList = genresQuery.data ?? [];
 
-  useEffect(() => { setPage(0); }, [moods, energy, vocal, genre, yearFrom, yearTo, debouncedQ, sort]);
+  useEffect(() => { setPage(0); }, [moods, energy, vocal, genre, language, yearFrom, yearTo, debouncedQ, sort]);
 
   // The vocab only rides the browse response, so other tabs fetch a one-row
   // browse rather than hardcoding SHOW_MOODS.
@@ -92,10 +94,10 @@ export default function BrowseTab({
   const energyCounts = stats?.byEnergy || libStats?.byEnergy || {};
   const totalPages = browse ? Math.max(1, Math.ceil(browse.total / PAGE_SIZE)) : 1;
   const filtersActive =
-    moods.length > 0 || energy !== 'any' || vocal !== 'any' || !!genre || !!yearFrom || !!yearTo || !!q.trim();
+    moods.length > 0 || energy !== 'any' || vocal !== 'any' || !!genre || !!language || !!yearFrom || !!yearTo || !!q.trim();
 
   const clearFilters = () => {
-    setMoods([]); setEnergy('any'); setVocal('any'); setGenre(''); setYearFrom(''); setYearTo(''); setQ('');
+    setMoods([]); setEnergy('any'); setVocal('any'); setGenre(''); setLanguage(''); setYearFrom(''); setYearTo(''); setQ('');
     setSort('artist'); setPage(0);
   };
 
@@ -110,6 +112,11 @@ export default function BrowseTab({
         energy={energy} setEnergy={setEnergy}
         vocal={vocal} setVocal={setVocal}
         genre={genre} setGenre={setGenre}
+        language={language} setLanguage={setLanguage}
+        languageCounts={stats?.byLanguage || libStats?.byLanguage || {}}
+        languageUnknown={stats?.languageUnknown ?? libStats?.languageUnknown ?? 0}
+        languageMixed={stats?.languageMixed ?? libStats?.languageMixed ?? 0}
+        languageInstrumental={stats?.languageInstrumental ?? libStats?.languageInstrumental ?? 0}
         yearFrom={yearFrom} setYearFrom={setYearFrom}
         yearTo={yearTo} setYearTo={setYearTo}
         q={q} setQ={setQ}
@@ -136,6 +143,9 @@ export default function BrowseTab({
           )}
           {genre && (
             <span className="lib-active-chip">{genre}<button type="button" onClick={() => setGenre('')} aria-label="remove genre">×</button></span>
+          )}
+          {language && (
+            <span className="lib-active-chip">{language}<button type="button" onClick={() => setLanguage('')} aria-label="remove language">×</button></span>
           )}
           {(yearFrom || yearTo) && (
             <span className="lib-active-chip">{yearFrom || '…'}–{yearTo || '…'}<button type="button" onClick={() => { setYearFrom(''); setYearTo(''); }} aria-label="remove year">×</button></span>

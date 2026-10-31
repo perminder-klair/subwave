@@ -167,6 +167,9 @@ const STATS_INDEXES: Array<[name: string, sql: string]> = [
   ['idx_tracks_vocal_measured', 'CREATE INDEX IF NOT EXISTS idx_tracks_vocal_measured ON tracks((vocal_ranges_json IS NOT NULL))'],
   ['idx_tracks_fail_count', 'CREATE INDEX IF NOT EXISTS idx_tracks_fail_count ON tracks(analyze_fail_count) WHERE analyze_fail_count IS NOT NULL'],
   ['idx_tracks_stats', 'CREATE INDEX IF NOT EXISTS idx_tracks_stats ON tracks(energy, source, tagged_at, artist, genres, moods) WHERE moods IS NOT NULL'],
+  // Language coverage expands a JSON array, so keep every column it reads in
+  // a narrow covering index instead of falling back to the wide track rows.
+  ['idx_tracks_language_stats', 'CREATE INDEX IF NOT EXISTS idx_tracks_language_stats ON tracks(language_checked_at, language_primary, language_mode, languages, id) WHERE language_checked_at IS NOT NULL'],
 ];
 
 export function ensureStatsIndexes(): void {
@@ -316,6 +319,28 @@ function computeStats(): LibraryStats {
     .all() as Array<{ genre: string; n: number }>) {
     byGenre[r.genre] = r.n;
   }
+  const byLanguage: Record<string, number> = {};
+  for (const r of d.prepare(`
+    SELECT langs.value AS language, COUNT(DISTINCT tracks.id) AS n
+      FROM tracks,
+        json_each(CASE
+          WHEN json_valid(tracks.languages) THEN tracks.languages
+          WHEN tracks.language_primary IS NOT NULL THEN json_array(tracks.language_primary)
+          ELSE '[]'
+        END) AS langs
+     WHERE language_checked_at IS NOT NULL
+     GROUP BY langs.value
+  `).all() as Array<{ language: string; n: number }>) {
+    byLanguage[r.language] = r.n;
+  }
+  const languageCounts = d.prepare(`
+    SELECT
+      SUM(CASE WHEN language_checked_at IS NOT NULL AND language_primary IS NULL AND language_mode = 'unknown' THEN 1 ELSE 0 END) AS unknown,
+      SUM(CASE WHEN language_checked_at IS NOT NULL AND language_mode = 'mixed' THEN 1 ELSE 0 END) AS mixed,
+      SUM(CASE WHEN language_checked_at IS NOT NULL AND language_mode = 'instrumental' THEN 1 ELSE 0 END) AS instrumental
+    FROM tracks
+    WHERE language_checked_at IS NOT NULL
+  `).get() as { unknown: number | null; mixed: number | null; instrumental: number | null };
   const withEmbedding = (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as {
     n: number;
   }).n;
@@ -324,6 +349,10 @@ function computeStats(): LibraryStats {
   ).n;
   return {
     ...totals, updatedAt: totals.updatedAt || null,
-    byMood, byEnergy, byGenre, bySource, withEmbedding, withAudioEmbedding,
+    byMood, byEnergy, byGenre, byLanguage,
+    languageUnknown: languageCounts.unknown ?? 0,
+    languageMixed: languageCounts.mixed ?? 0,
+    languageInstrumental: languageCounts.instrumental ?? 0,
+    bySource, withEmbedding, withAudioEmbedding,
   };
 }

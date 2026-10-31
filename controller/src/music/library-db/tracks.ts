@@ -3,7 +3,7 @@
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import { FACETS, clearFacetFailures, clearFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
-import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import type { LanguageWrite, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
@@ -168,15 +168,25 @@ export function textVectorDirtyIds(): string[] {
 
 export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   const eraBefore = storedEra(id);
+  // Non-walk writers omit the MBID because they do not own Navidrome's
+  // catalogue identity. The walk passes null when Navidrome removed an MBID,
+  // so that stale exact-evidence links cannot survive a rescan.
+  const musicBrainzUpdate = meta.musicBrainzId === undefined
+    ? 'musicbrainz_id = tracks.musicbrainz_id,'
+    : 'musicbrainz_id = excluded.musicbrainz_id,';
+  const musicBrainzChanged = meta.musicBrainzId === undefined
+    ? '0'
+    : '(excluded.musicbrainz_id IS NOT tracks.musicbrainz_id)';
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, musicbrainz_id, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
         album        = COALESCE(excluded.album, tracks.album),
+        ${musicBrainzUpdate}
         -- COALESCE: the walk is the only writer that HAS these ids, so a manual
         -- edit or analyzer top-up passing undefined must not blank a walked row.
         album_id     = COALESCE(excluded.album_id, tracks.album_id),
@@ -206,7 +216,18 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
         is_compilation = COALESCE(excluded.is_compilation, tracks.is_compilation),
         era_untrusted  = COALESCE(excluded.era_untrusted, tracks.era_untrusted),
         genres       = COALESCE(excluded.genres, tracks.genres),
-        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
+        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
+        -- Exact MusicBrainz evidence belongs to the old recording identity. A
+        -- Navidrome walk that changes or removes the MBID must make automatic
+        -- language answers retryable, while an operator override remains safe.
+        language_primary = CASE WHEN tracks.language_source = 'manual' THEN tracks.language_primary WHEN ${musicBrainzChanged} THEN NULL ELSE tracks.language_primary END,
+        languages = CASE WHEN tracks.language_source = 'manual' THEN tracks.languages WHEN ${musicBrainzChanged} THEN NULL ELSE tracks.languages END,
+        language_mode = CASE WHEN tracks.language_source = 'manual' THEN tracks.language_mode WHEN ${musicBrainzChanged} THEN NULL ELSE tracks.language_mode END,
+        language_source = CASE WHEN tracks.language_source = 'manual' THEN tracks.language_source WHEN ${musicBrainzChanged} THEN NULL ELSE tracks.language_source END,
+        language_confidence = CASE WHEN tracks.language_source = 'manual' THEN tracks.language_confidence WHEN ${musicBrainzChanged} THEN NULL ELSE tracks.language_confidence END,
+        language_checked_at = CASE WHEN tracks.language_source = 'manual' THEN tracks.language_checked_at WHEN ${musicBrainzChanged} THEN NULL ELSE tracks.language_checked_at END,
+        language_model = CASE WHEN tracks.language_source = 'manual' THEN tracks.language_model WHEN ${musicBrainzChanged} THEN NULL ELSE tracks.language_model END,
+        language_contract_version = CASE WHEN tracks.language_source = 'manual' THEN tracks.language_contract_version WHEN ${musicBrainzChanged} THEN NULL ELSE tracks.language_contract_version END
     `,
     )
     .run(
@@ -214,6 +235,7 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.title ?? null,
       meta.artist ?? null,
       meta.album ?? null,
+      meta.musicBrainzId ?? null,
       meta.albumId ?? null,
       meta.artistId ?? null,
       normaliseYear(meta.year),
@@ -300,14 +322,64 @@ export function setManualOriginalYear(id: string, year: number | null): void {
 export function upsertTrackEnrichment(id: string, enrich: TrackEnrichment): void {
   requireDb()
     .prepare(
-      `UPDATE tracks SET lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ? WHERE id = ?`,
+      `UPDATE tracks SET lastfm_tags = ?, lyric_excerpt = ?, lyrics_language = ?, enriched_at = ? WHERE id = ?`,
     )
     .run(
       enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null,
       enrich.lyricExcerpt ?? null,
+      enrich.lyricLanguage ?? null,
       new Date().toISOString(),
       id,
     );
+}
+
+// Language is a separate artifact from mood tagging. Automatic passes may
+// fill an unknown result, but they can never overwrite an operator's manual
+// language selection.
+export function upsertTrackLanguage(id: string, language: LanguageWrite): void {
+  const d = requireDb();
+  const existing = d.prepare(
+    `SELECT language_source FROM tracks WHERE id = ?`,
+  ).get(id) as { language_source?: string | null } | undefined;
+  if (existing?.language_source === 'manual' && language.source !== 'manual') return;
+  d.prepare(
+    `UPDATE tracks SET
+       language_primary = ?, languages = ?, language_mode = ?, language_source = ?,
+       language_confidence = ?, language_checked_at = ?, language_model = ?,
+       language_contract_version = ?
+     WHERE id = ?`,
+  ).run(
+    language.primaryLanguage,
+    JSON.stringify(language.languages),
+    language.mode,
+    language.source,
+    language.confidence,
+    new Date().toISOString(),
+    language.model ?? null,
+    language.contractVersion,
+    id,
+  );
+}
+
+export function clearManualTrackLanguage(id: string): void {
+  requireDb().prepare(
+    `UPDATE tracks SET language_primary = NULL, languages = NULL, language_mode = NULL,
+       language_source = NULL, language_confidence = NULL, language_checked_at = NULL,
+       language_model = NULL, language_contract_version = NULL
+     WHERE id = ? AND language_source = 'manual'`,
+  ).run(id);
+}
+
+// A failed provider call is not a language decision. Hide any previous
+// automatic result from filters and leave the row in the normal pending scope;
+// manual selections remain protected.
+export function deferAutomaticTrackLanguage(id: string): void {
+  requireDb().prepare(
+    `UPDATE tracks SET language_primary = NULL, languages = NULL, language_mode = NULL,
+       language_source = NULL, language_confidence = NULL, language_checked_at = NULL,
+       language_model = NULL, language_contract_version = NULL
+       WHERE id = ? AND COALESCE(language_source, '') != 'manual'`,
+  ).run(id);
 }
 
 export function upsertTrackTags(id: string, tags: TagWrite): void {

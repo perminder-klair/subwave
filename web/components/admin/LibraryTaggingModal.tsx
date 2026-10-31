@@ -57,12 +57,12 @@ export default function LibraryTaggingModal(p: Props) {
   // All on by default EXCEPT the Demucs vocal pass, measured at ~90% of the
   // whole acoustics phase (~10s/track on a 24-thread CPU).
   const [steps, setSteps] = useState<TagSteps>({
-    reconcile: true, enrich: true, tagMoods: true, analyze: true, vocal: false,
+    reconcile: true, enrich: true, tagLanguages: true, tagMoods: true, analyze: true, vocal: false,
   });
   const toggleStep = (k: keyof TagSteps) => setSteps(s => ({ ...s, [k]: !s[k] }));
 
   const [passes, setPasses] = useState<RescanOpts>({
-    reseed: false, reEnrich: false, reAnalyze: false, upgrade: false,
+    reseed: false, reEnrich: false, reLanguage: false, reAnalyze: false, upgrade: false,
   });
   // Does a Re-analyse-acoustics pass also redo the slow Demucs pass? Unticking
   // keeps existing vocal ranges.
@@ -77,16 +77,16 @@ export default function LibraryTaggingModal(p: Props) {
   // opens a danger alert dialog.
   const [resetAck, setResetAck] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
-  const passAllSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
-  const anyPass = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
-  const reseedOnly = !!passes.reseed && !passes.reEnrich && !passes.reAnalyze && !passes.upgrade;
-  const clearPasses = () => setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
+  const passAllSelected = !!(passes.reseed && passes.reEnrich && passes.reLanguage && passes.reAnalyze && passes.upgrade);
+  const anyPass = !!(passes.reseed || passes.reEnrich || passes.reLanguage || passes.reAnalyze || passes.upgrade);
+  const reseedOnly = !!passes.reseed && !passes.reEnrich && !passes.reLanguage && !passes.reAnalyze && !passes.upgrade;
+  const clearPasses = () => setPasses({ reseed: false, reEnrich: false, reLanguage: false, reAnalyze: false, upgrade: false });
 
   useEffect(() => {
     if (!p.open) return;
     if (p.intent === 'reembed') {
       setTab('rescan');
-      setPasses({ reseed: true, reEnrich: false, reAnalyze: false, upgrade: false });
+      setPasses({ reseed: true, reEnrich: false, reLanguage: false, reAnalyze: false, upgrade: false });
       // Staleness blocked a run the operator wanted — default to continuing into it.
       setThenTag(true);
     } else {
@@ -107,8 +107,8 @@ export default function LibraryTaggingModal(p: Props) {
     // Otherwise send false — a harmless --no-vocal the backend ignores.
     vocal: effAnalyze && p.vocalWanted ? steps.vocal : false,
   };
-  const anyStep = effSteps.reconcile || effSteps.enrich || effSteps.tagMoods || effSteps.analyze;
-  const onlyReconcile = effSteps.reconcile && !effSteps.enrich && !effSteps.tagMoods && !effSteps.analyze;
+  const anyStep = effSteps.reconcile || effSteps.enrich || effSteps.tagLanguages || effSteps.tagMoods || effSteps.analyze;
+  const onlyReconcile = effSteps.reconcile && !effSteps.enrich && !effSteps.tagLanguages && !effSteps.tagMoods && !effSteps.analyze;
 
   // Run-tab cost preview. seedEst is the up-front LLM seed budget tag-library.ts
   // spends before propagation carries the rest; the batch-of-25 divisor mirrors
@@ -194,6 +194,9 @@ export default function LibraryTaggingModal(p: Props) {
               <Pass on={steps.enrich} onClick={() => toggleStep('enrich')}
                 name="Enrich metadata" tag="network"
                 hint="Fetch Last.fm tags + lyrics per track to sharpen the mood read. External API calls — slower on big batches." />
+              <Pass on={steps.tagLanguages} onClick={() => toggleStep('tagLanguages')}
+                name="Tag languages" tag="network · AI fallback"
+                hint="Detect lyric languages locally first, use exact MusicBrainz work metadata when available, and send only ambiguous lyric excerpts to the configured AI provider. Unknown stays unknown." />
               <Pass on={steps.tagMoods} onClick={() => toggleStep('tagMoods')}
                 name="Tag moods (LLM)" tag="AI · billed"
                 hint="The core step: embeds each track, then your DJ's LLM picks mood & energy and spreads tags to similar songs. Billed to the Settings → LLM provider — the embedding provider only handles similarity." />
@@ -257,8 +260,8 @@ export default function LibraryTaggingModal(p: Props) {
                 className="shrink-0 text-[11px] font-bold text-vermilion underline-offset-2 hover:underline disabled:opacity-40"
                 disabled={p.busy}
                 onClick={() => setPasses(passAllSelected
-                  ? { reseed: false, reEnrich: false, reAnalyze: false, upgrade: false }
-                  : { reseed: true, reEnrich: true, reAnalyze: true, upgrade: true })}
+                  ? { reseed: false, reEnrich: false, reLanguage: false, reAnalyze: false, upgrade: false }
+                  : { reseed: true, reEnrich: true, reLanguage: true, reAnalyze: true, upgrade: true })}
               >
                 {passAllSelected ? 'Clear all' : 'Select all'}
               </button>
@@ -266,6 +269,8 @@ export default function LibraryTaggingModal(p: Props) {
             <div className="grid gap-2.5">
               <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata" tag="network"
                 hint="Re-fetch Last.fm tags + lyrics for tracks you've already enriched. External API calls — slow on a big library." />
+              <Pass on={!!passes.reLanguage} onClick={() => togglePass('reLanguage')} name="Re-detect languages" tag="network · AI fallback"
+                hint="Run language detection again for tracks that already have a language result, including previous unknowns." />
               <Pass on={!!passes.reseed} onClick={() => togglePass('reseed')} name="Re-embed all tracks" tag="slow"
                 hint={`Drop & rebuild the similarity vectors for your whole library${p.libraryTotal != null ? ` (${num(p.libraryTotal)} tracks)` : ''} at the current embedding model — not just tagged tracks. Re-spends embedding calls; only needed after a model change. Your mood tags are kept.`} />
               {reseedOnly && (

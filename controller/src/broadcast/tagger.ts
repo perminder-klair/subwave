@@ -163,6 +163,7 @@ export function startTagger(
     reseed?: boolean;
     reEnrich?: boolean;
     reAnalyze?: boolean;
+    reLanguage?: boolean;
     upgrade?: boolean;
     // "Re-embed, then continue tagging". Only honoured when reseed is the sole re-* pass.
     thenTag?: boolean;
@@ -170,29 +171,32 @@ export function startTagger(
     reconcile?: boolean;
     enrich?: boolean;
     tagMoods?: boolean;
+    tagLanguages?: boolean;
     analyze?: boolean;
     // Per-run Demucs override; undefined defers to the setting.
     vocal?: boolean;
   } = {},
 ) {
-  const { limit, reseed, reEnrich, reAnalyze, upgrade, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
+  const { limit, reseed, reEnrich, reAnalyze, reLanguage, upgrade, thenTag, reconcile, enrich, tagMoods, tagLanguages, analyze, vocal } = opts;
   const args = ['src/music/tag-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
   if (reseed) args.push('--reseed');
   if (reEnrich) args.push('--re-enrich');
   if (reAnalyze) args.push('--re-analyze');
+  if (reLanguage) args.push('--re-language');
   if (upgrade) args.push('--upgrade');
   // Any re-* pass adds --rescan, which scopes every pass to already-done tracks and
   // suppresses forward discovery. Exception: a reseed-only "then tag" chain drops
   // --rescan so the forward pass also tags the untagged remainder. Any other re-*
   // flag keeps --rescan scoping and ignores thenTag.
-  const reseedOnly = !!reseed && !reEnrich && !reAnalyze && !upgrade;
+  const reseedOnly = !!reseed && !reEnrich && !reAnalyze && !reLanguage && !upgrade;
   const chainTag = reseedOnly && thenTag === true;
-  const rescan = !!(reseed || reEnrich || reAnalyze || upgrade) && !chainTag;
+  const rescan = !!(reseed || reEnrich || reAnalyze || reLanguage || upgrade) && !chainTag;
   if (rescan) args.push('--rescan');
   // Only an explicit `false` skips; undefined keeps the phase on.
   if (enrich === false) args.push('--skip-enrich');
   if (tagMoods === false) args.push('--skip-tag');
+  if (tagLanguages === false) args.push('--skip-language');
   if (analyze === false) args.push('--skip-analyze');
   if (reconcile === false) args.push('--no-prune');
   if (analyze !== false && vocal === true) args.push('--vocal');
@@ -205,9 +209,11 @@ export function startTagger(
     reseed ? 'reseed' : null,
     reEnrich ? 're-enrich' : null,
     reAnalyze ? 're-analyze' : null,
+    reLanguage ? 're-language' : null,
     upgrade ? 'upgrade' : null,
     enrich === false ? 'skip-enrich' : null,
     tagMoods === false ? 'skip-tag' : null,
+    tagLanguages === false ? 'skip-language' : null,
     analyze === false ? 'skip-analyze' : null,
     reconcile === false ? 'no-prune' : null,
     analyze !== false && vocal === true ? 'vocal' : null,
