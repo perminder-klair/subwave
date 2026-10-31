@@ -79,6 +79,8 @@ export function restorePaths(form: FormState, baseline: FormState, paths: readon
  */
 const FORM_KEY_ALIASES: Record<string, readonly string[]> = {
   transitions: ['audio'],
+  'transitions.stemCache': ['audio.stemCache'],
+  'transitions.stemCacheGb': ['audio.stemCacheGb'],
 };
 
 /** Does `path` belong to any of these FormState keys, alias included? */

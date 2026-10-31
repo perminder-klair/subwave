@@ -200,7 +200,7 @@ regular cadence — it's cheap insurance.
   via web search — so it depends on Settings → Web search being configured. If it's on
   while search isn't ready, the feature is dead; either configure search or turn it off.
 
-## Stem transitions (Settings → Broadcast & mixer → Stem transitions)
+## Stem transitions (Settings → Stems → Stem transitions)
 - **Stem cache budget** is the disk budget in GB. If it holds too few tracks,
   raise it to cover more of the library, then run the analysis pass to backfill.
 - **Stem cache** keeps the separated stems on disk. **Stem-blend seams** needs

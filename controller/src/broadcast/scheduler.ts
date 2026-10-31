@@ -27,6 +27,8 @@ import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import { createPoolBuilder } from './auto-pool.js';
 import { applyTrackFloor, capCueOutSec, trackLengthSeconds } from '../music/track-floor.js';
+import { runScheduledOrphanPurge } from '../music/orphan-purge.js';
+import { allTrackIdsOrdered } from '../music/library-db.js';
 import { airableAnchorTracks, coastFloor, COAST_MIN_SEC, rotationCoast, rotationOrder, showNoRepeatGuard } from '../music/show-recency.js';
 import { knownDurationSec } from './queue/pure.js';
 import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
@@ -1195,6 +1197,31 @@ async function nightlyDoctor() {
 // retention all live in backup/pure.ts and this tick only reports. Every
 // failure is logged and swallowed — losing the scheduler to a backup would take
 // the auto playlist, the talk tick and the takeover janitor with it.
+// Orphan stem dirs: a track that left the library keeps its Demucs
+// dirs forever unless the byte budget evicts them (sweep only trims over
+// budget). This pass moves them to the quarantine and deletes what aged there
+// a week. Off by default (audio.stemOrphanPurgeEnabled); the report says
+// nothing on a quiet pass, and a refused pass (offline share, empty id set)
+// is an operator-facing error because it means the purge is enabled against a
+// cache it cannot see. 04:47 keeps it clear of the 02:00 cleanup and the
+// 04:17 doctor.
+async function stemOrphanPurgeTick() {
+  try {
+    if (settings.get()?.audio?.stemOrphanPurgeEnabled !== true) return;
+    const r = await runScheduledOrphanPurge(allTrackIdsOrdered());
+    if (r.refused) { queue.log('error', `Stem orphan purge: refused — ${r.reason}`); return; }
+    if (r.quarantined || r.deletedCount || r.released.length || r.failed) {
+      queue.log('scheduler',
+        `Stem orphan purge: quarantined ${r.quarantined}, released ${r.released.length}, deleted ${r.deletedCount}`
+        + ` (${Math.round(r.freedBytes / 1_000_000)} MB freed)`
+        + (r.failed ? `, ${r.failed} failed (check ownership on the stems share)` : '')
+        + (r.inFlight ? `, ${r.inFlight} in-flight dir(s) skipped` : ''));
+    }
+  } catch (err) {
+    queue.log('error', `Stem orphan purge failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function scheduledBackupTick() {
   try {
     const r = await backup.runScheduledBackup();
@@ -1357,6 +1384,10 @@ export function startScheduler() {
   // the elapsed-time cadence lives in backup/pure.ts. :23 keeps it off the :02
   // cleanup and the */5 janitor. Off by default.
   cron.schedule('23 * * * *', scheduledBackupTick);
+
+  // Off by default; a daily pass because orphans accrue with library churn,
+  // and one hour of quarantine skew costs nothing at this cadence.
+  cron.schedule('47 4 * * *', stemOrphanPurgeTick, { noOverlap: true });
 
   syncSkillCrons();
   // Each task bakes the zone in at registration, so a live timezone change has

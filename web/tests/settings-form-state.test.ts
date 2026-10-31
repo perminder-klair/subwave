@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { settingsForm } from '../components/admin/settings/form-state';
-import { archivesSavePayload, dangerSavePayload } from '../components/admin/settings/save-payload';
+import { archivesSavePayload, dangerSavePayload, stemsSavePayload } from '../components/admin/settings/save-payload';
 import { countLeafDiffs, dirtyPaths, restorePaths, ownsErrorPath, mergePatchErrors } from '../components/admin/settings/form-diff';
-import { sectionById } from '../components/admin/settings/registry';
+import { RESTART_PATHS, sectionById } from '../components/admin/settings/registry';
+import { samePath } from '../components/admin/settings/form-diff';
 
 test('cold hydration preserves defaults and independent primary/fallback fields', () => {
   const form = settingsForm({
@@ -68,7 +69,7 @@ test('whole-block saves refuse blank numbers and preserve explicit zero and deci
   assert.deepEqual(danger.fieldErrors, { 'stream.bufferSeconds': 'enter a number' });
   assert.equal(danger.patch.maxTrackSeconds, 0);
   assert.equal(danger.patch.ducking.voice, 0.22);
-  assert.equal(danger.patch.audio.stemCacheGb, 1.5);
+  assert.equal(stemsSavePayload(form).patch.audio.stemCacheGb, 1.5);
   form.archive.retentionDays = '';
   const archive = archivesSavePayload(form);
   assert.deepEqual(archive.fieldErrors, { 'archive.retentionDays': 'enter a number' });
@@ -118,4 +119,43 @@ test('provider dirtiness and discard do not own selection or segment runtime', (
   assert.equal(restored.llm.model, baseline.llm.model);
   assert.equal(restored.llm.trackSelection, 'shortlist');
   assert.equal(restored.llm.segmentRuntime, 'direct');
+});
+
+test('Broadcast & mixer and Stems split transitions at the leaf: each page sees and saves only its own fields', () => {
+  const broadcast = sectionById('broadcast')!.formKeys;
+  const stems = sectionById('stems')!.formKeys;
+  const baseline = settingsForm({});
+  // The crossfade curve lives on Broadcast & mixer: its save bar comes up,
+  // with the restart warning, and the Stems page stays clean.
+  const curve = structuredClone(baseline);
+  curve.transitions.equalPowerCrossfade = !baseline.transitions.equalPowerCrossfade;
+  assert.deepEqual(dirtyPaths(curve, baseline, broadcast), ['transitions.equalPowerCrossfade']);
+  assert.deepEqual(dirtyPaths(curve, baseline, stems), []);
+  const restartWarn = (keys: readonly string[]) => RESTART_PATHS.some(path =>
+    keys.some(key => path === key || path.startsWith(`${key}.`)) && !samePath(curve, baseline, path));
+  assert.equal(restartWarn(broadcast), true);
+  assert.equal(restartWarn(stems), false);
+  // An effect toggle is Broadcast's too.
+  const fx = structuredClone(baseline);
+  fx.transitions.effects.sweep = !baseline.transitions.effects.sweep;
+  assert.deepEqual(dirtyPaths(fx, baseline, broadcast), ['transitions.effects']);
+  assert.deepEqual(dirtyPaths(fx, baseline, stems), []);
+  // The stem budget is the Stems page's, and its errors route there.
+  const budget = structuredClone(baseline);
+  budget.transitions.stemCacheGb = '7';
+  assert.deepEqual(dirtyPaths(budget, baseline, stems), ['transitions.stemCacheGb']);
+  assert.deepEqual(dirtyPaths(budget, baseline, broadcast), []);
+  assert.equal(ownsErrorPath(stems, 'audio.stemCacheGb'), true);
+  assert.equal(ownsErrorPath(broadcast, 'audio.stemCacheGb'), false);
+});
+
+test('the Stems save and the Broadcast save post disjoint fields, so neither commits the other page\'s edit', () => {
+  const form = settingsForm({});
+  const stems = stemsSavePayload(form).patch;
+  const danger = dangerSavePayload(form).patch;
+  assert.deepEqual(Object.keys(stems.transitions).sort(), ['pairDrain', 'stemBlends']);
+  assert.deepEqual(Object.keys(stems.audio).sort(), ['stemCache', 'stemCacheGb']);
+  assert.deepEqual(Object.keys(danger.transitions).sort(), ['effects', 'equalPowerCrossfade']);
+  assert.equal('audio' in danger, false);
+  assert.deepEqual(Object.keys(stems).sort(), ['audio', 'transitions']);
 });

@@ -292,6 +292,12 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
   } catch {
     return []; // no cache dir yet
   }
+  // Dot entries are never track dirs: the root marker, and the orphan purge's
+  // .orphan-quarantine, whose few-KB inode size would otherwise rank it first
+  // in the eviction order (no library row) and let an over-budget sweep
+  // rm -rf the whole quarantine past its grace, while freeing far more than
+  // the sweep counted. stemsRootStatus skips them the same way.
+  entries = entries.filter(name => !name.startsWith('.'));
   const measured = await mapPool(entries, SCAN_CONCURRENCY, name => measureDir(path.join(root, name)));
   return measured.filter((d): d is { dir: string; bytes: number; mtimeMs: number } => d !== null);
 }
@@ -425,6 +431,41 @@ export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBy
   return { bytes, dirs, estTrackBytes: estimateTrackBytes(bytes, dirs) };
 }
 
+// The STORED cache size, for a surface that must answer at once (the stem
+// budget field). Never walks: a walk of a large cache on a network share
+// takes minutes, and this is read whenever the Settings page opens. A
+// snapshot the sweep would not trust (older than a day, a pass writing) is
+// still reported, flagged, because an operator about to lower the budget is
+// better served by an old figure with its age than by none. Null when there
+// is no usable snapshot of THIS root.
+export interface StoredUsage {
+  bytes: number;
+  dirs: number;
+  estTrackBytes: number;
+  /** Last full walk. */
+  measuredAt: string;
+  updatedAt: string;
+  /** The sweep would use this figure as is (measured within a day, no pass writing). */
+  fresh: boolean;
+  /** An analysis pass is adding stems right now; the figure is a floor. */
+  passRunning: boolean;
+}
+
+export async function storedUsage(): Promise<StoredUsage | null> {
+  const { snap, verdict } = await snapshotState();
+  if (!snap || snap.version !== 1 || snap.root !== stemsRoot()) return null;
+  if (!Number.isFinite(snap.bytes) || !Number.isFinite(snap.dirs) || snap.bytes < 0 || snap.dirs < 0) return null;
+  return {
+    bytes: snap.bytes,
+    dirs: snap.dirs,
+    estTrackBytes: estimateTrackBytes(snap.bytes, snap.dirs),
+    measuredAt: snap.measuredAt,
+    updatedAt: snap.updatedAt,
+    fresh: verdict === 'use',
+    passRunning: verdict === 'pass-running',
+  };
+}
+
 // The analysis pass marks the snapshot while it may write stem dirs. Called
 // after its headroom read, so that read could still use the snapshot.
 export async function markPassPending(): Promise<boolean> {
@@ -484,7 +525,8 @@ export async function settlePassWrites(
 export async function cachedTrackIdSet(): Promise<Set<string>> {
   cacheWalks += 1;
   try {
-    return new Set((await readdir(stemsRoot())).filter(n => n !== STEMS_MARKER));
+    // Dot entries (the marker, the orphan quarantine) are not track ids.
+    return new Set((await readdir(stemsRoot())).filter(n => !n.startsWith('.')));
   } catch {
     return new Set(); // no cache dir yet
   }

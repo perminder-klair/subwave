@@ -337,7 +337,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
           detail: `only ${cached.toLocaleString('en-GB')} of ${total.toLocaleString('en-GB')} tracks have stems on disk` +
             (attempted > cached ? ` (${attempted.toLocaleString('en-GB')} attempted)` : ''),
           hint: holds < total
-            ? `Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade. The ${budgetGb} GB budget only holds ~${holds.toLocaleString('en-GB')} tracks — raise Stem cache budget in Settings → Broadcast & mixer → Stem transitions to cover more of the library, then let the analysis pass backfill the rest.`
+            ? `Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade. The ${budgetGb} GB budget only holds ~${holds.toLocaleString('en-GB')} tracks — raise Stem cache budget in Settings → Stems → Stem transitions to cover more of the library, then let the analysis pass backfill the rest.`
             : 'Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade until the backfill catches up. Run the analysis pass (it now targets tracks with no cached stems) and this fills in over a few runs.',
         });
       }
@@ -349,7 +349,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         label: 'stem transitions',
         status: 'warn',
         detail: 'stem blends are on but pair-drain scheduling is off',
-        hint: 'Stem-blend seams requires Pair-aware transitions — a blend can only be inserted at a pair-aware drain. Re-enable Pair-aware transitions or turn Stem-blend seams off in Settings → Broadcast & mixer → Stem transitions.',
+        hint: 'Stem-blend seams requires Pair-aware transitions — a blend can only be inserted at a pair-aware drain. Re-enable Pair-aware transitions or turn Stem-blend seams off in Settings → Stems → Stem transitions.',
       });
     }
   } catch { /* analyzer unavailable — skip */ }

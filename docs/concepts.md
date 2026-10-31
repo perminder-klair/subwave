@@ -182,7 +182,7 @@ unanchored. Re-select the playlists in the show editor to fix it.
 
 ## The stem cache
 
-**Where:** Admin → Settings → Transitions.
+**Where:** Admin → Settings → Stems.
 
 Stem-blend transitions mix the outgoing and incoming tracks by *instrument*
 rather than crossfading two finished mixes: the outgoing drums duck out under

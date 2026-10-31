@@ -18,7 +18,7 @@
 import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chmodSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -146,6 +146,32 @@ async function main() {
       assert.equal(res.overBudgetBytes, 15 * MB, 'still 15 MB over the 5 MB budget');
     } finally {
       chmodSync(stemsRoot, 0o755);
+    }
+  });
+
+  await test('an over-budget sweep never touches the orphan quarantine, nor counts it', async () => {
+    // .orphan-quarantine is a dot-dir of whole track dirs (orphan-purge.ts):
+    // measured as a cache dir it weighed a few KB, ranked first (no library
+    // row) and went in one rm -rf, grace and release skipped, and the sweep
+    // then went on evicting live dirs it no longer needed to free.
+    resetCache();
+    makeDir('live-a', 10 * MB, 3000);
+    makeDir('live-b', 10 * MB, 2000);
+    const qu = join(stemCache.stemsRoot(), '.orphan-quarantine');
+    for (const id of ['gone-1', 'gone-2']) {
+      mkdirSync(join(qu, id), { recursive: true });
+      writeFileSync(join(qu, id, 'tail-drums.flac'), Buffer.alloc(5 * MB));
+    }
+    const before = await stemCache.usage();
+    assert.equal(before.dirs, 2, 'the quarantine is not a cache dir');
+    assert.equal(before.bytes, 20 * MB, 'nor are its bytes the budget\'s');
+    assert.deepEqual([...(await stemCache.cachedTrackIdSet())].sort(), ['live-a', 'live-b']);
+    forgetSnapshot();
+    const res = await stemCache.sweep(15 * MB);
+    assert.equal(res.removed, 1, 'one live dir brings it under budget');
+    assert.deepEqual([...(await stemCache.cachedTrackIdSet())], ['live-b']);
+    for (const id of ['gone-1', 'gone-2']) {
+      assert.ok(existsSync(join(qu, id, 'tail-drums.flac')), `${id} survived the sweep`);
     }
   });
 
