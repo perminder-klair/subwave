@@ -13,6 +13,8 @@
 //    so a row must be `<slug>.<audio ext>` — the only shape the writers make.
 //  - skills/** goes through the skill import's guards, so a tool.mjs that is
 //    not already live (or shipped in this image) arrives as tool.mjs.pending.
+//  - blocklist.json (the never-play list) goes through blocklist.restore: the
+//    boot parser, and the live list, which a file copy would leave stale.
 //
 // requireAdmin is a no-op with ADMIN_USER/ADMIN_PASS unset, so the router
 // mounts bare. Run: `npm test -- backup-restore-guards`.
@@ -42,6 +44,10 @@ const express = (await import('express')).default;
 const { router } = await import('../src/routes/backup.js');
 const { BACKUP_FORMAT, BACKUP_VERSION } = await import('../src/backup/zip.js');
 const { readTemplate, discoverSeededKinds } = await import('../src/skills/loader.js');
+const blocklist = await import('../src/music/blocklist.js');
+const { buildBackupZip } = await import('../src/backup/zip.js');
+await blocklist.load();
+await blocklist.add({ type: 'track', id: 'station-own', name: 'Kept Out', artist: 'A', album: 'B' });
 await discoverSeededKinds();
 
 const app = express();
@@ -90,6 +96,13 @@ const outcome = await restore(backupOf([
   ['skills/weather/tool.mjs', WEATHER_TOOL],
   ['skills/Mixed/SKILL.md', '---\nname: Mixed\n---\nBrief.\n'],
   ['skills/link/SKILL.md', '---\nname: link\n---\nShadows a queue kind.\n'],
+  ['blocklist.json', JSON.stringify({
+    entries: [
+      { type: 'album', id: 'alb-restored', name: 'Restored Album', artist: 'Band', album: null, addedAt: '2026-01-01T00:00:00Z' },
+      { type: 'nonsense', id: 'x' },
+    ],
+    rules: [],
+  })],
 ]));
 
 test('the restore succeeds and reports what it left out', () => {
@@ -99,6 +112,39 @@ test('the restore succeeds and reports what it left out', () => {
   assert.ok(skipped.some(s => s.startsWith('skills/Mixed/SKILL.md')));
   assert.ok(skipped.some(s => s.startsWith('skills/link')));
   assert.ok(skipped.some(s => s.includes('../settings.json') || s.includes('"escape"')));
+});
+
+test('the never-play list restores into the live list, through the boot parser', () => {
+  assert.ok(outcome.body.restored.includes('blocklist.json'));
+  assert.ok(outcome.body.skipped.some((x: string) => x.startsWith('blocklist.json: 1 unusable')));
+  assert.equal(blocklist.isBlocked({ id: 'any', albumId: 'alb-restored' }), true, 'live at once, no restart');
+  assert.equal(blocklist.isBlocked({ id: 'station-own' }), false, 'the backup list replaces the old one');
+  const onDisk = JSON.parse(readFileSync(path.join(stateRoot, 'blocklist.json'), 'utf8'));
+  assert.deepEqual(onDisk.entries.map((e: any) => e.id), ['alb-restored']);
+});
+
+test('a backup carries the never-play list', async () => {
+  const zip = await buildBackupZip();
+  const member = zip.getEntry('blocklist.json');
+  assert.ok(member, 'blocklist.json is in the archive');
+  assert.deepEqual(JSON.parse(member.getData().toString('utf8')).entries.map((e: any) => e.id), ['alb-restored']);
+});
+
+test('a bad never-play list refuses the restore before anything is written', async () => {
+  const before = readFileSync(path.join(stateRoot, 'blocklist.json'), 'utf8');
+  for (const bad of ['{ not json', JSON.stringify([1, 2]), JSON.stringify({ entries: 'nope' })]) {
+    const res = await restore(backupOf([['blocklist.json', bad], ['jingles.json', JSON.stringify({ items: {} })]]));
+    assert.equal(res.status, 400, bad);
+  }
+  assert.equal(readFileSync(path.join(stateRoot, 'blocklist.json'), 'utf8'), before);
+  assert.equal(blocklist.isBlocked({ id: 'any', albumId: 'alb-restored' }), true);
+});
+
+test('a backup without a never-play list leaves the station\'s alone', async () => {
+  const res = await restore(backupOf([['sfx/other.mp3', 'x']]));
+  assert.equal(res.status, 200);
+  assert.ok(!res.body.restored.includes('blocklist.json'));
+  assert.equal(blocklist.isBlocked({ id: 'any', albumId: 'alb-restored' }), true);
 });
 
 test('jingles.m3u is regenerated from validated sidecar keys, never copied', () => {
@@ -154,7 +200,7 @@ test('an oversized JSON member is refused by its declared size', async () => {
 });
 
 test('ZIP path aliases cannot overwrite routed sidecars or the jingle playlist', async () => {
-  const files = ['jingles.m3u', 'jingles.json', 'sfx.json'];
+  const files = ['jingles.m3u', 'jingles.json', 'sfx.json', 'blocklist.json'];
   const before = new Map(files.map(file => [file, readFileSync(path.join(stateRoot, file))]));
   for (const file of files) {
     for (const suffix of ['/.', '//.', '\\.']) {
