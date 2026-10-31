@@ -57,6 +57,9 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     leadSilenceMs: row.lead_silence_ms ?? null,
     tailSilenceMs: row.tail_silence_ms ?? null,
     tailStartMs: row.tail_start_ms ?? null,
+    edgeLeadMs: row.edge_lead_ms ?? null,
+    edgeTailMs: row.edge_tail_ms ?? null,
+    decodedDurationMs: row.decoded_duration_ms ?? null,
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
   };

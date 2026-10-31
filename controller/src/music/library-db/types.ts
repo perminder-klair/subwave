@@ -68,6 +68,12 @@ export interface TrackRecord {
   // Where the trailing gap opens, absolute ms from byte zero (the cue_out). null
   // on pre-column rows; silence-trim.ts falls back to duration - tailSilenceMs.
   tailStartMs: number | null;
+  // Whole-file facet `edges`: silence at each end against the same absolute
+  // floor, and the decoded length (not the container tag). null = not
+  // measured; silence-trim.ts prefers them over the window figures above.
+  edgeLeadMs: number | null;
+  edgeTailMs: number | null;
+  decodedDurationMs: number | null;
   // 2D UMAP of the CLAP audio vector, normalised to [0,1] per axis. null = not
   // projected.
   mapX: number | null;
@@ -161,6 +167,9 @@ export interface TrackRow {
   lead_silence_ms: number | null;
   tail_silence_ms: number | null;
   tail_start_ms: number | null;
+  edge_lead_ms?: number | null;
+  edge_tail_ms?: number | null;
+  decoded_duration_ms?: number | null;
   map_x: number | null;
   map_y: number | null;
 }

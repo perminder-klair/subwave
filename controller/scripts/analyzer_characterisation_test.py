@@ -140,6 +140,18 @@ def facet_parity(flat, facets):
     for facet, keys in (("head", HEAD_KEYS), ("loudness", LOUDNESS_KEYS), ("tail", TAIL_KEYS)):
         want = pick(keys)
         cell = facets.get(facet) or {}
+        data = cell.get("data") or {}
+        if facet == "loudness" and cell.get("status") == "ok" and data.get("loudness_version") == 2:
+            # A complete file's loudness is the whole-file measurement (v2),
+            # which the flat response never makes: check its shape, not parity.
+            whole = {"loudness_lufs", "peak_db", "sample_peak_db", "lra_lu", "loudness_version"}
+            # The same pass's short-term curve rides along (whole + both ends).
+            curve = data.get("loudness_curve")
+            curve_ok = isinstance(curve, dict) and isinstance((curve.get("whole") or {}).get("lufs"), list)
+            if set(data) != whole | {"loudness_curve"} or not curve_ok or \
+                    not all(isinstance(data[k], (int, float)) for k in whole):
+                problems.append(f"whole-file loudness malformed: {data}")
+            continue
         if cell.get("status") == "ok":
             if cell.get("data") != want:
                 problems.append(f"{facet} data differs: {sorted(cell.get('data') or {})} vs {sorted(want)}")

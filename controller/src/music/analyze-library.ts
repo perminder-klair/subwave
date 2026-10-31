@@ -16,7 +16,7 @@
 // Facet mode — scope read from track_facet_status instead of the legacy
 // queries (music/acoustics-plan.ts). Never walks; --re-analyze/--audio/--vocal
 // are ignored.
-//   --facets F[,F]       head, loudness, tail, clap, vocal, stems
+//   --facets F[,F]       head, loudness, tail, clap, vocal, stems, edges
 //   --where W            needs (default) | missing | unmeasurable[:reason] |
 //                        failed | outdated | all
 //   --ids a,b,c          restrict to these track ids
@@ -117,6 +117,8 @@ async function buildFacetPlan(args: string[], limit: number | undefined): Promis
       clap: available ? analyzer.audioEmbeddingAvailable() : null,
       demucs: available ? analyzer.vocalActivityAvailable() : null,
       tailVocal: available ? analyzer.tailVocalAvailable() : null,
+      wholeFile: available ? analyzer.wholeFileAvailable() : null,
+      loudnessCurve: available ? analyzer.loudnessCurveAvailable() : null,
     },
     limit,
   });

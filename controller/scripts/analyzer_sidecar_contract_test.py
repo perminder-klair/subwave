@@ -369,6 +369,43 @@ async def test_facet_contract():
     assert worker_calls == [{"id": "1", "path": audio.name, "complete": False, "facets": ["tail"]}], worker_calls
     assert result == {"ok": True, "facets": facet_answer["facets"], "source": facet_answer["source"]}, result
 
+    # The whole-file facets stream the music server's URL: a path request
+    # carries it as stream_url, and a URL-only request needs no path check.
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(
+            path=audio.name, complete=False, facets=["head", "edges"], stream_url="http://navi/stream",
+        ))
+    assert worker_calls == [{
+        "id": "1", "path": audio.name, "complete": False, "facets": ["head", "edges"],
+        "stream_url": "http://navi/stream",
+    }], worker_calls
+    # Whole-file facets alone take their own lane: a one-shot worker process
+    # under its own semaphore, never a pool worker holding CLAP/Demucs.
+    worker_calls.clear()
+    once_calls = []
+
+    async def once(payload):
+        once_calls.append(payload)
+        return {"ok": True, "facets": {"edges": {"status": "ok", "data": {}}}, "source": {"kind": "whole-file"}}
+
+    saved_once = server.run_whole_file_once
+    server.run_whole_file_once = once
+    try:
+        result = await server.analyze(server.AnalyzeRequest(url="http://navi/stream", facets=["loudness", "edges"]))
+    finally:
+        server.run_whole_file_once = saved_once
+    assert worker_calls == [], worker_calls
+    assert once_calls == [{"id": "1", "url": "http://navi/stream", "facets": ["loudness", "edges"]}], once_calls
+    assert result == {"ok": True, "facets": {"edges": {"status": "ok", "data": {}}}, "source": {"kind": "whole-file"}}, result
+    assert server.WHOLE_FILE_CONCURRENCY >= 1
+    # The URL is a facet-request field only: a flat request never forwards it.
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(path=audio.name, stream_url="http://navi/stream"))
+    assert "stream_url" not in worker_calls[0], worker_calls
+    assert not server.StdioWorker._wants_models({"facets": ["loudness", "edges"]})
+
     # Model bookkeeping follows the facets named, not the env defaults.
     assert server.StdioWorker._wants_models({"facets": ["head", "tail"]}) is False
     assert server.StdioWorker._wants_models({"facets": ["clap"]}) is True
