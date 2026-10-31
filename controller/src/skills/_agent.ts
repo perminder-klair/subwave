@@ -704,8 +704,8 @@ export async function runCapability(
     // Hint at the missing key when the capability is keyed.
     let hint = '';
     const searchProvider = settings.get().search?.provider;
-    if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
-      const name = searchProvider === 'brave' ? 'Brave Search' : 'Tavily';
+    if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave' || searchProvider === 'firecrawl')) {
+      const name = searchProvider === 'brave' ? 'Brave Search' : searchProvider === 'firecrawl' ? 'Firecrawl' : 'Tavily';
       hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
     } else if (cap.toolPending && !cap.toolFn) {
       hint = ' — its tool.mjs is awaiting your review in /admin/skills';
@@ -870,7 +870,7 @@ export function skillCatalog() {
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
     // web-search's key requirement depends on the active provider:
-    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
+    // Tavily/Brave/Firecrawl need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -881,6 +881,9 @@ export function skillCatalog() {
       } else if (searchProvider === 'brave') {
         requiresKey = 'SEARCH_API_KEY';
         keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
+      } else if (searchProvider === 'firecrawl') {
+        requiresKey = 'SEARCH_API_KEY';
+        keyUrl = 'https://www.firecrawl.dev/app/api-keys';
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;

@@ -138,7 +138,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         sub={<>
           The segment director can air a single line of recent artist context between
           tracks, when the active backend returns something worth saying. DuckDuckGo
-          is free and keyless; Tavily and Brave are keyed but return full web results;
+          is free and keyless; Tavily, Brave and Firecrawl are keyed but return full web results;
           SearXNG is keyless if you self-host it; Keenable returns web results with no
           key. Switching here reroutes the next call, no restart.
         </>}

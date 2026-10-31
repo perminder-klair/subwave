@@ -191,7 +191,7 @@ and any OpenAI-compatible server.
 **Search and reference.** [Brave Search](https://brave.com/search/api/),
 [Tavily](https://tavily.com), [DuckDuckGo](https://duckduckgo.com),
 [Keenable](https://keenable.ai), [SearXNG](https://github.com/searxng/searxng),
-and [Wikimedia](https://api.wikimedia.org).
+[Firecrawl](https://www.firecrawl.dev), and [Wikimedia](https://api.wikimedia.org).
 
 **Edge and distribution.** [Cloudflare](https://www.cloudflare.com) for TLS in
 the documented deployment and Workers for the CLI installer,

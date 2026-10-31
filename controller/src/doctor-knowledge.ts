@@ -111,7 +111,8 @@ Backs the DJ's artist-news segments. 'duckduckgo' is the keyless default; 'tavil
 and 'brave' give richer results but need a key (SEARCH_API_KEY — Brave is metered
 with $5/mo free credits and requires a card on file); 'searxng' is keyless but needs
 a self-hosted instance URL; 'keenable' is keyless web search, and a Keenable key in
-SEARCH_API_KEY only raises its rate limit. If a keyed provider is selected without a
+SEARCH_API_KEY only raises its rate limit; 'firecrawl' is keyed web search
+(SEARCH_API_KEY). If a keyed provider is selected without a
 key, news segments can't fetch — tell them to add the key or switch to
 DuckDuckGo or Keenable (both keyless), or to a self-hosted SearXNG.
 

@@ -576,7 +576,8 @@ export const TTS_CLOUD_PROVIDERS: readonly string[] = TTS_CLOUD_PROVIDER_VALUES;
 // Web-search backends. `duckduckgo` is free and keyless (useful only for
 // entity/definition queries); `tavily` and `brave` read SEARCH_API_KEY;
 // `searxng` is keyless self-hosted meta-search via settings.search.baseUrl;
-// `keenable` is keyless, and a Keenable key in SEARCH_API_KEY raises its limit.
+// `keenable` is keyless, and a Keenable key in SEARCH_API_KEY raises its limit;
+// `firecrawl` reads SEARCH_API_KEY.
 export const SEARCH_PROVIDERS = SETTINGS_SEARCH_PROVIDERS;
 
 // SEED mood vocabulary + each mood's CLAP sound-prompt. The operator edits the

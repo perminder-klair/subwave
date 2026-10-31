@@ -432,7 +432,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 
 | call | what it does |
 |---|---|
-| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG / Keenable) |
+| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG / Keenable / Firecrawl) |
 | `services.searchReady()` | `true` when a search provider is usable |
 | `services.nowPlaying()` | the track on air — `{ artist, title, album, year, id }` or `null` |
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |

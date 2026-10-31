@@ -52,7 +52,7 @@ function briefLlmError(err: unknown): string {
 
 // Non-mutating probe of one secret; builds a one-off client and never writes
 // process.env or secrets.env. `hint` disambiguates a key shared by several
-// providers (SEARCH_API_KEY is Tavily, Brave or Keenable) because the UI tests before
+// providers (SEARCH_API_KEY is Tavily, Brave, Keenable or Firecrawl) because the UI tests before
 // saving, so the stored provider can't be trusted mid-edit; it falls back to
 // the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
 // Responses API rejects anything below 16.
@@ -166,6 +166,16 @@ async function probeKey(
           return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
         }
         return { ok: true, message: '✓ Keenable key valid' };
+      }
+      if (provider === 'firecrawl') {
+        const r = await fetch('https://api.firecrawl.dev/v2/team/credit-usage', {
+          headers: { Authorization: `Bearer ${value}` },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!r.ok) {
+          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
+        }
+        return { ok: true, message: '✓ Firecrawl key valid' };
       }
       const r = await fetch('https://api.tavily.com/search', {
         method: 'POST',
