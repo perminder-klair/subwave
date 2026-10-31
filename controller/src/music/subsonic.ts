@@ -227,7 +227,7 @@ export async function pingWith(target: {
   user: string;
   pass: string;
   client?: string;
-}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; serverSoftwareVersion?: string; error?: string }> {
   const first = await pingWithOnce(target);
   if (first.ok) return first;
   await new Promise(resolve => setTimeout(resolve, 500));
@@ -244,7 +244,7 @@ async function pingWithOnce({
   user: string;
   pass: string;
   client?: string;
-}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; serverSoftwareVersion?: string; error?: string }> {
   try {
     const salt = crypto.randomBytes(8).toString('hex');
     const token = crypto.createHash('md5').update(pass + salt).digest('hex');
@@ -265,7 +265,14 @@ async function pingWithOnce({
     if (sub?.status !== 'ok') {
       return { ok: false, error: sub?.error?.message || 'Subsonic responded but auth failed' };
     }
-    return { ok: true, serverVersion: sub.version, serverType: sub.type || 'unknown' };
+    // `serverVersion` here is the Subsonic API version, kept for the existing
+    // callers; OpenSubsonic servers also report their own release.
+    return {
+      ok: true,
+      serverVersion: sub.version,
+      serverType: sub.type || 'unknown',
+      ...(typeof sub.serverVersion === 'string' && sub.serverVersion ? { serverSoftwareVersion: sub.serverVersion } : {}),
+    };
   } catch (err: any) {
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
       return { ok: false, error: 'Navidrome did not respond within 5s' };
