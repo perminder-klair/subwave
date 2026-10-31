@@ -4,6 +4,7 @@
 
 import express from 'express';
 import * as settings from '../settings.js';
+import { serialSteer } from '../music/steer.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody, validateBodyAsync } from '../middleware/validate.js';
 import {
@@ -271,7 +272,16 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
     }[resolved.source]
     : '';
   try {
-    await settings.update({ scheduleOverride: override });
+    // A takeover and a steer do not run together (see routes/steer.ts), and
+    // this waits its turn behind a steer that is still starting.
+    await serialSteer(async () => {
+      const steer = settings.activeSteer();
+      await settings.update(steer ? { scheduleOverride: override, steer: null } : { scheduleOverride: override });
+      if (steer) {
+        await queue.removeSteerQueued(String(steer.startedAt));
+        queue.log('scheduler', '[steer] cleared — takeover started');
+      }
+    });
     queue.log(
       'scheduler',
       show

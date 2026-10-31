@@ -53,6 +53,7 @@ import {
   scheduleSchema,
   scheduleOverrideSchema,
 } from '../schemas/schedule.js';
+import { steerSchema, type Steer } from '../schemas/steer.js';
 
 // ── normalizers (lenient — used by load(), clamp/default rather than throw) ──
 
@@ -293,6 +294,12 @@ export function normalizeSchedule(raw: unknown, showIds: string[]) {
 // second check here.
 export function normalizeScheduleOverride(raw: unknown, showIds: string[]): ScheduleOverride | null {
   const r = scheduleOverrideSchema({ showIds, now: Date.now() }).safeParse(raw);
+  return r.success ? r.data : null;
+}
+
+// The steer's load-path twin: malformed or already over loads as null.
+export function normalizeSteer(raw: unknown): Steer | null {
+  const r = steerSchema({ now: Date.now() }).safeParse(raw);
   return r.success ? r.data : null;
 }
 

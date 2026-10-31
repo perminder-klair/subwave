@@ -36,6 +36,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 - `broadcast/dj-agent.ts` picks through `llm.trackSelection` (`agentic` or `shortlist`). Both routes run inside `pickViaSelectionRoute`, sharing the guards, the breaker and pool recovery, and `music/picker.ts` is the stateless pool fallback. `trackSelection` is the only route switch (`pickerAgent` is derived for old clients). The Musical Leanings review is one pass for both routes (`dj-agent/leanings-pass.ts`). See `docs/internals/music.md` → Track Shortlist discovery parity, and → Direct listener requests.
 - Listener-request safety is `util/request-guard.ts`, and whether an ack or intro names the queued track is `util/request-claim.ts`. Both serve `routes/request.ts` and the agent's request path; inline neither.
+- An operator steer (`settings.steer`, `routes/steer.ts`, `music/steer.ts`) leans picks and talk without changing the show on air. Pick paths read the show through `settings.resolvePickShow()`, pinned by `scripts/steer-show.test.ts`; a new pick path that calls `resolveActiveShow` directly silently ignores a steer. The text reaches models only through `steerClause`. See `docs/internals/music.md`.
 - A per-client limiter map is a `util/bounded-key-map.ts`, never a hand-rolled `Map` with its own cleanup.
 
 ## Broadcast

@@ -336,7 +336,7 @@ export function pickSystem(
   // opening message: the session window (~40 turns) scrolls past the opener
   // within the first hour, after which the picker would lose every show
   // constraint mid-show and revert to generic picks.
-  const activeShow = settings.resolveActiveShow(showAt ?? undefined);
+  const activeShow = settings.resolvePickShow(showAt ?? new Date());
   const showLine = activeShow?.topic
     ? `\n\n${instruction('picker', 'show-brief', { topic: activeShow.topic })}`
     : '';

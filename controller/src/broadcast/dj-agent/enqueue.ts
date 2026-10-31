@@ -112,7 +112,7 @@ export async function enqueuePick(
   link: string | null = null,
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
-  { linkClockAt = null, introPersona = null, hostSpeech = null, showAt = null }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null; showAt?: Date | null } = {},
+  { linkClockAt = null, introPersona = null, hostSpeech = null, showAt = null, steerKey = null }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null; showAt?: Date | null; steerKey?: string | null } = {},
 ): Promise<number> {
   // Single chokepoint for the intro budget: every pick path funnels its link
   // through here, so a new caller can't skip it. Near-idempotent for callers
@@ -150,6 +150,8 @@ export async function enqueuePick(
     linkPrev,
     linkClockAt,
     selectionShowAt: showAt,
+    // Marks one of a steer's opening tracks (queue/types.ts); private.
+    steer: steerKey,
   });
   if (pos === -2) {
     // Never-play blocklist refused the pick (library-db candidates can slip

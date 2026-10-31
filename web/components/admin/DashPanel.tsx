@@ -47,6 +47,7 @@ import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
+import { SteerCard } from './dash/SteerCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
 import {
   blockPlayingTrack,
@@ -94,9 +95,11 @@ import {
   fetchHealthStats,
   fetchNowPlayingFile,
   fetchRequests,
+  fetchSteer,
   fetchSuggestions,
   removeQueuedRow,
   runDashAction,
+  type SteerData,
 } from './dash/queries';
 import { useCardHashJump } from '../../hooks/useCardHashJump';
 
@@ -146,6 +149,14 @@ export default function DashPanel() {
     request: fetchHealthStats,
   });
   // A review surface, not a live ticker.
+  // The steer card owns this query; reading it here badges the steer's opening
+  // tracks in the queue. From the admin route, never from the public /state.
+  const steerQuery = useAdminQuery<SteerData>({
+    key: dashKeys.steer(), adminFetch, enabled: ready, staleTime: 0,
+    refetchInterval: () => 30_000,
+    request: fetchSteer,
+  });
+  const steerQueued = new Set((steerQuery.data?.queued ?? []).map(t => t.id));
   const requestsQuery = useAdminQuery<RequestEntry[]>({
     key: dashKeys.requests(), adminFetch, enabled: ready, staleTime: 0,
     refetchInterval: () => 10_000,
@@ -599,6 +610,14 @@ export default function DashPanel() {
                             </button>
                           </span>
                         ) : null}
+                        {typeof t.subsonic_id === 'string' && steerQueued.has(t.subsonic_id) ? (
+                          <span
+                            title="One of the steer's opening tracks. Only you see this; listeners see an ordinary pick."
+                            className="shrink-0 text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-ink/70 uppercase"
+                          >
+                            steer
+                          </span>
+                        ) : null}
                         <QueueHeldBadge sent={t.sent} />
                         <span
                           title={t.airsAt ? 'Forecast start, from the lengths queued ahead' : undefined}
@@ -807,6 +826,8 @@ export default function DashPanel() {
           </Card>
 
           <TakeoverCard tz={tz} locale={locale} />
+
+          <SteerCard tz={tz} locale={locale} />
 
           <Card title="Broadcast">
             <div className="grid gap-2.5">

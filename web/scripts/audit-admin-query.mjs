@@ -60,7 +60,18 @@ const defaultOwnershipRegistry = [
   {
     file: 'dash/queries.ts', function: 'fetchTakeoverWindow',
     reads: [{ callee: 'adminJson', method: 'GET', path: '/schedule/next-change', signal: 'signal' }],
-    consumers: [{ file: 'dash/TakeoverCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
+    consumers: [
+      { file: 'dash/TakeoverCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 },
+      { file: 'dash/SteerCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 },
+    ],
+  },
+  {
+    file: 'dash/queries.ts', function: 'fetchSteer',
+    reads: [{ callee: 'adminJson', method: 'GET', path: '/steer', signal: 'signal' }],
+    consumers: [
+      { file: 'dash/SteerCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 },
+      { file: 'DashPanel.tsx', owner: 'useAdminQuery', property: 'request', count: 1 },
+    ],
   },
   {
     file: 'dash/queries.ts', function: 'fetchNavidromeStatus',

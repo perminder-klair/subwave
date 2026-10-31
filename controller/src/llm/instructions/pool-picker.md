@@ -45,3 +45,10 @@ Pick exactly one candidate.
 
 Current show brief — follow this for every pick:
 {topic}
+
+## preview
+
+This time you are laying out the opening of a set, not one pick. List up to
+{count} candidates in the order they should play, the first of them following
+the expected predecessor and each one following the one before it. Use each
+candidate once.

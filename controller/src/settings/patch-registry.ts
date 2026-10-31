@@ -85,6 +85,7 @@ import {
 } from '../schemas/persona.js';
 import { scheduleOverrideSchema, scheduleSchema } from '../schemas/schedule.js';
 import { SHOW_MAX_TRACK_SECONDS, showsSchema } from '../schemas/show.js';
+import { steerSchema } from '../schemas/steer.js';
 import { webhooksSchema } from '../schemas/webhook.js';
 
 // Mirrors settings/defaults.ts's BOUNDS.maxTrackSeconds, which reads its ceiling
@@ -146,6 +147,7 @@ export const SETTINGS_PATCH_KEYS = [
   'shows',
   'schedule',
   'scheduleOverride',
+  'steer',
   'activePersonaId',
   'tts',
   'llm',
@@ -275,6 +277,8 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   // pin is how a takeover is cancelled.
   scheduleOverride: (ctx) =>
     scheduleOverrideSchema({ showIds: ctx.showIds, now: null }).nullable(),
+  // Nullable for the same reason: null is how a steer is cleared.
+  steer: steerSchema({ now: null }).nullable(),
   // These three were already on a shared schema before this registry existed —
   // update() reaches them through validateShowsStrict / validateScheduleStrict /
   // validateWebhooksStrict, which is where their server-only halves live (id
@@ -378,6 +382,8 @@ const SETTINGS_PATCH_ROOTED_KEYS: ReadonlySet<string> = new Set<SettingsPatchKey
   // because validateScheduleOverrideStrict has always rooted them here. Adding
   // the key to the text instead would double it on that path.
   'scheduleOverride',
+  // validateSteerStrict roots its messages the same way.
+  'steer',
   // The same three validate*Strict functions already root at their settings
   // key, so the route must too or the two disagree about the same body.
   'shows',

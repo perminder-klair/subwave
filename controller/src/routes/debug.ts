@@ -25,6 +25,7 @@ import * as library from '../music/library.js';
 import * as subsonicLog from '../music/subsonic-log.js';
 import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
+import { withSteer } from '../music/steer.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
@@ -126,7 +127,8 @@ router.post('/debug/discovery/compare', requireAdmin, async (_req, res) => {
     const { scope, activeShow, playlistTracks, episodeSource, context: pickContext } = await livePickerScope(queue, { context: await getFullContext() });
     const current = queue.current?.track ?? null;
     const agentStarted = performance.now();
-    const agent = await pickerAgent.run({ messages: session.pickWindowMessages(), scope });
+    // The live pick's messages, steer included, so the dry run sees what a pick would.
+    const agent = await pickerAgent.run({ messages: withSteer(session.pickWindowMessages(), settings.activeSteer()?.prompt), scope });
     const agentElapsedMs = Math.round(performance.now() - agentStarted);
     const shortlistStarted = performance.now();
     const explore = shouldExplore({ inRun: runActive(), audioWaypoint: scope.audioWaypoint, strictPlaylist: activeShow?.playlistStrict });
