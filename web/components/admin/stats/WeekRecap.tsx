@@ -62,7 +62,7 @@ function Headline({ t }: { t: WeekTotals }) {
   }
   if (t.tracks != null) parts.push(`${fmtInt(t.tracks)} ${t.tracks === 1 ? 'track' : 'tracks'} on air`);
   return (
-    <p className="m-0 max-w-[24ch] font-display text-[clamp(28px,6vw,42px)] leading-[1.08] font-normal tracking-[-0.02em] text-balance">
+    <p className="m-0 text-[22px] leading-[1.25] font-extrabold tracking-[-0.02em]">
       {parts.length ? `${parts.join(', and ')}.` : 'A quiet week.'}
     </p>
   );
@@ -72,7 +72,7 @@ function Fact({ label, value, sub }: { label: string; value: ReactNode; sub: Rea
   return (
     <Cell className="gap-1.5 px-6 py-[18px]">
       <span className={LABEL}>{label}</span>
-      <span className="font-display text-[24px] leading-[1.1] break-words">{value}</span>
+      <span className="text-[18px] leading-[1.25] font-bold tracking-[-0.01em] break-words">{value}</span>
       <span className={SUB}>{sub}</span>
     </Cell>
   );

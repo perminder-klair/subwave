@@ -12,7 +12,9 @@ import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { cn } from '../../../lib/cn';
 import type { Health } from '../../../lib/statsHealth';
 
-export const LABEL = 'font-mono text-[10px] font-bold uppercase tracking-[0.2em]';
+// A box's own title: the admin's card-head title (globals.css .card-head .title),
+// so a Stats panel reads like every other card on the site.
+export const LABEL = 'text-[11px] font-bold uppercase tracking-[0.25em]';
 export const NOTE = 'font-mono text-[10px] uppercase tracking-[0.16em] text-muted';
 export const SUB = 'font-mono text-[11px] text-muted';
 export const FIGURE = 'font-mono text-[22px] font-bold leading-[1.1] tabular-nums';
@@ -33,7 +35,10 @@ export function Section({ title, sub, right, id, bare, children }: {
     <section id={id} aria-label={title} className="grid scroll-mt-[var(--stats-clearance,112px)] grid-cols-1 gap-3">
       {!bare && (
         <header className={cn('flex flex-wrap gap-x-4 gap-y-1', right ? 'items-center' : 'items-baseline')}>
-          <h2 className="m-0 font-display text-[30px] leading-[1.1] font-normal tracking-[-0.01em]">{title}</h2>
+          {/* The Library's section heads ("Your library"): sans, uppercase, spaced.
+              The theme's display face is a poster face on some themes, too
+              loud for a heading that repeats down the page. */}
+          <h2 className="m-0 text-[14px] leading-[1.3] font-bold tracking-[0.2em] uppercase">{title}</h2>
           {sub && <span className={cn(NOTE, 'sm:ml-auto')}>{sub}</span>}
           {right && <span className="ml-auto sm:ml-0">{right}</span>}
         </header>
