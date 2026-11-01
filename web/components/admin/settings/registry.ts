@@ -369,6 +369,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Stem cache', section: 'stems', card: 'Stem transitions', keywords: 'demucs drums bass vocals disk' },
   { label: 'Stem cache budget', section: 'stems', card: 'Stem transitions', keywords: 'gb evict oldest' },
   { label: 'Stem-blend seams', section: 'stems', card: 'Stem transitions', keywords: 'drums carry under intro blend' },
+  { label: 'Orphan stems cleanup', section: 'stems', card: 'Orphan stems cleanup', keywords: 'quarantine purge deleted tracks left library reclaim disk daily pass' },
   { label: 'Crossfade curve', section: 'broadcast', card: 'Crossfade', keywords: 'equal power linear dip fade shape' },
   { label: 'Sweep', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect filter gear change clash dj mode' },
   { label: 'Washout', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect echo tail dub exit length cap dj mode' },
