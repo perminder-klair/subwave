@@ -95,23 +95,38 @@ function ownership() {
   return { clientName: config.navidrome.clientName, user: config.navidrome.user };
 }
 
+export type NativeServer =
+  | { usable: true; server?: ServerIdentity }
+  | { usable: false; reason: 'not-configured' }
+  | { usable: false; reason: 'not-navidrome'; server?: ServerIdentity };
+
+/** May Navidrome's own API be asked? The one check before any native call. */
+export async function nativeServer(): Promise<NativeServer> {
+  if (!config.navidrome.url || !config.navidrome.user || !config.navidrome.password) {
+    return { usable: false, reason: 'not-configured' };
+  }
+  // Ask the Subsonic API which server this is before touching Navidrome's own.
+  // A failed ping is not a verdict: the native login that follows reports the outage.
+  const ping = await pingWith({ url: config.navidrome.url, user: config.navidrome.user, pass: config.navidrome.password });
+  const server: ServerIdentity | undefined = ping.ok
+    ? { type: ping.serverType && ping.serverType !== 'unknown' ? ping.serverType : '', version: ping.serverSoftwareVersion ?? null }
+    : undefined;
+  if (serverKind(server?.type) === 'other') return { usable: false, reason: 'not-navidrome', server };
+  return { usable: true, server };
+}
+
 /**
  * Read the station's player rows; with `enable`, switch on every one still off.
  * A row refused mid-way leaves the others switched and reports `refused`.
  */
 export async function realPathStatus({ enable = false }: { enable?: boolean } = {}): Promise<RealPathStatus> {
-  if (!config.navidrome.url || !config.navidrome.user || !config.navidrome.password) {
-    return { state: 'unavailable', players: [], switched: [], reason: 'the music server is not configured' };
+  const native = await nativeServer();
+  if (!native.usable) {
+    return native.reason === 'not-configured'
+      ? { state: 'unavailable', players: [], switched: [], reason: 'the music server is not configured' }
+      : { state: 'not-navidrome', players: [], switched: [], server: native.server };
   }
-  // Ask the Subsonic API which server this is before touching Navidrome's own.
-  // A failed ping is not a verdict: the native login below reports the outage.
-  const ping = await pingWith({ url: config.navidrome.url, user: config.navidrome.user, pass: config.navidrome.password });
-  const server: ServerIdentity | undefined = ping.ok
-    ? { type: ping.serverType && ping.serverType !== 'unknown' ? ping.serverType : '', version: ping.serverSoftwareVersion ?? null }
-    : undefined;
-  if (serverKind(server?.type) === 'other') {
-    return { state: 'not-navidrome', players: [], switched: [], server };
-  }
+  const { server } = native;
   let token: string;
   let players: NavidromePlayerRow[];
   try {

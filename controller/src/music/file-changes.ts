@@ -10,9 +10,7 @@
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { config } from '../config.js';
-import { login, nativeFetch } from './navidrome-players.js';
-import { serverKind } from './navidrome-players-policy.js';
-import { pingWith } from './subsonic.js';
+import { login, nativeFetch, nativeServer } from './navidrome-players.js';
 import { capMark, changesFloor, futureDated } from './replaced-file-policy.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
@@ -71,10 +69,8 @@ export async function changedFiles(
   earliestMeasured: string | null,
   now: number = Date.now(),
 ): Promise<ChangedFiles | null> {
-  if (!config.navidrome.url || !config.navidrome.user || !config.navidrome.password) return null;
   try {
-    const ping = await pingWith({ url: config.navidrome.url, user: config.navidrome.user, pass: config.navidrome.password });
-    if (ping.ok && serverKind(ping.serverType) === 'other') return null;
+    if (!(await nativeServer()).usable) return null;
     const token = await login();
     const mark = await readMark();
     const firstFloor = earliestMeasured ? Date.parse(earliestMeasured) : NaN;
