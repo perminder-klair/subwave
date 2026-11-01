@@ -257,7 +257,7 @@ async function main() {
     // adopt.
     if (walkComplete && walked > 0) {
       const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: args.includes('--confirm-prune') });
-      if (held) logEvent('warning', held.message);
+      if (held) logEvent('warning', held.message, { hold: true });
       if (pruned > 0) {
         console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
       }

@@ -50,11 +50,14 @@ type TaggerState = {
   // Id of the current (or last) run's full log: the cursor feed below and its
   // file under state/tagger-logs/. null before the first run of this process.
   runLogId: string | null;
+  // What the current (or last) run held back for the operator, in its words. A
+  // held run exits 0, so this outlives it, until the next run starts.
+  holds: string[];
 };
 
 export const tagger: TaggerState = {
   running: false, startedAt: null, pid: null, lastLog: [], mode: null, progress: null, lastRun: null,
-  runLogId: null,
+  runLogId: null, holds: [],
 };
 
 // The full run log. `lastLog` above stays the short tail every snapshot carries;
@@ -288,6 +291,7 @@ function spawnChild(
   tagger.lastLog = [];
   tagger.mode = mode;
   tagger.progress = null;
+  tagger.holds = [];
   // One log and one file per run; openRunLog owns the id, retention and the
   // refused-file fallback. The previous id is passed so a run started in the
   // same second never shares it. The previous log is left open: 'exit' (which
@@ -371,6 +375,7 @@ function spawnChild(
             const last = tagger.lastLog[tagger.lastLog.length - 1];
             if (typeof last === 'string' && stripLogPrefix(last) === ev.text) tagger.lastLog.pop();
             tagger.lastLog.push({ kind: ev.kind, text: ev.text, at: ev.at });
+            if (ev.hold) tagger.holds.push(ev.text);
             thisRunLog.event(ev, (raw) => stripLogPrefix(raw) === ev.text);
           } catch { /* malformed sentinel — drop */ }
           continue;

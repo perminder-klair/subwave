@@ -228,9 +228,10 @@ replacement that keeps its folder's date is only seen by a full scan.
 
 A tag editor's "save all", or a restore that reset file dates, makes a whole
 library look replaced. So above 200 tracks or 2% of the library, whichever is
-larger, a walk clears nothing and logs a warning, and a reconcile finishes by
-saying the files are on hold. Until you answer, every walk finds the same files
-again, and any real replacement waits with them.
+larger, a walk clears nothing, logs a warning, and leaves a banner on the admin
+Library page saying the files are on hold. The banner stays after the run ends,
+until the next run starts. Until you answer, every walk finds the same files
+again and raises it again, and any real replacement waits with them.
 
 **The audio did not change** (only tags or dates did). Accept the files. This
 keeps their analysis and stems, and they are not found again:

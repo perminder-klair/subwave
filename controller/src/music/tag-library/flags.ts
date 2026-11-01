@@ -202,7 +202,7 @@ export async function walkNavidrome(
     candidates: candidates.size, knownTracks: walked, confirmed: confirmReplaced, accepted: acceptReplaced,
   });
   const held = !decision.clear && decision.reason === 'held';
-  if (held) logEvent('warning', decision.message);
+  if (held) logEvent('warning', decision.message, { hold: true });
   const replaced = decision.clear ? [...candidates.keys()] : [];
   for (const [id, size] of decision.clear ? candidates : []) db.clearTrackAudio(id, size);
   if (replaced.length > 0) {
@@ -264,7 +264,7 @@ export async function reconcileOnly() {
     }));
     if (held) {
       heldMessage = held.message;
-      logEvent('warning', held.message);
+      logEvent('warning', held.message, { hold: true });
     }
     console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
     reportCatalogueReady(walked);

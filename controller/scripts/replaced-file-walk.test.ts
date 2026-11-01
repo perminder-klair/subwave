@@ -45,6 +45,11 @@ let padding: Song[] = [];
 let failDeepPage = false;
 let refuseLogin = false;
 const by = (id: string) => songs.find(s => s.id === id) as Song;
+// The events a run flagged as a hold, for the panel to keep once it stops.
+const holdsIn = (out: string) => out.split('\n')
+  .filter(line => line.startsWith('[event] '))
+  .map(line => JSON.parse(line.slice('[event] '.length)) as { kind: string; text: string; hold?: boolean })
+  .filter(event => event.hold);
 
 function subsonic(req: IncomingMessage, res: ServerResponse, url: URL) {
   const endpoint = (url.pathname.split('/').at(-1) ?? '').replace(/\.view$/, '');
@@ -201,6 +206,10 @@ test('a mass replacement is held: nothing clears, the sizes and the mark stay, a
   assert.match(first.out, /--confirm-replaced/);
   assert.doesNotMatch(first.label, /in sync/i, 'a hold is not "in sync"');
   assert.match(first.label, new RegExp(`${MASS + 1} replaced files on hold`));
+  const holds = holdsIn(first.out);
+  assert.equal(holds.length, 1, 'the panel is told, not just the log');
+  assert.equal(holds[0].kind, 'warning');
+  assert.match(holds[0].text, /--accept-replaced/);
   assert.equal(stored('s0').bpm, 100);
   assert.equal(stored(`s${MASS}`).file_size, SIZE + MASS, 'a held size is not stored');
   assert.equal(mark(), MARK, 'a held clear does not move the mark');
@@ -208,6 +217,18 @@ test('a mass replacement is held: nothing clears, the sizes and the mark stay, a
   const next = await reconcile();
   assert.match(next.check, new RegExp(`1 by size, ${MASS} by change time`), 'the next walk finds them again');
   assert.equal(mark(), MARK);
+});
+
+test('a held mass removal reaches the panel the same way', async () => {
+  songs = songs.slice(0, TRACKS - MASS);
+
+  const { out, label } = await reconcile();
+
+  assert.match(label, /Removal of missing tracks on hold/);
+  const holds = holdsIn(out);
+  assert.equal(holds.length, 1);
+  assert.match(holds[0].text, /Removal is on hold/);
+  assert.equal(db.requireDb().prepare('SELECT COUNT(*) AS n FROM tracks').get().n, TRACKS, 'nothing was removed');
 });
 
 test('--confirm-replaced clears a held mass and moves the mark', async () => {
@@ -231,6 +252,7 @@ test('--accept-replaced clears nothing, and the same files are not found again',
   const accepted = await reconcile('--accept-replaced');
 
   assert.doesNotMatch(accepted.out, /NOT cleared/);
+  assert.deepEqual(holdsIn(accepted.out), []);
   assert.match(accepted.out, new RegExp(`${MASS + 1} file\\(s\\) accepted`));
   assert.equal(stored('s0').bpm, 100, 'the analysis stays');
   assert.equal(existsSync(stemDir), true, 'the stems stay');
