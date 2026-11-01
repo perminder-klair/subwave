@@ -4,6 +4,8 @@
 //
 // Pinned here:
 //   - the columns are added on open, and opening again changes nothing;
+//   - a second process racing that first open can't fail it, the ALTERs run
+//     under the write lock, and any other failure throws out of open();
 //   - the walk's Subsonic child maps to the four fields (walkFileInfo);
 //   - a writer without file facts (manual edit, analyzer top-up) never clears
 //     the stored ones, and a later walk updates them.
@@ -13,6 +15,7 @@ import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
+import Database from 'better-sqlite3';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 const dir = createTempDir(join(tmpdir(), 'subwave-file-info-'));
@@ -28,10 +31,81 @@ const cols = () => (db.getDb()!.pragma('table_info(tracks)') as Array<{ name: st
 const row = (id: string) => db.getDb()!
   .prepare('SELECT file_path, file_suffix, file_size, bit_rate FROM tracks WHERE id = ?').get(id);
 
+const FILE_COLUMNS: Array<[string, string]> = [
+  ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
+];
+const addColumns = (d: Database.Database) => {
+  for (const [name, type] of FILE_COLUMNS) d.exec(`ALTER TABLE tracks ADD COLUMN ${name} ${type}`);
+};
+
+// Back to the shape an upgrade finds, closed, so the next open has to add them.
+function dropColumns() {
+  for (const [name] of FILE_COLUMNS) db.getDb()!.exec(`ALTER TABLE tracks DROP COLUMN ${name}`);
+  db.close();
+}
+
+// Opens the library with a real second connection acting at a chosen moment:
+// `moves[n]` runs right after the opener's nth table_info(tracks) read. The first
+// read decides whether to take the lock, the second is the re-read under it.
+async function openWithRival(moves: Array<(opener: Database.Database, rival: Database.Database) => void>) {
+  const realPragma = Database.prototype.pragma;
+  let rival: Database.Database | null = null;
+  let reads = 0;
+  Database.prototype.pragma = function pragma(this: Database.Database, sql: string, options?: Database.PragmaOptions) {
+    const result = realPragma.call(this, sql, options);
+    if (this !== rival && sql === 'table_info(tracks)') {
+      rival ??= new Database(this.name, { timeout: 0 });
+      moves[reads++]?.(this, rival);
+    }
+    return result;
+  };
+  try {
+    await db.open({ embeddingDim: 8, adoptStoredDim: true });
+  } finally {
+    Database.prototype.pragma = realPragma;
+    (rival as Database.Database | null)?.close();
+  }
+  return reads;
+}
+
 test('the file columns exist after open, and a second open is a no-op', async () => {
   assert.deepEqual(cols(), ['file_path TEXT', 'file_suffix TEXT', 'file_size INTEGER', 'bit_rate INTEGER']);
   db.close();
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
+  assert.deepEqual(cols(), ['file_path TEXT', 'file_suffix TEXT', 'file_size INTEGER', 'bit_rate INTEGER']);
+});
+
+test('a rival that adds the columns between the read and the ALTER cannot fail open()', async () => {
+  dropColumns();
+  await openWithRival([(_, rival) => addColumns(rival)]);
+  assert.deepEqual(cols(), ['file_path TEXT', 'file_suffix TEXT', 'file_size INTEGER', 'bit_rate INTEGER']);
+});
+
+test('the ALTERs run under the write lock', async () => {
+  dropColumns();
+  const reads = await openWithRival([
+    () => {},
+    // The re-read: a rival must not be able to write until the columns are in.
+    (_, rival) => assert.throws(() => rival.exec('BEGIN IMMEDIATE'), { code: 'SQLITE_BUSY' }),
+  ]);
+  assert.equal(reads, 2);
+  assert.deepEqual(cols(), ['file_path TEXT', 'file_suffix TEXT', 'file_size INTEGER', 'bit_rate INTEGER']);
+});
+
+test('any other failure throws out of open(), and the next open adds the columns', async () => {
+  dropColumns();
+  await assert.rejects(openWithRival([(opener, rival) => {
+    opener.pragma('busy_timeout = 20'); // the default would hold this test for 5 s
+    rival.exec('BEGIN IMMEDIATE');
+  }]), { code: 'SQLITE_BUSY' });
+  db.close();
+  await db.open({ embeddingDim: 8, adoptStoredDim: true });
+  assert.deepEqual(cols(), ['file_path TEXT', 'file_suffix TEXT', 'file_size INTEGER', 'bit_rate INTEGER']);
+});
+
+test('a later open takes no write lock', async () => {
+  db.close();
+  await openWithRival([(_, rival) => rival.exec('BEGIN IMMEDIATE')]);
   assert.deepEqual(cols(), ['file_path TEXT', 'file_suffix TEXT', 'file_size INTEGER', 'bit_rate INTEGER']);
 });
 
