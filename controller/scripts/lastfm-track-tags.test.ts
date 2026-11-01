@@ -436,6 +436,24 @@ test('a bad key is an outage, not a library of misses', async () => {
   assert.equal(row('a').lastfmTrackTagsAt, null);
 });
 
+// A pass ends after six failures in a row, and a failed row stays owed for good.
+// In a fixed order, rows that always fail would end every pass at the same place.
+test('rows Last.fm always refuses cannot keep a pass from the rest of the library', async () => {
+  const refused: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    seed(`bad${i}`, 'Odd Act', `Refused ${i}`);
+    trackReplies.set(`Odd Act|Refused ${i}`, { body: { error: 8, message: 'Operation failed' } });
+    refused.push(`bad${i}`);
+  }
+  for (let i = 0; i < 40; i++) seed(`good${i}`, `Artist ${i}`, `Song ${i}`);
+  // However the failures fall in one pass, a later one gets past them.
+  for (let pass = 0; pass < 10 && db.idsNeedingLastfmTrackTags().length > refused.length; pass++) {
+    const ids = selectTrackTagIds({ reEnrich: false, limit: Infinity, ids: [], owed: db.idsNeedingLastfmTrackTags() });
+    await backfillLastfmTrackTags(ids, 4, createLastfmPacer({ minGapMs: 1, failureBackoffMs: 1, rateLimitBackoffMs: 1, maxBackoffMs: 4 }));
+  }
+  assert.deepEqual(db.idsNeedingLastfmTrackTags().sort(), refused.sort(), 'all the others answered, and a failure stamped nothing');
+});
+
 // ---- re-enrich ----
 
 test('--re-enrich re-asks answered rows; unchanged tags stay clean, changed ones go dirty', async () => {
@@ -475,15 +493,33 @@ test('--re-enrich during an outage keeps the merged list and its stamp', async (
 
 test('the scope: --re-enrich stays inside what the caller resolved, a normal pass backfills', () => {
   const owed = ['o1', 'n1', 'o2'];
-  assert.deepEqual(selectTrackTagIds({ reEnrich: false, limit: Infinity, ids: [], owed }), owed);
+  const order = (ids: string[]) => ids;
+  assert.deepEqual(selectTrackTagIds({ reEnrich: false, limit: Infinity, ids: [], owed, order }), owed);
   assert.deepEqual(
-    selectTrackTagIds({ reEnrich: false, limit: Infinity, ids: ['n1', 'answered'], owed }),
+    selectTrackTagIds({ reEnrich: false, limit: Infinity, ids: ['n1', 'answered'], owed, order }),
     ['n1', 'o1', 'o2'],
     'this run\'s new tracks first, an answered one not at all',
   );
   assert.deepEqual(selectTrackTagIds({ reEnrich: false, limit: 1, ids: ['n1'], owed }), ['n1'], '--limit reaches it');
-  assert.deepEqual(selectTrackTagIds({ reEnrich: true, limit: Infinity, ids: ['a', 'b'], owed }), ['a', 'b']);
-  assert.deepEqual(selectTrackTagIds({ reEnrich: true, limit: 1, ids: ['a', 'b'], owed }), ['a']);
+  assert.deepEqual(selectTrackTagIds({ reEnrich: true, limit: Infinity, ids: ['a', 'b'], owed, order }), ['a', 'b']);
+  assert.deepEqual(selectTrackTagIds({ reEnrich: true, limit: 1, ids: ['a', 'b'], owed, order }), ['a']);
+});
+
+test('the order is new each pass, whichever scope is walked, and new tracks still go first', () => {
+  const reversed = (ids: string[]) => [...ids].reverse();
+  const owed = ['o1', 'n1', 'n2', 'o2'];
+  assert.deepEqual(
+    selectTrackTagIds({ reEnrich: false, limit: Infinity, ids: ['n1', 'n2'], owed, order: reversed }),
+    ['n2', 'n1', 'o2', 'o1'],
+  );
+  assert.deepEqual(
+    selectTrackTagIds({ reEnrich: true, limit: Infinity, ids: ['a', 'b'], owed, order: reversed }),
+    ['b', 'a'],
+  );
+  const many = Array.from({ length: 200 }, (_, i) => `id${i}`);
+  const picked = selectTrackTagIds({ reEnrich: false, limit: Infinity, ids: [], owed: many });
+  assert.notDeepEqual(picked, many, 'the default order is not the stored one');
+  assert.deepEqual([...picked].sort(), [...many].sort(), 'and it loses nothing');
 });
 
 test('--limit caps the pass, and the rest stays owed for the next one', async () => {
