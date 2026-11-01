@@ -247,6 +247,18 @@ test('the password goes over https, or to a host on the station\'s own network',
     'http://169.254.10.1',
     'http://[fe80::1]',
     'http://[febf::1]',
+    'http://[FE80::1]:4533',
+    // Tailscale's 100.64.0.0/10, at both edges.
+    'http://100.64.0.0',
+    'http://100.64.0.1:4533',
+    'http://100.100.100.100',
+    'http://100.127.255.255',
+    // IPv6 unique-local, fc00::/7, at both edges and in every spelling.
+    'http://[fc00::1]',
+    'http://[fd00::1]',
+    'http://[fdff:ffff::1]:4533',
+    'http://[FD12:3456:789A:1::1]',
+    'http://[fd00:0:0:0:0:0:0:1]',
     // Names.
     'http://localhost:4533',
     'http://LOCALHOST',
@@ -254,6 +266,13 @@ test('the password goes over https, or to a host on the station\'s own network',
     'http://Music.Box.local:4533',
     'http://navidrome:4533',
     'http://navidrome/sub/path',
+    // The setup wizard's own default for a Navidrome on the Docker host.
+    'http://host.docker.internal:4533',
+    'http://navidrome.corp.internal',
+    'http://nas.lan',
+    'http://NAS.LAN:4533',
+    'http://nas.home.arpa',
+    'http://music.tail1234.ts.net',
   ]) {
     assert.equal(passwordRefusal(url), null, url);
   }
@@ -274,20 +293,48 @@ test('anything else is refused, with what was refused named', () => {
     'http://169.255.0.1',
     'http://126.0.0.1',
     'http://0.0.0.0',
-    'http://100.64.0.1',
-    // Not on the list, however local they look.
-    'http://host.docker.internal:4533',
-    'http://nas.lan',
-    'http://[fd00::1]',
-    'http://[fec0::1]',
+    // Just outside Tailscale's range, either side, and the rest of 100/8.
+    'http://100.63.255.255',
+    'http://100.128.0.1',
+    'http://100.0.0.1',
+    'http://100.255.0.1',
+    // Public IPv6, and just outside each private range.
+    'http://[2001:4860:4860::8888]',
+    'http://[2606:4700:4700::1111]',
     'http://[2001:db8::1]',
+    'http://[fbff::1]',
+    'http://[fe00::1]',
+    'http://[fe7f::1]',
+    'http://[fec0::1]',
+    'http://[ff02::1]',
+    // A short first group is not the range it looks like: 00fd::, 0fd0::.
+    'http://[fd::1]',
+    'http://[fd0::1]',
+    'http://[fe8::1]',
+    // A private IPv4 in IPv6 clothing is not on the list; refused, not parsed.
     'http://[::ffff:8.8.8.8]',
+    'http://[::ffff:192.168.1.1]',
     'http://navidrome.',
     // A local-looking name that is not local.
     'http://localhost.example.com',
     'http://nas.local.example.com',
     'http://10.0.0.1.example.com',
     'http://192.168.1.1@music.example.com',
+    // A private suffix anywhere but the end, or with no name in front.
+    'http://example.lan.com',
+    'http://lan.example.com',
+    'http://host.docker.internal.example.com',
+    'http://internal.example.com',
+    'http://music.ts.net.example.com',
+    'http://music.home.arpa.example.com',
+    'http://ts.net',
+    'http://home.arpa',
+    // The suffix must be a whole label.
+    'http://nas.xlan',
+    'http://nas.xinternal',
+    'http://nas.xts.net',
+    'http://nas.xhome.arpa',
+    'http://nas.lan.',
     // Another scheme.
     'ftp://navidrome',
     'ws://localhost',
@@ -337,7 +384,8 @@ test('the Doctor says why the password was kept back, and how to fix it', async 
   const f = realPathFinding(st, { localMount: false });
   assert.equal(f.status, 'warn');
   assert.match(f.detail, /only sent over https or to a local address/);
-  assert.match(f.hint || '', /over https, or at a LAN address/);
+  assert.match(f.hint || '', /over https, or at a private address/);
+  assert.match(f.hint || '', /host\.docker\.internal/);
   assert.match(f.hint || '', /Settings → Players/);
 });
 
