@@ -2461,14 +2461,14 @@ class Queue {
 
   // The last text gate on every model-written spoken path: scheduled speech
   // (announce, announceExchange, announceAtNextTrack) and a pick's link or
-  // request intro (push, cleanUnrenderedIntro). `text` is the line as written,
-  // label off and not yet normalised, because normalising hides a template
-  // from the test (stand-in-policy); the return is the display form that airs.
-  // A stand-in line is dropped whole. An empty return is the callers' existing
-  // "nothing to air" case, so a dropped feature falls back exactly as a
-  // stood-down skill does. Operator text is exempt: a raw /dj/say (`verbatim`)
-  // and a jingle's script, which the operator typed (jingles.create from the
-  // Imaging page and onboarding).
+  // request intro (push, cleanUnrenderedIntro). `text` is the line with the
+  // caller's label off and not yet normalised, because stand-in-policy reads it
+  // both before and after normalising and past any other label; the return is
+  // the display form that airs. A stand-in line is dropped whole. An empty
+  // return is the callers' existing "nothing to air" case, so a dropped feature
+  // falls back exactly as a stood-down skill does. Operator text is exempt: a
+  // raw /dj/say (`verbatim`) and a jingle's script, which the operator typed
+  // (jingles.create from the Imaging page and onboarding).
   speakable(text: string, kind: string, { verbatim = false } = {}): string {
     const token = verbatim ? null : standInToken(text);
     if (!token) return normalizeForDisplay(text);
