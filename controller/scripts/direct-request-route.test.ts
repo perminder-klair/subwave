@@ -1413,6 +1413,16 @@ test('a quoted attribute word is a name, so a miss takes no pool', async () => {
   assert.equal(queue.upcoming.length, 0);
 });
 
+test('a named comparison with nothing on air still owns the miss on its stand-in', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  const result = await submit('something like Michael Jackson');
+  assert.equal(result.outcome, 'substituted');
+  assert.match(result.ack, /alternative/);
+  assert.equal(requestLog.snapshot(1)[0].pickSource, 'fallback');
+  assert.equal(requestLog.snapshot(1)[0].artistMiss, 'Michael Jackson');
+});
+
 const vertigo = { id: 'vertigo', title: 'Vertigo', artist: 'U2', genre: 'Rock', duration: 200 };
 test('a digit name beside a genre stays a name: the interpreter reads "play U2 rock"', async () => {
   catalogueSongs = [filler, vertigo];

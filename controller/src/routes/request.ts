@@ -977,7 +977,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // A search in the listener's own spelling answers in the library's ("Tupac"
   // finds 2Pac). That may be the same act, so the intro is not told it is not.
   const requestedArtist = matched.artist || (
-    selection.source === 'similar-to-current' && matched.similarTo && !matched.similarTo.releaseContext
+    matched.similarTo && !matched.similarTo.releaseContext
       ? matched.similarTo.artist || matched.similarTo.title
       : null
   );
