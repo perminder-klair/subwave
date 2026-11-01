@@ -348,3 +348,59 @@ test('the grammar reads what the analyzer really writes', async () => {
   await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 860 * DAY });
   assert.ok(existsSync(join(QU, id)), 'a complete stem set is an orphan');
 });
+
+// A track that came back, was analysed again, and left again: the live copy is
+// the newer one, and the quarantine holds the stale one.
+function collide(t0: number) {
+  const id = seedStem();
+  return (async () => {
+    await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: t0 });
+    mkdirSync(join(ROOT, id), { recursive: true });
+    writeFileSync(join(ROOT, id, 'head-drums.flac'), 'fresh analysis');
+    const t = new Date(NOW_BASE - 2 * DAY);
+    utimesSync(join(ROOT, id), t, t);
+    const back = await purge.runOrphanPurge({ knownIds: [id, '_sentinel'], confirm: true, now: t0 + DAY });
+    assert.equal(back.released.includes(id), false, 'the live slot is taken');
+    return id;
+  })();
+}
+
+test('a collision keeps the newer copy, on a fresh stamp', async () => {
+  const t0 = NOW_BASE + 900 * DAY;
+  const id = await collide(t0);
+  const left = t0 + 6.5 * DAY;
+  const rep = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: left });
+  assert.ok(!existsSync(join(ROOT, id)), 'the live copy moved');
+  assert.equal(readFileSync(join(QU, id, 'head-drums.flac'), 'utf8'), 'fresh analysis', 'the newer copy is the one kept');
+  assert.equal(Number(readFileSync(join(QU, id, '.orphaned-at'), 'utf8')), left, 'the grace starts when it left');
+  assert.equal(rep.quarantined, 1);
+  // The stale copy's stem file and its stamp are what the replace freed.
+  assert.equal(rep.freedBytes, 1024 + String(t0).length);
+});
+
+test('a replaced quarantine gets its whole grace, not what was left of the old one', async () => {
+  const t0 = NOW_BASE + 920 * DAY;
+  const id = await collide(t0);
+  const left = t0 + 6.5 * DAY;
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: left });
+  // Past the OLD stamp's week, half a day after the track left.
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: t0 + 7 * DAY + 1000 });
+  assert.ok(existsSync(join(QU, id)), 'still held inside its own week');
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: left + 7 * DAY + 1000 });
+  assert.ok(!existsSync(join(QU, id)), 'aged out a week after it left');
+});
+
+test('a collision whose stale copy refuses to go leaves the live copy in the cache', async () => {
+  const t0 = NOW_BASE + 940 * DAY;
+  const id = await collide(t0);
+  chmodSync(join(QU, id), 0o555);
+  try {
+    const rep = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: t0 + 2 * DAY });
+    assert.equal(rep.failed, 1);
+    assert.equal(rep.quarantined, 0);
+    assert.equal(readFileSync(join(ROOT, id, 'head-drums.flac'), 'utf8'), 'fresh analysis');
+  } finally {
+    chmodSync(join(QU, id), 0o755);
+  }
+  rmSync(join(ROOT, id), { recursive: true, force: true });
+});

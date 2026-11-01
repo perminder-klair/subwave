@@ -10,7 +10,8 @@
 //   (a dot-directory, so scanDirs and the marker walk ignore it), and only a
 //   quarantine past the grace period is deleted. The quarantine is a move on
 //   the same filesystem, so it is atomic and costs no copy — the property
-//   root-squashed NFS shares need.
+//   root-squashed NFS shares need. An id that is quarantined already gives way
+//   to the newer live copy, which starts its own grace.
 // - A quarantine whose id is in the library again is RELEASED back (the live
 //   slot is free: a quarantine is a move, so exactly one copy exists). If a
 //   fresh analysis already took the slot the quarantine is superseded and
@@ -101,6 +102,19 @@ async function dirBytes(dir: string): Promise<number> {
     }
   } catch { /* vanished mid-scan */ }
   return total;
+}
+
+// Delete a dir and say what really went: a delete refused part-way (a squashed
+// share) leaves files behind, and those are not reclaimed space.
+async function deleteDir(dir: string): Promise<{ gone: boolean; freedBytes: number }> {
+  const before = await dirBytes(dir);
+  let removed = true;
+  try {
+    await rm(dir, { recursive: true, force: true });
+  } catch { removed = false; }
+  const gone = await stat(dir).then(() => false, () => true);
+  if (removed && gone) return { gone: true, freedBytes: before };
+  return { gone: false, freedBytes: gone ? 0 : Math.max(0, before - await dirBytes(dir)) };
 }
 
 // Quarantine age from the sidecar written at move time, or null when it is
@@ -306,22 +320,10 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     }
     // 2. Aged (and superseded-with-fresh-copy) quarantines: delete for good.
     for (const { name } of toDelete) {
-      const entryDir = path.join(qu, name);
-      const before = await dirBytes(entryDir);
-      let removed = true;
-      try {
-        await rm(entryDir, { recursive: true, force: true });
-      } catch { removed = false; }
-      // Freed is what is really gone: a delete refused part-way (a squashed
-      // share) leaves files behind, and those are not reclaimed space.
-      const gone = await stat(entryDir).then(() => false, () => true);
-      if (removed && gone) {
-        report.freedBytes += before;
-        report.deletedCount += 1;
-      } else {
-        if (!gone) report.freedBytes += Math.max(0, before - await dirBytes(entryDir));
-        report.failed += 1;
-      }
+      const { gone, freedBytes } = await deleteDir(path.join(qu, name));
+      report.freedBytes += freedBytes;
+      if (gone) report.deletedCount += 1;
+      else report.failed += 1;
     }
     // 3. Orphans: move into quarantine (same-filesystem rename; no merge).
     await mkdirSafe(qu);
@@ -331,19 +333,15 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     for (const { name } of plan.quarantine) {
       const from = path.join(root, name);
       const to = path.join(qu, name);
-      const collision = await stat(to).then(() => true, () => false);
-      if (collision) {
-        // A quarantine entry for the same id already exists — it can only have
-        // been re-created in the library and orphaned again. Keep the existing
-        // quarantine with its own stamp and drop the live copy. (This used to
-        // compare ages, but the live dir's only age was its mtime, which a
-        // rename keeps and the header rules out.)
-        try {
-          await rm(from, { recursive: true, force: true });
-          await writeNameSidecar(to, names?.get(name), now);
-          report.quarantined += 1;
-        } catch { report.failed += 1; }
-        continue;
+      if (await stat(to).then(() => true, () => false)) {
+        // This id is quarantined already: it came back, a fresh analysis took
+        // the live slot, and it left again. The live copy is the newer one, so
+        // it replaces the stale copy and starts a whole grace of its own. Never
+        // the reverse: dropping the live copy would delete the only fresh stems
+        // on the spot, and leave what remains to age out on the old stamp.
+        const stale = await deleteDir(to);
+        report.freedBytes += stale.freedBytes;
+        if (!stale.gone) { report.failed += 1; continue; }
       }
       try {
         await rename(from, to);
