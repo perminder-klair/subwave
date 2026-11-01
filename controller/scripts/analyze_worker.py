@@ -1538,21 +1538,32 @@ def stems_dir_to_write(stems_dir, require_marker):
 # for (ACL-only NFS, some NAS exports, FUSE) answer a mode change on SETATTR
 # with EPERM, ENOTSUP or ENOSYS. The item then keeps the mount's mode, and the
 # analyzer says so once per process, naming the path, so a cache that stays
-# 755 is explained in its own log.
+# 755 is explained in its own log. The warning keys on writability, never on
+# chmod's exit status (the entrypoint's state_writable_by_others): transitions/
+# is created root-owned 777, so it refuses this user on every render and is a
+# working config, which must neither warn nor spend the one line a real refusal needs.
 SHARED_DIR_MODE = 0o777
 SHARED_FILE_MODE = 0o666
 _shared_chmod_logged = False
 
 
-def _shared_chmod(path, mode):
+def _writable_by_others(path):
+    try:
+        return bool(os.stat(path).st_mode & 0o002)
+    except OSError:
+        return False
+
+
+def _shared_chmod(path, mode, shown_as=None):
     global _shared_chmod_logged
     try:
         os.chmod(path, mode)
     except OSError as err:
-        if not _shared_chmod_logged:
-            _shared_chmod_logged = True
-            log(f"could not set mode {oct(mode)} on {path} ({err.strerror or err}): "
-                "it keeps the mount's mode, and the write goes ahead (logged once)")
+        if _shared_chmod_logged or _writable_by_others(path):
+            return
+        _shared_chmod_logged = True
+        log(f"could not set mode {oct(mode)} on {shown_as or path} ({err.strerror or err}): "
+            "it keeps the mount's mode, and the write goes ahead (logged once)")
 
 
 def make_shared_dir(path):
@@ -1576,7 +1587,7 @@ def shared_output(path):
     tmp = path + ".tmp"
     try:
         yield tmp
-        _shared_chmod(tmp, SHARED_FILE_MODE)
+        _shared_chmod(tmp, SHARED_FILE_MODE, shown_as=path)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):

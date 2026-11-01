@@ -22,6 +22,7 @@ import stat
 import sys
 import tempfile
 import types
+from unittest.mock import patch
 
 sys.modules.setdefault("numpy", types.ModuleType("numpy"))
 sf = types.ModuleType("soundfile")
@@ -133,11 +134,41 @@ def t_file_chmod_refused():
     finally:
         os.chmod = real
     for name in ("tail-drums.flac", "tail-bass.flac", "tail-meta.json"):
-        assert os.path.exists(os.path.join(d, name)), f"{name} not published"
+        p = os.path.join(d, name)
+        assert os.path.exists(p), f"{name} not published"
+        assert mode(p) == 0o644, f"{name} {oct(mode(p))}: not the mount's mode"
     assert not [f for f in os.listdir(d) if f.endswith(".tmp")]
     lines = [ln for ln in err.getvalue().splitlines() if "could not set mode" in ln]
     assert len(lines) == 1, err.getvalue()
-    assert ".tmp" in lines[0] and "track-5" in lines[0], lines[0]
+    # The name an operator can look up, not a temp file already renamed away.
+    assert "track-5/tail-drums.flac " in lines[0] and ".tmp" not in lines[0], lines[0]
+
+
+def t_writable_refusal_is_silent():
+    # transitions/ is created root-owned 777, so it refuses the analyzer's chmod
+    # on every render and works fine. The warning keys on writability, never on
+    # chmod's exit status (the entrypoint's state_writable_by_others), and that
+    # silence must not spend the one line a real refusal needs.
+    healthy = os.path.join(root, "transitions-root-owned")
+    stuck = os.path.join(root, "stems", "track-7")
+    for path, m in ((healthy, 0o777), (stuck, 0o755)):
+        os.makedirs(path)
+        os.chmod(path, m)
+    real = os.chmod
+
+    def deny(path, m, *a, **k):
+        if path in (healthy, stuck):
+            raise PermissionError(1, "Operation not permitted", path)
+        return real(path, m, *a, **k)
+
+    err = io.StringIO()
+    with patch.object(aw, "_shared_chmod_logged", False), patch("os.chmod", deny), \
+            contextlib.redirect_stderr(err):
+        aw.make_shared_dir(healthy)
+        assert "could not set mode" not in err.getvalue(), err.getvalue()
+        aw.make_shared_dir(stuck)
+    lines = [ln for ln in err.getvalue().splitlines() if "could not set mode" in ln]
+    assert len(lines) == 1 and stuck in lines[0], err.getvalue()
 
 
 def t_failed_write_leaves_no_tmp():
@@ -189,6 +220,7 @@ test("tail-meta.json 666", t_tail_meta)
 test("a 755 folder from an older analyzer is opened up", t_existing_dir_reopened)
 test("a folder it cannot chmod still gets its files written", t_foreign_dir_tolerated)
 test("a file it cannot chmod is still published, logged once", t_file_chmod_refused)
+test("a refused chmod on a writable folder is silent, a stuck one still logs", t_writable_refusal_is_silent)
 test("a failed write leaves no partial .tmp", t_failed_write_leaves_no_tmp)
 test("render_transition writes its folder and clip shared", t_transition_output)
 sys.exit(1 if failures else 0)
