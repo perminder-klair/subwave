@@ -77,6 +77,17 @@ const server: Server = createServer((req, res) => {
       + `</channel></rss>`);
     return;
   }
+  if (path === '/dated2') {
+    // The second feed of the search-feed case: as stale, in its own way.
+    const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toUTCString();
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(`<?xml version="1.0"?><rss version="2.0"><channel><title>Dated too</title>`
+      + `<item><title>Last winter</title><pubDate>${at(120)}</pubDate></item>`
+      + `<item><title>Market day</title><pubDate>${at(2)}</pubDate></item>`
+      + `<item><title>Last month</title><pubDate>${at(30)}</pubDate></item>`
+      + `</channel></rss>`);
+    return;
+  }
   if (path === '/late') {
     // 22:30 UTC on the 30th is already the 31st in Athens (UTC+2).
     res.writeHead(200, { 'content-type': 'application/rss+xml' });
@@ -296,6 +307,18 @@ feed2: ${feedUrl(path)}
 Speak from what answered.
 `);
 }
+
+// The case the age cap exists for: two search feeds, both mixing in old items.
+writeSkill('merged-age', `---
+name: merged-age
+label: Merged age
+feed: ${feedUrl('/dated')}
+feed2: ${feedUrl('/dated2')}
+feedMaxAgeDays: 7
+feedMaxItems: 10
+---
+Only what is current.
+`);
 
 // None of the age or further-feed keys: `published` is not opt-in.
 writeSkill('plain-dated', `---
@@ -616,6 +639,11 @@ test('a skill with none of the new keys still hands the DJ each item\'s day', as
   const byTitle = new Map(data.headlines.map((h: any) => [h.title, h]));
   assert.match((byTitle.get("Tonight's talk") as any).published, /^\d{4}-\d{2}-\d{2}$/);
   assert.equal('published' in (byTitle.get('Undated notice') as any), false, 'only a dated item carries the key');
+});
+
+test('feedMaxAgeDays holds on merged feeds, on every feed of them', async () => {
+  const data: any = await fetchSegmentData(capOf('merged-age'), { time: {} }, {});
+  assert.deepEqual(data.headlines?.map((h: any) => h.title), ["Tonight's talk", 'Market day', 'Undated notice', 'Film festival']);
 });
 
 test('a tighter window keeps only what is inside it, plus the undated item', async () => {
