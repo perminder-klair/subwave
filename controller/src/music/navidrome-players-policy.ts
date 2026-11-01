@@ -137,7 +137,9 @@ export function serverLabel(s: ServerIdentity | undefined): string {
 // dotted quads, so none passes as a single label. IPv6 stays in its brackets,
 // lower-cased, with leading zeros gone, so a first group of `fd12` is the whole
 // group and `[fd::1]` (00fd::) can't pass for unique-local.
-const PRIVATE_SUFFIXES = ['.local', '.internal', '.lan', '.home.arpa', '.ts.net'];
+const PRIVATE_SUFFIXES = [
+  '.local', '.localdomain', '.internal', '.lan', '.home', '.home.arpa', '.corp', '.svc', '.fritz.box', '.ts.net',
+];
 
 function isLocalHost(host: string): boolean {
   if (host === 'localhost' || PRIVATE_SUFFIXES.some(suffix => host.endsWith(suffix))) return true;

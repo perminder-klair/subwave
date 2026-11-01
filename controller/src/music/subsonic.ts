@@ -12,6 +12,7 @@ import * as sceneVocab from './scene-vocab.js';
 import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
+import { libraryMountProven } from './library-mount.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -935,8 +936,9 @@ export function getRawStreamUrl(songId: string): string {
 //   library at the same place. The path is the file.
 // - absolute and outside it: Navidrome's root differs from the mount, and no
 //   setting maps one to the other. So leading segments come off one at a time,
-//   longest remainder first, stopping at two: a bare filename would match any
-//   `01.flac` at the top of the mount.
+//   longest remainder first, stopping at three: artist, album and file. Fewer
+//   can match another record (`Greatest Hits/01 - Intro.flac`), and the wrong
+//   song would air under this track's metadata. A miss streams the right one.
 // A path comes from the server, so any `..` segment rejects it outright, and
 // every candidate must stay under the mount. Lexical on purpose: a symlink the
 // operator put inside the library still plays.
@@ -950,20 +952,30 @@ function localPathCandidates(libRoot: string, songPath: string): string[] {
   if (inside(songPath)) return [songPath];
   const parts = segments.filter(Boolean);
   return parts
-    .slice(0, -1)
+    .slice(0, -2)
     .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
     .filter(inside);
 }
 
-// Local file path when MUSIC_LIBRARY_PATH mounts the library in the controller
-// container, else null. Navidrome's `path` is usually synthetic (built from
-// tags, not read off disk), so it routinely disagrees with the real layout; an
-// unchecked guess resolves to nothing in Liquidsoap and kills the pick (#1405).
-// Existence is checked here and a miss falls back to the stream URL.
-export function getLocalPath(song) {
+// The song's file as the CONTROLLER sees it on the MUSIC_LIBRARY_PATH mount, else
+// null, for a reader in this container (the cue probe's ffprobe). Navidrome's
+// `path` is usually synthetic (built from tags, not read off disk), so it
+// routinely disagrees with the real layout; an unchecked guess resolves to
+// nothing in Liquidsoap and kills the pick (#1405). Existence is checked here and
+// a miss falls back to the stream URL.
+export function findLibraryFile(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !song.path) return null;
   return localPathCandidates(libRoot, String(song.path)).find(p => fs.existsSync(p)) ?? null;
+}
+
+// The file to hand LIQUIDSOAP, else null so the pick streams. It opens the file
+// in the broadcast container, which only a proof from the mixer speaks for
+// (library-mount.ts): this reads the cached answer and never waits on one.
+export function getLocalPath(song) {
+  const libRoot = process.env.MUSIC_LIBRARY_PATH;
+  if (!libRoot || !libraryMountProven(libRoot)) return null;
+  return findLibraryFile(song);
 }
 
 // Best URI for Liquidsoap — local file if available, otherwise stream URL

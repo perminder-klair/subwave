@@ -16,11 +16,18 @@ const base = createTempDir(join(tmpdir(), 'subwave-local-path-'));
 process.env.STATE_DIR = join(base, 'state');
 mkdirSync(process.env.STATE_DIR, { recursive: true });
 const { getLocalPath, getPlayableUri } = await import('../src/music/subsonic.js');
+const { _markLibraryMountProven } = await import('../src/music/library-mount.js');
 
 const SONG = 'Artist/Album/01 - Song.flac';
 let run = 0;
 let scratch = '';
 let root = '';
+
+// The path logic on its own: library-mount.test.ts pins the proof in front of it.
+function mount(path: string) {
+  process.env.MUSIC_LIBRARY_PATH = path;
+  _markLibraryMountProven(path);
+}
 
 function file(path: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -32,7 +39,7 @@ beforeEach(() => {
   scratch = join(base, `run-${(run += 1)}`);
   root = join(scratch, 'music');
   mkdirSync(root, { recursive: true });
-  process.env.MUSIC_LIBRARY_PATH = root;
+  mount(root);
 });
 
 after(async () => {
@@ -44,7 +51,7 @@ test('a tag-built path joins the mount exactly as it always did', () => {
   file(join(root, SONG));
   assert.equal(getLocalPath({ path: SONG }), `${root}/${SONG}`);
 
-  process.env.MUSIC_LIBRARY_PATH = `${root}/`;
+  mount(`${root}/`);
   assert.equal(getLocalPath({ path: SONG }), `${root}//${SONG}`, 'the string is built as before');
 });
 
@@ -58,7 +65,7 @@ test('a real path inside the mount is used as it is', () => {
   const abs = file(join(root, SONG));
   assert.equal(getLocalPath({ path: abs }), abs);
 
-  process.env.MUSIC_LIBRARY_PATH = `${root}/`;
+  mount(`${root}/`);
   assert.equal(getLocalPath({ path: abs }), abs, 'a trailing slash on the mount changes nothing');
 });
 
@@ -92,13 +99,22 @@ test('nothing stripped is tried first, as the plain join always found it', () =>
   assert.equal(getLocalPath({ path: `/srv/${SONG}` }), whole);
 });
 
-test('stripping stops at two segments, so a bare filename cannot match', () => {
+test('stripping stops at three segments, so another record cannot match', () => {
   file(join(root, '01 - Song.flac'));
-  assert.equal(getLocalPath({ path: '/srv/library/Artist/Album/01 - Song.flac' }), null);
+  file(join(root, 'Album/01 - Song.flac'));
+  assert.equal(getLocalPath({ path: '/srv/library/Artist/Album/01 - Song.flac' }), null, 'neither the file nor the album alone');
   assert.equal(getLocalPath({ path: '/01 - Song.flac' }), null);
+  assert.equal(getLocalPath({ path: '/Album/01 - Song.flac' }), null);
 
-  const album = file(join(root, 'Album/01 - Song.flac'));
-  assert.equal(getLocalPath({ path: '/srv/library/Artist/Album/01 - Song.flac' }), album, 'two segments may');
+  const whole = file(join(root, SONG));
+  assert.equal(getLocalPath({ path: `/srv/library/${SONG}` }), whole, 'artist, album and file may');
+});
+
+test('the reviewer\'s wrong song stays a miss: same album name and file, another artist', () => {
+  file(join(root, 'Greatest Hits/01 - Intro.flac'));
+  assert.equal(getLocalPath({ path: '/srv/library/Queen/Greatest Hits/01 - Intro.flac' }), null);
+  file(join(root, 'Abba/Greatest Hits/01 - Intro.flac'));
+  assert.equal(getLocalPath({ path: '/srv/library/Queen/Greatest Hits/01 - Intro.flac' }), null, 'nor a third artist\'s copy');
 });
 
 test('a `..` anywhere is refused, even when the file is there', () => {
