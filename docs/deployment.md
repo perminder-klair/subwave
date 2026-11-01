@@ -296,13 +296,34 @@ Before you do it, know this:
   and, when `STEMS_DIR` is set, the relocated root as well, which the in-state
   loop never reaches.
 - **What the analyzer writes inside the cache stays deletable.** The
-  per-track folders (`stems/<id>/`), the stem files and the rendered
-  transition clips are created 777 / 666 whatever the analyzer's umask, so a
-  controller that is a different user on the share (a remote analyzer, or NFS
-  squashing root to `nobody`) can still evict them. Before, they came out
-  755 / 644 and eviction failed with `dir delete(s) failed — check
-  ownership/permissions on state/stems`; a `umask 0000` override on the
-  analyzer's command was the workaround, and can go.
+  per-track folders (`stems/<id>/`) and the stem files are created 777 / 666
+  whatever the analyzer's umask, so a controller that is a different user on
+  the share (a remote analyzer, or NFS squashing root to `nobody`) can still
+  evict them. Before, they came out 755 / 644 and eviction failed with
+  `dir delete(s) failed — check ownership/permissions on state/stems`; a
+  `umask 0000` override on the analyzer's command was the workaround, and can
+  go.
+
+  Folders already on disk keep their old mode, because a cached track is not
+  written again. If you saw that error, open them once after upgrading, from
+  inside the analyzer, which is the user that owns them:
+
+  ```sh
+  docker compose exec analyzer find /var/sub-wave/stems -mindepth 1 -type d ! -perm 777 -exec chmod 777 {} +
+  ```
+
+  On a multi-station install without `STEMS_DIR`, run it once per station on
+  `/var/sub-wave/stations/<id>/stems`. A `chmod` error names a folder the
+  analyzer does not own: `chown` that one on the host. Until a stuck folder is
+  opened the sweep leaves it out of the budget check and warns, rather than
+  evicting other tracks in its place, but its bytes still count as used. A
+  cache held over budget by stuck folders alone writes no new stems.
+- **Transition clips are not part of this cache.** The rendered clips live in
+  `state/transitions` (multi-station: `state/stations/<id>/transitions`), so
+  `STEMS_DIR` does not move them and they do not count against the stem
+  budget. The analyzer writes them 666 too. The controller's hourly sweep
+  removes any clip over an hour old, unless it is still queued for a seam that
+  hasn't aired.
 - **A mount that refuses `chmod` no longer stops the station.** Read-only
   binds, some NFS exports and exFAT/NTFS disks won't take the permission
   change. That used to abort the broadcast entrypoint before Icecast started,
