@@ -22,6 +22,37 @@
 
 export const QUARANTINE_DIR = '.orphan-quarantine';
 
+/** Sidecar stamped into a quarantine entry at move time. */
+export const ORPHANED_AT = '.orphaned-at';
+
+/** Sidecar written into a stem dir at quarantine time. Dot-prefixed so every
+ *  existing walk that filters dot-entries keeps ignoring it. */
+export const NAME_SIDECAR = '.track-meta.json';
+
+// What the analyzer writes into a track's dir (write_stems, write_tail_meta):
+// <window>-<stem>.flac and tail-meta.json, each through a .tmp a crash can leave
+// behind. The stem is the model's own source name, not a fixed four: a
+// non-default DEMUCS_MODEL writes guitar and piano too.
+const STEM_FILE = /^(?:(?:head|tail)-[a-z0-9_]+\.flac|tail-meta\.json)(?:\.tmp)?$/;
+
+/**
+ * Pure: do these directory entries read as a track's stem dir? "Not a known id"
+ * alone is not an orphan, because a share holds things SUB/WAVE never wrote
+ * (`lost+found`, `@eaDir`, `#recycle`, an operator's folder) and a purge only
+ * deletes what it can name as its own. So: at least one stem file, nothing but
+ * stem files and the purge's sidecars, and no subdirectory. An empty dir does
+ * not qualify, because `lost+found` usually is one.
+ */
+export function isStemDirListing(entries: ReadonlyArray<{ name: string; isDirectory: boolean }>): boolean {
+  let stemFiles = 0;
+  for (const e of entries) {
+    if (e.isDirectory) return false;
+    if (STEM_FILE.test(e.name)) stemFiles += 1;
+    else if (e.name !== ORPHANED_AT && e.name !== NAME_SIDECAR) return false;
+  }
+  return stemFiles > 0;
+}
+
 /** Directories newer than this are treated as in-flight analyzer writes. */
 export const IN_FLIGHT_MS = 3600_000;
 

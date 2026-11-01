@@ -22,18 +22,15 @@
 // or the logs still answers, with fewer names.
 
 import { createReadStream } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
-import { mapPool } from '../util/async-pool.js';
 import { config } from '../config.js';
 import { requireDb } from './library-db/handle.js';
-import { SCAN_CONCURRENCY, stemsRoot, stemsRootStatus } from './stem-cache.js';
-import { IN_FLIGHT_MS, QUARANTINE_DIR } from './orphan-purge-pure.js';
+import { stemsRoot } from './stem-cache.js';
+import { NAME_SIDECAR, QUARANTINE_DIR } from './orphan-purge-pure.js';
 
-/** Sidecar written into a stem dir at quarantine time. Dot-prefixed so every
- *  existing walk that filters dot-entries keeps ignoring it. */
-export const NAME_SIDECAR = '.track-meta.json';
+export { NAME_SIDECAR };
 
 export interface OrphanTrackName {
   title: string;
@@ -238,30 +235,4 @@ export async function resolveOrphanNames(ids: readonly string[], opts: ResolveOp
     for (const [id, n] of await namesFromLogs(new Set(missing), logDir, now)) out.set(id, n);
   }
   return out;
-}
-
-/** Orphan dir names at the cache root (not known ids, not dot dirs, not
- *  written within IN_FLIGHT_MS). Shares the purge's walk rules, the in-flight
- *  grace included, so the list and the report never disagree. */
-export async function listOrphanDirNames(knownIds: ReadonlySet<string>, now = Date.now()): Promise<string[]> {
-  const status = await stemsRootStatus({ readOnly: true });
-  if (!status.online) return [];
-  const root = stemsRoot();
-  let names: string[];
-  try {
-    const entries = await readdir(root, { withFileTypes: true });
-    names = entries.filter(e => e.isDirectory() && !e.name.startsWith('.') && !knownIds.has(e.name)).map(e => e.name);
-  } catch {
-    return [];
-  }
-  const ages = await mapPool(names, SCAN_CONCURRENCY,
-    name => stat(path.join(root, name)).then(st => st.mtimeMs, () => null));
-  return names.filter((_, i) => ages[i] != null && now - ages[i]! >= IN_FLIGHT_MS);
-}
-
-export async function listQuarantineDirNames(): Promise<string[]> {
-  try {
-    const entries = await readdir(path.join(stemsRoot(), QUARANTINE_DIR), { withFileTypes: true });
-    return entries.filter(e => e.isDirectory()).map(e => e.name);
-  } catch { return []; }
 }

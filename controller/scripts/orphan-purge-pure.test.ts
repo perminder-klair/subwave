@@ -6,6 +6,7 @@ import {
   QUARANTINE_DIR,
   QUARANTINE_GRACE_MS,
   exceedsAutoCeiling,
+  isStemDirListing,
   AUTO_MAX_MIN_DIRS,
 } from '../src/music/orphan-purge-pure.js';
 
@@ -118,4 +119,42 @@ test('the automatic ceiling: a large share of the cache, and at least AUTO_MAX_M
   assert.equal(exceedsAutoCeiling(40_000, 36_000), true, 'half the cache is an operator decision');
   assert.equal(exceedsAutoCeiling(AUTO_MAX_MIN_DIRS - 1, 0), false, 'a small cache is never held back');
   assert.equal(exceedsAutoCeiling(0, 0), false);
+});
+
+const file = (name: string) => ({ name, isDirectory: false });
+const dir = (name: string) => ({ name, isDirectory: true });
+
+test('a stem dir holds stem files and nothing else', () => {
+  assert.equal(isStemDirListing([file('head-drums.flac'), file('head-vocals.flac')]), true);
+  assert.equal(isStemDirListing([file('tail-bass.flac'), file('tail-meta.json')]), true);
+  assert.equal(isStemDirListing([file('head-other.flac'), file('.orphaned-at'), file('.track-meta.json')]), true);
+});
+
+test('the grammar follows the model: a six-source Demucs writes more than four stems', () => {
+  assert.equal(isStemDirListing([file('head-guitar.flac'), file('tail-piano.flac')]), true);
+});
+
+test('a crashed write leaves its .tmp behind, and that is still the analyzer\'s file', () => {
+  assert.equal(isStemDirListing([file('head-drums.flac'), file('head-bass.flac.tmp'), file('tail-meta.json.tmp')]), true);
+});
+
+test('an empty dir is not a stem dir: lost+found often is one', () => {
+  assert.equal(isStemDirListing([]), false);
+});
+
+test('sidecars alone are not a stem dir', () => {
+  assert.equal(isStemDirListing([file('.orphaned-at'), file('.track-meta.json')]), false);
+});
+
+test('anything else beside the stems disqualifies the dir', () => {
+  assert.equal(isStemDirListing([file('head-drums.flac'), file('keep-me.tar')]), false);
+  assert.equal(isStemDirListing([file('head-drums.flac'), file('.DS_Store')]), false);
+  assert.equal(isStemDirListing([file('middle-drums.flac')]), false);
+  assert.equal(isStemDirListing([file('head-drums.flac.bak')]), false);
+  assert.equal(isStemDirListing([file('xhead-drums.flac')]), false);
+});
+
+test('a subdirectory disqualifies the dir, even one named like a stem', () => {
+  assert.equal(isStemDirListing([file('head-drums.flac'), dir('@eaDir')]), false);
+  assert.equal(isStemDirListing([dir('head-drums.flac')]), false);
 });

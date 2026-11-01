@@ -122,7 +122,7 @@ test('a confirmed quarantine stamps the resolved name before the logs can age it
   const id = ID_A;
   const dir = join(root, id);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'window-drums.flac'), 'x');
+  writeFileSync(join(dir, 'head-drums.flac'), 'x');
   const { utimesSync } = await import('node:fs');
   const t = new Date(Date.now() - 2 * 86400_000);
   utimesSync(dir, t, t);
@@ -140,7 +140,7 @@ test('a confirmed quarantine stamps the resolved name before the logs can age it
   assert.equal(typeof stamped.orphanedAt, 'number');
 });
 
-test('the orphan list keeps the purge\'s in-flight grace: a dir written within the hour is not listed', async () => {
+test('the orphan list keeps the purge\'s rules: no dir written within the hour, and nothing that is not stems', async () => {
   // The panel's "Show tracks" list and the report count the same folders.
   const cache = await import('../src/music/stem-cache.js');
   const root = cache.stemsRoot();
@@ -150,7 +150,14 @@ test('the orphan list keeps the purge\'s in-flight grace: a dir written within t
   const fresh = join(root, ID_D);
   mkdirSync(old, { recursive: true });
   mkdirSync(fresh, { recursive: true });
+  writeFileSync(join(old, 'head-drums.flac'), 'x');
+  writeFileSync(join(fresh, 'head-drums.flac'), 'x');
   const t = new Date(Date.now() - 2 * 3600_000);
   utimesSync(old, t, t);
-  assert.deepEqual(await names.listOrphanDirNames(new Set()), [ID_C]);
+  const foreign = join(root, 'operator-backup');
+  mkdirSync(foreign, { recursive: true });
+  writeFileSync(join(foreign, 'keep-me.tar'), 'x');
+  utimesSync(foreign, t, t);
+  const { listOrphanDirNames } = await import('../src/music/orphan-purge.js');
+  assert.deepEqual(await listOrphanDirNames(new Set()), [ID_C]);
 });

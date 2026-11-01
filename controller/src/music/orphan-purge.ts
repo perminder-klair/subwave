@@ -3,6 +3,9 @@
 // planOrphanPurge / planQuarantinePurge (orphan-purge-pure.ts) decide; this
 // file performs the moves on the share and reports. Rules the IO must keep:
 //
+// - An orphan is a dir that READS as stems (isStemDirListing), not just one the
+//   library has no id for: a share holds things SUB/WAVE never wrote, and those
+//   are neither moved nor, should an earlier build have moved one, aged out.
 // - NEVER delete an orphan directly. Orphans MOVE into <root>/.orphan-quarantine
 //   (a dot-directory, so scanDirs and the marker walk ignore it), and only a
 //   quarantine past the grace period is deleted. The quarantine is a move on
@@ -48,6 +51,8 @@ import { resolveOrphanNames, writeNameSidecar, type OrphanTrackName } from './or
 import {
   exceedsAutoCeiling,
   IN_FLIGHT_MS,
+  isStemDirListing,
+  ORPHANED_AT,
   planOrphanPurge,
   planQuarantinePurge,
   QUARANTINE_DIR,
@@ -58,9 +63,6 @@ export { IN_FLIGHT_MS };
 
 // Set while a confirmed pass runs; a second confirmed pass is refused.
 let confirmedPassRunning = false;
-
-/** Sidecar stamped into a quarantine entry at move time. */
-const ORPHANED_AT = '.orphaned-at';
 
 export interface PurgeReport {
   dryRun: boolean;
@@ -124,6 +126,56 @@ async function listDirs(dir: string): Promise<string[]> {
   } catch {
     return []; // no quarantine yet
   }
+}
+
+async function readsAsStems(dir: string): Promise<boolean> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    return isStemDirListing(entries.map(e => ({ name: e.name, isDirectory: e.isDirectory() })));
+  } catch {
+    return false; // vanished mid-walk
+  }
+}
+
+/**
+ * One walk of the cache root, shared by the pass and the panel's track list so
+ * the two never disagree. Only an orphan is read at all: a known id is kept
+ * whatever its age or contents, so the walk stats and lists just the unknown
+ * dirs, in parallel, which keeps a 76k-dir share from costing one round trip
+ * per track. Throws when the root cannot be read.
+ */
+async function walkCacheRoot(root: string, known: ReadonlySet<string>, now: number, inFlightMs: number) {
+  const names = (await readdir(root, { withFileTypes: true }))
+    .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+    .map(e => e.name);
+  const kept = names.filter(name => known.has(name));
+  const unknown = names.filter(name => !known.has(name));
+  const verdicts = await mapPool(unknown, stemCache.SCAN_CONCURRENCY, async (name) => {
+    const mtimeMs = await stat(path.join(root, name)).then(st => st.mtimeMs, () => null);
+    if (mtimeMs == null) return 'gone'; // vanished mid-walk
+    if (now - mtimeMs < inFlightMs) return 'in-flight';
+    return (await readsAsStems(path.join(root, name))) ? 'orphan' : 'foreign';
+  });
+  return {
+    kept,
+    orphans: unknown.filter((_, i) => verdicts[i] === 'orphan'),
+    inFlight: verdicts.filter(v => v === 'in-flight').length,
+  };
+}
+
+/** The orphan dirs a pass would quarantine right now, for the panel's list. */
+export async function listOrphanDirNames(knownIds: ReadonlySet<string>, now = Date.now()): Promise<string[]> {
+  const status = await stemCache.stemsRootStatus({ readOnly: true });
+  if (!status.online) return [];
+  try {
+    return (await walkCacheRoot(stemCache.stemsRoot(), knownIds, now, IN_FLIGHT_MS)).orphans;
+  } catch {
+    return [];
+  }
+}
+
+export function listQuarantineDirNames(): Promise<string[]> {
+  return listDirs(path.join(stemCache.stemsRoot(), QUARANTINE_DIR));
 }
 
 /**
@@ -190,33 +242,19 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
   const report: PurgeReport = { ...empty };
 
   // ---- cache-root walk: quarantine orphans --------------------------------
-  let entries: string[] = [];
+  const cacheEntries: Array<{ name: string; known: boolean }> = [];
   if (rootStatus.online) {
     try {
-      entries = (await readdir(root, { withFileTypes: true }))
-        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-        .map(e => e.name);
+      const walk = await walkCacheRoot(root, known, now, inFlightMs);
+      report.inFlight = walk.inFlight;
+      cacheEntries.push(
+        ...walk.kept.map(name => ({ name, known: true })),
+        ...walk.orphans.map(name => ({ name, known: false })),
+      );
     } catch {
       return { ...report, refused: true, reason: `cache root ${root} could not be read` };
     }
   }
-  // Only an orphan needs its mtime (the in-flight check): a known id is kept
-  // whatever its age, so the walk stats just the orphans, in parallel, which
-  // keeps a 76k-dir share from costing one round trip per track.
-  const cacheEntries: Array<{ name: string; known: boolean }> = [];
-  const orphanNames: string[] = [];
-  for (const name of entries) {
-    if (known.has(name)) cacheEntries.push({ name, known: true });
-    else orphanNames.push(name);
-  }
-  const ages = await mapPool(orphanNames, stemCache.SCAN_CONCURRENCY,
-    name => stat(path.join(root, name)).then(st => st.mtimeMs, () => null));
-  orphanNames.forEach((name, i) => {
-    const mtimeMs = ages[i];
-    if (mtimeMs == null) return; // vanished mid-walk
-    if (now - mtimeMs < inFlightMs) { report.inFlight += 1; return; }
-    cacheEntries.push({ name, known: false });
-  });
   const plan = planOrphanPurge(cacheEntries, { now, confirm: opts.confirm });
   if (opts.automatic && opts.confirm && exceedsAutoCeiling(plan.quarantine.length, plan.keptCount)) {
     return {
@@ -246,8 +284,12 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     quEntries.push({ name, known: known.has(name), ageMs, liveSlotFree });
   }
   const qplan = planQuarantinePurge(quEntries, { now, confirm: opts.confirm, ...(opts.graceMs !== undefined ? { graceMs: opts.graceMs } : {}) });
+  // The delete is the step nothing undoes, so it reads the dir again: an entry
+  // that is not stems (an earlier build moved it) stays where it is.
+  const deletable = await mapPool(qplan.deleted, stemCache.SCAN_CONCURRENCY, d => readsAsStems(path.join(qu, d.name)));
+  const toDelete = qplan.deleted.filter((_, i) => deletable[i]);
   report.released = qplan.released;
-  report.deletedNames = qplan.deleted.map(d => d.name).slice(0, 10);
+  report.deletedNames = toDelete.map(d => d.name).slice(0, 10);
   report.agingCount = qplan.aging.length;
   report.supersededCount = qplan.superseded.length;
 
@@ -263,7 +305,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
       await rm(path.join(root, name, ORPHANED_AT), { force: true }).catch(() => {});
     }
     // 2. Aged (and superseded-with-fresh-copy) quarantines: delete for good.
-    for (const { name } of qplan.deleted) {
+    for (const { name } of toDelete) {
       const entryDir = path.join(qu, name);
       const before = await dirBytes(entryDir);
       let removed = true;
@@ -326,7 +368,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
   } else {
     // Dry run: every count, zero mutations.
     report.quarantined = plan.quarantine.length;
-    report.deletedCount = qplan.deleted.length;
+    report.deletedCount = toDelete.length;
   }
   return report;
 }

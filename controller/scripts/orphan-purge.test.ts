@@ -11,7 +11,7 @@
 
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
@@ -39,7 +39,7 @@ function seedStem(opts: { fresh?: boolean } = {}): string {
   const id = `track-${seq++}`;
   const dir = join(ROOT, id);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'window-drums.flac'), 'x'.repeat(1024));
+  writeFileSync(join(dir, 'head-drums.flac'), 'x'.repeat(1024));
   if (!opts.fresh) {
     // Two days behind `nowBase` below; passes use nowBase so it is not in-flight.
     const t = new Date(NOW_BASE - 2 * DAY);
@@ -175,15 +175,16 @@ test('a quarantine with no readable stamp starts its grace now, never from the d
 test('a move whose stamp cannot be written is undone and counted', async () => {
   const id = seedStem();
   const live = join(ROOT, id);
-  // The rename works, the stamp write does not (a directory sits where the
-  // stamp goes, so writeFile fails with EISDIR, as a refused write would). The
-  // dir must go back to the cache, unquarantined.
-  mkdirSync(join(live, '.orphaned-at'));
+  // The rename works, the stamp write does not (the stamp's name is a link to
+  // a directory, so writeFile fails with EISDIR as a refused write would, for
+  // root too). A real directory there would stop the dir reading as stems at
+  // all. The dir must go back to the cache, unquarantined.
+  symlinkSync(stateDir, join(live, '.orphaned-at'));
   const t = new Date(NOW_BASE - 2 * DAY);
   utimesSync(live, t, t);
   const rep = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 600 * DAY });
   assert.ok(rep.failed >= 1);
-  assert.ok(existsSync(join(live, 'window-drums.flac')), 'moved back to the cache');
+  assert.ok(existsSync(join(live, 'head-drums.flac')), 'moved back to the cache');
   assert.ok(!existsSync(join(QU, id)));
   rmSync(live, { recursive: true, force: true });
 });
@@ -269,4 +270,81 @@ test('the nightly pass refuses a mass move and leaves it to an operator; a manua
   const manual = await purge.runOrphanPurge({ knownIds: known, confirm: true, now });
   assert.ok(manual.quarantined >= 120);
   assert.ok(orphans.every(id => existsSync(join(QU, id))));
+});
+
+// What a share can hold that SUB/WAVE never wrote. Unknown to the library, so
+// "not a known id" alone reads each as an orphan, and they all sit past the
+// in-flight grace: only the look of the dir tells them from stems.
+const FOREIGN = ['lost+found', '@eaDir', '#recycle', 'operator-backup'];
+for (const name of FOREIGN) {
+  for (const populated of [false, true]) {
+    test(`${name}, ${populated ? 'populated' : 'empty'}, is left where it is by every pass`, async () => {
+      const dir = join(ROOT, name);
+      mkdirSync(dir, { recursive: true });
+      if (populated) writeFileSync(join(dir, 'keep-me.tar'), 'operator data');
+      const t = new Date(NOW_BASE - 30 * DAY);
+      utimesSync(dir, t, t);
+      try {
+        const now = NOW_BASE + 800 * DAY;
+        const nightly = await purge.runScheduledOrphanPurge(['_sentinel'], now);
+        assert.ok(!nightly.quarantinedNames.includes(name));
+        const manual = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now });
+        assert.ok(!manual.quarantinedNames.includes(name));
+        await purge.runScheduledOrphanPurge(['_sentinel'], now + 8 * DAY);
+        assert.ok(existsSync(dir), 'still at the cache root');
+        assert.ok(!existsSync(join(QU, name)), 'never quarantined');
+        if (populated) assert.equal(readFileSync(join(dir, 'keep-me.tar'), 'utf8'), 'operator data');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+test('a dir with stems in it and anything else beside them is not an orphan', async () => {
+  const mixedFile = seedStem();
+  writeFileSync(join(ROOT, mixedFile, 'notes.txt'), 'an operator file');
+  const mixedDir = seedStem();
+  mkdirSync(join(ROOT, mixedDir, 'old'));
+  for (const id of [mixedFile, mixedDir]) {
+    const t = new Date(NOW_BASE - 30 * DAY);
+    utimesSync(join(ROOT, id), t, t);
+  }
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 820 * DAY });
+  assert.ok(existsSync(join(ROOT, mixedFile, 'notes.txt')));
+  assert.ok(existsSync(join(ROOT, mixedDir, 'old')));
+  assert.ok(!existsSync(join(QU, mixedFile)));
+  assert.ok(!existsSync(join(QU, mixedDir)));
+  rmSync(join(ROOT, mixedFile), { recursive: true, force: true });
+  rmSync(join(ROOT, mixedDir), { recursive: true, force: true });
+});
+
+test('a foreign dir an earlier build quarantined is never aged out', async () => {
+  // Moved before the stem check existed: it sits in the quarantine with a stamp,
+  // and the delete is the one step that cannot be undone.
+  const dir = join(QU, 'operator-backup');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'keep-me.tar'), 'operator data');
+  writeFileSync(join(dir, '.orphaned-at'), String(NOW_BASE));
+  const dry = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: false, now: NOW_BASE + 840 * DAY });
+  assert.ok(!dry.deletedNames.includes('operator-backup'), 'not offered as a delete');
+  const rep = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 840 * DAY });
+  assert.ok(!rep.deletedNames.includes('operator-backup'));
+  assert.equal(readFileSync(join(dir, 'keep-me.tar'), 'utf8'), 'operator data');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('the grammar reads what the analyzer really writes', async () => {
+  // Pinned against stem-cache's own names, so the two cannot drift apart.
+  const id = `track-${seq++}`;
+  const dir = join(ROOT, id);
+  mkdirSync(dir, { recursive: true });
+  for (const w of ['head', 'tail'] as const) {
+    for (const s of cache.STEM_NAMES) writeFileSync(cache.stemPath(id, w, s), 'x');
+  }
+  writeFileSync(join(dir, 'tail-meta.json'), '{}');
+  const t = new Date(NOW_BASE - 30 * DAY);
+  utimesSync(dir, t, t);
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 860 * DAY });
+  assert.ok(existsSync(join(QU, id)), 'a complete stem set is an orphan');
 });
