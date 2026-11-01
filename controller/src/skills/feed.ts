@@ -425,8 +425,9 @@ function failureText(reason: unknown): string {
   return reason.name === 'AbortError' ? `no answer within ${MERGED_FEED_DEADLINE_MS / 1000}s` : reason.message;
 }
 
-// A feed named in a log line: host and path. The query is dropped, both for
-// length (a news search lives there) and because a private feed's token can.
+// A feed named in a log line or an error: host and path. The query is dropped,
+// both for length (a news search lives there) and because a private feed's token
+// can.
 function feedLabel(url: string): string {
   try {
     const u = new URL(url);
@@ -442,9 +443,10 @@ function feedLabel(url: string): string {
 // so a fire never offers more than one feed's worth, and the burn-on-read
 // memory (SEEN_KEEP) always covers a whole list. A feed failing while another
 // answers is reported; if the ones that answered had no items, the failure is
-// the answer (rethrown), so a broken feed is never hidden behind an empty one.
-// All of them failing rethrows the first error, the same `{ error }`
-// degradation a single feed has always had.
+// the answer, so a broken feed is never hidden behind an empty one. That error,
+// and all of them failing, is the same `{ error }` degradation a single feed has
+// always had, naming every feed that failed: with several, "HTTP 500" alone does
+// not say which one to go and fix.
 async function fetchMerged(
   feed: ResolvedFeed,
   report: (failures: FeedFailure[], answered: string[]) => void = () => {},
@@ -454,14 +456,13 @@ async function fetchMerged(
   if (urls.length === 1) return fetchHeadlines({ feedUrl: urls[0], ...opts });
   const results = await Promise.allSettled(urls.map((feedUrl) => fetchHeadlines({ feedUrl, ...opts, deadlineMs: MERGED_FEED_DEADLINE_MS })));
   const lists = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
-  const firstFailure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-  if (!lists.length || (firstFailure && !lists.some((l) => l.length))) throw new Error(failureText(firstFailure!.reason));
-  report(
-    results.flatMap((r, i) => (r.status === 'rejected'
-      ? [{ url: urls[i], error: failureText(r.reason) }]
-      : [])),
-    urls.filter((_, i) => results[i].status === 'fulfilled'),
-  );
+  const failures = results.flatMap((r, i) => (r.status === 'rejected'
+    ? [{ url: urls[i], error: failureText(r.reason) }]
+    : []));
+  if (!lists.length || (failures.length && !lists.some((l) => l.length))) {
+    throw new Error(failures.map(({ url, error }) => `${feedLabel(url)}: ${error}`).join('; '));
+  }
+  report(failures, urls.filter((_, i) => results[i].status === 'fulfilled'));
   const out: Headline[] = [];
   const taken = new Set<string>();
   for (let i = 0; lists.some((l) => i < l.length); i++) {

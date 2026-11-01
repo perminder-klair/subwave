@@ -69,7 +69,7 @@ export function requiresGrounding(cap: GroundedCap | null | undefined): boolean 
 export function unusableDataReason(data: SkillData): string | null {
   if (data == null) return null;
   if (typeof data !== 'object') return null;
-  if (data.error) return `data fetch failed (${String(data.error).slice(0, 120)})`;
+  if (data.error) return `data fetch failed (${String(data.error).slice(0, 400)})`;
   if (data.available === false) return 'the skill found nothing fresh worth airing';
   return null;
 }

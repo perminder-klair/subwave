@@ -92,7 +92,7 @@ const server: Server = createServer((req, res) => {
       + `</channel></rss>`);
     return;
   }
-  if (path === '/boom') {
+  if (path.startsWith('/boom')) {
     res.writeHead(500);
     res.end('nope');
     return;
@@ -236,6 +236,19 @@ label: Plain dated
 feed: ${feedUrl('/dated')}
 ---
 Just a feed.
+`);
+
+// Two failures behind an empty feed, on paths long enough that a report cut short
+// would lose the second one.
+const LONG_PATH = `/boom/${'a'.repeat(70)}`;
+writeSkill('two-down', `---
+name: two-down
+label: Two down
+feed: ${feedUrl('/empty')}
+feed2: ${feedUrl(`${LONG_PATH}-one`)}
+feed3: ${feedUrl(`${LONG_PATH}-two`)}
+---
+Two of three are down.
 `);
 
 writeSkill('all-hung', `---
@@ -578,6 +591,16 @@ for (const { kind, path, case: how } of BAD_FEEDS) {
 test('every feed hanging is the fetch error inside the tool wrapper, and burns nothing', async () => {
   const state: any = {};
   const data: any = await fetchSegmentData(capOf('all-hung'), { time: {} }, state);
-  assert.match(String(data.error), /no answer within 6s/);
+  assert.match(String(data.error), /\/hang: no answer within 6s; .*\/stall: no answer within 6s/);
   assert.equal(state.feedSeen.get('all-hung').size, 0);
+});
+
+test('a failure behind an empty feed names every feed that failed, through to the stand-down reason', async () => {
+  const cap = capOf('two-down');
+  const data: any = await fetchSegmentData(cap, { time: {} }, {});
+  assert.ok(String(data.error).includes(`${LONG_PATH}-one: News feed HTTP 500`), String(data.error));
+  assert.ok(String(data.error).includes(`${LONG_PATH}-two: News feed HTTP 500`), String(data.error));
+  const reason = String(standDownReason(cap, data));
+  assert.ok(reason.includes(`${LONG_PATH}-one`), reason);
+  assert.ok(reason.includes(`${LONG_PATH}-two`), reason);
 });

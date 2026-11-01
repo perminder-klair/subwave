@@ -146,8 +146,9 @@ every feed skill gets the same behaviour:
   appears in two of them is offered once. One of them failing is skipped while
   another answers, with a warning in the log naming the feed and the error
   (once, until it recovers). If the feeds that answered have no items, the
-  failure is reported as the fetch error, as with a single feed; all of them
-  failing stands the segment down.
+  failure is reported as the fetch error, as with a single feed, naming every
+  feed that failed; all of them failing does the same and stands the segment
+  down.
 - Items are **burned on read**: at most 6 fresh items reach one segment, and the
   next fire offers the ones after them rather than repeating. That memory is
   per-skill and lives for as long as the controller runs.
