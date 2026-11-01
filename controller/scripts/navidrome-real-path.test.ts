@@ -14,6 +14,7 @@ import {
   isOwnPlayer,
   normalizePlayerRow,
   ownPlayers,
+  passwordRefusal,
   realPathFinding,
   serverKind,
   stateOf,
@@ -26,12 +27,14 @@ import { realPathTick } from '../src/broadcast/scheduler.js';
 type Row = Record<string, unknown> & { id: string; reportRealPath: boolean };
 
 const fake = {
-  mode: 'navidrome' as 'navidrome' | 'not-navidrome' | 'refuse-put',
+  mode: 'navidrome' as 'navidrome' | 'not-navidrome' | 'refuse-put' | 'redirect-login',
   // What the Subsonic ping names the server: '' leaves `type` out (a server that does not say).
   serverType: 'navidrome',
   rows: [] as Row[],
   puts: [] as { id: string; body: Record<string, unknown> }[],
   requests: 0,
+  // Requests to where a redirected login was pointed.
+  redirected: 0,
 };
 
 function row(id: string, client: string, userAgent: string, userName: string, on: boolean): Row {
@@ -68,7 +71,15 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   if (url.pathname === '/rest/ping') {
     return send(200, { 'subsonic-response': { status: 'ok', version: '1.16.1', ...(fake.serverType ? { type: fake.serverType, serverVersion: '0.16.4' } : {}) } });
   }
+  if (url.pathname === '/elsewhere') {
+    fake.redirected++;
+    return send(200, { token: 'jwt-1' });
+  }
   if (req.method === 'POST' && url.pathname === '/auth/login') {
+    if (fake.mode === 'redirect-login') {
+      res.writeHead(307, { Location: '/elsewhere' });
+      return res.end();
+    }
     const b = JSON.parse(await readBody(req));
     if (b.username !== 'radio' || b.password !== 'secret') return send(401, { error: 'bad creds' });
     return send(200, { id: 'u-radio', name: 'Radio', username: 'radio', isAdmin: false, token: 'jwt-1' });
@@ -97,6 +108,7 @@ beforeEach(() => {
   fake.serverType = 'navidrome';
   fake.puts = [];
   fake.requests = 0;
+  fake.redirected = 0;
   seed();
   config.navidrome.url = base;
   config.navidrome.user = 'radio';
@@ -213,6 +225,137 @@ test('a refused read of the players warns like a refused login', async () => {
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('the password goes over https, or to a host on the station\'s own network', () => {
+  for (const url of [
+    'https://music.example.com',
+    'https://8.8.8.8:4533',
+    // Loopback.
+    'http://127.0.0.1:4533',
+    'http://127.200.0.9',
+    'http://[::1]:4533',
+    'http://0x7f.1',
+    // RFC 1918, at the edge of each range.
+    'http://10.0.0.1',
+    'http://10.255.255.255',
+    'http://172.16.0.1',
+    'http://172.31.255.255',
+    'http://192.168.1.20:4533',
+    // Link-local.
+    'http://169.254.10.1',
+    'http://[fe80::1]',
+    'http://[febf::1]',
+    // Names.
+    'http://localhost:4533',
+    'http://LOCALHOST',
+    'http://nas.local',
+    'http://Music.Box.local:4533',
+    'http://navidrome:4533',
+    'http://navidrome/sub/path',
+  ]) {
+    assert.equal(passwordRefusal(url), null, url);
+  }
+});
+
+test('anything else is refused, with what was refused named', () => {
+  for (const url of [
+    'http://music.example.com:4533',
+    'http://8.8.8.8',
+    'http://134744072', // 8.8.8.8 as one number
+    'http://0x08.0x08.0x08.0x08',
+    // Just outside each range.
+    'http://11.0.0.1',
+    'http://172.15.255.255',
+    'http://172.32.0.1',
+    'http://192.169.0.1',
+    'http://169.253.0.1',
+    'http://169.255.0.1',
+    'http://126.0.0.1',
+    'http://0.0.0.0',
+    'http://100.64.0.1',
+    // Not on the list, however local they look.
+    'http://host.docker.internal:4533',
+    'http://nas.lan',
+    'http://[fd00::1]',
+    'http://[fec0::1]',
+    'http://[2001:db8::1]',
+    'http://[::ffff:8.8.8.8]',
+    'http://navidrome.',
+    // A local-looking name that is not local.
+    'http://localhost.example.com',
+    'http://nas.local.example.com',
+    'http://10.0.0.1.example.com',
+    'http://192.168.1.1@music.example.com',
+    // Another scheme.
+    'ftp://navidrome',
+    'ws://localhost',
+  ]) {
+    assert.match(passwordRefusal(url) || '', /only sent over https or to a local address/, url);
+  }
+  assert.match(passwordRefusal('http://music.example.com:4533') || '', /http:\/\/music\.example\.com:4533 is neither/);
+  assert.match(passwordRefusal('not a url') || '', /not valid/);
+  assert.match(passwordRefusal('') || '', /not valid/);
+  assert.doesNotMatch(passwordRefusal('http://user:hunter2@music.example.com') || '', /hunter2/);
+});
+
+// The Subsonic ping goes out as usual, to a fake on a public-looking name.
+async function onPublicHost<T>(run: (sent: { url: string; body: string }[]) => Promise<T>): Promise<T> {
+  const realFetch = globalThis.fetch;
+  const sent: { url: string; body: string }[] = [];
+  config.navidrome.url = 'http://music.example.com:4533';
+  globalThis.fetch = (input, init) => {
+    sent.push({ url: String(input), body: String(init?.body ?? '') });
+    return realFetch(String(input).replace(config.navidrome.url, base), init);
+  };
+  try {
+    return await run(sent);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+test('a refused host is sent nothing, opted in or not, and reads as unavailable', async () => {
+  await onPublicHost(async sent => {
+    const read = await realPathStatus();
+    const on = await realPathStatus({ enable: true });
+    for (const st of [read, on]) {
+      assert.equal(st.state, 'unavailable');
+      assert.equal(st.access, 'not-sent');
+      assert.match(st.reason || '', /is neither/);
+    }
+    assert.ok(sent.length > 0, 'the ping still went');
+    assert.deepEqual(sent.filter(r => !r.url.includes('/rest/ping')), [], 'nothing but the ping');
+    assert.equal(sent.some(r => `${r.url} ${r.body}`.includes('secret')), false, 'the password never left');
+    assert.equal(fake.puts.length, 0);
+  });
+});
+
+test('the Doctor says why the password was kept back, and how to fix it', async () => {
+  const st = await onPublicHost(() => realPathStatus());
+  const f = realPathFinding(st, { localMount: false });
+  assert.equal(f.status, 'warn');
+  assert.match(f.detail, /only sent over https or to a local address/);
+  assert.match(f.hint || '', /over https, or at a LAN address/);
+  assert.match(f.hint || '', /Settings → Players/);
+});
+
+test('the hourly pass logs a kept-back password once, and writes nothing', async () => {
+  const lines: string[] = [];
+  await onPublicHost(async () => {
+    await autoEnableRealPath(l => lines.push(l));
+    await autoEnableRealPath(l => lines.push(l));
+  });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /is neither/);
+});
+
+test('a redirect does not carry the password anywhere', async () => {
+  fake.mode = 'redirect-login';
+  const st = await realPathStatus();
+  assert.equal(st.state, 'unavailable');
+  assert.match(st.reason || '', /307/);
+  assert.equal(fake.redirected, 0);
 });
 
 test('the server kind comes from the Subsonic ping type; an unnamed server is unknown', () => {
