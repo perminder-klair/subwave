@@ -172,6 +172,7 @@ test('a server without Navidrome\'s native API, or no connection, reads as unava
   const st = await realPathStatus({ enable: true });
   assert.equal(st.state, 'unavailable');
   assert.match(st.reason || '', /404/);
+  assert.equal(st.access, undefined, 'a 404 is not the account being refused');
 
   fake.mode = 'navidrome';
   config.navidrome.password = '';
@@ -179,6 +180,39 @@ test('a server without Navidrome\'s native API, or no connection, reads as unava
   const none = await realPathStatus();
   assert.equal(none.state, 'unavailable');
   assert.equal(fake.requests, 0, 'an unconfigured station asks nothing');
+});
+
+test('a refused login reaches the Doctor as a warning with the step by hand, and the log points at it', async () => {
+  config.navidrome.password = 'wrong';
+  const st = await realPathStatus({ enable: true });
+  assert.equal(st.state, 'unavailable');
+  assert.equal(st.access, 'refused');
+  assert.match(st.reason || '', /401/);
+
+  const f = realPathFinding(st, { localMount: false });
+  assert.equal(f.status, 'warn');
+  assert.match(f.detail, /401/);
+  assert.match(f.hint || '', /refused this account/);
+  assert.match(f.hint || '', /Settings → Players/);
+  assert.doesNotMatch(f.hint || '', /Keep Report Real Path on/, 'the opt-in signs in the same way, so it is no answer');
+
+  const lines: string[] = [];
+  await autoEnableRealPath(l => lines.push(l));
+  assert.match(lines[0], /see the Doctor for the manual step/);
+});
+
+test('a refused read of the players warns like a refused login', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (input, init) => (String(input).includes('/api/player')
+    ? Promise.resolve(new Response('{}', { status: 403 }))
+    : realFetch(input, init));
+  try {
+    const st = await realPathStatus();
+    assert.equal(st.access, 'refused');
+    assert.equal(realPathFinding(st, { localMount: false }).status, 'warn');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
 
 test('the server kind comes from the Subsonic ping type; an unnamed server is unknown', () => {
@@ -270,4 +304,5 @@ test('the Doctor is ok when every row is on and skips what it cannot read', () =
   const un = realPathFinding(status({ state: 'unavailable', reason: 'HTTP 404 on /auth/login' }), { localMount: false });
   assert.equal(un.status, 'skip');
   assert.match(un.detail, /HTTP 404/);
+  assert.match(un.hint || '', /Settings → Players/, 'the log sends the operator here for this step');
 });

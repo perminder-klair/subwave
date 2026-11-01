@@ -118,7 +118,15 @@ export async function realPathStatus({ enable = false }: { enable?: boolean } = 
     token = await login();
     players = ownPlayers(await listPlayers(token), ownership());
   } catch (err) {
-    return { state: 'unavailable', players: [], switched: [], server, reason: errMessage(err, 'unreachable') };
+    const refused = err instanceof NativeApiError && (err.status === 401 || err.status === 403);
+    return {
+      state: 'unavailable',
+      players: [],
+      switched: [],
+      server,
+      reason: errMessage(err, 'unreachable'),
+      ...(refused ? { access: 'refused' as const } : {}),
+    };
   }
 
   const switched: string[] = [];

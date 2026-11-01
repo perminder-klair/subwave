@@ -88,6 +88,11 @@ export interface RealPathStatus {
   switched: string[];
   /** Why the state is `refused` / `unavailable`. */
   reason?: string;
+  /**
+   * With `unavailable`, when the cause is the account and not an outage:
+   * `refused` is Navidrome answering 401/403 to the login or the read.
+   */
+  access?: 'refused';
   /** What the Subsonic ping said the server is, when it answered. */
   server?: ServerIdentity;
 }
@@ -128,12 +133,14 @@ export function playerLabel(p: NavidromePlayerRow): string {
   return p.userAgent ? `${p.client} [${p.userAgent}]` : p.client;
 }
 
+const TICK_BY_HAND = 'In Navidrome, open Settings → Players and tick "Report Real Path" on each SUB/WAVE player';
 const MANUAL_STEP =
-  'In Navidrome, open Settings → Players and tick "Report Real Path" on each SUB/WAVE player, '
-  + 'or turn on Settings → Music source → "Keep Report Real Path on" here to have the station do it.';
+  `${TICK_BY_HAND}, or turn on Settings → Music source → "Keep Report Real Path on" here to have the station do it.`;
 
 /**
- * The Doctor's finding for the flag. It warns whenever a row is off: without a
+ * The Doctor's finding for the flag. A refused login warns, because the station
+ * can neither read the rows nor keep them on; an outage or a missing API skips,
+ * with the same step by hand. Otherwise it warns whenever a row is off: without a
  * library mount the tag-built path still weakens the station-archive guard,
  * and with one a file whose folders differ from its tags silently falls back to
  * the stream.
@@ -149,8 +156,17 @@ export function realPathFinding(
       return { status: 'skip', detail: 'no SUB/WAVE player registered in Navidrome yet' };
     case 'not-navidrome':
       return { status: 'skip', detail: `a Navidrome setting; the music server is ${serverLabel(st.server)}` };
-    case 'unavailable':
-      return { status: 'skip', detail: `cannot read Navidrome's players (${st.reason || 'no native API'})` };
+    case 'unavailable': {
+      const detail = `cannot read Navidrome's players (${st.reason || 'no native API'})`;
+      if (st.access === 'refused') {
+        return {
+          status: 'warn',
+          detail,
+          hint: `Navidrome refused this account on its own API, so the station can't read or switch its players. ${TICK_BY_HAND}.`,
+        };
+      }
+      return { status: 'skip', detail, hint: `${TICK_BY_HAND}.` };
+    }
     case 'refused':
     case 'off': {
       const off = st.players.filter(p => !p.reportRealPath);
