@@ -72,6 +72,7 @@ export interface TrackRecord {
   // projected.
   mapX: number | null;
   mapY: number | null;
+  explicitStatus: ExplicitStatus | null;
 }
 
 // The measured ending the crossfade seam lands on. Timestamps are absolute ms.
@@ -110,6 +111,9 @@ export interface TrackPaceSpan {
   endMs: number;
   value: number;
 }
+
+// OpenSubsonic `explicitStatus`, normalised. NULL/null is "no tag", never "clean".
+export type ExplicitStatus = 'explicit' | 'clean';
 
 // The raw `tracks` row: snake_case, acoustic blobs still JSON strings. The write
 // path validates energy/source into their unions, so those read back typed. A
@@ -163,6 +167,7 @@ export interface TrackRow {
   tail_start_ms: number | null;
   map_x: number | null;
   map_y: number | null;
+  explicit_status: ExplicitStatus | null;
 }
 
 export interface TrackMeta {
@@ -183,6 +188,10 @@ export interface TrackMeta {
   isCompilation?: boolean | null;
   /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
   eraUntrusted?: boolean | null;
+  /** The walk's answer, normalised on write. Unlike the ids, null CLEARS: only
+   *  a walk can see a tag was removed, and it always passes a value. A writer
+   *  with no opinion leaves it undefined and the stored value stands. */
+  explicitStatus?: string | null;
 }
 
 export interface TrackEnrichment {
@@ -236,13 +245,13 @@ export interface LibraryStats {
 // Discovery pools deliberately exclude analysis that their consumers never read.
 export type MoodPoolRecord = Pick<TrackRecord,
   'id' | 'title' | 'artist' | 'album' | 'albumId' | 'artistId' | 'year' |
-  'genres' | 'genre' | 'moods' | 'energy' | 'durationSec'>;
+  'genres' | 'genre' | 'moods' | 'energy' | 'durationSec' | 'explicitStatus'>;
 export type EnergyPoolRecord = MoodPoolRecord & Pick<TrackRecord,
   'originalYear' | 'isCompilation' | 'yearUntrusted' | 'audioMoods' | 'bpm' |
   'musicalKey' | 'introMs' | 'loudnessLufs' | 'structure' | 'vocalRanges' | 'vocalRangesInvalid' | 'pace'>;
 export type MoodPoolRow = Pick<TrackRow,
   'id' | 'title' | 'artist' | 'album' | 'album_id' | 'artist_id' | 'year' |
-  'genres' | 'genre' | 'moods' | 'energy' | 'duration_sec'>;
+  'genres' | 'genre' | 'moods' | 'energy' | 'duration_sec' | 'explicit_status'>;
 export type EnergyPoolRow = MoodPoolRow & Pick<TrackRow,
   'original_year' | 'is_compilation' | 'era_untrusted' | 'audio_moods' | 'bpm' |
   'musical_key' | 'intro_ms' | 'loudness_lufs' | 'structure_json' | 'vocal_ranges_json' | 'pace_json'>;

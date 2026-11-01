@@ -502,6 +502,16 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 31');
   }
 
+  if (userVersion < 32) {
+    // The track's own advisory tag as the music server reports it (OpenSubsonic
+    // `explicitStatus`): 'explicit', 'clean' or NULL. The walk owns it, so it
+    // stays NULL on an existing library until the next walk. Added only when
+    // missing, as above: a wound-back user_version still has the column.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('explicit_status')) runDdl(d, `ALTER TABLE tracks ADD COLUMN explicit_status TEXT;`);
+    d.pragma('user_version = 32');
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above

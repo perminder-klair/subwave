@@ -24,6 +24,7 @@ const NEVER_WRITTEN = ['id', 'genre'];
 const WALK_OWNED = [
   'title', 'artist', 'album', 'album_id', 'artist_id', 'year',
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
+  'explicit_status',
   ...SEARCH_KEY_DDL.columns,
 ];
 

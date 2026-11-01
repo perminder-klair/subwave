@@ -4,7 +4,7 @@
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import { FACETS, clearFacetFailures, clearFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
 import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
-import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
+import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
@@ -171,8 +171,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec, explicit_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -206,7 +206,10 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
         is_compilation = COALESCE(excluded.is_compilation, tracks.is_compilation),
         era_untrusted  = COALESCE(excluded.era_untrusted, tracks.era_untrusted),
         genres       = COALESCE(excluded.genres, tracks.genres),
-        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
+        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
+        -- A CASE, not COALESCE: the walk must be able to clear a removed tag,
+        -- and every other writer (undefined) must leave the walked value alone.
+        explicit_status = CASE WHEN ? = 1 THEN excluded.explicit_status ELSE tracks.explicit_status END
     `,
     )
     .run(
@@ -223,6 +226,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.eraUntrusted == null ? null : meta.eraUntrusted ? 1 : 0,
       meta.genres?.length ? JSON.stringify(meta.genres) : null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
+      normaliseExplicitStatus(meta.explicitStatus),
+      meta.explicitStatus === undefined ? 0 : 1,
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);
 }

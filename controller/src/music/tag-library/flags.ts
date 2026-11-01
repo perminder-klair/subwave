@@ -133,6 +133,9 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
       eraUntrusted: song.albumEraUntrusted ?? null,
       genres: subsonic.songGenres(song),
       duration: song.duration,
+      // Always a value: null is how a walk clears a tag that has gone, so a
+      // server that omits the field reads as no tag rather than as no opinion.
+      explicitStatus: db.normaliseExplicitStatus(song.explicitStatus),
     });
     liveIds.add(song.id);
     if (song.albumEraUntrusted && song.albumEraReason) {
