@@ -195,6 +195,24 @@ def t_failed_write_leaves_no_tmp():
     assert os.listdir(d) == [], os.listdir(d)
 
 
+def t_planted_tmp_not_followed():
+    # The folder is 777, so anyone on the share can plant a link at a predictable
+    # temp name. The write never goes through it and never chmods its target.
+    d = os.path.join(root, "stems", "track-8")
+    target = os.path.join(root, "planted-target")
+    with open(target, "w") as f:
+        f.write("keep")
+    os.chmod(target, 0o600)
+    aw.make_shared_dir(d)
+    os.symlink(target, os.path.join(d, "tail-drums.flac.tmp"))
+    aw.write_stems({"drums": Stem()}, "tail", d)
+    with open(target) as f:
+        assert f.read() == "keep", "written through the link"
+    assert mode(target) == 0o600, oct(mode(target))
+    assert not os.path.islink(os.path.join(d, "tail-drums.flac"))
+    assert mode(os.path.join(d, "tail-drums.flac")) == 0o666
+
+
 def t_transition_output():
     # render_transition's clip lands through the same two helpers.
     out = os.path.join(root, "transitions")
@@ -222,5 +240,6 @@ test("a folder it cannot chmod still gets its files written", t_foreign_dir_tole
 test("a file it cannot chmod is still published, logged once", t_file_chmod_refused)
 test("a refused chmod on a writable folder is silent, a stuck one still logs", t_writable_refusal_is_silent)
 test("a failed write leaves no partial .tmp", t_failed_write_leaves_no_tmp)
+test("a link planted at the temp name is not followed", t_planted_tmp_not_followed)
 test("render_transition writes its folder and clip shared", t_transition_output)
 sys.exit(1 if failures else 0)

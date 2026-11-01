@@ -1583,9 +1583,15 @@ def shared_output(path):
     place atomically (the chmod comes first, so the final name never appears
     at the umask's mode). On any failure, the write's or the rename's, the
     temp file is removed so a partial file never counts against the cache
-    budget, and the error goes up to the caller, which degrades."""
-    tmp = path + ".tmp"
+    budget, and the error goes up to the caller, which degrades.
+
+    The temp name is unique and created O_EXCL, because these folders are open
+    to everyone: a link planted at a predictable name would be written through
+    and chmodded (write_state_marker's mktemp is there for the same reason).
+    Not mkstemp itself: its 600 is what a refused chmod would then publish."""
+    tmp = f"{path}.{os.urandom(4).hex()}.tmp"
     try:
+        os.close(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
         yield tmp
         _shared_chmod(tmp, SHARED_FILE_MODE, shown_as=path)
         os.replace(tmp, path)
