@@ -228,7 +228,7 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
         era_untrusted  = COALESCE(excluded.era_untrusted, tracks.era_untrusted),
         genres       = COALESCE(excluded.genres, tracks.genres),
         duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
-        -- File facts: only the walk has them; any other writer passes NULL.
+        -- File facts: only the library walks pass them; any other writer passes NULL.
         file_path    = COALESCE(excluded.file_path, tracks.file_path),
         file_suffix  = COALESCE(excluded.file_suffix, tracks.file_suffix),
         file_size    = COALESCE(excluded.file_size, tracks.file_size),

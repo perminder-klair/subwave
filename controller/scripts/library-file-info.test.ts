@@ -8,29 +8,56 @@
 //     under the write lock, and any other failure throws out of open();
 //   - the walk's Subsonic child maps to the four fields (walkFileInfo), under the
 //     one cleaning rule upsertTrackMeta also applies (cleanFileInfo);
-//   - a writer without file facts (manual edit, analyzer top-up) never clears
-//     the stored ones, and a later walk updates them.
+//   - the analyzer's own walk stores them, run for real against a fake Navidrome;
+//   - a writer without file facts (a manual edit, say) never clears the stored
+//     ones, and a later walk updates them.
 // Run: `npm test -- library-file-info`.
 
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
 import Database from 'better-sqlite3';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
+// A fake Navidrome with one album, for the real analyzer walk.
+let songs: Array<Record<string, unknown>> = [];
+const navidrome = createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+  const endpoint = url.pathname.split('/').at(-1);
+  const body: Record<string, unknown> = { status: 'ok' };
+  if (endpoint === 'getAlbumList2') {
+    body.albumList2 = { album: Number(url.searchParams.get('offset') ?? 0) ? [] : [{ id: 'album', name: 'Album', artist: 'Artist' }] };
+  }
+  if (endpoint === 'getAlbum') body.album = { id: 'album', name: 'Album', artist: 'Artist', song: songs };
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ 'subsonic-response': body }));
+});
+await new Promise<void>((resolve) => navidrome.listen(0, '127.0.0.1', resolve));
+process.env.NAVIDROME_URL = `http://127.0.0.1:${(navidrome.address() as AddressInfo).port}`;
+process.env.NAVIDROME_USER = 'fixture';
+process.env.NAVIDROME_PASS = 'fixture';
+
 const dir = createTempDir(join(tmpdir(), 'subwave-file-info-'));
 process.env.STATE_DIR = dir;
 const db = await import('../src/music/library-db.js');
 const { walkFileInfo } = await import('../src/music/tag-library/flags.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
-after(async () => { db.close(); await removeTempDir(dir); });
+after(async () => {
+  db.close();
+  navidrome.closeAllConnections();
+  await new Promise((resolve) => navidrome.close(resolve));
+  await removeTempDir(dir);
+});
 
 const cols = () => (db.getDb()!.pragma('table_info(tracks)') as Array<{ name: string; type: string }>)
   .filter((c) => ['file_path', 'file_suffix', 'file_size', 'bit_rate'].includes(c.name))
   .map((c) => `${c.name} ${c.type}`);
-const row = (id: string) => db.getDb()!
-  .prepare('SELECT file_path, file_suffix, file_size, bit_rate FROM tracks WHERE id = ?').get(id);
+const FACTS = 'SELECT file_path, file_suffix, file_size, bit_rate FROM tracks WHERE id = ?';
+const row = (id: string) => db.getDb()!.prepare(FACTS).get(id);
 
 const FILE_COLUMNS: Array<[string, string]> = [
   ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
@@ -126,7 +153,7 @@ test('the walk stores them, other writers keep them, the next walk updates them'
   db.upsertTrackMeta('w1', { title: 'Song', artist: 'Artist', album: 'Album', duration: 200, ...walkFileInfo(walked) });
   assert.deepEqual(row('w1'),
     { file_path: '/music/Artist/Album/03 - Song.MP3', file_suffix: 'mp3', file_size: 7_878_806, bit_rate: 192 });
-  // A manual edit or the analyzer's metadata top-up has no file facts.
+  // A manual edit has no file facts.
   db.upsertTrackMeta('w1', { title: 'Song (edit)' });
   assert.equal((row('w1') as { file_path: string }).file_path, '/music/Artist/Album/03 - Song.MP3');
   // The file was replaced by a FLAC: the next walk wins.
@@ -154,4 +181,34 @@ test('a value that rounds to 0 is not reported, so it never overwrites a stored 
   // A caller that skips walkFileInfo gets the same rule.
   db.upsertTrackMeta('zero', { filePath: '   ', fileSuffix: ' ', fileSize: 0.4, bitRate: 0.4 });
   assert.deepEqual(row('zero'), stored);
+});
+
+test('the analyzer walk stores what Navidrome reports', async () => {
+  songs = [{ id: 'analyzer-walk', title: 'Song', artist: 'Artist', album: 'Album', duration: 200,
+    path: '/music/Artist/Album/02.FLAC', suffix: 'FLAC', size: 30_000_000, bitRate: 900 }];
+  const cliDir = createTempDir(join(tmpdir(), 'subwave-file-info-cli-'));
+  try {
+    // Its own state dir: this walk prunes whatever Navidrome did not report.
+    const { code, output } = await new Promise<{ code: number | null; output: string }>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--import', 'tsx', 'src/music/analyze-library.ts', '--walk'], {
+        cwd: new URL('..', import.meta.url),
+        env: { ...process.env, STATE_DIR: cliDir, ANALYZE_URL: 'http://127.0.0.1:1', ANALYZE_PYTHON: '' },
+      });
+      let text = '';
+      child.stdout.on('data', (chunk) => { text += chunk; });
+      child.stderr.on('data', (chunk) => { text += chunk; });
+      child.on('error', reject);
+      child.on('close', (exit) => resolve({ code: exit, output: text }));
+    });
+    assert.equal(code, 0, output);
+    const stored = new Database(join(cliDir, 'library.db'), { readonly: true });
+    try {
+      assert.deepEqual(stored.prepare(FACTS).get('analyzer-walk'),
+        { file_path: '/music/Artist/Album/02.FLAC', file_suffix: 'flac', file_size: 30_000_000, bit_rate: 900 });
+    } finally {
+      stored.close();
+    }
+  } finally {
+    await removeTempDir(cliDir);
+  }
 });

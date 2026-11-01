@@ -183,7 +183,8 @@ export interface TrackMeta {
   isCompilation?: boolean | null;
   /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
   eraUntrusted?: boolean | null;
-  /** The file as Navidrome reports it (walk only). `filePath` is the real path
+  /** The file as Navidrome reports it (the tagger's and the analyzer's walks,
+   *  which see the same Subsonic child). `filePath` is the real path
    *  when the client has "Report Real Path" on, else Navidrome's tag-built one.
    *  COALESCEd like the ids: a writer without them never clears a stored value. */
   filePath?: string | null;
