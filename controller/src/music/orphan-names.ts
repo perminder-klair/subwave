@@ -26,7 +26,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { config } from '../config.js';
-import { requireDb } from './library-db/handle.js';
+import { storedTrackNames } from './library-db.js';
 import { stemsRoot } from './stem-cache.js';
 import { NAME_SIDECAR, QUARANTINE_DIR } from './orphan-purge-pure.js';
 
@@ -112,40 +112,6 @@ function pick(map: ReadonlyMap<string, OrphanTrackName>, missing: ReadonlySet<st
   return hit;
 }
 
-// ---- library db -------------------------------------------------------------
-
-function chunk<T>(items: readonly T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
-  return out;
-}
-
-/** tracks-row hit (a dir whose id came back) then the `plays` air snapshot.
- *  Db closed/unavailable → empty map; names are a courtesy, not a guarantee. */
-function namesFromDb(ids: readonly string[]): Map<string, OrphanTrackName> {
-  const out = new Map<string, OrphanTrackName>();
-  if (ids.length === 0) return out;
-  let db: ReturnType<typeof requireDb> | null = null;
-  try { db = requireDb(); } catch { return out; }
-  for (const part of chunk(ids, 500)) {
-    const ph = part.map(() => '?').join(',');
-    try {
-      for (const r of db.prepare(`SELECT id, title, artist, album FROM tracks WHERE id IN (${ph})`).all(...part) as Array<{ id: string; title: string | null; artist: string | null; album: string | null }>) {
-        if (r.title) out.set(r.id, { title: r.title, artist: r.artist ?? undefined, album: r.album ?? undefined, source: 'library' });
-      }
-    } catch { /* keep what we have */ }
-    try {
-      // Newest play per id wins; ORDER BY id DESC on the rowid-ish key first,
-      // so a later row only overwrites an id it has not already resolved.
-      const rows = db.prepare(`SELECT track_id, title, artist, album, MAX(played_at) AS played_at FROM plays WHERE track_id IN (${ph}) GROUP BY track_id`).all(...part) as Array<{ track_id: string; title: string | null; artist: string | null; album: string | null }>;
-      for (const r of rows) {
-        if (r.title && !out.has(r.track_id)) out.set(r.track_id, { title: r.title, artist: r.artist ?? undefined, album: r.album ?? undefined, source: 'plays' });
-      }
-    } catch { /* keep what we have */ }
-  }
-  return out;
-}
-
 // ---- recent-plays sidecar ---------------------------------------------------
 
 async function namesFromRecent(missing: ReadonlySet<string>, stateDir: string): Promise<Map<string, OrphanTrackName>> {
@@ -217,7 +183,7 @@ export async function resolveOrphanNames(ids: readonly string[], opts: ResolveOp
   // 2. Library db (rows that came back; then plays snapshots).
   let missing = ids.filter(id => !out.has(id));
   if (missing.length > 0) {
-    for (const [id, n] of namesFromDb(missing)) out.set(id, n);
+    for (const [id, n] of storedTrackNames(missing)) out.set(id, n);
   }
 
   // 3. recent-plays.json.

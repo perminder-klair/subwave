@@ -23,6 +23,7 @@ const cache = await import('../src/music/stem-cache.js');
 const purge = await import('../src/music/orphan-purge.js');
 const { QUARANTINE_DIR } = await import('../src/music/orphan-purge-pure.js');
 const rotation = await import('../src/music/id-rotation.js');
+const { resolveOrphanNames } = await import('../src/music/orphan-names.js');
 const { canonicalId } = await import('../src/music/id-canonical.js');
 const { requireDb } = await import('../src/music/library-db/handle.js');
 await db.open({ embeddingDim: 768, adoptStoredDim: true });
@@ -220,4 +221,45 @@ test('an old id already quarantined comes back for the rename to find', async ()
   await rotation.adoptAndPrune(live);
   assert.ok(await cache.hasWindow(neu, 'head') && await cache.hasWindow(neu, 'tail'));
   db.acknowledgeIdRotations(db.pendingIdRotations());
+});
+
+// The names half of orphan-names.ts against a real library, so its reads can move
+// without changing an answer. Run on the raw SQL before the move and after it.
+const play = (trackId: string, title: string, playedAt: string, extra: Record<string, unknown> = {}) =>
+  db.recordPlay({ trackId, title, artist: 'Air Artist', album: 'Air Album', playedAt, source: 'dj', ...extra } as never);
+
+test('a dir is named from its track row first, and a row wins over a play', async () => {
+  db.upsertTrackMeta('named-row', { title: 'Row Title', artist: 'Row Artist', album: 'Row Album', duration: 200 });
+  play('named-row', 'Air Title', '2026-10-01T10:00:00.000Z');
+  const got = await resolveOrphanNames(['named-row'], { logDir: join(stateDir, 'no-logs'), stateDir });
+  assert.deepEqual(got.get('named-row'), { title: 'Row Title', artist: 'Row Artist', album: 'Row Album', source: 'library' });
+});
+
+test('with no row, the newest play names it', async () => {
+  play('played-only', 'Older Title', '2026-09-01T10:00:00.000Z');
+  play('played-only', 'Newer Title', '2026-10-01T10:00:00.000Z');
+  const got = await resolveOrphanNames(['played-only'], { logDir: join(stateDir, 'no-logs'), stateDir });
+  assert.deepEqual(got.get('played-only'), { title: 'Newer Title', artist: 'Air Artist', album: 'Air Album', source: 'plays' });
+});
+
+test('more ids than one IN list holds still all resolve, and an unknown id stays unnamed', async () => {
+  const ids = Array.from({ length: 1201 }, (_, i) => `bulk-${i}`);
+  db.upsertTrackMeta('bulk-1200', { title: 'Last Of The Batch', artist: 'A', album: 'B', duration: 200 });
+  play('bulk-0', 'First Of The Batch', '2026-10-01T10:00:00.000Z');
+  const got = await resolveOrphanNames(ids, { logDir: join(stateDir, 'no-logs'), stateDir });
+  assert.equal(got.get('bulk-1200')?.title, 'Last Of The Batch');
+  assert.equal(got.get('bulk-0')?.title, 'First Of The Batch');
+  assert.equal(got.get('bulk-7'), undefined);
+  assert.equal(got.size, 2);
+});
+
+test('a closed library answers with fewer names, never an error', async () => {
+  db.upsertTrackMeta('while-closed', { title: 'Unreachable', artist: 'A', album: 'B', duration: 200 });
+  db.close();
+  try {
+    const got = await resolveOrphanNames(['while-closed'], { logDir: join(stateDir, 'no-logs'), stateDir });
+    assert.equal(got.size, 0);
+  } finally {
+    await db.open({ embeddingDim: 768, adoptStoredDim: true });
+  }
 });
