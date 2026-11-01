@@ -107,6 +107,17 @@ const server: Server = createServer((req, res) => {
       + `</rdf:RDF>`);
     return;
   }
+  if (path === '/padded') {
+    // Runs of spaces inside the stamp, where trimming the value can't reach them.
+    const pad = ' '.repeat(200_000);
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(`<?xml version="1.0"?><rss version="2.0"><channel><title>Padded</title>`
+      + `<item><title>Padded day</title><pubDate>30 Oct${pad}2026</pubDate></item>`
+      + `<item><title>Padded zone</title><pubDate>30 Oct 2026${pad}GMT</pubDate></item>`
+      + `<item><title>Padded both</title><pubDate>30${pad}Oct${pad}2026${pad}GMT</pubDate></item>`
+      + `</channel></rss>`);
+    return;
+  }
   if (path === '/dateonly-zoned') {
     // Days with no clock that still name a zone, then a real moment with one.
     res.writeHead(200, { 'content-type': 'application/rdf+xml' });
@@ -769,6 +780,20 @@ test('a date-only stamp that names a zone keeps its day, wherever the process ru
     else process.env.TZ = processZone;
     setStationTimezone('');
   }
+});
+
+test('a heavily padded date keeps its day and returns quickly', async () => {
+  const started = performance.now();
+  const result: any = await makeFeedTool('padded', { url: feedUrl('/padded'), maxItems: 5 })({}, {});
+  const elapsedMs = performance.now() - started;
+  assert.deepEqual(result.headlines.map((h: any) => [h.title, h.published]), [
+    ['Padded day', '2026-10-30'],
+    ['Padded zone', '2026-10-30'],
+    ['Padded both', '2026-10-30'],
+  ]);
+  // Each pattern over this text must be linear. The tool deadline can't interrupt
+  // a regex, which holds the whole event loop for as long as it runs.
+  assert.ok(elapsedMs < 2000, `took ${Math.round(elapsedMs)} ms`);
 });
 
 test('further feeds merge round-robin, a repeated headline appears once', async () => {

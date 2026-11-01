@@ -60,7 +60,9 @@ function publishedOf(entry: Record<string, unknown>): { at: number; stamp: strin
 // UTC and the rest ("30 Oct 2026") as local time, and each is read back that way.
 function calendarDayOf(text: string): string | null {
   if (/\d:\d/.test(text)) return null;
-  const bare = text.replace(/\s*(?:Z|GMT|UTC?|[ECMP][SD]T)$/i, '');
+  // No `\s*` in the pattern: over a long run of spaces it goes quadratic, and a
+  // regex holds the event loop in a way no tool deadline can interrupt.
+  const bare = text.trim().replace(/(?:Z|GMT|UTC?|[ECMP][SD]T)$/i, '').trimEnd();
   const d = new Date(bare);
   if (Number.isNaN(d.getTime())) return null;
   if (/^\d{4}(-\d{2}){0,2}$/.test(bare)) return d.toISOString().slice(0, 10);
