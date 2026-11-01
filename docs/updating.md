@@ -29,6 +29,9 @@ Two things it deliberately does **not** contain:
 - **Archives.** `state/archive/` (hourly stream recordings) is excluded because
   it's enormous. Back that up separately, or accept losing it.
 
+`library.db` does hold each track's file path as Navidrome reports it, so a
+backup you share shows your folder layout.
+
 Restoring runs the archive through the same checks the dedicated imports
 use. `jingles.m3u` is never copied: it is rebuilt from the restored
 `jingles.json`, keeping only entries with an ordinary audio filename.
