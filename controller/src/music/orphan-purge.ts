@@ -231,6 +231,17 @@ export async function runOrphanPurge(opts: {
   }
 }
 
+/** A pass in one line, for the booth log: the daily tick and a manual press word
+ *  it the same way. */
+export function purgeSummary(r: PurgeReport): string {
+  const failed = r.failed ? `, ${r.failed} failed (check ownership on the stems share)` : '';
+  if (r.refused) return `refused — ${r.reason}${r.released.length ? `, released ${r.released.length}` : ''}${failed}`;
+  return `quarantined ${r.quarantined}, released ${r.released.length}, deleted ${r.deletedCount}`
+    + ` (${Math.round(r.freedBytes / 1_000_000)} MB freed)`
+    + failed
+    + (r.inFlight ? `, ${r.inFlight} in-flight dir(s) skipped` : '');
+}
+
 function emptyReport(dryRun: boolean): PurgeReport {
   return {
     dryRun, keptCount: 0, quarantined: 0, quarantinedNames: [], released: [],

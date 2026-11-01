@@ -27,7 +27,7 @@ import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import { createPoolBuilder } from './auto-pool.js';
 import { applyTrackFloor, capCueOutSec, trackLengthSeconds } from '../music/track-floor.js';
-import { runScheduledOrphanPurge } from '../music/orphan-purge.js';
+import { purgeSummary, runScheduledOrphanPurge } from '../music/orphan-purge.js';
 import { allTrackIdsOrdered } from '../music/library-db.js';
 import { airableAnchorTracks, coastFloor, COAST_MIN_SEC, rotationCoast, rotationOrder, showNoRepeatGuard } from '../music/show-recency.js';
 import { knownDurationSec } from './queue/pure.js';
@@ -1209,13 +1209,9 @@ async function stemOrphanPurgeTick() {
   try {
     if (settings.get()?.audio?.stemOrphanPurgeEnabled !== true) return;
     const r = await runScheduledOrphanPurge(allTrackIdsOrdered());
-    if (r.refused) { queue.log('error', `Stem orphan purge: refused — ${r.reason}`); return; }
+    if (r.refused) { queue.log('error', `Stem orphan purge: ${purgeSummary(r)}`); return; }
     if (r.quarantined || r.deletedCount || r.released.length || r.failed) {
-      queue.log('scheduler',
-        `Stem orphan purge: quarantined ${r.quarantined}, released ${r.released.length}, deleted ${r.deletedCount}`
-        + ` (${Math.round(r.freedBytes / 1_000_000)} MB freed)`
-        + (r.failed ? `, ${r.failed} failed (check ownership on the stems share)` : '')
-        + (r.inFlight ? `, ${r.inFlight} in-flight dir(s) skipped` : ''));
+      queue.log('scheduler', `Stem orphan purge: ${purgeSummary(r)}`);
     }
   } catch (err) {
     queue.log('error', `Stem orphan purge failed: ${err instanceof Error ? err.message : String(err)}`);

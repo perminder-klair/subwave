@@ -1,8 +1,9 @@
 // Orphan stem-dir purge, operator surface.
 //
 // GET  /stems/orphans        dry-run report (never touches the disk)
-// POST /stems/orphans        {confirm: true} runs the purge for real;
-//                            {setEnabled: true|false} flips the daily cron.
+// POST /stems/orphans        {confirm: true} runs the purge for real and logs
+//                            the pass; {setEnabled: true|false} flips the daily
+//                            cron, and answers without walking the cache.
 //
 // Manual triggers are exempt from every automatic gate (an explicit press
 // always acts), but NOT from the purge's own safety rules: unconfirmed stays a
@@ -10,9 +11,10 @@
 // reported verbatim. requireAdmin, like every operator surface.
 
 import { Router } from 'express';
+import { queue } from '../broadcast/queue.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { allTrackIdsOrdered } from '../music/library-db.js';
-import { listOrphanDirNames, listQuarantineDirNames, runOrphanPurge } from '../music/orphan-purge.js';
+import { listOrphanDirNames, listQuarantineDirNames, purgeSummary, runOrphanPurge } from '../music/orphan-purge.js';
 import { resolveOrphanNames } from '../music/orphan-names.js';
 import * as settings from '../settings.js';
 
@@ -51,10 +53,15 @@ router.get('/stems/orphans/tracks', requireAdmin, async (_req, res) => {
 router.post('/stems/orphans', requireAdmin, async (req, res) => {
   const body = (req.body ?? {}) as { confirm?: unknown; setEnabled?: unknown };
   try {
+    const confirm = body.confirm === true;
     if (typeof body.setEnabled === 'boolean') {
       await settings.update({ audio: { stemOrphanPurgeEnabled: body.setEnabled } });
+      // A toggle moves nothing, so it spends no walk: the panel keeps its report.
+      if (!confirm) {
+        res.json({ enabled: settings.get()?.audio?.stemOrphanPurgeEnabled === true });
+        return;
+      }
     }
-    const confirm = body.confirm === true;
     const report = await runOrphanPurge({
       knownIds: allTrackIdsOrdered(),
       confirm,
@@ -62,6 +69,7 @@ router.post('/stems/orphans', requireAdmin, async (req, res) => {
       // resolved names into each quarantine before the logs age them out.
       ...(confirm ? { resolveNames: (ids: string[]) => resolveOrphanNames(ids) } : {}),
     });
+    if (confirm) queue.log(report.refused ? 'warn' : 'info', `Stem orphan purge (manual): ${purgeSummary(report)}`);
     res.json({ enabled: settings.get()?.audio?.stemOrphanPurgeEnabled === true, report });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
