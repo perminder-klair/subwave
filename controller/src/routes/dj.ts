@@ -903,7 +903,7 @@ function toAdminRow(s: AdminSong) {
     loudnessLufs: tag?.loudnessLufs ?? null,
     paceMean: tag?.paceMean ?? null,
     // Shared measured-duration classification, as in /library/browse.
-    instrumental: isInstrumental(tag?.vocalRanges, tag?.vocalRangesInvalid),
+    instrumental: isInstrumental(tag),
     // /dj/search returns blocked rows on purpose; this is what marks them.
     blockedBy: blocked ? blocklist.refOf(blocked) : null,
   };

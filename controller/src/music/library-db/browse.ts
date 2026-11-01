@@ -1,7 +1,7 @@
 // The admin library browse panel's filter query and the Observatory's
 // wide-row projection.
 
-import { SQL_HAS_MOODS, requireDb } from './handle.js';
+import { SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
 import { instrumentalFromJson } from '../lyric-vocal.js';
 import type { FilterOpts, TrackRecord, TrackRow } from './types.js';
 import { parsePaceSpans, rowToTrack, safeParseArray } from './rows.js';
@@ -11,6 +11,12 @@ import { refreshSearchKeys } from './search-keys.js';
 // `yearUntrusted`'s composition and the two must move together.
 export const ERA_YEAR_SQL =
   `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
+
+// The verdict for a WHERE scan, head first: the tail can only turn a verdict vocal,
+// so a row the head already calls vocal never reads outro_json, which sits past the
+// beat grids (#1937). CASE, because SQLite promises no evaluation order for AND.
+const IS_INSTRUMENTAL_SQL = `CASE is_instrumental(vocal_ranges_json, NULL) WHEN 0 THEN 0
+  ELSE is_instrumental(vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES}) END`;
 
 // `reindexing` (set only for a query search): the stored search keys are still
 // being rebuilt after a bulk change, so the answer may be missing tracks.
@@ -43,9 +49,9 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     params.push(genre);
   }
   if (vocal === 'instrumental') {
-    where.push('is_instrumental(vocal_ranges_json) = 1');
+    where.push(`${IS_INSTRUMENTAL_SQL} = 1`);
   } else if (vocal === 'vocal') {
-    where.push('is_instrumental(vocal_ranges_json) = 0');
+    where.push(`${IS_INSTRUMENTAL_SQL} = 0`);
   }
   if (yearFrom != null) { where.push(`${ERA_YEAR_SQL} >= ?`); params.push(yearFrom); }
   if (yearTo != null) { where.push(`${ERA_YEAR_SQL} <= ?`); params.push(yearTo); }
@@ -136,14 +142,17 @@ interface ObservatoryTrackRow {
 
 const OBSERVATORY_COLS = `id, title, artist, album, year, genres, genre, duration_sec,
   moods, energy, source, confidence, bpm, musical_key, analysis_confidence,
-  loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y`;
+  loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y,
+  ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json`;
 
-function vocalModeFromJson(json: string | null): ObservatoryTrackRow['vocal'] {
-  const instrumental = instrumentalFromJson(json);
+type ObservatorySourceRow = TrackRow & { tail_vocal_ranges_json: string | null };
+
+function vocalModeFromJson(json: string | null, tailJson: string | null): ObservatoryTrackRow['vocal'] {
+  const instrumental = instrumentalFromJson(json, tailJson);
   return instrumental == null ? null : instrumental === 1 ? 'instrumental' : 'vocal';
 }
 
-export function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
+export function rowToObservatory(row: ObservatorySourceRow): ObservatoryTrackRow {
   // ~14 spans, so the mean is cheap; the fat blobs are never selected.
   let paceMean: number | null = null;
   if (row.pace_json) {
@@ -168,7 +177,7 @@ export function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
     analysisConfidence: row.analysis_confidence ?? null,
     loudnessLufs: row.loudness_lufs ?? null,
     paceMean,
-    vocal: vocalModeFromJson(row.vocal_ranges_json),
+    vocal: vocalModeFromJson(row.vocal_ranges_json, row.tail_vocal_ranges_json),
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
   };
@@ -182,7 +191,7 @@ export function allTagged(limit?: number): ObservatoryTrackRow[] {
   const sql =
     `SELECT ${OBSERVATORY_COLS} FROM tracks WHERE ${SQL_HAS_MOODS} ORDER BY id` +
     (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
-  return (requireDb().prepare(sql).all() as TrackRow[]).map(rowToObservatory);
+  return (requireDb().prepare(sql).all() as ObservatorySourceRow[]).map(rowToObservatory);
 }
 
 // Stratified sample of ~`max` rows, proportional per genre (NULL is its own
@@ -208,7 +217,7 @@ export function allTaggedSampled(max: number, totalTagged: number): ObservatoryT
     SELECT ${OBSERVATORY_COLS} FROM tracks JOIN picked USING (id)
     ORDER BY id
   `;
-  return (requireDb().prepare(sql).all(m, total) as TrackRow[]).map(rowToObservatory);
+  return (requireDb().prepare(sql).all(m, total) as ObservatorySourceRow[]).map(rowToObservatory);
 }
 
 

@@ -67,7 +67,8 @@ test('public pools preserve payloads and required acoustic values', () => {
   assert.deepEqual(energy, { ...mood, originalYear: 1990, isCompilation: true,
     yearUntrusted: true, audioMoods: ['reflective', 'Custom'], bpm: 120, musicalKey: '8A',
     introMs: 200, loudnessLufs: -12, structure: [{ startMs: 0, endMs: 100, kind: 'intro' }],
-    vocalRanges: [{ startMs: 10, endMs: 20 }], vocalRangesInvalid: true, paceMean: 0.123 });
+    vocalRanges: [{ startMs: 10, endMs: 20 }], vocalRangesInvalid: true,
+    tailVocalRanges: null, tailVocalRangesInvalid: false, paceMean: 0.123 });
   assert.deepEqual(db.getTrack('payload')!.beats, [1, 2, 3]);
   assert.deepEqual(library.songsByEnergy('invalid'), []);
 });
@@ -230,15 +231,18 @@ test('production lookup statements select only their contracts and use indexes',
   } finally { d.prepare = prepare; }
   assert.equal(statements.length, 2, 'one bounded read per pool, no hydration');
   for (const sql of statements) {
-    assert.doesNotMatch(sql, /SELECT\s+\*|json_each|beats_json|bars_json|key_ranges_json|audio_mood_scores_json|outro_json/i);
+    // The one sanctioned read of outro_json: its vocal spans alone, projected in
+    // SQL for the instrumental verdict, so the blob's beat grids never reach JS.
+    assert.doesNotMatch(sql.replace(db.SQL_TAIL_VOCAL_RANGES, ''), /SELECT\s+\*|json_each|beats_json|bars_json|key_ranges_json|audio_mood_scores_json|outro_json/i);
     const plan = (prepare(`EXPLAIN QUERY PLAN ${sql}`).all('low') as Array<{ detail: string }>).map(r => r.detail).join('\n');
     assert.doesNotMatch(plan, /SCAN t\b/);
     assert.match(plan, /SEARCH/);
   }
-  assert.doesNotMatch(statements[0], /structure_json|vocal_ranges_json|pace_json/);
+  assert.doesNotMatch(statements[0], /structure_json|vocal_ranges_json|pace_json|outro_json/);
   assert.match(statements[1], /structure_json/);
   assert.match(statements[1], /vocal_ranges_json/);
   assert.match(statements[1], /pace_json/);
+  assert.ok(statements[1].includes(db.SQL_TAIL_VOCAL_RANGES));
 });
 
 test('concurrent upgrading connections build exactly one complete index', async () => {
