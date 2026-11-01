@@ -721,12 +721,13 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
       key_ranges_json = NULL, outro_json = NULL,
       lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
+      audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
       -- The failure history goes with the analysis it describes, or the tracks
       -- most in need of a retry would be the only ones skipped.
       analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL`,
   ).run();
-  // CLAP vectors are written in the same pass, and the audio moods cleared
-  // above are derived from them.
+  // CLAP vectors are written in the same pass, and the audio moods and
+  // descriptors cleared above are derived from them.
   d.prepare('DELETE FROM track_audio_vectors').run();
   clearFacetRows(opts);
   })();

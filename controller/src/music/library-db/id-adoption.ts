@@ -40,6 +40,7 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
       'lead_silence_ms', 'analyze_error', 'analyze_failed_at', 'analyze_fail_count'],
   },
   { anchor: 'audio_moods', cols: ['audio_moods', 'audio_mood_scores_json'] },
+  { anchor: 'audio_descriptors', cols: ['audio_descriptors', 'audio_descriptor_scores_json'] },
   { anchor: 'map_x', cols: ['map_x', 'map_y'] },
 ];
 

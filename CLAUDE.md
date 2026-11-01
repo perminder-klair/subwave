@@ -117,6 +117,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Anything going to Liquidsoap uses `getAnnotatedUri`.
 - The tagger's own `moods`/`energy` never enter the embed text. Bump `TAGGER_CONTRACT_VERSION` (`music/tagger-core.ts`) when the prompt asks for something different.
 - CLAP cosines are not comparable across moods, so calibrate per mood.
+- Sound descriptors (`music/audio-descriptors.ts`) are CLAP guesses, read only through `usableDescriptors`, by the `Sound:` line and the admin dossier: never Sleeve Notes, fact packets, the picker payload or a public read. Below the baseline floor they select nothing, and `isInstrumental` alone owns the vocal question.
 - Enforce variety (artist spacing, album cooldown) at the point of choice, never inside the discovery tools.
 - The track-length cap and floor are different mechanisms; never unify them. A never-starve filter never returns its input array.
 - Tempo-derived timing is octave-safe: fold, then halve, never clamp.

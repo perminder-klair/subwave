@@ -15,6 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   EMBED_TEXT_VERSION,
+  embedTextStale,
   formatTrackText,
   resolveIndexTextFormat,
   soundDescriptors,
@@ -26,6 +27,68 @@ test('audio moods lead, then tempo, then mode', () => {
     soundDescriptors({ audioMoods: ['dreamy', 'melancholic'], bpm: 92, musicalKey: '8A' }),
     ['dreamy', 'melancholic', 'mid-tempo', 'minor key'],
   );
+});
+
+test('sound descriptors ride the Sound line beside the audio moods', () => {
+  assert.deepEqual(
+    soundDescriptors({ audioMoods: ['dreamy'], audioDescriptors: ['tabla', 'lo-fi'], bpm: 92 }),
+    ['dreamy', 'tabla', 'lo-fi', 'mid-tempo'],
+  );
+  const text = formatTrackText(
+    { title: 'T', artist: 'A', album: 'B', year: 2001 },
+    null,
+    { audioMoods: ['dreamy'], audioDescriptors: ['tabla', 'female vocals'] },
+  );
+  assert.match(text, /^Sound: dreamy, tabla, female vocals$/m);
+});
+
+test('a measured instrumental never carries a vocal descriptor into the text', () => {
+  assert.deepEqual(
+    soundDescriptors({ audioDescriptors: ['tabla', 'female vocals'], vocalRanges: [] }),
+    ['tabla', 'instrumental'],
+  );
+  assert.deepEqual(
+    soundDescriptors({ audioDescriptors: ['tabla', 'female vocals'], vocalRanges: null }),
+    ['tabla', 'female vocals'],
+    'unknown is not instrumental',
+  );
+});
+
+test('a track with no descriptors produces exactly the v3 text', () => {
+  const song = { title: 'T', artist: 'A', album: 'B', year: 2001, genres: ['Rock'], eraYear: 2001 };
+  const acoustics = { audioMoods: ['dreamy'], bpm: 92, musicalKey: '8A', vocalRanges: [] };
+  const expected =
+    'A — T · B (2001) [Rock]\n' +
+    'Sound: dreamy, mid-tempo, minor key, instrumental\n' +
+    'Era: 2000s';
+  for (const audioDescriptors of [undefined, null, [], ['', ' ']]) {
+    assert.equal(formatTrackText(song, null, { ...acoustics, audioDescriptors }), expected);
+  }
+  // A lean-tier row: no heavy analysis at all, so no Sound line either.
+  assert.equal(
+    formatTrackText({ title: 'T', artist: 'A', album: 'B', year: 2001, genres: ['Rock'] }, null, { audioDescriptors: [] }),
+    'A — T · B (2001) [Rock]',
+  );
+});
+
+test('a lean station is not told to re-embed for a text that did not change', () => {
+  // The bump only moves a track carrying descriptors. Advising a re-embed off the
+  // version alone would cost every lean-tier station a full pass for nothing.
+  assert.equal(embedTextStale(3, false), false);
+  assert.equal(embedTextStale(3, true), true, 'a station with descriptors has something to gain');
+  assert.equal(embedTextStale(EMBED_TEXT_VERSION, true), false);
+  assert.equal(embedTextStale(EMBED_TEXT_VERSION + 1, true), false, 'a newer index is never stale');
+});
+
+test('an older shape is still stale, with or without descriptors', () => {
+  for (const stored of [null, undefined, 1, 2]) {
+    assert.equal(embedTextStale(stored, false), true, String(stored));
+    assert.equal(embedTextStale(stored, true), true, String(stored));
+  }
+});
+
+test('the text shape records the descriptor change', () => {
+  assert.equal(EMBED_TEXT_VERSION, 4);
 });
 
 test('tempo bands', () => {

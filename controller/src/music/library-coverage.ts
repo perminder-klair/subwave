@@ -9,7 +9,8 @@ import * as library from './library.js';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import { vocalActivityWanted, audioEmbeddingWanted } from './analyze.js';
-import { activeModelLabel, EMBED_TEXT_VERSION } from './embeddings.js';
+import { activeModelLabel, EMBED_TEXT_VERSION, embedTextStale } from './embeddings.js';
+import { descriptorsSelected } from './audio-descriptors.js';
 import { dimensionStatus } from './coverage-status.js';
 
 // analyzer.isAvailable() can do a 5s sidecar probe and caches no negative
@@ -134,6 +135,7 @@ interface DbCounts {
   embeddedMeta: ReturnType<typeof db.getEmbeddingMeta>;
   embeddedVectors: number;
   analysisFailed: number;
+  descriptorsOn: boolean;
 }
 let dbCounts: { token: string; value: DbCounts } | null = null;
 
@@ -148,6 +150,7 @@ function readDbCounts(): DbCounts {
     embeddedMeta: db.getEmbeddingMeta(),
     embeddedVectors: db.vectorCount(),
     analysisFailed: db.analysisFailedCount(),
+    descriptorsOn: descriptorsSelected(db.getAudioDescriptorVocabHash()),
   };
   dbCounts = { token, value };
   return value;
@@ -187,6 +190,7 @@ export async function get() {
   else if (analysisAvailStale() && !analysisProbeInflight) refreshAnalysisAvail();
   const {
     tagged, analysed, audioEmbedded, vocalAnalyzed, embeddedMeta, embeddedVectors, analysisFailed,
+    descriptorsOn,
   } = readDbCounts();
   const total = cache.scannedAt ? cache.total : null;
   // Floored so 100% means complete, and capped because the numerator is live
@@ -206,7 +210,7 @@ export async function get() {
   // Embed-text shape, separate from embeddingStale (#1246): a soft advisory
   // that never blocks a tag run.
   const embeddingFormatStale = !!(
-    embeddedMeta && (embeddedMeta.textFormat ?? 1) < EMBED_TEXT_VERSION
+    embeddedMeta && embedTextStale(embeddedMeta.textFormat, descriptorsOn)
   );
   // Label-text-only share (#1246); null rather than a misleading 0 when empty.
   const labelOnlyVectors = embeddedVectors > 0 ? db.labelOnlyVectorCount() : null;

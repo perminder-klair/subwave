@@ -13,7 +13,7 @@ let statsCache: { at: number; token: string; value: LibraryStats } | null = null
 const STATS_TTL_MS = 5000;
 
 // EMBEDDED tracks whose vector carries no musical signal, only the head line
-// (#1246), so similarity ranks them by artist/album wording. The five predicates
+// (#1246), so similarity ranks them by artist/album wording. The six predicates
 // mirror formatTrackText's optional lines and must stay in step with it. Long TTL
 // because it only moves when the tagger runs and is read on a pick path
 // (picker/scope.ts); invalidateStats() clears it on a handle swap.
@@ -36,6 +36,7 @@ function computeLabelOnlyVectorCount(): number {
         WHERE (t.lastfm_tags   IS NULL OR t.lastfm_tags   = '' OR t.lastfm_tags   = '[]')
           AND (t.lyric_excerpt IS NULL OR t.lyric_excerpt = '')
           AND (t.audio_moods   IS NULL OR t.audio_moods   = '' OR t.audio_moods   = '[]')
+          AND (t.audio_descriptors IS NULL OR t.audio_descriptors = '' OR t.audio_descriptors = '[]')
           AND (t.bpm IS NULL OR t.bpm <= 0)
           AND (t.musical_key   IS NULL OR t.musical_key   = '')`,
     )

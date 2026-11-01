@@ -4,6 +4,7 @@
 
 import { embedMany } from 'ai';
 import { isInstrumental } from './lyric-vocal.js';
+import { usableDescriptors } from './audio-descriptors.js';
 import {
   embeddingModel,
   activeEmbeddingModelLabel,
@@ -55,6 +56,8 @@ export interface TrackAcoustics {
   musicalKey?: string | null;      // Camelot code, e.g. '8A'
   // Zero-shot CLAP moods (music/audio-moods.ts). Heavy analyzer tier only.
   audioMoods?: string[] | null;
+  // Zero-shot sound descriptors (music/audio-descriptors.ts). Heavy tier only.
+  audioDescriptors?: string[] | null;
   // tracks.vocal_ranges. Total sung duration determines instrumental status;
   // null/undefined = not computed.
   vocalRanges?: unknown[] | null;
@@ -68,7 +71,8 @@ export interface TrackAcoustics {
 //   1  head line + Last.fm tags + lyric excerpt
 //   2  ... + the Sound: descriptor line + the Era: decade line (#1246)
 //   3  tolerate short vocal bleed in the instrumental descriptor (#1655)
-export const EMBED_TEXT_VERSION = 3;
+//   4  ... + the CLAP sound descriptors on the Sound: line
+export const EMBED_TEXT_VERSION = 4;
 
 // Tempo as a word, not a number: "128" embeds as an arbitrary token.
 function tempoWord(bpm: number): string | null {
@@ -96,6 +100,7 @@ export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
     const t = String(m || '').trim();
     if (t) words.push(t);
   }
+  words.push(...usableDescriptors(acoustics));
   const tempo = acoustics.bpm != null ? tempoWord(Number(acoustics.bpm)) : null;
   if (tempo) words.push(tempo);
   const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
@@ -240,6 +245,22 @@ export function resolveIndexTextFormat(
   if (reseed) return EMBED_TEXT_VERSION;
   if (vectorCount > 0) return Math.min(stored ?? 1, EMBED_TEXT_VERSION);
   return EMBED_TEXT_VERSION;
+}
+
+// Text-shape versions that move no vector on a station with no sound
+// descriptors: a track without them keeps its exact text, so a lean-tier index
+// is already current and re-embedding it would cost a full pass for nothing.
+const DESCRIPTOR_ONLY_VERSIONS: ReadonlySet<number> = new Set([4]);
+
+// Whether a re-embed would change anything, the soft advisory (#1246).
+export function embedTextStale(
+  stored: number | null | undefined,
+  descriptorsSelected: boolean,
+): boolean {
+  for (let v = (stored ?? 1) + 1; v <= EMBED_TEXT_VERSION; v++) {
+    if (descriptorsSelected || !DESCRIPTOR_ONLY_VERSIONS.has(v)) return true;
+  }
+  return false;
 }
 
 // Pure prefix application, exported for tests.

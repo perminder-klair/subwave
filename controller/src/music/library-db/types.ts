@@ -59,6 +59,10 @@ export interface TrackRecord {
   keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
   // Zero-shot audio moods; [] until scored. Complement the LLM `moods`.
   audioMoods: string[];
+  // Zero-shot sound descriptors; [] until scored or selected. CLAP guesses, for
+  // the embed text and the operator's dossier only: never add this to a
+  // projection, and read it through audio-descriptors.usableDescriptors.
+  audioDescriptors: string[];
   // null = no outro signal.
   outro: TrackOutro | null;
   // Edge dead air (ms) against an ABSOLUTE dBFS floor, unlike introMs and
@@ -157,6 +161,7 @@ export interface TrackRow {
   bars_json: string | null;
   key_ranges_json: string | null;
   audio_moods: string | null;
+  audio_descriptors: string | null;
   outro_json: string | null;
   lead_silence_ms: number | null;
   tail_silence_ms: number | null;
