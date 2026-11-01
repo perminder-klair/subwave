@@ -1,10 +1,10 @@
 # Updating, rolling back, and recovering
 
-Updating SUB/WAVE is one command on every install shape. This page is mostly
-about the other half — what to do when an update lands badly, which is the part
-that was missing.
+Updating SUB/WAVE takes at most three commands on any install shape. This page
+is mostly about the other half — what to do when an update lands badly, which is
+the part that was missing.
 
-> Just want the command? Jump to [Update](#update). Something already broken?
+> Just want the commands? Jump to [Update](#update). Something already broken?
 > Jump to [Recovery](#recovery-when-an-update-goes-wrong).
 
 ---
