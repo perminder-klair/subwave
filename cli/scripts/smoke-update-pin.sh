@@ -94,7 +94,7 @@ COMPOSE
   fi
 }
 
-pin_in() { sed -n 's/^SUBWAVE_VERSION=//p' "$scratch/$1/.env"; }
+pin_in() { sed -n 's/^SUBWAVE_VERSION=//p' "$scratch/$1/.env" | tail -n 1; }
 resolved_by() { sed -n "s/^$2 //p" "$scratch/$1.log" 2>/dev/null || true; }
 
 check_first_run() { # check_first_run <name> <label>
@@ -113,6 +113,12 @@ run_update inline-comment "SUBWAVE_VERSION=$old_pin # pinned"
 check_first_run inline-comment "inline comment"
 run_update quoted-comment "SUBWAVE_VERSION=\"$old_pin\" # pinned"
 check_first_run quoted-comment "quoted pin with a comment"
+
+# Compose and the binary's .env load both take the last of a duplicated pin, so
+# moving any other line sends the next run back to the old version.
+run_update duplicated "SUBWAVE_VERSION=$old_pin
+SUBWAVE_VERSION=$old_pin"
+check_first_run duplicated "duplicated pin"
 
 # A real shell export isn't the autoloaded pin, so it stays in charge. The .env
 # check proves the run reached the move rather than passing by doing nothing.
