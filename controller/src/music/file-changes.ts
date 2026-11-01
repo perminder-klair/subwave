@@ -54,6 +54,10 @@ export async function saveMark(newest: string | null): Promise<void> {
  * `complete` is false when a page failed part-way (Navidrome 0.5x answers 500,
  * "ambiguous column name", past ~51k rows of this sort): the changes read so
  * far are the newest and still acted on, but the mark is not moved past them.
+ * The limit on such a server: every walk reads from the top of the list again,
+ * and re-measuring a track does not move it down, so a change older than the
+ * newest ~51k rows is never reached. A size change still finds it; a same-size
+ * one is missed. A read that runs out of MAX_PAGES is partial in the same way.
  * Null when the server is not Navidrome or its API is unavailable.
  *
  * `_sort=updated_at` is not a column Navidrome's song resource maps: it works

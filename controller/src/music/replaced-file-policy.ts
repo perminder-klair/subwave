@@ -41,6 +41,10 @@ export function changedAfterMeasure(
 // and file-changes.changedFiles then stops at the library's oldest measurement.
 // A mark in the future (saved before the cap below, or by a skewed clock) is
 // read as now: above every real change, it would blind the signal.
+// The limit: `updatedAt` is the file's mtime, and the mark reads it as an import
+// clock. A file whose mtime predates the floor is never read, however recently
+// Navidrome imported it (cp -p, rsync -t, mv from another folder, a restore).
+// A size change still finds it; a same-size one is missed.
 export const CHANGE_MARK_MARGIN_MS = 6 * 3_600_000;
 export function changesFloor(mark: string | null | undefined, now: number = Date.now()): number | null {
   const t = mark ? Date.parse(mark) : NaN;
