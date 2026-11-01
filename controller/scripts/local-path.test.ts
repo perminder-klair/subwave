@@ -20,7 +20,7 @@ import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 const base = createTempDir(join(tmpdir(), 'subwave-local-path-'));
 process.env.STATE_DIR = join(base, 'state');
 mkdirSync(process.env.STATE_DIR, { recursive: true });
-const { findLibraryFile, getLocalPath, getPlayableUri } = await import('../src/music/subsonic.js');
+const { findLibraryFile, getLocalPath, getPlayableUri, localFileState } = await import('../src/music/subsonic.js');
 const { _markLibraryMountProven } = await import('../src/music/library-mount.js');
 
 const SONG = 'Artist/Album/01 - Song.flac';
@@ -257,6 +257,11 @@ test('a size sent as a string still proves: JSON from a server is what it is', (
 test('a directory at the guess is not the file', () => {
   mkdirSync(join(root, SONG), { recursive: true });
   assert.equal(getLocalPath(song(`/srv/library/${SONG}`, 'Song', fs.statSync(join(root, SONG)).size)), null);
+});
+
+test('a directory at a direct path is not proved, even at the track\'s size', () => {
+  mkdirSync(join(root, SONG), { recursive: true });
+  assert.equal(localFileState(song(SONG, 'Song', fs.statSync(join(root, SONG)).size)), 'unproved');
 });
 
 test('an unreadable file is no proof, and never throws on the push path', (t) => {

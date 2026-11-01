@@ -72,6 +72,8 @@ export type RealPathState =
   | 'on'
   /** At least one SUB/WAVE row still has the flag off. */
   | 'off'
+  /** The opt-in is off and nobody asked, so Navidrome's own API was left alone. */
+  | 'not-read'
   /** No SUB/WAVE row exists yet (no request made since Navidrome was set up). */
   | 'no-players'
   /** Navidrome refused the write (a 401/403: the account may not edit players). */
@@ -96,6 +98,15 @@ export interface RealPathStatus {
   access?: 'refused' | 'not-sent';
   /** What the Subsonic ping said the server is, when it answered. */
   server?: ServerIdentity;
+}
+
+/** A few of the library's tracks, checked against the MUSIC_LIBRARY_PATH mount. */
+export interface LocalPathSample {
+  sampled: number;
+  /** Paths with no file on the mount proved to be the track: these stream. */
+  missed: string[];
+  /** Paths inside the mount whose file's size differs from Navidrome's: these play. */
+  unproved: string[];
 }
 
 export interface ServerIdentity {
@@ -125,9 +136,9 @@ export function serverLabel(s: ServerIdentity | undefined): string {
 }
 
 // `POST /auth/login` takes the password itself, where every Subsonic call carries
-// a salted token, and it runs for the Doctor, the card's status read and every
-// walk, opted in or not. The guard keeps it off the public internet in clear, not
-// off the LAN or the host, so it goes over https or to any private host:
+// a salted token. It runs with the opt-in on, or on an operator's press. The guard
+// keeps it off the public internet in clear, not off the LAN or the host, so it
+// goes over https or to any private host:
 // - IPv4 loopback, RFC 1918, link-local and Tailscale's 100.64.0.0/10;
 // - IPv6 loopback, unique-local (fc00::/7) and link-local (fe80::/10);
 // - `localhost` and a private network's suffixes, `.internal` among them for
@@ -176,22 +187,62 @@ export function playerLabel(p: NavidromePlayerRow): string {
 const TICK_BY_HAND = 'In Navidrome, open Settings → Players and tick "Report Real Path" on each SUB/WAVE player';
 const MANUAL_STEP =
   `${TICK_BY_HAND}, or turn on Settings → Music source → "Keep Report Real Path on" here to have the station do it.`;
+const TAG_BUILT_MISS = 'Navidrome sends tag-built paths, so a file whose folders differ from its tags falls back to the stream.';
+
+type RealPathFinding = { status: 'ok' | 'warn' | 'skip'; detail: string; hint?: string };
+
+// Every row on says nothing about the mount. `ok` also needs the sampled tracks
+// to be proved: a file existing isn't the right file. The two ways of failing
+// are told apart, because one streams the right song and the other plays what's
+// on the mount, and a hint saying "stream" over the second would be false.
+function mountFinding(flags: string, sample: LocalPathSample | null | undefined): RealPathFinding {
+  if (!sample?.sampled) {
+    return { status: 'skip', detail: `${flags} · could not sample tracks against MUSIC_LIBRARY_PATH` };
+  }
+  const notProved = sample.missed.length + sample.unproved.length;
+  if (!notProved) {
+    return { status: 'ok', detail: `${flags} · ${sample.sampled} of ${sample.sampled} sampled tracks proved on MUSIC_LIBRARY_PATH` };
+  }
+  const hints: string[] = [];
+  if (sample.missed.length) {
+    hints.push(`${sample.missed.length} stream instead of playing from disk, for example ${sample.missed[0]}: no file on the mount proved to be the track, by its size and title. `
+      + 'Point MUSIC_LIBRARY_PATH at the folder Navidrome scans, or its parent, with the same layout below it. Tracks in a library the mount does not hold stream, as they should.');
+  }
+  if (sample.unproved.length) {
+    hints.push(`${sample.unproved.length} play the file at that path, whose size differs from what Navidrome holds, for example ${sample.unproved[0]}. `
+      + 'Rescan Navidrome, and check MUSIC_LIBRARY_PATH holds the library it scans.');
+  }
+  return {
+    status: 'warn',
+    detail: `${flags} · ${notProved} of ${sample.sampled} sampled tracks not proved on MUSIC_LIBRARY_PATH`,
+    hint: hints.join(' '),
+  };
+}
 
 /**
- * The Doctor's finding for the flag. A refused or unsent login warns, because the
- * station can neither read the rows nor keep them on; an outage or a missing API skips,
- * with the same step by hand. Otherwise it warns whenever a row is off: without a
- * library mount the tag-built path still weakens the station-archive guard,
- * and with one a file whose folders differ from its tags silently falls back to
- * the stream.
+ * The Doctor's finding for the flag. With the opt-in off it skips, so an upgrade
+ * adds no warning. With it on, a refused or unsent login warns, because the
+ * station can neither read the rows nor keep them on; an outage or a missing API
+ * skips, with the same step by hand. Otherwise it warns whenever a row is off:
+ * without a library mount the tag-built path still weakens the station-archive
+ * guard, and with one a file whose folders differ from its tags silently falls
+ * back to the stream.
  */
 export function realPathFinding(
   st: RealPathStatus,
-  opts: { localMount: boolean },
-): { status: 'ok' | 'warn' | 'skip'; detail: string; hint?: string } {
+  opts: { localMount: boolean; sample?: LocalPathSample | null },
+): RealPathFinding {
   switch (st.state) {
-    case 'on':
-      return { status: 'ok', detail: `on for all ${st.players.length} SUB/WAVE player(s)` };
+    case 'on': {
+      const flags = `on for all ${st.players.length} SUB/WAVE player(s)`;
+      return opts.localMount ? mountFinding(flags, opts.sample) : { status: 'ok', detail: flags };
+    }
+    case 'not-read':
+      return {
+        status: 'skip',
+        detail: 'not read: "Keep Report Real Path on" is off in Settings → Music source',
+        ...(opts.localMount ? { hint: `MUSIC_LIBRARY_PATH is set, and by default ${TAG_BUILT_MISS} Turn the setting on to play those from disk.` } : {}),
+      };
     case 'no-players':
       return { status: 'skip', detail: 'no SUB/WAVE player registered in Navidrome yet' };
     case 'not-navidrome':
@@ -219,7 +270,7 @@ export function realPathFinding(
       const off = st.players.filter(p => !p.reportRealPath);
       const what = off.length ? `off for ${off.map(playerLabel).join(', ')}` : 'off';
       const why = opts.localMount
-        ? 'MUSIC_LIBRARY_PATH is set, but Navidrome sends tag-built paths, so a file whose folders differ from its tags falls back to the stream.'
+        ? `MUSIC_LIBRARY_PATH is set, but ${TAG_BUILT_MISS}`
         : 'Navidrome sends tag-built file paths, not the real ones on disk.';
       return {
         status: 'warn',

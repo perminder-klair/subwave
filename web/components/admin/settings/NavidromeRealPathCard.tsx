@@ -9,10 +9,12 @@ import { Btn, Card, Pill, Seg } from '../ui';
 // Navidrome sends a `path` built from the tags rather than the file on disk.
 // The controller reads and switches the rows (routes/settings/core.ts,
 // music/navidrome-players.ts); this card shows them, offers a one-off switch
-// and the opt-in that keeps them on. The setting is Navidrome's own, so on any
+// and the opt-in that keeps them on. Reading them logs in to Navidrome with the
+// station's password, so with the opt-in off opening the card reads nothing and
+// the rows wait for "Check status". The setting is Navidrome's own, so on any
 // other Subsonic server the card shrinks to one line and offers nothing.
 
-type RealPathState = 'on' | 'off' | 'no-players' | 'refused' | 'not-navidrome' | 'unavailable';
+type RealPathState = 'on' | 'off' | 'not-read' | 'no-players' | 'refused' | 'not-navidrome' | 'unavailable';
 
 interface RealPathView {
   state: RealPathState;
@@ -28,6 +30,7 @@ const realPathKey = ['settings', 'navidrome', 'players'] as const;
 const STATE_TEXT: Record<RealPathState, string> = {
   on: 'Every SUB/WAVE player reports real paths.',
   off: 'Some SUB/WAVE players still send tag-built paths.',
+  'not-read': "Not checked. While the setting below is off, SUB/WAVE stays out of Navidrome's own API until you ask.",
   'no-players': 'Navidrome has no SUB/WAVE player yet — it appears after the first request.',
   refused: 'Navidrome refused the change for this account. Tick it by hand in Navidrome → Settings → Players.',
   'not-navidrome': 'Report Real Path is a Navidrome setting; there is nothing to switch on this music server.',
@@ -40,6 +43,13 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
     adminFetch,
     request: (fetcher, signal) => adminJson<RealPathView>(fetcher, '/settings/navidrome/players', undefined, signal),
     toastOnError: false,
+  });
+
+  const checkNow = useAdminMutation<RealPathView, void>({
+    adminFetch,
+    request: (_vars, fetcher) =>
+      adminJson<RealPathView>(fetcher, '/settings/navidrome/players/check', { method: 'POST' }),
+    onDone: (view, _vars, client) => { client.setQueryData(realPathKey, view); },
   });
 
   const switchNow = useAdminMutation<RealPathView, void>({
@@ -77,8 +87,9 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
   });
 
   const view = query.data;
-  const busy = switchNow.isPending || setAuto.isPending;
+  const busy = checkNow.isPending || switchNow.isPending || setAuto.isPending;
   const canSwitch = view?.state === 'off' || view?.state === 'refused';
+  const canCheck = view !== undefined && !view.autoEnable;
 
   if (view?.state === 'not-navidrome') {
     const name = view.server?.type
@@ -148,11 +159,23 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
           </div>
         </div>
 
-        {canSwitch && (
+        {(canCheck || canSwitch) && (
           <div className="field">
-            <Btn sm tone="accent" onClick={() => switchNow.mutate()} disabled={busy}>
-              {switchNow.isPending ? 'Switching…' : 'Turn on now'}
-            </Btn>
+            <div className="flex flex-wrap gap-2">
+              {canCheck && (
+                <Btn sm onClick={() => checkNow.mutate()} disabled={busy}>
+                  {checkNow.isPending ? 'Checking…' : 'Check status'}
+                </Btn>
+              )}
+              {canSwitch && (
+                <Btn sm tone="accent" onClick={() => switchNow.mutate()} disabled={busy}>
+                  {switchNow.isPending ? 'Switching…' : 'Turn on now'}
+                </Btn>
+              )}
+            </div>
+            {canCheck && (
+              <div className="field-hint">Check status signs in to Navidrome once with the station&apos;s password.</div>
+            )}
           </div>
         )}
       </div>

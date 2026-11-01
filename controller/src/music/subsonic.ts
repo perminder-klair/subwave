@@ -1040,6 +1040,18 @@ export function getLocalPath(song) {
   return findLibraryFile(song);
 }
 
+// The Doctor's reading of a track, as the controller sees it: whether the mixer can
+// read the mount is the `library mount` line's to say. `proved` is the file
+// findLibraryFile() finds at the size the server holds for it; a mapped guess has
+// already passed the stricter test to get here. `unproved` plays anyway: a relative
+// path or a real path inside the mount needs no proof to play, so a stale or
+// different file there is not a miss. `none` streams.
+export function localFileState(song): 'proved' | 'unproved' | 'none' {
+  const local = findLibraryFile(song);
+  if (!local) return 'none';
+  return fileSizeOnDisk(local) === Number(song.size) ? 'proved' : 'unproved';
+}
+
 // Best URI for Liquidsoap — local file if available, otherwise stream URL
 export function getPlayableUri(song, resolveProbeId: string | null = null) {
   return getLocalPath(song) || getStreamUrl(song.id, resolveProbeId);
