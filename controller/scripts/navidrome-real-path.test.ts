@@ -93,6 +93,7 @@ function seed() {
     row('p-web', 'NavidromeUI', 'Firefox', 'radio', false),
     row('p-probe', 'subwave', 'Python-urllib', 'radio', false),
     row('p-front', 'sub-wavefront', 'node', 'radio', false),
+    row('p-sound', 'sub-wave-of-sound', 'DSub', 'radio', false),
     row('p-other', 'sub-wave', 'node', 'someone-else', false),
   ];
 }
@@ -221,9 +222,13 @@ beforeEach(() => {
 const own = { clientName: 'sub-wave', user: 'radio' };
 const asRow = (r: Row) => normalizePlayerRow(r) as NavidromePlayerRow;
 
-test('a SUB/WAVE player is our client name or its -suffix, on the station account only', () => {
+test('a SUB/WAVE player is on the exact list of our client names, on the station account only', () => {
   seed();
   assert.deepEqual(ownPlayers(fake.rows.map(asRow), own).map(p => p.id), ['p-node', 'p-admin', 'p-lavf']);
+  assert.equal(isOwnPlayer(asRow(row('x', 'sub-wave-wizard', 'node', 'radio', false)), own), true);
+  for (const client of ['sub-wave-of-sound', 'sub-wave-', 'sub-wave-admin-2', 'sub-wave-wizard-x', 'SUB-WAVE-ADMIN']) {
+    assert.equal(isOwnPlayer(asRow(row('x', client, 'node', 'radio', false)), own), false, client);
+  }
   // Navidrome reports the username as stored; the station may have typed it in another case.
   assert.equal(isOwnPlayer(asRow(row('x', 'sub-wave', 'node', 'Radio', false)), own), true);
   // A blank client name owns nothing rather than everything.
@@ -266,7 +271,7 @@ test('switching turns on our rows that are off, sends the whole row, and leaves 
   assert.equal(sent.maxBitRate, 0);
   assert.equal(sent.scrobbleEnabled, true);
   assert.equal(sent.client, 'sub-wave');
-  for (const id of ['p-web', 'p-probe', 'p-front', 'p-other']) {
+  for (const id of ['p-web', 'p-probe', 'p-front', 'p-sound', 'p-other']) {
     assert.equal(fake.rows.find(r => r.id === id)?.reportRealPath, false, `${id} is not ours`);
   }
 });
@@ -724,9 +729,12 @@ test('opening the card with the opt-in off reads nothing from Navidrome, and a p
   assert.equal(logins(), 1, 'the press logs in once');
   assert.deepEqual(fake.puts, [], 'and writes nothing');
 
+  assert.ok(!checked.players.some(p => p.client === 'sub-wave-of-sound'), 'a look-alike is not on the card as ours');
+
   const switched = await card('/settings/navidrome/players/real-path', 'POST');
   assert.equal(switched.state, 'on');
   assert.equal(switched.switched, 2);
+  assert.equal(fake.rows.find(r => r.id === 'p-sound')?.reportRealPath, false, 'and the press leaves it alone');
 
   fake.calls = [];
   assert.equal((await card('/settings/navidrome/players')).state, 'not-read', 'the next opening reads nothing again');

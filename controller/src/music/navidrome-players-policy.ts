@@ -16,11 +16,12 @@
 // without the operator noticing. That is why the switch re-applies on a timer
 // rather than once.
 //
-// Ownership is the client name AND the user: the station's own clients are
-// `config.navidrome.clientName` and its `-suffix` variants, and only rows of the
-// account the station signs in with are touched — never another user's player,
-// never another app's, even when the account is a Navidrome admin and the list
-// includes them.
+// Ownership is the client name AND the user: the station's own clients are an
+// exact list, `config.navidrome.clientName` plus the names its two connection
+// tests send, and only rows of the account the station signs in with are touched
+// — never another user's player, never another app's, even when the account is a
+// Navidrome admin and the list includes them. A prefix or suffix rule would catch
+// a third-party app that happens to call itself `sub-wave-of-sound`.
 
 export interface NavidromePlayerRow {
   id: string;
@@ -53,10 +54,14 @@ export function normalizePlayerRow(raw: unknown): NavidromePlayerRow | null {
   };
 }
 
+// The client names of the admin connection test (routes/settings/core.ts) and
+// the onboarding one (routes/onboarding.ts).
+const CONNECTION_TEST_CLIENTS: readonly string[] = ['sub-wave-admin', 'sub-wave-wizard'];
+
 export function isOwnPlayer(row: NavidromePlayerRow, ctx: OwnershipContext): boolean {
   const name = ctx.clientName.trim();
   if (!name) return false;
-  const clientOk = row.client === name || row.client.startsWith(`${name}-`);
+  const clientOk = row.client === name || CONNECTION_TEST_CLIENTS.includes(row.client);
   // Usernames compare case-insensitively: Navidrome logs in `Radio` as `radio`.
   const userOk = row.userName.toLowerCase() === ctx.user.trim().toLowerCase();
   return clientOk && userOk;
