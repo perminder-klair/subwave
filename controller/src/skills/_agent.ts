@@ -145,7 +145,7 @@ ${list}`;
 
 let tickBusy = false;
 const lastFired = new Map<string, number>(); // kind → ms timestamp of last aired segment
-const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of last unusable pool-mode fetch
+const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of the last run with nothing to air: an unusable fetch, a co-hosted stand-down or a stand-in line
 
 // An unavailable source shouldn't retry on the very next 5-minute tick, nor
 // inherit a multi-hour on-air cooldown when the next track may change its
@@ -842,8 +842,9 @@ export async function runCapability(
     : { pauseTalkEligible, sfx: selectedSfx });
   if (!delivery.accepted) {
     if (delivery.reason === 'stand-in') {
-      // Nothing was rendered: the model wrote a stand-in, not speech. Same
-      // backoff as a skill with nothing to say.
+      // Nothing was rendered: the model wrote a stand-in, not speech. The other
+      // forced stand-downs leave the backoff alone. This one sets it, so the
+      // director is not offered a skill that has just written a stand-in.
       lastUnavailable.set(cap.kind, Date.now());
       return standDown('the DJ wrote a stand-in, not a line, so nothing aired');
     }

@@ -125,6 +125,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).
 - LLM calls go through the `llm/sdk` primitives, and provider quirks live only in `llm/internal/provider/capabilities.ts`. The default provider is a slow homelab Ollama, so add no aggressive retry.
 - TTS goes through `tts.speak(text, {kind})`. The rescue chain is a list of voice slots, and a rescue target is engine + provider.
+- A stand-in line (`placeholder`, `TBD`, template text) never airs: `queue.speakable` judges model-written speech with `broadcast/stand-in-policy.ts` on the line as written, before `normalizeForDisplay`, and `push()` reports a dropped intro so no caller records it as said.
 
 **Product behaviour**
 - The station keeps making sound: the token cap, a muted voice and an LLM outage never stop the music.
