@@ -201,6 +201,16 @@ test('an accepted file dated ahead stands from its own date, so the margin does 
   consistent();
 });
 
+test('the size signal reads the cleaned size, so junk is not a replacement', () => {
+  measured('junk');
+  assert.equal(db.upsertTrackMeta('junk', meta(1_000.4)), false, 'rounds to the stored size');
+  assert.equal(db.upsertTrackMeta('junk', meta(0.4)), false, 'rounds to nothing: not reported');
+  assert.equal(db.upsertTrackMeta('junk', { title: 'T', fileSize: 'junk' as unknown as number }), false);
+  assert.equal(sql(`SELECT file_size FROM tracks WHERE id = 'junk'`).get()!.file_size, 1_000);
+  assert.equal(db.upsertTrackMeta('junk', meta(4_000.4)), true);
+  assert.equal(sql(`SELECT file_size FROM tracks WHERE id = 'junk'`).get()!.file_size, 1_000, 'held until answered');
+});
+
 test('a walk reporting the same size keeps every measurement', () => {
   measured('same');
   const before = rows('same');
