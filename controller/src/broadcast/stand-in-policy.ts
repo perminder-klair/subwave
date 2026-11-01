@@ -53,11 +53,18 @@ const HAS_WORD = /[\p{L}\p{N}]/u;
 // bracket pair whose words start like a template's. A real aside in brackets
 // starts with anything else and airs.
 const BRACKETED = /^\s*(?:\[[^\]]*\]|\{+[^}]*\}+|<[^>]*>)\s*[.!?]?\s*$/;
-const TEMPLATE_START = /^(?:placeholder|insert|your|tbd)\b/;
+const TEMPLATE_WORD = 'placeholder|insert|your|tbd';
+const TEMPLATE_START = new RegExp(`^(?:${TEMPLATE_WORD})\\b`);
 // What a model wraps a whole line in: quotes, emphasis, a tag, a closing stop.
-const WRAPPER = /^(?:[\s"'“”‘’«»*_`]|<\/?[a-z][^>]*>)+|(?:[\s"'“”‘’«»*_`.!?]|<\/?[a-z][^>]*>)+$/giu;
+// A template in angle brackets is no wrapper, though it looks like a tag. It has
+// to reach BRACKETED: normalizeForDisplay strips a tag only up to 120 characters,
+// so past that nothing else stops it and it airs brackets and all.
+const WRAPPING_TAG = `</?(?!(?:${TEMPLATE_WORD})\\b)[a-z][^>]*>`;
+const WRAPPER = new RegExp(`^(?:[\\s"'“”‘’«»*_\`]|${WRAPPING_TAG})+|(?:[\\s"'“”‘’«»*_\`.!?]|${WRAPPING_TAG})+$`, 'giu');
 // No sentence punctuation in it: "That was Efdemin. The date: TBD." is speech.
-const LABEL = /^[^:\r\n.,!?]{1,40}:\s+/;
+// It may close in emphasis, because "**Niki:** ..." reaches the raw test that way
+// and a bracket after it is gone by the display form.
+const LABEL = /^[^:\r\n.,!?]{1,40}:[*_]*\s+/;
 
 function wordsOnly(text: string): string {
   return text
@@ -70,8 +77,7 @@ export function foldStandIn(text: string): string {
   return wordsOnly(text).toLowerCase();
 }
 
-function judge(line: string): string | null {
-  if (!HAS_WORD.test(line)) return line.slice(0, 24);
+function namedToken(line: string): string | null {
   const words = wordsOnly(line);
   if (STAND_IN_CAPITALS.has(words)) return words;
   const folded = foldStandIn(line);
@@ -82,18 +88,19 @@ function judge(line: string): string | null {
 }
 
 // The token that made `text` a stand-in, for the booth log, or null when the
-// line is speech.
+// line is speech. Only a named token is looked for past a label. Having no words
+// and normalising to nothing are verdicts on the whole line.
 export function standInToken(text: string | null | undefined): string | null {
   const raw = String(text ?? '').trim();
   if (!raw) return null; // empty is the callers' own "no line" case, not this one
-  for (const written of new Set([raw, raw.replace(LABEL, '')])) {
-    const shown = normalizeForDisplay(written);
-    const token = judge(written) ?? (shown
-      ? judge(shown) ?? judge(shown.replace(LABEL, ''))
-      : foldStandIn(written).slice(0, 40));
+  if (!HAS_WORD.test(raw)) return raw.slice(0, 24);
+  const shown = normalizeForDisplay(raw);
+  for (const form of shown ? [raw, shown] : [raw]) {
+    const token = namedToken(form) ?? namedToken(form.replace(LABEL, ''));
     if (token) return token;
   }
-  return null;
+  if (!shown) return foldStandIn(raw).slice(0, 40);
+  return HAS_WORD.test(shown) ? null : shown.slice(0, 24);
 }
 
 // The lines of an exchange the gate will let air: the same test

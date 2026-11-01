@@ -255,6 +255,9 @@ for (const [shape, line] of Object.entries(TEMPLATES)) {
 // what normalising leaves of each, because a model reaches for all of these and
 // each one alone gets past a test of the raw line.
 const LONG_TEMPLATE = '[Placeholder for the weather update, which should cover the temperature, the wind and the forecast for tonight]';
+// Past the 120 characters normalizeForDisplay will treat as a tag, so nothing
+// strips this one and, if the gate misses it, it airs angle brackets and all.
+const LONG_ANGLE = '<placeholder for the news segment, covering the top headlines of the hour, the local weather, the travel news and a line back to the music>';
 const DISGUISED = {
   'a quoted long template': `"${LONG_TEMPLATE}"`,
   'a quoted short template': '"[Insert weather update here]"',
@@ -271,6 +274,18 @@ const DISGUISED = {
   'a label on a short template': 'Niki: [Insert reply here]',
   'a label on a quoted long template': `Niki: "${LONG_TEMPLATE}"`,
   'a label on a tag': 'DJ: <p>TBD</p>',
+  'a long angle template': LONG_ANGLE,
+  'a long angle template and a full stop': `${LONG_ANGLE}.`,
+  'a quoted long angle template': `"${LONG_ANGLE}"`,
+  'emphasis around a long angle template': `**${LONG_ANGLE}**`,
+  'a tag around a long angle template': `<p>${LONG_ANGLE}</p>`,
+  'a label on a long angle template': `Niki: ${LONG_ANGLE}`,
+  'a label on a quoted long angle template': `Niki: "${LONG_ANGLE}"`,
+  'a quoted short angle template': '"<your text>"',
+  'a label on a short angle template': 'Niki: <placeholder>',
+  'a bold label on a quoted template': '**Niki:** "[placeholder]"',
+  'a bold label on a quoted angle template': '**Niki:** "<TBD>"',
+  'a bold label on a quoted word': '**Niki:** "[N/A]"',
 };
 
 // Real lines that look like some of the above. A label stays on the air as it
@@ -286,7 +301,19 @@ const REAL_SPEECH = {
   'an aside in round brackets': '(Insert coin to continue, as the arcades said.)',
   'a labelled word that is one elsewhere': 'Niki: Todo.',
   'a bold word': 'The **only** ferry out of Chania tonight.',
+  // A label is looked past for a named token only. What follows the colon being
+  // a beat rather than a word says nothing: the line in front of it is speech.
+  'a lead-in to a cue': 'Here it comes: [laughs]',
+  'a lead-in to a long cue': 'Now listen to this: [music swells]',
+  'a lead-in to a tag': 'And then she said: <pause>',
+  'a lead-in to an ellipsis': 'Wait for it: ...',
+  'a lead-in to an emoji': 'And now: 🎶',
+  'a lead-in to a dash': 'One more thing: —',
 };
+
+// What the any-label rule costs, on purpose: the same shape as "Script:
+// placeholder" with a person's words in front. Pinned so the trade stays visible.
+const LABEL_LOOKALIKES = ['Up next: Placeholder', 'Now playing: Undefined', 'Tour dates: TBA', 'The date: TBD.'];
 
 for (const [shape, line] of Object.entries(DISGUISED)) {
   test(`announce drops ${shape} and reports it as a stand-in`, async () => {
@@ -327,7 +354,44 @@ for (const [shape, line] of Object.entries(REAL_SPEECH)) {
     assert.equal(spoken[0], normalizeForDisplay(line));
     assert.ok(!droppedAsStandIn());
   });
+
+  test(`${shape} stays in an exchange and on a pushed track`, async () => {
+    await queue.announceExchange([{ persona: GUEST as never, text: line }], 'banter', { castNames: [GUEST.name] });
+    assert.equal(spoken.length, 1);
+    let reported = 0;
+    await queue.push({
+      track: { id: 'kept', title: 'Song', artist: 'Artist' } as never, introScript: line, introPersona: HOST as never,
+      onStandInDropped: () => { reported += 1; },
+    });
+    assert.equal(queue.upcoming.find(i => i.track.id === 'kept')!.introScript, normalizeForDisplay(line));
+    assert.equal(reported, 0);
+  });
 }
+
+test('the any-label rule drops a person\'s words that end in a named token, by design', () => {
+  for (const line of LABEL_LOOKALIKES) assert.ok(standInToken(line), line);
+});
+
+test('what the gate does not catch, as the docs say', () => {
+  // The list is fixed and the match is whole-line. If one of these starts to
+  // drop, that is an improvement, and the CLAUDE.md line wants updating with it.
+  for (const line of ['[laughs] placeholder', '[sighs] TBD', '{text}', '{{text}}']) {
+    assert.equal(standInToken(line), null, line);
+  }
+});
+
+test('an angle-bracket template drops at any length', () => {
+  // normalizeForDisplay strips a tag only up to 120 characters, so the cases
+  // either side of that cap reach the gate differently.
+  const opening = '<placeholder for the news segment';
+  for (const length of [40, 100, 118, 119, 120, 121, 122, 123, 124, 146, 300, 1000]) {
+    const template = `${opening}${'x'.repeat(length - opening.length - 1)}>`;
+    assert.equal(template.length, length);
+    assert.ok(standInToken(template), `${length} characters`);
+    assert.ok(standInToken(`"${template}"`), `${length} characters, quoted`);
+    assert.ok(standInToken(`Niki: ${template}`), `${length} characters, labelled`);
+  }
+});
 
 test('a line the gate passes is not dropped by a later look at its display form', () => {
   // push() checks the line once and the render checks it again. If those two
