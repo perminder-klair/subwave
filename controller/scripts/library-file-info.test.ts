@@ -8,9 +8,11 @@
 //     under the write lock, and any other failure throws out of open();
 //   - the walk's Subsonic child maps to the four fields (walkFileInfo), under the
 //     one cleaning rule upsertTrackMeta also applies (cleanFileInfo);
-//   - the analyzer's own walk stores them, run for real against a fake Navidrome;
-//   - a writer without file facts (a manual edit, say) never clears the stored
-//     ones, and a later walk updates them.
+//   - both library walks store them: the tagger's walkNavidrome and the analyzer's
+//     own walk, each run for real against a fake Navidrome;
+//   - a writer without file facts (a manual edit, say) never clears any of the
+//     four, and a later walk updates them;
+//   - ID adoption leaves an adopted row with what its own walk reported.
 // Run: `npm test -- library-file-info`.
 
 import assert from 'node:assert/strict';
@@ -23,7 +25,7 @@ import test, { after } from 'node:test';
 import Database from 'better-sqlite3';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
-// A fake Navidrome with one album, for the real analyzer walk.
+// A fake Navidrome with one album, for the two real walks.
 let songs: Array<Record<string, unknown>> = [];
 const navidrome = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -44,7 +46,7 @@ process.env.NAVIDROME_PASS = 'fixture';
 const dir = createTempDir(join(tmpdir(), 'subwave-file-info-'));
 process.env.STATE_DIR = dir;
 const db = await import('../src/music/library-db.js');
-const { walkFileInfo } = await import('../src/music/tag-library/flags.js');
+const { walkFileInfo, walkNavidrome } = await import('../src/music/tag-library/flags.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 after(async () => {
   db.close();
@@ -153,9 +155,10 @@ test('the walk stores them, other writers keep them, the next walk updates them'
   db.upsertTrackMeta('w1', { title: 'Song', artist: 'Artist', album: 'Album', duration: 200, ...walkFileInfo(walked) });
   assert.deepEqual(row('w1'),
     { file_path: '/music/Artist/Album/03 - Song.MP3', file_suffix: 'mp3', file_size: 7_878_806, bit_rate: 192 });
-  // A manual edit has no file facts.
+  // A manual edit has no file facts, and every one of the four survives it.
   db.upsertTrackMeta('w1', { title: 'Song (edit)' });
-  assert.equal((row('w1') as { file_path: string }).file_path, '/music/Artist/Album/03 - Song.MP3');
+  assert.deepEqual(row('w1'),
+    { file_path: '/music/Artist/Album/03 - Song.MP3', file_suffix: 'mp3', file_size: 7_878_806, bit_rate: 192 });
   // The file was replaced by a FLAC: the next walk wins.
   db.upsertTrackMeta('w1', walkFileInfo({ path: '/music/Artist/Album/03 - Song.flac', suffix: 'flac', size: 30_000_000, bitRate: 900 }));
   assert.deepEqual(row('w1'),
@@ -181,6 +184,14 @@ test('a value that rounds to 0 is not reported, so it never overwrites a stored 
   // A caller that skips walkFileInfo gets the same rule.
   db.upsertTrackMeta('zero', { filePath: '   ', fileSuffix: ' ', fileSize: 0.4, bitRate: 0.4 });
   assert.deepEqual(row('zero'), stored);
+});
+
+test('walkNavidrome stores what Navidrome reports', async () => {
+  songs = [{ id: 'tagger-walk', title: 'Song', artist: 'Artist', album: 'Album', duration: 200,
+    path: '/music/Artist/Album/01.FLAC', suffix: 'FLAC', size: 41_600_000, bitRate: 662 }];
+  await walkNavidrome();
+  assert.deepEqual(row('tagger-walk'),
+    { file_path: '/music/Artist/Album/01.FLAC', file_suffix: 'flac', file_size: 41_600_000, bit_rate: 662 });
 });
 
 test('the analyzer walk stores what Navidrome reports', async () => {
@@ -211,4 +222,19 @@ test('the analyzer walk stores what Navidrome reports', async () => {
   } finally {
     await removeTempDir(cliDir);
   }
+});
+
+test('an adopted row keeps what its own walk reported, never the old id\'s file', () => {
+  // Golden id pairs from scripts/id-adoption.test.ts.
+  const [OLD_MOVED, NEW_MOVED] = ['e3b7fc2ae9447bbec37a13bf916e3cf6', '6VHl3uR4kss6sUPKA8Cwnk'];
+  const [OLD_SILENT, NEW_SILENT] = ['a1b2c3d4e5f60718293a4b5c6d7e8f90', '4V7sy1hL4SujOBMYLPtQuk'];
+  for (const id of [OLD_MOVED, OLD_SILENT]) {
+    db.upsertTrackMeta(id, { title: 'Old', filePath: '/old/song.mp3', fileSuffix: 'mp3', fileSize: 111, bitRate: 128 });
+  }
+  db.upsertTrackMeta(NEW_MOVED, { title: 'New', filePath: '/new/song.flac', fileSuffix: 'flac', fileSize: 222, bitRate: 900 });
+  db.upsertTrackMeta(NEW_SILENT, { title: 'New' }); // this walk reported no file facts
+  assert.equal(db.adoptRotatedIds(new Set([NEW_MOVED, NEW_SILENT])).adopted, 2);
+  assert.deepEqual(row(NEW_MOVED), { file_path: '/new/song.flac', file_suffix: 'flac', file_size: 222, bit_rate: 900 });
+  // The old path may name a file that has gone: blank beats wrong here.
+  assert.deepEqual(row(NEW_SILENT), { file_path: null, file_suffix: null, file_size: null, bit_rate: null });
 });
