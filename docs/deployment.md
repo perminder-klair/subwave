@@ -306,7 +306,11 @@ Before you do it, know this:
 
   Folders already on disk keep their old mode, because a cached track is not
   written again. If you saw that error, open them once after upgrading, from
-  inside the analyzer, which is the user that owns them:
+  inside the analyzer, which is the user that owns them. Run this wherever the
+  analyzer runs. With a remote analyzer that is the GPU host, not the station:
+  `ANALYZER_REPLICAS=0` removes the station's `analyzer` container, and the
+  [compose file on the GPU host](tts-heavy.md#running-the-analyzer-on-another-machine)
+  uses the same service name and mount, so the command is the same:
 
   ```sh
   docker compose exec analyzer find /var/sub-wave/stems -mindepth 1 -type d ! -perm 777 -exec chmod 777 {} +
@@ -314,10 +318,12 @@ Before you do it, know this:
 
   On a multi-station install without `STEMS_DIR`, run it once per station on
   `/var/sub-wave/stations/<id>/stems`. A `chmod` error names a folder the
-  analyzer does not own: `chown` that one on the host. Until a stuck folder is
-  opened the sweep leaves it out of the budget check and warns, rather than
-  evicting other tracks in its place, but its bytes still count as used. A
-  cache held over budget by stuck folders alone writes no new stems.
+  analyzer does not own: as root on the machine that holds the files (the file
+  server, on NFS), `chown 10001:10001` that folder, the analyzer's user, then
+  run the command again. Until a stuck folder is opened the sweep leaves it out
+  of the budget check and warns, rather than evicting other tracks in its
+  place, but its bytes still count as used. A cache held over budget by stuck
+  folders alone writes no new stems.
 - **Transition clips are not part of this cache.** The rendered clips live in
   `state/transitions` (multi-station: `state/stations/<id>/transitions`), so
   `STEMS_DIR` does not move them and they do not count against the stem
