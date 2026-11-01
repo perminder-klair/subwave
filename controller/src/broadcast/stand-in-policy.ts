@@ -29,10 +29,15 @@ const STAND_IN_LINES = new Set([
   'placeholder', 'placeholder text', 'text placeholder', 'segment placeholder',
   'your text', 'your text here', 'text here', 'insert text', 'insert text here',
   'segment text', 'your line here',
-  'tbd', 'tba', 'todo', 'tktk', 'fixme',
-  'n a', 'null', 'undefined',
+  'tbd', 'tba', 'tktk', 'fixme',
+  'n a', 'undefined',
   'sample text', 'dummy text',
 ]);
+
+// Real words in a language a persona may speak ("todo" is Spanish and
+// Portuguese for everything, "null" German for zero), so only the capitals a
+// form-filler writes count, matched before any case folding.
+const STAND_IN_CAPITALS = new Set(['TODO', 'NULL']);
 
 const LOREM = /^lorem ipsum\b/;
 const HAS_WORD = /[\p{L}\p{N}]/u;
@@ -43,12 +48,15 @@ const HAS_WORD = /[\p{L}\p{N}]/u;
 const BRACKETED = /^\s*(?:\[[^\]]*\]|\{[^}]*\}|<[^>]*>)\s*[.!?]?\s*$/;
 const TEMPLATE_START = /^(?:placeholder|insert|your|tbd)\b/;
 
-export function foldStandIn(text: string): string {
+function wordsOnly(text: string): string {
   return text
     .normalize('NFKC')
-    .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
+}
+
+export function foldStandIn(text: string): string {
+  return wordsOnly(text).toLowerCase();
 }
 
 // The token that made `text` a stand-in, for the booth log, or null when the
@@ -57,6 +65,8 @@ export function standInToken(text: string | null | undefined): string | null {
   const raw = String(text ?? '').trim();
   if (!raw) return null; // empty is the callers' own "no line" case, not this one
   if (!HAS_WORD.test(raw)) return raw.slice(0, 24);
+  const words = wordsOnly(raw);
+  if (STAND_IN_CAPITALS.has(words)) return words;
   const folded = foldStandIn(raw);
   if (STAND_IN_LINES.has(folded) || LOREM.test(folded)) return folded.slice(0, 40);
   if (BRACKETED.test(raw) && TEMPLATE_START.test(folded)) return folded.slice(0, 40);

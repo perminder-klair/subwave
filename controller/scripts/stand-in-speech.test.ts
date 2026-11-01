@@ -39,7 +39,7 @@ const { forcedDirectorAgent, runCapability } = await import('../src/skills/_agen
 test('the stand-ins seen on air and their kin are caught', () => {
   for (const line of [
     'placeholder', 'Placeholder.', '"placeholder"', '[placeholder]', '<placeholder>',
-    'PLACEHOLDER TEXT', 'TBD', 'todo', 'N/A', 'null', 'undefined', 'Your text here',
+    'PLACEHOLDER TEXT', 'TBD', 'TODO', 'N/A', 'NULL', 'undefined', 'Your text here',
     '{your text}', 'Lorem ipsum dolor sit amet, consectetur adipiscing elit.', '...', '—', '…',
   ]) assert.ok(standInToken(line), `should catch ${JSON.stringify(line)}`);
 });
@@ -69,6 +69,14 @@ test('markup that leaves nothing to say is a stand-in, not an empty line', () =>
   for (const [shape, line] of Object.entries(TEMPLATES)) assert.ok(standInToken(line), shape);
   assert.ok(standInToken('[Music swells]'), 'a cue with no words after it never aired');
   assert.ok(standInToken('<br>'), 'a bare tag normalises to nothing');
+});
+
+test('todo and null are words elsewhere, so only the capitals are a stand-in', () => {
+  // "Todo." is Spanish and Portuguese for everything, "Null." German for zero.
+  for (const line of ['Todo.', '¡Todo!', 'todo', 'Null.', 'Null!', 'null.', 'null'])
+    assert.equal(standInToken(line), null, `should keep ${JSON.stringify(line)}`);
+  for (const line of ['TODO', 'TODO.', '"TODO"', 'NULL', 'NULL.'])
+    assert.ok(standInToken(line), `should catch ${JSON.stringify(line)}`);
 });
 
 test('a one-word reply a guest could give in banter is speech', () => {
