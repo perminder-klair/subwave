@@ -561,7 +561,10 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     && !literal.artist && !literal.album
     && /^(?:please\s+)?(?:play|queue|request|put\s+on)\b/iu.test(text)
     && !/["'“‘]/u.test(text);
-  const literalIdentityFrame = !/^\s*(?:please\s+)?(?:play|queue|request|put\s+on)\s+(?:anything|something|some|music|songs?|tracks?|a\s+song|a\s+track)\b/iu.test(text);
+  // "something chill for the evening" and "play me some rock" open with a
+  // generic frame, so they are vibes that happen to parse as a title. A miss
+  // may take an honest alternative; only a real name is held to no-match.
+  const literalIdentityFrame = !/^\s*(?:please\s+)?(?:(?:play|queue|request|put\s+on)\s+)?(?:(?:me|us)\s+)?(?:anything|something|some|music|songs?|tracks?|a\s+song|a\s+track)\b/iu.test(text);
 
   // Conversational DJ agent. On any non-evidence failure fall through to the
   // stateless cascade below, so a request is never dropped. Agentic mode is
@@ -721,7 +724,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // title-only request by adding an artist (for example, "Queen Bohemian
   // Rhapsody"), that artist must not reopen the unrelated alternative pool.
   // Named and unquoted title-only misses remain no-match even after repair.
-  const exactTitleOnlyRequest = framedTitleOnly || titleOnlyNamedRequest;
+  const exactTitleOnlyRequest = (framedTitleOnly || titleOnlyNamedRequest) && literalIdentityFrame;
   const unsupported = directRequestUnsupported(text, matched);
   // Labels naming no condition ("dedication") were dropped above; keep them
   // visible to the operator.

@@ -1432,3 +1432,21 @@ test('"play U2 rock" with the interpreter down never claims a match on another a
   assert.notEqual(result.outcome, 'matched');
   assert.equal(queue.upcoming.length, 0);
 });
+
+for (const failure of ['interpreter down', 'token cap']) {
+  for (const text of ['something chill for the evening', 'play me some rock']) {
+    test(`a vibe phrase is not held to an exact title (${failure}): ${text}`, async () => {
+      catalogueSongs = [filler];
+      searchEmpty = true;
+      if (failure === 'interpreter down') modelError = true;
+      else {
+        await settings.update({ llm: { dailyTokenCap: 1000, exemptRequests: false } } as never);
+        addDailyUsage(5000);
+      }
+      const result = await submit(text);
+      assert.equal(result.outcome, 'substituted');
+      assert.equal(queue.upcoming.length, 1);
+      assert.match(result.ack, /alternative/);
+    });
+  }
+}
