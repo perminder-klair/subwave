@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { RequestSong } from '../src/music/request-match.js';
+import type { ListenerRequestEntry } from '../src/routes/request.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 
 process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-direct-route-'));
@@ -1194,8 +1195,8 @@ const agentPicked = (song: RequestSong) => ({ object: { id: song.id, ack: 'Here 
 
 // The deadlines are tens of seconds, so these run on mocked clocks through the
 // exported entry the POST handler calls. Real I/O still gets event-loop turns.
-function listenerEntry(text: string) {
-  return { id: `mock-time-${++ip}`, status: 'pending' as const, requester: 'Listener', text, createdAt: Date.now() };
+function listenerEntry(text: string): ListenerRequestEntry {
+  return { id: `mock-time-${++ip}`, status: 'pending', requester: 'Listener', text, createdAt: Date.now() };
 }
 const eventLoopTurns = async () => { for (let n = 0; n < 30; n++) await new Promise(resolve => setImmediate(resolve)); };
 async function advance(t: TestContext, ms: number, step = 1000) {
