@@ -356,8 +356,8 @@ The first line names the app version, the JS bundle (`OTA <id>` or
 UTC. Each `reload [reason] #n` line should match one new stream request (its
 `t=` cache-buster) in the station's Icecast access log; a `skipped` line loads
 nothing. `(failure n)` on an automatic reload is its place on the backoff: it
-climbs while items fail or stop within 4 s of playing, and 1 means the last item
-stayed up. A playback error reads `event playback-error code=<code> msg=<text>`:
+climbs while loads fail or items fail within 4 s of playing, and it starts over
+at 1 once an item stays up or stalls. A playback error reads `event playback-error code=<code> msg=<text>`:
 Android sends both, and its code is the part that tells a refused stream
 (`android-io-bad-http-status`) from a dead link
 (`android-io-network-connection-failed`); iOS sends only the text, AVPlayer's

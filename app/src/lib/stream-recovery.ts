@@ -31,27 +31,26 @@
 // and when Playing cleared the count for good each such item started the curve
 // over: this module ran at about 35 reloads a minute on a 1s cut and 60 on a
 // 0.25s cut, on fake timers. So the reset on an item's first Playing is provisional.
-// An item that stops within STAYED_UP_MS of it takes the reset back, and the
-// reload that replaces it counts one more.
+// An item that stops within STAYED_UP_MS of it and then fails takes the reset
+// back, and the reload that replaces it counts one more.
 //
 // What is judged is the moment the item stopped, the first Buffering, error or
-// end since it last played, never the reload. The watchdog fires WATCHDOG_MS
-// after a stall begins, so "how long since Playing" at the reload would call
-// every stalled item a success, and a stream that stalls a second in would hold
-// the curve at its floor as a closing one did. An iOS cut can also report
-// Buffering before its end. Buffering is still only an instant: a Playing that
-// ends the stall clears the stop, though not the item's clock, which is
-// wall-clock from its first Playing, never the media clock.
+// end since it last played, never the moment it reported a failure. An iOS cut
+// can report Buffering before its end, and an Android error can land after
+// ExoPlayer's own retries, past the line. Buffering is still only an instant: a
+// Playing that ends the stall clears the stop, though not the item's clock,
+// which is wall-clock from its first Playing, never the media clock.
 //
-// A stall's count stays out of a refused load's way. A cut closes the item, but
-// a source that flaps stalls it, and then the mount refuses the reload. If the
-// count reached that refusal, a listener on a source 3s up and 1s down would
-// climb to a minute of silence (2% sound against 22%, on fake timers). So the
-// reload of a stalled item keeps the count for the next item that plays, and a
-// load that never plays starts its own curve from the first step. A long run of
-// stalls with no refusal between them still grows, which is what a stream that
-// stalls a moment in looks like, and it can't be told from a flap whose reloads
-// all land while the source is up.
+// A stall never counts, however early, and stays on WATCHDOG_MS. A cut closes the
+// item, but a source that flaps stalls it, and the player can't tell a stream
+// that stalls a moment in from that. Icecast-KH holds a listener's socket open
+// about 15s after its source stops, then closes it, and the mount refuses a
+// reload while the source is down. A stall that grew to 16s outlived the socket,
+// the close read as the item's own failure, and the count reached the refused
+// load: a source up under 4s then cost 60-130s of silence (on fake timers). A
+// stalled item's reload is the first failure, as it always was. That leaves a
+// stream that stalls a second in at the watchdog's 8 reloads a minute, fewer than
+// the 12 a cut just past the line costs.
 //
 // A hold counts as that item's Playing, dated from the sample the clock kept
 // pace from. JS can miss the real one (a stale Ready or Error is all it hears),
@@ -79,8 +78,8 @@
 // How long a stall (Buffering/Loading), or a new load, may run before the media
 // clock is checked. The first stall of an episode sets the deadline and later
 // ones never push it back, so a storm of state flaps cannot postpone the check.
-// After automatic reloads that failed it waits the error backoff instead, once
-// that is the longer (watchdogDelay, stallDelay). WATCHDOG_MS is always the floor.
+// After automatic reloads that never reached Playing it waits the error
+// backoff instead, once that is the longer (watchdogDelay).
 export const WATCHDOG_MS = 6000;
 
 // Reconnect backoff: doubles from 500ms to a 60s ceiling.
@@ -141,8 +140,8 @@ export function retryDelay(retries: number): number {
   return Math.min(RECONNECT_BASE_MS * 2 ** retries, RECONNECT_MAX_MS);
 }
 
-/** How long a new load waits for its clock check: WATCHDOG_MS, or the backoff
- *  once failed reloads have pushed it past that. */
+/** How long a stall or a new load waits for its clock check: WATCHDOG_MS, or
+ *  the backoff once failed reloads have pushed it past that. */
 export function watchdogDelay(retries: number): number {
   return Math.max(WATCHDOG_MS, retryDelay(retries));
 }
@@ -150,8 +149,7 @@ export function watchdogDelay(retries: number): number {
 export interface Backoff {
   /** Automatic reloads that failed in a row. An item that played clears it. */
   retries: number;
-  /** What that cleared, kept until the item is judged, and what a stalled item
-   *  leaves for the next item that plays. */
+  /** What that cleared, kept until the item is judged. */
   heldRetries: number;
   /** When this item first played; null until it does. */
   playingSince: number | null;
@@ -165,8 +163,7 @@ export const NO_BACKOFF: Backoff = { retries: 0, heldRetries: 0, playingSince: n
  *  clock, or a slow link's Playing after each stall would look like a new item. */
 export function itemPlaying(backoff: Backoff, at: number): Backoff {
   if (backoff.playingSince !== null) return { ...backoff, stoppedAt: null };
-  const heldRetries = Math.max(backoff.retries, backoff.heldRetries);
-  return { retries: 0, heldRetries, playingSince: at, stoppedAt: null };
+  return { retries: 0, heldRetries: backoff.retries, playingSince: at, stoppedAt: null };
 }
 
 /** A stall or a failure. The first stop since the item last played is the one
@@ -189,18 +186,12 @@ export function failureDelay(backoff: Backoff, now: number): number {
   return backoff.playingSince === null ? delay : Math.min(delay, PLAYED_MAX_MS);
 }
 
-/** How long a stall waits for its clock check. */
-export function stallDelay(backoff: Backoff, now: number): number {
-  return Math.max(WATCHDOG_MS, failureDelay(backoff, now));
-}
-
 /** An automatic reload replaces the item: one failure more than it leaves.
  *  `failed` is an item that reported its own failure. One that played and only
- *  stalled keeps the count from the new load, which may yet be refused. */
+ *  stalled leaves nothing, so the new load is the first failure. */
 export function itemReplaced(backoff: Backoff, now: number, failed: boolean): Backoff {
-  const count = failures(backoff, now) + 1;
-  if (backoff.playingSince !== null && !failed) return { ...NO_BACKOFF, retries: 1, heldRetries: count };
-  return { ...NO_BACKOFF, retries: count };
+  const stalled = backoff.playingSince !== null && !failed;
+  return { ...NO_BACKOFF, retries: (stalled ? 0 : failures(backoff, now)) + 1 };
 }
 
 function describe(from: ProgressSample | null, to: ProgressSample | null): string {
@@ -318,7 +309,7 @@ export class StreamRecovery {
         // tune-in or reload, both platforms), never a mid-stream stall.
         if (prev === 'playing' && state === 'buffering') this.recordFlap();
         this.noteStop();
-        this.arm('watchdog', stallDelay(this.backoff, this.now()));
+        this.arm('watchdog', watchdogDelay(this.backoff.retries));
         return;
       case 'error':
       case 'ended':
@@ -529,7 +520,7 @@ export class StreamRecovery {
     this.attempt += 1;
     this.deps.log(
       `reload [${reason}] #${this.attempt} state=${this.lastState ?? 'none'}${detail ? `: ${detail}` : ''}${
-        explicit ? '' : ` (failure ${Math.max(this.backoff.retries, this.backoff.heldRetries)})`
+        explicit ? '' : ` (failure ${this.backoff.retries})`
       }`,
     );
     try {
