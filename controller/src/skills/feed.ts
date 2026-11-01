@@ -168,7 +168,7 @@ export function hashHeadline(title: string): string {
   return h.toString(36);
 }
 
-export async function fetchHeadlines({ feedUrl, maxItems, maxAgeDays = null }: { feedUrl?: string; maxItems?: number; maxAgeDays?: number | null } = {}) {
+export async function fetchHeadlines({ feedUrl, maxItems, maxAgeDays = null, deadlineMs }: { feedUrl?: string; maxItems?: number; maxAgeDays?: number | null; deadlineMs?: number } = {}) {
   const url = feedUrl || config.news.feedUrl;
   const cap = maxItems || config.news.maxItems;
   // Bounded like the web-search backends. The feed URL is operator-set
@@ -176,8 +176,9 @@ export async function fetchHeadlines({ feedUrl, maxItems, maxAgeDays = null }: {
   // deadline is about liveness. It runs inside the segment director on the
   // autonomous DJ path, where a hung socket would otherwise park the whole
   // segment on undici's ~300s default and eat the agent's own 45s budget many
-  // times over. 15s is generous for an RSS document.
-  const res = await fetchWithTimeout(url, { timeoutMs: 15_000 });
+  // times over. 15s is generous for an RSS document. `deadlineMs` is for a caller
+  // with less time than that, and it covers the body as well as the headers.
+  const res = await fetchWithTimeout(url, deadlineMs ? { timeoutMs: deadlineMs, bodyDeadline: true } : { timeoutMs: 15_000 });
   if (!res.ok) throw new Error(`News feed HTTP ${res.status}`);
   return parseFeed(await res.text(), cap, { maxAgeDays });
 }
@@ -412,6 +413,18 @@ export function makeFeedTool(kind: string, feed: ResolvedFeed, warn: (message: s
 
 interface FeedFailure { url: string; error: string }
 
+// How long one feed of several may take, body included. The tool wrapper
+// (llm/internal/tools/segment-tools.ts) gives up at 8 s and does not cancel, so a
+// merge that waited past it would lose the feeds that answered, and its abandoned
+// run would then burn items nobody received. A feed still out at this point has
+// failed: it takes the skip path, with time left to hand back the rest.
+const MERGED_FEED_DEADLINE_MS = 6_000;
+
+function failureText(reason: unknown): string {
+  if (!(reason instanceof Error)) return String(reason);
+  return reason.name === 'AbortError' ? `no answer within ${MERGED_FEED_DEADLINE_MS / 1000}s` : reason.message;
+}
+
 // A feed named in a log line: host and path. The query is dropped, both for
 // length (a news search lives there) and because a private feed's token can.
 function feedLabel(url: string): string {
@@ -439,13 +452,13 @@ async function fetchMerged(
   const urls = [feed.url, ...(feed.extraUrls || [])];
   const opts = { maxItems: feed.maxItems, maxAgeDays: feed.maxAgeDays ?? null };
   if (urls.length === 1) return fetchHeadlines({ feedUrl: urls[0], ...opts });
-  const results = await Promise.allSettled(urls.map((feedUrl) => fetchHeadlines({ feedUrl, ...opts })));
+  const results = await Promise.allSettled(urls.map((feedUrl) => fetchHeadlines({ feedUrl, ...opts, deadlineMs: MERGED_FEED_DEADLINE_MS })));
   const lists = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
   const firstFailure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-  if (!lists.length || (firstFailure && !lists.some((l) => l.length))) throw firstFailure!.reason;
+  if (!lists.length || (firstFailure && !lists.some((l) => l.length))) throw new Error(failureText(firstFailure!.reason));
   report(
     results.flatMap((r, i) => (r.status === 'rejected'
-      ? [{ url: urls[i], error: r.reason instanceof Error ? r.reason.message : String(r.reason) }]
+      ? [{ url: urls[i], error: failureText(r.reason) }]
       : [])),
     urls.filter((_, i) => results[i].status === 'fulfilled'),
   );

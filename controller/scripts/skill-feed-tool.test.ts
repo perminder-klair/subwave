@@ -97,6 +97,23 @@ const server: Server = createServer((req, res) => {
     res.end('nope');
     return;
   }
+  // A host gone dark: it takes the request and never answers.
+  if (path === '/hang') return;
+  if (path === '/stall') {
+    // Headers on time, then a body that never finishes.
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.write('<?xml version="1.0"?><rss version="2.0"><channel>');
+    return;
+  }
+  if (path === '/slow') {
+    // Healthy, but it answers after the 8 s tool wrapper has given up.
+    setTimeout(() => {
+      if (res.destroyed) return;
+      res.writeHead(200, { 'content-type': 'application/rss+xml' });
+      res.end(rss(3, 'Slow'));
+    }, 9000).unref();
+    return;
+  }
   res.writeHead(200, { 'content-type': 'application/rss+xml' });
   res.end(rss(10, 'Story'));
 });
@@ -193,6 +210,34 @@ editorialNote: nothing to fetch
 Write a timeless line from this brief alone.
 `);
 
+// A healthy feed beside one that goes bad in a way the 8 s tool wrapper cannot
+// outlast. These run through SKILL.md, the loader and fetchSegmentData, because
+// the wrapper is the thing that goes wrong: a direct makeFeedTool call waits.
+const BAD_FEEDS = [
+  { kind: 'hung-feed2', path: '/hang', case: 'never answers' },
+  { kind: 'slow-feed2', path: '/slow', case: 'answers at 9 s' },
+  { kind: 'stalled-feed2', path: '/stall', case: 'stalls after its headers' },
+];
+for (const { kind, path } of BAD_FEEDS) {
+  writeSkill(kind, `---
+name: ${kind}
+label: ${kind}
+feed: ${feedUrl('/rss')}
+feed2: ${feedUrl(path)}
+---
+Speak from what answered.
+`);
+}
+
+writeSkill('all-hung', `---
+name: all-hung
+label: All hung
+feed: ${feedUrl('/hang')}
+feed2: ${feedUrl('/stall')}
+---
+Nothing will answer.
+`);
+
 const { queue } = await import('../src/broadcast/queue.js');
 const logged: string[] = [];
 const realLog = queue.log.bind(queue);
@@ -200,14 +245,17 @@ const realLog = queue.log.bind(queue);
 
 const { loadSkills, readTemplate } = await import('../src/skills/loader.js');
 const { buildSegmentTools, fetchSegmentData } = await import('../src/llm/internal/tools/segment-tools.js');
-const { resolveFeedConfig, makeFeedTool, FEED_ITEMS_PER_FIRE } = await import('../src/skills/feed.js');
+const { resolveFeedConfig, makeFeedTool, hashHeadline, FEED_ITEMS_PER_FIRE } = await import('../src/skills/feed.js');
 const { requiresGrounding, standDownReason } = await import('../src/skills/abstain-policy.js');
 const { setStationTimezone } = await import('../src/time.js');
 
 const caps = await loadSkills();
 const capOf = (kind: string) => caps.find(c => c.kind === kind);
 
-test.after(() => { server.close(); });
+test.after(() => {
+  server.closeAllConnections();
+  server.close();
+});
 
 test('a feed: line alone earns the skill a skill_<name> fetch tool', async () => {
   const cap = capOf('giveaway');
@@ -495,4 +543,25 @@ test('resolveFeedConfig reads the age cap and further feeds, warning on bad valu
   const orphan = resolveFeedConfig({ feed2: 'https://b.test/rss' });
   assert.equal(orphan.feed, null, 'a further feed without a first one is no feed');
   assert.match(orphan.warnings[0], /feed2: set, but "feed" is empty/);
+});
+
+for (const { kind, path, case: how } of BAD_FEEDS) {
+  test(`a further feed that ${how} is skipped inside the tool wrapper, and only what was delivered is burned`, async () => {
+    const state: any = {};
+    const data: any = await fetchSegmentData(capOf(kind), { time: {} }, state);
+    assert.deepEqual(data.headlines?.map((h: any) => h.title), ['Story 1', 'Story 2', 'Story 3', 'Story 4', 'Story 5', 'Story 6'],
+      `the healthy feed reaches the DJ, not ${JSON.stringify(data)}`);
+    assert.deepEqual([...state.feedSeen.get(kind)], data.headlines.map((h: any) => hashHeadline(h.title)),
+      'the burn-on-read memory holds exactly what the DJ received');
+    const warnings = logged.filter(l => l.includes(`"${kind}"`) && l.includes(path));
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /failed and was skipped.*no answer within 6s/);
+  });
+}
+
+test('every feed hanging is the fetch error inside the tool wrapper, and burns nothing', async () => {
+  const state: any = {};
+  const data: any = await fetchSegmentData(capOf('all-hung'), { time: {} }, state);
+  assert.match(String(data.error), /no answer within 6s/);
+  assert.equal(state.feedSeen.get('all-hung').size, 0);
 });
