@@ -28,6 +28,8 @@
 //   (stamped by the next confirmed pass): later, never sooner.
 // - Dirs touched in the last hour are left alone: the analyzer writes stems
 //   into a fresh dir, and a purge must never eat an in-flight set.
+// - An id still rotating (the id_rotation_journal holds it) is known: its dir is
+//   the rename's to move, and libraryIds says why that matters.
 // - An empty id set is REFUSED, not treated as an empty library. The only
 //   cheap way to get zero ids is a closed or half-open database, and quarantining
 //   a whole cache on that reading is exactly the mass deletion quarantine exists
@@ -156,6 +158,17 @@ async function listDirs(dir: string): Promise<string[]> {
   }
 }
 
+// The ids a pass counts as the library's. An id rotation commits the new ids
+// first and renames the dirs afterwards, one at a time, and its journal stays
+// open until that is done. So an old id in the journal still owns its dir: read
+// as an orphan it would be quarantined out from under the rename, the track
+// would keep a stems_at with nothing behind it, and absence alone never brings
+// a track back into the backfill. A journal that cannot be read throws, so the
+// pass stops rather than reading that as "nothing is rotating".
+function libraryIds(knownIds: Iterable<string>): Set<string> {
+  return new Set([...knownIds, ...db.pendingIdRotations().keys()]);
+}
+
 async function readsAsStems(dir: string): Promise<boolean> {
   try {
     const entries = await readdir(dir, { withFileTypes: true });
@@ -196,7 +209,7 @@ export async function listOrphanDirNames(knownIds: ReadonlySet<string>, now = Da
   const status = await stemCache.stemsRootStatus({ readOnly: true });
   if (!status.online) return [];
   try {
-    return (await walkCacheRoot(stemCache.stemsRoot(), knownIds, now, IN_FLIGHT_MS)).orphans;
+    return (await walkCacheRoot(stemCache.stemsRoot(), libraryIds(knownIds), now, IN_FLIGHT_MS)).orphans;
   } catch {
     return [];
   }
@@ -276,7 +289,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
   if (opts.knownIds.length === 0) {
     return { ...empty, refused: true, reason: 'empty library id set: refusing (a closed or half-loaded database must never quarantine the cache)' };
   }
-  const known = new Set(opts.knownIds);
+  const known = libraryIds(opts.knownIds);
   const inFlightMs = opts.inFlightMs ?? IN_FLIGHT_MS;
   const report: PurgeReport = { ...empty };
 

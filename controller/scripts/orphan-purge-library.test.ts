@@ -22,6 +22,8 @@ const db = await import('../src/music/library-db.js');
 const cache = await import('../src/music/stem-cache.js');
 const purge = await import('../src/music/orphan-purge.js');
 const { QUARANTINE_DIR } = await import('../src/music/orphan-purge-pure.js');
+const rotation = await import('../src/music/id-rotation.js');
+const { canonicalId } = await import('../src/music/id-canonical.js');
 const { requireDb } = await import('../src/music/library-db/handle.js');
 await db.open({ embeddingDim: 768, adoptStoredDim: true });
 
@@ -135,4 +137,87 @@ test('an offline share runs only the aged delete: a release waits until it is ba
   }
   const online = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now });
   assert.deepEqual(online.released, [back], 'released as soon as the share is back');
+});
+
+// A legacy 32-hex id, which Navidrome 0.64 rotates to its canonical base62 form.
+const legacyId = (n: number) => n.toString(16).padStart(32, 'e');
+
+// adoptRotatedIds commits the rows and the journal first, and only then does
+// moveStemDirs rename the dirs, one at a time. stems_at rides to the new row and
+// disk absence is not backfill eligibility, so a dir lost in that window is
+// never separated again.
+function startRotation(old: string, seed = true) {
+  const neu = canonicalId(old);
+  assert.notEqual(neu, old);
+  db.upsertTrackMeta(old, META);
+  db.upsertTrackAnalysis(old, { bpm: 120, musicalKey: 'Am', stemsAttempted: true });
+  if (seed) seedStems(old, ['head', 'tail']);
+  // The walk has already written the row under its new id; adoption merges the
+  // old row into it.
+  db.upsertTrackMeta(neu, META);
+  const live = new Set(db.allTrackIdsOrdered().filter(id => id !== old));
+  assert.equal(db.adoptRotatedIds(live).adopted, 1);
+  assert.equal(db.pendingIdRotations().get(old), neu);
+  return { neu, live };
+}
+
+test('a pass inside a rotation leaves the old dir for the rename, so the track keeps its stems', async () => {
+  const old = legacyId(1);
+  const { neu, live } = startRotation(old);
+  const now = T0 + 60 * DAY;
+  await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now });
+  assert.ok(existsSync(join(ROOT, old)), 'left for the rename');
+  assert.ok(!existsSync(join(QU, old)), 'not quarantined');
+
+  await rotation.adoptAndPrune(live);
+  assert.ok(await cache.hasWindow(neu, 'head') && await cache.hasWindow(neu, 'tail'), 'the rename found it');
+
+  await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now: now + 8 * DAY });
+  assert.ok(await cache.hasWindow(neu, 'head') && await cache.hasWindow(neu, 'tail'), 'still there a week on');
+  assert.equal(db.needsStemsIds().includes(neu), false, 'stamped, with stems to show for it');
+  db.acknowledgeIdRotations(db.pendingIdRotations());
+});
+
+test('the track list and a dry run agree: a dir mid-rotation is not an orphan', async () => {
+  const old = legacyId(2);
+  startRotation(old);
+  const now = T0 + 70 * DAY;
+  const dry = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: false, now });
+  assert.equal(dry.quarantined, 0);
+  assert.ok(!(await purge.listOrphanDirNames(new Set(db.allTrackIdsOrdered()), now)).includes(old));
+  db.acknowledgeIdRotations(db.pendingIdRotations());
+  rmSync(join(ROOT, old), { recursive: true, force: true });
+});
+
+test('a pass does not count a rotating dir towards the ceiling either', async () => {
+  // A whole library rotates at once on the Navidrome upgrade. Read as orphans,
+  // those dirs would trip the ceiling and hold the night's real work.
+  const olds = Array.from({ length: 120 }, (_, i) => legacyId(100 + i));
+  for (const old of olds) startRotation(old);
+  const now = T0 + 80 * DAY;
+  const rep = await purge.runScheduledOrphanPurge(db.allTrackIdsOrdered(), now);
+  assert.equal(rep.refused, undefined);
+  assert.equal(rep.quarantined, 0);
+  db.acknowledgeIdRotations(db.pendingIdRotations());
+  for (const old of olds) rmSync(join(ROOT, old), { recursive: true, force: true });
+});
+
+test('an old id already quarantined comes back for the rename to find', async () => {
+  // Quarantined by a build without the journal check, while the journal is
+  // still open: it reads as known, so the pass releases it to its old slot.
+  const old = legacyId(3);
+  const { neu, live } = startRotation(old, false);
+  const dir = join(QU, old);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, '.orphaned-at'), String(T0));
+  for (const w of ['head', 'tail']) {
+    for (const s of cache.STEM_NAMES) writeFileSync(join(dir, `${w}-${s}.flac`), 'x'.repeat(64));
+  }
+  writeFileSync(join(dir, 'tail-meta.json'), '{}');
+  const now = T0 + 90 * DAY;
+  const rep = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now });
+  assert.ok(rep.released.includes(old));
+  await rotation.adoptAndPrune(live);
+  assert.ok(await cache.hasWindow(neu, 'head') && await cache.hasWindow(neu, 'tail'));
+  db.acknowledgeIdRotations(db.pendingIdRotations());
 });
