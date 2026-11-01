@@ -32,6 +32,14 @@
 //   cheap way to get zero ids is a closed or half-open database, and quarantining
 //   a whole cache on that reading is exactly the mass deletion quarantine exists
 //   to survive.
+// - Quarantine bytes sit OUTSIDE the byte budget, on purpose: scanDirs skips the
+//   dot-dir, so the sweep neither counts nor evicts them. The budget says how
+//   many stems the cache may keep for blends, and the sweep cannot evict a
+//   quarantine without breaking its grace, so if those bytes counted, the only
+//   way back under budget would be evicting live tracks to pay for dead ones.
+//   The grace bounds the quarantine instead: disk use can reach the budget plus
+//   a week of orphans, so leave that headroom on a small share. With the daily
+//   pass off the week only ends at the next manual pass.
 // - Delete failures are counted and reported, never thrown — a purge that
 //   cannot delete on a squashed share must keep running and keep saying so.
 // - Any mutation drops the usage snapshot (stem-cache's cached walk totals),
