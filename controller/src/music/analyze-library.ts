@@ -42,6 +42,7 @@ import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { readFileSync } from 'node:fs';
 import { formatPlan, parseFacets, parseWhere, planAcoustics, type AcousticsPlan } from './acoustics-plan.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
+import { walkFileInfo } from './tag-library/flags.js';
 
 const logEvent = makeEventLogger('analyze');
 
@@ -227,6 +228,7 @@ async function main() {
           year: song.year,
           genres: subsonic.songGenres(song),
           duration: song.duration,
+          ...walkFileInfo(song),
         });
         liveIds.add(song.id);
         walked += 1;
