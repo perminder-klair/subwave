@@ -139,8 +139,9 @@ every feed skill gets the same behaviour:
   ignores its own `when:7d` on a long query and mixes in items months old, which
   the DJ would otherwise present as news. Undated items are kept.
 - Every item the feed dates reaches the DJ with its day in the station's timezone
-  (`published: 2026-10-30`), so it can tell news from history. This is on for
-  every feed skill, with no key to set; an undated item simply carries no date.
+  (`published: 2026-10-30`), so it can tell news from history. A feed that gives
+  a day and no clock keeps that day as written. This is on for every feed skill,
+  with no key to set; an undated item simply carries no date.
 - `feed2` and `feed3` add further feeds. They are fetched together and merged
   round-robin, so a busy feed cannot crowd a quiet one out, and a headline that
   appears in two of them is offered once. One of them failing is skipped while

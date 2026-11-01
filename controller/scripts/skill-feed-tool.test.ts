@@ -84,6 +84,17 @@ const server: Server = createServer((req, res) => {
       + `</channel></rss>`);
     return;
   }
+  if (path === '/dateonly') {
+    // A Dublin Core day and an RSS day with no clock, then a real moment that
+    // happens to fall on UTC midnight, which must stay a moment.
+    res.writeHead(200, { 'content-type': 'application/rdf+xml' });
+    res.end(`<?xml version="1.0"?><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/">`
+      + `<item><title>Dublin Core day</title><dc:date>2026-10-30</dc:date></item>`
+      + `<item><title>RSS day</title><pubDate>Fri, 30 Oct 2026</pubDate></item>`
+      + `<item><title>Midnight moment</title><dc:date>2026-10-30T00:00:00Z</dc:date></item>`
+      + `</rdf:RDF>`);
+    return;
+  }
   if (path === '/local') {
     res.writeHead(200, { 'content-type': 'application/rss+xml' });
     // "Story 2" repeats an item of /other: merged, it must appear once.
@@ -529,6 +540,28 @@ test("an item's day is the station's, not UTC's", async () => {
   } finally {
     setStationTimezone('');
   }
+});
+
+test('a date-only item keeps its calendar day in every station zone', async () => {
+  const days: Record<string, string> = {};
+  try {
+    for (const zone of ['Pacific/Honolulu', 'America/New_York', 'UTC', 'Pacific/Auckland']) {
+      setStationTimezone(zone);
+      const result: any = await makeFeedTool(`date-only-${zone}`, { url: feedUrl('/dateonly'), maxItems: 5 })({}, {});
+      const day = (title: string) => result.headlines.find((h: any) => h.title === title).published;
+      assert.equal(day('Dublin Core day'), '2026-10-30', zone);
+      assert.equal(day('RSS day'), '2026-10-30', zone);
+      days[zone] = day('Midnight moment');
+    }
+  } finally {
+    setStationTimezone('');
+  }
+  assert.deepEqual(days, {
+    'Pacific/Honolulu': '2026-10-29',
+    'America/New_York': '2026-10-29',
+    UTC: '2026-10-30',
+    'Pacific/Auckland': '2026-10-30',
+  }, 'a stamp with a clock is still a moment, placed on the station\'s calendar');
 });
 
 test('further feeds merge round-robin, a repeated headline appears once', async () => {

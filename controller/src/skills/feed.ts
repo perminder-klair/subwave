@@ -23,7 +23,10 @@ export const FEED_MAX_AGE_LIMIT = 365;
 export interface Headline {
   title: string;
   description: string;
-  /** ISO time the item was published, present only when the feed dates it. */
+  /**
+   * When the item was published, present only when the feed dates it: an ISO
+   * time, or a bare YYYY-MM-DD when the feed gives a day and no clock.
+   */
   published?: string;
 }
 
@@ -39,14 +42,31 @@ export interface ParseOptions {
 // thereby fresh, but nor is it provably stale. That includes zone names
 // Date.parse does not know ("CEST"): such an item is kept as undated, the safe
 // direction, on purpose.
-function publishedOf(entry: Record<string, unknown>): number | null {
+function publishedOf(entry: Record<string, unknown>): { at: number; stamp: string } | null {
   for (const node of [entry.pubDate, entry.published, entry.updated, entry.date, entry.issued]) {
     const text = textOf(node).trim();
     if (!text) continue;
-    const t = Date.parse(text);
-    if (Number.isFinite(t)) return t;
+    const at = Date.parse(text);
+    if (Number.isFinite(at)) return { at, stamp: calendarDayOf(text, at) ?? new Date(at).toISOString() };
   }
   return null;
+}
+
+// A stamp with no clock names a calendar day, not a moment, so it keeps that day:
+// read as a moment it is midnight somewhere, and the day before on any station
+// west of there. Date.parse takes the ISO forms as UTC and the rest ("30 Oct
+// 2026") as local time, so each is read back the way it was parsed.
+function calendarDayOf(text: string, at: number): string | null {
+  if (/\d:\d/.test(text)) return null;
+  const d = new Date(at);
+  if (/^\d{4}(-\d{2}){0,2}$/.test(text)) return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// The day an item reaches the DJ with: a moment lands on the station's calendar,
+// and a bare day is already a calendar day.
+function stationDay(published: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(published) ? published : zonedISODate(new Date(published));
 }
 
 const parser = new XMLParser({
@@ -151,13 +171,13 @@ export function parseFeed(xml: string, cap: number, { maxAgeDays = null, now = D
     if (out.length >= cap) break;
     const title = stripHtml(textOf(entry.title));
     if (!title) continue;
-    const at = publishedOf(entry);
-    if (oldest != null && at != null && at < oldest) continue;
+    const published = publishedOf(entry);
+    if (oldest != null && published && published.at < oldest) continue;
     // RSS carries the blurb in <description>; Atom uses <summary>, falling back
     // to <content> (which, post-removeNSPrefix, is also where RSS's
     // <content:encoded> lands).
     const description = stripHtml(textOf(entry.description ?? entry.summary ?? entry.content));
-    out.push(at == null ? { title, description } : { title, description, published: new Date(at).toISOString() });
+    out.push(published ? { title, description, published: published.stamp } : { title, description });
   }
   return out;
 }
@@ -405,7 +425,7 @@ export function makeFeedTool(kind: string, feed: ResolvedFeed, warn: (message: s
     // news from what is history (and never call an old event "coming up").
     return {
       headlines: fresh.map(it => (it.published
-        ? { title: it.title, detail: it.description || null, published: zonedISODate(new Date(it.published)) }
+        ? { title: it.title, detail: it.description || null, published: stationDay(it.published) }
         : { title: it.title, detail: it.description || null })),
     };
   };
