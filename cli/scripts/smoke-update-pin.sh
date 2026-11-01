@@ -65,19 +65,19 @@ check() { # check <label> <wanted> <got>
   fi
 }
 
-# Scaffolds an install pinned to $old_pin and runs `subwave update` from inside
-# it, which is what makes the binary load that .env. Extra args are VAR=value
-# pairs for the run's environment.
-run_update() { # run_update <name> [VAR=value...]
-  local name="$1" install="$scratch/$1"
-  shift
+# Scaffolds an install with the given pin line and runs `subwave update` from
+# inside it, which is what makes the binary load that .env. Extra args are
+# VAR=value pairs for the run's environment.
+run_update() { # run_update <name> <pin line> [VAR=value...]
+  local name="$1" pin_line="$2" install="$scratch/$1"
+  shift 2
   mkdir -p "$install"
   cat >"$install/docker-compose.yml" <<'COMPOSE'
 services:
   controller:
     image: ghcr.io/perminder-klair/subwave-controller:${SUBWAVE_VERSION:-latest}
 COMPOSE
-  printf 'ADMIN_USER=admin\nADMIN_PASS=smoke\nSUBWAVE_VERSION=%s\n' "$old_pin" >"$install/.env"
+  printf 'ADMIN_USER=admin\nADMIN_PASS=smoke\n%s\n' "$pin_line" >"$install/.env"
 
   if ! (
     cd "$install"
@@ -97,15 +97,26 @@ COMPOSE
 pin_in() { sed -n 's/^SUBWAVE_VERSION=//p' "$scratch/$1/.env"; }
 resolved_by() { sed -n "s/^$2 //p" "$scratch/$1.log" 2>/dev/null || true; }
 
+check_first_run() { # check_first_run <name> <label>
+  check "$2: .env moves to the new pin" "$target" "$(pin_in "$1")"
+  check "$2: pull resolves the new version" "$target" "$(resolved_by "$1" pull)"
+  check "$2: up resolves the new version" "$target" "$(resolved_by "$1" up)"
+}
+
 # The operator's flow: the pin in .env is behind the binary.
-run_update first-run
-check "first run: .env moves to the new pin" "$target" "$(pin_in first-run)"
-check "first run: pull resolves the new version" "$target" "$(resolved_by first-run pull)"
-check "first run: up resolves the new version" "$target" "$(resolved_by first-run up)"
+run_update first-run "SUBWAVE_VERSION=$old_pin"
+check_first_run first-run "first run"
+
+# A hand-edited pin can carry an inline comment, which the binary's .env load
+# drops. The pin has to be recognised in process.env all the same.
+run_update inline-comment "SUBWAVE_VERSION=$old_pin # pinned"
+check_first_run inline-comment "inline comment"
+run_update quoted-comment "SUBWAVE_VERSION=\"$old_pin\" # pinned"
+check_first_run quoted-comment "quoted pin with a comment"
 
 # A real shell export isn't the autoloaded pin, so it stays in charge. The .env
 # check proves the run reached the move rather than passing by doing nothing.
-run_update shell-export "SUBWAVE_VERSION=$exported"
+run_update shell-export "SUBWAVE_VERSION=$old_pin" "SUBWAVE_VERSION=$exported"
 check "shell export: .env still moves to the new pin" "$target" "$(pin_in shell-export)"
 check "shell export: pull keeps the exported version" "$exported" "$(resolved_by shell-export pull)"
 check "shell export: up keeps the exported version" "$exported" "$(resolved_by shell-export up)"
@@ -113,7 +124,7 @@ check "shell export: up keeps the exported version" "$exported" "$(resolved_by s
 if [ "$failures" -ne 0 ]; then
   echo
   echo "$failures check(s) failed against $binary ($target). subwave update output:"
-  cat "$scratch/first-run.out" "$scratch/shell-export.out"
+  cat "$scratch"/*.out
   exit 1
 fi
 echo "all checks passed against $binary ($target)"

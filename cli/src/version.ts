@@ -27,7 +27,9 @@ export function movePinInEnv(
   for (let i = 0; i < lines.length; i++) {
     const m = (lines[i] as string).match(/^SUBWAVE_VERSION\s*=\s*(.*)$/);
     if (!m) continue;
-    let current = (m[1] ?? '').trim();
+    // An inline comment goes first: `from` has to equal what a compiled binary
+    // loaded into process.env, or update.ts can't recognise the old pin there.
+    let current = (m[1] ?? '').trim().replace(/\s+#.*$/, '');
     if (
       (current.startsWith('"') && current.endsWith('"')) ||
       (current.startsWith("'") && current.endsWith("'"))
