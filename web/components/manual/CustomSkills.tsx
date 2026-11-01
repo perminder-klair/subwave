@@ -158,8 +158,9 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
             <code className="bs-code-inline">feed2</code> and{' '}
             <code className="bs-code-inline">feed3</code> add further feeds, merged
             round-robin with the first, and a headline in two of them is offered once. One
-            that fails, or takes more than six seconds, is skipped while another answers,
-            with a warning in the log naming it (once, until it recovers). If the feeds that
+            that fails, takes more than six seconds or answers with something that isn&rsquo;t
+            a feed is skipped while another answers, with a warning in the log naming it
+            (once, until it recovers). If the feeds that
             answered have no items, the failure is the fetch error, naming every feed that
             failed by its key.
           </li>

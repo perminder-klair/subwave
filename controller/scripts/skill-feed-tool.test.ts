@@ -104,6 +104,27 @@ const server: Server = createServer((req, res) => {
       + `</channel></rss>`);
     return;
   }
+  if (path === '/html') {
+    // A pasted site URL or a challenge page: a 200, with unclosed tags as HTML has.
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<!doctype html><html><head><meta charset="utf-8"><title>Front page</title></head><body><p>Hello<br></body></html>');
+    return;
+  }
+  if (path === '/plain') {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('Access denied');
+    return;
+  }
+  if (path === '/empty-atom') {
+    res.writeHead(200, { 'content-type': 'application/atom+xml' });
+    res.end(atom(0, 'Atom'));
+    return;
+  }
+  if (path === '/empty-rdf') {
+    res.writeHead(200, { 'content-type': 'application/rdf+xml' });
+    res.end('<?xml version="1.0"?><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><channel><title>T</title></channel></rdf:RDF>');
+    return;
+  }
   if (path === '/flaky' && flakyDown) {
     res.writeHead(503);
     res.end('down');
@@ -717,6 +738,37 @@ test('a failed feed is reported again only after it has recovered', async () => 
   } finally {
     flakyDown = false;
   }
+});
+
+for (const path of ['/html', '/plain']) {
+  test(`a further feed that answers 200 with ${path.slice(1)} is reported once, like a failed one`, async () => {
+    const warnings: string[] = [];
+    const tool = makeFeedTool(`not-a-feed-${path}`, { url: feedUrl('/other'), maxItems: 10, extraUrls: { feed2: feedUrl(path) } }, m => warnings.push(m));
+    const result: any = await tool({}, {});
+    assert.deepEqual(result.headlines.map((h: any) => h.title), ['Story 1', 'Story 2', 'Story 3'], 'the healthy feed still answers');
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], new RegExp(`${path} failed and was skipped.*HTTP 200, but not a feed`));
+    await tool({}, {});
+    assert.equal(warnings.length, 1, 'the same answer is not repeated on every fire');
+  });
+}
+
+test('a real feed with nothing in it is not reported, in any dialect', async () => {
+  const warnings: string[] = [];
+  for (const path of ['/empty', '/empty-atom', '/empty-rdf']) {
+    await makeFeedTool(`empty-${path}`, { url: feedUrl('/other'), maxItems: 10, extraUrls: { feed2: feedUrl(path) } }, m => warnings.push(m))({}, {});
+  }
+  assert.deepEqual(warnings, []);
+});
+
+test('a non-feed behind an empty feed is the fetch error, by key', async () => {
+  const tool = makeFeedTool('non-feed-alone', { url: feedUrl('/empty'), maxItems: 10, extraUrls: { feed2: feedUrl('/html') } });
+  await assert.rejects(() => tool({}, {}), /^Error: feed2: HTTP 200, but not a feed$/);
+});
+
+test('a single feed that is not a feed stays the no-items answer it always was', async () => {
+  const result: any = await makeFeedTool('lone-html', { url: feedUrl('/html'), maxItems: 10 })({}, {});
+  assert.deepEqual(result, { available: false, reason: 'the feed has no items' });
 });
 
 test('a failing feed is the answer when the feeds that answered have none', async () => {

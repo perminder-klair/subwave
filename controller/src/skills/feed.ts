@@ -149,21 +149,34 @@ function entriesOf(doc: Record<string, unknown>): Record<string, unknown>[] {
   return [];
 }
 
+function parseDocument(xml: string): Record<string, unknown> | null {
+  try {
+    return asRecord(parser.parse(xml));
+  } catch {
+    // Malformed XML — treat it as an empty feed rather than throwing into the
+    // segment director, which is what the regex scanner did by construction.
+    return null;
+  }
+}
+
+// Whether a document is a feed at all, empty or not. A front page or a challenge
+// page answers 200 and parses to no entries, exactly as an empty feed does.
+function isFeedDocument(doc: Record<string, unknown> | null): boolean {
+  if (!doc) return false;
+  return Object.keys(doc).some((root) => /^(rss|feed|rdf)$/i.test(root)) || entriesOf(doc).length > 0;
+}
+
 // Parse a feed document into at most `cap` headlines. Entries with no title are
 // dropped — a headline the DJ cannot read is not a headline. With `maxAgeDays`,
 // an item dated older than that is dropped too, before the cap counts it: a
 // search feed (Google News) ignores its own `when:` window on a long query and
 // mixes months-old items in, and the DJ cannot tell last summer's festival from
 // tonight's. An undated item is kept (fail open: nothing says it is stale).
-export function parseFeed(xml: string, cap: number, { maxAgeDays = null, now = Date.now() }: ParseOptions = {}): Headline[] {
-  let doc: Record<string, unknown> | null = null;
-  try {
-    doc = asRecord(parser.parse(xml));
-  } catch {
-    // Malformed XML — treat it as an empty feed rather than throwing into the
-    // segment director, which is what the regex scanner did by construction.
-    return [];
-  }
+export function parseFeed(xml: string, cap: number, options: ParseOptions = {}): Headline[] {
+  return headlinesIn(parseDocument(xml), cap, options);
+}
+
+function headlinesIn(doc: Record<string, unknown> | null, cap: number, { maxAgeDays = null, now = Date.now() }: ParseOptions = {}): Headline[] {
   if (!doc) return [];
 
   const oldest = maxAgeDays ? now - maxAgeDays * 86_400_000 : null;
@@ -199,7 +212,7 @@ function withoutUrls(err: unknown): unknown {
   return message === err.message ? err : new Error(message);
 }
 
-export async function fetchHeadlines({ feedUrl, maxItems, maxAgeDays = null, deadlineMs }: { feedUrl?: string; maxItems?: number; maxAgeDays?: number | null; deadlineMs?: number } = {}) {
+export async function fetchHeadlines({ feedUrl, maxItems, maxAgeDays = null, deadlineMs, requireFeed = false }: { feedUrl?: string; maxItems?: number; maxAgeDays?: number | null; deadlineMs?: number; requireFeed?: boolean } = {}) {
   const url = feedUrl || config.news.feedUrl;
   const cap = maxItems || config.news.maxItems;
   // Bounded like the web-search backends. The feed URL is operator-set
@@ -212,7 +225,11 @@ export async function fetchHeadlines({ feedUrl, maxItems, maxAgeDays = null, dea
   try {
     const res = await fetchWithTimeout(url, deadlineMs ? { timeoutMs: deadlineMs, bodyDeadline: true } : { timeoutMs: 15_000 });
     if (!res.ok) throw new Error(`News feed HTTP ${res.status}`);
-    return parseFeed(await res.text(), cap, { maxAgeDays });
+    const doc = parseDocument(await res.text());
+    // A lone feed answers this as "no items", which it always has. `requireFeed`
+    // is for a merge, where it would otherwise contribute nothing without a word.
+    if (requireFeed && !isFeedDocument(doc)) throw new Error(`HTTP ${res.status}, but not a feed`);
+    return headlinesIn(doc, cap, { maxAgeDays });
   } catch (err) {
     throw withoutUrls(err);
   }
@@ -503,7 +520,7 @@ async function fetchMerged(
   const feeds = [{ key: FEED_URL_KEY, url: feed.url }, ...Object.entries(feed.extraUrls || {}).map(([key, url]) => ({ key, url }))];
   const opts = { maxItems: feed.maxItems, maxAgeDays: feed.maxAgeDays ?? null };
   if (feeds.length === 1) return fetchHeadlines({ feedUrl: feed.url, ...opts });
-  const results = await Promise.allSettled(feeds.map(({ url }) => fetchHeadlines({ feedUrl: url, ...opts, deadlineMs: MERGED_FEED_DEADLINE_MS })));
+  const results = await Promise.allSettled(feeds.map(({ url }) => fetchHeadlines({ feedUrl: url, ...opts, deadlineMs: MERGED_FEED_DEADLINE_MS, requireFeed: true })));
   const lists = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
   const failures = results.flatMap((r, i) => (r.status === 'rejected'
     ? [{ ...feeds[i], error: failureText(r.reason) }]

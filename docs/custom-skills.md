@@ -145,8 +145,9 @@ every feed skill gets the same behaviour:
   with no key to set; an undated item simply carries no date.
 - `feed2` and `feed3` add further feeds. They are fetched together and merged
   round-robin, so a busy feed cannot crowd a quiet one out, and a headline that
-  appears in two of them is offered once. One of them failing, or taking more
-  than 6 seconds, is skipped while another answers, with a warning in the log
+  appears in two of them is offered once. One of them failing, taking more than
+  6 seconds, or answering with something that isn't a feed (a pasted site URL, a
+  challenge page) is skipped while another answers, with a warning in the log
   naming the feed and the error (once, until it recovers). If the feeds that answered have no items, the
   failure is reported as the fetch error, as with a single feed, naming every
   feed that failed by its key (`feed2: News feed HTTP 500`); all of them failing
@@ -469,7 +470,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
 | `services.library.getArtist(id)` / `.getAlbum(id)` / `.searchArtists(name, opts?)` | Navidrome/Subsonic reads |
 | `services.onThisDay()` | Wikipedia "on this day" events for today |
-| `services.fetchHeadlines({ feedUrl?, maxItems?, maxAgeDays?, deadlineMs? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) into `{ title, description, published? }` items. `published` is an ISO time, or a bare `YYYY-MM-DD` when the feed gives a day and no clock. `deadlineMs` replaces the 15 s default with a limit that covers the body too |
+| `services.fetchHeadlines({ feedUrl?, maxItems?, maxAgeDays?, deadlineMs?, requireFeed? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) into `{ title, description, published? }` items. `published` is an ISO time, or a bare `YYYY-MM-DD` when the feed gives a day and no clock. `deadlineMs` replaces the 15 s default with a limit that covers the body too, and `requireFeed` throws on a 200 that isn't a feed instead of returning no items |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
 
