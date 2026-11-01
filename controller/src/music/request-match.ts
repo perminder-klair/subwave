@@ -1129,8 +1129,9 @@ export function pinExplicitRequestMatch(match: RequestMatch, text: string): Requ
  */
 export function normalizeRequestMatch(match: RequestMatch, options: { moods?: readonly string[] } = {}): RequestMatch {
   const mood = match.mood ? resolveRequestMood(match.mood, options.moods || []) || match.mood : null;
-  // The request schema currently emits only the three supported values. Keep
-  // legacy or hand-written callers safe as well: an unknown model value must
+  // A language named in any recognised form reads as its display name. An
+  // unknown one stays as written, so it remains a condition for the catalogue
+  // to meet rather than one dropped for being unrecognised.
   const language = match.language && resolveLanguageCode(match.language)
     ? (languageDisplayName(match.language) || match.language)
     : match.language || null;

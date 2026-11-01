@@ -138,8 +138,7 @@ export async function tavilySearch(query: string, signal?: AbortSignal): Promise
 // The deadline matters more here than on the other backends: this is the
 // DEFAULT provider (see searchWeb below), and DDG is known to accept a
 // connection and then hold it, which without a timeout parks the request on
-// undici's ~300s default. memo() shares concurrent identical searches and
-// cancels the provider fetch only after every waiting caller has detached.
+// undici's ~300s default.
 export async function duckduckgoSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   const url = new URL(DDG_ENDPOINT);
   url.searchParams.set('q', query);
