@@ -48,19 +48,22 @@ function publishedOf(entry: Record<string, unknown>): { at: number; stamp: strin
     const text = textOf(node).trim();
     if (!text) continue;
     const at = Date.parse(text);
-    if (Number.isFinite(at)) return { at, stamp: calendarDayOf(text, at) ?? new Date(at).toISOString() };
+    if (Number.isFinite(at)) return { at, stamp: calendarDayOf(text) ?? new Date(at).toISOString() };
   }
   return null;
 }
 
 // A stamp with no clock names a calendar day, not a moment, so it keeps that day:
 // read as a moment it is midnight somewhere, and the day before on any station
-// west of there. Date.parse takes the ISO forms as UTC and the rest ("30 Oct
-// 2026") as local time, so each is read back the way it was parsed.
-function calendarDayOf(text: string, at: number): string | null {
+// west of there. A zone on such a stamp ("30 Oct 2026 GMT", "2026-10-30Z") only
+// says whose midnight, so it is set aside. Date.parse then takes the ISO forms as
+// UTC and the rest ("30 Oct 2026") as local time, and each is read back that way.
+function calendarDayOf(text: string): string | null {
   if (/\d:\d/.test(text)) return null;
-  const d = new Date(at);
-  if (/^\d{4}(-\d{2}){0,2}$/.test(text)) return d.toISOString().slice(0, 10);
+  const bare = text.replace(/\s*(?:Z|GMT|UTC?|[ECMP][SD]T)$/i, '');
+  const d = new Date(bare);
+  if (Number.isNaN(d.getTime())) return null;
+  if (/^\d{4}(-\d{2}){0,2}$/.test(bare)) return d.toISOString().slice(0, 10);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 

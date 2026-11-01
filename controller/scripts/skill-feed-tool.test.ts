@@ -107,6 +107,20 @@ const server: Server = createServer((req, res) => {
       + `</rdf:RDF>`);
     return;
   }
+  if (path === '/dateonly-zoned') {
+    // Days with no clock that still name a zone, then a real moment with one.
+    res.writeHead(200, { 'content-type': 'application/rdf+xml' });
+    res.end(`<?xml version="1.0"?><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/">`
+      + `<item><title>GMT day</title><pubDate>30 Oct 2026 GMT</pubDate></item>`
+      + `<item><title>UTC day</title><pubDate>Fri, 30 Oct 2026 UTC</pubDate></item>`
+      + `<item><title>EST day</title><pubDate>30 Oct 2026 EST</pubDate></item>`
+      + `<item><title>Z day</title><dc:date>2026-10-30Z</dc:date></item>`
+      + `<item><title>Lower z day</title><dc:date>2026-10-30z</dc:date></item>`
+      + `<item><title>Spaced GMT day</title><dc:date>2026-10-30 GMT</dc:date></item>`
+      + `<item><title>Clock and zone</title><pubDate>Fri, 30 Oct 2026 02:00:00 GMT</pubDate></item>`
+      + `</rdf:RDF>`);
+    return;
+  }
   if (path === '/local') {
     res.writeHead(200, { 'content-type': 'application/rss+xml' });
     // "Story 2" repeats an item of /other: merged, it must appear once.
@@ -730,6 +744,31 @@ test('a date-only item keeps its calendar day in every station zone', async () =
     UTC: '2026-10-30',
     'Pacific/Auckland': '2026-10-30',
   }, 'a stamp with a clock is still a moment, placed on the station\'s calendar');
+});
+
+test('a date-only stamp that names a zone keeps its day, wherever the process runs', async () => {
+  const processZone = process.env.TZ;
+  try {
+    setStationTimezone('America/New_York');
+    for (const tz of ['America/New_York', 'Asia/Tokyo', 'UTC']) {
+      process.env.TZ = tz;
+      // Seven items, and a fire offers six at most.
+      const tool = makeFeedTool(`zoned-${tz}`, { url: feedUrl('/dateonly-zoned'), maxItems: 10 });
+      const state = {};
+      const first: any = await tool({}, state);
+      const second: any = await tool({}, state);
+      const headlines = [...first.headlines, ...second.headlines];
+      const day = (title: string) => headlines.find((h: any) => h.title === title).published;
+      for (const title of ['GMT day', 'UTC day', 'EST day', 'Z day', 'Lower z day', 'Spaced GMT day']) {
+        assert.equal(day(title), '2026-10-30', `${title} with the process in ${tz}`);
+      }
+      assert.equal(day('Clock and zone'), '2026-10-29', `a stamp with a clock is still a moment, with the process in ${tz}`);
+    }
+  } finally {
+    if (processZone === undefined) delete process.env.TZ;
+    else process.env.TZ = processZone;
+    setStationTimezone('');
+  }
 });
 
 test('further feeds merge round-robin, a repeated headline appears once', async () => {
