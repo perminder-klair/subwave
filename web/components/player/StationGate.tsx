@@ -4,12 +4,12 @@
 // URL. Validate with fail-closed /station-auth; /listener-auth can fail open. Only the controller's
 // own answers count (lib/stationAuth.ts): a stored token is forgotten on its refusal alone, and a
 // typed one is saved on its pass alone. A stream that keeps refusing the stored token asks again
-// (lib/stuckPasswordCheck.ts). The right password tunes back in a listener the gate took off the air
-// (lib/gateResume.ts).
+// (lib/stuckPasswordCheck.ts). A password the controller passes, typed or stored, tunes back in a
+// listener the gate took off the air (lib/gateResume.ts).
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { gateHolds, resumeOnAnswer } from '@/lib/gateResume';
+import { gateHolds, resumeOnAnswer, resumeOnStored } from '@/lib/gateResume';
 import { useStationOrigin } from '@/lib/stationOrigin';
 import {
   SAVED_REJECTED_COPY,
@@ -70,13 +70,20 @@ export function useStationAuth(): {
     }
     client.check(stored).then(({ result }) => {
       if (cancelled) return;
-      const verdict = storedPasswordVerdict(answerForStored(result, stored, getStationAuthToken()));
+      const answer = answerForStored(result, stored, getStationAuthToken());
+      const verdict = storedPasswordVerdict(answer);
       if (verdict.clearStored) clearStationAuthToken();
       setSavedRejected(verdict.clearStored);
-      setPhase(verdict.phase);
+      if (resumeOnStored(gateHoldRef.current, answer, stored, getStationAuthToken())) {
+        // As in unlock: the <audio> a private player took has to be back before play() can use it.
+        flushSync(() => setPhase(verdict.phase));
+        play();
+      } else {
+        setPhase(verdict.phase);
+      }
     });
     return () => { cancelled = true; };
-  }, [required, client]);
+  }, [required, client, play, gateHoldRef]);
 
   // Locked out while tuned in (a lock switched on, or the password rotated): the audio stops with
   // the prompt, as the app's does. Otherwise a stream password station's <audio> stays mounted
@@ -125,9 +132,9 @@ export function useStationAuth(): {
       // Committed now: a private player's new <audio> has to exist before play() can use it.
       flushSync(() => setPhase('ok'));
     }
-    // After the await, so outside the submit's gesture: Chromium and Firefox go by the page's sticky
-    // activation. A browser that refuses lands in usePlayer's NotAllowedError path: stopped, and the
-    // tune-in button still works.
+    // After the await: Chromium and Firefox go by the page's sticky activation, and WebKit forwards
+    // the submit's gesture through the fetch. A browser that refuses lands in usePlayer's
+    // NotAllowedError path: stopped, and the tune-in button still works.
     if (resume) play();
     return check;
   };

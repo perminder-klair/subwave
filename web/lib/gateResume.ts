@@ -14,7 +14,9 @@
 //   remounts, and the app, whose hook outlives a switch, keys it by station. Any other tune-out
 //   under the prompt drops it.
 // - Only the controller's pass resumes: a wrong password keeps the hold for the next try, and a 429
-//   or an unavailable check leaves the audio stopped, as the listener can still try again.
+//   or an unavailable check leaves the audio stopped, as the listener can still try again. A stored
+//   password that passes the visit check resumes too (resumeOnStored), while one the check could
+//   not verify opens the gate and starts nothing.
 
 import type { StationAuthResult } from './stationAuth';
 
@@ -39,4 +41,13 @@ export function gateHolds(held: boolean, { required, takesAudio, phase, tunedIn 
 /** Whether this answer to a typed password tunes the held listener back in. */
 export function resumeOnAnswer(held: boolean, result: StationAuthResult): boolean {
   return held && result === 'ok';
+}
+
+/** Whether the visit check's answer tunes the held listener back in. A private player's <audio> goes
+ *  at 'checking', so a tap before the first /state is held and, with a good stored password, no
+ *  prompt ever comes. The stream carries what is stored when it connects, so the pass must be for
+ *  that password: another tab can change it while the check is out. The app has no twin of this:
+ *  its audio stays up through the visit check, which so holds nobody. */
+export function resumeOnStored(held: boolean, result: StationAuthResult, asked: string, stored: string): boolean {
+  return resumeOnAnswer(held, result) && stored === asked;
 }

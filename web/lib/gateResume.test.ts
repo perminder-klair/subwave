@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { gateHolds, resumeOnAnswer, type GateAudioState } from './gateResume';
+import { gateHolds, resumeOnAnswer, resumeOnStored, type GateAudioState } from './gateResume';
 import type { StationAuthResult } from './stationAuth';
 
 type Step = Partial<GateAudioState>;
@@ -104,4 +104,16 @@ test('only the controller\'s pass resumes, and only a held listener', () => {
   const answers: StationAuthResult[] = ['ok', 'denied', 'rate-limited', 'unavailable'];
   assert.deepEqual(answers.map(a => resumeOnAnswer(true, a)), [true, false, false, false]);
   assert.deepEqual(answers.map(a => resumeOnAnswer(false, a)), [false, false, false, false]);
+});
+
+test('the visit check resumes a held listener only on a pass for the password still stored', () => {
+  assert.equal(resumeOnStored(true, 'ok', 'right', 'right'), true);
+  assert.equal(resumeOnStored(false, 'ok', 'right', 'right'), false);
+  // Kept and opened by the gate, but unverified, so nothing starts on it.
+  for (const answer of ['denied', 'rate-limited', 'unavailable'] as const) {
+    assert.equal(resumeOnStored(true, answer, 'right', 'right'), false);
+  }
+  // Another tab changed or forgot it while the check was out: the stream would carry something else.
+  assert.equal(resumeOnStored(true, 'ok', 'right', 'newer'), false);
+  assert.equal(resumeOnStored(true, 'ok', 'right', ''), false);
 });
