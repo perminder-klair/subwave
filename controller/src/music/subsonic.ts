@@ -929,44 +929,104 @@ export function getRawStreamUrl(songId: string): string {
   return buildUrl('stream', { id: songId, format: 'raw' });
 }
 
-// Where a song's `path` could be on the library mount, best guess first. Three
-// shapes reach here:
+// Where a song's `path` could be on the library mount. Three shapes reach here:
 // - relative: built from the tags, joined to the mount as it always was.
 // - absolute and inside the mount: Report Real Path on a Navidrome that sees the
 //   library at the same place. The path is the file.
 // - absolute and outside it: Navidrome's root differs from the mount, and no
-//   setting maps one to the other. So leading segments come off one at a time,
-//   longest remainder first, stopping at three: artist, album and file. Fewer
-//   can match another record (`Greatest Hits/01 - Intro.flac`), and the wrong
-//   song would air under this track's metadata. A miss streams the right one.
+//   setting maps one to the other. So `mapped` holds guesses: the whole path
+//   under the mount, for a mount above Navidrome's root, then leading segments
+//   off one at a time, longest remainder first, stopping at three: artist, album
+//   and file. Fewer can match another record (`Greatest Hits/01 - Intro.flac`).
 // A path comes from the server, so any `..` segment rejects it outright, and
 // every candidate must stay under the mount. Lexical on purpose: a symlink the
 // operator put inside the library still plays.
-function localPathCandidates(libRoot: string, songPath: string): string[] {
+function localPathCandidates(libRoot: string, songPath: string): { direct: string[]; mapped: string[] } {
   const segments = songPath.split('/');
-  if (segments.includes('..')) return [];
+  if (segments.includes('..')) return { direct: [], mapped: [] };
   const root = resolve(libRoot);
   const prefix = root.endsWith(sep) ? root : root + sep;
   const inside = (candidate: string) => resolve(candidate).startsWith(prefix);
-  if (!isAbsolute(songPath)) return [`${libRoot}/${songPath}`].filter(inside);
-  if (inside(songPath)) return [songPath];
+  if (!isAbsolute(songPath)) return { direct: [`${libRoot}/${songPath}`].filter(inside), mapped: [] };
+  if (inside(songPath)) return { direct: [songPath], mapped: [] };
   const parts = segments.filter(Boolean);
-  return parts
-    .slice(0, -2)
-    .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
-    .filter(inside);
+  return {
+    direct: [],
+    mapped: parts
+      .slice(0, -2)
+      .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
+      .filter(inside),
+  };
+}
+
+// The two ends of a file, where audio formats keep their tags: ID3v2, FLAC, Ogg
+// and a fast-start M4A at the head, APE, ID3v1 and a late `moov` at the tail.
+const TAG_WINDOW_BYTES = 64 * 1024;
+
+// The same `song.size` a Subsonic server reports: the file's bytes, tags included.
+function fileSizeOnDisk(file: string): number | null {
+  try {
+    const st = fs.statSync(file, { throwIfNoEntry: false });
+    return st?.isFile() ? st.size : null;
+  } catch {
+    return null;
+  }
+}
+
+// A byte search, not a tag parser, so one rule covers every format. The spellings
+// are the ones tags use. A title it can't find (cover art ahead of the text
+// frames, UTF-16BE, a title Navidrome took from the file name) only costs that
+// track its local play.
+function tagsHoldTitle(file: string, size: number, title: string): boolean {
+  const spellings = (['utf8', 'latin1', 'utf16le'] as const).map(encoding => Buffer.from(title, encoding));
+  const window = Buffer.alloc(Math.min(TAG_WINDOW_BYTES, size));
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      for (const from of [0, size - window.length]) {
+        const seen = window.subarray(0, fs.readSync(fd, window, 0, window.length, from));
+        if (spellings.some(spelling => seen.includes(spelling))) return true;
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch { /* unreadable: not proved */ }
+  return false;
+}
+
+// Is this mapped guess the track the server means? A file existing proves
+// nothing: a second library, or a mount that holds part of the library, can have
+// another song at the same folder and file name, and it would air under this
+// song's title and id. So the file has to match two things the server read from
+// the real one. The size alone isn't enough: same-length CBR files with
+// same-length tags come out byte for byte the same size. Anything missing is no
+// proof, which streams the right song: a server that sends no `size`, a shape
+// that dropped it. Checked before any stat, so that case costs nothing.
+function isRequestedFile(file: string, song): boolean {
+  const size = Number(song.size);
+  const title = String(song.title ?? '').trim();
+  if (!Number.isSafeInteger(size) || size <= 0 || !title) return false;
+  return fileSizeOnDisk(file) === size && tagsHoldTitle(file, size, title);
 }
 
 // The song's file as the CONTROLLER sees it on the MUSIC_LIBRARY_PATH mount, else
 // null, for a reader in this container (the cue probe's ffprobe). Navidrome's
 // `path` is usually synthetic (built from tags, not read off disk), so it
 // routinely disagrees with the real layout; an unchecked guess resolves to
-// nothing in Liquidsoap and kills the pick (#1405). Existence is checked here and
-// a miss falls back to the stream URL.
+// nothing in Liquidsoap and kills the pick (#1405). A relative path or a real
+// path inside the mount is checked for existence, as the plain join always was.
+// A mapped guess has to prove it is this track. Anything else falls back to the
+// stream URL. Stateless on purpose: a Doctor run or any other read can't change
+// what the mixer gets next.
+//
+// Cost per call: one stat, or for a mapped path one stat per guess, which is
+// path depth - 2 on a miss, and on a hit one open and at most two reads of the
+// file that matched the size. A `size` this can't use costs no stat at all.
 export function findLibraryFile(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !song.path) return null;
-  return localPathCandidates(libRoot, String(song.path)).find(p => fs.existsSync(p)) ?? null;
+  const { direct, mapped } = localPathCandidates(libRoot, String(song.path));
+  return direct.find(p => fs.existsSync(p)) ?? mapped.find(p => isRequestedFile(p, song)) ?? null;
 }
 
 // The file to hand LIQUIDSOAP, else null so the pick streams. It opens the file
