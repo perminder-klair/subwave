@@ -492,3 +492,18 @@ test('a quarantine wider than the walk\'s pool is read in full', async () => {
   const dry = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: false, now: now + 9 * DAY });
   assert.ok(dry.deletedCount >= 40);
 });
+
+test('a collision re-reads the quarantined entry: what is not stems is never replaced', async () => {
+  // The replace deletes, so it reads the dir first, like the aged delete.
+  const id = seedStem();
+  const dir = join(QU, id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'keep-me.tar'), 'operator data');
+  writeFileSync(join(dir, '.orphaned-at'), String(NOW_BASE));
+  const rep = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 1080 * DAY });
+  assert.equal(readFileSync(join(dir, 'keep-me.tar'), 'utf8'), 'operator data');
+  assert.ok(existsSync(join(ROOT, id, 'head-drums.flac')), 'the live copy stays in the cache');
+  assert.equal(rep.failed, 1);
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(join(ROOT, id), { recursive: true, force: true });
+});

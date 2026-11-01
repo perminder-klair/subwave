@@ -10,8 +10,9 @@
 //   (a dot-directory, so scanDirs and the marker walk ignore it), and only a
 //   quarantine past the grace period is deleted. The quarantine is a move on
 //   the same filesystem, so it is atomic and costs no copy — the property
-//   root-squashed NFS shares need. An id that is quarantined already gives way
-//   to the newer live copy, which starts its own grace.
+//   root-squashed NFS shares need. The one delete inside the grace: an id that
+//   is quarantined already gives way to the newer live copy of that same id,
+//   which starts its own grace, so the track never holds less than a week.
 // - A quarantine whose id is in the library again is RELEASED back (the live
 //   slot is free: a quarantine is a move, so exactly one copy exists), and a
 //   complete set stamps the row's stems_at. If a fresh analysis already took
@@ -390,6 +391,9 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
           // it replaces the stale copy and starts a whole grace of its own. Never
           // the reverse: dropping the live copy would delete the only fresh stems
           // on the spot, and leave what remains to age out on the old stamp.
+          // Deleting, so it reads the dir first, like the aged delete: an entry
+          // that is not stems is left alone, and the live copy with it.
+          if (!(await readsAsStems(to))) { report.failed += 1; continue; }
           const stale = await deleteDir(to);
           report.freedBytes += stale.freedBytes;
           if (!stale.gone) { report.failed += 1; continue; }
