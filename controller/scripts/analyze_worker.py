@@ -1586,8 +1586,10 @@ def shared_output(path):
     """Yields the temp path to write; on success sets 666 and renames it into
     place atomically (the chmod comes first, so the final name never appears
     at the umask's mode). On any failure, the write's or the rename's, the
-    temp file is removed so a partial file never counts against the cache
-    budget, and the error goes up to the caller, which degrades.
+    temp file is removed, so a failed write costs the cache budget nothing,
+    and the error goes up to the caller, which degrades. A killed worker
+    cleans up nothing: its partial .tmp stays until the folder is evicted, or
+    until the clip sweep ages it out of transitions/.
 
     The temp name is unique and created O_EXCL, because these folders are open
     to everyone: a link planted at a predictable name would be written through
