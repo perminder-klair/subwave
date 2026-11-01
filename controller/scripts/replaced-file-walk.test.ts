@@ -335,6 +335,7 @@ test('a partial read is acted on, says so, and does not move the mark', async ()
   const { check } = await reconcile();
 
   assert.match(check, /partial/);
+  assert.doesNotMatch(check, /server stopped/, 'running out of pages is not the server\'s doing');
   assert.equal(stored('s0').bpm, null, 'the changes read are the newest: they still count');
   assert.equal(mark(), MARK);
 });
@@ -348,6 +349,7 @@ test('a refused login reads as size only, without blaming the server for having 
 
   assert.match(check, /size only/);
   assert.match(check, /refused/);
+  assert.match(check, /kept the password back/);
   assert.equal(stored('s0').bpm, null, 'the size check stands alone');
   assert.equal(stored('s1').bpm, 100);
   assert.equal(mark(), MARK);

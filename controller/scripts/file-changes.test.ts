@@ -96,6 +96,26 @@ test('a first walk pages down to the oldest measurement, then the mark bounds th
   assert.deepEqual(listCalls, [0]);
 });
 
+test('a password the station keeps back is no answer, and nothing is paged', async () => {
+  const { config } = await import('../src/config.js');
+  const url = config.navidrome.url;
+  const realFetch = globalThis.fetch;
+  const asked: string[] = [];
+  config.navidrome.url = 'http://music.example.com:4533';
+  globalThis.fetch = (input, init) => {
+    asked.push(new URL(String(input)).pathname);
+    return realFetch(String(input).replace(config.navidrome.url, url), init);
+  };
+  try {
+    assert.equal(await fc.changedFiles(new Date(T0).toISOString()), null);
+  } finally {
+    globalThis.fetch = realFetch;
+    config.navidrome.url = url;
+  }
+  assert.ok(asked.length > 0, 'the Subsonic ping went');
+  assert.deepEqual(asked.filter(p => !p.startsWith('/rest/ping')), [], 'no login, no list');
+});
+
 test('nothing measured yet: nothing is stale, Navidrome is not paged', async () => {
   const r = await fc.changedFiles(null);
   assert.deepEqual(r, { changes: [], newest: null, complete: true, since: null, futureDated: 0 });

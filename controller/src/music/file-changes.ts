@@ -5,8 +5,8 @@
 // replaced-file-policy.changedAfterMeasure.
 //
 // Navidrome-only and best-effort, like navidrome-players.ts: another server, a
-// refused login or a timeout returns null and the walk carries on with the
-// size check alone. Nothing here throws or holds up the walk.
+// refused or unsent login or a timeout returns null and the walk carries on with
+// the size check alone. Nothing here throws or holds up the walk.
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { config } from '../config.js';
@@ -51,10 +51,10 @@ export async function saveMark(newest: string | null): Promise<void> {
  * time seen. The first walk (no mark) stops at the oldest measurement SUB/WAVE
  * holds: a file changed before it cannot postdate any track's measure, and
  * `updatedAt` is the file's own date, decades back on an old library.
- * `complete` is false when a page failed part-way (Navidrome 0.5x answers 500,
+ * `complete` is false when a page failed part-way (Navidrome answers 500,
  * "ambiguous column name", past ~51k rows of this sort): the changes read so
  * far are the newest and still acted on, but the mark is not moved past them.
- * The limit on such a server: every walk reads from the top of the list again,
+ * The limit this sets: every walk reads from the top of the list again,
  * and re-measuring a track does not move it down, so a change older than the
  * newest ~51k rows is never reached. A size change still finds it; a same-size
  * one is missed. A read that runs out of MAX_PAGES is partial in the same way.

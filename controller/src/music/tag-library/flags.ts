@@ -193,9 +193,9 @@ export async function walkNavidrome(
   }
   // One line per walk on the change-time signal, whatever it found.
   logEvent('info', walked === 0 ? 'Replaced-file check: skipped (empty walk)'
-    : !fileChanges ? 'Replaced-file check: size only (no change times: the server is not Navidrome, or its API refused or timed out)'
+    : !fileChanges ? 'Replaced-file check: size only (no change times: the server is not Navidrome, its API refused or timed out, or the station kept the password back; the Doctor says which)'
       : `Replaced-file check: ${fileChanges.changes.length.toLocaleString('en-GB')} change(s) read since `
-        + `${fileChanges.since ?? 'the start'}${fileChanges.complete ? '' : ' (partial: the server stopped answering part-way, the mark stays)'}`
+        + `${fileChanges.since ?? 'the start'}${fileChanges.complete ? '' : ' (partial: the read stopped before its floor, the mark stays)'}`
         + (fileChanges.futureDated ? `, ${fileChanges.futureDated} future-dated file(s) skipped (a wrong clock on the files)` : '')
         + `; ${sizeCandidates} by size, ${candidates.size - sizeCandidates} by change time`);
   const decision = decideReplacedClear({

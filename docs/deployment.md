@@ -264,16 +264,20 @@ docker compose exec controller npx tsx src/music/tag-library.ts --reconcile-only
 
 ### What it can miss
 
-Each of these only affects a replacement of exactly the same size, because a
-size change is always found:
+Each of these only affects a replacement of exactly the same size. A different
+size is found once the track has a stored size to compare with: the first walk
+after an upgrade only stores it, and a server that reports no sizes never does.
 
 - **An old file date.** A file copied with `cp -p` or `rsync -t`, moved in with
   `mv`, or restored from a backup keeps its date. If that date is older than the
   newest change the last walk saw, less 6 hours, it isn't read.
-- **Navidrome 0.5x on a large library.** It stops answering past about 51,000
-  rows of this list, so an older change isn't reached. A walk logs when its read
-  was partial.
+- **Navidrome on a large library.** It stops answering past about 51,000 rows of
+  this list, so an older change isn't reached. A walk logs when its read was
+  partial.
 - **A server other than Navidrome.** Only Navidrome reports change times.
+- **Navidrome over plain http on a public address.** Reading change times needs
+  the password, which the station only sends over https or to a local address.
+  The Doctor says so under "real file paths".
 
 ---
 
