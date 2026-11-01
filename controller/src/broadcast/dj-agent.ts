@@ -1857,8 +1857,8 @@ async function runRequestViaAgent(queue: any, { requester, text, signal, introBu
     // cascade. The `kind` half is load-bearing: a null id ALONE is also what an
     // omitted id looks like once coerceModelPayload is done with it, so a weak
     // model forgetting the field would otherwise answer a real music request
-    // as chat. Without kind:"chat" a null id is the agent's no-match, reported
-    // to the listener as one (RequestIdentificationMiss below).
+    // as chat. Without kind:"chat" a null id reaches the salvage below, and
+    // what is left is RequestIdentificationMiss for the route to judge.
     //
     // Echo guard (A2): the ack is the model's own free text, generated from a
     // message that may carry an injected script, so it is guarded like the
@@ -1927,10 +1927,13 @@ async function runRequestViaAgent(queue: any, { requester, text, signal, introBu
     // One djObject call constrained to that set (repickRequestFromSeen,
     // above) salvages the run instead of discarding it wholesale — the
     // caller's stateless matcher cascade is still the fallback when this
-    // misses too (the re-pick call itself fails). A null id is the agent
-    // saying none of its candidates is the song, so it is never salvaged
-    // into a stand-in that the route would record as a match.
-    if (!song && object?.id && extras.seen.size) {
+    // misses too (the re-pick call itself fails). An omitted id arrives here
+    // as null, so a weak model that forgot the field while holding real
+    // candidates is salvaged too. The exception is a run that used
+    // identifyRequestedTrack: there a null id is the agent saying none of its
+    // verified candidates is the song, and a re-pick would turn that into a
+    // stand-in the route records as a match.
+    if (!song && (object?.id || !evidenceToolCalls.length) && extras.seen.size) {
       throwIfAborted();
       corrected = true;
       const repicked = await repickRequestWithinDeadline({

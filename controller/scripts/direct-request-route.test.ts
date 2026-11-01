@@ -1319,3 +1319,33 @@ for (const text of ['play something nice for my mum', 'i want to hear some good 
     assert.equal(queue.upcoming.length, 1);
   });
 }
+
+for (const text of ['anything except Queen', 'instrumental tracks from the 1990s']) {
+  test(`an omitted id with a real candidate is salvaged by the corrective call: ${text}`, async () => {
+    await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+    const pick = { id: 'candidate', title: 'Fixture Outside Queen', artist: 'Fixture Artist', duration: 200 };
+    agentResult = { object: { ack: 'Coming up.' }, ...searched, extras: { seen: new Map([[pick.id, pick]]) } };
+    modelOutput = { kind: 'track', id: pick.id, ack: 'Here you go.', search_terms: [], scope: 'song' };
+    const result = await submit(text);
+    assert.equal(result.outcome, 'matched');
+    assert.equal(queue.upcoming[0].track.id, pick.id);
+    assert.equal(bodies.length, 1, 'one corrective call, no fall-through');
+    assert.equal(requestLog.snapshot(1)[0].path, 'agent');
+  });
+}
+
+test('a null answer after a real evidence run stays a miss even with verified candidates', async () => {
+  await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+  const verified = { id: 'verified-song', title: 'The Requested Song', artist: 'Fixture Artist' };
+  agentResult = {
+    object: { kind: 'track', id: null, ack: 'Not sure that is the one.' },
+    steps: 1,
+    toolCalls: [{ name: 'identifyRequestedTrack', result: { candidates: [verified] } }],
+    extras: { seen: new Map([[verified.id, verified]]) },
+  };
+  const result = await submit('phull koyi vilyat wala lai geya ghod da main reh geya keyariyan');
+  assert.equal(result.outcome, 'no-match');
+  assert.match(result.message, /identify that song/i);
+  assert.equal(queue.upcoming.length, 0);
+  assert.equal(bodies.length, 0, 'a declined answer must not spend a re-pick');
+});
