@@ -6,8 +6,7 @@ import { djAgent, djObject } from '../llm/sdk.js';
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import * as settings from '../settings.js';
 import { cohostedSkillSchema, cohostedSkillSystem } from '../llm/internal/prompts/cohosted-skill.js';
-import { stripSpeakerLabel } from '../audio/speech-text.js';
-import { standInToken } from '../broadcast/stand-in-policy.js';
+import { withoutStandIns } from '../broadcast/stand-in-policy.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 
 interface Persona {
@@ -149,8 +148,7 @@ export async function runCohostedCapability({
   // report and record these lines as what aired. A discussion with nothing left
   // is a stand-down the callers already back off on, not a failed render, and
   // that holds for a forced run too.
-  const names = cast.map((persona) => persona.name || '');
-  const spoken = lines.filter((line) => !standInToken(stripSpeakerLabel(line.text, names)));
+  const spoken = withoutStandIns(lines, cast.map((persona) => persona.name || ''));
   if (!spoken.length) {
     return { aired: false, lines: null, reason: 'the DJs wrote stand-ins, not lines, so nothing aired' };
   }

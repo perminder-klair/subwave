@@ -18,7 +18,7 @@
 // at all or a template passing as prose. Text it would empty had nothing to
 // say, and that is a stand-in too.
 
-import { normalizeForDisplay } from '../audio/speech-text.js';
+import { normalizeForDisplay, stripSpeakerLabel } from '../audio/speech-text.js';
 
 // Compared after folding (lower case, outer quotes/brackets/punctuation and
 // inner runs of space or punctuation collapsed to one space). Only tokens that
@@ -72,4 +72,10 @@ export function standInToken(text: string | null | undefined): string | null {
   if (BRACKETED.test(raw) && TEMPLATE_START.test(folded)) return folded.slice(0, 40);
   if (!normalizeForDisplay(raw)) return folded.slice(0, 40);
   return null;
+}
+
+// The lines of an exchange the gate will let air: the same test
+// announceExchange makes, for a caller that reports or records those lines.
+export function withoutStandIns<Line extends { text: string }>(lines: readonly Line[], castNames: readonly string[]): Line[] {
+  return lines.filter(line => !standInToken(stripSpeakerLabel(line.text, castNames)));
 }

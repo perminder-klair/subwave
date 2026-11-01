@@ -36,6 +36,7 @@ import { isIdle } from './stream-idle.js';
 import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
+import { withoutStandIns } from './stand-in-policy.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
@@ -659,10 +660,10 @@ export async function runHourlyCheck({ showWelcome = false, automatic = false }:
       persona: speaker,
       showWelcome,
     });
-    await queue.announce(script, 'hourly-check', {
+    const outcome = await queue.announce(script, 'hourly-check', {
       persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name }, hostSpeech: speechOwner.hostSpeech,
     });
-    return script;
+    return outcome.accepted ? script : null;
   });
 }
 
@@ -768,10 +769,10 @@ export async function runLink() {
     // Announce mode drops the link when the track has no artist name; say so
     // rather than answering the press with a silent success.
     if (!script) throw new Error('no link to air — this track has no artist name to announce');
-    await queue.announce(script, 'link', {
+    const outcome = await queue.announce(script, 'link', {
       persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
     });
-    return script;
+    return outcome.accepted ? script : null;
   });
 }
 
@@ -796,9 +797,11 @@ export async function runBanter() {
       recentOpeners: queue.getRecentOpeners(),
     });
     if (!lines) throw new Error('banter generation returned no usable exchange');
-    const ok = await queue.announceExchange(lines, 'banter', { castNames: [host, ...guests].map(p => p.name) });
+    const castNames = [host, ...guests].map(p => p.name);
+    const ok = await queue.announceExchange(lines, 'banter', { castNames });
     if (!ok) throw new Error('banter exchange failed to render');
-    return lines.map(l => `${l.persona.name}: ${l.text}`).join('\n');
+    return withoutStandIns(lines as { persona: { name: string }; text: string }[], castNames)
+      .map(l => `${l.persona.name}: ${l.text}`).join('\n');
   });
 }
 
@@ -888,9 +891,12 @@ export async function runStationId({ atNextTrack = false, automatic = false } = 
       persona: speaker,
     });
     const opts = { persona: speaker, daypart, hostSpeech: speechOwner.hostSpeech, meta: { personaId: speaker?.id, personaName: speaker?.name } };
-    if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id', opts);
-    else await queue.announce(script, 'station-id', opts);
-    return script;
+    if (atNextTrack) {
+      await queue.announceAtNextTrack(script, 'station-id', opts);
+      return script;
+    }
+    const outcome = await queue.announce(script, 'station-id', opts);
+    return outcome.accepted ? script : null;
   });
 }
 
