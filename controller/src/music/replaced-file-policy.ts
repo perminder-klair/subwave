@@ -15,8 +15,8 @@ export function fileReplaced(storedSize: number | null | undefined, walkedSize: 
 }
 
 // Navidrome: the server re-imported the file (its native `updatedAt`) after
-// SUB/WAVE last measured the track (the newest analysis facet row). A track
-// never measured has nothing stale to clear. A re-import also follows a
+// SUB/WAVE last measured the whole track (the oldest analysis facet row). A
+// track never measured has nothing stale to clear. A re-import also follows a
 // tag-only edit, so such a track is re-analysed too: the accepted cost.
 // `updatedAt` is the FILE's mtime (Navidrome's ModTime), not a server clock: a
 // device with a wrong clock or a timezone-shifted SMB/FAT mount can date a file

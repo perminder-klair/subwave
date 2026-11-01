@@ -108,11 +108,11 @@ test('a held candidate keeps its old size, so the next walk finds it again', () 
   consistent();
 });
 
-test('lastMeasuredAt reads the newest analysis row', () => {
+test('lastMeasuredAt reads the oldest analysis row: one fresh facet says nothing about the rest', () => {
   measured('when');
   sql(`UPDATE track_facet_status SET at = '2026-10-01T00:00:00Z' WHERE track_id = 'when'`).run();
   sql(`UPDATE track_facet_status SET at = '2026-10-20T00:00:00Z' WHERE track_id = 'when' AND facet = 'loudness'`).run();
-  assert.equal(db.lastMeasuredAt('when'), '2026-10-20T00:00:00Z');
+  assert.equal(db.lastMeasuredAt('when'), '2026-10-01T00:00:00Z');
   assert.equal(db.earliestMeasuredAt(), '2026-10-01T00:00:00Z');
   db.upsertTrackMeta('never', meta(10));
   assert.equal(db.lastMeasuredAt('never'), null);
@@ -122,6 +122,25 @@ test('lastMeasuredAt reads the newest analysis row', () => {
   db.clearTrackAudio('when');
   assert.equal(db.lastMeasuredAt('when'), null);
   assert.ok(db.needsAnalysisIds().includes('when'));
+  consistent();
+});
+
+test('a write of one facet leaves the other facets dated as they were', () => {
+  measured('clap');
+  sql(`UPDATE track_facet_status SET at = '2026-10-01T00:00:00Z' WHERE track_id = 'clap'`).run();
+  db.upsertTrackAudioVector('clap', new Float32Array(db.AUDIO_EMBEDDING_DIM).fill(0.2));
+  db.writeFacetResults('clap', { source: 'url', stems: { attempted: true } });
+  assert.equal(db.lastMeasuredAt('clap'), '2026-10-01T00:00:00Z');
+  assert.ok(policy.changedAfterMeasure('2026-10-28T15:01:20Z', db.lastMeasuredAt('clap')));
+});
+
+test('a failed attempt measures nothing: a kept measurement keeps its date, and its attempts move', () => {
+  measured('failing');
+  sql(`UPDATE track_facet_status SET at = '2026-10-01T00:00:00Z' WHERE track_id = 'failing'`).run();
+  db.recordAnalysisFailure('failing', 'decoder error');
+  assert.equal(db.lastMeasuredAt('failing'), '2026-10-01T00:00:00Z');
+  const row = sql(`SELECT attempts, status FROM track_facet_status WHERE track_id = 'failing' AND facet = 'head'`).get() as { attempts: number; status: string };
+  assert.deepEqual({ ...row }, { attempts: 1, status: 'ok' });
   consistent();
 });
 

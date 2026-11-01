@@ -172,16 +172,16 @@ function positiveInt(v: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
 }
 
-// When the track's audio was last measured: the newest analysis facet row.
-// NULL = never measured.
-// Caveat: `at` moves on any rewrite of a facet row, the seed and a version
-// re-derive (resyncAllFacets after an ANALYSIS_VERSION bump) included, not only
-// a measurement. A file replaced before such a re-derive and not walked since
-// then reads as measured after its change and is missed by the change-time
-// signal (the size signal still sees it unless the size held).
+// When the whole track was last measured: its OLDEST analysis facet row, the
+// time every answer has stood since. NULL = never measured. Not the newest
+// row: a write of one facet (the CLAP-only fast path, a facet plan) re-measures
+// that facet alone, and would pass the rest off as measured after a replacement.
+// Caveat: the seed dates every row of a track from when the facet table was
+// created, so a file replaced before that reads as measured after its change
+// and is left to the size signal.
 export function lastMeasuredAt(id: string): string | null {
   const r = requireDb()
-    .prepare('SELECT MAX(at) AS at FROM track_facet_status WHERE track_id = ?')
+    .prepare('SELECT MIN(at) AS at FROM track_facet_status WHERE track_id = ?')
     .get(id) as { at: string | null } | undefined;
   return r?.at ?? null;
 }
