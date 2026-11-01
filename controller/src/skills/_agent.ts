@@ -25,6 +25,7 @@ import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase, onAirLocat
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
+import { searchKeyProblem } from './web-search.js';
 import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
@@ -39,6 +40,13 @@ export { dataBlock };
 // toggles all iterate THIS. Read live so a rescan takes effect at once.
 function allCapabilities() {
   return loadedCapabilities();
+}
+
+// The refused-key sentence when the search key is what's stopping this skill, or
+// null. A skill that never asks about search isn't stopped by that key.
+function refusedKeyProblem(cap: any): string | null {
+  const problem = searchKeyProblem();
+  return problem && cap.asksSearchReady?.() ? problem : null;
 }
 
 // Default per-skill context profile: every "right now" field EXCEPT weather.
@@ -710,8 +718,11 @@ export async function runCapability(
     // Hint at the missing key when the capability is keyed.
     let hint = '';
     const searchProvider = settings.get().search?.provider;
-    if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
-      const name = searchProvider === 'brave' ? 'Brave Search' : 'Tavily';
+    const keyProblem = refusedKeyProblem(cap);
+    if (keyProblem) {
+      hint = ` — ${keyProblem}. Paste one into Settings → Web search`;
+    } else if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave' || searchProvider === 'firecrawl')) {
+      const name = searchProvider === 'brave' ? 'Brave Search' : searchProvider === 'firecrawl' ? 'Firecrawl' : 'Tavily';
       hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
     } else if (cap.toolPending && !cap.toolFn) {
       hint = ' — its tool.mjs is awaiting your review in /admin/skills';
@@ -886,7 +897,7 @@ export function skillCatalog() {
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
     // web-search's key requirement depends on the active provider:
-    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
+    // Tavily/Brave/Firecrawl need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -897,6 +908,9 @@ export function skillCatalog() {
       } else if (searchProvider === 'brave') {
         requiresKey = 'SEARCH_API_KEY';
         keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
+      } else if (searchProvider === 'firecrawl') {
+        requiresKey = 'SEARCH_API_KEY';
+        keyUrl = 'https://www.firecrawl.dev/app/api-keys';
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;
@@ -910,6 +924,7 @@ export function skillCatalog() {
         keyUrl = null;
       }
     }
+    const ready = typeof c.ready === 'function' ? !!c.ready() : true;
     return {
       name: c.skill,
       hasTool: typeof c.toolFn === 'function',
@@ -925,10 +940,13 @@ export function skillCatalog() {
       // an operator-authored skill and explain the off-by-default behaviour.
       custom: !c.seeded,
       // `ready` is false when a required env key isn't set; `requiresKey` names
-      // it and `keyUrl` links to its source.
-      ready: typeof c.ready === 'function' ? !!c.ready() : true,
+      // it and `keyUrl` links to its source. `keyProblem` is set instead when a
+      // key is on file and the search provider refuses it, so setting the env
+      // var wouldn't help.
+      ready,
       requiresKey,
       keyUrl,
+      keyProblem: ready ? null : refusedKeyProblem(c),
       hint,
       // The "right now" fields this situation may include (#471), resolved to
       // the default profile when unset so the admin UI needn't guess.

@@ -4,7 +4,7 @@
 // Part of the doctor/ split - see ../doctor.ts for the section runner.
 
 import { recentCalls } from '../llm/log.js';
-import { searchReady, searchWeb } from '../skills/web-search.js';
+import { searchKeyProblem, searchReady, searchWeb } from '../skills/web-search.js';
 import * as system from '../system.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
 import * as analyzer from '../music/analyzer.js';
@@ -21,7 +21,7 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
   const out: Finding[] = [];
 
   // Web search — backs the DJ's artist-news segments. DuckDuckGo and Keenable
-  // are keyless; Tavily and Brave need a key; SearXNG needs its server URL.
+  // are keyless; Tavily, Brave and Firecrawl need a key; SearXNG needs its server URL.
   // Report config readiness, then do a short live probe so "is it actually
   // working?" is answered, not just "is it configured?".
   const provider = s?.search?.provider || 'duckduckgo';
@@ -29,11 +29,14 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
   try { ready = searchReady(); } catch { ready = true; }
 
   if (!ready) {
+    const wrongKey = !!searchKeyProblem();
     out.push({
       label: 'web search',
       status: 'warn',
-      detail: `${provider} selected but no ${provider === 'searxng' ? 'server URL' : 'API key'}`,
-      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily and Brave need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
+      detail: wrongKey
+        ? 'firecrawl selected but the key on file is not a Firecrawl key (they start with fc-)'
+        : `${provider} selected but no ${provider === 'searxng' ? 'server URL' : 'API key'}`,
+      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily, Brave and Firecrawl need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
     });
     return out;
   }

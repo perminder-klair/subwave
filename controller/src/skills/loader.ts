@@ -416,6 +416,17 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     cap.ready = () => false;
   } else if (toolMod?.ready) {
     cap.ready = () => toolMod.ready(buildStationServices());
+    // ready() can't say why it's false, and a refused search key needs different
+    // advice from a missing one, so watch whether it asks searchReady(). That
+    // covers web-search, now-playing-dig and any custom skill copying the manual's
+    // example, which a list of kinds wouldn't. The services object is one shared
+    // instance, so wrap it, never patch it.
+    cap.asksSearchReady = () => {
+      const services = buildStationServices();
+      let asked = false;
+      toolMod.ready({ ...services, searchReady: () => { asked = true; return services.searchReady(); } });
+      return asked;
+    };
   } else if (requiresKey) {
     cap.ready = () => !!process.env[requiresKey];
   }
