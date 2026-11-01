@@ -177,8 +177,8 @@ export function useStationGate({
         setSavedRejected(false);
         const resume = resumeOnAnswer(heldForRef.current === api, result);
         setPhase('ok');
-        // The password is already in the ref the stream URL reads. tune()
-        // toggles, so a remote Play that got here first is left playing.
+        // The password is already in the ref the stream URL reads, and tune()
+        // toggles, so it never runs for a listener already on air.
         if (resume && !playerRef.current.tunedIn) playerRef.current.tune();
       }
       return result;
