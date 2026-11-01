@@ -28,7 +28,7 @@ import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
-import { keenableKeySource } from '../../skills/web-search.js';
+import { firecrawlKeySource, keenableKeySource } from '../../skills/web-search.js';
 import { planLlmSwap, LlmSwapError } from '../../settings/llm-swap.js';
 import { llmSwapFit } from '../../settings/llm-swap-fit.js';
 import { recentCalls } from '../../llm/log.js';
@@ -194,6 +194,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // 'settings' | 'env' | null: where the key a Keenable search sends comes
         // from. The env flag below can't tell a keen_ key from a Tavily one.
         keenableKeySource: keenableKeySource(),
+        // The same answer for Firecrawl; null with a key on file means that key
+        // is another provider's, and searches refuse it.
+        firecrawlKeySource: firecrawlKeySource(),
       },
       // Which writable keys (SECRET_ENV_KEYS) are present in the environment,
       // as booleans only; the UI keys its "key missing" alerts off this.

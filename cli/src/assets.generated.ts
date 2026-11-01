@@ -414,6 +414,13 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production without the bundled re
 # Split hostnames need a web rebuild with NEXT_PUBLIC_API_URL /
 # NEXT_PUBLIC_STREAM_URL (baked at build time).
 #
+# On /stream*, drop WWW-Authenticate from the response when the request has an
+# \`auth\` query parameter, or Sec-Fetch-Dest: audio|video with Sec-Fetch-Site:
+# same-origin, and ONLY then. Browsers answer Icecast's 401 challenge with a native
+# dialog over the whole player, but ffmpeg, mpv and GStreamer send \`user:pass@\` only
+# once challenged, so a blanket strip locks them out. docs/reverse-proxy.md has the
+# recipes.
+#
 # Block /api/listener-auth at your proxy: it is Icecast's URL-auth callback and
 # answers 200/401 on the shared privacy.password, so routing it hands the
 # internet a password oracle (#478). Icecast reaches the controller directly
@@ -1304,7 +1311,8 @@ SITE_URL=
 # ELEVENLABS_API_KEY=
 # FISH_API_KEY=
 # SEARCH_API_KEY=tvly-...           # Tavily or Brave Search key (optional, paid/metered),
-#                                   # or a keen_... Keenable key (optional, raises its free limit)
+#                                   # or a keen_... Keenable key (optional, raises its free limit),
+#                                   # or an fc-... Firecrawl key
 # SearXNG: no env var. Configure base URL in admin UI → Settings → Search.
 # Embedding key — only when embeddings use a different provider/key than chat
 # (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the
@@ -1514,4 +1522,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `1.28.0`; // x-release-please-version
+export const CLI_VERSION = `1.29.0`; // x-release-please-version

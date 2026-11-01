@@ -31,6 +31,10 @@
 #       Regression check — the plain crossfade's equal-power curve (J4) holds the
 #       level mid-cross where linear dips ~3 dB, and only song-to-song seams take
 #       it. Lifts equal_power_fade and the equal_power_seam rule from radio.liq.
+#   scripts/fx-render-test.sh ampgain
+#       Regression check — a transition gain must ignore the incoming track's
+#       liq_amplify (every amplify in dj_transition passes override=null). Lifts
+#       the sweep's incoming side and renders it with an annotated incoming.
 #   scripts/fx-render-test.sh jingledry
 #       Regression check — a stinger shorter than the crossfade must air dry at
 #       full level, not as its own fade-in under the outgoing track. Lifts the
@@ -230,8 +234,8 @@ def t(a, b) =
       # track in the mix however deep the cutoff dives.
       swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
                 filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_src))
-      amplify(sweep_gain, add(normalize=false,
-        [amplify(0.30, a_src), amplify(0.75, swept)]))
+      amplify(override=null, sweep_gain, add(normalize=false,
+        [amplify(override=null, 0.30, a_src), amplify(override=null, 0.75, swept)]))
     else a_src end
   a_src =
     if blend_on then
@@ -245,7 +249,7 @@ def t(a, b) =
         30.0 * pow(1800.0 / 30.0, sxx)
       end
       blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_src)
-      add(normalize=false, [a_src, amplify(-1., blend_low)])
+      add(normalize=false, [a_src, amplify(override=null, -1., blend_low)])
     else a_src end
   a_src =
     if washout_on then
@@ -298,7 +302,7 @@ def t(a, b) =
       washed = comb(delay=0.30, feedback=wash_fb, a_src)   # radio.liq's default tap
       washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
                  filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
-      amplify(wash_gain, washed)
+      amplify(override=null, wash_gain, washed)
     else a_src end
   # DISSOLVE — keep in lockstep with radio.liq's dissolve block: 4 parallel
   # combs at mutually prime delays, shared swell/hold/release feedback, ONE
@@ -357,11 +361,11 @@ def t(a, b) =
          comb(delay=0.113, feedback=diss_fb, a_src),
          comb(delay=0.151, feedback=diss_fb, a_src),
          comb(delay=0.181, feedback=diss_fb, a_src),
-         amplify(-4., a_src)])
-      washed = amplify(0.7, washed)
+         amplify(override=null, -4., a_src)])
+      washed = amplify(override=null, 0.7, washed)
       washed = filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet,
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
-      add(normalize=false, [a_src, amplify(diss_gain, washed)])
+      add(normalize=false, [a_src, amplify(override=null, diss_gain, washed)])
     else a_src end
   # CHOP — keep in lockstep with radio.liq's chop block: compressed clock
   # dd=min(d,10) shared with the incoming fade, accelerating gate (beat →
@@ -432,7 +436,7 @@ def t(a, b) =
           end
         g * master
       end
-      amplify(chop_gain, a_src)
+      amplify(override=null, chop_gain, a_src)
     else a_src end
   # LOOP — keep in lockstep with radio.liq's loop block: comb is a one-shot
   # feed-forward echo, so the loop is a cascade of doubling delays (taps at every
@@ -475,14 +479,14 @@ def t(a, b) =
         e = if e < 0. then 0. else e end
         if e >= d then 0.0 else 1.0 - e / d end
       end
-      gated  = amplify(loop_dry, a_src)
+      gated  = amplify(override=null, loop_dry, a_src)
       looped = comb(delay=bar, feedback=0.0, gated)
       looped = comb(delay=2.0 * bar, feedback=0.0, looped)
       looped = if 4.0 * bar < d then comb(delay=4.0 * bar, feedback=0.0, looped) else looped end
       looped = if 8.0 * bar < d then comb(delay=8.0 * bar, feedback=0.0, looped) else looped end
       looped = filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet,
                  filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
-      amplify(loop_gain, looped)
+      amplify(override=null, loop_gain, looped)
     else a_src end
   b_fade = if chop_on then chop_dd else d end
   b_src = fade.in(duration=b_fade, b.source)
@@ -538,7 +542,7 @@ def t(a, b) =
       bsf = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
               filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
       bsf_low = filter.rc(frequency=160., mode="low", wetness=1., bsf)
-      add(normalize=false, [bsf, amplify(bass_amt, bsf_low)])
+      add(normalize=false, [bsf, amplify(override=null, bass_amt, bsf_low)])
     else b_src end
   add(normalize=false, [a_src, b_src])
 end
@@ -1013,6 +1017,66 @@ LIQ
   echo "EQPOWER PASS — equal-power holds the level through a plain crossfade, and only song-to-song seams take it"
 }
 
+# ampgain — a transition gain must not pick up the incoming track's liq_amplify.
+# Every analysed track reaches the cross with a per-track loudness gain in its
+# `liq_amplify` metadata (applied once, before the cross, as in radio.liq).
+# Liquidsoap's `amplify` replaces its own factor with that metadata unless it
+# is called with override=null, so a gesture gain on the incoming side becomes
+# the track gain applied a second time. The sweep's bass swap is the incoming
+# gain that shows it: lifted from radio.liq, rendered with the incoming plain
+# and with liq_amplify "-6 dB", its low band (< 100 Hz) must sit exactly 6 dB
+# down (within 0.5 dB) in every 1 s window from the start of the cross to 3 s
+# after it, skipping windows under -60 dB (the fade-in's first second, where a
+# 16-bit render's quantisation floor, not the gain, sets the difference). The same block with override=null stripped is rendered too and must
+# FAIL that tolerance, so the check is proven to see the bug (the fx renders
+# elsewhere push un-annotated files and cannot).
+ampgain() {
+  mkdir -p "$WORK"
+  local radio="$HERE/../liquidsoap/radio.liq"
+  awk '/^  # SWEEP, incoming side/{on=1} on{print} on&&/^    end$/{exit}' "$radio" > "$WORK/amp-fixed.liq"
+  grep -q 'bass_amt' "$WORK/amp-fixed.liq" \
+    || { echo "AMPGAIN FAIL — could not lift the sweep's incoming side out of radio.liq"; return 1; }
+  sed 's/amplify(override=null, /amplify(/g' "$WORK/amp-fixed.liq" > "$WORK/amp-bug.liq"
+  [ -f "$WORK/amp-s.wav" ] || ffmpeg -v error -y -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 20 "$WORK/amp-s.wav"
+  [ -f "$WORK/amp-b.wav" ] || ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=5:amplitude=0.25" -t 30 -ar 44100 -ac 2 "$WORK/amp-b.wav"
+  local v ann b
+  for v in fixed bug; do for ann in plain gain; do
+    b='single("/work/amp-b.wav")'
+    [ "$ann" = gain ] && b='single("annotate:liq_amplify=\"-6 dB\":/work/amp-b.wav")'
+    cat > "$WORK/amp-$v-$ann.liq" <<LIQ
+settings.frame.audio.samplerate := 44100
+d = 12.
+def tr(a, b) =
+  sweeping = true
+  b_source = fade.in(duration=d, b.source)
+$(cat "$WORK/amp-$v.liq")
+  add(normalize=false, [fade.out(duration=d, a.source), b_source])
+end
+s = amplify(override="liq_amplify", 1., sequence([once(single("/work/amp-s.wav")), once($b)]))
+s = cross(duration=d, tr, s)
+output.file(%wav, fallible=true, on_stop=shutdown, "/work/amp-$v-$ann.wav", s)
+LIQ
+    liq "amp-$v-$ann.liq" > "$WORK/amp-$v-$ann.log" 2>&1 &
+  done; done
+  wait
+  # The cross runs 8..20 s. Low band, 1 s windows 8..22 s: worst |gain - plain + 6|.
+  lowband() {
+    ffmpeg -v error -i "$WORK/amp-$1.wav" -af "lowpass=f=100,lowpass=f=100,asetnsamples=n=44100,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,ametadata=print:file=-" -f null - 2>/dev/null \
+      | awk -F= '/RMS_level/{v[n++]=$2} END{for(i=8;i<23;i++) printf "%s ", v[i]; print ""}'
+  }
+  worst() {
+    { lowband "$1-plain"; lowband "$1-gain"; } | awk 'NR==1{for(i=1;i<=NF;i++)a[i]=$i; n=NF} NR==2{w=0; for(i=1;i<=n;i++){if(a[i]<-60)continue; d=a[i]-$i-6; if(d<0)d=-d; if(d>w)w=d}; printf "%.2f\n", w}'
+  }
+  local wf wb
+  wf=$(worst fixed); wb=$(worst bug)
+  echo "  sweep bass swap, incoming with liq_amplify -6 dB: worst 1 s window off (plain - 6 dB) by $wf dB (radio.liq), $wb dB (override=null stripped)"
+  awk -v w="$wb" 'BEGIN{exit !(w != "" && w > 1.0)}' \
+    || { echo "AMPGAIN FAIL — the check cannot see the bug: the stripped block also holds -6 dB"; return 1; }
+  awk -v w="$wf" 'BEGIN{exit !(w != "" && w <= 0.5)}' \
+    || { echo "AMPGAIN FAIL — a transition gain on the incoming picks up its liq_amplify"; return 1; }
+  echo "AMPGAIN PASS — the incoming's liq_amplify applies once; the sweep's gains ignore it"
+}
+
 case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
@@ -1021,7 +1085,8 @@ case "${1:-}" in
   jingleseam) jingleseam ;;
   jingledry) jingledry ;;
   eqpower) eqpower ;;
+  ampgain) ampgain ;;
   xdur)   xdur ;;
   xchain) xchain ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | xdur | xchain"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | ampgain | xdur | xchain"; exit 2 ;;
 esac

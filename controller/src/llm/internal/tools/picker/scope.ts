@@ -83,6 +83,11 @@ export interface PickerScope {
   // invocation in one agent run. This prevents a model retry from exceeding
   // the three-search provider budget.
   evidenceSearch?: { limit: number; used: number; seen: Set<string> };
+  // Request path only: the listener's cleaned words. searchLibrary looks the
+  // recording they name up itself (#2195), so a named track never hangs on how
+  // the model worded its query. Data: it picks library rows and reaches no
+  // prompt or tool answer. null on every pick path.
+  requestText: string | null;
 }
 
 // Every field defaults to "no constraint". Spread over a partial so there is
@@ -111,6 +116,7 @@ const NO_SCOPE: PickerScope = {
   audioWaypoint: null,
   resolveReferences: false,
   evidenceSearch: undefined,
+  requestText: null,
 };
 
 export function pickerScope(partial: Partial<PickerScope> = {}): PickerScope {
