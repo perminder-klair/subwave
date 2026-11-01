@@ -65,7 +65,7 @@ interface OrphanVars {
   setEnabled?: boolean;
 }
 
-interface OrphanTrackRow {
+export interface OrphanTrackRow {
   id: string;
   state: 'orphan' | 'quarantined';
   title: string | null;
@@ -326,6 +326,26 @@ function TrackGroup({ label, tracks }: { label: string; tracks: OrphanTrackRow[]
   );
 }
 
+export function OrphanTracksFold({ loading, error, rows }: { loading: boolean; error: Error | null; rows: OrphanTrackRow[] }) {
+  const orphanRows = rows.filter(t => t.state === 'orphan');
+  const quarantinedRows = rows.filter(t => t.state === 'quarantined');
+  return (
+    <div className="max-h-80 overflow-y-auto rounded border border-[var(--separator-soft)] px-3 py-1">
+      {error && <p role="alert" className="py-2 text-sm text-destructive">{errorMessage(error)}</p>}
+      {loading ? (
+        <p className="py-2 text-sm text-muted">Resolving names — this scans the recent event logs…</p>
+      ) : rows.length === 0 ? (
+        error ? null : <p className="py-2 text-sm text-muted">Nothing in the cache root or the quarantine.</p>
+      ) : (
+        <>
+          {orphanRows.length > 0 && <TrackGroup label="Orphaned — will move to quarantine" tracks={orphanRows} />}
+          {quarantinedRows.length > 0 && <TrackGroup label="Already in quarantine" tracks={quarantinedRows} />}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function OrphanStemsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const ready = hydrated && !needsAuth;
@@ -343,10 +363,6 @@ export default function OrphanStemsPanel() {
     mutation.mutate(vars, {
       onSuccess: data => { if (vars.confirm && data.report) setLastPass(data.report); },
     });
-
-  const rows = tracksQuery.data?.tracks ?? [];
-  const orphanRows = rows.filter(t => t.state === 'orphan');
-  const quarantinedRows = rows.filter(t => t.state === 'quarantined');
 
   return (
     <Card title="Orphan stems cleanup" sub={ORPHAN_CARD_SUB}>
@@ -366,18 +382,11 @@ export default function OrphanStemsPanel() {
           onToggleDaily={() => act({ setEnabled: !enabled })}
         >
           {showTracks && (
-            <div className="max-h-80 overflow-y-auto rounded border border-[var(--separator-soft)] px-3 py-1">
-              {tracksQuery.isLoading ? (
-                <p className="py-2 text-sm text-muted">Resolving names — this scans the recent event logs…</p>
-              ) : orphanRows.length === 0 && quarantinedRows.length === 0 ? (
-                <p className="py-2 text-sm text-muted">Nothing in the cache root or the quarantine.</p>
-              ) : (
-                <>
-                  {orphanRows.length > 0 && <TrackGroup label="Orphaned — will move to quarantine" tracks={orphanRows} />}
-                  {quarantinedRows.length > 0 && <TrackGroup label="Already in quarantine" tracks={quarantinedRows} />}
-                </>
-              )}
-            </div>
+            <OrphanTracksFold
+              loading={tracksQuery.isLoading}
+              error={tracksQuery.error}
+              rows={tracksQuery.data?.tracks ?? []}
+            />
           )}
         </OrphanReportView>
       ) : (

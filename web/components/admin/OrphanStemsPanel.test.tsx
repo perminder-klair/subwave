@@ -6,11 +6,13 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   ORPHAN_CARD_SUB,
   OrphanReportView,
+  OrphanTracksFold,
   PassResult,
   pendingWork,
   runDialog,
   runLabel,
   type OrphanReport,
+  type OrphanTrackRow,
 } from './OrphanStemsPanel';
 
 const dry = (over: Partial<OrphanReport> = {}): OrphanReport => ({
@@ -136,4 +138,25 @@ test('both orphan reads go through adminJson', () => {
   assert.match(source, /adminJson<OrphanState>\(fetcher, '\/stems\/orphans', undefined, signal\)/);
   assert.match(source, /adminJson<OrphanTracks>\(fetcher, '\/stems\/orphans\/tracks', undefined, signal\)/);
   assert.doesNotMatch(source, /\.json\(\)/);
+});
+
+const fold = (over: Partial<Parameters<typeof OrphanTracksFold>[0]> = {}) =>
+  renderToStaticMarkup(createElement(OrphanTracksFold, { loading: false, error: null, rows: [], ...over }));
+const row: OrphanTrackRow = { id: 'abc', state: 'orphan', title: 'Marionette', artist: null, album: null };
+
+test('an empty list says the cache has nothing in it', () => {
+  assert.match(fold(), /Nothing in the cache root or the quarantine/);
+});
+
+test('a failed list is a failure, never an empty cache', () => {
+  const html = fold({ error: new Error('/stems/orphans/tracks failed (500): library closed') });
+  assert.doesNotMatch(html, /Nothing in the cache root/);
+  assert.match(html, /role="alert"/);
+  assert.match(html, /library closed/);
+});
+
+test('a refetch that fails keeps the rows it already had, and says it failed', () => {
+  const html = fold({ error: new Error('failed (500)'), rows: [row] });
+  assert.match(html, /role="alert"/);
+  assert.match(html, /Marionette/);
 });
