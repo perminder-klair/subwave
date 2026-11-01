@@ -1205,7 +1205,7 @@ async function nightlyDoctor() {
 // is an operator-facing error because it means the purge is enabled against a
 // cache it cannot see. 04:47 keeps it clear of the 02:00 cleanup and the
 // 04:17 doctor.
-async function stemOrphanPurgeTick() {
+export async function stemOrphanPurgeTick() {
   try {
     if (settings.get()?.audio?.stemOrphanPurgeEnabled !== true) return;
     const r = await runScheduledOrphanPurge(allTrackIdsOrdered());
