@@ -1746,9 +1746,9 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
 // Returns { ack, track } on success, or null when the conversational agent is
 // disabled or the breaker is open (the caller then runs its own stateless
 // matcher cascade). Throws if the agent runs but fails — the caller catches
-// and falls back the same way. Agent outcomes here feed the shared breaker:
-// the request agent runs the same model through the same done-tool harness,
-// so its failures are the same symptom.
+// and falls back the same way. Agent outcomes here feed the request breaker,
+// which is separate from the pick breaker so a picker failure can't take the
+// request agent down with it (dj-agent/breaker.ts).
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
 export function requestMatchingEnabled(): boolean {
@@ -1963,6 +1963,10 @@ async function runRequestViaAgent(queue: any, { requester, text, signal, introBu
         agent: 'request', id: object?.id ?? null, candidates: extras.seen.size, toolCalls,
         idInSessionWindow: !!(object?.id && windowText.includes(object.id)),
       });
+      // Real discovery calls only, as on the pick path: a run that never
+      // explored says nothing about the library, so it is the model failing,
+      // and it must not ride the breaker exemption an empty search earns.
+      if (!toolCalls.length) throw new Error(`request agent made no tool calls and returned id ${object?.id ?? 'none'}`);
       if (extras.seen.size === 0 || !object?.id) {
         throw new RequestIdentificationMiss(`request agent found no matching track for id ${object?.id ?? 'none'}`);
       }

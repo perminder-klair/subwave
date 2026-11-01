@@ -244,7 +244,7 @@ test('agentic matching sends recording-condition requests to the agent first', a
 
 test('an agentic null result falls through to the deterministic resolver', async () => {
   await settings.update({ llm: { requestMatching: 'agentic' } } as never);
-  agentResult = { object: {}, toolCalls: [], extras: { seen: new Map() } };
+  agentResult = { object: {}, toolCalls: [{ name: 'searchLibrary' }], extras: { seen: new Map() } };
 
   const result = await submit();
 
@@ -380,7 +380,7 @@ test('a missing short title fails without selecting an unrelated fallback', asyn
 
 test('a framed impossible title stays no-match instead of taking an agent vibe fallback', async () => {
   await settings.update({ llm: { requestMatching: 'agentic' } } as never);
-  agentResult = { object: {}, toolCalls: [], extras: { seen: new Map() } };
+  agentResult = { object: {}, toolCalls: [{ name: 'searchLibrary' }], extras: { seen: new Map() } };
   catalogueSongs = [filler];
   searchEmpty = true;
   const result = await submit('play qzxv impossible recording 918273');
@@ -414,7 +414,7 @@ test('a stalled interpreter gives way to the literal parse instead of timing the
 
 test('an agent failure cannot replace an explicit voice request with another artist track', async () => {
   await settings.update({ llm: { requestMatching: 'agentic' } } as never);
-  agentResult = { object: {}, toolCalls: [], extras: { seen: new Map() } };
+  agentResult = { object: {}, toolCalls: [{ name: 'searchLibrary' }], extras: { seen: new Map() } };
   catalogueSongs = [
     { id: 'blank-space', title: 'Blank Space', artist: 'Taylor Swift' },
     { id: 'patient-zero', title: 'Patient Zero', artist: 'Taylor Swift' },
