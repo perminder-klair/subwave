@@ -10,6 +10,7 @@ import { join } from 'node:path';
 
 import { config } from '../src/config.js';
 import * as settings from '../src/settings.js';
+import { setCache } from '../src/settings/store.js';
 import {
   isOwnPlayer,
   normalizePlayerRow,
@@ -418,6 +419,14 @@ test('the hourly tick writes nothing unless the operator opted in', async () => 
   assert.equal(r.saved.musicSource.reportRealPath, true);
   await realPathTick();
   assert.deepEqual(fake.puts.map(p => p.id), ['p-node', 'p-admin']);
+  await settings.update({ musicSource: { reportRealPath: false } });
+});
+
+test('a saved opt-in survives a cold load', async () => {
+  await settings.update({ musicSource: { reportRealPath: true } });
+  setCache(null);
+  await settings.load();
+  assert.equal(settings.get().musicSource.reportRealPath, true);
   await settings.update({ musicSource: { reportRealPath: false } });
 });
 
