@@ -1274,7 +1274,8 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   };
   const choose = (songs: RequestSong[]) => {
     if (match.similarTo && similaritySeed) {
-      return [...songs].sort((a, b) => similarityScore(b) - similarityScore(a) || a.id.localeCompare(b.id))[0] || null;
+      const ranked = [...songs].sort((a, b) => similarityScore(b) - similarityScore(a) || a.id.localeCompare(b.id));
+      return deps.choose ? deps.choose(ranked, { ranked: true }) : ranked[0] || null;
     }
     const score = (song: RequestSong) => Number(!!match.mood && moodMatches(song))
       + Number(!!match.genre && !requiredGenre && genreMatches(song))
@@ -1409,21 +1410,22 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
         similarSongs: undefined, similarSeedSongs: undefined, fallbackSongs: async () => [],
       });
     }
-    if (!seed.track) {
-      // A named comparison is still a named identity claim. Without a
-      // verified recording seed, do not silently reinterpret it as a request
-      // for the current track or another artist's similarity pool.
-      return { track: null, source: 'similar-seed', outcome: 'no-match', errors, required, alternatives };
+    // "something like X" asks for a kind of music, so an X the library lacks
+    // is no refusal: the rungs below offer an honest stand-in, spaced at the
+    // route's point of choice (#1993).
+    if (seed.track) {
+      similaritySeed = seed.track;
+      const candidates = await safe('similar seed tracks', () => {
+        if (deps.similarSeedSongs) return deps.similarSeedSongs(seed.track!.id);
+        return deps.similarSongs ? deps.similarSongs() : Promise.resolve([]);
+      }, []);
+      const seedTitle = requestName(seed.track.title);
+      const filtered = unique(candidates).filter(song => song.id !== seed.track!.id && requestName(song.title) !== seedTitle);
+      const result = select(filtered, 'similar-to-seed');
+      if (result) return result;
+      similaritySeed = null;
     }
-    similaritySeed = seed.track;
-    const candidates = await safe('similar seed tracks', () => {
-      if (deps.similarSeedSongs) return deps.similarSeedSongs(seed.track!.id);
-      return deps.similarSongs ? deps.similarSongs() : Promise.resolve([]);
-    }, []);
-    const seedTitle = requestName(seed.track.title);
-    const filtered = unique(candidates).filter(song => song.id !== seed.track!.id && requestName(song.title) !== seedTitle);
-    const result = select(filtered, 'similar-to-seed');
-    return result || { track: null, source: 'similar-seed', outcome: 'no-match', errors, required, alternatives };
+    standingIn = true;
   }
 
   const search = async (term: string) => {

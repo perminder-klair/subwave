@@ -208,6 +208,21 @@ export function drawRequestCandidate<T extends CandidateLike>(
   return { pick: first, withheld: null, skipped: 0, starved: true };
 }
 
+// The same draw over a pool that is already best-first, such as named
+// similarity: the best candidate that passes spacing wins, not a random one.
+export function drawRankedRequestCandidate<T extends CandidateLike>(
+  pool: readonly T[],
+  recentRoots: Set<string>,
+  isStandIn: (song: T) => boolean,
+): RequestDraw<T> {
+  const passes = (song: T) => !spacedOut(song, recentRoots, (s) => !isStandIn(s));
+  const first = pool[0] ?? null;
+  if (!first || passes(first)) return { pick: first, withheld: null, skipped: 0, starved: false };
+  const next = pool.findIndex(passes);
+  if (next < 0) return { pick: first, withheld: null, skipped: 0, starved: true };
+  return { pick: pool[next]!, withheld: first, skipped: next, starved: false };
+}
+
 // What the guard did, split by OUTCOME not cause: the call site only needs
 // "did the pick change, and does the slot still need filling". Every relaxation
 // reason is logged here.

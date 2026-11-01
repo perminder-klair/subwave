@@ -1161,3 +1161,23 @@ test('only unframed attribute words are offered to the catalogue as a name', () 
   assert.equal(modelFreeRequest('rock music').bareName, undefined);
   assert.equal(modelFreeRequest('something like Focus').similarTo?.title, 'Focus');
 });
+
+test('an unranked resolver still takes the best neighbour, and the route chooser gets the ranking', async () => {
+  const seed = { id: 'seed', title: 'Tum Hi Ho', artist: 'Arijit Singh' };
+  const best = { id: 'best', title: 'Best', artist: 'A', _similarity: 0.9 };
+  const next = { id: 'next', title: 'Next', artist: 'B', _similarity: 0.4 };
+  const seen: Array<{ ids: string[]; ranked?: boolean }> = [];
+  const f = fixture({ searchPage: async query => query === seed.title ? { songs: [seed], rawCount: 1 } : { songs: [], rawCount: 0 } });
+  const r = await resolveDirectRequest(modelFreeRequest('something like Tum Hi Ho'), { ...f.deps, similarSeedSongs: async () => [next, best],
+    choose: (pool, options) => { seen.push({ ids: pool.map(song => song.id), ranked: options?.ranked }); return pool[1] ?? null; } });
+  assert.deepEqual(seen, [{ ids: ['best', 'next'], ranked: true }]);
+  assert.equal(r.track?.id, 'next', 'the chooser decides, at the point of choice');
+});
+
+test('a named seed with no neighbours falls to a stand-in instead of a refusal', async () => {
+  const seed = { id: 'seed', title: 'Tum Hi Ho', artist: 'Arijit Singh' };
+  const f = fixture({ searchPage: async query => query === seed.title ? { songs: [seed], rawCount: 1 } : { songs: [], rawCount: 0 } });
+  const r = await resolveDirectRequest(modelFreeRequest('something like Tum Hi Ho'), { ...f.deps, similarSeedSongs: async () => [] });
+  assert.equal(r.track?.id, filler.id);
+  assert.equal(r.outcome, 'substituted');
+});

@@ -852,11 +852,12 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
           }));
       },
     },
-    choose: pool => {
+    choose: (pool, { ranked = false } = {}) => {
       const isStandIn = matchedRequestStandIn(named, {
         requestText: text, lookups: matchedRequestLookups(searches, text), onAir: currentTrack,
       });
-      const drawn = drawRequestCandidate(pool, queue.neighbourArtistRoots(varietyWindow), isStandIn);
+      const draw = ranked ? drawRankedRequestCandidate : drawRequestCandidate;
+      const drawn = draw(pool, queue.neighbourArtistRoots(varietyWindow), isStandIn);
       if (drawn.withheld) {
         flagGuard(entry, 'artist-spaced');
         queue.log('request-guard', `stand-in by recently-played artist "${drawn.withheld.artist}" set aside — drew "${drawn.pick?.title}" by ${drawn.pick?.artist} instead (${drawn.skipped} recent stand-in(s) passed over, spacing window ${varietyWindow} slots)`);
@@ -869,7 +870,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     queuedIds: queue.queuedIds(),
     currentId: queue.current?.track?.id,
     exactOnly: explicitNamedRequest || explicitArtistOnlyRequest || likelyShortTitle || exactTitleOnlyRequest || forcedNamedTitle
-      || Boolean(matched.releaseContext) || Boolean(matched.similarTo),
+      || Boolean(matched.releaseContext),
     signal,
     moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },
     languageSongs: async language => {
