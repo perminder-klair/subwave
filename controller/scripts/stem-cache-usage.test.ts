@@ -10,8 +10,9 @@
 // - a snapshot older than a day, or with a pass writing, still reports, but
 //   says so (`fresh: false` / `passRunning: true`) — the operator sees an old
 //   figure with its age rather than nothing;
-// - a snapshot a purge marked stale still reports, flagged (`stale: true`), and
-//   the sweep re-measures it rather than trusting it;
+// - a snapshot a purge or a replaced file's dropped stems marked stale still
+//   reports, flagged (`stale: true`), and the sweep re-measures it rather than
+//   trusting it;
 // - no snapshot, another root, or a malformed one reports null;
 // - GET /stem-cache/usage carries it plus the budget in force.
 //
@@ -19,7 +20,7 @@
 
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listen } from './test-utils/http.js';
@@ -99,6 +100,22 @@ test('GET /stem-cache/usage: the stored size and the budget in force', async () 
   const none = await (await fetch(`${s.url}/stem-cache/usage`)).json() as { usage: unknown };
   assert.equal(none.usage, null);
   await s.close();
+});
+
+test('stems dropped for a replaced file keep the figure, flagged, and the next read walks', async () => {
+  writeSnap({ bytes: 80 * GB, dirs: 4000 });
+  mkdirSync(stemCache.dirFor('swapped'), { recursive: true });
+
+  assert.equal((await stemCache.forgetStems(['swapped'])).removed, 1);
+
+  const got = await stemCache.storedUsage();
+  assert.equal(got?.bytes, 80 * GB, 'with no figure the budget field loses its warning and its confirm');
+  assert.equal(got?.stale, true);
+  // In the file, not this process: the walk that drops stems is the tagger's child.
+  assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).stale, true);
+  const walks = stemCache._cacheWalksForTests();
+  await stemCache.usage();
+  assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the sweep re-measures it');
 });
 
 test('a stale snapshot is still reported, flagged, and never walked for', async () => {
