@@ -935,8 +935,9 @@ export function getRawStreamUrl(songId: string): string {
 //   library at the same place. The path is the file.
 // - absolute and outside it: Navidrome's root differs from the mount, and no
 //   setting maps one to the other. So leading segments come off one at a time,
-//   longest remainder first, stopping at two: a bare filename would match any
-//   `01.flac` at the top of the mount.
+//   longest remainder first, stopping at three: artist, album and file. Fewer
+//   can match another record (`Greatest Hits/01 - Intro.flac`), and the wrong
+//   song would air under this track's metadata. A miss streams the right one.
 // A path comes from the server, so any `..` segment rejects it outright, and
 // every candidate must stay under the mount. Lexical on purpose: a symlink the
 // operator put inside the library still plays.
@@ -950,7 +951,7 @@ function localPathCandidates(libRoot: string, songPath: string): string[] {
   if (inside(songPath)) return [songPath];
   const parts = segments.filter(Boolean);
   return parts
-    .slice(0, -1)
+    .slice(0, -2)
     .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
     .filter(inside);
 }

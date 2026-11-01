@@ -92,13 +92,22 @@ test('nothing stripped is tried first, as the plain join always found it', () =>
   assert.equal(getLocalPath({ path: `/srv/${SONG}` }), whole);
 });
 
-test('stripping stops at two segments, so a bare filename cannot match', () => {
+test('stripping stops at three segments, so another record cannot match', () => {
   file(join(root, '01 - Song.flac'));
-  assert.equal(getLocalPath({ path: '/srv/library/Artist/Album/01 - Song.flac' }), null);
+  file(join(root, 'Album/01 - Song.flac'));
+  assert.equal(getLocalPath({ path: '/srv/library/Artist/Album/01 - Song.flac' }), null, 'neither the file nor the album alone');
   assert.equal(getLocalPath({ path: '/01 - Song.flac' }), null);
+  assert.equal(getLocalPath({ path: '/Album/01 - Song.flac' }), null);
 
-  const album = file(join(root, 'Album/01 - Song.flac'));
-  assert.equal(getLocalPath({ path: '/srv/library/Artist/Album/01 - Song.flac' }), album, 'two segments may');
+  const whole = file(join(root, SONG));
+  assert.equal(getLocalPath({ path: `/srv/library/${SONG}` }), whole, 'artist, album and file may');
+});
+
+test('the reviewer\'s wrong song stays a miss: same album name and file, another artist', () => {
+  file(join(root, 'Greatest Hits/01 - Intro.flac'));
+  assert.equal(getLocalPath({ path: '/srv/library/Queen/Greatest Hits/01 - Intro.flac' }), null);
+  file(join(root, 'Abba/Greatest Hits/01 - Intro.flac'));
+  assert.equal(getLocalPath({ path: '/srv/library/Queen/Greatest Hits/01 - Intro.flac' }), null, 'nor a third artist\'s copy');
 });
 
 test('a `..` anywhere is refused, even when the file is there', () => {
