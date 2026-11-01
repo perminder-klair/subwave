@@ -318,12 +318,11 @@ Before you do it, know this:
 
   On a multi-station install without `STEMS_DIR`, run it once per station on
   `/var/sub-wave/stations/<id>/stems`. A `chmod` error names a folder the
-  analyzer does not own: as root on the machine that holds the files (the file
-  server, on NFS), `chown 10001:10001` that folder, the analyzer's user, then
-  run the command again. Until a stuck folder is opened the sweep leaves it out
-  of the budget check and warns, rather than evicting other tracks in its
-  place, but its bytes still count as used. A cache held over budget by stuck
-  folders alone writes no new stems.
+  analyzer cannot change: run `chmod 777` on it as root on the machine that
+  holds the files (the file server, on NFS). Until a stuck folder is opened the
+  sweep leaves it out of the budget check and warns, rather than evicting other
+  tracks in its place, but its bytes still count as used. A cache held over
+  budget by stuck folders alone writes no new stems.
 - **Transition clips are not part of this cache.** The rendered clips live in
   `state/transitions` (multi-station: `state/stations/<id>/transitions`), so
   `STEMS_DIR` does not move them and they do not count against the stem

@@ -121,7 +121,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Tempo-derived timing is octave-safe: fold, then halve, never clamp.
 - The seed track id is not a pick (`util/pick-seed.ts`).
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
-- The analyzer writes shared folders 777 and files 666 whatever its umask, and a folder the sweep cannot delete leaves the budget check, so it never gets others evicted (`broadcast.md`).
+- The analyzer writes shared folders 777 and files 666 whatever its umask, and a folder the sweep cannot delete leaves the budget check, before any delete if the `access()` probe catches it, otherwise once its own delete fails (`broadcast.md`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).
 - LLM calls go through the `llm/sdk` primitives, and provider quirks live only in `llm/internal/provider/capabilities.ts`. The default provider is a slow homelab Ollama, so add no aggressive retry.
