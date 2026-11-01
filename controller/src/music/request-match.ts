@@ -365,11 +365,33 @@ export function modelFreeRequest(text: string): RequestMatch {
 export interface RequestedRecording {
   query: string;
   isExact(song: RequestSong): boolean;
+  // The exact hits on one page of that search.
+  exactIn(songs: RequestSong[]): RequestSong[];
 }
 
 // A lone generic word is no title: "play something" does not ask for the
-// Beatles' "Something".
-const GENERIC_ASK = new Set(['a', 'an', 'any', 'some', 'something', 'anything', 'music', 'song', 'songs', 'track', 'tracks', 'tune', 'tunes']);
+// Beatles' "Something", nor "more please" for Usher's "More".
+const GENERIC_ASK = new Set(['a', 'an', 'any', 'some', 'something', 'anything', 'more', 'another', 'again', 'else', 'play',
+  'please', 'surprise', 'me', 'music', 'song', 'songs', 'track', 'tracks', 'tune', 'tunes']);
+
+// A title made only of the words around an ask proves nothing by sitting in
+// the ask: "play U2 please" names U2, not their "Please".
+function framingOnly(title: string): boolean {
+  return requestName(title).split(' ').every(word => REQUEST_FRAME.has(word) || GENERIC_ASK.has(word));
+}
+
+// The words a listener uses for one recording of a song over another. Bare
+// words, unlike Direct's phrases, because a pin is the one reading no model
+// checks: "Hello by Adele live" must not become the studio cut.
+const ANOTHER_CUT = /\b(?:live|acoustic|unplugged|instrumental|karaoke|remix(?:ed)?|demo|cover|version)\b/;
+
+// Does the text, past this track's own names, ask for anything the track does
+// not say it is? Direct's conditions, so "live version" and "but not the remix"
+// are read one way on both routes.
+function asksBeyond(text: string, title: string, credits: string[]): boolean {
+  return ANOTHER_CUT.test(requestName(maskNames(text, [title, ...credits], ' ', false)))
+    || directRequestUnsupported(text, { title, search_terms: credits }).length > 0;
+}
 
 // The recording the listener's OWN words name, for the request agent's
 // searchLibrary (#2195): what to search, and how to recognise an exact hit.
@@ -379,27 +401,41 @@ const GENERIC_ASK = new Set(['a', 'an', 'any', 'some', 'something', 'anything', 
 //
 // The query is the title alone: search3 needs every word to match, so one word
 // of an unparsed tail ("BY RIHANNA. I want it loud") would empty it. That tail
-// is also why a title match accepts any credit the listener's words hold as
-// whole words. A pair written "A - B" may be either way round, so its query
-// holds both sides, which search3 matches in any order.
+// is also why a title match accepts a credit heading what follows "by", behind
+// only what a listener adds after a name. Anywhere else in the text a credit is
+// no proof: "Creep by Elvis, Radiohead is overrated" asks for neither. A pair
+// written "A - B" may be either way round, so its query holds both sides, which
+// search3 matches in any order.
 //
 // The last branch catches what the literal parse cannot split: "disturbia
 // rihanna" has no separator, "Stand by Me" is read as "Stand" by "Me", and
 // "Disturbia - Rihanna" is read as "Rihanna" by "Disturbia". There the track's
 // title and credits must account for every word but framing.
+//
+// A pin outranks the model's own reading, so a doubt pins nothing: the model's
+// search still runs. Wrong here is a wrong song on air, and a miss is the
+// behaviour this replaced.
 export function requestedRecording(text: string | null | undefined): RequestedRecording | null {
   if (!text?.trim()) return null;
-  const { title, artist, reversible } = modelFreeRequest(text);
-  if (!title) return null;
+  // NUL is maskNames' marker; left in, it reads as every name being present.
+  const said = text.replaceAll('\u0000', ' ');
+  const { title, artist, reversible, language } = modelFreeRequest(said);
+  if (!title || language) return null;
   if (!artist && requestName(title).split(' ').every(word => GENERIC_ASK.has(word))) return null;
+  const isExact = (song: RequestSong) => {
+    const name = String(song.title ?? '');
+    const credits = creditKeys(song);
+    const named = (requestTitleMatches(title, name)
+      && (requestArtistMatches(artist, song) || credits.some(credit => headsLiteral(artist ?? '', credit))))
+      || (!framingOnly(name) && namedInRequest(said, name, credits));
+    return named && !asksBeyond(said, name, credits);
+  };
   return {
     query: reversible ? `${artist} ${title}` : title,
-    isExact: song => {
-      const credits = creditKeys(song);
-      return (requestTitleMatches(title, song.title)
-        && (requestArtistMatches(artist, song) || credits.some(credit => inRequest(text, credit))))
-        || namedInRequest(text, String(song.title ?? ''), credits);
-    },
+    isExact,
+    // A bare name that is also an act on the page names the act: "play Queen"
+    // is not a request for Perfume Genius's "Queen".
+    exactIn: songs => (!artist && songs.some(song => requestArtistMatches(title, song)) ? [] : songs.filter(isExact)),
   };
 }
 

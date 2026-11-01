@@ -31,8 +31,11 @@ const COVER = row('rhapsody-cover', 'Bohemian Rhapsody', 'Panic! at the Disco');
 const SOMETHING = row('something', 'Something', 'The Beatles', 'Abbey Road');
 const ISLA = row('isla', 'La Isla Bonita', 'Madonna');
 const BILLIE = row('billie', 'Billie Jean', 'Michael Jackson');
+const QUEEN_SONG = row('queen-song', 'Queen', 'Perfume Genius');
+const HELLO = row('hello', 'Hello', 'Adele', '25');
+const CREEP = row('creep', 'Creep', 'Radiohead');
 const FILLERS = Array.from({ length: 62 }, (_, i) => row(`filler-${i}`, `Deep Cut ${i}`, 'Rihanna', `Album ${i}`));
-const CATALOGUE = [...FILLERS, MAN_DOWN, DISTURBIA, STAND, LETTER, RHAPSODY, COVER, SOMETHING, ISLA, BILLIE];
+const CATALOGUE = [...FILLERS, MAN_DOWN, DISTURBIA, STAND, LETTER, RHAPSODY, COVER, SOMETHING, ISLA, BILLIE, QUEEN_SONG, HELLO, CREEP];
 
 interface Call { query: string; songCount: number; songOffset: number }
 const calls: Call[] = [];
@@ -222,6 +225,68 @@ test('requestedRecording: names no recording, so no search is spent', () => {
   }
 });
 
+// A pin outranks the model's own reading, so these are the asks where a wrong
+// pin airs the wrong song. Each one pinned on real Navidrome before this rule.
+test('requestedRecording: a version the listener asked for never pins another cut', () => {
+  for (const text of ['Hello by Adele live', 'Hello by Adele (live)', 'Hello by Adele, the live version', 'Hello by Adele acoustic', 'Hello by Adele remix', 'Hello by Adele instrumental', 'Hello by Adele, live', 'Hello by Adele live at Wembley']) {
+    assert.equal(requestedRecording(text)?.isExact(HELLO), false, text);
+  }
+  // Its own name may hold the word, and so may the track it asks for.
+  assert.equal(requestedRecording('Bohemian Rhapsody (Live) by Queen')?.isExact(row('x', 'Bohemian Rhapsody (Live)', 'Queen')), true);
+  assert.equal(requestedRecording('Live Forever by Oasis')?.isExact(row('x', 'Live Forever', 'Oasis')), true);
+  assert.equal(requestedRecording('Lightning Crashes by Live')?.isExact(row('x', 'Lightning Crashes', 'Live')), true);
+});
+
+test('requestedRecording: only what a listener adds after a name may follow it', () => {
+  for (const [text, song] of [
+    ['Hello by Adele is overplayed, give me something else', HELLO],
+    ['Hello by Adele was on earlier', HELLO],
+    ['Disturbia by Rihanna but not the remix', DISTURBIA],
+    ['Hello by Elvis for Adele', HELLO],
+    ['Creep by Elvis, Radiohead is overrated', CREEP],
+    ['Creep by TLC not Radiohead', CREEP],
+  ] as const) assert.equal(requestedRecording(text)?.isExact(song), false, text);
+  // A new clause passes the tail rule, so only Direct's conditions can refuse these.
+  for (const text of ['Hello by Adele, but not that one', 'Hello by Adele, from the 2000s']) {
+    assert.equal(requestedRecording(text)?.isExact(HELLO), false, text);
+  }
+  assert.equal(requestedRecording('Hello by Adele for my mum')?.isExact(HELLO), true);
+  assert.equal(requestedRecording('Hello by Adele, it is my birthday')?.isExact(HELLO), true);
+  assert.equal(requestedRecording('Hello by Adele please')?.isExact(HELLO), true);
+});
+
+test('requestedRecording: a title of framing words is no proof of a title', () => {
+  for (const [text, title, artist] of [
+    ['play U2 please', 'Please', 'U2'], ['U2 please', 'Please', 'U2'],
+    ['play Alan Walker', 'Play', 'Alan Walker'], ['put on BTS', 'ON', 'BTS'],
+    ['play Paramore now', 'Now', 'Paramore'], ['more Madonna', 'More', 'Madonna'],
+    ['I love Keyshia Cole', 'Love', 'Keyshia Cole'],
+  ]) assert.equal(requestedRecording(text!)?.isExact(row('x', title!, artist!)), false, text);
+  // Named as a title, it is one.
+  assert.equal(requestedRecording('Please by U2')?.isExact(row('x', 'Please', 'U2')), true);
+  assert.equal(requestedRecording('ON by BTS')?.isExact(row('x', 'ON', 'BTS')), true);
+});
+
+test('requestedRecording: a bare name that is also an act on the page names the act', () => {
+  const page = [QUEEN_SONG, RHAPSODY];
+  for (const text of ['Queen', 'play Queen', 'Queen please']) assert.deepEqual(requestedRecording(text)?.exactIn(page), [], text);
+  assert.deepEqual(requestedRecording('Queen by Perfume Genius')?.exactIn(page), [QUEEN_SONG]);
+  assert.deepEqual(requestedRecording('Bohemian Rhapsody')?.exactIn([RHAPSODY, COVER, MAN_DOWN]), [RHAPSODY, COVER]);
+});
+
+test('requestedRecording: a condition that is no name spends no pin', () => {
+  assert.equal(requestedRecording('Hello by Adele in Spanish'), null);
+  for (const text of ['more', 'more please', 'surprise me', 'play', 'please', 'something else']) {
+    assert.equal(requestedRecording(text), null, text);
+  }
+});
+
+test('requestedRecording: a NUL is not read as every name being present', () => {
+  // maskNames marks a found name with NUL, and the schema lets one through.
+  assert.equal(requestedRecording('\u0000 Rihanna')?.isExact(MAN_DOWN), false);
+  assert.equal(requestedRecording('Hello by Adele\u0000')?.isExact(HELLO), true);
+});
+
 // --- searchLibrary on the request path -------------------------------------------
 
 test('route 1: the model passes the listener\'s phrase and search3 finds nothing', async () => {
@@ -293,6 +358,23 @@ test('titles holding framing words, a title-only ask and a cover keep working', 
   const named = await exec(searchTool({ requestText: 'Bohemian Rhapsody by Queen' }), 'Queen');
   assert.equal(named[0].id, 'rhapsody');
   assert.ok(!named.some((t: any) => t.id === 'rhapsody-cover'));
+});
+
+test('an ask for an act never heads the answer with a song of that name', async () => {
+  const answer = await exec(searchTool({ requestText: 'play Queen' }), 'Rhapsody');
+  assert.equal(asks().length, 1);
+  assert.ok(!titles(answer).includes('Queen'), 'the search that found it was the look-up alone');
+});
+
+test('an ask for another cut never heads the answer with the studio one', async () => {
+  const answer = await exec(searchTool({ requestText: 'Hello by Adele live' }), 'Rihanna');
+  assert.equal(asks().length, 1);
+  assert.ok(!titles(answer).includes('Hello'));
+});
+
+test('every exact hit is pinned, not only the first', async () => {
+  const answer = await exec(searchTool({ requestText: 'Bohemian Rhapsody' }), 'Rihanna');
+  assert.deepEqual(titles(answer).slice(0, 2), ['Bohemian Rhapsody', 'Bohemian Rhapsody']);
 });
 
 test('an artist-only ask spends no look-up and pins nothing', async () => {
@@ -405,6 +487,17 @@ test('a failed look-up costs the model nothing but itself', async () => {
   const answer = await exec(searchTool({ requestText: 'broken ask' }), 'Rihanna');
   assert.ok(Array.isArray(answer));
   assert.ok(answer.length > 0);
+});
+
+test('a look-up that hangs costs the pin, never the model\'s own search', async () => {
+  // The tool deadline alone would let it spend all ten seconds, so the model's
+  // search would never run and the answer would be the deadline error.
+  const started = Date.now();
+  const answer = await exec(searchTool({ requestText: 'slow ask' }), 'Rihanna', new AbortController().signal);
+  assert.ok(Array.isArray(answer), JSON.stringify(answer).slice(0, 120));
+  assert.ok(answer.length > 0);
+  assert.ok(calls.some((c) => c.query === 'Rihanna'), 'the model\'s own search ran');
+  assert.ok(Date.now() - started < 5_000, 'well inside the tool deadline');
 });
 
 test('the look-up is capped like any other query', async () => {

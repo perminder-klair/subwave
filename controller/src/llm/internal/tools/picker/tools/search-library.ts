@@ -16,6 +16,9 @@ const ARTIST_RETRY_MAX_WORDS = 6;
 // search whatever it finds.
 const ASK_ROWS = 100;
 const ASK_CAP = 8;
+// Its share of the tool deadline. The model's own search runs after it, so a
+// slow look-up may cost the pin but never that search.
+const ASK_DEADLINE_MS = 3_000;
 const NO_ASK = { pinned: [] as any[], held: 0 };
 
 // Fixed copy: neither line carries a word of the listener's.
@@ -40,8 +43,12 @@ export default definePickerTool({
     const pinAsk = async (ask: RequestedRecording, signal?: AbortSignal) => {
       let exact: any[];
       try {
-        const { songs } = await subsonic.searchPage(ask.query.slice(0, QUERY_MAX_CHARS), { songCount: ASK_ROWS, signal });
-        exact = songs.filter((song) => ask.isExact(song));
+        const deadline = AbortSignal.timeout(ASK_DEADLINE_MS);
+        const { songs } = await subsonic.searchPage(ask.query.slice(0, QUERY_MAX_CHARS), {
+          songCount: ASK_ROWS,
+          signal: signal ? AbortSignal.any([deadline, signal]) : deadline,
+        });
+        exact = ask.exactIn(songs);
       } catch {
         return NO_ASK;
       }
