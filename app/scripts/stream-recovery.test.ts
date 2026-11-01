@@ -2,13 +2,21 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import {
   CHURN_MIN_PACE,
+  NO_BACKOFF,
+  PLAYED_MAX_MS,
   RECONNECT_BASE_MS,
   RECONNECT_MAX_MS,
+  STAYED_UP_MS,
   StreamRecovery,
   WATCHDOG_MIN_PACE,
   WATCHDOG_MS,
+  failureDelay,
+  itemPlaying,
+  itemReplaced,
+  itemStopped,
   keptPace,
   retryDelay,
+  stallDelay,
   watchdogDelay,
   type ReloadReason,
 } from '../src/lib/stream-recovery.ts';
@@ -528,7 +536,10 @@ test('a Playing over an interruption whose end was missed starts the backoff ove
   await hungDeep(h);
   h.recovery.onDuck(true); // iOS doesn't promise the end
   h.recovery.onState('playing');
+  h.clock.run();
+  await h.tick(STAYED_UP_MS);
   h.recovery.onState('buffering');
+  h.clock.freeze();
   await h.tick(WATCHDOG_MS - 250);
   assert.equal(h.reloads.length, 7);
   await h.tick(500);
@@ -894,4 +905,458 @@ test('a reload that fails after a tune-out schedules no retry', async (t) => {
   h.held[0].reject(new Error('load failed'));
   await h.tick(70_000);
   assert.deepEqual(h.reloads, ['tune']);
+});
+
+// What each platform reports for an item, from the native code RNTP 4.1.2 pins:
+// SwiftAudioEx 1.1.0 (AVPlayerWrapper, AudioPlayer) and KotlinAudio 2.1.0
+// (BaseAudioPlayer). iOS writes the `error` state and then fails, and a failure
+// to play to the end fails twice over; Android reports the error, then the state.
+type Platform = 'ios' | 'android';
+
+function native(h: Harness, platform: Platform) {
+  const { clock, recovery } = h;
+  const failed = () => {
+    if (platform === 'ios') {
+      recovery.onState('error');
+      recovery.onError();
+      recovery.onError();
+    } else {
+      recovery.onError();
+      recovery.onState('error');
+    }
+  };
+  return {
+    plays() {
+      recovery.onState('loading');
+      if (platform === 'android') recovery.onState('buffering');
+      recovery.onState('ready');
+      recovery.onState('playing');
+      clock.run();
+    },
+    ended() {
+      clock.freeze();
+      recovery.onState('ended');
+    },
+    error() {
+      clock.freeze();
+      failed();
+    },
+    stalls() {
+      clock.freeze();
+      recovery.onState('buffering');
+    },
+    refused() {
+      recovery.onState('loading');
+      if (platform === 'android') recovery.onState('buffering');
+      failed();
+    },
+  };
+}
+
+type Step = [wait: number, run: () => void];
+
+// Run for `ms`, starting a fresh script of steps at each new reload. The steps
+// left over from the item it replaced go with it. Every wait is a multiple of
+// the harness's 250ms tick.
+async function items(h: Harness, ms: number, script: (n: number) => Step[]) {
+  let seen = 0;
+  let due: { at: number; run: () => void }[] = [];
+  for (const end = Date.now() + ms; Date.now() < end;) {
+    while (seen < h.reloads.length) {
+      let at = h.reloadAt[seen];
+      due = script(seen).map(([wait, run]) => ({ at: (at += wait), run }));
+      seen += 1;
+    }
+    while (due.length && due[0].at <= Date.now()) {
+      due.shift()?.run();
+      await settle();
+    }
+    if (seen === h.reloads.length && !(due.length && due[0].at <= Date.now())) await h.tick(250);
+  }
+}
+
+const PLAYED_CURVE = [500, 1000, 2000, 4000, 8000, 16_000, 16_000, 16_000];
+// What a stall waits on that curve: the watchdog is its floor.
+const STALL_CURVE = PLAYED_CURVE.map((ms) => Math.max(ms, WATCHDOG_MS));
+
+const PLATFORMS: Platform[] = ['ios', 'android'];
+
+// The wait before each reload after the first, with the item's own play taken off.
+function waits(h: Harness, played: number) {
+  return gapsFrom(h, 0).map((ms) => ms - played);
+}
+
+async function tunedIn(h: Harness) {
+  h.recovery.tuneIn();
+  await settle();
+}
+
+// Eight early failures, so the count stands past the curve's ceiling. Item 8 has
+// just been loaded, and its test scripts it.
+async function deepCutLoop(h: Harness, platform: Platform) {
+  const n = native(h, platform);
+  await tunedIn(h);
+  await items(h, 71_500, (i) => (i <= 7 ? [[0, n.plays], [1000, n.ended]] : []));
+  assert.equal(h.reloads.length, 9);
+}
+
+// The last reload's line in the playback log.
+function lastReload(h: Harness) {
+  return h.logs.filter((l) => l.startsWith('reload [') && !l.includes('skipped')).at(-1) ?? '';
+}
+
+test('the rule\'s numbers', () => {
+  assert.equal(STAYED_UP_MS, 4000);
+  assert.equal(PLAYED_MAX_MS, 16_000);
+  assert.ok(STAYED_UP_MS < WATCHDOG_MS, 'the check after an interruption always lands past the line');
+});
+
+for (const platform of PLATFORMS) {
+  for (const end of ['ended', 'error'] as const) {
+    for (const played of [250, 1000, 3000]) {
+      test(`${platform}: an item cut ${played}ms in (${end}) grows the backoff, to 16s`, async (t) => {
+        const h = setup(t);
+        const n = native(h, platform);
+        await tunedIn(h);
+        await items(h, 100_000, () => [[0, n.plays], [played, n[end]]]);
+        assert.deepEqual(waits(h, played).slice(0, PLAYED_CURVE.length), PLAYED_CURVE);
+      });
+    }
+
+    for (const played of [STAYED_UP_MS, 4250, 5000]) {
+      test(`${platform}: an item cut ${played}ms in (${end}) stayed up: the first retry, every time`, async (t) => {
+        const h = setup(t);
+        const n = native(h, platform);
+        await tunedIn(h);
+        await items(h, 60_000, () => [[0, n.plays], [played, n[end]]]);
+        assert.ok(h.reloads.length >= 8);
+        assert.ok(waits(h, played).every((ms) => ms === RECONNECT_BASE_MS), `${waits(h, played)}`);
+      });
+    }
+  }
+
+  test(`${platform}: a stall a moment in grows the watchdog's wait, to 16s`, async (t) => {
+    const h = setup(t);
+    const n = native(h, platform);
+    await tunedIn(h);
+    await items(h, 75_000, () => [[0, n.plays], [1000, n.stalls]]);
+    assert.ok(h.reloads.slice(1).every((r) => r === 'watchdog'));
+    assert.deepEqual(waits(h, 1000).slice(0, 7), STALL_CURVE.slice(0, 7));
+  });
+
+  test(`${platform}: a stall past the line leaves the watchdog at its 6s`, async (t) => {
+    const h = setup(t);
+    const n = native(h, platform);
+    await tunedIn(h);
+    await items(h, 90_000, () => [[0, n.plays], [STAYED_UP_MS, n.stalls]]);
+    assert.ok(h.reloads.length >= 8);
+    assert.ok(waits(h, STAYED_UP_MS).every((ms) => ms === WATCHDOG_MS), `${waits(h, STAYED_UP_MS)}`);
+  });
+
+  test(`${platform}: one outage is as quick as ever, then the curve`, async (t) => {
+    const h = setup(t);
+    const n = native(h, platform);
+    await tunedIn(h);
+    await items(h, 40_000, (i) => (i === 0 ? [[0, n.plays], [30_000, n.ended]] : [[0, n.refused]]));
+    assert.deepEqual(gapsFrom(h, 1), [1000, 2000, 4000]);
+    assert.equal(h.reloadAt[1] - h.reloadAt[0], 30_000 + RECONNECT_BASE_MS);
+  });
+
+  test(`${platform}: a long outage waits it out, and an item that stays up clears the count`, async (t) => {
+    const h = setup(t);
+    const n = native(h, platform);
+    await tunedIn(h);
+    await items(h, 190_000, (i) => (i < 9 ? [[0, n.refused]] : [[0, n.plays], [STAYED_UP_MS, n.ended]]));
+    assert.deepEqual(gapsFrom(h, 8).slice(0, 2), [RECONNECT_MAX_MS, STAYED_UP_MS + RECONNECT_BASE_MS]);
+  });
+
+  for (const end of ['ended', 'error', 'stalls'] as const) {
+    test(`${platform}: the first item back from a long outage dying (${end}) waits 16s, not a minute`, async (t) => {
+      const h = setup(t);
+      const n = native(h, platform);
+      await tunedIn(h);
+      await items(h, 205_000, (i) => (i < 9 ? [[0, n.refused]] : [[0, n.plays], [1000, n[end]]]));
+      assert.equal(h.reloadAt[10] - h.reloadAt[9], 1000 + PLAYED_MAX_MS);
+    });
+  }
+
+  test(`${platform}: a refused load after early closes takes the full curve`, async (t) => {
+    const h = setup(t);
+    const n = native(h, platform);
+    await tunedIn(h);
+    await items(h, 140_000, (i) => (i <= 7 ? [[0, n.plays], [1000, n.ended]] : [[0, n.refused]]));
+    assert.equal(h.reloadAt[9] - h.reloadAt[8], RECONNECT_MAX_MS);
+  });
+
+  test(`${platform}: a refused load after early stalls starts its curve at the first step`, async (t) => {
+    const h = setup(t);
+    const n = native(h, platform);
+    await tunedIn(h);
+    await items(h, 80_000, (i) => (i <= 6 ? [[0, n.plays], [1000, n.stalls]] : [[0, n.refused]]));
+    assert.equal(h.reloadAt[8] - h.reloadAt[7], retryDelay(1));
+  });
+
+  test(`${platform}: a source that flaps never climbs to a minute`, async (t) => {
+    // 3s up, 1s down. It stalls whatever is playing, and the mount refuses the
+    // reload that lands while it is down.
+    const h = setup(t);
+    const n = native(h, platform);
+    await tunedIn(h);
+    await items(h, 5 * 60_000, () => {
+      const phase = (Date.now() - 1_000_000) % 4000;
+      return phase >= 2750 ? [[0, n.refused]] : [[0, n.plays], [3000 - phase, n.stalls]];
+    });
+    assert.ok(Math.max(...gapsFrom(h, 0)) <= 2 * WATCHDOG_MS, `gaps ${gapsFrom(h, 0).join(', ')}`);
+  });
+}
+
+test('an iOS cut that reports Buffering before its end is judged from the stall', async (t) => {
+  const h = setup(t);
+  const n = native(h, 'ios');
+  await tunedIn(h);
+  await items(h, 70_000, () => [[0, n.plays], [1000, n.stalls], [500, n.ended]]);
+  assert.deepEqual(waits(h, 1500).slice(0, 6), PLAYED_CURVE.slice(0, 6));
+});
+
+test('an Android error that lands past the line still counts the moment the item stalled', async (t) => {
+  // ExoPlayer's own retries run first: Buffering at 1s, the error 3.5s later.
+  const h = setup(t);
+  const n = native(h, 'android');
+  await tunedIn(h);
+  await items(h, 80_000, () => [[0, n.plays], [1000, n.stalls], [3500, n.error]]);
+  assert.deepEqual(waits(h, 4500).slice(0, 6), PLAYED_CURVE.slice(0, 6));
+});
+
+test('a stall that recovers clears the stop: the item is judged by when it finally ends', async (t) => {
+  const h = setup(t);
+  const n = native(h, 'ios');
+  await deepCutLoop(h, 'ios');
+  n.plays();
+  await h.tick(1000);
+  n.stalls();
+  await h.tick(1000);
+  h.recovery.onState('playing');
+  h.clock.run();
+  await h.tick(3000);
+  n.ended();
+  await h.tick(RECONNECT_BASE_MS);
+  assert.equal(h.reloads[9], 'error', 'up past the line, so the first retry');
+});
+
+test('a Playing that ends a stall keeps the item\'s clock: a slow link is no new item', async (t) => {
+  const h = setup(t);
+  const n = native(h, 'ios');
+  await tunedIn(h);
+  await items(h, 60_000, () => [
+    [0, n.plays],
+    [1000, n.stalls],
+    [500, () => { h.recovery.onState('playing'); h.clock.run(); }],
+    [1000, n.ended],
+  ]);
+  assert.deepEqual(waits(h, 2500).slice(0, 5), PLAYED_CURVE.slice(0, 5));
+});
+
+test('an interruption is no stop: its check waits 6s and nothing about the item counts as early', async (t) => {
+  const h = setup(t);
+  const n = native(h, 'ios');
+  await deepCutLoop(h, 'ios');
+  // A stall a moment into the item, then a call, and a stall reported during it.
+  n.plays();
+  await h.tick(1000);
+  n.stalls();
+  await h.tick(250);
+  h.recovery.onDuck(true);
+  await h.tick(250);
+  h.recovery.onState('buffering');
+  await h.tick(1000);
+  h.recovery.onDuck(false);
+  await h.tick(WATCHDOG_MS - 250);
+  assert.equal(h.reloads.length, 9);
+  await h.tick(250);
+  assert.equal(h.reloads[9], 'watchdog');
+  assert.match(lastReload(h), /\(failure 1\)$/);
+});
+
+test('a regained link in a cut loop reloads at once and starts the count over', async (t) => {
+  const h = setup(t);
+  const n = native(h, 'ios');
+  await deepCutLoop(h, 'ios');
+  n.plays();
+  await h.tick(1000);
+  n.ended();
+  await h.tick(1000); // a 16s wait is running
+  const at = Date.now();
+  h.recovery.linkRegained();
+  await settle();
+  assert.equal(h.reloads[9], 'link');
+  assert.equal(h.reloadAt[9], at);
+  assert.match(lastReload(h), /\(failure 1\)$/);
+  // Its own reload is the first failure, as a hung station's is.
+  n.plays();
+  await h.tick(1000);
+  n.ended();
+  await h.tick(retryDelay(1) - 250);
+  assert.equal(h.reloads.length, 10);
+  await h.tick(250);
+  assert.equal(h.reloads[10], 'error');
+});
+
+for (const [name, reason, ask] of [
+  ['tune-in', 'tune', (r: StreamRecovery) => r.tuneIn()],
+  ['remote Play', 'remote', (r: StreamRecovery) => r.tuneIn('remote')],
+  ['retune', 'format', (r: StreamRecovery) => r.retune()],
+] as const) {
+  test(`a ${name} in a cut loop loads at once, and its first failure is the 500ms one`, async (t) => {
+    const h = setup(t);
+    const n = native(h, 'android');
+    await deepCutLoop(h, 'android');
+    n.plays();
+    await h.tick(1000);
+    n.ended();
+    await h.tick(1000); // a 16s wait is running
+    const at = Date.now();
+    ask(h.recovery);
+    await settle();
+    assert.equal(h.reloads[9], reason);
+    assert.equal(h.reloadAt[9], at);
+    n.plays();
+    await h.tick(1000);
+    n.ended();
+    await h.tick(RECONNECT_BASE_MS);
+    assert.equal(h.reloads[10], 'error');
+  });
+}
+
+test('the churn guard never waits for the backoff: it trips on the stall that makes four', async (t) => {
+  const h = setup(t);
+  const n = native(h, 'ios');
+  await deepCutLoop(h, 'ios');
+  n.plays();
+  for (let i = 0; i < 4; i++) {
+    await h.tick(500);
+    n.stalls();
+    await settle();
+    if (i === 3) break;
+    await h.tick(500);
+    h.recovery.onState('playing');
+    h.clock.run();
+  }
+  assert.equal(h.reloads[9], 'churn');
+  assert.equal(h.reloadAt[9], Date.now());
+});
+
+test('an early failure a hold shows was stale counts for nothing', async (t) => {
+  const h = setup(t);
+  const n = native(h, 'ios');
+  await deepCutLoop(h, 'ios');
+  n.plays();
+  await h.tick(1000);
+  h.recovery.onState('error'); // the audio plays on through it
+  await h.tick(PLAYED_MAX_MS);
+  assert.equal(h.reloads.length, 9);
+  assert.ok(h.logs.some((l) => l.startsWith('hold [error] state=error')));
+  n.ended();
+  await h.tick(RECONNECT_BASE_MS);
+  assert.equal(h.reloads[9], 'error', 'up past the line, so the first retry');
+});
+
+test('a hold on a load whose Playing JS never heard stands at once', async (t) => {
+  const h = setup(t);
+  await deepCutLoop(h, 'ios');
+  h.recovery.onState('loading');
+  h.clock.run();
+  await h.tick(RECONNECT_MAX_MS);
+  assert.ok(h.logs.some((l) => l.startsWith('hold [watchdog] state=loading')));
+  h.clock.freeze();
+  await h.tick(WATCHDOG_MS);
+  assert.equal(h.reloads[9], 'watchdog');
+  assert.match(lastReload(h), /\(failure 1\)$/);
+});
+
+for (const platform of PLATFORMS) {
+  test(`${platform}: a healthy ten minutes reloads nothing, whatever it flaps`, async (t) => {
+    const h = setup(t);
+    const n = native(h, platform);
+    await tunedIn(h);
+    n.plays();
+    await h.tick(1000);
+    n.stalls(); // an underrun a moment in
+    await h.tick(1500);
+    h.recovery.onState('playing');
+    h.clock.run();
+    for (let i = 0; i < 13; i++) {
+      await h.tick(45_000);
+      n.stalls();
+      await h.tick(500);
+      h.recovery.onState('playing');
+      h.clock.run();
+    }
+    assert.deepEqual(h.reloads, ['tune']);
+  });
+}
+
+test('the playback log shows the count, so a phone\'s log can show the curve', async (t) => {
+  const h = setup(t);
+  const n = native(h, 'ios');
+  await tunedIn(h);
+  await items(h, 12_000, () => [[0, n.plays], [1000, n.ended]]);
+  const counts = h.logs.filter((l) => l.startsWith('reload [error]')).map((l) => /\(failure (\d+)\)$/.exec(l)?.[1]);
+  assert.deepEqual(counts, ['1', '2', '3', '4']);
+});
+
+// The rule by itself: a clock that restarts or steps can't be scripted above.
+const AT = 1_000_000;
+const heldAt = (retries: number) => itemPlaying({ ...NO_BACKOFF, retries }, AT);
+
+test('only the first sign of play starts an item\'s clock', () => {
+  const again = itemPlaying(heldAt(3), AT + 3000);
+  assert.equal(again.playingSince, AT);
+  assert.equal(again.heldRetries, 3);
+  assert.equal(again.retries, 0);
+  assert.equal(failureDelay(again, AT + 3500), retryDelay(3));
+  assert.equal(failureDelay(again, AT + STAYED_UP_MS), RECONNECT_BASE_MS);
+});
+
+test('the first stop since an item played is the one judged', () => {
+  const stopped = itemStopped(itemStopped(heldAt(4), AT + 1000), AT + 9000);
+  assert.equal(stopped.stoppedAt, AT + 1000);
+  assert.equal(failureDelay(stopped, AT + 60_000), retryDelay(4));
+  assert.equal(stallDelay(stopped, AT + 60_000), Math.max(WATCHDOG_MS, retryDelay(4)));
+  // Played again, it is judged afresh, from the same first Playing.
+  const back = itemPlaying(stopped, AT + 2000);
+  assert.equal(back.stoppedAt, null);
+  assert.equal(failureDelay(itemStopped(back, AT + STAYED_UP_MS), AT + 60_000), RECONNECT_BASE_MS);
+  assert.deepEqual(itemStopped(NO_BACKOFF, AT), NO_BACKOFF, 'an item that never played has nothing to judge');
+});
+
+test('a hold dated from its baseline stands or not by the window it measured', () => {
+  const load = { ...NO_BACKOFF, retries: 5 };
+  const now = AT + 6000;
+  assert.equal(failureDelay(itemPlaying(load, now - WATCHDOG_MS), now), RECONNECT_BASE_MS);
+  assert.equal(failureDelay(itemPlaying(load, now - 500), now), retryDelay(5));
+});
+
+test('a clock stepped backwards never reads as an item that stayed up', () => {
+  assert.equal(failureDelay(heldAt(3), AT - 3_600_000), retryDelay(3));
+});
+
+test('the ceiling is for an item that played: a load that never did keeps the curve', () => {
+  assert.equal(failureDelay(heldAt(10), AT + 1000), PLAYED_MAX_MS);
+  assert.equal(stallDelay(heldAt(10), AT + 1000), PLAYED_MAX_MS);
+  const load = { ...NO_BACKOFF, retries: 10 };
+  assert.equal(failureDelay(load, AT), RECONNECT_MAX_MS);
+  assert.equal(stallDelay(load, AT), RECONNECT_MAX_MS);
+});
+
+test('an item replaced after a failure carries the count; one replaced after a stall keeps it back', () => {
+  const failed = itemReplaced(heldAt(3), AT + 1000, true);
+  assert.deepEqual(failed, { ...NO_BACKOFF, retries: 4 });
+  const stalled = itemReplaced(heldAt(3), AT + 1000, false);
+  assert.deepEqual(stalled, { ...NO_BACKOFF, retries: 1, heldRetries: 4 });
+  assert.equal(failureDelay(itemPlaying(stalled, AT + 2000), AT + 2500), retryDelay(4));
+  // Never played, so it is the load's own failure, and any held count goes with it.
+  assert.deepEqual(itemReplaced(stalled, AT + 2000, false), { ...NO_BACKOFF, retries: 2 });
+  // Stayed up: the reset stands either way.
+  assert.deepEqual(itemReplaced(heldAt(3), AT + STAYED_UP_MS, true), { ...NO_BACKOFF, retries: 1 });
+  assert.equal(itemReplaced(heldAt(3), AT + STAYED_UP_MS, false).retries, 1);
 });
