@@ -125,9 +125,10 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
           <div className="field-hint">
             Navidrome keeps one player per SUB/WAVE component (controller, analyzer, mixer) and
             starts each new one with &quot;Report Real Path&quot; off, so the file paths it sends
-            are built from the tags. The real path is what lets a mounted library
-            (<code>MUSIC_LIBRARY_PATH</code>) play local files. Only SUB/WAVE&apos;s own players on
-            this account are ever changed.
+            are built from the tags. A mounted library (<code>MUSIC_LIBRARY_PATH</code>) finds its
+            files from a tag-built path only when its folders match the tags; the real path finds
+            them however they&apos;re laid out. A file it can&apos;t find plays from the stream. Only
+            SUB/WAVE&apos;s own players on this account are ever changed.
           </div>
         </div>
 

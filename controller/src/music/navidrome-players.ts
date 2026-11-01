@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import {
   normalizePlayerRow,
   ownPlayers,
+  passwordRefusal,
   serverKind,
   stateOf,
   type NavidromePlayerRow,
@@ -25,7 +26,7 @@ const TIMEOUT_MS = 5_000;
 const PAGE = 500;
 
 class NativeApiError extends Error {
-  constructor(message: string, readonly status: number | null) {
+  constructor(message: string, readonly status: number | null, readonly notSent = false) {
     super(message);
   }
 }
@@ -61,8 +62,12 @@ export async function nativeFetch(path: string, init: RequestInit & { token?: st
 }
 
 export async function login(): Promise<string> {
+  const refusal = passwordRefusal(baseUrl());
+  if (refusal) throw new NativeApiError(refusal, null, true);
   const res = await nativeFetch('/auth/login', {
     method: 'POST',
+    // Followed, a 307 would carry the password on, past the check above.
+    redirect: 'manual',
     body: JSON.stringify({ username: config.navidrome.user, password: config.navidrome.password }),
   });
   const body = (await res.json().catch(() => null)) as { token?: unknown } | null;
@@ -89,6 +94,12 @@ async function switchOn(token: string, id: string): Promise<void> {
     token,
     body: JSON.stringify({ ...row, reportRealPath: true }),
   });
+}
+
+function accessProblem(err: unknown): RealPathStatus['access'] {
+  if (!(err instanceof NativeApiError)) return undefined;
+  if (err.notSent) return 'not-sent';
+  return err.status === 401 || err.status === 403 ? 'refused' : undefined;
 }
 
 function ownership() {
@@ -133,7 +144,15 @@ export async function realPathStatus({ enable = false }: { enable?: boolean } = 
     token = await login();
     players = ownPlayers(await listPlayers(token), ownership());
   } catch (err) {
-    return { state: 'unavailable', players: [], switched: [], server, reason: errMessage(err, 'unreachable') };
+    const access = accessProblem(err);
+    return {
+      state: 'unavailable',
+      players: [],
+      switched: [],
+      server,
+      reason: errMessage(err, 'unreachable'),
+      ...(access ? { access } : {}),
+    };
   }
 
   const switched: string[] = [];

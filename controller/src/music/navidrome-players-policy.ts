@@ -88,6 +88,12 @@ export interface RealPathStatus {
   switched: string[];
   /** Why the state is `refused` / `unavailable`. */
   reason?: string;
+  /**
+   * With `unavailable`, when the cause is the account and not an outage:
+   * `refused` is Navidrome answering 401/403 to the login or the read,
+   * `not-sent` is the station keeping the password back (passwordRefusal).
+   */
+  access?: 'refused' | 'not-sent';
   /** What the Subsonic ping said the server is, when it answered. */
   server?: ServerIdentity;
 }
@@ -118,6 +124,33 @@ export function serverLabel(s: ServerIdentity | undefined): string {
   return s.version ? `${s.type} ${s.version}` : s.type;
 }
 
+// `POST /auth/login` takes the password itself, where every Subsonic call carries
+// a salted token, and it runs for the Doctor, the card's status read and every
+// walk, opted in or not. So it only goes over https, or to a host on the
+// station's own network: loopback, RFC 1918, link-local, `localhost`, `.local`,
+// or a single-label name (a compose service). `URL` has already folded a numeric
+// host (`0x7f.1`, a decimal) to dotted quads, so none passes as a single label.
+function isLocalHost(host: string): boolean {
+  if (host === 'localhost' || host.endsWith('.local')) return true;
+  if (host.startsWith('[')) return host === '[::1]' || /^\[fe[89ab][0-9a-f]:/.test(host);
+  const quad = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (!quad) return !host.includes('.');
+  const [a, b] = [Number(quad[1]), Number(quad[2])];
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+}
+
+/** Why the password may not go to this music server URL; null when it may. */
+export function passwordRefusal(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return 'the password was not sent: the music server URL is not valid';
+  }
+  if (parsed.protocol === 'https:' || (parsed.protocol === 'http:' && isLocalHost(parsed.hostname))) return null;
+  return `the password is only sent over https or to a local address, and ${parsed.protocol}//${parsed.host} is neither`;
+}
+
 export function stateOf(players: readonly NavidromePlayerRow[]): RealPathState {
   if (players.length === 0) return 'no-players';
   return players.every(p => p.reportRealPath) ? 'on' : 'off';
@@ -128,14 +161,17 @@ export function playerLabel(p: NavidromePlayerRow): string {
   return p.userAgent ? `${p.client} [${p.userAgent}]` : p.client;
 }
 
+const TICK_BY_HAND = 'In Navidrome, open Settings → Players and tick "Report Real Path" on each SUB/WAVE player';
 const MANUAL_STEP =
-  'In Navidrome, open Settings → Players and tick "Report Real Path" on each SUB/WAVE player, '
-  + 'or turn on Settings → Music source → "Keep Report Real Path on" here to have the station do it.';
+  `${TICK_BY_HAND}, or turn on Settings → Music source → "Keep Report Real Path on" here to have the station do it.`;
 
 /**
- * The Doctor's finding for the flag. It warns whenever a row is off: without a
+ * The Doctor's finding for the flag. A refused or unsent login warns, because the
+ * station can neither read the rows nor keep them on; an outage or a missing API skips,
+ * with the same step by hand. Otherwise it warns whenever a row is off: without a
  * library mount the tag-built path still weakens the station-archive guard,
- * and with one every local-file play silently falls back to the stream.
+ * and with one a file whose folders differ from its tags silently falls back to
+ * the stream.
  */
 export function realPathFinding(
   st: RealPathStatus,
@@ -148,14 +184,30 @@ export function realPathFinding(
       return { status: 'skip', detail: 'no SUB/WAVE player registered in Navidrome yet' };
     case 'not-navidrome':
       return { status: 'skip', detail: `a Navidrome setting; the music server is ${serverLabel(st.server)}` };
-    case 'unavailable':
-      return { status: 'skip', detail: `cannot read Navidrome's players (${st.reason || 'no native API'})` };
+    case 'unavailable': {
+      const detail = `cannot read Navidrome's players (${st.reason || 'no native API'})`;
+      if (st.access === 'refused') {
+        return {
+          status: 'warn',
+          detail,
+          hint: `Navidrome refused this account on its own API, so the station can't read or switch its players. ${TICK_BY_HAND}.`,
+        };
+      }
+      if (st.access === 'not-sent') {
+        return {
+          status: 'warn',
+          detail,
+          hint: `Point the station at Navidrome over https, or at a LAN address or compose service name. Until then it can't read or switch its players. ${TICK_BY_HAND}.`,
+        };
+      }
+      return { status: 'skip', detail, hint: `${TICK_BY_HAND}.` };
+    }
     case 'refused':
     case 'off': {
       const off = st.players.filter(p => !p.reportRealPath);
       const what = off.length ? `off for ${off.map(playerLabel).join(', ')}` : 'off';
       const why = opts.localMount
-        ? 'MUSIC_LIBRARY_PATH is set, but Navidrome sends tag-built paths, so local-file plays fall back to the stream.'
+        ? 'MUSIC_LIBRARY_PATH is set, but Navidrome sends tag-built paths, so a file whose folders differ from its tags falls back to the stream.'
         : 'Navidrome sends tag-built file paths, not the real ones on disk.';
       return {
         status: 'warn',
