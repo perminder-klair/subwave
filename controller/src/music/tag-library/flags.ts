@@ -193,7 +193,7 @@ export async function walkNavidrome(
   }
   // One line per walk on the change-time signal, whatever it found.
   logEvent('info', walked === 0 ? 'Replaced-file check: skipped (empty walk)'
-    : !fileChanges ? 'Replaced-file check: size only (the music server reports no change times)'
+    : !fileChanges ? 'Replaced-file check: size only (no change times: the server is not Navidrome, or its API refused or timed out)'
       : `Replaced-file check: ${fileChanges.changes.length.toLocaleString('en-GB')} change(s) read since `
         + `${fileChanges.since ?? 'the start'}${fileChanges.complete ? '' : ' (partial: the server stopped answering part-way, the mark stays)'}`
         + (fileChanges.futureDated ? `, ${fileChanges.futureDated} future-dated file(s) skipped (a wrong clock on the files)` : '')

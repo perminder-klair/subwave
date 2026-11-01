@@ -78,7 +78,8 @@ export async function changedFiles(
     // Nothing measured yet: nothing can be stale.
     if (floor == null) return { changes: [], newest: capMark(mark, now), complete: true, since: null, futureDated: 0 };
     const changes: FileChange[] = [];
-    let complete = true;
+    // True only once the read reaches its floor or the end of the list.
+    let complete = false;
     let future = 0;
     for (let page = 0; page < MAX_PAGES; page++) {
       let rows: Array<{ id?: unknown; updatedAt?: unknown }> | null;
@@ -91,7 +92,6 @@ export async function changedFiles(
       }
       if (!Array.isArray(rows)) {
         if (page === 0) return null;
-        complete = false;
         break;
       }
       let older = false;
@@ -103,7 +103,7 @@ export async function changedFiles(
         if (t < floor) { older = true; break; }
         changes.push({ id: r.id, updatedAt: r.updatedAt });
       }
-      if (older || rows.length < PAGE) break;
+      if (older || rows.length < PAGE) { complete = true; break; }
     }
     return {
       changes,

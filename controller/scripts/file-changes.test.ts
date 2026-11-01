@@ -22,6 +22,8 @@ let SONGS = Array.from({ length: 2_500 }, (_, i) => ({ id: `s${i}`, updatedAt: n
 const BASE_SONGS = SONGS;
 let serverType = 'navidrome';
 let failFromStart: number | null = null;
+// Every page full, for ever: a read that never reaches its floor.
+let endless = false;
 const listCalls: number[] = [];
 
 function handler(req: IncomingMessage, res: ServerResponse) {
@@ -41,6 +43,10 @@ function handler(req: IncomingMessage, res: ServerResponse) {
     if (failFromStart != null && start >= failFromStart) {
       res.statusCode = 500;
       res.end('{"error":"ambiguous column name: updated_at"}');
+      return;
+    }
+    if (endless) {
+      res.end(JSON.stringify(Array.from({ length: 1_000 }, (_, i) => ({ id: `e${start + i}`, updatedAt: new Date(T0 - (start + i) * 1_000).toISOString() }))));
       return;
     }
     res.end(JSON.stringify(SONGS.slice(start, Number(u.searchParams.get('_end')))));
@@ -67,6 +73,7 @@ after(async () => { server.close(); await removeTempDir(dir); });
 beforeEach(async () => {
   serverType = 'navidrome';
   failFromStart = null;
+  endless = false;
   listCalls.length = 0;
   SONGS = BASE_SONGS;
   rmSync(markFile, { force: true });
@@ -102,6 +109,14 @@ test('a failed deep page keeps the newest changes and says the answer is partial
   assert.equal(r.complete, false, 'the walk must not move the mark past what it did not read');
   assert.equal(r.changes.length, 1000);
   assert.equal(r.changes[0].id, 's0');
+});
+
+test('a read that runs out of pages is partial, so the mark stays behind what it did not read', async () => {
+  endless = true;
+  const r = await fc.changedFiles(new Date(T0 - 365 * 24 * HOUR).toISOString());
+  assert.ok(r);
+  assert.equal(listCalls.length, 500, 'bounded');
+  assert.equal(r.complete, false);
 });
 
 test('a failed first page, or another server, is no answer at all', async () => {
