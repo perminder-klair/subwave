@@ -138,7 +138,7 @@ const detailPayload = (id) =>
       moods: ['calm'], energy: 'low', source: 'llm', confidence: 0.9, taggerVersion: 3, model: 'mock',
       taggedAt: null, lastfmTags: null, lyricExcerpt: null, bpm: 120, musicalKey: '4A', introMs: 4000,
       analysisConfidence: 0.8, analysisVersion: 1, loudnessLufs: -12, peakDb: -1, structure: null,
-      vocalRanges: null, pace: null, keyRanges: null, audioMoods: [], audioMoodScores: null, outro: null,
+      vocalRanges: null, pace: null, keyRanges: null, audioMoods: [], audioMoodScores: null, audioDescriptors: [], audioDescriptorScores: null, outro: null,
     },
     textEmbedding: null,
     audioEmbedding: null,
