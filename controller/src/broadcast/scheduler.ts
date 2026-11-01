@@ -38,6 +38,7 @@ import { isIdle } from './stream-idle.js';
 import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
+import { withoutStandIns } from './stand-in-policy.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
@@ -661,10 +662,10 @@ export async function runHourlyCheck({ showWelcome = false, automatic = false }:
       persona: speaker,
       showWelcome,
     });
-    await queue.announce(script, 'hourly-check', {
+    const outcome = await queue.announce(script, 'hourly-check', {
       persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name }, hostSpeech: speechOwner.hostSpeech,
     });
-    return script;
+    return outcome.accepted ? script : null;
   });
 }
 
@@ -770,10 +771,10 @@ export async function runLink() {
     // Announce mode drops the link when the track has no artist name; say so
     // rather than answering the press with a silent success.
     if (!script) throw new Error('no link to air — this track has no artist name to announce');
-    await queue.announce(script, 'link', {
+    const outcome = await queue.announce(script, 'link', {
       persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
     });
-    return script;
+    return outcome.accepted ? script : null;
   });
 }
 
@@ -798,9 +799,14 @@ export async function runBanter() {
       recentOpeners: queue.getRecentOpeners(),
     });
     if (!lines) throw new Error('banter generation returned no usable exchange');
-    const ok = await queue.announceExchange(lines, 'banter', { castNames: [host, ...guests].map(p => p.name) });
+    const castNames = [host, ...guests].map(p => p.name);
+    const ok = await queue.announceExchange(lines, 'banter', { castNames });
+    const spoken = withoutStandIns(lines as { persona: { name: string }; text: string }[], castNames);
+    // Every line was a stand-in: the gate dropped them and the booth log says
+    // so. That is a refused segment like any other, not a failed render.
+    if (!spoken.length) return null;
     if (!ok) throw new Error('banter exchange failed to render');
-    return lines.map(l => `${l.persona.name}: ${l.text}`).join('\n');
+    return spoken.map(l => `${l.persona.name}: ${l.text}`).join('\n');
   });
 }
 
@@ -840,14 +846,15 @@ async function runSegmentTick() {
 // intro rides the session-settled hook. Gating lives in programme.ts.
 //
 // Gate-free manual runners (/dj/segment). Intro/outro re-mark their beat so the
-// autonomous path doesn't re-open or re-close the show; a manual feature
-// deliberately doesn't consume the hour's planned beat.
+// autonomous path doesn't re-open or re-close the show, but only once it aired:
+// a refused press leaves the beat for the show. A manual feature deliberately
+// doesn't consume the hour's planned beat.
 export async function runProgrammeIntro() {
   const ctx = await prepareEpisodeContext(await getFullContext());
   await session.maybeRoll(ctx);
   await programme.ensurePlan(ctx);
   const out = await programme.runIntro(queue, ctx);
-  programme.markIntroAired();
+  if (out !== null) programme.markIntroAired();
   return out;
 }
 
@@ -863,7 +870,7 @@ export async function runProgrammeOutro() {
   await session.maybeRoll(ctx);
   await programme.ensurePlan(ctx);
   const out = await programme.runOutro(queue, ctx);
-  session.markProgrammeBeat('outro');
+  if (out !== null) session.markProgrammeBeat('outro');
   return out;
 }
 
@@ -890,9 +897,12 @@ export async function runStationId({ atNextTrack = false, automatic = false } = 
       persona: speaker,
     });
     const opts = { persona: speaker, daypart, hostSpeech: speechOwner.hostSpeech, meta: { personaId: speaker?.id, personaName: speaker?.name } };
-    if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id', opts);
-    else await queue.announce(script, 'station-id', opts);
-    return script;
+    if (atNextTrack) {
+      await queue.announceAtNextTrack(script, 'station-id', opts);
+      return script;
+    }
+    const outcome = await queue.announce(script, 'station-id', opts);
+    return outcome.accepted ? script : null;
   });
 }
 

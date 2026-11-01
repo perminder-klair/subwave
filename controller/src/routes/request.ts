@@ -299,6 +299,7 @@ async function resolveRequest(entry) {
       queue.log('request-guard', `more-like-this intro echoed request text — ${generatedIntro.guard}`);
     }
     const introScript = generatedIntro.introScript;
+    let introDropped = false;
     const pos = await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
@@ -306,6 +307,7 @@ async function resolveRequest(entry) {
       // otherwise re-resolve the speaker off the wall clock.
       introPersona: generatedIntro.introPersona,
       introHostSpeech: generatedIntro.introHostSpeech,
+      onStandInDropped: () => { introDropped = true; },
     });
     entry.pick = pick;
     if (pos === -2) {
@@ -324,12 +326,13 @@ async function resolveRequest(entry) {
       session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
       return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
     }
+    const airedIntro = introDropped ? null : introScript || null;
     session.appendTurn({
       role: 'dj', kind: 'request',
-      text: introScript || ackLine,
+      text: airedIntro || ackLine,
       meta: { trackId: pick.id, requester },
     });
-    entry.introScript = introScript || null;
+    entry.introScript = airedIntro;
     return resolved({
       ack: withWaitNotice(ackLine, pick.id),
       track: { title: pick.title, artist: pick.artist },
@@ -561,6 +564,7 @@ async function resolveRequest(entry) {
   const introScript = generatedIntro.introScript;
 
   // 4. Enqueue. push() dedups a track a concurrent request already queued (#619).
+  let introDropped = false;
   const pos = await queue.push({
     track: pick,
     requestedBy: requester,
@@ -569,6 +573,7 @@ async function resolveRequest(entry) {
     introKind: 'dj-speak',
     introPersona: generatedIntro.introPersona,
     introHostSpeech: generatedIntro.introHostSpeech,
+    onStandInDropped: () => { introDropped = true; },
   });
   entry.pick = pick;
   if (pos === -2) {
@@ -585,14 +590,15 @@ async function resolveRequest(entry) {
     session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
     return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
+  const airedIntro = introDropped ? null : introScript || null;
   session.appendTurn({
     role: 'dj', kind: 'request',
-    text: introScript || ack || `Queued "${pick.title}".`,
+    text: airedIntro || ack || `Queued "${pick.title}".`,
     meta: { trackId: pick.id, requester },
   });
 
   entry.pickSource = pickSource;
-  entry.introScript = introScript || null;
+  entry.introScript = airedIntro;
   return resolved({
     ack: withWaitNotice(ack, pick.id),
     track: { title: pick.title, artist: pick.artist },
