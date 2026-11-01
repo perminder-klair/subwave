@@ -1094,6 +1094,10 @@ export const lyricsPatchSchema = settingsBlockOf({
   lrclib: settingsBoolLike(),
 });
 
+export const musicSourcePatchSchema = settingsBlockOf({
+  reportRealPath: settingsBoolLike(),
+});
+
 export const searchPatchSchema = settingsBlockOf({
   provider: settingsStrictOneOf(
     SETTINGS_SEARCH_PROVIDERS,

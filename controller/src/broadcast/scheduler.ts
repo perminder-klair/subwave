@@ -61,6 +61,8 @@ import * as stemCacheStore from '../music/stem-cache.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 import * as backup from '../backup/scheduled.js';
+import { autoEnableRealPath } from '../music/navidrome-players.js';
+import { onLibraryMountLost, proveLibraryMount } from '../music/library-mount.js';
 
 // take() hard-stops at the target, so TARGET_POOL must exceed the sum of the
 // non-show weights or the random top-up below becomes unreachable.
@@ -1350,6 +1352,33 @@ export function syncSkillCrons() {
   }
 }
 
+// Keeps the proof that the mixer can read MUSIC_LIBRARY_PATH current. Asks
+// nothing on a station without the mount. Never throws.
+export async function libraryMountTick() {
+  await proveLibraryMount().catch((err: Error) => queue.log('error', `Library mount check failed: ${err.message}`));
+}
+
+// The coast was built from local paths the mixer may no longer open: left alone
+// it stays dead until the next hourly refresh, and it is the leg that carries the
+// music when dj_queue has nothing. Rebuilding it now writes streams.
+onLibraryMountLost(() => {
+  queue.log('scheduler', 'Library mount: the mixer can no longer read it, so tracks stream; rebuilding the fallback playlist');
+  void refreshAutoPlaylist({ automatic: true }).catch((err: Error) =>
+    queue.log('error', `Fallback refresh after losing the library mount failed: ${err.message}`));
+});
+
+// Keeps Navidrome's "Report Real Path" on for SUB/WAVE's own player rows when
+// the operator opted in (musicSource.reportRealPath). On a timer, not once: a
+// new client or user agent gets a fresh row with the flag off. Never throws.
+export async function realPathTick() {
+  if (settings.get().musicSource?.reportRealPath !== true) return;
+  try {
+    await autoEnableRealPath(line => queue.log('scheduler', line));
+  } catch (err) {
+    queue.log('error', `Report Real Path check failed: ${err.message}`);
+  }
+}
+
 // Takeover janitor. resolveActiveShow already ignores an expired override, so
 // correctness never depends on this tick — it is promptness and hygiene only.
 async function overrideJanitor() {
@@ -1390,6 +1419,14 @@ export function startScheduler() {
   // the elapsed-time cadence lives in backup/pure.ts. :23 keeps it off the :02
   // cleanup and the */5 janitor. Off by default.
   cron.schedule('23 * * * *', scheduledBackupTick);
+  // :41 keeps it off the :02 cleanup and the :23 backup. The boot pass waits a
+  // minute so the controller's own first Subsonic calls have created its rows.
+  cron.schedule('41 * * * *', realPathTick);
+  setTimeout(() => { void realPathTick(); }, 60_000).unref();
+  // Every minute, since a restart this controller didn't make can change the
+  // mounts: until the next proof a stale one is the only thing that isn't safe.
+  cron.schedule('* * * * *', libraryMountTick);
+  void libraryMountTick();
 
   // Off by default; a daily pass because orphans accrue with library churn,
   // and one hour of quarantine skew costs nothing at this cadence.
