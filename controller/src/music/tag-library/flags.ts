@@ -219,7 +219,7 @@ export async function walkNavidrome(
     );
   }
   if (!decision.clear && decision.reason === 'accepted' && candidates.size > 0) {
-    db.acceptReplacedFiles(candidates);
+    db.acceptReplacedFiles(candidates, new Map(fileChanges?.changes.map(c => [c.id, c.updatedAt])));
     logEvent('info', `${candidates.size.toLocaleString('en-GB')} file(s) accepted as changed: their analysis and stems are kept`);
   }
   // Only once acted on: a walk that dies before here, or a held clear, asks

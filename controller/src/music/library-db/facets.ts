@@ -420,9 +420,9 @@ export function deleteFacetRows(id: string): void {
 }
 
 // The measurements stand for the file as it is now (tracks.acceptReplacedFiles):
-// they date from here, or the next walk would find the same file stale again.
-export function restampFacetRows(id: string): void {
-  requireDb().prepare('UPDATE track_facet_status SET at = ? WHERE track_id = ?').run(new Date().toISOString(), id);
+// they date from `at`, or the next walk would find the same file stale again.
+export function restampFacetRows(id: string, at: string): void {
+  requireDb().prepare('UPDATE track_facet_status SET at = ? WHERE track_id = ?').run(at, id);
 }
 
 // Mirror of clearAnalysis(): drop what it clears, plus every failure.

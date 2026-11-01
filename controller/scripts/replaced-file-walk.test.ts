@@ -251,6 +251,32 @@ test('--accept-replaced clears nothing, and the same files are not found again',
   assert.equal(stored('s0').bpm, null);
 });
 
+test('an accepted file dated inside the margin is not found again', async () => {
+  // Past now, not past the margin: a change to the walk, and newer than a stamp of now.
+  by('s0').updatedAt = iso(Date.now() + 3 * HOUR);
+
+  const accepted = await reconcile('--accept-replaced');
+
+  assert.match(accepted.check, /0 by size, 1 by change time/);
+  assert.equal(stored('s0').bpm, 100);
+
+  const next = await reconcile();
+  assert.match(next.check, /1 change\(s\) read/, 'the same file is read again');
+  assert.match(next.check, /0 by size, 0 by change time/);
+  assert.equal(stored('s0').bpm, 100, 'the analysis stays');
+});
+
+test('an accepted mass dated inside the margin does not go back on hold', async () => {
+  for (let i = 0; i < MASS; i++) by(`s${i}`).updatedAt = iso(Date.now() + 3 * HOUR);
+
+  await reconcile('--accept-replaced');
+
+  const next = await reconcile();
+  assert.match(next.check, /0 by size, 0 by change time/);
+  assert.match(next.label, /in sync/i);
+  assert.equal(stored('s0').bpm, 100);
+});
+
 test('accept wins over confirm: given both, nothing is lost', async () => {
   by('s0').updatedAt = CHANGED;
   await reconcile('--confirm-replaced', '--accept-replaced');

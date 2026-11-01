@@ -178,6 +178,29 @@ test('an accepted file keeps its analysis, stores its size, and is not found aga
   consistent();
 });
 
+test('an accepted file dated ahead stands from its own date, so the margin does not bring it back', () => {
+  const now = Date.parse('2026-10-28T12:00:00Z');
+  const ahead = new Date(now + 3 * 3_600_000).toISOString();
+  assert.equal(policy.acceptedAt(ahead, now), ahead);
+  assert.equal(policy.acceptedAt('2026-10-28T11:00:00Z', now), new Date(now).toISOString(), 'a past date stands from now');
+  assert.equal(policy.acceptedAt(null, now), new Date(now).toISOString(), 'no date, as the size signal has');
+  assert.equal(policy.acceptedAt('not a date', now), new Date(now).toISOString());
+  assert.equal(
+    policy.acceptedAt('2026-10-28T15:00:00.123456789Z', now),
+    '2026-10-28T15:00:00.123Z',
+    'stored at the precision the comparison reads',
+  );
+  assert.equal(policy.changedAfterMeasure('2026-10-28T15:00:00.123456789Z', policy.acceptedAt('2026-10-28T15:00:00.123456789Z', now), now), false);
+
+  measured('ahead');
+  const soon = new Date(Date.now() + 3 * 3_600_000).toISOString();
+  assert.ok(policy.changedAfterMeasure(soon, db.lastMeasuredAt('ahead')), 'inside the margin it is a change');
+  db.acceptReplacedFiles(new Map<string, number | null>([['ahead', null]]), new Map([['ahead', soon]]));
+  assert.equal(db.lastMeasuredAt('ahead'), soon);
+  assert.equal(policy.changedAfterMeasure(soon, db.lastMeasuredAt('ahead')), false);
+  consistent();
+});
+
 test('a walk reporting the same size keeps every measurement', () => {
   measured('same');
   const before = rows('same');

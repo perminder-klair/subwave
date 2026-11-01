@@ -35,6 +35,15 @@ export function changedAfterMeasure(
   return changed > measured;
 }
 
+// When an accepted file's measurements stand from: now, or the file's own date
+// when that is later. A file dated up to the margin ahead is still a change
+// (futureDated above lets it through), so a stamp of now would leave it newer
+// than its measurement and the next walk would find it again.
+export function acceptedAt(updatedAt: string | null | undefined, now: number = Date.now()): string {
+  const changed = updatedAt ? Date.parse(updatedAt) : NaN;
+  return new Date(Number.isFinite(changed) ? Math.max(changed, now) : now).toISOString();
+}
+
 // How far back each walk asks Navidrome for changes: from the newest change
 // time the previous walk saw, less a margin for clock skew and a scan still
 // writing while the previous walk read. No mark (the first walk) is null here,
@@ -73,8 +82,8 @@ export function capMark(newest: string | null | undefined, now: number = Date.no
 // walk (the size is not stored and the change-time mark does not move while
 // held), until the operator answers. --confirm-replaced clears them.
 // --accept-replaced, the answer for a tag edit, clears nothing: the sizes are
-// stored, the measurements date from now and the mark moves, so the same files
-// are not found again. Given both, accept wins: it loses nothing.
+// stored, the measurements date from now (acceptedAt) and the mark moves, so the
+// same files are not found again. Given both, accept wins: it loses nothing.
 export type ReplacedDecision =
   | { clear: true }
   | { clear: false; reason: 'accepted' }

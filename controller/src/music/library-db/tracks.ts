@@ -9,7 +9,7 @@ import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
-import { fileReplaced } from '../replaced-file-policy.js';
+import { acceptedAt, fileReplaced } from '../replaced-file-policy.js';
 
 export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
@@ -235,15 +235,19 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
 // tag editor's "save all", a restore that reset file dates), so nothing is
 // cleared and every measurement stands for the file as it is now. `files` is
 // the walk's candidates: id -> the walked size, or null from the change-time
-// signal. One transaction, so a walk that dies here asks again in full.
-export function acceptReplacedFiles(files: ReadonlyMap<string, number | null>): void {
+// signal. `changedAt` is what Navidrome dated each, where it said (acceptedAt).
+// One transaction, so a walk that dies here asks again in full.
+export function acceptReplacedFiles(
+  files: ReadonlyMap<string, number | null>,
+  changedAt: ReadonlyMap<string, string> = new Map(),
+): void {
   const d = requireDb();
   const setSize = d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?');
   d.transaction(() => {
     for (const [id, fileSize] of files) {
       const size = positiveInt(fileSize);
       if (size != null) setSize.run(size, id);
-      restampFacetRows(id);
+      restampFacetRows(id, acceptedAt(changedAt.get(id)));
     }
   })();
 }
