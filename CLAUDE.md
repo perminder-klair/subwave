@@ -86,6 +86,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and six tests drive both copies), so fix one, fix both.
 - **State bootstrap is never fatal.** Guard each step and warn; Icecast and the dead-air guard must still come up.
 - **The admin lockout counts distinct guesses, never requests**, and `ADMIN_LOCKOUT=off` (env only) is the operator's final say (`infrastructure.md`). The web console sends `X-Subwave-Console` so it is never answered with a Basic challenge.
+- **The edge drops Icecast's Basic challenge only for a client that can't answer it** (`?auth=`, or `Sec-Fetch-Dest: audio|video` from the same origin), in both Caddyfiles and every `docs/reverse-proxy.md` recipe. Unconditional either way is the bug: stripped, ffmpeg and mpv can't log in; kept, the browser's "Sign in" dialog covers the player (`infrastructure.md`).
 - **The listener-country chain fails open link by link** (`broadcast/listener-country.ts`). A later link runs when an earlier one misses (`XX`/`T1`), not only when it is absent.
 
 **Timing** (`broadcast.md`)
@@ -121,11 +122,14 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Tempo-derived timing is octave-safe: fold, then halve, never clamp.
 - The seed track id is not a pick (`util/pick-seed.ts`).
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
+- The analyzer writes shared folders 777 and files 666 whatever its umask, and a folder the sweep cannot delete leaves the budget check, before any delete if the `access()` probe catches it, otherwise once its own delete fails (`broadcast.md`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
+- The orphan purge moves only what reads as a stem dir, deletes only from its quarantine, only what still reads as stems, and only past the grace (one exception: a newer live copy replaces a quarantined one of the same id, on a fresh stamp), and keeps quarantine bytes outside the budget (`music/orphan-purge.ts`).
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).
 - `getLocalPath()` is for Liquidsoap: it answers only for a mount the mixer proved it can read (`music/library-mount.ts`), and anything short of that proof streams. A reader in the controller uses `findLibraryFile()`.
 - LLM calls go through the `llm/sdk` primitives, and provider quirks live only in `llm/internal/provider/capabilities.ts`. The default provider is a slow homelab Ollama, so add no aggressive retry.
 - TTS goes through `tts.speak(text, {kind})`. The rescue chain is a list of voice slots, and a rescue target is engine + provider.
+- A whole line that is a listed stand-in (`placeholder`, `TBD`, template text) is dropped before TTS: `queue.speakable` judges model-written speech with `broadcast/stand-in-policy.ts`, on the line both before and after `normalizeForDisplay` and past any leading label, and `push()` reports a dropped intro so no caller records it as said. The list is a net, not a guarantee: `[laughs] placeholder` and `{text}` still air.
 
 **Product behaviour**
 - The station keeps making sound: the token cap, a muted voice and an LLM outage never stop the music.
@@ -135,7 +139,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Gate before generation, never at `speak()`.
 - Public reads are explicit allowlists: never widen one to TTS config, skills or behaviour dials. A persona's `soul` is a system prompt, published only behind `publishPersonaSouls`, and absent (not empty) when off.
 - A DJ template without `{location}` withholds the place from every model: prompts and skill tools see the live context only through `settings.spokenContext()` (`buildContextLines`, `segment-tools.ts`); display and operator surfaces keep it (#2099).
-- Absent or malformed settings coerce to the pre-existing behaviour, so an upgrade is byte-identical. The exceptions, each announced, are legacy `llm.pickerAgent: false` → Track Shortlist, and the Lyrics panel with its LRCLIB fallback (`settings.lyrics`), which an upgrade turns on.
+- Absent or malformed settings coerce to the pre-existing behaviour, so an upgrade is byte-identical. The exceptions, each announced, are legacy `llm.pickerAgent: false` → Track Shortlist, the Lyrics panel with its LRCLIB fallback (`settings.lyrics`), which an upgrade turns on, and the `published` day on each dated item from the generated feed tool, which reaches the DJ with no key to set.
 - A multi-station switch is a pointer write + mixer restart + controller `process.exit`; never hot-swap state paths in-process.
 - A scheduled job deletes only files it wrote itself, matched on an anchored name (`backup/pure.ts`).
 - Operator curation outranks listener signal: an operator heart skips the `topLiked` cutoff and survives the trim.

@@ -1,10 +1,10 @@
 # Updating, rolling back, and recovering
 
-Updating SUB/WAVE is one command on every install shape. This page is mostly
-about the other half — what to do when an update lands badly, which is the part
-that was missing.
+Updating SUB/WAVE takes at most three commands on any install shape. This page
+is mostly about the other half — what to do when an update lands badly, which is
+the part that was missing.
 
-> Just want the command? Jump to [Update](#update). Something already broken?
+> Just want the commands? Jump to [Update](#update). Something already broken?
 > Jump to [Recovery](#recovery-when-an-update-goes-wrong).
 
 ---
@@ -108,20 +108,27 @@ than after.
 ### Standalone CLI install (the default)
 
 ```bash
-subwave update        # pull new images, recreate what changed
 subwave self-update   # replace the `subwave` binary itself
+subwave sync          # refresh compose files that are behind the new binary
+subwave update        # pull new images, recreate what changed
 ```
+
+Run them in that order:
+
+1. **`self-update`** goes first because `subwave update` pins the stack to **the
+   CLI binary's own release**, so if the binary is behind, so is the stack.
+2. **`sync`** goes next because new services and changed env wiring don't ride
+   an image bump, and only `sync` re-materialises the compose files. It backs up
+   the current ones first, and changes nothing if they're already current.
+3. **`update`** goes last, so the stack is recreated once, with the new compose
+   files and the new images together.
 
 `subwave update` moves the `SUBWAVE_VERSION` pin in `.env` forward to match the
 CLI's own release, then pulls and recreates. It only moves a **concrete**
 version pin — an install deliberately following `latest` stays on `latest`.
 
-`subwave update` pins the stack to **the CLI binary's own release**, so if the
-binary is behind, so is the stack. To land on the newest release, run
-`self-update` first and `update` second. If `update` then warns that your
-compose files are behind the CLI, run `subwave sync` — new services and changed
-env wiring don't ride an image bump, and only `sync` re-materialises the compose
-files (it backs up the current ones first).
+If `update` warns that your compose files are behind the CLI, `sync` was
+skipped: run it, then run `subwave update` again.
 
 ### Images, no CLI
 
