@@ -150,6 +150,17 @@ async function applyRotationNow(): Promise<boolean> {
   }
 }
 
+// The operator's answer to a replaced-file hold (music/replaced-file-policy.ts),
+// for the two runs that walk. The admin UI sends neither: both are API-only.
+type ReplacedAnswer = { confirmReplaced?: boolean; acceptReplaced?: boolean };
+
+function replacedFlags({ confirmReplaced, acceptReplaced }: ReplacedAnswer): string[] {
+  return [
+    ...(confirmReplaced ? ['--confirm-replaced'] : []),
+    ...(acceptReplaced ? ['--accept-replaced'] : []),
+  ];
+}
+
 // Spawn the tagger as a detached-from-our-event-loop child process. Caller is
 // responsible for rejecting the request if `tagger.running` is already true.
 // The re-* flags map straight to music/tag-library.ts: `reseed` drops + rebuilds
@@ -173,7 +184,7 @@ export function startTagger(
     analyze?: boolean;
     // Per-run Demucs override; undefined defers to the setting.
     vocal?: boolean;
-  } = {},
+  } & ReplacedAnswer = {},
 ) {
   const { limit, reseed, reEnrich, reAnalyze, upgrade, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
   const args = ['src/music/tag-library.ts'];
@@ -197,6 +208,8 @@ export function startTagger(
   if (reconcile === false) args.push('--no-prune');
   if (analyze !== false && vocal === true) args.push('--vocal');
   if (analyze !== false && vocal === false) args.push('--no-vocal');
+  const replaced = replacedFlags(opts);
+  args.push(...replaced);
 
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
@@ -212,6 +225,7 @@ export function startTagger(
     reconcile === false ? 'no-prune' : null,
     analyze !== false && vocal === true ? 'vocal' : null,
     analyze !== false && vocal === false ? 'no-vocal' : null,
+    ...replaced,
   ]
     .filter(Boolean)
     .join(', ');
@@ -240,11 +254,12 @@ export function startAnalyzer(opts: { limit?: number; audio?: boolean; vocal?: b
 // Walk Navidrome and prune library rows it no longer contains. No embeddings, no
 // LLM. The walk stamps era verdicts (#1418) and chains the incremental MusicBrainz
 // original-year backfill. Same single-flight slot; caller rejects when running.
-export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence } = {}) {
+export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence } & ReplacedAnswer = {}) {
+  const replaced = replacedFlags(opts);
   spawnChild(
     'reconcile',
-    ['src/music/tag-library.ts', '--reconcile-only'],
-    opts.automaticIdRotation ? 'automatic Navidrome ID-rotation recovery' : '',
+    ['src/music/tag-library.ts', '--reconcile-only', ...replaced],
+    opts.automaticIdRotation ? 'automatic Navidrome ID-rotation recovery' : replaced.join(', '),
     opts,
   );
 }
