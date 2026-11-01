@@ -491,10 +491,13 @@ class Queue {
     if (item.introWav && existsSync(item.introWav)) return;
     if (!item.introScript) return;
     const speaker = item.introPersona ?? settings.getEffectivePersona();
-    item.introScript = normalizeForDisplay(stripSpeakerLabel(item.introScript, speaker?.name ? [speaker.name] : []));
     // A recovered script predates the stand-in gate in push(): the same test,
     // and the track plays without its link.
-    if (item.introScript && !this.speakable(item.introScript, item.introKind || 'dj-speak')) {
+    item.introScript = this.speakable(
+      stripSpeakerLabel(item.introScript, speaker?.name ? [speaker.name] : []),
+      item.introKind || 'dj-speak',
+    );
+    if (!item.introScript) {
       item.introScript = null;
       item.introPersona = null;
       item.introHostSpeech = null;
@@ -1019,16 +1022,22 @@ class Queue {
       introPersona = null;
       introHostSpeech = null;
     }
-    if (introScript && !introLabelChecked) {
-      const speaker = introPersona ?? settings.getEffectivePersona();
-      introScript = normalizeForDisplay(stripSpeakerLabel(introScript, speaker?.name ? [speaker.name] : []));
-    }
     // A pick's link and a request intro are model-written too: a stand-in goes,
-    // and the track plays without a link.
-    if (introScript && !this.speakable(introScript, introKind)) {
-      introScript = null;
-      introPersona = null;
-      introHostSpeech = null;
+    // and the track plays without a link. A checked script arrives in its
+    // display form and keeps it.
+    if (introScript) {
+      const speaker = introPersona ?? settings.getEffectivePersona();
+      const written = introLabelChecked
+        ? introScript
+        : stripSpeakerLabel(introScript, speaker?.name ? [speaker.name] : []);
+      const spoken = this.speakable(written, introKind);
+      if (!spoken) {
+        introScript = null;
+        introPersona = null;
+        introHostSpeech = null;
+      } else if (!introLabelChecked) {
+        introScript = spoken;
+      }
     }
     const item = {
       track, requestedBy, operator, intent, introScript, introLabelChecked: true, introKind, introPersona, introHostSpeech,
@@ -2440,16 +2449,17 @@ class Queue {
 
   // The last text gate on every model-written spoken path: scheduled speech
   // (announce, announceExchange, announceAtNextTrack) and a pick's link or
-  // request intro (push, cleanUnrenderedIntro). A stand-in line
-  // (stand-in-policy) is dropped whole. An empty return is the callers'
-  // existing "nothing to air" case, so a dropped feature falls back exactly as
-  // a stood-down skill does. Operator text is exempt: a raw /dj/say
-  // (`verbatim`) and a jingle's script, which the operator typed
-  // (jingles.create from the Imaging page and onboarding).
+  // request intro (push, cleanUnrenderedIntro). `text` is the line as written,
+  // label off and not yet normalised, because normalising hides a template
+  // from the test (stand-in-policy); the return is the display form that airs.
+  // A stand-in line is dropped whole. An empty return is the callers' existing
+  // "nothing to air" case, so a dropped feature falls back exactly as a
+  // stood-down skill does. Operator text is exempt: a raw /dj/say (`verbatim`)
+  // and a jingle's script, which the operator typed (jingles.create from the
+  // Imaging page and onboarding).
   speakable(text: string, kind: string, { verbatim = false } = {}): string {
-    if (verbatim || !text) return text;
-    const token = standInToken(text);
-    if (!token) return text;
+    const token = verbatim ? null : standInToken(text);
+    if (!token) return normalizeForDisplay(text);
     this.log('scheduler', `${kind}: dropped a stand-in line ("${token}") instead of airing it`);
     logEvent('speech.standInDropped', { kind, token });
     return '';
@@ -2502,14 +2512,13 @@ class Queue {
     // truth than _speak is what made the fix miss the very path that reported
     // the bug.
     const speaker = persona ?? settings.getEffectivePersona();
-    const displayText = normalizeForDisplay(
-      speaker?.name ? stripSpeakerLabel(text || '', [speaker.name]) : (text || ''),
-    );
-    const safeText = this.speakable(displayText, kind, { verbatim: meta?.verbatim === true });
+    const written = speaker?.name ? stripSpeakerLabel(text || '', [speaker.name]) : (text || '');
+    const verbatim = meta?.verbatim === true;
+    const safeText = this.speakable(written, kind, { verbatim });
     if (!safeText) {
       return {
         accepted: false, deferred: false, completed: Promise.resolve(false),
-        ...(displayText ? { reason: 'stand-in' as const } : {}),
+        ...(!verbatim && written.trim() ? { reason: 'stand-in' as const } : {}),
       };
     }
     if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
@@ -2716,7 +2725,7 @@ class Queue {
       // Each clip owns its speaker's gain, attribution and live-edge marker.
       // Conversational batching must preserve those before it can air here.
       for (const l of lines) {
-        const text = this.speakable(normalizeForDisplay(stripSpeakerLabel(l.text || '', knownNames)), kind);
+        const text = this.speakable(stripSpeakerLabel(l.text || '', knownNames), kind);
         if (!text) continue;
         const wavPath = await this._speak(text, { kind, persona: l.persona });
         rendered.push({ ...l, text, wavPath });
@@ -2786,9 +2795,11 @@ class Queue {
     // guard as announce(): a label the model prefixed would otherwise be read
     // aloud. Same speaker resolution, for the same reason.
     const scheduledSpeaker = persona ?? settings.getEffectivePersona();
-    const safeText = this.speakable(normalizeForDisplay(
+    const safeText = this.speakable(
       scheduledSpeaker?.name ? stripSpeakerLabel(text || '', [scheduledSpeaker.name]) : (text || ''),
-    ), kind, { verbatim: meta?.verbatim === true });
+      kind,
+      { verbatim: meta?.verbatim === true },
+    );
     if (!safeText) return;
     if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {

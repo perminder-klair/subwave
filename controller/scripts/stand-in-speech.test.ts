@@ -9,6 +9,7 @@
 
 import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
@@ -17,11 +18,21 @@ import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 const root = createTempDir(join(tmpdir(), 'subwave-stand-in-'));
 process.env.STATE_DIR = root;
 
+function writeSkill(slug: string, frontmatter = '') {
+  const dir = join(root, 'skills', slug);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${slug}\ncooldown: 60\n${frontmatter}---\nSay something.\n`);
+}
+writeSkill('forced-words');
+
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { standInToken } = await import('../src/broadcast/stand-in-policy.js');
+const { enqueuePick, trimLinkToIntro } = await import('../src/broadcast/dj-agent/enqueue.js');
 const { writeSilentWav } = await import('../src/audio/wav-silence.js');
+const { loadSkills } = await import('../src/skills/loader.js');
+const { forcedDirectorAgent, runCapability } = await import('../src/skills/_agent.js');
 
 // ── the matcher ──────────────────────────────────────────────────────────────
 
@@ -40,8 +51,24 @@ test('template text left in brackets is a stand-in; a real aside in brackets is 
   ]) assert.ok(standInToken(line), `should catch ${JSON.stringify(line)}`);
   for (const line of [
     '[laughs] That was a long one.', '(Insert coin to continue, as the arcades said.)',
-    '[Music swells]', 'Insert the tape and press play: Plakias, 1986.',
+    '[Music swells] Here we go.', 'Insert the tape and press play: Plakias, 1986.',
   ]) assert.equal(standInToken(line), null, `should keep ${JSON.stringify(line)}`);
+});
+
+// One of each bracket shape, as the model wrote it. Normalising empties the
+// short bracket and the tag, and only strips the long bracket's brackets, so
+// these are the lines a gate behind the normaliser cannot see.
+const TEMPLATES = {
+  'a short [...]': '[Insert weather update here]',
+  'a [...] past the 80-character cue cap': '[Insert a short weather update here for the listeners, covering the temperature, the wind and tonight]',
+  'a <...>': '<placeholder>',
+  'a {...}': '{your text}',
+};
+
+test('markup that leaves nothing to say is a stand-in, not an empty line', () => {
+  for (const [shape, line] of Object.entries(TEMPLATES)) assert.ok(standInToken(line), shape);
+  assert.ok(standInToken('[Music swells]'), 'a cue with no words after it never aired');
+  assert.ok(standInToken('<br>'), 'a bare tag normalises to nothing');
 });
 
 test('a one-word reply a guest could give in banter is speech', () => {
@@ -73,6 +100,7 @@ type Seams = { _speak: (text: string) => Promise<string>; _airVoice: () => Promi
 const seams = queue as unknown as Seams;
 const realSpeak = seams._speak;
 const realAirVoice = seams._airVoice;
+const realForcedRun = forcedDirectorAgent.run;
 const template = settings.get().personas[0];
 const HOST = { ...template, id: 'p_host', name: 'Manolo X', language: '' };
 const GUEST = { ...template, id: 'p_guest', name: 'Niki', language: '' };
@@ -91,11 +119,14 @@ beforeEach(async () => {
   queue._pendingVoice = null;
   seams._speak = async (text: string) => { spoken.push(text); return wav; };
   seams._airVoice = async () => true;
+  forcedDirectorAgent.run = realForcedRun;
   await settings.update({
     personas: [HOST, GUEST], activePersonaId: HOST.id,
     shows: [{ id: SHOW, name: 'Stand-in', topic: 'tests', personaId: HOST.id, energies: ['medium'] }],
     schedule: fullScheduleWeek(SHOW), scheduleOverride: null,
     tts: { enabled: true },
+    skills: { enabled: { 'forced-words': true } },
+    sfx: { enabled: false },
   } as never);
   session.start({
     at: new Date().toISOString(),
@@ -108,6 +139,7 @@ beforeEach(async () => {
 after(async () => {
   seams._speak = realSpeak;
   seams._airVoice = realAirVoice;
+  forcedDirectorAgent.run = realForcedRun;
   queue.senderBusy = false;
   await new Promise(resolve => setTimeout(resolve, 1_100));
   await removeTempDir(root);
@@ -159,6 +191,64 @@ test('a pick whose link is a stand-in is queued without a link', async () => {
   assert.equal(item.introPersona, null);
   await queue.push({ track: { id: 'real', title: 'Song', artist: 'Artist' } as never, introScript: 'Here comes a good one.', introPersona: HOST as never });
   assert.equal(queue.upcoming.find(i => i.track.id === 'real')!.introScript, 'Here comes a good one.');
+});
+
+for (const [shape, line] of Object.entries(TEMPLATES)) {
+  test(`announce drops ${shape} and reports it as a stand-in`, async () => {
+    const out = await queue.announce(line, 'programme-feature', { persona: HOST as never });
+    assert.equal(out.accepted, false);
+    assert.equal(out.reason, 'stand-in');
+    assert.deepEqual(spoken, []);
+  });
+
+  test(`the deferred path drops ${shape}`, async () => {
+    await queue.announceAtNextTrack(line, 'station-id', { persona: HOST as never });
+    assert.deepEqual(spoken, []);
+  });
+
+  test(`an exchange skips ${shape} and airs the real line`, async () => {
+    const real = 'Storms over Crete tonight, the ferries are docked.';
+    await queue.announceExchange([
+      { persona: HOST as never, text: real },
+      { persona: GUEST as never, text: line },
+    ], 'banter', { castNames: [HOST.name, GUEST.name] });
+    assert.deepEqual(spoken, [real]);
+  });
+
+  test(`a request intro that is ${shape} is queued without it`, async () => {
+    await queue.push({ track: { id: 'intro', title: 'Song', artist: 'Artist' } as never, introScript: line, introPersona: HOST as never });
+    assert.equal(queue.upcoming.find(i => i.track.id === 'intro')!.introScript, null);
+  });
+
+  test(`a pick link that is ${shape} goes before the budget trim can launder it`, async () => {
+    const song = { id: 'link', title: 'Song', artist: 'Artist' };
+    assert.equal(trimLinkToIntro(line, song, HOST as never), null);
+    await enqueuePick(queue, song, 'tests', 'tests', line, null, {}, { introPersona: HOST as never });
+    assert.equal(queue.upcoming.find(i => i.track.id === 'link')!.introScript, null);
+  });
+
+  test(`a forced run on ${shape} stands down as a stand-in, not as a queue refusal`, async () => {
+    forcedDirectorAgent.run = (async () => ({ object: { text: line, sfx: null }, steps: 1, toolCalls: [], extras: undefined })) as never;
+    await loadSkills();
+    const run = await runCapability('forced-words', {} as never);
+    assert.equal(run.aired, false);
+    assert.match(String(run.reason), /stand-in/);
+    assert.deepEqual(spoken, []);
+  });
+}
+
+test('the label comes off before the line is judged', async () => {
+  const out = await queue.announce(`${HOST.name}: [Insert weather update here]`, 'programme-feature', { persona: HOST as never });
+  assert.equal(out.reason, 'stand-in');
+  assert.deepEqual(spoken, []);
+});
+
+test('operator text is still normalised, and a bracket with nothing in it is no stand-in of theirs', async () => {
+  const out = await queue.announce('[Insert weather update here]', 'dj-speak', { meta: { verbatim: true } });
+  assert.equal(out.accepted, false, 'normalising it leaves nothing to say');
+  assert.equal(out.reason, undefined, 'a verbatim line is never judged');
+  await queue.announce('**Placeholder**', 'dj-speak', { meta: { verbatim: true } });
+  assert.deepEqual(spoken, ['Placeholder']);
 });
 
 test('a recovered link from before the gate is cleaned the same way', () => {

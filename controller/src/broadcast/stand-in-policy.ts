@@ -11,6 +11,14 @@
 // dressed up as a segment. Verbatim operator text never reaches this check
 // (the operator's words are theirs to air), and the caller drops the line
 // rather than repairing it: there is nothing in a stand-in to repair.
+//
+// Judged on the line as the model wrote it, with the speaker label off and
+// BEFORE normalizeForDisplay. That pass empties a short bracket or a tag, and
+// only strips the brackets from a long one, so a later test would see nothing
+// at all or a template passing as prose. Text it would empty had nothing to
+// say, and that is a stand-in too.
+
+import { normalizeForDisplay } from '../audio/speech-text.js';
 
 // Compared after folding (lower case, outer quotes/brackets/punctuation and
 // inner runs of space or punctuation collapsed to one space). Only tokens that
@@ -52,5 +60,6 @@ export function standInToken(text: string | null | undefined): string | null {
   const folded = foldStandIn(raw);
   if (STAND_IN_LINES.has(folded) || LOREM.test(folded)) return folded.slice(0, 40);
   if (BRACKETED.test(raw) && TEMPLATE_START.test(folded)) return folded.slice(0, 40);
+  if (!normalizeForDisplay(raw)) return folded.slice(0, 40);
   return null;
 }
