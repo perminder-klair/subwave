@@ -41,17 +41,32 @@ export function dropNameEchoes(tags: string[], names: { artist: string; title: s
   });
 }
 
+// How many of the artist's top tags outlast a song with a full list of its own.
+// Track tags are the noisier source, and a never-play `tag` rule or a Musical
+// Leaning is written against what the act is known for: without this, a popular
+// song's own ten tags would take it out of reach of both.
+const RESERVED_ARTIST_TAGS = 3;
+
 // The one list every consumer reads: the track's own tags first, because they
-// are what separates two songs by one act, then the artist's until the cap.
+// are what separates two songs by one act, then the artist's until the cap. The
+// artist's top tags always get a place, and only a tag outside them spends the
+// rest of the room.
 export function mergeCrowdTags(trackTags: string[], artistTags: string[], cap = 10): string[] {
-  const seen = new Set<string>();
-  const merged: string[] = [];
+  const byKey = new Map<string, string>();
   for (const tag of [...trackTags, ...artistTags]) {
     const key = nameKey(tag);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    merged.push(tag);
-    if (merged.length >= cap) break;
+    if (key && !byKey.has(key)) byKey.set(key, tag);
+  }
+  const artistKeys = [...new Set(artistTags.map(nameKey).filter(Boolean))];
+  const reserved = new Set(artistKeys.slice(0, Math.min(RESERVED_ARTIST_TAGS, cap)));
+  let room = cap - reserved.size;
+  const merged: string[] = [];
+  for (const [key, tag] of byKey) {
+    if (reserved.has(key)) merged.push(tag);
+    else if (room > 0) {
+      merged.push(tag);
+      room -= 1;
+    }
   }
   return merged;
 }
