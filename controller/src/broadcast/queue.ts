@@ -960,7 +960,11 @@ class Queue {
   // the line if the real seam lands too far from it — the forecast is made from
   // the on-air track's remaining play and goes badly wrong when the pick misses
   // that seam and auto.m3u fills the slot.
-  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null, selectionShowAt = null }: {
+  //
+  // `onStandInDropped` fires when the intro is a stand-in and the track will
+  // play without it. The gate lives here, so this is how a caller that records
+  // its own copy of the line learns it was never said.
+  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null, selectionShowAt = null, onStandInDropped }: {
     track: Track;
     requestedBy?: string | null;
     operator?: boolean;
@@ -976,6 +980,7 @@ class Queue {
     linkPrev?: { id?: string | null; title?: string | null; artist?: string | null } | null;
     linkClockAt?: Date | number | null;
     selectionShowAt?: Date | number | null;
+    onStandInDropped?: () => void;
   }) {
     // The blocklist is absolute — even explicit manual queueing is refused
     // until the entry is unblocked — so it sits above `allowDuplicate`. Every
@@ -1032,6 +1037,7 @@ class Queue {
         : stripSpeakerLabel(introScript, speaker?.name ? [speaker.name] : []);
       const spoken = this.speakable(written, introKind);
       if (!spoken) {
+        if (written.trim()) onStandInDropped?.();
         introScript = null;
         introPersona = null;
         introHostSpeech = null;

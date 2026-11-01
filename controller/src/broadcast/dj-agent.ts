@@ -2062,6 +2062,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // in the intro, after misnaming the track) — join rather than let one
     // verdict hide another.
     const guardVerdict = [claimGuard, spacingGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
+    let introDropped = false;
     const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
@@ -2071,6 +2072,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       // Voice the intro as whoever wrote it (see the pool-pick push above).
       introPersona: currentSpeech.persona,
       introHostSpeech: currentSpeech.hostSpeech,
+      onStandInDropped: () => { introDropped = true; },
     });
     // Never-play blocklist refused the pick — throw so the route's stateless
     // fallback cascade runs; its own resolution is blocklist-filtered, so the
@@ -2092,19 +2094,20 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       // for the same reason as the cooldown branch: nothing was queued here.
       return { ack: dupAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: guardVerdict, refused: 'already-queued' };
     }
+    const airedIntro = introDropped ? null : intro || null;
     session.appendTurn({
       role: 'dj', kind: 'request',
       // `ack` is guaranteed non-empty (screenAck substitutes), so it always
       // wins over the title fallback when there's no intro — the fallback is
       // kept only as a guard against a future edit making `ack` optional.
-      text: intro || ack || `Queued "${song.title}".`,
+      text: airedIntro || ack || `Queued "${song.title}".`,
       meta: { trackId: song.id, requester, toolCalls },
     });
 
     return {
       ack,
       track: { title: song.title, artist: song.artist, id: song.id },
-      introScript: intro || null,
+      introScript: airedIntro,
       guard: guardVerdict,
     };
   });
