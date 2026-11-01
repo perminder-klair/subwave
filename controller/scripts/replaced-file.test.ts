@@ -1,10 +1,12 @@
 // A file replaced at the same path keeps its track id (Navidrome derives the
-// id from the path), so the walk's size change is the only signal that the
-// audio is new: library-db.upsertTrackMeta reports it (keeping the old size),
-// the walk clears every audio measurement of the track at its end
-// (clearTrackAudio, behind decideReplacedClear's mass hold), the facet rows
-// follow, and the walk drops the stem files (stem-cache.forgetStems).
-// Metadata and the year stay.
+// id from the path), so only the file itself can say the audio is new: its size
+// (library-db.upsertTrackMeta reports a change, keeping the old size) or
+// Navidrome's change time against the last measurement. The walk clears every
+// audio measurement of the track at its end (clearTrackAudio, behind
+// decideReplacedClear's mass hold), the facet rows follow, and the walk drops
+// the stem files (stem-cache.forgetStems). Metadata and the year stay. The
+// operator can instead accept a file (acceptReplacedFiles): nothing clears and
+// the measurements date from then. The walk itself is replaced-file-walk.test.ts.
 //
 // Run: npm test -- replaced-file
 
