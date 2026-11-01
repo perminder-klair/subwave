@@ -282,9 +282,19 @@ export async function maybeRunIntro(
   // can still open the remaining hours if the gate reopens.
   if (!autoVoiceAllowed()) return false;
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
+  // Claimed before air (see markProgrammeBeat): the hourly cron and the track
+  // boundary both land here, and the claim is what stops both firing it. A
+  // refused intro keeps the claim, or a model stuck on stand-ins is asked again
+  // at every boundary, and gives back only the stamp: nothing opened the show,
+  // so the hourly check has nothing to stand down for.
   markIntroAired();
-  await runIntro(queue, ctx, now, { automaticHostSpeech: true });
-  return true;
+  const spoken = await runIntro(queue, ctx, now, { automaticHostSpeech: true });
+  if (spoken !== null) return true;
+  if (session.getProgramme() === prog) {
+    prog.introAiredAt = null;
+    session.attachProgramme(prog);
+  }
+  return false;
 }
 
 // Mark the intro beat + stamp its air time (suppressHourly keys off the stamp).

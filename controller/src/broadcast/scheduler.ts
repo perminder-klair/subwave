@@ -841,14 +841,15 @@ async function runSegmentTick() {
 // intro rides the session-settled hook. Gating lives in programme.ts.
 //
 // Gate-free manual runners (/dj/segment). Intro/outro re-mark their beat so the
-// autonomous path doesn't re-open or re-close the show; a manual feature
-// deliberately doesn't consume the hour's planned beat.
+// autonomous path doesn't re-open or re-close the show, but only once it aired:
+// a refused press leaves the beat for the show. A manual feature deliberately
+// doesn't consume the hour's planned beat.
 export async function runProgrammeIntro() {
   const ctx = await prepareEpisodeContext(await getFullContext());
   await session.maybeRoll(ctx);
   await programme.ensurePlan(ctx);
   const out = await programme.runIntro(queue, ctx);
-  programme.markIntroAired();
+  if (out !== null) programme.markIntroAired();
   return out;
 }
 
@@ -864,7 +865,7 @@ export async function runProgrammeOutro() {
   await session.maybeRoll(ctx);
   await programme.ensurePlan(ctx);
   const out = await programme.runOutro(queue, ctx);
-  session.markProgrammeBeat('outro');
+  if (out !== null) session.markProgrammeBeat('outro');
   return out;
 }
 
