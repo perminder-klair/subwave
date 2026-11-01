@@ -197,11 +197,29 @@ test('a released dir drops its quarantine stamp', async () => {
   assert.ok(!existsSync(join(ROOT, id, '.orphaned-at')));
 });
 
-test('the usage snapshot is invalidated when the purge moved anything', async () => {
+test('a pass that changed the cache keeps the usage figure, flagged stale', async () => {
+  // Deleted outright, the budget field lost its figure and a lowering Save went
+  // through with no confirm. The figure stays, and the next sweep re-measures.
   seedStem();
-  writeFileSync(join(stateDir, 'stem-cache-usage.json'), JSON.stringify({ v: 1, bytes: 1, dirs: 1 }));
+  const measuredAt = new Date().toISOString();
+  writeFileSync(join(stateDir, 'stem-cache-usage.json'), JSON.stringify({
+    version: 1, root: ROOT, bytes: 5_000_000_000, dirs: 400, measuredAt, updatedAt: measuredAt,
+  }));
   await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 2 * DAY });
-  assert.ok(!existsSync(join(stateDir, 'stem-cache-usage.json')), 'stale snapshot must be dropped');
+  const usage = await cache.storedUsage();
+  assert.equal(usage?.bytes, 5_000_000_000, 'the figure is still reported');
+  assert.equal(usage?.fresh, false);
+  assert.equal(usage?.stale, true);
+});
+
+test('a dry run leaves the usage figure as it found it', async () => {
+  seedStem();
+  const measuredAt = new Date().toISOString();
+  writeFileSync(join(stateDir, 'stem-cache-usage.json'), JSON.stringify({
+    version: 1, root: ROOT, bytes: 5_000_000_000, dirs: 400, measuredAt, updatedAt: measuredAt,
+  }));
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: false, now: NOW_BASE + 2 * DAY });
+  assert.equal((await cache.storedUsage())?.fresh, true);
 });
 
 test('a pass with nothing to do reports zeros and touches nothing', async () => {

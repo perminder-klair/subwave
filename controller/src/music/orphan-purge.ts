@@ -44,8 +44,9 @@
 //   pass off the week only ends at the next manual pass.
 // - Delete failures are counted and reported, never thrown — a purge that
 //   cannot delete on a squashed share must keep running and keep saying so.
-// - Any mutation drops the usage snapshot (stem-cache's cached walk totals),
-//   so the next sweep re-measures instead of trusting stale bytes.
+// - Any mutation marks the usage snapshot stale (stem-cache's cached walk
+//   totals), so the next sweep re-measures instead of trusting those bytes,
+//   while the budget field keeps a flagged figure and its confirm.
 // - One confirmed pass at a time (the cron, a manual confirm): a second one
 //   is refused while the first runs, so two never interleave their moves and
 //   each report is what its own pass did. A release that lands on a live slot
@@ -410,9 +411,9 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
       }
     }
     if (report.quarantined || report.deletedCount || report.released.length || report.freedBytes) {
-      // The usage snapshot cached the pre-purge totals; drop it so the next
+      // The usage snapshot cached the pre-purge totals; mark it so the next
       // sweep walks again instead of trusting bytes that no longer exist.
-      await stemCache.dropUsageSnapshot();
+      await stemCache.markUsageStale();
     }
   } else {
     // Dry run: every count, zero mutations.

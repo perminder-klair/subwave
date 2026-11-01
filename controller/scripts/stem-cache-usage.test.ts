@@ -10,6 +10,8 @@
 // - a snapshot older than a day, or with a pass writing, still reports, but
 //   says so (`fresh: false` / `passRunning: true`) — the operator sees an old
 //   figure with its age rather than nothing;
+// - a snapshot a purge marked stale still reports, flagged (`stale: true`), and
+//   the sweep re-measures it rather than trusting it;
 // - no snapshot, another root, or a malformed one reports null;
 // - GET /stem-cache/usage carries it plus the budget in force.
 //
@@ -17,7 +19,7 @@
 
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listen } from './test-utils/http.js';
@@ -97,4 +99,67 @@ test('GET /stem-cache/usage: the stored size and the budget in force', async () 
   const none = await (await fetch(`${s.url}/stem-cache/usage`)).json() as { usage: unknown };
   assert.equal(none.usage, null);
   await s.close();
+});
+
+test('a stale snapshot is still reported, flagged, and never walked for', async () => {
+  writeSnap({ bytes: 80 * GB, dirs: 4000 });
+  await stemCache.markUsageStale();
+  const walks = stemCache._cacheWalksForTests();
+  const got = await stemCache.storedUsage();
+  assert.equal(got?.bytes, 80 * GB);
+  assert.equal(got?.fresh, false);
+  assert.equal(got?.stale, true);
+  assert.equal(stemCache._cacheWalksForTests(), walks);
+});
+
+test('nothing stored stays nothing: marking stale invents no figure', async () => {
+  rmSync(snapFile, { force: true });
+  await stemCache.markUsageStale();
+  assert.equal(await stemCache.storedUsage(), null);
+});
+
+test('stale is a walk for the sweep and the headroom read, and a live pass still owns its mark', () => {
+  const base = { version: 1 as const, root, bytes: GB, dirs: 10, measuredAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  assert.equal(stemCache.snapshotVerdict({ snap: base, root, nowMs: Date.now(), pendingAlive: false }), 'use');
+  assert.equal(stemCache.snapshotVerdict({ snap: { ...base, stale: true }, root, nowMs: Date.now(), pendingAlive: false }), 'walk');
+  const pending = { pid: process.pid, since: new Date().toISOString() };
+  assert.equal(stemCache.snapshotVerdict({ snap: { ...base, stale: true, pending }, root, nowMs: Date.now(), pendingAlive: true }), 'pass-running');
+});
+
+test('the sweep re-measures a stale snapshot, and the flag goes with it', async () => {
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  writeSnap({ bytes: 80 * GB, dirs: 4000 });
+  await stemCache.markUsageStale();
+  const walks = stemCache._cacheWalksForTests();
+  const swept = await stemCache.sweep(100 * GB);
+  assert.equal(swept.skipped, undefined, 'walked: a stale figure is not a reason to skip');
+  assert.ok(stemCache._cacheWalksForTests() > walks);
+  const got = await stemCache.storedUsage();
+  assert.equal(got?.bytes, 0, 're-measured');
+  assert.equal(got?.fresh, true);
+  assert.equal(got?.stale, false);
+});
+
+test('a pass settling onto a stale snapshot takes the walk, and cannot launder the flag', async () => {
+  writeSnap({ bytes: 80 * GB, dirs: 4000 });
+  assert.equal(await stemCache.markPassPending(), true);
+  await stemCache.markUsageStale();
+  assert.equal(await stemCache.settlePassWrites([]), null);
+  assert.equal((await stemCache.storedUsage())?.stale, true);
+  // Clear what the refused settlement left for the rest of the file.
+  await stemCache.sweep(100 * GB, { force: true });
+});
+
+test('GET /stem-cache/usage carries the stale flag to the budget field', async () => {
+  writeSnap({ bytes: 80 * GB, dirs: 4000 });
+  await stemCache.markUsageStale();
+  const app = express();
+  app.use(router);
+  const { server, url } = await listen(app);
+  server.unref();
+  const body = await (await fetch(`${url}/stem-cache/usage`)).json() as { usage: { bytes: number; stale: boolean } };
+  assert.equal(body.usage.bytes, 80 * GB);
+  assert.equal(body.usage.stale, true);
+  await new Promise(r => server.close(r));
 });

@@ -311,6 +311,8 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 // - the only writer of stem dirs is the analysis pass, which marks the
 //   snapshot `pending` while it runs and adds the dirs it wrote when it ends;
 // - evictions are made by sweep(), which rewrites the snapshot from its walk;
+// - the orphan purge marks it `stale` (markUsageStale): the next read walks, and
+//   until then the figure stays readable for the budget field;
 // - anything else (dirs deleted or copied in by hand, a pass that died before
 //   settling) is caught by a full walk at least every SNAPSHOT_MAX_AGE_MS.
 export const SNAPSHOT_MAX_AGE_MS = 24 * 3600_000;
@@ -328,6 +330,8 @@ export interface UsageSnapshot {
   updatedAt: string;
   // An analysis pass that may be writing stem dirs right now.
   pending?: { pid: number; since: string };
+  // The cache changed outside the pass and the sweep: these are last-known totals.
+  stale?: boolean;
 }
 
 export type SnapshotVerdict = 'use' | 'walk' | 'pass-running';
@@ -350,6 +354,7 @@ export function snapshotVerdict(opts: {
     // written dirs nobody counted.
     return opts.pendingAlive && fresh ? 'pass-running' : 'walk';
   }
+  if (snap.stale) return 'walk';
   const measured = Date.parse(snap.measuredAt);
   if (!Number.isFinite(measured) || opts.nowMs - measured > SNAPSHOT_MAX_AGE_MS || measured > opts.nowMs + 60_000) return 'walk';
   return 'use';
@@ -367,13 +372,6 @@ async function readSnapshot(): Promise<UsageSnapshot | null> {
   }
 }
 
-// For a writer outside the pass and the sweep (the orphan purge): the stored
-// totals no longer match the disk, so the next read walks instead of trusting
-// them. A live pass finding its pending mark gone settles through a walk too.
-export async function dropUsageSnapshot(): Promise<void> {
-  await rm(snapshotPath(), { force: true }).catch(() => {});
-}
-
 async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
   try {
     await writeFileAtomic(snapshotPath(), JSON.stringify(snap) + '\n');
@@ -384,6 +382,19 @@ async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
     snapshotUntrusted = true;
     return false;
   }
+}
+
+// For a writer outside the pass and the sweep (the orphan purge): the stored
+// totals no longer match the disk, so the next read walks instead of trusting
+// them. The file stays, because the budget field reads it (storedUsage) and an
+// operator about to lower the budget is better served by a flagged figure than
+// by none: with no figure the warning and the confirm both go. Totals that
+// cannot be marked must not outlive this, so a failed write removes them.
+export async function markUsageStale(): Promise<void> {
+  const snap = await readSnapshot();
+  if (!snap) return;
+  const marked = await writeSnapshot({ ...snap, stale: true, updatedAt: new Date().toISOString() });
+  if (!marked) await rm(snapshotPath(), { force: true }).catch(() => {});
 }
 
 function pidAlive(pid: number): boolean {
@@ -456,6 +467,8 @@ export interface StoredUsage {
   fresh: boolean;
   /** An analysis pass is adding stems right now; the figure is a floor. */
   passRunning: boolean;
+  /** The cache changed since this was measured (an orphan pass); the sweep re-measures it. */
+  stale: boolean;
 }
 
 export async function storedUsage(): Promise<StoredUsage | null> {
@@ -470,6 +483,7 @@ export async function storedUsage(): Promise<StoredUsage | null> {
     updatedAt: snap.updatedAt,
     fresh: verdict === 'use',
     passRunning: verdict === 'pass-running',
+    stale: snap.stale === true,
   };
 }
 
@@ -500,7 +514,8 @@ async function dirBytes(dir: string): Promise<number | null> {
 // End of an analysis pass: add the NET-NEW dirs it allocated to the snapshot
 // (measuring just those), clear the pending mark, and say whether the cache is
 // still inside the budget. Existing dirs may gain a missing tail, so a pass
-// that rewrote one invalidates the snapshot and takes a full walk instead.
+// that rewrote one invalidates the snapshot and takes a full walk instead, as
+// does one a purge marked stale mid-pass, since its base no longer holds.
 // An untrusted settlement also invalidates old totals, even if its file remains.
 export async function settlePassWrites(
   newTrackIds: Iterable<string>,
@@ -510,7 +525,7 @@ export async function settlePassWrites(
   const snap = await readSnapshot();
   const mine = snap?.pending?.pid === process.pid;
   const base = snapshotVerdict({ snap, root: stemsRoot(), nowMs: Date.now(), pendingAlive: true });
-  if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running') {
+  if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running' || snap.stale) {
     snapshotUntrusted = true;
     return null;
   }

@@ -16,6 +16,8 @@ export interface StemUsage {
   updatedAt?: string;
   fresh?: boolean;
   passRunning?: boolean;
+  /** An orphan pass changed the cache since this was measured. */
+  stale?: boolean;
 }
 
 export interface StemUsageResponse {
@@ -38,6 +40,14 @@ export function stemBudgetImpact(usage: StemUsage | null | undefined, budgetGb: 
   const avg = usage.dirs > 0 ? usage.bytes / usage.dirs : usage.estTrackBytes;
   const deleteTracks = Math.min(usage.dirs, Math.max(1, Math.round(deleteBytes / Math.max(1, avg))));
   return { deleteBytes, deleteTracks, keepTracks: Math.max(0, usage.dirs - deleteTracks) };
+}
+
+/** Why a stored figure is not the sweep's own, for the "measured" note. */
+export function usageCaveat(usage: StemUsage): string {
+  if (usage.fresh) return '';
+  if (usage.passRunning) return ', analysis pass adding more';
+  if (usage.stale) return ', a cleanup pass has run since';
+  return ', over a day old';
 }
 
 export function fmtGb(bytes: number): string {

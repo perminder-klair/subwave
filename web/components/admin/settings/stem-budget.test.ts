@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { stemBudgetImpact, fmtGb } from './stem-budget';
+import { stemBudgetImpact, fmtGb, usageCaveat } from './stem-budget';
 
 const GB = 1024 ** 3;
 const usage = { bytes: 778 * GB, dirs: 76_000, estTrackBytes: Math.round((778 * GB) / 76_000) };
@@ -44,4 +44,18 @@ test('GB display', () => {
   assert.equal(fmtGb(1.25 * GB), '1.3 GB');
   assert.equal(fmtGb(0.2 * GB), '0.2 GB');
   assert.equal(fmtGb(12_345 * GB), '12,345 GB');
+});
+
+test('a figure an orphan pass left stale still drives the cut: the confirm must not vanish', () => {
+  const usage = { bytes: 80 * GB, dirs: 4000, estTrackBytes: 20 * 1024 ** 2, fresh: false, stale: true };
+  const impact = stemBudgetImpact(usage, 50);
+  assert.ok(impact, 'a lowered budget still has something to confirm');
+  assert.equal(impact.deleteBytes, 30 * GB);
+});
+
+test('the measured note names why a figure is not current, and only then', () => {
+  assert.equal(usageCaveat({ bytes: 1, dirs: 1, estTrackBytes: 1, fresh: true }), '');
+  assert.equal(usageCaveat({ bytes: 1, dirs: 1, estTrackBytes: 1, fresh: false, passRunning: true }), ', analysis pass adding more');
+  assert.equal(usageCaveat({ bytes: 1, dirs: 1, estTrackBytes: 1, fresh: false, stale: true }), ', a cleanup pass has run since');
+  assert.equal(usageCaveat({ bytes: 1, dirs: 1, estTrackBytes: 1, fresh: false }), ', over a day old');
 });
