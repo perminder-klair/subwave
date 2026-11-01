@@ -191,6 +191,31 @@ Has its own fetcher.
 }
 `);
 
+// Keys only the generated tool reads, on skills that keep their own fetcher: one
+// that ignores them (news' pre-#1616 tool.mjs is the real case), and one that
+// declares a key because it reads it.
+writeSkill('own-tool-extras', `---
+name: own-tool-extras
+label: Own tool extras
+feed: ${feedUrl('/rss')}
+feed2: ${feedUrl('/other')}
+feedMaxAgeDays: 7
+---
+The generated tool never runs here.
+`, `export default async function () { return { mine: true }; }
+`);
+
+writeSkill('own-tool-reads', `---
+name: own-tool-reads
+label: Own tool reads
+feed: ${feedUrl('/rss')}
+feed2: ${feedUrl('/other')}
+---
+This tool reads the key it declares.
+`, `export const configFields = { feed2: { type: 'url', label: 'Second feed' } };
+export default async function (_ctx, _state, _services, config) { return { mine: true, second: config.feed2 }; }
+`);
+
 // A feed: line the loader cannot fetch must say so rather than silently
 // behaving as if the field were absent — the "fail loudly" half of #1616.
 writeSkill('bad-feed', `---
@@ -689,6 +714,14 @@ for (const { kind, path, case: how } of BAD_FEEDS) {
     assert.match(warnings[0], /failed and was skipped.*no answer within 6s/);
   });
 }
+
+test('feed keys a tool.mjs leaves unread are warned about, and a declared key is not', () => {
+  const warned = (kind: string) => logged.filter(l => l.startsWith('warn:') && l.includes(`"${kind}"`));
+  assert.equal(warned('own-tool-extras').length, 1);
+  assert.match(warned('own-tool-extras')[0], /feedMaxAgeDays, feed2: set, but this skill's own tool\.mjs/);
+  assert.deepEqual(warned('own-tool-reads'), [], 'the tool declares what it reads');
+  assert.deepEqual(warned('own-tool'), [], 'a tool.mjs reading feed: for itself is the documented shape');
+});
 
 test('every feed hanging is the fetch error inside the tool wrapper, and burns nothing', async () => {
   const state: any = {};

@@ -178,7 +178,14 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           Only an <code className="bs-code-inline">http</code> or{' '}
           <code className="bs-code-inline">https</code> URL creates the tool — anything else
           is logged as a warning naming the skill, so a{' '}
-          <code className="bs-code-inline">feed:</code> line never quietly does nothing. A
+          <code className="bs-code-inline">feed:</code> line never quietly does nothing. On a
+          skill with its own <code className="bs-code-inline">tool.mjs</code>,{' '}
+          <code className="bs-code-inline">feedMaxAgeDays</code>,{' '}
+          <code className="bs-code-inline">feed2</code> and{' '}
+          <code className="bs-code-inline">feed3</code> do nothing unless that code reads
+          them, and the log says so; on a station that still has News&rsquo;s old{' '}
+          <code className="bs-code-inline">tool.mjs</code>,{' '}
+          <strong>Reset to default</strong> removes it. A
           skill that ships its own <code className="bs-code-inline">tool.mjs</code> keeps it;
           the generated tool fills a gap, it never displaces a fetcher you wrote.
         </p>

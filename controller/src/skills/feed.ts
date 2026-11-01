@@ -326,6 +326,15 @@ export function resolveFeedConfig(config: Record<string, unknown> | null | undef
   return { feed, warnings };
 }
 
+// The keys only the generated tool reads. A skill with its own tool.mjs never gets
+// that tool, so on it they do nothing unless its code reads them, and code that
+// does declares them in `configFields`. `feed` and `feedMaxItems` are not here: a
+// tool.mjs reading those for itself is the documented shape.
+export function unreadFeedKeys(config: Record<string, unknown> | null | undefined, declared: { key: string }[]): string[] {
+  return [FEED_MAX_AGE_KEY, ...FEED_EXTRA_URL_KEYS]
+    .filter((key) => String(config?.[key] ?? '').trim() && !declared.some((f) => f.key === key));
+}
+
 function cleanUrl(raw: unknown): string {
   return raw == null ? '' : String(raw).replace(/[\r\n\t]/g, '').trim();
 }

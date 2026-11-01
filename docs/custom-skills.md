@@ -175,6 +175,14 @@ gap, it never displaces a fetcher you wrote. If you want feed items *and*
 something else, read `config.feed` yourself via
 `services.fetchHeadlines` (see the table below).
 
+`feedMaxAgeDays`, `feed2` and `feed3` are read by the generated tool only. On a
+skill with its own `tool.mjs` they do nothing unless that code reads them, and the
+loader logs a warning naming them. That includes **News on a station first booted
+before feeds moved out of it** (#1616): its `state/skills/news/tool.mjs` is still
+the old hand-written fetcher, so these keys have no effect there. **Reset to
+default** on the skill removes that file. It also restores the shipped `SKILL.md`,
+so set your feed and any other edits again afterwards.
+
 ### `cohosts: true` — one contribution from every host
 
 `cohosts: true` turns the skill from one DJ line into a co-hosted discussion. It

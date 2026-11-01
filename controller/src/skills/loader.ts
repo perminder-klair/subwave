@@ -63,7 +63,7 @@ import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
 import { parseConfigFields, type SkillConfigField } from './config-fields.js';
-import { FEED_CONFIG_FIELDS, makeFeedTool, resolveFeedConfig } from './feed.js';
+import { FEED_CONFIG_FIELDS, makeFeedTool, resolveFeedConfig, unreadFeedKeys } from './feed.js';
 import { declaredBool } from './abstain-policy.js';
 import {
   SKILL_SLUG_RE,
@@ -433,6 +433,12 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // Operator knobs travel with the tool, not the kind — a duplicated skill
     // copies tool.mjs and keeps its settings form (#1300).
     cap.configFields = toolMod.configFields || [];
+    // The case that bites: a station seeded before #1616 still runs news' old
+    // tool.mjs, so these keys would validate, save and do nothing, unsaid.
+    const unread = unreadFeedKeys(data, cap.configFields);
+    if (unread.length) {
+      queue.log('warn', `[skills] "${slug}" ${unread.join(', ')}: set, but this skill's own tool.mjs replaces the generated feed tool that reads them`);
+    }
     // Whether a forced run may stand down when this tool returns nothing usable
     // (issue #1412). Tri-state on purpose: undefined means the skill didn't say,
     // and abstain-policy.ts decides. `cap.config` already carries the operator's
