@@ -107,16 +107,17 @@ const RETRY_FAST_TRANSPORT: Readonly<CallOptions> = { retryFastTransport: true }
 // undici collapses every connect/socket error into `TypeError: fetch failed`, so
 // name the endpoint, the origin and the underlying code. Never the URL — it
 // carries the auth token.
-function describeTransportError(endpoint: string, err: any): Error {
+export function transportDetail(err: any): string {
   const cause = err?.cause;
   const code = cause?.code || cause?.errno || null;
   const detail = cause?.message && cause.message !== err?.message ? cause.message : null;
-  let origin = config.navidrome.url;
-  try { origin = new URL(config.navidrome.url).origin; } catch { /* keep as configured */ }
-  return new Error(
-    `Subsonic ${endpoint} could not reach ${origin}: ${err?.message || 'fetch failed'}`
-    + `${code ? ` (${code})` : ''}${detail ? ` — ${detail}` : ''}`,
-  );
+  return `${err?.message || 'fetch failed'}${code ? ` (${code})` : ''}${detail ? ` — ${detail}` : ''}`;
+}
+
+function describeTransportError(endpoint: string, err: any, url: string = config.navidrome.url): Error {
+  let origin = url;
+  try { origin = new URL(url).origin; } catch { /* keep as configured */ }
+  return new Error(`Subsonic ${endpoint} could not reach ${origin}: ${transportDetail(err)}`);
 }
 
 // Bounded fetch: a hung Navidrome must not pin the admin routes behind it (#786).
@@ -279,7 +280,7 @@ async function pingWithOnce({
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
       return { ok: false, error: 'Navidrome did not respond within 5s' };
     }
-    return { ok: false, error: err?.message || 'Navidrome unreachable' };
+    return { ok: false, error: describeTransportError('ping', err, url).message };
   }
 }
 

@@ -81,7 +81,7 @@ export type RealPathState =
   | 'not-read'
   /** No SUB/WAVE row exists yet (no request made since Navidrome was set up). */
   | 'no-players'
-  /** Navidrome refused the write (a 401/403: the account may not edit players). */
+  /** Navidrome refused the write with a 401/403: the account may not edit players. */
   | 'refused'
   /** The music server says it is not Navidrome: the flag does not exist there. */
   | 'not-navidrome'
@@ -93,7 +93,7 @@ export interface RealPathStatus {
   players: NavidromePlayerRow[];
   /** Rows this call switched on. */
   switched: string[];
-  /** Why the state is `refused` / `unavailable`. */
+  /** Why the state is `refused` / `unavailable`, or which row failed on a pass that reads `off`. */
   reason?: string;
   /**
    * With `unavailable`, when the cause is the account and not an outage:
@@ -190,9 +190,14 @@ export function playerLabel(p: NavidromePlayerRow): string {
 }
 
 const TICK_BY_HAND = 'In Navidrome, open Settings → Players and tick "Report Real Path" on each SUB/WAVE player';
-const MANUAL_STEP =
-  `${TICK_BY_HAND}, or turn on Settings → Music source → "Keep Report Real Path on" here to have the station do it.`;
 const TAG_BUILT_MISS = 'Navidrome sends tag-built paths, so a file whose folders differ from its tags falls back to the stream.';
+
+// Only reached with the opt-in on, so it never tells the operator to turn it on.
+const WHAT_TO_DO =
+  'The station switches a new player on within the hour, or press "Turn on now" in Settings → Music source. '
+  + 'If Navidrome refuses, tick "Report Real Path" on each SUB/WAVE player in Navidrome → Settings → Players. '
+  + 'ND_SUBSONIC_DEFAULTREPORTREALPATH=true on Navidrome starts new players on, for every client, not only SUB/WAVE '
+  + '(0.64.2 honours it, 0.53.3 does not).';
 
 type RealPathFinding = { status: 'ok' | 'warn' | 'skip'; detail: string; hint?: string };
 
@@ -280,7 +285,7 @@ export function realPathFinding(
       return {
         status: 'warn',
         detail: st.state === 'refused' ? `${what} · Navidrome refused to switch it (${st.reason || 'forbidden'})` : what,
-        hint: `${why} ${MANUAL_STEP}`,
+        hint: `${why} ${WHAT_TO_DO}`,
       };
     }
   }

@@ -117,7 +117,7 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
             <>
               <div className="text-[12px] leading-[1.5]">
                 {STATE_TEXT[view.state]}
-                {view.state === 'unavailable' && view.reason ? ` (${view.reason}).` : ''}
+                {view.reason ? ` (${view.reason}).` : ''}
               </div>
               {view.players.length > 0 && (
                 <ul className="mt-2 grid gap-1 text-[12px]">
@@ -148,6 +148,7 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
         <div className="field">
           <Label>Keep Report Real Path on</Label>
           <Seg
+            aria-label="Keep Report Real Path on"
             value={view?.autoEnable ? 'on' : 'off'}
             onChange={v => { if (!busy) setAuto.mutate(v === 'on'); }}
             options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}

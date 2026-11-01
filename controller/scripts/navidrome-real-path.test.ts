@@ -62,6 +62,10 @@ const fake = {
   // What the Subsonic ping names the server: '' leaves `type` out (a server that does not say).
   serverType: 'navidrome',
   rows: [] as Row[],
+  // A row's PUT answers with this status; 0 drops the connection.
+  failPut: new Map<string, number>(),
+  // Every row a write was tried on, whatever came of it.
+  attempted: [] as string[],
   songs: [ALIGNED, ODD],
   // Off for a server that sends no `size`.
   sendSize: true,
@@ -163,7 +167,11 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   if (m && !target) return send(404, { error: 'no such player' });
   if (req.method === 'GET' && target) return send(200, target);
   if (req.method === 'PUT' && target) {
+    fake.attempted.push(target.id);
     if (fake.mode === 'refuse-put') return send(403, { error: 'forbidden' });
+    const failing = fake.failPut.get(target.id);
+    if (failing === 0) return req.socket.destroy();
+    if (failing) return send(failing, { error: 'failed' });
     const body = JSON.parse(await readBody(req));
     fake.puts.push({ id: target.id, body });
     Object.assign(target, body);
@@ -211,6 +219,8 @@ beforeEach(() => {
   fake.redirected = 0;
   fake.calls = [];
   fake.pingClients = [];
+  fake.failPut = new Map();
+  fake.attempted = [];
   seed();
   config.navidrome.url = base;
   config.navidrome.user = 'radio';
@@ -267,7 +277,7 @@ test('switching turns on our rows that are off, sends the whole row, and leaves 
   assert.deepEqual(fake.puts.map(p => p.id), ['p-node', 'p-admin'], 'the row already on is not rewritten');
   const sent = fake.puts[0].body;
   assert.equal(sent.reportRealPath, true);
-  // Navidrome's PUT replaces the record: the other fields must ride along unchanged.
+  // The whole row goes back: the other fields ride along unchanged.
   assert.equal(sent.maxBitRate, 0);
   assert.equal(sent.scrobbleEnabled, true);
   assert.equal(sent.client, 'sub-wave');
@@ -283,6 +293,65 @@ test('a refused write reports refused with the reason, and no row is claimed as 
   assert.match(st.reason || '', /403/);
   assert.deepEqual(st.switched, []);
   assert.equal(st.players.find(p => p.id === 'p-node')?.reportRealPath, false);
+});
+
+test('a refusal after a row switched is logged once, beside the switch', async () => {
+  fake.failPut.set('p-admin', 403);
+  const lines: string[] = [];
+  const first = await autoEnableRealPath(l => lines.push(l));
+  assert.equal(first.state, 'refused');
+  assert.deepEqual(first.switched, ['p-node']);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /switched Report Real Path on for sub-wave \[node\]/);
+  assert.match(lines[1], /could not keep Report Real Path on \(sub-wave-admin \[node\]: HTTP 403/);
+
+  await autoEnableRealPath(l => lines.push(l));
+  await autoEnableRealPath(l => lines.push(l));
+  assert.equal(lines.length, 2, 'not every hour');
+});
+
+test('a 500 on one row leaves the next row its turn, and is not called a refusal', async () => {
+  fake.failPut.set('p-node', 500);
+  const lines: string[] = [];
+  const st = await autoEnableRealPath(l => lines.push(l));
+  assert.deepEqual(fake.attempted, ['p-node', 'p-admin']);
+  assert.deepEqual(st.switched, ['p-admin']);
+  assert.equal(st.state, 'off', 'a row is still off, and nobody refused anything');
+  assert.equal(st.reason, 'sub-wave [node]: HTTP 500');
+  assert.doesNotMatch(st.reason || '', /p-node/, 'row ids stay server-side');
+  assert.equal(lines.length, 2);
+  assert.match(lines[1], /could not keep Report Real Path on \(sub-wave \[node\]: HTTP 500\)/);
+
+  fake.failPut.clear();
+  await autoEnableRealPath(l => lines.push(l));
+  assert.equal(lines.length, 3, 'the row switches on the next pass');
+  assert.equal(fake.rows.find(r => r.id === 'p-node')?.reportRealPath, true);
+});
+
+test('a 401 or a dead connection ends the pass rather than trying every row', async () => {
+  fake.failPut.set('p-node', 401);
+  const refused = await realPathStatus({ enable: true });
+  assert.equal(refused.state, 'refused');
+  assert.deepEqual(fake.attempted, ['p-node']);
+
+  seed();
+  fake.attempted = [];
+  fake.failPut = new Map([['p-node', 0]]);
+  const dead = await realPathStatus({ enable: true });
+  assert.equal(dead.state, 'off');
+  assert.deepEqual(fake.attempted, ['p-node']);
+  assert.match(dead.reason || '', /^sub-wave \[node\]: could not reach Navidrome: /);
+});
+
+test('a dead server names the cause, not a bare "fetch failed"', async () => {
+  const closed = createServer();
+  await new Promise<void>(resolve => closed.listen(0, '127.0.0.1', resolve));
+  const { port } = closed.address() as AddressInfo;
+  await new Promise<void>(resolve => closed.close(() => resolve()));
+  config.navidrome.url = `http://127.0.0.1:${port}`;
+  const st = await realPathStatus();
+  assert.equal(st.state, 'unavailable');
+  assert.match(st.reason || '', new RegExp(`could not reach http://127\\.0\\.0\\.1:${port}: fetch failed \\(ECONNREFUSED\\)`));
 });
 
 test('a server without Navidrome\'s native API, or no connection, reads as unavailable', async () => {
@@ -583,6 +652,18 @@ test('the automatic pass logs what it switched, and a repeated refusal only once
   assert.match(lines[1], /could not keep Report Real Path on/);
 });
 
+test('a stored true survives a cold load, and a stored false stays off', async () => {
+  await settings.update({ musicSource: { reportRealPath: true } });
+  setCache(null);
+  await settings.load();
+  assert.equal(settings.get().musicSource.reportRealPath, true);
+
+  await settings.update({ musicSource: { reportRealPath: false } });
+  setCache(null);
+  await settings.load();
+  assert.equal(settings.get().musicSource.reportRealPath, false);
+});
+
 test('the hourly tick writes nothing unless the operator opted in', async () => {
   // The first load of this process, from a hand-edited file: a malformed flag is off.
   writeFileSync(join(process.env.STATE_DIR as string, 'settings.json'), JSON.stringify({ musicSource: { reportRealPath: 'yes' } }));
@@ -739,6 +820,20 @@ test('opening the card with the opt-in off reads nothing from Navidrome, and a p
   fake.calls = [];
   assert.equal((await card('/settings/navidrome/players')).state, 'not-read', 'the next opening reads nothing again');
   assert.equal(nativeCalls(), 0);
+});
+
+test('the card gets the reason a row failed, whatever the state', async () => {
+  await settings.update({ musicSource: { reportRealPath: false } });
+  fake.failPut.set('p-node', 500);
+  const failed = await card('/settings/navidrome/players/real-path', 'POST');
+  assert.equal(failed.state, 'off');
+  assert.equal(failed.reason, 'sub-wave [node]: HTTP 500');
+
+  seed();
+  fake.failPut = new Map([['p-node', 403]]);
+  const refused = await card('/settings/navidrome/players/real-path', 'POST');
+  assert.equal(refused.state, 'refused');
+  assert.match(refused.reason || '', /HTTP 403/);
 });
 
 test('opening the card with the opt-in on reads the rows', async () => {
@@ -918,8 +1013,15 @@ test('the Doctor warns while a SUB/WAVE row is off, naming the row and the manua
   assert.doesNotMatch(f.detail, /Lavf/, 'a row already on is not listed');
   assert.match(f.hint || '', /Settings → Players/);
   assert.match(f.hint || '', /tag-built file paths/);
+  // Reached only with the opt-in on: it says what happens next, and how to start rows on.
+  assert.doesNotMatch(f.hint || '', /Keep Report Real Path on/);
+  assert.match(f.hint || '', /within the hour/);
+  assert.match(f.hint || '', /Turn on now/);
+  assert.match(f.hint || '', /ND_SUBSONIC_DEFAULTREPORTREALPATH=true/);
+  assert.match(f.hint || '', /0\.53\.3 does not/, 'an older server ignores it, so the hint must not promise it');
   assert.match(realPathFinding(status({ players }), { localMount: true }).hint || '', /MUSIC_LIBRARY_PATH/);
   const refused = realPathFinding(status({ state: 'refused', players, reason: 'HTTP 403' }), { localMount: false });
+  assert.match(refused.hint || '', /Navidrome → Settings → Players/);
   assert.equal(refused.status, 'warn');
   assert.match(refused.detail, /refused .*HTTP 403/);
 });

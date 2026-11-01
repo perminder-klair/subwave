@@ -23,6 +23,7 @@ import {
   normalizePlayerRow,
   ownPlayers,
   passwordRefusal,
+  playerLabel,
   serverKind,
   stateOf,
   type LocalPathSample,
@@ -30,7 +31,7 @@ import {
   type RealPathStatus,
   type ServerIdentity,
 } from './navidrome-players-policy.js';
-import { getRandomSongs, localFileState, pingWith } from './subsonic.js';
+import { getRandomSongs, localFileState, pingWith, transportDetail } from './subsonic.js';
 
 const TIMEOUT_MS = 5_000;
 // Navidrome's list endpoint pages; this covers every realistic player table.
@@ -69,7 +70,7 @@ export async function nativeFetch(path: string, init: RequestInit & { token?: st
   } catch (err) {
     const name = err instanceof Error ? err.name : '';
     const timedOut = name === 'TimeoutError' || name === 'AbortError';
-    throw new NativeApiError(timedOut ? 'Navidrome did not answer within 5s' : errMessage(err, 'unreachable'), null);
+    throw new NativeApiError(timedOut ? 'Navidrome did not answer within 5s' : `could not reach Navidrome: ${transportDetail(err)}`, null);
   }
   if (!res.ok) throw new NativeApiError(`HTTP ${res.status} on ${path.split('?')[0]}`, res.status);
   return res;
@@ -98,8 +99,8 @@ async function listPlayers(token: string): Promise<NavidromePlayerRow[]> {
   return body.map(normalizePlayerRow).filter((r): r is NavidromePlayerRow => r !== null);
 }
 
-// Read-modify-write of the whole row: Navidrome's PUT replaces the record, so
-// sending only the flag would blank the row's other fields.
+// Read-modify-write of the whole row, the shape Navidrome's own UI sends. The
+// API is unpublished, so this does not lean on what a partial PUT would do.
 async function switchOn(token: string, id: string): Promise<void> {
   const res = await nativeFetch(`/api/player/${encodeURIComponent(id)}`, { token });
   const row = (await res.json()) as Record<string, unknown>;
@@ -164,7 +165,10 @@ function stoppedAt(native: Exclude<NativeServer, { usable: true }>): RealPathSta
 
 /**
  * Read the station's player rows; with `enable`, switch on every one still off.
- * A row refused mid-way leaves the others switched and reports `refused`.
+ * A 401/403 stops the pass and reports `refused`, leaving the rows already
+ * switched: it is the account's answer, the same for every row. Any other HTTP
+ * error is that row's, so the rest still get their turn and the row's failure
+ * comes back as `reason`. A connection that dies ends the pass the same way.
  * This logs in, so with the opt-in off only an operator's press may call it;
  * a passive reader goes through passiveRealPathStatus().
  */
@@ -190,6 +194,8 @@ export async function realPathStatus({ enable = false }: { enable?: boolean } = 
   }
 
   const switched: string[] = [];
+  const failures: string[] = [];
+  let refused = false;
   if (enable) {
     for (const p of players) {
       if (p.reportRealPath) continue;
@@ -199,14 +205,23 @@ export async function realPathStatus({ enable = false }: { enable?: boolean } = 
         switched.push(p.id);
       } catch (err) {
         const status = err instanceof NativeApiError ? err.status : null;
-        const reason = status === 401 || status === 403
-          ? `HTTP ${status}: this account may not edit its players`
-          : errMessage(err, 'write failed');
-        return { state: 'refused', players, switched, server, reason };
+        refused = status === 401 || status === 403;
+        // Named as the operator finds the row; its id stays server-side.
+        const why = refused
+          ? `HTTP ${status}, this account may not edit its players`
+          : status ? `HTTP ${status}` : errMessage(err, 'write failed');
+        failures.push(`${playerLabel(p)}: ${why}`);
+        if (refused || status === null) break;
       }
     }
   }
-  return { state: stateOf(players), players, switched, server };
+  return {
+    state: refused ? 'refused' : stateOf(players),
+    players,
+    switched,
+    server,
+    ...(failures.length ? { reason: failures.join('; ') } : {}),
+  };
 }
 
 /**
@@ -248,11 +263,12 @@ let lastAutoOutcome = '';
 
 export async function autoEnableRealPath(log: (line: string) => void): Promise<RealPathStatus> {
   const st = await realPathStatus({ enable: true });
-  const outcome = st.state === 'refused' || st.state === 'unavailable' ? `${st.state}:${st.reason}` : st.state;
+  const outcome = st.reason ? `${st.state}:${st.reason}` : st.state;
   if (st.switched.length) {
     const names = st.players.filter(p => st.switched.includes(p.id)).map(p => `${p.client} [${p.userAgent}]`);
     log(`Navidrome: switched Report Real Path on for ${names.join(', ')}`);
-  } else if (outcome !== lastAutoOutcome && (st.state === 'refused' || st.state === 'unavailable')) {
+  }
+  if (st.reason && outcome !== lastAutoOutcome) {
     log(`Navidrome: could not keep Report Real Path on (${st.reason}); see the Doctor for the manual step`);
   }
   lastAutoOutcome = outcome;
