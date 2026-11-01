@@ -27,6 +27,9 @@ subwave status       # is it on air?
 uninstall` tears the stack down and removes the install, keeping `state/` unless
 you pass `--purge`.
 
+To update a station, run `subwave self-update`, `subwave sync` and `subwave
+update`, in that order ([why](../docs/updating.md#update)).
+
 ## Commands
 
 | Command | What it does |
