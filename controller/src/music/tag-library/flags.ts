@@ -122,12 +122,13 @@ export function walkFileInfo(song: any): {
 // --reconcile-only. No embeddings and no LLM, but more than metadata: a file
 // replaced at the same path has its analysis cleared and its stems dropped here
 // (replaced-file-policy.ts), unless that is held or the operator accepts it.
+// `replacedHeld` counts the candidates a hold left waiting, 0 without one.
 export async function walkNavidrome(
   {
     confirmReplaced = process.argv.includes('--confirm-replaced'),
     acceptReplaced = process.argv.includes('--accept-replaced'),
   }: { confirmReplaced?: boolean; acceptReplaced?: boolean } = {},
-): Promise<{ walked: number; liveIds: Set<string> }> {
+): Promise<{ walked: number; liveIds: Set<string>; replacedHeld: number }> {
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
@@ -234,7 +235,7 @@ export async function walkNavidrome(
       `${suspect.toLocaleString('en-GB')} tracks on era-suspect albums (${breakdown})` +
       ' — their release year is treated as the reissue\'s, and they are queued for an original-year lookup');
   }
-  return { walked, liveIds };
+  return { walked, liveIds, replacedHeld: held ? candidates.size : 0 };
 }
 
 // Standalone reconcile: diff library-db against the live Navidrome catalogue and
@@ -252,7 +253,7 @@ export async function walkNavidrome(
 export async function reconcileOnly() {
   await db.open({ embeddingDim: embeddings.resolveEmbeddingDim(), adoptStoredDim: true });
   console.log('[tag] reconcile-only: walking Navidrome to prune orphaned rows');
-  const { walked, liveIds } = await walkNavidrome();
+  const { walked, liveIds, replacedHeld } = await walkNavidrome();
   let adopted = 0;
   let pruned = 0;
   let heldMessage = '';
@@ -277,6 +278,7 @@ export async function reconcileOnly() {
     adopted > 0 ? `Re-linked ${adopted} track${adopted === 1 ? '' : 's'} after a Navidrome ID migration` : '',
     pruned > 0 ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in Navidrome` : '',
     heldMessage ? 'Removal of missing tracks on hold (see the log)' : '',
+    replacedHeld > 0 ? `Re-analysis of ${replacedHeld.toLocaleString('en-GB')} replaced file${replacedHeld === 1 ? '' : 's'} on hold (see the log)` : '',
   ].filter(Boolean);
   reportProgress({
     phase: 'done',
