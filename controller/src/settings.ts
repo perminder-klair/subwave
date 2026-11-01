@@ -1205,6 +1205,10 @@ export async function load() {
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
             ? stored.embedding.enrichment.lastfmTags
             : DEFAULTS.embedding.enrichment.lastfmTags,
+        lastfmTrackTags:
+          typeof stored.embedding?.enrichment?.lastfmTrackTags === 'boolean'
+            ? stored.embedding.enrichment.lastfmTrackTags
+            : DEFAULTS.embedding.enrichment.lastfmTrackTags,
         lyrics:
           typeof stored.embedding?.enrichment?.lyrics === 'boolean'
             ? stored.embedding.enrichment.lyrics
@@ -2392,6 +2396,9 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       const en = e.enrichment || {};
       if (en.lastfmTags !== undefined) {
         next.embedding.enrichment.lastfmTags = !!en.lastfmTags;
+      }
+      if (en.lastfmTrackTags !== undefined) {
+        next.embedding.enrichment.lastfmTrackTags = !!en.lastfmTrackTags;
       }
       if (en.lyrics !== undefined) {
         next.embedding.enrichment.lyrics = !!en.lyrics;

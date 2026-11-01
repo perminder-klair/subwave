@@ -31,6 +31,9 @@ export interface TrackRecord {
   genre: string | null;
   durationSec: number | null;
   lastfmTags: string[] | null;
+  // Last genuine track.getTopTags answer, hit or miss. Set only while the opt-in
+  // is on; null = owed a lookup then.
+  lastfmTrackTagsAt: string | null;
   lyricExcerpt: string | null;
   enrichedAt: string | null;
   moods: string[];
@@ -133,6 +136,7 @@ export interface TrackRow {
   genre: string | null;
   duration_sec: number | null;
   lastfm_tags: string | null;
+  lastfm_track_tags_at: string | null;
   lyric_excerpt: string | null;
   enriched_at: string | null;
   moods: string | null;

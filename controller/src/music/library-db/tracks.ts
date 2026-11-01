@@ -142,10 +142,7 @@ export function resolvedEraYearForTrack(id: string): number | null {
   return row ? resolvedStoredEra(row) : null;
 }
 
-function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
-  if (!before) return;
-  const after = storedEra(id);
-  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+function markTextVectorDirty(id: string): void {
   requireDb()
     .prepare(
       `UPDATE tracks SET text_vector_dirty = 1
@@ -154,8 +151,16 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
     .run(id);
 }
 
-// Existing vectors whose era-bearing source text changed. They remain in the
-// KNN index until phaseEmbed successfully replaces them.
+function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
+  if (!before) return;
+  const after = storedEra(id);
+  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+  markTextVectorDirty(id);
+}
+
+// Existing vectors whose source text changed: the era, or (opt-in) the track's
+// Last.fm tags. They remain in the KNN index until phaseEmbed successfully
+// replaces them.
 export function textVectorDirtyIds(): string[] {
   return (requireDb()
     .prepare(
@@ -297,17 +302,71 @@ export function setManualOriginalYear(id: string, year: number | null): void {
   markTextVectorDirtyIfEraChanged(id, eraBefore);
 }
 
+// The stamp describes the stored list, so a write that replaces the list clears
+// it and the row is owed a lookup again: with the opt-in off, a re-enrich puts
+// the artist-only list back, and turning it on later has to see that. A station
+// that never turned it on has no stamps, so this changes nothing there.
 export function upsertTrackEnrichment(id: string, enrich: TrackEnrichment): void {
+  const lastfmTags = enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null;
   requireDb()
     .prepare(
-      `UPDATE tracks SET lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ? WHERE id = ?`,
+      `UPDATE tracks SET
+         lastfm_track_tags_at = CASE WHEN lastfm_tags IS ? THEN lastfm_track_tags_at END,
+         lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ?
+       WHERE id = ?`,
     )
     .run(
-      enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null,
+      lastfmTags,
+      lastfmTags,
       enrich.lyricExcerpt ?? null,
       new Date().toISOString(),
       id,
     );
+}
+
+// Tracks still owed a track.getTopTags lookup. Not scoped to the tagger's
+// untagged/enriched sets, for the same reason as idsNeedingOriginalYear. A row
+// with no artist or title can't be asked about, so it is never owed.
+export function idsNeedingLastfmTrackTags(): string[] {
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks
+          WHERE lastfm_track_tags_at IS NULL
+            AND TRIM(COALESCE(artist, '')) <> ''
+            AND TRIM(COALESCE(title, '')) <> ''`,
+      )
+      .all() as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+// The one write of a track-aware Last.fm list, shared by the bulk pass and the
+// retag route. A genuine answer replaces the list and stamps the row, hit or
+// miss. Anything else stamps nothing and never costs a row the list it has, so
+// an outage leaves the library as it found it; a row with no list takes what
+// did come back, so a new track isn't embedded bare. Only a real change touches
+// the list or dirties the vector: `lastfm_tags` is in the search keys' trigger,
+// and the embed text is built from this exact order. Returns the stored list.
+export function recordLastfmTrackTags(
+  id: string,
+  lookup: { tags: string[]; answered: boolean },
+): string[] | null {
+  const d = requireDb();
+  const row = d.prepare(`SELECT lastfm_tags FROM tracks WHERE id = ?`).get(id) as
+    | Pick<TrackRow, 'lastfm_tags'>
+    | undefined;
+  if (!row) return null;
+  const stored = row.lastfm_tags ? safeParseArray(row.lastfm_tags) : [];
+  const next = lookup.answered || stored.length === 0 ? lookup.tags : stored;
+  if (JSON.stringify(next) !== JSON.stringify(stored)) {
+    d.prepare(`UPDATE tracks SET lastfm_tags = ? WHERE id = ?`)
+      .run(next.length ? JSON.stringify(next) : null, id);
+    markTextVectorDirty(id);
+  }
+  if (lookup.answered) {
+    d.prepare(`UPDATE tracks SET lastfm_track_tags_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+  }
+  return next.length ? next : null;
 }
 
 export function upsertTrackTags(id: string, tags: TagWrite): void {
