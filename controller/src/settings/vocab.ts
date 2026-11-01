@@ -905,6 +905,9 @@ export interface NormalizedShow {
    *  order and resume across airings. Inert without it. */
   playlistInOrder: boolean;
   excludedPlaylistIds: string[];
+  /** A clean show: tracks tagged explicit stay off air. Only a positive tag
+   *  counts. See music/explicit-policy.ts. */
+  excludeExplicit: boolean;
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */
   tags: string[];

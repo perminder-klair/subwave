@@ -39,6 +39,8 @@ export interface FilterTrack {
   vocalRangesInvalid?: boolean;
   // Part of trackAllTags' any-namespace union.
   lastfmTags?: string[] | null;
+  // OpenSubsonic advisory tag; music/explicit-policy.ts owns reading it.
+  explicitStatus?: string | null;
 }
 
 // Raw Subsonic children carry OpenSubsonic `genres: [{name}]` objects, not

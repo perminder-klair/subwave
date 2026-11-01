@@ -121,6 +121,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - The track-length cap and floor are different mechanisms; never unify them. A never-starve filter never returns its input array.
 - Tempo-derived timing is octave-safe: fold, then halve, never clamp.
 - The seed track id is not a pick (`util/pick-seed.ts`).
+- A clean show (`show.excludeExplicit`) holds back only a positive `explicit` tag; no tag and unknown pass (`music/explicit-policy.ts`). It filters before every never-starve step, is hard on the pick paths and requests, and only the coast may relax it, last, in the booth log (`music.md`).
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).

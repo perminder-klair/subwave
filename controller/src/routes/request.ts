@@ -31,6 +31,7 @@ import { classifyUnsupportedLabels, directRequestUnsupported, isRefusedOutcome, 
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
 import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
+import { heldBackFromRequest } from '../music/explicit-policy.js';
 
 export const router = express.Router();
 
@@ -182,6 +183,18 @@ function withWaitNotice(ack: string | null | undefined, trackId: string | null |
   return `${ack}${requestWaitClause({ waitSec: queue.airForecastSec(queue.upcoming[idx]), blockLabel })}`;
 }
 
+// A clean show holds a track tagged explicit back from listeners too. Checked
+// before the intro is written, and declined by the caller with the same
+// not-found copy as the blocklist, so the reason does not leak. The agent path
+// never gets here: its scope hides these tracks from the model. Judged on the
+// show on air now, and an operator's own push does not come through this route.
+function heldBackForShow(track: any): boolean {
+  const show = settings.resolveActiveShow();
+  if (!heldBackFromRequest(track, show)) return false;
+  queue.log('blocked', `${track?.title} — ${track?.artist} (request held back: tagged explicit, clean show "${show?.name}")`);
+  return true;
+}
+
 // A comparison ("something like Michael Jackson", "anything like this",
 // "similar") opens the similar-to-current rung. Never a bare "like": "I'd
 // like X by Y" names X, and Y's catalogue answers a miss better.
@@ -275,6 +288,11 @@ async function resolveRequest(entry) {
       if (pick) entry.pickSource = 'more-like-this:similar';
     }
     if (!pick) {
+      return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
+    }
+    if (heldBackForShow(pick)) {
+      entry.pick = pick;
+      entry.pickSource = `${entry.pickSource}:explicit`;
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
     // The fallback can land on a different artist; phrase the ack from the pick.
@@ -525,6 +543,12 @@ async function resolveRequest(entry) {
     const ack = selection.outcome === 'cooldown' ? queue.cooldownAck(pick.id, pick.title || '') : queue.dedupAck(pick.id);
     session.appendTurn({ role: 'dj', kind: 'request', text: ack, meta: { trackId: pick.id, requester } });
     return resolved({ ack, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
+  }
+  if (heldBackForShow(pick)) {
+    entry.pick = pick;
+    entry.outcome = 'no-match';
+    entry.pickSource = `${pickSource}:explicit`;
+    return failed(sorryNoMatch(requester));
   }
   queue.log('request', `resolved via ${pickSource} (${selection.outcome}): ${pick.title} — ${pick.artist}`);
   // Substitutions need honest fixed copy. A real match keeps the screened
