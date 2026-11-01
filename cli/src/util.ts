@@ -59,6 +59,21 @@ export function parseEnvFile(path: string): Record<string, string> {
   return out;
 }
 
+// parseEnvFile keeps an inline comment (`CADDY_PORT=8080 # custom`), and then
+// leaves a quoted value quoted. Compose drops the comment and the quotes, so a
+// caller comparing or using the value as compose would runs it through this.
+export function stripEnvComment(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  let v = value.trim().replace(/\s+#.*$/, '');
+  if (
+    v.length >= 2 &&
+    ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))
+  ) {
+    v = v.slice(1, -1);
+  }
+  return v;
+}
+
 // Quote a .env value so docker compose reads it literally. Compose interpolates
 // `$VAR` in both unquoted and double-quoted values, so only single quotes are
 // safe (#156). There is no escape for `'` inside `'...'`, so a value containing

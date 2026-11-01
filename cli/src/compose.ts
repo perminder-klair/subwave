@@ -5,7 +5,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { getSubwaveHome } from './util.ts';
+import { resolveSubwaveHome } from './home.ts';
+import { getSubwaveHome, parseEnvFile, stripEnvComment } from './util.ts';
 
 // `prod-byo` is prod without the bundled Caddy: a prod sibling everywhere except
 // the URL helpers, which point at host-bound service ports, not the Caddy edge.
@@ -136,8 +137,15 @@ export function runningImageRefs(file: ComposeFile): string[] {
 
 // Reads the same env vars the compose files bind with, so an operator who
 // overrides a host binding doesn't leave the CLI looking at the wrong port.
+// Same precedence as compose: the shell environment first, then the install's
+// .env, wherever the CLI runs from. Home resolution here never exits, so the
+// URL helpers still return the default port when no install resolves.
 function byoPort(name: 'WEB_PORT' | 'CONTROLLER_PORT' | 'ICECAST_PORT' | 'CADDY_PORT', fallback: number): number {
-  const raw = process.env[name];
+  let raw = process.env[name]?.trim();
+  if (!raw) {
+    const r = resolveSubwaveHome();
+    raw = r ? stripEnvComment(parseEnvFile(resolve(r.home, '.env'))[name]) : undefined;
+  }
   if (!raw) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
