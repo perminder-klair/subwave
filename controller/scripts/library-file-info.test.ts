@@ -6,7 +6,8 @@
 //   - the columns are added on open, and opening again changes nothing;
 //   - a second process racing that first open can't fail it, the ALTERs run
 //     under the write lock, and any other failure throws out of open();
-//   - the walk's Subsonic child maps to the four fields (walkFileInfo);
+//   - the walk's Subsonic child maps to the four fields (walkFileInfo), under the
+//     one cleaning rule upsertTrackMeta also applies (cleanFileInfo);
 //   - a writer without file facts (manual edit, analyzer top-up) never clears
 //     the stored ones, and a later walk updates them.
 // Run: `npm test -- library-file-info`.
@@ -132,4 +133,25 @@ test('the walk stores them, other writers keep them, the next walk updates them'
   db.upsertTrackMeta('w1', walkFileInfo({ path: '/music/Artist/Album/03 - Song.flac', suffix: 'flac', size: 30_000_000, bitRate: 900 }));
   assert.deepEqual(row('w1'),
     { file_path: '/music/Artist/Album/03 - Song.flac', file_suffix: 'flac', file_size: 30_000_000, bit_rate: 900 });
+});
+
+test('the mapping and the upsert apply one rule', () => {
+  const walked = walkFileInfo({ path: '/music/x.FLAC', suffix: 'FLAC', size: 1234.6, bitRate: '320' });
+  assert.deepEqual(walked, { filePath: '/music/x.FLAC', fileSuffix: 'flac', fileSize: 1235, bitRate: 320 });
+  assert.deepEqual(db.cleanFileInfo(walked), walked, 'a clean value stays as it is');
+  db.upsertTrackMeta('rule', walked);
+  assert.deepEqual(row('rule'),
+    { file_path: '/music/x.FLAC', file_suffix: 'flac', file_size: 1235, bit_rate: 320 });
+});
+
+test('a value that rounds to 0 is not reported, so it never overwrites a stored one', () => {
+  const stored = { file_path: '/music/y.mp3', file_suffix: 'mp3', file_size: 1000, bit_rate: 662 };
+  db.upsertTrackMeta('zero', walkFileInfo({ path: '/music/y.mp3', suffix: 'mp3', size: 1000, bitRate: 662 }));
+  assert.deepEqual(walkFileInfo({ size: 0.4, bitRate: 0.4 }),
+    { filePath: null, fileSuffix: null, fileSize: null, bitRate: null });
+  db.upsertTrackMeta('zero', walkFileInfo({ size: 0.4, bitRate: 0.4 }));
+  assert.deepEqual(row('zero'), stored);
+  // A caller that skips walkFileInfo gets the same rule.
+  db.upsertTrackMeta('zero', { filePath: '   ', fileSuffix: ' ', fileSize: 0.4, bitRate: 0.4 });
+  assert.deepEqual(row('zero'), stored);
 });

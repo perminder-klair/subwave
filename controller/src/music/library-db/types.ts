@@ -192,6 +192,8 @@ export interface TrackMeta {
   bitRate?: number | null;
 }
 
+export type FileInfo = Required<Pick<TrackMeta, 'filePath' | 'fileSuffix' | 'fileSize' | 'bitRate'>>;
+
 export interface TrackEnrichment {
   lastfmTags: string[] | null;
   lyricExcerpt: string | null;

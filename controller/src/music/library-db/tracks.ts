@@ -3,7 +3,7 @@
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import { FACETS, clearFacetFailures, clearFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
-import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
@@ -166,13 +166,28 @@ export function textVectorDirtyIds(): string[] {
     .all() as Array<{ id: string }>).map(r => r.id);
 }
 
+// Rounds before it checks, so the test is on the value that gets stored: a stored
+// 0 is not NULL, and it would overwrite a good value through the COALESCE.
 function positiveInt(v: unknown): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// The one cleaning rule for a track's file facts. Anything it nulls counts as not
+// reported, so COALESCE keeps what is stored. Running it twice changes nothing.
+export function cleanFileInfo(raw: { [K in keyof FileInfo]?: unknown }): FileInfo {
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v : null);
+  return {
+    filePath: text(raw.filePath),
+    fileSuffix: text(raw.fileSuffix)?.toLowerCase() ?? null,
+    fileSize: positiveInt(raw.fileSize),
+    bitRate: positiveInt(raw.bitRate),
+  };
 }
 
 export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   const eraBefore = storedEra(id);
+  const file = cleanFileInfo(meta);
   requireDb()
     .prepare(
       `
@@ -234,10 +249,10 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.eraUntrusted == null ? null : meta.eraUntrusted ? 1 : 0,
       meta.genres?.length ? JSON.stringify(meta.genres) : null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
-      typeof meta.filePath === 'string' && meta.filePath !== '' ? meta.filePath : null,
-      typeof meta.fileSuffix === 'string' && meta.fileSuffix !== '' ? meta.fileSuffix.toLowerCase() : null,
-      positiveInt(meta.fileSize),
-      positiveInt(meta.bitRate),
+      file.filePath,
+      file.fileSuffix,
+      file.fileSize,
+      file.bitRate,
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);
 }
