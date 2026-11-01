@@ -384,13 +384,15 @@ test('a new track still gets whatever came back when its own lookup fails', asyn
   assert.equal(row('new').lastfmTrackTagsAt, null);
 });
 
-test('a genuine "nothing at all" clears a list that is no longer true', async () => {
-  seed('a', 'Gone', 'Song', { tags: ['stale'], vector: true });
+// The stored list may come from Navidrome's getArtistInfo2, and Last.fm's error 6
+// is "invalid parameters", not proof of anything about the act.
+test('a genuine "nothing at all" stamps the row and costs it no list', async () => {
+  seed('a', 'Gone', 'Song', { tags: ['from a custom navidrome'], vector: true });
   artistReplies.set('Gone', { body: { error: 6, message: 'The artist you supplied could not be found' } });
   await phaseEnrich([], false);
-  assert.equal(row('a').lastfmTags, null);
+  assert.deepEqual(row('a').lastfmTags, ['from a custom navidrome']);
   assert.ok(row('a').lastfmTrackTagsAt);
-  assert.deepEqual(db.textVectorDirtyIds(), ['a']);
+  assert.deepEqual(db.textVectorDirtyIds(), []);
 });
 
 test('duplicates share a call: on the normalised artist and title, and for the artist', async () => {

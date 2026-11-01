@@ -341,12 +341,14 @@ export function idsNeedingLastfmTrackTags(): string[] {
 }
 
 // The one write of a track-aware Last.fm list, shared by the bulk pass and the
-// retag route. A genuine answer replaces the list and stamps the row, hit or
-// miss. Anything else stamps nothing and never costs a row the list it has, so
-// an outage leaves the library as it found it; a row with no list takes what
-// did come back, so a new track isn't embedded bare. Only a real change touches
-// the list or dirties the vector: `lastfm_tags` is in the search keys' trigger,
-// and the embed text is built from this exact order. Returns the stored list.
+// retag route. A genuine answer stamps the row, hit or miss, and replaces the
+// list if it has tags on it: one with none says nothing about a list that may
+// have come from Navidrome. Anything else stamps nothing and never costs a row
+// the list it has, so an outage leaves the library as it found it; a row with no
+// list takes what did come back, so a new track isn't embedded bare. Only a real
+// change touches the list or dirties the vector: `lastfm_tags` is in the search
+// keys' trigger, and the embed text is built from this exact order. Returns the
+// stored list.
 export function recordLastfmTrackTags(
   id: string,
   lookup: { tags: string[]; answered: boolean },
@@ -357,7 +359,7 @@ export function recordLastfmTrackTags(
     | undefined;
   if (!row) return null;
   const stored = row.lastfm_tags ? safeParseArray(row.lastfm_tags) : [];
-  const next = lookup.answered || stored.length === 0 ? lookup.tags : stored;
+  const next = (lookup.answered && lookup.tags.length > 0) || stored.length === 0 ? lookup.tags : stored;
   if (JSON.stringify(next) !== JSON.stringify(stored)) {
     d.prepare(`UPDATE tracks SET lastfm_tags = ? WHERE id = ?`)
       .run(next.length ? JSON.stringify(next) : null, id);
