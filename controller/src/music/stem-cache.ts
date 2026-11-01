@@ -1,7 +1,7 @@
 // The analyzer writes cached head/tail stems on the shared volume. The controller manages
 // paths and evicts by the same priority the backfill uses.
 
-import { readdir, stat, rm, readFile, mkdir, chmod, writeFile } from 'node:fs/promises';
+import { access, constants, readdir, stat, rm, readFile, mkdir, chmod, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
@@ -532,9 +532,17 @@ function withPriorities(
   }));
 }
 
+// Probed before any delete rather than learned from a failed one: a fresh unplayed
+// track ranks below a stuck played one, so it would be gone before the sweep met the
+// first folder it could not delete. rm's catch still covers what this can't see.
+async function canDeleteInside(dir: string): Promise<boolean> {
+  return access(dir, constants.W_OK | constants.X_OK).then(() => true, () => false);
+}
+
 // Evict by ascending stem priority, then mtime, until the byte budget fits. Report failedDirs
 // and overBudgetBytes so callers can expose deletion failures; retry failed deletions next
-// sweep. #1257.
+// sweep. #1257. A folder that can't be deleted stays in the reported overage but leaves the
+// budget check: counting it would delete every folder that can go, and free nothing it holds.
 export async function sweep(budget = budgetBytes(), { force = false }: { force?: boolean } = {}): Promise<{
   removed: number;
   freedBytes: number;
@@ -567,17 +575,26 @@ export async function sweep(budget = budgetBytes(), { force = false }: { force?:
   }
 
   const ordered = stemEvictionOrder(withPriorities(dirs));
+  const canGo = await mapPool(ordered, SCAN_CONCURRENCY, d => canDeleteInside(d.dir));
+  const stuck = ordered.filter((_, i) => !canGo[i]);
   let removed = 0;
   let freedBytes = 0;
-  let failedDirs = 0;
-  for (const d of ordered) {
-    if (total <= budget) break;
+  let failedDirs = stuck.length;
+  let unevictable = stuck.reduce((n, d) => n + d.bytes, 0);
+  for (const d of ordered.filter((_, i) => canGo[i])) {
+    if (total - unevictable <= budget) break;
     try {
       await rm(d.dir, { recursive: true, force: true });
       total -= d.bytes;
       freedBytes += d.bytes;
       removed += 1;
-    } catch { failedDirs += 1; /* best-effort — retry next sweep */ }
+    } catch { failedDirs += 1; unevictable += d.bytes; /* best-effort — retry next sweep */ }
+  }
+  if (failedDirs > 0) {
+    console.warn(
+      `[stem-cache] ${failedDirs} folder(s) (${Math.round(unevictable / 1024 ** 2)} MB) cannot be deleted by this user: ` +
+      'left out of the budget check, so nothing is evicted in their place. Open them as their owner (docs/deployment.md).',
+    );
   }
   await writeSnapshot(snapshotFromWalk(total, dirs.length - removed));
   return { removed, freedBytes, failedDirs, overBudgetBytes: Math.max(0, total - budget) };
