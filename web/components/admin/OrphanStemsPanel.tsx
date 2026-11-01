@@ -83,20 +83,12 @@ const orphanKeys = {
   tracks: () => [...orphanKeys.all, 'tracks'] as const,
 };
 
-export function fetchOrphanState(fetcher: AdminFetch, signal?: AbortSignal) {
-  return adminJson<OrphanState>(fetcher, '/stems/orphans', undefined, signal);
-}
-
-export function fetchOrphanTracks(fetcher: AdminFetch, signal?: AbortSignal) {
-  return adminJson<OrphanTracks>(fetcher, '/stems/orphans/tracks', undefined, signal);
-}
-
 function useOrphanState(adminFetch: AdminFetch, enabled: boolean) {
   return useAdminQuery<OrphanState>({
     key: orphanKeys.state(),
     adminFetch,
     enabled,
-    request: fetchOrphanState,
+    request: (fetcher, signal) => adminJson<OrphanState>(fetcher, '/stems/orphans', undefined, signal),
   });
 }
 
@@ -107,7 +99,7 @@ function useOrphanTracks(adminFetch: AdminFetch, enabled: boolean) {
     key: orphanKeys.tracks(),
     adminFetch,
     enabled,
-    request: fetchOrphanTracks,
+    request: (fetcher, signal) => adminJson<OrphanTracks>(fetcher, '/stems/orphans/tracks', undefined, signal),
   });
 }
 

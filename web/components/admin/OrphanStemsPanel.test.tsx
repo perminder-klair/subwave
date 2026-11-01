@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -6,8 +7,6 @@ import {
   ORPHAN_CARD_SUB,
   OrphanReportView,
   PassResult,
-  fetchOrphanState,
-  fetchOrphanTracks,
   pendingWork,
   runDialog,
   runLabel,
@@ -128,12 +127,13 @@ test('a refused report keeps the toggle and Re-scan: the pass must stay reachabl
   assert.match(html, />Re-scan</);
 });
 
-const failing = (async () => new Response(JSON.stringify({ error: 'library closed' }), { status: 500 })) as never;
-
-test('a 500 from the report is an error, never data', async () => {
-  await assert.rejects(fetchOrphanState(failing), /library closed/);
-});
-
-test('a 500 from the track list is an error, never data', async () => {
-  await assert.rejects(fetchOrphanTracks(failing), /library closed/);
+// The audit needs each read written inside its useAdminQuery, so a read cannot
+// be called alone here, and adminJson's own tests pin that a 500 is an error.
+// This pins the other half: both reads use it, not a bare r.json(), which cached
+// the controller's { error } as if it were the report.
+test('both orphan reads go through adminJson', () => {
+  const source = readFileSync(new URL('./OrphanStemsPanel.tsx', import.meta.url), 'utf8');
+  assert.match(source, /adminJson<OrphanState>\(fetcher, '\/stems\/orphans', undefined, signal\)/);
+  assert.match(source, /adminJson<OrphanTracks>\(fetcher, '\/stems\/orphans\/tracks', undefined, signal\)/);
+  assert.doesNotMatch(source, /\.json\(\)/);
 });
