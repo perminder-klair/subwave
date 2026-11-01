@@ -17,7 +17,7 @@ import {
 
 const dry = (over: Partial<OrphanReport> = {}): OrphanReport => ({
   dryRun: true, keptCount: 10, quarantined: 0, quarantinedNames: [], released: [], deletedCount: 0,
-  deletedNames: [], agingCount: 0, supersededCount: 0, inFlight: 0, failed: 0, freedBytes: 0, ...over,
+  deletedNames: [], agingCount: 0, supersededCount: 0, inFlight: 0, failed: 0, quarantineEntries: 0, freedBytes: 0, ...over,
 });
 const pass = (over: Partial<OrphanReport> = {}) => dry({ dryRun: false, ...over });
 
@@ -159,4 +159,11 @@ test('a refetch that fails keeps the rows it already had, and says it failed', (
   const html = fold({ error: new Error('failed (500)'), rows: [row] });
   assert.match(html, /role="alert"/);
   assert.match(html, /Marionette/);
+});
+
+test('Show tracks counts every row the fold lists', () => {
+  // Quarantine entries past the week, or back in the library, are neither new
+  // orphans nor aging, and they are still rows.
+  assert.match(view(dry({ deletedCount: 2, released: ['a'], quarantineEntries: 3 })), /Show tracks \(3\)/);
+  assert.match(view(dry({ quarantined: 4, agingCount: 2, quarantineEntries: 2 })), /Show tracks \(6\)/);
 });

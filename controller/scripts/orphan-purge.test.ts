@@ -11,7 +11,7 @@
 
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
@@ -506,4 +506,18 @@ test('a collision re-reads the quarantined entry: what is not stems is never rep
   assert.equal(rep.failed, 1);
   rmSync(dir, { recursive: true, force: true });
   rmSync(join(ROOT, id), { recursive: true, force: true });
+});
+
+test('the report counts every quarantine entry, whatever a pass would do with it', async () => {
+  // Aged out and back in the library, these are neither new orphans nor aging,
+  // and the panel's Show tracks count has to include them.
+  const aged = seedStem();
+  const back = seedStem();
+  const now = NOW_BASE + 1100 * DAY;
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now });
+  const dry = await purge.runOrphanPurge({ knownIds: ['_sentinel', back], confirm: false, now: now + 8 * DAY });
+  const onDisk = readdirSync(QU).length;
+  assert.equal(dry.quarantineEntries, onDisk);
+  assert.ok(onDisk >= 2);
+  assert.ok(existsSync(join(QU, aged)));
 });

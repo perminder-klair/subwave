@@ -100,6 +100,8 @@ export interface PurgeReport {
   inFlight: number;
   /** Moves/deletes that failed this pass (permissions, squashed roots). */
   failed: number;
+  /** Everything in the quarantine, whatever a pass would do with it. */
+  quarantineEntries: number;
   /** True when the pass refused to run; `reason` says why. */
   refused?: boolean;
   reason?: string;
@@ -268,7 +270,7 @@ function emptyReport(dryRun: boolean): PurgeReport {
   return {
     dryRun, keptCount: 0, quarantined: 0, quarantinedNames: [], released: [],
     deletedCount: 0, deletedNames: [], agingCount: 0, supersededCount: 0, inFlight: 0, failed: 0,
-    freedBytes: 0,
+    quarantineEntries: 0, freedBytes: 0,
   };
 }
 
@@ -338,6 +340,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     }
     return { name, known: known.has(name), ageMs, liveSlotFree };
   });
+  report.quarantineEntries = quEntries.length;
   const qplan = planQuarantinePurge(quEntries, { confirm: opts.confirm, ...(opts.graceMs !== undefined ? { graceMs: opts.graceMs } : {}) });
   // The delete is the step nothing undoes, so it reads the dir again: an entry
   // that is not stems (an earlier build moved it) stays where it is.

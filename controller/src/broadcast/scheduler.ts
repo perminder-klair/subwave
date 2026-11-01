@@ -1199,7 +1199,7 @@ async function nightlyDoctor() {
 // a week. Off by default (audio.stemOrphanPurgeEnabled); the report says
 // nothing on a quiet pass, and a refused pass (offline share, empty id set)
 // is an operator-facing error because it means the purge is enabled against a
-// cache it cannot see. 04:47 keeps it clear of the 02:00 cleanup and the
+// cache it cannot see. 04:47 keeps it clear of the hourly cleanup at :02 and the
 // 04:17 doctor.
 export async function stemOrphanPurgeTick() {
   try {

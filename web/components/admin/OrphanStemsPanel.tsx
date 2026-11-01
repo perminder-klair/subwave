@@ -41,6 +41,8 @@ export interface OrphanReport {
   supersededCount: number;
   inFlight: number;
   failed: number;
+  /** Everything in the quarantine, whatever a pass would do with it. */
+  quarantineEntries: number;
   refused?: boolean;
   reason?: string;
   /** Why the automatic pass would refuse this plan; a manual confirm still runs. */
@@ -256,7 +258,7 @@ export function OrphanReportView({
           onClick={onToggleTracks}
           title="The dirs by track name — resolved from play history and the event log; ids with no surviving name stay listed, unknown."
         >
-          {showTracks ? 'Hide tracks' : `Show tracks (${report.quarantined + report.agingCount})`}
+          {showTracks ? 'Hide tracks' : `Show tracks (${report.quarantined + report.quarantineEntries})`}
         </Btn>
         <Btn sm tone="solid" disabled={pending === 0 || busy} onClick={onRun}>
           {busy ? 'Working…' : runLabel(report)}
