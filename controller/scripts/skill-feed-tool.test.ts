@@ -43,6 +43,7 @@ function atom(count: number, prefix: string): string {
 }
 
 let requests = 0;
+let flakyDown = false;
 const server: Server = createServer((req, res) => {
   requests++;
   const path = (req.url || '').split('?')[0];
@@ -101,6 +102,11 @@ const server: Server = createServer((req, res) => {
     res.end(`<?xml version="1.0"?><rss version="2.0"><channel><title>Local</title>`
       + `<item><title>Local 1</title></item><item><title>Story 2</title></item><item><title>Local 2</title></item>`
       + `</channel></rss>`);
+    return;
+  }
+  if (path === '/flaky' && flakyDown) {
+    res.writeHead(503);
+    res.end('down');
     return;
   }
   if (path.startsWith('/many/')) {
@@ -623,6 +629,25 @@ test('one failing feed is skipped while another answers, and is reported once un
   assert.match(warnings[0], /127\.0\.0\.1:\d+\/boom failed and was skipped.*HTTP 500/);
   await some({}, {});
   assert.equal(warnings.length, 1, 'the same failure is not repeated on every fire');
+});
+
+test('a failed feed is reported again only after it has recovered', async () => {
+  const warnings: string[] = [];
+  const tool = makeFeedTool('flaky', { url: feedUrl('/other'), maxItems: 10, extraUrls: [feedUrl('/flaky')] }, m => warnings.push(m));
+  try {
+    flakyDown = true;
+    await tool({}, {});
+    await tool({}, {});
+    assert.equal(warnings.length, 1, 'down: reported once');
+    flakyDown = false;
+    await tool({}, {});
+    assert.equal(warnings.length, 1, 'recovering is not itself a warning');
+    flakyDown = true;
+    await tool({}, {});
+    assert.equal(warnings.length, 2, 'down again after a recovery: reported again');
+  } finally {
+    flakyDown = false;
+  }
 });
 
 test('a failing feed is the answer when the feeds that answered have none', async () => {
