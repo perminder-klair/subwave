@@ -1755,7 +1755,16 @@ export function requestMatchingEnabled(): boolean {
   return settings.get().llm?.requestMatching === 'agentic';
 }
 
-export async function runRequest(queue: any, { requester, text, signal, introBudgetMs }: { requester: string; text: string; signal?: AbortSignal; introBudgetMs?: () => number }) {
+type RequestRunOptions = {
+  requester: string;
+  text: string;
+  signal?: AbortSignal;
+  introBudgetMs?: () => number;
+  // Called when the run really used identifyRequestedTrack, whatever it answers.
+  onEvidenceRun?: () => void;
+};
+
+export async function runRequest(queue: any, { requester, text, signal, introBudgetMs, onEvidenceRun }: RequestRunOptions) {
   if (!requestMatchingEnabled() || requestBreakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
@@ -1763,7 +1772,7 @@ export async function runRequest(queue: any, { requester, text, signal, introBud
   if (!budget.requestsAllowed()) return null;
 
   try {
-    const out = await runRequestViaAgent(queue, { requester, text, signal, introBudgetMs });
+    const out = await runRequestViaAgent(queue, { requester, text, signal, introBudgetMs, onEvidenceRun });
     requestBreakerSuccess();
     return out;
   } catch (err) {
@@ -1772,7 +1781,7 @@ export async function runRequest(queue: any, { requester, text, signal, introBud
   }
 }
 
-async function runRequestViaAgent(queue: any, { requester, text, signal, introBudgetMs }: { requester: string; text: string; signal?: AbortSignal; introBudgetMs?: () => number }) {
+async function runRequestViaAgent(queue: any, { requester, text, signal, introBudgetMs, onEvidenceRun }: RequestRunOptions) {
   return withTrace({ kind: 'request', requester }, async () => {
     const throwIfAborted = () => {
       if (!signal?.aborted) return;
@@ -1826,6 +1835,7 @@ async function runRequestViaAgent(queue: any, { requester, text, signal, introBu
     throwIfAborted();
     const { toolCalls, extras } = run;
     const evidenceToolCalls = toolCalls.filter((call: any) => call?.name === 'identifyRequestedTrack');
+    if (evidenceToolCalls.length) onEvidenceRun?.();
     const verifiedEvidenceIds = new Set<string>(evidenceToolCalls.flatMap((call: any) => {
       const result = typeof call?.result === 'string'
         ? (() => { try { return JSON.parse(call.result); } catch { return null; } })()

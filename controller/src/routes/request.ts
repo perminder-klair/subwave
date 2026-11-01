@@ -569,12 +569,18 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // deterministic-first routing belongs to a separate follow-up policy.
   const needsEvidenceIdentification = isLyricOrFilmDescription(text) && !framedTitleOnly;
   if (djAgent.requestMatchingEnabled()) {
-    if (needsEvidenceIdentification) {
-      entry.stages.push('web-evidence');
+    // A miss ends the request only when identifyRequestedTrack actually looked.
+    // With requestWebResolve off the tool is never offered, and without this a
+    // null answer on any four free-form words lost "Smells Like Teen Spirit".
+    let evidenceRan = false;
+    const noteEvidenceRun = () => {
+      if (evidenceRan) return;
+      evidenceRan = true;
+      entry.stages!.push('web-evidence');
       entry.evidenceSource = settings.get().search?.provider || 'duckduckgo';
-    }
+    };
     try {
-      const agentRes = await djAgent.runRequest(queue, { requester, text, signal, introBudgetMs: () => requestIntroTimeoutMs(entry) });
+      const agentRes = await djAgent.runRequest(queue, { requester, text, signal, introBudgetMs: () => requestIntroTimeoutMs(entry), onEvidenceRun: noteEvidenceRun });
       throwIfRequestResolutionAborted(signal);
       if (agentRes) {
         // Thread the agent's own echo-guard verdict into the durable log; the
@@ -617,13 +623,14 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
         });
       }
     } catch (err) {
-      if (needsEvidenceIdentification && err instanceof RequestIdentificationMiss) {
+      if (needsEvidenceIdentification && evidenceRan && err instanceof RequestIdentificationMiss) {
         entry.path = 'agent';
         entry.pickSource = 'agent:evidence-miss';
         entry.outcome = 'no-match';
         return failed(EVIDENCE_MISS_REFUSAL);
       }
       if (needsEvidenceIdentification && isWebSearchProviderError(err)) {
+        noteEvidenceRun();
         entry.path = 'agent';
         entry.pickSource = 'agent:provider-error';
         entry.outcome = 'provider-error';

@@ -287,7 +287,7 @@ test('a song request naming only a film goes through evidence identification', a
 
 test('an evidence-agent miss does not enter the unsupported direct-request path', async () => {
   await settings.update({ llm: { requestMatching: 'agentic' } } as never);
-  agentResult = { object: {}, steps: 1, toolCalls: [], extras: { seen: new Map() } };
+  agentResult = { object: {}, steps: 1, toolCalls: [{ name: 'identifyRequestedTrack' }], extras: { seen: new Map() } };
   const result = await submit('phull koyi vilyat wala lai geya ghod da main reh geya keyariyan');
   assert.equal(result.status, 'failed');
   assert.equal(result.outcome, 'no-match');
@@ -295,6 +295,7 @@ test('an evidence-agent miss does not enter the unsupported direct-request path'
   assert.equal(queue.upcoming.length, 0);
   assert.equal(bodies.length, 0, 'an evidence miss must not make a second direct matcher call');
   assert.equal(requestLog.snapshot(1)[0].pickSource, 'agent:evidence-miss');
+  assert.ok(requestLog.snapshot(1)[0].stages.includes('web-evidence'));
 });
 
 test('an evidence agent that declines its candidates is an honest miss, not a re-picked match', async () => {
@@ -1286,3 +1287,35 @@ test('the ceiling is the agent deadline plus a fallback reserve, and it still en
   assert.equal(entry.outcome, 'timeout');
   assert.equal(queue.upcoming.length, 0);
 });
+
+for (const [text, song, fields] of [
+  ['Smells Like Teen Spirit', { title: 'Smells Like Teen Spirit', artist: 'Nirvana' }, { title: 'Smells Like Teen Spirit', artist: 'Nirvana' }],
+  ['Stairway To Heaven Led Zeppelin', { title: 'Stairway To Heaven', artist: 'Led Zeppelin' }, { title: 'Stairway To Heaven', artist: 'Led Zeppelin' }],
+  ["Don't Stop Me Now", { title: "Don't Stop Me Now", artist: 'Queen' }, { title: "Don't Stop Me Now", artist: 'Queen' }],
+  ['Queen Bohemian Rhapsody please', { title: 'Bohemian Rhapsody', artist: 'Queen' }, { title: 'Bohemian Rhapsody', artist: 'Queen' }],
+] as Array<[string, { title: string; artist: string }, Record<string, unknown>]>) {
+  test(`a null answer without an evidence run reaches the resolver: ${text}`, async () => {
+    await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+    agentResult = agentFoundNothing();
+    catalogueSongs = [filler, { ...exact, id: 'wanted', ...song }];
+    modelOutput = { kind: 'track', search_terms: [song.title], scope: 'song', ...fields };
+    const result = await submit(text);
+    assert.equal(result.outcome, 'matched');
+    assert.equal(queue.upcoming[0].track.id, 'wanted');
+    const logged = requestLog.snapshot(1)[0];
+    assert.ok(!logged.stages.includes('web-evidence'), 'no web search could happen');
+    assert.equal(logged.evidenceSource, null);
+  });
+}
+
+for (const text of ['play something nice for my mum', 'i want to hear some good music']) {
+  test(`a vibe with a null answer and no evidence run still gets a stand-in: ${text}`, async () => {
+    await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+    agentResult = agentFoundNothing();
+    catalogueSongs = [filler];
+    modelOutput = { kind: 'track', title: null, search_terms: [], scope: 'song' };
+    const result = await submit(text);
+    assert.equal(result.outcome, 'substituted');
+    assert.equal(queue.upcoming.length, 1);
+  });
+}
