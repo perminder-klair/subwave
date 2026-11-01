@@ -67,7 +67,7 @@ test('the Navidrome signal: re-imported after the track was last measured', () =
   assert.equal(policy.changedAfterMeasure('2026-10-28T15:01:20Z', null), false, 'never measured: nothing stale');
   assert.equal(policy.changedAfterMeasure(null, '2026-10-28T13:36:32Z'), false);
   assert.equal(policy.changedAfterMeasure('garbage', '2026-10-28T13:36:32Z'), false);
-  assert.equal(policy.changesFloor(null), null, 'no mark: every song');
+  assert.equal(policy.changesFloor(null), null, 'no mark: no floor here, the caller stops at the oldest measurement');
   assert.equal(policy.changesFloor('2026-10-28T15:00:00Z'), Date.parse('2026-10-28T15:00:00Z') - policy.CHANGE_MARK_MARGIN_MS);
 });
 

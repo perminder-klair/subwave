@@ -304,7 +304,8 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 // reused while they can be trusted:
 // - the only writer of stem dirs is the analysis pass, which marks the
 //   snapshot `pending` while it runs and adds the dirs it wrote when it ends;
-// - evictions are made by sweep(), which rewrites the snapshot from its walk;
+// - evictions are made by sweep(), which rewrites the snapshot from its walk,
+//   and by forgetStems(), which deletes the snapshot so the next read walks;
 // - anything else (dirs deleted or copied in by hand, a pass that died before
 //   settling) is caught by a full walk at least every SNAPSHOT_MAX_AGE_MS.
 export const SNAPSHOT_MAX_AGE_MS = 24 * 3600_000;

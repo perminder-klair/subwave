@@ -37,7 +37,8 @@ export function changedAfterMeasure(
 
 // How far back each walk asks Navidrome for changes: from the newest change
 // time the previous walk saw, less a margin for clock skew and a scan still
-// writing while the previous walk read. No mark (the first walk): everything.
+// writing while the previous walk read. No mark (the first walk) is null here,
+// and file-changes.changedFiles then stops at the library's oldest measurement.
 // A mark in the future (saved before the cap below, or by a skewed clock) is
 // read as now: above every real change, it would blind the signal.
 export const CHANGE_MARK_MARGIN_MS = 6 * 3_600_000;
