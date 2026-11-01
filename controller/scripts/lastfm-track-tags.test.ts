@@ -271,6 +271,23 @@ test('off: a pass makes exactly the calls it always did and writes nothing new',
   assert.equal(asked.length, 0, 'a fully-tagged library costs nothing');
 });
 
+// Real Last.fm answers a blank api_key with 400 + error 6, which reads as a miss:
+// stamped, every row in the library would be done and never asked.
+test('a key of only spaces counts as no key for track tags', async () => {
+  const saved = process.env.LASTFM_API_KEY;
+  process.env.LASTFM_API_KEY = '   ';
+  try {
+    assert.equal(lastfm.lastfmTrackTagsEnabled({ lastfmTrackTags: true }, lastfm.hasLastfmKey()), false);
+    seed('a', 'Act', 'Song', { tags: ['kept'] });
+    await phaseEnrich([], false);
+    assert.equal(trackAsks().length, 0);
+    assert.deepEqual(row('a').lastfmTags, ['kept']);
+    assert.equal(row('a').lastfmTrackTagsAt, null);
+  } finally {
+    process.env.LASTFM_API_KEY = saved;
+  }
+});
+
 test('on with no key: nothing reaches Last.fm and nothing is stamped', async () => {
   seed('a', 'A', 'One', { tags: ['old'] });
   delete process.env.LASTFM_API_KEY;

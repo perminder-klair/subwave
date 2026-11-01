@@ -34,12 +34,17 @@ export function lastfmEnrichEnabled(cfgValue: unknown, hasKey: boolean): boolean
 }
 
 // Track-level tags sit on top of that gate and are strictly opt-in. They need a
-// key whatever the setting says: keyless installs stay on getArtistInfo2.
+// key whatever the setting says: keyless installs stay on getArtistInfo2. A key
+// of only spaces is none: Last.fm answers it with error 6, which reads as a miss,
+// so a pass would stamp the whole library without having asked about any of it.
 export function lastfmTrackTagsEnabled(
   enrichCfg: { lastfmTags?: unknown; lastfmTrackTags?: unknown },
   hasKey: boolean,
 ): boolean {
-  return enrichCfg.lastfmTrackTags === true && hasKey && lastfmEnrichEnabled(enrichCfg.lastfmTags, hasKey);
+  return enrichCfg.lastfmTrackTags === true
+    && hasKey
+    && resolveKey().trim() !== ''
+    && lastfmEnrichEnabled(enrichCfg.lastfmTags, hasKey);
 }
 
 // `answered` is true for a hit AND for a genuine "not found"; it is what a
