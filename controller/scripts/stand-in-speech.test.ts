@@ -115,11 +115,13 @@ const GUEST = { ...template, id: 'p_guest', name: 'Niki', language: '' };
 const SHOW = 's_stand_in';
 
 let spoken: string[] = [];
+const droppedAsStandIn = () => queue.djLog.some(entry => /dropped a stand-in line/.test(entry.message));
 const wav = join(root, 'test.wav');
 await writeSilentWav(wav, 100);
 
 beforeEach(async () => {
   spoken = [];
+  queue.djLog = [];
   queue.senderBusy = true;
   queue.upcoming = [];
   queue.current = null;
@@ -170,7 +172,8 @@ test('announce still airs real speech', async () => {
 });
 
 test('the deferred path drops a stand-in too', async () => {
-  await queue.announceAtNextTrack('[placeholder]', 'station-id', { persona: HOST as never });
+  // Not a bracket: normalising alone empties one, gate or no gate.
+  await queue.announceAtNextTrack('TBD', 'station-id', { persona: HOST as never });
   assert.deepEqual(spoken, []);
 });
 
@@ -185,7 +188,7 @@ test('an exchange airs its real lines and skips a stand-in one', async () => {
 test('an exchange whose every line is a stand-in airs nothing', async () => {
   const aired = await queue.announceExchange([
     { persona: HOST as never, text: 'placeholder' },
-    { persona: GUEST as never, text: '[Insert reply here]' },
+    { persona: GUEST as never, text: 'TBD' },
   ], 'banter', { castNames: [HOST.name, GUEST.name] });
   assert.equal(aired, false);
   assert.deepEqual(spoken, []);
@@ -212,6 +215,7 @@ for (const [shape, line] of Object.entries(TEMPLATES)) {
   test(`the deferred path drops ${shape}`, async () => {
     await queue.announceAtNextTrack(line, 'station-id', { persona: HOST as never });
     assert.deepEqual(spoken, []);
+    assert.ok(droppedAsStandIn(), 'the gate dropped it, not the normaliser');
   });
 
   test(`an exchange skips ${shape} and airs the real line`, async () => {
@@ -221,6 +225,7 @@ for (const [shape, line] of Object.entries(TEMPLATES)) {
       { persona: GUEST as never, text: line },
     ], 'banter', { castNames: [HOST.name, GUEST.name] });
     assert.deepEqual(spoken, [real]);
+    assert.ok(droppedAsStandIn(), 'the gate dropped it, not the normaliser');
   });
 
   test(`a request intro that is ${shape} is queued without it`, async () => {

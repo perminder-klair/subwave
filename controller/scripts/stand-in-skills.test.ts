@@ -17,7 +17,7 @@ import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 const root = createTempDir(join(tmpdir(), 'subwave-stand-in-skills-'));
 process.env.STATE_DIR = root;
 
-const SOLO = ['solo-word', 'solo-bracket'];
+const SOLO = ['solo-word', 'solo-bracket', 'solo-direct', 'solo-forced'];
 const COHOSTED = ['duo-agent', 'duo-direct', 'duo-forced', 'curiosity'];
 for (const slug of [...SOLO, ...COHOSTED]) {
   const dir = join(root, 'skills', slug);
@@ -30,7 +30,7 @@ const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { loadSkills } = await import('../src/skills/loader.js');
-const { agenticTick, directorAgent, runCapability } = await import('../src/skills/_agent.js');
+const { agenticTick, directorAgent, forcedDirectorAgent, runCapability } = await import('../src/skills/_agent.js');
 const { primaryLeg } = await import('../src/llm/internal/provider/legs.js');
 const { writeSilentWav } = await import('../src/audio/wav-silence.js');
 const { recentAiredCuriosity } = await import('../src/skills/curiosity.js');
@@ -40,6 +40,7 @@ const seams = queue as unknown as Seams;
 const realSpeak = seams._speak;
 const realAirVoice = seams._airVoice;
 const realDirectorRun = directorAgent.run;
+const realForcedRun = forcedDirectorAgent.run;
 
 const template = settings.get().personas[0];
 const HOST = { ...template, id: 'p_host', name: 'Manolo X', language: '', frequency: 'aggressive' };
@@ -114,31 +115,78 @@ beforeEach(() => {
   seams._speak = async (text: string) => { spoken.push(text); return wav; };
   seams._airVoice = async () => ({ voiceId: 'v', clipMs: 1_000, aired: Promise.resolve(null) });
   directorAgent.run = realDirectorRun;
+  forcedDirectorAgent.run = realForcedRun;
 });
 
 after(async () => {
   seams._speak = realSpeak;
   seams._airVoice = realAirVoice;
   directorAgent.run = realDirectorRun;
+  forcedDirectorAgent.run = realForcedRun;
   queue.senderBusy = false;
   await new Promise(resolve => setTimeout(resolve, 1_100));
   await removeTempDir(root);
+});
+
+const directorWrites = (kind: string, text: string) => {
+  const runs = { count: 0 };
+  directorAgent.run = (async () => {
+    runs.count += 1;
+    return { object: { air: true, reason: 'tests', segment: { kind, text, sfx: null } }, steps: 1, toolCalls: [], extras: undefined };
+  }) as never;
+  return runs;
+};
+
+for (const [skill, line] of [['solo-word', 'placeholder'], ['solo-bracket', '[Insert weather update here]']]) {
+  test(`a solo skill whose line is ${line} backs off`, async () => {
+    await station({ skill });
+    const director = directorWrites(skill, line);
+
+    await agenticTick(ctx());
+    await agenticTick(ctx());
+
+    assert.equal(director.count, 1, 'the second tick does not offer the skill again');
+    assert.deepEqual(spoken, []);
+    assert.deepEqual(errors(), []);
+  });
+}
+
+test('a solo skill whose line is a stand-in backs off in pool mode', async t => {
+  await station({ skill: 'solo-direct', runtime: 'direct' });
+  stubModel(t);
+  reply = { air: true, reason: 'tests', text: 'placeholder', sfx: null };
+
+  await agenticTick(ctx());
+  const afterFirstTick = modelCalls;
+  await agenticTick(ctx());
+
+  assert.ok(afterFirstTick > 0, 'the model did write the line');
+  assert.equal(modelCalls, afterFirstTick, 'the second tick spends no model call');
+  assert.deepEqual(spoken, []);
+});
+
+test('a forced run that writes a stand-in holds the director off too', async () => {
+  await station({ skill: 'solo-forced' });
+  forcedDirectorAgent.run = (async () => ({ object: { text: 'placeholder', sfx: null }, steps: 1, toolCalls: [], extras: undefined })) as never;
+  const director = directorWrites('solo-forced', 'A real line.');
+
+  const run = await runCapability('solo-forced', ctx());
+  await agenticTick(ctx());
+
+  assert.match(String(run.reason), /stand-in/);
+  assert.equal(director.count, 0, 'the skill that just wrote a stand-in is not offered');
 });
 
 test('a co-hosted skill that writes only stand-ins backs off, through the director', async t => {
   await station({ skill: 'duo-agent', guests: true });
   stubModel(t);
   reply = discussion('placeholder', '[Insert reply here]');
-  let directorRuns = 0;
-  directorAgent.run = (async () => {
-    directorRuns += 1;
-    return { object: { air: true, reason: 'tests', segment: { kind: 'duo-agent', text: 'A line.', sfx: null } }, steps: 1, toolCalls: [], extras: undefined };
-  }) as never;
+  const director = directorWrites('duo-agent', 'A line.');
 
   await agenticTick(ctx());
   await agenticTick(ctx());
 
-  assert.equal(directorRuns, 1, 'the second tick does not offer the skill again');
+  assert.equal(director.count, 1, 'the second tick does not offer the skill again');
   assert.deepEqual(spoken, []);
   assert.deepEqual(errors(), [], 'a stand-in is a stand-down, not a render failure');
 });
