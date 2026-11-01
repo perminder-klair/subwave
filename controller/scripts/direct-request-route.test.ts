@@ -1349,3 +1349,86 @@ test('a null answer after a real evidence run stays a miss even with verified ca
   assert.equal(queue.upcoming.length, 0);
   assert.equal(bodies.length, 0, 'a declined answer must not spend a re-pick');
 });
+
+const titleWords = ['Focus', 'Sunny', 'Love', 'Rain', 'Work', 'Morning', 'Rock', 'Party', 'Dance'];
+for (const word of titleWords) {
+  const track = { id: `title-${word}`, title: word, artist: 'Fixture Artist', duration: 200 };
+  test(`a word that is also an attribute reaches the catalogue as a title: ${word}`, async () => {
+    catalogueSongs = [filler, track];
+    genreSongs = [filler];
+    const result = await submit(`play ${word}`);
+    assert.equal(result.outcome, 'matched');
+    assert.equal(queue.upcoming[0].track.id, track.id);
+    assert.equal(bodies.length, 0, 'no model is needed to find a title the library has');
+  });
+
+  test(`the same word is found when the agent comes back empty and the interpreter is down: ${word}`, async () => {
+    await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+    agentResult = agentFoundNothing();
+    modelError = true;
+    catalogueSongs = [filler, track];
+    genreSongs = [filler];
+    const result = await submit(`play ${word}`);
+    assert.equal(result.outcome, 'matched');
+    assert.equal(queue.upcoming[0].track.id, track.id);
+  });
+}
+
+test('a bare attribute word with no such title or artist keeps its attribute reading', async () => {
+  catalogueSongs = [filler];
+  genreSongs = [filler];
+  const result = await submit('play Rock');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, filler.id);
+});
+
+test('a bare attribute word gets no fuzzy title reading', async () => {
+  catalogueSongs = [filler, { id: 'rocks', title: 'Rocks', artist: 'Primal Scream', duration: 200 }];
+  genreSongs = [filler];
+  const result = await submit('play Rock');
+  assert.equal(queue.upcoming[0].track.id, filler.id, JSON.stringify(result));
+});
+
+test('a bare attribute word can be an artist', async () => {
+  const band = { id: 'love-band', title: 'Alone Again Or', artist: 'Love', duration: 200 };
+  catalogueSongs = [filler, band];
+  const result = await submit('play Love');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, band.id);
+});
+
+test('framing words say an attribute was meant, so a same-named track does not win', async () => {
+  catalogueSongs = [filler, { id: 'title-rock', title: 'Rock', artist: 'Fixture Artist', duration: 200 }];
+  genreSongs = [filler];
+  const result = await submit('play some rock');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, filler.id);
+});
+
+test('a quoted attribute word is a name, so a miss takes no pool', async () => {
+  catalogueSongs = [filler];
+  genreSongs = [filler];
+  const result = await submit('play "Rock"');
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(queue.upcoming.length, 0);
+});
+
+const vertigo = { id: 'vertigo', title: 'Vertigo', artist: 'U2', genre: 'Rock', duration: 200 };
+test('a digit name beside a genre stays a name: the interpreter reads "play U2 rock"', async () => {
+  catalogueSongs = [filler, vertigo];
+  genreSongs = [filler];
+  modelOutput = { kind: 'track', title: null, artist: 'U2', genre: 'Rock', search_terms: [], scope: 'song' };
+  const result = await submit('play U2 rock');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, vertigo.id);
+  assert.equal(bodies.length, 1);
+});
+
+test('"play U2 rock" with the interpreter down never claims a match on another artist', async () => {
+  catalogueSongs = [filler];
+  genreSongs = [filler];
+  modelError = true;
+  const result = await submit('play U2 rock');
+  assert.notEqual(result.outcome, 'matched');
+  assert.equal(queue.upcoming.length, 0);
+});

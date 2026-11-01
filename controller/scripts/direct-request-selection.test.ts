@@ -1137,3 +1137,27 @@ test('punctuation-only identities stay distinct and survive literal parsing', ()
   assert.equal(modelFreeRequest('Normal People - !!!').title, '!!!');
   assert.equal(modelFreeRequest('Normal People by !!!').artist, '!!!');
 });
+
+
+test('a digit or non-Latin word beside an attribute keeps the request a name', () => {
+  for (const [text, title] of [['play U2 rock', 'U2 rock'], ['play 2Pac rap', '2Pac rap'], ['play Love 2', 'Love 2'], ['तेरे बिना love', 'तेरे बिना love']]) {
+    const literal = modelFreeRequest(text!);
+    assert.equal(literal.title, title, text);
+    assert.equal(literal.genre ?? null, null, text);
+    assert.equal(literal.mood ?? null, null, text);
+  }
+});
+
+test('native-script framing around an attribute is still framing', () => {
+  assert.equal(modelFreeRequest('कुछ शांत संगीत बजाओ').mood, 'calm');
+  assert.equal(modelFreeRequest('ਪੰਜਾਬੀ ਸੰਗੀਤ ਚਲਾਓ').language, 'Punjabi');
+  assert.equal(modelFreeRequest('ਪੰਜਾਬੀ ਗੀਤ').language, 'Punjabi');
+});
+
+test('only unframed attribute words are offered to the catalogue as a name', () => {
+  assert.equal(modelFreeRequest('play Focus').bareName, 'Focus');
+  assert.equal(modelFreeRequest('Morning.').bareName, 'Morning');
+  assert.equal(modelFreeRequest('play some rock').bareName, undefined);
+  assert.equal(modelFreeRequest('rock music').bareName, undefined);
+  assert.equal(modelFreeRequest('something like Focus').similarTo?.title, 'Focus');
+});

@@ -57,6 +57,10 @@ export interface RequestMatch {
     title: string;
     wholeTitle: string;
   };
+  // Set when every word of the request is also an attribute and no framing
+  // says which was meant ("play Focus"). The resolver tries these words as an
+  // exact title and artist before any attribute pool.
+  bareName?: string;
   // A named similarity request is resolved through the same recording
   // identity verifier before its neighbours are considered.
   similarTo?: {
@@ -750,7 +754,13 @@ export function rankRequestCandidates(
       || String(a.song.id).localeCompare(String(b.song.id)));
 }
 
-const ATTRIBUTE_CONNECTORS = new Set(['and', 'or', 'in', 'en', 'de', 'में', 'ਵਿੱਚ', 'vibes', 'vibe']);
+// Framing a listener writes around an attribute: joiners, plus "some", "music",
+// "songs" and "play" in the scripts the mood and language aliases cover.
+const ATTRIBUTE_CONNECTORS = new Set([
+  'and', 'or', 'in', 'en', 'de', 'में', 'ਵਿੱਚ', 'vibes', 'vibe',
+  'कुछ', 'संगीत', 'गाना', 'गाने', 'गीत', 'बजाओ', 'चलाओ', 'सुनाओ', 'लगाओ',
+  'ਕੁਝ', 'ਸੰਗੀਤ', 'ਗਾਣਾ', 'ਗਾਣੇ', 'ਗੀਤ', 'ਚਲਾਓ', 'ਸੁਣਾਓ', 'ਲਗਾਓ',
+].map(requestName));
 
 function knownAttributeToken(token: string): boolean {
   return !!(resolveRequestMood(token)
@@ -759,9 +769,10 @@ function knownAttributeToken(token: string): boolean {
 
 // Attribute recognition is a whole-request decision. Resolving a single token
 // such as "dance" is not enough evidence: it is also a common title word.
-// Unknown Latin words beside a recognised attribute keep the input on the
+// Any unknown word beside a recognised attribute keeps the input on the
 // named-title path, so "I wanna dance with somebody who loves me" is not
-// reduced to the genre "dance".
+// reduced to the genre "dance". That holds for digits and other scripts too:
+// "U2 rock" names a band and "तेरे बिना love" a song.
 function isAttributeOnlyRequest(
   attributeBody: string,
   languagePhrase: RegExpMatchArray | null,
@@ -773,7 +784,7 @@ function isAttributeOnlyRequest(
     .filter(Boolean);
   const allowed = new Set([...canonicalTerms, ...ATTRIBUTE_CONNECTORS]);
   const inputTokens = requestName(attributeBody).split(' ').filter(Boolean);
-  return inputTokens.every(token => allowed.has(token) || knownAttributeToken(token) || !/^[a-z]+$/iu.test(token));
+  return inputTokens.every(token => allowed.has(token) || knownAttributeToken(token));
 }
 
 export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): boolean {
@@ -832,7 +843,7 @@ export function modelFreeRequest(text: string): RequestMatch {
       language: null, mood: null, sort: null, scope: 'song',
       search_terms: [],
       similarTo: {
-        title: seed.title || null,
+        title: seed.title || seed.bareName || null,
         artist: seed.artist || null,
         album: seed.album || null,
         releaseContext: seed.releaseContext,
@@ -868,6 +879,8 @@ export function modelFreeRequest(text: string): RequestMatch {
     ])
     && !/\s+(?:by|from)\s+/iu.test(cleaned)
     && !/[\u0000,]|\s[-–—]\s/u.test(cleaned)
+    // A quoted word is a name, whatever else it could mean.
+    && !/^["'“‘]/u.test(cleaned)
     && cleaned.split(/\s+/u).length <= 12) {
     const languageRequested = !!inferredLanguage && (explicitLanguageCue || nativeScriptCue || !!genreLanguage || !inferredGenre)
       && !/\b(?:genre|style)\b/iu.test(cleaned);
@@ -882,6 +895,7 @@ export function modelFreeRequest(text: string): RequestMatch {
       language: languageRequested ? inferredLanguage : null,
       mood: inferredMood, sort: null, scope: 'song', search_terms: [],
       unsupported: [], intent: conditions.join(' '), ack: '',
+      ...(attributeBody === cleaned ? { bareName: cleaned.replace(/[.!?]+$/u, '') } : {}),
     };
   }
   // A trailing language condition stays explicit even without interpretation.
@@ -1146,8 +1160,12 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   // Named title+artist requests use this to prevent a miss from becoming an
   // unrelated artist, search, mood, or starred-track fallback.
   exactOnly?: boolean;
+  // Exact catalogue proof only. Bare words get no fuzzy reading, or "rock"
+  // would land on a track called "Rocks".
+  exactIdentity?: boolean;
   random?: () => number;
-  choose?(pool: RequestSong[]): RequestSong | null;
+  // `ranked` says the pool is best-first, so order matters to the choice.
+  choose?(pool: RequestSong[], options?: { ranked?: boolean }): RequestSong | null;
   signal?: AbortSignal;
 }): Promise<RequestSelection> {
   const { catalog, recentIds, queuedIds, currentId } = deps;
@@ -1182,6 +1200,20 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     ? nameSearchTerms(match).filter(term => inRequest(deps.text!, term)) : [];
   // Once a named song missed, a pool draw only stands in for it.
   let standingIn = false;
+  // Every word is also an attribute, so only the catalogue can say which was
+  // meant. This needs no model, so it holds with the interpreter skipped or
+  // down, and it runs first because the attribute is still a good answer to a
+  // miss but never a good answer to a song the library has.
+  if (match.bareName) {
+    const named = await resolveDirectRequest({
+      kind: 'track', title: match.bareName, artist: null, album: null, scope: 'song', literal: true, titleOnly: true,
+    }, {
+      ...deps, text: undefined, exactOnly: true, exactIdentity: true, choose: undefined,
+      similarSongs: undefined, similarSeedSongs: undefined, fallbackSongs: async () => [],
+    });
+    errors.push(...named.errors);
+    if (named.track) return { ...named, errors };
+  }
   const moodPool = match.mood ? await safe('mood tracks', () => deps.moodSongs(match.mood!), []) : [];
   const languagePool = match.language && deps.languageSongs
     ? await safe('language tracks', () => deps.languageSongs!(canonicalLanguage(match.language!) || match.language!), [])
@@ -1260,7 +1292,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     return titleScore * 0.55 + artistScore * 0.35 + albumScore * 0.10;
   };
   const selectFuzzy = (songs: RequestSong[], source: string): RequestSelection | null => {
-    if (!title) return null;
+    if (!title || deps.exactIdentity) return null;
     const scored = unique(songs)
       // Keep temporarily ineligible candidates in the ranked set. Exact
       // matching already preserves a queued/cooldown identity for a refusal;
@@ -1437,7 +1469,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       // misspelled multi-word title entirely. Ask the local catalogue for a
       // bounded candidate set before any artist/pool fallback. The verifier
       // above still owns title/artist similarity and ambiguity decisions.
-      if (catalog.fuzzySearch) {
+      if (catalog.fuzzySearch && !deps.exactIdentity) {
         const local = await safe('local fuzzy search', () => catalog.fuzzySearch!(title!, { signal: deps.signal }), []);
         const localFuzzy = selectFuzzy(local, 'local-fuzzy');
         if (localFuzzy) return localFuzzy;
