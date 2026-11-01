@@ -799,9 +799,12 @@ export async function runBanter() {
     if (!lines) throw new Error('banter generation returned no usable exchange');
     const castNames = [host, ...guests].map(p => p.name);
     const ok = await queue.announceExchange(lines, 'banter', { castNames });
+    const spoken = withoutStandIns(lines as { persona: { name: string }; text: string }[], castNames);
+    // Every line was a stand-in: the gate dropped them and the booth log says
+    // so. That is a refused segment like any other, not a failed render.
+    if (!spoken.length) return null;
     if (!ok) throw new Error('banter exchange failed to render');
-    return withoutStandIns(lines as { persona: { name: string }; text: string }[], castNames)
-      .map(l => `${l.persona.name}: ${l.text}`).join('\n');
+    return spoken.map(l => `${l.persona.name}: ${l.text}`).join('\n');
   });
 }
 

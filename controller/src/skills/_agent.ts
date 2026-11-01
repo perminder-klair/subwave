@@ -736,6 +736,8 @@ export async function runCapability(
       capability: cap, host, guests, context: ctx, situation, segmentState, forced: true,
     });
     if (!result.aired || !result.lines) {
+      // The same backoff as a solo forced run that wrote a stand-in, below.
+      if (result.standIn) lastUnavailable.set(cap.kind, Date.now());
       const reason = result.reason || 'nothing usable to discuss';
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
       return { aired: false, queued: false, deferred: false, text: null, reason };
@@ -842,9 +844,10 @@ export async function runCapability(
     : { pauseTalkEligible, sfx: selectedSfx });
   if (!delivery.accepted) {
     if (delivery.reason === 'stand-in') {
-      // Nothing was rendered: the model wrote a stand-in, not speech. The other
-      // forced stand-downs leave the backoff alone. This one sets it, so the
-      // director is not offered a skill that has just written a stand-in.
+      // Nothing was rendered: the model wrote a stand-in, not speech. Other
+      // forced stand-downs leave the backoff alone. A stand-in sets it, here and
+      // on the co-hosted path, so the director is not offered a skill that has
+      // just written one.
       lastUnavailable.set(cap.kind, Date.now());
       return standDown('the DJ wrote a stand-in, not a line, so nothing aired');
     }

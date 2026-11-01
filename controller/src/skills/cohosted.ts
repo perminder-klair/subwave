@@ -22,6 +22,8 @@ interface CohostedResult {
   aired: boolean;
   lines: Array<{ persona: Persona; text: string }> | null;
   reason: string | null;
+  /** Nothing aired because every line was a stand-in (stand-in-policy). */
+  standIn?: boolean;
 }
 
 type CohostedObject = { reason?: unknown; air?: unknown; lines?: Array<{ speaker?: unknown; text?: unknown }> } | undefined;
@@ -150,7 +152,7 @@ export async function runCohostedCapability({
   // that holds for a forced run too.
   const spoken = withoutStandIns(lines, cast.map((persona) => persona.name || ''));
   if (!spoken.length) {
-    return { aired: false, lines: null, reason: 'the DJs wrote stand-ins, not lines, so nothing aired' };
+    return { aired: false, lines: null, reason: 'the DJs wrote stand-ins, not lines, so nothing aired', standIn: true };
   }
   return {
     aired: true,

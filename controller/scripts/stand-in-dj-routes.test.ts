@@ -169,6 +169,32 @@ test('a press whose voice fails to render reports that nothing aired', async t =
   assert.equal(res.body.spoken, undefined);
 });
 
+test('a banter press whose every line is a stand-in reports that nothing aired', async t => {
+  stubModel(t);
+  reply = { lines: [
+    { speaker: HOST.id, text: 'placeholder' },
+    { speaker: GUEST.id, text: 'TBD' },
+    { speaker: HOST.id, text: '<p>TBD</p>' },
+  ] };
+  const res = await post('/dj/segment', { type: 'banter' });
+  assert.equal(res.status, 502, JSON.stringify(res.body));
+  assert.match(String(res.body.error), /nothing aired/);
+  assert.deepEqual(spoken, []);
+});
+
+test('a banter press whose voice fails is still a render failure', async t => {
+  stubModel(t);
+  reply = { lines: [
+    { speaker: HOST.id, text: 'Storms over Crete tonight.' },
+    { speaker: GUEST.id, text: 'The ferries are docked in Chania.' },
+    { speaker: HOST.id, text: 'And the wind is not done yet.' },
+  ] };
+  seams._speak = async () => { throw new Error('no voice'); };
+  const res = await post('/dj/segment', { type: 'banter' });
+  assert.equal(res.status, 500, JSON.stringify(res.body));
+  assert.match(String(res.body.error), /failed to render/);
+});
+
 test('a banter press reports the lines that aired, not the one that was dropped', async t => {
   stubModel(t);
   reply = { lines: [

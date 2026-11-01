@@ -18,7 +18,7 @@ const root = createTempDir(join(tmpdir(), 'subwave-stand-in-skills-'));
 process.env.STATE_DIR = root;
 
 const SOLO = ['solo-word', 'solo-bracket', 'solo-direct', 'solo-forced'];
-const COHOSTED = ['duo-agent', 'duo-direct', 'duo-forced', 'curiosity'];
+const COHOSTED = ['duo-agent', 'duo-direct', 'duo-forced', 'duo-forced-backoff', 'curiosity'];
 for (const slug of [...SOLO, ...COHOSTED]) {
   const dir = join(root, 'skills', slug);
   mkdirSync(dir, { recursive: true });
@@ -219,6 +219,19 @@ test('a forced co-hosted run on stand-ins stands down instead of throwing', asyn
   assert.match(String(run.reason), /stand-in/);
   assert.deepEqual(spoken, []);
   assert.deepEqual(errors(), []);
+});
+
+test('a forced co-hosted run that writes stand-ins holds the director off, like a solo one', async t => {
+  await station({ skill: 'duo-forced-backoff', guests: true });
+  stubModel(t);
+  reply = discussion('placeholder', 'TBD');
+  const director = directorWrites('duo-forced-backoff', 'A real line.');
+
+  const run = await runCapability('duo-forced-backoff', ctx());
+  await agenticTick(ctx());
+
+  assert.match(String(run.reason), /stand-in/);
+  assert.equal(director.count, 0, 'the skill that just wrote stand-ins is not offered');
 });
 
 test('the curiosity ledger and the forced run keep only what aired', async t => {
