@@ -126,17 +126,27 @@ export function serverLabel(s: ServerIdentity | undefined): string {
 
 // `POST /auth/login` takes the password itself, where every Subsonic call carries
 // a salted token, and it runs for the Doctor, the card's status read and every
-// walk, opted in or not. So it only goes over https, or to a host on the
-// station's own network: loopback, RFC 1918, link-local, `localhost`, `.local`,
-// or a single-label name (a compose service). `URL` has already folded a numeric
-// host (`0x7f.1`, a decimal) to dotted quads, so none passes as a single label.
+// walk, opted in or not. The guard keeps it off the public internet in clear, not
+// off the LAN or the host, so it goes over https or to any private host:
+// - IPv4 loopback, RFC 1918, link-local and Tailscale's 100.64.0.0/10;
+// - IPv6 loopback, unique-local (fc00::/7) and link-local (fe80::/10);
+// - `localhost` and a private network's suffixes, `.internal` among them for
+//   host.docker.internal, the setup wizard's own default;
+// - a single-label name (a compose service).
+// `URL` has done the parsing. A numeric host (`0x7f.1`, a decimal) is folded to
+// dotted quads, so none passes as a single label. IPv6 stays in its brackets,
+// lower-cased, with leading zeros gone, so a first group of `fd12` is the whole
+// group and `[fd::1]` (00fd::) can't pass for unique-local.
+const PRIVATE_SUFFIXES = ['.local', '.internal', '.lan', '.home.arpa', '.ts.net'];
+
 function isLocalHost(host: string): boolean {
-  if (host === 'localhost' || host.endsWith('.local')) return true;
-  if (host.startsWith('[')) return host === '[::1]' || /^\[fe[89ab][0-9a-f]:/.test(host);
+  if (host === 'localhost' || PRIVATE_SUFFIXES.some(suffix => host.endsWith(suffix))) return true;
+  if (host.startsWith('[')) return host === '[::1]' || /^\[(f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):/.test(host);
   const quad = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
   if (!quad) return !host.includes('.');
   const [a, b] = [Number(quad[1]), Number(quad[2])];
-  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+    || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
 }
 
 /** Why the password may not go to this music server URL; null when it may. */
@@ -197,7 +207,7 @@ export function realPathFinding(
         return {
           status: 'warn',
           detail,
-          hint: `Point the station at Navidrome over https, or at a LAN address or compose service name. Until then it can't read or switch its players. ${TICK_BY_HAND}.`,
+          hint: `Point the station at Navidrome over https, or at a private address: a LAN or Tailscale one, a compose service, or host.docker.internal. Until then it can't read or switch its players. ${TICK_BY_HAND}.`,
         };
       }
       return { status: 'skip', detail, hint: `${TICK_BY_HAND}.` };
