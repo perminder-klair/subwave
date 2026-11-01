@@ -1322,7 +1322,7 @@ export function syncSkillCrons() {
 // Keeps the proof that the mixer can read MUSIC_LIBRARY_PATH current. Asks
 // nothing on a station without the mount. Never throws.
 export async function libraryMountTick() {
-  await proveLibraryMount();
+  await proveLibraryMount().catch((err: Error) => queue.log('error', `Library mount check failed: ${err.message}`));
 }
 
 // The coast was built from local paths the mixer may no longer open: left alone

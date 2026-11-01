@@ -9,7 +9,7 @@
 // Run: npm test -- library-mount
 
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -303,7 +303,10 @@ test('the sample is an audio file, past hidden folders, artwork and unsendable n
 
 test('a re-proof keeps its sample, and walks again when that file has gone', async () => {
   const first = (await proveLibraryMount())?.sample as string;
-  await proveLibraryMount();
+  // A symlink still opens, and a walk would pass it by: only the kept sample finds it.
+  rmSync(first);
+  symlinkSync(put(join(base, `elsewhere-${run}.flac`)), first);
+  assert.deepEqual(await proveLibraryMount(), { mount: root, state: 'proven', sample: first });
   assert.deepEqual(commands, [`path_readable ${first}`, `path_readable ${first}`]);
 
   rmSync(first);
@@ -383,6 +386,26 @@ test('the coast rebuilds as soon as the proof is lost', async () => {
   const wiring = scheduler.slice(scheduler.indexOf('onLibraryMountLost(() =>'));
   assert.match(wiring.slice(0, 400), /refreshAutoPlaylist\(\{ automatic: true \}\)/);
   assert.match(scheduler, /cron\.schedule\('\* \* \* \* \*', libraryMountTick\)/, 're-proven every minute');
+});
+
+test('the Doctor asks the mixer, and only on a station with a mount', async () => {
+  const { checkBroadcast } = await import('../src/doctor/checks-services.js');
+  const row = async () => (await checkBroadcast()).find(f => f.label === 'library mount');
+
+  assert.equal((await row())?.status, 'ok');
+  assert.ok(commands.some(c => c.startsWith('path_readable ')));
+
+  reply = NO;
+  const warned = await row();
+  assert.equal(warned?.status, 'warn');
+  assert.match(warned?.hint || '', /same path as the controller/);
+  streams();
+
+  reply = OLDER_MIXER;
+  assert.equal((await row())?.status, 'warn');
+
+  delete process.env.MUSIC_LIBRARY_PATH;
+  assert.equal(await row(), undefined);
 });
 
 test('the Doctor reads each state, with the fix', () => {

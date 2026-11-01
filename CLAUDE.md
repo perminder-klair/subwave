@@ -123,6 +123,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).
+- `getLocalPath()` is for Liquidsoap: it answers only for a mount the mixer proved it can read (`music/library-mount.ts`), and anything short of that proof streams. A reader in the controller uses `findLibraryFile()`.
 - LLM calls go through the `llm/sdk` primitives, and provider quirks live only in `llm/internal/provider/capabilities.ts`. The default provider is a slow homelab Ollama, so add no aggressive retry.
 - TTS goes through `tts.speak(text, {kind})`. The rescue chain is a list of voice slots, and a rescue target is engine + provider.
 
