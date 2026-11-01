@@ -4,6 +4,7 @@ import { settingsForm } from '../components/admin/settings/form-state';
 import { archivesSavePayload, dangerSavePayload } from '../components/admin/settings/save-payload';
 import { countLeafDiffs, dirtyPaths, restorePaths, ownsErrorPath, mergePatchErrors } from '../components/admin/settings/form-diff';
 import { sectionById } from '../components/admin/settings/registry';
+import { lastfmTrackTagsBlocker } from '../components/admin/settings/lastfm-track-tags';
 
 test('cold hydration preserves defaults and independent primary/fallback fields', () => {
   const form = settingsForm({
@@ -118,4 +119,14 @@ test('provider dirtiness and discard do not own selection or segment runtime', (
   assert.equal(restored.llm.model, baseline.llm.model);
   assert.equal(restored.llm.trackSelection, 'shortlist');
   assert.equal(restored.llm.segmentRuntime, 'direct');
+});
+
+test('Last.fm track tags hydrate off, and read as unavailable without what they need', () => {
+  assert.equal(settingsForm({}).embedding.enrichment.lastfmTrackTags, false);
+  assert.equal(settingsForm({ embedding: { enrichment: { lastfmTrackTags: true } } }).embedding.enrichment.lastfmTrackTags, true);
+
+  assert.equal(lastfmTrackTagsBlocker(true, true), null);
+  assert.match(lastfmTrackTagsBlocker(false, true) ?? '', /API key/);
+  assert.match(lastfmTrackTagsBlocker(false, false) ?? '', /API key/, 'the key is the first thing to fix');
+  assert.match(lastfmTrackTagsBlocker(true, false) ?? '', /Last\.fm tags/);
 });

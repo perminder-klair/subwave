@@ -197,6 +197,7 @@ export interface SearchForm {
 
 export interface EmbeddingEnrichmentForm {
   lastfmTags: boolean;
+  lastfmTrackTags: boolean;
   lyrics: boolean;
 }
 
