@@ -4,9 +4,12 @@
 // URL. Validate with fail-closed /station-auth; /listener-auth can fail open. Only the controller's
 // own answers count (lib/stationAuth.ts): a stored token is forgotten on its refusal alone, and a
 // typed one is saved on its pass alone. A stream that keeps refusing the stored token asks again
-// (lib/stuckPasswordCheck.ts).
+// (lib/stuckPasswordCheck.ts). The right password tunes back in a listener the gate took off the air
+// (lib/gateResume.ts).
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { flushSync } from 'react-dom';
+import { gateHolds, resumeOnAnswer } from '@/lib/gateResume';
 import { useStationOrigin } from '@/lib/stationOrigin';
 import {
   SAVED_REJECTED_COPY,
@@ -37,10 +40,11 @@ export function useStationAuth(): {
 } {
   const { state } = usePlayerFeed();
   const { tunedIn, status } = usePlayerAudio();
-  const { stop } = usePlayerActions();
+  const { play, stop, gateHoldRef } = usePlayerActions();
   const { apiUrl } = useStationOrigin();
   const required =
     state.privacy?.privatePlayer === true || state.privacy?.listenerAuth === true;
+  const privatePlayer = state.privacy?.privatePlayer === true;
   const listenerAuth = state.privacy?.listenerAuth === true;
 
   const [phase, setPhase] = useState<AuthPhase>('checking');
@@ -76,10 +80,14 @@ export function useStationAuth(): {
 
   // Locked out while tuned in (a lock switched on, or the password rotated): the audio stops with
   // the prompt, as the app's does. Otherwise a stream password station's <audio> stays mounted
-  // under the prompt and the player reconnects forever.
+  // under the prompt and the player reconnects forever. A private player's <audio> goes with the
+  // face, so the render that unmounts it is the last to say that listener was tuned in. The hold is
+  // written after the stop, which drops it as it would for any other caller.
   useEffect(() => {
+    const held = gateHolds(gateHoldRef.current, { required, takesAudio: privatePlayer, phase, tunedIn });
     if (required && phase === 'prompt' && tunedIn) stop();
-  }, [required, phase, tunedIn, stop]);
+    gateHoldRef.current = held;
+  }, [required, privatePlayer, phase, tunedIn, stop, gateHoldRef]);
 
   // Icecast rejects a stale password silently, as far as the player can tell: it just keeps
   // reconnecting. Ask the controller whether that is why, for as long as the player stays stuck
@@ -111,10 +119,16 @@ export function useStationAuth(): {
     setSavedRejected(false);
     const check = await client.check(pw);
     if (clientRef.current !== client) return { result: 'unavailable', retryAt: 0 };
+    const resume = resumeOnAnswer(gateHoldRef.current, check.result);
     if (check.result === 'ok') {
       setStationAuthToken(pw);
-      setPhase('ok');
+      // Committed now: a private player's new <audio> has to exist before play() can use it.
+      flushSync(() => setPhase('ok'));
     }
+    // After the await, so outside the submit's gesture: Chromium and Firefox go by the page's sticky
+    // activation. A browser that refuses lands in usePlayer's NotAllowedError path: stopped, and the
+    // tune-in button still works.
+    if (resume) play();
     return check;
   };
 
