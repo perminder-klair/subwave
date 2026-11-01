@@ -1531,8 +1531,11 @@ def stems_dir_to_write(stems_dir, require_marker):
 # makedirs/open leaves what it shares with the controller at 755/644. Where the
 # controller is another user on that share (a remote analyzer, or NFS squashing
 # root to nobody), it then cannot delete inside stems/<id>/ when it evicts the
-# track. Shared folders get 777 and shared files 666, the state bootstrap's
-# rule (docker/broadcast-entrypoint.sh), set explicitly so no umask can narrow them.
+# track. Shared folders get 777, the state bootstrap's rule for its folders
+# (docker/broadcast-entrypoint.sh), set explicitly so no umask can narrow them.
+# Shared files get 666 to match. That half is this module's choice, not the
+# bootstrap's, which sets 666 only on the two playlists: eviction needs just the
+# folder, and whoever can write the folder can already replace a file in it.
 # A refused chmod never stops a write, on a folder or a file: the entrypoint's
 # own rule (state_prepare_file's `chmod ... || true`), because the shares this is
 # for (ACL-only NFS, some NAS exports, FUSE) answer a mode change on SETATTR
@@ -1568,11 +1571,12 @@ def _shared_chmod(path, mode, shown_as=None):
 
 def make_shared_dir(path):
     """makedirs + an explicit 777 on the leaf. makedirs gives any missing
-    parent the umask's mode; the roots (stems/, transitions/, a relocated
-    STEMS_DIR) are created 777 by the broadcast entrypoint and the
-    controller's marker setup, and stems_require_marker makes sure they exist,
-    so only an older controller that sends no marker flag ever reaches here
-    with one missing."""
+    parent the umask's mode. For stems, stems_require_marker means the root
+    already exists, created 777 by the broadcast entrypoint or the controller's
+    marker setup, so only an older controller that sends no marker flag reaches
+    here with one missing. render_transition has no marker check: its out_dir
+    is transitions/, which the entrypoint creates 777 and which is the leaf
+    here anyway, so a parent can only be missing if the state dir itself is."""
     os.makedirs(path, exist_ok=True)
     _shared_chmod(path, SHARED_DIR_MODE)
 

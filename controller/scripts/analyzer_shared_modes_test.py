@@ -5,8 +5,8 @@ The analyzer image runs as an unprivileged user with the default umask 022, so
 a plain makedirs/open leaves stems/<id>/ at 755 and its files at 644. The
 controller deletes those folders (stem-cache eviction), and on a share where it
 is not that user (a remote analyzer, or NFS squashing root to nobody) it cannot
-delete inside a 755 folder. The state bootstrap's rule applies instead: shared
-folders 777, shared files 666, whatever the process umask.
+delete inside a 755 folder. So shared folders are 777, the state bootstrap's
+rule for its folders, and shared files 666 to match, whatever the process umask.
 A refused chmod, on a folder or a file, never stops the write (the
 entrypoint's rule too), and a failed write leaves no partial .tmp behind.
 Pure stdlib: numpy and soundfile are stubbed.
