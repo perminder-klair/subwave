@@ -135,7 +135,8 @@ const MANUAL_STEP =
 /**
  * The Doctor's finding for the flag. It warns whenever a row is off: without a
  * library mount the tag-built path still weakens the station-archive guard,
- * and with one every local-file play silently falls back to the stream.
+ * and with one a file whose folders differ from its tags silently falls back to
+ * the stream.
  */
 export function realPathFinding(
   st: RealPathStatus,
@@ -155,7 +156,7 @@ export function realPathFinding(
       const off = st.players.filter(p => !p.reportRealPath);
       const what = off.length ? `off for ${off.map(playerLabel).join(', ')}` : 'off';
       const why = opts.localMount
-        ? 'MUSIC_LIBRARY_PATH is set, but Navidrome sends tag-built paths, so local-file plays fall back to the stream.'
+        ? 'MUSIC_LIBRARY_PATH is set, but Navidrome sends tag-built paths, so a file whose folders differ from its tags falls back to the stream.'
         : 'Navidrome sends tag-built file paths, not the real ones on disk.';
       return {
         status: 'warn',

@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { isAbsolute, resolve, sep } from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
@@ -927,16 +928,42 @@ export function getRawStreamUrl(songId: string): string {
   return buildUrl('stream', { id: songId, format: 'raw' });
 }
 
+// Where a song's `path` could be on the library mount, best guess first. Three
+// shapes reach here:
+// - relative: built from the tags, joined to the mount as it always was.
+// - absolute and inside the mount: Report Real Path on a Navidrome that sees the
+//   library at the same place. The path is the file.
+// - absolute and outside it: Navidrome's root differs from the mount, and no
+//   setting maps one to the other. So leading segments come off one at a time,
+//   longest remainder first, stopping at two: a bare filename would match any
+//   `01.flac` at the top of the mount.
+// A path comes from the server, so any `..` segment rejects it outright, and
+// every candidate must stay under the mount. Lexical on purpose: a symlink the
+// operator put inside the library still plays.
+function localPathCandidates(libRoot: string, songPath: string): string[] {
+  const segments = songPath.split('/');
+  if (segments.includes('..')) return [];
+  const root = resolve(libRoot);
+  const prefix = root.endsWith(sep) ? root : root + sep;
+  const inside = (candidate: string) => resolve(candidate).startsWith(prefix);
+  if (!isAbsolute(songPath)) return [`${libRoot}/${songPath}`].filter(inside);
+  if (inside(songPath)) return [songPath];
+  const parts = segments.filter(Boolean);
+  return parts
+    .slice(0, -1)
+    .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
+    .filter(inside);
+}
+
 // Local file path when MUSIC_LIBRARY_PATH mounts the library in the controller
-// container, else null. Navidrome's `path` is synthetic (built from tags, not
-// read off disk), so it routinely disagrees with the real layout; an unchecked
-// guess resolves to nothing in Liquidsoap and kills the pick (#1405). Existence
-// is checked here and a miss falls back to the stream URL.
+// container, else null. Navidrome's `path` is usually synthetic (built from
+// tags, not read off disk), so it routinely disagrees with the real layout; an
+// unchecked guess resolves to nothing in Liquidsoap and kills the pick (#1405).
+// Existence is checked here and a miss falls back to the stream URL.
 export function getLocalPath(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !song.path) return null;
-  const local = `${libRoot}/${song.path}`;
-  return fs.existsSync(local) ? local : null;
+  return localPathCandidates(libRoot, String(song.path)).find(p => fs.existsSync(p)) ?? null;
 }
 
 // Best URI for Liquidsoap — local file if available, otherwise stream URL
