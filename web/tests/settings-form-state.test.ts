@@ -159,3 +159,17 @@ test('the Stems save and the Broadcast save post disjoint fields, so neither com
   assert.equal('audio' in danger, false);
   assert.deepEqual(Object.keys(stems).sort(), ['audio', 'transitions']);
 });
+
+test('the Stems save bar owns its fields through one list, alias paths included', async () => {
+  const { ownedFieldErrors } = await import('../components/admin/settings/shared');
+  const { STEM_FORM_KEYS } = await import('../components/admin/settings/registry');
+  // The cache fields report under audio.*, the form keeps them under transitions.
+  const errors = {
+    'audio.stemCacheGb': 'must be a number',
+    'transitions.pairDrain': 'bad',
+    'transitions.equalPowerCrossfade': 'not this page',
+    'audio.vocalActivity': 'not this page',
+  };
+  assert.deepEqual(ownedFieldErrors(errors, STEM_FORM_KEYS).map(([path]) => path).sort(),
+    ['audio.stemCacheGb', 'transitions.pairDrain']);
+});

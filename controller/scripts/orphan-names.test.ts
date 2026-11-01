@@ -102,14 +102,6 @@ test('event logs answer last, and only for what the cheap sources missed', async
   assert.equal(again.get(ID_A)?.title, 'From Logs');
 });
 
-test('skipLogs keeps a cheap resolver cheap', async () => {
-  const dirs = freshDirs();
-  writeFileSync(join(dirs.logDir, 'events-2026-10-01.jsonl'),
-    `{"type":"navidrome","songIds":[{"id":"${ID_A}","title":"Should Not Be Read","artist":"Nope"}]}\n`);
-  const got = await names.resolveOrphanNames([ID_A], { ...dirs, skipLogs: true });
-  assert.equal(got.get(ID_A), undefined);
-});
-
 test('a confirmed quarantine stamps the resolved name before the logs can age it', async () => {
   // The IO half: runOrphanPurge with an injected resolver writes .track-meta.json
   // into the quarantine for exactly the ids it moved. Same cached stem-cache

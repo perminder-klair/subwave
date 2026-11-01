@@ -90,13 +90,9 @@ export interface OrphanPlan {
   quarantine: Array<{ name: string }>;
   /** Library-known dirs left alone. */
   kept: string[];
-  /** Always empty for a first pass: nothing is released from a cache walk. */
-  released: string[];
   /** Roll-up count so callers log without re-counting. */
   quarantined: number;
   keptCount: number;
-  /** Bytes the plan would free (deletions only); the IO layer fills it. */
-  freedBytes: number;
 }
 
 export interface QuarantineEntry {
@@ -128,12 +124,11 @@ export interface QuarantinePlan {
   /** Ids that came back in the library while the live slot is taken: the quarantine is stale either way. */
   superseded: string[];
   deletedCount: number;
-  freedBytes: number;
 }
 
 export function planOrphanPurge(
   entries: readonly CacheEntry[],
-  { now: _now, confirm }: { now: number; confirm: boolean },
+  { confirm }: { confirm: boolean },
 ): OrphanPlan {
   const quarantine: Array<{ name: string }> = [];
   const kept: string[] = [];
@@ -145,16 +140,14 @@ export function planOrphanPurge(
     dryRun: !confirm,
     quarantine,
     kept,
-    released: [],
     quarantined: quarantine.length,
     keptCount: kept.length,
-    freedBytes: 0,
   };
 }
 
 export function planQuarantinePurge(
   entries: readonly QuarantineEntry[],
-  { now: _now, confirm, graceMs = QUARANTINE_GRACE_MS }: { now: number; confirm: boolean; graceMs?: number },
+  { confirm, graceMs = QUARANTINE_GRACE_MS }: { confirm: boolean; graceMs?: number },
 ): QuarantinePlan {
   const released: string[] = [];
   const deleted: Array<{ name: string }> = [];
@@ -183,6 +176,5 @@ export function planQuarantinePurge(
     aging,
     superseded,
     deletedCount: deleted.length,
-    freedBytes: 0, // filled by the IO layer, which is the only one that can measure
   };
 }

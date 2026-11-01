@@ -20,21 +20,19 @@ const entry = (name: string, over: Partial<{ mtimeMs: number; known: boolean }> 
 });
 
 test('a directory for a track still in the library is kept untouched', () => {
-  const plan = planOrphanPurge([entry('keep-me', { known: true })], { now: NOW, confirm: true });
+  const plan = planOrphanPurge([entry('keep-me', { known: true })], { confirm: true });
   assert.deepEqual(plan.quarantine, []);
-  assert.deepEqual(plan.released, []);
   assert.deepEqual(plan.kept, ['keep-me']);
-  assert.equal(plan.freedBytes, 0);
 });
 
 test('an orphan is quarantined, not deleted, once the operator has confirmed', () => {
-  const plan = planOrphanPurge([entry('gone-track')], { now: NOW, confirm: true });
+  const plan = planOrphanPurge([entry('gone-track')], { confirm: true });
   assert.deepEqual(plan.quarantine.map(q => q.name), ['gone-track']);
   assert.deepEqual(plan.kept, []);
 });
 
 test('unconfirmed is a dry run: the plan reports what WOULD move but moves nothing', () => {
-  const plan = planOrphanPurge([entry('gone-track'), entry('keep-me', { known: true })], { now: NOW, confirm: false });
+  const plan = planOrphanPurge([entry('gone-track'), entry('keep-me', { known: true })], { confirm: false });
   assert.deepEqual(plan.quarantine.map(q => q.name), ['gone-track']);
   assert.equal(plan.dryRun, true);
 });
@@ -44,7 +42,7 @@ test('an orphan that is in the library again is released back, not copied', () =
   // the sole copy, so a re-appearing track id gets its stems back by moving.
   const plan = planQuarantinePurge(
     [{ name: 'back-again', known: true, ageMs: 2 * DAY, liveSlotFree: true }],
-    { now: NOW, confirm: true },
+    { confirm: true },
   );
   assert.deepEqual(plan.released, ['back-again']);
   assert.deepEqual(plan.deleted, []);
@@ -53,7 +51,7 @@ test('an orphan that is in the library again is released back, not copied', () =
 test('a superseded quarantine ages out and is deleted once aged, never merged over the new copy', () => {
   const plan = planQuarantinePurge(
     [{ name: 're-analysed', known: true, ageMs: QUARANTINE_GRACE_MS + 1, liveSlotFree: false }],
-    { now: NOW, confirm: true },
+    { confirm: true },
   );
   assert.deepEqual(plan.deleted.map(d => d.name), ['re-analysed']);
   assert.deepEqual(plan.released, []);
@@ -63,7 +61,7 @@ test('a superseded quarantine ages out and is deleted once aged, never merged ov
 test('a quarantine younger than the grace period stays put', () => {
   const plan = planQuarantinePurge(
     [{ name: 'fresh-orphan', known: false, ageMs: QUARANTINE_GRACE_MS - DAY, liveSlotFree: true }],
-    { now: NOW, confirm: true },
+    { confirm: true },
   );
   assert.deepEqual(plan.aging.map(a => a.name), ['fresh-orphan']);
   assert.deepEqual(plan.deleted, []);
@@ -73,7 +71,7 @@ test('a quarantine younger than the grace period stays put', () => {
 test('a quarantine older than the grace period is deleted once confirmed', () => {
   const plan = planQuarantinePurge(
     [{ name: 'old-orphan', known: false, ageMs: QUARANTINE_GRACE_MS + 60_000, liveSlotFree: false }],
-    { now: NOW, confirm: true },
+    { confirm: true },
   );
   assert.deepEqual(plan.deleted.map(d => d.name), ['old-orphan']);
 });
@@ -81,7 +79,7 @@ test('a quarantine older than the grace period is deleted once confirmed', () =>
 test('an unconfirmed quarantine pass is also a dry run', () => {
   const plan = planQuarantinePurge(
     [{ name: 'old-orphan', known: false, ageMs: 9 * DAY, liveSlotFree: false }],
-    { now: NOW, confirm: false },
+    { confirm: false },
   );
   assert.deepEqual(plan.deleted.map(d => d.name), ['old-orphan']);
   assert.equal(plan.dryRun, true);
@@ -97,16 +95,15 @@ test('grace is 7 days', () => {
 });
 
 test('an empty cache plans nothing', () => {
-  const plan = planOrphanPurge([], { now: NOW, confirm: true });
+  const plan = planOrphanPurge([], { confirm: true });
   assert.equal(plan.quarantined, 0);
-  assert.equal(plan.freedBytes, 0);
   assert.deepEqual(plan.kept, []);
 });
 
 test('a young superseded quarantine waits out the grace like any other, released under no condition', () => {
   const plan = planQuarantinePurge(
     [{ name: 're-analysed-young', known: true, ageMs: DAY, liveSlotFree: false }],
-    { now: NOW, confirm: true },
+    { confirm: true },
   );
   assert.deepEqual(plan.released, []);
   assert.deepEqual(plan.deleted, []);

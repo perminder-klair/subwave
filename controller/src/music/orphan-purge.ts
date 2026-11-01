@@ -48,7 +48,6 @@
 
 import { readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { config } from '../config.js';
 import { mapPool } from '../util/async-pool.js';
 import * as db from './library-db.js';
 import * as stemCache from './stem-cache.js';
@@ -287,7 +286,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
       return { ...report, refused: true, reason: `cache root ${root} could not be read` };
     }
   }
-  const plan = planOrphanPurge(cacheEntries, { now, confirm: opts.confirm });
+  const plan = planOrphanPurge(cacheEntries, { confirm: opts.confirm });
   // Only the automatic pass stops at the ceiling. A dry run names it instead,
   // which is how the reason reaches the Stems page while the operator can still
   // confirm the move.
@@ -316,7 +315,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     }
     return { name, known: known.has(name), ageMs, liveSlotFree };
   });
-  const qplan = planQuarantinePurge(quEntries, { now, confirm: opts.confirm, ...(opts.graceMs !== undefined ? { graceMs: opts.graceMs } : {}) });
+  const qplan = planQuarantinePurge(quEntries, { confirm: opts.confirm, ...(opts.graceMs !== undefined ? { graceMs: opts.graceMs } : {}) });
   // The delete is the step nothing undoes, so it reads the dir again: an entry
   // that is not stems (an earlier build moved it) stays where it is.
   const deletable = await mapPool(qplan.deleted, stemCache.SCAN_CONCURRENCY, d => readsAsStems(path.join(qu, d.name)));
@@ -392,7 +391,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     if (report.quarantined || report.deletedCount || report.released.length || report.freedBytes) {
       // The usage snapshot cached the pre-purge totals; drop it so the next
       // sweep walks again instead of trusting bytes that no longer exist.
-      await rm(path.join(config.stateDir, 'stem-cache-usage.json'), { force: true }).catch(() => {});
+      await stemCache.dropUsageSnapshot();
     }
   } else {
     // Dry run: every count, zero mutations.
@@ -441,9 +440,4 @@ export async function runScheduledOrphanPurge(knownIds: readonly string[], now?:
     resolveNames: ids => resolveOrphanNames(ids),
     ...(now !== undefined ? { now } : {}),
   });
-}
-
-/** Dry-run convenience for the doctor and the admin route. */
-export async function orphanPurgeReport(knownIds: readonly string[]): Promise<PurgeReport> {
-  return runOrphanPurge({ knownIds, confirm: false });
 }

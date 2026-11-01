@@ -1193,10 +1193,6 @@ async function nightlyDoctor() {
   }
 }
 
-// Scheduled backups (#1570). Off by default; the cadence, name grammar and
-// retention all live in backup/pure.ts and this tick only reports. Every
-// failure is logged and swallowed — losing the scheduler to a backup would take
-// the auto playlist, the talk tick and the takeover janitor with it.
 // Orphan stem dirs: a track that left the library keeps its Demucs
 // dirs forever unless the byte budget evicts them (sweep only trims over
 // budget). This pass moves them to the quarantine and deletes what aged there
@@ -1218,6 +1214,10 @@ export async function stemOrphanPurgeTick() {
   }
 }
 
+// Scheduled backups (#1570). Off by default; the cadence, name grammar and
+// retention all live in backup/pure.ts and this tick only reports. Every
+// failure is logged and swallowed — losing the scheduler to a backup would take
+// the auto playlist, the talk tick and the takeover janitor with it.
 async function scheduledBackupTick() {
   try {
     const r = await backup.runScheduledBackup();

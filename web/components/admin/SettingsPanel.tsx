@@ -38,7 +38,7 @@ import {
   type LoudnessSource, type TransitionEffect,
 } from './settings/shared';
 import {
-  SECTIONS, SECTION_GROUPS, RESTART_PATHS, sectionById, type SectionId,
+  SECTIONS, SECTION_GROUPS, RESTART_PATHS, STEM_FORM_KEYS, sectionById, type SectionId,
 } from './settings/registry';
 import { Advanced, SectionChromeProvider } from './settings/section-chrome';
 import { SettingsSearch, type SettingsJump } from './settings/SettingsSearch';
@@ -897,7 +897,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               onSave={saveStemsGuarded}
               saveLabel="Save stems"
               errors={fieldErrors}
-              ownedKeys={['transitions.pairDrain', 'transitions.stemBlends', 'audio.stemCache', 'audio.stemCacheGb']}
+              ownedKeys={STEM_FORM_KEYS}
             />
           </>
         )}

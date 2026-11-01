@@ -367,6 +367,13 @@ async function readSnapshot(): Promise<UsageSnapshot | null> {
   }
 }
 
+// For a writer outside the pass and the sweep (the orphan purge): the stored
+// totals no longer match the disk, so the next read walks instead of trusting
+// them. A live pass finding its pending mark gone settles through a walk too.
+export async function dropUsageSnapshot(): Promise<void> {
+  await rm(snapshotPath(), { force: true }).catch(() => {});
+}
+
 async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
   try {
     await writeFileAtomic(snapshotPath(), JSON.stringify(snap) + '\n');

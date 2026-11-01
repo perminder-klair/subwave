@@ -44,18 +44,18 @@ export const LLM_PROVIDER_FORM_KEYS = [
   'llm.exemptRequests', 'llm.maxOutputTokens', 'llm.geminiSafety', 'llm.fallback',
 ] as const;
 
+// The Stems page's fields: the stem half of `transitions` (the form keeps the
+// stem cache under transitions; it saves to `audio.*`). One list, read by the
+// section's dirty check and its SaveBar's error scope.
+export const STEM_FORM_KEYS = [
+  'transitions.pairDrain', 'transitions.stemBlends', 'transitions.stemCache', 'transitions.stemCacheGb',
+] as const;
+
 // `satisfies`, never a `readonly SectionSpec[]` annotation: the annotation
 // widens every `id` back to `string` and takes `SectionId` — and with it every
 // typo guard on SETTINGS_INDEX, ADVANCED_CARDS and `activeSection` — down with
 // it. A bad id then compiles clean and dies quietly at runtime (`sectionById`
 // → undefined → no formKeys → no dirty tracking, no save bar).
-// The Stems page's fields: the stem half of `transitions` (the form keeps the
-// stem cache under transitions; it saves to `audio.*`). One list, read by the
-// section's dirty check and its save payload's error scope.
-export const STEM_FORM_KEYS = [
-  'transitions.pairDrain', 'transitions.stemBlends', 'transitions.stemCache', 'transitions.stemCacheGb',
-] as const;
-
 export const SECTIONS = [
   {
     id: 'station', group: 'the station', label: 'Station',

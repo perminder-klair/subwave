@@ -12,6 +12,7 @@ import type { EngineAvailability } from '../tts/engineMeta';
 import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
+import { ownsErrorPath } from './form-diff';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
 import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety } from '../../../lib/schemas.generated';
@@ -803,9 +804,9 @@ export function ownedFieldErrors(
   ownedKeys: readonly string[] | undefined,
 ): Array<[string, string]> {
   if (!errors || !ownedKeys?.length) return [];
-  return Object.entries(errors).filter(([path]) =>
-    ownedKeys.some((key) => path === key || path.startsWith(`${key}.`)),
-  );
+  // Through the aliases: a form key can save under another name (the stem
+  // cache lives under `transitions` and saves to `audio.*`).
+  return Object.entries(errors).filter(([path]) => ownsErrorPath(ownedKeys, path));
 }
 
 /** Portal section-owned saves into the sticky bar to retain their closures and field-error scope.

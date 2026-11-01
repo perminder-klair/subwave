@@ -45,9 +45,6 @@ export interface ResolveOpts {
   logDir?: string;
   stateDir?: string;
   now?: number;
-  /** Skip the (lazy, expensive) event-log scan — used by the quarantine
-   *  stamp path when the caller already accepted a coarse answer. */
-  skipLogs?: boolean;
 }
 
 // ---- event-log scan ---------------------------------------------------------
@@ -231,7 +228,7 @@ export async function resolveOrphanNames(ids: readonly string[], opts: ResolveOp
 
   // 4. Event logs — the lazy, cached, expensive tail.
   missing = ids.filter(id => !out.has(id));
-  if (!opts.skipLogs && missing.length > 0) {
+  if (missing.length > 0) {
     for (const [id, n] of await namesFromLogs(new Set(missing), logDir, now)) out.set(id, n);
   }
   return out;
