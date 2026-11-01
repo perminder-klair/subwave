@@ -464,8 +464,10 @@ class Queue {
     await considerIdRotationRecovery(track);
   };
 
+  // Null when the clean just dropped the line: there is nothing to render.
   startIntroRender(item: QueueItem) {
     this.cleanUnrenderedIntro(item);
+    if (!item.introScript) return null;
     const expected = introSpeechIdentity(item);
     const kind = expected.kind || 'dj-speak';
     const render = this._introRenders.start(item, () => this._speak(expected.script!, {
@@ -486,21 +488,25 @@ class Queue {
   // Recovered/legacy scripts may predate the guard. Clean before the render
   // identity is captured, and keep the displayed/stored line equal to TTS input.
   // An existing WAV already owns its words and must never be relabelled.
+  //
+  // A snapshot can hold a script from before the stand-in gate in push() with
+  // introLabelChecked already set, so the flag only answers whether to strip a
+  // label: the same stand-in test runs either way, and the track plays without
+  // its link. A checked script keeps its exact words.
   cleanUnrenderedIntro(item: QueueItem) {
-    if (item.introLabelChecked) return;
     if (item.introWav && existsSync(item.introWav)) return;
     if (!item.introScript) return;
     const speaker = item.introPersona ?? settings.getEffectivePersona();
-    // A recovered script predates the stand-in gate in push(): the same test,
-    // and the track plays without its link.
-    item.introScript = this.speakable(
-      stripSpeakerLabel(item.introScript, speaker?.name ? [speaker.name] : []),
-      item.introKind || 'dj-speak',
-    );
-    if (!item.introScript) {
+    const written = item.introLabelChecked
+      ? item.introScript
+      : stripSpeakerLabel(item.introScript, speaker?.name ? [speaker.name] : []);
+    const spoken = this.speakable(written, item.introKind || 'dj-speak');
+    if (!spoken) {
       item.introScript = null;
       item.introPersona = null;
       item.introHostSpeech = null;
+    } else if (!item.introLabelChecked) {
+      item.introScript = spoken;
     }
     item.introLabelChecked = true;
   }
@@ -2106,11 +2112,11 @@ class Queue {
             // never surface unhandled. startIntroRender snapshots the full
             // speech identity and owns mutation even after the drain stops waiting.
             const render = this.startIntroRender(item);
-            const result = await awaitIntroRender(
+            const result = render && await awaitIntroRender(
               render,
               budgetSec == null ? null : budgetSec * 1000,
             );
-            if (result.status === 'timed-out') {
+            if (result?.status === 'timed-out') {
               this.log('mix', `Intro render overran its ${Math.round(budgetSec!)}s window — committing "${item.track.title}" now, voice follows at air time`);
             }
           }
@@ -3342,6 +3348,7 @@ class Queue {
       if (!item.introScript) return;
       try {
         this.cleanUnrenderedIntro(item);
+        if (!item.introScript) return;
         item.introWav = await this._speak(item.introScript, {
           kind: item.introKind || 'dj-speak',
           // Same persona the script was written under — speak() would

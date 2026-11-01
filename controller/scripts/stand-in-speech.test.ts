@@ -259,10 +259,47 @@ test('operator text is still normalised, and a bracket with nothing in it is no 
   assert.deepEqual(spoken, ['Placeholder']);
 });
 
+// What a queue snapshot holds: push() has stamped the flag on every item since
+// #1715, so a link recovered from before the gate arrives already marked checked.
+const recovered = (introScript: string) => ({
+  track: { id: 'old', title: 'Song', artist: 'Artist' }, introScript, introPersona: HOST,
+  introHostSpeech: null, introKind: 'link', introLabelChecked: true, introWav: null, introAired: false,
+}) as never as Parameters<typeof queue.cleanUnrenderedIntro>[0];
+
 test('a recovered link from before the gate is cleaned the same way', () => {
-  const item = { track: { id: 'old', title: 'Song', artist: 'Artist' }, introScript: 'TBD', introPersona: HOST, introLabelChecked: false } as never as Parameters<typeof queue.cleanUnrenderedIntro>[0];
+  const item = recovered('TBD');
   queue.cleanUnrenderedIntro(item);
   assert.equal(item.introScript, null);
+  assert.equal(item.introPersona, null);
+});
+
+test('a recovered stand-in is not rendered ahead of its seam', async () => {
+  const item = recovered('TBD');
+  assert.equal(queue.startIntroRender(item), null, 'nothing to wait for');
+  assert.deepEqual(spoken, []);
+});
+
+test('a recovered stand-in is not rendered at air time either', async () => {
+  const item = recovered('TBD');
+  await queue.airIntro(item);
+  assert.deepEqual(spoken, []);
+  assert.equal(item.introWav, null);
+});
+
+test('a checked link keeps its words: the check neither relabels nor renormalises it', async () => {
+  const line = `${HOST.name}: a second name kept on purpose.`;
+  const item = recovered(line);
+  await queue.startIntroRender(item);
+  assert.deepEqual(spoken, [line]);
+  assert.equal(item.introScript, line);
+});
+
+test('an unchecked legacy link is still cleaned as it was', async () => {
+  const item = recovered(`${HOST.name}: **a real line**`);
+  item.introLabelChecked = false;
+  queue.cleanUnrenderedIntro(item);
+  assert.equal(item.introScript, 'a real line');
+  assert.equal(item.introLabelChecked, true);
 });
 
 test('operator text airs as typed, even a stand-in word (verbatim is exempt)', async () => {
