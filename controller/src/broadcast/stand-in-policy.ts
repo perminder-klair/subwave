@@ -13,17 +13,26 @@
 // rather than repairing it: there is nothing in a stand-in to repair.
 //
 // Judged on the line as the model wrote it AND on what normalizeForDisplay
-// leaves of it, each with any leading label looked past. Either one alone misses
-// half of these. Normalising empties a short bracket or a tag and only strips
+// leaves of it. Either one alone misses half of these. Normalising empties a short bracket or a tag and only strips
 // the brackets from a long one, so a template past it reads as prose; before it,
 // "<p>TBD</p>" and "placeholder [laughs]" read as speech. Text it would empty
 // had nothing to say, and that is a stand-in too. A line this test passes must
 // stay passed in its display form: push() checks once and the render checks
 // again, and by then a caller may have recorded the line as said.
 //
-// The label here is any name, not just the cast's ("DJ: placeholder", "Script:
-// placeholder"), which is safe because it is only looked past for the verdict:
+// A named token is also looked for past a leading label, and the label is any
+// name, not just the cast's ("DJ: placeholder", "Script: placeholder"). That is
+// safe for what airs because it is only looked past for the verdict:
 // stripSpeakerLabel owns what comes off the air, and strips known names only.
+// It costs a little real speech, on purpose: a person's words in the same shape
+// drop too ("Up next: Placeholder", "Now playing: Undefined", "Tour dates: TBA",
+// "The date: TBD."). The no-words and normalises-to-nothing rules are verdicts
+// on the whole line and never run past a label, because a beat after a lead-in
+// is speech ("Here it comes: [laughs]", "Wait for it: ...").
+//
+// A net, not a guarantee. The list is fixed and the match is whole-line, so a
+// stand-in behind a leading cue ("[laughs] placeholder", "[sighs] TBD") and a
+// word not on the list ("{text}", "{{text}}") still air.
 
 import { normalizeForDisplay, stripSpeakerLabel } from '../audio/speech-text.js';
 
