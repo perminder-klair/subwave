@@ -257,8 +257,8 @@ export const FEED_CONFIG_FIELDS = {
 
 // How many FRESH items one fire hands the model. This is the news skill's
 // historical return cap, kept for every feed skill: `feedMaxItems` caps how much
-// of the feed is read (and so lowers this ceiling when it is smaller), while
-// this caps how much of it is spent — burning a whole 50-item feed on one
+// of each feed is read (and lowers this ceiling when it is smaller), while this
+// caps how much of it is spent — burning a whole 50-item feed on one
 // between-track aside leaves nothing for the next break.
 export const FEED_ITEMS_PER_FIRE = 6;
 
@@ -412,7 +412,10 @@ export function makeFeedTool(kind: string, feed: ResolvedFeed, warn: (message: s
     // A feed that fetched fine but carries no readable items is the same
     // answer as one that has all aired. It touches no dedup memory.
     if (!items.length) return { available: false, reason: 'the feed has no items' };
-    const fresh = items.filter(it => !seen.has(hashHeadline(it.title))).slice(0, FEED_ITEMS_PER_FIRE);
+    // Capped after the seen filter: capped before it, a low `feedMaxItems` would
+    // leave only the first feed's items in the list, and a later feed would read
+    // as aired without ever being offered.
+    const fresh = items.filter(it => !seen.has(hashHeadline(it.title))).slice(0, Math.min(FEED_ITEMS_PER_FIRE, feed.maxItems));
     if (!fresh.length) return { available: false, reason: 'every item on the feed has already aired' };
     // Burn on read so a later tick doesn't re-offer the same item.
     for (const it of fresh) seen.add(hashHeadline(it.title));
@@ -459,10 +462,10 @@ function feedLabel(url: string): string {
 
 // Every declared feed, fetched together and interleaved round-robin so a busy
 // feed cannot crowd a quiet one out; a repeated headline keeps its first
-// appearance. `maxItems` is read from each feed and caps the merged list too,
-// so a fire never offers more than one feed's worth, and the burn-on-read
-// memory (SEEN_KEEP) always covers a whole list. A feed failing while another
-// answers is reported; if the ones that answered had no items, the failure is
+// appearance. `maxItems` is read from each feed, and makeFeedTool applies it to
+// what one fire offers. The list stops at SEEN_KEEP, so the burn-on-read memory
+// always covers a whole list and a trim can't bring an aired headline back. A
+// feed failing while another answers is reported; if the ones that answered had no items, the failure is
 // the answer, so a broken feed is never hidden behind an empty one. That error,
 // and all of them failing, is the same `{ error }` degradation a single feed has
 // always had, naming every feed that failed: with several, "HTTP 500" alone does
@@ -495,5 +498,5 @@ async function fetchMerged(
       out.push(it);
     }
   }
-  return out.slice(0, feed.maxItems);
+  return out.slice(0, SEEN_KEEP);
 }

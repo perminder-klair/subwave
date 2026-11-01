@@ -103,6 +103,11 @@ const server: Server = createServer((req, res) => {
       + `</channel></rss>`);
     return;
   }
+  if (path.startsWith('/many/')) {
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rss(50, path.slice('/many/'.length)));
+    return;
+  }
   if (path.startsWith('/boom')) {
     res.writeHead(500);
     res.end('nope');
@@ -523,10 +528,49 @@ test('a tighter window keeps only what is inside it, plus the undated item', asy
   assert.deepEqual(result.headlines.map((h: any) => h.title), ["Tonight's talk", 'Undated notice']);
 });
 
-test('the merged list is capped at feedMaxItems in total', async () => {
+test('a fire offers at most feedMaxItems in total, and the next moves on', async () => {
   const tool = makeFeedTool('merged-cap', { url: feedUrl('/other'), maxItems: 3, extraUrls: [feedUrl('/local')] });
-  const result: any = await tool({}, {});
-  assert.deepEqual(result.headlines.map((h: any) => h.title), ['Story 1', 'Local 1', 'Story 2']);
+  const state = {};
+  const first: any = await tool({}, state);
+  assert.deepEqual(first.headlines.map((h: any) => h.title), ['Story 1', 'Local 1', 'Story 2']);
+  const second: any = await tool({}, state);
+  assert.deepEqual(second.headlines.map((h: any) => h.title), ['Story 3', 'Local 2']);
+});
+
+test('a low feedMaxItems still reaches every feed, a fire at a time', async () => {
+  const tool = makeFeedTool('low-cap', { url: feedUrl('/other'), maxItems: 1, extraUrls: [feedUrl('/local')] });
+  const state = {};
+  const first: any = await tool({}, state);
+  assert.deepEqual(first.headlines.map((h: any) => h.title), ['Story 1']);
+  const second: any = await tool({}, state);
+  assert.deepEqual(second.headlines.map((h: any) => h.title), ['Local 1'], 'feed2 is reached, not reported as aired');
+  const third: any = await tool({}, state);
+  assert.equal(third.available, false);
+
+  const three = makeFeedTool('low-cap-three', { url: feedUrl('/other'), maxItems: 2, extraUrls: [feedUrl('/local'), feedUrl('/atom')] });
+  const threeState = {};
+  const offered: string[] = [];
+  for (let fire = 0; fire < 3; fire++) {
+    const result: any = await three({}, threeState);
+    offered.push(...result.headlines.map((h: any) => h.title));
+  }
+  assert.deepEqual(offered, ['Story 1', 'Local 1', 'Atom 1', 'Story 2', 'Atom 2'], 'feed3 is reached too');
+});
+
+test('three full feeds never outrun the burn-on-read memory', async () => {
+  const tool = makeFeedTool('three-full', {
+    url: feedUrl('/many/One'),
+    maxItems: 50,
+    extraUrls: [feedUrl('/many/Two'), feedUrl('/many/Three')],
+  });
+  const state = {};
+  const offered: string[] = [];
+  for (let fire = 0; fire < 40; fire++) {
+    const result: any = await tool({}, state);
+    offered.push(...(result.headlines || []).map((h: any) => h.title));
+  }
+  assert.equal(new Set(offered).size, offered.length, 'no headline comes back after the seen set is trimmed');
+  for (const name of ['One', 'Two', 'Three']) assert.ok(offered.includes(`${name} 1`), `${name} is offered`);
 });
 
 test("an item's day is the station's, not UTC's", async () => {

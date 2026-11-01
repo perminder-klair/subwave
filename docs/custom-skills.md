@@ -132,8 +132,9 @@ every feed skill gets the same behaviour:
 - **RSS 2.0, Atom and RDF/RSS-1.0** all parse — namespaced tags
   (`<dc:title>`, `<content:encoded>`) and CDATA included.
 - `feedMaxItems` (1–50, default 10) caps how much of the feed is read per fire.
-  With `feed2`/`feed3` it is read from each feed and also caps the merged list,
-  so a fire never offers more than that many items in total.
+  With `feed2`/`feed3` it is read from each feed, and a fire offers no more than
+  that many items in total. The next fire moves on to the ones left, so a low
+  value still reaches every feed.
 - `feedMaxAgeDays` (1–365, default no limit) drops items published longer ago
   than that, before `feedMaxItems` counts them. Search feeds need it: Google News
   ignores its own `when:7d` on a long query and mixes in items months old, which
