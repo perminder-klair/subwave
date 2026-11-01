@@ -149,6 +149,93 @@ async function main() {
     }
   });
 
+  // A folder an older analyzer left 755 under another uid: this user cannot
+  // delete inside it, however often the sweep tries. Staged with 0555, since
+  // only root could stage a real foreign owner, and root would ignore the mode.
+  const stuckDirs = (dirs: string[]) => {
+    for (const d of dirs) chmodSync(d, 0o555);
+    return () => { for (const d of dirs) chmodSync(d, 0o755); };
+  };
+  const skipAsRoot = () => {
+    if (typeof process.getuid !== 'function' || process.getuid() !== 0) return false;
+    console.log('    (skipped: running as root, rm cannot be made to fail via permissions)');
+    return true;
+  };
+
+  await test('stuck folders over the budget never push the sweep into deleting others', async (t) => {
+    if (skipAsRoot()) return;
+    const warn = t.mock.method(console, 'warn', () => {});
+    resetCache();
+    const unstick = stuckDirs([
+      makeDir('stuck-a', 10 * MB, 9000),
+      makeDir('stuck-b', 10 * MB, 8000),
+      makeDir('stuck-c', 10 * MB, 7000),
+    ]);
+    makeDir('fresh-a', 1 * MB, 300);
+    makeDir('fresh-b', 1 * MB, 200);
+    makeDir('fresh-c', 1 * MB, 100);
+    try {
+      const res = await stemCache.sweep(25 * MB);
+      assert.equal(res.removed, 0, 'deleting the fresh folders would free nothing the stuck ones hold');
+      assert.equal(res.failedDirs, 3);
+      assert.equal(res.overBudgetBytes, 8 * MB, 'the report still states the real overage');
+      assert.deepEqual(
+        [...(await stemCache.cachedTrackIdSet())].sort(),
+        ['fresh-a', 'fresh-b', 'fresh-c', 'stuck-a', 'stuck-b', 'stuck-c'],
+      );
+      assert.equal(warn.mock.callCount(), 1, 'one warning per sweep, naming the count');
+      assert.match(String(warn.mock.calls[0].arguments[0]), /3 folder/);
+    } finally {
+      unstick();
+    }
+  });
+
+  await test('fresh folders survive even when the eviction order reaches them first', async (t) => {
+    // The real catalogue's shape: a new unplayed track ranks below a stuck
+    // played one. Finding out only by failing would delete the fresh folders
+    // before the sweep had met a single stuck one.
+    if (skipAsRoot()) return;
+    t.mock.method(console, 'warn', () => {});
+    resetCache();
+    makeDir('fresh-a', 1 * MB, 9000);
+    makeDir('fresh-b', 1 * MB, 8000);
+    const unstick = stuckDirs([
+      makeDir('stuck-a', 15 * MB, 300),
+      makeDir('stuck-b', 15 * MB, 200),
+    ]);
+    try {
+      const res = await stemCache.sweep(25 * MB);
+      assert.equal(res.removed, 0);
+      assert.equal(res.failedDirs, 2);
+      assert.deepEqual(
+        [...(await stemCache.cachedTrackIdSet())].sort(),
+        ['fresh-a', 'fresh-b', 'stuck-a', 'stuck-b'],
+      );
+    } finally {
+      unstick();
+    }
+  });
+
+  await test('a stuck folder leaves eviction working for everything else', async (t) => {
+    // Out of the budget check, not an off switch: what can go still has to fit.
+    if (skipAsRoot()) return;
+    t.mock.method(console, 'warn', () => {});
+    resetCache();
+    const unstick = stuckDirs([makeDir('stuck', 10 * MB, 9000)]);
+    makeDir('old', 10 * MB, 3000);
+    makeDir('mid', 10 * MB, 2000);
+    makeDir('new', 10 * MB, 1000);
+    try {
+      const res = await stemCache.sweep(25 * MB);
+      assert.equal(res.removed, 1);
+      assert.equal(res.failedDirs, 1);
+      assert.equal(res.overBudgetBytes, 5 * MB);
+      assert.deepEqual([...(await stemCache.cachedTrackIdSet())].sort(), ['mid', 'new', 'stuck']);
+    } finally {
+      unstick();
+    }
+  });
+
   await test('an over-budget sweep never touches the orphan quarantine, nor counts it', async () => {
     // .orphan-quarantine is a dot-dir of whole track dirs (orphan-purge.ts):
     // measured as a cache dir it weighed a few KB, ranked first (no library

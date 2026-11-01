@@ -86,6 +86,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and six tests drive both copies), so fix one, fix both.
 - **State bootstrap is never fatal.** Guard each step and warn; Icecast and the dead-air guard must still come up.
 - **The admin lockout counts distinct guesses, never requests**, and `ADMIN_LOCKOUT=off` (env only) is the operator's final say (`infrastructure.md`). The web console sends `X-Subwave-Console` so it is never answered with a Basic challenge.
+- **The edge drops Icecast's Basic challenge only for a client that can't answer it** (`?auth=`, or `Sec-Fetch-Dest: audio|video` from the same origin), in both Caddyfiles and every `docs/reverse-proxy.md` recipe. Unconditional either way is the bug: stripped, ffmpeg and mpv can't log in; kept, the browser's "Sign in" dialog covers the player (`infrastructure.md`).
 - **The listener-country chain fails open link by link** (`broadcast/listener-country.ts`). A later link runs when an earlier one misses (`XX`/`T1`), not only when it is absent.
 
 **Timing** (`broadcast.md`)
@@ -121,6 +122,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Tempo-derived timing is octave-safe: fold, then halve, never clamp.
 - The seed track id is not a pick (`util/pick-seed.ts`).
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
+- The analyzer writes shared folders 777 and files 666 whatever its umask, and a folder the sweep cannot delete leaves the budget check, before any delete if the `access()` probe catches it, otherwise once its own delete fails (`broadcast.md`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
 - The orphan purge moves only what reads as a stem dir, deletes only from its quarantine, only what still reads as stems, and only past the grace (one exception: a newer live copy replaces a quarantined one of the same id, on a fresh stamp), and keeps quarantine bytes outside the budget (`music/orphan-purge.ts`).
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).

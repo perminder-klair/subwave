@@ -27,6 +27,9 @@ subwave status       # is it on air?
 uninstall` tears the stack down and removes the install, keeping `state/` unless
 you pass `--purge`.
 
+To update a station, run `subwave self-update`, `subwave sync` and `subwave
+update`, in that order ([why](../docs/updating.md#update)).
+
 ## Commands
 
 | Command | What it does |
@@ -82,10 +85,11 @@ npx tsx src/cli.ts status
 npm run typecheck        # tsc --noEmit
 ```
 
-There are no tests, and CI does not typecheck this package — `lint.yml` covers
-`controller/`, `web/` and `mcp-subwave/` only. Run `npm run typecheck` yourself
-before pushing. The one CI job that does gate on `cli/` is the embedded-asset
-check below.
+There are no unit tests, and CI does not typecheck this package — `lint.yml`
+covers `controller/`, `web/` and `mcp-subwave/` only. Run `npm run typecheck`
+yourself before pushing. Two CI jobs do look at `cli/`: the embedded-asset check
+below, and `cli-smoke.yml`, which compiles the binary on a pull request and runs
+`scripts/smoke-update-pin.sh` against it.
 
 ### Embedded assets
 
@@ -112,6 +116,17 @@ hence `sync`, and the drift warnings in `update` and `doctor` that point at it.
 so images track the binary rather than floating on `:latest` and drifting ahead
 of the frozen compose files it carries. `update` moves that pin forward. A dev
 build has no published tag and stays on `:latest`.
+
+A compiled binary loads the working directory's `.env` into `process.env` at
+boot, which a `tsx` run doesn't, and compose prefers the environment over `.env`.
+So `update` has to move the pin in `process.env` as well as in the file, or a run
+from the install directory hands `pull` and `up` the old version (#2196). Only a
+compiled binary can show this, so that's what the regression check runs against:
+
+```bash
+npm run build:linux-x64
+scripts/smoke-update-pin.sh dist/subwave-linux-x64
+```
 
 `CLI_VERSION` is baked in at embed time and carries an
 `x-release-please-version` marker so release-please bumps it during the release

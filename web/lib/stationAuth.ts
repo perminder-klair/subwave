@@ -89,11 +89,22 @@ export function storedPasswordVerdict(result: StationAuthResult): StoredPassword
   return result === 'denied' ? { phase: 'prompt', clearStored: true } : { phase: 'ok', clearStored: false };
 }
 
+// A refusal is of the password that was sent. localStorage is shared between tabs, and another one
+// can save a new password while the check is out: that one is unverified, not refused, and acting on
+// the old answer would sign the listener out of the right password. `stored` is what is there now.
+// The app has no twin of this: one store, no second tab, and it only types at the prompt, where no
+// check of the stored password runs.
+export function answerForStored(result: StationAuthResult, asked: string, stored: string): StationAuthResult {
+  return result === 'denied' && stored && stored !== asked ? 'unavailable' : result;
+}
+
 const FAILURE_COPY: Record<Exclude<StationAuthResult, 'ok'>, string> = {
   denied: 'That password was not accepted.',
   'rate-limited': 'Too many attempts. Wait a few minutes, then try again.',
   unavailable: 'Could not reach the station. Check your connection and try again.',
 };
+
+export const SAVED_REJECTED_COPY = 'The saved password was not accepted.';
 
 function waitCopy(ms: number): string {
   const sec = Math.ceil(ms / 1000);
@@ -146,4 +157,34 @@ export async function checkStationAuth(apiBase: string, password: string): Promi
   } finally {
     clearTimeout(timer);
   }
+}
+
+export interface StationAuthClient {
+  check(password: string): Promise<StationAuthCheck>;
+  /** When the last check that went out began; 0 for none. */
+  lastCheckAt(): number;
+  /** When the latest answer said to ask again: a 429's `Retry-After`, or 0 for none. */
+  heldUntil(): number;
+}
+
+// One per mounted player, the web's half of the app's api.checkStationAuth and stationAuthHeldUntil.
+// The visit check, a typed press and the stuck-password watcher all ask through it, because the limit
+// covers the whole address: a 429 holds whichever check saw it, and every other one too. A showcase
+// switch remounts the player, so the stamp and the hold stay behind: one more check per switch.
+export function createStationAuthClient(apiBase: string): StationAuthClient {
+  let lastCheckAt = 0;
+  let heldUntil = 0;
+  return {
+    check: async password => {
+      const now = Date.now();
+      // A full bucket refuses the right password too, so asking before the wait is up proves nothing.
+      if (now < heldUntil) return { result: 'rate-limited', retryAt: heldUntil };
+      lastCheckAt = now;
+      const check = await checkStationAuth(apiBase, password);
+      heldUntil = check.retryAt;
+      return check;
+    },
+    lastCheckAt: () => lastCheckAt,
+    heldUntil: () => heldUntil,
+  };
 }
