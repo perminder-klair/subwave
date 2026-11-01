@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PlayerStatus } from '@/hooks/usePlayer';
 import type { StationApi } from '@/lib/api';
+import { gateHolds, resumeOnAnswer } from '@/lib/gate-resume';
 import {
   stationLockRequired,
   stationReadsOpen,
@@ -42,6 +43,7 @@ export function useStationGate({
   tunedIn,
   status,
   stop,
+  tune,
 }: {
   api: StationApi | null;
   privacy: StationPrivacy | null | undefined;
@@ -52,6 +54,7 @@ export function useStationGate({
   tunedIn: boolean;
   status: PlayerStatus;
   stop: () => void;
+  tune: () => void;
 }): StationGate {
   const required = stationLockRequired(privacy);
   const solid = privacy?.privatePlayer === true;
@@ -69,6 +72,10 @@ export function useStationGate({
   useEffect(() => {
     storeRef.current = { rememberStationPassword, forgetStationPassword };
   }, [rememberStationPassword, forgetStationPassword]);
+  const playerRef = useRef({ tunedIn, tune });
+  useEffect(() => {
+    playerRef.current = { tunedIn, tune };
+  }, [tunedIn, tune]);
   const lastCheckRef = useRef(0);
   // A check answers for the station it was asked about. A late answer after a
   // station switch must not save or forget anything under the new station.
@@ -113,10 +120,15 @@ export function useStationGate({
   }, [required, stationPassword]);
 
   // Locked out while tuned in (a lock switched on, or the password rotated):
-  // the audio stops with the face, as the web player's does.
+  // the audio stops with the face, as the web player's does. The right
+  // password tunes that listener back in (gate-resume.ts), so the hold names
+  // the station: this hook outlives a switch, and a switch must drop it.
+  const heldForRef = useRef<StationApi | null>(null);
   useEffect(() => {
+    const held = gateHolds(heldForRef.current === api, { required, takesAudio: false, phase, tunedIn });
+    heldForRef.current = held ? api : null;
     if (phase === 'prompt' && tunedIn) stop();
-  }, [phase, tunedIn, stop]);
+  }, [required, phase, tunedIn, stop, api]);
 
   // Icecast rejects a stale password silently, as far as the player can tell:
   // it just keeps reconnecting. Ask the controller whether that is why, for as
@@ -163,7 +175,11 @@ export function useStationGate({
       if (result === 'ok') {
         await storeRef.current.rememberStationPassword(password);
         setSavedRejected(false);
+        const resume = resumeOnAnswer(heldForRef.current === api, result);
         setPhase('ok');
+        // The password is already in the ref the stream URL reads. tune()
+        // toggles, so a remote Play that got here first is left playing.
+        if (resume && !playerRef.current.tunedIn) playerRef.current.tune();
       }
       return result;
     },
