@@ -2,7 +2,7 @@
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
-import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
+import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, restampFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
 import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
@@ -228,6 +228,23 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
     // old file.
     deleteFacetRows(id);
     syncTrackFacets(id);
+  })();
+}
+
+// The operator's other answer to a replaced file: the audio did not change (a
+// tag editor's "save all", a restore that reset file dates), so nothing is
+// cleared and every measurement stands for the file as it is now. `files` is
+// the walk's candidates: id -> the walked size, or null from the change-time
+// signal. One transaction, so a walk that dies here asks again in full.
+export function acceptReplacedFiles(files: ReadonlyMap<string, number | null>): void {
+  const d = requireDb();
+  const setSize = d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?');
+  d.transaction(() => {
+    for (const [id, fileSize] of files) {
+      const size = positiveInt(fileSize);
+      if (size != null) setSize.run(size, id);
+      restampFacetRows(id);
+    }
   })();
 }
 

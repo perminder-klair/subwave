@@ -101,9 +101,6 @@ function informativeAlbumYear(song: {
   return ord === (song.year ?? null) ? null : ord;
 }
 
-// Walk the whole Navidrome catalogue, upserting each song's metadata and
-// collecting the live id set. Shared by the full tagger run and
-// --reconcile-only. Metadata only: no embeddings, no LLM.
 // The file facts a Subsonic child carries, for the library status exports:
 // `path` is the real file path only when the client has "Report Real Path" on in
 // Navidrome (otherwise one built from the tags), `size` is bytes, `bitRate` kbps.
@@ -120,8 +117,16 @@ export function walkFileInfo(song: any): {
   };
 }
 
+// Walk the whole Navidrome catalogue, upserting each song's metadata and
+// collecting the live id set. Shared by the full tagger run and
+// --reconcile-only. No embeddings and no LLM, but more than metadata: a file
+// replaced at the same path has its analysis cleared and its stems dropped here
+// (replaced-file-policy.ts), unless that is held or the operator accepts it.
 export async function walkNavidrome(
-  { confirmReplaced = process.argv.includes('--confirm-replaced') }: { confirmReplaced?: boolean } = {},
+  {
+    confirmReplaced = process.argv.includes('--confirm-replaced'),
+    acceptReplaced = process.argv.includes('--accept-replaced'),
+  }: { confirmReplaced?: boolean; acceptReplaced?: boolean } = {},
 ): Promise<{ walked: number; liveIds: Set<string> }> {
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
@@ -192,8 +197,11 @@ export async function walkNavidrome(
         + `${fileChanges.since ?? 'the start'}${fileChanges.complete ? '' : ' (partial: the server stopped answering part-way, the mark stays)'}`
         + (fileChanges.futureDated ? `, ${fileChanges.futureDated} future-dated file(s) skipped (a wrong clock on the files)` : '')
         + `; ${sizeCandidates} by size, ${candidates.size - sizeCandidates} by change time`);
-  const decision = decideReplacedClear({ candidates: candidates.size, knownTracks: walked, confirmed: confirmReplaced });
-  if (!decision.clear) logEvent('warning', decision.message);
+  const decision = decideReplacedClear({
+    candidates: candidates.size, knownTracks: walked, confirmed: confirmReplaced, accepted: acceptReplaced,
+  });
+  const held = !decision.clear && decision.reason === 'held';
+  if (held) logEvent('warning', decision.message);
   const replaced = decision.clear ? [...candidates.keys()] : [];
   for (const [id, size] of decision.clear ? candidates : []) db.clearTrackAudio(id, size);
   if (replaced.length > 0) {
@@ -209,9 +217,13 @@ export async function walkNavidrome(
         (stems.offline ? ` (stem cache offline: ${stems.offline})` : ''),
     );
   }
+  if (!decision.clear && decision.reason === 'accepted' && candidates.size > 0) {
+    db.acceptReplacedFiles(candidates);
+    logEvent('info', `${candidates.size.toLocaleString('en-GB')} file(s) accepted as changed: their analysis and stems are kept`);
+  }
   // Only once acted on: a walk that dies before here, or a held clear, asks
   // again from the old mark.
-  if (fileChanges?.complete && decision.clear) await import('../file-changes.js').then(m => m.saveMark(fileChanges.newest)).catch(() => {});
+  if (fileChanges?.complete && !held) await import('../file-changes.js').then(m => m.saveMark(fileChanges.newest)).catch(() => {});
   const suspect = [...eraReasons.values()].reduce((a, b) => a + b, 0);
   if (suspect) {
     const breakdown = [...eraReasons.entries()]

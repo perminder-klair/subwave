@@ -89,11 +89,19 @@ test('a mass replacement is held, like a mass prune: nothing cleared without --c
   const held = policy.decideReplacedClear({ candidates: 40_000, knownTracks: 72_000, confirmed: false });
   assert.equal(held.clear, false);
   assert.match((held as { message: string }).message, /--confirm-replaced/);
+  assert.match((held as { message: string }).message, /--accept-replaced/);
   assert.deepEqual(policy.decideReplacedClear({ candidates: 40_000, knownTracks: 72_000, confirmed: true }), { clear: true });
   // The prune's threshold: max(200, 2 % of the library).
   assert.equal(policy.decideReplacedClear({ candidates: 1_440, knownTracks: 72_000, confirmed: false }).clear, true);
   assert.equal(policy.decideReplacedClear({ candidates: 1_441, knownTracks: 72_000, confirmed: false }).clear, false);
   assert.equal(policy.decideReplacedClear({ candidates: 200, knownTracks: 50, confirmed: false }).clear, true);
+});
+
+test('accepting clears nothing, whatever the count, and wins over confirming', () => {
+  const accepted = { clear: false, reason: 'accepted' };
+  assert.deepEqual(policy.decideReplacedClear({ candidates: 40_000, knownTracks: 72_000, confirmed: false, accepted: true }), accepted);
+  assert.deepEqual(policy.decideReplacedClear({ candidates: 5, knownTracks: 72_000, confirmed: false, accepted: true }), accepted);
+  assert.deepEqual(policy.decideReplacedClear({ candidates: 40_000, knownTracks: 72_000, confirmed: true, accepted: true }), accepted);
 });
 
 test('a held candidate keeps its old size, so the next walk finds it again', () => {
@@ -141,6 +149,30 @@ test('a failed attempt measures nothing: a kept measurement keeps its date, and 
   assert.equal(db.lastMeasuredAt('failing'), '2026-10-01T00:00:00Z');
   const row = sql(`SELECT attempts, status FROM track_facet_status WHERE track_id = 'failing' AND facet = 'head'`).get() as { attempts: number; status: string };
   assert.deepEqual({ ...row }, { attempts: 1, status: 'ok' });
+  consistent();
+});
+
+test('an accepted file keeps its analysis, stores its size, and is not found again', () => {
+  measured('accepted');
+  measured('dated');
+  sql(`UPDATE track_facet_status SET at = '2026-10-01T00:00:00Z' WHERE track_id IN ('accepted', 'dated')`).run();
+  const changed = '2026-10-28T15:01:20Z';
+  assert.equal(db.upsertTrackMeta('accepted', meta(4_000)), true);
+  assert.ok(policy.changedAfterMeasure(changed, db.lastMeasuredAt('dated')));
+
+  // The walk's candidates: the size signal's size, and null from the change time.
+  db.acceptReplacedFiles(new Map<string, number | null>([['accepted', 4_000], ['dated', null]]));
+
+  const t = sql(`SELECT file_size, bpm, stems_at FROM tracks WHERE id = 'accepted'`).get() as Record<string, unknown>;
+  assert.equal(t.file_size, 4_000);
+  assert.equal(t.bpm, 100);
+  assert.equal(t.stems_at, '2026-10-01T00:00:00Z');
+  assert.equal(sql(`SELECT file_size FROM tracks WHERE id = 'dated'`).get()!.file_size, 1_000, 'no size to store: the old one stands');
+  assert.equal(db.upsertTrackMeta('accepted', meta(4_000)), false, 'the size signal is answered');
+  for (const id of ['accepted', 'dated']) {
+    assert.equal(policy.changedAfterMeasure(changed, db.lastMeasuredAt(id)), false, 'the change-time signal is answered');
+  }
+  assert.ok(rows('accepted').includes('loudness:ok'));
   consistent();
 });
 
