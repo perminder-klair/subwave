@@ -134,15 +134,18 @@ every feed skill gets the same behaviour:
 - `feedMaxItems` (1–50, default 10) caps how much of the feed is read per fire.
   With `feed2`/`feed3` it is read from each feed, and a fire offers no more than
   that many items in total. The next fire moves on to the ones left, so a low
-  value still reaches every feed.
+  value still reaches every feed. The merged list holds at most 60 items, taken
+  round-robin: three full 50-item feeds offer 60 of their 150, then report that
+  every item has aired until new ones appear.
 - `feedMaxAgeDays` (1–365, default no limit) drops items published longer ago
   than that, before `feedMaxItems` counts them. Search feeds need it: Google News
   ignores its own `when:7d` on a long query and mixes in items months old, which
   the DJ would otherwise present as news. Undated items are kept.
 - Every item the feed dates reaches the DJ with its day in the station's timezone
   (`published: 2026-10-30`), so it can tell news from history. A feed that gives
-  a day and no clock keeps that day as written. This is on for every feed skill,
-  with no key to set; an undated item simply carries no date.
+  a day and no clock keeps that day as written. This is on for every skill the
+  generated tool serves, with no key to set; an undated item simply carries no
+  date. A skill with its own `tool.mjs` passes on what its code returns.
 - `feed2` and `feed3` add further feeds. They are fetched together and merged
   round-robin, so a busy feed cannot crowd a quiet one out, and a headline that
   appears in two of them is offered once. One of them failing, taking more than
@@ -181,8 +184,9 @@ something else, read `config.feed` yourself via
 skill with its own `tool.mjs` they do nothing unless that code reads them, and the
 loader logs a warning naming them. That includes **News on a station first booted
 before feeds moved out of it** (#1616): its `state/skills/news/tool.mjs` is still
-the old hand-written fetcher, so these keys have no effect there. **Reset to
-default** on the skill removes that file. It also restores the shipped `SKILL.md`,
+the old hand-written fetcher, so these keys have no effect there and its items
+reach the DJ with no `published` date. **Reset to default** on the skill removes
+that file. It also restores the shipped `SKILL.md`,
 so set your feed and any other edits again afterwards.
 
 ### `cohosts: true` — one contribution from every host

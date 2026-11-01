@@ -142,7 +142,9 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
             <code className="bs-code-inline">feed2</code> or{' '}
             <code className="bs-code-inline">feed3</code> it is read from each feed, and a
             fire offers no more than that many items in total; the next fire moves on to
-            the ones left.
+            the ones left. The merged list holds at most 60 items, taken round-robin: three
+            full 50-item feeds offer 60 of their 150, then report that every item has aired
+            until new ones appear.
           </li>
           <li>
             <code className="bs-code-inline">feedMaxAgeDays</code> (1–365, default no limit)
@@ -152,7 +154,9 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           <li>
             Every item the feed dates reaches the DJ with its day in the station&rsquo;s
             timezone, so it can tell news from history. A feed that gives a day and no clock
-            keeps that day as written. This is on for every feed skill, with no key to set.
+            keeps that day as written. This is on for every skill the generated tool serves,
+            with no key to set; a skill with its own{' '}
+            <code className="bs-code-inline">tool.mjs</code> passes on what its code returns.
           </li>
           <li>
             <code className="bs-code-inline">feed2</code> and{' '}
@@ -184,8 +188,9 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           <code className="bs-code-inline">feedMaxAgeDays</code>,{' '}
           <code className="bs-code-inline">feed2</code> and{' '}
           <code className="bs-code-inline">feed3</code> do nothing unless that code reads
-          them, and the log says so; on a station that still has News&rsquo;s old{' '}
-          <code className="bs-code-inline">tool.mjs</code>,{' '}
+          them, and the log says so. A station that still has News&rsquo;s old{' '}
+          <code className="bs-code-inline">tool.mjs</code> gets none of these keys and no{' '}
+          <code className="bs-code-inline">published</code> date until{' '}
           <strong>Reset to default</strong> removes it. A
           skill that ships its own <code className="bs-code-inline">tool.mjs</code> keeps it;
           the generated tool fills a gap, it never displaces a fetcher you wrote.
