@@ -7,7 +7,9 @@
 //   tuned out before the gate rose (the idle cutoff, a Media Session pause, their own stop), was
 //   not interrupted, and a password is no reason to start audio for them.
 // - The hold lasts as long as the gate. Once it is down it is spent, so it can never answer for a
-//   later prompt: the listener's own stop stays a stop.
+//   later prompt: the listener's own stop stays a stop. A station with no lock rests at 'checking'
+//   here, so that phase is the gate only under a lock, as in lib/skinLock.ts: a lock lifted before
+//   its check answered puts the face back with the gate down.
 // - A hold belongs to one station and one mounted player. It lives in a ref that a showcase switch
 //   remounts, and the app, whose hook outlives a switch, keys it by station. Any other tune-out
 //   under the prompt drops it.
@@ -29,7 +31,7 @@ export interface GateAudioState {
 
 /** Whether the gate holds a listener to tune back in, given whether it did before this state. */
 export function gateHolds(held: boolean, { required, takesAudio, phase, tunedIn }: GateAudioState): boolean {
-  if (phase === 'open' || phase === 'ok') return false;
+  if (phase !== 'prompt' && !(required && phase === 'checking')) return false;
   if (!required || !tunedIn) return held;
   return phase === 'prompt' || takesAudio;
 }

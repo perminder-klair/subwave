@@ -74,6 +74,11 @@ test('the render a lock lifts in, with the prompt not yet gone, holds nobody new
   assert.equal(walk({ required: false, phase: 'prompt', tunedIn: true }), false);
 });
 
+test('a lock lifted at checking drops the hold, as the web twin needs', () => {
+  const rose: Step[] = [{ required: false, phase: 'checking', tunedIn: true }, { required: true, takesAudio: true }, { tunedIn: false }];
+  assert.equal(walk(...rose, { required: false, takesAudio: false }), false);
+});
+
 test('a listener back on air during a recheck has nothing left to resume', () => {
   assert.equal(walk({ tunedIn: true }, { tunedIn: false }, { phase: 'checking', tunedIn: true }), false);
 });

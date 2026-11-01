@@ -9,7 +9,10 @@
 //   timer, their own stop), was not interrupted, and a password is no reason
 //   to start audio for them.
 // - The hold lasts as long as the gate. Once it is down it is spent, so it can
-//   never answer for a later prompt: the listener's own stop stays a stop.
+//   never answer for a later prompt: the listener's own stop stays a stop. The
+//   web's station with no lock rests at 'checking', so that phase is the gate
+//   only under a lock. This hook's goes to 'open', which is why only the web
+//   needs it, and the rule is kept whole to stay a twin.
 // - A hold belongs to one station. useStationGate outlives a switch, so it
 //   keeps the `api` it held for, where the web's remounts with its player.
 // - Only the controller's pass resumes: a wrong password keeps the hold for
@@ -32,7 +35,7 @@ export interface GateAudioState {
 /** Whether the gate holds a listener to tune back in, given whether it did
  *  before this state. */
 export function gateHolds(held: boolean, { required, takesAudio, phase, tunedIn }: GateAudioState): boolean {
-  if (phase === 'open' || phase === 'ok') return false;
+  if (phase !== 'prompt' && !(required && phase === 'checking')) return false;
   if (!required || !tunedIn) return held;
   return phase === 'prompt' || takesAudio;
 }

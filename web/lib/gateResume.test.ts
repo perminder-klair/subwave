@@ -75,6 +75,16 @@ test('the prompt left up after the lock is lifted keeps the hold, and starts non
   assert.equal(walk({ required: false, tunedIn: true }), false);
 });
 
+test('a lock lifted before its check answered drops the hold: the gate is down', () => {
+  const rose: Step[] = [{ required: false, phase: 'checking', tunedIn: true }, { required: true, takesAudio: true }, { tunedIn: false }];
+  assert.equal(walk(...rose, { required: false, takesAudio: false }), false);
+  // Their own press and their own stop on the public station, then the next lock.
+  assert.equal(
+    walk(...rose, { required: false, takesAudio: false }, { tunedIn: true }, { tunedIn: false }, { required: true, takesAudio: true }),
+    false,
+  );
+});
+
 test('a listener back on air during a recheck has nothing left to resume', () => {
   assert.equal(walk({ tunedIn: true }, { tunedIn: false }, { phase: 'checking', tunedIn: true }), false);
 });
