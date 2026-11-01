@@ -30,6 +30,7 @@ const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { standInToken } = await import('../src/broadcast/stand-in-policy.js');
 const { enqueuePick, trimLinkToIntro } = await import('../src/broadcast/dj-agent/enqueue.js');
+const { normalizeForDisplay } = await import('../src/audio/speech-text.js');
 const { writeSilentWav } = await import('../src/audio/wav-silence.js');
 const { loadSkills } = await import('../src/skills/loader.js');
 const { forcedDirectorAgent, runCapability } = await import('../src/skills/_agent.js');
@@ -249,6 +250,93 @@ for (const [shape, line] of Object.entries(TEMPLATES)) {
     assert.deepEqual(spoken, []);
   });
 }
+
+// A stand-in in costume. The test reads the raw line, the line a label away, and
+// what normalising leaves of each, because a model reaches for all of these and
+// each one alone gets past a test of the raw line.
+const LONG_TEMPLATE = '[Placeholder for the weather update, which should cover the temperature, the wind and the forecast for tonight]';
+const DISGUISED = {
+  'a quoted long template': `"${LONG_TEMPLATE}"`,
+  'a quoted short template': '"[Insert weather update here]"',
+  'a quoted long template and a full stop': `"${LONG_TEMPLATE}".`,
+  'doubled braces': '{{ your weather update }}',
+  'a tag around a word': '<p>TBD</p>',
+  'a tag around a long template': `<p>${LONG_TEMPLATE}</p>`,
+  'a stand-in and a trailing cue': 'placeholder [laughs]',
+  'emphasis around a template': '**[Insert weather update here]**',
+  'another persona\'s label': 'Niki: placeholder',
+  'a role label': 'DJ: placeholder',
+  'a field label': 'Script: placeholder',
+  'a bold label': '**Niki:** placeholder',
+  'a label on a short template': 'Niki: [Insert reply here]',
+  'a label on a quoted long template': `Niki: "${LONG_TEMPLATE}"`,
+  'a label on a tag': 'DJ: <p>TBD</p>',
+};
+
+// Real lines that look like some of the above. A label stays on the air as it
+// was: only the test looks past it.
+const REAL_SPEECH = {
+  'a line with another persona\'s label': 'Niki: hello there',
+  'a short aside before its words': '[laughs] That was a long one.',
+  'a long aside in brackets': '[This aside runs well past the eighty character cue cap and it is still just a person talking on the radio]',
+  'a line in quotes': '"A quoted line, start to finish."',
+  'a colon that is no label': 'Attention : voici le morceau',
+  'a stand-in word after a sentence': 'That was Efdemin. The date: TBD.',
+  'a template word opening a sentence': 'Insert the tape and press play: Plakias, 1986.',
+  'an aside in round brackets': '(Insert coin to continue, as the arcades said.)',
+  'a labelled word that is one elsewhere': 'Niki: Todo.',
+  'a bold word': 'The **only** ferry out of Chania tonight.',
+};
+
+for (const [shape, line] of Object.entries(DISGUISED)) {
+  test(`announce drops ${shape} and reports it as a stand-in`, async () => {
+    const out = await queue.announce(line, 'programme-feature', { persona: HOST as never });
+    assert.equal(out.accepted, false);
+    assert.equal(out.reason, 'stand-in');
+    assert.deepEqual(spoken, []);
+    assert.ok(droppedAsStandIn(), 'the gate dropped it, not the normaliser');
+  });
+
+  test(`the deferred path and an exchange drop ${shape}`, async () => {
+    await queue.announceAtNextTrack(line, 'station-id', { persona: HOST as never });
+    assert.deepEqual(spoken, []);
+    const real = 'Storms over Crete tonight, the ferries are docked.';
+    await queue.announceExchange([
+      { persona: HOST as never, text: real },
+      { persona: GUEST as never, text: line },
+    ], 'banter', { castNames: [HOST.name, GUEST.name] });
+    assert.deepEqual(spoken, [real]);
+  });
+
+  test(`push() drops ${shape} and says so`, async () => {
+    let reported = 0;
+    await queue.push({
+      track: { id: 'told', title: 'Song', artist: 'Artist' } as never, introScript: line, introPersona: HOST as never,
+      onStandInDropped: () => { reported += 1; },
+    });
+    assert.equal(queue.upcoming.find(i => i.track.id === 'told')!.introScript, null);
+    assert.equal(reported, 1, 'a caller recording its own copy must hear of it');
+  });
+}
+
+for (const [shape, line] of Object.entries(REAL_SPEECH)) {
+  test(`${shape} airs`, async () => {
+    const out = await queue.announce(line, 'programme-feature', { persona: HOST as never });
+    assert.equal(out.accepted, true);
+    assert.equal(spoken.length, 1);
+    assert.equal(spoken[0], normalizeForDisplay(line));
+    assert.ok(!droppedAsStandIn());
+  });
+}
+
+test('a line the gate passes is not dropped by a later look at its display form', () => {
+  // push() checks the line once and the render checks it again. If those two
+  // disagree, the caller has already recorded as said a line that never airs.
+  for (const line of Object.values(REAL_SPEECH)) {
+    assert.equal(standInToken(line), null, line);
+    assert.equal(standInToken(normalizeForDisplay(line)), null, line);
+  }
+});
 
 test('the label comes off before the line is judged', async () => {
   const out = await queue.announce(`${HOST.name}: [Insert weather update here]`, 'programme-feature', { persona: HOST as never });

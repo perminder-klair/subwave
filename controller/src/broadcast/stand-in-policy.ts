@@ -12,11 +12,18 @@
 // (the operator's words are theirs to air), and the caller drops the line
 // rather than repairing it: there is nothing in a stand-in to repair.
 //
-// Judged on the line as the model wrote it, with the speaker label off and
-// BEFORE normalizeForDisplay. That pass empties a short bracket or a tag, and
-// only strips the brackets from a long one, so a later test would see nothing
-// at all or a template passing as prose. Text it would empty had nothing to
-// say, and that is a stand-in too.
+// Judged on the line as the model wrote it AND on what normalizeForDisplay
+// leaves of it, each with any leading label looked past. Either one alone misses
+// half of these. Normalising empties a short bracket or a tag and only strips
+// the brackets from a long one, so a template past it reads as prose; before it,
+// "<p>TBD</p>" and "placeholder [laughs]" read as speech. Text it would empty
+// had nothing to say, and that is a stand-in too. A line this test passes must
+// stay passed in its display form: push() checks once and the render checks
+// again, and by then a caller may have recorded the line as said.
+//
+// The label here is any name, not just the cast's ("DJ: placeholder", "Script:
+// placeholder"), which is safe because it is only looked past for the verdict:
+// stripSpeakerLabel owns what comes off the air, and strips known names only.
 
 import { normalizeForDisplay, stripSpeakerLabel } from '../audio/speech-text.js';
 
@@ -45,8 +52,12 @@ const HAS_WORD = /[\p{L}\p{N}]/u;
 // "{your text}", "<placeholder for the news segment>". A line wholly inside one
 // bracket pair whose words start like a template's. A real aside in brackets
 // starts with anything else and airs.
-const BRACKETED = /^\s*(?:\[[^\]]*\]|\{[^}]*\}|<[^>]*>)\s*[.!?]?\s*$/;
+const BRACKETED = /^\s*(?:\[[^\]]*\]|\{+[^}]*\}+|<[^>]*>)\s*[.!?]?\s*$/;
 const TEMPLATE_START = /^(?:placeholder|insert|your|tbd)\b/;
+// What a model wraps a whole line in: quotes, emphasis, a tag, a closing stop.
+const WRAPPER = /^(?:[\s"'“”‘’«»*_`]|<\/?[a-z][^>]*>)+|(?:[\s"'“”‘’«»*_`.!?]|<\/?[a-z][^>]*>)+$/giu;
+// No sentence punctuation in it: "That was Efdemin. The date: TBD." is speech.
+const LABEL = /^[^:\r\n.,!?]{1,40}:\s+/;
 
 function wordsOnly(text: string): string {
   return text
@@ -59,18 +70,29 @@ export function foldStandIn(text: string): string {
   return wordsOnly(text).toLowerCase();
 }
 
+function judge(line: string): string | null {
+  if (!HAS_WORD.test(line)) return line.slice(0, 24);
+  const words = wordsOnly(line);
+  if (STAND_IN_CAPITALS.has(words)) return words;
+  const folded = foldStandIn(line);
+  if (STAND_IN_LINES.has(folded) || LOREM.test(folded)) return folded.slice(0, 40);
+  const bare = line.replace(WRAPPER, '');
+  if (BRACKETED.test(bare) && TEMPLATE_START.test(foldStandIn(bare))) return foldStandIn(bare).slice(0, 40);
+  return null;
+}
+
 // The token that made `text` a stand-in, for the booth log, or null when the
 // line is speech.
 export function standInToken(text: string | null | undefined): string | null {
   const raw = String(text ?? '').trim();
   if (!raw) return null; // empty is the callers' own "no line" case, not this one
-  if (!HAS_WORD.test(raw)) return raw.slice(0, 24);
-  const words = wordsOnly(raw);
-  if (STAND_IN_CAPITALS.has(words)) return words;
-  const folded = foldStandIn(raw);
-  if (STAND_IN_LINES.has(folded) || LOREM.test(folded)) return folded.slice(0, 40);
-  if (BRACKETED.test(raw) && TEMPLATE_START.test(folded)) return folded.slice(0, 40);
-  if (!normalizeForDisplay(raw)) return folded.slice(0, 40);
+  for (const written of new Set([raw, raw.replace(LABEL, '')])) {
+    const shown = normalizeForDisplay(written);
+    const token = judge(written) ?? (shown
+      ? judge(shown) ?? judge(shown.replace(LABEL, ''))
+      : foldStandIn(written).slice(0, 40));
+    if (token) return token;
+  }
   return null;
 }
 

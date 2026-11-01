@@ -178,6 +178,32 @@ test('the conversational agent records the ack when push() drops the intro', asy
   await assertRemembered(String(result?.ack));
 });
 
+// The display form of each passes as a line unless the gate judges it too, and
+// the render then drops what push() let by, after the caller recorded it.
+for (const [line, word] of [['<p>TBD</p>', 'TBD'], ['placeholder [laughs]', 'placeholder'], ['Niki: placeholder', 'placeholder']]) {
+  test(`the request cascade does not remember ${line} as said`, async () => {
+    intro = line;
+    const result = await submit('Queen, Bohemian Rhapsody');
+    assert.equal(queue.upcoming.find(i => i.requestedBy === 'Listener')!.introScript, null);
+    await assertNotRemembered(word);
+    await assertRemembered(result.ack);
+    assert.equal(requestLog.snapshot(1)[0].introScript, null);
+  });
+
+  test(`the conversational agent does not remember ${line} as said`, async () => {
+    await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+    requestAgent.run = (async () => ({
+      object: { kind: 'track', id: song.id, ack: 'Found it, coming up.', intro: line },
+      steps: 1, toolCalls: [], extras: { seen: new Map([[song.id, song]]) },
+    })) as never;
+    session.appendTurn({ role: 'event', kind: 'request', text: 'Listener "Listener" requests: "the one about the rhapsody"' });
+    const result = await runRequest(queue, { requester: 'Listener', text: 'the one about the rhapsody' });
+    assert.equal(result?.introScript, null);
+    await assertNotRemembered(word);
+    await assertRemembered(String(result?.ack));
+  });
+}
+
 test('a real intro is still remembered as said', async () => {
   intro = 'Here comes the big one for you.';
   await submit('Queen, Bohemian Rhapsody');
