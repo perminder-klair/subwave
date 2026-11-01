@@ -612,6 +612,18 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
   })();
 }
 
+// A complete stem set that is on disk without this row having asked for it: the
+// purge handing a track its dir back. Says only that the stems exist, so it
+// leaves the track's analysis failure history alone, which writeFacetResults
+// would clear as a success.
+export function stampStemsCached(id: string): void {
+  const d = requireDb();
+  d.transaction(() => {
+    d.prepare('UPDATE tracks SET stems_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+    syncTrackFacets(id, { fresh: ['stems'], source: 'unknown' });
+  })();
+}
+
 // Never analysed, or analysed by an older ANALYSIS_VERSION, minus the ones
 // judged unanalysable. Ordered for stable resumption.
 export function needsAnalysisIds(limit?: number): string[] {

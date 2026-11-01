@@ -666,6 +666,9 @@ export const DEFAULTS = {
     // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
+    // Daily orphan stem-dir purge (quarantine, then delete after a week).
+    // Off by default — deleting operator files is opt-in (#1570 discipline).
+    stemOrphanPurgeEnabled: false,
     // Pause the analysis pass while anyone is listening, resuming once the stream
     // has been listener-free for analyzeQuietMinutes (#1099). Checked between
     // tracks inside runAnalysisPass, so it covers the tagger child, `npm run

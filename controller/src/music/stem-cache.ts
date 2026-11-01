@@ -292,6 +292,12 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
   } catch {
     return []; // no cache dir yet
   }
+  // Dot entries are never track dirs: the root marker, and the orphan purge's
+  // .orphan-quarantine, whose few-KB inode size would otherwise rank it first
+  // in the eviction order (no library row) and let an over-budget sweep
+  // rm -rf the whole quarantine past its grace, while freeing far more than
+  // the sweep counted. stemsRootStatus skips them the same way.
+  entries = entries.filter(name => !name.startsWith('.'));
   const measured = await mapPool(entries, SCAN_CONCURRENCY, name => measureDir(path.join(root, name)));
   return measured.filter((d): d is { dir: string; bytes: number; mtimeMs: number } => d !== null);
 }
@@ -305,6 +311,8 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 // - the only writer of stem dirs is the analysis pass, which marks the
 //   snapshot `pending` while it runs and adds the dirs it wrote when it ends;
 // - evictions are made by sweep(), which rewrites the snapshot from its walk;
+// - the orphan purge marks it `stale` (markUsageStale): the next read walks, and
+//   until then the figure stays readable for the budget field;
 // - anything else (dirs deleted or copied in by hand, a pass that died before
 //   settling) is caught by a full walk at least every SNAPSHOT_MAX_AGE_MS.
 export const SNAPSHOT_MAX_AGE_MS = 24 * 3600_000;
@@ -322,6 +330,8 @@ export interface UsageSnapshot {
   updatedAt: string;
   // An analysis pass that may be writing stem dirs right now.
   pending?: { pid: number; since: string };
+  // The cache changed outside the pass and the sweep: these are last-known totals.
+  stale?: boolean;
 }
 
 export type SnapshotVerdict = 'use' | 'walk' | 'pass-running';
@@ -344,6 +354,7 @@ export function snapshotVerdict(opts: {
     // written dirs nobody counted.
     return opts.pendingAlive && fresh ? 'pass-running' : 'walk';
   }
+  if (snap.stale) return 'walk';
   const measured = Date.parse(snap.measuredAt);
   if (!Number.isFinite(measured) || opts.nowMs - measured > SNAPSHOT_MAX_AGE_MS || measured > opts.nowMs + 60_000) return 'walk';
   return 'use';
@@ -371,6 +382,19 @@ async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
     snapshotUntrusted = true;
     return false;
   }
+}
+
+// For a writer outside the pass and the sweep (the orphan purge): the stored
+// totals no longer match the disk, so the next read walks instead of trusting
+// them. The file stays, because the budget field reads it (storedUsage) and an
+// operator about to lower the budget is better served by a flagged figure than
+// by none: with no figure the warning and the confirm both go. Totals that
+// cannot be marked must not outlive this, so a failed write removes them.
+export async function markUsageStale(): Promise<void> {
+  const snap = await readSnapshot();
+  if (!snap) return;
+  const marked = await writeSnapshot({ ...snap, stale: true, updatedAt: new Date().toISOString() });
+  if (!marked) await rm(snapshotPath(), { force: true }).catch(() => {});
 }
 
 function pidAlive(pid: number): boolean {
@@ -425,6 +449,44 @@ export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBy
   return { bytes, dirs, estTrackBytes: estimateTrackBytes(bytes, dirs) };
 }
 
+// The STORED cache size, for a surface that must answer at once (the stem
+// budget field). Never walks: a walk of a large cache on a network share
+// takes minutes, and this is read whenever the Settings page opens. A
+// snapshot the sweep would not trust (older than a day, a pass writing) is
+// still reported, flagged, because an operator about to lower the budget is
+// better served by an old figure with its age than by none. Null when there
+// is no usable snapshot of THIS root.
+export interface StoredUsage {
+  bytes: number;
+  dirs: number;
+  estTrackBytes: number;
+  /** Last full walk. */
+  measuredAt: string;
+  updatedAt: string;
+  /** The sweep would use this figure as is (measured within a day, no pass writing). */
+  fresh: boolean;
+  /** An analysis pass is adding stems right now; the figure is a floor. */
+  passRunning: boolean;
+  /** The cache changed since this was measured (an orphan pass); the sweep re-measures it. */
+  stale: boolean;
+}
+
+export async function storedUsage(): Promise<StoredUsage | null> {
+  const { snap, verdict } = await snapshotState();
+  if (!snap || snap.version !== 1 || snap.root !== stemsRoot()) return null;
+  if (!Number.isFinite(snap.bytes) || !Number.isFinite(snap.dirs) || snap.bytes < 0 || snap.dirs < 0) return null;
+  return {
+    bytes: snap.bytes,
+    dirs: snap.dirs,
+    estTrackBytes: estimateTrackBytes(snap.bytes, snap.dirs),
+    measuredAt: snap.measuredAt,
+    updatedAt: snap.updatedAt,
+    fresh: verdict === 'use',
+    passRunning: verdict === 'pass-running',
+    stale: snap.stale === true,
+  };
+}
+
 // The analysis pass marks the snapshot while it may write stem dirs. Called
 // after its headroom read, so that read could still use the snapshot.
 export async function markPassPending(): Promise<boolean> {
@@ -452,7 +514,8 @@ async function dirBytes(dir: string): Promise<number | null> {
 // End of an analysis pass: add the NET-NEW dirs it allocated to the snapshot
 // (measuring just those), clear the pending mark, and say whether the cache is
 // still inside the budget. Existing dirs may gain a missing tail, so a pass
-// that rewrote one invalidates the snapshot and takes a full walk instead.
+// that rewrote one invalidates the snapshot and takes a full walk instead, as
+// does one a purge marked stale mid-pass, since its base no longer holds.
 // An untrusted settlement also invalidates old totals, even if its file remains.
 export async function settlePassWrites(
   newTrackIds: Iterable<string>,
@@ -462,7 +525,7 @@ export async function settlePassWrites(
   const snap = await readSnapshot();
   const mine = snap?.pending?.pid === process.pid;
   const base = snapshotVerdict({ snap, root: stemsRoot(), nowMs: Date.now(), pendingAlive: true });
-  if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running') {
+  if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running' || snap.stale) {
     snapshotUntrusted = true;
     return null;
   }
@@ -484,7 +547,8 @@ export async function settlePassWrites(
 export async function cachedTrackIdSet(): Promise<Set<string>> {
   cacheWalks += 1;
   try {
-    return new Set((await readdir(stemsRoot())).filter(n => n !== STEMS_MARKER));
+    // Dot entries (the marker, the orphan quarantine) are not track ids.
+    return new Set((await readdir(stemsRoot())).filter(n => !n.startsWith('.')));
   } catch {
     return new Set(); // no cache dir yet
   }

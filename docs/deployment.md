@@ -229,7 +229,7 @@ Everything that survives `docker compose down` lives in `state/`:
 | `voice/` | Controller | TTS WAVs rendered for each spoken segment |
 | `archive/` | Liquidsoap | Hourly MP3 archive (`YYYY-MM-DD/HH-00.mp3`) |
 | `logs/` | Controller + Liquidsoap | Event logs |
-| `stems/` | Analyzer | Cached Demucs stem windows for stem-blend transitions — byte-budgeted by `audio.stemCacheGb` (Settings → Transitions) |
+| `stems/` | Analyzer | Cached Demucs stem windows for stem-blend transitions — byte-budgeted by `audio.stemCacheGb` (Settings → Stems) |
 | `transitions/` | Analyzer | Rendered stem-blend clips (swept after ~1h) |
 | `next.txt`, `jingle-now.txt`, `say.txt`, `intro.txt`, `auto.m3u`, `now-playing.json` | Controller ⇄ Liquidsoap | File-based IPC (see `CLAUDE.md`) |
 
