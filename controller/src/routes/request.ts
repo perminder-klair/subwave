@@ -32,8 +32,8 @@ import { classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupp
 import { canonicalLanguage } from '../music/request-normalize.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
-import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
-import { RequestIdentificationMiss } from '../broadcast/dj-agent/breaker.js';
+import { ARTIST_VARIETY_WINDOW, drawRankedRequestCandidate, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
+import { agentDeadline, RequestIdentificationMiss } from '../broadcast/dj-agent/breaker.js';
 import { isWebSearchProviderError } from '../skills/web-search.js';
 
 export const router = express.Router();
@@ -124,24 +124,41 @@ export interface ListenerRequestEntry {
 const requests = new Map<string, ListenerRequestEntry>();
 const REQUEST_TTL_MS = 10 * 60 * 1000;
 // A listener request is accepted asynchronously, but it must still reach a
-// terminal state promptly. Provider generation has a much larger safety
-// timeout for other call sites; letting that budget govern this route leaves a
-// listener receipt pending for minutes when a model accepts a request and then
-// stops answering. Keep this route's wall-clock bound independent and shorter.
-const REQUEST_RESOLUTION_MAX_MS = 60_000;
+// terminal state. The agent keeps `llm.agentTimeoutMs`, so a slow station that
+// raised it is not cut off here, and the fallback that deadline promises runs
+// after it: the interpreter, then the library lookup, which needs no model. The
+// ceiling is therefore the agent's deadline plus a reserve for that fallback.
+// `llm.requestTimeoutMs` bounds one generation, never the whole request.
+const REQUEST_FALLBACK_RESERVE_MS = 45_000;
+// Held back from the interpreter, so a slow one still leaves the literal parse
+// time to reach the catalogue.
+const REQUEST_CATALOGUE_RESERVE_MS = 15_000;
 const REQUEST_QUEUE_RESERVE_MS = 2_000;
 const REQUEST_INTERPRETATION_MAX_MS = 30_000;
 
-function requestResolutionTimeoutMs(): number {
+export function requestResolutionTimeoutMs(): number {
+  return agentDeadline() + REQUEST_FALLBACK_RESERVE_MS;
+}
+
+function requestTimeLeftMs(entry: ListenerRequestEntry): number {
+  const elapsed = entry.startedAt ? Date.now() - entry.startedAt : 0;
+  return requestResolutionTimeoutMs() - elapsed;
+}
+
+function requestGenerationTimeoutMs(): number {
   const providerTimeout = Number((settings.get() as any)?.llm?.requestTimeoutMs);
-  return Number.isFinite(providerTimeout) && providerTimeout > 0
-    ? Math.min(REQUEST_RESOLUTION_MAX_MS, providerTimeout)
-    : REQUEST_RESOLUTION_MAX_MS;
+  return Number.isFinite(providerTimeout) && providerTimeout > 0 ? providerTimeout : Infinity;
 }
 
 function requestIntroTimeoutMs(entry: ListenerRequestEntry): number {
-  const elapsed = entry.startedAt ? Date.now() - entry.startedAt : 0;
-  return Math.max(0, requestResolutionTimeoutMs() - elapsed - REQUEST_QUEUE_RESERVE_MS);
+  return Math.max(0, Math.min(requestTimeLeftMs(entry) - REQUEST_QUEUE_RESERVE_MS, requestGenerationTimeoutMs()));
+}
+
+// What the interpreter may spend and still leave the catalogue its reserve. A
+// named request can be resolved without it, so it never waits long for repair.
+function requestInterpretationTimeoutMs(entry: ListenerRequestEntry, named: boolean): number {
+  const budget = Math.min(requestTimeLeftMs(entry) - REQUEST_CATALOGUE_RESERVE_MS, requestGenerationTimeoutMs());
+  return Math.max(0, named ? Math.min(budget, REQUEST_INTERPRETATION_MAX_MS) : budget);
 }
 
 function throwIfRequestResolutionAborted(signal?: AbortSignal): void {
@@ -636,11 +653,14 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     try {
       // A title-only phrase may still benefit from model repair (for example,
       // an unseparated artist and title), but it must not spend the complete
-      // request deadline before the local fuzzy catalogue gets a chance.
-      const interpretationSignal = (titleOnlyNamedRequest || bareExplicitNamedRequest)
-        ? signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_INTERPRETATION_MAX_MS)]) : AbortSignal.timeout(REQUEST_INTERPRETATION_MAX_MS)
-        : signal;
-      const interpreted = await dj.matchRequest(text, { listenerName: requester, nowPlaying: currentTrack }, interpretationSignal);
+      // request deadline before the local fuzzy catalogue gets a chance. The
+      // race is what guarantees that, since a provider can ignore its signal,
+      // and withDeadline's error never reads as a reason to fail over.
+      const interpretationMs = requestInterpretationTimeoutMs(entry, titleOnlyNamedRequest || bareExplicitNamedRequest);
+      if (interpretationMs <= 0) throw new Error('no time left to interpret the request');
+      const interpreted = await withDeadline(interpretationMs, 'request interpretation', deadlineSignal =>
+        dj.matchRequest(text, { listenerName: requester, nowPlaying: currentTrack },
+          signal ? AbortSignal.any([signal, deadlineSignal!]) : deadlineSignal));
       throwIfRequestResolutionAborted(signal);
       if (explicitNamedRequest) {
         // Keep useful explicit attributes from the interpreter, but let the

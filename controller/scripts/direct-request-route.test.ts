@@ -12,7 +12,7 @@ process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-direct-route-'));
 process.env.NAVIDROME_URL = 'http://direct-library.invalid';
 const express = (await import('express')).default;
 const settings = await import('../src/settings.js');
-const { router } = await import('../src/routes/request.js');
+const { router, resolveListenerRequest, requestResolutionTimeoutMs } = await import('../src/routes/request.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { primaryLeg } = await import('../src/llm/internal/provider/legs.js');
 const requestLog = await import('../src/broadcast/request-log.js');
@@ -50,6 +50,9 @@ let bodies: any[] = [];
 let agentCalls = 0;
 let agentResult: any = null;
 let agentError: Error | null = null;
+let agentDelayMs = 0;
+let modelDelayMs = 0;
+let libraryStalls = false;
 
 beforeEach(async context => {
   const t = context as TestContext;
@@ -57,7 +60,7 @@ beforeEach(async context => {
   await settings.update({
     tts: { enabled: false },
     llm: { requestMatching: 'direct', provider: 'openai-compatible', compatibleMode: 'local',
-      baseUrl: 'http://direct-model.invalid/v1', model: 'no-tools', fallback: { enabled: false }, dailyTokenCap: 0, requestTimeoutMs: 300000 },
+      baseUrl: 'http://direct-model.invalid/v1', model: 'no-tools', fallback: { enabled: false }, dailyTokenCap: 0, requestTimeoutMs: 300000, agentTimeoutMs: 45000 },
     requests: { enabled: true, onePendingPerIp: false, maxPending: 50, globalHourlyCap: 1000, repeatCooldownMin: 120 },
   } as never);
   queue.upcoming = [];
@@ -79,9 +82,13 @@ beforeEach(async context => {
   agentCalls = 0;
   agentResult = null;
   agentError = null;
+  agentDelayMs = 0;
+  modelDelayMs = 0;
+  libraryStalls = false;
   modelOutput = { kind: 'track', title: exact.title, artist: 'Queen', search_terms: [exact.title, 'Queen'], genre: 'Rock', scope: 'song' };
   t.mock.method(requestAgent, 'run', async () => {
     agentCalls++;
+    if (agentDelayMs) await new Promise(resolve => setTimeout(resolve, agentDelayMs));
     if (agentError) throw agentError;
     if (agentResult) return agentResult;
     throw Error('Direct must never invoke the request agent');
@@ -90,6 +97,7 @@ beforeEach(async context => {
   for (const model of new Set([leg.model, leg.noThinkModel])) t.mock.method(model as any, 'doGenerate', async (options: any) => {
     bodies.push(options);
     if (modelStalls) return new Promise(() => {});
+    if (modelDelayMs) await new Promise(resolve => setTimeout(resolve, modelDelayMs));
     if (modelError) throw Error('synthetic interpreter failure');
     const intro = JSON.stringify(options.prompt).includes('Write an intro for this track');
     if (intro && introStalls) return new Promise(() => {});
@@ -104,6 +112,7 @@ beforeEach(async context => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     if (url.origin === base) return realFetch(input, init);
     if (url.hostname !== 'direct-library.invalid') throw Error('synthetic offline dependency');
+    if (libraryStalls) return new Promise<Response>(() => {});
     const endpoint = url.pathname.split('/').at(-1);
     const artistQuery = artistSongs.length && /queen/i.test(url.searchParams.get('query') || '');
     const data = endpoint === 'search3' ? { searchResult3: { song: searchEmpty ? [] : catalogueSongs, artist: artistQuery ? [{ id: 'queen', name: 'Queen' }] : [] } }
@@ -392,14 +401,14 @@ test('a one-word artist remains artist-capable after a title miss', async () => 
   assert.equal(bodies.length, 0, 'a local ambiguity should not require an interpretation call');
 });
 
-test('a stalled interpreter settles the accepted request instead of leaving it pending', async () => {
+test('a stalled interpreter gives way to the literal parse instead of timing the request out', async () => {
+  // 5000 ms is the settings floor for one generation.
   await settings.update({ llm: { requestTimeoutMs: 5000 } } as never);
   modelStalls = true;
-  const result = await submit('play something from the nineties', 650);
-  assert.equal(result.status, 'failed');
-  assert.equal(result.outcome, 'timeout');
-  assert.match(result.message, /too long/i);
-  assert.equal(queue.upcoming.length, 0);
+  const result = await submit('Please play Bohemian Rhapsody by Queen', 650);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, exact.id);
+  assert.equal(requestLog.snapshot(1)[0].interpretationFallback, true);
 });
 
 test('an agent failure cannot replace an explicit voice request with another artist track', async () => {
@@ -484,8 +493,8 @@ test('a failed intro preserves the requested music and reports success', async (
 });
 
 test('a late intro cannot discard an already selected track', async () => {
-  // 5000 ms is the settings floor: the intro gets that less the queue reserve,
-  // so the request settles after about three seconds and must be waited for.
+  // 5000 ms is the settings floor for one generation, so the request settles
+  // after about five seconds and must be waited for.
   await settings.update({ tts: { enabled: true }, llm: { requestTimeoutMs: 5000 } } as never);
   introStalls = true;
   const result = await submit(undefined, 1000);
@@ -1173,4 +1182,107 @@ test('distinct punctuation-only titles never match each other', async t => {
   const result = await submit('Play "?"');
   assert.equal(result.outcome, 'matched');
   assert.equal(queue.upcoming[0].track.id, wanted.id);
+});
+
+
+// --- Agent first, direct as the fallback: no request develop serves is lost. ---
+
+const searched = { toolCalls: [{ name: 'searchLibrary' }], steps: 1 };
+const agentFoundNothing = () => ({ object: {}, ...searched, extras: { seen: new Map() } });
+const agentPicked = (song: RequestSong) => ({ object: { id: song.id, ack: 'Here you go.' }, ...searched, extras: { seen: new Map([[song.id, song]]) } });
+
+// The deadlines are tens of seconds, so these run on mocked clocks through the
+// exported entry the POST handler calls. Real I/O still gets event-loop turns.
+function listenerEntry(text: string) {
+  return { id: `mock-time-${++ip}`, status: 'pending' as const, requester: 'Listener', text, createdAt: Date.now() };
+}
+const eventLoopTurns = async () => { for (let n = 0; n < 30; n++) await new Promise(resolve => setImmediate(resolve)); };
+async function advance(t: TestContext, ms: number, step = 1000) {
+  for (let done = 0; done < ms; done += step) {
+    await eventLoopTurns();
+    t.mock.timers.tick(Math.min(step, ms - done));
+  }
+  await eventLoopTurns();
+}
+// A stubbed delay starts a tick or two after the request does, so this steps
+// until the request settles. Past the limit it fails rather than hangs.
+async function advanceUntilSettled(t: TestContext, entry: { status: string }, limitMs: number) {
+  for (let done = 0; done < limitMs && entry.status === 'pending'; done += 1000) {
+    await eventLoopTurns();
+    t.mock.timers.tick(1000);
+  }
+  // The last step may have released real I/O, which mock time cannot hurry.
+  const started = performance.now();
+  while (entry.status === 'pending' && performance.now() - started < 2000) await new Promise(resolve => setImmediate(resolve));
+  assert.notEqual(entry.status, 'pending', `still pending after ${limitMs} ms`);
+}
+
+test('an agent that fails at its deadline still leaves a 20 s interpreter and the library time', async t => {
+  await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+  agentDelayMs = 45_000;
+  agentError = Object.assign(new Error('djAgentRequest exceeded 45000ms deadline'), { name: 'AgentDeadlineError' });
+  modelDelayMs = 20_000;
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('Bohemian Rhapsody by Queen');
+  const settled = resolveListenerRequest(entry);
+  await advanceUntilSettled(t, entry, 70_000);
+  assert.equal((await settled).outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, exact.id);
+  assert.equal(bodies.length, 1, 'the interpreter was given its time');
+  agentError = null;
+});
+
+test('a raised Agent deadline is honoured: an answer at 70 s still queues', async t => {
+  await settings.update({ llm: { requestMatching: 'agentic', agentTimeoutMs: 120_000 } } as never);
+  agentDelayMs = 70_000;
+  agentResult = agentPicked(exact);
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('Bohemian Rhapsody by Queen');
+  const settled = resolveListenerRequest(entry);
+  await advanceUntilSettled(t, entry, 75_000);
+  assert.equal((await settled).outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, exact.id);
+});
+
+test('requestTimeoutMs bounds one generation and never shortens the request', async t => {
+  await settings.update({ llm: { requestMatching: 'agentic', requestTimeoutMs: 5000 } } as never);
+  agentDelayMs = 30_000;
+  agentResult = agentPicked(exact);
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('Bohemian Rhapsody by Queen');
+  const settled = resolveListenerRequest(entry);
+  await advanceUntilSettled(t, entry, 35_000);
+  assert.equal((await settled).outcome, 'matched');
+});
+
+test('the interpreter is capped by the time left, so the literal parse runs instead of a timeout', async t => {
+  await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+  agentDelayMs = 45_000;
+  agentResult = agentFoundNothing();
+  modelStalls = true;
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('surprise me');
+  const settled = resolveListenerRequest(entry);
+  await advance(t, 70_000);
+  assert.equal(entry.status, 'pending', 'the interpreter still holds its share');
+  await advanceUntilSettled(t, entry, 10_000);
+  await settled;
+  assert.equal(entry.outcome, 'substituted');
+  assert.equal(entry.interpretationFallback, true);
+});
+
+test('the ceiling is the agent deadline plus a fallback reserve, and it still ends the request', async t => {
+  assert.equal(requestResolutionTimeoutMs(), 90_000);
+  await settings.update({ llm: { agentTimeoutMs: 120_000, requestTimeoutMs: 5000 } } as never);
+  assert.equal(requestResolutionTimeoutMs(), 165_000, 'follows the agent deadline, not one generation');
+  libraryStalls = true;
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('Bohemian Rhapsody by Queen');
+  void resolveListenerRequest(entry);
+  await advance(t, 164_000, 4000);
+  assert.equal(entry.status, 'pending');
+  await advance(t, 2_000);
+  assert.equal(entry.status, 'failed');
+  assert.equal(entry.outcome, 'timeout');
+  assert.equal(queue.upcoming.length, 0);
 });
