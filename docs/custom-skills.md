@@ -145,9 +145,9 @@ every feed skill gets the same behaviour:
   with no key to set; an undated item simply carries no date.
 - `feed2` and `feed3` add further feeds. They are fetched together and merged
   round-robin, so a busy feed cannot crowd a quiet one out, and a headline that
-  appears in two of them is offered once. One of them failing is skipped while
-  another answers, with a warning in the log naming the feed and the error
-  (once, until it recovers). If the feeds that answered have no items, the
+  appears in two of them is offered once. One of them failing, or taking more
+  than 6 seconds, is skipped while another answers, with a warning in the log
+  naming the feed and the error (once, until it recovers). If the feeds that answered have no items, the
   failure is reported as the fetch error, as with a single feed, naming every
   feed that failed; all of them failing does the same and stands the segment
   down.
@@ -162,8 +162,9 @@ every feed skill gets the same behaviour:
   of ordering a line with nothing in it. Set `requiresData: false` if your skill
   would rather write from its brief.
 
-The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL* and
-*Max items*, so a feed can be added, changed or cleared without touching disk.
+The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL*,
+*Max items*, *Max age · days*, *Second feed URL* and *Third feed URL*, so a feed
+can be added, changed or cleared without touching disk.
 
 > Only an `http:` or `https:` URL creates the tool. Anything else is logged as a
 > warning naming the skill and leaves it prompt-only — a `feed:` line must never
@@ -459,7 +460,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
 | `services.library.getArtist(id)` / `.getAlbum(id)` / `.searchArtists(name, opts?)` | Navidrome/Subsonic reads |
 | `services.onThisDay()` | Wikipedia "on this day" events for today |
-| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) |
+| `services.fetchHeadlines({ feedUrl?, maxItems?, maxAgeDays?, deadlineMs? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) into `{ title, description, published? }` items. `published` is an ISO time, or a bare `YYYY-MM-DD` when the feed gives a day and no clock. `deadlineMs` replaces the 15 s default with a limit that covers the body too |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
 

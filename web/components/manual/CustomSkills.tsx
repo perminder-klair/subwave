@@ -138,7 +138,11 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           </li>
           <li>
             <code className="bs-code-inline">feedMaxItems</code> (1–50, default 10) caps how
-            much of the feed is read per fire.
+            much of the feed is read per fire. With{' '}
+            <code className="bs-code-inline">feed2</code> or{' '}
+            <code className="bs-code-inline">feed3</code> it is read from each feed, and a
+            fire offers no more than that many items in total; the next fire moves on to
+            the ones left.
           </li>
           <li>
             <code className="bs-code-inline">feedMaxAgeDays</code> (1–365, default no limit)
@@ -147,14 +151,17 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           </li>
           <li>
             Every item the feed dates reaches the DJ with its day in the station&rsquo;s
-            timezone, so it can tell news from history. This is on for every feed skill,
-            with no key to set.
+            timezone, so it can tell news from history. A feed that gives a day and no clock
+            keeps that day as written. This is on for every feed skill, with no key to set.
           </li>
           <li>
             <code className="bs-code-inline">feed2</code> and{' '}
             <code className="bs-code-inline">feed3</code> add further feeds, merged
-            round-robin with the first; a headline in two of them is offered once, and one
-            failing feed is skipped while another answers.
+            round-robin with the first, and a headline in two of them is offered once. One
+            that fails, or takes more than six seconds, is skipped while another answers,
+            with a warning in the log naming it (once, until it recovers). If the feeds that
+            answered have no items, the failure is the fetch error, naming every feed that
+            failed.
           </li>
           <li>
             Items are <strong>burned on read</strong>: at most six fresh ones reach a

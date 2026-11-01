@@ -384,8 +384,8 @@ function seenSetFor(state: any, kind: string): Set<string> {
 // caller (llm/internal/tools/segment-tools.ts, the forced path, the co-hosted
 // path) is unchanged — including the timeout and the `{ error }` degradation.
 //
-// Returns the news shape, `{ headlines: [{ title, detail }] }`, when there is
-// something fresh, and `{ available: false, reason }` when there is not — never
+// Returns the news shape, `{ headlines: [{ title, detail, published? }] }`, when
+// there is something fresh, and `{ available: false, reason }` when there is not — never
 // an empty list (#1830). An empty list read as usable data to
 // abstain-policy.ts, so Run now, a skill cron or a programme beat on a drained
 // feed ordered a line with no items in it, and the model invented a headline.

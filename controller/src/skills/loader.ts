@@ -399,7 +399,7 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // False, absent and malformed values preserve the historical solo path.
     cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
     // Operator-editable knobs this skill declares for itself (tool.mjs
-    // `configFields`, or the generic feed pair for a skill without a tool.mjs).
+    // `configFields`, or the generic feed knobs for a skill without a tool.mjs).
     // Drives the admin editor's settings section — see config-fields.ts. Empty
     // only for a skill whose tool.mjs declares none.
     configFields: [] as SkillConfigField[],
