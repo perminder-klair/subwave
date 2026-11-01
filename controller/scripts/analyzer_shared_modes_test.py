@@ -213,9 +213,8 @@ def t_planted_tmp_not_followed():
     assert mode(os.path.join(d, "tail-drums.flac")) == 0o666
 
 
-def t_transition_output():
-    # The real render, cached stems to published clip. transitions/ is created
-    # root-owned 777, so its chmod is refused on every render, silently.
+def render_clip(out):
+    # The real render, cached stems to published clip.
     sr = aw.DEMUCS_SR
     stems = {name: Stem() for name in ("drums", "bass", "other", "vocals")}
     out_stems = os.path.join(root, "stems", "track-out")
@@ -223,21 +222,8 @@ def t_transition_output():
     aw.write_stems(stems, "tail", out_stems)
     aw.write_tail_meta(out_stems, 170.0, 200.0)
     aw.write_stems(stems, "head", in_stems)
-    out = os.path.join(root, "transitions")
-    os.makedirs(out)
-    os.chmod(out, 0o777)
     audio = np.full((4 * sr, 2), 0.1, dtype=np.float32)
-    real = os.chmod
-
-    def deny(path, m, *a, **k):
-        if path == out:
-            raise PermissionError(1, "Operation not permitted", path)
-        return real(path, m, *a, **k)
-
-    err = io.StringIO()
-    with patch.object(sf, "read", lambda path, **_: (audio, sr), create=True), \
-            patch.object(aw, "_shared_chmod_logged", False), patch("os.chmod", deny), \
-            contextlib.redirect_stderr(err):
+    with patch.object(sf, "read", lambda path, **_: (audio, sr), create=True):
         res = aw.render_transition({
             "out": {"stems_dir": out_stems, "gain_db": 0.0,
                     "outro": {"bars": [171000, 172000, 173000], "start_ms": 195000}},
@@ -248,6 +234,34 @@ def t_transition_output():
     assert res["path"] == os.path.join(out, "clip.wav"), res
     assert mode(res["path"]) == 0o666, oct(mode(res["path"]))
     assert os.listdir(out) == ["clip.wav"], os.listdir(out)
+
+
+def t_transition_output():
+    # A folder the render makes itself comes out open, so the controller's clip
+    # sweep can delete inside it. It starts missing: pre-setting 777 here would
+    # pass with a plain makedirs at the umask's 755.
+    out = os.path.join(root, "transitions-made-here")
+    render_clip(out)
+    assert mode(out) == 0o777, oct(mode(out))
+
+
+def t_transition_refused_chmod():
+    # transitions/ is created root-owned 777, so its chmod is refused on every
+    # render, silently.
+    out = os.path.join(root, "transitions")
+    os.makedirs(out)
+    os.chmod(out, 0o777)
+    real = os.chmod
+
+    def deny(path, m, *a, **k):
+        if path == out:
+            raise PermissionError(1, "Operation not permitted", path)
+        return real(path, m, *a, **k)
+
+    err = io.StringIO()
+    with patch.object(aw, "_shared_chmod_logged", False), patch("os.chmod", deny), \
+            contextlib.redirect_stderr(err):
+        render_clip(out)
     assert "could not set mode" not in err.getvalue(), err.getvalue()
 
 
@@ -261,4 +275,5 @@ test("a refused chmod on a writable folder is silent, a stuck one still logs", t
 test("a failed write leaves no partial .tmp", t_failed_write_leaves_no_tmp)
 test("a link planted at the temp name is not followed", t_planted_tmp_not_followed)
 test("render_transition writes its folder and clip shared", t_transition_output)
+test("render_transition in a root-owned 777 folder refuses silently", t_transition_refused_chmod)
 sys.exit(1 if failures else 0)
