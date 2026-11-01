@@ -7,7 +7,7 @@
 
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
@@ -21,6 +21,7 @@ process.env.STATE_DIR = stateDir;
 const db = await import('../src/music/library-db.js');
 const cache = await import('../src/music/stem-cache.js');
 const purge = await import('../src/music/orphan-purge.js');
+const { QUARANTINE_DIR } = await import('../src/music/orphan-purge-pure.js');
 const { requireDb } = await import('../src/music/library-db/handle.js');
 await db.open({ embeddingDim: 768, adoptStoredDim: true });
 
@@ -99,4 +100,39 @@ test('a release does not save the separation: the new row is analysed, and analy
   assert.equal(db.needsAnalysisIds().includes(id), true);
   assert.equal(cache.stemWriteDecision({ cacheOn: true, slotsLeft: 0, hasExistingDir: true }).want, true);
   rmSync(join(ROOT, id), { recursive: true, force: true });
+});
+
+test('an offline share runs only the aged delete: a release waits until it is back', async () => {
+  // Offline here is what an unmounted share looks like: no marker and no dirs,
+  // while the catalogue remembers stems ('keep' is stamped). A visible
+  // quarantine lets the aged delete through; nothing else may touch the root.
+  const back = 'offline-back';
+  const aged = 'offline-aged';
+  const t0 = T0 + 50 * DAY;
+  db.upsertTrackMeta(back, META);
+  seedStems(back, ['head', 'tail']);
+  seedStems(aged, ['head', 'tail']);
+  db.pruneMissingTracks(new Set(['keep']));
+  await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now: t0 });
+  assert.ok(existsSync(join(QU, back)) && existsSync(join(QU, aged)));
+  db.upsertTrackMeta(back, META);
+  for (const e of readdirSync(ROOT)) {
+    if (e !== QUARANTINE_DIR) rmSync(join(ROOT, e), { recursive: true, force: true });
+  }
+  const status = await cache.stemsRootStatus({ readOnly: true });
+  assert.equal(status.online, false);
+  const now = t0 + 8 * DAY;
+  try {
+    const dry = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: false, now });
+    assert.deepEqual(dry.released, [], 'not offered either');
+    const rep = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now });
+    assert.deepEqual(rep.released, []);
+    assert.ok(existsSync(join(QU, back)), 'still quarantined');
+    assert.ok(!existsSync(join(ROOT, back)));
+    assert.ok(!existsSync(join(QU, aged)), 'the aged delete still ran');
+  } finally {
+    writeFileSync(join(ROOT, cache.STEMS_MARKER), '{}');
+  }
+  const online = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now });
+  assert.deepEqual(online.released, [back], 'released as soon as the share is back');
 });

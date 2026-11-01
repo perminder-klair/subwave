@@ -42,8 +42,9 @@
 //   an analyzer mkdir just created replaces that empty dir (rename onto an
 //   empty dir), and onto a non-empty one fails and is counted.
 // - The automatic pass (runScheduledOrphanPurge) refuses a plan above
-//   AUTO_MAX_SHARE of the cache and leaves it to an operator's confirm, and
-//   stamps each quarantine's name like the manual one.
+//   AUTO_MAX_SHARE of the cache and leaves it, and that night's aged deletes,
+//   to an operator's confirm. It still releases what came back, and it stamps
+//   each quarantine's name like the manual one.
 
 import { readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -75,7 +76,7 @@ export interface PurgeReport {
   /** Orphans moved into the quarantine (dry run: would move). */
   quarantined: number;
   quarantinedNames: string[];
-  /** Quarantine entries moved back to the live cache. */
+  /** Quarantine entries moved back to the live cache (dry run: would move). */
   released: string[];
   /** Quarantine entries deleted (dry run: would delete). */
   deletedCount: number;
@@ -91,6 +92,9 @@ export interface PurgeReport {
   /** True when the pass refused to run; `reason` says why. */
   refused?: boolean;
   reason?: string;
+  /** Dry run: why the automatic pass would refuse this plan. A manual confirm
+   *  still makes it, so the dry run itself is not refused. */
+  autoRefusal?: string;
   /** Bytes freed by deleted quarantines (quarantining itself frees nothing). */
   freedBytes: number;
   offline?: string;
@@ -246,8 +250,8 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     // "Offline" normally means an unmounted share, and then the purge must do
     // nothing. But a quarantine that is visible proves the share IS mounted
     // (a marker can be lost while entries age): in that reading only the aged
-    // delete runs — quarantining NEW dirs into a share we cannot vouch for is
-    // the step that stays refused.
+    // delete runs — quarantining NEW dirs, or releasing old ones, into a share
+    // we cannot vouch for stays refused.
     if (!quExists) return { ...empty, refused: true, reason: 'offline', offline: rootStatus.message };
   }
 
@@ -273,21 +277,22 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     }
   }
   const plan = planOrphanPurge(cacheEntries, { now, confirm: opts.confirm });
-  if (opts.automatic && opts.confirm && exceedsAutoCeiling(plan.quarantine.length, plan.keptCount)) {
-    return {
-      ...report, keptCount: plan.keptCount, quarantined: 0, refused: true,
-      reason: `would quarantine ${plan.quarantine.length} of ${plan.quarantine.length + plan.keptCount} stem dirs, `
-        + 'more than an automatic pass moves on its own (is the library half-loaded?): '
-        + 'check the Stems page and confirm the move there if it is right',
-    };
-  }
+  // Only the automatic pass stops at the ceiling. A dry run names it instead,
+  // which is how the reason reaches the Stems page while the operator can still
+  // confirm the move.
+  const overCeiling = exceedsAutoCeiling(plan.quarantine.length, plan.keptCount);
+  const ceilingReason = `would quarantine ${plan.quarantine.length} of ${plan.quarantine.length + plan.keptCount} stem dirs, `
+    + 'more than an automatic pass moves on its own (is the library half-loaded?): '
+    + 'confirm the move on the Stems page if it is right';
+  const held = opts.automatic === true && opts.confirm && overCeiling;
+  if (!opts.confirm && overCeiling) report.autoRefusal = ceilingReason;
   report.keptCount = plan.keptCount;
-  report.quarantinedNames = plan.quarantine.map(q => q.name).slice(0, 10);
+  report.quarantinedNames = held ? [] : plan.quarantine.map(q => q.name).slice(0, 10);
 
   // ---- quarantine walk -----------------------------------------------------
-  const quEntries: QuarantineEntry[] = [];
-  const quNames = await listDirs(qu);
-  for (const name of quNames) {
+  // In parallel like the root walk: a dry run reads every entry on each Stems
+  // page open, and a network share holds thousands of them.
+  const quEntries: QuarantineEntry[] = await mapPool(await listDirs(qu), stemCache.SCAN_CONCURRENCY, async (name) => {
     const entryDir = path.join(qu, name);
     const liveSlotFree = !(await stat(path.join(root, name)).then(() => true, () => false));
     let ageMs = await quarantinedAgeMs(entryDir, now);
@@ -298,22 +303,24 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
       if (opts.confirm) await stampQuarantine(entryDir, now).catch(() => {});
       ageMs = 0;
     }
-    quEntries.push({ name, known: known.has(name), ageMs, liveSlotFree });
-  }
+    return { name, known: known.has(name), ageMs, liveSlotFree };
+  });
   const qplan = planQuarantinePurge(quEntries, { now, confirm: opts.confirm, ...(opts.graceMs !== undefined ? { graceMs: opts.graceMs } : {}) });
   // The delete is the step nothing undoes, so it reads the dir again: an entry
   // that is not stems (an earlier build moved it) stays where it is.
   const deletable = await mapPool(qplan.deleted, stemCache.SCAN_CONCURRENCY, d => readsAsStems(path.join(qu, d.name)));
   const toDelete = qplan.deleted.filter((_, i) => deletable[i]);
-  report.released = qplan.released;
-  report.deletedNames = toDelete.map(d => d.name).slice(0, 10);
+  // Offline, only the aged delete runs: a release writes into a root that
+  // cannot be vouched for, and the entry loses nothing by waiting.
+  const toRelease = rootStatus.online ? qplan.released : [];
+  report.deletedNames = held ? [] : toDelete.map(d => d.name).slice(0, 10);
   report.agingCount = qplan.aging.length;
   report.supersededCount = qplan.superseded.length;
 
   if (opts.confirm) {
     // 1. Releases first: an id that is both known now and sitting in the
     //    quarantine gets its copy back rather than being re-quarantined below.
-    for (const name of qplan.released) {
+    for (const name of toRelease) {
       try {
         await rename(path.join(qu, name), path.join(root, name));
       } catch { report.failed += 1; continue; }
@@ -321,48 +328,57 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
       // along into a later quarantine.
       await rm(path.join(root, name, ORPHANED_AT), { force: true }).catch(() => {});
       await stampReleasedStems(name);
+      report.released.push(name);
     }
-    // 2. Aged (and superseded-with-fresh-copy) quarantines: delete for good.
-    for (const { name } of toDelete) {
-      const { gone, freedBytes } = await deleteDir(path.join(qu, name));
-      report.freedBytes += freedBytes;
-      if (gone) report.deletedCount += 1;
-      else report.failed += 1;
-    }
-    // 3. Orphans: move into quarantine (same-filesystem rename; no merge).
-    await mkdirSafe(qu);
-    const names = opts.resolveNames && plan.quarantine.length
-      ? await opts.resolveNames(plan.quarantine.map(q => q.name))
-      : undefined;
-    for (const { name } of plan.quarantine) {
-      const from = path.join(root, name);
-      const to = path.join(qu, name);
-      if (await stat(to).then(() => true, () => false)) {
-        // This id is quarantined already: it came back, a fresh analysis took
-        // the live slot, and it left again. The live copy is the newer one, so
-        // it replaces the stale copy and starts a whole grace of its own. Never
-        // the reverse: dropping the live copy would delete the only fresh stems
-        // on the spot, and leave what remains to age out on the old stamp.
-        const stale = await deleteDir(to);
-        report.freedBytes += stale.freedBytes;
-        if (!stale.gone) { report.failed += 1; continue; }
+    // The ceiling reads as a half-loaded library, and on that reading a release
+    // is safe while a delete is the one step nothing undoes, so a held pass
+    // stops here and leaves the deletes and the moves to an operator's confirm.
+    if (held) {
+      report.refused = true;
+      report.reason = ceilingReason;
+    } else {
+      // 2. Aged (and superseded-with-fresh-copy) quarantines: delete for good.
+      for (const { name } of toDelete) {
+        const { gone, freedBytes } = await deleteDir(path.join(qu, name));
+        report.freedBytes += freedBytes;
+        if (gone) report.deletedCount += 1;
+        else report.failed += 1;
       }
-      try {
-        await rename(from, to);
-      } catch { report.failed += 1; continue; }
-      try {
-        await stampQuarantine(to, now);
-      } catch {
-        // Unstamped, the quarantine would have no age to keep it 7 days: undo
-        // the move and leave the dir in the cache for the next pass.
-        await rename(to, from).catch(() => {});
-        report.failed += 1;
-        continue;
+      // 3. Orphans: move into quarantine (same-filesystem rename; no merge).
+      await mkdirSafe(qu);
+      const names = opts.resolveNames && plan.quarantine.length
+        ? await opts.resolveNames(plan.quarantine.map(q => q.name))
+        : undefined;
+      for (const { name } of plan.quarantine) {
+        const from = path.join(root, name);
+        const to = path.join(qu, name);
+        if (await stat(to).then(() => true, () => false)) {
+          // This id is quarantined already: it came back, a fresh analysis took
+          // the live slot, and it left again. The live copy is the newer one, so
+          // it replaces the stale copy and starts a whole grace of its own. Never
+          // the reverse: dropping the live copy would delete the only fresh stems
+          // on the spot, and leave what remains to age out on the old stamp.
+          const stale = await deleteDir(to);
+          report.freedBytes += stale.freedBytes;
+          if (!stale.gone) { report.failed += 1; continue; }
+        }
+        try {
+          await rename(from, to);
+        } catch { report.failed += 1; continue; }
+        try {
+          await stampQuarantine(to, now);
+        } catch {
+          // Unstamped, the quarantine would have no age to keep it 7 days: undo
+          // the move and leave the dir in the cache for the next pass.
+          await rename(to, from).catch(() => {});
+          report.failed += 1;
+          continue;
+        }
+        await writeNameSidecar(to, names?.get(name), now);
+        report.quarantined += 1;
       }
-      await writeNameSidecar(to, names?.get(name), now);
-      report.quarantined += 1;
     }
-    if (report.quarantined || report.deletedCount || report.released.length) {
+    if (report.quarantined || report.deletedCount || report.released.length || report.freedBytes) {
       // The usage snapshot cached the pre-purge totals; drop it so the next
       // sweep walks again instead of trusting bytes that no longer exist.
       await rm(path.join(config.stateDir, 'stem-cache-usage.json'), { force: true }).catch(() => {});
@@ -370,6 +386,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
   } else {
     // Dry run: every count, zero mutations.
     report.quarantined = plan.quarantine.length;
+    report.released = toRelease;
     report.deletedCount = toDelete.length;
   }
   return report;

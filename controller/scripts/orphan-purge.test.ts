@@ -404,3 +404,73 @@ test('a collision whose stale copy refuses to go leaves the live copy in the cac
   }
   rmSync(join(ROOT, id), { recursive: true, force: true });
 });
+
+test('a release that fails is counted as failed, and not reported as released', async () => {
+  const id = seedStem();
+  const now = NOW_BASE + 1000 * DAY;
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now });
+  chmodSync(ROOT, 0o555);
+  let rep;
+  try {
+    rep = await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: true, now: now + DAY });
+  } finally {
+    chmodSync(ROOT, 0o777);
+  }
+  assert.ok(!rep.released.includes(id));
+  assert.equal(rep.failed, 1);
+  assert.ok(existsSync(join(QU, id)), 'still quarantined');
+  // A dry run names what a pass would release, which is the same word.
+  const dry = await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: false, now: now + DAY });
+  assert.ok(dry.released.includes(id));
+  await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: true, now: now + DAY });
+});
+
+test('a dry run names the ceiling the automatic pass would refuse at, without refusing itself', async () => {
+  const known: string[] = [];
+  for (let i = 0; i < 20; i++) known.push(seedStem());
+  const orphans: string[] = [];
+  for (let i = 0; i < 120; i++) orphans.push(seedStem());
+  const now = NOW_BASE + 1020 * DAY;
+  const dry = await purge.runOrphanPurge({ knownIds: known, confirm: false, now });
+  assert.match(dry.autoRefusal ?? '', /would quarantine \d+ of \d+ stem dirs/);
+  assert.equal(dry.refused, undefined, 'the operator can still confirm it');
+  assert.ok(dry.quarantined >= 120);
+  await purge.runOrphanPurge({ knownIds: known, confirm: true, now });
+  const after = await purge.runOrphanPurge({ knownIds: known, confirm: false, now });
+  assert.equal(after.autoRefusal, undefined, 'gone once the move is made');
+});
+
+test('a refused automatic pass still releases what came back, and holds the aged deletes', async () => {
+  // The ceiling trips when the library looks half-loaded. A release is safe on
+  // that reading; a delete is the one step nothing undoes.
+  const t0 = NOW_BASE + 1040 * DAY;
+  const back = seedStem();
+  const aged = seedStem();
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: t0 });
+  const known: string[] = [back];
+  for (let i = 0; i < 20; i++) known.push(seedStem());
+  for (let i = 0; i < 120; i++) seedStem();
+  const rep = await purge.runScheduledOrphanPurge(known, t0 + 8 * DAY);
+  assert.equal(rep.refused, true);
+  assert.deepEqual(rep.released, [back]);
+  assert.ok(existsSync(join(ROOT, back)), 'released');
+  assert.equal(rep.deletedCount, 0);
+  assert.ok(existsSync(join(QU, aged)), 'the aged delete waits for a confirm');
+  assert.equal(rep.quarantined, 0);
+  const manual = await purge.runOrphanPurge({ knownIds: known, confirm: true, now: t0 + 8 * DAY });
+  assert.ok(!existsSync(join(QU, aged)), 'a manual confirm makes the delete too');
+  assert.ok(manual.quarantined >= 120);
+});
+
+test('a quarantine wider than the walk\'s pool is read in full', async () => {
+  // The quarantine walk runs in parallel: every entry still lands in the plan.
+  const now = NOW_BASE + 1060 * DAY;
+  const ids: string[] = [];
+  for (let i = 0; i < 40; i++) ids.push(seedStem());
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now });
+  for (const id of ids) rmSync(join(QU, id, '.orphaned-at'));
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: now + DAY });
+  for (const id of ids) assert.equal(Number(readFileSync(join(QU, id, '.orphaned-at'), 'utf8')), now + DAY);
+  const dry = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: false, now: now + 9 * DAY });
+  assert.ok(dry.deletedCount >= 40);
+});
