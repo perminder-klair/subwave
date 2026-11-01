@@ -114,6 +114,10 @@ function moveVersionPin(home: string): void {
   const moved = movePinInEnv(readFileSync(envPath, 'utf8'), target);
   if (!moved) return;
   writeFileSync(envPath, moved.text);
+  // A compiled Bun binary loads the working directory's .env into process.env at
+  // boot, and compose prefers the environment over .env, so `pull` and `up` would
+  // get the old pin (#2196). A shell export of another version stays in charge.
+  if (process.env.SUBWAVE_VERSION === moved.from) process.env.SUBWAVE_VERSION = target;
   header('version pin');
   ok(`moved SUBWAVE_VERSION ${moved.from} → ${target} (matches this CLI)`);
   console.log();
