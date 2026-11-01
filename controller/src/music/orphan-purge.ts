@@ -13,9 +13,11 @@
 //   root-squashed NFS shares need. An id that is quarantined already gives way
 //   to the newer live copy, which starts its own grace.
 // - A quarantine whose id is in the library again is RELEASED back (the live
-//   slot is free: a quarantine is a move, so exactly one copy exists). If a
-//   fresh analysis already took the slot the quarantine is superseded and
-//   simply ages out — never merged over the new copy.
+//   slot is free: a quarantine is a move, so exactly one copy exists), and a
+//   complete set stamps the row's stems_at. If a fresh analysis already took
+//   the slot the quarantine is superseded and simply ages out — never merged
+//   over the new copy. A release brings blends back, it does not save the
+//   separation (orphan-purge-pure.ts says why).
 // - Quarantine age comes from an `.orphaned-at` sidecar written at move time
 //   (the move itself only touches ctime, but writing the sidecars bumps the
 //   dir's mtime, and the stem-priority lesson is that cache mtimes lie). The
@@ -47,6 +49,7 @@ import { readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import { mapPool } from '../util/async-pool.js';
+import * as db from './library-db.js';
 import * as stemCache from './stem-cache.js';
 import { resolveOrphanNames, writeNameSidecar, type OrphanTrackName } from './orphan-names.js';
 import {
@@ -317,6 +320,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
       // Back in the cache it is not quarantined: a stale stamp must not ride
       // along into a later quarantine.
       await rm(path.join(root, name, ORPHANED_AT), { force: true }).catch(() => {});
+      await stampReleasedStems(name);
     }
     // 2. Aged (and superseded-with-fresh-copy) quarantines: delete for good.
     for (const { name } of toDelete) {
@@ -369,6 +373,16 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     report.deletedCount = toDelete.length;
   }
   return report;
+}
+
+// A released track's row is a new one with no stems_at, so a complete set would
+// otherwise read as owed a separation. Best-effort: a stamp that cannot land
+// costs a backfill run, nothing worse.
+async function stampReleasedStems(id: string): Promise<void> {
+  try {
+    const complete = (await stemCache.hasWindow(id, 'head')) && (await stemCache.hasWindow(id, 'tail'));
+    if (complete) db.stampStemsCached(id);
+  } catch { /* library closed */ }
 }
 
 // Throws when the stamp cannot be written: the move is then undone.

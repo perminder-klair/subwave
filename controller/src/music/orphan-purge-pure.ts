@@ -12,8 +12,12 @@
 // skips dot names), and only a quarantine that has aged past QUARANTINE_GRACE_MS
 // is deleted. The quarantine is also the recovery path: an id that walks back
 // into the library gets its directory moved back, so a purge that fired on a
-// bad assumption (a half-finished Navidrome scan, say) costs a re-link, not
-// Demucs minutes.
+// bad assumption (a half-finished Navidrome scan, say) loses no stems and the
+// track's blends work again at once. It does not save the Demucs run. An id is
+// only an orphan once its row is gone, so it comes back as a new row with no
+// analysis: the first pass analyses it, stems ride along with that analysis
+// for an existing dir (analyze.ts allocateStems) and rewrite it, and with the
+// stem cache off the vocal facet still separates unless the lyrics decide it.
 //
 // Deletions are additionally gated on `confirm`: an unconfirmed pass plans,
 // counts and reports — the dry run an operator reads before the first real

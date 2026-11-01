@@ -5,7 +5,8 @@
 // (GET never moves anything); "Move N to quarantine" asks once, naming the
 // count and the week's grace, then moves; aged
 // quarantines delete themselves after a week, and a track id that walks back
-// into the library gets its dirs released rather than re-separated.
+// into the library gets its dirs released, which brings its blends back at once
+// (its first analysis as a new track still runs Demucs).
 // The daily cron behind the toggle is off by default — deleting operator
 // files is opt-in, and a first pass should be read, not trusted (#1570 rule).
 // The dirs are named by track id and the library no longer knows them, so
@@ -157,7 +158,7 @@ export default function OrphanStemsPanel() {
   return (
     <Card
       title="Orphan stems cleanup"
-      sub="A track that leaves the library keeps its Demucs stem dirs until the byte budget evicts them. This finds those dirs, parks them in a quarantine for a week (a track that walks back gets them released, not re-separated), and deletes what ages out."
+      sub="A track that leaves the library keeps its Demucs stem dirs until the byte budget evicts them. This finds those dirs, parks them in a quarantine for a week (a track that comes back gets them released, so its blends work again at once, though its first analysis as a new track still runs Demucs), and deletes what ages out."
     >
       {!ready || stateQuery.isLoading ? (
         <p className="text-sm text-muted">Reading the cache…</p>
