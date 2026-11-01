@@ -229,6 +229,15 @@ Speak from what answered.
 `);
 }
 
+// None of the age or further-feed keys: `published` is not opt-in.
+writeSkill('plain-dated', `---
+name: plain-dated
+label: Plain dated
+feed: ${feedUrl('/dated')}
+---
+Just a feed.
+`);
+
 writeSkill('all-hung', `---
 name: all-hung
 label: All hung
@@ -471,10 +480,17 @@ test('feedMaxAgeDays drops stale items before the cap, keeps undated ones, and h
   assert.equal('published' in result.headlines[1], false, 'an undated item carries no date key');
 });
 
-test('without feedMaxAgeDays every item is offered, as before', async () => {
+test('without feedMaxAgeDays every item is offered', async () => {
   const tool = makeFeedTool('dated-all', { url: feedUrl('/dated'), maxItems: 10 });
   const result: any = await tool({}, {});
   assert.equal(result.headlines.length, 5);
+});
+
+test('a skill with none of the new keys still hands the DJ each item\'s day', async () => {
+  const data: any = await fetchSegmentData(capOf('plain-dated'), { time: {} }, {});
+  const byTitle = new Map(data.headlines.map((h: any) => [h.title, h]));
+  assert.match((byTitle.get("Tonight's talk") as any).published, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal('published' in (byTitle.get('Undated notice') as any), false, 'only a dated item carries the key');
 });
 
 test('a tighter window keeps only what is inside it, plus the undated item', async () => {

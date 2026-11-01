@@ -142,9 +142,13 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           </li>
           <li>
             <code className="bs-code-inline">feedMaxAgeDays</code> (1–365, default no limit)
-            skips items published longer ago than that, and each dated item reaches the DJ
-            with its day. Search feeds need it: they mix in items months old. Undated items
-            are kept.
+            skips items published longer ago than that. Search feeds need it: they mix in
+            items months old. Undated items are kept.
+          </li>
+          <li>
+            Every item the feed dates reaches the DJ with its day in the station&rsquo;s
+            timezone, so it can tell news from history. This is on for every feed skill,
+            with no key to set.
           </li>
           <li>
             <code className="bs-code-inline">feed2</code> and{' '}

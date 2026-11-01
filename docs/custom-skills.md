@@ -135,10 +135,12 @@ every feed skill gets the same behaviour:
   With `feed2`/`feed3` it is read from each feed and also caps the merged list,
   so a fire never offers more than that many items in total.
 - `feedMaxAgeDays` (1–365, default no limit) drops items published longer ago
-  than that, before `feedMaxItems` counts them, and each item that carries a date
-  reaches the DJ with its day in the station's timezone (`published: 2026-10-30`). Search feeds need it:
-  Google News ignores its own `when:7d` on a long query and mixes in items months
-  old, which the DJ would otherwise present as news. Undated items are kept.
+  than that, before `feedMaxItems` counts them. Search feeds need it: Google News
+  ignores its own `when:7d` on a long query and mixes in items months old, which
+  the DJ would otherwise present as news. Undated items are kept.
+- Every item the feed dates reaches the DJ with its day in the station's timezone
+  (`published: 2026-10-30`), so it can tell news from history. This is on for
+  every feed skill, with no key to set; an undated item simply carries no date.
 - `feed2` and `feed3` add further feeds. They are fetched together and merged
   round-robin, so a busy feed cannot crowd a quiet one out, and a headline that
   appears in two of them is offered once. One of them failing is skipped while
