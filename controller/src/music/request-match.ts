@@ -269,12 +269,15 @@ function artistIdentityKey(value: unknown): string {
   return requestName(key).replace(/^the (?=\S)/, '') || key;
 }
 
+function creditKeys(song: RequestSong): string[] {
+  const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
+  return credits.flatMap(credit => [artistNameKey(credit), ...artistParticipantKeys(String(credit ?? ''))]);
+}
+
 export function requestArtistMatches(want: unknown, song: RequestSong): boolean {
   const artist = artistIdentityKey(want);
   if (!artist) return true;
-  const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
-  return credits.some(credit => [artistNameKey(credit), ...artistParticipantKeys(String(credit ?? ''))]
-    .some(key => artistIdentityKey(key) === artist));
+  return creditKeys(song).some(key => artistIdentityKey(key) === artist);
 }
 
 export function requestedTitle(match: RequestMatch, text?: string): string | null {
@@ -357,6 +360,47 @@ export function modelFreeRequest(text: string): RequestMatch {
   return { kind: 'track', title, album: null, unverifiedConditions, artist: artist ? unquote(artist) : null, reversible: !!separated,
     search_terms: [title], genre: null, language: language?.[1] || null, mood: null, sort: null,
     scope: 'song', intent: 'library search without model interpretation', ack: '' };
+}
+
+export interface RequestedRecording {
+  query: string;
+  isExact(song: RequestSong): boolean;
+}
+
+// A lone generic word is no title: "play something" does not ask for the
+// Beatles' "Something".
+const GENERIC_ASK = new Set(['a', 'an', 'any', 'some', 'something', 'anything', 'music', 'song', 'songs', 'track', 'tracks', 'tune', 'tunes']);
+
+// The recording the listener's OWN words name, for the request agent's
+// searchLibrary (#2195): what to search, and how to recognise an exact hit.
+// Read from the listener's text and never the model's query, because a model
+// that searches "Rihanna" alone has dropped the title entirely, and only these
+// words still hold it. Null when they name no title, so no search is spent.
+//
+// The query is the title alone: search3 needs every word to match, so one word
+// of an unparsed tail ("BY RIHANNA. I want it loud") would empty it. That tail
+// is also why a title match accepts any credit the listener's words hold as
+// whole words. A pair written "A - B" may be either way round, so its query
+// holds both sides, which search3 matches in any order.
+//
+// The last branch catches what the literal parse cannot split: "disturbia
+// rihanna" has no separator, "Stand by Me" is read as "Stand" by "Me", and
+// "Disturbia - Rihanna" is read as "Rihanna" by "Disturbia". There the track's
+// title and credits must account for every word but framing.
+export function requestedRecording(text: string | null | undefined): RequestedRecording | null {
+  if (!text?.trim()) return null;
+  const { title, artist, reversible } = modelFreeRequest(text);
+  if (!title) return null;
+  if (!artist && requestName(title).split(' ').every(word => GENERIC_ASK.has(word))) return null;
+  return {
+    query: reversible ? `${artist} ${title}` : title,
+    isExact: song => {
+      const credits = creditKeys(song);
+      return (requestTitleMatches(title, song.title)
+        && (requestArtistMatches(artist, song) || credits.some(credit => inRequest(text, credit))))
+        || namedInRequest(text, String(song.title ?? ''), credits);
+    },
+  };
 }
 
 // A model reply repaired against the literal reading of the same words.

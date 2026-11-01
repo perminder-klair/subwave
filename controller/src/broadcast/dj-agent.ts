@@ -229,8 +229,10 @@ function misnamedRepickReason(song: any, misnamed: MisnamedLine[]): string {
 // itself, under the run's own scope, so its hits went through the same
 // recency/blocklist filtering and slim projection as every other candidate.
 // Bounded by the tool deadline; any failure only means no extra candidates.
+// A fresh tool set would look the listener's words up again, so requestText
+// stays out: this is one search, for the name the lines claimed.
 async function lookupRequestClaim(query: string, scope: PickerScope): Promise<Map<string, any>> {
-  const { tools, seen } = buildPickerTools(scope);
+  const { tools, seen } = buildPickerTools({ ...scope, requestText: null });
   const search = (tools as Record<string, any>).searchLibrary;
   try {
     await search?.execute?.({ query }, {
@@ -1790,8 +1792,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
 
     // A request runs with recency only — no show locks. An explicit listener
     // ask wins over the show's strict filters, which is why the scope stops
-    // here rather than being built from the active show.
-    const scope = pickerScope({ recentIds });
+    // here rather than being built from the active show. requestText lets
+    // searchLibrary find what the listener named however the model words its
+    // query (#2195).
+    const scope = pickerScope({ recentIds, requestText: text });
     const run = await requestAgent.run({
       messages,
       scope,
