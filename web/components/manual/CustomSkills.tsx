@@ -161,7 +161,7 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
             that fails, or takes more than six seconds, is skipped while another answers,
             with a warning in the log naming it (once, until it recovers). If the feeds that
             answered have no items, the failure is the fetch error, naming every feed that
-            failed.
+            failed by its key.
           </li>
           <li>
             Items are <strong>burned on read</strong>: at most six fresh ones reach a

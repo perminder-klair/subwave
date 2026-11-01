@@ -149,8 +149,9 @@ every feed skill gets the same behaviour:
   than 6 seconds, is skipped while another answers, with a warning in the log
   naming the feed and the error (once, until it recovers). If the feeds that answered have no items, the
   failure is reported as the fetch error, as with a single feed, naming every
-  feed that failed; all of them failing does the same and stands the segment
-  down.
+  feed that failed by its key (`feed2: News feed HTTP 500`); all of them failing
+  does the same and stands the segment down. Only the log carries a feed's host
+  and path: the error can reach the model, and a path or query can hold a token.
 - Items are **burned on read**: at most 6 fresh items reach one segment, and the
   next fire offers the ones after them rather than repeating. That memory is
   per-skill and lives for as long as the controller runs.

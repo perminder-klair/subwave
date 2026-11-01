@@ -14,6 +14,7 @@ export const FEED_MAX_ITEMS_KEY = 'feedMaxItems';
 export const FEED_MAX_AGE_KEY = 'feedMaxAgeDays';
 // Optional further feeds read alongside `feed`, merged into one list.
 export const FEED_EXTRA_URL_KEYS = ['feed2', 'feed3'] as const;
+type FeedExtraKey = (typeof FEED_EXTRA_URL_KEYS)[number];
 
 // Upper bound on `feedMaxItems`, and the `max` the admin number field enforces.
 export const FEED_MAX_ITEMS_LIMIT = 50;
@@ -188,6 +189,16 @@ export function hashHeadline(title: string): string {
   return h.toString(36);
 }
 
+// A fetch error can quote the URL it was handed, credentials and all ("Request
+// cannot be constructed from a URL that includes credentials: https://user:pass@…").
+// An error from here becomes `{ error }`, which an agent's tool call hands to the
+// model, so its text never carries a URL.
+function withoutUrls(err: unknown): unknown {
+  if (!(err instanceof Error)) return err;
+  const message = err.message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]');
+  return message === err.message ? err : new Error(message);
+}
+
 export async function fetchHeadlines({ feedUrl, maxItems, maxAgeDays = null, deadlineMs }: { feedUrl?: string; maxItems?: number; maxAgeDays?: number | null; deadlineMs?: number } = {}) {
   const url = feedUrl || config.news.feedUrl;
   const cap = maxItems || config.news.maxItems;
@@ -198,9 +209,13 @@ export async function fetchHeadlines({ feedUrl, maxItems, maxAgeDays = null, dea
   // segment on undici's ~300s default and eat the agent's own 45s budget many
   // times over. 15s is generous for an RSS document. `deadlineMs` is for a caller
   // with less time than that, and it covers the body as well as the headers.
-  const res = await fetchWithTimeout(url, deadlineMs ? { timeoutMs: deadlineMs, bodyDeadline: true } : { timeoutMs: 15_000 });
-  if (!res.ok) throw new Error(`News feed HTTP ${res.status}`);
-  return parseFeed(await res.text(), cap, { maxAgeDays });
+  try {
+    const res = await fetchWithTimeout(url, deadlineMs ? { timeoutMs: deadlineMs, bodyDeadline: true } : { timeoutMs: 15_000 });
+    if (!res.ok) throw new Error(`News feed HTTP ${res.status}`);
+    return parseFeed(await res.text(), cap, { maxAgeDays });
+  } catch (err) {
+    throw withoutUrls(err);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -271,8 +286,8 @@ const SEEN_KEEP = 60;
 export interface ResolvedFeed {
   url: string;
   maxItems: number;
-  /** Further feeds merged with `url`; absent when none is declared. */
-  extraUrls?: string[];
+  /** Further feeds merged with `url`, by frontmatter key; absent when none is declared. */
+  extraUrls?: Partial<Record<FeedExtraKey, string>>;
   /** Item age cap in days; absent when none is declared. */
   maxAgeDays?: number;
 }
@@ -314,13 +329,13 @@ export function resolveFeedConfig(config: Record<string, unknown> | null | undef
 
   const feed: ResolvedFeed = { url, maxItems: resolveMaxItems(config?.[FEED_MAX_ITEMS_KEY], warnings) };
   // A bad further feed is skipped with a warning; the first one still works.
-  const extraUrls: string[] = [];
+  const extraUrls: NonNullable<ResolvedFeed['extraUrls']> = {};
   for (const e of extras) {
     const why = urlProblem(e.url);
     if (why) warnings.push(`${e.key}: "${e.url}" ${why} — skipped`);
-    else if (e.url !== url && !extraUrls.includes(e.url)) extraUrls.push(e.url);
+    else if (e.url !== url && !Object.values(extraUrls).includes(e.url)) extraUrls[e.key] = e.url;
   }
-  if (extraUrls.length) feed.extraUrls = extraUrls;
+  if (Object.keys(extraUrls).length) feed.extraUrls = extraUrls;
   const maxAgeDays = resolveMaxAge(config?.[FEED_MAX_AGE_KEY], warnings);
   if (maxAgeDays != null) feed.maxAgeDays = maxAgeDays;
   return { feed, warnings };
@@ -443,7 +458,7 @@ export function makeFeedTool(kind: string, feed: ResolvedFeed, warn: (message: s
   };
 }
 
-interface FeedFailure { url: string; error: string }
+interface FeedFailure { key: string; url: string; error: string }
 
 // How long one feed of several may take, body included. The tool wrapper
 // (llm/internal/tools/segment-tools.ts) gives up at 8 s and does not cancel, so a
@@ -452,14 +467,16 @@ interface FeedFailure { url: string; error: string }
 // failed: it takes the skip path, with time left to hand back the rest.
 const MERGED_FEED_DEADLINE_MS = 6_000;
 
+// Every reason here came through fetchHeadlines, so its message holds no URL.
 function failureText(reason: unknown): string {
-  if (!(reason instanceof Error)) return String(reason);
+  if (!(reason instanceof Error)) return 'fetch failed';
   return reason.name === 'AbortError' ? `no answer within ${MERGED_FEED_DEADLINE_MS / 1000}s` : reason.message;
 }
 
-// A feed named in a log line or an error: host and path. The query is dropped,
-// both for length (a news search lives there) and because a private feed's token
-// can.
+// A feed named in a log line: host and path. The query is dropped, both for
+// length (a news search lives there) and because a private feed's token can. The
+// path can hold one too, so this never goes in an `{ error }`, which reaches the
+// model: that names the feed by its key.
 function feedLabel(url: string): string {
   try {
     const u = new URL(url);
@@ -474,27 +491,27 @@ function feedLabel(url: string): string {
 // appearance. `maxItems` is read from each feed, and makeFeedTool applies it to
 // what one fire offers. The list stops at SEEN_KEEP, so the burn-on-read memory
 // always covers a whole list and a trim can't bring an aired headline back. A
-// feed failing while another answers is reported; if the ones that answered had no items, the failure is
-// the answer, so a broken feed is never hidden behind an empty one. That error,
-// and all of them failing, is the same `{ error }` degradation a single feed has
-// always had, naming every feed that failed: with several, "HTTP 500" alone does
-// not say which one to go and fix.
+// feed failing while another answers is reported; if the ones that answered had
+// no items, the failure is the answer, so a broken feed is never hidden behind an
+// empty one. That error, and all of them failing, is the same `{ error }`
+// degradation a single feed has always had, naming every feed that failed by its
+// key: with several, "HTTP 500" alone does not say which one to go and fix.
 async function fetchMerged(
   feed: ResolvedFeed,
   report: (failures: FeedFailure[], answered: string[]) => void = () => {},
 ): Promise<Headline[]> {
-  const urls = [feed.url, ...(feed.extraUrls || [])];
+  const feeds = [{ key: FEED_URL_KEY, url: feed.url }, ...Object.entries(feed.extraUrls || {}).map(([key, url]) => ({ key, url }))];
   const opts = { maxItems: feed.maxItems, maxAgeDays: feed.maxAgeDays ?? null };
-  if (urls.length === 1) return fetchHeadlines({ feedUrl: urls[0], ...opts });
-  const results = await Promise.allSettled(urls.map((feedUrl) => fetchHeadlines({ feedUrl, ...opts, deadlineMs: MERGED_FEED_DEADLINE_MS })));
+  if (feeds.length === 1) return fetchHeadlines({ feedUrl: feed.url, ...opts });
+  const results = await Promise.allSettled(feeds.map(({ url }) => fetchHeadlines({ feedUrl: url, ...opts, deadlineMs: MERGED_FEED_DEADLINE_MS })));
   const lists = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
   const failures = results.flatMap((r, i) => (r.status === 'rejected'
-    ? [{ url: urls[i], error: failureText(r.reason) }]
+    ? [{ ...feeds[i], error: failureText(r.reason) }]
     : []));
   if (!lists.length || (failures.length && !lists.some((l) => l.length))) {
-    throw new Error(failures.map(({ url, error }) => `${feedLabel(url)}: ${error}`).join('; '));
+    throw new Error(failures.map(({ key, error }) => `${key}: ${error}`).join('; '));
   }
-  report(failures, urls.filter((_, i) => results[i].status === 'fulfilled'));
+  report(failures, feeds.filter((_, i) => results[i].status === 'fulfilled').map(({ url }) => url));
   const out: Headline[] = [];
   const taken = new Set<string>();
   for (let i = 0; lists.some((l) => i < l.length); i++) {

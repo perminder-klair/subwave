@@ -285,8 +285,7 @@ feed: ${feedUrl('/dated')}
 Just a feed.
 `);
 
-// Two failures behind an empty feed, on paths long enough that a report cut short
-// would lose the second one.
+// Two failures behind an empty feed, on paths too long to want in a report.
 const LONG_PATH = `/boom/${'a'.repeat(70)}`;
 writeSkill('two-down', `---
 name: two-down
@@ -296,6 +295,51 @@ feed2: ${feedUrl(`${LONG_PATH}-one`)}
 feed3: ${feedUrl(`${LONG_PATH}-two`)}
 ---
 Two of three are down.
+`);
+
+// What must never reach the model: a private token in a feed's path or query, and
+// credentials in its URL, which fetch quotes back in its own error.
+const TOKEN_PATH = '/boom/secret:abc123/u:me/';
+const TOKEN_URL = `${feedUrl(TOKEN_PATH)}?token=querysecret`;
+const CREDENTIAL_URL = feedUrl('/rss').replace('http://', 'http://user:hunter2@');
+writeSkill('token-alone', `---
+name: token-alone
+label: Token alone
+feed: ${feedUrl('/empty')}
+feed2: ${TOKEN_URL}
+---
+Nothing but the failure to report.
+`);
+writeSkill('token-beside', `---
+name: token-beside
+label: Token beside
+feed: ${feedUrl('/rss')}
+feed2: ${TOKEN_URL}
+---
+The first feed answers.
+`);
+writeSkill('credentials-alone', `---
+name: credentials-alone
+label: Credentials alone
+feed: ${feedUrl('/empty')}
+feed2: ${CREDENTIAL_URL}
+---
+Nothing but the failure to report.
+`);
+writeSkill('credentials-beside', `---
+name: credentials-beside
+label: Credentials beside
+feed: ${feedUrl('/rss')}
+feed2: ${CREDENTIAL_URL}
+---
+The first feed answers.
+`);
+writeSkill('credentials-single', `---
+name: credentials-single
+label: Credentials single
+feed: ${CREDENTIAL_URL}
+---
+A single feed takes the same fetch.
 `);
 
 writeSkill('all-hung', `---
@@ -560,7 +604,7 @@ test('a tighter window keeps only what is inside it, plus the undated item', asy
 });
 
 test('a fire offers at most feedMaxItems in total, and the next moves on', async () => {
-  const tool = makeFeedTool('merged-cap', { url: feedUrl('/other'), maxItems: 3, extraUrls: [feedUrl('/local')] });
+  const tool = makeFeedTool('merged-cap', { url: feedUrl('/other'), maxItems: 3, extraUrls: { feed2: feedUrl('/local') } });
   const state = {};
   const first: any = await tool({}, state);
   assert.deepEqual(first.headlines.map((h: any) => h.title), ['Story 1', 'Local 1', 'Story 2']);
@@ -569,7 +613,7 @@ test('a fire offers at most feedMaxItems in total, and the next moves on', async
 });
 
 test('a low feedMaxItems still reaches every feed, a fire at a time', async () => {
-  const tool = makeFeedTool('low-cap', { url: feedUrl('/other'), maxItems: 1, extraUrls: [feedUrl('/local')] });
+  const tool = makeFeedTool('low-cap', { url: feedUrl('/other'), maxItems: 1, extraUrls: { feed2: feedUrl('/local') } });
   const state = {};
   const first: any = await tool({}, state);
   assert.deepEqual(first.headlines.map((h: any) => h.title), ['Story 1']);
@@ -578,7 +622,7 @@ test('a low feedMaxItems still reaches every feed, a fire at a time', async () =
   const third: any = await tool({}, state);
   assert.equal(third.available, false);
 
-  const three = makeFeedTool('low-cap-three', { url: feedUrl('/other'), maxItems: 2, extraUrls: [feedUrl('/local'), feedUrl('/atom')] });
+  const three = makeFeedTool('low-cap-three', { url: feedUrl('/other'), maxItems: 2, extraUrls: { feed2: feedUrl('/local'), feed3: feedUrl('/atom') } });
   const threeState = {};
   const offered: string[] = [];
   for (let fire = 0; fire < 3; fire++) {
@@ -592,7 +636,7 @@ test('three full feeds never outrun the burn-on-read memory', async () => {
   const tool = makeFeedTool('three-full', {
     url: feedUrl('/many/One'),
     maxItems: 50,
-    extraUrls: [feedUrl('/many/Two'), feedUrl('/many/Three')],
+    extraUrls: { feed2: feedUrl('/many/Two'), feed3: feedUrl('/many/Three') },
   });
   const state = {};
   const offered: string[] = [];
@@ -640,14 +684,14 @@ test('a date-only item keeps its calendar day in every station zone', async () =
 });
 
 test('further feeds merge round-robin, a repeated headline appears once', async () => {
-  const tool = makeFeedTool('merged', { url: feedUrl('/other'), maxItems: 10, extraUrls: [feedUrl('/local')] });
+  const tool = makeFeedTool('merged', { url: feedUrl('/other'), maxItems: 10, extraUrls: { feed2: feedUrl('/local') } });
   const result: any = await tool({}, {});
   assert.deepEqual(result.headlines.map((h: any) => h.title), ['Story 1', 'Local 1', 'Story 2', 'Story 3', 'Local 2']);
 });
 
 test('one failing feed is skipped while another answers, and is reported once until it recovers', async () => {
   const warnings: string[] = [];
-  const some = makeFeedTool('half', { url: feedUrl('/boom'), maxItems: 10, extraUrls: [feedUrl('/local')] }, m => warnings.push(m));
+  const some = makeFeedTool('half', { url: feedUrl('/boom'), maxItems: 10, extraUrls: { feed2: feedUrl('/local') } }, m => warnings.push(m));
   const ok: any = await some({}, {});
   assert.deepEqual(ok.headlines.map((h: any) => h.title), ['Local 1', 'Story 2', 'Local 2']);
   assert.equal(warnings.length, 1);
@@ -658,7 +702,7 @@ test('one failing feed is skipped while another answers, and is reported once un
 
 test('a failed feed is reported again only after it has recovered', async () => {
   const warnings: string[] = [];
-  const tool = makeFeedTool('flaky', { url: feedUrl('/other'), maxItems: 10, extraUrls: [feedUrl('/flaky')] }, m => warnings.push(m));
+  const tool = makeFeedTool('flaky', { url: feedUrl('/other'), maxItems: 10, extraUrls: { feed2: feedUrl('/flaky') } }, m => warnings.push(m));
   try {
     flakyDown = true;
     await tool({}, {});
@@ -676,18 +720,18 @@ test('a failed feed is reported again only after it has recovered', async () => 
 });
 
 test('a failing feed is the answer when the feeds that answered have none', async () => {
-  const tool = makeFeedTool('hidden', { url: feedUrl('/boom'), maxItems: 10, extraUrls: [feedUrl('/empty')] });
+  const tool = makeFeedTool('hidden', { url: feedUrl('/boom'), maxItems: 10, extraUrls: { feed2: feedUrl('/empty') } });
   await assert.rejects(() => tool({}, {}), /HTTP 500/, 'not { available: false, reason: "the feed has no items" }');
 });
 
 test('all feeds failing is the fetch error', async () => {
-  const none = makeFeedTool('none', { url: feedUrl('/boom'), maxItems: 10, extraUrls: [feedUrl('/boom')] });
+  const none = makeFeedTool('none', { url: feedUrl('/boom'), maxItems: 10, extraUrls: { feed2: feedUrl('/boom') } });
   await assert.rejects(() => none({}, {}), /HTTP 500/);
 });
 
 test('resolveFeedConfig reads the age cap and further feeds, warning on bad values', () => {
   const ok = resolveFeedConfig({ feed: 'https://a.test/rss', feed2: 'https://b.test/rss', feed3: 'https://a.test/rss', feedMaxAgeDays: '7' });
-  assert.deepEqual(ok.feed, { url: 'https://a.test/rss', maxItems: 10, extraUrls: ['https://b.test/rss'], maxAgeDays: 7 });
+  assert.deepEqual(ok.feed, { url: 'https://a.test/rss', maxItems: 10, extraUrls: { feed2: 'https://b.test/rss' }, maxAgeDays: 7 });
   assert.deepEqual(ok.warnings, []);
 
   const bad = resolveFeedConfig({ feed: 'https://a.test/rss', feed2: 'ftp://b.test/x', feedMaxAgeDays: '0' });
@@ -695,6 +739,9 @@ test('resolveFeedConfig reads the age cap and further feeds, warning on bad valu
   assert.equal(bad.warnings.length, 2);
   assert.match(bad.warnings.join(' '), /feed2: .* skipped/);
   assert.match(bad.warnings.join(' '), /feedMaxAgeDays: .* no age limit/);
+
+  const keyed = resolveFeedConfig({ feed: 'https://a.test/rss', feed2: 'ftp://b.test/x', feed3: 'https://c.test/rss' });
+  assert.deepEqual(keyed.feed?.extraUrls, { feed3: 'https://c.test/rss' }, 'a feed keeps its own key when the one before it is skipped');
 
   const orphan = resolveFeedConfig({ feed2: 'https://b.test/rss' });
   assert.equal(orphan.feed, null, 'a further feed without a first one is no feed');
@@ -723,19 +770,51 @@ test('feed keys a tool.mjs leaves unread are warned about, and a declared key is
   assert.deepEqual(warned('own-tool'), [], 'a tool.mjs reading feed: for itself is the documented shape');
 });
 
+test('a merged fetch error names the feed by key, with no path token or query', async () => {
+  const cap = capOf('token-alone');
+  const data: any = await fetchSegmentData(cap, { time: {} }, {});
+  assert.equal(data.error, 'feed2: News feed HTTP 500');
+  // The agent's tool result is the path that hands this to the model.
+  const viaTool: any = await buildSegmentTools({ time: {} }, {}, [cap])[cap.toolName].execute({});
+  assert.equal(viaTool.error, 'feed2: News feed HTTP 500');
+});
+
+test('a skipped feed keeps its host and path in the log, never its query', async () => {
+  const data: any = await fetchSegmentData(capOf('token-beside'), { time: {} }, {});
+  assert.ok(data.headlines?.length, 'the first feed answers');
+  assert.equal(JSON.stringify(data).includes('secret'), false);
+  const line = logged.find(l => l.includes('"token-beside"'));
+  assert.ok(line?.includes(TOKEN_PATH), `the log names the feed: ${line}`);
+  assert.equal(line?.includes('querysecret'), false, line);
+});
+
+test('credentials in a feed URL reach neither the error nor the log', async () => {
+  const alone: any = await fetchSegmentData(capOf('credentials-alone'), { time: {} }, {});
+  assert.match(alone.error, /^feed2: /);
+  assert.equal(String(alone.error).includes('hunter2'), false, alone.error);
+
+  const single: any = await fetchSegmentData(capOf('credentials-single'), { time: {} }, {});
+  assert.ok(single.error, 'a single feed fails the same way');
+  assert.equal(String(single.error).includes('hunter2'), false, single.error);
+
+  await fetchSegmentData(capOf('credentials-beside'), { time: {} }, {});
+  const line = logged.find(l => l.includes('"credentials-beside"'));
+  assert.ok(line, 'the failure is logged');
+  assert.equal(line?.includes('hunter2'), false, line);
+});
+
 test('every feed hanging is the fetch error inside the tool wrapper, and burns nothing', async () => {
   const state: any = {};
   const data: any = await fetchSegmentData(capOf('all-hung'), { time: {} }, state);
-  assert.match(String(data.error), /\/hang: no answer within 6s; .*\/stall: no answer within 6s/);
+  assert.equal(data.error, 'feed: no answer within 6s; feed2: no answer within 6s');
   assert.equal(state.feedSeen.get('all-hung').size, 0);
 });
 
 test('a failure behind an empty feed names every feed that failed, through to the stand-down reason', async () => {
   const cap = capOf('two-down');
   const data: any = await fetchSegmentData(cap, { time: {} }, {});
-  assert.ok(String(data.error).includes(`${LONG_PATH}-one: News feed HTTP 500`), String(data.error));
-  assert.ok(String(data.error).includes(`${LONG_PATH}-two: News feed HTTP 500`), String(data.error));
+  assert.equal(data.error, 'feed2: News feed HTTP 500; feed3: News feed HTTP 500');
   const reason = String(standDownReason(cap, data));
-  assert.ok(reason.includes(`${LONG_PATH}-one`), reason);
-  assert.ok(reason.includes(`${LONG_PATH}-two`), reason);
+  assert.ok(reason.includes('feed2:') && reason.includes('feed3:'), reason);
+  assert.equal(reason.includes(LONG_PATH), false, reason);
 });
