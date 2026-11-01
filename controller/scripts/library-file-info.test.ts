@@ -159,8 +159,12 @@ test('the walk stores them, other writers keep them, the next walk updates them'
   db.upsertTrackMeta('w1', { title: 'Song (edit)' });
   assert.deepEqual(row('w1'),
     { file_path: '/music/Artist/Album/03 - Song.MP3', file_suffix: 'mp3', file_size: 7_878_806, bit_rate: 192 });
-  // The file was replaced by a FLAC: the next walk wins.
-  db.upsertTrackMeta('w1', walkFileInfo({ path: '/music/Artist/Album/03 - Song.flac', suffix: 'flac', size: 30_000_000, bitRate: 900 }));
+  // The file was replaced by a FLAC: the next walk wins. A new size is a
+  // replacement: the walk stores it with the clear at its end
+  // (replaced-file.test.ts pins the hold in between).
+  const flac = walkFileInfo({ path: '/music/Artist/Album/03 - Song.flac', suffix: 'flac', size: 30_000_000, bitRate: 900 });
+  assert.equal(db.upsertTrackMeta('w1', flac), true);
+  db.clearTrackAudio('w1', flac.fileSize);
   assert.deepEqual(row('w1'),
     { file_path: '/music/Artist/Album/03 - Song.flac', file_suffix: 'flac', file_size: 30_000_000, bit_rate: 900 });
 });
