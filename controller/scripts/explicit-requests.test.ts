@@ -29,6 +29,8 @@ const { queue } = await import('../src/broadcast/queue.js');
 const requestLog = await import('../src/broadcast/request-log.js');
 const { requestAgent } = await import('../src/broadcast/dj-agent/agents.js');
 const { runRequest } = await import('../src/broadcast/dj-agent.js');
+const { buildPickerTools } = await import('../src/llm/internal/tools/picker/index.js');
+const { pickerScope } = await import('../src/llm/internal/tools/picker/scope.js');
 
 await settings.load();
 
@@ -265,6 +267,22 @@ test('the request agent never sees a tagged track on a clean show, and sees ever
     requestAgent.run = realRun;
   }
   assert.deepEqual(scopes.map(s => s.excludeExplicit), [true, false]);
+});
+
+test('the request agent hears a tagged ask as not found, never as played recently', async (t) => {
+  // What the model is told becomes what the listener is told. A blocked ask
+  // reads this way, and so does the cascade's refusal.
+  stubNetwork(t, { search: [TAGGED] });
+  await settings.update({ embedding: { enabled: false } } as never);
+  const search = (excludeExplicit: boolean) => buildPickerTools(pickerScope({
+    recentIds: new Set<string>(), excludeExplicit, requestText: 'Tagged Song by Tagged Act please',
+  })).tools.searchLibrary as any;
+  const options = { toolCallId: 'x', messages: [] };
+  const held = await search(true).execute({ query: 'Tagged Song' }, options);
+  assert.doesNotMatch(JSON.stringify(held), /played too recently|already queued/);
+  assert.deepEqual(held.tracks, []);
+  const off = await search(false).execute({ query: 'Tagged Song' }, options);
+  assert.deepEqual(off.map?.((s: any) => s.id) ?? off.tracks?.map((s: any) => s.id), ['tagged'], 'off: as it always was');
 });
 
 const admin = (path: string, body: unknown) => realFetch(`${base}${path}`, {
