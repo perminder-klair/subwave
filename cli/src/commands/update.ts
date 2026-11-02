@@ -87,7 +87,7 @@ export async function runUpdateCommand(): Promise<void> {
   muted('  `subwave status` to confirm services are healthy.');
   muted('  `subwave logs <service>` if anything looks off.');
   if (!cloneMode) {
-    muted('  `subwave self-update` to refresh the CLI binary itself.');
+    muted('  Next release: `subwave self-update`, `subwave sync`, then `subwave update`.');
   }
 
   // New services and changed env wiring don't ride an image bump; only
@@ -97,7 +97,7 @@ export async function runUpdateCommand(): Promise<void> {
     if (mode && hasDrift(detectDrift(home, mode))) {
       console.log();
       warn('your compose files are behind this CLI — new services / settings are missing.');
-      muted('  → run `subwave sync` to refresh them (backs up your current files first).');
+      muted('  → run `subwave sync` (backs up your current files first), then `subwave update` again.');
     }
   }
 
@@ -114,6 +114,10 @@ function moveVersionPin(home: string): void {
   const moved = movePinInEnv(readFileSync(envPath, 'utf8'), target);
   if (!moved) return;
   writeFileSync(envPath, moved.text);
+  // A compiled Bun binary loads the working directory's .env into process.env at
+  // boot, and compose prefers the environment over .env, so `pull` and `up` would
+  // get the old pin (#2196). A shell export of another version stays in charge.
+  if (process.env.SUBWAVE_VERSION === moved.from) process.env.SUBWAVE_VERSION = target;
   header('version pin');
   ok(`moved SUBWAVE_VERSION ${moved.from} → ${target} (matches this CLI)`);
   console.log();

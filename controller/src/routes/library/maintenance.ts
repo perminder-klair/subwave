@@ -224,7 +224,10 @@ router.post('/library/analyze', requireAdmin, (req, res) => {
 // at 100% coverage; shares the tagger's single-flight slot.
 router.post('/library/reconcile', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
-  startReconcile();
+  startReconcile({
+    confirmReplaced: req.body?.confirmReplaced === true,
+    acceptReplaced: req.body?.acceptReplaced === true,
+  });
   res.json({ ok: true, tagger });
 });
 

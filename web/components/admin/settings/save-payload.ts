@@ -46,15 +46,12 @@ export function dangerSavePayload(form: FormState) {
       enabled: form.silenceTrim.enabled,
       minGapMs: n.int('silenceTrim.minGapMs', form.silenceTrim.minGapMs),
     },
+    // The stem fields save from the Stems page (stemsSavePayload): posting
+    // them here would commit an unsaved Stems edit under this button and mark
+    // it clean.
     transitions: {
-      pairDrain: form.transitions.pairDrain,
-      stemBlends: form.transitions.stemBlends,
       equalPowerCrossfade: form.transitions.equalPowerCrossfade,
       effects: form.transitions.effects,
-    },
-    audio: {
-      stemCache: form.transitions.stemCache,
-      stemCacheGb: n.num('audio.stemCacheGb', form.transitions.stemCacheGb),
     },
     loudness: {
       targetLufs: n.float('loudness.targetLufs', form.loudness.targetLufs),
@@ -75,6 +72,24 @@ export function dangerSavePayload(form: FormState) {
       maxListeners: n.int('stream.maxListeners', form.stream.maxListeners),
       countryHeader: form.stream.countryHeader,
       geoipDbPath: form.stream.geoipDbPath,
+    },
+  };
+  return { patch, fieldErrors: n.bad };
+}
+
+// The Stems page's save: only its own fields, so it neither commits nor marks
+// clean an unsaved Broadcast & mixer edit (and that page's save doesn't post
+// these). The form keeps the stem cache under `transitions`; it saves to `audio`.
+export function stemsSavePayload(form: FormState) {
+  const n = numberFields();
+  const patch = {
+    transitions: {
+      pairDrain: form.transitions.pairDrain,
+      stemBlends: form.transitions.stemBlends,
+    },
+    audio: {
+      stemCache: form.transitions.stemCache,
+      stemCacheGb: n.num('audio.stemCacheGb', form.transitions.stemCacheGb),
     },
   };
   return { patch, fieldErrors: n.bad };
