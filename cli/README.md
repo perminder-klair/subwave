@@ -143,7 +143,8 @@ Three things guard against it, and they work together:
 - `src/tty.ts` opens `/dev/tty` directly and hands it to Clack as the prompt's
   `input`, sidestepping `process.stdin`.
 - `scripts/patch-clack.mjs` runs at build time, because `@clack/prompts`'
-  high-level wrappers don't forward that `input` option.
+  high-level wrappers don't forward that `input` option. Every build path must
+  run it; `scripts/check-clack-patch.mjs` checks the compiled binary.
 - `src/ui.ts` arms a watchdog on the first prompt, but only when launched from a
   piped parent, turning any remaining hang into a fast, actionable exit.
 
@@ -168,8 +169,12 @@ npm run build:all           # linux + darwin, x64 + arm64 → dist/
 npm run build:linux-x64     # or just one
 ```
 
-`prebuild` runs `embed-assets` and `patch-clack` first, so a build always
-carries current assets.
+`npm run build:*` runs `prebuild` (`embed-assets` + `patch-clack`) first, so a
+local build carries current assets and the Clack patch. CI doesn't use these
+scripts: `publish-cli.yml` and `cli-smoke.yml` run `patch-clack` themselves
+after `bun install`, and `scripts/check-clack-patch.mjs` fails the build if a
+compiled binary doesn't forward `input` at the prompt sites (#2202). Any new
+build path must do both.
 
 ### Layout
 
