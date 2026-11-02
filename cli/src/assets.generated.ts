@@ -1289,9 +1289,12 @@ SITE_URL=
 # Music source -> "Keep Report Real Path on" and it sends the real path instead.
 # If Navidrome mounts the library at this same path, that path is used as it is.
 # If not, SUB/WAVE looks for it under this folder, and plays a file only when its
-# size and title match the track. Anything it can't find or can't prove falls
-# back to streaming, so those tracks play as they would without this. The Doctor
-# samples a few tracks under "real file paths" to show whether they line up.
+# size matches the track and its tags hold the track's title. Anything it can't
+# find or can't prove falls back to streaming, so those tracks play as they would
+# without this. A different recording at the same folder and file name, with the
+# same size and the same title, would still play. With "Keep Report Real Path on"
+# set, the Doctor samples a few tracks under "real file paths" to show whether
+# they line up.
 # MUSIC_LIBRARY_PATH=
 # TTS_SPEED=0.85
 # Routine fallback refresh uses hourly minute-step cadence, rotated off :00/:02:

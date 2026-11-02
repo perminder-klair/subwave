@@ -139,7 +139,8 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
             are built from the tags. A mounted library (<code>MUSIC_LIBRARY_PATH</code>) finds its
             files from a tag-built path only when its folders match the tags; the real path finds
             them however they&apos;re laid out. If the mount sits somewhere other than
-            Navidrome&apos;s own folder, a file plays only when its size and title match the track.
+            Navidrome&apos;s own folder, a file plays only when its size matches the track and
+            its tags hold the track&apos;s title; at Navidrome&apos;s own path nothing has to match.
             The controller and broadcast containers both need the library, at the same path. Until
             the mixer can read it, or for any file it can&apos;t find or can&apos;t prove, the track
             plays from the stream. Only SUB/WAVE&apos;s own players on this account are ever
