@@ -1562,19 +1562,6 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       if (exact) return exact;
       const heldExact = refusal();
       if (heldExact) return heldExact;
-      // Navidrome's token search is intentionally bounded and may miss a
-      // misspelled multi-word title entirely. Ask the local catalogue for a
-      // bounded candidate set before any artist/pool fallback. The verifier
-      // below still owns title/artist similarity and ambiguity decisions.
-      const localAsked = Boolean(catalog.fuzzySearch && !deps.exactIdentity);
-      const local = localAsked
-        ? await safe('local fuzzy search', () => catalog.fuzzySearch!(title!, { signal: deps.signal }), [])
-        : [];
-      // The server's search can't cross scripts, so a title the local library
-      // holds exactly, through the request's transliterations ("Кино" is
-      // Kino), is still an exact title, and a match.
-      const localExact = select(local, 'local-library') || refusal();
-      if (localExact) return localExact;
       // A bare string is tried as an artist after it misses as a title, and
       // before any near title, so "play Queen" is the act and never another
       // act's "Queens". A reading whose title is its own artist is the same ask.
@@ -1605,6 +1592,21 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
           resolvedArtistName = artistName;
         }
       }
+      // Navidrome's token search is intentionally bounded and may miss a
+      // misspelled multi-word title entirely. Ask the local catalogue for a
+      // bounded candidate set before any pool fallback. The verifier below
+      // still owns title/artist similarity and ambiguity decisions.
+      const localAsked = Boolean(catalog.fuzzySearch && !deps.exactIdentity);
+      const local = localAsked
+        ? await safe('local fuzzy search', () => catalog.fuzzySearch!(title!, { signal: deps.signal }), [])
+        : [];
+      // The server's search can't cross scripts, so a title the local library
+      // holds exactly, through the request's transliterations ("Kino" is
+      // "Кино"), is still an exact title, and a match. It comes after the exact
+      // artist: an act named in its own script ("play Кино", the band) outranks
+      // another act's title only a transliteration makes equal (Flora's "Kino").
+      const localExact = select(local, 'local-library') || refusal();
+      if (localExact) return localExact;
       const fuzzy = selectFuzzy(searched, 'search') || (localAsked ? selectFuzzy(local, 'local-fuzzy') : null);
       if (fuzzy) return fuzzy;
       // Generic "Title from Artist" is also a common artist frame. Try that

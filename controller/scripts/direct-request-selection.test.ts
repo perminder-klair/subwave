@@ -899,6 +899,23 @@ test('a title in another script is an exact title when only the local library ho
   assert.equal(result.source, 'local-library');
 });
 
+test('an act named in its own script outranks a title only a transliteration makes equal', async () => {
+  // "play Кино" is the band, not Flora's "Kino" (the verifier's finding 1).
+  const kino = { id: 'kino', title: 'Kino', artist: 'Flora' };
+  const blood = { id: 'gruppa-krovi', title: 'Группа крови', artist: 'Кино', album: 'Группа крови' };
+  const f = fixture({
+    searchPage: async () => ({ songs: [], rawCount: 0 }),
+    fuzzySearch: async () => [kino],
+    resolveArtist: async name => (name === 'Кино' ? { id: 'kino-band', name: 'Кино' } : null),
+    getArtist: async () => ({ album: [{ id: 'gk', name: 'Группа крови', year: 1988 }] }),
+    getAlbum: async () => [blood],
+  });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Кино'), literal: true }, { ...f.deps, text: 'play Кино' });
+  assert.equal(result.track?.id, blood.id);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(result.source, 'artist-albums');
+});
+
 test('ambiguous fuzzy title matching returns alternatives instead of guessing', async () => {
   const first = { id: 'one', title: 'Hello', artist: 'Adele' };
   const second = { id: 'two', title: 'Hello', artist: 'Lionel Richie' };
