@@ -3,12 +3,13 @@ import * as blocklist from './blocklist.js';
 import * as settings from '../settings.js';
 import * as subsonic from './subsonic.js';
 import { applyStrictLocks, hasEraBound, type VocalMode } from './show-filter.js';
+import type { VocalEvidence } from './lyric-vocal.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor } from './track-floor.js';
 import { resolveExcludedPlaylistIds, resolveShowPlaylistPool } from './show-playlist.js';
 import { artistRootKey } from './recency.js';
 
-export type Candidate = { id?: string; title?: string | null; artist?: string | null; album?: string | null; albumId?: string | null; artistId?: string | null; lastfmTags?: string[] | null; year?: number | null; originalYear?: number | null; isCompilation?: boolean | null; yearUntrusted?: boolean | null; genres?: string[] | null; genre?: string | null; moods?: string[] | null; audioMoods?: string[] | null; energy?: string | null; vocalRanges?: unknown[] | null; vocalRangesInvalid?: boolean; duration?: number | null; durationSec?: number | null };
+export type Candidate = { id?: string; title?: string | null; artist?: string | null; album?: string | null; albumId?: string | null; artistId?: string | null; lastfmTags?: string[] | null; year?: number | null; originalYear?: number | null; isCompilation?: boolean | null; yearUntrusted?: boolean | null; genres?: string[] | null; genre?: string | null; moods?: string[] | null; audioMoods?: string[] | null; energy?: string | null; duration?: number | null; durationSec?: number | null } & VocalEvidence;
 type Locks = { genres: string[]; eras: Array<{ fromYear?: number | null; toYear?: number | null }>; moods: string[]; energies: string[]; vocals: VocalMode | null };
 export interface ShowCandidateDiagnostic { strict: boolean; artists: number; library: { indexed: number; matchingFilters: number; afterExclusions: number; effective: number }; playlist: null | { total: number; matchingFilters: number; afterExclusions: number; effective: number }; warnings: string[] }
 export type CandidateCoverage = { mood: boolean; energy: boolean; vocal: boolean };

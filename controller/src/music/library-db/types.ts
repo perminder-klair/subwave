@@ -61,6 +61,10 @@ export interface TrackRecord {
   audioMoods: string[];
   // null = no outro signal.
   outro: TrackOutro | null;
+  // The tail's half of the instrumental verdict, read off outro_json's raw key so
+  // it agrees with the SQL scalar. Timing reads outro.vocalRanges, never these.
+  tailVocalRanges: TrackSection[] | null;
+  tailVocalRangesInvalid: boolean;
   // Edge dead air (ms) against an ABSOLUTE dBFS floor, unlike introMs and
   // outro.startMs which are relative. null = not measured, so trim nothing.
   leadSilenceMs: number | null;
@@ -183,7 +187,20 @@ export interface TrackMeta {
   isCompilation?: boolean | null;
   /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
   eraUntrusted?: boolean | null;
+  /** The file as Navidrome reports it (the tagger's and the analyzer's walks,
+   *  which see the same Subsonic child). `filePath` is the real path
+   *  when the client has "Report Real Path" on, else Navidrome's tag-built one.
+   *  COALESCEd like the ids: a writer without them never clears a stored value.
+   *  So read these as "last reported by a walk": one that stops reporting a field
+   *  leaves the old figure, and a row can mix two walks, such as a replaced file's
+   *  new path beside the old file's bitrate. */
+  filePath?: string | null;
+  fileSuffix?: string | null;
+  fileSize?: number | null;
+  bitRate?: number | null;
 }
+
+export type FileInfo = Required<Pick<TrackMeta, 'filePath' | 'fileSuffix' | 'fileSize' | 'bitRate'>>;
 
 export interface TrackEnrichment {
   lastfmTags: string[] | null;
@@ -239,10 +256,13 @@ export type MoodPoolRecord = Pick<TrackRecord,
   'genres' | 'genre' | 'moods' | 'energy' | 'durationSec'>;
 export type EnergyPoolRecord = MoodPoolRecord & Pick<TrackRecord,
   'originalYear' | 'isCompilation' | 'yearUntrusted' | 'audioMoods' | 'bpm' |
-  'musicalKey' | 'introMs' | 'loudnessLufs' | 'structure' | 'vocalRanges' | 'vocalRangesInvalid' | 'pace'>;
+  'musicalKey' | 'introMs' | 'loudnessLufs' | 'structure' | 'vocalRanges' | 'vocalRangesInvalid' |
+  'tailVocalRanges' | 'tailVocalRangesInvalid' | 'pace'>;
 export type MoodPoolRow = Pick<TrackRow,
   'id' | 'title' | 'artist' | 'album' | 'album_id' | 'artist_id' | 'year' |
   'genres' | 'genre' | 'moods' | 'energy' | 'duration_sec'>;
 export type EnergyPoolRow = MoodPoolRow & Pick<TrackRow,
   'original_year' | 'is_compilation' | 'era_untrusted' | 'audio_moods' | 'bpm' |
-  'musical_key' | 'intro_ms' | 'loudness_lufs' | 'structure_json' | 'vocal_ranges_json' | 'pace_json'>;
+  'musical_key' | 'intro_ms' | 'loudness_lufs' | 'structure_json' | 'vocal_ranges_json' | 'pace_json'> & {
+    tail_vocal_ranges_json: string | null; // SQL_TAIL_VOCAL_RANGES, not a column
+  };

@@ -1,658 +1,57 @@
 'use client';
 
-// /stats reports activity since boot, except `transitions`, which is read from the
-// play history; /listeners reports persisted audience history.
+// The Stats page, after the "Stats Redesign" design: a front panel that says
+// whether anyone is listening and whether the station is healthy, then sections
+// from the weekly recap down to diagnostics, with a tuner dial pinned above them
+// to find your way. This file owns the reads and the page header; each section
+// renders from what it is handed (./stats/*).
+//
+// /stats reports activity since boot, except `transitions`, which is read from
+// the play history; /listeners, /audience and /stats/week read durable records.
 
-import type { ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { AdminResponseError, adminJson, useAdminQuery } from '../../lib/admin-query';
 import { errorMessage } from '../../lib/notify';
-import { useDynamicStyle } from '../../hooks/useDynamicStyle';
-import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
-import { Card, Btn, Pill, Eyebrow, Seg } from './ui';
-import { ScrollArea } from '../ui/scroll-area';
+import { Btn } from './ui';
 import { cn } from '../../lib/cn';
-import { fmtConnected, type ListenerConnection } from '../../lib/clientLabel';
-import {
-  bucketSamplesByHour,
-  groupConnectionsByDevice,
-  type HourBucket,
-} from '../../lib/audienceStats';
 import { statsKeys } from './stats-queries';
-import type { MixDropReason, TransitionEffect } from '@/lib/schemas.generated';
-import { countRows, dropReasonLabel, effectLabel, effectSeamCount, reasonSummary } from '../../lib/transitionStats';
-
-interface LatencyStats {
-  avg?: number;
-  p50?: number;
-  p95?: number;
-  max?: number;
-}
-
-interface TokenStats {
-  total?: number;
-  input?: number;
-  output?: number;
-}
-
-interface ByKindRow {
-  kind: string;
-  count: number;
-  ok: number;
-  avgMs?: number;
-  tokens?: number;
-}
-
-interface ByModelRow {
-  model: string;
-  count: number;
-  tokens?: number;
-  costUsd?: number;
-  priced?: boolean;
-}
-
-interface ContextWindowRow {
-  kind: string;
-  calls: number;
-  samples: number;
-  averageInputTokens: number | null;
-  peakInputTokens: number | null;
-}
-
-interface ShortlistContextWindow {
-  samples: number;
-  // Largest prompt the window must hold: this route's picker plus every LLM
-  // function sharing the one num_ctx. pickerPeakInputTokens is the route's own.
-  peakInputTokens: number | null;
-  pickerPeakInputTokens?: number | null;
-  peakKind?: string | null;
-  suggestedTokens: number | null;
-  headroomPct?: number;
-  responseReserveTokens?: number;
-  message: string;
-}
-
-interface ByEngineRow {
-  engine: string;
-  count: number;
-  ok: number;
-  avgMs?: number;
-}
-
-interface ByTtsKindRow {
-  kind: string;
-  count: number;
-  avgMs?: number;
-}
-
-interface ByDjKindRow {
-  kind: string;
-  count: number;
-}
-
-interface LlmStats {
-  window: number;
-  count: number;
-  ok: number;
-  failed: number;
-  successRate?: number;
-  latency: LatencyStats;
-  tokens?: TokenStats;
-  cost?: { usd: number; complete: boolean } | null;
-  provider?: string;
-  agent: { calls: number; avgSteps?: number; avgTools?: number };
-  byKind: ByKindRow[];
-  byModel: ByModelRow[];
-  contextWindows?: {
-    shortlist: ShortlistContextWindow;
-    agenticPicker: ShortlistContextWindow;
-    byKind: ContextWindowRow[];
-  };
-  activeModel?: string;
-  budget?: {
-    enabled: boolean;
-    cap: number;
-    softPct: number;
-    usedToday: number;
-    remaining: number | null;
-    mode: 'normal' | 'soft' | 'hard';
-  };
-}
-
-interface TtsStats {
-  window: number;
-  count: number;
-  ok: number;
-  failed: number;
-  latency: LatencyStats;
-  fellBack: number;
-  fallbackRate?: number;
-  chars?: number;
-  byEngine: ByEngineRow[];
-  byKind: ByTtsKindRow[];
-}
-
-interface DjLogStats {
-  count: number;
-  byKind: ByDjKindRow[];
-}
-
-interface ByPathRow {
-  path: string;
-  count: number;
-  ok: number;
-}
-
-interface ByPickSourceRow {
-  source: string;
-  count: number;
-}
-
-interface TopRequesterRow {
-  requester: string;
-  count: number;
-}
-
-interface RequestsStats {
-  window: number;
-  count: number;
-  resolved: number;
-  failed: number;
-  successRate?: number | null;
-  latency: LatencyStats;
-  artistMiss: { count: number; rate?: number | null };
-  byPath: ByPathRow[];
-  byPickSource: ByPickSourceRow[];
-  topRequesters: TopRequesterRow[];
-}
-
-// The durable seam record, from library.db `plays` over the last `days` days —
-// unlike the in-memory rollups above, it survives a controller restart. Null
-// when the library DB is unavailable.
-interface TransitionStats {
-  days: number;
-  since: string;
-  seams: number;                          // plays with a recorded seam label
-  bySeam: Record<string, number>;         // label of the seam INTO the track ('Normal', 'Washout + Sweep', …)
-  asked: number;                          // DJ picks with a recorded ask
-  byAsk: Record<string, number>;          // the DJ's ask before any strip ('normal' | effect id)
-  dropped: number;
-  byReason: Partial<Record<MixDropReason, number>>;
-  byEffect: Partial<Record<TransitionEffect, Partial<Record<MixDropReason, number>>>>;
-}
-
-interface StatsResponse {
-  llm?: LlmStats;
-  trackSelection?: 'agentic' | 'shortlist';
-  tts?: TtsStats;
-  djLog?: DjLogStats;
-  requests?: RequestsStats;
-  transitions?: TransitionStats | null;
-  error?: string;
-}
-
-interface ListenerSample {
-  t: string;
-  count: number;
-}
-
-interface ListenersResponse {
-  current?: number | null;
-  sinceMinutes?: number;
-  bytes?: number;
-  samples?: ListenerSample[];
-  error?: string;
-}
-
-interface AudienceResponse {
-  sinceMinutes?: number;
-  sessions?: number;
-  referrers?: { source: string; count: number }[];
-  countries?: { country: string; count: number }[];
-  paths?: { path: string; count: number }[];
-  error?: string;
-}
-
-// Deduped one row per listener by the server. `error` is set on a 502 (Icecast
-// admin unreachable) so "nobody connected" stays distinct from "couldn't read".
-interface ConnectionsResponse {
-  count?: number;
-  connections?: ListenerConnection[];
-  error?: string;
-}
-
-interface ContainerUsage {
-  name: string;
-  service: string;
-  cpuPct: number;
-  memUsed: number;
-  memLimit: number;
-  memPct: number;
-}
-
-interface HostUsage {
-  cpus: number;
-  loadavg: [number, number, number];
-  memTotal: number;
-  memUsed: number;
-  uptime: number;
-}
-
-interface SystemResponse {
-  t?: string;
-  dockerAvailable?: boolean;
-  dockerError?: string;
-  host?: HostUsage;
-  containers?: ContainerUsage[];
-  error?: string;
-}
-
-const fmtInt = (n: number | null | undefined): string =>
-  n == null ? '—' : Number(n).toLocaleString('en-GB');
-
-const fmtMs = (n: number | null | undefined): string => {
-  if (n == null) return '—';
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${Math.round(n)}ms`;
-};
-
-const fmtPct = (n: number | null | undefined): string =>
-  n == null ? '—' : `${Math.round(n * 100)}%`;
-
-const fmtTokens = (n: number | null | undefined): string => {
-  if (n == null) return '—';
-  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
-  return String(n);
-};
-
-// One-decimal mean; counts are small integers.
-const fmtAvg = (n: number | null | undefined): string =>
-  n == null ? '—' : (Math.round(n * 10) / 10).toLocaleString('en-GB');
-
-const fmtBytes = (n: number | null | undefined): string => {
-  if (n == null) return '—';
-  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
-  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
-  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
-  return `${n} B`;
-};
-
-interface StatCellProps {
-  label: ReactNode;
-  value: ReactNode;
-  sub?: ReactNode;
-  accent?: boolean;
-  danger?: boolean;
-  last?: boolean;
-}
-
-function StatCell({ label, value, sub, accent, danger, last }: StatCellProps) {
-  const tone = danger ? 'text-[var(--danger)]' : accent ? 'text-vermilion' : '';
-  return (
-    <div
-      className={cn(
-        'grid gap-[3px] p-3.5',
-        !last && 'border-r border-separator-soft',
-      )}
-    >
-      <span className="caption">{label}</span>
-      <span className={cn('mono-num text-[22px] leading-[1.1] font-bold', tone)}>
-        {value}
-      </span>
-      {sub && <span className="caption text-muted">{sub}</span>}
-    </div>
-  );
-}
-
-interface MetricStripProps {
-  children: ReactNode;
-}
-
-function MetricStrip({ children }: MetricStripProps) {
-  const count = Array.isArray(children) ? children.length : 1;
-  const ref = useRef<HTMLDivElement>(null);
-  useDynamicStyle(ref, { gridTemplateColumns: `repeat(${count}, 1fr)` });
-  // `.strip-mobile` reflows to 2 columns under 640px and clears LEFT rules only;
-  // StatCell divides with a RIGHT rule, so clear the row-ending one here.
-  return (
-    <div
-      ref={ref}
-      className="strip-mobile grid border-b border-separator-strong [&>*:nth-child(even)]:border-r-0 sm:[&>*:nth-child(even):not(:last-child)]:border-r"
-    >
-      {children}
-    </div>
-  );
-}
-
-interface BarProps {
-  frac?: number;
-}
-
-function Bar({ frac }: BarProps) {
-  const ref = useRef<HTMLSpanElement>(null);
-  useDynamicStyle(ref, { width: `${Math.max(2, Math.round((frac || 0) * 100))}%` });
-  return (
-    <span className="inline-block h-1.5 w-14 shrink-0 overflow-hidden rounded-[2px] bg-separator-soft align-middle">
-      <span ref={ref} className="block h-full bg-vermilion" />
-    </span>
-  );
-}
-
-interface TableColumn<R> {
-  key: string;
-  label: ReactNode;
-  align?: 'left' | 'right' | 'center';
-  render?: (row: R) => ReactNode;
-}
-
-interface TableProps<R> {
-  cols: TableColumn<R>[];
-  rows?: R[];
-  empty: ReactNode;
-}
-
-function Table<R>({ cols, rows, empty }: TableProps<R>) {
-  if (!rows?.length) {
-    return <span className="field-hint italic">{empty}</span>;
-  }
-  // Scroll container below sm: only. From sm: up overflow-x must stay `visible`
-  // or the sticky <thead> resolves against this div, not the ScrollBox viewport.
-  return (
-    <div className="w-full overflow-x-auto sm:overflow-x-visible">
-      <table className="w-full border-collapse">
-        <thead>
-          <tr>
-            {cols.map(c => (
-              <th
-                key={c.key}
-                className={cn(
-                  'caption border-b border-separator-strong px-2 py-1 whitespace-nowrap',
-                  // Sticky for the ScrollBox case; card-bg masks rows underneath.
-                  'sticky top-0 z-[1] bg-[var(--card-bg)]',
-                  c.align === 'right' && 'text-right',
-                  c.align === 'center' && 'text-center',
-                )}
-              >
-                {c.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>
-              {cols.map(c => (
-                <td
-                  key={c.key}
-                  className={cn(
-                    'border-b border-separator-soft px-2 py-1 text-[12px]',
-                    c.align === 'right' && 'text-right',
-                    c.align === 'center' && 'text-center',
-                  )}
-                >
-                  {c.render ? c.render(r) : ((r as Record<string, unknown>)[c.key] as ReactNode)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// `max` anchors the widest bar to 100%.
-interface BarRow {
-  label: string;
-  count: number;
-  trailing?: ReactNode;
-}
-
-function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
-  return (
-    <div className="grid gap-1.5">
-      {rows.map(r => (
-        // Narrower label on a phone so bar + figure fit one line in a 390px card.
-        <div key={r.label} className="flex items-center gap-2.5 text-[12px]">
-          <span className="w-[88px] shrink-0 truncate text-muted sm:w-[110px]" title={r.label}>
-            {r.label}
-          </span>
-          <Bar frac={r.count / (max || 1)} />
-          <span className="mono-num min-w-0 font-bold">{r.trailing ?? r.count}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// Caps a long-tail breakdown; the sticky <thead> resolves against this viewport.
-function ScrollBox({ children }: { children: ReactNode }) {
-  return <ScrollArea className="max-h-[260px]">{children}</ScrollArea>;
-}
-
-// Hand-rolled SVG area chart. The viewBox is a fixed 100×100 unit box stretched
-// to the container (preserveAspectRatio=none), so strokes need
-// vector-effect=non-scaling-stroke and labels stay out of the SVG.
-function ListenerChart({ samples }: { samples: ListenerSample[] }) {
-  if (!samples || samples.length < 2) {
-    return (
-      <div className="flex h-[130px] items-center justify-center">
-        <span className="field-hint italic">collecting listener history…</span>
-      </div>
-    );
-  }
-  const W = 100;
-  const H = 100;
-  const counts = samples.map(s => s.count);
-  const peak = Math.max(...counts);
-  // 12% headroom so the dashed peak line is not flush against the frame.
-  const drawMax = peak > 0 ? peak * 1.12 : 1;
-  const n = samples.length;
-  const x = (i: number) => (i / (n - 1)) * W;
-  const y = (c: number) => H - (c / drawMax) * H;
-  const pts = samples.map((s, i) => `${x(i).toFixed(2)},${y(s.count).toFixed(2)}`);
-  const line = `M ${pts.join(' L ')}`;
-  const area = `${line} L ${W},${H} L 0,${H} Z`;
-  const peakY = y(peak);
-  return (
-    <svg
-      className="block h-[130px] w-full"
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      {peak > 0 && (
-        <line
-          x1="0"
-          y1={peakY}
-          x2={W}
-          y2={peakY}
-          stroke="var(--accent-2)"
-          strokeWidth={1}
-          strokeDasharray="2 3"
-          opacity={0.55}
-          vectorEffect="non-scaling-stroke"
-        />
-      )}
-      <path d={area} fill="color-mix(in oklab, var(--accent) 14%, transparent)" stroke="none" />
-      <path
-        d={line}
-        fill="none"
-        stroke="var(--accent)"
-        strokeWidth={1.6}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </svg>
-  );
-}
-
-// Per-hour height goes through useDynamicStyle; the lint rule forbids `style={…}`.
-function HourColumn({ frac, title }: { frac: number; title: string }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  useDynamicStyle(ref, { height: `${Math.max(2, Math.round(frac * 100))}%` });
-  return (
-    <span className="flex h-full flex-1 items-end" title={title}>
-      <span ref={ref} className="block min-h-[2px] w-full rounded-[2px] bg-vermilion" />
-    </span>
-  );
-}
-
-// Average listeners by local hour-of-day, anchored to the busiest hour's
-// average. The axis labels a few anchor hours rather than all 24 to stay legible.
-function HourOfDayChart({ buckets }: { buckets: HourBucket[] }) {
-  const hasData = buckets.some(b => b.samples > 0);
-  if (!hasData) {
-    return (
-      <div className="flex h-[110px] items-center justify-center">
-        <span className="field-hint italic">collecting hourly history…</span>
-      </div>
-    );
-  }
-  const maxAvg = Math.max(...buckets.map(b => b.avg), 0);
-  const pad = (h: number) => String(h).padStart(2, '0');
-  return (
-    <div>
-      <div className="flex h-[110px] items-end gap-[3px]">
-        {buckets.map(b => (
-          <HourColumn
-            key={b.hour}
-            frac={maxAvg ? b.avg / maxAvg : 0}
-            title={
-              b.samples
-                ? `${pad(b.hour)}:00 · avg ${(Math.round(b.avg * 10) / 10)} · peak ${b.peak}`
-                : `${pad(b.hour)}:00 · no data`
-            }
-          />
-        ))}
-      </div>
-      <div className="caption mt-1 flex justify-between text-muted">
-        <span>00</span>
-        <span>06</span>
-        <span>12</span>
-        <span>18</span>
-        <span>23</span>
-      </div>
-    </div>
-  );
-}
-
-const RANGE_OPTIONS = [
-  { id: '1440', label: '24h' },
-  { id: '10080', label: '7d' },
-];
+import { LABEL, NOTE } from './stats/parts';
+import { SectionDial } from './stats/SectionDial';
+import { FrontPanel } from './stats/FrontPanel';
+import { WeekRecap } from './stats/WeekRecap';
+import { Listening } from './stats/Listening';
+import { OnAir } from './stats/OnAir';
+import { EngineRoom } from './stats/EngineRoom';
+import { Rack } from './stats/Rack';
+import { Diagnostics, type DiagnosticKey } from './stats/Diagnostics';
+import type {
+  AudienceResponse,
+  ConnectionsResponse,
+  ListenersResponse,
+  StatsResponse,
+  SystemResponse,
+  WeekRecap as WeekRecapResponse,
+} from './stats/types';
 
 class StatsShapeError extends Error {}
 
-interface EffectDropRow {
-  effect: string;
-  count: number;
-  reasons: string;
-}
-
-// The durable seam record as three views of one pipeline: what the DJ asked for
-// on its picks, what each seam was armed with, and why asks did not make it.
-// `t` is null when the play history is unavailable; the caller hides the card
-// altogether for a controller too old to send the key.
-function TransitionsCard({ t }: { t: TransitionStats | null }) {
-  const sub = `last ${t?.days ?? 7} days · from the play history, so it survives restarts`;
-  if (!t || t.seams === 0) {
-    return (
-      <Card title="Transitions" sub={sub}>
-        <span className="field-hint italic">
-          {!t
-            ? 'play history unavailable'
-            : 'no transitions recorded yet — each aired track records how it came in'}
-        </span>
-      </Card>
-    );
-  }
-  const asks = countRows(t.byAsk, effectLabel);
-  const seams = countRows(t.bySeam);
-  const reasons = countRows(t.byReason, dropReasonLabel);
-  const withEffect = effectSeamCount(t.bySeam);
-  const effectAsks = t.asked - (t.byAsk.normal ?? 0);
-  const effectRows: EffectDropRow[] = Object.entries(t.byEffect ?? {})
-    .map(([effect, rec]) => ({
-      effect: effectLabel(effect),
-      count: Object.values(rec ?? {}).reduce<number>((sum, n) => sum + (n || 0), 0),
-      reasons: reasonSummary(rec),
-    }))
-    .filter(r => r.count > 0)
-    .sort((a, b) => b.count - a.count || a.effect.localeCompare(b.effect));
-  return (
-    <Card title="Transitions" sub={sub}>
-      <div className="grid gap-0">
-        <MetricStrip>
-          <StatCell label="Seams" value={fmtInt(t.seams)} sub="aired tracks with a recorded way in" />
-          <StatCell label="With an effect" value={fmtInt(withEffect)} accent={withEffect > 0}
-            sub={`${fmtPct(withEffect / t.seams)} of seams`} />
-          <StatCell label="DJ asks" value={fmtInt(t.asked)} sub={`${fmtInt(effectAsks)} for an effect`} />
-          <StatCell label="Dropped" value={fmtInt(t.dropped)} last
-            sub="effects that did not air as chosen" />
-        </MetricStrip>
-
-        <div className="stack-mobile grid grid-cols-[1fr_1fr_1fr] gap-0">
-          <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
-            <div className="caption mb-2">the DJ asked for</div>
-            {asks.length ? (
-              <BarList max={asks[0]?.count || 1} rows={asks} />
-            ) : (
-              <span className="field-hint italic">no DJ picks recorded</span>
-            )}
-          </div>
-          <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
-            <div className="caption mb-2">seams armed</div>
-            <BarList max={seams[0]?.count || 1} rows={seams} />
-          </div>
-          <div className="p-3.5">
-            <div className="caption mb-2">why effects were dropped</div>
-            {reasons.length ? (
-              <BarList max={reasons[0]?.count || 1} rows={reasons} />
-            ) : (
-              <span className="field-hint italic">nothing dropped</span>
-            )}
-          </div>
-        </div>
-
-        {effectRows.length > 0 && (
-          <div className="border-t border-separator-soft p-3.5">
-            <div className="caption mb-2">drops by effect</div>
-            <ScrollBox>
-              <Table<EffectDropRow>
-                empty="No drops"
-                rows={effectRows}
-                cols={[
-                  { key: 'effect', label: 'Effect' },
-                  { key: 'count', label: 'Dropped', align: 'right',
-                    render: r => <span className="mono-num">{r.count}</span> },
-                  { key: 'reasons', label: 'Why',
-                    render: r => <span className="text-muted">{r.reasons}</span> },
-                ]}
-              />
-            </ScrollBox>
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
+const CLOSED: Record<DiagnosticKey, boolean> = { requests: false, transitions: false };
 
 export default function StatsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [paused, setPaused] = useState(false);
   const [range, setRange] = useState('1440'); // minutes — 24h default
+  const [open, setOpen] = useState(CLOSED);
   const enabled = hydrated && !needsAuth && !paused;
 
   // /stats — usage rollups, 5s.
-  const statsQuery = useAdminQuery<StatsResponse>({
+  const statsQuery = useAdminQuery<StatsResponse & { t?: string }>({
     key: statsKeys.rollups(), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 5_000,
     request: async (fetcher, signal) => {
-      const body = await adminJson<StatsResponse>(fetcher, '/stats', undefined, signal);
+      const body = await adminJson<StatsResponse & { t?: string }>(fetcher, '/stats', undefined, signal);
       if (!body || typeof body !== 'object' || !body.llm) {
         throw new StatsShapeError(body?.error || 'unexpected response shape from /stats');
       }
@@ -660,7 +59,15 @@ export default function StatsPanel() {
     },
   });
 
-  // /listeners — durable time-series for the Audience chart, 30s. Soft-fails:
+  // /stats/week — the weekly recap and most-played lists. Cached server-side
+  // for five minutes (it reads listeners.jsonl whole), so poll at that pace.
+  const weekQuery = useAdminQuery<WeekRecapResponse>({
+    key: statsKeys.week(), adminFetch, enabled, staleTime: 0,
+    refetchInterval: () => 5 * 60_000,
+    request: (fetcher, signal) => adminJson(fetcher, '/stats/week', undefined, signal),
+  });
+
+  // /listeners — durable time-series for the listener chart, 30s. Soft-fails:
   // a miss leaves the last reading in place rather than erroring the page.
   const listenersQuery = useAdminQuery<ListenersResponse>({
     key: statsKeys.listeners(range), adminFetch, enabled, staleTime: 0,
@@ -707,8 +114,8 @@ export default function StatsPanel() {
     },
   });
 
-  // /system — per-container CPU/memory, 30s (~1s per container to sample).
-  // Soft-fails; range-independent.
+  // /system — host and per-container CPU/memory, 30s (~1s per container to
+  // sample). Feeds the front panel's Host row as well as the rack. Soft-fails.
   const systemQuery = useAdminQuery<SystemResponse>({
     key: statsKeys.system(), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 30_000,
@@ -719,556 +126,90 @@ export default function StatsPanel() {
   const err = statsQuery.error ? errorMessage(statsQuery.error) : null;
   const listeners = listenersQuery.data ?? lastListeners;
   const audience = audienceQuery.data ?? lastAudience;
-  const connections = connectionsQuery.data ?? null;
-  const systemRes = systemQuery.data ?? null;
-
-  const llm = data?.llm;
-  const tts = data?.tts;
-  const djLog = data?.djLog;
-  const requests = data?.requests;
+  const recap = weekQuery.data ?? null;
+  const system = systemQuery.data ?? null;
+  const rangeLabel = range === '10080' ? '7d' : '24h';
 
   const samples = listeners?.samples ?? [];
   const counts = samples.map(s => s.count);
-  const lNow = listeners?.current ?? null;
-  const lPeak = counts.length ? Math.max(...counts) : null;
-  const lMin = counts.length ? Math.min(...counts) : null;
-  const lAvg = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null;
-  const rangeLabel = range === '10080' ? '7d' : '24h';
-
-  // Same series as the trend chart, so it respects the range toggle. Local time.
-  const hourBuckets = bucketSamplesByHour(samples);
-
-  const audSessions = audience?.sessions ?? null;
-  const audReferrers = audience?.referrers ?? [];
-  const audCountries = audience?.countries ?? [];
-
-  const connErr = connections?.error ?? null;
-  const connList = connections?.connections ?? [];
-  const connCount = connections?.count ?? connList.length;
-  const deviceGroups = groupConnectionsByDevice(connList);
-  const connAvgSeconds = connList.length
-    ? connList.reduce((a, c) => a + (c.connectedSeconds > 0 ? c.connectedSeconds : 0), 0) / connList.length
-    : 0;
-
-  const sysHost = systemRes?.host ?? null;
-  const sysContainers = systemRes?.containers ?? [];
+  // The controller's own clock, so the masthead moves with each poll.
+  const asOf = data?.t ? new Date(data.t) : null;
 
   return (
-    <div className="grid gap-4">
-      <section className="card">
-        <div className="flex flex-wrap items-center gap-4 p-3.5">
-          <Eyebrow className={err ? 'text-[var(--danger)]' : 'text-vermilion'}>
-            ● {err ? 'down' : 'live'}
-          </Eyebrow>
-          <span className="caption">refresh · 5s</span>
-          <span className="caption text-muted">
-            rollups since boot · listeners durable
+    // A block, not a grid: a sticky grid item can't leave its own row, and the
+    // dial has to ride the whole page.
+    <div>
+      <header className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+        <h1 className="m-0 font-display text-[40px] leading-none font-normal tracking-[-0.02em]">Stats</h1>
+        <span className={NOTE}>
+          {[
+            recap?.station,
+            asOf && `${asOf.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · ${asOf.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`,
+          ].filter(Boolean).join(' · ') || ' '}
+        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-4">
+          <span className={cn(LABEL, err ? 'text-[var(--danger)]' : paused ? 'text-muted' : 'text-vermilion')}>
+            ● {err ? 'down' : paused ? 'paused' : 'live'}
           </span>
-          <span className="ml-auto">
-            <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
-          </span>
+          <span className="font-mono text-[10px] tracking-[0.2em] uppercase">refresh · 5s</span>
+          <span className={cn(NOTE, 'order-last w-full sm:order-none sm:w-auto')}>rollups since boot · listeners durable</span>
+          <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
         </div>
-      </section>
+      </header>
 
-      {err && <ErrorState error={err} />}
+      <SectionDial />
 
-      <Card
-        title="Audience"
-        sub={`listeners over the last ${rangeLabel}`}
-        right={<Seg value={range} options={RANGE_OPTIONS} onChange={setRange} />}
-      >
-        <div className="grid gap-0">
-          <MetricStrip>
-            <StatCell label="Now" value={fmtInt(lNow)} accent />
-            <StatCell label="Peak" value={fmtInt(lPeak)} />
-            <StatCell label="Average" value={fmtAvg(lAvg)} />
-            <StatCell label="Low" value={fmtInt(lMin)} last />
-          </MetricStrip>
-          <div className="p-3.5">
-            {listeners == null ? (
-              <div className="flex h-[130px] items-center justify-center">
-                <Skeleton className="h-4 w-16" />
-              </div>
-            ) : (
-              <ListenerChart samples={samples} />
-            )}
-          </div>
-          <div className="border-t border-separator-soft p-3.5">
-            <div className="caption mb-2">
-              busiest hours
-              <span className="text-muted"> · avg listeners by hour · your local time</span>
-            </div>
-            {listeners == null ? (
-              <div className="flex h-[110px] items-center justify-center">
-                <Skeleton className="h-4 w-16" />
-              </div>
-            ) : (
-              <HourOfDayChart buckets={hourBuckets} />
-            )}
-          </div>
-        </div>
-      </Card>
+      <div className="mt-3 grid grid-cols-1 gap-14">
+        {err && <ErrorState error={err} />}
 
-      <Card
-        title="Audience sources"
-        sub={`where listeners came from · last ${rangeLabel}`}
-      >
-        <div className="grid gap-0">
-          <div className="border-b border-separator-strong p-3.5">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-              <span className="caption">connected now · by device</span>
-              <span className="caption text-muted">
-                {connErr
-                  ? 'live detail unavailable'
-                  : connections == null
-                    ? 'loading…'
-                    : `${fmtInt(connCount)} listening${
-                        connList.length ? ` · avg ${fmtConnected(connAvgSeconds)}` : ''
-                      }`}
-              </span>
-            </div>
-            {connErr ? (
-              <span className="field-hint italic">{connErr}</span>
-            ) : connections == null ? (
-              <Skeleton className="h-4 w-16" />
-            ) : deviceGroups.length === 0 ? (
-              <span className="field-hint italic">nobody connected right now</span>
-            ) : (
-              <BarList
-                max={deviceGroups[0]?.count || 1}
-                rows={deviceGroups.map(g => ({
-                  label: g.device,
-                  count: g.count,
-                  trailing: `${g.count} · ${fmtConnected(g.avgSeconds)}${
-                    g.count > 1 ? ` · up to ${fmtConnected(g.maxSeconds)}` : ''
-                  }`,
-                }))}
-              />
-            )}
-          </div>
+        <FrontPanel
+          listeners={{
+            now: listeners?.current ?? null,
+            peak: counts.length ? Math.max(...counts) : null,
+            avg: counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null,
+            low: counts.length ? Math.min(...counts) : null,
+            rangeLabel,
+            loaded: listeners != null,
+          }}
+          llm={data?.llm ?? null}
+          tts={data?.tts ?? null}
+          requests={data?.requests ?? null}
+          host={system?.host ?? null}
+          statsDown={!!err}
+        />
 
-          {audience == null ? (
-            <div className="p-3.5">
-              <Skeleton className="h-4 w-16" />
-            </div>
-          ) : (audSessions ?? 0) === 0 ? (
-            <div className="p-3.5">
-              <span className="field-hint italic">
-                no sessions recorded yet, sources appear as listeners arrive
-              </span>
-            </div>
-          ) : (
-            <>
-              <MetricStrip>
-                <StatCell label="Sessions" value={fmtInt(audSessions)} accent
-                  sub={`distinct, last ${rangeLabel}`} />
-                <StatCell label="Sources" value={fmtInt(audReferrers.length)} />
-                <StatCell label="Countries" value={fmtInt(audCountries.length)} last />
-              </MetricStrip>
+        <WeekRecap recap={recap} />
 
-              <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-                <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
-                  <div className="caption mb-2">top referrers</div>
-                  {audReferrers.length ? (
-                    <ScrollBox>
-                      <BarList
-                        rows={audReferrers.map(r => ({ label: r.source, count: r.count }))}
-                        max={audReferrers[0]?.count || 1}
-                      />
-                    </ScrollBox>
-                  ) : (
-                    <span className="field-hint italic">none</span>
-                  )}
-                </div>
-                <div className="p-3.5">
-                  <div className="caption mb-2">top countries</div>
-                  {audCountries.length ? (
-                    <ScrollBox>
-                      <BarList
-                        rows={audCountries.map(c => ({ label: c.country, count: c.count }))}
-                        max={audCountries[0]?.count || 1}
-                      />
-                    </ScrollBox>
-                  ) : (
-                    <span className="field-hint italic">none</span>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </Card>
+        <Listening
+          range={range}
+          onRange={setRange}
+          rangeLabel={rangeLabel}
+          samples={samples}
+          listenersLoaded={listeners != null}
+          audience={audience}
+          connections={connectionsQuery.data ?? null}
+        />
 
-      {!data && !err && (
-        <Card title="Stats">
-          <span className="field-hint italic">connecting…</span>
-        </Card>
-      )}
+        <OnAir
+          recap={recap}
+          djLog={data?.djLog ?? null}
+          transitions={data?.transitions}
+          onTransitions={() => setOpen(o => ({ ...o, transitions: true }))}
+        />
 
-      {data && llm && tts && djLog && requests && (
-        <>
-          <Card
-            title="LLM usage"
-            sub={`last ${llm.window} model calls`}
-            right={
-              (llm.provider || llm.activeModel) ? (
-                <span className="flex items-center gap-1.5">
-                  {llm.provider && <Pill>{llm.provider}</Pill>}
-                  {llm.activeModel && <Pill tone="accent">{llm.activeModel}</Pill>}
-                </span>
-              ) : null
-            }
-          >
-            {llm.budget?.enabled && (
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator-strong p-3.5">
-                <span className="caption">
-                  Daily token budget<span className="text-muted"> · resets 00:00 UTC</span>
-                </span>
-                <span className="flex items-center gap-2.5">
-                  <span className={cn(
-                    'mono-num text-[15px] font-bold',
-                    llm.budget.mode === 'hard' ? 'text-[var(--danger)]'
-                      : llm.budget.mode === 'soft' ? 'text-vermilion' : '',
-                  )}>
-                    {fmtTokens(llm.budget.usedToday)} / {fmtTokens(llm.budget.cap)}
-                  </span>
-                  <Pill tone={llm.budget.mode === 'normal' ? undefined : 'accent'}>
-                    {llm.budget.mode}
-                  </Pill>
-                </span>
-              </div>
-            )}
-            {llm.count === 0 ? (
-              <span className="field-hint italic">
-                no model calls recorded yet
-              </span>
-            ) : (
-              <div className="grid gap-0">
-                <MetricStrip>
-                  <StatCell label="Calls" value={fmtInt(llm.count)}
-                    sub={`${llm.ok} ok · ${llm.failed} failed`} />
-                  <StatCell label="Success rate" value={fmtPct(llm.successRate)}
-                    danger={llm.successRate != null && llm.successRate < 0.9} />
-                  <StatCell label="Avg latency" value={fmtMs(llm.latency.avg)}
-                    sub={`p50 ${fmtMs(llm.latency.p50)} · p95 ${fmtMs(llm.latency.p95)}`} />
-                  <StatCell label="Tokens" value={fmtTokens(llm.tokens?.total)}
-                    sub={llm.tokens
-                      ? `${fmtTokens(llm.tokens.input)} in · ${fmtTokens(llm.tokens.output)} out`
-                      : 'provider reports none'} />
-                  <StatCell label="Agent runs" value={fmtInt(llm.agent.calls)} last
-                    sub={llm.agent.calls
-                      ? `${llm.agent.avgSteps} steps · ${llm.agent.avgTools} tools avg`
-                      : 'none'} />
-                </MetricStrip>
+        <EngineRoom llm={data?.llm ?? null} tts={data?.tts ?? null} />
 
-                <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-                  <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
-                    <div className="caption mb-2">by call kind</div>
-                    <Table<ByKindRow>
-                      empty="No calls"
-                      rows={llm.byKind}
-                      cols={[
-                        { key: 'kind', label: 'Kind', render: r => r.kind.replace(/^sdk\./, '') },
-                        { key: 'count', label: 'Calls', align: 'right',
-                          render: r => <span className="mono-num">{r.count}</span> },
-                        { key: 'ok', label: 'OK', align: 'right',
-                          render: r => <span className="mono-num">{r.ok}/{r.count}</span> },
-                        { key: 'avgMs', label: 'Avg', align: 'right',
-                          render: r => <span className="mono-num">{fmtMs(r.avgMs)}</span> },
-                        { key: 'tokens', label: 'Tokens', align: 'right',
-                          render: r => <span className="mono-num">{fmtTokens(r.tokens || null)}</span> },
-                      ]}
-                    />
-                  </div>
-                  <div className="p-3.5">
-                    <div className="caption mb-2">by model</div>
-                    <Table<ByModelRow>
-                      empty="No calls"
-                      rows={llm.byModel}
-                      cols={[
-                        { key: 'model', label: 'Model' },
-                        { key: 'count', label: 'Calls', align: 'right',
-                          render: r => <span className="mono-num">{r.count}</span> },
-                        { key: 'tokens', label: 'Tokens', align: 'right',
-                          render: r => <span className="mono-num">{fmtTokens(r.tokens || null)}</span> },
-                      ]}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
+        <Rack system={system} />
 
-          <Card
-            title="LLM context windows"
-            sub="reported input tokens · since controller start"
-            right={(() => {
-              // Lead with the route the station is actually running.
-              const active = data?.trackSelection === 'shortlist'
-                ? { label: 'shortlist', window: llm.contextWindows?.shortlist }
-                : { label: 'Agentic', window: llm.contextWindows?.agenticPicker };
-              return active.window?.suggestedTokens ? (
-                <Pill tone="accent">
-                  {active.label} recommends {fmtTokens(active.window.suggestedTokens)}
-                </Pill>
-              ) : null;
-            })()}
-          >
-            {(() => {
-              const context = llm.contextWindows;
-              const shortlist = context?.shortlist;
-              const agenticPicker = context?.agenticPicker;
-              const rows = context?.byKind ?? [];
-              return (
-                <div className="grid gap-0">
-                  <MetricStrip>
-                    <StatCell label="Shortlist num_ctx" accent
-                      value={fmtTokens(shortlist?.suggestedTokens)}
-                      sub={shortlist?.suggestedTokens
-                        ? `${fmtTokens(shortlist.peakInputTokens)} peak prompt${shortlist.peakKind ? ` · ${shortlist.peakKind.replace(/^sdk\./, '')}` : ''}`
-                        : 'waiting for shortlist usage'} />
-                    <StatCell label="Agentic Picker num_ctx" accent
-                      value={fmtTokens(agenticPicker?.suggestedTokens)}
-                      sub={agenticPicker?.suggestedTokens
-                        ? `${fmtTokens(agenticPicker.peakInputTokens)} peak prompt${agenticPicker.peakKind ? ` · ${agenticPicker.peakKind.replace(/^sdk\./, '')}` : ''}`
-                        : 'waiting for Agentic usage'} />
-                    <StatCell label="Headroom"
-                      value={agenticPicker?.headroomPct != null ? `${agenticPicker.headroomPct}%` : shortlist?.headroomPct != null ? `${shortlist.headroomPct}%` : '—'}
-                      sub={agenticPicker?.responseReserveTokens != null || shortlist?.responseReserveTokens != null
-                        ? `${fmtTokens(agenticPicker?.responseReserveTokens ?? shortlist?.responseReserveTokens)} response reserve`
-                        : 'applied once samples arrive'} />
-                    <StatCell label="Agentic samples" value={fmtInt(agenticPicker?.samples)} last
-                      sub="successful calls with input usage" />
-                  </MetricStrip>
-                  <div className="border-t border-separator-soft p-3.5">
-                    <p className="field-hint mb-3 max-w-[760px]">
-                      Ollama&apos;s num_ctx is one setting for every call, so each route&apos;s figure must hold its own
-                      picker prompts and every other LLM function running beside it (links, segments, requests). Agentic
-                      counts its largest individual model step rather than the whole tool loop. Both add headroom and a
-                      response reserve, then round up for a server context setting. The peak names the function that set it.
-                    </p>
-                    <Table<ContextWindowRow>
-                      empty="No LLM calls recorded yet"
-                      rows={rows}
-                      cols={[
-                        { key: 'kind', label: 'Function', render: r => r.kind.replace(/^sdk\./, '') },
-                        { key: 'calls', label: 'Calls', align: 'right',
-                          render: r => <span className="mono-num">{r.calls}</span> },
-                        { key: 'samples', label: 'Usage', align: 'right',
-                          render: r => <span className="mono-num">{r.samples}/{r.calls}</span> },
-                        { key: 'averageInputTokens', label: 'Avg context', align: 'right',
-                          render: r => <span className="mono-num">{fmtTokens(r.averageInputTokens)}</span> },
-                        { key: 'peakInputTokens', label: 'Peak', align: 'right',
-                          render: r => <span className="mono-num">{fmtTokens(r.peakInputTokens)}</span> },
-                      ]}
-                    />
-                    {agenticPicker?.suggestedTokens == null && shortlist?.suggestedTokens == null && (
-                      <p className="field-hint mt-3 italic">{agenticPicker?.message || shortlist?.message || 'Waiting for context-window evidence.'}</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })()}
-          </Card>
-
-          <Card title="Voice / TTS usage" sub={`last ${tts.window} spoken segments`}>
-            {tts.count === 0 ? (
-              <span className="field-hint italic">
-                no spoken segments recorded yet
-              </span>
-            ) : (
-              <div className="grid gap-0">
-                <MetricStrip>
-                  <StatCell label="Segments" value={fmtInt(tts.count)}
-                    sub={`${tts.ok} ok · ${tts.failed} failed`} />
-                  <StatCell label="Avg latency" value={fmtMs(tts.latency.avg)}
-                    sub={`p95 ${fmtMs(tts.latency.p95)}`} />
-                  <StatCell label="Slowest" value={fmtMs(tts.latency.max)} />
-                  <StatCell label="Fallbacks" value={fmtInt(tts.fellBack)}
-                    danger={tts.fellBack > 0}
-                    sub={`${fmtPct(tts.fallbackRate)} of calls`} />
-                  <StatCell label="Characters" value={fmtTokens(tts.chars)} last
-                    sub="voiced" />
-                </MetricStrip>
-
-                <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-                  <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
-                    <div className="caption mb-2">by engine</div>
-                    <Table<ByEngineRow>
-                      empty="No segments"
-                      rows={tts.byEngine}
-                      cols={[
-                        { key: 'engine', label: 'Engine' },
-                        { key: 'count', label: 'Calls', align: 'right',
-                          render: r => <span className="mono-num">{r.count}</span> },
-                        { key: 'ok', label: 'OK', align: 'right',
-                          render: r => <span className="mono-num">{r.ok}/{r.count}</span> },
-                        { key: 'avgMs', label: 'Avg', align: 'right',
-                          render: r => <span className="mono-num">{fmtMs(r.avgMs)}</span> },
-                      ]}
-                    />
-                  </div>
-                  <div className="p-3.5">
-                    <div className="caption mb-2">by segment kind</div>
-                    <Table<ByTtsKindRow>
-                      empty="No segments"
-                      rows={tts.byKind}
-                      cols={[
-                        { key: 'kind', label: 'Kind' },
-                        { key: 'count', label: 'Calls', align: 'right',
-                          render: r => <span className="mono-num">{r.count}</span> },
-                        { key: 'avgMs', label: 'Avg', align: 'right',
-                          render: r => <span className="mono-num">{fmtMs(r.avgMs)}</span> },
-                      ]}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-
-          <Card
-            title="Requests"
-            sub={`last ${requests.window} listener requests · full trace on the Dash`}
-          >
-            {requests.count === 0 ? (
-              <span className="field-hint italic">
-                no listener requests yet
-              </span>
-            ) : (
-              <div className="grid gap-0">
-                <MetricStrip>
-                  <StatCell label="Requests" value={fmtInt(requests.count)}
-                    sub={`${requests.resolved} ok · ${requests.failed} failed`} />
-                  <StatCell label="Success rate" value={fmtPct(requests.successRate)}
-                    danger={requests.successRate != null && requests.successRate < 0.8} />
-                  <StatCell label="Avg resolve" value={fmtMs(requests.latency.avg)}
-                    sub={`p95 ${fmtMs(requests.latency.p95)}`} />
-                  <StatCell label="Artist misses" value={fmtInt(requests.artistMiss.count)} last
-                    danger={requests.artistMiss.count > 0}
-                    sub={`${fmtPct(requests.artistMiss.rate)} of requests`} />
-                </MetricStrip>
-
-                <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-                  <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
-                    <div className="caption mb-2">by resolution path</div>
-                    {requests.byPath.length ? (
-                      <BarList
-                        max={requests.byPath[0]?.count || 1}
-                        rows={requests.byPath.map(r => ({
-                          label: r.path,
-                          count: r.count,
-                          trailing: `${r.ok}/${r.count}`,
-                        }))}
-                      />
-                    ) : (
-                      <span className="field-hint italic">no paths recorded</span>
-                    )}
-                  </div>
-                  <div className="grid gap-3.5 p-3.5">
-                    <div>
-                      <div className="caption mb-2">by pick source</div>
-                      <ScrollBox>
-                        <Table<ByPickSourceRow>
-                          empty="No pick sources"
-                          rows={requests.byPickSource}
-                          cols={[
-                            { key: 'source', label: 'Source' },
-                            { key: 'count', label: 'Picks', align: 'right',
-                              render: r => <span className="mono-num">{r.count}</span> },
-                          ]}
-                        />
-                      </ScrollBox>
-                    </div>
-                    <div>
-                      <div className="caption mb-2">top requesters</div>
-                      <Table<TopRequesterRow>
-                        empty="No requesters"
-                        rows={requests.topRequesters}
-                        cols={[
-                          { key: 'requester', label: 'Listener' },
-                          { key: 'count', label: 'Requests', align: 'right',
-                            render: r => <span className="mono-num">{r.count}</span> },
-                        ]}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-
-          <Card title="DJ activity" sub={`${djLog.count} log events by kind`}>
-            {!djLog.byKind.length ? (
-              <span className="field-hint italic">
-                no DJ-log events yet
-              </span>
-            ) : (
-              <ScrollBox>
-                <BarList
-                  max={djLog.byKind[0]?.count || 1}
-                  rows={djLog.byKind.map(r => ({ label: r.kind, count: r.count }))}
-                />
-              </ScrollBox>
-            )}
-          </Card>
-
-          {/* Absent (undefined) means a controller too old to keep the record:
-              no card rather than a misleading "unavailable". */}
-          {data.transitions !== undefined && <TransitionsCard t={data.transitions} />}
-        </>
-      )}
-
-      <Card
-        title="System resources"
-        sub="CPU + memory for the SUB/WAVE containers on this host"
-      >
-        {systemRes == null ? (
-          <Skeleton className="h-4 w-16" />
-        ) : (
-          <div className="grid gap-0">
-            <MetricStrip>
-              <StatCell label="Host cores" value={fmtInt(sysHost?.cpus)} />
-              <StatCell label="Load (1m)"
-                value={sysHost ? sysHost.loadavg[0].toFixed(2) : '—'}
-                danger={!!sysHost && sysHost.loadavg[0] > sysHost.cpus}
-                sub={sysHost
-                  ? `${sysHost.loadavg[1].toFixed(2)} · ${sysHost.loadavg[2].toFixed(2)} (5m · 15m)`
-                  : undefined} />
-              <StatCell label="Host memory" value={fmtBytes(sysHost?.memUsed)}
-                sub={sysHost ? `of ${fmtBytes(sysHost.memTotal)}` : undefined} />
-              <StatCell label="Containers" value={fmtInt(sysContainers.length)} last />
-            </MetricStrip>
-            <div className="p-3.5">
-              {!systemRes.dockerAvailable ? (
-                <span className="field-hint italic">
-                  container stats unavailable — start the docker-socket-proxy
-                  sidecar (docker compose up -d) to enable
-                  {systemRes.dockerError ? ` · ${systemRes.dockerError}` : ''}
-                </span>
-              ) : sysContainers.length === 0 ? (
-                <span className="field-hint italic">no containers reporting</span>
-              ) : (
-                <ScrollBox>
-                  <Table<ContainerUsage>
-                    empty="No containers"
-                    rows={sysContainers}
-                    cols={[
-                      { key: 'service', label: 'Service' },
-                      { key: 'cpuPct', label: 'CPU', align: 'right',
-                        render: r => <span className="mono-num">{r.cpuPct.toFixed(1)}%</span> },
-                      { key: 'memUsed', label: 'Memory', align: 'right',
-                        render: r => <span className="mono-num">{fmtBytes(r.memUsed)}</span> },
-                      { key: 'memPct', label: 'Mem %', align: 'right',
-                        render: r => <span className="mono-num">{r.memPct.toFixed(1)}%</span> },
-                    ]}
-                  />
-                </ScrollBox>
-              )}
-            </div>
-          </div>
-        )}
-      </Card>
+        <Diagnostics
+          requests={data?.requests ?? null}
+          llm={data?.llm ?? null}
+          trackSelection={data?.trackSelection}
+          transitions={data ? data.transitions : undefined}
+          open={open}
+          onToggle={key => setOpen(o => ({ ...o, [key]: !o[key] }))}
+        />
+      </div>
     </div>
   );
 }

@@ -1,5 +1,11 @@
+import {
+  LLM_PROVIDER_CATALOG, PROVIDER_GROUPS, type LlmProviderEntry, type ProviderGroup,
+} from '../../../lib/schemas.generated';
 
-export type ProviderKind = 'local' | 'self-hosted' | 'cloud';
+// Every table here derives from the provider catalogue
+// (controller/src/schemas/providers.ts, mirrored by gen:schemas).
+
+export type ProviderKind = LlmProviderEntry['kind'];
 
 export interface ProviderMeta {
   id: string;
@@ -12,30 +18,50 @@ export interface ProviderMeta {
   kind: ProviderKind;
   // Controller env var the key is read from — cloud providers only.
   envVar?: string;
+  // The picker group it sits in: on your network, a model vendor, a gateway.
+  group: ProviderGroup;
 }
 
-// Order mirrors the controller's settings.LLM_PROVIDERS. The grid renders
-// data.llm.providers (server-authoritative) and looks each id up here, so a
-// provider the server adds first still renders as a bare card.
-export const PROVIDERS: ProviderMeta[] = [
-  { id: 'ollama',            label: 'Ollama',            blurb: 'Homelab box · no key',          kind: 'local' },
-  { id: 'locca',             label: 'locca',             blurb: 'Local llama.cpp · no key',       kind: 'local' },
-  { id: 'openai-compatible', label: 'OpenAI-compatible', blurb: 'llama.cpp · vLLM · LM Studio',   kind: 'self-hosted' },
-  { id: 'anthropic',         label: 'Anthropic',         blurb: 'Claude · cloud',                 kind: 'cloud', envVar: 'ANTHROPIC_API_KEY' },
-  { id: 'openai',            label: 'OpenAI',            blurb: 'GPT · cloud',                    kind: 'cloud', envVar: 'OPENAI_API_KEY' },
-  { id: 'google',            label: 'Google',            blurb: 'Gemini · cloud',                 kind: 'cloud', envVar: 'GOOGLE_GENERATIVE_AI_API_KEY' },
-  { id: 'deepseek',          label: 'DeepSeek',          blurb: 'Chat & reasoner · cloud',        kind: 'cloud', envVar: 'DEEPSEEK_API_KEY' },
-  { id: 'openrouter',        label: 'OpenRouter',        blurb: 'Multi-vendor aggregator',        kind: 'cloud', envVar: 'OPENROUTER_API_KEY' },
-  { id: 'requesty',          label: 'Requesty',          blurb: 'Multi-vendor aggregator',        kind: 'cloud', envVar: 'REQUESTY_API_KEY' },
-  { id: 'gateway',           label: 'AI Gateway',        blurb: 'Vercel · multi-vendor',          kind: 'cloud', envVar: 'AI_GATEWAY_API_KEY' },
-];
+// Catalogue order, which is the controller's settings.LLM_PROVIDERS order. Every
+// picker renders the server's list through groupProviders and looks each id up
+// here, so a provider the server adds first still renders as a bare card.
+export const PROVIDERS: ProviderMeta[] = LLM_PROVIDER_CATALOG.map(({ id, label, blurb, kind, group, envVar }) => ({
+  id, label, blurb, kind, group, ...(envVar ? { envVar } : {}),
+}));
 
 export const PROVIDER_META: Record<string, ProviderMeta> = Object.fromEntries(
   PROVIDERS.map(p => [p.id, p]),
 );
 
-// Default render order (local first). Settings passes the server's list instead.
+// Only for a picker rendered before the server's list arrives.
 export const PROVIDER_IDS: string[] = PROVIDERS.map(p => p.id);
+
+// The picker's group headings.
+export const PROVIDER_GROUP_LABELS: Record<ProviderGroup, string> = {
+  network: 'On your network',
+  vendor: 'Model vendors',
+  gateway: 'Gateways: one key, many vendors',
+};
+
+export interface ProviderGroupView {
+  group: ProviderGroup;
+  label: string;
+  ids: string[];
+}
+
+// The given ids under their picker groups, in PROVIDER_GROUPS order, each group
+// keeping the order it was given (the server's). Empty groups are dropped. An id
+// the catalogue doesn't know, a provider the server added first, is shown as a
+// model vendor.
+export function groupProviders(ids: readonly string[]): ProviderGroupView[] {
+  return PROVIDER_GROUPS
+    .map(group => ({
+      group,
+      label: PROVIDER_GROUP_LABELS[group],
+      ids: ids.filter(id => (PROVIDER_META[id]?.group ?? 'vendor') === group),
+    }))
+    .filter(view => view.ids.length > 0);
+}
 
 // Derived from PROVIDERS so the two never drift.
 export const LLM_ENV_VARS: Record<string, string> = Object.fromEntries(
@@ -43,18 +69,15 @@ export const LLM_ENV_VARS: Record<string, string> = Object.fromEntries(
 );
 
 // Longer descriptors for the dropdown and the "Routing now" banner.
-export const LLM_PROVIDER_LABELS: Record<string, string> = {
-  ollama: 'Ollama (local/cloud)',
-  locca: 'locca (local llama.cpp, host)',
-  'openai-compatible': 'OpenAI-compatible (llama.cpp, vLLM, LM Studio)',
-  anthropic: 'Anthropic (Claude)',
-  openai: 'OpenAI (GPT)',
-  google: 'Google (Gemini)',
-  deepseek: 'DeepSeek',
-  openrouter: 'OpenRouter (multi-vendor aggregator)',
-  requesty: 'Requesty (multi-vendor aggregator)',
-  gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
-};
+export const LLM_PROVIDER_LABELS: Record<string, string> = Object.fromEntries(
+  LLM_PROVIDER_CATALOG.map(p => [p.id, p.longLabel]),
+);
+
+// Embedding model suggestions per provider, for the Library model picker. dim
+// is shown so an already-tagged library can be matched.
+export const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = Object.fromEntries(
+  LLM_PROVIDER_CATALOG.flatMap(p => (p.embedding?.suggestions ? [[p.id, [...p.embedding.suggestions]]] : [])),
+);
 
 export const llmProviderLabel = (id: string | undefined): string =>
   (id && LLM_PROVIDER_LABELS[id]) || id || '—';

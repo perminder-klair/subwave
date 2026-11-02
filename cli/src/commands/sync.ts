@@ -67,7 +67,7 @@ export async function runSyncCommand(opts: SyncOptions = {}): Promise<void> {
     ok(`${r.action} ${r.name}${b}`);
   }
   console.log();
-  muted('→ apply the changes: `subwave restart`  (or `subwave update` to also pull new images).');
+  muted('→ run `subwave update` to apply the files and pull the new images  (or `subwave restart` to keep the current images).');
   await pauseForEnter();
 }
 

@@ -1,6 +1,9 @@
 // One value per text file. Liquidsoap reads them once at mixer startup, so a
 // change needs a restart; update() rewrites them on every save. A few are read
-// by docker/broadcast-entrypoint.sh instead, as marked.
+// by the Icecast renderers (docker/broadcast-entrypoint.sh, the AIO's
+// supervisor.sh) instead, as marked. The renderers also read the three stream
+// bitrates, to size each burst, and hand them on as SUBWAVE_*_BITRATE (#2143);
+// radio.liq reads those files itself only when run without that handoff.
 
 import { writeFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
@@ -13,6 +16,8 @@ export const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
 // radio.liq's `smooth_add` `p` on the heavy voice layer and the light intro one.
 export const LIQ_DUCK_VOICE_PATH = `${STATE_DIR}/liquidsoap_duck_voice.txt`;
 export const LIQ_DUCK_INTRO_PATH = `${STATE_DIR}/liquidsoap_duck_intro.txt`;
+// Plain crossfade curve (transitions.equalPowerCrossfade). Same read-once lifecycle.
+export const LIQ_EQUAL_POWER_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_equal_power_crossfade.txt`;
 export const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 export const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 export const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
@@ -45,6 +50,8 @@ export async function writeLiquidsoapSettings(s) {
   // Defaulted like `station`: `undefined` in the handoff file unducks the DJ.
   await writeFile(LIQ_DUCK_VOICE_PATH, String(s.ducking?.voice ?? DEFAULTS.ducking.voice));
   await writeFile(LIQ_DUCK_INTRO_PATH, String(s.ducking?.intro ?? DEFAULTS.ducking.intro));
+  // Only an explicit true writes "true": absent or malformed stays linear.
+  await writeFile(LIQ_EQUAL_POWER_CROSSFADE_PATH, String(s.transitions?.equalPowerCrossfade === true));
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');

@@ -217,6 +217,34 @@ test('a solo show stands a forced co-hosted skill down — reported, not thrown'
   );
 });
 
+const answering = (lines: { speaker: string; text: string }[]) => ({
+  capability: { kind: 'case-discussion', desc: 'Discuss one case.' },
+  host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
+  runAgent: async () => ({ object: { reason: 'Tests.', air: true, lines }, steps: 0, toolCalls: [] }),
+});
+
+test('a discussion of nothing but stand-ins is a stand-down, even when forced', async () => {
+  // A speaker label is what a model adds most readily, so it comes off first.
+  const result = await runCohostedCapability(answering([
+    { speaker: 'p_host', text: 'placeholder' },
+    { speaker: 'p_ada', text: 'Ada: TBD' },
+    { speaker: 'p_sol', text: '[Insert reply here]' },
+  ]));
+  assert.equal(result.aired, false);
+  assert.equal(result.lines, null);
+  assert.match(String(result.reason), /stand-in/);
+});
+
+test('a stand-in among real lines is left out of what the run reports', async () => {
+  const result = await runCohostedCapability(answering([
+    full.lines[0],
+    { speaker: 'p_ada', text: 'placeholder' },
+    full.lines[2],
+  ]));
+  assert.equal(result.aired, true);
+  assert.deepEqual(result.lines?.map((line) => line.persona.id), ['p_host', 'p_sol']);
+});
+
 test('the programme producer is only offered a co-hosted kind when the episode has guests', async () => {
   // The producer plans an hour around the kinds it is shown. Offering a
   // co-hosted skill to a solo episode plans a feature the beat can only fall

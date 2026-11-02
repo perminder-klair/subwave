@@ -3,7 +3,7 @@
 // go through it.
 
 import { embedMany } from 'ai';
-import { isInstrumental } from './lyric-vocal.js';
+import { isInstrumental, type VocalEvidence } from './lyric-vocal.js';
 import {
   embeddingModel,
   activeEmbeddingModelLabel,
@@ -19,9 +19,17 @@ import {
 } from '../llm/provider.js';
 import type { EmbeddingCfg, EmbeddingTextPrefixes } from '../llm/provider.js';
 import { moodVocab } from '../settings.js';
+import { LLM_PROVIDER_CATALOG } from '../schemas/providers.js';
 import crypto from 'node:crypto';
 
 const LYRIC_EXCERPT_CHARS = 400; // cap lyrics before they bloat the embedding text
+
+// The chat-only help's cloud row, from the catalogue so a new embedding
+// gateway is listed without a copy edit.
+const CLOUD_EMBEDDING_LABELS = LLM_PROVIDER_CATALOG
+  .filter((p) => p.kind === 'cloud' && p.embedding)
+  .map((p) => p.label)
+  .join(' / ');
 
 export interface SongMeta {
   title?: string | null;
@@ -41,16 +49,13 @@ export interface TrackEnrichment {
 
 // Measured acoustics from the analyzer pass (#1246). Never the tagger's own
 // `moods` / `energy`: those are decided from these vectors, so feeding them
-// back is circular.
-export interface TrackAcoustics {
+// back is circular. VocalEvidence is tracks.vocal_ranges plus the tail's spans:
+// sung duration decides instrumental status, and null/undefined = not computed.
+export interface TrackAcoustics extends VocalEvidence {
   bpm?: number | null;
   musicalKey?: string | null;      // Camelot code, e.g. '8A'
   // Zero-shot CLAP moods (music/audio-moods.ts). Heavy analyzer tier only.
   audioMoods?: string[] | null;
-  // tracks.vocal_ranges. Total sung duration determines instrumental status;
-  // null/undefined = not computed.
-  vocalRanges?: unknown[] | null;
-  vocalRangesInvalid?: boolean;
   // The pace curve is deliberately not an input: its range (~0.02–0.5) makes a
   // fixed threshold stamp one word on ~everything.
 }
@@ -93,7 +98,7 @@ export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
   const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
   if (mode) words.push(mode);
   // [] is a measurement ("no vocals found"), null is its absence.
-  if (isInstrumental(acoustics.vocalRanges, acoustics.vocalRangesInvalid) === true) {
+  if (isInstrumental(acoustics) === true) {
     words.push('instrumental');
   }
   return words;
@@ -394,7 +399,7 @@ function actionableMessage(
         `  library tagger can't use it. (The DJ still works on "${provider}".)\n` +
         `  Pick an embedding-capable provider in /admin/settings → Embedding:\n` +
         `    • Ollama   — local + free (ollama pull nomic-embed-text; auto-pulled)\n` +
-        `    • OpenAI / Google / OpenRouter — cloud (needs the matching API key)\n` +
+        `    • ${CLOUD_EMBEDDING_LABELS} — cloud (needs the matching API key)\n` +
         `    • locca / openai-compatible — your own embedding server`
       );
     case 'not_embedding_model':

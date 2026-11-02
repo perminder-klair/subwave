@@ -14,20 +14,17 @@ import { existsSync } from 'node:fs';
 import { chmod, readFile } from 'node:fs/promises';
 import { parse as parseDotenv } from 'dotenv';
 import { STATE_DIR } from '../config.js';
+import { LLM_KEY_ENV_VARS } from '../schemas/providers.js';
+import { SECRET_CONTROL_CHAR_RE, stripSecretControlChars } from '../schemas/settings.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
 const PATH = `${STATE_DIR}/secrets.env`;
 
 // Keys the wizard may write; anything else is ignored, so the form cannot be
-// abused as a generic env-var setter.
+// abused as a generic env-var setter. The LLM providers' keys come from the
+// catalogue (schemas/providers.ts), in its order.
 export const SECRET_ENV_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'GOOGLE_GENERATIVE_AI_API_KEY',
-  'OPENROUTER_API_KEY',
-  'REQUESTY_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'AI_GATEWAY_API_KEY',
+  ...LLM_KEY_ENV_VARS,
   'ELEVENLABS_API_KEY',
   'FISH_API_KEY',
   'SEARCH_API_KEY',
@@ -41,6 +38,17 @@ export const SECRET_ENV_KEYS = [
   'LISTENBRAINZ_USER_TOKEN',
   'LISTENBRAINZ_API_URL',
 ];
+
+// A key with a control character in it (one pasted across a line wrap, say)
+// can't go in an HTTP header: fetch throws, and its message quotes the whole
+// header value, key included. Every route that probes a key asks this before
+// the probe, so the operator gets this answer instead of the key on screen.
+// Saving strips the same characters instead (schemas/settings.ts).
+export function secretValueIssue(value: string): string | null {
+  return SECRET_CONTROL_CHAR_RE.test(value)
+    ? 'The key has a line break or other control character in it. Paste it again as one line.'
+    : null;
+}
 
 // An unquoted value carrying a `#`: dotenv truncates there (correct .env
 // semantics), which is also how a secret containing a `#` loses its tail. Warned
@@ -111,7 +119,12 @@ export async function loadSecretsIntoEnv(): Promise<{ loaded: string[]; skipped:
 
 // Persist a batch of API keys, merged over what is already there. An empty value
 // is written as `KEY=` rather than deleted, so the next boot falls back to env.
-export async function saveSecrets(patch: Record<string, string>): Promise<void> {
+export async function saveSecrets(rawPatch: Record<string, string>): Promise<void> {
+  // Control characters stripped as every secret's save path does
+  // (schemas/settings.ts), so a key with a line break is joined, not refused.
+  const patch = Object.fromEntries(
+    Object.entries(rawPatch).map(([key, value]) => [key, stripSecretControlChars(value)]),
+  );
   // Same reader as the boot path: this rewrites the whole file, so a value read
   // wrong here is a stored secret destroyed on disk.
   const current: Record<string, string> = existsSync(PATH)

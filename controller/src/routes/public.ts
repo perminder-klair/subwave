@@ -14,8 +14,9 @@ import { getFullContext, geocodePlace } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
-import { isIdle } from '../broadcast/stream-idle.js';
+import { idleWindow, isIdle } from '../broadcast/stream-idle.js';
 import { currentStarve } from '../broadcast/music-starve.js';
+import { advertisedBufferSeconds } from '../broadcast/stream-mounts.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
 import { composeBoothFeed } from '../broadcast/booth-carry.js';
@@ -276,8 +277,9 @@ router.get('/now-playing', async (req, res) => {
         // Seconds a listener sits behind the live edge; every timestamp here is
         // live-edge, so players subtract this for listener-time (#1114). Never
         // measure it as `buffered.end - currentTime` (that is the demux window).
-        // Operator surfaces (admin, MCP) intentionally keep live edge.
-        bufferSeconds: stationSettings.stream?.bufferSeconds ?? 22,
+        // Operator surfaces (admin, MCP) intentionally keep live edge. The burst
+        // the running mounts were rendered with, not a setting saved since (#2142).
+        bufferSeconds: advertisedBufferSeconds(),
         opusEnabled: stationSettings.stream?.opusEnabled === true,
         flacEnabled: stationSettings.stream?.flacEnabled === true,
         aacEnabled: stationSettings.stream?.aacEnabled === true,
@@ -460,6 +462,12 @@ router.get('/state', (req, res) => {
     needsSetup: getSetupStatusSync().needsSetup,
     // Programme paused by the idle gate (zero listeners), not broken.
     streamIdle: isIdle(),
+    // The latest idle pause as ages in ms ({ startedMsAgo, endedMsAgo }, null
+    // before the first since boot or once withdrawn: new mounts, a status poll
+    // that cannot vouch for them, an idle command the mixer did not confirm).
+    // The web player sizes its skip over a woken station's stale silence from
+    // it (#2072).
+    streamIdleWindow: idleWindow(),
     // Music chain starved (#1300), emergency loop on air. Not streamIdle, which
     // is a deliberate pause.
     musicStarved: starve.starved,
@@ -534,6 +542,8 @@ router.post(
 // The web player's gate (#478). Same password as /listener-auth, opposite
 // failure mode: fails CLOSED whenever either privacy lock is on. Rate-limited,
 // since the caller is an arbitrary browser. The password is never logged.
+// Installed apps and the web gate read these exact answers, so they are a
+// contract (scripts/station-auth-route.test.ts).
 router.post(
   '/station-auth',
   express.json({ limit: '10kb' }),

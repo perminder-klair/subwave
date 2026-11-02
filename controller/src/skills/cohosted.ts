@@ -11,6 +11,7 @@ import { notebookMemoryUpdateForTurns } from './notebook-schema.js';
 import { discussionTurnPlan } from './discussion-structure.js';
 import { findSkillPersona } from './special-guest.js';
 import { renderLookAheadTeases } from './look-ahead.js';
+import { withoutStandIns } from '../broadcast/stand-in-policy.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 
 interface Persona {
@@ -27,6 +28,8 @@ interface CohostedResult {
   lines: Array<{ persona: Persona; text: string; meta?: Record<string, unknown> }> | null;
   memoryUpdate?: unknown;
   reason: string | null;
+  /** Nothing aired because stand-in text made the segment unusable. */
+  standIn?: boolean;
 }
 
 type CohostedObject = { memoryUpdate?: unknown; firstSummary?: string; secondSummary?: string; text?: unknown; reason?: unknown; air?: unknown; lines?: Array<{ speaker?: unknown; text?: unknown }> } | undefined;
@@ -236,6 +239,9 @@ async function generateCohostedCapability({
       ? renderLookAheadTeases(source, String(out?.firstSummary || ''), String(out?.secondSummary || ''))
       : String(out?.text || '').trim();
     if (!text) throw new Error(`skill "${capability.skill || capability.kind}" produced no spoken segment`);
+    if (!withoutStandIns([{ text }], [host.name || '']).length) {
+      return { aired: false, lines: null, reason: 'the DJ wrote a stand-in, not a line, so nothing aired', standIn: true };
+    }
     return { aired: true, lines: [{ persona: host, text }], memoryUpdate: out?.memoryUpdate, reason: String(out?.reason || '').trim() || null };
   }
 
@@ -248,10 +254,20 @@ async function generateCohostedCapability({
   if (lines.some(line => !line.persona || !line.text)) {
     throw new Error(`skill "${capability.skill || capability.kind}" produced no co-hosted discussion`);
   }
+  // A stand-in never airs (queue.speakable), so `lines` leaves it out: callers
+  // report and record these lines as what aired. A discussion with nothing left
+  // is a stand-down the callers already back off on, not a failed render, and
+  // that holds for a forced run too.
+  const spoken = withoutStandIns(lines, cast.map((persona) => persona.name || ''));
+  // Notebook updates reference the original turn numbers. Stand down rather
+  // than attach an update to a different turn after removing a stand-in.
+  if (!spoken.length || (capability.notebook && spoken.length !== lines.length)) {
+    return { aired: false, lines: null, reason: 'the discussion contains stand-in text, so nothing aired', standIn: true };
+  }
   return {
     aired: true,
     memoryUpdate: out?.memoryUpdate,
-    lines: lines as Array<{ persona: Persona; text: string }>,
+    lines: spoken as Array<{ persona: Persona; text: string }>,
     reason: String(out?.reason || '').trim() || null,
   };
 }

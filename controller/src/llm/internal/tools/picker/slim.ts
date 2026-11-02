@@ -22,7 +22,7 @@ export function slim(s: any) {
   // song (#862). Measured acoustics prefer the analyzer's number (library
   // record) over the file's ID3 tag. Each field is omitted when absent so the
   // agent only ever sees real values. `moods`/`energy` are the station's
-  // tagging vocabulary; `instrumental` is derived from vocalRanges; `pace`
+  // tagging vocabulary; `instrumental` is the measured vocal verdict; `pace`
   // (0..1 perceptual energy) and `sections` (structural-part count over the
   // opening) feed FLOW reasoning per PICKER_CRITERIA in llm/dj.ts.
   const rec = s.id ? library.get(s.id) : null;
@@ -54,10 +54,11 @@ export function slim(s: any) {
   // `duration`, library `durationSec`), so it's present even for an un-tagged
   // Subsonic track whose library lookup came back empty.
   const durationSec = durationSeconds(s) ?? durationSeconds(rec);
-  // vocalRanges: classify measured sung duration; null/undefined = not
-  // computed (unknown — omit rather than guess "has vocals").
+  // Classify measured sung duration over both windows; a null verdict is
+  // unknown (omit rather than guess "has vocals"). The spans themselves stay
+  // out of this whitelist: the model reads the verdict, never the evidence.
   const vocalSource = Array.isArray(s.vocalRanges) ? s : rec;
-  const instrumental = isInstrumental(vocalSource?.vocalRanges, vocalSource?.vocalRangesInvalid);
+  const instrumental = isInstrumental(vocalSource);
   // realBpm: a non-positive bpm means unknown — never emitted, never allowed
   // to mask the analyzed value.
   const bpm = library.realBpm(rec?.bpm) ?? library.realBpm(s.bpm);

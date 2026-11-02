@@ -4,6 +4,13 @@
 
 export type StationLocale = 'en-GB' | 'en-US';
 
+/** GET /state's `streamIdleWindow`: the latest idle pause, as ages in ms when
+ *  the server answered. `endedMsAgo` is null while it lasts. */
+export interface IdleWindow {
+  startedMsAgo: number;
+  endedMsAgo: number | null;
+}
+
 /** `subsonic_id` drives MediaSession artwork via the `/api/cover/:id` proxy;
  *  jingles and scanning have no id. */
 export interface NowPlayingTrack {
@@ -172,6 +179,12 @@ export interface QueueEntry {
    *  the air path branches on it. `index`/`size` are stamped from the plan, so
    *  a half-played block still reads "9 of 11". */
   block?: { id: string; label: string; index: number; size: number };
+  /** Current and upcoming rows: playable seconds after silence trim and any
+   *  stamped cue, the same measure as /now-playing's. Absent when unmeasured. */
+  duration?: number;
+  /** Upcoming rows: the forecast start, live-edge like `startedAt`. Absent
+   *  when the on-air clock or any length ahead is unknown. */
+  airsAt?: string;
   [key: string]: unknown;
 }
 
@@ -215,6 +228,13 @@ export interface StationState {
    *  `listenerAuth` means the mounts demand the shared listener password
    *  before tune-in. Absent on older controllers = fully public. */
   privacy?: { privatePlayer?: boolean; listenerAuth?: boolean };
+  /** The programme is held by the idle gate (no listeners). */
+  streamIdle?: boolean;
+  /** The latest idle pause as ages in ms when the server answered; null
+   *  before the first since the controller started or once the mounts
+   *  restarted, absent on an older one (#2072, lib/idleSkip.ts). useStationFeed's copy drops it: the ages
+   *  change on every poll. */
+  streamIdleWindow?: IdleWindow | null;
 }
 
 /** `role` arrives as 'segment' for spoken bits and is reclassified to 'voice'

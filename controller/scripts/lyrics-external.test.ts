@@ -48,14 +48,14 @@ test('a hit and a miss are both kept, and a second answer replaces the first', (
 
 test('a v30 database gains the table on its next open, and an upgraded one is left alone', async () => {
   const raw = db.requireDb();
-  assert.equal(raw.pragma('user_version', { simple: true }), 31);
+  assert.equal(raw.pragma('user_version', { simple: true }), 32);
 
   // The predecessor shape: every earlier migration, no lyrics_external.
   raw.exec('DROP TABLE lyrics_external');
   raw.pragma('user_version = 30');
   db.close();
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
-  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 31);
+  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 32);
   assert.equal(db.getExternalLyrics('track-a'), null, 'created empty');
   db.setExternalLyrics('track-c', hit('[00:02.00]kept'));
 

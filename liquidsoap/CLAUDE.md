@@ -39,6 +39,8 @@ Each one records a measured failure.
 
 **Transitions**
 - Fade duration equals the buffer (`d` is what is actually buffered); shorter fades in a fixed buffer sum to +6 dB. There are two measured exceptions: the chop's incoming fade runs on `chop_dd`, and a stem-blend clip seam fades both sides over the cue lead.
+- Every `amplify` inside `dj_transition` passes `override=null`. Its default override reads `liq_amplify`, which the incoming source carries from its first sample, so a gain curve or constant there is replaced by the track's loudness gain, applied a second time.
+- The equal-power crossfade (`transitions.equalPowerCrossfade`, default off → linear) applies to plain song-to-song seams only (`equal_power_seam`): cos out and sin^1.5 in, so in² + out² stays within 0.9 dB of 1, because two uncorrelated songs add in power and a linear seam dips −3 dB. The incoming is sin^1.5, not sin, so it rises no faster than linear: a quiet ending into a loud start is a fade-in from silence, and plain sin made it abrupt. Liquidsoap's `fade type="sin"` is sin², not equal-power. A stem-blend clip seam stays linear (equal-power over two aligned copies of the same audio sums +3 dB). Read once at startup; `scripts/fx-render-test.sh eqpower` and `controller/scripts/equal-power-seam.test.ts` pin it.
 - `cross_stamps` is the only translator of a track's `liq_cross_duration` into end/start durations, and `strip_cross_stamps` removes them from `dj_transition`'s output. Keep the controller's contract: one stamp per track, governing that track's own end.
 - A clip seam aligns on its cue lead by delaying the incoming side. That is sample-accurate on 2.4.6 only (`scripts/stem-seam-test.sh`).
 - A `liq_cue_in` lands on the next codec frame at or after the cue, not on it. Only clip → Y compensates: the drain stamps `liq_clip_cue_late` on Y and `dj_transition` shifts Y by it, reading the stamp only when the outgoing side is the clip (#2003). A late landing delays Y. An MP3's early one (its encoder delay) is negative, and Y starts sooner out of `clip_seam_slack` (#2077). The per-codec rules are measurements of this decoder, so a decoder-priority change or an image bump re-runs `scripts/stem-seam-test.sh cuein`.
@@ -53,10 +55,13 @@ Each one records a measured failure.
 - Every `file.write(atomic=true)` carries a `temp_dir=` from its own `ensure_tmp_dir` line, one per writer. Without it the rename crosses devices on Docker and silently goes non-atomic.
 - Pause voice acknowledgement: `poll_voice` writes `pause-talk-voice-accepted.json` only after `voice_queue.push`, `voice_marker` alone writes `pause-talk-voice-started.json`, and each has its own temp dir.
 - `proto_subhttp` never judges a download by curl's exit code alone: Navidrome answers a missing file with 200 + JSON, so it also refuses json/xml/text bodies and files under 4 KiB. It records `ready`/`failed` under the handoff's probe id and redacts stream query strings in every log.
-- The controller calls radio.liq's telnet commands by name over port 1234 (`restart`, `skip`, `auto.reload`, `auto.ready`, `jingles.reload`, `jingle_overlay_status`, `stream_*`, `idle_*`, `dj_queue_status`, `dj_queue_remove`, `subhttp_probe_status`), so renaming one breaks `broadcast/liquidsoap-control.ts`.
+- The controller calls radio.liq's telnet commands by name over port 1234 (`restart`, `skip`, `auto.reload`, `auto.ready`, `jingles.reload`, `jingle_overlay_status`, `stream_*`, `idle_*`, `dj_queue_status`, `dj_queue_remove`, `subhttp_probe_status`, `path_readable`), so renaming one breaks `broadcast/liquidsoap-control.ts`.
 
 **Ducking**
 - Use `smooth_add` only: an RMS follower drove the music to silence (`f38a9af`). `p` is the fraction of the music left up, so smaller is deeper. Never convert it to dB at a call site, and keep the shipped `duck_intro` default above `duck_voice` (a link should duck less than a solo ident). An operator may set them either way, so don't enforce the order. Both depths are read once at startup and bounds-checked here too, because a hand-edited file reaches the mixer directly.
+
+**Outputs**
+- The Opus encoder is hard CBR (`vbr="none"`), never VBR or DTX (#2138). Icecast's `<burst-size>` is a byte count sized from the bitrate, and constrained VBR coded idle silence at 1.6 kbps, so after an idle pause a new listener's burst reached back past the pause into stale music: on the rig (Opus 96k, 22 s buffer), live music arrived 51.9 s after connecting following a 30 s pause, and 140.2 s after a 120 s one. CBR brought both to ~23 s, as MP3's. Ogg framing adds ~1%, so the burst runs a little under `bufferSeconds`. `controller/scripts/opus-cbr.test.ts` pins every branch.
 
 ## Testing
 

@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
 import { fishAudioIssue } from '@/lib/schemas.generated';
+import { LLM_ENV_VARS } from '../admin/llm/providerMeta';
 
 // Every step reads and writes through the `set` updater rather than its own
 // state, so the Review step can show the whole picture without prop-drilling.
@@ -175,14 +176,7 @@ export function useWizard() {
   const save = useCallback(async () => {
     const apiKeys: Record<string, string> = { ...data.apiKeys };
     if (data.llm.apiKey) {
-      const k =
-        data.llm.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' :
-        data.llm.provider === 'openai' ? 'OPENAI_API_KEY' :
-        data.llm.provider === 'google' ? 'GOOGLE_GENERATIVE_AI_API_KEY' :
-        data.llm.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' :
-        data.llm.provider === 'openrouter' ? 'OPENROUTER_API_KEY' :
-        data.llm.provider === 'requesty' ? 'REQUESTY_API_KEY' :
-        data.llm.provider === 'gateway' ? 'AI_GATEWAY_API_KEY' : '';
+      const k = LLM_ENV_VARS[data.llm.provider] ?? '';
       if (k) apiKeys[k] = data.llm.apiKey;
     }
     if (data.tts.cloud.enabled && data.tts.cloud.apiKey) {

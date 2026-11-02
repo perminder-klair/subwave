@@ -20,17 +20,19 @@ await db.open({ embeddingDim: 3 });
 const d = db.getDb()!;
 const fat = JSON.stringify(Array.from({ length: 180 }, (_, i) => i * 400));
 const pace = JSON.stringify(Array.from({ length: 12 }, (_, i) => ({ startMs: i * 1000, endMs: (i + 1) * 1000, value: 0.4 })));
+// songsByEnergy parses this column for the tail's half of the instrumental verdict.
+const outro = JSON.stringify({ startMs: 180000, ending: 'fade', beats: Array.from({ length: 40 }, (_, i) => 180000 + i * 500), bars: [180000], vocalRanges: [] });
 // Seed a genuine v26 schema, then measure the one-time upgrade.
 db.runDdl(d, `DROP TRIGGER IF EXISTS tracks_moods_insert; DROP TRIGGER IF EXISTS tracks_moods_update;
  DROP TRIGGER IF EXISTS tracks_moods_delete; DROP TABLE IF EXISTS track_moods;
  DROP INDEX IF EXISTS idx_tracks_energy; PRAGMA user_version=26;`);
 const insert = d.prepare(`INSERT INTO tracks(id,moods,audio_moods,energy,beats_json,bars_json,
- pace_json,key_ranges_json,audio_mood_scores_json,structure_json,vocal_ranges_json)
- VALUES(?,?,?,?,?,?,?,?,?,?,?)`);
+ pace_json,key_ranges_json,audio_mood_scores_json,structure_json,vocal_ranges_json,outro_json)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`);
 d.transaction(() => {
   for (let i = 0; i < n; i++) insert.run(`t${i}`, JSON.stringify([i % 3 ? 'other' : 'reflective', i % 97 ? 'common' : 'rare']),
     i % 2 ? '["reflective"]' : '[]', i % 3 ? 'high' : 'low', fat, fat, pace, fat, fat,
-    '[{"startMs":0,"endMs":30000,"kind":"intro"}]', '[]');
+    '[{"startMs":0,"endMs":30000,"kind":"intro"}]', '[]', outro);
 })();
 const size = () => Object.fromEntries(['library.db', 'library.db-wal'].map(f => [f, (() => { try { return statSync(join(dir, f)).size; } catch { return 0; } })()]));
 db.checkpointWal();

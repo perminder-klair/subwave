@@ -1,5 +1,6 @@
 // All providers return { answer, results: [{ title, content }] } behind a 30-minute memo.
-// DDG instant answers may be empty; Tavily/Brave need keys; SearXNG needs a base URL.
+// DDG instant answers may be empty; Tavily/Brave need keys; SearXNG needs a base URL;
+// Keenable is keyless, with an optional key that raises its rate limit; Firecrawl needs a key.
 // Brave supports artist-name queries (#623); searxngEngines pins only these calls (#1353).
 
 import { config } from '../config.js';
@@ -10,6 +11,8 @@ import { BoundedKeyMap } from '../util/bounded-key-map.js';
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 const DDG_ENDPOINT = 'https://api.duckduckgo.com/';
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
+const KEENABLE_ENDPOINT = 'https://api.keenable.ai/v1/search';
+const FIRECRAWL_ENDPOINT = 'https://api.firecrawl.dev/v2/search';
 
 type SearchResult = { title: string; content: string };
 type SearchResponse = { answer: string; results: SearchResult[] };
@@ -42,8 +45,17 @@ async function memo(
   return val;
 }
 
+// The one key slot every keyed backend reads: the saved settings.search.apiKey,
+// else SEARCH_API_KEY from the environment. `source` says which, for the admin.
+export function searchKeySlot(): { key: string; source: 'settings' | 'env' | null } {
+  const saved = settings.get().search?.apiKey;
+  if (saved) return { key: saved, source: 'settings' };
+  const env = process.env.SEARCH_API_KEY || config.search.apiKey;
+  return env ? { key: env, source: 'env' } : { key: '', source: null };
+}
+
 export async function tavilySearch(query: string): Promise<SearchResponse> {
-  const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
+  const apiKey = searchKeySlot().key;
   const res = await fetchWithTimeout(TAVILY_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -223,7 +235,7 @@ export async function braveSearch(
   query: string,
   recency?: 'day' | 'week' | 'month',
 ): Promise<SearchResponse> {
-  const apiKey = settings.get().search?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey;
+  const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('Brave Search API key not configured');
 
   const url = new URL(BRAVE_ENDPOINT);
@@ -246,10 +258,11 @@ export async function braveSearch(
   return parseBraveResponse(data);
 }
 
-// Strips residual markup from Brave snippets. text_decorations=0 removes the
-// highlighting, but descriptions can still carry entities (&#x27; etc.) and
-// the occasional stray tag depending on the source page.
-function braveText(raw: unknown): string {
+// Strips residual markup from a search snippet. Brave and Firecrawl both pass
+// through page descriptions, which can carry entities (&#x27; etc.) and the
+// occasional stray tag depending on the source page, even with Brave's
+// text_decorations=0 removing the highlighting.
+function cleanSnippet(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   return raw
     .replace(/<[^>]+>/g, '')
@@ -284,14 +297,14 @@ export function parseBraveResponse(data: unknown): SearchResponse {
   // one-element array — accept either.
   const ibRaw = sub(d.infobox, 'results');
   const ib = Array.isArray(ibRaw) ? ibRaw[0] : ibRaw;
-  const answer = braveText(sub(ib, 'long_desc') || sub(ib, 'description'));
+  const answer = cleanSnippet(sub(ib, 'long_desc') || sub(ib, 'description'));
 
   const results: SearchResult[] = [];
   const push = (r: unknown) => {
     if (!r || typeof r !== 'object' || results.length >= 10) return;
     const rec = r as Record<string, unknown>;
-    const title = braveText(rec.title);
-    const content = braveText(rec.description).slice(0, 300);
+    const title = cleanSnippet(rec.title);
+    const content = cleanSnippet(rec.description).slice(0, 300);
     if (!title || !content) return;
     results.push({ title, content });
   };
@@ -301,6 +314,190 @@ export function parseBraveResponse(data: unknown): SearchResponse {
   for (const r of Array.isArray(webResults) ? webResults : []) push(r);
 
   return { answer, results };
+}
+
+// Keenable backend. Keyless by default: without a key the call goes to the
+// public endpoint, which is free and rate limited per IP. A Keenable key
+// (`keen_…`) in the shared settings.search.apiKey / SEARCH_API_KEY slot moves
+// it to the keyed endpoint and raises that limit. The slot may still hold a
+// Tavily or Brave key from an earlier provider, so only a `keen_` value is
+// sent; anything else keeps the call keyless rather than failing it.
+export async function keenableSearch(
+  query: string,
+  recency?: 'day' | 'week' | 'month',
+): Promise<SearchResponse> {
+  const apiKey = searchKeySlot().key;
+  const { url, init } = buildKeenableRequest({ query, apiKey, recency });
+  const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
+  if (!res.ok) throw new Error(`Keenable HTTP ${res.status}`);
+  const data = await res.json();
+  return parseKeenableResponse(data);
+}
+
+// The one test for "is this a Keenable key": the request builder, the admin
+// key probe and keenableKeySource all ask it.
+export function isKeenableKey(key: string): boolean {
+  return key.trim().startsWith('keen_');
+}
+
+// Where the key a Keenable search would send comes from, or null when it runs
+// keyless. SEARCH_API_KEY being set can't say whose key it is, so GET
+// /settings serves this to show a Keenable key that lives only in .env.
+export function keenableKeySource(): 'settings' | 'env' | null {
+  const { key, source } = searchKeySlot();
+  return isKeenableKey(key) ? source : null;
+}
+
+// Pure request builder for a Keenable search. Exported alongside
+// parseKeenableResponse so endpoint, headers and body can be pinned without
+// mocking fetch. `X-Keenable-Title` is required on the keyless endpoint (it
+// answers 400 without it) and names the app on both. Recency becomes a
+// `published_after` date; pages with no known publish date can still come back.
+export function buildKeenableRequest(opts: {
+  query: string;
+  apiKey?: string;
+  recency?: 'day' | 'week' | 'month';
+  now?: Date;
+}): { url: string; init: RequestInit } {
+  const apiKey = (opts.apiKey || '').trim();
+  const keyed = isKeenableKey(apiKey);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Keenable-Title': 'subwave',
+  };
+  if (keyed) headers['X-API-Key'] = apiKey;
+
+  const body: Record<string, unknown> = {
+    query: opts.query,
+    max_results: 5,
+    snippet_max_length: 300,
+  };
+  if (opts.recency) {
+    const days = { day: 1, week: 7, month: 30 }[opts.recency];
+    const since = new Date((opts.now ?? new Date()).getTime() - days * 86_400_000);
+    body.published_after = since.toISOString().slice(0, 10);
+  }
+
+  return {
+    url: keyed ? KEENABLE_ENDPOINT : `${KEENABLE_ENDPOINT}/public`,
+    init: { method: 'POST', headers, body: JSON.stringify(body) },
+  };
+}
+
+// Pure parser for Keenable's search JSON (results[] of title/url/snippet/
+// description). The page text is in `snippet`; `description` is usually an
+// empty string, so the pick is on emptiness, not presence. Snippets keep the
+// page's line breaks, so whitespace is collapsed before the 300-char cap the
+// other parsers use. There is no answer field. Tolerant of malformed input:
+// any shape mismatch yields { answer: '', results: [] }.
+export function parseKeenableResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const raw = (data as Record<string, unknown>).results;
+
+  const text = (v: unknown): string =>
+    typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '';
+  const results: SearchResult[] = [];
+  for (const r of Array.isArray(raw) ? raw : []) {
+    if (!r || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const title = text(rec.title);
+    const content = (text(rec.snippet) || text(rec.description)).slice(0, 300);
+    if (!title || !content) continue;
+    results.push({ title, content });
+    if (results.length >= 5) break;
+  }
+
+  return { answer: '', results };
+}
+
+const FOREIGN_FIRECRAWL_KEY = 'The key on file is not a Firecrawl key (they start with fc-)';
+
+// Firecrawl backend. Keyed via the shared settings.search.apiKey /
+// SEARCH_API_KEY slot (same resolution as Tavily and Brave). The slot may still
+// hold another provider's key, which must not reach Firecrawl, so anything but
+// an `fc-` value is refused here and reads as not ready in searchReady(). Threads
+// optional recency through Firecrawl's `tbs` param (qdr:d/w/m).
+export async function firecrawlSearch(
+  query: string,
+  recency?: 'day' | 'week' | 'month',
+): Promise<SearchResponse> {
+  const apiKey = searchKeySlot().key;
+  if (!apiKey) throw new Error('Firecrawl API key not configured');
+  if (!isFirecrawlKey(apiKey)) throw new Error(FOREIGN_FIRECRAWL_KEY);
+  const { url, init } = buildFirecrawlRequest({ query, apiKey, recency });
+  const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
+  if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
+  const data = await res.json();
+  return parseFirecrawlResponse(data);
+}
+
+// The one test for "is this a Firecrawl key": firecrawlSearch, searchReady, the
+// admin key probe, firecrawlKeySource and searchKeyProblem all ask it. It matches
+// Firecrawl's own CLI, which refuses any cloud key without the prefix. Their API
+// still accepts a legacy key as a bare UUID, but that key also works as `fc-` +
+// the UUID without its dashes, so nothing valid is locked out.
+export function isFirecrawlKey(key: string): boolean {
+  return key.trim().startsWith('fc-');
+}
+
+// Where the key a Firecrawl search would send comes from, or null when the slot
+// holds none or holds another provider's. GET /settings serves this because the
+// admin only sees a redacted key, and can't tell whose it is.
+export function firecrawlKeySource(): 'settings' | 'env' | null {
+  const { key, source } = searchKeySlot();
+  return isFirecrawlKey(key) ? source : null;
+}
+
+// Why the selected provider refuses the key on file, or null when it doesn't.
+// No key at all is null too: that one keeps its own "set a key" wording, which
+// can't fix this state, because a saved key shadows SEARCH_API_KEY.
+export function searchKeyProblem(): string | null {
+  if (settings.get().search?.provider !== 'firecrawl') return null;
+  const { key } = searchKeySlot();
+  return key && !isFirecrawlKey(key) ? FOREIGN_FIRECRAWL_KEY : null;
+}
+
+// Pure request builder for a Firecrawl search, exported so endpoint, headers
+// and body can be pinned without mocking fetch.
+export function buildFirecrawlRequest(opts: {
+  query: string;
+  apiKey: string;
+  recency?: 'day' | 'week' | 'month';
+}): { url: string; init: RequestInit } {
+  const body: Record<string, unknown> = { query: opts.query, limit: 5 };
+  if (opts.recency) body.tbs = { day: 'qdr:d', week: 'qdr:w', month: 'qdr:m' }[opts.recency];
+  return {
+    url: FIRECRAWL_ENDPOINT,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey.trim()}` },
+      body: JSON.stringify(body),
+    },
+  };
+}
+
+// Pure parser for Firecrawl's search JSON (data.web[] of url/title/
+// description). Descriptions can carry HTML entities, so they go through the
+// same cleanup as Brave's, then whitespace is collapsed before the 300-char
+// cap. There is no answer field. Any shape mismatch yields { answer: '', results: [] }.
+export function parseFirecrawlResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const inner = (data as Record<string, unknown>).data;
+  const raw = inner && typeof inner === 'object' ? (inner as Record<string, unknown>).web : undefined;
+
+  const text = (v: unknown): string => cleanSnippet(v).replace(/\s+/g, ' ').trim();
+  const results: SearchResult[] = [];
+  for (const r of Array.isArray(raw) ? raw : []) {
+    if (!r || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const title = text(rec.title);
+    const content = text(rec.description).slice(0, 300);
+    if (!title || !content) continue;
+    results.push({ title, content });
+    if (results.length >= 5) break;
+  }
+
+  return { answer: '', results };
 }
 
 // Provider dispatcher — reads the active provider from live settings on every
@@ -318,19 +515,24 @@ export async function searchWeb(
     if (provider === 'searxng') return searxngSearch(query, recency);
     if (provider === 'tavily') return tavilySearch(query);
     if (provider === 'brave') return braveSearch(query, recency);
+    if (provider === 'keenable') return keenableSearch(query, recency);
+    if (provider === 'firecrawl') return firecrawlSearch(query, recency);
     return duckduckgoSearch(query);
   });
 }
 
 // True when the active search provider is usable right now.
 //   duckduckgo:   always ready (no key, no URL)
+//   keenable:     always ready (keyless; a key only raises the rate limit)
 //   tavily/brave: needs settings.search.apiKey, or SEARCH_API_KEY env
+//   firecrawl:    the same, and it has to be an fc- key
 //   searxng:      needs settings.search.baseUrl (no env fallback by design)
 export function searchReady(): boolean {
   const s = settings.get().search;
   const provider = s?.provider || 'duckduckgo';
-  if (provider === 'duckduckgo') return true;
+  if (provider === 'duckduckgo' || provider === 'keenable') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
+  if (provider === 'firecrawl') return isFirecrawlKey(searchKeySlot().key);
   // tavily / brave (and any future keyed provider)
-  return !!(s?.apiKey || process.env.SEARCH_API_KEY || config.search.apiKey);
+  return !!searchKeySlot().key;
 }

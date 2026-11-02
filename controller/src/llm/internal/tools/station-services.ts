@@ -31,7 +31,8 @@ export interface StationServices {
   personas: { find: (query: string) => PersonaIdentity | null; onAirHost: () => PersonaIdentity | null };
   schedule: { laterToday: () => ReturnType<typeof laterTodayProgramming> };
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /
-  // SearXNG). `searchReady()` is false when no provider is usable.
+  // Brave / SearXNG / Keenable / Firecrawl). `searchReady()` is false when no
+  // provider is usable.
   searchWeb: typeof searchWeb;
   searchReady: typeof searchReady;
   // The track currently on air (artist/title/album/year/id), or null.

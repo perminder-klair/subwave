@@ -68,19 +68,49 @@ export function isRefusedOutcome(outcome: string | null | undefined): boolean {
   return outcome === 'cooldown' || outcome === 'already-queued';
 }
 
+// The five conditions Direct refuses, in the words a model labels them with:
+// the prompt's own list, the backstop's labels below and their variants ("era
+// or year ranges", "previous conversation"). Labels are English because the
+// prompt keeps the field in English.
+const UNSUPPORTED_CATEGORIES = [
+  /\b(?:exclu|negat|except|avoid|without)/i,
+  /\b(?:eras?|years?|decades?|(?:19|20)?\d0s)\b/i,
+  /\b(?:instrumental|acoustic|live|vocals?|recording)\b/i,
+  /\b(?:lyrics?|films?|movies?|tv|television|shows?|series|adverts?|commercials?|trend\w*|viral|tiktok|soundtracks?|external)\b|\bsong[\s-]+identif/i,
+  /\b(?:earlier|previous(?:ly)?|prior|conversations?|discuss(?:ed|ion)?|mentioned)\b/i,
+];
+
+// A model label that names none of the five is not a condition on the tracks:
+// a dedication, an occasion or an invented category ("journey identification")
+// must not refuse the request (#2133). The ignored labels are returned for the
+// request log; a kept label stays as the model wrote it.
+export function classifyUnsupportedLabels(labels: string[] = []): { conditions: string[]; ignored: string[] } {
+  const conditions: string[] = [];
+  const ignored: string[] = [];
+  for (const label of labels) {
+    if (!label.trim()) continue;
+    (UNSUPPORTED_CATEGORIES.some(category => category.test(label)) ? conditions : ignored).push(label);
+  }
+  return { conditions, ignored };
+}
+
 // Backstop for common conditions a small model can silently omit. Quoted
 // names are data: "Everything but the Girl" is not an exclusion instruction.
 // This is deliberately bounded, not a second natural-language interpreter.
 export function directRequestUnsupported(text: string, match: RequestMatch = {}): string[] {
   if (match.kind === 'chat') return [];
   const prose = requestConditionProse(text, match);
-  const reasons = new Set((match.unsupported || []).filter(reason => reason.trim()));
+  const reasons = new Set(classifyUnsupportedLabels(match.unsupported).conditions);
   if (/\b(?:anything|something|music|songs?|tracks?)\s+(?:except|excluding|but(?: not)?)\b|\b(?:but not|but no|excluding|except(?: for)?|other than)\s+\S|\b(?:do not|don['’]?t)\s+play\b/i.test(prose)) reasons.add('exclusions');
   // Require an instruction/clause boundary, not bare no/not or a cue inside
   // a name such as No Doubt, Not Waving, Skip James or Never Shout Never.
   if (/(?:^|[,;.!?]\s*|\s+(?:but|and|please)\s+)(?:please\s+)?(?:avoid\s+|steer\s+clear\s+of\s+|(?:do\s+not|don['’]?t)\s+(?:include|play)\s+|exclude\s+)(?=\S)/iu.test(prose)
     || /(?<![\p{L}\p{N}])with\s+no\s+(?=\S)/iu.test(prose)) reasons.add('exclusions');
   if (/\b(?:19|20)\d0s\b|\b(?:from|during|in)\s+(?:the\s+)?(?:19|20)\d{2}\b/i.test(prose)) reasons.add('era');
+  // A bare decade ("the 80s", "'90s hip hop", "eighties") is an era too, but
+  // not an age: "my mum in her 60s" and "the over-60s" name people. The prose
+  // has lost its apostrophes, so '80s and 80's arrive as 80s.
+  if (/(?<!\b(?:my|his|her|their|your|our)\s+(?:(?:early|mid|late)[\s-]+)?)(?<!\b(?:over|under)[\s-]+)(?<![\p{L}\p{N}])(?:[2-9]0s|(?:twen|thir|for|fif|six|seven|eigh|nine)ties)(?![\p{L}\p{N}])/iu.test(prose)) reasons.add('era');
   if (/\b(?:instrumental|acoustic|live)\s+(?:only|music|songs?|tracks?|versions?)\b|\b(?:only|strictly)\s+(?:instrumental|acoustic|live)\b|\bwithout\s+(?:vocals|singing|lyrics)\b/i.test(prose)) reasons.add('recording condition');
   if (/\b(?:song|track|one)\s+(?:from|in)\s+(?:that|the|a)\s+(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
   if (/\b(?:one|song|track|music)\s+(?:we|you|I)\s+(?:discussed|mentioned|requested|talked about)\s+(?:earlier|before|yesterday|last)\b/i.test(prose)) reasons.add('earlier conversation');
@@ -239,12 +269,15 @@ function artistIdentityKey(value: unknown): string {
   return requestName(key).replace(/^the (?=\S)/, '') || key;
 }
 
+function creditKeys(song: RequestSong): string[] {
+  const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
+  return credits.flatMap(credit => [artistNameKey(credit), ...artistParticipantKeys(String(credit ?? ''))]);
+}
+
 export function requestArtistMatches(want: unknown, song: RequestSong): boolean {
   const artist = artistIdentityKey(want);
   if (!artist) return true;
-  const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
-  return credits.some(credit => [artistNameKey(credit), ...artistParticipantKeys(String(credit ?? ''))]
-    .some(key => artistIdentityKey(key) === artist));
+  return creditKeys(song).some(key => artistIdentityKey(key) === artist);
 }
 
 export function requestedTitle(match: RequestMatch, text?: string): string | null {
@@ -329,6 +362,83 @@ export function modelFreeRequest(text: string): RequestMatch {
     scope: 'song', intent: 'library search without model interpretation', ack: '' };
 }
 
+export interface RequestedRecording {
+  query: string;
+  isExact(song: RequestSong): boolean;
+  // The exact hits on one page of that search.
+  exactIn(songs: RequestSong[]): RequestSong[];
+}
+
+// A lone generic word is no title: "play something" does not ask for the
+// Beatles' "Something", nor "more please" for Usher's "More".
+const GENERIC_ASK = new Set(['a', 'an', 'any', 'some', 'something', 'anything', 'more', 'another', 'again', 'else', 'play',
+  'please', 'surprise', 'me', 'music', 'song', 'songs', 'track', 'tracks', 'tune', 'tunes']);
+
+// A title made only of the words around an ask proves nothing by sitting in
+// the ask: "play U2 please" names U2, not their "Please".
+function framingOnly(title: string): boolean {
+  return requestName(title).split(' ').every(word => REQUEST_FRAME.has(word) || GENERIC_ASK.has(word));
+}
+
+// The words a listener uses for one recording of a song over another. Bare
+// words, unlike Direct's phrases, because a pin is the one reading no model
+// checks: "Hello by Adele live" must not become the studio cut.
+const ANOTHER_CUT = /\b(?:live|acoustic|unplugged|instrumental|karaoke|remix(?:ed)?|demo|cover|version)\b/;
+
+// Does the text, past this track's own names, ask for anything the track does
+// not say it is? Direct's conditions, so "live version" and "but not the remix"
+// are read one way on both routes.
+function asksBeyond(text: string, title: string, credits: string[]): boolean {
+  return ANOTHER_CUT.test(requestName(maskNames(text, [title, ...credits], ' ', false)))
+    || directRequestUnsupported(text, { title, search_terms: credits }).length > 0;
+}
+
+// The recording the listener's OWN words name, for the request agent's
+// searchLibrary (#2195): what to search, and how to recognise an exact hit.
+// Read from the listener's text and never the model's query, because a model
+// that searches "Rihanna" alone has dropped the title entirely, and only these
+// words still hold it. Null when they name no title, so no search is spent.
+//
+// The query is the title alone: search3 needs every word to match, so one word
+// of an unparsed tail ("BY RIHANNA. I want it loud") would empty it. That tail
+// is also why a title match accepts a credit heading what follows "by", behind
+// only what a listener adds after a name. Anywhere else in the text a credit is
+// no proof: "Creep by Elvis, Radiohead is overrated" asks for neither. A pair
+// written "A - B" may be either way round, so its query holds both sides, which
+// search3 matches in any order.
+//
+// The last branch catches what the literal parse cannot split: "disturbia
+// rihanna" has no separator, "Stand by Me" is read as "Stand" by "Me", and
+// "Disturbia - Rihanna" is read as "Rihanna" by "Disturbia". There the track's
+// title and credits must account for every word but framing.
+//
+// A pin outranks the model's own reading, so a doubt pins nothing: the model's
+// search still runs. Wrong here is a wrong song on air, and a miss is the
+// behaviour this replaced.
+export function requestedRecording(text: string | null | undefined): RequestedRecording | null {
+  if (!text?.trim()) return null;
+  // NUL is maskNames' marker; left in, it reads as every name being present.
+  const said = text.replaceAll('\u0000', ' ');
+  const { title, artist, reversible, language } = modelFreeRequest(said);
+  if (!title || language) return null;
+  if (!artist && requestName(title).split(' ').every(word => GENERIC_ASK.has(word))) return null;
+  const isExact = (song: RequestSong) => {
+    const name = String(song.title ?? '');
+    const credits = creditKeys(song);
+    const named = (requestTitleMatches(title, name)
+      && (requestArtistMatches(artist, song) || credits.some(credit => headsLiteral(artist ?? '', credit))))
+      || (!framingOnly(name) && namedInRequest(said, name, credits));
+    return named && !asksBeyond(said, name, credits);
+  };
+  return {
+    query: reversible ? `${artist} ${title}` : title,
+    isExact,
+    // A bare name that is also an act on the page names the act: "play Queen"
+    // is not a request for Perfume Genius's "Queen".
+    exactIn: songs => (!artist && songs.some(song => requestArtistMatches(title, song)) ? [] : songs.filter(isExact)),
+  };
+}
+
 // A model reply repaired against the literal reading of the same words.
 export function repairRequestMatch(match: RequestMatch, text: string): RequestMatch {
   if (match.kind === 'chat') return match;
@@ -341,7 +451,7 @@ export function repairRequestMatch(match: RequestMatch, text: string): RequestMa
   if (quoted && !match.title && !match.album && match.scope !== 'album' && !literal.artist
     && !requestArtistMatches(quoted, { id: 'literal', artist: match.artist || '' })) return { ...match, title: quoted };
   if (!literal.artist || !literal.title) return match;
-  if (!match.unsupported?.length
+  if (!classifyUnsupportedLabels(match.unsupported).conditions.length
     && ![match.title, match.album, match.artist, match.genre, match.language, match.mood, ...(match.search_terms || [])].some(Boolean)) {
     // A valid empty plan is not a failure. Keep an unambiguous name pair when
     // the words hold one; generic asks still proceed as "anything".
@@ -382,7 +492,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
 }): Promise<RequestSelection> {
   const { catalog, recentIds, queuedIds, currentId } = deps;
   const errors: string[] = [];
-  const unsupported = deps.text === undefined ? match.unsupported || [] : directRequestUnsupported(deps.text, match);
+  const unsupported = deps.text === undefined ? classifyUnsupportedLabels(match.unsupported).conditions : directRequestUnsupported(deps.text, match);
   if (unsupported.length) return { track: null, source: 'unsupported', outcome: 'unsupported', errors, unsupported };
   // Model-supplied names can hide instructions just as literal names can.
   // Defer those raw cues until an actual catalogue identity proves the name;

@@ -5,6 +5,8 @@ import express from 'express';
 import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
+import { realPathStatus } from '../../music/navidrome-players.js';
+import type { RealPathStatus } from '../../music/navidrome-players-policy.js';
 import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
@@ -24,9 +26,11 @@ import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
+import { firecrawlKeySource, keenableKeySource } from '../../skills/web-search.js';
 import { planLlmSwap, LlmSwapError } from '../../settings/llm-swap.js';
 import { llmSwapFit } from '../../settings/llm-swap-fit.js';
 import { recentCalls } from '../../llm/log.js';
@@ -191,27 +195,16 @@ router.get('/settings', requireAdmin, async (req, res) => {
       },
       search: {
         providers: settings.SEARCH_PROVIDERS,
+        // 'settings' | 'env' | null: where the key a Keenable search sends comes
+        // from. The env flag below can't tell a keen_ key from a Tavily one.
+        keenableKeySource: keenableKeySource(),
+        // The same answer for Firecrawl; null with a key on file means that key
+        // is another provider's, and searches refuse it.
+        firecrawlKeySource: firecrawlKeySource(),
       },
-      // Which provider API keys are present in the environment; the UI keys
-      // its "key missing" alerts off this.
-      env: {
-        OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
-        ELEVENLABS_API_KEY: !!process.env.ELEVENLABS_API_KEY,
-        FISH_API_KEY: !!process.env.FISH_API_KEY,
-        ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
-        GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-        DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
-        OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
-        REQUESTY_API_KEY: !!process.env.REQUESTY_API_KEY,
-        AI_GATEWAY_API_KEY: !!process.env.AI_GATEWAY_API_KEY,
-        SEARCH_API_KEY: !!process.env.SEARCH_API_KEY,
-        EMBEDDING_API_KEY: !!process.env.EMBEDDING_API_KEY,
-        LASTFM_API_KEY: !!process.env.LASTFM_API_KEY,
-        LASTFM_API_SECRET: !!process.env.LASTFM_API_SECRET,
-        LASTFM_SESSION_KEY: !!process.env.LASTFM_SESSION_KEY,
-        LISTENBRAINZ_USER_TOKEN: !!process.env.LISTENBRAINZ_USER_TOKEN,
-        LISTENBRAINZ_API_URL: !!process.env.LISTENBRAINZ_API_URL,
-      },
+      // Which writable keys (SECRET_ENV_KEYS) are present in the environment,
+      // as booleans only; the UI keys its "key missing" alerts off this.
+      env: Object.fromEntries(SECRET_ENV_KEYS.map(k => [k, !!process.env[k]])),
       skills: { catalog: skillCatalog() },
     });
   } catch (err) {
@@ -360,7 +353,9 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     for (const [key, value] of Object.entries(body)) {
       if (!(SECRET_ENV_KEYS as readonly string[]).includes(key)) continue;
       if (typeof value !== 'string') continue;
-      const trimmed = value.trim();
+      // Stripped before the blank check, so a value of only control characters
+      // keeps the stored key rather than clearing it in saveSecrets.
+      const trimmed = stripSecretControlChars(value).trim();
       if (!trimmed) continue;
       if (trimmed.length > 4096) continue;
       patch[key] = trimmed;
@@ -430,6 +425,37 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message || 'save failed' });
   }
+});
+
+// "Report Real Path" on SUB/WAVE's own Navidrome player rows: GET reads them,
+// POST switches every one still off (the operator's button, so it runs whatever
+// the opt-in `musicSource.reportRealPath` says). Row ids stay server-side.
+function realPathView(st: RealPathStatus) {
+  return {
+    state: st.state,
+    reason: st.reason ?? null,
+    server: st.server ?? null,
+    switched: st.switched.length,
+    autoEnable: settings.get().musicSource?.reportRealPath === true,
+    players: st.players.map(p => ({
+      client: p.client,
+      userAgent: p.userAgent,
+      reportRealPath: p.reportRealPath,
+      lastSeen: p.lastSeen,
+    })),
+  };
+}
+
+router.get('/settings/navidrome/players', requireAdmin, async (_req, res) => {
+  res.json(realPathView(await realPathStatus()));
+});
+
+router.post('/settings/navidrome/players/real-path', requireAdmin, async (_req, res) => {
+  const st = await realPathStatus({ enable: true });
+  if (st.switched.length) {
+    queue.log('scheduler', `Navidrome: Report Real Path switched on for ${st.switched.length} SUB/WAVE player(s) (operator)`);
+  }
+  res.json(realPathView(st));
 });
 
 // Non-mutating test. Merges over the effective values like save does, so Test

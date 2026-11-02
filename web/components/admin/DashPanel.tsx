@@ -6,7 +6,7 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { useAdminMutation, useAdminQuery } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey } from '../../lib/sessionFeed';
-import { fmtClock } from '../../lib/format';
+import { fmtClock, fmtClockMinute, fmtTime } from '../../lib/format';
 import { formatFileFormat } from '../../lib/fileFormat';
 import { FILE_FORMAT_RETRY_MS } from '../../lib/schemas.generated';
 import { clientLabel, fmtConnected } from '../../lib/clientLabel';
@@ -98,6 +98,7 @@ import {
   removeQueuedRow,
   runDashAction,
 } from './dash/queries';
+import { useCardHashJump } from '../../hooks/useCardHashJump';
 
 // Listeners-table header cells. `sticky top-0` resolves against the ScrollArea
 // viewport, and the opaque card-bg stops rows showing through. The rule is an
@@ -110,6 +111,8 @@ export default function DashPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
+  // Stats' health lamps link to cards here by hash (#llm-recent-calls).
+  useCardHashJump();
 
   const [sayText, setSayText] = useState('');
   const [sayMode, setSayMode] = useState('raw');
@@ -597,10 +600,16 @@ export default function DashPanel() {
                           </span>
                         ) : null}
                         <QueueHeldBadge sent={t.sent} />
-                        <span className="mono-num text-[10px] whitespace-nowrap text-muted">
-                          {typeof t.duration === 'number' || typeof t.duration === 'string'
-                            ? t.duration
-                            : ''}
+                        <span
+                          title={t.airsAt ? 'Forecast start, from the lengths queued ahead' : undefined}
+                          className="mono-num text-[10px] whitespace-nowrap text-muted"
+                        >
+                          {[
+                            t.airsAt ? fmtClockMinute(t.airsAt, tz, locale) : '',
+                            typeof t.duration === 'number' ? fmtTime(t.duration) : '',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
                         </span>
                         {typeof t.subsonic_id === 'string' && t.subsonic_id ? (
                           <QueueItemActions className="opacity-100">

@@ -3,6 +3,8 @@
 // OpenRouter/compat/locca use construction-time controls in registry.ts instead.
 // Pure cfg mappings are pinned by controller/scripts/llm-pure.test.ts.
 
+import { OPENAI_COMPATIBLE_GATEWAYS, type GatewayReasoningRule, type OpenAICompatibleGateway } from '../../../schemas/providers.js';
+
 interface ThinkingArgs {
   modelId: string;
   reasoning: boolean;
@@ -92,6 +94,50 @@ export function thinkingMandatoryModel(modelId: string): boolean {
   return THINKING_MANDATORY_CLAUDE_RE.test(String(modelId || ''));
 }
 
+// Reasoning rules shared by name. A fixed-endpoint gateway names one in the
+// catalogue (`openaiCompatible.reasoning`) instead of copying a lambda, which is
+// how a gateway serving bare OpenAI ids came to inherit a `vendor/model`
+// gateway's rule (#2097). A gateway whose service needs something else adds a
+// named rule here.
+export const REASONING_RULES: Record<GatewayReasoningRule, ProviderCapabilities['reasoningLevel']> = {
+  // OpenAI's own ids, forwarded as reasoning_effort verbatim. gpt-5 and o-series
+  // floor at 'minimal' ('none' is rejected); dotted GPT-5 generations (5.1+)
+  // replaced 'minimal' with 'none'. Keep the model-id gate — gpt-4-class models
+  // 400 on any reasoning effort. forceNoThink is not factored: forced tools are
+  // permitted while reasoning.
+  openaiModels: ({ modelId, reasoning }) =>
+    /^(o\d|gpt-5)/i.test(modelId)
+      ? (reasoning ? 'medium' : /^gpt-5\.\d/i.test(modelId) ? 'none' : 'minimal')
+      : undefined,
+  // 'minimal' when reasoning is off or a tool is forced, for every model id;
+  // the gateway tolerates the field on all of its `vendor/model` ids. Requesty's.
+  minimalWhenOff: ({ reasoning, forceNoThink }) =>
+    (reasoning && !forceNoThink ? undefined : 'minimal'),
+  // A gateway that serializes the level to whatever vendor the `provider/model`
+  // id resolves to. Gemma downstreams are the exception, same 400 as the google
+  // entry (#1044), so omit the param for them. A thinking-mandatory Claude
+  // downstream gets 'minimal' instead of 'none'. Vercel AI Gateway's.
+  vendorRouted: ({ modelId, reasoning, forceNoThink }) => {
+    if ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId)) return undefined;
+    return thinkingMandatoryModel(modelId) ? 'minimal' : 'none';
+  },
+};
+
+// The one descriptor every fixed-endpoint OpenAI-compatible gateway gets. Built
+// via createOpenAI, so it takes native objects and reasoning_effort; its key is
+// read at construction, so apiKeyEnv; its embeddings, when it has them, come
+// from the same endpoint as its chat. Only the reasoning rule differs.
+function gatewayCapabilities(gw: OpenAICompatibleGateway): ProviderCapabilities {
+  return {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    reasoningLevel: REASONING_RULES[gw.openaiCompatible.reasoning],
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
+    ...(gw.embedding ? { embeddingEndpoint: 'vendor' as const } : {}),
+    apiKeyEnv: gw.envVar,
+  };
+}
+
 const CAPS: Record<string, ProviderCapabilities> = {
   ollama: {
     objectStrategy: 'tool',
@@ -107,15 +153,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
   openai: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    // Forwarded as reasoning_effort verbatim. gpt-5 and o-series floor at
-    // 'minimal' ('none' is rejected); dotted GPT-5 generations (5.1+) replaced
-    // 'minimal' with 'none'. Keep the model-id gate — gpt-4-class models 400 on
-    // any reasoning effort. forceNoThink is not factored: forced tools are
-    // permitted while reasoning.
-    reasoningLevel: ({ modelId, reasoning }) =>
-      /^(o\d|gpt-5)/i.test(modelId)
-        ? (reasoning ? 'medium' : /^gpt-5\.\d/i.test(modelId) ? 'none' : 'minimal')
-        : undefined,
+    reasoningLevel: REASONING_RULES.openaiModels,
     discoverySteps: NATIVE_DISCOVERY_STEPS,
     embeddingEndpoint: 'vendor',
   },
@@ -195,32 +233,15 @@ const CAPS: Record<string, ProviderCapabilities> = {
     embeddingEndpoint: 'vendor',
     apiKeyEnv: 'OPENROUTER_API_KEY',
   },
-  // Requesty is built via createOpenAI, so the level resolves through the openai
-  // code path as reasoning_effort. Suppressed when reasoning is off or on a
-  // forced-tool leg. No model-id gate: requesty ids are `vendor/model` and the
-  // gateway tolerates the field.
-  requesty: {
-    objectStrategy: 'native',
-    repeatPenaltyApplies: false,
-    reasoningLevel: ({ reasoning, forceNoThink }) =>
-      (reasoning && !forceNoThink ? undefined : 'minimal'),
-    discoverySteps: NATIVE_DISCOVERY_STEPS,
-    embeddingEndpoint: 'vendor',
-    apiKeyEnv: 'REQUESTY_API_KEY',
-  },
-  // The gateway serializes the top-level level to whatever vendor the
-  // `provider/model` id resolves to. Gemma downstreams are the exception, same
-  // 400 as the google entry (#1044), so omit the param for them. A
-  // thinking-mandatory Claude downstream gets 'minimal' instead of 'none'.
+  // Vercel AI Gateway: createGateway, not the generic createOpenAI path.
   gateway: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    reasoningLevel: ({ modelId, reasoning, forceNoThink }) => {
-      if ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId)) return undefined;
-      return thinkingMandatoryModel(modelId) ? 'minimal' : 'none';
-    },
+    reasoningLevel: REASONING_RULES.vendorRouted,
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
+  // Requesty and every other fixed-endpoint OpenAI-compatible gateway.
+  ...Object.fromEntries(OPENAI_COMPATIBLE_GATEWAYS.map((gw) => [gw.id, gatewayCapabilities(gw)])),
 };
 
 // Unknown provider id → native objects, no repeat penalty, provider-default

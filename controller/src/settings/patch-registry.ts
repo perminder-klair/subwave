@@ -49,6 +49,7 @@ import {
   jingleRotateSchema,
   likesPatchSchema,
   lyricsPatchSchema,
+  musicSourcePatchSchema,
   localeSchema,
   loudnessPatchSchema,
   moodScheduleSchema,
@@ -167,6 +168,7 @@ export const SETTINGS_PATCH_KEYS = [
   'scrobble',
   'likes',
   'lyrics',
+  'musicSource',
 ] as const;
 
 export type SettingsPatchKey = (typeof SETTINGS_PATCH_KEYS)[number];
@@ -246,6 +248,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   scrobble: scrobblePatchSchema,
   likes: likesPatchSchema,
   lyrics: lyricsPatchSchema,
+  musicSource: musicSourcePatchSchema,
   moods: moodsSchema,
   moodSchedule: moodScheduleSchema,
   weatherMoods: weatherMoodsSchema,
