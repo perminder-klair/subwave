@@ -5,7 +5,7 @@
 // attribute, AND across attributes. An empty list means "no constraint".
 
 import * as library from './library.js';
-import { isInstrumental } from './lyric-vocal.js';
+import { isInstrumental, type VocalEvidence } from './lyric-vocal.js';
 import { resolveEraYear } from './era-year.js';
 // The genre fold lives in a leaf module so library-db can register its SQL twin
 // without importing this one (which imports library).
@@ -16,7 +16,7 @@ export { resolveEraYear };
 
 // Raw Subsonic children and slimTrack library rows both satisfy this
 // structurally; every field is optional so a source omitting one still passes.
-export interface FilterTrack {
+export interface FilterTrack extends VocalEvidence {
   id?: string;
   // Library rows: strings. Raw Subsonic children: OpenSubsonic {name} objects.
   genres?: Array<string | { name?: unknown }> | null;
@@ -34,9 +34,6 @@ export interface FilterTrack {
   energy?: string | null;
   moods?: string[] | null;
   audioMoods?: string[] | null;
-  // Measured timing spans; isInstrumental owns classification. Null = unknown.
-  vocalRanges?: unknown[] | null;
-  vocalRangesInvalid?: boolean;
   // Part of trackAllTags' any-namespace union.
   lastfmTags?: string[] | null;
   // OpenSubsonic advisory tag; music/explicit-policy.ts owns reading it.
@@ -276,9 +273,10 @@ export type VocalMode = '' | 'instrumental' | 'vocal';
 
 // Tri-state track classification, shared with embedding descriptors:
 //
-//   total sung time <5s   → measured instrumental (including [], #1655)
-//   total sung time >=5s  → measured vocal
-//   vocalRanges == null   → not measured, which is NOT the same as "vocal"
+//   each window sung <5s  → measured instrumental (including [], #1655)
+//   either window >=5s    → measured vocal
+//   vocalRanges == null   → not measured, which is NOT the same as "vocal", unless
+//                           the tail alone proves singing
 //
 // Demucs is opt-in, so on most libraries every track is null; collapsing null to
 // "has vocals" makes an instrumental show reject its whole library.
@@ -286,7 +284,7 @@ export function trackInstrumental(t: FilterTrack | null | undefined): boolean | 
   const source = Array.isArray(t?.vocalRanges)
     ? t
     : (t?.id ? library.get(t.id) : null);
-  return isInstrumental(source?.vocalRanges, source?.vocalRangesInvalid);
+  return isInstrumental(source);
 }
 
 // Soft lean: un-measured tracks stay eligible, never-starve. It fills

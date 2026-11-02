@@ -113,6 +113,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Write `genres`, never `genre` (a generated column); `subsonic.songGenres()` is the one ingest normaliser. Genre matching is one-directional.
 - Judge era with `resolveEraYear` and `yearUntrusted`, never raw `year`, and keep the JS and SQL era filters in agreement.
 - Silence trim measures against an absolute floor, and `music/silence-trim.ts` owns every onset shift.
+- A track's instrumental verdict is `isInstrumental` over both measured windows, each judged alone (`music/lyric-vocal.ts`). A row carrying `vocalRanges` carries the tail evidence too, and SQL reads it through `SQL_TAIL_VOCAL_RANGES`, never the whole `outro_json`.
 - Library coverage never counts on the read path; only `refresh()` counts it.
 - Anything going to Liquidsoap uses `getAnnotatedUri`.
 - The tagger's own `moods`/`energy` never enter the embed text. Bump `TAGGER_CONTRACT_VERSION` (`music/tagger-core.ts`) when the prompt asks for something different.

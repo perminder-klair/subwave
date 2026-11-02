@@ -3,7 +3,7 @@
 // version must degrade to null rather than throw a query.
 
 import type { ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
-import { parseVocalRangesJson } from '../lyric-vocal.js';
+import { parseOutroVocalJson, parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
 
 export function rowToTrack(row: TrackRow): TrackRecord {
   return {
@@ -54,6 +54,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
+    ...parseOutroVocalJson(row.outro_json),
     leadSilenceMs: row.lead_silence_ms ?? null,
     tailSilenceMs: row.tail_silence_ms ?? null,
     tailStartMs: row.tail_start_ms ?? null,
@@ -226,6 +227,7 @@ export function rowToEnergyPool(row: EnergyPoolRow): EnergyPoolRecord {
     introMs: row.intro_ms ?? null, loudnessLufs: row.loudness_lufs ?? null,
     structure: row.structure_json ? safeParseSections(row.structure_json) : null,
     ...parseVocalRangesJson(row.vocal_ranges_json),
+    ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
     pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
   };
 }
