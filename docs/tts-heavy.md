@@ -623,7 +623,10 @@ docker compose exec controller npx tsx src/music/analyze-library.ts --facets hea
 ```
 
 A local-venv backend needs `onnxruntime==1.27.0` installed and
-`BEAT_THIS_MODEL` pointing at an exported model (`tools/beat-this/README.md`).
+`BEAT_THIS_MODEL` pointing at the model file, the one the images bake:
+[`beat_this-small0.onnx`](https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx)
+(sha256 `5cff50fb031bc4a4…`; `tools/beat-this/README.md` has the full hash and
+how to rebuild it).
 
 ### Running analysis without a sidecar (dev / offline)
 

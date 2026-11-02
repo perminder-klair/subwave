@@ -5,8 +5,10 @@ The analyzer's optional downbeat tracker: [Beat This!](https://github.com/CPJKU/
 analyzer image can run it with onnxruntime and no torch. With
 `ANALYZE_DOWNBEATS=beat-this` the worker (`controller/scripts/analyze_worker.py`,
 `DownbeatTracker`) takes the bar grid from it instead of librosa's every-4th-beat
-guess. These scripts are how the model is made and how that switch was judged.
-Nothing here runs on a station.
+guess. The images download the model from this repo's GitHub releases
+([Hosting the model](#hosting-the-model)); these scripts are how that file is
+made, rebuilt or audited, and how the switch was judged. Nothing here runs on
+a station or in an image build.
 
 | File | Runs in | What it does |
 | --- | --- | --- |
@@ -19,6 +21,7 @@ Nothing here runs on a station.
 
 | What | Pin |
 | --- | --- |
+| Shipped model | `small0` ONNX, release `beat-this-small0-v1`, `https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx`, sha256 `5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf` |
 | beat_this | v1.1.0, commit `ad7974846029835307ba19a3d5cefbf40b243041` |
 | `small0` checkpoint | `https://f0k.de/pubs/2024_ismir/beat_this-small0.ckpt`, sha256 `6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b` |
 | `final0` checkpoint | `https://f0k.de/pubs/2024_ismir/beat_this-final0.ckpt`, sha256 `8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331` |
@@ -47,8 +50,10 @@ curl -fLo /tmp/bt/small0.ckpt https://f0k.de/pubs/2024_ismir/beat_this-small0.ck
   --out /tmp/bt/beat_this-small0.onnx --audio "/path/to/Kings of Swing.mp3"
 ```
 
-The images run exactly this in a builder stage (`docker/Dockerfile.analyzer`,
-`docker/Dockerfile.aio`) and copy only the `.onnx` into the final stage.
+This is how the shipped file was made, and how to rebuild or audit it. On the
+machine it was made on, these pins reproduced the release asset byte for byte
+(sha256 below). The image builds don't run it; they fetch the asset
+([Hosting the model](#hosting-the-model)).
 
 Export choices:
 
@@ -86,9 +91,13 @@ Exported here (torch 2.7.1+cpu, onnx IR 8):
 | sha256 | `5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf` | `6ea0954f813f58cd945bd9215c0ed39330e811baa428ede6576bc32149eca965` |
 | Max abs logit diff vs PyTorch (12 chunks of 1500, 1013, 512 and 1237 frames) | 6.39e-05 | 7.72e-05 |
 
-Two exports on the same machine were byte-identical. The hash is a record, not
-a gate: the build gate is the logit parity, because a different CPU or torch
-build may fold constants into different bits.
+Two exports on the same machine were byte-identical, an export inside a
+`python:3.11-slim-bookworm` container on the same host matched them, and the
+`small0` release asset has the same hash. The export's own gate is the logit parity, not
+the hash, because a different CPU or torch build may fold constants into
+different bits. So an audit that gets a different hash should run
+`parity.py` on both files before suspecting the asset. The image build's gate
+is the hash: `ADD --checksum` fails on any other bytes.
 
 ## Parity with upstream
 
@@ -175,16 +184,65 @@ cp311 and cp313 on both.
 
 ## Hosting the model
 
-Today both images export the model in a `--platform=$BUILDPLATFORM` builder
-stage, so every image build downloads CPU torch and the checkpoint from
-`f0k.de`. The alternatives, for the maintainer:
+What ships is a GitHub release asset on this repo: the `small0` export above,
+uploaded once to the non-latest prerelease `beat-this-small0-v1`. Both
+`docker/Dockerfile.analyzer` and `docker/Dockerfile.aio` fetch it with
 
-| Option | Build depends on | Trade-off |
+```dockerfile
+ADD --chmod=644 --checksum=sha256:5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf \
+    https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx \
+    /opt/analyzer/models/beat_this-small0.onnx
+```
+
+so an image build reaches only GitHub for the model (no PyTorch index, no
+`f0k.de`, no torch in any stage), and fails on any other bytes. `--checksum`
+needs Dockerfile frontend 1.6 or newer. Both files start with
+`# syntax=docker/dockerfile:1`, which fetches a current 1.x frontend whatever
+the local BuildKit has built in. `--chmod` matters because `ADD` gives a
+downloaded file mode 600 and the analyzer runs as uid 10001. The file is the
+same on every architecture.
+
+| Role | How | Build depends on |
 | --- | --- | --- |
-| Builder stage (current) | f0k.de, the PyTorch wheel index, GitHub | Reproducible from source on every build, and the parity check runs every time. Each build pays ~1 GB of downloads and a minute of export, and a mirror outage breaks image builds (not stations). |
-| GitHub release asset on this repo | GitHub only, which the build already needs | `ADD --checksum=sha256:…` of a 9.6 MB file: fast, and the hash pins exactly what ships. Somebody runs `export.py` once per model change and uploads the file. |
-| Hugging Face repo | huggingface.co | Same shape as a release asset. The heavy tier already depends on HF at run time, but the lean tier never has. |
-| Git LFS, or the file committed | GitHub LFS quotas, or nothing | LFS needs setup in every clone and CI job and has bandwidth quotas. A plain commit is simplest, but every model update adds ~10 MB to history for good. |
+| What ships | the release asset, `ADD`ed by URL and sha256 | GitHub, which the build already needs |
+| How to rebuild or audit it | `export.py` with the pins above (and `parity.py` against upstream) | f0k.de, the PyTorch wheel index and GitHub, on your machine only |
+
+The alternatives that were weighed:
+
+| Option | Trade-off |
+| --- | --- |
+| Builder stage (shipped before the release asset) | Exported from source and parity-checked on every build, but each build paid ~1 GB of downloads and a minute of export, and an outage at `f0k.de` or the PyTorch index broke image builds. |
+| Hugging Face repo | Same shape as a release asset. The heavy tier already depends on HF at run time, but the lean tier never has. |
+| Git LFS, or the file committed | LFS needs setup in every clone and CI job and has bandwidth quotas. A plain commit is simplest, but every model update adds ~10 MB to history for good. |
+
+### Publishing a new model version
+
+This is the one place the steps are written down.
+
+1. **Re-export** with `export.py` ([Export](#export)), after changing whatever
+   pin the new version is for. Ship nothing from a run that did not exit 0.
+   Take the new file's `onnx_sha256` from the JSON report it prints, and
+   re-run `parity.py` (and `evaluate.py` and `cost.py` if the graph or the
+   checkpoint changed) before deciding to ship it.
+2. **Upload it as a new `beat-this-*` prerelease** that is never marked latest.
+   `install.sh` resolves `/releases/latest`, so a model release must not
+   become it; a `beat-this-*` tag doesn't match the `v*` tags the publish
+   workflows build on.
+
+   ```bash
+   gh release create beat-this-small0-v2 /tmp/bt/beat_this-small0.onnx \
+     --repo perminder-klair/subwave --prerelease --latest=false \
+     --title "Beat This! small0 ONNX (v2)" --notes "sha256 <onnx_sha256>"
+   ```
+
+   Never replace the file in an existing release: every commit that pins the
+   old hash would stop building.
+3. **Bump the URL and the `--checksum` in both Dockerfiles**, in lockstep,
+   and the "Shipped model" pin above. If the file name changes, the worker's
+   default `BEAT_THIS_MODEL` (`controller/scripts/analyze_worker.py`) and the
+   `ADD` destination change with it. Build an image and run
+   `controller/scripts/analyzer_downbeat_test.py` inside it; its real-model
+   case uses the baked file.
 
 ## Licence
 
