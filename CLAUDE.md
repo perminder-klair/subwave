@@ -114,6 +114,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Judge era with `resolveEraYear` and `yearUntrusted`, never raw `year`, and keep the JS and SQL era filters in agreement.
 - Silence trim measures against an absolute floor, and `music/silence-trim.ts` owns every onset shift.
 - A track's instrumental verdict is `isInstrumental` over both measured windows, each judged alone (`music/lyric-vocal.ts`). A row carrying `vocalRanges` carries the tail evidence too, and SQL reads it through `SQL_TAIL_VOCAL_RANGES`, never the whole `outro_json`.
+- A write that moves a `Sound:` word marks the vector through `markTextVectorDirtyIfSoundChanged`: by part (measured or moods), against the words stored with the vector (`text_vector_sound`), never the row before the write. An unknown part never marks: NULL, or the moods a relabel-all moved, which it forgets (`forgetVectorSoundIfMoved`) rather than marks (`music.md`, #2236).
 - Library coverage never counts on the read path; only `refresh()` counts it.
 - Anything going to Liquidsoap uses `getAnnotatedUri`.
 - The tagger's own `moods`/`energy` never enter the embed text. Bump `TAGGER_CONTRACT_VERSION` (`music/tagger-core.ts`) when the prompt asks for something different.
