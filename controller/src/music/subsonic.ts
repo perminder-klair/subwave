@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { extname, isAbsolute, resolve, sep } from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
@@ -13,7 +13,7 @@ import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 import { libraryMountProven } from './library-mount.js';
-import { headTitle, normalizeTitle, tailTitle, titleVerdict } from './tag-title.js';
+import { fileTitle, MAX_TITLE_CHARS, normalizeTitle, titleVerdict } from './tag-title.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -962,10 +962,11 @@ function localPathCandidates(libRoot: string, songPath: string): { direct: strin
 }
 
 // The two ends of a file, where tags sit: ID3v2, FLAC's and Ogg's comments and a
-// fast-start M4A's `moov` at the head, a late `moov` and ID3v1 at the tail. A
-// title outside both is never read, so that track streams: cover art ahead of it
-// (a FLAC PICTURE block, an ID3v2 APIC frame), or a late `moov` whose cover art
-// follows `©nam` and leaves the title that far from the end.
+// fast-start M4A's `moov` at the head, a late `moov`, APEv2 and ID3v1 at the
+// tail. A title outside both is never read, so that track streams: cover art
+// ahead of it (a FLAC PICTURE block, an ID3v2 APIC frame, an Ogg picture
+// comment), or a late `moov` whose cover art follows `©nam` and leaves the title
+// that far from the end.
 const TAG_WINDOW_BYTES = 64 * 1024;
 
 // The same `song.size` a Subsonic server reports: the file's bytes, tags included.
@@ -979,24 +980,26 @@ function fileSizeOnDisk(file: string): number | null {
 }
 
 // Does the title field in this file's tags hold the server's title? tag-title.ts
-// reads the field of each layout as its whole value, so the same words in another
-// field, the cover art or the audio don't count. `none` is a file whose tags hold
-// no title it can read in the two windows: the field is past them, or the format
-// has no ID3, Vorbis or MP4 tags. One open, the head read, and the tail read only
-// when the head holds no title field.
+// reads the title field of the file's format, picked by its extension as
+// Navidrome picks it, as a whole value, so the same words in another field, the
+// cover art or the audio don't count. `none` is a file whose tags hold no title
+// it can read in the two windows, or none it can be sure Navidrome reads the same
+// way. One open, the head read, and the tail read only for a format that keeps
+// tags there and asks for it.
 function titleInTags(file: string, size: number, title: string): 'same' | 'other' | 'none' {
-  const window = Buffer.alloc(Math.min(TAG_WINDOW_BYTES, size));
+  const length = Math.min(TAG_WINDOW_BYTES, size);
   try {
     const fd = fs.openSync(file, 'r');
     try {
-      const head = window.subarray(0, fs.readSync(fd, window, 0, window.length, 0));
-      let field = headTitle(head);
-      if (field === null) {
-        // A file that fits in the window has its tail in the head already.
-        const tail = size <= window.length ? head : window.subarray(0, fs.readSync(fd, window, 0, window.length, size - window.length));
-        field = tailTitle(tail);
-      }
-      return titleVerdict(field, title);
+      const read = (from: number) => {
+        const window = Buffer.alloc(length);
+        return window.subarray(0, fs.readSync(fd, window, 0, length, from));
+      };
+      const head = read(0);
+      let tail: Buffer | null = null;
+      // A file that fits in the window has its tail in the head already.
+      const readTail = () => (tail ??= size <= length ? head : read(size - length));
+      return titleVerdict(fileTitle(extname(file).slice(1), head, readTail), title);
     } finally {
       fs.closeSync(fd);
     }
@@ -1008,10 +1011,14 @@ function titleInTags(file: string, size: number, title: string): 'same' | 'other
 
 // What a server's song offers as proof: its byte count and its title, or null
 // when either is missing, which streams the right song: a server that sends no
-// `size`, a shape that dropped it. Checked before any stat, so that costs nothing.
+// `size`, a shape that dropped it. A title longer than any tag field could match
+// is no proof either, and is never normalised, whatever the server sends.
+// Checked before any stat, so all of that costs nothing.
 function proofOf(song): { size: number; title: string } | null {
   const size = Number(song.size);
-  const title = normalizeTitle(String(song.title ?? ''));
+  const raw = String(song.title ?? '');
+  if (raw.length > MAX_TITLE_CHARS) return null;
+  const title = normalizeTitle(raw);
   return Number.isSafeInteger(size) && size > 0 && title ? { size, title } : null;
 }
 
@@ -1022,9 +1029,9 @@ function proofOf(song): { size: number; title: string } | null {
 // the real one: its size, and the title field of its tags. The size alone isn't
 // enough: same-length CBR files with same-length tags come out byte for byte the
 // same size. What's left is a different recording at the same folder and file
-// name, with the same size and the same title in its title field: the same album
-// in two editions, two compilations' `Intro`. Nothing short of the audio tells
-// those apart.
+// name, with the same size and the same title in the field Navidrome reads: the
+// same album in two editions, two compilations' `Intro`. Nothing short of the
+// audio tells those apart.
 function isRequestedFile(file: string, song): boolean {
   const proof = proofOf(song);
   if (!proof) return false;
@@ -1070,8 +1077,9 @@ export function getLocalPath(song) {
 // already passed the stricter test to get here. `unproved` plays anyway: a relative
 // path or a real path inside the mount needs no proof to play, so a stale or
 // different file there is not a miss. `unread` streams although a guess has the
-// track's size, because its tags hold no title the check can read: the likely
-// track, and a mount at Navidrome's own path would play it with no proof. `none`
+// track's size, because its tags hold no title the check can read, or none it
+// can be sure Navidrome reads the same way: the likely track, and a mount at
+// Navidrome's own path would play it with no proof. `none`
 // streams. The extra walk for `unread` is the Doctor's alone; the push path stops
 // at findLibraryFile().
 export function localFileState(song): 'proved' | 'unproved' | 'unread' | 'none' {

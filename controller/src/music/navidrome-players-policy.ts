@@ -115,7 +115,8 @@ export interface LocalPathSample {
   unproved: string[];
   /**
    * Paths with a file of the track's size on the mount whose tags hold no title
-   * the check can read: these stream, though the file is likely the track.
+   * the check can read, or none it can be sure Navidrome reads the same way:
+   * these stream, though the file is likely the track.
    */
   unread: string[];
 }
@@ -234,7 +235,8 @@ function mountFinding(flags: string, sample: LocalPathSample | null | undefined)
   }
   if (sample.unread.length) {
     hints.push(`${sample.unread.length} stream though a file of the track's size is on the mount, for example ${sample.unread[0]}: `
-      + 'its tags hold no title the check can read in the first or last 64 KiB, as when cover art sits ahead of the title, or the format has no ID3, Vorbis or MP4 tags. '
+      + 'its tags hold no title the check can read in the first or last 64 KiB, or none it can be sure Navidrome reads the same way: '
+      + 'cover art ahead of the title, a format whose tags it doesn\'t read (APE, WAV, AIFF, WavPack, WMA), or tags that disagree. '
       + `To play these from disk, ${MOUNT_AT_NAVIDROME_PATH}.`);
   }
   if (sample.unproved.length) {

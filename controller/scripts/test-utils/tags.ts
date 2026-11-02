@@ -100,16 +100,30 @@ export function vorbisComment(comments: Comments, vendor = 'reference libFLAC 1.
 
 const flacBlock = (type: number, data: Buffer, last: boolean) => Buffer.concat([Buffer.from([(last ? 0x80 : 0) | type]), u24be(data.length), data]);
 
-/** `fLaC`, STREAMINFO, an optional PICTURE of `picture` bytes ahead of the comments, then audio. */
-export function flac(comments: Comments, { picture = 0, audio = 4096, id3 = Buffer.alloc(0) as Buffer, words = '' } = {}): Buffer {
+/**
+ * `fLaC`, STREAMINFO, an optional PICTURE of `picture` bytes ahead of the comments,
+ * the VORBIS_COMMENT block (left out with `noComments`), then audio.
+ */
+export function flac(comments: Comments, { picture = 0, audio = 4096, id3 = Buffer.alloc(0) as Buffer, words = '', noComments = false } = {}): Buffer {
+  const blocks: [number, Buffer][] = [[0, Buffer.alloc(34, 1)]];
+  if (picture) blocks.push([6, Buffer.alloc(picture, 0x89)]);
+  if (!noComments) blocks.push([4, vorbisComment(comments)]);
   return Buffer.concat([
     id3,
     latin1('fLaC'),
-    flacBlock(0, Buffer.alloc(34, 1), false),
-    ...(picture ? [flacBlock(6, Buffer.alloc(picture, 0x89), false)] : []),
-    flacBlock(4, vorbisComment(comments), true),
+    ...blocks.map(([type, data], i) => flacBlock(type, data, i === blocks.length - 1)),
     audioBytes(audio, words),
   ]);
+}
+
+/** An APEv2 tag: items, then the 32-byte `APETAGEX` footer, as foobar2000 writes it. */
+export function apeTag(fields: Record<string, string>): Buffer {
+  const items = Object.entries(fields).map(([k, v]) => {
+    const value = Buffer.from(v, 'utf8');
+    return Buffer.concat([u32le(value.length), u32le(0), latin1(k), Buffer.from([0]), value]);
+  });
+  const body = Buffer.concat(items);
+  return Buffer.concat([body, latin1('APETAGEX'), u32le(2000), u32le(body.length + 32), u32le(items.length), u32le(0), Buffer.alloc(8)]);
 }
 
 // Ogg pages for one stream's packets, at most `segments` lacing values a page, so
@@ -161,10 +175,12 @@ const dataAtom = (value: Buffer, type: number) => atom('data', u32be(type), u32b
  * An M4A: `ftyp`, then `moov` ahead of `mdat` (fast start) or after it (the default
  * writer). `tables` stands in for the sample tables ahead of `udta`; `cover` adds
  * a `covr` of that many bytes after `©nam`, as ffmpeg writes it. The other fields
- * come first, so a reader that took any field would take one of them.
+ * come first, so a reader that took any field would take one of them. `stale`
+ * puts a `free` atom holding an old `ilst` with that `©nam` just ahead of `moov`,
+ * as retagging in place leaves it.
  */
 export function mp4({ title, album, artist, utf16 = false }: { title?: string; album?: string; artist?: string; utf16?: boolean },
-  { layout = 'fast' as 'fast' | 'late', tables = 2000, cover = 0, audio = 4096, words = '' } = {}): Buffer {
+  { layout = 'fast' as 'fast' | 'late', tables = 2000, cover = 0, audio = 4096, words = '', stale = undefined as string | undefined } = {}): Buffer {
   const text = (s: string) => utf16 ? dataAtom(Buffer.from(s, 'utf16le').swap16(), 2) : dataAtom(Buffer.from(s, 'utf8'), 1);
   const ilst = atom('ilst',
     ...(album !== undefined ? [atom(ALB, text(album))] : []),
@@ -175,5 +191,6 @@ export function mp4({ title, album, artist, utf16 = false }: { title?: string; a
   const moov = atom('moov', atom('mvhd', Buffer.alloc(100)), atom('trak', Buffer.alloc(tables, 0x11)), atom('udta', meta));
   const ftyp = atom('ftyp', latin1('M4A '), u32be(512), latin1('M4A isomiso2'));
   const mdat = atom('mdat', audioBytes(audio, words));
-  return Buffer.concat(layout === 'fast' ? [ftyp, moov, mdat] : [ftyp, mdat, moov]);
+  const old = stale === undefined ? [] : [atom('free', atom('ilst', atom(NAM, text(stale))))];
+  return Buffer.concat(layout === 'fast' ? [ftyp, ...old, moov, mdat] : [ftyp, mdat, ...old, moov]);
 }
