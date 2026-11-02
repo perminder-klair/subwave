@@ -95,10 +95,11 @@ test('searchKeyMismatch names whose key it is, and an empty key is not a mismatc
 });
 
 test('searchProvidersRefusing lists the keyed providers that would refuse a key', () => {
-  assert.deepEqual(searchProvidersRefusing('fc-abc'), ['tavily', 'brave']);
-  assert.deepEqual(searchProvidersRefusing('tvly-abc'), ['brave', 'firecrawl']);
-  assert.deepEqual(searchProvidersRefusing('keen_abc'), ['tavily', 'brave', 'firecrawl']);
-  assert.deepEqual(searchProvidersRefusing('BSAabc'), ['firecrawl']);
+  assert.deepEqual(searchProvidersRefusing('fc-abc'), ['tavily', 'brave', 'outcrawl']);
+  assert.deepEqual(searchProvidersRefusing('tvly-abc'), ['brave', 'firecrawl', 'outcrawl']);
+  assert.deepEqual(searchProvidersRefusing('keen_abc'), ['tavily', 'brave', 'firecrawl', 'outcrawl']);
+  assert.deepEqual(searchProvidersRefusing('BSAabc'), ['firecrawl', 'outcrawl']);
+  assert.deepEqual(searchProvidersRefusing('ock_abc.def'), ['tavily', 'brave', 'firecrawl']);
   assert.deepEqual(searchProvidersRefusing(''), []);
   assert.equal(searchKeyRequired('tavily'), true);
   assert.equal(searchKeyRequired('keenable'), false);
@@ -109,6 +110,7 @@ const FOREIGN: Array<[provider: 'tavily' | 'brave', key: string, sentence: strin
   ['tavily', 'fc-firecrawl-secret', 'The key on file is a Firecrawl key, not a Tavily key'],
   ['tavily', 'keen_keenable-secret', 'The key on file is a Keenable key, not a Tavily key'],
   ['brave', 'fc-firecrawl-secret', 'The key on file is a Firecrawl key, not a Brave Search key'],
+  ['tavily', 'ock_outcrawl.secret', 'The key on file is an Outcrawl key, not a Tavily key'],
   ['brave', 'tvly-tavily-secret', 'The key on file is a Tavily key, not a Brave Search key'],
   ['brave', 'keen_keenable-secret', 'The key on file is a Keenable key, not a Brave Search key'],
 ];
@@ -196,9 +198,9 @@ test('searchKeyRefusedBy follows the key on file, saved or env', async (t) => {
   await settings.update({ search: { provider: 'duckduckgo', apiKey: '' } });
   assert.deepEqual(searchKeyRefusedBy(), []);
   process.env.SEARCH_API_KEY = 'fc-env';
-  assert.deepEqual(searchKeyRefusedBy(), ['tavily', 'brave']);
+  assert.deepEqual(searchKeyRefusedBy(), ['tavily', 'brave', 'outcrawl']);
   await settings.update({ search: { apiKey: 'tvly-saved' } });
-  assert.deepEqual(searchKeyRefusedBy(), ['brave', 'firecrawl']);
+  assert.deepEqual(searchKeyRefusedBy(), ['brave', 'firecrawl', 'outcrawl']);
 });
 
 test('GET /settings serves keyRefusedBy', async (t) => {

@@ -721,9 +721,12 @@ export async function runCapability(
     const keyProblem = refusedKeyProblem(cap);
     if (keyProblem) {
       hint = ` — ${keyProblem}. Paste one into Settings → Web search`;
-    } else if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave' || searchProvider === 'firecrawl')) {
-      const name = searchProvider === 'brave' ? 'Brave Search' : searchProvider === 'firecrawl' ? 'Firecrawl' : 'Tavily';
-      hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
+    } else if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave' || searchProvider === 'firecrawl' || searchProvider === 'outcrawl')) {
+      const name = searchProvider === 'brave' ? 'Brave Search'
+        : searchProvider === 'firecrawl' ? 'Firecrawl'
+        : searchProvider === 'outcrawl' ? 'Outcrawl'
+        : 'Tavily';
+      hint = ` — set SEARCH_API_KEY or paste ${name === 'Outcrawl' ? 'an' : 'a'} ${name} key into the admin UI`;
     } else if (cap.toolPending && !cap.toolFn) {
       hint = ' — its tool.mjs is awaiting your review in /admin/skills';
     } else if (cap.requiresKey) {
@@ -897,7 +900,7 @@ export function skillCatalog() {
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
     // web-search's key requirement depends on the active provider:
-    // Tavily/Brave/Firecrawl need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
+    // Tavily/Brave/Firecrawl/Outcrawl need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -911,6 +914,9 @@ export function skillCatalog() {
       } else if (searchProvider === 'firecrawl') {
         requiresKey = 'SEARCH_API_KEY';
         keyUrl = 'https://www.firecrawl.dev/app/api-keys';
+      } else if (searchProvider === 'outcrawl') {
+        requiresKey = 'SEARCH_API_KEY';
+        keyUrl = 'https://outcrawl.ai/console';
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;

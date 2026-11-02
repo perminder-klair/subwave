@@ -162,3 +162,24 @@ test('watching ready() leaves the shared services object alone', async (t) => {
   skillCatalog();
   assert.equal(buildStationServices().searchReady, searchReady);
 });
+
+test('Outcrawl names a refused key the same way, and an ock_ key clears it', async (t) => {
+  await setSearch(t, { provider: 'outcrawl', apiKey: 'fc-left-over' });
+  for (const name of SEARCH_GATED) {
+    const skill = row(name);
+    assert.equal(skill.ready, false, name);
+    assert.match(skill.keyProblem, /not an Outcrawl key/, name);
+  }
+  await assert.rejects(runCapability('web-search', {}), /not an Outcrawl key.*Settings → Web search/);
+
+  await settings.update({ search: { provider: 'outcrawl', apiKey: 'ock_a-real.one' } });
+  assert.equal(searchKeyProblem(), null);
+  assert.equal(row('web-search').ready, true);
+  assert.equal(row('web-search').keyUrl, 'https://outcrawl.ai/console');
+});
+
+test('Run now asks for an Outcrawl key when none is set', async (t) => {
+  await setSearch(t, { provider: 'outcrawl', apiKey: '' });
+  await assert.rejects(runCapability('web-search', {}), /set SEARCH_API_KEY or paste an Outcrawl key/);
+  assert.equal(row('web-search').requiresKey, 'SEARCH_API_KEY');
+});

@@ -53,7 +53,7 @@ function briefLlmError(err: unknown): string {
 
 // Non-mutating probe of one secret; builds a one-off client and never writes
 // process.env or secrets.env. `hint` disambiguates a key shared by several
-// providers (SEARCH_API_KEY is Tavily, Brave, Keenable or Firecrawl) because the UI tests before
+// providers (SEARCH_API_KEY is Tavily, Brave, Keenable, Firecrawl or Outcrawl) because the UI tests before
 // saving, so the stored provider can't be trusted mid-edit; it falls back to
 // the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
 // Responses API rejects anything below 16.
@@ -202,6 +202,23 @@ async function probeKey(
         }
         if (left <= 0) return { ok: false, message: 'Firecrawl key valid, but it has no credits left' };
         return { ok: true, message: `✓ Firecrawl key valid · ${left} credit${left === 1 ? '' : 's'} left` };
+      }
+      if (provider === 'outcrawl') {
+        // Outcrawl searches refuse anything but an ock_ key, so the probe does too.
+        const refusal = refused('outcrawl');
+        if (refusal) return refusal;
+        // A one-result search: 401 is a bad key, 402 a key with no credits left.
+        const r = await fetch('https://api.outcrawl.ai/v1/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${value}` },
+          body: JSON.stringify({ query: 'test', limit: 1 }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (r.status === 402) return { ok: false, message: 'Outcrawl key valid, but it has no credits left' };
+        if (!r.ok) {
+          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected: check it\'s correct and active' : `Request failed (${r.status})` };
+        }
+        return { ok: true, message: '✓ Outcrawl key valid' };
       }
       const refusal = refused('tavily');
       if (refusal) return refusal;

@@ -21,6 +21,10 @@ test('a key on file is foreign to exactly the providers that refuse it', () => {
   assert.equal(searchKeyIsForeign('firecrawl', true, ['brave', 'firecrawl']), true);
   assert.equal(searchKeyIsForeign('tavily', true, ['brave', 'firecrawl']), false);
   assert.equal(searchKeyIsForeign('tavily', true, []), false);
+  // An Outcrawl key: everyone but Outcrawl refuses it.
+  const oc = ['tavily', 'brave', 'firecrawl'];
+  assert.equal(searchKeyIsForeign('firecrawl', true, oc), true);
+  assert.equal(searchKeyIsForeign('outcrawl', true, oc), false);
 });
 
 test('no key on file is plain missing, never foreign', () => {

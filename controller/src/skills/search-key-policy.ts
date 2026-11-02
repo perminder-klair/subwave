@@ -6,8 +6,8 @@
 // searchReady(), searchKeyProblem(), the doctor, the admin "Test key" probe and
 // the Settings → Web search warning.
 //
-// Firecrawl and Keenable publish a prefix and take only a key that carries it:
-// Firecrawl refuses anything else, Keenable runs keyless instead. Tavily's and
+// Firecrawl, Keenable and Outcrawl publish a prefix and take only a key that carries it:
+// Firecrawl and Outcrawl refuse anything else, Keenable runs keyless instead. Tavily's and
 // Brave's key formats aren't confirmed, so an allowlist could lock out a working
 // key. They refuse only a key carrying another provider's known prefix, and any
 // other key still goes through.
@@ -21,11 +21,17 @@ import { SEARCH_PROVIDER_CATALOG } from '../schemas/settings.js';
 const KEY_PREFIX: Readonly<Record<string, string>> = {
   firecrawl: 'fc-',
   keenable: 'keen_',
+  outcrawl: 'ock_',
   tavily: 'tvly-',
 };
 
 // Providers that take only a key carrying their own prefix.
-const PREFIX_REQUIRED: ReadonlySet<string> = new Set(['firecrawl', 'keenable']);
+const PREFIX_REQUIRED: ReadonlySet<string> = new Set(['firecrawl', 'keenable', 'outcrawl']);
+
+// "a Tavily key", "an Outcrawl key".
+function withArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
 
 function keyName(provider: string): string {
   const entry = SEARCH_PROVIDER_CATALOG.find((p) => p.id === provider);
@@ -56,9 +62,9 @@ export function searchKeyMismatch(provider: string, key: string): string | null 
   const k = key.trim();
   if (!k || searchKeyFits(provider, k)) return null;
   if (PREFIX_REQUIRED.has(provider)) {
-    return `not a ${keyName(provider)} key (they start with ${KEY_PREFIX[provider]})`;
+    return `not ${withArticle(keyName(provider))} key (they start with ${KEY_PREFIX[provider]})`;
   }
-  return `a ${keyName(prefixOwner(k) ?? '')} key, not a ${keyName(provider)} key`;
+  return `${withArticle(keyName(prefixOwner(k) ?? ''))} key, not ${withArticle(keyName(provider))} key`;
 }
 
 // True when the provider can't search without a key (the catalogue's

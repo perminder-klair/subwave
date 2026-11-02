@@ -108,6 +108,7 @@ test('a key with a control character is refused before any probe, without echoin
     { key: 'SEARCH_API_KEY', provider: 'brave' },
     { key: 'SEARCH_API_KEY', provider: 'keenable' },
     { key: 'SEARCH_API_KEY', provider: 'firecrawl' },
+    { key: 'SEARCH_API_KEY', provider: 'outcrawl' },
     { key: 'ELEVENLABS_API_KEY' },
     { key: 'LISTENBRAINZ_USER_TOKEN' },
     { key: 'EMBEDDING_API_KEY' },
@@ -259,4 +260,35 @@ test('Firecrawl: one credit reads in the singular, and a body with no count stay
     assert.equal(r.message, '✓ Firecrawl key valid');
     t.mock.restoreAll();
   }
+});
+
+test('Outcrawl: a key is probed with a one-result search; 401 reads as rejected, 402 as drained', async (t) => {
+  const outbound = stubProvider(t, 200, { hits: [], usage: { credits: '0' } });
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_good.secret', provider: 'outcrawl' });
+  assert.equal(r.ok, true);
+  assert.equal(r.message, '✓ Outcrawl key valid');
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].url, 'https://api.outcrawl.ai/v1/search');
+  assert.equal(outbound[0].method, 'POST');
+  assert.equal(outbound[0].headers.get('authorization'), 'Bearer ock_good.secret');
+  t.mock.restoreAll();
+
+  stubProvider(t, 401, { error: 'invalid api key' });
+  const rejected = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_bad.secret', provider: 'outcrawl' });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.message, 'Key rejected: check it\'s correct and active');
+  t.mock.restoreAll();
+
+  stubProvider(t, 402, { error: 'out of credits' });
+  const drained = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_drained.secret', provider: 'outcrawl' });
+  assert.equal(drained.ok, false);
+  assert.equal(drained.message, 'Outcrawl key valid, but it has no credits left');
+});
+
+test("Outcrawl: another provider's key is refused without a request", async (t) => {
+  const outbound = stubProvider(t, 200);
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-left-over', provider: 'outcrawl' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, 'Not an Outcrawl key (they start with ock_)');
+  assert.equal(outbound.length, 0);
 });
