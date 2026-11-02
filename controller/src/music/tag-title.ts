@@ -34,8 +34,9 @@
 //   and be sound. Unsure: anything else on the way, an ID3v2 tag in front of the
 //   file, another item whose name Navidrome lower-cases into one of its title or
 //   subtitle keys (`TIT2`, `inam`, `©NAM`, a freeform `TITLE`), a `©nam` or
-//   freeform item with a 64-bit size, and a `data` atom TagLib reads its own way:
-//   under 16 bytes, of 2^31 or more, or running past its item.
+//   freeform item with a 64-bit size, a `data` atom TagLib reads its own way
+//   (under 16 bytes, of 2^31 or more, or running past its item), and a `©nam` or
+//   freeform item after one whose data lies outside the windows.
 // - Anything else (WAV, AIFF, WavPack, APE, WMA…) has no title this reads.
 // Each value is read up to its first NUL, as TagLib reads it, and Navidrome drops
 // empty values, so the title is the first that isn't. A title or subtitle value
