@@ -32,6 +32,7 @@ const { buildPickerTools } = await import('../src/llm/internal/tools/picker/inde
 const { buildPickerContext, pickerScope } = await import('../src/llm/internal/tools/picker/scope.js');
 const { buildShortlist } = await import('../src/music/shortlist.js');
 const { runArtistGuard } = await import('../src/broadcast/dj-agent/artist-guard.js');
+const { showPreparation } = await import('../src/broadcast/show-preparation.js');
 
 type Song = { id: string; title: string; artist: string; duration: number; genre?: string; genres?: Array<{ name: string }>; explicitStatus?: string };
 let seq = 0;
@@ -342,6 +343,22 @@ test('pool: nothing but tagged tracks leaves the slot to the coast, with no mode
   assert.equal(picked, null);
   assert.equal(modelCalls, 0);
   assert.ok(logs.some(l => /clean show "Clean Hour".*2 track\(s\) tagged explicit.*auto-playlist/.test(l)), logs.join(' | '));
+});
+
+test('pool: a prepared episode holds the line too, and this gate is all that stands in its way', async (t) => {
+  // Prepared before the show went clean, or before the walk that tagged its
+  // artist. An episode's tracks reach the pool directly, past every source's own
+  // sampling, so add() is the only filter on them.
+  const show = await onAir({ excludeExplicit: true });
+  const tracks = [TAGGED, UNTAGGED];
+  t.mock.method(showPreparation, 'read', () => ({
+    music: { kind: 'artist', identity: 'episode', artist: { id: 'a', name: 'A' }, tracks, ids: new Set(tracks.map(s => s.id)) },
+    status: { kind: 'ready', occurrence: { id: 'o' } },
+    editorial: null,
+  }) as never);
+  const { q } = stubQueue();
+  await pool(q, show);
+  assert.deepEqual(offered.flat().map(c => c.id), ['untagged']);
 });
 
 test('pool: an empty pool that a clean show did not cause logs nothing about it', async () => {
