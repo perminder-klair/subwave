@@ -162,32 +162,29 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
   markTextVectorDirty(id);
 }
 
-// text_vector_sound, the Sound: words the vector was built from (migration 36).
+// text_vector_sound, the Sound: words the vector was built from (migration 36),
+// by part. A null part is one a relabel-all forgot (forgetVectorSoundIfMoved).
 // Anything unreadable is unknown, like NULL.
-function parseVectorSound(json: string | null): SoundWords | null {
+type BuiltSound = { [P in SoundPart]: string[] | null };
+function parseVectorSound(json: string | null): BuiltSound | null {
   if (json == null) return null;
   try {
     const v = JSON.parse(json);
-    if (Array.isArray(v?.moods) && Array.isArray(v?.measured)) {
-      return { moods: v.moods.map(String), measured: v.measured.map(String) };
-    }
+    const part = (x: unknown) => (Array.isArray(x) ? x.map(String) : x === null ? null : undefined);
+    const moods = part(v?.moods);
+    const measured = part(v?.measured);
+    if (moods !== undefined && measured !== undefined) return { moods, measured };
   } catch { /* unknown */ }
   return null;
 }
 
 const sameWords = (a: string[], b: string[]) => a.length === b.length && a.every((w, i) => w === b[i]);
 
-// A measurement that lands after its vector (#2236): a new track is embedded in
-// phase 1 and analysed in phase 5, so its first vector has no Sound: line. The
-// one rule: a write marks the vector when the words of a part it writes now
-// differ from the words the vector was built from. Against the vector, never the
-// row before the write: a re-analyze clears the row first, so a before/after
-// compare would call every row changed. By part, because the parts land at
-// different times (sound-line.ts). Unknown (NULL) never marks, so a vector from
-// before the upgrade stays on manual Re-embed. One-way, like the era mark: equal
-// words never clear a flag another writer set. The row is read as getTrack()
-// would see it, with the tail through SQL_TAIL_VOCAL_RANGES, never outro_json.
-export function markTextVectorDirtyIfSoundChanged(id: string, parts: readonly SoundPart[]): void {
+// The row's Sound: words now, beside the words its vector was built from. Null
+// when the row is gone or the vector's words are unknown. The row is read as
+// getTrack() would see it, with the tail through SQL_TAIL_VOCAL_RANGES, never
+// outro_json.
+function soundAgainstVector(id: string): { now: SoundWords; built: BuiltSound } | null {
   const row = requireDb()
     .prepare(
       `SELECT bpm, musical_key, audio_moods, vocal_ranges_json,
@@ -198,15 +195,45 @@ export function markTextVectorDirtyIfSoundChanged(id: string, parts: readonly So
       tail_vocal_ranges_json: string | null;
     }) | undefined;
   const built = parseVectorSound(row?.text_vector_sound ?? null);
-  if (!row || !built) return;
+  if (!row || !built) return null;
   const now = soundWords({
     bpm: row.bpm, musicalKey: row.musical_key,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     ...parseVocalRangesJson(row.vocal_ranges_json),
     ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
   });
-  if (parts.every(p => sameWords(now[p], built[p]))) return;
+  return { now, built };
+}
+
+// A measurement that lands after its vector (#2236): a new track is embedded in
+// phase 1 and analysed in phase 5, so its first vector has no Sound: line. The
+// one rule: a write marks the vector when the words of a part it writes now
+// differ from the words the vector was built from. Against the vector, never the
+// row before the write: a re-analyze clears the row first, so a before/after
+// compare would call every row changed. By part, because the parts land at
+// different times (sound-line.ts). Unknown (NULL, or a part a relabel-all forgot)
+// never marks, so a vector from before the upgrade stays on manual Re-embed.
+// One-way, like the era mark: equal words never clear a flag another writer set.
+export function markTextVectorDirtyIfSoundChanged(id: string, parts: readonly SoundPart[]): void {
+  const s = soundAgainstVector(id);
+  if (!s) return;
+  if (parts.every(p => s.built[p] == null || sameWords(s.now[p], s.built[p]))) return;
   markTextVectorDirty(id);
+}
+
+// A relabel-all (a vocabulary or calibration change, or crossing the floor) moves
+// a part's words on every row at once and marks nothing, or it would re-embed the
+// whole library. The vectors still hold the old words, though, and an identical
+// --re-analyze relabels every row again through the incremental branch, which
+// would find each one changed and mark it: the same whole library, one re-analyze
+// later. So the relabel forgets the part where it moved the vector's words, and
+// that part stays unknown until the vector is rebuilt.
+export function forgetVectorSoundIfMoved(id: string, part: SoundPart): void {
+  const s = soundAgainstVector(id);
+  if (!s || s.built[part] == null || sameWords(s.now[part], s.built[part])) return;
+  requireDb()
+    .prepare(`UPDATE tracks SET text_vector_sound = ? WHERE id = ?`)
+    .run(JSON.stringify({ ...s.built, [part]: null }), id);
 }
 
 // Existing vectors whose source text changed: an era edit, (opt-in) the track's

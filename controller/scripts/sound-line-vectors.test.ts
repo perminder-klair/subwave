@@ -231,6 +231,61 @@ test('a relabel-all embeds nothing, though it changes every label', async () => 
   assert.deepEqual(dirty(), []);
 });
 
+test('an identical re-analyze after a relabel-all embeds nothing', async () => {
+  // A settled station: every analysed track has a vector built from its row as the
+  // analyzer measures it now (new-b's tempo went back after the test above).
+  await analyse({ reAnalyze: true });
+  await phaseEmbed(db.analysedIds(), 8, 'plain');
+  drain();
+  assert.deepEqual(dirty(), []);
+  const labels = () => new Map(db.analysedIds().map(id => [id, db.getTrack(id)!.audioMoods.join(',')]));
+  const before = labels();
+  // A vocabulary edit relabels every row and marks none, so the vectors keep the
+  // mood words they were built from. A re-analyze then clears the moods, and its
+  // mood pass relabels every row through the incremental branch: compared with
+  // those words, each row the edit moved would mark, and the next tag run would
+  // re-embed the library.
+  const vocab = settings.get().moods;
+  await settings.update({
+    moods: vocab.map(m => ({ ...m, clapPrompt: `${m.clapPrompt || m.name} at dusk` })),
+  } as never);
+  await runAudioMoodPass();
+  const after = labels();
+  const moved = [...after].filter(([id, l]) => before.get(id) !== l).length;
+  assert.ok(moved > 50, `the edit moved most labels (${moved})`);
+  assert.deepEqual(dirty(), [], 'the relabel marks nothing');
+
+  await analyse({ reAnalyze: true });
+  assert.deepEqual(labels(), after, 'the same labels');
+  assert.deepEqual(dirty(), [], 'nothing marked');
+  await reembedMarked();
+  assert.deepEqual(drain(), [], 'no embed call');
+
+  await settings.update({ moods: vocab } as never);
+  await runAudioMoodPass();
+  assert.deepEqual(dirty(), []);
+});
+
+test('moods that land after their vector mark it once, with no measured change', async () => {
+  // Analysed without CLAP and embedded with its measured words; the audio backfill
+  // brings the CLAP vector later, so only the mood pass's incremental write moves
+  // its words.
+  addTrack('late-moods');
+  db.upsertTrackAnalysis('late-moods', { bpm: 124, musicalKey: '8A', source: 'full' });
+  await phaseEmbed(['late-moods'], 8, 'plain');
+  assert.match(drain()[0], /\nSound: upbeat tempo, minor key$/m);
+
+  await analyse();
+  assert.ok(db.getTrack('late-moods')!.audioMoods.length > 0, 'the incremental mood branch labelled it');
+  assert.deepEqual(dirty(), ['late-moods']);
+  await reembedMarked();
+  const once = drain();
+  assert.equal(once.length, 1);
+  assert.match(once[0], /\nSound: .+, upbeat tempo, minor key$/m);
+  await reembedMarked();
+  assert.deepEqual(drain(), [], 'then never again');
+});
+
 test('a late tail measurement that removes "instrumental" embeds once', async () => {
   addTrack('tail');
   db.upsertTrackAnalysis('tail', { bpm: 124, musicalKey: '8A', vocalRanges: [], source: 'full' });

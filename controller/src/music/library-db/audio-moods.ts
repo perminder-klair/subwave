@@ -14,7 +14,7 @@ import {
 } from './audio-scores.js';
 // Every backfill scope must keep this exclusion, or an unanalysable file is
 // re-attempted forever (#1300).
-import { analysisFailureExclusion, markTextVectorDirtyIfSoundChanged } from './tracks.js';
+import { analysisFailureExclusion, forgetVectorSoundIfMoved, markTextVectorDirtyIfSoundChanged } from './tracks.js';
 import { deleteFacetRows } from './facets.js';
 import { touchGenreInputs } from './genre-inputs.js';
 
@@ -79,6 +79,20 @@ export function setNewTrackAudioMoodLabelsBulk(
   requireDb().transaction(() => {
     setTrackAudioMoodLabelsBulk(rows);
     for (const { id } of rows) markTextVectorDirtyIfSoundChanged(id, ['moods']);
+  })();
+}
+
+// The relabel-all's write (a vocabulary or calibration change, or crossing the
+// floor). It never marks, and where it moves the mood words a vector was built
+// from it forgets them (tracks.ts forgetVectorSoundIfMoved), or the next
+// identical --re-analyze would mark every row it moved (#2236).
+export function setRelabelledTrackAudioMoodLabelsBulk(
+  rows: Array<{ id: string; moods: string[] }>,
+): void {
+  if (rows.length === 0) return;
+  requireDb().transaction(() => {
+    setTrackAudioMoodLabelsBulk(rows);
+    for (const { id } of rows) forgetVectorSoundIfMoved(id, 'moods');
   })();
 }
 
