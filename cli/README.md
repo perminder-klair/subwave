@@ -170,11 +170,12 @@ npm run build:linux-x64     # or just one
 ```
 
 `npm run build:*` runs `prebuild` (`embed-assets` + `patch-clack`) first, so a
-local build carries current assets and the Clack patch. CI doesn't use these
-scripts: `publish-cli.yml` and `cli-smoke.yml` run `patch-clack` themselves
-after `bun install`, and `scripts/check-clack-patch.mjs` fails the build if a
-compiled binary doesn't forward `input` at the prompt sites (#2202). Any new
-build path must do both.
+local build carries current assets and the Clack patch, then runs
+`check-clack-patch` on the binary it wrote. CI doesn't use these scripts:
+`publish-cli.yml` and `cli-smoke.yml` run `patch-clack` themselves after
+`bun install`, then run `scripts/check-clack-patch.mjs` on every compiled
+binary. The check fails the build if a binary doesn't forward `input` at the
+prompt sites (#2202). Any new build path must do both.
 
 ### Layout
 

@@ -4,8 +4,10 @@ name: CLI smoke
 # The bug it guards against (#2196) only exists in a compiled binary, so a `tsx`
 # run can't catch it.
 #
-# Builds the same way as publish-cli.yml, patch-clack included, and checks the
+# Like publish-cli.yml, it runs patch-clack after `bun install` and checks the
 # compiled binary still forwards the /dev/tty `input` to its prompts (#2202).
+# Unlike publish-cli.yml, it compiles the committed assets as they are, with no
+# embed-assets step.
 #
 # Pull requests only, and separate from publish-cli.yml on purpose: a PR catches
 # the regression sooner, and this check must never be able to block a release.
