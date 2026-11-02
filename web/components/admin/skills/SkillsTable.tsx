@@ -57,7 +57,7 @@ export function SkillsTable({
           {s.toolPending ? (
             <MetaChip className="border-[var(--danger)] text-[var(--danger)]">code to review</MetaChip>
           ) : s.ready === false && (
-            <MetaChip className="border-[var(--danger)] text-[var(--danger)]">needs key</MetaChip>
+            <MetaChip className="border-[var(--danger)] text-[var(--danger)]">{s.keyProblem ? 'wrong key' : 'needs key'}</MetaChip>
           )}
           {isPinned(s) && <MetaChip accent>pinned</MetaChip>}
         </span>

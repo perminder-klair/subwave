@@ -14,3 +14,13 @@ test('every Advanced anchor names a searchable card in its own section', () => {
     }
   }
 });
+
+// The dirs it names left the library, so "orphan" and "quarantine" are the only
+// words an operator has for this card.
+test('the orphan stems card is findable by what it does', () => {
+  const entry = SETTINGS_INDEX.find(e => e.card === 'Orphan stems cleanup');
+  assert.ok(entry, 'no SETTINGS_INDEX entry');
+  assert.equal(entry.section, 'stems');
+  const words = `${entry.label} ${entry.keywords}`.toLowerCase();
+  for (const word of ['orphan', 'quarantine', 'purge']) assert.ok(words.includes(word), word);
+});
