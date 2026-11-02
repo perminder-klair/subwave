@@ -591,16 +591,21 @@ export default function MoodsPanel() {
               <ScrollArea className="max-h-[360px]">
                 <div className="flex flex-col gap-3 pr-2">
                   {corrFields.map((field, idx) => (
+                    // From sm up the row is a grid whose two fields share its rows
+                    // (subgrid): label, input, hint, error. Only "Spoken form"
+                    // has a hint, so aligning the fields by their bottom edge
+                    // left its input a line above the other; on shared rows
+                    // both inputs and the remove button sit on one line.
                     <div
                       key={field._rhfKey}
-                      className="flex flex-col gap-2 border-b border-ink/10 pb-3 last:border-0 sm:flex-row sm:items-end sm:gap-3"
+                      className="flex flex-col gap-2 border-b border-ink/10 pb-3 last:border-0 sm:grid sm:grid-cols-[1fr_1fr_auto] sm:gap-x-3"
                     >
                       <TextField
                         control={arrayControl}
                         name={`corrections.${idx}.from`}
                         label="Text on air"
                         placeholder="text on air (e.g. GHz)"
-                        className="sm:flex-1"
+                        className="sm:row-span-4 sm:grid sm:grid-rows-subgrid sm:content-start"
                         maxLength={CORRECTION_FROM_MAX}
                       />
                       <TextField
@@ -610,12 +615,12 @@ export default function MoodsPanel() {
                         placeholder="spoken form (e.g. gigahertz)"
                         description="leave empty to drop the word"
                         maxLength={CORRECTION_TO_MAX}
-                        className="sm:flex-1"
+                        className="sm:row-span-4 sm:grid sm:grid-rows-subgrid sm:content-start"
                       />
                       <Btn
                         sm
                         title="Remove correction"
-                        className="size-9 shrink-0 self-start sm:self-end"
+                        className="size-9 shrink-0 self-start sm:col-start-3 sm:row-start-2 sm:self-center"
                         onClick={() => removeCorr(idx)}
                       >
                         <Trash2 size={12} />
