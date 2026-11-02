@@ -29,6 +29,7 @@ const DESCRIPTOR_PASS: ZeroShotSpec = {
   pageScores: db.pageAudioDescriptorScores,
   writeLabels: db.setTrackAudioDescriptorLabelsBulk,
   select: selectAudioDescriptors,
+  needsBaselines: true,
   say: {
     relabelled: (count, calibrated) =>
       `Re-derived sound descriptors for ${count.toLocaleString('en-GB')} tracks` +

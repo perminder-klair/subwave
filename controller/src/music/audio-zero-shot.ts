@@ -10,7 +10,9 @@ import {
   computeBaselines,
   moodPassAction,
   moodStateHashFor,
+  parseMoodStateHash,
   prunedBaselines,
+  UNCALIBRATED_VERSION,
   type MoodBaselines,
 } from './audio-calibration.js';
 import type { TaggerEventKind } from './tagger-progress.js';
@@ -44,6 +46,9 @@ export interface ZeroShotSpec {
   pageScores(afterId: string, limit: number): { items: ScoreRow[]; lastId: string | null };
   writeLabels(rows: Array<{ id: string; labels: string[] }>): void;
   select(scores: Record<string, number>, baselines: MoodBaselines | null): string[];
+  // select() returns nothing without baselines, so a library still under the
+  // floor has no labels to re-derive. Moods fall back to raw and leave this off.
+  needsBaselines?: boolean;
   say: {
     relabelled(count: number, calibrated: boolean): string;
     towerFailed: string;
@@ -119,6 +124,11 @@ export async function runZeroShotPass(spec: ZeroShotSpec): Promise<ZeroShotStats
   if (ids.length === 0) {
     if (action !== 'relabel') return { scored: 0, scope: 0, skipped: null };
     const baselines = loadBaselines(spec);
+    // Owed until the library crosses the floor, which would otherwise repeat this
+    // rewrite and its log line on every pass until then.
+    if (!baselines && spec.needsBaselines && parseMoodStateHash(stored)?.version === UNCALIBRATED_VERSION) {
+      return { scored: 0, scope: 0, skipped: null, calibrated: false };
+    }
     const relabelled = relabelAllFromStoredScores(spec, baselines);
     spec.writeState(moodStateHashFor(hash, !!baselines, spec.version));
     spec.logEvent('success', spec.say.relabelled(relabelled, !!baselines));

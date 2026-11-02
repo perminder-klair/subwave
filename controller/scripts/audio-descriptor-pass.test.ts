@@ -127,6 +127,25 @@ test('under the baseline floor it stores the scores and selects no labels', asyn
   );
 });
 
+test('an idle pass under the floor writes nothing and says nothing', async () => {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...args: unknown[]) => { lines.push(args.join(' ')); };
+  const towerBefore = tower.calls;
+  const writesBefore = (requireDb().prepare('SELECT total_changes() AS n').get() as { n: number }).n;
+  let stats;
+  try {
+    stats = await runAudioDescriptorPass();
+  } finally {
+    console.log = log;
+  }
+  assert.deepEqual(stats, { scored: 0, scope: 0, skipped: null, calibrated: false });
+  assert.equal((requireDb().prepare('SELECT total_changes() AS n').get() as { n: number }).n, writesBefore);
+  assert.equal(tower.calls, towerBefore);
+  assert.deepEqual(lines, []);
+  assert.equal(db.getAudioDescriptorVocabHash(), `${audioDescriptorVocabHash()}:0`, 'the labels are still owed');
+});
+
 test('crossing the floor labels the tracks scored under it, across a page boundary', async () => {
   addTracks(150, 720);
   const stats = await runAudioDescriptorPass();
