@@ -888,6 +888,17 @@ test('a high-confidence title typo is offered through a bounded fuzzy search, as
   assert.ok((result.confidence || 0) >= 0.92);
 });
 
+test('a title in another script is an exact title when only the local library holds it', async () => {
+  // The server's search can't cross scripts; the local candidates can, and a
+  // transliteration that equals the title is a match, never a near title.
+  const kino = { id: 'kino', title: 'Kino', artist: 'Flora' };
+  const f = fixture({ searchPage: async () => ({ songs: [], rawCount: 0 }), fuzzySearch: async () => [kino] });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Кино'), literal: true }, { ...f.deps, text: 'play Кино' });
+  assert.equal(result.track?.id, kino.id);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(result.source, 'local-library');
+});
+
 test('ambiguous fuzzy title matching returns alternatives instead of guessing', async () => {
   const first = { id: 'one', title: 'Hello', artist: 'Adele' };
   const second = { id: 'two', title: 'Hello', artist: 'Lionel Richie' };

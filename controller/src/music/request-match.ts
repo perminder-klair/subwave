@@ -1562,6 +1562,19 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       if (exact) return exact;
       const heldExact = refusal();
       if (heldExact) return heldExact;
+      // Navidrome's token search is intentionally bounded and may miss a
+      // misspelled multi-word title entirely. Ask the local catalogue for a
+      // bounded candidate set before any artist/pool fallback. The verifier
+      // below still owns title/artist similarity and ambiguity decisions.
+      const localAsked = Boolean(catalog.fuzzySearch && !deps.exactIdentity);
+      const local = localAsked
+        ? await safe('local fuzzy search', () => catalog.fuzzySearch!(title!, { signal: deps.signal }), [])
+        : [];
+      // The server's search can't cross scripts, so a title the local library
+      // holds exactly, through the request's transliterations ("Кино" is
+      // Kino), is still an exact title, and a match.
+      const localExact = select(local, 'local-library') || refusal();
+      if (localExact) return localExact;
       // A bare string is tried as an artist after it misses as a title, and
       // before any near title, so "play Queen" is the act and never another
       // act's "Queens". A reading whose title is its own artist is the same ask.
@@ -1592,17 +1605,8 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
           resolvedArtistName = artistName;
         }
       }
-      const fuzzy = selectFuzzy(searched, 'search');
+      const fuzzy = selectFuzzy(searched, 'search') || (localAsked ? selectFuzzy(local, 'local-fuzzy') : null);
       if (fuzzy) return fuzzy;
-      // Navidrome's token search is intentionally bounded and may miss a
-      // misspelled multi-word title entirely. Ask the local catalogue for a
-      // bounded candidate set before any artist/pool fallback. The verifier
-      // above still owns title/artist similarity and ambiguity decisions.
-      if (catalog.fuzzySearch && !deps.exactIdentity) {
-        const local = await safe('local fuzzy search', () => catalog.fuzzySearch!(title!, { signal: deps.signal }), []);
-        const localFuzzy = selectFuzzy(local, 'local-fuzzy');
-        if (localFuzzy) return localFuzzy;
-      }
       // Generic "Title from Artist" is also a common artist frame. Try that
       // alternate identity before treating the trailing name as release
       // context, and only through exact title+artist proof.
