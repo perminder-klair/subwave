@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { after, test, type TestContext } from 'node:test';
+import { after, test, type Mock, type TestContext } from 'node:test';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 import { listen as listenHttp } from './test-utils/http.js';
 
@@ -138,6 +138,24 @@ test('searchWeb: dispatches to Firecrawl and carries the recency through as tbs'
   assert.equal(calls[0].url, 'https://api.firecrawl.dev/v2/search');
   assert.equal(JSON.parse(calls[0].body).tbs, 'qdr:w');
   assert.equal(out.results.length, 5);
+});
+
+test('searchWeb: a request deadline reaches Firecrawl, and its failure is typed', async (t) => {
+  stubSearch(t);
+  await settings.update({ search: { provider: 'firecrawl', apiKey: 'fc-signal' } });
+  const { mock } = globalThis.fetch as Mock<typeof fetch>;
+  const deadline = new AbortController();
+  let sent: AbortSignal | null | undefined;
+  mock.mockImplementation(async (_input, init) => {
+    sent = init?.signal;
+    return new Response(JSON.stringify(fixture('firecrawl-artist.json')), { status: 200 });
+  });
+  await searchWeb('signal probe', { signal: deadline.signal });
+  deadline.abort();
+  assert.equal(sent?.aborted, true);
+
+  mock.mockImplementation(async () => new Response('nope', { status: 500 }));
+  await assert.rejects(searchWeb('typed failure probe'), { provider: 'firecrawl', providerFailure: true });
 });
 
 test('isFirecrawlKey: only an fc- value counts', () => {
