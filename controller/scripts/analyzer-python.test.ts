@@ -2,9 +2,11 @@
 // auto-discovery, so they actually run with the rest of the suite instead of
 // only when someone remembers `python3 scripts/<file>.py`. Each suite is
 // lightweight and isolated from the analyzer runtime (no torch / demucs /
-// librosa / audio), with one exception: vocal_gate_test.py's case 6 needs
-// torch, so it skips here and runs only inside the subwave-analyzer-heavy
-// image. Three numerical suites use NumPy; when it is unavailable,
+// librosa / audio), with two exceptions that skip here: vocal_gate_test.py's
+// case 6 needs torch and runs only inside the subwave-analyzer-heavy image,
+// and analyzer_downbeat_test.py's real-model case needs onnxruntime, librosa
+// and the baked Beat This model (any analyzer image). The numerical suites
+// use NumPy; when it is unavailable,
 // this shim installs the pinned test-only wheel into a temporary directory, so
 // a clean checkout's `npm test` is reproducible without modifying the user's
 // Python environment. A box without python3 still skips cleanly (exit 0).
@@ -29,6 +31,7 @@ const SUITES = [
   'analyzer_noise_test.py', // decode-noise filter + capability loss (#1300)
   'analyzer_silence_test.py', // edge dead-air measurement (silence trim)
   'analyzer_beat_test.py', // main beat tracking is best-effort (#1647)
+  'analyzer_downbeat_test.py', // ANALYZE_DOWNBEATS: off is today's grid, every fallback too; the real-model case skips here
   'analyzer_facets_test.py', // facet functions are pure; path wrappers = decode + facet
   'analyzer_stems_marker_test.py', // no stem writes into an unmarked (unmounted) stems root
   'analyzer_shared_modes_test.py', // shared stems/transitions written 777/666 whatever the umask
