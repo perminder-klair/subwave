@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # subwave-analyzer — acoustic-analysis sidecar (bpm/key/intro/loudness, plus
 # optional CLAP "sounds-like" embeddings and Demucs vocal-activity ranges).
 # Default-on service in every compose file; the controller POSTs to it via
@@ -19,41 +20,10 @@
 # reports the reason on /health rather than degrading silently.
 #
 # One model IS baked, into every flavour: the Beat This! downbeat tracker
-# (ANALYZE_DOWNBEATS=beat-this, off by default), ~10 MB of ONNX exported in
-# the stage below.
-
-# ---- Beat This! downbeat model ---------------------------------------------
-# Exported from the sha256-pinned upstream checkpoint by tools/beat-this/
-# export.py, which fails the build unless onnxruntime reproduces PyTorch's
-# logits on upstream's own test recording. Only the .onnx leaves this stage,
-# so the analyzer itself stays torch-free. $BUILDPLATFORM: an arm64 build
-# exports natively on the build host instead of emulating torch, and the file
-# is the same on every architecture. Keep the pins in lockstep with
-# docker/Dockerfile.aio and tools/beat-this/README.md. This makes every image
-# build fetch the checkpoint from the maintainer's mirror; the README lists
-# the hosting alternatives.
-FROM --platform=$BUILDPLATFORM python:3.11-slim-bookworm AS beat-this
-ARG BEAT_THIS_COMMIT=ad7974846029835307ba19a3d5cefbf40b243041
-ARG BEAT_THIS_CKPT_URL=https://f0k.de/pubs/2024_ismir/beat_this-small0.ckpt
-ARG BEAT_THIS_CKPT_SHA256=6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b
-ARG BEAT_THIS_AUDIO_SHA256=af695e220645a1fe2314282dace96f2353c84de2364c27066e4944e3e6d66ffa
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-RUN python3 -m venv /opt/export && \
-    /opt/export/bin/pip install --no-cache-dir \
-      --index-url https://download.pytorch.org/whl/cpu \
-      --extra-index-url https://pypi.org/simple \
-      torch==2.7.1 torchaudio==2.7.1 einops==0.8.0 rotary-embedding-torch==0.6.4 \
-      soxr==1.1.0 soundfile==0.14.0 onnx==1.18.0 onnxruntime==1.27.0 \
-      "beat_this @ https://github.com/CPJKU/beat_this/archive/${BEAT_THIS_COMMIT}.tar.gz"
-COPY tools/beat-this/export.py /build/export.py
-RUN cd /build && \
-    curl -fsSL --retry 3 -o small0.ckpt "$BEAT_THIS_CKPT_URL" && \
-    curl -fsSL --retry 3 -o test.mp3 \
-      "https://raw.githubusercontent.com/CPJKU/beat_this/${BEAT_THIS_COMMIT}/tests/It%20Don't%20Mean%20A%20Thing%20-%20Kings%20of%20Swing.mp3" && \
-    echo "${BEAT_THIS_AUDIO_SHA256}  test.mp3" | sha256sum -c - && \
-    /opt/export/bin/python export.py --ckpt small0.ckpt --sha256 "$BEAT_THIS_CKPT_SHA256" \
-      --out beat_this-small0.onnx --audio test.mp3
+# (ANALYZE_DOWNBEATS=beat-this, off by default), ~10 MB of ONNX fetched by a
+# checksum-pinned ADD below. ADD --checksum needs Dockerfile frontend 1.6+,
+# which the `# syntax=` line guarantees on any BuildKit, as in
+# docker/Dockerfile.aio and docker/Dockerfile.broadcast.
 
 FROM python:3.11-slim-bookworm
 
@@ -127,8 +97,16 @@ WORKDIR /app
 COPY docker/analyzer/server.py /app/server.py
 # The SAME worker the controller runs in-process — single source of truth.
 COPY controller/scripts/analyze_worker.py /app/workers/analyze_worker.py
-# The downbeat model (stage above) at the worker's default BEAT_THIS_MODEL.
-COPY --from=beat-this /build/beat_this-small0.onnx /opt/analyzer/models/beat_this-small0.onnx
+# The Beat This! downbeat model at the worker's default BEAT_THIS_MODEL:
+# tools/beat-this/export.py's small0 export, published as a prerelease asset
+# on this repo. --checksum fails the build on any other bytes, and --chmod
+# because ADD gives a downloaded file mode 600 and the server runs as 10001.
+# One file for every architecture. Keep the URL and hash in lockstep with
+# docker/Dockerfile.aio; tools/beat-this/README.md says how to publish a new
+# version.
+ADD --chmod=644 --checksum=sha256:5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf \
+    https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx \
+    /opt/analyzer/models/beat_this-small0.onnx
 
 # Shared state mount — the controller pre-fetches tracks into
 # /var/sub-wave/analyze-tmp. mkdir'd here so the image runs standalone too.

@@ -27,35 +27,6 @@ ARG SUBWAVE_BUILD_VERSION
 ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 RUN npm run build
 
-# ---- Beat This! downbeat model (ANALYZE_DOWNBEATS=beat-this) ---------------
-# Same stage as docker/Dockerfile.analyzer's — keep the pins in lockstep (and
-# with tools/beat-this/README.md). The export fails the build unless
-# onnxruntime reproduces PyTorch's logits; only the .onnx reaches the runtime
-# stage, which stays torch-free. The checkpoint comes from the maintainer's
-# mirror, so this build depends on f0k.de (README: hosting alternatives).
-FROM --platform=$BUILDPLATFORM python:3.11-slim-bookworm AS beat-this
-ARG BEAT_THIS_COMMIT=ad7974846029835307ba19a3d5cefbf40b243041
-ARG BEAT_THIS_CKPT_URL=https://f0k.de/pubs/2024_ismir/beat_this-small0.ckpt
-ARG BEAT_THIS_CKPT_SHA256=6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b
-ARG BEAT_THIS_AUDIO_SHA256=af695e220645a1fe2314282dace96f2353c84de2364c27066e4944e3e6d66ffa
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-RUN python3 -m venv /opt/export && \
-    /opt/export/bin/pip install --no-cache-dir \
-      --index-url https://download.pytorch.org/whl/cpu \
-      --extra-index-url https://pypi.org/simple \
-      torch==2.7.1 torchaudio==2.7.1 einops==0.8.0 rotary-embedding-torch==0.6.4 \
-      soxr==1.1.0 soundfile==0.14.0 onnx==1.18.0 onnxruntime==1.27.0 \
-      "beat_this @ https://github.com/CPJKU/beat_this/archive/${BEAT_THIS_COMMIT}.tar.gz"
-COPY tools/beat-this/export.py /build/export.py
-RUN cd /build && \
-    curl -fsSL --retry 3 -o small0.ckpt "$BEAT_THIS_CKPT_URL" && \
-    curl -fsSL --retry 3 -o test.mp3 \
-      "https://raw.githubusercontent.com/CPJKU/beat_this/${BEAT_THIS_COMMIT}/tests/It%20Don't%20Mean%20A%20Thing%20-%20Kings%20of%20Swing.mp3" && \
-    echo "${BEAT_THIS_AUDIO_SHA256}  test.mp3" | sha256sum -c - && \
-    /opt/export/bin/python export.py --ckpt small0.ckpt --sha256 "$BEAT_THIS_CKPT_SHA256" \
-      --out beat_this-small0.onnx --audio test.mp3
-
 # ---- caddy binary: lift the glibc build from the official Debian image ------
 FROM caddy:2 AS caddybin
 
@@ -240,8 +211,13 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
 # ANALYZE_WORKER defaults to /app/scripts/analyze_worker.py (copied below).
 ENV ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
     HF_HOME=/var/sub-wave/hf-cache
-# The downbeat model (beat-this stage) at the worker's default BEAT_THIS_MODEL.
-COPY --from=beat-this /build/beat_this-small0.onnx /opt/analyzer/models/beat_this-small0.onnx
+# The Beat This! downbeat model (ANALYZE_DOWNBEATS=beat-this) at the worker's
+# default BEAT_THIS_MODEL, checksum-pinned from this repo's prerelease asset.
+# Same URL and hash as docker/Dockerfile.analyzer (its comment has the why);
+# keep the two in lockstep.
+ADD --chmod=644 --checksum=sha256:5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf \
+    https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx \
+    /opt/analyzer/models/beat_this-small0.onnx
 # Expose analyzer pip for maintenance while system python3 keeps precedence.
 # Kokoro and analyzer workers still use their explicit *_PYTHON paths.
 ENV PATH=$PATH:/opt/analyzer/venv/bin
