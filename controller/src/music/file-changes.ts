@@ -5,8 +5,9 @@
 // replaced-file-policy.changedAfterMeasure.
 //
 // Navidrome-only and best-effort, like navidrome-players.ts: another server, a
-// refused or unsent login or a timeout returns null and the walk carries on with
-// the size check alone. Nothing here throws or holds up the walk.
+// failed ping, a refused or unsent login or a timeout returns null and the walk
+// carries on with the size check alone. Nothing here throws or holds up the walk.
+// Its login is outside the Report Real Path opt-in: it only reads.
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { config } from '../config.js';

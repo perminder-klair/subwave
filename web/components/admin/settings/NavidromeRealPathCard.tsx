@@ -30,7 +30,7 @@ const realPathKey = ['settings', 'navidrome', 'players'] as const;
 const STATE_TEXT: Record<RealPathState, string> = {
   on: 'Every SUB/WAVE player reports real paths.',
   off: 'Some SUB/WAVE players still send tag-built paths.',
-  'not-read': "Not checked. While the setting below is off, SUB/WAVE stays out of Navidrome's own API until you ask.",
+  'not-read': "Not checked. While the setting below is off, SUB/WAVE leaves these rows alone until you ask.",
   'no-players': 'Navidrome has no SUB/WAVE player yet — it appears after the first request.',
   refused: 'Navidrome refused the change for this account. Tick it by hand in Navidrome → Settings → Players.',
   'not-navidrome': 'Report Real Path is a Navidrome setting; there is nothing to switch on this music server.',
@@ -138,10 +138,12 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
             starts each new one with &quot;Report Real Path&quot; off, so the file paths it sends
             are built from the tags. A mounted library (<code>MUSIC_LIBRARY_PATH</code>) finds its
             files from a tag-built path only when its folders match the tags; the real path finds
-            them however they&apos;re laid out. The controller and broadcast containers both need
-            the library, at the same path. Until the mixer can read it, or for any file it
-            can&apos;t find, the track plays from the stream. Only SUB/WAVE&apos;s own players on
-            this account are ever changed.
+            them however they&apos;re laid out. If the mount sits somewhere other than
+            Navidrome&apos;s own folder, a file plays only when its size and title match the track.
+            The controller and broadcast containers both need the library, at the same path. Until
+            the mixer can read it, or for any file it can&apos;t find or can&apos;t prove, the track
+            plays from the stream. Only SUB/WAVE&apos;s own players on this account are ever
+            changed.
           </div>
         </div>
 

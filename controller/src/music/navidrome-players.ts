@@ -37,7 +37,7 @@ const TIMEOUT_MS = 5_000;
 // Navidrome's list endpoint pages; this covers every realistic player table.
 const PAGE = 500;
 // Enough to catch a mount that holds little of the library, cheap enough for
-// the Doctor: one Subsonic call, then what getLocalPath() costs per track.
+// the Doctor: one Subsonic call, then what findLibraryFile() costs per track.
 const SAMPLE_SIZE = 5;
 
 class NativeApiError extends Error {
@@ -238,7 +238,7 @@ export async function passiveRealPathStatus(): Promise<RealPathStatus> {
 
 /**
  * A few random tracks checked against the MUSIC_LIBRARY_PATH mount, for the
- * Doctor. Null when the sample could not be read. Stateless, as getLocalPath()
+ * Doctor. Null when the sample could not be read. Stateless, as findLibraryFile()
  * is, so a run can't change what the mixer gets next.
  */
 export async function sampleLocalPaths(): Promise<LocalPathSample | null> {

@@ -5,9 +5,10 @@
 // (`Artist/Album/01 - Title.flac`) unless the PLAYER making the request has
 // "Report Real Path" ticked (Settings → Players). Two things read that path:
 // `subsonic.getLocalPath()`, which plays the file off a MUSIC_LIBRARY_PATH
-// mount and silently falls back to the stream when the tag-built path is not on
-// disk (#1405), and `subsonic.isStationArchive()`, whose path test only matches
-// the real `archive/YYYY-MM-DD/HH-00.mp3` layout (#273).
+// mount, and falls back to the stream when a path is not on disk or a real path
+// outside the mount can't prove it is the track (#1405), and
+// `subsonic.isStationArchive()`, whose path test only matches the real
+// `archive/YYYY-MM-DD/HH-00.mp3` layout (#273).
 //
 // Navidrome keeps one player row per client name + user agent, and a new row
 // starts with the flag OFF. So the controller (`node`), the analyzer, Liquidsoap
@@ -77,7 +78,7 @@ export type RealPathState =
   | 'on'
   /** At least one SUB/WAVE row still has the flag off. */
   | 'off'
-  /** The opt-in is off and nobody asked, so Navidrome's own API was left alone. */
+  /** The opt-in is off and nobody asked, so the rows were not read. */
   | 'not-read'
   /** No SUB/WAVE row exists yet (no request made since Navidrome was set up). */
   | 'no-players'
@@ -141,7 +142,8 @@ export function serverLabel(s: ServerIdentity | undefined): string {
 }
 
 // `POST /auth/login` takes the password itself, where every Subsonic call carries
-// a salted token. It runs with the opt-in on, or on an operator's press. The guard
+// a salted token. For the player rows it runs with the opt-in on, or on an
+// operator's press; the library walk's read of change times makes it too. The guard
 // keeps it off the public internet in clear, not off the LAN or the host, so it
 // goes over https or to any private host:
 // - IPv4 loopback, RFC 1918, link-local and Tailscale's 100.64.0.0/10;
