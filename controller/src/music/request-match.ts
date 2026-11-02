@@ -1292,6 +1292,13 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       return fallback;
     }
   };
+  // One library answer per artist name, so the spelling check ahead of a near
+  // title and the album walk below share it.
+  const artistLookups = new Map<string, Promise<{ id: string; name?: string } | null>>();
+  const resolveArtist = (name: string) => {
+    if (!artistLookups.has(name)) artistLookups.set(name, safe('artist resolution', () => catalog.resolveArtist(name, { signal: deps.signal }), null));
+    return artistLookups.get(name)!;
+  };
   let title = requestedTitle(match, deps.text);
   let artistName = match.artist;
   let titleOnlyArtistFallback = false;
@@ -1396,10 +1403,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     // "play me something" is no typo for The Beatles' "Something".
     if (!title || deps.exactIdentity || framingOnly(title)) return null;
     const scored = unique(songs)
-      // Keep temporarily ineligible candidates in the ranked set. Exact
-      // matching already preserves a queued/cooldown identity for a refusal;
-      // fuzzy matching must do the same instead of turning a verified repeat
-      // into a misleading no-match.
+      // Temporarily ineligible candidates stay in for the clarification list.
       // A track the show holds back is no candidate, as in select().
       .filter(song => constraints(song, source) && contextProven(song) && !deps.heldBack?.(song))
       .map(song => ({ song, confidence: identityScore(song), titleScore: requestTitleSimilarity(title, song.title), artistScore: resolvedArtistName ? requestCandidateArtistSimilarity(resolvedArtistName, song) : 1 }))
@@ -1413,10 +1417,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       artist: String(row.song.artist || ''),
       confidence: Number(row.confidence.toFixed(4)),
     }));
-    // Prefer an eligible candidate when one exists. If every plausible
-    // candidate is queued, playing, or on cooldown, retain the best verified
-    // identity so the caller can return its typed refusal instead of widening
-    // into an unrelated fallback.
+    // Prefer an eligible candidate when one exists. A near title is no
+    // identity, so one that is queued, playing, or on cooldown is refused by
+    // nobody's name: the rungs below offer what can air, as they would for any
+    // other miss.
     const ranked = scored.filter(row => eligible(row.song));
     const top = (ranked.length ? ranked : scored)[0];
     const comparison = ranked.length ? ranked : scored;
@@ -1426,21 +1430,13 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     // Keep a meaningful title threshold and the same ambiguity margin; a
     // collision therefore remains a no-match rather than becoming a guess.
     const minimumConfidence = resolvedArtistName ? 0.92 : 0.88;
-    if (!top || top.confidence < minimumConfidence || margin < 0.08) return null;
-    if (!eligible(top.song)) {
-      return {
-        track: top.song,
-        source,
-        outcome: queuedIds.has(top.song.id) || top.song.id === currentId ? 'already-queued' : 'cooldown',
-        errors,
-        confidence: top.confidence,
-        alternatives,
-      };
-    }
+    if (!top || top.confidence < minimumConfidence || margin < 0.08 || !eligible(top.song)) return null;
+    // A near title is an alternative, never a match: one edit is a typo or
+    // another song ("Angel" and "Angels"), and the score can't tell which.
     return {
       track: top.song,
       source: `${source}:fuzzy`,
-      outcome: 'matched',
+      outcome: 'substituted',
       errors,
       confidence: top.confidence,
       alternatives,
@@ -1589,6 +1585,19 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
         errors.push(...byAct.errors);
         if (byAct.track) return byAct;
       }
+      // The same order for a named artist: the library's own spelling of it
+      // ("Guns and Roses" is Guns N' Roses) proves a hit before any near match.
+      if (artistName && !match.reversible && !actTried) {
+        const artist = await resolveArtist(artistName);
+        const spelled = artist && ((!match.literal && !unverifiedConditions.length) || requestArtistMatches(artistName, { id: artist.id, artist: artist.name }))
+          ? artist.name || artistName : artistName;
+        if (spelled !== artistName) {
+          resolvedArtistName = spelled;
+          const exact = select(searched, 'search') || refusal();
+          if (exact) return exact;
+          resolvedArtistName = artistName;
+        }
+      }
       const fuzzy = selectFuzzy(searched, 'search');
       if (fuzzy) return fuzzy;
       // Navidrome's token search is intentionally bounded and may miss a
@@ -1691,7 +1700,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       const result = select(best ? [best] : [], 'artist-popular');
       if (result) return result;
     }
-    const artist = await safe('artist resolution', () => catalog.resolveArtist(artistName!, { signal: deps.signal }), null);
+    const artist = await resolveArtist(artistName!);
     if (artist && ((!match.literal && !unverifiedConditions.length) || requestArtistMatches(artistName, { id: artist.id, artist: artist.name }))) {
       resolvedArtistName = artist.name || artistName;
       // The title search judged its hits against the listener's spelling of

@@ -874,7 +874,7 @@ test('model interpretation cannot erase combined deterministic conditions', () =
   assert.equal(repaired.language, 'Punjabi');
 });
 
-test('a high-confidence title typo can resolve through a bounded fuzzy search', async () => {
+test('a high-confidence title typo is offered through a bounded fuzzy search, as an alternative', async () => {
   const wanted = { id: 'soni', title: 'Soni De Nakhre', artist: 'Pritam', genre: 'Punjabi' };
   const f = fixture({
     searchPage: async query => ({ songs: /soni|nakhre|nakhree|pritam/i.test(query) ? [wanted] : [], rawCount: 1 }),
@@ -884,7 +884,7 @@ test('a high-confidence title typo can resolve through a bounded fuzzy search', 
     { ...f.deps, exactOnly: true },
   );
   assert.equal(result.track?.id, wanted.id);
-  assert.equal(result.outcome, 'matched');
+  assert.equal(result.outcome, 'substituted');
   assert.ok((result.confidence || 0) >= 0.92);
 });
 
@@ -902,7 +902,7 @@ test('ambiguous fuzzy title matching returns alternatives instead of guessing', 
 });
 
 for (const typo of ['choor bazari', 'chhor bazari']) {
-  test(`a multi-word title typo uses local fuzzy candidates without fallback: ${typo}`, async () => {
+  test(`a multi-word title typo uses local fuzzy candidates without fallback, as an alternative: ${typo}`, async () => {
     const wanted = { id: 'chor-bazaari', title: 'Chor Bazaari', artist: 'Sunidhi Chauhan & Neeraj Shridhar' };
     const f = fixture({
       searchPage: async () => ({ songs: [], rawCount: 0 }),
@@ -913,12 +913,12 @@ for (const typo of ['choor bazari', 'chhor bazari']) {
       { ...f.deps, exactOnly: true },
     );
     assert.equal(result.track?.id, wanted.id);
-    assert.equal(result.outcome, 'matched');
+    assert.equal(result.outcome, 'substituted');
     assert.equal(f.fallbackCalls(), 0);
   });
 }
 
-test('a fuzzy title preserves an already-queued verified candidate', async () => {
+test('a near title already queued is no refusal by its name', async () => {
   const wanted = { id: 'chor-bazaari', title: 'Chor Bazaari', artist: 'Sunidhi Chauhan & Neeraj Shridhar' };
   const f = fixture({
     searchPage: async () => ({ songs: [], rawCount: 0 }),
@@ -929,8 +929,9 @@ test('a fuzzy title preserves an already-queued verified candidate', async () =>
     { title: 'choor bazari', artist: null, search_terms: ['choor bazari'], scope: 'song' },
     { ...f.deps, exactOnly: true },
   );
-  assert.equal(result.track?.id, wanted.id);
-  assert.equal(result.outcome, 'already-queued');
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+  assert.deepEqual(result.alternatives?.map(row => row.id), [wanted.id]);
   assert.equal(f.fallbackCalls(), 0);
 });
 

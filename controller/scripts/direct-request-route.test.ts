@@ -2192,6 +2192,23 @@ test('"play Kiss" is still the title when the library holds it', async () => {
   assert.equal(queue.upcoming[0].track.title, 'Kiss');
 });
 
+// A title equal only after fuzzy scoring may still be queued, but one edit is a
+// typo or another song ("Angel" and "Angels"), so it is labelled an alternative.
+for (const condition of ['the title read', 'interpreter down']) {
+  for (const [text, title, near] of [['play Angel', 'Angel', 'Angels'], ['play Kesaria', 'Kesaria', 'Kesariya']]) {
+    test(`a near title is an alternative, never a match (${condition}): ${text}`, async () => {
+      catalogueSongs = [titled(near), filler];
+      if (condition === 'the title read') modelOutput = read({ title, search_terms: [title] });
+      else modelError = true;
+      const result = await submit(text);
+      assert.equal(result.outcome, 'substituted');
+      assert.match(result.ack, /alternative/);
+      assert.equal(queue.upcoming[0].track.title, near);
+      assert.match(requestLog.snapshot(1)[0].pickSource, /fuzzy$/);
+    });
+  }
+}
+
 // The exact-artist step takes only the act the words name, inside the
 // request's hard conditions, and reuses the title's search hits.
 test('"play Queens" is never a match on Queen when the artist search answers Queen', async () => {
@@ -2218,6 +2235,21 @@ test('a bare string tried as an artist doesn\'t search the same words twice', as
   await submit('play Imaginary Song');
   assert.equal(songSearches.filter(query => query === 'Imaginary Song').length, 1, songSearches.join(' | '));
 });
+
+// A near title is no identity, so one the station can't play right now is
+// refused by nobody's name: develop's stand-in answers instead.
+for (const state of ['on cooldown', 'already queued']) {
+  test(`a near title ${state} is no refusal: play Angel`, async () => {
+    const angels = titled('Angels', 'Robbie Williams');
+    catalogueSongs = [angels, filler];
+    modelError = true;
+    if (state === 'on cooldown') queue._recentPlays = [{ ...angels, endedAt: new Date().toISOString() }];
+    else queue.upcoming = [{ track: angels, requestedBy: 'Someone' }] as never;
+    const result = await submit('play Angel');
+    assert.equal(result.outcome, 'substituted');
+    assert.notEqual(queue.upcoming.at(-1)?.track?.id, angels.id);
+  });
+}
 
 // Last, because it leaves a mood in the library for every test after it.
 test('with no model the rest of a request is an alternative once its genre is dropped', async () => {
