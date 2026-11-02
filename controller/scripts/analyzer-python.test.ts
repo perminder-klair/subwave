@@ -5,7 +5,7 @@
 // librosa / audio), with two exceptions that skip here: vocal_gate_test.py's
 // case 6 needs torch and runs only inside the subwave-analyzer-heavy image,
 // and analyzer_downbeat_test.py's real-model case needs onnxruntime, librosa
-// and the baked Beat This model (any analyzer image). The numerical suites
+// and the baked Beat This model (the heavy analyzer image). The numerical suites
 // use NumPy; when it is unavailable,
 // this shim installs the pinned test-only wheel into a temporary directory, so
 // a clean checkout's `npm test` is reproducible without modifying the user's

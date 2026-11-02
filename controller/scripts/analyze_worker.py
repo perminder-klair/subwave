@@ -217,10 +217,13 @@ ANALYZE_MAX_BYTES = _env_int("ANALYZE_MAX_BYTES", 12 * 1024 * 1024)
 # guess whose phase is arbitrary, and render_transition cues the incoming
 # track on that grid. With the flag on, the beat and bar grid of BOTH windows
 # (head and tail) comes from Beat This! (CPJKU, ISMIR 2024) instead: a small
-# ONNX export run by onnxruntime on a numpy front end, so the lean tier stays
-# torch-free (tools/beat-this/ has the export and the evaluation). BPM and key
-# stay librosa's either way. Unset, empty and unrecognised values all mean
-# today's grid, byte for byte; an unrecognised one also says so once here.
+# ONNX export run by onnxruntime on a numpy front end, no torch involved
+# (tools/beat-this/ has the export and the evaluation). Only the heavy images
+# ship onnxruntime and the model: the grid's only consumers are stem blends
+# and the stem cache, which need Demucs stems, so a lean image falls back to
+# today's grid and says why. BPM and key stay librosa's either way. Unset,
+# empty and unrecognised values all mean today's grid, byte for byte; an
+# unrecognised one also says so once here.
 DOWNBEAT_TRACKERS = ("beat-this",)
 _DOWNBEATS_OFF = ("off", "librosa", "0", "false", "no", "none")
 
@@ -241,8 +244,8 @@ def downbeats_mode():
 
 
 DOWNBEATS = downbeats_mode()
-# Baked into both analyzer images by docker/Dockerfile.analyzer. A local
-# offline venv points this at its own copy.
+# Baked into the heavy (WITH_DEMUCS=1) builds of docker/Dockerfile.analyzer
+# and docker/Dockerfile.aio. A local offline venv points this at its own copy.
 BEAT_THIS_MODEL = (
     os.environ.get("BEAT_THIS_MODEL", "").strip() or "/opt/analyzer/models/beat_this-small0.onnx"
 )
@@ -1722,6 +1725,15 @@ def get_downbeat_tracker():
                 f"({DOWNBEAT_THREADS} threads)"
             )
             _maybe_start_downbeat_release()
+        except (ImportError, FileNotFoundError) as ex:
+            # The lean images ship neither onnxruntime nor the model.
+            log(
+                f"ANALYZE_DOWNBEATS=beat-this needs the heavy analyzer image "
+                f"(ANALYZER_HEAVY=1, or subwave-aio-heavy), which ships onnxruntime "
+                f"and the Beat This model ({ex}); using librosa's bar grid for this run"
+            )
+            _downbeat_failed = True
+            return None
         except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
             log(f"Beat This load failed ({ex}); using librosa's bar grid for this run")
             _downbeat_failed = True
