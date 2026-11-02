@@ -935,6 +935,17 @@ test('a near title already queued is no refusal by its name', async () => {
   assert.equal(f.fallbackCalls(), 0);
 });
 
+test('a clean show refuses a fuzzy title candidate held back by show policy', async () => {
+  const explicit = { id: 'explicit-chor-bazari', title: 'Chor Bazaari', artist: 'Sunidhi Chauhan', explicitStatus: 'explicit' };
+  const f = fixture({ searchPage: async () => ({ songs: [], rawCount: 0 }), fuzzySearch: async () => [explicit] });
+  const result = await resolveDirectRequest(
+    { title: 'choor bazari', artist: null, search_terms: ['choor bazari'], scope: 'song' },
+    { ...f.deps, exactOnly: true, heldBack: song => song.explicitStatus === 'explicit' },
+  );
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+});
+
 test('same-title local fuzzy collisions remain no-match instead of guessing', async () => {
   const first = { id: 'chor-a', title: 'Chor Bazaari', artist: 'Sunidhi Chauhan & Neeraj Shridhar' };
   const second = { id: 'chor-b', title: 'Chor Bazaari', artist: 'Other Artist' };
@@ -1042,6 +1053,24 @@ test('a small typo in a unique movie or album context can still be verified loca
   assert.equal(result.track?.id, soundtrack.id);
   assert.equal(result.source, 'release-context-fuzzy');
   assert.equal(result.outcome, 'matched');
+});
+
+test('a clean show refuses a fuzzy release-context candidate held back by show policy', async () => {
+  const explicit = {
+    id: 'explicit-sadi-gali', title: 'Sadi Gali', artist: 'Lehmber Hussainpuri',
+    album: 'Tanu Weds Manu', explicitStatus: 'explicit',
+  };
+  const parsed = modelFreeRequest('play Sadi Gali from Tenu Weds Manu');
+  const f = fixture({ searchPage: async query => query === 'Sadi Gali'
+    ? { songs: [explicit], rawCount: 1 } : { songs: [], rawCount: 0 } });
+  const result = await resolveDirectRequest(parsed, {
+    ...f.deps,
+    text: 'play Sadi Gali from Tenu Weds Manu',
+    exactOnly: true,
+    heldBack: song => song.explicitStatus === 'explicit',
+  });
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
 });
 
 test('fuzzy release context refuses an ambiguous local match', async () => {

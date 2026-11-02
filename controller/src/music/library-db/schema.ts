@@ -502,6 +502,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 31');
   }
 
+  const columnsAtOpen = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
   if (userVersion < 32) markTailSungVectorsOnce(d);
 
   if (userVersion < 33) {
@@ -527,26 +528,52 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
   }
 
   if (userVersion < 35) {
-    // Language tags are optional metadata, but the request resolver's local
-    // language queries need their storage columns on every fresh and upgraded
-    // library. Keep the additive, nullable shape compatible with PR #2080's
-    // language tagging writes.
-    //
-    // Numbered after develop's own migrations. The earlier language branch used
-    // version 30 before the lyric migrations landed on develop. Such a
-    // database has the language columns but may not have lyric_offsets, so
-    // keep this repair idempotent for that history too.
-    runDdl(d, `
-      CREATE TABLE IF NOT EXISTS lyric_offsets (
-        track_id   TEXT PRIMARY KEY,
-        offset_ms  INTEGER NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-    `);
-    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
-    const add = ['language_primary', 'languages'].filter(column => !have.has(column));
-    if (add.length) runDdl(d, add.map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`).join('\n'));
+    // CLAP sound descriptors (music/audio-descriptors.ts), shaped like the audio
+    // moods: audio_descriptors = the selected labels, audio_descriptor_scores_json
+    // = the full {label: cosine} map, descriptor_vocab_hash invalidates both.
+    // Only the missing columns are added, as in migration 28.
+    const columnsOf = (table: string) =>
+      new Set((d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name));
+    const tracks = columnsOf('tracks');
+    const add = ['audio_descriptors', 'audio_descriptor_scores_json']
+      .filter(c => !tracks.has(c))
+      .map(c => `ALTER TABLE tracks ADD COLUMN ${c} TEXT;`);
+    if (!columnsOf('audio_embedding_meta').has('descriptor_vocab_hash')) {
+      add.push('ALTER TABLE audio_embedding_meta ADD COLUMN descriptor_vocab_hash TEXT;');
+    }
+    if (add.length) runDdl(d, add.join('\n'));
     d.pragma('user_version = 35');
+  }
+
+  const hasLanguageColumns = ['language_primary', 'languages'].every(column => columnsAtOpen.has(column));
+  // The earlier request branch also used version 32, for the language columns
+  // below, so a database that ran it sits at 32 without develop's tail marks.
+  // Develop's own 32 never adds those columns, so they tell the two apart.
+  if (userVersion === 32 && hasLanguageColumns) markTailSungVectorsForLanguageV32(d);
+
+  if (userVersion < 36) {
+    // Serialize the schema check, DDL and version write. A second process can
+    // have read the old user_version before waiting on this connection's lock.
+    d.transaction(() => {
+      if ((d.pragma('user_version', { simple: true }) as number) >= 36) return;
+
+      // Language tags are optional metadata, but request queries need their
+      // nullable storage columns on every fresh and upgraded library. #2080
+      // supplies the tagging writes; this migration only creates the columns.
+      // Older language builds used version 30 and may lack later lyric tables.
+      // Numbered after develop's own steps, whose numbers stay as develop has them.
+      runDdl(d, `
+        CREATE TABLE IF NOT EXISTS lyric_offsets (
+          track_id   TEXT PRIMARY KEY,
+          offset_ms  INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+      const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+      const add = ['language_primary', 'languages'].filter(column => !have.has(column));
+      if (add.length) runDdl(d, add.map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`).join('\n'));
+      d.pragma('user_version = 36');
+    }).immediate();
   }
 
   // Before the vector reconcile below, which bumps it when it drops vectors.
@@ -716,6 +743,23 @@ function markTailSungVectorsOnce(d: Database.Database): void {
       `[library-db] tail vocal re-embed marks not set (${(err as Error).message}); ` +
         'similarity keeps working on the old text',
     );
+  }
+}
+
+// Develop's 32 marks for a database the earlier request branch left at 32 (see
+// migrate). The same rows and the same failure direction as markTailSungVectorsOnce,
+// but no version write: the steps after it move user_version on as they always do.
+function markTailSungVectorsForLanguageV32(d: Database.Database): void {
+  try {
+    d.transaction(() => {
+      const hasTextVectors = d
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='track_vectors'`)
+        .get();
+      const marked = hasTextVectors ? d.prepare(TAIL_SUNG_VECTORS_SQL).run().changes : 0;
+      if (marked > 0) console.log(`[library-db] ${marked} tracks marked to re-embed: tail vocals changed their Sound line`);
+    }).immediate();
+  } catch (err) {
+    console.warn(`[library-db] tail vocal re-embed marks not set (${(err as Error).message}); similarity keeps working on the old text`);
   }
 }
 

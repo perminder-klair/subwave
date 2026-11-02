@@ -177,6 +177,32 @@ test('parse: a result keeps its url, as every other provider does', () => {
   assert.equal('url' in bare.results[0], false);
 });
 
+test('searchWeb: caller cancellation reaches the Firecrawl request', async (t) => {
+  const originalSearch = structuredClone(settings.get().search);
+  const controller = new AbortController();
+  let providerSignal: AbortSignal | undefined;
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  t.mock.method(globalThis, 'fetch', ((input: string | URL | Request, init?: RequestInit) => {
+    void input;
+    providerSignal = init?.signal ?? undefined;
+    markStarted();
+    return new Promise<Response>((resolve, reject) => {
+      providerSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      setTimeout(() => resolve(new Response(JSON.stringify(fixture('firecrawl-artist.json')), { status: 200 })), 50);
+    });
+  }) as typeof fetch);
+  t.after(async () => settings.update({ search: originalSearch }));
+  await settings.update({ search: { provider: 'firecrawl', apiKey: 'fc-test' } });
+
+  const pending = searchWeb('cancel Firecrawl request', { signal: controller.signal });
+  await started;
+  controller.abort();
+
+  await assert.rejects(pending, /abort/i);
+  assert.equal(providerSignal?.aborted, true);
+});
+
 test('isFirecrawlKey: only an fc- value counts', () => {
   assert.equal(isFirecrawlKey('fc-abc'), true);
   assert.equal(isFirecrawlKey(' fc-abc '), true);

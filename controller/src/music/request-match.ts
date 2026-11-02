@@ -525,20 +525,19 @@ function artistIdentityKey(value: unknown): string {
   return requestName(key).replace(/^the (?=\S)/, '') || key;
 }
 
-function creditKeys(song: RequestSong): string[] {
-  const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
-  return credits.flatMap(credit => [artistNameKey(credit), ...artistParticipantKeys(String(credit ?? ''))]);
-}
-
 function artistIdentityVariants(value: unknown): string[] {
   return requestNameVariants(value)
     .map(key => key.replace(/^the (?=\S)/, '').trim())
     .filter(Boolean);
 }
 
+function creditKeys(song: RequestSong): string[] {
+  const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
+  return credits.flatMap(credit => [artistNameKey(credit), ...artistParticipantKeys(String(credit ?? ''))]);
+}
+
 export function requestArtistMatches(want: unknown, song: RequestSong): boolean {
   const artists = artistIdentityVariants(want);
-  const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
   const rawWant = String(want ?? '').trim();
   if (!rawWant) return true;
   // requestName intentionally drops punctuation. Punctuation-only recordings
@@ -546,15 +545,10 @@ export function requestArtistMatches(want: unknown, song: RequestSong): boolean 
   // exact NFC/case-folded spelling rather than acting as a wildcard.
   if (!artists.length) {
     const wantedKey = nameKey(rawWant);
+    const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
     return credits.some(credit => nameKey(credit) === wantedKey);
   }
-  return credits.some((credit) => {
-    const keys = [artistNameKey(credit), ...artistParticipantKeys(String(credit ?? ''))];
-    return keys.some((key) => {
-      const variants = artistIdentityVariants(key);
-      return variants.some((variant) => artists.includes(variant));
-    });
-  });
+  return creditKeys(song).some(key => artistIdentityVariants(key).some(variant => artists.includes(variant)));
 }
 
 function candidateArtistParts(value: unknown): string[] {
