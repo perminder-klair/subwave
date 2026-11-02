@@ -28,7 +28,7 @@ import {
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
-import { classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, isGreetingLikeRequest, isGenericRequestPhrase, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestTitleSimilarity, resolveDirectRequest } from '../music/request-match.js';
+import { classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, asksForKindOfMusic, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, isGreetingLikeRequest, isGenericRequestPhrase, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestedTitle, requestTitleSimilarity, resolveDirectRequest, resolveExactName, wordsProveName } from '../music/request-match.js';
 import { canonicalLanguage } from '../music/request-normalize.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
@@ -328,6 +328,11 @@ const ON_AIR_REFERENCE = /\bsimilar\b|\b(?:something|anything|more|songs?|tracks
 const UNSUPPORTED_REFUSAL = `I couldn't reliably check all the conditions in that request. Try naming a song, artist, album, genre or simple mood.`;
 const EVIDENCE_MISS_REFUSAL = `I couldn't identify that song from the description. Try naming the title or artist.`;
 
+function requestCooldownIds(): Set<string> {
+  const cooldownMin = Number(settings.get().requests.repeatCooldownMin ?? 120);
+  return cooldownMin > 0 ? queue.recentlyPlayedIds(cooldownMin / 60) : new Set<string>();
+}
+
 // A bounded literal parser for hard-budget or failed interpretation calls.
 // The resolver still verifies its title/artist against the actual catalogue.
 function modelFreeMatch(text: string): Awaited<ReturnType<typeof dj.matchRequest>> {
@@ -507,9 +512,10 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // An explicit artist-only request is an identity claim too. It may choose
   // any eligible recording from that artist, but it must not fall through to
   // an unrelated mood, search, or starred-track substitute when the artist is
-  // absent from the library.
+  // absent from the library. "by" names an act. "from" may as well name a place
+  // or a film ("something from the movie Titanic"), so it proves nothing.
   const explicitArtistOnlyRequest = Boolean(literal.artist?.trim() && !literal.title?.trim() && !literal.album?.trim()
-    && /\b(?:by|from)\b/iu.test(text));
+    && /\bby\b/iu.test(text));
   // A bare title+artist pair is already a complete identity plan. Keep it on
   // the local-first path instead of waiting on the optional interpreter; the
   // interpreter is still useful when the same named request carries an
@@ -518,9 +524,8 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     && !literal.album && !literal.genre && !literal.language && !literal.mood;
   // A short, attribute-free request is more likely to be a title than a
   // conversational instruction. Resolve it against the local catalogue first
-  // so a provider stall cannot delay a straightforward named request. It is an
-  // identity claim: a miss must remain a miss rather than becoming an
-  // unrelated fallback track.
+  // so a provider stall cannot delay a straightforward named request. A miss
+  // proves nothing ("funk", "mellow"), so the interpreter still reads it.
   const likelyShortTitle = !lyricLike
     && literal.kind === 'track'
     && Boolean(literal.title?.trim())
@@ -532,10 +537,10 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     // a broad instruction ("surprise me"), so a local miss must still reach
     // interpretation instead of being frozen into the wrong identity.
     && literal.title!.trim().split(/\s+/u).length === 1;
-  // A multi-word title-only request is still an identity claim once the
-  // literal parser has ruled out attributes and conversational frames. It may
-  // use interpretation for repair, but a miss must never become an unrelated
-  // fallback track.
+  // A multi-word title-only request may be an identity claim once the literal
+  // parser has ruled out attributes and conversational frames. It may use
+  // interpretation for repair; whether a miss is final depends on the proof
+  // below.
   const titleOnlyNamedRequest = (framedTitleOnly || !lyricLike)
     && literal.kind === 'track'
     && Boolean(literal.title?.trim())
@@ -564,10 +569,10 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     && !literal.artist && !literal.album
     && /^(?:please\s+)?(?:play|queue|request|put\s+on)\b/iu.test(text)
     && !/["'“‘]/u.test(text);
-  // "something chill for the evening" and "play me some rock" open with a
-  // generic frame, so they are vibes that happen to parse as a title. A miss
-  // may take an honest alternative; only a real name is held to no-match.
-  const literalIdentityFrame = !/^\s*(?:please\s+)?(?:(?:play|queue|request|put\s+on)\s+)?(?:(?:me|us)\s+)?(?:anything|something|some|music|songs?|tracks?|a\s+song|a\s+track)\b/iu.test(text);
+  // "i want something chill" and "any rock tonight" ask for a kind of music,
+  // and only parse as a title because no attribute reading took them.
+  const kindOfMusic = asksForKindOfMusic(text);
+  const titleClaim = (framedTitleOnly || titleOnlyNamedRequest) && !kindOfMusic;
 
   // Conversational DJ agent. On any non-evidence failure fall through to the
   // stateless cascade below, so a request is never dropped. Agentic mode is
@@ -655,21 +660,41 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // what is on air. Gated before generation: past the hard token cap with
   // requests not exempt, the model is not called at all.
   const currentTrack = queue.current?.track || null;
-  // `modelFreeRequest` marks a one-word literal as `literal` so legacy
-  // artist-only handling can consider it an artist. Once the local title-first
-  // classifier has identified it as a short title candidate, keep the title
-  // identity intact for the catalogue resolver instead.
-  let matched = likelyShortTitle ? { ...literal, literal: false, titleOnly: true } : literal;
+  // Words that may be a name go to the catalogue before anything reads them,
+  // so a provider stall cannot delay a request the library can answer. A hit
+  // that is free to air ends the question. A hit on cooldown or in the queue
+  // does not: "play Rock" may have meant the genre, so the interpreter decides,
+  // and with no interpreter the refusal stands.
+  const quotedShortTitle = likelyShortTitle && wordsProveName(text);
+  const bareWords = literal.bareName || (likelyShortTitle ? literal.title : null);
+  const nameFirst = bareWords ? await resolveExactName(bareWords, {
+    catalog: subsonic,
+    recentIds: requestCooldownIds(),
+    queuedIds: queue.queuedIds(),
+    currentId: queue.current?.track?.id,
+    signal,
+  }) : null;
+  throwIfRequestResolutionAborted(signal);
+  const nameRefused = !!nameFirst?.track && isRefusedOutcome(nameFirst.outcome);
+  const nameFree = !!nameFirst?.track && !nameRefused;
+  // A quoted word is the title whatever a model makes of it. `modelFreeRequest`
+  // marks a one-word literal as `literal` so legacy artist-only handling can
+  // consider it an artist; here the title identity stays intact instead.
+  let matched = quotedShortTitle ? { ...literal, literal: false, titleOnly: true } : literal;
   const deicticSimilarityRequest = literal.intent === 'Wants more like the current track.';
-  if (!likelyShortTitle && !forcedNamedTitle && !literal.similarTo && !deicticSimilarityRequest
-    && !deterministicLiteralRequest && budget.requestsAllowed()) {
+  // Set once the interpreter has answered, and true if it read a name.
+  let interpreterAnswered = false;
+  let modelNamed = false;
+  let modelReadGenre = false;
+  const interpret = async () => {
     try {
       // A title-only phrase may still benefit from model repair (for example,
       // an unseparated artist and title), but it must not spend the complete
       // request deadline before the local fuzzy catalogue gets a chance. The
       // race is what guarantees that, since a provider can ignore its signal,
-      // and withDeadline's error never reads as a reason to fail over.
-      const interpretationMs = requestInterpretationTimeoutMs(entry, titleOnlyNamedRequest || bareExplicitNamedRequest);
+      // and withDeadline's error never reads as a reason to fail over. One word
+      // the catalogue just missed has nothing but this reading left.
+      const interpretationMs = requestInterpretationTimeoutMs(entry, (titleClaim && !likelyShortTitle) || bareExplicitNamedRequest);
       if (interpretationMs <= 0) throw new Error('no time left to interpret the request');
       const interpreted = await withDeadline(interpretationMs, 'request interpretation', deadlineSignal =>
         dj.matchRequest(text, { listenerName: requester, nowPlaying: currentTrack },
@@ -683,16 +708,23 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       } else {
         matched = repairRequestMatch(interpreted, text) as typeof matched;
       }
+      interpreterAnswered = true;
+      modelNamed = Boolean(requestedTitle(matched, text) || matched.artist?.trim());
+      modelReadGenre = Boolean(interpreted.genre);
     } catch (err) {
       entry.interpretationFallback = true;
       queue.log('error', `request interpretation failed: ${err.message} — trying library search`);
     }
-  }
+  };
+  if (!nameFree && !quotedShortTitle && !forcedNamedTitle && !literal.similarTo && !deicticSimilarityRequest
+    && (!deterministicLiteralRequest || nameRefused) && budget.requestsAllowed()) await interpret();
   // Once a concrete track has been selected, the optional intro must not be
   // allowed to turn a successful request into a timeout. The intro helper has
   // its own bounded budget; queue admission below is the terminal handoff.
   matched = normalizeRequestMatch(matched, { moods: settings.moodVocab() });
-  if (literal.releaseContext && literal.title?.trim()) {
+  // An answer that read no name takes the request off the literal wording.
+  const literalStands = modelNamed || !interpreterAnswered;
+  if (literal.releaseContext && literal.title?.trim() && literalStands) {
     // Preserve the complete literal wording. The resolver will try the whole
     // title first, then the bounded title-plus-release-context hypothesis.
     matched = {
@@ -700,7 +732,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       kind: 'track', title: literal.title, artist: literal.artist || null,
       album: null, releaseContext: literal.releaseContext, scope: 'song',
       literal: false, titleOnly: true,
-      unsupported: literalIdentityFrame ? literal.unsupported || [] : matched.unsupported || literal.unsupported || [],
+      unsupported: kindOfMusic ? matched.unsupported || literal.unsupported || [] : literal.unsupported || [],
     };
   }
   if (forcedNamedTitle && literal.title?.trim()) {
@@ -711,7 +743,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       scope: 'song', literal: false, titleOnly: true,
     };
   }
-  if (framedTitleOnly && literal.title?.trim()) {
+  if (framedTitleOnly && literal.title?.trim() && literalStands) {
     // The listener supplied a title but no artist. Keep that identity literal
     // and clear any artist the interpreter guessed; the catalogue resolver can
     // then verify the title without allowing an invented credit to widen or
@@ -723,11 +755,13 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       scope: 'song', literal: false, titleOnly: true,
     };
   }
-  // The literal wording is the identity claim. If the interpreter repairs a
-  // title-only request by adding an artist (for example, "Queen Bohemian
-  // Rhapsody"), that artist must not reopen the unrelated alternative pool.
-  // Named and unquoted title-only misses remain no-match even after repair.
-  const exactTitleOnlyRequest = (framedTitleOnly || titleOnlyNamedRequest) && literalIdentityFrame;
+  // A miss keeps its honest alternative, as it always did, unless something
+  // proves the words were a name: the interpreter read one, or the words show
+  // it themselves. Then the wording is the identity claim. If the interpreter
+  // repairs a title-only request by adding an artist (for example, "Queen
+  // Bohemian Rhapsody"), that artist must not reopen the alternative pool.
+  const nameProven = modelNamed || wordsProveName(text);
+  const exactTitleOnlyRequest = titleClaim && nameProven;
   const unsupported = directRequestUnsupported(text, matched);
   // Labels naming no condition ("dedication") were dropped above; keep them
   // visible to the operator.
@@ -768,16 +802,19 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
 
   // Matcher breakdown for the debug record; only the stateless cascade gets here.
   entry.path = 'cascade';
-  entry.intent = matched.intent || null;
-  entry.mood = matched.mood || null;
-  entry.scope = matched.scope || null;
-  entry.sort = matched.sort || null;
-  entry.artist = matched.artist || null;
-  entry.title = matched.title || null;
-  entry.album = matched.album || null;
-  entry.genre = matched.genre || null;
-  entry.language = matched.language || null;
-  entry.searchTerms = matched.search_terms || null;
+  const recordReading = () => {
+    entry.intent = matched.intent || null;
+    entry.mood = matched.mood || null;
+    entry.scope = matched.scope || null;
+    entry.sort = matched.sort || null;
+    entry.artist = matched.artist || null;
+    entry.title = matched.title || null;
+    entry.album = matched.album || null;
+    entry.genre = matched.genre || null;
+    entry.language = matched.language || null;
+    entry.searchTerms = matched.search_terms || null;
+  };
+  recordReading();
 
   // Preserve upstream stand-in spacing after the resolver applies identity,
   // hard constraints and cooldowns. Named matches remain exempt, and the
@@ -791,7 +828,6 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     ];
   const searches: Array<{ term: string; hits: any[] }> = [];
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
-  const cdMin = Number(settings.get().requests.repeatCooldownMin ?? 120);
   if (matched.language) {
     // Language-constrained requests use the local language projection. Older
     // databases without that optional migration return an empty pool and keep
@@ -815,7 +851,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     language: song.language ?? undefined,
     languages: Array.isArray(song.languages) ? song.languages : undefined,
   }));
-  const selection = await resolveDirectRequest(matched, {
+  const resolveReading = () => resolveDirectRequest(matched, {
     text,
     catalog: {
       ...subsonic,
@@ -869,11 +905,11 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       }
       return drawn.pick;
     },
-    recentIds: cdMin > 0 ? queue.recentlyPlayedIds(cdMin / 60) : new Set<string>(),
+    recentIds: requestCooldownIds(),
     queuedIds: queue.queuedIds(),
     currentId: queue.current?.track?.id,
-    exactOnly: explicitNamedRequest || explicitArtistOnlyRequest || likelyShortTitle || exactTitleOnlyRequest || forcedNamedTitle
-      || Boolean(matched.releaseContext),
+    exactOnly: explicitNamedRequest || explicitArtistOnlyRequest || exactTitleOnlyRequest || forcedNamedTitle
+      || (Boolean(matched.releaseContext) && nameProven),
     signal,
     moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },
     languageSongs: async language => {
@@ -901,7 +937,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       ? {
         similarSeedSongs: async (seedId: string) => {
           await library.load();
-          const excluded = new Set([...queue.queuedIds(), ...queue.recentlyPlayedIds(cdMin / 60), seedId]);
+          const excluded = new Set([...queue.queuedIds(), ...requestCooldownIds(), seedId]);
           const merged: any[] = [];
           const seen = new Set<string>();
           const add = (songs: any[], fallbackSimilarity: number) => {
@@ -946,7 +982,21 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       }
       : {}),
   });
+  let selection = nameFree || (nameRefused && !interpreterAnswered) ? nameFirst! : await resolveReading();
+  // The literal parse alone read a genre the library can't meet ("play metal"
+  // with no such tag). That parse skipped the interpreter, so it decides now.
+  // A genre no model confirmed is no reason to refuse, so without one the
+  // request takes its honest alternative. A language stays a hard condition.
+  if (deterministicLiteralRequest && !interpreterAnswered && !selection.track
+    && selection.required?.includes('genre') && !selection.required.includes('language')) {
+    if (budget.requestsAllowed()) await interpret();
+    if (!modelReadGenre) matched = { ...(interpreterAnswered && matched.kind !== 'chat' ? matched : literal), genre: null };
+    matched = normalizeRequestMatch(matched, { moods: settings.moodVocab() });
+    recordReading();
+    selection = await resolveReading();
+  }
   throwIfRequestResolutionAborted(signal);
+  if (nameFirst && selection !== nameFirst) selection.errors.unshift(...nameFirst.errors);
   const pick = selection.track;
   const pickSource = selection.source;
   entry.stages.push('local-candidate-ranking');

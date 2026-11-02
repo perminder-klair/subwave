@@ -54,6 +54,7 @@ let agentError: Error | null = null;
 let agentDelayMs = 0;
 let modelDelayMs = 0;
 let libraryStalls = false;
+let libraryDelayMs = 0;
 
 beforeEach(async context => {
   const t = context as TestContext;
@@ -86,6 +87,7 @@ beforeEach(async context => {
   agentDelayMs = 0;
   modelDelayMs = 0;
   libraryStalls = false;
+  libraryDelayMs = 0;
   modelOutput = { kind: 'track', title: exact.title, artist: 'Queen', search_terms: [exact.title, 'Queen'], genre: 'Rock', scope: 'song' };
   t.mock.method(requestAgent, 'run', async () => {
     agentCalls++;
@@ -114,12 +116,13 @@ beforeEach(async context => {
     if (url.origin === base) return realFetch(input, init);
     if (url.hostname !== 'direct-library.invalid') throw Error('synthetic offline dependency');
     if (libraryStalls) return new Promise<Response>(() => {});
+    if (libraryDelayMs) await new Promise(resolve => setTimeout(resolve, libraryDelayMs));
     const endpoint = url.pathname.split('/').at(-1);
     const artistQuery = artistSongs.length && /queen/i.test(url.searchParams.get('query') || '');
     const data = endpoint === 'search3' ? { searchResult3: { song: searchEmpty ? [] : catalogueSongs, artist: artistQuery ? [{ id: 'queen', name: 'Queen' }] : [] } }
       : endpoint === 'getStarred2' ? { starred2: { song: [filler] } }
         : endpoint === 'getSimilarSongs2' ? { similarSongs2: { song: [filler] } }
-        : endpoint === 'getGenres' ? { genres: { genre: [{ value: 'Rock', songCount: 2 }] } }
+        : endpoint === 'getGenres' ? { genres: { genre: ['Rock', 'Funk', 'R&B'].map(value => ({ value, songCount: 2 })) } }
           : endpoint === 'getSongsByGenre' ? { songsByGenre: { song: genreSongs } }
           : endpoint === 'getArtist' ? { artist: { album: artistSongs.length ? [{ id: 'queen-album', name: 'Sheer Heart Attack' }] : [] } }
           : endpoint === 'getAlbum' ? { album: { song: artistSongs } } : {};
@@ -368,15 +371,16 @@ test('a short title is resolved locally before the interpreter', async () => {
   assert.equal(bodies.length, 0, 'a short named request should not spend an interpretation call');
 });
 
-test('a missing short title fails without selecting an unrelated fallback', async () => {
+test('a missing short title the interpreter reads as a name fails without an unrelated fallback', async () => {
   catalogueSongs = [filler];
   searchEmpty = true;
+  modelOutput = { kind: 'track', title: 'Daaku', artist: null, search_terms: ['Daaku'], scope: 'song' };
   const result = await submit('daaku');
   assert.equal(result.status, 'failed');
   assert.equal(result.outcome, 'no-match');
   assert.match(result.message, /couldn't find|could not find|no match|nothing .* matched/i);
   assert.equal(queue.upcoming.length, 0);
-  assert.equal(bodies.length, 0, 'a named-title miss must not invoke the interpreter or fallback pool');
+  assert.equal(bodies.length, 1, 'one word the catalogue missed still goes to the interpreter');
 });
 
 test('a framed impossible title stays no-match instead of taking an agent vibe fallback', async () => {
@@ -1461,3 +1465,345 @@ for (const failure of ['interpreter down', 'token cap']) {
     });
   }
 }
+
+// Three ways a station reaches the fallback with less than a healthy model.
+async function fallbackWithNoModel(failure: string) {
+  if (failure === 'agent failed') {
+    await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+    agentError = Error('synthetic agent failure');
+    modelError = true;
+  } else if (failure === 'token cap') {
+    await settings.update({ llm: { dailyTokenCap: 1000, exemptRequests: false } } as never);
+    addDailyUsage(5000);
+  } else modelError = true;
+}
+const NO_MODEL = ['interpreter down', 'agent failed', 'token cap'];
+
+for (const [title, artist] of [['Love Song', 'Sara Bareilles'], ['Work Song', 'Hozier'], ['Sad Songs', 'Elton John'], ['Party Music', 'The Coup'], ['Rock Music', 'Pixies'], ['Dance Music', 'The Mountain Goats']]) {
+  const track = { id: `title-${title}`, title, artist, duration: 200 };
+  for (const condition of ['interpreter up', ...NO_MODEL]) {
+    test(`a trailing "song" or "music" leaves the title first (${condition}): ${title}`, async () => {
+      catalogueSongs = [filler, track];
+      genreSongs = [filler];
+      if (condition !== 'interpreter up') await fallbackWithNoModel(condition);
+      const result = await submit(`play ${title}`);
+      assert.equal(result.outcome, 'matched');
+      assert.equal(queue.upcoming[0].track.id, track.id);
+      if (condition === 'interpreter up') assert.equal(bodies.length, 0, 'no model is needed to find a title the library has');
+    });
+  }
+}
+
+test('a trailing "music" with no such title is still the genre', async () => {
+  catalogueSongs = [filler];
+  genreSongs = [filler];
+  const result = await submit('play rock music');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(requestLog.snapshot(1)[0].pickSource, 'genre:Rock');
+});
+
+test('a track named with the opening frame is found, and the frame alone finds nothing', async () => {
+  const someLove = { id: 'some-love', title: 'Some Love', artist: 'Fixture Artist', duration: 200 };
+  catalogueSongs = [filler, someLove];
+  genreSongs = [filler];
+  modelError = true;
+  assert.equal((await submit('play Some Love')).outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, someLove.id);
+});
+
+for (const failure of ['the agent answered nothing', 'the agent failed']) {
+  for (const [text, reading, outcome] of [
+    ['play funk', { genre: 'Funk' }, 'matched'],
+    ['रॉक', { genre: 'Rock' }, 'matched'],
+    ['play mellow', { mood: 'calm' }, 'substituted'],
+    ['play happy', { mood: 'celebratory' }, 'substituted'],
+    ['play oldies', {}, 'substituted'],
+    ['play hits', {}, 'substituted'],
+    ['play instrumental', {}, 'substituted'],
+    ['play christmas', { mood: 'festival' }, 'substituted'],
+    ['प्यार', { mood: 'romantic' }, 'substituted'],
+  ] as const) {
+    test(`one word the catalogue misses goes to the interpreter (${failure}): ${text}`, async () => {
+      await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+      if (failure === 'the agent failed') agentError = Error('synthetic agent failure');
+      else agentResult = agentFoundNothing();
+      catalogueSongs = [filler];
+      searchEmpty = true;
+      genreSongs = [filler];
+      modelOutput = { kind: 'track', title: null, search_terms: [], scope: 'song', ...reading };
+      const result = await submit(text);
+      assert.equal(result.outcome, outcome);
+      assert.equal(queue.upcoming.length, 1);
+      assert.equal(bodies.length, 1, 'the interpreter read it');
+    });
+  }
+}
+
+test('Direct reads one word too, and the agent stays out of it', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  genreSongs = [filler];
+  modelOutput = { kind: 'track', title: null, genre: 'Funk', search_terms: [], scope: 'song' };
+  const result = await submit('play funk');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(requestLog.snapshot(1)[0].pickSource, 'genre:Funk');
+  assert.equal(bodies.length, 1);
+});
+
+for (const text of ['R&B', 'play R&B', 'R&B please']) {
+  test(`"&" reaches the genre alias: ${text}`, async () => {
+    catalogueSongs = [filler];
+    searchEmpty = true;
+    genreSongs = [filler];
+    const result = await submit(text);
+    assert.equal(result.outcome, 'matched');
+    assert.equal(requestLog.snapshot(1)[0].pickSource, 'genre:R&B');
+  });
+}
+
+for (const failure of NO_MODEL) {
+  test(`a genre the library lacks is no refusal when no model confirmed it (${failure})`, async () => {
+    catalogueSongs = [filler];
+    searchEmpty = true;
+    genreSongs = [];
+    await fallbackWithNoModel(failure);
+    const result = await submit('play metal');
+    assert.equal(result.outcome, 'substituted');
+    assert.equal(queue.upcoming.length, 1);
+    assert.match(result.ack, /alternative/);
+  });
+}
+
+test('a genre the library lacks stays a miss when the interpreter confirms it', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  genreSongs = [];
+  modelOutput = { kind: 'track', title: null, genre: 'Metal', search_terms: [], scope: 'song' };
+  const result = await submit('play metal');
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(bodies.length, 1, 'the interpreter is asked only once the library has missed');
+});
+
+test('an interpreter that reads no genre takes the request off the literal one', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  genreSongs = [];
+  modelOutput = { kind: 'track', title: null, search_terms: [], scope: 'song' };
+  const result = await submit('play metal');
+  assert.equal(result.outcome, 'substituted');
+  assert.match(result.ack, /alternative/);
+});
+
+test('a language the library lacks stays a miss with no model', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  genreSongs = [];
+  modelError = true;
+  assert.equal((await submit('हिंदी गाने')).outcome, 'no-match');
+  assert.equal(queue.upcoming.length, 0);
+});
+
+test('a one-word chat still reaches the interpreter', async () => {
+  searchEmpty = true;
+  modelOutput = { kind: 'chat', ack: 'Cheers, friend!', search_terms: [], scope: 'song' };
+  const result = await submit('lol');
+  assert.equal(result.ack, 'Cheers, friend!');
+  assert.equal(queue.upcoming.length, 0);
+});
+
+const vibes = [
+  'can you play something chill for the evening', 'could you play me some rock', 'i want something chill for the evening', 'give me something chill',
+  'got anything upbeat', 'any chill songs for tonight', "i'd love some jazz tonight",
+  'something chill for the evening', 'play me some rock', 'put on something mellow for me please', 'hey dj something chill', 'something upbeat for the drive home',
+  'please play something relaxing for my mum', 'some chill tunes for the evening',
+  'रोमांटिक गाने', 'рок музыка', 'música rock', 'something from the movie Titanic',
+  // Nothing marks these as vibes, which is why the default has to be the alternative.
+  'lazy sunday', 'sunday brunch', 'late night jazz', 'top 40', 'funk', 'daaku',
+];
+for (const failure of NO_MODEL) {
+  for (const text of vibes) {
+    test(`with no model a miss keeps its honest alternative (${failure}): ${text}`, async () => {
+      catalogueSongs = [filler];
+      searchEmpty = true;
+      await fallbackWithNoModel(failure);
+      const result = await submit(text);
+      assert.equal(result.outcome, 'substituted');
+      assert.equal(queue.upcoming.length, 1);
+      assert.match(result.ack, /alternative/);
+    });
+  }
+
+  for (const text of ['play U2 rock', 'play 2Pac rap', 'तेरे बिना love', 'play "Nonexistent Song"', 'something by Nobody Special']) {
+    test(`with no model a name the words prove stays a miss (${failure}): ${text}`, async () => {
+      catalogueSongs = [filler];
+      searchEmpty = true;
+      genreSongs = [filler];
+      await fallbackWithNoModel(failure);
+      const result = await submit(text);
+      assert.equal(result.outcome, 'no-match');
+      assert.equal(queue.upcoming.length, 0);
+    });
+  }
+}
+
+test('a reading with no name takes the request off its literal wording', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  genreSongs = [filler];
+  modelOutput = { kind: 'track', title: null, genre: 'Rock', search_terms: [], scope: 'song' };
+  for (const text of ['late night rock', 'play lazy sunday brunch classics', 'play good songs for my mum']) {
+    queue.upcoming = [];
+    const result = await submit(text);
+    assert.equal(result.outcome, 'matched', text);
+    assert.equal(requestLog.snapshot(1)[0].pickSource, 'genre:Rock', text);
+  }
+});
+
+test('a title the interpreter reads for a generic "from" wording is used', async () => {
+  const result = await submit('the song from the new Dune movie');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, exact.id);
+});
+
+test('"from" names no artist the library must hold, whatever a model reads', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  for (const [text, reading] of [
+    ['something from the movie Titanic', { title: null, search_terms: ['Titanic'] }],
+    ['something from Queen', { title: null, artist: 'Queen', search_terms: [] }],
+    ['music from Iceland', { title: null, search_terms: [] }],
+  ] as const) {
+    queue.upcoming = [];
+    modelOutput = { kind: 'track', scope: 'song', ...reading };
+    const result = await submit(text);
+    assert.equal(result.outcome, 'substituted', text);
+    assert.match(result.ack, /alternative/, text);
+  }
+});
+
+test('"by" does name one', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  modelOutput = { kind: 'track', title: null, artist: 'Nobody Special', search_terms: [], scope: 'song' };
+  assert.equal((await submit('something by Nobody Special')).outcome, 'no-match');
+});
+
+test('music from a film is a kind of music, a song from one is an identification', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  modelOutput = { kind: 'track', title: null, search_terms: [], scope: 'song' };
+  assert.equal((await submit('music from the movie Titanic')).outcome, 'substituted');
+  assert.equal((await submit('a song from the movie Titanic')).outcome, 'unsupported');
+});
+
+test('a generic ask gets no fuzzy reading of a title made of the same word', async () => {
+  const something = { id: 'something', title: 'Something', artist: 'The Beatles', duration: 200 };
+  catalogueSongs = [filler, something];
+  modelError = true;
+  const result = await submit('play me something');
+  assert.equal(result.outcome, 'substituted');
+  assert.match(result.ack, /alternative/);
+});
+
+test('a word asking for a kind of music keeps the alternative whatever title a model reads', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  modelOutput = { kind: 'track', title: 'Anything Upbeat', artist: null, search_terms: ['Anything Upbeat'], scope: 'song' };
+  const result = await submit('got anything upbeat');
+  assert.equal(result.outcome, 'substituted');
+  assert.match(result.ack, /alternative/);
+});
+
+test('a title the interpreter reads, with no such track, is a miss', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  modelOutput = { kind: 'track', title: 'Imaginary Title Here', artist: null, search_terms: ['Imaginary Title Here'], scope: 'song' };
+  const result = await submit('Imaginary Title Here');
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(queue.upcoming.length, 0);
+});
+
+const rockTrack = { id: 'title-rock', title: 'Rock', artist: 'Fixture Artist', duration: 200 };
+const refusals: Array<[string, string, () => void]> = [
+  ['cooldown', 'cooldown', () => { queue._recentPlays = [{ ...rockTrack, endedAt: new Date().toISOString() }] as never; }],
+  ['in the queue', 'already-queued', () => { queue.upcoming = [{ track: rockTrack, requestedBy: 'Someone' }] as never; }],
+];
+for (const [state, refused, setUp] of refusals) {
+  test(`a bare word whose title is refused takes the attribute the interpreter reads (${state})`, async () => {
+    catalogueSongs = [filler, rockTrack];
+    genreSongs = [filler];
+    setUp();
+    modelOutput = { kind: 'track', title: null, genre: 'Rock', search_terms: [], scope: 'song' };
+    const result = await submit('play Rock');
+    assert.equal(result.outcome, 'matched');
+    assert.equal(requestLog.snapshot(1)[0].pickSource, 'genre:Rock');
+    assert.ok(queue.upcoming.some(item => item.track.id === filler.id));
+  });
+
+  test(`a bare word the interpreter reads as the title keeps its refusal (${state})`, async () => {
+    catalogueSongs = [filler, rockTrack];
+    genreSongs = [filler];
+    setUp();
+    modelOutput = { kind: 'track', title: 'Rock', artist: null, search_terms: ['Rock'], scope: 'song' };
+    assert.equal((await submit('play Rock')).outcome, refused);
+  });
+
+  test(`a bare word with its title refused and no interpreter keeps the refusal (${state})`, async () => {
+    catalogueSongs = [filler, rockTrack];
+    genreSongs = [filler];
+    setUp();
+    modelError = true;
+    assert.equal((await submit('play Rock')).outcome, refused);
+  });
+
+  test(`a quoted title keeps its refusal whatever a model reads (${state})`, async () => {
+    catalogueSongs = [filler, rockTrack];
+    genreSongs = [filler];
+    setUp();
+    modelOutput = { kind: 'track', title: null, genre: 'Rock', search_terms: [], scope: 'song' };
+    assert.equal((await submit('play "Rock"')).outcome, refused);
+    assert.equal(bodies.length, 0);
+  });
+}
+
+test('a vibe gets the whole interpreter budget, as a slow model needs', async t => {
+  genreSongs = [filler];
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  modelDelayMs = 35_000;
+  modelOutput = { kind: 'track', title: null, genre: 'Rock', search_terms: [], scope: 'song' };
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('something chill for the evening');
+  const settled = resolveListenerRequest(entry);
+  await advanceUntilSettled(t, entry, 40_000);
+  await settled;
+  assert.equal(entry.outcome, 'matched');
+  assert.notEqual(entry.interpretationFallback, true);
+});
+
+test('one word the catalogue missed gets the whole interpreter budget too', async t => {
+  genreSongs = [filler];
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  modelDelayMs = 35_000;
+  modelOutput = { kind: 'track', title: null, genre: 'Funk', search_terms: [], scope: 'song' };
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('play funk');
+  const settled = resolveListenerRequest(entry);
+  await advanceUntilSettled(t, entry, 40_000);
+  await settled;
+  assert.equal(entry.outcome, 'matched');
+  assert.notEqual(entry.interpretationFallback, true);
+});
+
+test('a title-only name stops waiting for repair at the named cap', async t => {
+  catalogueSongs = [filler, exact];
+  modelDelayMs = 35_000;
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('Bohemian Rhapsody');
+  const settled = resolveListenerRequest(entry);
+  await advanceUntilSettled(t, entry, 34_000);
+  await settled;
+  assert.equal(entry.interpretationFallback, true);
+  assert.equal(entry.outcome, 'matched');
+});

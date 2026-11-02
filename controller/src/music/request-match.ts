@@ -57,9 +57,10 @@ export interface RequestMatch {
     title: string;
     wholeTitle: string;
   };
-  // Set when every word of the request is also an attribute and no framing
-  // says which was meant ("play Focus"). The resolver tries these words as an
-  // exact title and artist before any attribute pool.
+  // The listener's whole wording, set when the parse found no title in it
+  // ("play Focus", "Love Song", "something like Olivia"). The words can still
+  // be one, so resolveExactName offers them to the catalogue before any
+  // attribute or similarity reading.
   bareName?: string;
   // A named similarity request is resolved through the same recording
   // identity verifier before its neighbours are considered.
@@ -251,7 +252,7 @@ export function directRequestUnsupported(text: string, match: RequestMatch = {})
   // has lost its apostrophes, so '80s and 80's arrive as 80s.
   if (/(?<!\b(?:my|his|her|their|your|our)\s+(?:(?:early|mid|late)[\s-]+)?)(?<!\b(?:over|under)[\s-]+)(?<![\p{L}\p{N}])(?:[2-9]0s|(?:twen|thir|for|fif|six|seven|eigh|nine)ties)(?![\p{L}\p{N}])/iu.test(prose)) reasons.add('era');
   if (/\b(?:instrumental|acoustic|live)\s+(?:only|music|songs?|tracks?|versions?)\b|\b(?:only|strictly)\s+(?:instrumental|acoustic|live)\b|\bwithout\s+(?:vocals|singing|lyrics)\b/i.test(prose)) reasons.add('recording condition');
-  if (/\b(?:song|track|one|music)\s+(?:from|in)\s+(?:(?:that|the|a)\s+)?(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
+  if (/\b(?:song|track|one)\s+(?:from|in)\s+(?:that|the|a)\s+(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
   if (/\b(?:one|song|track|music)\s+(?:we|you|I)\s+(?:discussed|mentioned|requested|talked about)\s+(?:earlier|before|yesterday|last)\b/i.test(prose)) reasons.add('earlier conversation');
   return [...reasons];
 }
@@ -792,6 +793,30 @@ function isAttributeOnlyRequest(
   return inputTokens.every(token => allowed.has(token) || knownAttributeToken(token));
 }
 
+// Words that ask for a kind of music wherever they sit: "i want some jazz",
+// "any chill songs for tonight". A title can hold one too, so they never stop a
+// catalogue hit; they only mean a miss may take an honest alternative.
+const KIND_OF_MUSIC = /\b(?:any|anything|something|some|music|songs?|tracks?|tunes?)\b/iu;
+
+export function asksForKindOfMusic(text: string): boolean {
+  return KIND_OF_MUSIC.test(text) && !leadingQuotedName(text);
+}
+
+// With no model to read them, an unknown phrase can't be told from a mood the
+// aliases don't list ("lazy sunday"), so a miss keeps its honest alternative
+// and holding it to an exact title needs proof. A quote is proof, and so is a
+// word no attribute reading can absorb standing beside one: letters and digits
+// in one token ("U2 rock", "2Pac rap") or another script ("तेरे बिना love").
+function nameToken(token: string): boolean {
+  return (/\p{L}/u.test(token) && /\p{N}/u.test(token)) || /(?!\p{Script=Latin})\p{L}/u.test(token);
+}
+
+export function wordsProveName(text: string): boolean {
+  if (leadingQuotedName(text)) return true;
+  const tokens = requestName(text.replace(REQUEST_LEAD, '')).split(' ').filter(Boolean);
+  return tokens.some(knownAttributeToken) && tokens.some(token => !knownAttributeToken(token) && nameToken(token));
+}
+
 export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): boolean {
   const lyricLike = looksLikeLyricRequest(text);
   return lyricLike
@@ -803,7 +828,7 @@ export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): b
     && !hasUnspacedNativeScript(text)
     && !LYRIC_CUE.test(text)
     && !/\b(?:album|artist|genre|language|mood)\b/iu.test(text)
-    && !/^(?:please\s+)?(?:play|queue|request|put\s+on)\s+(?:some|something|anything|music|a\s+song|a\s+track)\b/iu.test(text);
+    && !asksForKindOfMusic(text);
 }
 
 export function modelFreeRequest(text: string): RequestMatch {
@@ -823,6 +848,7 @@ export function modelFreeRequest(text: string): RequestMatch {
     .replace(/\s+(?:music|songs?|tracks?|genre|language|style)(?=\s+(?:in|en|de|में|ਵਿੱਚ)\b)/iu, '')
     .replace(/\s+(?:music|songs?|tracks?|genre|language|style)\s*$/iu, '')
     .trim();
+  const wholeWording = cleaned.replace(/[.!?]+$/u, '');
   const namedSimilarity = cleaned.match(/^(?:something|anything)\s+like\s+(.+?)[.!?]*$/iu);
   const lyricLike = looksLikeLyricRequest(cleaned) && !namedSimilarity;
   // At the model token cap, deictic similarity requests still need their
@@ -834,7 +860,7 @@ export function modelFreeRequest(text: string): RequestMatch {
     return {
       kind: 'track', title: null, album: null, artist: null, genre: null,
       language: null, mood: null, sort: null, scope: 'song',
-      search_terms: [], intent: 'Wants more like the current track.', ack: '',
+      search_terms: [], intent: 'Wants more like the current track.', ack: '', bareName: wholeWording,
     };
   }
   // Named similarity is a separate relation from lyric or vibe search. Keep
@@ -854,7 +880,7 @@ export function modelFreeRequest(text: string): RequestMatch {
         releaseContext: seed.releaseContext,
         raw: namedSimilarity[1].trim(),
       },
-      intent: `Wants something similar to ${namedSimilarity[1].trim()}.`, ack: '',
+      intent: `Wants something similar to ${namedSimilarity[1].trim()}.`, ack: '', bareName: wholeWording,
     };
   }
   // Parse a trailing language condition before resolving the other attributes,
@@ -899,8 +925,7 @@ export function modelFreeRequest(text: string): RequestMatch {
       genre: inferredGenre,
       language: languageRequested ? inferredLanguage : null,
       mood: inferredMood, sort: null, scope: 'song', search_terms: [],
-      unsupported: [], intent: conditions.join(' '), ack: '',
-      ...(attributeBody === cleaned ? { bareName: cleaned.replace(/[.!?]+$/u, '') } : {}),
+      unsupported: [], intent: conditions.join(' '), ack: '', bareName: wholeWording,
     };
   }
   // A trailing language condition stays explicit even without interpretation.
@@ -952,15 +977,9 @@ export function modelFreeRequest(text: string): RequestMatch {
     const contextName = unquote(explicitContext ? explicitContext[3] : context[2]).trim();
     const wholeTitle = unquote(query).trim();
     if (titleBefore && contextName) {
-      if (/^(?:a\s+)?(?:song|track|music|one)$/iu.test(titleBefore)) {
-        return {
-          kind: 'track', title: null, album: null, artist: null,
-          genre: null, language: null, mood: null, sort: null,
-          scope: 'song', search_terms: [], unsupported: ['film identification'],
-          intent: 'Identify a song from a film or show.', ack: '',
-        };
-      }
-      return {
+      // "the song from the new Dune movie" names no recording, so there is no
+      // title for the context to qualify.
+      if (!asksForKindOfMusic(titleBefore)) return {
         kind: 'track', title: wholeTitle, album: null, artist: null,
         genre: null, language: language?.[1] || null, mood: null, sort: null,
         reversible: false, search_terms: [wholeTitle], scope: 'song',
@@ -1074,8 +1093,10 @@ export function requestedRecording(text: string | null | undefined): RequestedRe
   if (!text?.trim()) return null;
   // NUL is maskNames' marker; left in, it reads as every name being present.
   const said = text.replaceAll('\u0000', ' ');
-  const { title, artist, reversible, language } = modelFreeRequest(said);
-  if (!title || language) return null;
+  const literal = modelFreeRequest(said);
+  const { artist, reversible } = literal;
+  const title = literal.title || literal.bareName;
+  if (!title || (literal.title && literal.language)) return null;
   if (!artist && requestName(title).split(' ').every(word => GENERIC_ASK.has(word))) return null;
   const isExact = (song: RequestSong) => {
     const name = String(song.title ?? '');
@@ -1220,6 +1241,16 @@ export function normalizeRequestMatch(match: RequestMatch, options: { moods?: re
   return { ...match, mood, language };
 }
 
+// The listener's words as an exact title, then an exact artist: no fuzzy
+// reading, so "rock" can't land on "Rocks", and no pools. It needs no model, so
+// it holds with the interpreter down. It runs before any reading because an
+// attribute is a good answer to a miss but never to a song the library has.
+export function resolveExactName(name: string, deps: Pick<Parameters<typeof resolveDirectRequest>[1], 'catalog' | 'recentIds' | 'queuedIds' | 'currentId' | 'signal'>): Promise<RequestSelection> {
+  return resolveDirectRequest({
+    kind: 'track', title: name, artist: null, album: null, scope: 'song', literal: true, titleOnly: true,
+  }, { ...deps, exactOnly: true, exactIdentity: true, moodSongs: async () => [], fallbackSongs: async () => [] });
+}
+
 // One chronological scale; precise original dates precede release/year fallbacks.
 export function requestReleaseRank(album: { year?: number; originalReleaseDate?: { year?: number; month?: number; day?: number }; releaseDate?: string }): number {
   const date = album.originalReleaseDate;
@@ -1283,20 +1314,6 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     ? nameSearchTerms(match).filter(term => inRequest(deps.text!, term)) : [];
   // Once a named song missed, a pool draw only stands in for it.
   let standingIn = false;
-  // Every word is also an attribute, so only the catalogue can say which was
-  // meant. This needs no model, so it holds with the interpreter skipped or
-  // down, and it runs first because the attribute is still a good answer to a
-  // miss but never a good answer to a song the library has.
-  if (match.bareName) {
-    const named = await resolveDirectRequest({
-      kind: 'track', title: match.bareName, artist: null, album: null, scope: 'song', literal: true, titleOnly: true,
-    }, {
-      ...deps, text: undefined, exactOnly: true, exactIdentity: true, choose: undefined,
-      similarSongs: undefined, similarSeedSongs: undefined, fallbackSongs: async () => [],
-    });
-    errors.push(...named.errors);
-    if (named.track) return { ...named, errors };
-  }
   const moodPool = match.mood ? await safe('mood tracks', () => deps.moodSongs(match.mood!), []) : [];
   const languagePool = match.language && deps.languageSongs
     ? await safe('language tracks', () => deps.languageSongs!(canonicalLanguage(match.language!) || match.language!), [])
@@ -1376,7 +1393,8 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     return titleScore * 0.55 + artistScore * 0.35 + albumScore * 0.10;
   };
   const selectFuzzy = (songs: RequestSong[], source: string): RequestSelection | null => {
-    if (!title || deps.exactIdentity) return null;
+    // "play me something" is no typo for The Beatles' "Something".
+    if (!title || deps.exactIdentity || framingOnly(title)) return null;
     const scored = unique(songs)
       // Keep temporarily ineligible candidates in the ranked set. Exact
       // matching already preserves a queued/cooldown identity for a refusal;

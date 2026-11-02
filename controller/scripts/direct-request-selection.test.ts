@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, explicitRequestAttribute, isFramedTitleOnlyRequest, isGenericRequestPhrase, isGreetingLikeRequest, isLyricOrFilmDescription, looksLikeLyricRequest, modelFreeRequest, requestedTitle, rankRequestCandidates, repairRequestMatch, requestArtistMatches, requestCandidateArtistMatches, requestReleaseRank, requestTitleMatches,
   resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
+  asksForKindOfMusic, resolveExactName, wordsProveName,
 } from '../src/music/request-match.js';
 
 test('listener requests are classified into deterministic resolver lanes', () => {
@@ -1154,12 +1155,52 @@ test('native-script framing around an attribute is still framing', () => {
   assert.equal(modelFreeRequest('ਪੰਜਾਬੀ ਗੀਤ').language, 'Punjabi');
 });
 
-test('only unframed attribute words are offered to the catalogue as a name', () => {
+test('the whole wording is offered to the catalogue, never the word inside a frame', () => {
   assert.equal(modelFreeRequest('play Focus').bareName, 'Focus');
   assert.equal(modelFreeRequest('Morning.').bareName, 'Morning');
-  assert.equal(modelFreeRequest('play some rock').bareName, undefined);
-  assert.equal(modelFreeRequest('rock music').bareName, undefined);
+  assert.equal(modelFreeRequest('rock music').bareName, 'rock music');
+  assert.equal(modelFreeRequest('play Love Song').bareName, 'Love Song');
+  assert.equal(modelFreeRequest('play some rock').bareName, 'some rock');
+  assert.equal(modelFreeRequest('something like Focus').bareName, 'something like Focus');
   assert.equal(modelFreeRequest('something like Focus').similarTo?.title, 'Focus');
+  assert.equal(modelFreeRequest('like this').bareName, 'like this');
+});
+
+test('words alone prove a name only with a quote, or a mixed or foreign word beside an attribute', () => {
+  for (const text of ['play U2 rock', 'play 2Pac rap', 'तेरे बिना love', 'play "Rock"', '"lazy sunday"']) assert.equal(wordsProveName(text), true, text);
+  for (const text of ['lazy sunday', 'Smells Like Teen Spirit', 'top 40 rock', 'música rock', 'рок музыка', 'रोमांटिक गाने', 'something chill', 'U2']) {
+    assert.equal(wordsProveName(text), false, text);
+  }
+});
+
+test('a kind of music is asked for anywhere in the words, never inside a quote', () => {
+  for (const text of ['i want something chill', 'got anything upbeat', 'any chill songs for tonight', "i'd love some jazz tonight", 'play good music for dinner']) {
+    assert.equal(asksForKindOfMusic(text), true, text);
+  }
+  for (const text of ['Smells Like Teen Spirit', 'lazy sunday', 'play "Some Nights"', 'Someone Like You', 'Musical Chairs']) assert.equal(asksForKindOfMusic(text), false, text);
+});
+
+test('"R&B" is a genre, however it is framed', () => {
+  for (const text of ['R&B', 'play R&B', 'some R&B', 'R&B music', 'rnb']) assert.equal(modelFreeRequest(text).genre, 'r&b', text);
+});
+
+test('generic words before "from" name no recording, so no release context', () => {
+  for (const text of ['the song from the new Dune movie', 'that song from Titanic', 'love songs from Bollywood']) {
+    assert.equal(modelFreeRequest(text).releaseContext, undefined, text);
+  }
+  assert.equal(modelFreeRequest('Tum Hi Ho from Aashiqui 2').releaseContext?.title, 'Tum Hi Ho');
+});
+
+test('the exact name step takes no fuzzy reading and no pool', async () => {
+  const { deps } = fixture({
+    searchPage: async () => ({ songs: [{ id: 'rocks', title: 'Rocks', artist: 'Primal Scream' }], rawCount: 1 }),
+    resolveArtist: async () => null,
+  });
+  assert.equal((await resolveExactName('Rock', deps)).track, null);
+  const hit = await resolveExactName('Rocks', deps);
+  assert.equal(hit.track?.id, 'rocks');
+  assert.equal(hit.outcome, 'matched');
+  assert.equal((await resolveExactName('Rocks', { ...deps, recentIds: new Set(['rocks']) })).outcome, 'cooldown');
 });
 
 test('an unranked resolver still takes the best neighbour, and the route chooser gets the ranking', async () => {

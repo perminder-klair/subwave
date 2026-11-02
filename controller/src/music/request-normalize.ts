@@ -64,9 +64,10 @@ const ENERGY_ALIASES: Record<string, RequestEnergy> = {
   high: 'high', energetic: 'high', upbeat: 'high', pumped: 'high', lively: 'high', intense: 'high',
 };
 
+// Keyed by requestName, which folds "&": "r b" is how "R&B" arrives.
 const GENRE_ALIASES: Record<string, string> = {
   rock: 'rock', pop: 'pop', jazz: 'jazz', blues: 'blues', soul: 'soul', rap: 'rap', hiphop: 'hip hop',
-  'hip hop': 'hip hop', rnb: 'r&b', 'r&b': 'r&b', metal: 'metal', punk: 'punk', folk: 'folk', country: 'country',
+  'hip hop': 'hip hop', rnb: 'r&b', 'r b': 'r&b', metal: 'metal', punk: 'punk', folk: 'folk', country: 'country',
   classical: 'classical', electronic: 'electronic', dance: 'dance', house: 'house', techno: 'techno', trance: 'trance',
   disco: 'disco', reggae: 'reggae', afrobeats: 'afrobeats', indie: 'indie', lofi: 'lofi', 'lo fi': 'lofi',
   bhangra: 'bhangra', bollywood: 'bollywood', devotional: 'devotional', gospel: 'gospel', soundtrack: 'soundtrack',
