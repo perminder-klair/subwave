@@ -1823,11 +1823,15 @@ test('a stalled re-pick leaves a slow library its reserve at default deadlines',
   agentResult = { object: { ack: 'x' }, ...searched, extras: { seen: new Map([[filler.id, filler]]) } };
   modelStalls = true;
   libraryDelayMs = 3000;
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  // Earlier tests leave the request breaker open, which would skip the agent
+  // and the re-pick this is about. An hour on, its cooldown has passed.
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() + 3_600_000 });
   const entry = listenerEntry('Bohemian Rhapsody by Queen');
   const settled = resolveListenerRequest(entry);
   await advanceUntilSettled(t, entry, 91_000);
   await settled;
+  assert.equal(agentCalls, 1);
+  assert.ok(bodies.length > 0, 'the re-pick reached the model');
   assert.equal(entry.outcome, 'matched');
   assert.equal(queue.upcoming[0].track.id, exact.id);
 });
