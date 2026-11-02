@@ -233,24 +233,35 @@ export function resolveIndexTextMode(
   return preferredTextMode();
 }
 
-// What text format the index is recorded as (#1246): the oldest shape still
-// present, since a forward run embeds only vectorless tracks and leaves a mix.
-// Recording the current one would erase the signal that a re-embed is worth
-// running. `reseed` rewrites every vector, so it always adopts.
-export function resolveIndexTextFormat(
-  stored: number | null | undefined,
-  vectorCount: number,
-  reseed = false,
-): number {
-  if (reseed) return EMBED_TEXT_VERSION;
-  if (vectorCount > 0) return Math.min(stored ?? 1, EMBED_TEXT_VERSION);
-  return EMBED_TEXT_VERSION;
-}
-
 // Text-shape versions that move no vector on a station with no sound
 // descriptors: a track without them keeps its exact text, so a lean-tier index
 // is already current and re-embedding it would cost a full pass for nothing.
 const DESCRIPTOR_ONLY_VERSIONS: ReadonlySet<number> = new Set([4]);
+
+// The shape an index built with no descriptors really holds.
+function formatWithoutDescriptors(): number {
+  let v = EMBED_TEXT_VERSION;
+  while (DESCRIPTOR_ONLY_VERSIONS.has(v)) v -= 1;
+  return v;
+}
+
+// What text format the index is recorded as (#1246): the oldest shape still
+// present, since a forward run embeds only vectorless tracks and leaves a mix.
+// Recording the current one would erase the signal that a re-embed is worth
+// running. `reseed` rewrites every vector, so it always adopts, and so does an
+// empty index, as far as the station has descriptors to write: one built before
+// any were selected holds none, and the advisory is the only way they get in.
+export function resolveIndexTextFormat(
+  stored: number | null | undefined,
+  vectorCount: number,
+  reseed = false,
+  descriptorsSelected = true,
+): number {
+  const adopted = descriptorsSelected ? EMBED_TEXT_VERSION : formatWithoutDescriptors();
+  if (reseed) return adopted;
+  if (vectorCount > 0) return Math.min(stored ?? 1, EMBED_TEXT_VERSION);
+  return adopted;
+}
 
 // Whether a re-embed would change anything, the soft advisory (#1246).
 export function embedTextStale(

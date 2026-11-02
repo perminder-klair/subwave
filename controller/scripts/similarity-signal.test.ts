@@ -205,6 +205,20 @@ test('an empty index adopts the current format', () => {
   assert.equal(resolveIndexTextFormat(1, 0), EMBED_TEXT_VERSION);
 });
 
+test('an index built before any descriptor was selected still owes the advisory', () => {
+  // A fresh heavy station embeds before its first analysis, and a lean one can
+  // re-embed and go heavy later. Neither index holds a descriptor, so stamping the
+  // current shape would hide the only prompt those words ever get.
+  const beforeDescriptors = EMBED_TEXT_VERSION - 1;
+  assert.equal(resolveIndexTextFormat(null, 0, false, false), beforeDescriptors);
+  assert.equal(resolveIndexTextFormat(3, 20_000, true, false), beforeDescriptors);
+  assert.equal(embedTextStale(beforeDescriptors, false), false, 'quiet while no label exists');
+  assert.equal(embedTextStale(beforeDescriptors, true), true, 'said once a pass has selected labels');
+  assert.equal(resolveIndexTextFormat(null, 0, false, true), EMBED_TEXT_VERSION, 'with labels it is current');
+  assert.equal(resolveIndexTextFormat(3, 20_000, true, true), EMBED_TEXT_VERSION);
+  assert.equal(resolveIndexTextFormat(3, 20_000, false, false), 3, 'a forward run still reports what is stored');
+});
+
 test('a populated index keeps its older format — the advisory must persist', () => {
   // A forward run only embeds tracks with no vector, so the index becomes a
   // MIX. Recording the current version would erase the one signal that a
