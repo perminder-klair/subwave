@@ -4,15 +4,30 @@ name: Publish CLI binaries
 # attaches the binaries to the GitHub Release matching the tag.
 #
 # Triggers:
-#   - push of a tag like v1.2.3 → builds + uploads
-#   - manual workflow_dispatch → builds without uploading (smoke test)
+#   - push of a tag like v1.2.3 → builds + uploads (see flow below)
+#   - manual workflow_dispatch → builds + smoke-tests only, from any ref (a tag
+#     included): hide-release, wait-for-images and release run only on a tag
+#     *push*, so a dispatch never touches a published release
+#
+# Tag flow: hide-release, build and wait-for-images start together; release
+# waits for all three.
+#   A CLI binary pins SUBWAVE_VERSION to its own version, so it must not be
+#   handed out before that version's images exist on GHCR (publish-images.yml
+#   runs from the same tag push and finishes ~25-35 min after the CLI build).
+#   hide-release flips the release-please-created release to pre-release
+#   within seconds, so `/releases/latest` keeps resolving the previous complete
+#   release. wait-for-images polls GHCR until every image the CLI references is
+#   pullable at this version. Only then does `release` attach the binaries +
+#   SHA256SUMS and un-hide the release, marking it latest unless a newer
+#   release already is.
 #
 # The install script at install.sh (served from cli.getsubwave.com → raw
 # GitHub URL → this repo) downloads the matching CLI binary from the latest
 # release.
 #
-# Inputs are all matrix-controlled — no user-supplied data flows into
-# `run:` steps, so the standard command-injection vectors don't apply.
+# Inputs are all matrix- or github-context-controlled and reach `run:` steps
+# only through `env:` — no user-supplied data is interpolated into scripts, so
+# the standard command-injection vectors don't apply.
 
 on:
   push:
@@ -21,7 +36,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # for uploading release assets
+  contents: read    # hide-release + release raise this to write at job level
 
 jobs:
   build:
@@ -86,19 +101,14 @@ jobs:
       - name: Upload binary artifact
         # Share every built binary (not just on tags) so the smoke jobs can
         # download and exec them on both tag pushes and workflow_dispatch runs.
-        # Short retention — these are throwaway CI artifacts, not releases.
+        # On tags the `release` job also attaches these to the GitHub Release,
+        # possibly from a "Re-run failed jobs" days later if the images were
+        # late — so keep them a week rather than a day.
         uses: actions/upload-artifact@v4
         with:
           name: bin-${{ matrix.asset }}
           path: cli/dist/${{ matrix.asset }}
-          retention-days: 1
-
-      - name: Upload to release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: cli/dist/${{ matrix.asset }}
-          fail_on_unmatched_files: true
+          retention-days: 7
 
       - name: Compute checksum
         # Standard `<hex>  <filename>` line (run from dist/ so the filename is
@@ -114,10 +124,10 @@ jobs:
         with:
           name: sha256-${{ matrix.asset }}
           path: cli/dist/${{ matrix.asset }}.sha256
-          retention-days: 1
+          retention-days: 7
 
   # Cross-arch smoke tests. Informational only — they do NOT gate the release
-  # upload (that happens inside `build`). The darwin jobs are stable enough to
+  # upload (that happens in the `release` job). The darwin jobs are stable enough to
   # be made `required` branch-protection checks later; the QEMU one is flaky by
   # nature and stays continue-on-error.
   #
@@ -182,14 +192,177 @@ jobs:
             -v "$PWD/dist:/d" ubuntu:24.04 \
             sh -c '/d/subwave-linux-arm64 --version && /d/subwave-linux-arm64 --help'
 
-  # Fan-in: gather every per-binary checksum fragment into a single
-  # SHA256SUMS file (the standard `sha256sum -c` format) and attach it to the
-  # release. install.sh downloads this to verify the binary before install.
-  checksums:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+  # Hide the release while the images build. release-please creates the
+  # GitHub Release together with the tag, and GitHub treats it as "latest" at
+  # once — with no assets yet. `/releases/latest` skips pre-releases, so
+  # flipping it to pre-release keeps install.sh and `subwave self-update` on
+  # the previous, fully published release until `release` below un-hides it.
+  # A hand-pushed tag with no release yet only warns: `release` creates it.
+  #
+  # Only gh's "release not found" means there is no release. Any other error
+  # (5xx, rate limit, network) is retried, and if it persists the job fails
+  # rather than guessing. `release` doesn't need this job to succeed: a release
+  # that stayed visible gets its binaries once the images are up, instead of
+  # sitting empty until someone re-runs the workflow.
+  hide-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # gh release edit
     steps:
+      - name: Mark release as pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Run a command up to 5 times, backing off 5/10/15/20 s. Exit 1 is
+          # the retryable failure; any other exit status is final.
+          retry() {
+            local attempt rc
+            for attempt in 1 2 3 4 5; do
+              rc=0; "$@" || rc=$?
+              [ "$rc" -eq 1 ] || return "$rc"
+              [ "$attempt" -lt 5 ] || return 1
+              echo "::warning::'$*' failed (attempt $attempt of 5); retrying"
+              sleep $((attempt * 5))
+            done
+          }
+
+          # 0: the release exists. 2: gh says "release not found". 1: any
+          # other error, worth retrying.
+          lookup() {
+            local out
+            out="$(gh release view "$TAG" --json tagName 2>&1)" && return 0
+            case "$out" in *"release not found"*) return 2 ;; esac
+            echo "$out"
+            return 1
+          }
+
+          rc=0; retry lookup || rc=$?
+          case "$rc" in
+            0)
+              if ! retry gh release edit "$TAG" --prerelease; then
+                echo "::error::Could not mark $TAG as pre-release. It stays visible as latest, without binaries, until the release job attaches them."
+                exit 1
+              fi
+              echo "Marked $TAG as pre-release until its images are on GHCR."
+              ;;
+            2)
+              echo "::warning::No GitHub Release for $TAG yet; the release job will create it once the images are published."
+              ;;
+            *)
+              echo "::error::Could not look up the GitHub Release for $TAG. If it exists, it stays visible as latest, without binaries, until the release job attaches them."
+              exit 1
+              ;;
+          esac
+
+  # Gate the release on the images. Polls GHCR anonymously (the same way
+  # users pull) for ghcr.io/<owner>/<image>:<version> and passes once every
+  # image is there. buildx pushes a multi-arch index only after all its
+  # platform manifests, so a present tag means every platform is pullable.
+  #
+  # IMAGES must track the `image:` refs in the compose files embedded by
+  # cli/scripts/embed-assets.ts (docker-compose.yml, docker-compose.byo.yml,
+  # docker-compose.dev.yml, docker-compose.analyzer-gpu.yml — analyzer covers
+  # both `subwave-analyzer${ANALYZER_HEAVY:+-heavy}` variants). The aio images
+  # (subwave-aio, -aio-heavy, -aio-cuda) are left out on purpose: the CLI never
+  # runs them, so they don't hold up the CLI release.
+  #
+  # If the images land after the timeout, use "Re-run failed jobs" on this
+  # run: it re-runs wait-for-images + release and reuses the build artifacts
+  # (kept 7 days).
+  wait-for-images:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Wait for images on GHCR
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          OWNER="${OWNER,,}"        # GHCR repository names are lowercase
+          VERSION="${TAG#v}"        # metadata-action's {{version}} is bare semver
+          IMAGES="subwave-caddy subwave-broadcast subwave-controller subwave-web subwave-analyzer subwave-analyzer-heavy subwave-analyzer-cuda subwave-tts-heavy"
+          ACCEPT="application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json"
+
+          # The HTTP status of an anonymous manifest HEAD, asked the way a
+          # user's pull asks. Only 200 counts as present. Anything else means
+          # "not yet" and is logged so a stuck run says why: 404 (not pushed),
+          # 401/403/429, 5xx, 000 (network error), or no-token when the token
+          # request itself failed.
+          manifest_status() {
+            local img="$1" token code
+            token="$(curl -fsS "https://ghcr.io/token?scope=repository:$OWNER/$img:pull" 2>/dev/null | jq -r '.token // empty' 2>/dev/null)" || token=""
+            if [ -z "$token" ]; then
+              echo "no-token"
+              return 0
+            fi
+            code="$(curl -sS -o /dev/null -I -w '%{http_code}' \
+              -H "Authorization: Bearer $token" \
+              -H "Accept: $ACCEPT" \
+              "https://ghcr.io/v2/$OWNER/$img/manifests/$VERSION" 2>/dev/null)" || true
+            echo "${code:-000}"
+          }
+
+          missing="$IMAGES"
+          while :; do
+            still=""
+            statuses=""
+            for img in $missing; do
+              code="$(manifest_status "$img")"
+              if [ "$code" = 200 ]; then
+                echo "present: ghcr.io/$OWNER/$img:$VERSION"
+              else
+                still="$still $img"
+                statuses="$statuses $img=$code"
+              fi
+            done
+            missing="${still# }"
+            if [ -z "$missing" ]; then
+              echo "All images for $VERSION are on GHCR."
+              exit 0
+            fi
+            echo "still missing for $VERSION (HTTP status):$statuses"
+            sleep 30
+          done
+
+  # Fan-in: attach every binary plus a single SHA256SUMS (the standard
+  # `sha256sum -c` format; install.sh downloads it to verify the binary) to the
+  # release, then un-hide it. Runs only once the images are on GHCR.
+  # Upload before un-hiding, so the release is never latest without assets.
+  #
+  # It needs build and wait-for-images to succeed, but not hide-release: if
+  # hiding failed, the release is already visible, and filling it beats leaving
+  # it empty until a manual re-run. It still waits for hide-release to finish,
+  # so a slow hide can never land after the un-hide. `!cancelled()` drops the
+  # implicit success() that would otherwise skip this job on a failed hide.
+  release:
+    needs: [build, wait-for-images, hide-release]
+    if: >-
+      github.event_name == 'push'
+      && startsWith(github.ref, 'refs/tags/v')
+      && !cancelled()
+      && needs.build.result == 'success'
+      && needs.wait-for-images.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # upload release assets + gh release edit
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: dist
+          merge-multiple: true
+
       - name: Download checksum fragments
         uses: actions/download-artifact@v4
         with:
@@ -202,8 +375,61 @@ jobs:
           cat sums/*.sha256 | sort -k2 > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Upload SHA256SUMS to release
+      - name: Upload binaries + SHA256SUMS to release
         uses: softprops/action-gh-release@v2
         with:
-          files: SHA256SUMS
+          files: |
+            dist/subwave-*
+            SHA256SUMS
           fail_on_unmatched_files: true
+
+      - name: Un-hide the release
+        # Marks it latest only when no newer release is latest already. A late
+        # "Re-run failed jobs" on an older tag, or two tags finishing out of
+        # order, must not move /releases/latest (and with it install.sh,
+        # `subwave self-update` and the pin `subwave update` writes) back to an
+        # older version. Tags are plain vX.Y.Z: sort -V would rank a -rc
+        # suffix above its release.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Run a command up to 5 times, backing off 5/10/15/20 s. Exit 1 is
+          # the retryable failure; any other exit status is final.
+          retry() {
+            local attempt rc
+            for attempt in 1 2 3 4 5; do
+              rc=0; "$@" || rc=$?
+              [ "$rc" -eq 1 ] || return "$rc"
+              [ "$attempt" -lt 5 ] || return 1
+              echo "::warning::'$*' failed (attempt $attempt of 5); retrying"
+              sleep $((attempt * 5))
+            done
+          }
+
+          # Sets LATEST to the current latest release's tag, or "" when the
+          # repo has none. 1: any other error, worth retrying.
+          latest_tag() {
+            local out
+            if out="$(gh release view --json tagName --jq .tagName 2>&1)"; then
+              LATEST="$out"
+              return 0
+            fi
+            case "$out" in *"release not found"*) LATEST=""; return 0 ;; esac
+            echo "$out"
+            return 1
+          }
+
+          LATEST=""
+          retry latest_tag
+          newest="$(printf '%s\n' "$LATEST" "$TAG" | sed '/^$/d' | sort -V | tail -n 1)"
+          if [ "$newest" = "$TAG" ]; then
+            retry gh release edit "$TAG" --prerelease=false --latest
+            echo "Published $TAG as latest."
+          else
+            retry gh release edit "$TAG" --prerelease=false --latest=false
+            echo "::notice::$LATEST is newer and stays latest; $TAG is published without becoming latest."
+          fi
