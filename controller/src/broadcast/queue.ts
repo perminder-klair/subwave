@@ -13,6 +13,7 @@ import * as library from '../music/library.js';
 import * as lyricsSources from '../music/lyrics-sources.js';
 import * as loudness from '../music/loudness.js';
 import { aboveKnownTrackCeiling } from '../music/track-duration.js';
+import { anyCleanShow, heldBackFromShow } from '../music/explicit-policy.js';
 import * as silenceTrim from '../music/silence-trim.js';
 import * as cueLanding from '../music/cue-landing.js';
 import { capCueOutSec } from '../music/track-floor.js';
@@ -1379,7 +1380,7 @@ class Queue {
         // Marked committed before the await: once this handoff enters the
         // serialized next.txt writer, a host edit must not strip the matching
         // speech and leave an instrumental bed airing naked.
-        const written = await this._writeHandoff(config.liquidsoap.queueFile, beds.bedUri(path, { bedSec, crossSec }), { beforeWrite: () => !this.aboveAutomaticCeiling(item, true) });
+        const written = await this._writeHandoff(config.liquidsoap.queueFile, beds.bedUri(path, { bedSec, crossSec }), { beforeWrite: () => !this.automaticIneligible(item, true) });
         if (written === false) {
           delete item.bedded;
           delete item.bedEntrySec;
@@ -1837,7 +1838,8 @@ class Queue {
     const untilAirs = this.remainingUntilItemAirs(item);
     if (untilAirs == null) return null;
     const startMs = Date.now() + (untilAirs + this.hiddenDelayBeforeItemAirs(item)) * 1000;
-    if (!showBoundary.fadeAtShowEndActive(new Date(startMs))) return null;
+    const fading = showBoundary.fadeAtShowEndActive(new Date(startMs));
+    if (!fading && !anyCleanShow(settings.get().shows)) return null;
     // The span that would actually air, after the cap and the trimmed tail —
     // never the tagged duration. A track the #447 cap already stops before the
     // boundary has no overshoot to cut, and asking about the raw length would
@@ -1850,6 +1852,10 @@ class Queue {
     );
     if (playable == null || playable <= 0) return null;
     const boundaryMs = showBoundary.nextShowBoundaryMs(startMs, playable);
+    // A tagged pick that started in time to be the outgoing show's still may not
+    // run on into a clean show, whatever the outgoing show says about fading.
+    const intoCleanShow = boundaryMs != null && heldBackFromShow(item.track, settings.resolveActiveShow(new Date(boundaryMs)));
+    if (!fading && !intoCleanShow) return null;
     const cut = showBoundary.resolveBoundaryCueSec({
       startMs,
       cueInSec: trim.cueInSec ?? 0,
@@ -1973,19 +1979,45 @@ class Queue {
   // stamps only. transitions.pairDrain off → eager drain, today's behaviour.
   // A sent music/bed/silence handoff is already owned by the mixer. Never
   // interrupt it; only unsent automatic choices are subject to the live ceiling.
-  selectionMaxSecFor(item: Pick<QueueItem, 'selectionShowAt'>): number | null {
+  private selectionShow(item: Pick<QueueItem, 'selectionShowAt'>) {
     // Re-resolve the forecast against LIVE settings, never a saved ceiling.
     // Once its date has passed, the actual current show owns the selection.
     const at = item.selectionShowAt;
-    const show = typeof at === 'number' && Number.isFinite(at)
+    return typeof at === 'number' && Number.isFinite(at)
       ? settings.resolveActiveShow(new Date(Math.max(Date.now(), at)))
       : settings.resolveActiveShow();
-    return settings.effectiveTrackLengthLimits(show).selectionMaxSec;
+  }
+
+  selectionMaxSecFor(item: Pick<QueueItem, 'selectionShowAt'>): number | null {
+    return settings.effectiveTrackLengthLimits(this.selectionShow(item)).selectionMaxSec;
+  }
+
+  // An automatic choice the mixer does not have yet. A bed or pause in the mixer
+  // commits the track behind it, and a published seam commits its successor.
+  private droppableAutomatic(item: QueueItem, preparing: boolean): boolean {
+    return !item.requestedBy && !item.sent && !item.lengthPolicyCommitted && (preparing || (!item.bedded && item.pauseDelaySec == null));
   }
 
   aboveAutomaticCeiling(item: QueueItem, preparing = false): boolean {
-    return !item.requestedBy && !item.sent && !item.lengthPolicyCommitted && (preparing || (!item.bedded && item.pauseDelaySec == null))
+    return this.droppableAutomatic(item, preparing)
       && aboveKnownTrackCeiling(item.track, this.selectionMaxSecFor(item));
+  }
+
+  // The clean show this unsent pick would air in and may not, or null. A pick is
+  // judged when it is made, and a takeover, a live edit or a request landing
+  // ahead of it can move what it airs in after that, so the drain judges it again
+  // by the rule the pick cycle used, on today's forecast. selectionShowAt cannot
+  // say this: it is the forecast that has gone stale.
+  cleanShowHolding(item: QueueItem, preparing = false) {
+    if (!this.droppableAutomatic(item, preparing) || !anyCleanShow(settings.get().shows)) return null;
+    const now = Date.now();
+    const showAt = pickShowDate(now, this.airForecastSec(item), showBoundary.nextShowBoundaryMs(now, 6 * 3600));
+    const show = showAt ? settings.resolveActiveShow(showAt) : this.selectionShow(item);
+    return heldBackFromShow(item.track, show) ? show : null;
+  }
+
+  automaticIneligible(item: QueueItem, preparing = false): boolean {
+    return this.aboveAutomaticCeiling(item, preparing) || this.cleanShowHolding(item, preparing) != null;
   }
 
   // A render is only a proposal until the outgoing URI is published. Its
@@ -2025,15 +2057,17 @@ class Queue {
   }
 
   async dropAboveCeiling(item: QueueItem): Promise<boolean> {
-    if (!this.aboveAutomaticCeiling(item)) return false;
+    const cleanShow = this.cleanShowHolding(item);
+    if (!cleanShow && !this.aboveAutomaticCeiling(item)) return false;
     this._lengthDropped.add(item);
-    this.log('length-skip', `${item.track.title} — ${item.track.artist} (unsent automatic track above current maximum)`);
+    if (cleanShow) this.log('blocked', `${item.track.title} — ${item.track.artist} (unsent automatic pick held back: tagged explicit, clean show "${cleanShow.name}")`);
+    else this.log('length-skip', `${item.track.title} — ${item.track.artist} (unsent automatic track above current maximum)`);
     this._introRenders.invalidate(item);
     item.introScript = null;
     const wav = item.introWav;
     item.introWav = null;
     if (wav) await unlink(wav).catch(() => {});
-    await this.removeUpcomingItem(item, 'length policy');
+    await this.removeUpcomingItem(item, cleanShow ? 'clean show' : 'length policy');
     return true;
   }
 
@@ -2217,7 +2251,7 @@ class Queue {
                   inHeadTrimmed: inTrim.cueInSec != null,
                 },
               );
-              if (blend && this.upcoming.includes(item) && this.upcoming.includes(successor) && !this.aboveAutomaticCeiling(successor)) {
+              if (blend && this.upcoming.includes(item) && this.upcoming.includes(successor) && !this.automaticIneligible(successor)) {
                 const previousBlend = item.stemBlend;
                 // A recovered proposal already stripped this track's exit.
                 // Keep the FIRST snapshot across re-renders; legacy proposals
@@ -2302,7 +2336,9 @@ class Queue {
           const cueSec = item.cueInSec;
           let source: string | null = null;
           try {
-            source = subsonic.getLocalPath(item.track) || (item.track.id ? subsonic.getRawStreamUrl(item.track.id) : null);
+            // ffprobe runs here, in the controller, so the mixer's view of the
+            // mount is no gate on it.
+            source = subsonic.findLibraryFile(item.track) || (item.track.id ? subsonic.getRawStreamUrl(item.track.id) : null);
           } catch { /* no Subsonic config: no probe */ }
           const probeBudgetMs = cueProbeBudgetMs(this.remainingUntilItemAirs(item));
           const landing: cueLanding.CueLanding = !source
@@ -2356,9 +2392,9 @@ class Queue {
           written = await writeHandoff(config.liquidsoap.queueFile, uri, {
             maxWaitMs: 5000,
             beforeWrite: () => this.upcoming.includes(item)
-              && !this.aboveAutomaticCeiling(item)
+              && !this.automaticIneligible(item)
               && JSON.stringify(lengthLimits) === JSON.stringify(settings.effectiveTrackLengthLimits())
-              && !(item.stemBlend && successor && (!this.upcoming.includes(successor) || this.aboveAutomaticCeiling(successor))),
+              && !(item.stemBlend && successor && (!this.upcoming.includes(successor) || this.automaticIneligible(successor))),
             onWritten: () => {
               // Publication is the ownership boundary, before another await
               // can change settings or an operator can cancel the seam.
@@ -2981,7 +3017,7 @@ class Queue {
       // the mixer. queue.json's ordinary 500ms debounce is too late here.
       await writePauseTalkCommit(p);
       const uri = `annotate:subwave_kind="pause-talk",subwave_pause_id="${pauseId}",liq_cross_duration="${PAUSE_TALK_EXIT_CROSS_SEC.toFixed(2)}":${path}`;
-      const written = await writeHandoff(config.liquidsoap.queueFile, uri, { maxWaitMs: 5000, beforeWrite: () => !this.aboveAutomaticCeiling(item) });
+      const written = await writeHandoff(config.liquidsoap.queueFile, uri, { maxWaitMs: 5000, beforeWrite: () => !this.automaticIneligible(item) });
       if (!written) throw new Error('automatic track became ineligible');
       item.pauseDelaySec = p.pauseDelaySec;
       this.log('scheduler', `Pause-and-talk break armed for ${p.kind} (${Math.round(voiceWindowMs / 1000)}s voice window)`);

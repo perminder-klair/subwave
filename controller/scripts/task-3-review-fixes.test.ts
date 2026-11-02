@@ -54,7 +54,7 @@ test('upgrading a version-29 library adds language columns without losing rows',
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((raw().pragma('user_version', { simple: true }) as number), 32);
+  assert.equal((raw().pragma('user_version', { simple: true }) as number), 35);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
   assert.equal(db.getTrack('spanish')?.title, 'Uno');

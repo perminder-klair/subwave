@@ -1232,7 +1232,7 @@ export function normalizeRequestMatch(match: RequestMatch, options: { moods?: re
 // The listener's words as an exact title, then an exact artist: no fuzzy
 // reading, so "rock" can't land on "Rocks", and no pools. This is what the
 // words get when no interpreter can answer. One that can reads first.
-export function resolveExactName(name: string, deps: Pick<Parameters<typeof resolveDirectRequest>[1], 'catalog' | 'recentIds' | 'queuedIds' | 'currentId' | 'signal'>): Promise<RequestSelection> {
+export function resolveExactName(name: string, deps: Pick<Parameters<typeof resolveDirectRequest>[1], 'catalog' | 'recentIds' | 'queuedIds' | 'currentId' | 'signal' | 'heldBack'>): Promise<RequestSelection> {
   return resolveDirectRequest({
     kind: 'track', title: name, artist: null, album: null, scope: 'song', literal: true, titleOnly: true,
   }, { ...deps, exactOnly: true, exactIdentity: true, moodSongs: async () => [], fallbackSongs: async () => [] });
@@ -1268,6 +1268,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   // `ranked` says the pool is best-first, so order matters to the choice.
   choose?(pool: RequestSong[], options?: { ranked?: boolean }): RequestSong | null;
   signal?: AbortSignal;
+  // What the show on air will not air (a clean show). Such a track is no
+  // candidate, so a draw lands on what can air. If the ask itself is all there
+  // is, it comes back so the caller can refuse it by name.
+  heldBack?(song: RequestSong): boolean;
 }): Promise<RequestSelection> {
   const { catalog, recentIds, queuedIds, currentId } = deps;
   const errors: string[] = [];
@@ -1392,7 +1396,8 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       // matching already preserves a queued/cooldown identity for a refusal;
       // fuzzy matching must do the same instead of turning a verified repeat
       // into a misleading no-match.
-      .filter(song => constraints(song, source) && contextProven(song))
+      // A track the show holds back is no candidate, as in select().
+      .filter(song => constraints(song, source) && contextProven(song) && !deps.heldBack?.(song))
       .map(song => ({ song, confidence: identityScore(song), titleScore: requestTitleSimilarity(title, song.title), artistScore: resolvedArtistName ? requestCandidateArtistSimilarity(resolvedArtistName, song) : 1 }))
       // Keep a wider, still meaningful candidate set for clarification. Only
       // the stricter confidence and margin checks below may auto-select.
@@ -1438,8 +1443,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     };
   };
   let held: { track: RequestSong; source: string } | null = null;
+  let heldByShow: { track: RequestSong; source: string } | null = null;
   const select = (songs: RequestSong[], source: string, exact = true): RequestSelection | null => {
-    const pool = unique(songs).filter(s => constraints(s, source) && (!exact || identity(s)));
+    const found = unique(songs).filter(s => constraints(s, source) && (!exact || identity(s)));
+    const pool = deps.heldBack ? found.filter(s => !deps.heldBack!(s)) : found;
     const track = choose(pool.filter(eligible));
     const named = exact && !standingIn;
     if (track) {
@@ -1450,11 +1457,12 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     // Preserve the requested identity for an honest refusal, never replace an
     // exact recording merely because it is queued or on cooldown.
     if (named && pool.length && !held) held = { track: pool[0], source };
+    if (named && found.length && !pool.length && !heldByShow) heldByShow = { track: found[0], source };
     return null;
   };
   const selectFuzzyReleaseContext = (songs: RequestSong[], source: string): RequestSelection | null => {
     if (!match.releaseContext || !title) return null;
-    const pool = unique(songs).filter(song => constraints(song, source)
+    const pool = unique(songs).filter(song => constraints(song, source) && !deps.heldBack?.(song)
       && requestTitleMatches(title, song.title)
       && requestCandidateArtistMatches(resolvedArtistName, song)
       && releaseContextFuzzyMatches(match.releaseContext!, song));
@@ -1482,7 +1490,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   };
   const refusal = (): RequestSelection | null => held ? {
     ...held, outcome: queuedIds.has(held.track.id) || held.track.id === currentId ? 'already-queued' : 'cooldown', errors,
-  } : null;
+  } : heldByShow ? { ...heldByShow, outcome: 'matched', errors, unmetPreferences: [] } : null;
 
   if (match.similarTo) {
     const seedRequest: RequestMatch = {

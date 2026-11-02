@@ -310,7 +310,8 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 // reused while they can be trusted:
 // - the only writer of stem dirs is the analysis pass, which marks the
 //   snapshot `pending` while it runs and adds the dirs it wrote when it ends;
-// - evictions are made by sweep(), which rewrites the snapshot from its walk;
+// - evictions are made by sweep(), which rewrites the snapshot from its walk,
+//   and by forgetStems(), which marks it `stale` as the purge does;
 // - the orphan purge marks it `stale` (markUsageStale): the next read walks, and
 //   until then the figure stays readable for the budget field;
 // - anything else (dirs deleted or copied in by hand, a pass that died before
@@ -384,7 +385,7 @@ async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
   }
 }
 
-// For a writer outside the pass and the sweep (the orphan purge): the stored
+// For a writer outside the pass and the sweep (the orphan purge, forgetStems): the stored
 // totals no longer match the disk, so the next read walks instead of trusting
 // them. The file stays, because the budget field reads it (storedUsage) and an
 // operator about to lower the budget is better served by a flagged figure than
@@ -594,6 +595,38 @@ function withPriorities(
     ...d,
     priority: index ? index.get(path.basename(d.dir)) ?? UNKNOWN_TRACK_PRIORITY : null,
   }));
+}
+
+// Drop the stem dirs of tracks whose file was replaced at the same path
+// (library-db.clearTrackAudio cleared their stamps): the render is cache-hit-
+// only (hasWindow), so stems cut from the old audio would otherwise keep
+// playing under the new file. Never touches an offline root (an unmounted
+// share). Best-effort, like the sweep: a dir that refuses is counted, and its
+// cleared stamp has the backfill separate the track again either way.
+export async function forgetStems(trackIds: readonly string[]): Promise<{ removed: number; failed: number; offline?: string }> {
+  if (trackIds.length === 0) return { removed: 0, failed: 0 };
+  const root = await stemsRootStatus({ readOnly: true });
+  if (!root.online) return { removed: 0, failed: 0, offline: root.message };
+  let removed = 0;
+  let failed = 0;
+  for (const id of trackIds) {
+    const dir = dirFor(id);
+    const there = await stat(dir).then(() => true, () => false);
+    if (!there) continue;
+    try {
+      await rm(dir, { recursive: true, force: true });
+      removed += 1;
+    } catch { failed += 1; }
+  }
+  // The usage snapshot still counts those dirs' bytes, which would size the
+  // backfill too small (headroomTracks) until the next full walk. The walk
+  // runs in the tagger's process, so the mark goes in the file, not just an
+  // in-memory flag: whichever process sweeps next walks again.
+  if (removed > 0) {
+    snapshotUntrusted = true;
+    await markUsageStale();
+  }
+  return { removed, failed };
 }
 
 // Probed before any delete rather than learned from a failed one: a fresh unplayed

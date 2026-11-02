@@ -3,6 +3,7 @@
 
 import { effectiveNoRepeatWindow, exhaustiveNoRepeatWindow, trackKey } from './recency.js';
 import { applyStrictLocks, type FilterTrack, type VocalMode, type YearRange } from './show-filter.js';
+import { excludesExplicit, withoutExplicit } from './explicit-policy.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor, trackLengthSeconds } from './track-floor.js';
 
@@ -23,6 +24,7 @@ type RecencyShow = {
   moods?: string[];
   energies?: string[];
   vocals?: string;
+  excludeExplicit?: boolean;
 } | null;
 
 export type ShowNoRepeatGuard = {
@@ -58,9 +60,9 @@ export interface NoRepeatHistory {
 // nothing coasts through it.)
 export const COAST_MIN_SEC = 3600;
 
-// What of a strict anchor can actually AIR: the show's strict locks (never-
-// starve, as the pool picker applies them), the known length ceiling, the
-// minimum-length floor, and the excluded playlists. ORDER-PRESERVING — every
+// What of a strict anchor can actually AIR: a clean show's explicit filter, the
+// show's strict locks (never-starve, as the pool picker applies them), the known
+// length ceiling, the minimum-length floor, and the excluded playlists. ORDER-PRESERVING — every
 // step is a filter — so the in-order walk (music/playlist-order.ts) walks the
 // same set this guard counts. Two copies of "can this anchor track air" is how
 // the rotation size and the running order would come to disagree.
@@ -80,8 +82,11 @@ export function airableAnchorTracks<T extends ShowTrack>(
     maxTrackSec?: number | null;
   },
 ): T[] {
+  // A clean show first and hard: the locks below never-starve, so one that found
+  // only tagged tracks must be skipped rather than bring them back.
+  const allowed = withoutExplicit(playlistTracks, excludesExplicit(show));
   const filtered = show?.filtersStrict
-    ? applyStrictLocks(playlistTracks, {
+    ? applyStrictLocks(allowed, {
         genres: resolvedGenres ?? show.genres ?? [],
         eras: show.eras ?? [],
         moods: show.moods ?? [],
@@ -90,7 +95,7 @@ export function airableAnchorTracks<T extends ShowTrack>(
           ? show.vocals
           : '') as VocalMode,
       }, { starve: false })
-    : playlistTracks;
+    : allowed;
   // Hard, unlike the pool picker's never-starve use of the same floor: what can
   // air, not a pool that must not empty. Nothing left = nothing airable.
   const airable = applyTrackFloor(applyKnownTrackCeiling(filtered, maxTrackSec), minTrackSec ?? null, { starve: true });

@@ -264,7 +264,7 @@ async function main() {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
   } else if (walked > 0) {
     const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: flags.confirmPrune });
-    if (held) logEvent('warning', held.message);
+    if (held) logEvent('warning', held.message, { hold: true });
     if (pruned > 0) {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
     }
@@ -315,7 +315,7 @@ async function main() {
       const scopeNote = flags.rescan ? 'already-enriched tracks' : 'tracks';
       console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} ${scopeNote}`);
     }
-    await phaseEnrich(enrichIds, flags.reEnrich);
+    await phaseEnrich(enrichIds, flags.reEnrich, flags.limit);
   } else if (flags.skipEnrich) {
     console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
   }

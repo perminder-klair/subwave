@@ -1,7 +1,7 @@
 // Schema migrations, versioned by PRAGMA user_version; run in order on open.
 
 import Database from 'better-sqlite3';
-import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
+import { AUDIO_EMBEDDING_DIM, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
 import { SEARCH_KEY_DDL, ensureSearchIndex, ensureSearchKeys, fillSearchKeys } from './search-keys.js';
 import { ensureFacetStatus } from './facets.js';
 import { ensureGenreInputs, touchGenreInputs } from './genre-inputs.js';
@@ -502,15 +502,40 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 31');
   }
 
-  if (userVersion < 32) {
+  if (userVersion < 32) markTailSungVectorsOnce(d);
+
+  if (userVersion < 33) {
+    // The track's own advisory tag as the music server reports it (OpenSubsonic
+    // `explicitStatus`): 'explicit', 'clean' or NULL. The walk owns it, so it
+    // stays NULL on an existing library until the next walk. Added only when
+    // missing, as above: a wound-back user_version still has the column.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('explicit_status')) runDdl(d, `ALTER TABLE tracks ADD COLUMN explicit_status TEXT;`);
+    d.pragma('user_version = 33');
+  }
+
+  if (userVersion < 34) {
+    // When Last.fm last gave a genuine answer about this song, hit or miss
+    // (music/tag-library/enrich.ts). It describes the stored lastfm_tags, so
+    // NULL means the row is owed a lookup while the setting is on. Added only
+    // if missing, for a database wound back below this step (see 28).
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('lastfm_track_tags_at')) {
+      runDdl(d, `ALTER TABLE tracks ADD COLUMN lastfm_track_tags_at TEXT;`);
+    }
+    d.pragma('user_version = 34');
+  }
+
+  if (userVersion < 35) {
     // Language tags are optional metadata, but the request resolver's local
     // language queries need their storage columns on every fresh and upgraded
     // library. Keep the additive, nullable shape compatible with PR #2080's
     // language tagging writes.
     //
-    // The earlier language branch used version 30 before the lyric migrations
-    // landed on develop. Such a database has the language columns but may not
-    // have lyric_offsets, so keep this repair idempotent for that history too.
+    // Numbered after develop's own migrations. The earlier language branch used
+    // version 30 before the lyric migrations landed on develop. Such a
+    // database has the language columns but may not have lyric_offsets, so
+    // keep this repair idempotent for that history too.
     runDdl(d, `
       CREATE TABLE IF NOT EXISTS lyric_offsets (
         track_id   TEXT PRIMARY KEY,
@@ -521,8 +546,9 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
     const add = ['language_primary', 'languages'].filter(column => !have.has(column));
     if (add.length) runDdl(d, add.map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`).join('\n'));
-    d.pragma('user_version = 32');
+    d.pragma('user_version = 35');
   }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
@@ -541,6 +567,8 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
   // its next open here. Never throws either.
   if (ensureSearchKeys(d) && userVersion < 29) fillSearchKeys();
   ensureSearchIndex(d);
+
+  ensureFileInfoColumns(d);
 
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
@@ -640,6 +668,57 @@ export function clearEchoedAlbumTagYears(d: Database.Database): number {
   return r.changes;
 }
 
+// The vectors whose embed text the tail verdict changed, for migration 32. The word
+// "instrumental" is written for a `true` verdict alone, so the only move that changes
+// the text is instrumental on the head to vocal on both windows: unknown to vocal
+// reads the same either way, and neither does a tail with no readable evidence.
+// `(vocal_ranges_json IS NOT NULL) = 1` is idx_tracks_vocal_measured's expression, so
+// a station with no vocal analysis probes that index and reads no row at all, and a
+// station with some reads only its measured rows (a station without the index scans,
+// and marks the same rows). CASE keeps outro_json, past the beat grids (#1937), out of
+// it until the head has said instrumental, as in browse.ts. Its cost is one read of the
+// measured rows, once: about 0.7s warm and 9s cold if all of 200k rows are measured.
+export const TAIL_SUNG_VECTORS_SQL = `UPDATE tracks SET text_vector_dirty = 1
+  WHERE (vocal_ranges_json IS NOT NULL) = 1
+    AND CASE is_instrumental(vocal_ranges_json, NULL) WHEN 1 THEN
+      is_instrumental(vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES}) = 0
+      AND EXISTS (SELECT 1 FROM track_vectors WHERE id = tracks.id)
+    END`;
+
+// Same-format text changed on some rows, so this is the dirty flag's job and not an
+// EMBED_TEXT_VERSION bump: only those rows are paid for, on the next tag run, with no
+// banner and nothing for an operator to do. It covers what is stored at the upgrade;
+// a measurement landing after its vector is a separate gap (music.md). A stale word in
+// a vector that still works is no reason to stop a station, so a failure warns, with
+// nothing half marked, and the steps after it still run. They move user_version past
+// 32, so a failed mark is final: those rows keep the text they had, which still works.
+// In the race this lock is for, the opener that won has marked them. Locked before the
+// recheck, because another opener may have finished while this one waited.
+function markTailSungVectorsOnce(d: Database.Database): void {
+  try {
+    d.transaction(() => {
+      if ((d.pragma('user_version', { simple: true }) as number) >= 32) return;
+      const started = performance.now();
+      const hasTextVectors = d
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='track_vectors'`)
+        .get();
+      const marked = hasTextVectors ? d.prepare(TAIL_SUNG_VECTORS_SQL).run().changes : 0;
+      d.pragma('user_version = 32');
+      if (marked > 0) {
+        console.log(
+          `[library-db] ${marked} tracks marked to re-embed: tail vocals changed their Sound line ` +
+            `(${Math.round(performance.now() - started)}ms)`,
+        );
+      }
+    }).immediate();
+  } catch (err) {
+    console.warn(
+      `[library-db] tail vocal re-embed marks not set (${(err as Error).message}); ` +
+        'similarity keeps working on the old text',
+    );
+  }
+}
+
 // Wrapper so the SQL "exec" verb stays out of the source text and a security
 // linter doesn't flag it. Identical to db.exec(sql).
 export function runDdl(d: Database.Database, sql: string): void {
@@ -660,4 +739,28 @@ function vecTableDim(d: Database.Database): number | null {
 // behind --reseed.
 function vecCount(d: Database.Database): number {
   return (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as { n: number }).n;
+}
+
+// The file as Navidrome reports it, kept by the library walks: path, format,
+// size in bytes and bitrate in kbps. Added by name when missing rather than as
+// a numbered migration, so it can't collide with a user_version a parallel
+// change claims; idempotent, and a few MB on a 76k-track library.
+//
+// Several processes open this DB, and two can both find a column missing on the
+// first open after an upgrade, so the ALTERs re-read under the write lock. The
+// read before it keeps every later open off that lock. Unlike the never-throws
+// helpers in migrate(), a failure here throws: upsertTrackMeta names these
+// columns on every write, so swallowing it would only move the error there.
+function ensureFileInfoColumns(d: Database.Database): void {
+  const wanted: Array<[string, string]> = [
+    ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
+  ];
+  const missing = () => {
+    const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));
+    return wanted.filter(([name]) => !have.has(name));
+  };
+  if (missing().length === 0) return;
+  d.transaction(() => {
+    for (const [name, type] of missing()) runDdl(d, `ALTER TABLE tracks ADD COLUMN ${name} ${type}`);
+  }).immediate();
 }
