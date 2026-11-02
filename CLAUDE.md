@@ -123,7 +123,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - The seed track id is not a pick (`util/pick-seed.ts`).
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
-- Track-level Last.fm tags are opt-in and `lastfm_tags` stays the one list: `lastfm.getMergedTags` is the bulk pass's and the retag route's one read, `db.recordLastfmTrackTags` their one write, and only a genuine answer stamps `lastfm_track_tags_at`. A failure never does, or an outage marks the library done (`music.md`).
+- Track-level Last.fm tags are opt-in and `lastfm_tags` stays the one list: `lastfm.getMergedTags` is the bulk pass's and the retag route's one read, `db.recordLastfmTrackTags` their one write, and only a genuine answer stamps `lastfm_track_tags_at`. A failure never does, or an outage marks the library done. The merge is additive, the song's own tags ahead of the artist's whole list, so turning this on can only make a `tag` rule match more, never less (`music.md`).
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).
 - LLM calls go through the `llm/sdk` primitives, and provider quirks live only in `llm/internal/provider/capabilities.ts`. The default provider is a slow homelab Ollama, so add no aggressive retry.
 - TTS goes through `tts.speak(text, {kind})`. The rescue chain is a list of voice slots, and a rescue target is engine + provider.

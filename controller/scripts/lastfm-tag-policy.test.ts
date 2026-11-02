@@ -8,6 +8,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  MAX_TRACK_TAGS,
   classifyTopTagsResponse,
   dropNameEchoes,
   mergeCrowdTags,
@@ -77,41 +78,63 @@ test('track tags lead, artist tags fill, and a repeat is kept once at its first 
   );
 });
 
-test('the cap holds, and the track tags win all of it but the artist\'s top three', () => {
+test('at most five of a song\'s own tags lead, in Last.fm\'s order, and the artist\'s whole list follows', () => {
   const track = Array.from({ length: 12 }, (_, i) => `t${i}`);
   const artist = Array.from({ length: 10 }, (_, i) => `a${i}`);
+  assert.equal(MAX_TRACK_TAGS, 5);
   const merged = mergeCrowdTags(track, artist);
-  assert.equal(merged.length, 10);
-  assert.deepEqual(merged, [...track.slice(0, 7), 'a0', 'a1', 'a2']);
-  assert.deepEqual(mergeCrowdTags(track.slice(0, 4), artist), [...track.slice(0, 4), ...artist.slice(0, 6)]);
-  assert.deepEqual(mergeCrowdTags(track, ['a0']), [...track.slice(0, 9), 'a0'], 'an artist with fewer keeps what it has');
-  assert.deepEqual(mergeCrowdTags(track, []), track.slice(0, 10));
-  assert.deepEqual(mergeCrowdTags(track, artist, 2), ['a0', 'a1'], 'a cap under three is all reserve');
+  assert.equal(merged.length, 15);
+  assert.deepEqual(merged, [...track.slice(0, MAX_TRACK_TAGS), ...artist]);
+  assert.deepEqual(mergeCrowdTags(track.slice(0, 4), artist), [...track.slice(0, 4), ...artist]);
+  assert.deepEqual(mergeCrowdTags(track, ['a0']), [...track.slice(0, MAX_TRACK_TAGS), 'a0'], 'an artist with fewer keeps what it has');
+  assert.deepEqual(mergeCrowdTags(track, []), track.slice(0, MAX_TRACK_TAGS));
 });
 
-test('a top artist tag the song shares keeps its place and costs the song no room', () => {
-  const track = ['a1', ...Array.from({ length: 11 }, (_, i) => `t${i}`)];
-  assert.deepEqual(
-    mergeCrowdTags(track, ['a0', 'a1', 'a2', 'a3']),
-    ['a1', ...track.slice(1, 8), 'a0', 'a2'],
-  );
+test('a tag the song shares with its artist is kept once, in the song\'s place', () => {
+  assert.deepEqual(mergeCrowdTags(['a1', 't0'], ['a0', 'a1', 'a2']), ['a1', 't0', 'a0', 'a2']);
 });
 
-// A never-play `tag` rule reads this list through show-filter.trackAllTags, and
-// the blocklist is absolute: the act's own tag must not fall off a busy song.
-test('a song with ten tags of its own still answers to its artist\'s top tags', () => {
-  const own = Array.from({ length: 10 }, (_, i) => `own ${i}`);
-  const artistTags = ['country', 'folk', 'americana', 'singer-songwriter'];
-  const track = { id: 't', genres: ['Rock'], moods: [], lastfmTags: mergeCrowdTags(own, artistTags) };
-  const rule = (value: string) => compileRules([{
-    id: 'r', field: 'tag', values: [value], showIds: [], addedAt: '2026-01-01',
-  } as unknown as BlockRule])[0];
-  assert.deepEqual(track.lastfmTags.slice(-3), ['country', 'folk', 'americana']);
-  assert.ok(trackAllTags(track).includes('country'));
-  assert.equal(ruleMatches(rule('country'), track, null), true);
-  assert.equal(ruleMatches(rule('americana'), track, null), true);
-  assert.equal(ruleMatches(rule('own 6'), track, null), true);
-  assert.equal(ruleMatches(rule('own 7'), track, null), false, 'the room came from the end of the song\'s own tags');
+// The blocklist is absolute, and a `tag` rule reads this list through
+// show-filter.trackAllTags, so these run the rule itself, not the list's length.
+const matches = (value: string, lastfmTags: string[]) => ruleMatches(
+  compileRules([{ id: 'r', field: 'tag', values: [value], showIds: [], addedAt: '2026-01-01' } as unknown as BlockRule])[0],
+  { id: 't', genres: [], moods: [], lastfmTags },
+  null,
+);
+
+test('a rule on any one of the artist\'s ten tags still matches a song with a full list of its own', () => {
+  const own = Array.from({ length: 12 }, (_, i) => `own ${i}`);
+  const artistTags = ['country', 'folk', 'americana', 'singer-songwriter', 'acoustic',
+    'bluegrass', 'roots', 'alt-country', 'outlaw', 'nashville'];
+  const lastfmTags = mergeCrowdTags(own, artistTags);
+  assert.ok(trackAllTags({ id: 't', genres: [], moods: [], lastfmTags }).includes('nashville'));
+  for (const tag of artistTags) assert.equal(matches(tag, lastfmTags), true, tag);
+  assert.equal(matches('own 4', lastfmTags), true);
+  assert.equal(matches('own 5', lastfmTags), false, 'past the song\'s five is simply not on the list');
+});
+
+// Every artist length against every song length at every overlap, so nothing here
+// depends on a generator. The spellings collide on purpose: the merge keeps one of
+// each fold, so this also holds it to the fold a rule compares through.
+test('a rule can only ever match more with track tags on, never less', () => {
+  const pool = ['rock', 'Rock', ' rock ', 'hip  hop', 'hip hop', 'hip-hop', "rock 'n' roll", 'rock ’n’ roll',
+    'Café', 'Café', 'trip-hop', 'trip hop', ...Array.from({ length: 24 }, (_, i) => `tag ${i}`)];
+  let held = 0;
+  for (let artistLength = 0; artistLength <= 10; artistLength += 1) {
+    const artistTags = pool.slice(0, artistLength);
+    for (let ownLength = 0; ownLength <= 12; ownLength += 1) {
+      for (let overlap = 0; overlap < pool.length; overlap += 1) {
+        const own = [...pool.slice(overlap), ...pool.slice(0, overlap)].slice(0, ownLength);
+        const lastfmTags = mergeCrowdTags(own, artistTags);
+        for (const value of pool) {
+          if (!matches(value, artistTags)) continue;
+          held += 1;
+          assert.equal(matches(value, lastfmTags), true, JSON.stringify({ value, artistTags, lastfmTags }));
+        }
+      }
+    }
+  }
+  assert.ok(held > 10000, `the grid has to exercise the property, held ${held}`);
 });
 
 // What keeps a miss from dirtying a row: the list comes out as it went in.

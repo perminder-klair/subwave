@@ -366,6 +366,23 @@ test('the track-tag rows are in the pass for an already-tagged library', async (
   assert.deepEqual(row('old').lastfmTags, ['shoegaze', 'rock', 'indie']);
 });
 
+// The noise filter lives in the read and the limit in the merge, so only a real
+// pass shows the two in the right order: an echo mustn't cost the song a tag.
+test('a pass keeps five of the song\'s own tags after the noise filter, and all ten of the artist\'s', async () => {
+  const artist = Array.from({ length: 10 }, (_, i) => `a${i}`);
+  seed('a', 'Act', 'Song', { tags: artist, vector: true });
+  seed('b', 'Act', 'Other', { tags: artist });
+  trackReplies.set('Act|Song', tagReply('act', 'song', 'own0', 'own1', 'own2', 'own3', 'own4', 'own5', 'own6'));
+  trackReplies.set('Act|Other', tagReply('other', 'own0', 'own1', 'own2', 'own3', 'own4', 'own5', 'own6'));
+  artistReplies.set('Act', tagReply(...artist));
+  await phaseEnrich([], false);
+  const list = ['own0', 'own1', 'own2', 'own3', 'own4', ...artist];
+  assert.deepEqual(row('a').lastfmTags, list);
+  assert.deepEqual(row('b').lastfmTags, list);
+  assert.equal(row('a').lastfmTags?.length, 15);
+  assert.ok(db.textVectorDirtyIds().includes('a'));
+});
+
 test('a failed fill holds the row back too: a stamp means the whole list is good', async () => {
   seed('a', 'Flaky', 'Song', { tags: ['rock', 'indie'], vector: true });
   trackReplies.set('Flaky|Song', tagReply('shoegaze'));
@@ -682,6 +699,16 @@ test('retag and a bulk pass store the same list for the same song', async () => 
   assert.deepEqual(row('single').lastfmTags, row('bulk').lastfmTags);
   assert.ok(row('single').lastfmTrackTagsAt, 'an answer from the route counts: a later pass need not ask');
   assert.match(embedded.at(-1)!, /Last\.fm: shoegaze, rock, indie/, 'and the vector is built from that list');
+});
+
+test('retag stores the same full list a pass would: five of its own, then all ten', async () => {
+  await retagReady();
+  const artist = Array.from({ length: 10 }, (_, i) => `a${i}`);
+  trackReplies.set('Act|Song', tagReply('song', 'own0', 'own1', 'own2', 'own3', 'own4', 'own5'));
+  artistReplies.set('Act', tagReply(...artist));
+  seed('a', 'Act', 'Song');
+  await retag('a', 'Act', 'Song');
+  assert.deepEqual(row('a').lastfmTags, ['own0', 'own1', 'own2', 'own3', 'own4', ...artist]);
 });
 
 test('retag answers a row the pass then skips', async () => {

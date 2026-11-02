@@ -214,7 +214,7 @@ export interface MergedTags {
   tags: string[];
   // Both halves came back genuine, so the list may be stamped as final.
   answered: boolean;
-  // How many of `tags` are the song's own, before the artist's fill them up.
+  // How many tags of its own the song came back with, before the merge's limit.
   trackTagCount: number;
 }
 
@@ -231,7 +231,7 @@ export async function getMergedTags(
   const track = await source.track(artist, title, count);
   const fill = await source.artist(artist, count);
   return {
-    tags: mergeCrowdTags(track.tags, fill.tags, count),
+    tags: mergeCrowdTags(track.tags, fill.tags),
     answered: track.answered && fill.answered,
     trackTagCount: track.tags.length,
   };

@@ -41,32 +41,22 @@ export function dropNameEchoes(tags: string[], names: { artist: string; title: s
   });
 }
 
-// How many of the artist's top tags outlast a song with a full list of its own.
-// Track tags are the noisier source, and a never-play `tag` rule or a Musical
-// Leaning is written against what the act is known for: without this, a popular
-// song's own ten tags would take it out of reach of both.
-const RESERVED_ARTIST_TAGS = 3;
+// How many of a song's own tags join its artist's. Track tags are the noisier
+// source, and past the first few they thin out into labels one listener used.
+export const MAX_TRACK_TAGS = 5;
 
-// The one list every consumer reads: the track's own tags first, because they
-// are what separates two songs by one act, then the artist's until the cap. The
-// artist's top tags always get a place, and only a tag outside them spends the
-// rest of the room.
-export function mergeCrowdTags(trackTags: string[], artistTags: string[], cap = 10): string[] {
+// The one list every consumer reads: the song's own tags first, because they are
+// what separates two songs by one act, then the whole of the artist's. Additive
+// on purpose. The blocklist is absolute, and a never-play `tag` rule or a Musical
+// Leaning is written against what the act is known for, so the artist's list is
+// always a subset of this one and turning track tags on can only make a rule
+// match more. The fold is the one those rules compare through (blocklist normText
+// restates nameKey), so a repeat dropped here can't take a match with it.
+export function mergeCrowdTags(trackTags: string[], artistTags: string[]): string[] {
   const byKey = new Map<string, string>();
-  for (const tag of [...trackTags, ...artistTags]) {
+  for (const tag of [...trackTags.slice(0, MAX_TRACK_TAGS), ...artistTags]) {
     const key = nameKey(tag);
     if (key && !byKey.has(key)) byKey.set(key, tag);
   }
-  const artistKeys = [...new Set(artistTags.map(nameKey).filter(Boolean))];
-  const reserved = new Set(artistKeys.slice(0, Math.min(RESERVED_ARTIST_TAGS, cap)));
-  let room = cap - reserved.size;
-  const merged: string[] = [];
-  for (const [key, tag] of byKey) {
-    if (reserved.has(key)) merged.push(tag);
-    else if (room > 0) {
-      merged.push(tag);
-      room -= 1;
-    }
-  }
-  return merged;
+  return [...byKey.values()];
 }
