@@ -5,6 +5,7 @@ import * as db from '../../music/library-db.js';
 import * as subsonic from '../../music/subsonic.js';
 import * as settings from '../../settings.js';
 import * as mapProjection from '../../music/map-projection.js';
+import { usableDescriptors } from '../../music/audio-descriptors.js';
 
 export const router = express.Router();
 
@@ -148,6 +149,8 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
         keyRanges: t.keyRanges,
         audioMoods: t.audioMoods,
         audioMoodScores: db.getAudioMoodScores(id),
+        audioDescriptors: usableDescriptors(t),
+        audioDescriptorScores: db.getAudioDescriptorScores(id),
         // beats/bars stripped like the main grid.
         outro: t.outro
           ? { startMs: t.outro.startMs, ending: t.outro.ending, lufs: t.outro.lufs, bpm: t.outro.bpm }
