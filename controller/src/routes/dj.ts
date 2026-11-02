@@ -53,10 +53,12 @@ import { nextShowBoundaryMs } from '../broadcast/show-boundary.js';
 import { planBlock, blockLabel, blockPlayableSec, type BlockSong } from '../broadcast/block-queue.js';
 import {
   queueBlockSchema,
+  queueMarkerSchema,
   skipBodySchema,
   QUEUE_BLOCK_ARTIST_LIMIT_DEFAULT,
   QUEUE_BLOCK_MAX_TRACKS,
   type QueueBlockBody,
+  type QueueMarkerBody,
   type SkipBody,
   type SkipRefusalReason,
 } from '../schemas/dj.js';
@@ -878,6 +880,23 @@ router.delete('/dj/queue/:trackId', requireAdmin, async (req, res) => {
     queue.log('error', `/dj/queue remove failed: ${err.message}`);
     res.status(502).json({ error: err.message });
   }
+});
+
+// Hour markers (docs/plans/hour-markers.md): pin a queued track to a time, so
+// the station drops, holds or cuts around it to start it then. 409 when the
+// track is not queued, as the cancel above. The outcome is the plan's verdict
+// now (on-time, waiting, early, late, unknown); GET /state keeps it current.
+router.post('/dj/queue-marker', requireAdmin, validateBody(queueMarkerSchema), (req, res) => {
+  const { trackId, at, kind } = req.body as QueueMarkerBody;
+  const result = queue.setHourMarker(trackId, at, kind);
+  if (!result.ok) return res.status(409).json({ error: 'track is not in the queue', reason: result.reason });
+  const { marker, outcome } = result;
+  res.json({ marker: { id: marker.id, at: new Date(marker.at).toISOString(), kind: marker.kind }, outcome });
+});
+
+router.delete('/dj/queue-marker/:id', requireAdmin, (req, res) => {
+  if (!queue.clearHourMarker(req.params.id)) return res.status(404).json({ error: 'no such marker in the queue' });
+  res.json({ removed: true });
 });
 
 // Queue-ready admin row: Subsonic song + the library index's tags and analysis

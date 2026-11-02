@@ -138,3 +138,28 @@ export const skipBodySchema = z.preprocess(
 );
 
 export type SkipBody = z.infer<typeof skipBodySchema>;
+
+/** How far ahead an hour marker may be set. */
+export const QUEUE_MARKER_MAX_AHEAD_MS = 12 * 3_600_000;
+/** How far behind: a marker set for "now" from a slow phone still lands. */
+export const QUEUE_MARKER_MAX_BEHIND_MS = 60_000;
+
+/**
+ * Body for `POST /dj/queue-marker`: pin the first queued copy of `trackId` to a
+ * time (docs/plans/hour-markers.md). `at` is an ISO 8601 date-time with an
+ * offset, or epoch ms, and leaves the schema as epoch ms. `soft` lets the track
+ * airing at the time finish; `hard` ends it at the time.
+ */
+export const queueMarkerSchema = z.object({
+  trackId: idField,
+  at: z.union([
+    z.number().int().positive(),
+    z.iso.datetime({ offset: true }).transform((v) => Date.parse(v)),
+  ]),
+  kind: z.enum(['soft', 'hard']),
+}).refine(
+  (b) => b.at >= Date.now() - QUEUE_MARKER_MAX_BEHIND_MS && b.at <= Date.now() + QUEUE_MARKER_MAX_AHEAD_MS,
+  { message: 'must be within the next 12 hours', path: ['at'] },
+);
+
+export type QueueMarkerBody = z.infer<typeof queueMarkerSchema>;

@@ -518,6 +518,33 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
       },
       {
         method: 'POST',
+        path: '/dj/queue-marker',
+        summary: 'Pin a queued track to a time',
+        description:
+          'Set an hour marker on the first queued copy of `trackId`: the time it ' +
+          "must start. `kind: 'soft'` drops the not-yet-sent tracks that would " +
+          'only start after the time and lets the one airing then finish; ' +
+          "`'hard'` also ends that one at the time. Either way a track that " +
+          'would start well early is held while the auto playlist plays. `at` is ' +
+          'an ISO date-time or epoch ms, within the next 12 hours. 409 when the ' +
+          'track is not queued. GET /state shows each marker on its row with its ' +
+          'outcome (on-time, waiting, early, late, unknown).',
+        auth: 'admin',
+        mutatesAir: true,
+        bodyExample: { trackId: 'a1b2c3', at: '2026-11-03T07:00:00Z', kind: 'hard' },
+        responseExample: { marker: { id: '3f9a1c2b7e4d', at: '2026-11-03T07:00:00.000Z', kind: 'hard' }, outcome: { kind: 'waiting', bySec: 412 } },
+      },
+      {
+        method: 'DELETE',
+        path: '/dj/queue-marker/:id',
+        summary: 'Remove an hour marker',
+        description: 'Take a marker off its track. The track stays queued. 404 when no queued track carries it.',
+        auth: 'admin',
+        mutatesAir: true,
+        responseExample: { removed: true },
+      },
+      {
+        method: 'POST',
         path: '/dj/refresh-playlist',
         summary: 'Rebuild fallback playlist',
         description:

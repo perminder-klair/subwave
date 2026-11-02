@@ -139,6 +139,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - The station keeps making sound: the token cap, a muted voice and an LLM outage never stop the music.
 - Manual operator triggers are exempt from every automatic gate (frequency, budget, voice switch, clock switch).
 - An operator block (`POST /dj/queue-block`) reuses `queue.push()` and its existing opt-outs, with no new bypass; the never-play list still applies.
+- An hour marker (`POST /dj/queue-marker`) never drops a sent row or another anchor, and never drops on an unknown forecast. Its plan is `broadcast/marker-policy.ts`, and a hard marker cuts only in `queue.maybeHourMarkerCut`.
 - `requestedBy` says which exemptions a track gets, not who is waiting. Count waiting listeners as `queue.pendingListenerRequests()` plus the requests still resolving in `routes/request.ts`, which hold no queue slot yet.
 - Gate before generation, never at `speak()`.
 - Public reads are explicit allowlists: never widen one to TTS config, skills or behaviour dials. A persona's `soul` is a system prompt, published only behind `publishPersonaSouls`, and absent (not empty) when off.
