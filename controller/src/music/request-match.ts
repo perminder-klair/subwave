@@ -1756,6 +1756,15 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       const result = select(languagePool, 'language-library');
       if (result) return result;
     }
+    // Until the projection is populated, a genre tag naming the language is the
+    // evidence most libraries have, so its tracks are the language's own pool.
+    if (match.language) {
+      const languageGenre = await safe('language resolution', () => resolveRequestGenre(catalog, match.language!, deps.signal), null);
+      if (languageGenre) {
+        const result = select(await safe('language tracks', () => catalog.getSongsByGenreSampled(languageGenre, { count: 100, signal: deps.signal }), []), `language-genre:${languageGenre}`);
+        if (result) return result;
+      }
+    }
     if (match.mood) {
       const result = select(moodPool, `library-mood:${match.mood}`);
       if (result) return result;

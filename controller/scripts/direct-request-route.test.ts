@@ -122,7 +122,7 @@ beforeEach(async context => {
     const data = endpoint === 'search3' ? { searchResult3: { song: searchEmpty ? [] : catalogueSongs, artist: artistQuery ? [{ id: 'queen', name: 'Queen' }] : [] } }
       : endpoint === 'getStarred2' ? { starred2: { song: [filler] } }
         : endpoint === 'getSimilarSongs2' ? { similarSongs2: { song: [filler] } }
-        : endpoint === 'getGenres' ? { genres: { genre: ['Rock', 'Funk', 'R&B'].map(value => ({ value, songCount: 2 })) } }
+        : endpoint === 'getGenres' ? { genres: { genre: ['Rock', 'Funk', 'R&B', 'Punjabi Pop'].map(value => ({ value, songCount: 2 })) } }
           : endpoint === 'getSongsByGenre' ? { songsByGenre: { song: genreSongs } }
           : endpoint === 'getArtist' ? { artist: { album: artistSongs.length ? [{ id: 'queen-album', name: 'Sheer Heart Attack' }] : [] } }
           : endpoint === 'getAlbum' ? { album: { song: artistSongs } } : {};
@@ -1931,6 +1931,18 @@ for (const word of ['help', 'sorry', 'why', 'wow', 'stop', 'more', 'next', 'agai
     assert.equal(queue.upcoming.length, 0);
   });
 }
+
+test('an explicit language is read, and the genre naming it is a match', async () => {
+  const punjabi = { id: 'punjabi', title: 'Punjabi Fixture', artist: 'Fixture Artist', genre: 'Punjabi Pop', duration: 200 };
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  genreSongs = [punjabi];
+  modelOutput = read({ language: 'Punjabi' });
+  const result = await submit('play something in Punjabi');
+  assert.equal(bodies.length, 1);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(requestLog.snapshot(1)[0].pickSource, 'language-genre:Punjabi Pop');
+});
 
 // A comma, dash or "by" is a parse for the catalogue to try, never an identity
 // claim that outranks the reading.
