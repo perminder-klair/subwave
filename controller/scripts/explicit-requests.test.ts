@@ -293,7 +293,7 @@ test('the request agent hears a tagged ask as not found, never as played recentl
 
 // The paths a request takes past develop's single resolver call: the exact
 // step with no model, the reading behind a listener's pair, the language-genre
-// rung, the dropped-genre second chance, the fuzzy title step and the
+// rung, the dropped-genre second chance, the fuzzy title steps and the
 // evidence lane. Each draws around a tagged track the way develop's draws do,
 // so a clean stand-in airs where the tagged one would have been refused.
 async function noModel(t: TestContext) {
@@ -348,6 +348,18 @@ test('a fuzzy title is never a tagged track, so the next rung answers', async (t
   assert.equal(outcome.status, 'resolved', outcome.message ?? '');
   assert.equal(queue.upcoming.at(-1)?.track?.id, 'other');
   assert.doesNotMatch(record.pickSource, /fuzzy|explicit/);
+});
+
+test('a typo in the album a title comes from is never a tagged track', async (t) => {
+  // No "song" in the title: a kind-of-music word there reads the whole wording as a title.
+  const HYMN = { ...TAGGED, id: 'tagged-hymn', title: 'Tagged Hymn', album: 'Clean Edit' };
+  stubNetwork(t, { search: [HYMN, OTHER] });
+  await noModel(t);
+  await onAir({ excludeExplicit: true });
+  const { outcome, record } = await request('play Tagged Hymn from Clen Edit');
+  assert.equal(outcome.status, 'resolved', outcome.message ?? '');
+  assert.equal(queue.upcoming.at(-1)?.track?.id, 'other');
+  assert.doesNotMatch(record.pickSource, /release-context|explicit/);
 });
 
 test('the evidence lane hands the request agent no tagged track on a clean show', async (t) => {
