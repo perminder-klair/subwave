@@ -132,8 +132,9 @@ const REQUEST_TTL_MS = 10 * 60 * 1000;
 // `llm.requestTimeoutMs` bounds one generation, never the whole request.
 const REQUEST_FALLBACK_RESERVE_MS = 45_000;
 // Held back from the interpreter, so a slow one still leaves the literal parse
-// time to reach the catalogue.
-const REQUEST_CATALOGUE_RESERVE_MS = 15_000;
+// time to reach the catalogue. 25 s, measured against 15 s: a miss on a library
+// at 2 s a call needs about a dozen calls, and 15 s timed one out.
+const REQUEST_CATALOGUE_RESERVE_MS = 25_000;
 const REQUEST_QUEUE_RESERVE_MS = 2_000;
 
 export function requestResolutionTimeoutMs(): number {

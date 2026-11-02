@@ -1234,11 +1234,13 @@ async function advanceUntilSettled(t: TestContext, entry: { status: string }, li
   assert.notEqual(entry.status, 'pending', `still pending after ${limitMs} ms`);
 }
 
-test('an agent that fails at its deadline still leaves a 20 s interpreter and the library time', async t => {
+// At default deadlines the interpreter gets the time left less the library's
+// 25 s: 20 s once the agent has spent its 45 s.
+test('an agent that fails at its deadline still leaves the interpreter 20 s and the library its 25 s', async t => {
   await settings.update({ llm: { requestMatching: 'agentic' } } as never);
   agentDelayMs = 45_000;
   agentError = Object.assign(new Error('djAgentRequest exceeded 45000ms deadline'), { name: 'AgentDeadlineError' });
-  modelDelayMs = 20_000;
+  modelDelayMs = 19_000;
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
   const entry = listenerEntry('Bohemian Rhapsody by Queen');
   const settled = resolveListenerRequest(entry);
@@ -1280,7 +1282,8 @@ test('the interpreter is capped by the time left, so the literal parse runs inst
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
   const entry = listenerEntry('surprise me');
   const settled = resolveListenerRequest(entry);
-  await advance(t, 70_000);
+  // The agent's 45 s, then the interpreter's 20 s: still its turn at 60 s.
+  await advance(t, 60_000);
   assert.equal(entry.status, 'pending', 'the interpreter still holds its share');
   await advanceUntilSettled(t, entry, 10_000);
   await settled;
