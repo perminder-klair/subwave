@@ -12,7 +12,7 @@ import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway } from '../../schem
 import { applyCustomHeadersPatch } from '../../settings/vocab.js';
 import type { EmbeddingCfg } from '../../llm/provider.js';
 import { listenbrainzApiBase } from '../../broadcast/scrobble.js';
-import { isKeenableKey } from '../../skills/web-search.js';
+import { isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -52,7 +52,7 @@ function briefLlmError(err: unknown): string {
 
 // Non-mutating probe of one secret; builds a one-off client and never writes
 // process.env or secrets.env. `hint` disambiguates a key shared by several
-// providers (SEARCH_API_KEY is Tavily, Brave or Keenable) because the UI tests before
+// providers (SEARCH_API_KEY is Tavily, Brave, Keenable or Firecrawl) because the UI tests before
 // saving, so the stored provider can't be trusted mid-edit; it falls back to
 // the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
 // Responses API rejects anything below 16.
@@ -166,6 +166,32 @@ async function probeKey(
           return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
         }
         return { ok: true, message: '✓ Keenable key valid' };
+      }
+      if (provider === 'firecrawl') {
+        // firecrawlSearch refuses anything but an fc- key, so another provider's
+        // key is not sent here either.
+        if (!isFirecrawlKey(value)) {
+          return { ok: false, message: 'Not a Firecrawl key (they start with fc-)' };
+        }
+        // credit-usage rather than a search, which would spend credits on every
+        // click. It answers a bad key with a 401 all the same.
+        const r = await fetch('https://api.firecrawl.dev/v2/team/credit-usage', {
+          headers: { Authorization: `Bearer ${value}` },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!r.ok) {
+          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
+        }
+        // A 200 proves the key, not its balance, so the count goes in the message
+        // and a drained key doesn't read as valid. A body without a count stays a
+        // plain pass: the key itself was accepted.
+        const j = await r.json().catch(() => ({})) as { data?: { remainingCredits?: unknown } };
+        const left = j?.data?.remainingCredits;
+        if (typeof left !== 'number' || !Number.isFinite(left)) {
+          return { ok: true, message: '✓ Firecrawl key valid' };
+        }
+        if (left <= 0) return { ok: false, message: 'Firecrawl key valid, but it has no credits left' };
+        return { ok: true, message: `✓ Firecrawl key valid · ${left} credit${left === 1 ? '' : 's'} left` };
       }
       const r = await fetch('https://api.tavily.com/search', {
         method: 'POST',

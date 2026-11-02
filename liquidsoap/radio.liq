@@ -2628,6 +2628,27 @@ server.register(
   fun(arg) -> take_subhttp_outcome(string.trim(arg))
 )
 
+# Whether this container can read a regular file. The controller asks with a
+# real file off its MUSIC_LIBRARY_PATH mount (music/library-mount.ts) and only
+# sends a local path once this says "yes", because the mixer is what opens the
+# file and the default compose files mount no library here. Read-only: `test`
+# stats the path and opens nothing, so a large file costs nothing. The timeout
+# bounds a hung mount, and an unanswered question reads "no", the safe side: the
+# track streams.
+server.register(
+  "path_readable",
+  description="Whether the mixer can read a regular file at this path: yes / no",
+  usage="path_readable <path>",
+  fun(arg) -> begin
+    path = process.quote(string.trim(arg))
+    try
+      if process.test(timeout=1., "test -f #{path} && test -r #{path}") then "yes" else "no" end
+    catch _ do
+      "no"
+    end
+  end
+)
+
 # What a skip would air next from dj_queue: "ready" (a resolved request is
 # waiting), "resolving" (pushed but still downloading, so a skip now falls
 # through to auto.m3u), or "empty". The controller polls this before `skip` so

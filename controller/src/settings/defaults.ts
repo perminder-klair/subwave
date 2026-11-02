@@ -635,7 +635,8 @@ export const DEFAULTS = {
   },
   // Web-search backend for the segment director's web-search capability.
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
-  // override here); `keenable` needs no key but uses a `keen_` one if set.
+  // override here); `keenable` needs no key but uses a `keen_` one if set;
+  // `firecrawl` reads SEARCH_API_KEY like Tavily and Brave.
   search: {
     provider: 'duckduckgo',
     apiKey: '',
@@ -666,6 +667,9 @@ export const DEFAULTS = {
     // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
+    // Daily orphan stem-dir purge (quarantine, then delete after a week).
+    // Off by default — deleting operator files is opt-in (#1570 discipline).
+    stemOrphanPurgeEnabled: false,
     // Pause the analysis pass while anyone is listening, resuming once the stream
     // has been listener-free for analyzeQuietMinutes (#1099). Checked between
     // tracks inside runAnalysisPass, so it covers the tagger child, `npm run
@@ -830,6 +834,14 @@ export const DEFAULTS = {
     // with the panel: it sends each such track's artist, title, album and
     // length to lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
     lrclib: true,
+  },
+  // The Navidrome connection itself is in setup-config.json; this block is the
+  // station's behaviour toward it. `reportRealPath`: keep Navidrome's "Report
+  // Real Path" ticked on SUB/WAVE's own player rows (hourly + at boot), so
+  // `path` is the file on disk rather than one built from tags. Off by default:
+  // it writes to the operator's Navidrome. See music/navidrome-players-policy.ts.
+  musicSource: {
+    reportRealPath: false,
   },
 };
 
