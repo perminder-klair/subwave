@@ -2002,11 +2002,13 @@ test('the wording ahead of a reading takes no alternative, so the reading gets i
   assert.equal(queue.upcoming[0].track.id, exact.id);
 });
 
-test('a reading behind "from" gets its turn too', async () => {
-  modelOutput = read({ title: exact.title, artist: 'Queen' });
-  const result = await submit('hi, Bohemian Rhapsody from Queen');
+test('a reading behind "from" gets its turn too, without the parse\'s context', async () => {
+  const creep = { id: 'creep', title: 'Creep', artist: 'Radiohead', album: 'Pablo Honey', duration: 200 };
+  catalogueSongs = [filler, creep];
+  modelOutput = read({ title: 'Creep', artist: 'Radiohead' });
+  const result = await submit('hi, Creep from Radiohead');
   assert.equal(result.outcome, 'matched');
-  assert.equal(queue.upcoming[0].track.id, exact.id);
+  assert.equal(queue.upcoming[0].track.id, creep.id);
 });
 
 test('a track the listener\'s own words prove outranks a reading that rewrites them', async () => {
@@ -2027,8 +2029,11 @@ test('"Stand by Me" is the title the interpreter reads, not "Stand" by "Me"', as
 
 test('a comma with a title-only reading is not given the other side as a credit', async () => {
   modelOutput = read({ title: exact.title });
-  assert.equal((await submit('Bohemian Rhapsody, thanks')).outcome, 'matched');
-  assert.equal(queue.upcoming[0].track.id, exact.id);
+  for (const text of ['Bohemian Rhapsody, thanks', 'hey dj, Bohemian Rhapsody']) {
+    queue.upcoming = [];
+    assert.equal((await submit(text)).outcome, 'matched', text);
+    assert.equal(queue.upcoming[0].track.id, exact.id, text);
+  }
 });
 
 test('"by" keeps its credit behind a title-only reading, so a match is never claimed on another act', async () => {
