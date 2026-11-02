@@ -986,6 +986,24 @@ test('a file that merely exists is not ok, and the Doctor says which way it fail
   }
 });
 
+test('a mount the mixer has not proved is the library mount line\'s to report, not this one\'s', async () => {
+  await settings.update({ musicSource: { reportRealPath: true } });
+  try {
+    await realPathStatus({ enable: true });
+    const root = mount();
+    // On disk for the controller, with no proof from the mixer for this path.
+    const unproven = `${root}-unproven`;
+    addTracks(unproven, ALIGNED, ODD);
+    process.env.MUSIC_LIBRARY_PATH = unproven;
+    assert.match(await mixerUri(ALIGNED.id), /^subhttp:/, 'nothing local reaches the mixer');
+    const f = await doctorFinding();
+    assert.equal(f?.status, 'ok');
+    assert.match(f?.detail || '', /2 of 2 sampled tracks proved/);
+  } finally {
+    await settings.update({ musicSource: { reportRealPath: false } });
+  }
+});
+
 test('a Doctor run changes nothing the mixer gets next', async () => {
   await settings.update({ musicSource: { reportRealPath: true } });
   try {
