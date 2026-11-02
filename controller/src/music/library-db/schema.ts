@@ -1,7 +1,7 @@
 // Schema migrations, versioned by PRAGMA user_version; run in order on open.
 
 import Database from 'better-sqlite3';
-import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
+import { AUDIO_EMBEDDING_DIM, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
 import { SEARCH_KEY_DDL, ensureSearchIndex, ensureSearchKeys, fillSearchKeys } from './search-keys.js';
 import { ensureFacetStatus } from './facets.js';
 import { ensureGenreInputs, touchGenreInputs } from './genre-inputs.js';
@@ -502,6 +502,8 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 31');
   }
 
+  if (userVersion < 32) markTailSungVectorsOnce(d);
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
@@ -619,6 +621,55 @@ export function clearEchoedAlbumTagYears(d: Database.Database): number {
     )
     .run();
   return r.changes;
+}
+
+// The vectors whose embed text the tail verdict changed, for migration 32. The word
+// "instrumental" is written for a `true` verdict alone, so the only move that changes
+// the text is instrumental on the head to vocal on both windows: unknown to vocal
+// reads the same either way, and neither does a tail with no readable evidence.
+// `(vocal_ranges_json IS NOT NULL) = 1` is idx_tracks_vocal_measured's expression, so
+// a station with no vocal analysis probes that index and reads no row at all, and a
+// station with some reads only its measured rows (a station without the index scans,
+// and marks the same rows). CASE keeps outro_json, past the beat grids (#1937), out of
+// it until the head has said instrumental, as in browse.ts. Its cost is one read of the
+// measured rows, once: about 0.7s warm and 9s cold if all of 200k rows are measured.
+export const TAIL_SUNG_VECTORS_SQL = `UPDATE tracks SET text_vector_dirty = 1
+  WHERE (vocal_ranges_json IS NOT NULL) = 1
+    AND CASE is_instrumental(vocal_ranges_json, NULL) WHEN 1 THEN
+      is_instrumental(vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES}) = 0
+      AND EXISTS (SELECT 1 FROM track_vectors WHERE id = tracks.id)
+    END`;
+
+// Same-format text changed on some rows, so this is the dirty flag's job and not an
+// EMBED_TEXT_VERSION bump: only those rows are paid for, on the next tag run, with no
+// banner and nothing for an operator to do. It covers what is stored at the upgrade;
+// a measurement landing after its vector is a separate gap (music.md). A stale word in
+// a vector that still works is no reason to stop a station, so a failure warns and
+// leaves user_version behind for the next open, with nothing half marked. Locked before
+// the recheck, because another opener may have finished while this one waited.
+function markTailSungVectorsOnce(d: Database.Database): void {
+  try {
+    d.transaction(() => {
+      if ((d.pragma('user_version', { simple: true }) as number) >= 32) return;
+      const started = performance.now();
+      const hasTextVectors = d
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='track_vectors'`)
+        .get();
+      const marked = hasTextVectors ? d.prepare(TAIL_SUNG_VECTORS_SQL).run().changes : 0;
+      d.pragma('user_version = 32');
+      if (marked > 0) {
+        console.log(
+          `[library-db] ${marked} tracks marked to re-embed: tail vocals changed their Sound line ` +
+            `(${Math.round(performance.now() - started)}ms)`,
+        );
+      }
+    }).immediate();
+  } catch (err) {
+    console.warn(
+      `[library-db] tail vocal re-embed marks not set (${(err as Error).message}); ` +
+        'similarity keeps working, and the next open retries',
+    );
+  }
 }
 
 // Wrapper so the SQL "exec" verb stays out of the source text and a security

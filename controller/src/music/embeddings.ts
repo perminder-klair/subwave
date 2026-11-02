@@ -65,8 +65,7 @@ export interface TrackAcoustics extends VocalEvidence {
 //   1  head line + Last.fm tags + lyric excerpt
 //   2  ... + the Sound: descriptor line + the Era: decade line (#1246)
 //   3  tolerate short vocal bleed in the instrumental descriptor (#1655)
-//   4  singing measured only in the tail drops the instrumental descriptor
-export const EMBED_TEXT_VERSION = 4;
+export const EMBED_TEXT_VERSION = 3;
 
 // Tempo as a word, not a number: "128" embeds as an arbitrary token.
 function tempoWord(bpm: number): string | null {

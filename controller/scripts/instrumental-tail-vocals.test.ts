@@ -99,7 +99,7 @@ const {
   INSTRUMENTAL_VOCAL_TOLERANCE_MS,
 } = await import('../src/music/lyric-vocal.js');
 const { trackInstrumental, preferVocals, onlyVocals } = await import('../src/music/show-filter.js');
-const { soundDescriptors, formatTrackText, EMBED_TEXT_VERSION, resolveIndexTextFormat } = await import('../src/music/embeddings.js');
+const { soundDescriptors, formatTrackText } = await import('../src/music/embeddings.js');
 const { phaseEmbed } = await import('../src/music/tag-library/embed.js');
 const { buildCandidatePool } = await import('../src/music/playlist-gen.js');
 const { publicSimilarTrack } = await import('../src/util/similar-tracks.js');
@@ -369,13 +369,6 @@ test('embed text: the Sound line drops the word for a tail-sung track, through b
   assert.equal(response.status, 200, await response.text());
   assert.equal(embeddingInputs.length, 1, 'the retag route must submit an embedding');
   assert.doesNotMatch(embeddingInputs[0], /Sound: .*instrumental/, 'retag passes the same evidence as the bulk path');
-});
-
-test('a changed Sound line bumps the text format, so old vectors read as stale', () => {
-  assert.ok(EMBED_TEXT_VERSION >= 4, 'the tail changed the Sound line at format 4');
-  assert.equal(resolveIndexTextFormat(3, 20_000), 3, 'a v3 index keeps its format until it is re-embedded');
-  assert.equal(resolveIndexTextFormat(2, 20_000), 2, 'an index that skipped a version stays behind too');
-  assert.equal(resolveIndexTextFormat(3, 20_000, true), EMBED_TEXT_VERSION);
 });
 
 test('payloads and routes carry the verdict and never the evidence', async () => {
