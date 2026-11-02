@@ -6,9 +6,11 @@
 // read, it says `unsure`, and the track streams.
 // - MP3 (mp3, mp2): an ID3v2 tag at the head (`TT2`/`TIT2`, all four text
 //   encodings). A present ID3v2 tag is the only source, even with no title in
-//   it: Navidrome then titles the file from its name. Without one, an APEv2 tag
-//   anywhere in the windows is unsure (it would win, and this doesn't read APE),
-//   and otherwise ID3v1 in the last 128 bytes is read.
+//   it: Navidrome then titles the file from its name. An APEv2 tag behind it
+//   changes nothing, since Navidrome reads the ID3v2 title, so it isn't looked
+//   for. Without an ID3v2 tag, an APEv2 tag anywhere in the windows is unsure (it
+//   would win, and this doesn't read APE), and otherwise ID3v1 in the last 128
+//   bytes is read.
 // - FLAC: the VORBIS_COMMENT block's TITLE=. A FLAC with that block ignores an
 //   ID3v2 tag in front of it, even when the block holds no TITLE. A FLAC with an
 //   ID3v2 tag and no such block is unsure.
