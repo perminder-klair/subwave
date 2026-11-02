@@ -2267,6 +2267,27 @@ for (const [text, reading] of [
   });
 }
 
+// pinExplicitRequestMatch only runs behind a reading that named something.
+test('a chat reading of a comma pair stays chat, with nothing queued', async () => {
+  catalogueSongs = [exact, filler];
+  modelOutput = { kind: 'chat', ack: 'A classic, that one.' };
+  const result = await submit('Queen, Bohemian Rhapsody');
+  assert.equal(result.outcome, 'chat');
+  assert.equal(queue.upcoming.length, 0);
+});
+
+// A reading carries a comparison only when the words start "something like" or
+// "anything like", and those words never hold, so a seed a model also read as a
+// title takes the comparison's honest stand-in.
+test('a comparison whose seed a model read as a title is no hold', async () => {
+  catalogueSongs = [filler];
+  searchEmpty = true;
+  modelOutput = read({ title: 'Creep', artist: 'Radiohead', search_terms: ['Creep', 'Radiohead'] });
+  const result = await submit('something like Creep');
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(queue.upcoming.length, 1);
+});
+
 // Last, because it leaves a mood in the library for every test after it.
 test('with no model the rest of a request is an alternative once its genre is dropped', async () => {
   const db = await import('../src/music/library-db.js');
