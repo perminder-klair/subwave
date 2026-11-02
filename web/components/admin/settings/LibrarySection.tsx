@@ -19,6 +19,8 @@ import { EMBEDDING_PROVIDER_IDS } from '../../../lib/schemas.generated';
 import { cn } from '../../../lib/cn';
 import { HeaderRowsEditor } from './LlmSection';
 import { effectiveCompatMode } from './compat-mode';
+import { scrobbleReadiness } from './ScrobbleSection';
+import { lastfmTrackTagsBlocker } from './lastfm-track-tags';
 import {
   SectionHeader, SaveBar, KeyStatus,
   headerMap,
@@ -34,6 +36,7 @@ interface LibrarySectionProps extends SectionProps {
 
 export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LibrarySectionProps) {
   const e = form.embedding;
+  const trackTagsBlocker = lastfmTrackTagsBlocker(scrobbleReadiness(form, data).lfApiKeySet, e.enrichment.lastfmTags);
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
   const [compatEmbedKeyInput, setCompatEmbedKeyInput] = useState('');
 
@@ -81,6 +84,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         batchSize: parseInt(e.batchSize, 10) || 25,
         enrichment: {
           lastfmTags: e.enrichment.lastfmTags,
+          lastfmTrackTags: e.enrichment.lastfmTrackTags,
           lyrics: e.enrichment.lyrics,
         },
         // Write only when typed; getRedacted()'s 'set' sentinel is ignored
@@ -791,6 +795,43 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 }))
               }
             />
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Last.fm track tags</div>
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                Last.fm tags above describe the artist, so every song by an act
+                gets the same list. This adds each song&apos;s own tags ahead of
+                them, so two songs by one artist can read differently. It needs
+                one Last.fm call per track, about 50 minutes on a 10,000-track
+                library, on the next tagging run and resuming on the runs after
+                it, then re-embeds the tracks that changed.
+              </div>
+            </div>
+            {trackTagsBlocker ? (
+              <div className="text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
+                {trackTagsBlocker}
+              </div>
+            ) : (
+              <Seg
+                accent
+                value={e.enrichment.lastfmTrackTags ? 'on' : 'off'}
+                options={[
+                  { id: 'off', label: 'Off' },
+                  { id: 'on', label: 'On' },
+                ]}
+                onChange={v =>
+                  setForm(f => ({
+                    ...f,
+                    embedding: {
+                      ...f.embedding,
+                      enrichment: { ...f.embedding.enrichment, lastfmTrackTags: v === 'on' },
+                    },
+                  }))
+                }
+              />
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">

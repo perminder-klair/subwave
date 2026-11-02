@@ -35,7 +35,9 @@ const WALK_OWNED = [
 // failure counters follow analysis_version so successful new analysis does not inherit old
 // failures.
 const GROUPS: Array<{ anchor: string; cols: string[] }> = [
-  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lyric_excerpt', 'enriched_at'] },
+  // lastfm_track_tags_at describes lastfm_tags, so the two move together: a
+  // stamp carried onto a new row's own artist-only list would falsely mark it done.
+  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lastfm_track_tags_at', 'lyric_excerpt', 'enriched_at'] },
   { anchor: 'moods', cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at'] },
   {
     anchor: 'analysis_version',
