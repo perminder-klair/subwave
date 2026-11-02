@@ -15,14 +15,17 @@
 // is picked.
 //
 // Fire-and-forget and single-flight: the drain never awaits this, a second
-// held track while one runs is skipped, and the render vetoes itself while the
-// worker is separating (stem-blend.ts) rather than hold the sender behind it.
-// The decisions are pick-stems-policy.ts; this module gathers the facts in
-// that order and does the IO, through the analysis pass's own pieces: the
-// capped download, the stems facet and its write, the stems marker, the
-// budget's headroom, and the usage snapshot.
+// held track while one runs is skipped, and on a single-worker analyzer the
+// render stands down while the worker is separating (stem-blend.ts) rather
+// than hold the sender behind it. The decisions are pick-stems-policy.ts; this
+// module gathers the facts in that order and does the IO, through the
+// analysis pass's own pieces: the capped download, the stems facet and its
+// write, the stems marker and the usage snapshot. The budget rule is its own
+// (budgetVeto): a pick-time write may take a full cache a bounded way over,
+// for the hourly sweep to evict back down.
 
-import { rm, stat } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
+import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as analyzer from '../music/analyzer.js';
 import * as db from '../music/library-db.js';
@@ -36,6 +39,18 @@ let claimed: string | null = null;
 // Set only while the worker request is out: a capability probe, a cache walk
 // or the download hold no worker, so the render need not stand down for them.
 let separating = false;
+// The station-level notice already in the booth log (policy.noticeStep).
+let lastNotice: policy.PickStemsNotice | null = null;
+// Tests shorten the request deadline to reach its timeout.
+let deadlineOverrideMs: number | null = null;
+
+export function _setRequestDeadlineForTests(ms: number | null): void {
+  deadlineOverrideMs = ms;
+}
+
+function requestDeadlineMs(): number {
+  return deadlineOverrideMs ?? policy.requestDeadlineMs(config.analyzer.requestTimeoutMs);
+}
 
 // Whether a pick-time separation holds the analyzer worker right now.
 export function separationInFlight(): boolean {
@@ -76,6 +91,29 @@ function gate(opts: PickStemsOpts, inFlight: boolean): policy.PickStemsVeto | nu
 
 // Never rejects: the drain calls this with `void`.
 export async function maybeSeparateAtPick(
+  track: { id?: string | null; title?: string | null },
+  opts: PickStemsOpts,
+): Promise<PickStemsOutcome> {
+  const outcome = await attempt(track, opts);
+  const step: policy.PickStemsStep = outcome.ran
+    ? { ran: true }
+    : {
+      ran: false,
+      veto: 'veto' in outcome ? outcome.veto : null,
+      // Read only for a quiet-only veto: the setting has its own note on the
+      // Stems page, the env var has none.
+      quietOnlyFromEnv: 'veto' in outcome && outcome.veto === 'quiet-only'
+        && quietOnlyEnabled(process.env.ANALYZE_QUIET_ONLY, null),
+    };
+  try {
+    const { say, last } = policy.noticeStep(lastNotice, step);
+    lastNotice = last;
+    if (say) opts.log('warn', policy.NOTICE_MESSAGES[say]);
+  } catch { /* a notice is never worth a rejection */ }
+  return outcome;
+}
+
+async function attempt(
   track: { id?: string | null; title?: string | null },
   opts: PickStemsOpts,
 ): Promise<PickStemsOutcome> {
@@ -128,13 +166,17 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
   const root = await stemCache.stemsRootStatus({ prepare: true });
   if (!root.online) return veto('root-offline');
 
-  // A rewrite of an existing dir spends no budget, as in the pass; a net-new
-  // dir needs a slot. headroomTracks reads the usage snapshot, walking only
-  // when that can't be trusted.
+  // A pick-time write may take the cache over its budget, by a bounded
+  // allowance (budgetVeto). usage() reads the snapshot, walking only when
+  // that can't be trusted.
   const dir = stemCache.dirFor(id);
-  const hasExistingDir = await stat(dir).then(st => st.isDirectory(), () => false);
-  const slotsLeft = hasExistingDir ? 0 : await stemCache.headroomTracks();
-  if (!stemCache.stemWriteDecision({ cacheOn: true, slotsLeft, hasExistingDir }).want) return veto('budget-full');
+  const used = await stemCache.usage();
+  const overBudget = policy.budgetVeto({
+    usedBytes: used.bytes,
+    budgetBytes: stemCache.budgetBytes(),
+    estTrackBytes: used.estTrackBytes,
+  });
+  if (overBudget) return veto(overBudget);
 
   let staged: { path: string; complete: boolean };
   try {
@@ -161,12 +203,14 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
     try {
       res = await analyzer.analyzeFacets(
         id,
-        { facets: ['stems'], stems_dir: dir, complete: staged.complete },
+        { facets: ['stems'], stems_dir: dir, complete: staged.complete, timeoutMs: requestDeadlineMs() },
         staged.path,
       );
     } catch (err) {
       const secs = ((Date.now() - t0) / 1000).toFixed(1);
-      opts.log('warn', `pick-time stems: "${title}" failed after ${secs}s: ${(err as Error).message}`);
+      opts.log('warn', analyzer.isTimeoutError(err)
+        ? `pick-time stems: "${title}" timed out after ${secs}s (the worker may still finish)`
+        : `pick-time stems: "${title}" failed after ${secs}s: ${(err as Error).message}`);
       // A request that timed out may still be separating on the worker, so
       // the dir can grow after any measure taken now: let the next read walk.
       await stemCache.markUsageStale();

@@ -13,6 +13,7 @@ import * as loudness from '../music/loudness.js';
 import * as stemCache from '../music/stem-cache.js';
 import { bulkPassRunning } from '../music/tagger-lock.js';
 import { separationInFlight } from './pick-stems.js';
+import { renderStandsDown } from './pick-stems-policy.js';
 import { HARD_DEADLINE_SEC } from './drain-policy.js';
 import { CLIP_SEAM_CROSS_SEC, clipSeamCues, type ClipSeamCues } from './stem-seam.js';
 
@@ -57,10 +58,9 @@ export async function maybeRenderBlend(
   // unconditional: the clip is rendered from the successor's head window starting
   // at zero, so a trimmed leading blank would be baked into the seam.
   if (opts.inHeadTrimmed) return null;
-  // A bulk pass, or a pick-time separation (broadcast/pick-stems.ts), holds
-  // the single-flight analyzer worker for a minute or more: a render would
-  // only wait behind it, holding the sender, and time out.
-  if (bulkPassRunning() || separationInFlight()) return null;
+  // A bulk pass holds the single-flight analyzer worker for minutes; a render would
+  // only time out behind it. The pidfile is that pass's own lock.
+  if (bulkPassRunning()) return null;
 
   const out = db.getTrack(outTrack.id);
   const inn = db.getTrack(inTrack.id);
@@ -79,6 +79,16 @@ export async function maybeRenderBlend(
     stemCache.hasWindow(inTrack.id, 'head'),
   ]);
   if (!haveTail || !haveHead) return null;
+  // A pick-time separation (broadcast/pick-stems.ts) holds a worker for a
+  // minute or more. Only a cache hit gets this far, so this costs exactly the
+  // seams that would have blended; with one worker the render would lose the
+  // blend anyway, after holding the sender for its whole budget, and a spare
+  // pool member serves it at once (pick-stems-policy.ts renderStandsDown).
+  if (renderStandsDown({
+    separating: separationInFlight(),
+    backend: analyzer.backendLabel(),
+    concurrency: config.analyzer.concurrency,
+  })) return null;
 
   // The render must lose the race to the drain's hard fallback, so it gets the
   // window to the hard deadline minus a write/stamp margin, capped by the render

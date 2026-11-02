@@ -2,7 +2,8 @@
 // setting that turns it on (`transitions.pickTimeStems`).
 //
 // The policy is pure, so every veto is pinned here against a fact sheet that
-// otherwise says "go". The runner's IO and the drain's trigger are pinned by
+// otherwise says "go", along with the budget's overshoot bound, the request
+// deadline, the render's stand-down and the once-per-change notices. The runner's IO and the drain's trigger are pinned by
 // scripts/pick-stems.test.ts and scripts/pick-stems-drain.test.ts.
 //
 // The setting is pinned with a cold load (controller/CLAUDE.md): load()
@@ -108,6 +109,116 @@ test('describeNeed names the windows for the log line', () => {
   assert.equal(policy.describeNeed({ head: true, tail: true }), 'head + tail');
   assert.equal(policy.describeNeed({ head: true, tail: false }), 'head');
   assert.equal(policy.describeNeed({ head: false, tail: true }), 'tail');
+});
+
+// ---- the budget -----------------------------------------------------------
+
+const GiB = 1024 ** 3;
+const MB = 1024 ** 2;
+
+test('budget: the allowance is an hour of picks, capped at 5% of the budget, never under one dir', () => {
+  // The default 15 GB budget at a measured 15 MB a dir: 20 dirs, about 2%.
+  assert.equal(policy.overshootAllowanceBytes(15 * GiB, 15 * MB), 20 * 15 * MB);
+  // The 1 GB floor at the cold 25 MB guess: 20 dirs would be half the budget.
+  assert.equal(policy.overshootAllowanceBytes(1 * GiB, 25 * MB), 0.05 * GiB);
+  // Dirs bigger than 5% of the budget: still one, so the cache turns over.
+  assert.equal(policy.overshootAllowanceBytes(1 * GiB, 60 * MB), 60 * MB);
+});
+
+test('budget: a full cache still takes a pick, up to the allowance', () => {
+  const at = (usedBytes: number) => policy.budgetVeto({ usedBytes, budgetBytes: 15 * GiB, estTrackBytes: 15 * MB });
+  const allowance = policy.overshootAllowanceBytes(15 * GiB, 15 * MB);
+  assert.equal(at(0), null);
+  assert.equal(at(15 * GiB), null, 'exactly full: the steady state after a backfill');
+  assert.equal(at(15 * GiB + allowance - 1), null);
+  assert.equal(at(15 * GiB + allowance), 'budget-full');
+  assert.equal(at(40 * GiB), 'budget-full', 'a budget just lowered under the cache');
+});
+
+test('budget: many picks between two sweeps never pass budget + allowance + one dir', () => {
+  for (const [budget, est, dir] of [
+    [15 * GiB, 15 * MB, 15 * MB],
+    [15 * GiB, 15 * MB, 40 * MB], // dirs bigger than the average
+    [1 * GiB, 25 * MB, 8 * MB],
+    [1 * GiB, 60 * MB, 60 * MB],
+  ]) {
+    let used = budget; // the backfill filled it
+    let admitted = 0;
+    for (let pick = 0; pick < 500; pick++) {
+      if (policy.budgetVeto({ usedBytes: used, budgetBytes: budget, estTrackBytes: est })) continue;
+      used += dir; // at most one dir a separation, settled before the next
+      admitted += 1;
+    }
+    const allowance = policy.overshootAllowanceBytes(budget, est);
+    assert.ok(admitted >= 1, 'a full cache always turns over at least one pick');
+    assert.ok(used - budget <= allowance + dir, `${budget}/${est}/${dir}: ${used - budget} over`);
+    assert.equal(admitted, Math.ceil(allowance / dir));
+  }
+});
+
+// ---- the request ----------------------------------------------------------
+
+test('request: its deadline outlasts the slowest measured separation and the pass\'s own', () => {
+  assert.equal(policy.requestDeadlineMs(120_000), 300_000);
+  assert.ok(policy.requestDeadlineMs(120_000) > 176_000, 'head + tail measured 176 s on 2 CPUs, cold');
+  // An operator who raised the pass's deadline never gets a shorter one here.
+  assert.equal(policy.requestDeadlineMs(600_000), 600_000);
+});
+
+// ---- the render -----------------------------------------------------------
+
+test('render: stands down for a separation only when no pool member is spare', () => {
+  const at = (separating: boolean, backend: string, concurrency: number) =>
+    policy.renderStandsDown({ separating, backend, concurrency });
+  assert.equal(at(false, 'sidecar', 1), false, 'nothing separating: nothing to wait behind');
+  assert.equal(at(true, 'sidecar', 1), true);
+  assert.equal(at(true, 'sidecar', 2), false, 'a spare member serves it at once');
+  assert.equal(at(true, 'sidecar', 8), false);
+  assert.equal(at(true, 'local', 2), true, 'a local stdio worker is single-flight whatever the setting');
+  assert.equal(at(true, 'none', 2), true);
+});
+
+// ---- notices --------------------------------------------------------------
+
+test('notices: one line when a station-level reason first applies, none per pick', () => {
+  const said: Array<string | null> = [];
+  let last: import('../src/broadcast/pick-stems-policy.js').PickStemsNotice | null = null;
+  const step = (s: import('../src/broadcast/pick-stems-policy.js').PickStemsStep) => {
+    const r = policy.noticeStep(last, s);
+    last = r.last;
+    said.push(r.say);
+  };
+  step({ ran: false, veto: 'no-demucs' });
+  step({ ran: false, veto: 'no-demucs' });
+  step({ ran: false, veto: 'cached' }); // a track-level answer between them
+  step({ ran: false, veto: 'no-demucs' });
+  step({ ran: false, veto: 'no-facets' }); // a change is said
+  step({ ran: false, veto: null }); // a failed download
+  step({ ran: false, veto: 'no-facets' });
+  assert.deepEqual(said, ['no-demucs', null, null, null, 'no-facets', null, null]);
+});
+
+test('notices: a separation, or the feature switched off, clears it, so the next onset is said', () => {
+  let r = policy.noticeStep(null, { ran: false, veto: 'budget-full' });
+  assert.equal(r.say, 'budget-full');
+  r = policy.noticeStep(r.last, { ran: true }); // the sweep made room
+  assert.deepEqual(r, { say: null, last: null });
+  r = policy.noticeStep(r.last, { ran: false, veto: 'budget-full' });
+  assert.equal(r.say, 'budget-full');
+  r = policy.noticeStep(r.last, { ran: false, veto: 'off' });
+  assert.deepEqual(r, { say: null, last: null });
+});
+
+test('notices: quiet-only is said only when the env forces it, since the Stems page shows the setting', () => {
+  assert.equal(policy.noticeStep(null, { ran: false, veto: 'quiet-only', quietOnlyFromEnv: false }).say, null);
+  assert.equal(policy.noticeStep(null, { ran: false, veto: 'quiet-only', quietOnlyFromEnv: true }).say, 'quiet-only-env');
+  for (const v of ['no-blends', 'no-cache', 'no-pair-drain', 'not-held', 'bulk-pass', 'in-flight', 'no-grid',
+    'cached', 'root-offline', 'truncated'] as const) {
+    assert.equal(policy.noticeStep(null, { ran: false, veto: v }).say, null, v);
+  }
+  for (const n of ['budget-full', 'no-demucs', 'no-facets', 'quiet-only-env'] as const) {
+    assert.match(policy.NOTICE_MESSAGES[n], /^pick-time stems: /);
+  }
 });
 
 // ---- the setting ----------------------------------------------------------

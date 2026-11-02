@@ -905,13 +905,17 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                     </div>
                     <div className="field-hint">
                       While a picked track waits behind the one about to air, separate whatever
-                      stems it is missing, so the cache fills with what the station actually plays
-                      instead of waiting for the backfill. Its tail is usually ready for the seam
-                      out of it; the seam into it renders before this starts, so its head pays off
-                      the next time it is picked. Runs Demucs during the broadcast, one track at a
-                      time, on the same analyzer the blends use: watch the stream for dropouts
-                      before leaving it on. Needs stem-blend seams and the stem cache, and only
-                      separates tracks the analysis pass has already measured.
+                      stems it is missing, so the cache turns over to what the station actually
+                      plays. A full cache may run a little over its budget for this (about an
+                      hour of picks, never more than 5% of it) until the hourly cleanup removes
+                      stems of tracks that have never aired. Its tail is usually ready for the
+                      seam out of it; the seam into it renders before this starts, so its head
+                      pays off the next time it is picked. This runs Demucs on air, one track at
+                      a time, on the same analyzer the blends use, and keeps the model loaded, so
+                      on a GPU its memory stays in use. Not recommended below about 4 CPU cores:
+                      watch the stream for dropouts before leaving it on. Needs stem-blend seams
+                      and the stem cache, and only separates tracks the analysis pass has already
+                      measured.
                     </div>
                     {form.transitions.pickTimeStems && data?.values?.audio?.analyzeQuietOnly === true && (
                       <div className="field-hint text-destructive" role="status">

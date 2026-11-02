@@ -449,7 +449,10 @@ before the drain's hard fallback). The tag-time half became the stem backfill
 is sent, the drain separates the missing windows of the track it now holds
 (`broadcast/pick-stems.ts`). That cannot serve the seam into the track, which
 has already rendered, but its tail has the outgoing track's whole runtime to
-land before the seam out of it, and its head is cached for its next pick.
+land before the seam out of it, and its head is cached for its next pick. A
+full cache takes these writes a bounded way over its budget, and the hourly
+sweep evicts never-aired dirs to make room, so the cache turns over to what
+the station plays rather than stopping where the backfill filled it.
 
 The cache changes the render job's *cost*, not its existence — the blend is a
 pair artifact and the pair is only known at pick time.

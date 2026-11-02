@@ -9,15 +9,23 @@
 // - a separation writes the stems, stamps stems_at and logs started + done;
 // - its bytes reach the hourly sweep's budget check without a walk (the sweep
 //   used to trust a snapshot that only the analysis pass kept current);
+// - a full budget still takes a pick, the overshoot stops at its allowance
+//   however many picks come before the sweep, and the sweep's stem-priority
+//   order evicts never-aired dirs before the one just separated;
+// - the request has its own deadline, longer than the pass's, and one that
+//   still fires is logged as a timeout the worker may yet finish;
 // - while the worker separates, the blend render stands down instead of
-//   queueing behind it, and a second pick is turned away (single-flight);
+//   queueing behind it, unless the sidecar pool has a spare member, and a
+//   second pick is turned away (single-flight);
+// - a station-level reason the Stems page can't show is logged once, not
+//   once per pick;
 // - every IO-backed veto sends nothing to the worker.
 //
 // Run: `npm test -- pick-stems.test`.
 
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
@@ -40,6 +48,11 @@ const seen = { analyze: [] as AnalyzeBody[], render: 0, stream: [] as string[] }
 // Set by a test to hold the fake worker mid-separation.
 let holdWorker: Promise<void> | null = null;
 let onWorkerStart: (() => void) | null = null;
+// Set by a test for stem files of a real dir's size, written sparse so they
+// cost no disk: the budget reads st.size.
+let sparseStemBytes = 0;
+// What the fake reports on /health (analyzer.refreshCapabilities re-reads it).
+const health = { facets: true, vocal: true };
 
 async function readJson(req: IncomingMessage): Promise<AnalyzeBody> {
   const chunks: Buffer[] = [];
@@ -49,7 +62,11 @@ async function readJson(req: IncomingMessage): Promise<AnalyzeBody> {
 
 function writeStems(dir: string, window: 'head' | 'tail'): void {
   mkdirSync(dir, { recursive: true });
-  for (const s of STEM_NAMES) writeFileSync(path.join(dir, `${window}-${s}.flac`), Buffer.alloc(STEM_BYTES, 1));
+  for (const s of STEM_NAMES) {
+    const f = path.join(dir, `${window}-${s}.flac`);
+    writeFileSync(f, Buffer.alloc(STEM_BYTES, 1));
+    if (sparseStemBytes > STEM_BYTES) truncateSync(f, sparseStemBytes);
+  }
   if (window === 'tail') writeFileSync(path.join(dir, 'tail-meta.json'), JSON.stringify({ duration_s: 200, offset_s: 180 }));
 }
 
@@ -60,7 +77,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   if (req.method === 'GET' && url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      ok: true, engines: ['analyze'], analyze_facets_capable: true, analyze_vocal_capable: true,
+      ok: true, engines: ['analyze'], analyze_facets_capable: health.facets, analyze_vocal_capable: health.vocal,
     }));
     return;
   }
@@ -120,10 +137,12 @@ process.env.NAVIDROME_PASS = 'test';
 delete process.env.ANALYZE_QUIET_ONLY;
 
 const settings = await import('../src/settings.js');
+const { config } = await import('../src/config.js');
 const db = await import('../src/music/library-db.js');
 const stemCache = await import('../src/music/stem-cache.js');
 const analyzer = await import('../src/music/analyzer.js');
 const pickStems = await import('../src/broadcast/pick-stems.js');
+const policy = await import('../src/broadcast/pick-stems-policy.js');
 const stemBlend = await import('../src/broadcast/stem-blend.js');
 const { pidfilePath } = await import('../src/music/tagger-lock.js');
 
@@ -282,16 +301,170 @@ test('a failed request logs its duration, stamps nothing and leaves the cache to
   rmSync(snapFile, { force: true });
 });
 
-test('a net-new dir with no headroom left is not written', async () => {
-  addTrack('p4');
+const MB = 1024 ** 2;
+const DAY_S = 86_400;
+// The cache as a finished backfill leaves it: exactly at its budget (15 GB,
+// the default), so the pass's headroom is 0 for good.
+function fullSnapshot(bytes = stemCache.budgetBytes(), dirs = 600): void {
   const now = new Date().toISOString();
   writeFileSync(snapFile, JSON.stringify({
-    version: 1, root: stemCache.stemsRoot(), bytes: 15 * 1024 ** 3, dirs: 600, measuredAt: now, updatedAt: now,
+    version: 1, root: stemCache.stemsRoot(), bytes, dirs, measuredAt: now, updatedAt: now,
   }));
-  const before = seen.analyze.length;
-  assert.deepEqual(await run('p4').outcome, { ran: false, veto: 'budget-full' });
-  assert.equal(seen.analyze.length, before);
-  assert.equal(existsSync(stemCache.dirFor('p4')), false);
+}
+function ageDir(id: string, secondsAgo: number): void {
+  const t = Date.now() / 1000 - secondsAgo;
+  for (const f of readdirSync(stemCache.dirFor(id))) utimesSync(path.join(stemCache.dirFor(id), f), t, t);
+}
+function aired(id: string): void {
+  db.recordPlay({
+    trackId: id, title: `Song ${id}`, artist: 'A', album: 'B', playedAt: new Date().toISOString(),
+    source: 'ai', requestedBy: null, showId: null, showName: null,
+  });
+}
+
+test('a full budget still separates a net-new pick, and the snapshot counts it', async () => {
+  fullSnapshot();
+  assert.equal(await stemCache.headroomTracks(), 0, 'by the pass\'s rule there is no room');
+  addTrack('p4');
+  const { lines, outcome } = run('p4');
+  const result = await outcome;
+  assert.equal(result.ran && result.ok, true);
+  assert.equal(await stemCache.hasWindow('p4', 'tail'), true);
+  const snap = JSON.parse(readFileSync(snapFile, 'utf8'));
+  assert.equal(snap.bytes, stemCache.budgetBytes() + (await stemCache.trackDirBytes('p4'))!, 'over by the one dir');
+  assert.equal(snap.dirs, 601);
+  assert.equal(snap.stale, undefined, 'counted without a walk, so the next sweep sees it');
+  assert.equal(await stemCache.headroomTracks(), 0, 'and the pass still adds nothing');
+  assert.ok(!lines.some(l => l.startsWith('[warn]')), lines.join('\n'));
+  rmSync(snapFile, { force: true });
+});
+
+test('many picks before the sweep: the overshoot stops at its allowance, and is said once', async () => {
+  const budget = stemCache.budgetBytes();
+  fullSnapshot(budget, 600);
+  sparseStemBytes = 16 * MB; // a 128 MB dir: head + tail, four stems each
+  const outcomes: Array<Awaited<ReturnType<typeof run>['outcome']>> = [];
+  const warns: string[] = [];
+  const analysesBefore = seen.analyze.length;
+  try {
+    for (let i = 0; i < 12; i++) {
+      addTrack(`many-${i}`);
+      const { lines, outcome } = run(`many-${i}`);
+      outcomes.push(await outcome);
+      warns.push(...lines.filter(l => l.startsWith('[warn]')));
+    }
+  } finally {
+    sparseStemBytes = 0;
+  }
+  const ran = outcomes.filter(o => o.ran).length;
+  assert.ok(ran >= 2, `${ran} separated`);
+  assert.ok(outcomes.slice(0, ran).every(o => o.ran && o.ok), 'every pick until the ceiling ran');
+  assert.ok(outcomes.slice(ran).every(o => !o.ran && 'veto' in o && o.veto === 'budget-full'),
+    'and none after it until the sweep');
+  assert.equal(seen.analyze.length - analysesBefore, ran, 'a turned-away pick sends nothing to the worker');
+
+  const snap = JSON.parse(readFileSync(snapFile, 'utf8'));
+  const allowance = policy.overshootAllowanceBytes(budget, stemCache.estimateTrackBytes(snap.bytes, snap.dirs));
+  const oneDir = (await stemCache.trackDirBytes('many-0'))!;
+  assert.ok(oneDir >= 128 * MB);
+  assert.ok(snap.bytes - budget >= allowance, 'the allowance was spent before a pick was turned away');
+  assert.ok(snap.bytes - budget <= allowance + oneDir,
+    `${Math.round((snap.bytes - budget) / MB)} MB over, allowance ${Math.round(allowance / MB)} MB + one dir`);
+  assert.deepEqual(warns, [`[warn] ${policy.NOTICE_MESSAGES['budget-full']}`], 'one booth-log line for the lot');
+  rmSync(snapFile, { force: true });
+});
+
+test('the sweep evicts never-aired dirs the backfill wrote before the one just separated', async () => {
+  rmSync(snapFile, { force: true });
+  for (const id of ['bf-1', 'bf-2', 'bf-3']) {
+    addTrack(id);
+    writeStems(stemCache.dirFor(id), 'head');
+    writeStems(stemCache.dirFor(id), 'tail');
+    ageDir(id, DAY_S);
+  }
+  addTrack('fresh-1');
+  assert.equal((await run('fresh-1').outcome).ran, true);
+  // A budget only one dir fits: the sweep evicts in its order until it does,
+  // so whatever survives was last in line.
+  const swept = await stemCache.sweep((await stemCache.trackDirBytes('fresh-1'))!);
+  assert.ok(swept.removed >= 3);
+  assert.equal(existsSync(stemCache.dirFor('fresh-1')), true, 'the just-separated dir goes last');
+  for (const id of ['bf-1', 'bf-2', 'bf-3']) assert.equal(existsSync(stemCache.dirFor(id)), false, id);
+});
+
+test('once it airs, a separated dir outranks newer never-aired ones', async () => {
+  addTrack('aired-1');
+  addTrack('unaired-1');
+  assert.equal((await run('aired-1').outcome).ran, true);
+  assert.equal((await run('unaired-1').outcome).ran, true);
+  for (const id of ['bf-4', 'bf-5']) {
+    addTrack(id);
+    writeStems(stemCache.dirFor(id), 'head');
+    writeStems(stemCache.dirFor(id), 'tail');
+  }
+  // Both separated dirs older than the backfill's, so mtime alone would evict
+  // them first; only one has aired.
+  ageDir('aired-1', 2 * DAY_S);
+  ageDir('unaired-1', 2 * DAY_S);
+  aired('aired-1');
+  await stemCache.sweep((await stemCache.trackDirBytes('aired-1'))!);
+  assert.equal(existsSync(stemCache.dirFor('aired-1')), true, 'airplay ranks it above every never-aired dir');
+  for (const id of ['unaired-1', 'bf-4', 'bf-5']) assert.equal(existsSync(stemCache.dirFor(id)), false, id);
+});
+
+// ---- the request deadline ------------------------------------------------
+
+test('the request outlives the pass\'s deadline, which the pass keeps', async () => {
+  const passTimeoutMs = config.analyzer.requestTimeoutMs;
+  (config.analyzer as { requestTimeoutMs: number }).requestTimeoutMs = 300;
+  try {
+    holdWorker = new Promise<void>(r => setTimeout(r, 800));
+    addTrack('slow-1');
+    const result = await run('slow-1').outcome;
+    assert.equal(result.ran && result.ok, true, 'a worker 800 ms in, past a 300 ms pass deadline');
+    // The pass's own facet request, on the same worker: its deadline is unchanged.
+    holdWorker = new Promise<void>(r => setTimeout(r, 800));
+    addTrack('slow-pass');
+    await assert.rejects(
+      analyzer.analyzeFacets('slow-pass', { facets: ['stems'], stems_dir: stemCache.dirFor('slow-pass') }),
+      (err: unknown) => analyzer.isTimeoutError(err),
+    );
+  } finally {
+    (config.analyzer as { requestTimeoutMs: number }).requestTimeoutMs = passTimeoutMs;
+    await holdWorker;
+    holdWorker = null;
+    await new Promise(r => setTimeout(r, 50)); // the fake finishes its write
+  }
+});
+
+test('a deadline that still fires is logged as a timeout the worker may finish', async () => {
+  await stemCache.sweep(1024 ** 3, { force: true });
+  let release!: () => void;
+  holdWorker = new Promise<void>(r => { release = r; });
+  pickStems._setRequestDeadlineForTests(300);
+  addTrack('late-1');
+  try {
+    const { lines, outcome } = run('late-1');
+    const result = await outcome;
+    assert.equal(result.ran, true);
+    assert.equal(result.ran && result.ok, false);
+    assert.match(lines.at(-1) ?? '',
+      /^\[warn\] pick-time stems: "Song late-1" timed out after \d+\.\ds \(the worker may still finish\)$/);
+    assert.ok(!lines.some(l => / failed /.test(l)), lines.join('\n'));
+    assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).stale, true, 'the next read walks');
+    assert.ok(db.needsStemsIds().includes('late-1'), 'no stamp: unconfirmed');
+    assert.equal(pickStems.separationInFlight(), false);
+    assert.deepEqual(existsSync(stagingDir) ? readdirSync(stagingDir) : [], []);
+  } finally {
+    pickStems._setRequestDeadlineForTests(null);
+    holdWorker = null;
+    release();
+  }
+  // The worker does finish, and the walk the stale mark asked for counts it.
+  for (let i = 0; i < 50 && !(await stemCache.hasWindow('late-1', 'tail')); i++) await new Promise(r => setTimeout(r, 20));
+  const before = (await stemCache.storedUsage())!.dirs;
+  const walked = await stemCache.usage();
+  assert.equal(walked.dirs, before + 1);
   rmSync(snapFile, { force: true });
 });
 
@@ -336,6 +509,76 @@ test('while it separates, a second pick is turned away and the blend render stan
   assert.equal(seen.render, rendersBefore + 1, 'the setup does reach the render');
   // And the next pick goes through.
   assert.equal((await run('p6').outcome).ran, true);
+});
+
+test('a sidecar pool with a spare member renders while it separates', async () => {
+  const concurrency = config.analyzer.concurrency;
+  (config.analyzer as { concurrency: number }).concurrency = 2;
+  let release!: () => void;
+  holdWorker = new Promise<void>(r => { release = r; });
+  const started = new Promise<void>(r => { onWorkerStart = r; });
+  addTrack('p7');
+  const first = run('p7');
+  try {
+    await started;
+    assert.equal(pickStems.separationInFlight(), true);
+    const rendersBefore = seen.render;
+    // out-1 -> in-1 is cached (the test above).
+    await stemBlend.maybeRenderBlend(
+      { id: 'out-1', title: 'out', replayGain: null, gainDb: 0 },
+      { id: 'in-1', title: 'in', replayGain: null },
+      300,
+    );
+    assert.equal(seen.render, rendersBefore + 1, 'the free member takes the render');
+  } finally {
+    (config.analyzer as { concurrency: number }).concurrency = concurrency;
+    holdWorker = null;
+    onWorkerStart = null;
+    release();
+    // Settled even when an assertion above failed, so no claim outlives it.
+    assert.equal((await first.outcome).ran, true);
+  }
+});
+
+// ---- station-level notices -----------------------------------------------
+
+test('no Demucs, or ANALYZE_QUIET_ONLY, is said once in the booth log, not once per pick', async () => {
+  addTrack('n1');
+  const warns = async () => {
+    const { lines, outcome } = run('n1');
+    return { outcome: await outcome, warns: lines.filter(l => l.startsWith('[warn]')) };
+  };
+  health.vocal = false;
+  await analyzer.refreshCapabilities();
+  try {
+    const a = await warns();
+    assert.deepEqual(a.outcome, { ran: false, veto: 'no-demucs' });
+    assert.deepEqual(a.warns, [`[warn] ${policy.NOTICE_MESSAGES['no-demucs']}`]);
+    assert.deepEqual((await warns()).warns, [], 'the next pick says nothing');
+  } finally {
+    health.vocal = true;
+    await analyzer.refreshCapabilities();
+  }
+
+  process.env.ANALYZE_QUIET_ONLY = '1';
+  try {
+    const c = await warns();
+    assert.deepEqual(c.outcome, { ran: false, veto: 'quiet-only' });
+    assert.deepEqual(c.warns, [`[warn] ${policy.NOTICE_MESSAGES['quiet-only-env']}`], 'a change is said');
+    assert.deepEqual((await warns()).warns, []);
+  } finally {
+    delete process.env.ANALYZE_QUIET_ONLY;
+  }
+  // The saved setting has its note on the Stems page, so it is not said here.
+  await settings.update({ audio: { analyzeQuietOnly: true } });
+  try {
+    const d = await warns();
+    assert.deepEqual(d.outcome, { ran: false, veto: 'quiet-only' });
+    assert.deepEqual(d.warns, []);
+  } finally {
+    await settings.update({ audio: { analyzeQuietOnly: false } });
+  }
+  assert.equal((await warns()).outcome.ran, true);
 });
 
 // ---- vetoes that send nothing --------------------------------------------
