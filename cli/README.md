@@ -117,11 +117,15 @@ so images track the binary rather than floating on `:latest` and drifting ahead
 of the frozen compose files it carries. `update` moves that pin forward. A dev
 build has no published tag and stays on `:latest`.
 
-A compiled binary loads the working directory's `.env` into `process.env` at
-boot, which a `tsx` run doesn't, and compose prefers the environment over `.env`.
-So `update` has to move the pin in `process.env` as well as in the file, or a run
-from the install directory hands `pull` and `up` the old version (#2196). Only a
-compiled binary can show this, so that's what the regression check runs against:
+By default a Bun-compiled binary loads the working directory's `.env` (and
+`bunfig.toml`) at boot, which a `tsx` run doesn't. Compose prefers the
+environment over `.env`, so that let another project's `.env` override the
+install's pin and ports, and handed compose a stale copy of the install's own
+`.env` (#2196, #2203). The binaries are built with `--no-compile-autoload-dotenv`
+and `--no-compile-autoload-bunfig`, so the CLI never reads the working
+directory's `.env`. It reads the install's `.env` explicitly, with a shell export
+still winning, as in compose. Only a build can show whether the flags took, so
+the regression check runs against a compiled binary:
 
 ```bash
 npm run build:linux-x64
@@ -170,6 +174,11 @@ npm run build:linux-x64     # or just one
 
 `prebuild` runs `embed-assets` and `patch-clack` first, so a build always
 carries current assets.
+
+Building needs Bun >= 1.3.3, the first release with the
+`--no-compile-autoload-dotenv` and `--no-compile-autoload-bunfig` flags the build
+scripts pass; an older Bun rejects them. CI pins Bun 1.4.4 in `publish-cli.yml`
+and `cli-smoke.yml`, and the two pins move together.
 
 ### Layout
 
