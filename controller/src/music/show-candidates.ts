@@ -93,7 +93,7 @@ export async function diagnoseShowCandidates(show: any): Promise<ShowCandidateDi
     const tagged = libraryRows.length - withoutExplicit(libraryRows, true).length;
     warnings.push(tagged
       ? `${tagged} library track${tagged === 1 ? ' is' : 's are'} tagged explicit and held back from the counts below. Untagged tracks still count.`
-      : 'No library track is tagged explicit yet, so this show holds nothing back. Tags are read on the next library scan.');
+      : 'No library track is tagged explicit yet, so most tracks will pass. Tags are only read when you run Reconcile with Navidrome on the Library page: it does not run by itself.');
   }
   return buildShowCandidateDiagnostic({ show, libraryRows, playlistRows: playlistPool?.tracks ?? null, excludedIds, locks, minTrackSec, maxTrackSec, warnings });
 }

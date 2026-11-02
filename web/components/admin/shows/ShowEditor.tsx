@@ -800,7 +800,7 @@ export function ShowEditor({
             control={control}
             name={path('excludeExplicit')}
             label="Clean show"
-            description="Keeps tracks tagged explicit off air during this show, listener requests included. Only tracks tagged explicit in your files are held back: an untagged track still plays, so this is only as good as your tags, which are read on the next library scan. Anything you queue yourself still plays. If nothing else is left the station keeps playing rather than go silent, and the booth log says so."
+            description="Keeps tracks tagged explicit off air during this show, listener requests included. Only tracks tagged explicit in your files are held back: an untagged track still plays, so this is only as good as your tags, and they are only read when you run Reconcile with Navidrome on the Library page. Anything you queue yourself still plays. If nothing else is left the station keeps playing rather than go silent, and the booth log says so."
           />
         </ShowEditorSection>
 

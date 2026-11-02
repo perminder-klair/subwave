@@ -164,6 +164,7 @@ test('the editor says when a clean show has nothing to hold back, and how much i
   db.upsertTrackMeta('count-a', { title: 'a', artist: 'A' });
   const none = await diagnoseShowCandidates({ excludeExplicit: true });
   assert.ok(none.warnings.some(w => /No library track is tagged explicit yet/.test(w)), none.warnings.join(' | '));
+  assert.ok(none.warnings.some(w => /only read when you run Reconcile with Navidrome/.test(w)), 'nothing reads them by itself, so it names the step');
   db.upsertTrackMeta('count-b', { title: 'b', artist: 'B', explicitStatus: 'explicit' });
   db.upsertTrackMeta('count-c', { title: 'c', artist: 'C', explicitStatus: 'explicit' });
   const two = await diagnoseShowCandidates({ excludeExplicit: true });
