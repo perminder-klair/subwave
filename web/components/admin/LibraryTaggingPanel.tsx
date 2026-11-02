@@ -674,8 +674,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 {embeddingFormatStale && (
                   <>
                     {' '}
-                    Your vectors also use an older track description, so re-embed once the
-                    analysis has run to fold the measured sound in.
+                    Your vectors also predate the sound descriptors, so re-embed once the analysis
+                    has run to fold them in.
                   </>
                 )}
               </span>
@@ -684,10 +684,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           {embeddingFormatStale && !similarityThin && !embeddingStale && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
               <span>
-                <b>Your similarity vectors use an older track description.</b> The way we describe
-                a track&rsquo;s measured sound has changed since they were embedded, so similarity
-                is still comparing the older text. It keeps working as it is. Re-embed to fold the
-                change in.
+                <b>Your similarity vectors predate the sound descriptors.</b> Tracks now carry
+                measured sound (tempo, key, audio moods) that wasn&rsquo;t part of the text when
+                they were embedded, so similarity is still comparing the old label-heavy text.
+                Re-embed to fold the measured sound in.
               </span>
               <button
                 type="button"
