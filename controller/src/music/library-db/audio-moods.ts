@@ -1,7 +1,17 @@
 // Zero-shot audio moods: labels from scoring CLAP audio vectors against the
 // mood vocabulary's prompts, plus the vocab hash that decides a re-score.
 
-import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
+import { requireDb } from './handle.js';
+import {
+  idsMissingLabels,
+  iterateScoreMaps,
+  pageScoreMaps,
+  readScoreMap,
+  readStateHash,
+  writeLabels,
+  writeScoreMaps,
+  writeStateHash,
+} from './audio-scores.js';
 // Every backfill scope must keep this exclusion, or an unanalysable file is
 // re-attempted forever (#1300).
 import { analysisFailureExclusion } from './tracks.js';
@@ -14,12 +24,7 @@ import { touchGenreInputs } from './genre-inputs.js';
 export function setTrackAudioMoodScoresBulk(
   rows: Array<{ id: string; scores: Record<string, number> }>,
 ): void {
-  if (rows.length === 0) return;
-  const d = requireDb();
-  const stmt = d.prepare(`UPDATE tracks SET audio_mood_scores_json = ? WHERE id = ?`);
-  d.transaction((rs: typeof rows) => {
-    for (const r of rs) stmt.run(JSON.stringify(r.scores), r.id);
-  })(rows);
+  writeScoreMaps('audio_mood_scores_json', rows);
 }
 
 // Full re-score scope for a changed vocabulary. JOINed to tracks so a pruned
@@ -35,89 +40,32 @@ export function audioVectorIds(): string[] {
 
 // Incremental scope for an unchanged vocabulary.
 export function idsNeedingAudioMoods(): string[] {
-  const rows = requireDb()
-    .prepare(
-      `SELECT v.id FROM track_audio_vectors v JOIN tracks t ON t.id = v.id
-       WHERE t.audio_moods IS NULL ORDER BY v.id`,
-    )
-    .all() as Array<{ id: string }>;
-  return rows.map(r => r.id);
+  return idsMissingLabels('audio_moods');
 }
 
 // Dossier/tuning only; hot paths read the pre-picked audio_moods labels.
 export function getAudioMoodScores(id: string): Record<string, number> | null {
-  const row = requireDb()
-    .prepare('SELECT audio_mood_scores_json AS s FROM tracks WHERE id = ?')
-    .get(id) as { s: string | null } | undefined;
-  if (!row?.s) return null;
-  try {
-    const v = JSON.parse(row.s);
-    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
-  } catch {
-    return null;
-  }
+  return readScoreMap('audio_mood_scores_json', id);
 }
 
 // Every stored {mood: cosine} map, streamed (the input to computeBaselines).
-// Unparseable rows are skipped so one corrupt blob can't deny calibration.
-export function* iterateAudioMoodScores(): Generator<{ id: string; scores: Record<string, number> }> {
-  const rows = requireDb()
-    .prepare(
-      `SELECT id, audio_mood_scores_json AS s FROM tracks
-        WHERE audio_mood_scores_json IS NOT NULL ORDER BY id`,
-    )
-    .iterate() as Iterable<{ id: string; s: string }>;
-  for (const row of rows) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(row.s);
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-    yield { id: row.id, scores: parsed as Record<string, number> };
-  }
+export function iterateAudioMoodScores(): Generator<{ id: string; scores: Record<string, number> }> {
+  return iterateScoreMaps('audio_mood_scores_json');
 }
 
-// One page of stored score maps, keyset-paginated on id (`afterId` exclusive,
-// '' starts). Materialised, not streamed: better-sqlite3 refuses a write while a
-// read cursor is live. `lastId` is the last id SCANNED, not returned, so a page
-// ending on an unparseable row still advances the cursor. null = walk done.
+// One page of stored score maps (see pageScoreMaps).
 export function pageAudioMoodScores(
   afterId: string,
   limit: number,
 ): { items: Array<{ id: string; scores: Record<string, number> }>; lastId: string | null } {
-  const rows = requireDb()
-    .prepare(
-      `SELECT id, audio_mood_scores_json AS s FROM tracks
-        WHERE audio_mood_scores_json IS NOT NULL AND id > ?
-        ORDER BY id LIMIT ?`,
-    )
-    .all(afterId, Math.max(1, Math.floor(limit))) as Array<{ id: string; s: string }>;
-  const items: Array<{ id: string; scores: Record<string, number> }> = [];
-  for (const row of rows) {
-    try {
-      const parsed = JSON.parse(row.s);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        items.push({ id: row.id, scores: parsed as Record<string, number> });
-      }
-    } catch {
-      // Skip the row, never the cursor (see lastId).
-    }
-  }
-  return { items, lastId: rows.length ? rows[rows.length - 1].id : null };
+  return pageScoreMaps('audio_mood_scores_json', afterId, limit);
 }
 
 // Labels only; a calibration-only change must not need the analyzer's text tower.
 export function setTrackAudioMoodLabelsBulk(
   rows: Array<{ id: string; moods: string[] }>,
 ): void {
-  if (rows.length === 0) return;
-  const d = requireDb();
-  const stmt = d.prepare(`UPDATE tracks SET audio_moods = ? WHERE id = ?`);
-  d.transaction((rs: typeof rows) => {
-    for (const r of rs) stmt.run(JSON.stringify(r.moods), r.id);
-  })(rows);
+  writeLabels('audio_moods', rows.map(({ id, moods }) => ({ id, labels: moods })));
 }
 
 // Scope of the audio-derived energy correction (#1362). Restricted to
@@ -159,22 +107,11 @@ export function setTrackEnergyBulk(rows: Array<{ id: string; energy: string }>):
 
 // Hash the current audio_moods were scored with, or null. A mismatch re-scores.
 export function getAudioMoodVocabHash(): string | null {
-  const row = requireDb()
-    .prepare('SELECT mood_vocab_hash FROM audio_embedding_meta WHERE pk = 1')
-    .get() as { mood_vocab_hash: string | null } | undefined;
-  return row?.mood_vocab_hash ?? null;
+  return readStateHash('mood_vocab_hash');
 }
 
 export function setAudioMoodVocabHash(hash: string): void {
-  // Seed defensively: model/dim are NOT NULL and setAudioEmbeddingMeta's upsert
-  // never touches the hash.
-  requireDb()
-    .prepare(
-      `INSERT INTO audio_embedding_meta (pk, model, dim, set_at, mood_vocab_hash)
-       VALUES (1, 'unknown', ?, ?, ?)
-       ON CONFLICT(pk) DO UPDATE SET mood_vocab_hash = excluded.mood_vocab_hash`,
-    )
-    .run(AUDIO_EMBEDDING_DIM, new Date().toISOString(), hash);
+  writeStateHash('mood_vocab_hash', hash);
 }
 
 // Coverage meter, inverse of needsVocalIds (#646); a stored "[]" counts as done.

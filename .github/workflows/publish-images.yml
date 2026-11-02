@@ -45,6 +45,10 @@ jobs:
       # builds have very different durations, so capping concurrency spreads the
       # completions out. Costs wall-clock on a release run; tag pushes are rare.
       max-parallel: 4
+      # publish-cli.yml's `wait-for-images` job holds the CLI release until the
+      # images the CLI's compose files reference are on GHCR at this version.
+      # Adding or renaming one of those images here means updating its IMAGES
+      # list too (the aio images are deliberately not waited on).
       matrix:
         include:
           - image: subwave-caddy

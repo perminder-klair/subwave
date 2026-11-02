@@ -489,6 +489,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   similarSongs?(): Promise<RequestSong[]>;
   random?: () => number;
   choose?(pool: RequestSong[]): RequestSong | null;
+  // What the show on air will not air (a clean show). Such a track is no
+  // candidate, so a draw lands on what can air. If the ask itself is all there
+  // is, it comes back so the caller can refuse it by name.
+  heldBack?(song: RequestSong): boolean;
 }): Promise<RequestSelection> {
   const { catalog, recentIds, queuedIds, currentId } = deps;
   const errors: string[] = [];
@@ -549,8 +553,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     return pool[Math.min(pool.length - 1, Math.floor((deps.random || Math.random)() * pool.length))] || null;
   };
   let held: { track: RequestSong; source: string } | null = null;
+  let heldByShow: { track: RequestSong; source: string } | null = null;
   const select = (songs: RequestSong[], source: string, exact = true): RequestSelection | null => {
-    const pool = unique(songs).filter(s => constraints(s, source) && (!exact || identity(s)));
+    const found = unique(songs).filter(s => constraints(s, source) && (!exact || identity(s)));
+    const pool = deps.heldBack ? found.filter(s => !deps.heldBack!(s)) : found;
     const track = choose(pool.filter(eligible));
     const named = exact && !standingIn;
     if (track) {
@@ -560,11 +566,12 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     // Preserve the requested identity for an honest refusal, never replace an
     // exact recording merely because it is queued or on cooldown.
     if (named && pool.length && !held) held = { track: pool[0], source };
+    if (named && found.length && !pool.length && !heldByShow) heldByShow = { track: found[0], source };
     return null;
   };
   const refusal = (): RequestSelection | null => held ? {
     ...held, outcome: queuedIds.has(held.track.id) || held.track.id === currentId ? 'already-queued' : 'cooldown', errors,
-  } : null;
+  } : heldByShow ? { ...heldByShow, outcome: 'matched', errors, unmetPreferences: [] } : null;
   const search = async (term: string) => {
     const found: RequestSong[] = [];
     // Bounded, deterministic pages. rawCount includes filtered/blocked rows.

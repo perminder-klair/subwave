@@ -47,16 +47,18 @@ export function groupSearchProviders(ids: readonly string[]): { label: string; i
   ].filter(g => g.ids.length > 0);
 }
 
-// True when a key is on file but Firecrawl searches would refuse it, because it
-// isn't an fc- one. The key reaches this page redacted, so the controller decides
-// through firecrawlKeySource. `undefined` is a controller that doesn't send the
-// field, which says nothing about the key.
-export function firecrawlKeyIsForeign(
+// True when a key is on file but the picked provider's searches would refuse it,
+// because it is another provider's (a Firecrawl key under Tavily, a Tavily key
+// under Firecrawl). The key reaches this page redacted, so the controller decides,
+// through keyRefusedBy: the keyed providers that would refuse it. That covers the
+// picked provider before a save. `undefined` is a controller that doesn't send
+// the field, which says nothing about the key.
+export function searchKeyIsForeign(
   provider: string,
   keyOnFile: boolean,
-  source: 'settings' | 'env' | null | undefined,
+  refusedBy: string[] | undefined,
 ): boolean {
-  return provider === 'firecrawl' && keyOnFile && source === null;
+  return keyOnFile && !!refusedBy?.includes(provider);
 }
 
 interface SearchSectionProps extends SectionProps {
@@ -119,7 +121,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         && ((form.search.baseUrl ?? '') !== (savedSearch.baseUrl || '')
             || (form.search.searxngEngines ?? '') !== (savedSearch.searxngEngines || '')));
   const apiKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
-  const foreignKey = firecrawlKeyIsForeign(provider, apiKeySet, data.search?.firecrawlKeySource);
+  const foreignKey = searchKeyIsForeign(provider, apiKeySet, data.search?.keyRefusedBy);
 
   const testApiKey = async () => {
     const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
@@ -239,13 +241,14 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 </div>
               </div>
               {/* A keyless provider isn't "missing" anything, so skip the red banner.
-                  A key on file may be another provider's, which Firecrawl refuses, so
-                  "ready to use" would overclaim and the banner names the wrong key. */}
+                  A key on file may be another provider's, which the picked provider
+                  refuses, so "ready to use" would overclaim and the banner names the
+                  wrong key. */}
               {keyed.key !== 'optional' && (
                 <KeyStatus
                   envVar="SEARCH_API_KEY"
                   present={apiKeySet && !foreignKey}
-                  detail={foreignKey ? <>The key on file is not a Firecrawl key, so searches won&apos;t run. Firecrawl keys start with <code>fc-</code>: paste one in the field above and save.</> : undefined}
+                  detail={foreignKey ? <>The key on file is not a {keyed.keyName} key, so searches won&apos;t run. Paste a {keyed.keyName} key in the field above and save.</> : undefined}
                 />
               )}
               {/* The controller knows whether the key Keenable would send is a keen_

@@ -236,6 +236,46 @@ async function main() {
     }
   });
 
+  await test('a delete refused after the probe passed leaves the budget check only once it fails', async (t) => {
+    // The catch the probe can't replace (#2225): a share that answers access()
+    // and then refuses the delete. The sweep learns of it only by failing, so
+    // the folders ranked before it are gone already, and the warning must not
+    // say otherwise. Staged with a 0755 folder holding a 0555 subfolder: the
+    // probe sees a folder it can write, rm -r is refused inside it.
+    if (skipAsRoot()) return;
+    const warn = t.mock.method(console, 'warn', () => {});
+    resetCache();
+    makeDir('old-a', 2 * MB, 9000);
+    makeDir('old-b', 2 * MB, 8000);
+    const refused = makeDir('refused', 10 * MB, 7000);
+    makeDir('new', 20 * MB, 100);
+    // Backdated, or the subfolder's own mtime would rank the folder newest.
+    const locked = join(refused, 'locked');
+    mkdirSync(locked);
+    writeFileSync(join(locked, 'x'), 'x');
+    const ts = (Date.now() - 7000 * 1000) / 1000;
+    utimesSync(join(locked, 'x'), ts, ts);
+    utimesSync(locked, ts, ts);
+    chmodSync(locked, 0o555);
+    forgetSnapshot();
+    try {
+      const res = await stemCache.sweep(25 * MB);
+      assert.equal(res.failedDirs, 1);
+      assert.equal(res.removed, 2, 'the folders ranked before it went in its place');
+      assert.deepEqual(
+        [...(await stemCache.cachedTrackIdSet())].sort(),
+        ['new', 'refused'],
+        'once it failed, its bytes left the check: the newest folder survives',
+      );
+      assert.equal(warn.mock.callCount(), 1);
+      const msg = String(warn.mock.calls[0].arguments[0]);
+      assert.match(msg, /1 folder/);
+      assert.doesNotMatch(msg, /nothing is evicted/, 'the warning makes no claim the catch path breaks');
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
   await test('an over-budget sweep never touches the orphan quarantine, nor counts it', async () => {
     // .orphan-quarantine is a dot-dir of whole track dirs (orphan-purge.ts):
     // measured as a cache dir it weighed a few KB, ranked first (no library

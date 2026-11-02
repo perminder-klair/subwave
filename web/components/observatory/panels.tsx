@@ -610,6 +610,24 @@ export function Dossier({
             </div>
           </>
         )}
+        {d?.audioDescriptors && d.audioDescriptors.length > 0 && (
+          <>
+            <div className="t-caption ad-muted" style={{ margin: '12px 0 8px' }}>
+              HEARD
+            </div>
+            <div className="pill-row">
+              {d.audioDescriptors.map((m) => (
+                <span
+                  key={m}
+                  className="ad-pill"
+                  title={d.audioDescriptorScores?.[m] != null ? `CLAP guess, cosine ${d.audioDescriptorScores[m]}` : 'CLAP guess'}
+                >
+                  {m}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
         {lastfm && lastfm.length > 0 && (
           <>
             <div className="t-caption ad-muted" style={{ margin: '12px 0 8px' }}>

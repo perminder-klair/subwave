@@ -7,6 +7,9 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { BoundedKeyMap } from '../util/bounded-key-map.js';
+import {
+  searchKeyFits, searchKeyMismatch, searchKeyRequired, searchProvidersRefusing,
+} from './search-key-policy.js';
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 const DDG_ENDPOINT = 'https://api.duckduckgo.com/';
@@ -54,8 +57,19 @@ export function searchKeySlot(): { key: string; source: 'settings' | 'env' | nul
   return env ? { key: env, source: 'env' } : { key: '', source: null };
 }
 
+// The sentence for a key on file that `provider` refuses, or null when it
+// doesn't (an empty key included). search-key-policy.ts decides.
+function keyOnFileRefusal(provider: string, key: string): string | null {
+  const mismatch = searchKeyMismatch(provider, key);
+  return mismatch && `The key on file is ${mismatch}`;
+}
+
+// The slot may hold another provider's key, which is refused here before
+// anything is sent (#2223).
 export async function tavilySearch(query: string): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
+  const refusal = keyOnFileRefusal('tavily', apiKey);
+  if (refusal) throw new Error(refusal);
   const res = await fetchWithTimeout(TAVILY_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -227,7 +241,8 @@ export function parseSearxngResponse(data: unknown): SearchResponse {
 }
 
 // Brave Search API backend (issue #623). Keyed like Tavily — the key lives in
-// settings.search.apiKey with SEARCH_API_KEY as the env fallback. Threads
+// settings.search.apiKey with SEARCH_API_KEY as the env fallback, and another
+// provider's key left there is refused before anything is sent. Threads
 // optional recency through Brave's `freshness` param (pd/pw/pm), and asks for
 // undecorated snippets (text_decorations=0) so descriptions arrive as plain
 // text instead of <strong>-highlighted HTML.
@@ -237,6 +252,8 @@ export async function braveSearch(
 ): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('Brave Search API key not configured');
+  const refusal = keyOnFileRefusal('brave', apiKey);
+  if (refusal) throw new Error(refusal);
 
   const url = new URL(BRAVE_ENDPOINT);
   url.searchParams.set('q', query);
@@ -334,10 +351,10 @@ export async function keenableSearch(
   return parseKeenableResponse(data);
 }
 
-// The one test for "is this a Keenable key": the request builder, the admin
-// key probe and keenableKeySource all ask it.
+// "Is this a Keenable key": the request builder, the admin key probe and
+// keenableKeySource all ask it. The rule is search-key-policy.ts's.
 export function isKeenableKey(key: string): boolean {
-  return key.trim().startsWith('keen_');
+  return searchKeyFits('keenable', key);
 }
 
 // Where the key a Keenable search would send comes from, or null when it runs
@@ -410,8 +427,6 @@ export function parseKeenableResponse(data: unknown): SearchResponse {
   return { answer: '', results };
 }
 
-const FOREIGN_FIRECRAWL_KEY = 'The key on file is not a Firecrawl key (they start with fc-)';
-
 // Firecrawl backend. Keyed via the shared settings.search.apiKey /
 // SEARCH_API_KEY slot (same resolution as Tavily and Brave). The slot may still
 // hold another provider's key, which must not reach Firecrawl, so anything but
@@ -423,7 +438,8 @@ export async function firecrawlSearch(
 ): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('Firecrawl API key not configured');
-  if (!isFirecrawlKey(apiKey)) throw new Error(FOREIGN_FIRECRAWL_KEY);
+  const refusal = keyOnFileRefusal('firecrawl', apiKey);
+  if (refusal) throw new Error(refusal);
   const { url, init } = buildFirecrawlRequest({ query, apiKey, recency });
   const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
   if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
@@ -431,13 +447,12 @@ export async function firecrawlSearch(
   return parseFirecrawlResponse(data);
 }
 
-// The one test for "is this a Firecrawl key": firecrawlSearch, searchReady, the
-// admin key probe, firecrawlKeySource and searchKeyProblem all ask it. It matches
+// "Is this a Firecrawl key", with the rule in search-key-policy.ts. It matches
 // Firecrawl's own CLI, which refuses any cloud key without the prefix. Their API
 // still accepts a legacy key as a bare UUID, but that key also works as `fc-` +
 // the UUID without its dashes, so nothing valid is locked out.
 export function isFirecrawlKey(key: string): boolean {
-  return key.trim().startsWith('fc-');
+  return searchKeyFits('firecrawl', key);
 }
 
 // Where the key a Firecrawl search would send comes from, or null when the slot
@@ -450,11 +465,19 @@ export function firecrawlKeySource(): 'settings' | 'env' | null {
 
 // Why the selected provider refuses the key on file, or null when it doesn't.
 // No key at all is null too: that one keeps its own "set a key" wording, which
-// can't fix this state, because a saved key shadows SEARCH_API_KEY.
+// can't fix this state, because a saved key shadows SEARCH_API_KEY. Only a
+// provider that needs a key has a problem: Keenable runs keyless instead.
 export function searchKeyProblem(): string | null {
-  if (settings.get().search?.provider !== 'firecrawl') return null;
-  const { key } = searchKeySlot();
-  return key && !isFirecrawlKey(key) ? FOREIGN_FIRECRAWL_KEY : null;
+  const provider = settings.get().search?.provider || 'duckduckgo';
+  if (!searchKeyRequired(provider)) return null;
+  return keyOnFileRefusal(provider, searchKeySlot().key);
+}
+
+// The keyed providers that would refuse the key on file. GET /settings serves
+// it because the admin only sees a redacted key, and the provider dropdown can
+// change before a save.
+export function searchKeyRefusedBy(): string[] {
+  return searchProvidersRefusing(searchKeySlot().key);
 }
 
 // Pure request builder for a Firecrawl search, exported so endpoint, headers
@@ -524,7 +547,8 @@ export async function searchWeb(
 // True when the active search provider is usable right now.
 //   duckduckgo:   always ready (no key, no URL)
 //   keenable:     always ready (keyless; a key only raises the rate limit)
-//   tavily/brave: needs settings.search.apiKey, or SEARCH_API_KEY env
+//   tavily/brave: needs settings.search.apiKey, or SEARCH_API_KEY env, that
+//                 isn't another provider's (search-key-policy.ts)
 //   firecrawl:    the same, and it has to be an fc- key
 //   searxng:      needs settings.search.baseUrl (no env fallback by design)
 export function searchReady(): boolean {
@@ -532,7 +556,6 @@ export function searchReady(): boolean {
   const provider = s?.provider || 'duckduckgo';
   if (provider === 'duckduckgo' || provider === 'keenable') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
-  if (provider === 'firecrawl') return isFirecrawlKey(searchKeySlot().key);
-  // tavily / brave (and any future keyed provider)
-  return !!searchKeySlot().key;
+  // tavily / brave / firecrawl (and any future keyed provider)
+  return searchKeyFits(provider, searchKeySlot().key);
 }

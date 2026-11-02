@@ -44,6 +44,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     playlistExhaust: m.playlistExhaust ?? false,
     playlistInOrder: m.playlistInOrder ?? false,
     excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
+    excludeExplicit: m.excludeExplicit ?? false,
     programme: m.programme ?? false,
     segmentSkill: m.segmentSkill ?? '',
     preparationSkill: m.preparationSkill ?? '',
@@ -122,6 +123,8 @@ export function showPayload(s: Show) {
     // show's whole universe.
     playlistInOrder: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict && s.playlistInOrder,
     excludedPlaylistIds: s.excludedPlaylistIds || [],
+    // No conditional: unlike Strict it needs no other filter to act on.
+    excludeExplicit: s.excludeExplicit === true,
     programme: s.programme ?? false,
     // A skill pin only means something in programme mode.
     segmentSkill: s.programme ? (s.segmentSkill || '') : '',
@@ -156,6 +159,7 @@ export function showFacets(s: Show): ShowFacet[] {
   if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}${playlistOrderFacet(s)}` });
   const nEx = s.excludedPlaylistIds?.length ?? 0;
   if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
+  if (s.excludeExplicit) facets.push({ key: 'clean', label: 'clean', accent: true });
   if (s.maxTrackSeconds != null) {
     facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
   }

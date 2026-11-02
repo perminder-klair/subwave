@@ -148,10 +148,10 @@ test('--re-analyze clears the window analysis but keeps the whole-file figures',
 
 test('step 32 re-runs safely on a database that already has the columns', async () => {
   // A wound-back user_version must not make ADD COLUMN throw.
-  db.requireDb().pragma('user_version = 31');
+  db.requireDb().pragma('user_version = 35');
   db.close();
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
-  assert.ok((db.requireDb().pragma('user_version', { simple: true }) as number) >= 32);
+  assert.ok((db.requireDb().pragma('user_version', { simple: true }) as number) >= 36);
   assert.equal(cols('whole').loudness_version, 2);
   consistent();
 });

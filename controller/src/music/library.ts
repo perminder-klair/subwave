@@ -92,6 +92,8 @@ export function get(songId: string): any {
     // this projection for Subsonic-sourced rows.
     lastfmTags: t.lastfmTags,
     energy: t.energy,
+    // music/explicit-policy's fallback for a candidate that carries no tag field.
+    explicitStatus: t.explicitStatus,
     source: t.source,
     confidence: t.confidence,
     taggerVersion: t.taggerVersion,
@@ -110,6 +112,8 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // clean timing spans; classify through isInstrumental
     vocalRangesInvalid: t.vocalRangesInvalid,
+    tailVocalRanges: t.tailVocalRanges,
+    tailVocalRangesInvalid: t.tailVocalRangesInvalid,
     paceMean: paceMeanOf(t.pace),
     // Boundary keys for bpmKeyFor / queue.mixAnalysisFor.
     keyRanges: t.keyRanges,
@@ -328,6 +332,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     // separate from the editorial `moods`.
     audioMoods: r.audioMoods,
     energy: r.energy,
+    // Inline, so a clean show's check needs no per-track DB lookup.
+    explicitStatus: r.explicitStatus,
     // Seconds, for the max-track-length cap (#447). null = unknown.
     durationSec: r.durationSec,
     // Acoustic analysis — null on un-analysed tracks, read as "no signal".
@@ -338,6 +344,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     structure: r.structure,
     vocalRanges: r.vocalRanges,
     vocalRangesInvalid: r.vocalRangesInvalid,
+    tailVocalRanges: r.tailVocalRanges,
+    tailVocalRangesInvalid: r.tailVocalRangesInvalid,
     // Scalar mean pace (0..1); the full curve stays in the record.
     paceMean: paceMeanOf(r.pace),
   };
@@ -732,7 +740,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       musicalKey: r.musicalKey,
       loudnessLufs: r.loudnessLufs,
       paceMean: paceMeanOf(r.pace),
-      instrumental: isInstrumental(r.vocalRanges, r.vocalRangesInvalid),
+      instrumental: isInstrumental(r),
     })),
   };
 }

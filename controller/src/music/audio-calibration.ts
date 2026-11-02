@@ -172,12 +172,14 @@ export function composeMoodStateHash(vocabHash: string, version = CALIBRATION_VE
 export const UNCALIBRATED_VERSION = 0;
 
 // The one place the stamp decision lives; a pass calling composeMoodStateHash
-// directly would stamp the uncalibrated case as done.
-export function moodStateHashFor(vocabHash: string, calibrated: boolean): string {
-  return composeMoodStateHash(
-    vocabHash,
-    calibrated ? CALIBRATION_VERSION : UNCALIBRATED_VERSION,
-  );
+// directly would stamp the uncalibrated case as done. `version` is the
+// vocabulary's own derivation version: sound descriptors keep a separate one.
+export function moodStateHashFor(
+  vocabHash: string,
+  calibrated: boolean,
+  version = CALIBRATION_VERSION,
+): string {
+  return composeMoodStateHash(vocabHash, calibrated ? version : UNCALIBRATED_VERSION);
 }
 
 export interface MoodState {
@@ -199,10 +201,14 @@ export type MoodPassAction = 'none' | 'relabel' | 'rescore';
 
 // What a pass must do given what is on disk: no state or a changed vocabulary
 // → rescore; only the version changed → relabel; otherwise none.
-export function moodPassAction(stored: string | null, wantVocabHash: string): MoodPassAction {
+export function moodPassAction(
+  stored: string | null,
+  wantVocabHash: string,
+  version = CALIBRATION_VERSION,
+): MoodPassAction {
   const prev = parseMoodStateHash(stored);
   if (!prev) return 'rescore';
   if (prev.vocabHash !== wantVocabHash) return 'rescore';
-  if (prev.version !== CALIBRATION_VERSION) return 'relabel';
+  if (prev.version !== version) return 'relabel';
   return 'none';
 }
