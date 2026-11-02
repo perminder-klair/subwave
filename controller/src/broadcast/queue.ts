@@ -16,6 +16,7 @@ import { aboveKnownTrackCeiling } from '../music/track-duration.js';
 import { anyCleanShow, heldBackFromShow } from '../music/explicit-policy.js';
 import * as silenceTrim from '../music/silence-trim.js';
 import * as cueLanding from '../music/cue-landing.js';
+import * as libraryMount from '../music/library-mount.js';
 import { capCueOutSec } from '../music/track-floor.js';
 import { swallowedByCrossfade } from '../util/request-guard.js';
 import * as showBoundary from './show-boundary.js';
@@ -87,6 +88,7 @@ import {
   cueProbeBudgetMs,
   drainAction,
   introRenderBudgetSec,
+  mountCheckBudgetMs,
   playableDurationSec,
   remainingSec,
   shouldDeadlinePick,
@@ -2304,15 +2306,24 @@ class Queue {
         if (boundaryCueSec != null) {
           item.cueOutSec = Math.min(item.cueOutSec ?? Infinity, boundaryCueSec);
         }
+        // Local file or stream, decided once for this handoff (#2222). The mount
+        // proof reads one sample, so the mixer is asked about this pick's own
+        // file, and anything but a timely yes streams: a local handoff gets no
+        // resolve probe, so a file the mixer can't open would leave dj_queue
+        // unseen and hold the slot until the reconcile sweep clears it, several
+        // coast tracks later.
+        const onMount = subsonic.getLocalPath(item.track);
+        let localPath = await libraryMount.mixerReadablePath(onMount, mountCheckBudgetMs(this.remainingUntilItemAirs(item)));
+        if (onMount && !localPath) {
+          this.log('mix', `"${item.track.title}" streams: the mixer did not confirm it can read ${onMount}`);
+        }
         // Stem-seam cue points: the blend's cut on the way out, the clip's
         // hand-off on the way in (stamped when the INCOMING item drains).
         // Per-attempt identity for proto_subhttp's explicit completion signal.
         // A URL fragment carries it to Liquidsoap but is never sent to the
         // Navidrome origin by curl. Local-file handoffs never enter that
         // protocol, so do not poll a completion channel they cannot produce.
-        item.resolveProbeId = subsonic.getLocalPath(item.track)
-          ? undefined
-          : randomBytes(8).toString('hex');
+        item.resolveProbeId = localPath ? undefined : randomBytes(8).toString('hex');
         // A rendered blend's cut and the trimmed tail are both "stop early";
         // whichever comes first wins, exactly as getAnnotatedUri already
         // arbitrates those against the #447 cap. On the way in, the stem
@@ -2369,7 +2380,14 @@ class Queue {
           }
           const liveCueIns = positiveCues([item.stemSeam ? item.stemCueInSec : null, trim.cueInSec]);
           item.cueInSec = liveCueIns.length ? Math.max(...liveCueIns) : undefined;
+          // The write waited on the previous handoff: a restart or a lost proof
+          // since the mixer said yes streams the pick, with a probe to chase.
+          if (localPath && !libraryMount.libraryMountStands()) {
+            localPath = null;
+            item.resolveProbeId = randomBytes(8).toString('hex');
+          }
           return subsonic.getAnnotatedUri(item.track, {
+            localPath,
             // The cap's cue only when this track actually runs past it — a stamp
             // past a short track's end defeats the crossfade (track-floor.ts).
             maxDurationSec: capCueOutSec(itemDurSec, liveMax),
