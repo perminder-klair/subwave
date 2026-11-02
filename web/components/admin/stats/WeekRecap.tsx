@@ -62,7 +62,7 @@ function Headline({ t }: { t: WeekTotals }) {
   }
   if (t.tracks != null) parts.push(`${fmtInt(t.tracks)} ${t.tracks === 1 ? 'track' : 'tracks'} on air`);
   return (
-    <p className="m-0 text-[22px] leading-[1.25] font-extrabold tracking-[-0.02em]">
+    <p className="m-0 text-[22px] leading-[1.25] font-extrabold tracking-[-0.02em] text-balance">
       {parts.length ? `${parts.join(', and ')}.` : 'A quiet week.'}
     </p>
   );

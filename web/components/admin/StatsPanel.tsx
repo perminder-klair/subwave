@@ -151,7 +151,7 @@ export default function StatsPanel() {
           <span className={cn(LABEL, err ? 'text-[var(--danger)]' : paused ? 'text-muted' : 'text-vermilion')}>
             ● {err ? 'down' : paused ? 'paused' : 'live'}
           </span>
-          <span className="font-mono text-[10px] tracking-[0.2em] uppercase">refresh · 5s</span>
+          <span className="text-[11px] tracking-eyebrow uppercase">refresh · 5s</span>
           <span className={cn(NOTE, 'order-last w-full sm:order-none sm:w-auto')}>rollups since boot · listeners durable</span>
           <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
         </div>
