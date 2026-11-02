@@ -54,22 +54,22 @@ test('upgrading a version-29 library adds language columns without losing rows',
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((raw().pragma('user_version', { simple: true }) as number), 35);
+  assert.equal((raw().pragma('user_version', { simple: true }) as number), 36);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
   assert.equal(db.getTrack('spanish')?.title, 'Uno');
 });
 
-test('a version-32 library from develop gets the language columns in version 33', async () => {
+test('a version-35 library from develop gets the language columns in version 36', async () => {
   db.close();
   const Database = (await import('better-sqlite3')).default as any;
   const old = new Database(join(stateDir, 'library.db'));
   old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
-  old.pragma('user_version = 32');
+  old.pragma('user_version = 35');
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 36);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
 });
@@ -84,7 +84,7 @@ test('a version-30 language library repairs later tables and retains its languag
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 36);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
   assert.ok(requireDb().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lyrics_external'").get());
@@ -94,12 +94,13 @@ test('a version-30 language library repairs later tables and retains its languag
   });
 });
 
-test('concurrent version-32 opens serialize additive track-column migrations', async () => {
+test('concurrent opens of a develop library serialize the language step', async () => {
   db.close();
   const Database = (await import('better-sqlite3')).default as any;
   const old = new Database(join(stateDir, 'library.db'));
-  old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages; ALTER TABLE tracks DROP COLUMN explicit_status; ALTER TABLE tracks DROP COLUMN lastfm_track_tags_at;');
-  old.pragma('user_version = 32');
+  // Develop's own steps up to 35 are develop's; the language step is this branch's.
+  old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
+  old.pragma('user_version = 35');
   old.close();
 
   const { spawn } = await import('node:child_process');
@@ -109,7 +110,7 @@ test('concurrent version-32 opens serialize additive track-column migrations', a
     const {requireDb}=await import(${JSON.stringify(handleUrl)});
     const columns=new Set(requireDb().prepare('PRAGMA table_info(tracks)').all().map(row=>row.name));
     if(!columns.has('language_primary')||!columns.has('languages')||!columns.has('explicit_status')||!columns.has('lastfm_track_tags_at')) throw new Error('migrated track columns missing');
-    if(requireDb().pragma('user_version',{simple:true})!==35) throw new Error('schema version is not 35');
+    if(requireDb().pragma('user_version',{simple:true})!==36) throw new Error('schema version is not 36');
     db.close();`;
   const run = () => new Promise<string>((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], { env: process.env });
@@ -122,7 +123,7 @@ test('concurrent version-32 opens serialize additive track-column migrations', a
 
   await Promise.all(Array.from({ length: 12 }, run));
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 36);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
 });
