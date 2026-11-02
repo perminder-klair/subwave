@@ -224,10 +224,17 @@ test('a walk reporting the same size keeps every measurement', () => {
 test('a replaced file: its audio analysis is due again, its metadata and year stay', () => {
   measured('swap');
   assert.ok(rows('swap').includes('loudness:ok') && rows('swap').includes('clap:ok') && rows('swap').includes('stems:ok'), rows('swap').join());
+  // The whole-file pass's figures too: left set, the clear's own facet sync
+  // would mark loudness v2 and edges measured again on the new file.
+  sql(`UPDATE tracks SET loudness_version = 2, loudness_range_lu = 6, sample_peak_db = -1,
+         loudness_curve_json = '[]', edge_lead_ms = 40, edge_tail_ms = 900, decoded_duration_ms = 200000
+       WHERE id = 'swap'`).run();
   assert.equal(db.upsertTrackMeta('swap', meta(2_000)), true);
   db.clearTrackAudio('swap', 2_000);
   const t = sql('SELECT * FROM tracks WHERE id = ?').get('swap') as Record<string, unknown>;
   for (const col of ['bpm', 'musical_key', 'analysis_version', 'loudness_lufs', 'peak_db',
+    'loudness_version', 'loudness_range_lu', 'sample_peak_db', 'loudness_curve_json',
+    'edge_lead_ms', 'edge_tail_ms', 'decoded_duration_ms',
     'outro_json', 'vocal_ranges_json', 'stems_at', 'audio_moods', 'map_x']) {
     assert.equal(t[col], null, `${col} is cleared`);
   }

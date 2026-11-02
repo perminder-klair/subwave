@@ -211,10 +211,12 @@ export function earliestMeasuredAt(): string | null {
 }
 
 // Everything the analyzer measured from a track's audio, for one track: the
-// head analysis and its loudness, the tail, vocal ranges, the stems stamp, CLAP
-// and the audio moods derived from it, the map position derived from CLAP, and
-// the failure history that described the old file. Unlike clearAnalysis()
-// nothing is kept: every figure was measured on a file that is gone. Metadata,
+// head analysis and its loudness, the whole-file loudness (its curve too) and
+// edges, the tail, vocal ranges, the stems stamp, CLAP and the audio moods
+// derived from it, the map position derived from CLAP, and the failure history
+// that described the old file. Unlike clearAnalysis() nothing is kept: every
+// figure was measured on a file that is gone, and a whole-file column left set
+// would have syncTrackFacets() mark its facet measured again. Metadata,
 // tags, years, lyrics and plays are not audio measurements and stay. The stem
 // files themselves are the caller's (stem-cache.forgetStems), since this runs
 // inside the walk's sync write. `fileSize`, from the walk's size signal, is
@@ -230,10 +232,12 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
     if (size != null) d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?').run(size, id);
     d.prepare(
       `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL, analysis_confidence = NULL,
-         analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL, 
+         analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL, loudness_version = NULL,
+         loudness_range_lu = NULL, sample_peak_db = NULL, loudness_curve_json = NULL,
          structure_json = NULL, vocal_ranges_json = NULL, pace_json = NULL, beats_json = NULL,
          bars_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
          outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, lead_silence_ms = NULL,
+         edge_lead_ms = NULL, edge_tail_ms = NULL, decoded_duration_ms = NULL,
          stems_at = NULL, map_x = NULL, map_y = NULL,
          analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL
        WHERE id = ?`,
