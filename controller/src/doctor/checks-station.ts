@@ -29,12 +29,13 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
   try { ready = searchReady(); } catch { ready = true; }
 
   if (!ready) {
-    const wrongKey = !!searchKeyProblem();
+    // "The key on file is …", lowercased to follow "selected but".
+    const wrongKey = searchKeyProblem();
     out.push({
       label: 'web search',
       status: 'warn',
       detail: wrongKey
-        ? 'firecrawl selected but the key on file is not a Firecrawl key (they start with fc-)'
+        ? `${provider} selected but ${wrongKey.charAt(0).toLowerCase()}${wrongKey.slice(1)}`
         : `${provider} selected but no ${provider === 'searxng' ? 'server URL' : 'API key'}`,
       hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily, Brave and Firecrawl need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
     });
