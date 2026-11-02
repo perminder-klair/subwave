@@ -1513,8 +1513,9 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     }
     // "something like X" asks for a kind of music, so an X the library lacks
     // is no refusal: the rungs below offer an honest stand-in, spaced at the
-    // route's point of choice (#1993).
-    if (seed.track) {
+    // route's point of choice (#1993). A stand-in for the seed is no seed, or
+    // its neighbours would go out as a real match for an X that isn't there.
+    if (seed.track && seed.outcome !== 'substituted') {
       similaritySeed = seed.track;
       const candidates = await safe('similar seed tracks', () => {
         if (deps.similarSeedSongs) return deps.similarSeedSongs(seed.track!.id);

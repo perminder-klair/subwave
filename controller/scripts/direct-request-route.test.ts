@@ -1723,6 +1723,15 @@ test('a title the interpreter reads, with no such track, is a miss', async () =>
   assert.equal(queue.upcoming.length, 0);
 });
 
+test('a stand-in for the seed is no seed: its neighbours are not a match', async () => {
+  const george = { id: 'george', title: 'Faith', artist: 'George Michael', genre: 'Pop', duration: 200 };
+  catalogueSongs = [filler, george];
+  const result = await submit('something like Michael Jackson');
+  assert.equal(result.outcome, 'substituted');
+  assert.match(result.ack, /alternative/);
+  assert.notEqual(requestLog.snapshot(1)[0].pickSource, 'similar-to-seed');
+});
+
 const rockTrack = { id: 'title-rock', title: 'Rock', artist: 'Fixture Artist', duration: 200 };
 const refusals: Array<[string, string, () => void]> = [
   ['cooldown', 'cooldown', () => { queue._recentPlays = [{ ...rockTrack, endedAt: new Date().toISOString() }] as never; }],
