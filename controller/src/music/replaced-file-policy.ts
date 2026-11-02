@@ -1,0 +1,105 @@
+// When a library file counts as replaced: the walk keeps a track's id when its
+// file is replaced at the same path (Navidrome derives the id from the path),
+// so one of these signals is the only way the new audio ever gets measured.
+// Pure: scripts/replaced-file.test.ts. Callers: library-db.upsertTrackMeta (the
+// size), music/file-changes.ts (Navidrome's own change time) and the walk
+// (tag-library/flags.ts), which clears the candidates behind decideReplacedClear.
+
+import { pruneHoldThreshold } from './prune-policy.js';
+
+// Any Subsonic server: the walked size differs from a known stored one. A
+// stored NULL (a row walked before file facts existed) is not a change. Misses
+// a repaired file that kept its exact size, which is what the change time is for.
+export function fileReplaced(storedSize: number | null | undefined, walkedSize: number | null | undefined): boolean {
+  return storedSize != null && storedSize > 0 && walkedSize != null && walkedSize > 0 && storedSize !== walkedSize;
+}
+
+// Navidrome: the server re-imported the file (its native `updatedAt`) after
+// SUB/WAVE last measured the whole track (the oldest analysis facet row). A
+// track never measured has nothing stale to clear. A re-import also follows a
+// tag-only edit, so such a track is re-analysed too: the accepted cost.
+// `updatedAt` is the FILE's mtime (Navidrome's ModTime), not a server clock: a
+// device with a wrong clock or a timezone-shifted SMB/FAT mount can date a file
+// in the future, where it would postdate every measurement for ever and be
+// re-analysed on every walk. A date past now + the margin is no change.
+export function changedAfterMeasure(
+  updatedAt: string | null | undefined,
+  lastMeasuredAt: string | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!updatedAt || !lastMeasuredAt) return false;
+  const changed = Date.parse(updatedAt);
+  const measured = Date.parse(lastMeasuredAt);
+  if (!Number.isFinite(changed) || !Number.isFinite(measured)) return false;
+  if (futureDated(changed, now)) return false;
+  return changed > measured;
+}
+
+// When an accepted file's measurements stand from: now, or the file's own date
+// when that is later. A file dated up to the margin ahead is still a change
+// (futureDated above lets it through), so a stamp of now would leave it newer
+// than its measurement and the next walk would find it again.
+export function acceptedAt(updatedAt: string | null | undefined, now: number = Date.now()): string {
+  const changed = updatedAt ? Date.parse(updatedAt) : NaN;
+  return new Date(Number.isFinite(changed) ? Math.max(changed, now) : now).toISOString();
+}
+
+// How far back each walk asks Navidrome for changes: from the newest change
+// time the previous walk saw, less a margin for clock skew and a scan still
+// writing while the previous walk read. No mark (the first walk) is null here,
+// and file-changes.changedFiles then stops at the library's oldest measurement.
+// A mark in the future (saved before the cap below, or by a skewed clock) is
+// read as now: above every real change, it would blind the signal.
+// The limit: `updatedAt` is the file's mtime, and the mark reads it as an import
+// clock. A file whose mtime predates the floor is never read, however recently
+// Navidrome imported it (cp -p, rsync -t, mv from another folder, a restore).
+// A size change still finds it; a same-size one is missed.
+export const CHANGE_MARK_MARGIN_MS = 6 * 3_600_000;
+export function changesFloor(mark: string | null | undefined, now: number = Date.now()): number | null {
+  const t = mark ? Date.parse(mark) : NaN;
+  return Number.isFinite(t) ? Math.min(t, now) - CHANGE_MARK_MARGIN_MS : null;
+}
+
+/** A file date past now + the margin: a wrong clock, never a real change. */
+export function futureDated(changedMs: number, now: number = Date.now()): boolean {
+  return changedMs > now + CHANGE_MARK_MARGIN_MS;
+}
+
+/** The mark a walk may save: the newest change it read, never later than now. */
+export function capMark(newest: string | null | undefined, now: number = Date.now()): string | null {
+  const t = newest ? Date.parse(newest) : NaN;
+  if (!Number.isFinite(t)) return null;
+  return t > now ? new Date(now).toISOString() : newest!;
+}
+
+// How many replaced tracks one walk may clear on its own. Clearing throws away
+// the analyzer's work for each (days of it at library scale) and drops its
+// stems, and some real events trip both signals across the whole library: a
+// ReplayGain, Picard or beets "save all" (size and mtime on every file), a
+// NAS migration or restore that does not keep mtimes, then a full scan. Held
+// like a mass prune (music/prune-policy.ts, the same threshold): above it the
+// walk clears nothing and says so. The candidates are found again by the next
+// walk (the size is not stored and the change-time mark does not move while
+// held), until the operator answers. --confirm-replaced clears them.
+// --accept-replaced, the answer for a tag edit, clears nothing: the sizes are
+// stored, the measurements date from now (acceptedAt) and the mark moves, so the
+// same files are not found again. Given both, accept wins: it loses nothing.
+export type ReplacedDecision =
+  | { clear: true }
+  | { clear: false; reason: 'accepted' }
+  | { clear: false; reason: 'held'; message: string };
+
+export function decideReplacedClear(opts: { candidates: number; knownTracks: number; confirmed: boolean; accepted?: boolean }): ReplacedDecision {
+  if (opts.accepted) return { clear: false, reason: 'accepted' };
+  const limit = pruneHoldThreshold(opts.knownTracks);
+  if (opts.candidates <= limit || opts.confirmed) return { clear: true };
+  return {
+    clear: false,
+    reason: 'held',
+    message: `${opts.candidates.toLocaleString('en-GB')} tracks look replaced at the same path since they were measured `
+      + `(more than ${limit.toLocaleString('en-GB')}): their audio analysis was NOT cleared. A tag editor's `
+      + '"save all" or a restore that reset file dates does this. If the audio did not change, run the reconcile '
+      + 'with --accept-replaced to keep the analysis. If the files really were replaced, run it with '
+      + '--confirm-replaced to clear it for re-analysis. docs/deployment.md has the commands.',
+  };
+}

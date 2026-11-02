@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { isAbsolute, resolve, sep } from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
@@ -11,6 +12,7 @@ import * as sceneVocab from './scene-vocab.js';
 import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
+import { libraryMountProven } from './library-mount.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -227,7 +229,7 @@ export async function pingWith(target: {
   user: string;
   pass: string;
   client?: string;
-}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; serverSoftwareVersion?: string; error?: string }> {
   const first = await pingWithOnce(target);
   if (first.ok) return first;
   await new Promise(resolve => setTimeout(resolve, 500));
@@ -244,7 +246,7 @@ async function pingWithOnce({
   user: string;
   pass: string;
   client?: string;
-}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; serverSoftwareVersion?: string; error?: string }> {
   try {
     const salt = crypto.randomBytes(8).toString('hex');
     const token = crypto.createHash('md5').update(pass + salt).digest('hex');
@@ -265,7 +267,14 @@ async function pingWithOnce({
     if (sub?.status !== 'ok') {
       return { ok: false, error: sub?.error?.message || 'Subsonic responded but auth failed' };
     }
-    return { ok: true, serverVersion: sub.version, serverType: sub.type || 'unknown' };
+    // `serverVersion` here is the Subsonic API version, kept for the existing
+    // callers; OpenSubsonic servers also report their own release.
+    return {
+      ok: true,
+      serverVersion: sub.version,
+      serverType: sub.type || 'unknown',
+      ...(typeof sub.serverVersion === 'string' && sub.serverVersion ? { serverSoftwareVersion: sub.serverVersion } : {}),
+    };
   } catch (err: any) {
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
       return { ok: false, error: 'Navidrome did not respond within 5s' };
@@ -930,16 +939,53 @@ export function getRawStreamUrl(songId: string): string {
   return buildUrl('stream', { id: songId, format: 'raw' });
 }
 
-// Local file path when MUSIC_LIBRARY_PATH mounts the library in the controller
-// container, else null. Navidrome's `path` is synthetic (built from tags, not
-// read off disk), so it routinely disagrees with the real layout; an unchecked
-// guess resolves to nothing in Liquidsoap and kills the pick (#1405). Existence
-// is checked here and a miss falls back to the stream URL.
-export function getLocalPath(song) {
+// Where a song's `path` could be on the library mount, best guess first. Three
+// shapes reach here:
+// - relative: built from the tags, joined to the mount as it always was.
+// - absolute and inside the mount: Report Real Path on a Navidrome that sees the
+//   library at the same place. The path is the file.
+// - absolute and outside it: Navidrome's root differs from the mount, and no
+//   setting maps one to the other. So leading segments come off one at a time,
+//   longest remainder first, stopping at three: artist, album and file. Fewer
+//   can match another record (`Greatest Hits/01 - Intro.flac`), and the wrong
+//   song would air under this track's metadata. A miss streams the right one.
+// A path comes from the server, so any `..` segment rejects it outright, and
+// every candidate must stay under the mount. Lexical on purpose: a symlink the
+// operator put inside the library still plays.
+function localPathCandidates(libRoot: string, songPath: string): string[] {
+  const segments = songPath.split('/');
+  if (segments.includes('..')) return [];
+  const root = resolve(libRoot);
+  const prefix = root.endsWith(sep) ? root : root + sep;
+  const inside = (candidate: string) => resolve(candidate).startsWith(prefix);
+  if (!isAbsolute(songPath)) return [`${libRoot}/${songPath}`].filter(inside);
+  if (inside(songPath)) return [songPath];
+  const parts = segments.filter(Boolean);
+  return parts
+    .slice(0, -2)
+    .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
+    .filter(inside);
+}
+
+// The song's file as the CONTROLLER sees it on the MUSIC_LIBRARY_PATH mount, else
+// null, for a reader in this container (the cue probe's ffprobe). Navidrome's
+// `path` is usually synthetic (built from tags, not read off disk), so it
+// routinely disagrees with the real layout; an unchecked guess resolves to
+// nothing in Liquidsoap and kills the pick (#1405). Existence is checked here and
+// a miss falls back to the stream URL.
+export function findLibraryFile(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !song.path) return null;
-  const local = `${libRoot}/${song.path}`;
-  return fs.existsSync(local) ? local : null;
+  return localPathCandidates(libRoot, String(song.path)).find(p => fs.existsSync(p)) ?? null;
+}
+
+// The file to hand LIQUIDSOAP, else null so the pick streams. It opens the file
+// in the broadcast container, which only a proof from the mixer speaks for
+// (library-mount.ts): this reads the cached answer and never waits on one.
+export function getLocalPath(song) {
+  const libRoot = process.env.MUSIC_LIBRARY_PATH;
+  if (!libRoot || !libraryMountProven(libRoot)) return null;
+  return findLibraryFile(song);
 }
 
 // Best URI for Liquidsoap — local file if available, otherwise stream URL

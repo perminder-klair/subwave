@@ -1,6 +1,6 @@
 'use client';
 
-// 06 The rack: host load and memory, and each SUB/WAVE container, on LED
+// The rack: host load and memory, and each SUB/WAVE container, on LED
 // ladders like the meters on a rack unit. The red zone starts at 80%: of the
 // cores for load, of the host's memory for memory.
 
@@ -19,7 +19,7 @@ export function Rack({ system }: { system: SystemResponse | null }) {
   const memFrac = host?.memTotal ? host.memUsed / host.memTotal : 0;
   const memCheck = host ? memoryHealth(host).health : 'idle';
   return (
-    <Section n="06" title="The rack" sub="cpu + memory for the sub/wave containers on this host" id="stats-rack">
+    <Section title="The rack" sub="cpu + memory for the sub/wave containers on this host" id="stats-rack">
       <Panel>
         {system == null ? (
           <div className="p-[18px]"><Skeleton className="h-24 w-full" /></div>

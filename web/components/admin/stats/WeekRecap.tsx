@@ -1,6 +1,6 @@
 'use client';
 
-// 02 This week: the last seven complete UTC days against the seven before, as a
+// This week: the last seven complete UTC days against the seven before, as a
 // broadsheet front page. From /stats/week, which reads only the durable records;
 // a null figure is unmeasured (a station too young for the comparison), so it
 // prints without a delta rather than as a fall to zero.
@@ -81,7 +81,7 @@ function Fact({ label, value, sub }: { label: string; value: ReactNode; sub: Rea
 export function WeekRecap({ recap }: { recap: Recap | null }) {
   if (!recap) {
     return (
-      <Section n="02" title="This week">
+      <Section title="This week" id="stats-week">
         <Panel className="p-6"><Skeleton className="h-24 w-full" /></Panel>
       </Section>
     );
@@ -91,8 +91,8 @@ export function WeekRecap({ recap }: { recap: Recap | null }) {
   const busiest = recap.busiestHour ? new Date(recap.busiestHour.at) : null;
   return (
     <Section
-      n="02"
       title="This week"
+      id="stats-week"
       sub={`${weekRange(week.from, week.to)} · vs the week before`}
     >
       <Panel>

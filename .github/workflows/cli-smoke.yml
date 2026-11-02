@@ -1,0 +1,49 @@
+name: CLI smoke
+
+# Compiles the CLI and runs cli/scripts/smoke-update-pin.sh against the binary.
+# The bug it guards against (#2196) only exists in a compiled binary, so a `tsx`
+# run can't catch it.
+#
+# Pull requests only, and separate from publish-cli.yml on purpose: a PR catches
+# the regression sooner, and this check must never be able to block a release.
+#
+# No user-supplied data flows into a `run:` step.
+
+on:
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Moves together with the pin in publish-cli.yml: this has to compile
+          # with the same toolchain that builds the released binaries.
+          bun-version: 1.2.19
+
+      - name: Compile binary
+        working-directory: cli
+        run: |
+          bun install --frozen-lockfile || bun install
+          mkdir -p dist
+          bun build src/cli.ts \
+            --compile \
+            --target=bun-linux-x64 \
+            --outfile=dist/subwave-linux-x64
+
+      - name: Smoke test the first update
+        run: cli/scripts/smoke-update-pin.sh cli/dist/subwave-linux-x64

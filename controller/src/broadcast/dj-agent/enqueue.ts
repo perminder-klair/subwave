@@ -12,6 +12,8 @@ import { recordPick } from '../../llm/log.js';
 import { echoesRecentRequest } from '../../util/request-guard.js';
 import { speechPaceScale } from '../../audio/tts.js';
 import { normalizeForDisplay, normalizeForSpeech, spokenWordScale, stripSpeakerLabel } from '../../audio/speech-text.js';
+import { logEvent } from '../../observability/events.js';
+import { standInToken } from '../stand-in-policy.js';
 import { introMsOf } from './runs.js';
 import { releaseExtendedSleeveNoteReservation } from '../../sleeve-notes/link-selection.js';
 import { VOCAL_RUNWAY_FLOOR_MS } from '../vocal-runway.js';
@@ -122,12 +124,26 @@ export function dropEchoedLink(link: string | null, queue: any): string | null {
 // Returns the DISPLAY form (#1186): it becomes introScript, which is
 // booth-logged, remembered in the session and shown in the player's feed. The
 // pronunciation layer is applied separately by speak() at render time.
-export function trimLinkToIntro(text: string | null | undefined, song: any, persona: Persona | null = null): string | null {
+export function trimLinkToIntro(
+  text: string | null | undefined,
+  song: any,
+  persona: Persona | null = null,
+  queue: { log?: (kind: string, message: string) => void } | null = null,
+): string | null {
   const raw = (text || '').trim();
   if (!raw) return null;
   const speaker = persona ?? settings.getEffectivePersona();
   // Budget the words that will air, using the author captured at generation.
   const clean = stripSpeakerLabel(stripThinking(raw), speaker?.name ? [speaker.name] : []);
+  // The stand-in test wants the words as written (stand-in-policy), and the
+  // line below is where a pick link stops being that: by push() a long
+  // template has lost its brackets and reads as prose.
+  const token = standInToken(clean);
+  if (token) {
+    queue?.log?.('scheduler', `link: dropped a stand-in line ("${token}") instead of airing it`);
+    logEvent('speech.standInDropped', { kind: 'link', token });
+    return null;
+  }
   const display = normalizeForDisplay(clean);
   // Non-DJ personas skip the budget but not the cleanup.
   if (!speaker?.djMode) return display || null;
@@ -171,7 +187,7 @@ export async function enqueuePick(
   // the session turn may carry the marginally longer reading.
   const introLink = hostSpeech && !session.isHostSpeechCurrent(hostSpeech)
     ? null
-    : dropEchoedLink(trimLinkToIntro(link, song, introPersona), queue);
+    : dropEchoedLink(trimLinkToIntro(link, song, introPersona, queue), queue);
   if (!introLink && sleeveClaimUseId) {
     try { releaseExtendedSleeveNoteReservation(sleeveClaimUseId); } catch {}
   }

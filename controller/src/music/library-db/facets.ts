@@ -195,6 +195,7 @@ interface StoredFacet {
   source: string | null;
   // The terminal attempt is a fact even when no measurement column exists.
   unmeasurable_reason: string | null;
+  at: string;
 }
 
 export interface SyncOpts extends DeriveOpts {
@@ -213,7 +214,10 @@ export interface SyncOpts extends DeriveOpts {
 }
 
 // Re-derive one track's facet rows from its columns and store the difference.
-// Unchanged rows are left alone (their `at` stays the time of the last change).
+// Unchanged rows are left alone. `at` is when a row's answer last changed, so a
+// row that only mirrors a failure (`attempts` on a kept measurement) keeps it:
+// nothing was measured, and lastMeasuredAt() compares `at` with the file's date.
+// A failed row has no measurement to keep, and its `at` is the latest attempt.
 // Callers run it inside the same transaction as the column write it mirrors.
 export function syncTrackFacets(id: string, opts: SyncOpts = {}): void {
   syncTrackFacetsOn(requireDb(), id, opts);
@@ -230,7 +234,7 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
   const hasClap = !!d.prepare('SELECT 1 FROM track_audio_vectors WHERE id = ? LIMIT 1').get(id);
   const stored = new Map(
     (d
-      .prepare('SELECT facet, status, version, reason, attempts, source, unmeasurable_reason FROM track_facet_status WHERE track_id = ?')
+      .prepare('SELECT facet, status, version, reason, attempts, source, unmeasurable_reason, at FROM track_facet_status WHERE track_id = ?')
       .all(id) as StoredFacet[]).map(r => [r.facet, r]),
   );
   const unmeasurable: Partial<Record<Facet, string>> = {};
@@ -279,7 +283,8 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
     ) {
       continue;
     }
-    upsert.run(id, r.facet, version, r.status, r.reason, r.attempts, source, now, unmeasurable[r.facet] ?? null);
+    const answerHeld = prev && !isFresh && prev.status === r.status && r.status !== 'failed' && prev.version === version;
+    upsert.run(id, r.facet, version, r.status, r.reason, r.attempts, source, answerHeld ? prev.at : now, unmeasurable[r.facet] ?? null);
   }
   // Whatever the columns no longer support (cleared, or a failure wiped by a
   // success) goes: no row = not done.
@@ -412,6 +417,12 @@ export function moveFacetRows(oldId: string, newId: string): void {
 
 export function deleteFacetRows(id: string): void {
   requireDb().prepare('DELETE FROM track_facet_status WHERE track_id = ?').run(id);
+}
+
+// The measurements stand for the file as it is now (tracks.acceptReplacedFiles):
+// they date from `at`, or the next walk would find the same file stale again.
+export function restampFacetRows(id: string, at: string): void {
+  requireDb().prepare('UPDATE track_facet_status SET at = ? WHERE track_id = ?').run(at, id);
 }
 
 // Mirror of clearAnalysis(): drop what it clears, plus every failure.

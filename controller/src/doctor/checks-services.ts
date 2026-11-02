@@ -8,6 +8,10 @@ import { recentHealthCalls } from '../llm/internal/core/deferred.js';
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as subsonicLog from '../music/subsonic-log.js';
+import { proveLibraryMount } from '../music/library-mount.js';
+import { libraryMountFinding } from '../music/library-mount-policy.js';
+import { realPathStatus } from '../music/navidrome-players.js';
+import { realPathFinding } from '../music/navidrome-players-policy.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
@@ -254,6 +258,18 @@ export async function checkNavidrome(): Promise<Finding[]> {
     }
   } catch { /* tracker is best-effort */ }
 
+  // Navidrome's "Report Real Path" on SUB/WAVE's own players — read only; the
+  // switch is the opt-in setting or the Music source page's button.
+  if (p.ok) {
+    try {
+      const st = await realPathStatus();
+      out.push({
+        label: 'real file paths',
+        ...realPathFinding(st, { localMount: !!process.env.MUSIC_LIBRARY_PATH }),
+      });
+    } catch { /* never throws; belt and braces */ }
+  }
+
   // Mood-tag coverage — the picker leans on these tags to match the vibe.
   try {
     await library.load();
@@ -363,6 +379,14 @@ export async function checkBroadcast(): Promise<Finding[]> {
       hint: 'The mixer process may be down or restarting. Check broadcast logs.',
       fix: { id: 'restart-mixer', label: 'Restart mixer' },
     });
+  }
+
+  // A library mount only counts if the mixer can read it: Liquidsoap opens the
+  // file, in another container. Asks afresh, as the check above does.
+  const mount = process.env.MUSIC_LIBRARY_PATH;
+  if (mount) {
+    const proof = await proveLibraryMount().catch(() => null);
+    out.push({ label: 'library mount', ...libraryMountFinding(proof ?? { mount, state: 'unknown', sample: null }) });
   }
 
   return out;

@@ -3,7 +3,7 @@
 
 import { lyricsResultFor, type LyricsResult } from './lyrics';
 import type { StreamFormat } from './streamFormat';
-import { stationAuthResult, withStreamAuth, type StationAuthResult } from './station-password';
+import { rateLimitedUntil, stationAuthResult, withStreamAuth, type StationAuthResult } from './station-password';
 import {
   normalizeStationBase,
   resolveStationConnection,
@@ -66,9 +66,10 @@ export interface StationApi {
   pollRequest(id: string): Promise<RequestResult>;
   /** Like the currently playing track (#991). `songId` is what the client
    *  believes is on air; the controller rejects a stale tap. Error statuses
-   *  come back as a LikeResult with `error`; null on network error. */
+   *  come back as a LikeResult with `error`; null when no answer could be read:
+   *  a network error, a body that is not JSON, or one that never arrives. */
   likeCurrent(songId: string): Promise<LikeResult | null>;
-  /** Liked-state + count for the current airing. null on network error. */
+  /** Liked-state + count for the current airing. null as for likeCurrent. */
   likeStatus(): Promise<LikeStatus | null>;
   /** Fire-and-forget audience beacon; all failures are swallowed. */
   postBeacon(body: BeaconBody): Promise<void>;
@@ -79,6 +80,10 @@ export interface StationApi {
   /** Check a private-station password against `POST /station-auth` (#478),
    *  which fails closed and is rate-limited. Never throws. */
   checkStationAuth(password: string): Promise<StationAuthResult>;
+  /** When the latest `/station-auth` answer said to ask again: a 429's
+   *  `Retry-After`, or 0 for none. The limit covers the whole address, so this
+   *  holds whichever check saw it. */
+  stationAuthHeldUntil(): number;
   /** Absolute URL for an album cover. It still carries the login as URL
    *  userinfo for RNTP's iOS lock-screen artwork, which loads it with a bare
    *  URLSession request that takes no headers; every loader that does take
@@ -128,9 +133,13 @@ function mountFor(format: StreamFormat): string {
 }
 
 // Compose timeouts manually: RN fetch lacks AbortSignal.timeout and any.
-const FETCH_TIMEOUT_MS = 8000;
+export const FETCH_TIMEOUT_MS = 8000;
 
-function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
+/** What can still end a request past its headers, for readJson: fetch resolves
+ *  on them, and fetchWithTimeout lets go of its timer and the caller's signal. */
+const openRequests = new WeakMap<Response, { ctrl: AbortController; outer?: AbortSignal | null }>();
+
+export function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   const outer = init?.signal;
@@ -139,10 +148,52 @@ function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
     if (outer.aborted) ctrl.abort();
     else outer.addEventListener('abort', onAbort);
   }
-  return fetch(url, { ...init, signal: ctrl.signal }).finally(() => {
-    clearTimeout(timer);
-    outer?.removeEventListener('abort', onAbort);
+  return fetch(url, { ...init, signal: ctrl.signal })
+    .then((res) => {
+      openRequests.set(res, { ctrl, outer });
+      return res;
+    })
+    .finally(() => {
+      clearTimeout(timer);
+      outer?.removeEventListener('abort', onAbort);
+    });
+}
+
+/** A fetchWithTimeout response's JSON body, with its own FETCH_TIMEOUT_MS from
+ *  the start of the read, so a call takes at most twice that: headers, then body.
+ *  A caller with one budget for both passes what is left of it as `timeoutMs`
+ *  (readDirectory). The deadline or the caller's signal aborts the request, which
+ *  is what closes the connection of a stalled body, and rejects here too, because
+ *  the abort alone doesn't end the read: expo/fetch's native text() waits for a
+ *  complete body. After a cancel iOS never has one (NativeResponse.swift ends in
+ *  errorReceived), and Android calls whatever arrived complete
+ *  (NativeResponse.kt), so the read never settles on one and resolves with a
+ *  truncated body on the other. */
+export async function readJson(res: Response, timeoutMs = FETCH_TIMEOUT_MS): Promise<unknown> {
+  const { ctrl, outer } = openRequests.get(res) ?? {};
+  let stop = () => {};
+  const stopped = new Promise<never>((_, reject) => {
+    stop = () => {
+      ctrl?.abort();
+      reject(new Error('Request aborted'));
+    };
   });
+  const timer = setTimeout(stop, timeoutMs);
+  if (outer?.aborted) stop();
+  else outer?.addEventListener('abort', stop);
+  try {
+    return await Promise.race([res.json(), stopped]);
+  } finally {
+    clearTimeout(timer);
+    outer?.removeEventListener('abort', stop);
+  }
+}
+
+/** A JSON body, or undefined when it is not JSON or has not arrived in time
+ *  (readJson), for an answer that makes its own sense of a missing body:
+ *  stationAuthResult and lyricsResultFor. */
+function readJsonOrUndefined(res: Response): Promise<unknown> {
+  return readJson(res).catch(() => undefined);
 }
 
 type StationRequestInit = Omit<RequestInit, 'headers'> & { headers?: Record<string, string> };
@@ -164,12 +215,13 @@ export function createApi(
   const getJson = async <T>(p: string, signal?: AbortSignal): Promise<T> => {
     const res = await send(p, { signal });
     if (!res.ok) throw new Error(`${res.status} ${api(p)}`);
-    return (await res.json()) as T;
+    return (await readJson(res)) as T;
   };
   // Images keep the login in the URL as well, for the one loader that takes
   // no headers (see cover()). It is the same login as the header, so the two
   // never disagree.
   const asset = (p: string) => `${requestBase}/api${p}`;
+  let stationAuthHold = 0;
   const onStation = (url: string) => url.startsWith(`${requestBase}/`) || url.startsWith(`${cleanBase}/`);
   const probeHealth = async (signal?: AbortSignal): Promise<HealthResult> => {
     try {
@@ -204,7 +256,7 @@ export function createApi(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }).then((r) => r.json() as Promise<RequestResult>),
+      }).then((r) => readJson(r) as Promise<RequestResult>),
     postBeacon: async (body) => {
       try {
         await send('/beacon', {
@@ -223,15 +275,21 @@ export function createApi(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password }),
         });
-        return stationAuthResult(res.status, res.headers.has('www-authenticate'));
+        stationAuthHold = res.status === 429 ? rateLimitedUntil(res.headers.get('Retry-After'), Date.now()) : 0;
+        return stationAuthResult(res.status, {
+          challenged: res.headers.has('www-authenticate'),
+          // Only these bodies are read: they say who answered (stationAuthResult).
+          body: res.status === 200 || res.status === 401 ? await readJsonOrUndefined(res) : undefined,
+        });
       } catch {
         return stationAuthResult(null);
       }
     },
+    stationAuthHeldUntil: () => stationAuthHold,
     pollRequest: async (id) => {
       const res = await send(`/request/${encodeURIComponent(id)}`);
       if (res.status === 404) return { success: false, status: 'unknown' };
-      return (await res.json()) as RequestResult;
+      return (await readJson(res)) as RequestResult;
     },
     likeCurrent: async (songId) => {
       try {
@@ -240,7 +298,7 @@ export function createApi(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ songId }),
         });
-        return (await res.json()) as LikeResult;
+        return (await readJson(res)) as LikeResult;
       } catch {
         return null;
       }
@@ -248,7 +306,7 @@ export function createApi(
     likeStatus: async () => {
       try {
         const res = await send('/like');
-        return (await res.json()) as LikeStatus;
+        return (await readJson(res)) as LikeStatus;
       } catch {
         return null;
       }
@@ -260,7 +318,7 @@ export function createApi(
           cache: 'no-store',
           headers: password ? { 'x-station-auth': password } : undefined,
         });
-        const body: unknown = res.ok ? await res.json().catch(() => undefined) : undefined;
+        const body = res.ok ? await readJsonOrUndefined(res) : undefined;
         return lyricsResultFor(res.status, res.headers.get('Retry-After'), body);
       } catch {
         return { kind: 'unavailable', retryAfterSec: null };

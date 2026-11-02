@@ -1,8 +1,8 @@
 'use client';
 
-// The Stats page's building blocks, after the "Stats Redesign" design: numbered
-// sections, ink-ruled panels, mono eyebrow labels, share bars, LED ladders and a
-// tuner scale. Colours are theme tokens only (ink, the vermilion accent, danger),
+// The Stats page's building blocks, after the "Stats Redesign" design: sections,
+// ink-ruled panels, mono eyebrow labels, share bars, LED ladders and a tuner
+// scale. Colours are theme tokens only (ink, the vermilion accent, danger),
 // corners stay square, and every computed length goes through useDynamicStyle
 // because the lint rule forbids `style={…}`.
 
@@ -17,29 +17,27 @@ export const NOTE = 'font-mono text-[10px] uppercase tracking-[0.16em] text-mute
 export const SUB = 'font-mono text-[11px] text-muted';
 export const FIGURE = 'font-mono text-[22px] font-bold leading-[1.1] tabular-nums';
 
-export function Section({ n, title, sub, right, id, children }: {
-  n: string;
+export function Section({ title, sub, right, id, bare, children }: {
   title: string;
   sub?: ReactNode;
   right?: ReactNode;
-  id?: string;
+  id: string;
+  // Cards that label themselves, where a heading would only repeat the dial.
+  bare?: boolean;
   children: ReactNode;
 }) {
   return (
     // grid-cols-1 is minmax(0,1fr): without it a wide table's min-content
     // stretches the section past a phone screen instead of scrolling in place.
-    <section id={id} aria-label={title} className="grid scroll-mt-4 grid-cols-1 gap-4">
-      <header
-        className={cn(
-          'flex flex-wrap gap-x-3.5 gap-y-2 border-t-2 border-ink pt-3',
-          right ? 'items-center' : 'items-baseline',
-        )}
-      >
-        <span className="font-mono text-[11px] font-bold tracking-[0.2em] text-vermilion">{n}</span>
-        <h2 className="m-0 font-display text-[30px] leading-[1.1] font-normal tracking-[-0.01em]">{title}</h2>
-        {sub && <span className={NOTE}>{sub}</span>}
-        {right && <span className="ml-auto">{right}</span>}
-      </header>
+    // --stats-clearance is the top bar and the pinned dial (SectionDial).
+    <section id={id} aria-label={title} className="grid scroll-mt-[var(--stats-clearance,112px)] grid-cols-1 gap-3">
+      {!bare && (
+        <header className={cn('flex flex-wrap gap-x-4 gap-y-1', right ? 'items-center' : 'items-baseline')}>
+          <h2 className="m-0 font-display text-[30px] leading-[1.1] font-normal tracking-[-0.01em]">{title}</h2>
+          {sub && <span className={cn(NOTE, 'sm:ml-auto')}>{sub}</span>}
+          {right && <span className="ml-auto sm:ml-0">{right}</span>}
+        </header>
+      )}
       {children}
     </section>
   );
@@ -228,16 +226,25 @@ function Along({ pct, className, children }: { pct: number; className?: string; 
   return <div ref={ref} className={className}>{children}</div>;
 }
 
-function TickScale({ max, step, children }: { max: number; step: number; children?: ReactNode }) {
+export function TickScale({ max, step, minors = 5, className, children }: {
+  max: number;
+  step: number;
+  minors?: number;
+  className?: string;
+  children?: ReactNode;
+}) {
   const ref = useRef<HTMLDivElement>(null);
-  // Major ticks every `step`, minor every fifth of one.
+  // Major ticks every `step`, `minors` divisions to each.
   useDynamicStyle(ref, {
-    backgroundSize: `calc(100% / ${max / step}) 14px, calc(100% / ${(max / step) * 5}) 6px`,
+    backgroundSize: `calc(100% / ${max / step}) 14px, calc(100% / ${(max / step) * minors}) 6px`,
   });
   return (
     <div
       ref={ref}
-      className="relative h-7 border-b border-ink bg-[linear-gradient(to_right,var(--ink)_1px,transparent_1px),linear-gradient(to_right,var(--ink)_1px,transparent_1px)] bg-left-bottom bg-repeat-x"
+      className={cn(
+        'relative h-7 border-b border-ink bg-[linear-gradient(to_right,var(--ink)_1px,transparent_1px),linear-gradient(to_right,var(--ink)_1px,transparent_1px)] bg-left-bottom bg-repeat-x',
+        className,
+      )}
     >
       {children}
     </div>

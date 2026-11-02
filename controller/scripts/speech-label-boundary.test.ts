@@ -215,7 +215,7 @@ test('a timed-out clean render is reused at air time without stripping or render
     spoken.push(text);
     return new Promise<string>(resolve => { finish = resolve; });
   };
-  const pending = queue.startIntroRender(item);
+  const pending = queue.startIntroRender(item)!;
   assert.deepEqual(await awaitIntroRender(pending, 5), { status: 'timed-out' });
   const air = queue.airIntro(item);
   finish(wav);

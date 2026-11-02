@@ -294,3 +294,20 @@ all 541 web tests, controller/web lint and types, generated schema parity and
 isolated desktop/mobile browser checks. Controller lint has 1,747 warnings and
 zero errors. No production build, station deployment or database changes are
 part of this reconciliation.
+
+## Shared speech filtering reconciliation — 2 November
+
+Merge develop through `2d81afff`, preserving upstream's stand-in speech gate
+alongside the feature's intro budgets, exchange deadlines and host-revision
+checks. Rejected placeholder links release their fact reservations on fresh queue
+insertion, restoration of an unrendered intro and single-voice announcement.
+Music stays queued; refused words are not recorded as rendered or aired. The
+upstream dropped-line callback and refusal reason remain available to callers.
+Automatic Banter keeps its remaining-track budget and reports only usable lines.
+
+A combined regression exercises those three reservation-release paths with the
+real queue and database. All 738 targeted controller checks pass: stand-in speech
+200, Sleeve Notes 424, speech budgets 10, handoffs 87 and host speech 17. All 683
+web tests pass. Controller/web lint and types and generated schema parity pass;
+controller lint has 1,833 warnings and zero errors. This reconciliation includes
+no production build, station deployment or live database operation.

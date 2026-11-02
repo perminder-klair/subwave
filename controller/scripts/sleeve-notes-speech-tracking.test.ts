@@ -84,6 +84,38 @@ test('a Spark survives generation and enqueue, and a queue collision releases it
   assert.ok(read(generated.sleeveClaimUseId!).released_at);
 });
 
+test('upstream stand-in rejection releases reserved Sparks without dropping music or recording an airing', async t => {
+  const store = await import('../src/settings/store.js');
+  const saved = settings.get(), upcoming = queue.upcoming;
+  store.setCache({...saved, lyrics:{...saved.lyrics,enabled:false},
+    djBehaviour:{...saved.djBehaviour,extendedSleeveNotes:false}});
+  t.after(() => { store.setCache(saved); queue.upcoming = upcoming; });
+  const seams = queue as unknown as {persist:()=>void;drainToLiquidsoap:()=>Promise<void>};
+  t.mock.method(seams,'persist',()=>{});
+  t.mock.method(seams,'drainToLiquidsoap',async()=>{});
+  queue.upcoming = [];
+  const track = {id:'stand-in-track',title:'Song',artist:'Example Band',duration:240};
+  const reserve = () => sleeves.recordExtendedSleeveNoteSupplied(note, 'They formed in Cardiff.');
+  const assertReleased = (id: string) => {
+    assert.ok(read(id).released_at);
+    assert.equal(read(id).aired_at,null);
+    assert.equal(read(id).tts_requested_at,null);
+  };
+  const queued = reserve(); let dropped = 0;
+  await queue.push({track,introScript:'placeholder',introKind:'link',sleeveClaimUseId:queued,
+    onStandInDropped:()=>{dropped++;}});
+  assert.equal(dropped,1); assert.equal(queue.upcoming[0].track.id,track.id);
+  assert.equal(queue.upcoming[0].introScript,null);
+  assert.equal(queue.upcoming[0].sleeveClaimUseId,null); assertReleased(queued);
+  const resumed = reserve();
+  const item = {...queue.upcoming[0],introScript:'placeholder',sleeveClaimUseId:resumed};
+  queue.cleanUnrenderedIntro(item);
+  assert.equal(item.introScript,null); assert.equal(item.sleeveClaimUseId,null); assertReleased(resumed);
+  const announced = reserve();
+  const outcome = await queue.announce('placeholder','link',{sleeveClaimUseId:announced});
+  assert.equal(outcome.accepted,false); assert.equal(outcome.reason,'stand-in'); assertReleased(announced);
+});
+
 test.after(async () => {
   close();
   // Speech logging is best-effort and asynchronous.
