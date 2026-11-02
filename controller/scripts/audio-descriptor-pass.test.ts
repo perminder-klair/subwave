@@ -425,6 +425,18 @@ test('only the embed text and the operator dossier read the labels', () => {
   ], 'a new reader is a decision: descriptors are CLAP guesses, not facts');
 });
 
+// A clear that drops the audio moods has dropped the vector they came from.
+// Descriptors left behind are never re-scored, because the incremental scope only
+// sees a NULL label.
+test('whatever clears the audio moods clears the descriptors beside them', () => {
+  const src = resolvePath(dirname(fileURLToPath(import.meta.url)), '../src/music/library-db/tracks.ts');
+  const sql = readFileSync(src, 'utf8');
+  const clears = (column: string) => sql.split(`${column} = NULL`).length - 1;
+  assert.ok(clears('audio_moods') > 0);
+  assert.equal(clears('audio_descriptors'), clears('audio_moods'));
+  assert.equal(clears('audio_descriptor_scores_json'), clears('audio_mood_scores_json'));
+});
+
 // Last, because it drops the vectors every test above stands on.
 test('a re-analyse drops the descriptors with the vectors they came from', () => {
   assert.ok(db.getAudioDescriptorScores(idOf(0)));
