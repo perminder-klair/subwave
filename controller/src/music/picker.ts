@@ -817,7 +817,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // Mirrors the agent picker's `sections`.
           sections: library.sectionCount(c) ?? library.sectionCount(rec) ?? undefined,
           // Instrumental flag from the shared measured-duration policy.
-          instrumental: isInstrumental(rec?.vocalRanges, rec?.vocalRangesInvalid) ?? undefined,
+          instrumental: isInstrumental(rec) ?? undefined,
           unaired: neverAired,
           source: c._source || null,
           // Cosine similarity to the expected predecessor, KNN sources only.
