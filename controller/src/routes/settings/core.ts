@@ -30,7 +30,7 @@ import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
-import { firecrawlKeySource, keenableKeySource } from '../../skills/web-search.js';
+import { firecrawlKeySource, keenableKeySource, searchKeyRefusedBy } from '../../skills/web-search.js';
 import { planLlmSwap, LlmSwapError } from '../../settings/llm-swap.js';
 import { llmSwapFit } from '../../settings/llm-swap-fit.js';
 import { recentCalls } from '../../llm/log.js';
@@ -199,6 +199,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // The same answer for Firecrawl; null with a key on file means that key
         // is another provider's, and searches refuse it.
         firecrawlKeySource: firecrawlKeySource(),
+        // The keyed providers (Tavily, Brave, Firecrawl) that would refuse the
+        // key on file, so the page can warn for whichever one is picked.
+        keyRefusedBy: searchKeyRefusedBy(),
       },
       // Which writable keys (SECRET_ENV_KEYS) are present in the environment,
       // as booleans only; the UI keys its "key missing" alerts off this.

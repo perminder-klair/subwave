@@ -13,6 +13,7 @@ import { applyCustomHeadersPatch } from '../../settings/vocab.js';
 import type { EmbeddingCfg } from '../../llm/provider.js';
 import { listenbrainzApiBase } from '../../broadcast/scrobble.js';
 import { isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
+import { searchKeyMismatch } from '../../skills/search-key-policy.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -132,7 +133,16 @@ async function probeKey(
     }
     case 'SEARCH_API_KEY': {
       const provider = hint || settings.get().search?.provider || 'tavily';
+      // Brave and Tavily searches refuse a key carrying another provider's
+      // prefix, so the probe refuses it too, before any request: a Firecrawl key
+      // pasted under Tavily must not reach Tavily (search-key-policy.ts).
+      const refused = (target: string) => {
+        const mismatch = searchKeyMismatch(target, value);
+        return mismatch ? { ok: false, message: mismatch.charAt(0).toUpperCase() + mismatch.slice(1) } : null;
+      };
       if (provider === 'brave') {
+        const refusal = refused('brave');
+        if (refusal) return refusal;
         const url = new URL('https://api.search.brave.com/res/v1/web/search');
         url.searchParams.set('q', 'test');
         url.searchParams.set('count', '1');
@@ -193,6 +203,8 @@ async function probeKey(
         if (left <= 0) return { ok: false, message: 'Firecrawl key valid, but it has no credits left' };
         return { ok: true, message: `✓ Firecrawl key valid · ${left} credit${left === 1 ? '' : 's'} left` };
       }
+      const refusal = refused('tavily');
+      if (refusal) return refusal;
       const r = await fetch('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${value}` },
