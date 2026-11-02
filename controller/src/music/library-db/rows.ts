@@ -2,7 +2,7 @@
 // column as JSON is parsed here, defensively — a row written by an older schema
 // version must degrade to null rather than throw a query.
 
-import type { MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import type { ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { parseOutroVocalJson, parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
 
 export function rowToTrack(row: TrackRow): TrackRecord {
@@ -29,6 +29,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     genre: row.genre,
     durationSec: row.duration_sec,
     lastfmTags: row.lastfm_tags ? safeParseArray(row.lastfm_tags) : null,
+    lastfmTrackTagsAt: row.lastfm_track_tags_at ?? null,
     lyricExcerpt: row.lyric_excerpt,
     enrichedAt: row.enriched_at,
     moods: row.moods ? safeParseArray(row.moods) : [],
@@ -60,6 +61,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     tailStartMs: row.tail_start_ms ?? null,
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
+    explicitStatus: row.explicit_status ?? null,
   };
 }
 
@@ -187,6 +189,11 @@ export function safeParseArray(s: string): string[] {
   }
 }
 
+// The spec's values, exact. Everything else, its own '' included, is no tag.
+export function normaliseExplicitStatus(v: unknown): ExplicitStatus | null {
+  return v === 'explicit' || v === 'clean' ? v : null;
+}
+
 export function normaliseYear(y: unknown): number | null {
   if (y == null) return null;
   if (typeof y === 'number' && Number.isFinite(y)) return Math.trunc(y);
@@ -205,6 +212,7 @@ export function rowToMoodPool(row: MoodPoolRow): MoodPoolRecord {
     genres: row.genres ? safeParseArray(row.genres) : [], genre: row.genre,
     moods: row.moods ? safeParseArray(row.moods) : [], energy: row.energy ?? null,
     durationSec: row.duration_sec,
+    explicitStatus: row.explicit_status ?? null,
   };
 }
 

@@ -505,13 +505,13 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
   // Both parents assigned version 32: develop used it for tail-vocal vector
   // invalidation, while the earlier request branch used it for language
   // columns. A v32 database with those columns belongs to the latter lineage,
-  // so it still needs the tail migration before advancing to 33.
+  // so it still needs the tail migration before moving on. New schema steps
+  // keep their versions after the language step at 33.
   const trackColumns = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
   const legacyLanguageV32 = userVersion === 32 && trackColumns.has('language_primary') && trackColumns.has('languages');
-  const tailMigrationComplete =
-    userVersion > 32 || (userVersion === 32 && !legacyLanguageV32) || markTailSungVectorsOnce(d, legacyLanguageV32);
+  if (userVersion < 32 || legacyLanguageV32) markTailSungVectorsOnce(d, legacyLanguageV32);
 
-  if (userVersion < 33 && tailMigrationComplete) {
+  if (userVersion < 33) {
     // Serialize the schema check, DDL and version write. A second process can
     // have read the old user_version before waiting on this connection's lock.
     d.transaction(() => {
@@ -533,6 +533,27 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
       if (add.length) runDdl(d, add.map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`).join('\n'));
       d.pragma('user_version = 33');
     }).immediate();
+  }
+  if (userVersion < 34) {
+    // The track's own advisory tag as the music server reports it (OpenSubsonic
+    // `explicitStatus`): 'explicit', 'clean' or NULL. The walk owns it, so it
+    // stays NULL on an existing library until the next walk. Added only when
+    // missing, as above: a wound-back user_version still has the column.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('explicit_status')) runDdl(d, `ALTER TABLE tracks ADD COLUMN explicit_status TEXT;`);
+    d.pragma('user_version = 34');
+  }
+
+  if (userVersion < 35) {
+    // When Last.fm last gave a genuine answer about this song, hit or miss
+    // (music/tag-library/enrich.ts). It describes the stored lastfm_tags, so
+    // NULL means the row is owed a lookup while the setting is on. Added only
+    // if missing, for a database wound back below this step (see 28).
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('lastfm_track_tags_at')) {
+      runDdl(d, `ALTER TABLE tracks ADD COLUMN lastfm_track_tags_at TEXT;`);
+    }
+    d.pragma('user_version = 35');
   }
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
@@ -674,9 +695,9 @@ export const TAIL_SUNG_VECTORS_SQL = `UPDATE tracks SET text_vector_dirty = 1
 // EMBED_TEXT_VERSION bump: only those rows are paid for, on the next tag run, with no
 // banner and nothing for an operator to do. It covers what is stored at the upgrade;
 // a measurement landing after its vector is a separate gap (music.md). A stale word in
-// a vector that still works is no reason to stop a station, so a failure warns and
-// leaves user_version behind for the next open, with nothing half marked. Locked before
-// the recheck, because another opener may have finished while this one waited.
+// a vector that still works is no reason to stop a station, so a failure warns, with
+// nothing half marked, and the later schema steps still run. Locked before the recheck,
+// because another opener may have finished while this one waited.
 function markTailSungVectorsOnce(d: Database.Database, forceVersion32 = false): boolean {
   try {
     return d.transaction(() => {
@@ -699,7 +720,7 @@ function markTailSungVectorsOnce(d: Database.Database, forceVersion32 = false): 
   } catch (err) {
     console.warn(
       `[library-db] tail vocal re-embed marks not set (${(err as Error).message}); ` +
-        'similarity keeps working, and the next open retries',
+        'similarity keeps working on the old text',
     );
     return false;
   }

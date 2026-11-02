@@ -35,6 +35,7 @@ import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-cl
 import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
 import { RequestIdentificationMiss } from '../broadcast/dj-agent/breaker.js';
 import { isWebSearchProviderError } from '../skills/web-search.js';
+import { heldBackFromShow } from '../music/explicit-policy.js';
 
 export const router = express.Router();
 
@@ -166,11 +167,16 @@ function pruneRequests() {
   }
 }
 
+// A clean show's rule inside every draw, so a draw lands on what can air and
+// the refusal below is left for an ask with nothing else to offer. Silent:
+// heldBackForShow is the one that says so in the booth log.
+const heldBack = (song: any) => heldBackFromShow(song, settings.resolveActiveShow());
+
 // The shortcut shares identity lookup. Seed/queued tracks are excluded; recent
 // plays retain the upstream soft two-hour preference.
 async function pickMoreByArtist(artistName: string, recentIds: Set<string>, seedId?: string | null) {
   const result = await resolveDirectRequest({ artist: artistName }, {
-    catalog: subsonic, recentIds: new Set<string>(), queuedIds: queue.queuedIds(), currentId: seedId,
+    catalog: subsonic, recentIds: new Set<string>(), queuedIds: queue.queuedIds(), currentId: seedId, heldBack,
     choose: songs => {
       const fresh = songs.filter(song => !recentIds.has(song.id));
       const pool = fresh.length ? fresh : songs;
@@ -190,7 +196,7 @@ async function pickSimilarToTrack(reference, recentIds: Set<string>) {
   const exclude = new Set(recentIds);
   exclude.add(id);
   const pickFresh = (songs) => {
-    const list = (songs || []).filter((s) => s?.id && !exclude.has(s.id));
+    const list = (songs || []).filter((s) => s?.id && !exclude.has(s.id) && !heldBack(s));
     if (list.length === 0) return null;
     return list[Math.floor(Math.random() * list.length)];
   };
@@ -303,6 +309,20 @@ function withWaitNotice(ack: string | null | undefined, trackId: string | null |
   return `${ack}${requestWaitClause({ waitSec: queue.airForecastSec(queue.upcoming[idx]), blockLabel })}`;
 }
 
+// A clean show holds a track tagged explicit back from listeners too. The draws
+// already go around one (heldBack), so what reaches this is an ask with nothing
+// else to offer. Checked before the intro is written, and declined by the caller
+// with the same not-found copy as the blocklist, so the reason does not leak. The
+// agent path never gets here: its scope hides these tracks from the model. Judged
+// on the show on air now, and an operator's own push does not come through this
+// route.
+function heldBackForShow(track: any): boolean {
+  const show = settings.resolveActiveShow();
+  if (!heldBackFromShow(track, show)) return false;
+  queue.log('blocked', `${track?.title} — ${track?.artist} (request held back: tagged explicit, clean show "${show?.name}")`);
+  return true;
+}
+
 // A comparison ("something like Michael Jackson", "anything like this",
 // "similar") opens the similar-to-current rung. Never a bare "like": "I'd
 // like X by Y" names X, and Y's catalogue answers a miss better.
@@ -401,6 +421,11 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       if (pick) entry.pickSource = 'more-like-this:similar';
     }
     if (!pick) {
+      return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
+    }
+    if (heldBackForShow(pick)) {
+      entry.pick = pick;
+      entry.pickSource = `${entry.pickSource}:explicit`;
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
     // The fallback can land on a different artist; phrase the ack from the pick.
@@ -844,6 +869,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     exactOnly: explicitNamedRequest || explicitArtistOnlyRequest || likelyShortTitle || exactTitleOnlyRequest || forcedNamedTitle
       || Boolean(matched.releaseContext) || Boolean(matched.similarTo),
     signal,
+    heldBack,
     moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },
     languageSongs: async language => {
       await library.load();
@@ -965,6 +991,12 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     const ack = selection.outcome === 'cooldown' ? queue.cooldownAck(pick.id, pick.title || '') : queue.dedupAck(pick.id);
     session.appendTurn({ role: 'dj', kind: 'request', text: ack, meta: { trackId: pick.id, requester } });
     return resolved({ ack, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
+  }
+  if (heldBackForShow(pick)) {
+    entry.pick = pick;
+    entry.outcome = 'no-match';
+    entry.pickSource = `${pickSource}:explicit`;
+    return failed(sorryNoMatch(requester));
   }
   queue.log('request', `resolved via ${pickSource} (${selection.outcome}): ${pick.title} — ${pick.artist}`);
   // Substitutions need honest fixed copy. A real match keeps the screened

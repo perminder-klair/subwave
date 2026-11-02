@@ -315,7 +315,7 @@ async function main() {
       const scopeNote = flags.rescan ? 'already-enriched tracks' : 'tracks';
       console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} ${scopeNote}`);
     }
-    await phaseEnrich(enrichIds, flags.reEnrich);
+    await phaseEnrich(enrichIds, flags.reEnrich, flags.limit);
   } else if (flags.skipEnrich) {
     console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
   }

@@ -4,10 +4,11 @@
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, restampFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
-import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
+import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
+import { keepStoredTags } from '../lastfm-tag-policy.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 import { acceptedAt, fileReplaced } from '../replaced-file-policy.js';
 
@@ -143,10 +144,7 @@ export function resolvedEraYearForTrack(id: string): number | null {
   return row ? resolvedStoredEra(row) : null;
 }
 
-function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
-  if (!before) return;
-  const after = storedEra(id);
-  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+function markTextVectorDirty(id: string): void {
   requireDb()
     .prepare(
       `UPDATE tracks SET text_vector_dirty = 1
@@ -155,8 +153,16 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
     .run(id);
 }
 
-// Existing vectors whose source text changed: an era edit, or migration 32's tail
-// verdict. They remain in the KNN index until phaseEmbed successfully replaces them.
+function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
+  if (!before) return;
+  const after = storedEra(id);
+  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+  markTextVectorDirty(id);
+}
+
+// Existing vectors whose source text changed: an era edit, (opt-in) the track's
+// Last.fm tags, or migration 32's tail verdict. They remain in the KNN index until
+// phaseEmbed successfully replaces them.
 export function textVectorDirtyIds(): string[] {
   return (requireDb()
     .prepare(
@@ -282,8 +288,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
     .prepare(
       `
       INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec,
-                          file_path, file_suffix, file_size, bit_rate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          file_path, file_suffix, file_size, bit_rate, explicit_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -322,7 +328,10 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
         file_path    = COALESCE(excluded.file_path, tracks.file_path),
         file_suffix  = COALESCE(excluded.file_suffix, tracks.file_suffix),
         file_size    = COALESCE(excluded.file_size, tracks.file_size),
-        bit_rate     = COALESCE(excluded.bit_rate, tracks.bit_rate)
+        bit_rate     = COALESCE(excluded.bit_rate, tracks.bit_rate),
+        -- A CASE, not COALESCE: the walk must be able to clear a removed tag,
+        -- and every other writer (undefined) must leave the walked value alone.
+        explicit_status = CASE WHEN ? = 1 THEN excluded.explicit_status ELSE tracks.explicit_status END
     `,
     )
     .run(
@@ -343,6 +352,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
       file.fileSuffix,
       replaced ? storedSize : walkedSize,
       file.bitRate,
+      normaliseExplicitStatus(meta.explicitStatus),
+      meta.explicitStatus === undefined ? 0 : 1,
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);
   return replaced;
@@ -418,17 +429,79 @@ export function setManualOriginalYear(id: string, year: number | null): void {
   markTextVectorDirtyIfEraChanged(id, eraBefore);
 }
 
+// The stamp describes the stored list, so a write that replaces the list clears
+// it and the row is owed a lookup again: with the opt-in off, a re-enrich puts
+// the artist-only list back, and turning it on later has to see that. A station
+// that never turned it on has no stamps, so this changes nothing there.
 export function upsertTrackEnrichment(id: string, enrich: TrackEnrichment): void {
+  const lastfmTags = enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null;
   requireDb()
     .prepare(
-      `UPDATE tracks SET lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ? WHERE id = ?`,
+      `UPDATE tracks SET
+         lastfm_track_tags_at = CASE WHEN lastfm_tags IS ? THEN lastfm_track_tags_at END,
+         lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ?
+       WHERE id = ?`,
     )
     .run(
-      enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null,
+      lastfmTags,
+      lastfmTags,
       enrich.lyricExcerpt ?? null,
       new Date().toISOString(),
       id,
     );
+}
+
+// Tracks still owed a track.getTopTags lookup. Not scoped to the tagger's
+// untagged/enriched sets, for the same reason as idsNeedingOriginalYear. A row
+// with no artist or title can't be asked about, so it is never owed.
+export function idsNeedingLastfmTrackTags(): string[] {
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks
+          WHERE lastfm_track_tags_at IS NULL
+            AND TRIM(COALESCE(artist, '')) <> ''
+            AND TRIM(COALESCE(title, '')) <> ''`,
+      )
+      .all() as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+// The one write of a track-aware Last.fm list, shared by the bulk pass and the
+// retag route. A genuine answer stamps the row, hit or miss, and replaces the
+// list if it has tags on it: one with none says nothing about a list that may
+// have come from Navidrome. A row's first answer also keeps what the row already
+// held (keepStoredTags): only a row that has been answered holds its own old
+// tags, which are the ones to let go of. Anything else stamps nothing and never
+// costs a row the list it has, so an outage leaves the library as it found it; a
+// row with no list takes what did come back, so a new track isn't embedded bare.
+// Only a real
+// change touches the list or dirties the vector: `lastfm_tags` is in the search
+// keys' trigger, and the embed text is built from this exact order. Returns the
+// stored list.
+export function recordLastfmTrackTags(
+  id: string,
+  lookup: { tags: string[]; answered: boolean },
+): string[] | null {
+  const d = requireDb();
+  const row = d.prepare(`SELECT lastfm_tags, lastfm_track_tags_at FROM tracks WHERE id = ?`).get(id) as
+    | Pick<TrackRow, 'lastfm_tags' | 'lastfm_track_tags_at'>
+    | undefined;
+  if (!row) return null;
+  const stored = row.lastfm_tags ? safeParseArray(row.lastfm_tags) : [];
+  const replaces = lookup.answered && lookup.tags.length > 0;
+  const next = replaces && !row.lastfm_track_tags_at
+    ? keepStoredTags(lookup.tags, stored)
+    : replaces || stored.length === 0 ? lookup.tags : stored;
+  if (JSON.stringify(next) !== JSON.stringify(stored)) {
+    d.prepare(`UPDATE tracks SET lastfm_tags = ? WHERE id = ?`)
+      .run(next.length ? JSON.stringify(next) : null, id);
+    markTextVectorDirty(id);
+  }
+  if (lookup.answered) {
+    d.prepare(`UPDATE tracks SET lastfm_track_tags_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+  }
+  return next.length ? next : null;
 }
 
 export function upsertTrackTags(id: string, tags: TagWrite): void {

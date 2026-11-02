@@ -5,7 +5,7 @@ import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
 import { SQL_HAS_MOODS, SQL_NO_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
-import type { EnergyValue, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
+import type { EnergyValue, ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
 import { rowToMoodPool, rowToEnergyPool, safeParseArray } from './rows.js';
 
 // Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
@@ -38,7 +38,7 @@ export function ruleMatchRows(): Array<{
 }
 
 const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artist_id,
-  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec`;
+  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec, t.explicit_status`;
 
 export interface LanguagePoolRecord {
   id: string;
@@ -366,6 +366,8 @@ export function candidateFilterTracks(): Array<{
   // For the minimum-track-length floor (#1573); without this column every row
   // reads as unknown length and the funnel over-counts.
   durationSec: number | null;
+  // Carried, so a clean show's walk over this whole projection is no per-row read.
+  explicitStatus: ExplicitStatus | null;
 }> {
   type CandidateFilterRow = {
     id: string;
@@ -383,10 +385,11 @@ export function candidateFilterTracks(): Array<{
     vocal_ranges_json: string | null;
     tail_vocal_ranges_json: string | null;
     duration_sec: number | null;
+    explicit_status: ExplicitStatus | null;
   };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
-    vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json
+    vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
     FROM tracks`).all() as CandidateFilterRow[];
   return rows.map((row) => ({
     id: row.id,
@@ -406,6 +409,7 @@ export function candidateFilterTracks(): Array<{
     ...parseVocalRangesJson(row.vocal_ranges_json),
     ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
     durationSec: row.duration_sec ?? null,
+    explicitStatus: row.explicit_status ?? null,
   }));
 }
 

@@ -2,12 +2,13 @@ import * as library from './library.js';
 import * as settings from '../settings.js';
 import * as subsonic from './subsonic.js';
 import { applyStrictLocks, hasEraBound, type VocalMode } from './show-filter.js';
+import { excludesExplicit, withoutExplicit } from './explicit-policy.js';
 import type { VocalEvidence } from './lyric-vocal.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor } from './track-floor.js';
 import { resolveExcludedPlaylistIds, resolveShowPlaylistPool } from './show-playlist.js';
 
-export type Candidate = { id?: string; title?: string | null; artist?: string | null; year?: number | null; originalYear?: number | null; isCompilation?: boolean | null; yearUntrusted?: boolean | null; genres?: string[] | null; genre?: string | null; moods?: string[] | null; audioMoods?: string[] | null; energy?: string | null; duration?: number | null; durationSec?: number | null } & VocalEvidence;
+export type Candidate = { id?: string; title?: string | null; artist?: string | null; year?: number | null; originalYear?: number | null; isCompilation?: boolean | null; yearUntrusted?: boolean | null; genres?: string[] | null; genre?: string | null; moods?: string[] | null; audioMoods?: string[] | null; energy?: string | null; duration?: number | null; durationSec?: number | null; explicitStatus?: string | null } & VocalEvidence;
 type Locks = { genres: string[]; eras: Array<{ fromYear?: number | null; toYear?: number | null }>; moods: string[]; energies: string[]; vocals: VocalMode | null };
 export interface ShowCandidateDiagnostic { strict: boolean; library: { indexed: number; matchingFilters: number; afterExclusions: number; effective: number }; playlist: null | { total: number; matchingFilters: number; afterExclusions: number; effective: number }; warnings: string[] }
 export type CandidateCoverage = { mood: boolean; energy: boolean; vocal: boolean };
@@ -43,8 +44,10 @@ export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, 
   // It does NOT move the funnel's INPUT figures: `library.indexed` counts the
   // indexed library and `playlist.total` the playlist. The floor's effect shows
   // up as the drop to the steps below.
-  const libraryPool = applyTrackFloor(applyKnownTrackCeiling(libraryRows, maxTrackSec), minTrackSec, { starve: true });
-  const playlistPool = playlistRows ? applyTrackFloor(applyKnownTrackCeiling(playlistRows, maxTrackSec), minTrackSec, { starve: true }) : null;
+  // A clean show's explicit filter is the same kind of step, ahead of it.
+  const airable = (rows: Candidate[]) => applyTrackFloor(applyKnownTrackCeiling(withoutExplicit(rows, excludesExplicit(show)), maxTrackSec), minTrackSec, { starve: true });
+  const libraryPool = airable(libraryRows);
+  const playlistPool = playlistRows ? airable(playlistRows) : null;
   const libraryFiltered = filtered(libraryPool, locks);
   const playlistFiltered = playlistPool ? filtered(playlistPool, locks) : null;
   const libraryEffective = exclude(strict ? libraryFiltered : libraryPool, excludedIds);
@@ -86,5 +89,12 @@ export async function diagnoseShowCandidates(show: any): Promise<ShowCandidateDi
   const maxTrackSec = settings.effectiveTrackLengthLimits(show).selectionMaxSec;
   if (maxTrackSec) warnings.push(`Tracks with known duration above ${maxTrackSec}s are excluded. Unknown durations pass. An empty eligible pool stays empty; the station relies on its dead-air safety.`);
   if (minTrackSec) warnings.push(`Minimum track length is ${minTrackSec}s, so shorter tracks are excluded from the counts below. If that leaves nothing, the station still plays: the pool picker and the offline fallback both keep going rather than go quiet.`);
+  // The count alone cannot tell "held back nothing" from "nothing to hold back".
+  if (excludesExplicit(show)) {
+    const tagged = libraryRows.length - withoutExplicit(libraryRows, true).length;
+    warnings.push(tagged
+      ? `${tagged} library track${tagged === 1 ? ' is' : 's are'} tagged explicit and held back from the counts below. Untagged tracks still count.`
+      : 'No library track is tagged explicit yet, so most tracks will pass. Tags are only read when you run Reconcile with Navidrome on the Library page: it does not run by itself.');
+  }
   return buildShowCandidateDiagnostic({ show, libraryRows, playlistRows: playlistPool?.tracks ?? null, excludedIds, locks, minTrackSec, maxTrackSec, warnings });
 }

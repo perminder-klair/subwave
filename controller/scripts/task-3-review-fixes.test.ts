@@ -54,7 +54,7 @@ test('upgrading a version-29 library adds language columns without losing rows',
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((raw().pragma('user_version', { simple: true }) as number), 33);
+  assert.equal((raw().pragma('user_version', { simple: true }) as number), 35);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
   assert.equal(db.getTrack('spanish')?.title, 'Uno');
@@ -69,7 +69,7 @@ test('a version-32 library from develop gets the language columns in version 33'
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 33);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
 });
@@ -84,7 +84,7 @@ test('a version-30 language library repairs later tables and retains its languag
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 33);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
   assert.ok(requireDb().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lyrics_external'").get());
@@ -109,7 +109,7 @@ test('concurrent version-32 opens serialize the language-column migration', asyn
     const {requireDb}=await import(${JSON.stringify(handleUrl)});
     const columns=new Set(requireDb().prepare('PRAGMA table_info(tracks)').all().map(row=>row.name));
     if(!columns.has('language_primary')||!columns.has('languages')) throw new Error('language columns missing');
-    if(requireDb().pragma('user_version',{simple:true})!==33) throw new Error('schema version is not 33');
+    if(requireDb().pragma('user_version',{simple:true})!==35) throw new Error('schema version is not 35');
     db.close();`;
   const run = () => new Promise<string>((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], { env: process.env });
@@ -122,7 +122,7 @@ test('concurrent version-32 opens serialize the language-column migration', asyn
 
   await Promise.all(Array.from({ length: 12 }, run));
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 33);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
 });

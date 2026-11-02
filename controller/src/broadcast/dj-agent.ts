@@ -16,6 +16,7 @@ import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary, type CandidateLike } from '../music/recency.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
+import { excludesExplicit } from '../music/explicit-policy.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
@@ -445,6 +446,8 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
     // paths cannot disagree about how short is too short.
     minTrackSec,
     maxTrackSec,
+    // A clean show. Like the floor, not gated on `strict`.
+    excludeExplicit: excludesExplicit(activeShow),
     playlistLock,
     playlistTracks,
     // A strict playlist or a prepared episode already names its own source.
@@ -1817,10 +1820,11 @@ async function runRequestViaAgent(queue: any, { requester, text, signal, introBu
 
     // A request runs with recency only — no show locks. An explicit listener
     // ask wins over the show's strict filters, which is why the scope stops
-    // here rather than being built from the active show. requestText lets
-    // searchLibrary find what the listener named however the model words its
-    // query (#2195).
-    const scope = pickerScope({ recentIds, requestText: text });
+    // here rather than being built from the active show. A clean show is the
+    // one exception: the model never sees what the route would refuse.
+    // requestText lets searchLibrary find what the listener named however the
+    // model words its query (#2195).
+    const scope = pickerScope({ recentIds, requestText: text, excludeExplicit: excludesExplicit(settings.resolveActiveShow()) });
     const run = await requestAgent.run({
       messages,
       scope,
