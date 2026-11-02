@@ -71,6 +71,8 @@ beforeEach(() => {
 });
 
 const version = () => db.requireDb().pragma('user_version', { simple: true });
+// Every migration after 32 runs on the same open, so a full open ends at the newest one.
+const LATEST = 33;
 const sung = (ms: number) => [{ startMs: 200_000, endMs: 200_000 + ms }];
 const outro = (vocalRanges?: unknown) => JSON.stringify({
   startMs: 180_000, ending: 'fade', ...(vocalRanges === undefined ? {} : { vocalRanges }),
@@ -116,7 +118,7 @@ test('a station with no tail measurements gains nothing and pays nothing', async
 
   await upgrade();
 
-  assert.equal(version(), 32);
+  assert.equal(version(), LATEST);
   assert.deepEqual(db.textVectorDirtyIds(), [], '0 rows dirty');
   assert.deepEqual(ids.map(id => textOf(id)), before, 'byte-identical text');
   await phaseEmbed([], 8, 'plain');
@@ -187,15 +189,15 @@ test('it runs once, and a wound-back user_version only marks the same rows again
   db.close();
   await open();
   assert.deepEqual(db.textVectorDirtyIds(), [], 'an upgraded station is left alone on every later open');
-  assert.equal(version(), 32);
+  assert.equal(version(), LATEST);
 
   // A downgrade or a hand repair: every step from 28 on runs again.
   await upgrade(27);
-  assert.equal(version(), 32);
+  assert.equal(version(), LATEST);
   assert.deepEqual(db.textVectorDirtyIds(), ['reported'], 'no wider than the first time');
 });
 
-test('a failure warns, the station still opens, and the next open retries', async () => {
+test('a failure warns, the station still opens, and the later steps still run', async () => {
   seed('reported', '[]', outro(sung(15_000)));
   seed('also-sung', '[]', outro(sung(9_000)));
   db.requireDb().exec(`CREATE TRIGGER refuse_mark BEFORE UPDATE OF text_vector_dirty ON tracks
@@ -212,14 +214,16 @@ test('a failure warns, the station still opens, and the next open retries', asyn
   assert.ok(db.isOpen(), 'the station opened');
   assert.equal(db.getTrack('reported')?.title, 'reported', 'and answers reads');
   assert.ok(warnings.some(line => line.includes('disk on fire')), warnings.join('\n'));
-  assert.equal(version(), 31, 'left behind, so it is not lost');
   assert.deepEqual(db.textVectorDirtyIds(), [], 'all or nothing');
+  assert.equal(version(), LATEST, 'the steps after it ran');
 
+  // A later step has moved user_version on, so the mark is not tried again:
+  // the rows keep the text they had, which still works.
   db.requireDb().exec('DROP TRIGGER refuse_mark');
   db.close();
   await open();
-  assert.equal(version(), 32);
-  assert.deepEqual(db.textVectorDirtyIds().sort(), ['also-sung', 'reported']);
+  assert.equal(version(), LATEST);
+  assert.deepEqual(db.textVectorDirtyIds(), []);
 });
 
 test('a fresh database, with no vector table yet, migrates like any other', async () => {
@@ -227,7 +231,7 @@ test('a fresh database, with no vector table yet, migrates like any other', asyn
   seed('reported', '[]', outro(sung(15_000)));
   d.exec('DROP TABLE track_vectors');
   await upgrade();
-  assert.equal(version(), 32);
+  assert.equal(version(), LATEST);
   assert.equal(dirtyColumn('reported'), 0);
 });
 

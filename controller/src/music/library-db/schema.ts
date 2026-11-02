@@ -504,6 +504,16 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
 
   if (userVersion < 32) markTailSungVectorsOnce(d);
 
+  if (userVersion < 33) {
+    // The track's own advisory tag as the music server reports it (OpenSubsonic
+    // `explicitStatus`): 'explicit', 'clean' or NULL. The walk owns it, so it
+    // stays NULL on an existing library until the next walk. Added only when
+    // missing, as above: a wound-back user_version still has the column.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('explicit_status')) runDdl(d, `ALTER TABLE tracks ADD COLUMN explicit_status TEXT;`);
+    d.pragma('user_version = 33');
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
@@ -644,9 +654,11 @@ export const TAIL_SUNG_VECTORS_SQL = `UPDATE tracks SET text_vector_dirty = 1
 // EMBED_TEXT_VERSION bump: only those rows are paid for, on the next tag run, with no
 // banner and nothing for an operator to do. It covers what is stored at the upgrade;
 // a measurement landing after its vector is a separate gap (music.md). A stale word in
-// a vector that still works is no reason to stop a station, so a failure warns and
-// leaves user_version behind for the next open, with nothing half marked. Locked before
-// the recheck, because another opener may have finished while this one waited.
+// a vector that still works is no reason to stop a station, so a failure warns, with
+// nothing half marked, and the steps after it still run. They move user_version past
+// 32, so a failed mark is final: those rows keep the text they had, which still works.
+// In the race this lock is for, the opener that won has marked them. Locked before the
+// recheck, because another opener may have finished while this one waited.
 function markTailSungVectorsOnce(d: Database.Database): void {
   try {
     d.transaction(() => {
@@ -667,7 +679,7 @@ function markTailSungVectorsOnce(d: Database.Database): void {
   } catch (err) {
     console.warn(
       `[library-db] tail vocal re-embed marks not set (${(err as Error).message}); ` +
-        'similarity keeps working, and the next open retries',
+        'similarity keeps working on the old text',
     );
   }
 }

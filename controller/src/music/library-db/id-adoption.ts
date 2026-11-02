@@ -24,6 +24,7 @@ const NEVER_WRITTEN = ['id', 'genre'];
 const WALK_OWNED = [
   'title', 'artist', 'album', 'album_id', 'artist_id', 'year',
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
+  'explicit_status',
   ...SEARCH_KEY_DDL.columns,
   // The file as Navidrome reports it (walkFileInfo): the new id's own walk
   // writes them, and an old id's path may name a file that moved.

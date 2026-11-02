@@ -62,7 +62,7 @@ test('public pools preserve payloads and required acoustic values', () => {
   const mood = library.songsByMood('reflective').find(r => r.id === 'payload');
   assert.deepEqual(mood, { id: 'payload', title: 'payload', artist: 'Artist', album: 'Album',
     albumId: 'album', artistId: 'artist', year: 2000, genres: ['Rock'], genre: 'Rock',
-    moods: ['reflective'], energy: 'low', durationSec: 180 });
+    moods: ['reflective'], energy: 'low', durationSec: 180, explicitStatus: null });
   const energy = library.songsByEnergy('low').find(r => r.id === 'payload');
   assert.deepEqual(energy, { ...mood, originalYear: 1990, isCompilation: true,
     yearUntrusted: true, audioMoods: ['reflective', 'Custom'], bpm: 120, musicalKey: '8A',
@@ -201,7 +201,7 @@ test('v26 backfill tolerates malformed sources, rolls back failed DDL and restor
   for (const backup of [before, after]) {
     await db.restoreFromFile(backup);
     await db.open({ embeddingDim: 3, adoptStoredDim: true });
-    assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 32);
+    assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 33);
     assert.deepEqual(ids('valid'), ['malformed']);
     noOrphans();
   }
