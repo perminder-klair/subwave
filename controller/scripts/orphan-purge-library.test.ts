@@ -39,41 +39,74 @@ const META = { title: 'Song', artist: 'A', album: 'B', duration: 200 };
 db.upsertTrackMeta('keep', META);
 db.upsertTrackAnalysis('keep', { bpm: 120, musicalKey: 'Am', stemsAttempted: true });
 
+// The analyzer's own tail-meta.json: the decoded duration the stems were cut
+// from, which a release compares with the returning row's (META's 200 s).
+const tailMeta = (durationSec = META.duration) =>
+  JSON.stringify({ tail_start_sec: durationSec - 30, duration_sec: durationSec });
+
 function seedStems(id: string, windows: ReadonlyArray<'head' | 'tail'>) {
   const dir = join(ROOT, id);
   mkdirSync(dir, { recursive: true });
   for (const w of windows) {
     for (const s of cache.STEM_NAMES) writeFileSync(cache.stemPath(id, w, s), 'x'.repeat(64));
   }
-  if (windows.includes('tail')) writeFileSync(join(dir, 'tail-meta.json'), '{}');
+  if (windows.includes('tail')) writeFileSync(join(dir, 'tail-meta.json'), tailMeta());
   const t = new Date(T0 - 2 * DAY);
   utimesSync(dir, t, t);
 }
 
 // A track that had stems, left the library, and came back inside the grace:
-// its row was pruned, so the row it comes back with is a new one.
-async function leaveAndReturn(id: string, windows: ReadonlyArray<'head' | 'tail'>, day: number) {
+// its row was pruned, so the row it comes back with is a new one. `back` is
+// what the walk finds at that path: the same file unless a test says otherwise.
+async function leaveAndReturn(id: string, windows: ReadonlyArray<'head' | 'tail'>, day: number, back = META) {
   db.upsertTrackMeta(id, META);
   db.upsertTrackAnalysis(id, { bpm: 120, musicalKey: 'Am', stemsAttempted: true });
   seedStems(id, windows);
   db.pruneMissingTracks(new Set(['keep']));
   await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now: T0 + day * DAY });
   assert.ok(existsSync(join(QU, id)), 'quarantined');
-  db.upsertTrackMeta(id, META);
-  const rep = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now: T0 + (day + 1) * DAY });
-  assert.deepEqual(rep.released, [id]);
+  db.upsertTrackMeta(id, back);
+  return purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now: T0 + (day + 1) * DAY });
 }
 
 test('a released dir with both windows complete is stamped, so the stem backfill leaves it alone', async () => {
   const id = 'back-complete';
-  await leaveAndReturn(id, ['head', 'tail'], 10);
+  assert.deepEqual((await leaveAndReturn(id, ['head', 'tail'], 10)).released, [id]);
   assert.equal(db.needsStemsIds().includes(id), false);
 });
 
-test('a released dir missing a window is not stamped: the backfill still owes it stems', async () => {
+test('a head-only dir is held: with no tail-meta.json nothing proves it is the same audio, and the backfill still owes it stems', async () => {
   const id = 'back-head-only';
-  await leaveAndReturn(id, ['head'], 20);
+  const rep = await leaveAndReturn(id, ['head'], 20);
+  assert.deepEqual(rep.released, []);
+  assert.equal(rep.mismatchedCount, 1);
+  assert.ok(existsSync(join(QU, id)), 'still quarantined');
   assert.equal(db.needsStemsIds().includes(id), true);
+  rmSync(join(QU, id), { recursive: true, force: true });
+});
+
+test('a different recording back at the same path is never handed the old stems (#2224)', async () => {
+  // Navidrome derives the id from the path, so the new file returns under the
+  // old id, on a new row with no stored size for the replaced-file check.
+  const id = 'back-other-recording';
+  const rep = await leaveAndReturn(id, ['head', 'tail'], 25, { ...META, title: 'Song (live)', duration: 312 });
+  assert.deepEqual(rep.released, []);
+  assert.equal(rep.mismatchedCount, 1);
+  assert.ok(existsSync(join(QU, id)), 'still quarantined');
+  assert.ok(!existsSync(join(ROOT, id)), 'the live slot stays free for stems of its own');
+  assert.equal(await cache.hasWindow(id, 'head'), false, 'a blend finds no stems for it');
+  assert.equal(db.needsStemsIds().includes(id), true, 'not stamped: the backfill still owes it stems');
+  // Held on every pass until it ages out, like a superseded copy.
+  const later = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now: T0 + 33 * DAY });
+  assert.deepEqual(later.released, []);
+  assert.ok(!existsSync(join(QU, id)), 'deleted once past the grace');
+});
+
+test('the same recording back inside the tolerance is released: the row holds whole seconds', async () => {
+  const id = 'back-rounded';
+  const rep = await leaveAndReturn(id, ['head', 'tail'], 35, { ...META, duration: 201 });
+  assert.deepEqual(rep.released, [id]);
+  assert.equal(db.needsStemsIds().includes(id), false);
 });
 
 test('a release keeps the track\'s analysis failure history', async () => {
@@ -99,7 +132,7 @@ test('a release does not save the separation: the new row is analysed, and analy
   // pass takes it (needsAnalysisIds), and stems ride along for an existing dir
   // whatever stems_at says (stemWriteDecision, allocateStems in analyze.ts).
   const id = 'back-analysed';
-  await leaveAndReturn(id, ['head', 'tail'], 40);
+  assert.deepEqual((await leaveAndReturn(id, ['head', 'tail'], 40)).released, [id]);
   assert.equal(db.needsAnalysisIds().includes(id), true);
   assert.equal(cache.stemWriteDecision({ cacheOn: true, slotsLeft: 0, hasExistingDir: true }).want, true);
   rmSync(join(ROOT, id), { recursive: true, force: true });
@@ -214,7 +247,7 @@ test('an old id already quarantined comes back for the rename to find', async ()
   for (const w of ['head', 'tail']) {
     for (const s of cache.STEM_NAMES) writeFileSync(join(dir, `${w}-${s}.flac`), 'x'.repeat(64));
   }
-  writeFileSync(join(dir, 'tail-meta.json'), '{}');
+  writeFileSync(join(dir, 'tail-meta.json'), tailMeta());
   const now = T0 + 90 * DAY;
   const rep = await purge.runOrphanPurge({ knownIds: db.allTrackIdsOrdered(), confirm: true, now });
   assert.ok(rep.released.includes(old));
