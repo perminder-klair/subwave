@@ -31,6 +31,9 @@ export interface TrackRecord {
   genre: string | null;
   durationSec: number | null;
   lastfmTags: string[] | null;
+  // Last genuine track.getTopTags answer, hit or miss. Set only while the opt-in
+  // is on; null = owed a lookup then.
+  lastfmTrackTagsAt: string | null;
   lyricExcerpt: string | null;
   enrichedAt: string | null;
   moods: string[];
@@ -59,6 +62,10 @@ export interface TrackRecord {
   keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
   // Zero-shot audio moods; [] until scored. Complement the LLM `moods`.
   audioMoods: string[];
+  // Zero-shot sound descriptors; [] until scored or selected. CLAP guesses, for
+  // the operator's dossier only: never add this to a projection or the embed
+  // text, and read it through audio-descriptors.usableDescriptors.
+  audioDescriptors: string[];
   // null = no outro signal.
   outro: TrackOutro | null;
   // The tail's half of the instrumental verdict, read off outro_json's raw key so
@@ -141,6 +148,7 @@ export interface TrackRow {
   genre: string | null;
   duration_sec: number | null;
   lastfm_tags: string | null;
+  lastfm_track_tags_at: string | null;
   lyric_excerpt: string | null;
   enriched_at: string | null;
   moods: string | null;
@@ -165,6 +173,7 @@ export interface TrackRow {
   bars_json: string | null;
   key_ranges_json: string | null;
   audio_moods: string | null;
+  audio_descriptors: string | null;
   outro_json: string | null;
   lead_silence_ms: number | null;
   tail_silence_ms: number | null;
