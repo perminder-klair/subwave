@@ -107,6 +107,19 @@ import {
 } from './skip-policy.js';
 import type { SkipRefusalReason } from '../schemas/dj.js';
 import * as stemBlend from './stem-blend.js';
+import {
+  markerCutDue,
+  markerSendDue,
+  planMarkers,
+  MARKER_HARD_TOLERANCE_SEC,
+  MARKER_MIN_PLAY_SEC,
+  type MarkerKind,
+  type MarkerOutcome,
+  type MarkerPlan,
+  type MarkerRow,
+  type QueueMarker,
+} from './marker-policy.js';
+import { clockDisplay, zonedParts } from '../time.js';
 import type {
   DjLogEntry,
   NowPlaying,
@@ -423,6 +436,7 @@ class Queue {
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
   _transitionsSinceSfx = 999;  // DJ-mode transition-FX spacing counter (see drainToLiquidsoap)
+  _hourMarkerCuts = new Set<string>(); // hard hour markers already cut for, so a tick never cuts the anchor itself
   _lastBed: string | null = null;      // last bed aired — anti-repeat for bed-policy.pickBed
   _lastBedStartedAt = 0;               // bed-playing.json's last-seen startedAt — the edge onBedStarted fires on
   _recentEffects: string[] = [];  // the model's last few transition CHOICES — anti-streak guard + fed back into the pick event turn
@@ -1167,6 +1181,9 @@ class Queue {
     const keep = this.upcoming.filter(i => i.sent || !blocklist.isBlocked(i.track));
     const dropped = this.upcoming.length - keep.length;
     if (dropped > 0) {
+      for (const item of this.upcoming) {
+        if (!keep.includes(item)) this.passHourMarkerOn(item, 'is now blocked', (i) => keep.includes(i));
+      }
       this.upcoming = keep;
       this.log('blocked', `purged ${dropped} upcoming track${dropped === 1 ? '' : 's'} now blocked by the never-play blocklist`);
       this.persist();
@@ -1838,22 +1855,11 @@ class Queue {
     maxDurationSec: number | null,
   ): showBoundary.BoundaryCut | null {
     if (item.requestedBy) return null;
-    const untilAirs = this.remainingUntilItemAirs(item);
-    if (untilAirs == null) return null;
-    const startMs = Date.now() + (untilAirs + this.hiddenDelayBeforeItemAirs(item)) * 1000;
+    const span = this.plannedAirSpan(item, durSec, trim, maxDurationSec);
+    if (!span) return null;
+    const { startMs, playableSec: playable } = span;
     const fading = showBoundary.fadeAtShowEndActive(new Date(startMs));
     if (!fading && !anyCleanShow(settings.get().shows)) return null;
-    // The span that would actually air, after the cap and the trimmed tail —
-    // never the tagged duration. A track the #447 cap already stops before the
-    // boundary has no overshoot to cut, and asking about the raw length would
-    // invent one.
-    const early = positiveCues([maxDurationSec, trim.cueOutSec]);
-    const playable = playableDurationSec(
-      durSec,
-      early.length ? Math.min(...early) : null,
-      trim.cueInSec,
-    );
-    if (playable == null || playable <= 0) return null;
     const boundaryMs = showBoundary.nextShowBoundaryMs(startMs, playable);
     // A tagged pick that started in time to be the outgoing show's still may not
     // run on into a clean show, whatever the outgoing show says about fading.
@@ -1869,6 +1875,25 @@ class Queue {
       this.log('mix', `show boundary fade: "${item.track.title}" cued out at ${cut.cueOutSec}s — it would have run ${Math.round(cut.overshootSec)}s into the next show`);
     }
     return cut;
+  }
+
+  // When ITEM will start, and the seconds of it that would actually air: after
+  // the cap and the trimmed tail, never the tagged duration. A track the #447
+  // cap already stops before a boundary has no overshoot to cut, and asking
+  // about the raw length would invent one. Null when either is unknown. Both
+  // drain-time cuts (the show-boundary fade and a hard hour marker) read it.
+  private plannedAirSpan(
+    item: QueueItem,
+    durSec: number,
+    trim: { cueInSec: number | null; cueOutSec: number | null },
+    maxDurationSec: number | null,
+  ): { startMs: number; playableSec: number } | null {
+    const untilAirs = this.remainingUntilItemAirs(item);
+    if (untilAirs == null) return null;
+    const early = positiveCues([maxDurationSec, trim.cueOutSec]);
+    const playable = playableDurationSec(durSec, early.length ? Math.min(...early) : null, trim.cueInSec);
+    if (playable == null || playable <= 0) return null;
+    return { startMs: Date.now() + (untilAirs + this.hiddenDelayBeforeItemAirs(item)) * 1000, playableSec: playable };
   }
 
   // Stamp (or un-stamp) an armed boundary cut on the item, and return the cue
@@ -2086,6 +2111,9 @@ class Queue {
       return;
     }
     this.senderBusy = true;
+    // What a forced drain is for: the head it was raised for. Only that item
+    // may skip an hour-marker hold; an anchor held behind it keeps waiting.
+    const forcedHead = force ? this.upcoming.find(i => !i.sent) ?? null : null;
     try {
       while (true) {
         // A successor also contributes audio to a rendered seam. Validate the
@@ -2094,9 +2122,17 @@ class Queue {
         const item = this.upcoming.find(i => !i.sent);
         if (!item) break;
         if (await this.dropAboveCeiling(item)) continue;
+        // Hour markers: a row that would start after its marker goes before it
+        // is sent, and an anchor that would start early waits, so the auto
+        // playlist fills until it can join on time.
+        const markerStep = await this.hourMarkerDrainStep(item, force && item === forcedHead);
+        if (markerStep === 'dropped') continue;
+        if (markerStep === 'hold') break;
 
         const idx = this.upcoming.indexOf(item);
-        const hasSuccessor = idx >= 0 && idx + 1 < this.upcoming.length;
+        // A held anchor is not a successor: the auto playlist airs between them,
+        // so no seam may be shaped into it.
+        const hasSuccessor = idx >= 0 && idx + 1 < this.upcoming.length && !markerStep.successorHeld;
         // The clock that governs THIS item's drain is the end of the track it
         // will FOLLOW — the on-air track extended past any sent-but-unaired
         // items ahead (remainingUntilItemAirs). Without the extension, the
@@ -2104,8 +2140,10 @@ class Queue {
         // on-air clock hit zero) and every other seam lost its pair stamps —
         // caught live in the first on-air smoke test.
         // `force` is the clip-as-track recovery path (onTrackStarted's guard):
-        // never hold, but a known successor still earns its pair stamps.
-        const action = force
+        // never hold, but a known successor still earns its pair stamps. A hard
+        // anchor is sent by its release lead the same way, so the cut at its
+        // marker finds it queued behind the track it ends.
+        const action = force || markerSendDue(item.marker, Date.now())
           ? (hasSuccessor ? 'send-pair' : 'send-intrinsic')
           : drainAction({
               pairDrain: this.pairDrainActive(),
@@ -2186,8 +2224,12 @@ class Queue {
         // Revalidate before linked handoffs. Once a bed/silence is published
         // the item is committed; boundary forecasting must count its delay.
         if (await this.dropAboveCeiling(item)) continue;
-        const pauseTalkInserted = await this.maybePushPauseTalk(item);
-        if (!pauseTalkInserted) await this.maybePushBed(item);
+        // No hidden delay in front of a hard anchor: a bed or a pause-and-talk
+        // break airs before it and would push its join past the marker.
+        if (item.marker?.kind !== 'hard') {
+          const pauseTalkInserted = await this.maybePushPauseTalk(item);
+          if (!pauseTalkInserted) await this.maybePushBed(item);
+        }
         if (await this.dropAboveCeiling(item)) continue;
 
         const lengthLimits = settings.effectiveTrackLengthLimits();
@@ -2213,7 +2255,14 @@ class Queue {
         // reasons the trim is: it is one more "stop early" offset that folds
         // into the same arbitration below, and a rendered blend is mixed FROM
         // the tail this would remove, so the blend has to be told.
-        const boundaryCut = this.resolveBoundaryCut(item, itemDurSec, trim, maxDurationSec);
+        // A hard hour marker ends a track the same way, and the earlier of the
+        // two cuts wins. Requests are not exempt from it: a marker is an
+        // operator's instruction for this exact time.
+        const showCut = this.resolveBoundaryCut(item, itemDurSec, trim, maxDurationSec);
+        const markerCut = this.resolveHourMarkerCut(item, markerStep.endBy, itemDurSec, trim, maxDurationSec);
+        const boundaryCut = showCut && markerCut
+          ? (markerCut.cueOutSec < showCut.cueOutSec ? markerCut : showCut)
+          : showCut ?? markerCut;
         const boundaryCueSec = this.applyBoundaryStamps(item, boundaryCut);
 
         // Pair stamps for THIS item's own exit (the seam into its successor)
@@ -2485,7 +2534,9 @@ class Queue {
   // THIS track is the operator's intent — and the caller reports the miss
   // honestly. Never throws: a skip must not fail on its safety net.
   async commitBeforeSkip(): Promise<{ pending: boolean; committed: boolean; waitedMs: number }> {
-    if (skipPrepAction(this.upcoming.length) === 'skip-now') {
+    // A head held for its hour marker is not committed: the skip airs the
+    // next auto-playlist track, and the anchor still joins at its time.
+    if (skipPrepAction(this.upcoming.length) === 'skip-now' || this.hourMarkerHeld(this.upcoming[0])) {
       return { pending: false, committed: false, waitedMs: 0 };
     }
     const t0 = Date.now();
@@ -3802,6 +3853,7 @@ class Queue {
       const item = consumed[consumed.length - 1];
       const source = item.aiPicked ? 'ai' : 'request';
       this.current = { ...item, startedAt: new Date().toISOString(), source };
+      this.hourMarkersAired(consumed, Date.parse(this.current.startedAt!));
       // A timed-out intro pre-render is keyed by the queued item. The current
       // item is a spread clone, so carry the lifecycle across that identity
       // hand-off before airIntro tries to reuse it.
@@ -4307,6 +4359,7 @@ class Queue {
   onPushResolveFailed(item: QueueItem) {
     const idx = this.upcoming.indexOf(item);
     if (idx < 0) return;  // raced with a cancel/air between verdict and action
+    this.passHourMarkerOn(item, 'could not be played');
     this.upcoming.splice(idx, 1);
     if (item.resolveProbeId) recordPlaybackFailure({
       attemptId: item.resolveProbeId,
@@ -4586,6 +4639,7 @@ class Queue {
       }
     }
 
+    this.passHourMarkerOn(item, 'was removed');
     const idx = this.upcoming.indexOf(item);
     if (idx !== -1) this.upcoming.splice(idx, 1);
     this.log('scheduler', `${reason} removed from queue: ${item.track.title} — ${item.track.artist}`);
@@ -4667,13 +4721,171 @@ class Queue {
   // behind it, exactly as hiddenDelayBeforeItemAirs sums them. One unknown
   // length makes every later forecast unknown (null), never short.
   upcomingTiming(): { durationSec: number | null; airsInSec: number | null }[] {
-    const rows = this.upcoming.map((item) => ({
+    const rows = this.forecastRows();
+    const airs = forecastQueue(this.remainingSecOnAir(), rows);
+    return rows.map((row, n) => ({ durationSec: row.playableSec, airsInSec: airs[n] }));
+  }
+
+  // The live queue as the forecast and the hour-marker plan both read it.
+  private forecastRows(): MarkerRow[] {
+    return this.upcoming.map((item) => ({
       playableSec: this.playableSecOf(item),
       hiddenSec: this.ownHiddenDelaySec(item),
       sent: !!item.sent,
+      marker: item.marker ?? null,
     }));
-    const airs = forecastQueue(this.remainingSecOnAir(), rows);
-    return rows.map((row, n) => ({ durationSec: row.playableSec, airsInSec: airs[n] }));
+  }
+
+  // ── Hour markers (marker-policy.ts, docs/plans/hour-markers.md) ──────────
+  //
+  // The plan is recomputed from the live queue whenever something asks: the
+  // drain before each item, the watcher's cut, the /state snapshot. Nothing is
+  // cached, so a cancel, a new pick or a show change is planned around on the
+  // next tick, and a marker that passed while the controller was down is
+  // planned as late (it catches up) as soon as the on-air clock is known.
+
+  hourMarkerPlan(): MarkerPlan {
+    return planMarkers({ nowMs: Date.now(), onAirRemainingSec: this.remainingSecOnAir(), rows: this.forecastRows() });
+  }
+
+  // "07:00 hard", for the booth log.
+  hourMarkerLabel(marker: QueueMarker): string {
+    const { hour, minute } = zonedParts(new Date(marker.at));
+    return `${clockDisplay(hour, minute, settings.get().locale === 'en-US')} ${marker.kind}`;
+  }
+
+  // Pin the first queued copy of `trackId` to a time. A second marker on the
+  // same item replaces the first.
+  setHourMarker(trackId: string, at: number, kind: MarkerKind):
+    { ok: true; marker: QueueMarker; outcome: MarkerOutcome | null } | { ok: false; reason: 'not-queued' } {
+    const item = this.upcoming.find(i => i.track?.id === trackId);
+    if (!item) return { ok: false, reason: 'not-queued' };
+    const marker: QueueMarker = { id: randomBytes(6).toString('hex'), at, kind };
+    item.marker = marker;
+    const outcome = this.hourMarkerPlan().markers.find(m => m.markerId === marker.id)?.outcome ?? null;
+    this.log('scheduler', `${this.hourMarkerLabel(marker)} marker set before "${item.track.title}"${outcome ? ` (${outcome.kind})` : ''}`);
+    this.persist();
+    void this.drainToLiquidsoap();
+    return { ok: true, marker, outcome };
+  }
+
+  clearHourMarker(id: string): boolean {
+    const item = this.upcoming.find(i => i.marker?.id === id);
+    if (!item?.marker) return false;
+    this.log('scheduler', `${this.hourMarkerLabel(item.marker)} marker removed from "${item.track.title}"`);
+    delete item.marker;
+    this.persist();
+    void this.drainToLiquidsoap();
+    return true;
+  }
+
+  // Whether the plan holds this item back for its marker right now.
+  hourMarkerHeld(item: QueueItem | undefined): boolean {
+    if (!item?.marker || item.sent) return false;
+    return this.hourMarkerPlan().hold.includes(this.upcoming.indexOf(item));
+  }
+
+  // ITEM is leaving the queue without airing: its marker moves to the next item
+  // that stays (`stays`, default every other item) and carries none of its own,
+  // so a cancel, a show change or the blocklist never silently loses the time.
+  // Called BEFORE the item is removed, while its position is still known.
+  passHourMarkerOn(item: QueueItem, why: string, stays: (i: QueueItem) => boolean = (i) => i !== item) {
+    const marker = item.marker;
+    if (!marker) return;
+    delete item.marker;
+    const next = this.upcoming.slice(this.upcoming.indexOf(item) + 1).find(i => stays(i) && !i.marker);
+    if (next) {
+      next.marker = marker;
+      this.log('scheduler', `${this.hourMarkerLabel(marker)} marker moves to "${next.track.title}": "${item.track.title}" ${why}`);
+    } else {
+      this.log('scheduler', `${this.hourMarkerLabel(marker)} marker dropped: "${item.track.title}" ${why} and nothing queued after it can carry the time`);
+    }
+  }
+
+  // Booth-log how each anchor that just started kept its time. Called with the
+  // items onTrackStarted consumed; only the last one aired as matched.
+  hourMarkersAired(consumed: QueueItem[], startedAtMs: number) {
+    consumed.forEach((item, n) => {
+      const marker = item.marker;
+      if (!marker) return;
+      this._hourMarkerCuts.delete(marker.id);
+      if (n !== consumed.length - 1) return;
+      const offSec = Math.round((startedAtMs - marker.at) / 1000);
+      const how = Math.abs(offSec) <= MARKER_HARD_TOLERANCE_SEC ? 'on time'
+        : offSec > 0 ? `${offSec}s late` : `${-offSec}s early`;
+      this.log('scheduler', `${this.hourMarkerLabel(marker)} marker: "${item.track.title}" started ${how}`);
+    });
+  }
+
+  // Run every watcher tick. A hard marker's time has come and its anchor is
+  // queued next: end what is on air so the anchor starts now. This is the one
+  // place a hard marker cuts a track whose cue is already fixed (sent, on air,
+  // or an auto-playlist fill), and it needs no forecast, so an unknown clock
+  // is still cut on time.
+  maybeHourMarkerCut(skip: () => Promise<unknown> = liquidsoapControl.skipTrack) {
+    const head = this.upcoming[0];
+    const marker = head?.marker;
+    if (!marker || this._hourMarkerCuts.has(marker.id)) return;
+    if (!markerCutDue({ nowMs: Date.now(), marker, anchorSent: !!head.sent, onAirRemainingSec: this.remainingSecOnAir() })) return;
+    this._hourMarkerCuts.add(marker.id);
+    const lateSec = Math.round((Date.now() - marker.at) / 1000);
+    const onAir = this.current?.track?.title ? `"${this.current.track.title}"` : 'the track on air';
+    this.log('scheduler', `${this.hourMarkerLabel(marker)} marker: cutting ${onAir} so "${head.track.title}" starts${lateSec > MARKER_HARD_TOLERANCE_SEC ? `, ${lateSec}s after its time (catching up)` : ' on time'}`);
+    void skip().catch((err: Error) => {
+      this.log('error', `${this.hourMarkerLabel(marker)} marker cut failed: ${err.message}`);
+    });
+  }
+
+  // What the hour-marker plan means for the drain head, ITEM: drop it, hold it,
+  // or send it, with whether its successor is held (so no seam is shaped into a
+  // track that will not follow) and any time it must end by. Not private, nor
+  // is resolveHourMarkerCut: scripts/queue-marker-wiring.test.ts drives both.
+  async hourMarkerDrainStep(item: QueueItem, force: boolean): Promise<
+    'dropped' | 'hold' | { successorHeld: boolean; endBy: MarkerPlan['endBy'][number] | null }
+  > {
+    if (!this.upcoming.some(i => i.marker)) return { successorHeld: false, endBy: null };
+    const plan = this.hourMarkerPlan();
+    const idx = this.upcoming.indexOf(item);
+    if (plan.drop.includes(idx)) {
+      const anchor = plan.markers.find(m => m.anchor > idx && this.upcoming[m.anchor]?.marker?.id === m.markerId);
+      const label = anchor ? `${this.hourMarkerLabel(this.upcoming[anchor.anchor].marker!)} marker` : 'hour marker';
+      const result = await this.removeUpcomingItem(item, label);
+      if (result.ok) return 'dropped';
+    }
+    // `force` releases the head a forced drain was raised for: a clip already
+    // airing it (the clip-as-track guard) or an operator skip committing it.
+    if (!force && plan.hold.includes(idx)) return 'hold';
+    return {
+      successorHeld: plan.hold.includes(idx + 1),
+      endBy: plan.endBy.find(e => e.index === idx) ?? null,
+    };
+  }
+
+  // The cue_out that ends ITEM at a hard marker, by the show-boundary fade's
+  // own resolver, so the seam is the same plain full-buffer fade.
+  resolveHourMarkerCut(
+    item: QueueItem,
+    endBy: { atMs: number; markerId: string } | null,
+    durSec: number,
+    trim: { cueInSec: number | null; cueOutSec: number | null },
+    maxDurationSec: number | null,
+  ): showBoundary.BoundaryCut | null {
+    if (!endBy) return null;
+    const span = this.plannedAirSpan(item, durSec, trim, maxDurationSec);
+    if (!span) return null;
+    const cut = showBoundary.resolveBoundaryCueSec({
+      startMs: span.startMs,
+      cueInSec: trim.cueInSec ?? 0,
+      playableSec: span.playableSec,
+      boundaryMs: endBy.atMs,
+      toleranceSec: MARKER_HARD_TOLERANCE_SEC,
+      minPlaySec: MARKER_MIN_PLAY_SEC,
+    });
+    if (cut != null) {
+      const anchor = this.upcoming.find(i => i.marker?.id === endBy.markerId);
+      this.log('mix', `hour marker: "${item.track.title}" cued out at ${cut.cueOutSec}s so ${anchor?.marker ? `the ${this.hourMarkerLabel(anchor.marker)} marker` : 'the next track'} starts on time`);
+    }
+    return cut;
   }
 
   // Tracks played in the last `hours` hours — used by the picker to block
@@ -5183,6 +5395,9 @@ class Queue {
       this.onBedStarted();
       this.onPauseTalkStarted();
       void this.maybeAirJingleOverlay();
+      // A hard hour marker's cut is a time, not a track boundary, so it rides
+      // the tick: 1.5s is the precision it can promise.
+      this.maybeHourMarkerCut();
       // Pair-aware transitions: the deadline pick + a drain re-run every
       // tick. Drain holds are time-gated, and push() only fires the drain on
       // mutation — the clock advancing past a deadline has to re-trigger it
@@ -5228,6 +5443,14 @@ class Queue {
     const nowMs = Date.now();
     const seconds = (sec: number | null) => (sec == null ? undefined : Math.round(sec * 10) / 10);
     const timing = this.upcomingTiming();
+    // Hour markers ride their anchor with the plan's outcome for it now
+    // (on-time, waiting, early, late or unknown), so a client can warn.
+    const markerPlan = this.upcoming.some(i => i.marker) ? this.hourMarkerPlan() : null;
+    const markerOf = (item: QueueItem, n: number) => {
+      if (!item.marker) return undefined;
+      const outcome = markerPlan?.markers.find(m => m.anchor === n)?.outcome;
+      return { id: item.marker.id, at: new Date(item.marker.at).toISOString(), kind: item.marker.kind, outcome };
+    };
     return {
       current: this.current
         ? { ...mapItem(this.current), duration: seconds(this.playableSecOf(this.current)) }
@@ -5238,6 +5461,7 @@ class Queue {
         airsAt: timing[n].airsInSec == null
           ? undefined
           : new Date(nowMs + timing[n].airsInSec * 1000).toISOString(),
+        marker: markerOf(item, n),
       })),
       history: this.history.map(mapItem),
       // One operator-facing answer for the imminent FINALISED seam. Effect

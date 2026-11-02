@@ -8,6 +8,7 @@ import type { HostSpeechStamp } from '../session.js';
 import type { ClipSeamCues } from '../stem-seam.js';
 import type { TransitionEffect } from '../../settings/vocab.js';
 import type { MixDropReason } from '../../schemas/transitions.js';
+import type { QueueMarker } from '../marker-policy.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
 // `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
@@ -116,6 +117,11 @@ export interface QueueItem {
   // `index`/`size` are stamped from the PLAN, so they describe the block as it
   // was queued and do not shrink as it plays out ("3 of 11" stays "3 of 11").
   block?: { id: string; label: string; index: number; size: number };
+  // An hour marker: the time this item must start by (soft) or exactly at
+  // (hard), set by the operator with POST /dj/queue-marker. It rides the item
+  // it comes before, so it persists in queue.json and moves with it; the rules
+  // are broadcast/marker-policy.ts.
+  marker?: QueueMarker | null;
   intent?: string | null;
   introScript?: string | null;
   // Persist the one-label pass so retries/recovery cannot eat a second label
