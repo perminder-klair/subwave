@@ -8,6 +8,7 @@ import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
+import { keepStoredTags } from '../lastfm-tag-policy.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
 export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
@@ -343,9 +344,12 @@ export function idsNeedingLastfmTrackTags(): string[] {
 // The one write of a track-aware Last.fm list, shared by the bulk pass and the
 // retag route. A genuine answer stamps the row, hit or miss, and replaces the
 // list if it has tags on it: one with none says nothing about a list that may
-// have come from Navidrome. Anything else stamps nothing and never costs a row
-// the list it has, so an outage leaves the library as it found it; a row with no
-// list takes what did come back, so a new track isn't embedded bare. Only a real
+// have come from Navidrome. A row's first answer also keeps what the row already
+// held (keepStoredTags): only a row that has been answered holds its own old
+// tags, which are the ones to let go of. Anything else stamps nothing and never
+// costs a row the list it has, so an outage leaves the library as it found it; a
+// row with no list takes what did come back, so a new track isn't embedded bare.
+// Only a real
 // change touches the list or dirties the vector: `lastfm_tags` is in the search
 // keys' trigger, and the embed text is built from this exact order. Returns the
 // stored list.
@@ -354,12 +358,15 @@ export function recordLastfmTrackTags(
   lookup: { tags: string[]; answered: boolean },
 ): string[] | null {
   const d = requireDb();
-  const row = d.prepare(`SELECT lastfm_tags FROM tracks WHERE id = ?`).get(id) as
-    | Pick<TrackRow, 'lastfm_tags'>
+  const row = d.prepare(`SELECT lastfm_tags, lastfm_track_tags_at FROM tracks WHERE id = ?`).get(id) as
+    | Pick<TrackRow, 'lastfm_tags' | 'lastfm_track_tags_at'>
     | undefined;
   if (!row) return null;
   const stored = row.lastfm_tags ? safeParseArray(row.lastfm_tags) : [];
-  const next = (lookup.answered && lookup.tags.length > 0) || stored.length === 0 ? lookup.tags : stored;
+  const replaces = lookup.answered && lookup.tags.length > 0;
+  const next = replaces && !row.lastfm_track_tags_at
+    ? keepStoredTags(lookup.tags, stored)
+    : replaces || stored.length === 0 ? lookup.tags : stored;
   if (JSON.stringify(next) !== JSON.stringify(stored)) {
     d.prepare(`UPDATE tracks SET lastfm_tags = ? WHERE id = ?`)
       .run(next.length ? JSON.stringify(next) : null, id);

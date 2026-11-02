@@ -11,6 +11,7 @@ import {
   MAX_TRACK_TAGS,
   classifyTopTagsResponse,
   dropNameEchoes,
+  keepStoredTags,
   mergeCrowdTags,
 } from '../src/music/lastfm-tag-policy.js';
 import { compileRules, ruleMatches, type BlockRule } from '../src/music/blocklist-rules.js';
@@ -135,6 +136,12 @@ test('a rule can only ever match more with track tags on, never less', () => {
     }
   }
   assert.ok(held > 10000, `the grid has to exercise the property, held ${held}`);
+});
+
+test('a stored list stays behind the answer, once per fold', () => {
+  assert.deepEqual(keepStoredTags(['own', 'a0'], ['A0', 'old tail']), ['own', 'a0', 'old tail']);
+  assert.deepEqual(keepStoredTags(['a0', 'a1'], ['a0', 'a1']), ['a0', 'a1'], 'nothing moved, so nothing changes');
+  assert.deepEqual(keepStoredTags(['own'], []), ['own']);
 });
 
 // What keeps a miss from dirtying a row: the list comes out as it went in.

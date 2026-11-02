@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, beforeEach } from 'node:test';
 import express from 'express';
+import type { BlockRule } from '../src/music/blocklist-rules.js';
 import { chatCompletion } from './test-utils/llm.js';
 import { coldLoadSettings } from './test-utils/settings.js';
 import { removeTempDir } from './test-utils/temp-dir.js';
@@ -104,6 +105,7 @@ const library = await import('../src/music/library.js');
 const settings = await import('../src/settings.js');
 const lastfm = await import('../src/music/lastfm.js');
 const { createLastfmPacer } = await import('../src/music/lastfm-pacer.js');
+const { compileRules, ruleMatches } = await import('../src/music/blocklist-rules.js');
 const { selectTrackTagIds } = await import('../src/music/enrich-scope.js');
 const { phaseEnrich, backfillLastfmTrackTags } = await import('../src/music/tag-library/enrich.js');
 const { router: maintenanceRoutes } = await import('../src/routes/library/maintenance.js');
@@ -381,6 +383,35 @@ test('a pass keeps five of the song\'s own tags after the noise filter, and all 
   assert.deepEqual(row('b').lastfmTags, list);
   assert.equal(row('a').lastfmTags?.length, 15);
   assert.ok(db.textVectorDirtyIds().includes('a'));
+});
+
+// Last.fm's lists move, and a station with this off never re-reads them, so the
+// first pass is when most rows first hear a newer one. A never-play rule written
+// against what a row holds has to survive that: this is the setting going on, and
+// it must not be what unblocks a track.
+test('a row\'s first answer keeps every tag it had, so turning this on can only add', async () => {
+  seed('moved', 'Drift', 'Song', { tags: ['a0', 'a1', 'old tail'], vector: true });
+  seed('gone', 'Gone', 'Song', { tags: ['g0', 'g1'], vector: true });
+  trackReplies.set('Drift|Song', tagReply('own'));
+  trackReplies.set('Gone|Song', tagReply('solo'));
+  artistReplies.set('Drift', tagReply('a0', 'a1', 'new tail'));
+  artistReplies.set('Gone', { body: { error: 6, message: 'The artist you supplied could not be found' } });
+  const blocks = (id: string, value: string) => ruleMatches(
+    compileRules([{ id: 'r', field: 'tag', values: [value], showIds: [], addedAt: '2026-01-01' } as unknown as BlockRule])[0],
+    row(id),
+    null,
+  );
+  assert.equal(blocks('moved', 'old tail'), true);
+  assert.equal(blocks('gone', 'g0'), true);
+
+  await phaseEnrich([], false);
+
+  assert.equal(blocks('moved', 'old tail'), true);
+  assert.equal(blocks('gone', 'g0'), true);
+  assert.deepEqual(row('moved').lastfmTags, ['own', 'a0', 'a1', 'new tail', 'old tail']);
+  assert.deepEqual(row('gone').lastfmTags, ['solo', 'g0', 'g1']);
+  assert.ok(row('moved').lastfmTrackTagsAt);
+  assert.ok(row('gone').lastfmTrackTagsAt);
 });
 
 test('a failed fill holds the row back too: a stamp means the whole list is good', async () => {

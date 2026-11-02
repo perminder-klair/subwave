@@ -53,8 +53,21 @@ export const MAX_TRACK_TAGS = 5;
 // match more. The fold is the one those rules compare through (blocklist normText
 // restates nameKey), so a repeat dropped here can't take a match with it.
 export function mergeCrowdTags(trackTags: string[], artistTags: string[]): string[] {
+  return oncePerFold([...trackTags.slice(0, MAX_TRACK_TAGS), ...artistTags]);
+}
+
+// What a row's first answer does with the list it already had. Last.fm's lists
+// move, and a station with this off never re-reads them, so that list can hold
+// tags the artist no longer shows, or come from an act Last.fm no longer answers
+// for. Everything stays behind the answer: a rule written against what the row
+// holds must not stop matching because the setting went on.
+export function keepStoredTags(answer: string[], stored: string[]): string[] {
+  return oncePerFold([...answer, ...stored]);
+}
+
+function oncePerFold(tags: string[]): string[] {
   const byKey = new Map<string, string>();
-  for (const tag of [...trackTags.slice(0, MAX_TRACK_TAGS), ...artistTags]) {
+  for (const tag of tags) {
     const key = nameKey(tag);
     if (key && !byKey.has(key)) byKey.set(key, tag);
   }
