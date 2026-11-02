@@ -72,7 +72,7 @@ beforeEach(() => {
 
 const version = () => db.requireDb().pragma('user_version', { simple: true });
 // Every migration after 32 runs on the same open, so a full open ends at the newest one.
-const LATEST = 34;
+const LATEST = 35;
 const sung = (ms: number) => [{ startMs: 200_000, endMs: 200_000 + ms }];
 const outro = (vocalRanges?: unknown) => JSON.stringify({
   startMs: 180_000, ending: 'fade', ...(vocalRanges === undefined ? {} : { vocalRanges }),

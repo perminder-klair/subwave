@@ -526,6 +526,24 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 34');
   }
 
+  if (userVersion < 35) {
+    // CLAP sound descriptors (music/audio-descriptors.ts), shaped like the audio
+    // moods: audio_descriptors = the selected labels, audio_descriptor_scores_json
+    // = the full {label: cosine} map, descriptor_vocab_hash invalidates both.
+    // Only the missing columns are added, as in migration 28.
+    const columnsOf = (table: string) =>
+      new Set((d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name));
+    const tracks = columnsOf('tracks');
+    const add = ['audio_descriptors', 'audio_descriptor_scores_json']
+      .filter(c => !tracks.has(c))
+      .map(c => `ALTER TABLE tracks ADD COLUMN ${c} TEXT;`);
+    if (!columnsOf('audio_embedding_meta').has('descriptor_vocab_hash')) {
+      add.push('ALTER TABLE audio_embedding_meta ADD COLUMN descriptor_vocab_hash TEXT;');
+    }
+    if (add.length) runDdl(d, add.join('\n'));
+    d.pragma('user_version = 35');
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
