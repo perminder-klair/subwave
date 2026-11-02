@@ -154,6 +154,12 @@ function requestIntroTimeoutMs(entry: ListenerRequestEntry): number {
   return Math.max(0, Math.min(requestTimeLeftMs(entry) - REQUEST_QUEUE_RESERVE_MS, requestGenerationTimeoutMs()));
 }
 
+// A re-pick with no track in hand: if it fails the request still needs the
+// library, so it leaves the same reserve the interpreter does.
+function requestRepickTimeoutMs(entry: ListenerRequestEntry): number {
+  return Math.max(0, Math.min(requestTimeLeftMs(entry) - REQUEST_CATALOGUE_RESERVE_MS, requestGenerationTimeoutMs()));
+}
+
 // What the interpreter may spend and still leave the catalogue its reserve. A
 // named request can be resolved without it, so it never waits long for repair.
 function requestInterpretationTimeoutMs(entry: ListenerRequestEntry, named: boolean): number {
@@ -591,7 +597,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       entry.evidenceSource = settings.get().search?.provider || 'duckduckgo';
     };
     try {
-      const agentRes = await djAgent.runRequest(queue, { requester, text, signal, introBudgetMs: () => requestIntroTimeoutMs(entry), onEvidenceRun: noteEvidenceRun });
+      const agentRes = await djAgent.runRequest(queue, { requester, text, signal, introBudgetMs: () => requestIntroTimeoutMs(entry), repickBudgetMs: () => requestRepickTimeoutMs(entry), onEvidenceRun: noteEvidenceRun });
       throwIfRequestResolutionAborted(signal);
       if (agentRes) {
         // Thread the agent's own echo-guard verdict into the durable log; the

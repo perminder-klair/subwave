@@ -1762,11 +1762,15 @@ type RequestRunOptions = {
   text: string;
   signal?: AbortSignal;
   introBudgetMs?: () => number;
+  // The corrective re-pick with no track in hand. It leaves the fallback's
+  // reserve, which the intro's budget doesn't, because a track is already safe
+  // by the time an intro runs.
+  repickBudgetMs?: () => number;
   // Called when the run really used identifyRequestedTrack, whatever it answers.
   onEvidenceRun?: () => void;
 };
 
-export async function runRequest(queue: any, { requester, text, signal, introBudgetMs, onEvidenceRun }: RequestRunOptions) {
+export async function runRequest(queue: any, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun }: RequestRunOptions) {
   if (!requestMatchingEnabled() || requestBreakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
@@ -1774,7 +1778,7 @@ export async function runRequest(queue: any, { requester, text, signal, introBud
   if (!budget.requestsAllowed()) return null;
 
   try {
-    const out = await runRequestViaAgent(queue, { requester, text, signal, introBudgetMs, onEvidenceRun });
+    const out = await runRequestViaAgent(queue, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun });
     requestBreakerSuccess();
     return out;
   } catch (err) {
@@ -1783,7 +1787,7 @@ export async function runRequest(queue: any, { requester, text, signal, introBud
   }
 }
 
-async function runRequestViaAgent(queue: any, { requester, text, signal, introBudgetMs, onEvidenceRun }: RequestRunOptions) {
+async function runRequestViaAgent(queue: any, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun }: RequestRunOptions) {
   return withTrace({ kind: 'request', requester }, async () => {
     const throwIfAborted = () => {
       if (!signal?.aborted) return;
@@ -1943,7 +1947,7 @@ async function runRequestViaAgent(queue: any, { requester, text, signal, introBu
       const repicked = await repickRequestWithinDeadline({
         seen: spacedOffer(extras.seen), badId: object?.id ?? null, requester, text,
         persona: requestSpeech.persona,
-      }, introBudgetMs, signal);
+      }, repickBudgetMs, signal);
       if (repicked) {
         logEvent('pick.repicked', { agent: 'request', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
         queue.log('request', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);

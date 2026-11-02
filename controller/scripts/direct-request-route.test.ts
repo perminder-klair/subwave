@@ -1816,3 +1816,18 @@ test('a title-only name stops waiting for repair at the named cap', async t => {
   assert.equal(entry.interpretationFallback, true);
   assert.equal(entry.outcome, 'matched');
 });
+
+test('a stalled re-pick leaves a slow library its reserve at default deadlines', async t => {
+  await settings.update({ llm: { requestMatching: 'agentic' } } as never);
+  agentDelayMs = 44_000;
+  agentResult = { object: { ack: 'x' }, ...searched, extras: { seen: new Map([[filler.id, filler]]) } };
+  modelStalls = true;
+  libraryDelayMs = 3000;
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const entry = listenerEntry('Bohemian Rhapsody by Queen');
+  const settled = resolveListenerRequest(entry);
+  await advanceUntilSettled(t, entry, 91_000);
+  await settled;
+  assert.equal(entry.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, exact.id);
+});
