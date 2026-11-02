@@ -55,6 +55,8 @@ let agentDelayMs = 0;
 let modelDelayMs = 0;
 let libraryStalls = false;
 let libraryDelayMs = 0;
+let librarySearchFails = false;
+let librarySignals: Array<AbortSignal | null | undefined> = [];
 
 beforeEach(async context => {
   const t = context as TestContext;
@@ -88,6 +90,8 @@ beforeEach(async context => {
   modelDelayMs = 0;
   libraryStalls = false;
   libraryDelayMs = 0;
+  librarySearchFails = false;
+  librarySignals = [];
   modelOutput = { kind: 'track', title: exact.title, artist: 'Queen', search_terms: [exact.title, 'Queen'], genre: 'Rock', scope: 'song' };
   t.mock.method(requestAgent, 'run', async () => {
     agentCalls++;
@@ -115,9 +119,11 @@ beforeEach(async context => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     if (url.origin === base) return realFetch(input, init);
     if (url.hostname !== 'direct-library.invalid') throw Error('synthetic offline dependency');
+    librarySignals.push(init?.signal);
     if (libraryStalls) return new Promise<Response>(() => {});
     if (libraryDelayMs) await new Promise(resolve => setTimeout(resolve, libraryDelayMs));
     const endpoint = url.pathname.split('/').at(-1);
+    if (librarySearchFails && endpoint === 'search3') throw Error('synthetic search failure');
     const artistQuery = artistSongs.length && /queen/i.test(url.searchParams.get('query') || '');
     const data = endpoint === 'search3' ? { searchResult3: { song: searchEmpty ? [] : catalogueSongs, artist: artistQuery ? [{ id: 'queen', name: 'Queen' }] : [] } }
       : endpoint === 'getStarred2' ? { starred2: { song: [filler] } }
@@ -2101,6 +2107,37 @@ test('a hard condition the act cannot meet keeps its alternative inside that con
   const result = await submit('Queen funk');
   assert.equal(result.outcome, 'substituted');
   assert.equal(queue.upcoming[0].track.id, funky.id);
+});
+
+test('"rock in Punjabi" with no model stays a miss rather than dropping the genre', async () => {
+  const punjabi = { id: 'punjabi', title: 'Punjabi Fixture', artist: 'Fixture Artist', genre: 'Punjabi Pop', duration: 200 };
+  catalogueSongs = [filler, punjabi];
+  genreSongs = [filler];
+  modelError = true;
+  assert.equal((await submit('rock in Punjabi')).outcome, 'no-match');
+  assert.equal(queue.upcoming.length, 0);
+});
+
+test('a lookup that failed on the exact step stays on the record when the parse then answers', async () => {
+  librarySearchFails = true;
+  genreSongs = [filler];
+  modelError = true;
+  const result = await submit('play Rock');
+  assert.equal(result.outcome, 'matched');
+  assert.match(String(requestLog.snapshot(1)[0].lookupErrors), /synthetic search failure/);
+});
+
+test('the request deadline reaches the library step that runs with no interpreter', async t => {
+  modelError = true;
+  libraryStalls = true;
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() + 7_200_000 });
+  const entry = listenerEntry('play Rock');
+  const settled = resolveListenerRequest(entry);
+  await advanceUntilSettled(t, entry, 91_000);
+  await settled;
+  assert.equal(entry.outcome, 'timeout');
+  assert.ok(librarySignals.length > 0);
+  assert.equal(librarySignals.at(-1)?.aborted, true);
 });
 
 // Last, because it leaves a mood in the library for every test after it.
