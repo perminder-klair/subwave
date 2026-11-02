@@ -886,6 +886,39 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       config that can&rsquo;t deliver.
                     </div>
                   </div>
+
+                  <div className="field">
+                    <Label>Separate stems when a track is picked</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.pickTimeStems ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, pickTimeStems: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      While a picked track waits behind the one about to air, separate whatever
+                      stems it is missing, so the cache fills with what the station actually plays
+                      instead of waiting for the backfill. Its tail is usually ready for the seam
+                      out of it; the seam into it renders before this starts, so its head pays off
+                      the next time it is picked. Runs Demucs during the broadcast, one track at a
+                      time, on the same analyzer the blends use: watch the stream for dropouts
+                      before leaving it on. Needs stem-blend seams and the stem cache, and only
+                      separates tracks the analysis pass has already measured.
+                    </div>
+                    {form.transitions.pickTimeStems && data?.values?.audio?.analyzeQuietOnly === true && (
+                      <div className="field-hint text-destructive" role="status">
+                        Quiet-only analysis is on (Library), so nothing is separated at pick time.
+                      </div>
+                    )}
+                  </div>
                 </div>
               </Card>
             )}

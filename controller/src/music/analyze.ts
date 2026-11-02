@@ -14,7 +14,7 @@ import { runAudioMoodPass } from './audio-moods.js';
 import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
-import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
+import { quietGateDecision, quietOnlyEnabled, type QuietState } from './analyze-quiet-pure.js';
 import { dispatchAnalysis, type DispatchOutcome } from './analyze-dispatch.js';
 import {
   analysisModeForTrack,
@@ -89,9 +89,6 @@ interface QuietConfig {
 }
 
 async function readQuietConfig(): Promise<QuietConfig> {
-  const v = (process.env.ANALYZE_QUIET_ONLY || '').toLowerCase();
-  const envOn = v === '1' || v === 'true' || v === 'yes';
-  let enabled = envOn;
   let minutes = 10;
   let audio: any = null;
   try {
@@ -103,7 +100,7 @@ async function readQuietConfig(): Promise<QuietConfig> {
       audio = null;
     }
   }
-  if (!enabled) enabled = audio?.analyzeQuietOnly === true;
+  const enabled = quietOnlyEnabled(process.env.ANALYZE_QUIET_ONLY, audio);
   const m = audio?.analyzeQuietMinutes;
   if (Number.isFinite(m) && m >= 1 && m <= 120) minutes = Math.floor(m);
   return { enabled, minutes };

@@ -25,3 +25,16 @@ export function quietGateDecision(
   const quietSince = prev.quietSince ?? now;
   return { state: { quietSince }, proceed: now - quietSince >= quietAfterMs };
 }
+
+// Whether quiet-only analysis is on: ANALYZE_QUIET_ONLY wins ON, never off,
+// else settings.audio.analyzeQuietOnly. The bulk pass's gate and pick-time
+// stems (broadcast/pick-stems-policy.ts), which quiet-only switches off, both
+// read it through this one rule.
+export function quietOnlyEnabled(
+  env: string | undefined,
+  audio: { analyzeQuietOnly?: unknown } | null | undefined,
+): boolean {
+  const v = (env || '').toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes') return true;
+  return audio?.analyzeQuietOnly === true;
+}

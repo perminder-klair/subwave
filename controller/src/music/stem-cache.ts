@@ -308,8 +308,10 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 // on a network share, takes minutes. Nearly every hour nothing has changed, so
 // the last walk's totals are kept in <stateDir>/stem-cache-usage.json and
 // reused while they can be trusted:
-// - the only writer of stem dirs is the analysis pass, which marks the
-//   snapshot `pending` while it runs and adds the dirs it wrote when it ends;
+// - the analysis pass writes stem dirs in bulk: it marks the snapshot
+//   `pending` while it runs and adds the dirs it wrote when it ends;
+// - a pick-time separation (broadcast/pick-stems.ts) writes one dir at a
+//   time and adds what it grew at once (settleTrackWrite);
 // - evictions are made by sweep(), which rewrites the snapshot from its walk,
 //   and by forgetStems(), which marks it `stale` as the purge does;
 // - the orphan purge marks it `stale` (markUsageStale): the next read walks, and
@@ -385,7 +387,8 @@ async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
   }
 }
 
-// For a writer outside the pass and the sweep (the orphan purge, forgetStems): the stored
+// For a writer outside the pass and the sweep (the orphan purge, forgetStems, a
+// pick-time separation whose request failed mid-write): the stored
 // totals no longer match the disk, so the next read walks instead of trusting
 // them. The file stays, because the budget field reads it (storedUsage) and an
 // operator about to lower the budget is better served by a flagged figure than
@@ -541,6 +544,37 @@ export async function settlePassWrites(
   const settled: UsageSnapshot = { version: 1, root: snap.root, bytes, dirs, measuredAt: snap.measuredAt, updatedAt: new Date().toISOString() };
   if (!(await writeSnapshot(settled))) return null;
   return { bytes, dirs, withinBudget: bytes <= budget };
+}
+
+// Bytes under one track's dir, null when it has none. A pick-time separation
+// reads it before writing, to hand settleTrackWrite what it started from.
+export async function trackDirBytes(trackId: string): Promise<number | null> {
+  return dirBytes(dirFor(trackId));
+}
+
+// After a pick-time separation: add what the track's dir grew by to the
+// snapshot, so the hourly sweep's budget check counts it without a walk. A
+// snapshot that can't take an addition (none, untrusted, stale, or a pass
+// writing, whose settle owns the baseline) is marked stale instead, and the
+// next read walks. Totals that can't be updated must not outlive this, as in
+// markUsageStale.
+export async function settleTrackWrite(trackId: string, bytesBefore: number | null): Promise<void> {
+  const after = await dirBytes(dirFor(trackId));
+  const grew = (after ?? 0) - (bytesBefore ?? 0);
+  const newDir = bytesBefore === null && after !== null;
+  if (grew === 0 && !newDir) return;
+  const { snap, verdict } = await snapshotState();
+  if (verdict !== 'use' || !snap) {
+    await markUsageStale();
+    return;
+  }
+  const settled: UsageSnapshot = {
+    ...snap,
+    bytes: Math.max(0, snap.bytes + grew),
+    dirs: snap.dirs + (newDir ? 1 : 0),
+    updatedAt: new Date().toISOString(),
+  };
+  if (!(await writeSnapshot(settled))) await rm(snapshotPath(), { force: true }).catch(() => {});
 }
 
 // Track ids with a stem dir on disk: one readdir, no per-dir walk. The analysis

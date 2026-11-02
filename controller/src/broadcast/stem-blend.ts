@@ -11,7 +11,8 @@ import * as db from '../music/library-db.js';
 import * as mix from '../music/mix.js';
 import * as loudness from '../music/loudness.js';
 import * as stemCache from '../music/stem-cache.js';
-import { readPidfile, isPidAlive } from '../music/tagger-lock.js';
+import { bulkPassRunning } from '../music/tagger-lock.js';
+import { separationInFlight } from './pick-stems.js';
 import { HARD_DEADLINE_SEC } from './drain-policy.js';
 import { CLIP_SEAM_CROSS_SEC, clipSeamCues, type ClipSeamCues } from './stem-seam.js';
 
@@ -38,17 +39,6 @@ function transitionsDir(): string {
   return path.join(config.stateDir, 'transitions');
 }
 
-// A bulk pass holds the single-flight analyzer worker for minutes; a render would
-// only time out behind it. The pidfile is that pass's own lock.
-function bulkPassRunning(): boolean {
-  try {
-    const info = readPidfile();
-    return !!info && isPidAlive(info.pid);
-  } catch {
-    return false;
-  }
-}
-
 // bars/outro/lufs are never on the slim track objects, so they resolve from
 // library.db here.
 export async function maybeRenderBlend(
@@ -67,7 +57,10 @@ export async function maybeRenderBlend(
   // unconditional: the clip is rendered from the successor's head window starting
   // at zero, so a trimmed leading blank would be baked into the seam.
   if (opts.inHeadTrimmed) return null;
-  if (bulkPassRunning()) return null;
+  // A bulk pass, or a pick-time separation (broadcast/pick-stems.ts), holds
+  // the single-flight analyzer worker for a minute or more: a render would
+  // only wait behind it, holding the sender, and time out.
+  if (bulkPassRunning() || separationInFlight()) return null;
 
   const out = db.getTrack(outTrack.id);
   const inn = db.getTrack(inTrack.id);
