@@ -54,11 +54,16 @@ function pruneRequests() {
   }
 }
 
+// A clean show's rule inside every draw, so a draw lands on what can air and
+// the refusal below is left for an ask with nothing else to offer. Silent:
+// heldBackForShow is the one that says so in the booth log.
+const heldBack = (song: any) => heldBackFromShow(song, settings.resolveActiveShow());
+
 // The shortcut shares identity lookup. Seed/queued tracks are excluded; recent
 // plays retain the upstream soft two-hour preference.
 async function pickMoreByArtist(artistName: string, recentIds: Set<string>, seedId?: string | null) {
   const result = await resolveDirectRequest({ artist: artistName }, {
-    catalog: subsonic, recentIds: new Set<string>(), queuedIds: queue.queuedIds(), currentId: seedId,
+    catalog: subsonic, recentIds: new Set<string>(), queuedIds: queue.queuedIds(), currentId: seedId, heldBack,
     choose: songs => {
       const fresh = songs.filter(song => !recentIds.has(song.id));
       const pool = fresh.length ? fresh : songs;
@@ -78,7 +83,7 @@ async function pickSimilarToTrack(reference, recentIds: Set<string>) {
   const exclude = new Set(recentIds);
   exclude.add(id);
   const pickFresh = (songs) => {
-    const list = (songs || []).filter((s) => s?.id && !exclude.has(s.id));
+    const list = (songs || []).filter((s) => s?.id && !exclude.has(s.id) && !heldBack(s));
     if (list.length === 0) return null;
     return list[Math.floor(Math.random() * list.length)];
   };
@@ -183,11 +188,13 @@ function withWaitNotice(ack: string | null | undefined, trackId: string | null |
   return `${ack}${requestWaitClause({ waitSec: queue.airForecastSec(queue.upcoming[idx]), blockLabel })}`;
 }
 
-// A clean show holds a track tagged explicit back from listeners too. Checked
-// before the intro is written, and declined by the caller with the same
-// not-found copy as the blocklist, so the reason does not leak. The agent path
-// never gets here: its scope hides these tracks from the model. Judged on the
-// show on air now, and an operator's own push does not come through this route.
+// A clean show holds a track tagged explicit back from listeners too. The draws
+// already go around one (heldBack), so what reaches this is an ask with nothing
+// else to offer. Checked before the intro is written, and declined by the caller
+// with the same not-found copy as the blocklist, so the reason does not leak. The
+// agent path never gets here: its scope hides these tracks from the model. Judged
+// on the show on air now, and an operator's own push does not come through this
+// route.
 function heldBackForShow(track: any): boolean {
   const show = settings.resolveActiveShow();
   if (!heldBackFromShow(track, show)) return false;
@@ -497,6 +504,7 @@ async function resolveRequest(entry) {
     recentIds: cdMin > 0 ? queue.recentlyPlayedIds(cdMin / 60) : new Set<string>(),
     queuedIds: queue.queuedIds(),
     currentId: queue.current?.track?.id,
+    heldBack,
     moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },
     fallbackSongs: async () => {
       let moodSongs: any[] = [];

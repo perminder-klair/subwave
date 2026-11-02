@@ -56,7 +56,7 @@ const subsonicOk = (body: Record<string, unknown>) =>
   Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', ...body } });
 
 let modelCalls = 0;
-function stubNetwork(t: TestContext, { search = [TAGGED], matcher = NAMED as Record<string, unknown> } = {}) {
+function stubNetwork(t: TestContext, { search = [TAGGED], matcher = NAMED as Record<string, unknown>, albums = {} as Record<string, unknown[]>, similar = [] as unknown[] } = {}) {
   modelCalls = 0;
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -72,8 +72,16 @@ function stubNetwork(t: TestContext, { search = [TAGGED], matcher = NAMED as Rec
           : { role: 'assistant', content: JSON.stringify(matcher) },
       });
     }
-    if (url.includes('/rest/search3')) return subsonicOk({ searchResult3: { song: search } });
+    if (url.includes('/rest/search3')) return subsonicOk({ searchResult3: { song: search, artist: Object.keys(albums).length ? [{ id: 'act', name: 'Tagged Act' }] : [] } });
     if (url.includes('/rest/getTopSongs')) return subsonicOk({ topSongs: { song: search } });
+    if (url.includes('/rest/getArtist.') || url.includes('/rest/getArtist?')) {
+      return subsonicOk({ artist: { id: 'act', name: 'Tagged Act', album: Object.keys(albums).map(id => ({ id, name: id })) } });
+    }
+    if (url.includes('/rest/getAlbum.') || url.includes('/rest/getAlbum?')) {
+      const id = new URL(url).searchParams.get('id')!;
+      return subsonicOk({ album: { id, name: id, song: albums[id] ?? [] } });
+    }
+    if (url.includes('/rest/getSimilarSongs')) return subsonicOk({ similarSongs: { song: similar }, similarSongs2: { song: similar } });
     if (url.includes('/rest/')) return subsonicOk({});
     throw new Error('offline');
   });
@@ -119,7 +127,7 @@ beforeEach(async () => {
       baseUrl: 'http://127.0.0.1:9/v1', fallback: { enabled: false }, requestMatching: 'direct',
     },
     tts: { enabled: true },
-    requests: { enabled: true, maxPending: 20, onePendingPerIp: false, repeatCooldownMin: 120 },
+    requests: { enabled: true, maxPending: 20, onePendingPerIp: false, repeatCooldownMin: 120, globalHourlyCap: 10000 },
   } as never);
 });
 
@@ -140,6 +148,73 @@ test('the refusal comes before generation: no intro is written for a track that 
   await onAir({ excludeExplicit: true });
   await request('Tagged Song by Tagged Act please');
   assert.equal(modelCalls, 1, 'the matcher, and no intro after it');
+});
+
+// The draws are random: without the show's rule inside them each of these
+// lands on the tagged track about half the time, so the repeats are the test.
+const DRAWS = 10;
+const CLEAN_CUT = { ...TAGGED, id: 'clean-cut', album: 'Clean Edit', explicitStatus: 'clean' };
+const ALSO_BY = { ...OTHER, id: 'also-by', title: 'Also By', artist: 'Tagged Act' };
+const SECOND_TAGGED = { ...TAGGED, id: 'tagged-2', title: 'Tagged Two' };
+const ARTIST_ONLY = { ...NAMED, search_terms: ['Tagged Act'], title: null, scope: 'artist' };
+
+async function everyDraw(text: string) {
+  const aired = new Set<string>();
+  for (let i = 0; i < DRAWS; i++) {
+    queue.upcoming = [];
+    const { outcome } = await request(text);
+    assert.equal(outcome.status, 'resolved', outcome.message ?? '');
+    aired.add(queue.upcoming.at(-1)?.track?.id);
+  }
+  return [...aired];
+}
+
+test('a song with a clean recording airs that recording, never a refusal', async (t) => {
+  stubNetwork(t, { search: [TAGGED, CLEAN_CUT] });
+  await onAir({ excludeExplicit: true });
+  assert.deepEqual(await everyDraw('Tagged Song by Tagged Act please'), ['clean-cut']);
+});
+
+test('a wholly tagged album is stepped over for the rest of the artist', async (t) => {
+  stubNetwork(t, { search: [], matcher: ARTIST_ONLY, albums: { loud: [TAGGED, SECOND_TAGGED], soft: [ALSO_BY] } });
+  await onAir({ excludeExplicit: true });
+  assert.deepEqual(await everyDraw('play some Tagged Act'), ['also-by']);
+});
+
+test('more-like-this draws around a tagged track too', async (t) => {
+  stubNetwork(t, { search: [TAGGED, SECOND_TAGGED, ALSO_BY], matcher: ARTIST_ONLY });
+  await onAir({ excludeExplicit: true });
+  assert.deepEqual(await everyDraw('more like this'), ['also-by']);
+});
+
+test('more-like-this falling back to similar tracks draws around a tagged one', async (t) => {
+  const SIMILAR_TAGGED = { ...TAGGED, id: 'similar-tagged', artist: 'Someone Else' };
+  const SIMILAR_CLEAN = { ...OTHER, id: 'similar-clean', artist: 'Someone Else' };
+  stubNetwork(t, { search: [], similar: [SIMILAR_TAGGED, SIMILAR_CLEAN] });
+  await onAir({ excludeExplicit: true });
+  assert.deepEqual(await everyDraw('more like this'), ['similar-clean']);
+});
+
+test('a show that is not clean draws from the whole pool, as it always did', async (t) => {
+  stubNetwork(t, { search: [TAGGED, CLEAN_CUT] });
+  await onAir({});
+  const aired = new Set<string>();
+  for (let i = 0; i < 30; i++) {
+    queue.upcoming = [];
+    await request('Tagged Song by Tagged Act please');
+    aired.add(queue.upcoming.at(-1)?.track?.id);
+  }
+  assert.deepEqual([...aired].sort(), ['clean-cut', 'tagged']);
+});
+
+test('a tagged track that only the show holds back is not reported as played recently', async (t) => {
+  stubNetwork(t);
+  await onAir({ excludeExplicit: true });
+  // On cooldown as well: the show is the reason, and the listener hears one answer.
+  t.mock.method(queue, 'recentlyPlayedIds', () => new Set(['tagged']));
+  const { outcome } = await request('Tagged Song by Tagged Act please');
+  assert.equal(outcome.status, 'failed');
+  assert.equal(outcome.message, 'Sorry Tester, nothing in the crates matched that.');
 });
 
 test('more-like-this is held to the same line', async (t) => {
