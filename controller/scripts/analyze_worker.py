@@ -130,7 +130,7 @@ VOCAL_ENABLED = os.environ.get("ANALYZE_VOCAL_ACTIVITY", "").strip().lower() in 
     "1", "true", "yes",
 )
 DEMUCS_SR = 44100
-DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "").strip() or "htdemucs"
+DEFAULT_DEMUCS_MODEL = "htdemucs"
 
 
 def _env_float(name, default, minimum=None, maximum=None):
@@ -173,6 +173,36 @@ def demucs_overlap():
 
 
 DEMUCS_OVERLAP = demucs_overlap()
+
+
+def demucs_model(have_diffq=None):
+    """The Demucs checkpoint to load. Demucs names its quantised checkpoints
+    `*_q` (mdx_q, mdx_extra_q), and only diffq can unpack them. The heavy images
+    don't ship diffq (non-commercial licence, sdist-only build), so a `_q` name
+    would make demucs fatal() at load and switch vocal activity off for the run.
+    Swap it for the default instead, with one line saying so: the station keeps
+    its vocal ranges and stems. Nothing downstream keys on the model name: stems
+    are filed by source name, and both models write drums/bass/other/vocals.
+    Only when diffq is missing, though: a worker run outside the images with
+    diffq installed keeps the model it asked for. `have_diffq` is the test seam;
+    None probes with find_spec, which imports nothing."""
+    raw = os.environ.get("DEMUCS_MODEL", "").strip()
+    if not raw:
+        return DEFAULT_DEMUCS_MODEL
+    if raw.endswith("_q"):
+        if have_diffq is None:
+            have_diffq = importlib.util.find_spec("diffq") is not None
+        if not have_diffq:
+            # Runs at module load, before log() is defined — write stderr directly.
+            sys.stderr.write(
+                f"[analyze-worker] DEMUCS_MODEL={raw!r} is a quantised checkpoint, which needs "
+                f"diffq, and diffq is not installed; using {DEFAULT_DEMUCS_MODEL} instead\n"
+            )
+            return DEFAULT_DEMUCS_MODEL
+    return raw
+
+
+DEMUCS_MODEL = demucs_model()
 
 
 def _env_int(name, default, minimum=1):
@@ -1485,7 +1515,8 @@ def get_vocal_detector(force=False):
             _vocal_detector = d
             _maybe_start_idle_release()
         # BaseException, not Exception: demucs' fatal() raises SystemExit on an
-        # unusable model (e.g. a *_q quantized checkpoint without diffq), which
+        # unusable model (e.g. a quantised checkpoint named by its signature,
+        # which demucs_model() can't recognise, with no diffq installed), which
         # sails past `except Exception` and killed the whole worker — every
         # later request (bpm/key included) then 500'd "worker not ready".
         except BaseException as ex:  # noqa: BLE001 — degrade, never crash the worker
