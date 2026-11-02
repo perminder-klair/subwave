@@ -4,6 +4,9 @@ name: CLI smoke
 # The bug it guards against (#2196) only exists in a compiled binary, so a `tsx`
 # run can't catch it.
 #
+# Builds the same way as publish-cli.yml, patch-clack included, and checks the
+# compiled binary still forwards the /dev/tty `input` to its prompts (#2202).
+#
 # Pull requests only, and separate from publish-cli.yml on purpose: a PR catches
 # the regression sooner, and this check must never be able to block a release.
 #
@@ -39,11 +42,16 @@ jobs:
         working-directory: cli
         run: |
           bun install --frozen-lockfile || bun install
+          bun run patch-clack
           mkdir -p dist
           bun build src/cli.ts \
             --compile \
             --target=bun-linux-x64 \
             --outfile=dist/subwave-linux-x64
+
+      - name: Verify Clack patch reached the binary
+        working-directory: cli
+        run: node scripts/check-clack-patch.mjs dist/subwave-linux-x64
 
       - name: Smoke test the first update
         run: cli/scripts/smoke-update-pin.sh cli/dist/subwave-linux-x64

@@ -59,6 +59,15 @@ jobs:
           bun install --frozen-lockfile || bun install
           bun run scripts/embed-assets.ts
 
+      - name: Patch @clack/prompts (forward /dev/tty input)
+        # The release build calls `bun build` directly, so package.json's
+        # `prebuild` never runs here; apply the patch explicitly after install.
+        # Without it the shipped prompts drop the /dev/tty stream and hang on
+        # macOS under `curl … | sh` (#2202; see cli/README.md "Prompts and
+        # piped stdin").
+        working-directory: cli
+        run: bun run patch-clack
+
       - name: Compile binary
         working-directory: cli
         env:
@@ -70,6 +79,14 @@ jobs:
             --compile \
             --target="$TARGET" \
             --outfile="dist/$ASSET"
+
+      - name: Verify Clack patch reached the binary
+        # Every target, before smoke and upload: fail the build rather than
+        # release a binary whose prompts don't forward `input` (#2202).
+        working-directory: cli
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: node scripts/check-clack-patch.mjs "dist/$ASSET"
 
       - name: Smoke test (native, in-runner)
         # The linux-x64 binary is the only one that runs natively on this amd64
