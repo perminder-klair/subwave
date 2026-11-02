@@ -183,7 +183,20 @@ export interface TrackMeta {
   isCompilation?: boolean | null;
   /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
   eraUntrusted?: boolean | null;
+  /** The file as Navidrome reports it (the tagger's and the analyzer's walks,
+   *  which see the same Subsonic child). `filePath` is the real path
+   *  when the client has "Report Real Path" on, else Navidrome's tag-built one.
+   *  COALESCEd like the ids: a writer without them never clears a stored value.
+   *  So read these as "last reported by a walk": one that stops reporting a field
+   *  leaves the old figure, and a row can mix two walks, such as a replaced file's
+   *  new path beside the old file's bitrate. */
+  filePath?: string | null;
+  fileSuffix?: string | null;
+  fileSize?: number | null;
+  bitRate?: number | null;
 }
+
+export type FileInfo = Required<Pick<TrackMeta, 'filePath' | 'fileSuffix' | 'fileSize' | 'bitRate'>>;
 
 export interface TrackEnrichment {
   lastfmTags: string[] | null;
