@@ -1346,7 +1346,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       // matching already preserves a queued/cooldown identity for a refusal;
       // fuzzy matching must do the same instead of turning a verified repeat
       // into a misleading no-match.
-      .filter(song => constraints(song, source) && contextProven(song))
+      .filter(song => constraints(song, source) && contextProven(song) && !deps.heldBack?.(song))
       .map(song => ({ song, confidence: identityScore(song), titleScore: requestTitleSimilarity(title, song.title), artistScore: resolvedArtistName ? requestCandidateArtistSimilarity(resolvedArtistName, song) : 1 }))
       // Keep a wider, still meaningful candidate set for clarification. Only
       // the stricter confidence and margin checks below may auto-select.
@@ -1412,6 +1412,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   const selectFuzzyReleaseContext = (songs: RequestSong[], source: string): RequestSelection | null => {
     if (!match.releaseContext || !title) return null;
     const pool = unique(songs).filter(song => constraints(song, source)
+      && !deps.heldBack?.(song)
       && requestTitleMatches(title, song.title)
       && requestCandidateArtistMatches(resolvedArtistName, song)
       && releaseContextFuzzyMatches(match.releaseContext!, song));

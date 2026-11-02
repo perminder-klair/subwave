@@ -94,11 +94,11 @@ test('a version-30 language library repairs later tables and retains its languag
   });
 });
 
-test('concurrent version-32 opens serialize the language-column migration', async () => {
+test('concurrent version-32 opens serialize additive track-column migrations', async () => {
   db.close();
   const Database = (await import('better-sqlite3')).default as any;
   const old = new Database(join(stateDir, 'library.db'));
-  old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
+  old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages; ALTER TABLE tracks DROP COLUMN explicit_status; ALTER TABLE tracks DROP COLUMN lastfm_track_tags_at;');
   old.pragma('user_version = 32');
   old.close();
 
@@ -108,7 +108,7 @@ test('concurrent version-32 opens serialize the language-column migration', asyn
   const code = `const db=await import(${JSON.stringify(moduleUrl)}); await db.open({embeddingDim:4});
     const {requireDb}=await import(${JSON.stringify(handleUrl)});
     const columns=new Set(requireDb().prepare('PRAGMA table_info(tracks)').all().map(row=>row.name));
-    if(!columns.has('language_primary')||!columns.has('languages')) throw new Error('language columns missing');
+    if(!columns.has('language_primary')||!columns.has('languages')||!columns.has('explicit_status')||!columns.has('lastfm_track_tags_at')) throw new Error('migrated track columns missing');
     if(requireDb().pragma('user_version',{simple:true})!==35) throw new Error('schema version is not 35');
     db.close();`;
   const run = () => new Promise<string>((resolve, reject) => {

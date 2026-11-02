@@ -206,7 +206,7 @@ test('a version-32 language-schema database still runs tail-vocal invalidation',
   assert.deepEqual(db.textVectorDirtyIds(), ['legacy-language-v32']);
 });
 
-test('a failure warns, the station still opens, and the later steps still run', async () => {
+test('a failure warns, the station still opens, and the next open retries', async () => {
   seed('reported', '[]', outro(sung(15_000)));
   seed('also-sung', '[]', outro(sung(9_000)));
   db.requireDb().exec(`CREATE TRIGGER refuse_mark BEFORE UPDATE OF text_vector_dirty ON tracks
@@ -223,16 +223,14 @@ test('a failure warns, the station still opens, and the later steps still run', 
   assert.ok(db.isOpen(), 'the station opened');
   assert.equal(db.getTrack('reported')?.title, 'reported', 'and answers reads');
   assert.ok(warnings.some(line => line.includes('disk on fire')), warnings.join('\n'));
+  assert.equal(version(), 31, 'left behind, so the failed migration can retry');
   assert.deepEqual(db.textVectorDirtyIds(), [], 'all or nothing');
-  assert.equal(version(), LATEST, 'the steps after it ran');
 
-  // A later step has moved user_version on, so the mark is not tried again:
-  // the rows keep the text they had, which still works.
   db.requireDb().exec('DROP TRIGGER refuse_mark');
   db.close();
   await open();
   assert.equal(version(), LATEST);
-  assert.deepEqual(db.textVectorDirtyIds(), []);
+  assert.deepEqual(db.textVectorDirtyIds().sort(), ['also-sung', 'reported']);
 });
 
 test('a fresh database, with no vector table yet, migrates like any other', async () => {
