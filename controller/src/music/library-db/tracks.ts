@@ -155,8 +155,8 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
     .run(id);
 }
 
-// Existing vectors whose era-bearing source text changed. They remain in the
-// KNN index until phaseEmbed successfully replaces them.
+// Existing vectors whose source text changed: an era edit, or migration 32's tail
+// verdict. They remain in the KNN index until phaseEmbed successfully replaces them.
 export function textVectorDirtyIds(): string[] {
   return (requireDb()
     .prepare(

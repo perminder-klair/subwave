@@ -110,6 +110,8 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // clean timing spans; classify through isInstrumental
     vocalRangesInvalid: t.vocalRangesInvalid,
+    tailVocalRanges: t.tailVocalRanges,
+    tailVocalRangesInvalid: t.tailVocalRangesInvalid,
     paceMean: paceMeanOf(t.pace),
     // Boundary keys for bpmKeyFor / queue.mixAnalysisFor.
     keyRanges: t.keyRanges,
@@ -342,6 +344,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     structure: r.structure,
     vocalRanges: r.vocalRanges,
     vocalRangesInvalid: r.vocalRangesInvalid,
+    tailVocalRanges: r.tailVocalRanges,
+    tailVocalRangesInvalid: r.tailVocalRangesInvalid,
     // Scalar mean pace (0..1); the full curve stays in the record.
     paceMean: paceMeanOf(r.pace),
   };
@@ -736,7 +740,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       musicalKey: r.musicalKey,
       loudnessLufs: r.loudnessLufs,
       paceMean: paceMeanOf(r.pace),
-      instrumental: isInstrumental(r.vocalRanges, r.vocalRangesInvalid),
+      instrumental: isInstrumental(r),
     })),
   };
 }
