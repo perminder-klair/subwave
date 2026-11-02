@@ -1231,6 +1231,10 @@ export async function load() {
       stemCacheGb: Number.isFinite(stored.audio?.stemCacheGb) && stored.audio.stemCacheGb > 0
         ? stored.audio.stemCacheGb
         : DEFAULTS.audio.stemCacheGb,
+      stemOrphanPurgeEnabled:
+        typeof stored.audio?.stemOrphanPurgeEnabled === 'boolean'
+          ? stored.audio.stemOrphanPurgeEnabled
+          : DEFAULTS.audio.stemOrphanPurgeEnabled,
       analyzeQuietOnly:
         typeof stored.audio?.analyzeQuietOnly === 'boolean'
           ? stored.audio.analyzeQuietOnly
@@ -1379,6 +1383,12 @@ export async function load() {
         typeof stored.lyrics?.lrclib === 'boolean'
           ? stored.lyrics.lrclib
           : DEFAULTS.lyrics.lrclib,
+    },
+    musicSource: {
+      reportRealPath:
+        typeof stored.musicSource?.reportRealPath === 'boolean'
+          ? stored.musicSource.reportRealPath
+          : DEFAULTS.musicSource.reportRealPath,
     },
   };
   setCache(loaded);
@@ -2450,6 +2460,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       'stemCacheGb',
       'analyzeQuietOnly',
       'analyzeQuietMinutes',
+      'stemOrphanPurgeEnabled',
     ] as const) {
       if (au[k] !== undefined) (next.audio as Record<string, unknown>)[k] = au[k];
     }
@@ -2659,6 +2670,11 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     const ly = parseSettingsPatchKey<Record<string, unknown>>('lyrics', patch.lyrics);
     if (ly.enabled !== undefined) next.lyrics.enabled = ly.enabled as boolean;
     if (ly.lrclib !== undefined) next.lyrics.lrclib = ly.lrclib as boolean;
+  }
+
+  if ('musicSource' in patch) {
+    const ms = parseSettingsPatchKey<Record<string, unknown>>('musicSource', patch.musicSource);
+    if (ms.reportRealPath !== undefined) next.musicSource.reportRealPath = ms.reportRealPath as boolean;
   }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may

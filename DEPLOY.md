@@ -292,6 +292,8 @@ this order:
   **Admin → Settings → Backup → Export** zips all three (plus jingles, SFX,
   custom voices, themes, skills and persona avatars) with a WAL-safe copy of
   the database. API keys are redacted, so re-enter cloud keys after a restore.
+  `library.db` holds each track's file path as Navidrome reports it, so a backup
+  you share shows your folder layout.
 - `archive/` — your show recordings. Big, and deliberately **not** in the
   export. Back up or rotate separately.
 - `jingles/` + `jingles.m3u` — re-derivable from `scripts/generate-jingles.sh`,
