@@ -367,6 +367,10 @@ services:
       - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
+      # Real downbeats for the bar grid: beat-this (Beat This!, baked into
+      # the image). Unset/anything else = librosa's every-4th-beat grid.
+      - ANALYZE_DOWNBEATS=${ANALYZE_DOWNBEATS:-}
+      - ANALYZE_DOWNBEAT_THREADS=${ANALYZE_DOWNBEAT_THREADS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
       # as tts-heavy — set once and both sidecars pick it up.
       - HF_TOKEN=${HF_TOKEN:-}

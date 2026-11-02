@@ -17,6 +17,43 @@
 # huggingface.co, which is documented (and given an offline pre-seed recipe) in
 # docs/tts-heavy.md — a host without reach fails there, and the analyzer now
 # reports the reason on /health rather than degrading silently.
+#
+# One model IS baked, into every flavour: the Beat This! downbeat tracker
+# (ANALYZE_DOWNBEATS=beat-this, off by default), ~10 MB of ONNX exported in
+# the stage below.
+
+# ---- Beat This! downbeat model ---------------------------------------------
+# Exported from the sha256-pinned upstream checkpoint by tools/beat-this/
+# export.py, which fails the build unless onnxruntime reproduces PyTorch's
+# logits on upstream's own test recording. Only the .onnx leaves this stage,
+# so the analyzer itself stays torch-free. $BUILDPLATFORM: an arm64 build
+# exports natively on the build host instead of emulating torch, and the file
+# is the same on every architecture. Keep the pins in lockstep with
+# docker/Dockerfile.aio and tools/beat-this/README.md. This makes every image
+# build fetch the checkpoint from the maintainer's mirror; the README lists
+# the hosting alternatives.
+FROM --platform=$BUILDPLATFORM python:3.11-slim-bookworm AS beat-this
+ARG BEAT_THIS_COMMIT=ad7974846029835307ba19a3d5cefbf40b243041
+ARG BEAT_THIS_CKPT_URL=https://f0k.de/pubs/2024_ismir/beat_this-small0.ckpt
+ARG BEAT_THIS_CKPT_SHA256=6074be2c4d490c5f6101fcc374a1ec72ae93456e23bb6019783b849f5dc7d47b
+ARG BEAT_THIS_AUDIO_SHA256=af695e220645a1fe2314282dace96f2353c84de2364c27066e4944e3e6d66ffa
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/export && \
+    /opt/export/bin/pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple \
+      torch==2.7.1 torchaudio==2.7.1 einops==0.8.0 rotary-embedding-torch==0.6.4 \
+      soxr==1.1.0 soundfile==0.14.0 onnx==1.18.0 onnxruntime==1.27.0 \
+      "beat_this @ https://github.com/CPJKU/beat_this/archive/${BEAT_THIS_COMMIT}.tar.gz"
+COPY tools/beat-this/export.py /build/export.py
+RUN cd /build && \
+    curl -fsSL --retry 3 -o small0.ckpt "$BEAT_THIS_CKPT_URL" && \
+    curl -fsSL --retry 3 -o test.mp3 \
+      "https://raw.githubusercontent.com/CPJKU/beat_this/${BEAT_THIS_COMMIT}/tests/It%20Don't%20Mean%20A%20Thing%20-%20Kings%20of%20Swing.mp3" && \
+    echo "${BEAT_THIS_AUDIO_SHA256}  test.mp3" | sha256sum -c - && \
+    /opt/export/bin/python export.py --ckpt small0.ckpt --sha256 "$BEAT_THIS_CKPT_SHA256" \
+      --out beat_this-small0.onnx --audio test.mp3
 
 FROM python:3.11-slim-bookworm
 
@@ -37,6 +74,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # both cpu and cu128 indexes, including cp313 wheels for the AIO. cu128 adds
 # Blackwell (sm_120) kernels and vendors the runtime as nvidia-*-cu12 deps.
 # Chatterbox's separate venv keeps its own upstream torch pin.
+#
+# onnxruntime is in the LEAN set (the Beat This downbeat model needs it, and
+# it is torch-free), so every tier gets the one pin and the heavy tier's CLAP
+# ONNX route reuses it. It stays the CPU build even under WITH_CUDA: the ONNX
+# paths are the downbeat model and the CLAP_MODEL_PATH custom-export route,
+# and onnxruntime-gpu drags in a fragile CUDA/cuDNN matrix. The transformers
+# path runs on the GPU.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
@@ -45,15 +89,13 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
     if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu128"; fi && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 \
+      onnxruntime==1.27.0 && \
     if [ "$WITH_CLAP" = "1" ]; then \
-      # onnxruntime stays the CPU build even under WITH_CUDA: the ONNX path is
-      # only the CLAP_MODEL_PATH custom-export route, and onnxruntime-gpu drags
-      # in a fragile CUDA/cuDNN matrix. The transformers path runs on the GPU.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.7.1 transformers==5.13.0 onnxruntime==1.27.0 && \
+        torch==2.7.1 transformers==5.13.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
@@ -85,6 +127,8 @@ WORKDIR /app
 COPY docker/analyzer/server.py /app/server.py
 # The SAME worker the controller runs in-process — single source of truth.
 COPY controller/scripts/analyze_worker.py /app/workers/analyze_worker.py
+# The downbeat model (stage above) at the worker's default BEAT_THIS_MODEL.
+COPY --from=beat-this /build/beat_this-small0.onnx /opt/analyzer/models/beat_this-small0.onnx
 
 # Shared state mount — the controller pre-fetches tracks into
 # /var/sub-wave/analyze-tmp. mkdir'd here so the image runs standalone too.
