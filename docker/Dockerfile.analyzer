@@ -57,16 +57,14 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
-      # diffq decompresses demucs' quantized checkpoints — without it a
-      # DEMUCS_MODEL=*_q override makes demucs fatal() at load. It ships
-      # sdist-only (Cython ext): lend it gcc and purge in the SAME layer.
-      apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
+      # No diffq: it only unpacks demucs' quantised *_q checkpoints, is
+      # licensed non-commercial, and needs a compiler to build. The worker
+      # swaps a DEMUCS_MODEL=*_q for htdemucs (analyze_worker.py demucs_model).
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.7.1 torchaudio==2.7.1 demucs==4.0.1 diffq==0.2.4 && \
-      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs, diffq" && \
-      apt-get purge -y gcc libc6-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
+        torch==2.7.1 torchaudio==2.7.1 demucs==4.0.1 && \
+      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs" ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 

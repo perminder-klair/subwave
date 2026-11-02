@@ -67,7 +67,6 @@ in the `package.json` files, lockfiles, and `docker/Dockerfile.*`, not here.
 | [ONNX Runtime](https://onnxruntime.ai) | Runs Kokoro and custom CLAP exports | MIT |
 | [CLAP](https://github.com/LAION-AI/CLAP) (LAION): [`laion/clap-htsat-unfused`](https://huggingface.co/laion/clap-htsat-unfused) | Audio embeddings for mood tagging (heavy analyzer tier) | Apache-2.0 |
 | [Demucs](https://github.com/facebookresearch/demucs) (Meta AI): `htdemucs` | Vocal detection and stem blends (heavy analyzer tier) | MIT |
-| [diffq](https://github.com/facebookresearch/diffq) (Meta AI) | Decompresses Demucs' quantised checkpoints (heavy analyzer tier) | CC BY-NC 4.0 |
 | [FastAPI](https://fastapi.tiangolo.com), [Uvicorn](https://www.uvicorn.org), [Pydantic](https://docs.pydantic.dev) | HTTP front of the analyzer and `tts-heavy` sidecars | MIT / BSD-3-Clause / MIT |
 | [Cython](https://cython.org) | Build-time only, for Chatterbox's dependencies | Apache-2.0 |
 
@@ -225,9 +224,6 @@ the documented deployment and Workers for the CLI installer,
   processes. SUB/WAVE talks to them over files, telnet, and HTTP.
 - eSpeak NG (GPL-3.0) is loaded by the Kokoro worker, a separate Python
   process the controller spawns.
-- diffq is licensed for non-commercial use only. It ships only in the heavy
-  analyzer images (`ANALYZER_HEAVY=1`, `subwave-aio-heavy`, `subwave-aio-cuda`),
-  not in the default build.
 - Pocket TTS model weights are CC-BY-4.0, which requires attribution to Kyutai.
 - Tracks pulled with `tools/jamendo` carry their own Creative Commons licences.
   The tool writes a separate attribution file for them.
