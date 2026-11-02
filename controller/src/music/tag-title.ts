@@ -6,8 +6,8 @@
 // whole values; Navidrome takes the first value that isn't empty under the keys
 // it maps to the title, and cuts it at 1,024 bytes; and the Subsonic API appends
 // the subtitle when there is one, `Title (Subtitle)`, or `Title [Live]` when the
-// subtitle brings its own brackets. Where this can't be sure what Navidrome
-// reports, it says `unsure`, and the track streams.
+// subtitle brings its own brackets. Where this knows TagLib or Navidrome reads a
+// tag another way, it says `unsure`, and the track streams.
 // - MP3 (mp3, mp2): an ID3v2.2-2.4 tag at the head: `TIT2` (`TT2`), `TIT3`
 //   (`TT3`), and `TXXX` frames described `TITLE` or `SUBTITLE`, which join them in
 //   frame order, in all four text encodings.
@@ -45,9 +45,9 @@
 // that isn't empty is decoded, since Navidrome never reports it. The same words in
 // another field, in cover art or in the audio are no title.
 // Two shapes this can't see still let a wrong file of the right size and title
-// play: a subtitle, or another of Navidrome's title keys, past the windows behind
-// a title that matches (a title past them streams), and an MP4 with a broken atom
-// after its `ilst`, which Navidrome doesn't index.
+// play, the only ones known: a subtitle, or another of Navidrome's title keys,
+// past the windows behind a title that matches (a title past them streams), and
+// an MP4 with a broken atom after its `ilst`, which Navidrome doesn't index.
 //
 // Every walk is linear in the window, whatever the file holds: no regex runs on
 // file text but a 3-4 byte frame id, the trims are loops, and the MP4 walk visits

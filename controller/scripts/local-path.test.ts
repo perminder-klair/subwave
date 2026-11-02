@@ -287,7 +287,7 @@ test('a stat that fails is no proof, and never throws on the push path', (t) => 
 // reader picked by the file's extension, as Navidrome picks it. The same words in
 // another field, or in the audio, are not the title: a byte search found `Go` in
 // another song's MP3 frames and `Greatest Hits` in its album, and aired it. Where
-// the reader can't be sure it reads the field Navidrome reads, the track streams.
+// the reader knows it reads a field another way from Navidrome, the track streams.
 // Each layout below is written as its spec has it (test-utils/tags.ts).
 
 const OTHER = 'Up';
