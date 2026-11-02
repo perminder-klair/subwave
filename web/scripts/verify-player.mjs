@@ -72,6 +72,7 @@ async function fixtureServer() {
     } });
   const active = new Set();
   const requests = [];
+  let cutFrames = 0;
   const state = { upcoming: [], history: [], privacy: {}, ui: { skin: 'classic', tuneInOverlay: false } };
   const server = createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -82,6 +83,7 @@ async function fixtureServer() {
     const url = new URL(req.url, 'http://localhost');
     const json = value => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)); };
     if (url.pathname === '/test/stats') return json({ active: active.size, requests });
+    if (url.pathname === '/test/cut') { cutFrames = Number(url.searchParams.get('frames')); return json({}); }
     if (url.pathname === '/catalog') return json({});
     if (url.pathname === '/dj') return json({ station: 'Player test' });
     if (url.pathname === '/api/state') return json(state);
@@ -103,6 +105,8 @@ async function fixtureServer() {
       frame.set([0xff, 0xfb, 0x90, 0x00]);
       const chunk = Buffer.concat(Array(4).fill(frame)); // ~104ms of audio
       res.setHeader('Content-Type', 'audio/mpeg');
+      // A connection that plays that many frames (38 is ~1s) and closes cleanly.
+      if (cutFrames) { requests.push(url.href); res.end(Buffer.concat(Array(cutFrames).fill(frame))); return; }
       // Start with ~6.7s of cushion, like a live server's initial burst, so
       // decoder startup/jitter cannot masquerade as a stale-promise stop.
       res.write(Buffer.concat(Array(256).fill(frame)));
@@ -350,6 +354,46 @@ async function compatibility(browser, origin, label) {
   await unsupported.close();
 }
 
+// usePlayer's calls into lib/reconnectBackoff.ts. The rule has its own tests; this is the wiring:
+// each reconnect is a new connection to judge, `playing` and the close both reach the rule, the
+// delay it returns is the one waited, and a press starts the curve over. Chromium only: Firefox
+// runs these silent frames out at once and ends on a media-sink error, before any close to judge.
+async function shortConnections(browser, origin, label) {
+  const context = await browser.newContext();
+  await context.addInitScript(instrument);
+  const page = await context.newPage();
+  const cut = frames => fetch(`${origin}/test/cut?frames=${frames}`);
+  // When each connection started, from the `t` the hook puts on its URL.
+  const connects = async () => (await (await fetch(`${origin}/test/stats`)).json()).requests
+    .map(href => Number(new URL(href).searchParams.get('t').split('-')[0]));
+  const gaps = async (from, count) => {
+    for (let i = 0; i < 800 && (await connects()).length <= from + count; i++) await page.waitForTimeout(50);
+    const at = (await connects()).slice(from, from + count + 1);
+    assert.equal(at.length, count + 1, `${label}: ${count} reconnects`);
+    return at.slice(1).map((t, i) => t - at[i]);
+  };
+  await cut(38);
+  await page.goto(origin);
+  await page.waitForFunction(() => !!window.commands);
+  let from = (await connects()).length;
+  await page.evaluate(() => window.commands.tune());
+  const grown = await gaps(from, 4); // ~1s of audio, then 0.5, 1, 2 and 4s
+  assert.ok(grown[1] > grown[0] && grown[2] > grown[1] && grown[3] > 4500, `grows: ${grown}`);
+  pass(`${label}: a connection that plays a moment and closes grows the delay`);
+  from = (await connects()).length;
+  await page.evaluate(() => { window.commands.tune(); window.commands.tune(); });
+  const pressed = await gaps(from, 2);
+  assert.ok(pressed[0] < 3000, `press: ${pressed}`);
+  pass(`${label}: a press starts the curve over`);
+  await cut(190); // ~5s, past the rule's threshold
+  from = (await connects()).length;
+  const stayed = await gaps(from, 1);
+  assert.ok(stayed[0] < 7000, `stayed: ${stayed}`);
+  pass(`${label}: a connection that stays up clears the count`);
+  await cut(0);
+  await context.close();
+}
+
 async function realRoutes(browserType, origin, webUrl) {
   for (const path of ['/', '/listen', '/landing']) {
     const browser = await browserType.launch();
@@ -403,6 +447,7 @@ try {
         if (!process.argv.includes('--routes-only')) {
           for (const mode of ['desktop', 'iphone', 'ipad']) await scenarios(browser, origin, name, mode);
           await compatibility(browser, origin, name);
+          if (name === 'chromium') await shortConnections(browser, origin, name);
         } else {
           assert.ok(process.env.VERIFY_WEB, '--routes-only requires VERIFY_WEB');
         }

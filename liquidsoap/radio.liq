@@ -874,8 +874,8 @@ def dj_transition(a, b) =
       # the mix (~-10 dB, ~-8 dB after makeup) however deep the cutoff dives.
       swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
                 filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_source))
-      amplify(sweep_gain, add(normalize=false,
-        [amplify(0.30, a_source), amplify(0.75, swept)]))
+      amplify(override=null, sweep_gain, add(normalize=false,
+        [amplify(override=null, 0.30, a_source), amplify(override=null, 0.75, swept)]))
     else
       a_source
     end
@@ -901,7 +901,7 @@ def dj_transition(a, b) =
       # collapses music to -115 dB on 2.2.5; a 40 Hz HPF on a 440 Hz tone
       # renders -inf on 2.4.4). Build the high-pass as dry - lowpass(dry).
       blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_source)
-      add(normalize=false, [a_source, amplify(-1., blend_low)])
+      add(normalize=false, [a_source, amplify(override=null, -1., blend_low)])
     else
       a_source
     end
@@ -981,7 +981,7 @@ def dj_transition(a, b) =
       washed = comb(delay=wd, feedback=wash_fb, a_source)
       washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
                  filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
-      amplify(wash_gain, washed)
+      amplify(override=null, wash_gain, washed)
     else
       a_source
     end
@@ -1079,12 +1079,12 @@ def dj_transition(a, b) =
          comb(delay=0.113, feedback=diss_fb, a_source),
          comb(delay=0.151, feedback=diss_fb, a_source),
          comb(delay=0.181, feedback=diss_fb, a_source),
-         amplify(-4., a_source)])
-      washed = amplify(0.7, washed)
+         amplify(override=null, -4., a_source)])
+      washed = amplify(override=null, 0.7, washed)
       washed = filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet,
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
       # Dry (faded) + wash: the track walks out through its own ambience.
-      add(normalize=false, [a_source, amplify(diss_gain, washed)])
+      add(normalize=false, [a_source, amplify(override=null, diss_gain, washed)])
     else
       a_source
     end
@@ -1177,7 +1177,7 @@ def dj_transition(a, b) =
           end
         g * master
       end
-      amplify(chop_gain, a_source)
+      amplify(override=null, chop_gain, a_source)
     else
       a_source
     end
@@ -1258,7 +1258,7 @@ def dj_transition(a, b) =
         e = if e < 0. then 0. else e end
         if e >= d then 0.0 else 1.0 - e / d end
       end
-      gated  = amplify(loop_dry, a_source)
+      gated  = amplify(override=null, loop_dry, a_source)
       looped = comb(delay=bar, feedback=0.0, gated)
       looped = comb(delay=2.0 * bar, feedback=0.0, looped)
       looped = if 4.0 * bar < d then comb(delay=4.0 * bar, feedback=0.0, looped) else looped end
@@ -1270,7 +1270,7 @@ def dj_transition(a, b) =
       # exists, recreating the ~+6 dB transition-entry jump.
       looped = filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet,
                  filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
-      amplify(loop_gain, looped)
+      amplify(override=null, loop_gain, looped)
     else
       a_source
     end
@@ -1366,7 +1366,7 @@ def dj_transition(a, b) =
       bs = filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet,
              filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
       bs_low = filter.rc(frequency=160., mode="low", wetness=1., bs)
-      add(normalize=false, [bs, amplify(bass_amt, bs_low)])
+      add(normalize=false, [bs, amplify(override=null, bass_amt, bs_low)])
     else
       b_source
     end
@@ -2626,6 +2626,27 @@ server.register(
   description="Consume a proto_subhttp completion outcome: ready / failed / pending",
   usage="subhttp_probe_status <probe-id>",
   fun(arg) -> take_subhttp_outcome(string.trim(arg))
+)
+
+# Whether this container can read a regular file. The controller asks with a
+# real file off its MUSIC_LIBRARY_PATH mount (music/library-mount.ts) and only
+# sends a local path once this says "yes", because the mixer is what opens the
+# file and the default compose files mount no library here. Read-only: `test`
+# stats the path and opens nothing, so a large file costs nothing. The timeout
+# bounds a hung mount, and an unanswered question reads "no", the safe side: the
+# track streams.
+server.register(
+  "path_readable",
+  description="Whether the mixer can read a regular file at this path: yes / no",
+  usage="path_readable <path>",
+  fun(arg) -> begin
+    path = process.quote(string.trim(arg))
+    try
+      if process.test(timeout=1., "test -f #{path} && test -r #{path}") then "yes" else "no" end
+    catch _ do
+      "no"
+    end
+  end
 )
 
 # What a skip would air next from dj_queue: "ready" (a resolved request is

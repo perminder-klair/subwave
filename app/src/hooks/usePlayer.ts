@@ -172,6 +172,12 @@ export function usePlayer(
         }
       } else if (state === State.Buffering || state === State.Loading) {
         setStatus((s) => (s === 'playing' ? 'connecting' : s));
+      } else if (state === State.Ended || state === State.Stopped || state === State.Error) {
+        // A dead item, as PlaybackError says above: an `ended` brings no
+        // PlaybackError, and an item that played waits up to PLAYED_MAX_MS for
+        // its reload, so without this the UI says playing over that silence
+        // and a regained link (gated on status below) never fires.
+        if (tunedInRef.current) setStatus((s) => (s === 'playing' ? 'connecting' : s));
       }
       recoveryRef.current?.onState(state);
     },

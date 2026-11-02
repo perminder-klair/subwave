@@ -84,7 +84,8 @@ export function stationReadsOpen(privacy: StationPrivacy | null | undefined, pha
 /** `POST /station-auth` outcomes. That route fails CLOSED (401) whenever a lock
  *  is on and the password is wrong; 429 is its rate limit. Anything else —
  *  a network error, a 5xx, an older controller's 404, a 401 or a 200 from
- *  something in front of the controller — says nothing about the password. */
+ *  something in front of the controller — says nothing about the password.
+ *  web/lib/stationAuth.ts mirrors these rules; a change goes in both. */
 export type StationAuthResult = 'ok' | 'denied' | 'rate-limited' | 'unavailable';
 
 /** What came with the status, which tells the controller's answer from a proxy's. */

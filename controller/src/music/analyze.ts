@@ -386,7 +386,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
       console.log(
         stemSlotsLeft <= 0
           ? `[analyze] stem backfill skipped — cache is at its ${settings.get()?.audio?.stemCacheGb ?? 15} GB budget ` +
-              '(raise it in Settings → Transitions to cache more tracks)'
+              '(raise it in Settings → Stems to cache more tracks)'
           : `[analyze] stem backfill skipped — the ${reserved} ride-along stem writes already queued this pass ` +
               `claim the budget's remaining ~${stemSlotsLeft} track slots`,
       );
@@ -573,7 +573,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
       stemGateAnnounced = true;
       console.log(
         `[analyze] stem cache budget reached mid-pass — stems skipped for the remaining net-new tracks ` +
-          '(raise audio.stemCacheGb in Settings → Transitions to cache more)',
+          '(raise audio.stemCacheGb in Settings → Stems to cache more)',
       );
     }
     return trackStemDecision.want ? stemCacheStore.dirFor(id) : undefined;

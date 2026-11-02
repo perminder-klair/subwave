@@ -119,6 +119,10 @@ function fileToFormValues(j: SkillFileResponse) {
   };
 }
 
+// Width of a number field in SKILL SETTINGS: wide enough for its label and a
+// two-line hint, so a row of fields keeps one rhythm.
+const NUMBER_FIELD_WIDTH = 170;
+
 function titleCase(slug: string): string {
   return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
@@ -830,10 +834,14 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
             {configFields.length > 0 && (
               <div className="sw-section">
                 <div style={sectionLabel}>SKILL SETTINGS</div>
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
+                {/* Top-aligned: each field is label, input, then an optional hint, so
+                    aligning the tops lines the labels and the inputs up across a row
+                    whatever hint hangs under a neighbour. A number field has a fixed
+                    width its hint wraps inside, instead of stretching to the hint. */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
                   {configFields.map(f => (
-                    <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: f.type === 'number' ? '0 0 auto' : '1 1 320px', minWidth: 0 }}>
-                      <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>{f.label}</span>
+                    <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: f.type === 'number' ? `0 0 ${NUMBER_FIELD_WIDTH}px` : '1 1 320px', minWidth: 0 }}>
+                      <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={f.label}>{f.label}</span>
                       <input
                         type={f.type === 'number' ? 'number' : f.type === 'url' ? 'url' : 'text'}
                         min={f.type === 'number' ? f.min : undefined}
@@ -845,13 +853,13 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                         style={{
                           ...inputBase,
                           ...(f.type === 'number'
-                            ? { width: 110, padding: '11px 12px', fontVariantNumeric: 'tabular-nums' }
+                            ? { width: '100%', padding: '11px 12px', fontVariantNumeric: 'tabular-nums' }
                             : { width: '100%', minWidth: 0, padding: '11px 15px' }),
                           boxSizing: 'border-box',
                           fontSize: 14,
                         }}
                       />
-                      {f.hint && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{f.hint}</span>}
+                      {f.hint && <span style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.4 }}>{f.hint}</span>}
                     </label>
                   ))}
                 </div>

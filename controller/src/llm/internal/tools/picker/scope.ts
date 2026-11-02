@@ -79,6 +79,11 @@ export interface PickerScope {
   // Request path only: registers identifyRequestedTrack. No-op unless a
   // web-search provider is ready. Never set on the per-track picker.
   resolveReferences: boolean;
+  // Request path only: the listener's cleaned words. searchLibrary looks the
+  // recording they name up itself (#2195), so a named track never hangs on how
+  // the model worded its query. Data: it picks library rows and reaches no
+  // prompt or tool answer. null on every pick path.
+  requestText: string | null;
 }
 
 // Every field defaults to "no constraint". Spread over a partial so there is
@@ -106,6 +111,7 @@ const NO_SCOPE: PickerScope = {
   listenerFavourites: null,
   audioWaypoint: null,
   resolveReferences: false,
+  requestText: null,
 };
 
 export function pickerScope(partial: Partial<PickerScope> = {}): PickerScope {

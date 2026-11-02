@@ -42,6 +42,7 @@ import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { readFileSync } from 'node:fs';
 import { formatPlan, parseFacets, parseWhere, planAcoustics, type AcousticsPlan } from './acoustics-plan.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
+import { walkFileInfo } from './tag-library/flags.js';
 
 const logEvent = makeEventLogger('analyze');
 
@@ -229,6 +230,7 @@ async function main() {
           year: song.year,
           genres: subsonic.songGenres(song),
           duration: song.duration,
+          ...walkFileInfo(song),
         });
         liveIds.add(song.id);
         walked += 1;
@@ -259,7 +261,7 @@ async function main() {
     // adopt.
     if (walkComplete && walked > 0) {
       const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: args.includes('--confirm-prune') });
-      if (held) logEvent('warning', held.message);
+      if (held) logEvent('warning', held.message, { hold: true });
       if (pruned > 0) {
         console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
       }

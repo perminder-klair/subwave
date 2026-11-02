@@ -32,6 +32,7 @@ const SUITES = [
   'analyzer_facets_test.py', // facet functions are pure; path wrappers = decode + facet
   'analyzer_whole_file_test.py', // loudness v2 + edges: one whole-file decode, absolute floor
   'analyzer_stems_marker_test.py', // no stem writes into an unmarked (unmounted) stems root
+  'analyzer_shared_modes_test.py', // shared stems/transitions written 777/666 whatever the umask
 ];
 
 const probe = spawnSync('python3', ['--version'], { stdio: 'ignore' });
