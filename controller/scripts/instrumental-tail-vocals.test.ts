@@ -372,8 +372,9 @@ test('embed text: the Sound line drops the word for a tail-sung track, through b
 });
 
 test('a changed Sound line bumps the text format, so old vectors read as stale', () => {
-  assert.equal(EMBED_TEXT_VERSION, 4);
+  assert.ok(EMBED_TEXT_VERSION >= 4, 'the tail changed the Sound line at format 4');
   assert.equal(resolveIndexTextFormat(3, 20_000), 3, 'a v3 index keeps its format until it is re-embedded');
+  assert.equal(resolveIndexTextFormat(2, 20_000), 2, 'an index that skipped a version stays behind too');
   assert.equal(resolveIndexTextFormat(3, 20_000, true), EMBED_TEXT_VERSION);
 });
 
