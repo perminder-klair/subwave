@@ -35,7 +35,7 @@ export interface SeasonWindow {
 // module); pinned by scripts/blocklist-name-fold.test.ts. Punctuation beyond
 // the apostrophe is deliberately not folded (`trip-hop` != `trip hop`).
 export const normText = (s: unknown) =>
-  String(s ?? '').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
+  String(s ?? '').normalize('NFC').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
 
 // Number(x) + range test rather than z.number().int(): a numeric STRING from
 // <input type=number> has always been accepted.
@@ -143,8 +143,6 @@ export const blockRuleSchema = z.object({
       .default([]),
   ),
 });
-
-export type BlockRulePatch = z.output<typeof blockRuleSchema>;
 
 // `POST /library/blocklist` — the id-entry create body. Two accepted forms, so
 // only `type` is required: `{type, trackId}` (server resolves the rest) or a

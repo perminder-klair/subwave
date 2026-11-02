@@ -1,8 +1,10 @@
 // Use dismissTo to return to the existing player; replace stacks a second
-// player inside the modal. The config-seeded featured station cannot be removed.
+// player inside the modal. The config-seeded featured station cannot be removed,
+// but every saved station, the featured and tuned-in ones included, can have its
+// Station login edited (#1873).
 
 import { router } from 'expo-router';
-import { ChevronRight, Trash2, X } from 'lucide-react-native';
+import { ChevronRight, KeyRound, Trash2, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -73,6 +75,9 @@ export default function Stations() {
     ]);
   };
 
+  const editLogin = (st: StationRef) =>
+    router.push({ pathname: '/station-login', params: { url: st.url, name: st.name } });
+
   // Check station health in onboarding before tuning in.
   const discover = (st: DirectoryStation) =>
     router.push({ pathname: '/onboarding', params: { url: st.url, name: st.name } });
@@ -130,6 +135,22 @@ export default function Stations() {
               <Text className="font-mono text-ink" style={{ fontSize: 11, opacity: 0.8 }} numberOfLines={1}>
                 {stripProto(currentUrl)}
               </Text>
+              <Pressable
+                onPress={() => editLogin({ url: currentUrl, name: currentName })}
+                accessibilityRole="button"
+                accessibilityLabel={`Station login for ${currentName}`}
+                className="flex-row items-center"
+                style={{ gap: 8, marginTop: 6, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.softBorder }}
+              >
+                <KeyRound size={14} color={colors.accent} />
+                <Text
+                  className="font-mono text-ink"
+                  style={{ flex: 1, fontSize: 10.5, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: '700' }}
+                >
+                  Station login
+                </Text>
+                <ChevronRight size={14} color={colors.muted} />
+              </Pressable>
             </View>
           </>
         ) : null}
@@ -156,6 +177,15 @@ export default function Stations() {
                   {stripProto(st.url)}
                 </Text>
               </View>
+              <Pressable
+                onPress={() => editLogin(st)}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel={`Station login for ${st.name}`}
+                style={{ padding: 4 }}
+              >
+                <KeyRound size={15} color={colors.muted} />
+              </Pressable>
               {removable ? (
                 <Pressable
                   onPress={() => confirmForget(st)}

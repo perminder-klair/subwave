@@ -1,5 +1,0 @@
-# Standalone tool: its own deps and any local db copies stay out of git.
-node_modules/
-*.db
-*.db-wal
-*.db-shm

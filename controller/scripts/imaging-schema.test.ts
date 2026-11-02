@@ -6,7 +6,7 @@
 // the conversion notes call out (a .catch()ed description, a UI band wider
 // than the route's).
 //
-// Run: npx tsx scripts/imaging-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- imaging-schema`.
 import assert from 'node:assert/strict';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';

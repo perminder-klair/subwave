@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-episode-source-'));
 let albumCalls = 0;
@@ -40,7 +41,7 @@ const { buildPickerTools } = await import('../src/llm/internal/tools/picker/inde
 const { showNoRepeatGuard } = await import('../src/music/show-recency.js');
 const { showSchema } = await import('../src/schemas/show.js');
 await settings.load(); await library.load(); await blocklist.load();
-after(async () => { db.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }); });
+after(async () => { db.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await removeTempDir(root); });
 for (const [id, title] of [['one', 'One'], ['two', 'Two'], ['duplicate', 'One'], ['short', 'Short']]) {
   db.upsertTrackMeta(id, { title, artist: 'Artist', artistId: 'artist', album: 'Album', albumId: 'album', duration: id === 'short' ? 10 : 180 });
 }
@@ -66,6 +67,32 @@ test('strict playlist and exclusions intersect the prepared catalogue; an empty 
   assert.deepEqual([...source.ids], ['one']);
   assert.notEqual(source.identity, unrestricted.identity, 'a fallback built with old catalogue membership cannot publish over the new source');
   await assert.rejects(resolveArtistEpisodeSource('artist', show({ playlistIds: ['exclude'], playlistStrict: true, excludedPlaylistIds: ['exclude'] }), 'episode-three'), /No playable/);
+});
+
+test('a clean episode drops tagged tracks before the strict locks; nothing clean left refuses it', async () => {
+  // Their own artist ids: the catalogue is cached per artist for a minute.
+  const seed = (artistId: string, rows: Array<[string, string | null, string[]]>) => {
+    for (const [id, explicitStatus, genres] of rows) {
+      db.upsertTrackMeta(id, { title: id, artist: artistId, artistId, album: 'Album', albumId: 'album', duration: 180, genres, explicitStatus });
+    }
+  };
+  seed('mixed', [['m-tagged', 'explicit', ['Rare']], ['m-clean', 'clean', ['Soul']], ['m-none', null, ['Soul']], ['m-more', null, ['Soul']]]);
+  seed('tagged-only', [['t-1', 'explicit', []], ['t-2', 'explicit', []], ['t-3', 'explicit', []], ['t-4', 'explicit', []]]);
+  try {
+    const open = await resolveArtistEpisodeSource('mixed', show(), 'episode-tags');
+    assert.ok(open.ids.has('m-tagged'), 'off: the catalogue as before');
+    const clean = await resolveArtistEpisodeSource('mixed', show({ excludeExplicit: true }), 'episode-tags');
+    assert.deepEqual([...clean.ids].sort(), ['m-clean', 'm-more', 'm-none']);
+    assert.notEqual(clean.identity, open.identity, 'the fallback built for the old catalogue cannot publish over this one');
+    // Rare is the tagged track's alone, so the genre lock is what gives way.
+    const strict = await resolveArtistEpisodeSource('mixed', show({ excludeExplicit: true, filtersStrict: true, genres: ['Rare'] }), 'episode-tags');
+    assert.deepEqual([...strict.ids].sort(), ['m-clean', 'm-more', 'm-none']);
+    await assert.rejects(resolveArtistEpisodeSource('tagged-only', show({ excludeExplicit: true }), 'episode-tags'), /No playable/);
+  } finally {
+    const remove = db.getDb()!.prepare('DELETE FROM tracks WHERE artist_id = ?');
+    remove.run('mixed');
+    remove.run('tagged-only');
+  }
 });
 
 test('an incomplete mirror falls back to targeted albums and rejects another artist in the same album', async () => {

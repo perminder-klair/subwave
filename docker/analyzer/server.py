@@ -715,6 +715,9 @@ class AnalyzeRequest(BaseModel):
     # Absent = the flat response above, unchanged. embed / vocal /
     # embedding_only are ignored when this is set: the facets say it all.
     facets: list[str] | None = None
+    # Facet requests only: a tail measured without the vocal/stems facets also
+    # carries the outro's vocal ranges (Demucs on the tail window only).
+    tail_vocals: bool = False
 
 
 @app.post("/analyze")
@@ -752,6 +755,8 @@ async def analyze(req: AnalyzeRequest):
     facets = getattr(req, "facets", None)
     if facets is not None:
         payload["facets"] = facets
+        if req.tail_vocals:
+            payload["tail_vocals"] = True
     msg = await analyzer_pool.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")

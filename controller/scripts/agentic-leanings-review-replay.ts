@@ -105,6 +105,7 @@ async function main() {
       supportedLeanings: Array.isArray(compact.find((candidate) => candidate.id === replacement.id)?.leaningsMatches)
         ? compact.find((candidate) => candidate.id === replacement.id)!.leaningsMatches as string[]
         : [],
+      baselineSupportedLeanings: Array.isArray(compact[0]?.leaningsMatches) ? compact[0].leaningsMatches as string[] : [],
       flowCloseness: compact.find((candidate) => candidate.id === replacement.id)?.flowCloseness,
     }) : null;
     const resolvedSelectedId = replacement && validation?.valid ? review.selectedId : fixture.baseline.id;

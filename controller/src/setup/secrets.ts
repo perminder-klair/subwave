@@ -14,25 +14,23 @@ import { existsSync } from 'node:fs';
 import { chmod, readFile } from 'node:fs/promises';
 import { parse as parseDotenv } from 'dotenv';
 import { STATE_DIR } from '../config.js';
+import { LLM_KEY_ENV_VARS } from '../schemas/providers.js';
+import { SECRET_CONTROL_CHAR_RE, stripSecretControlChars } from '../schemas/settings.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { withPoolLock } from '../util/google-key-pool.js';
 
 const PATH = `${STATE_DIR}/secrets.env`;
 
 // Keys the wizard may write; anything else is ignored, so the form cannot be
-// abused as a generic env-var setter.
+// abused as a generic env-var setter. The LLM providers' keys come from the
+// catalogue (schemas/providers.ts), in its order.
 export const SECRET_ENV_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'GOOGLE_GENERATIVE_AI_API_KEY',
-  // Comma-separated Gemini key POOL, shared by the LLM leg and the TTS engine.
-  // GOOGLE_GENERATIVE_AI_API_KEY stays valid on its own and is treated as a
-  // one-key pool, so a station that only ever set one key is unaffected.
+  ...LLM_KEY_ENV_VARS,
+  // Comma-separated Gemini key POOL. The LLM leg reads it; TTS deliberately does
+  // not (#1778). `GOOGLE_GENERATIVE_AI_API_KEY` (singular, from the catalogue)
+  // stays valid on its own and is treated as a one-key pool — a station that
+  // only ever set one key is unaffected.
   'GOOGLE_GENERATIVE_AI_API_KEYS',
-  'OPENROUTER_API_KEY',
-  'REQUESTY_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'AI_GATEWAY_API_KEY',
   'ELEVENLABS_API_KEY',
   'FISH_API_KEY',
   'SEARCH_API_KEY',
@@ -46,6 +44,17 @@ export const SECRET_ENV_KEYS = [
   'LISTENBRAINZ_USER_TOKEN',
   'LISTENBRAINZ_API_URL',
 ];
+
+// A key with a control character in it (one pasted across a line wrap, say)
+// can't go in an HTTP header: fetch throws, and its message quotes the whole
+// header value, key included. Every route that probes a key asks this before
+// the probe, so the operator gets this answer instead of the key on screen.
+// Saving strips the same characters instead (schemas/settings.ts).
+export function secretValueIssue(value: string): string | null {
+  return SECRET_CONTROL_CHAR_RE.test(value)
+    ? 'The key has a line break or other control character in it. Paste it again as one line.'
+    : null;
+}
 
 // An unquoted value carrying a `#`: dotenv truncates there (correct .env
 // semantics), which is also how a secret containing a `#` loses its tail. Warned
@@ -144,7 +153,12 @@ export function saveSecrets(patch: Record<string, string>): Promise<void> {
  * Only for a caller that already holds `withPoolLock`. Everything else calls
  * `saveSecrets`.
  */
-export async function saveSecretsWithinLock(patch: Record<string, string>): Promise<void> {
+export async function saveSecretsWithinLock(rawPatch: Record<string, string>): Promise<void> {
+  // Control characters stripped as every secret's save path does
+  // (schemas/settings.ts), so a key with a line break is joined, not refused.
+  const patch = Object.fromEntries(
+    Object.entries(rawPatch).map(([key, value]) => [key, stripSecretControlChars(value)]),
+  );
   // Same reader as the boot path: this rewrites the whole file, so a value read
   // wrong here is a stored secret destroyed on disk.
   const current: Record<string, string> = existsSync(PATH)

@@ -2,7 +2,8 @@
 // column as JSON is parsed here, defensively — a row written by an older schema
 // version must degrade to null rather than throw a query.
 
-import type { MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import type { ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import { parseOutroVocalJson, parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
 
 export function rowToTrack(row: TrackRow): TrackRecord {
   return {
@@ -28,6 +29,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     genre: row.genre,
     durationSec: row.duration_sec,
     lastfmTags: row.lastfm_tags ? safeParseArray(row.lastfm_tags) : null,
+    lastfmTrackTagsAt: row.lastfm_track_tags_at ?? null,
     lyricExcerpt: row.lyric_excerpt,
     enrichedAt: row.enriched_at,
     moods: row.moods ? safeParseArray(row.moods) : [],
@@ -46,19 +48,21 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     loudnessLufs: row.loudness_lufs ?? null,
     peakDb: row.peak_db ?? null,
     structure: row.structure_json ? safeParseSections(row.structure_json) : null,
-    // [] means analysed instrumental; only a SQL NULL (not computed) maps to null.
-    vocalRanges: row.vocal_ranges_json != null ? parseSpans(row.vocal_ranges_json) : null,
+    ...parseVocalRangesJson(row.vocal_ranges_json),
     pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
     beats: row.beats_json ? parseMsArray(row.beats_json) : null,
     bars: row.bars_json ? parseMsArray(row.bars_json) : null,
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
+    audioDescriptors: row.audio_descriptors ? safeParseArray(row.audio_descriptors) : [],
     outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
+    ...parseOutroVocalJson(row.outro_json),
     leadSilenceMs: row.lead_silence_ms ?? null,
     tailSilenceMs: row.tail_silence_ms ?? null,
     tailStartMs: row.tail_start_ms ?? null,
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
+    explicitStatus: row.explicit_status ?? null,
   };
 }
 
@@ -73,8 +77,8 @@ export function parseOutroJson(s: string): TrackOutro | null {
     const msList = (x: unknown): number[] | null =>
       Array.isArray(x) && x.length ? x.filter((n): n is number => Number.isFinite(n)) : null;
     // Gate on KEY PRESENCE: absent stays null (not computed), present-but-empty
-    // survives as [] (analysed instrumental tail). Malformed entries drop
-    // span-by-span — a wholesale [] would fake "measured instrumental" and
+    // survives as [] (no detected tail vocals). Malformed entries drop
+    // span-by-span — a wholesale [] would fake "no tail vocals" and
     // permanently satisfy the backfill's tail-missing probe.
     let vocalRanges: Array<{ startMs: number; endMs: number }> | null = null;
     if (Array.isArray(v?.vocalRanges)) {
@@ -186,6 +190,11 @@ export function safeParseArray(s: string): string[] {
   }
 }
 
+// The spec's values, exact. Everything else, its own '' included, is no tag.
+export function normaliseExplicitStatus(v: unknown): ExplicitStatus | null {
+  return v === 'explicit' || v === 'clean' ? v : null;
+}
+
 export function normaliseYear(y: unknown): number | null {
   if (y == null) return null;
   if (typeof y === 'number' && Number.isFinite(y)) return Math.trunc(y);
@@ -204,6 +213,7 @@ export function rowToMoodPool(row: MoodPoolRow): MoodPoolRecord {
     genres: row.genres ? safeParseArray(row.genres) : [], genre: row.genre,
     moods: row.moods ? safeParseArray(row.moods) : [], energy: row.energy ?? null,
     durationSec: row.duration_sec,
+    explicitStatus: row.explicit_status ?? null,
   };
 }
 
@@ -218,7 +228,8 @@ export function rowToEnergyPool(row: EnergyPoolRow): EnergyPoolRecord {
     bpm: row.bpm ?? null, musicalKey: row.musical_key ?? null,
     introMs: row.intro_ms ?? null, loudnessLufs: row.loudness_lufs ?? null,
     structure: row.structure_json ? safeParseSections(row.structure_json) : null,
-    vocalRanges: row.vocal_ranges_json != null ? parseSpans(row.vocal_ranges_json) : null,
+    ...parseVocalRangesJson(row.vocal_ranges_json),
+    ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
     pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
   };
 }

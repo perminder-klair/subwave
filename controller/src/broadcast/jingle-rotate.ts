@@ -3,17 +3,25 @@
 // mixer images upgrade independently. The mixer reads its ratio at startup, so changes require
 // a restart. See docs/internals/broadcast.md. #1619, #997, #1258, #1468.
 
-import type { JingleRotateOwner } from '../schemas/settings.js';
+import { jinglePlacementSchema, type JinglePlacement, type JingleRotateOwner } from '../schemas/settings.js';
 
 export type { JingleRotateOwner };
+
+type JingleSettings = { jingleRatio?: unknown; jingleRotate?: unknown; jinglePlacement?: unknown };
+
+// Malformed/absent placement preserves the existing station.
+export function jinglePlacement(s: JingleSettings | null | undefined): JinglePlacement {
+  return jinglePlacementSchema.safeParse(s?.jinglePlacement).data ?? 'between';
+}
 
 // Who owns the rotate, from a settings object. Anything that is not the
 // explicit opt-in reads as the mixer, so an absent key, a hand-edited typo and
 // a settings.json from a older release all keep the pre-existing station.
 export function jingleRotateOwner(
-  s: { jingleRotate?: unknown } | null | undefined,
+  s: JingleSettings | null | undefined,
 ): JingleRotateOwner {
-  return s?.jingleRotate === 'controller' ? 'controller' : 'mixer';
+  // Both draws share one anti-repeat memory. The mixer cannot see an overlay draw.
+  return jinglePlacement(s) !== 'between' || s?.jingleRotate === 'controller' ? 'controller' : 'mixer';
 }
 
 // The exact BYTES of `liquidsoap_jingle_ratio.txt`. 0 while the controller owns
@@ -30,7 +38,7 @@ export function jingleRotateOwner(
 // radio.liq has always been handed makes it keep its own default. One
 // function, so the file and the /debug reading of it cannot drift.
 export function mixerJingleRatioFile(
-  s: { jingleRatio?: unknown; jingleRotate?: unknown } | null | undefined,
+  s: JingleSettings | null | undefined,
 ): string {
   return jingleRotateOwner(s) === 'controller' ? '0' : String(s?.jingleRatio);
 }
@@ -52,10 +60,11 @@ export function mixerJingleRatioFile(
 // queue.playRotateJingle() owns that, by spending the offer either way.
 export function rotateJingleDue(p: {
   owner: JingleRotateOwner;
+  placement?: JinglePlacement;
   ratio: number;
   tracksSinceJingle: number;
 }): boolean {
-  if (p.owner !== 'controller') return false;
+  if (p.placement === 'over' || p.owner !== 'controller') return false;
   if (!(p.ratio > 0)) return false;
   return p.tracksSinceJingle >= p.ratio;
 }
@@ -101,7 +110,7 @@ export function pickRotateJingle(
 // and is therefore running on the previous contents. Nothing distinguishes it
 // from a restarted one, which is why the control says "needs restart".
 export function jingleRotateStatus(
-  s: { jingleRatio?: unknown; jingleRotate?: unknown } | null | undefined,
+  s: JingleSettings | null | undefined,
   tracksSinceJingle: number,
   mixerRatioOnDisk: string | null = null,
 ) {
@@ -110,6 +119,7 @@ export function jingleRotateStatus(
   const intended = mixerJingleRatioFile(s);
   return {
     owner,
+    placement: jinglePlacement(s),
     ratio,
     mixerRatioIntended: intended,
     mixerRatioOnDisk,
@@ -145,17 +155,19 @@ export function jingleRotateStatus(
 type OwnerListener = (owner: JingleRotateOwner) => void;
 const ownerListeners = new Set<OwnerListener>();
 let currentOwner: JingleRotateOwner = 'mixer';  // the default, so a boot into 'mixer' fires nothing
+let currentPlacement: JinglePlacement = 'between';
 
 export function onJingleRotateOwnerChange(fn: OwnerListener): void {
   ownerListeners.add(fn);
 }
 
 // Fires on a real change only. load() and every successful update() push the
-// owner in whether or not it moved, and zeroing the counter on every unrelated
+// owner/placement in whether or not they moved, and zeroing the counter on every unrelated
 // settings save would quietly hold the rotate off on a chatty admin session.
-export function setJingleRotateOwner(owner: JingleRotateOwner): void {
-  if (owner === currentOwner) return;
+export function setJingleRotateOwner(owner: JingleRotateOwner, placement: JinglePlacement = 'between'): void {
+  if (owner === currentOwner && placement === currentPlacement) return;
   currentOwner = owner;
+  currentPlacement = placement;
   for (const fn of ownerListeners) {
     // One bad subscriber must not leave the change half-applied for the others.
     try { fn(owner); } catch { /* subscriber's problem */ }

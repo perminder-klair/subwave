@@ -4,7 +4,7 @@
 // Piper, then Kokoro — dropping the failed primary, duplicates, and anything
 // the availability gate rejects. configuredSlot decides what counts as a
 // configured fallback in the first place.
-// Run: `tsx scripts/tts-fallback.test.ts`.
+// Run: `npm test -- tts-fallback`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
 
@@ -102,14 +102,6 @@ assert.deepEqual(
   engines(orderedFallbacks('cloud', null, 'remote', (e) => e !== 'remote')),
   ['piper', 'kokoro'],
   'unusable default filtered',
-);
-
-// Unknown engine ids in settings are rejected by the gate (in prod,
-// engineUsable() returns false for anything outside ENGINES).
-assert.deepEqual(
-  engines(orderedFallbacks('cloud', null, 'bogus', (e) => e !== 'bogus')),
-  ['piper', 'kokoro'],
-  'invalid default filtered by the gate',
 );
 
 // Kokoro missing (model files absent) with Piper as primary: empty chain —

@@ -3,6 +3,6 @@
 // Barrel so call sites keep importing from `llm/speech.js` unchanged.
 
 export { speak, isConfigured, requestedCloudExpressionCueFamilyForPersona } from './internal/speech/cloud-speech.js';
-export { listVoices, normalizeVoiceList } from './internal/speech/voice-catalog.js';
+export { listVoices } from './internal/speech/voice-catalog.js';
 export { probeFishKey } from './internal/speech/fish-audio.js';
-export type { CloudVoice, VoiceListResult } from './internal/speech/voice-catalog.js';
+export { elevenLabsTtsModelIds } from './internal/core/pure.js';

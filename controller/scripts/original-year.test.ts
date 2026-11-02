@@ -6,6 +6,7 @@
 //
 // Run: npm test -- original-year
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   earliestOriginalYear,
@@ -15,17 +16,6 @@ import {
   type MbRecording,
 } from '../src/music/musicbrainz.js';
 
-let failures = 0;
-async function test(name: string, fn: () => void | Promise<void>) {
-  try {
-    await fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  ✗ ${name}\n    ${(err as Error).message}`);
-  }
-}
-
 const rec = (over: Partial<MbRecording>): MbRecording => ({
   score: 100,
   title: 'Dancing Queen',
@@ -33,8 +23,7 @@ const rec = (over: Partial<MbRecording>): MbRecording => ({
   ...over,
 });
 
-console.log('earliestOriginalYear (MB candidate filtering):');
-await test('takes the EARLIEST plausible year across matching recordings', () => {
+test('takes the EARLIEST plausible year across matching recordings', () => {
   const recs = [
     rec({ 'first-release-date': '2011-04-04' }), // remaster/comp appearance
     rec({ 'first-release-date': '1976-08-15' }), // the original
@@ -43,7 +32,7 @@ await test('takes the EARLIEST plausible year across matching recordings', () =>
   ];
   assert.equal(earliestOriginalYear(recs, { title: 'Dancing Queen', artist: 'ABBA' }), 1976);
 });
-await test('low-score and off-title/off-artist candidates are ignored', () => {
+test('low-score and off-title/off-artist candidates are ignored', () => {
   const recs = [
     rec({ score: 60, 'first-release-date': '1950' }),                      // weak match
     rec({ title: 'Completely Different Song', 'first-release-date': '1960' }),
@@ -52,11 +41,11 @@ await test('low-score and off-title/off-artist candidates are ignored', () => {
   ];
   assert.equal(earliestOriginalYear(recs, { title: 'Dancing Queen', artist: 'ABBA' }), 1976);
 });
-await test('normalised title matching survives remaster suffixes and punctuation', () => {
+test('normalised title matching survives remaster suffixes and punctuation', () => {
   const recs = [rec({ title: 'Dancing Queen (Remastered)', 'first-release-date': '1976' })];
   assert.equal(earliestOriginalYear(recs, { title: 'Dancing Queen', artist: 'ABBA' }), 1976);
 });
-await test('implausible years (pre-1900, far-future, junk) never resolve', () => {
+test('implausible years (pre-1900, far-future, junk) never resolve', () => {
   const recs = [
     rec({ 'first-release-date': '1899' }),
     rec({ 'first-release-date': '3000' }),
@@ -64,15 +53,15 @@ await test('implausible years (pre-1900, far-future, junk) never resolve', () =>
   ];
   assert.equal(earliestOriginalYear(recs, { title: 'Dancing Queen', artist: 'ABBA' }), null);
 });
-await test('trusted (MBID) lookups skip the score/title/artist gate but keep the year sanity window', () => {
+test('trusted (MBID) lookups skip the score/title/artist gate but keep the year sanity window', () => {
   const recs = [rec({ score: 0, title: 'Totally Renamed', 'first-release-date': '1976' })];
   assert.equal(earliestOriginalYear(recs, { title: 'Dancing Queen', artist: 'ABBA', trusted: true }), 1976);
   assert.equal(earliestOriginalYear([rec({ score: 0, 'first-release-date': '1850' })], { title: 'x', artist: 'y', trusted: true }), null);
 });
-await test('empty / no-match input resolves null (caller records a checked miss)', () => {
+test('empty / no-match input resolves null (caller records a checked miss)', () => {
   assert.equal(earliestOriginalYear([], { title: 'Dancing Queen', artist: 'ABBA' }), null);
 });
-await test('maxYear (the file year) caps candidates — a later mix release cannot win', () => {
+test('maxYear (the file year) caps candidates — a later mix release cannot win', () => {
   // Real case: "BREAK MY SOUL" (2022) resolved to 2025 via a 2025 DJ-mix
   // recording before the cap existed.
   const recs = [
@@ -89,8 +78,7 @@ await test('maxYear (the file year) caps candidates — a later mix release cann
   );
 });
 
-console.log('compilation title/artist noise stripping (retry query):');
-await test('stripTitleNoise removes stacked trailing (…)/[…] groups, never to empty', () => {
+test('stripTitleNoise removes stacked trailing (…)/[…] groups, never to empty', () => {
   assert.equal(stripTitleNoise('Super Gremlin (Mixed)'), 'Super Gremlin');
   assert.equal(stripTitleNoise('I Like You (A Happier Song) [feat. Doja Cat] [Mixed]'), 'I Like You');
   assert.equal(stripTitleNoise('Big Energy (feat. DJ Khaled) [Remix] [Mixed]'), 'Big Energy');
@@ -98,7 +86,7 @@ await test('stripTitleNoise removes stacked trailing (…)/[…] groups, never t
   assert.equal(stripTitleNoise('(Everything I Do) I Do It for You'), '(Everything I Do) I Do It for You');
   assert.equal(stripTitleNoise('(Untitled)'), '(Untitled)'); // never strip to nothing
 });
-await test('primaryArtist takes the first credit before feat./ft./&/,/x', () => {
+test('primaryArtist takes the first credit before feat./ft./&/,/x', () => {
   assert.equal(primaryArtist('DJ Khaled feat. Future & Lil Baby'), 'DJ Khaled');
   assert.equal(primaryArtist('Future & Gunna'), 'Future');
   assert.equal(primaryArtist('Latto & Mariah Carey'), 'Latto');
@@ -106,38 +94,31 @@ await test('primaryArtist takes the first credit before feat./ft./&/,/x', () => 
   assert.equal(primaryArtist('Taylor Swift'), 'Taylor Swift');
 });
 
-console.log('needsOriginalYearLookup (enrichment scope, shared with retag):');
 // The gate reads `yearUntrusted` — the composed flag (Navidrome's compilation
 // flag OR the derived anthology verdict), not the raw flag (#1418). Composition
 // happens once, in the library-db row mappers.
-await test('only era-untrusted tracks without a resolved year qualify', () => {
+test('only era-untrusted tracks without a resolved year qualify', () => {
   assert.equal(needsOriginalYearLookup({ yearUntrusted: true, originalYear: null, originalYearCheckedAt: null }), true);
   assert.equal(needsOriginalYearLookup({ yearUntrusted: false, originalYear: null, originalYearCheckedAt: null }), false);
   assert.equal(needsOriginalYearLookup({ yearUntrusted: null, originalYear: null, originalYearCheckedAt: null }), false);
   assert.equal(needsOriginalYearLookup({ yearUntrusted: true, originalYear: 1976, originalYearCheckedAt: '2026-01-01' }), false);
 });
-await test('the RAW compilation flag is not read here', () => {
+test('the RAW compilation flag is not read here', () => {
   // Deliberate: the flag is false on exactly the reissue anthologies this gate
   // exists for, so a call site that passed it instead of the composed value
   // would silently reopen the #1418 gap. Better to answer "no" than to accept
   // the field that caused the bug.
   assert.equal(needsOriginalYearLookup({ isCompilation: true, originalYear: null } as never), false);
 });
-await test('a manual answer is never re-asked, even on re-enrich', () => {
+test('a manual answer is never re-asked, even on re-enrich', () => {
   // MusicBrainz has nothing to add to an operator reading the sleeve. Belt and
   // braces beside the SQL guard in setOriginalYear.
   const manual = { yearUntrusted: true, originalYear: null, originalYearSource: 'manual', originalYearCheckedAt: null };
   assert.equal(needsOriginalYearLookup(manual), false);
   assert.equal(needsOriginalYearLookup(manual, true), false);
 });
-await test('a checked-but-missed track is skipped unless re-enriching', () => {
+test('a checked-but-missed track is skipped unless re-enriching', () => {
   const missed = { yearUntrusted: true, originalYear: null, originalYearCheckedAt: '2026-01-01T00:00:00Z' };
   assert.equal(needsOriginalYearLookup(missed), false);
   assert.equal(needsOriginalYearLookup(missed, true), true);
 });
-
-if (failures) {
-  console.error(`\n${failures} original-year test(s) failed.`);
-  process.exit(1);
-}
-console.log('\nall original-year tests passed');

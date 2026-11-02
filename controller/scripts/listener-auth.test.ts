@@ -16,7 +16,7 @@
 //
 // If someone ever "simplifies" these into one function, the assertions marked
 // ASYMMETRY below are the ones that will catch it.
-// Run: `tsx scripts/listener-auth.test.ts`.
+// Run: `npm test -- listener-auth.test.ts` (a substring match, so edge-listener-auth.test.ts runs too).
 //
 // node:assert-via-tsx style, matching scripts/blocklist.test.ts.
 

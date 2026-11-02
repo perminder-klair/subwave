@@ -12,7 +12,7 @@
 // - a pass marked pending that is no longer alive (its dirs were never added).
 //
 // Runs against a temp STATE_DIR set before stem-cache is imported.
-// Run: `tsx scripts/stem-cache-snapshot.test.ts` (auto-discovered by npm test).
+// Run: `npm test -- stem-cache-snapshot`.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

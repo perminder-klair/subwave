@@ -107,6 +107,8 @@ export interface SettingsResponse {
     djPrompts?: Array<Partial<DjPromptPreset>>;
     activeDjPromptId?: string;
     djHouseRules?: string;
+    // Read only to warn what removing a persona takes with it.
+    shows?: Array<{ id?: string; name?: string; personaId?: string; guestPersonaIds?: string[] }>;
     // An 'inherit' persona takes its engine and station speed from this block;
     // when that engine is cloud it also takes the provider + voice. Kept in
     // step with the public /settings projection used by this editor.

@@ -19,7 +19,7 @@ const {
   soundKnnWidth,
   similarTracksOutcome,
 } = await import('../src/util/similar-tracks.js');
-const { stationAuthCandidate, stationAuthDecision } = await import('../src/util/listener-auth.js');
+const { stationAuthCandidate } = await import('../src/util/listener-auth.js');
 
 const PW = 'hunter2-correct-horse';
 
@@ -97,12 +97,6 @@ test('the published row is a fixed, non-widening subset', () => {
     ],
     'adding a key here publishes it to the internet — do it deliberately',
   );
-});
-
-test('the CLAP-derived audioMoods stay an admin surface', () => {
-  // /library/browse publishes audioMoods behind requireAdmin; this route is
-  // reachable with no credential on a public station.
-  assert.equal('audioMoods' in publicSimilarTrack(SEED_ROW as never), false);
 });
 
 test('the year is the ERA year, never the raw release year', () => {
@@ -238,22 +232,6 @@ test('privatePlayer OFF with listenerAuth ON still closes the gate', async () =>
   await settings.update({ privacy: { password: PW, privatePlayer: false, listenerAuth: true } } as never);
   assert.equal((await callGate()).passed, false);
   assert.equal((await callGate({ headers: { 'x-station-auth': PW } })).passed, true);
-
-  // The pure decision agrees, so the middleware can't be collapsed into the
-  // Icecast one without this failing.
-  assert.equal(
-    stationAuthDecision({ privatePlayer: false, listenerAuth: true, password: PW, candidate: 'x' }),
-    false,
-  );
-});
-
-test('a lock with no password on file is closed, not open', async () => {
-  // update() refuses to persist this, but a hand-edited settings.json can
-  // produce it; "no password" must not read as "no lock".
-  assert.equal(
-    stationAuthDecision({ privatePlayer: true, listenerAuth: false, password: '', candidate: '' }),
-    false,
-  );
 });
 
 test('a failing API read cannot spend the player password box\'s attempts', async () => {

@@ -4,6 +4,7 @@
 import * as piper from './piper.js';
 import * as kokoro from './kokoro.js';
 import { applyEdgeFades } from './wav-edges.js';
+import { measureClipLevel, voiceLevellingEnabled } from './clip-level.js';
 import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
 import { heavyColdEngines, heavyEnabledEngines } from './ttsHeavyClient.js';
@@ -39,8 +40,10 @@ function personaFor(persona?: any): any {
 // seam where the 'inherit' engine sentinel is resolved; everything downstream
 // compares against a concrete engine id.
 function djPersonaTts(kind: string, persona?: any): any {
-  if (GLOBAL_VOICE_KINDS.has(kind)) return null;
-  const slot = personaFor(persona)?.tts || null;
+  // A global kind never follows the on-air persona, but a caller may name a
+  // voice for it (a jingle created with one). Only the slot is taken: language,
+  // soul and style stay off for these kinds.
+  const slot = (GLOBAL_VOICE_KINDS.has(kind) ? persona : personaFor(persona))?.tts || null;
   return resolvePersonaVoiceSlot(slot, settings.get().tts);
 }
 
@@ -165,15 +168,17 @@ function fallbackChain(primary: TtsTarget): RescueSlot[] {
 }
 
 // Voice level trim (dB) for a segment of `kind`: per-engine gain plus the
-// persona's own trim, clamped to ±TTS_GAIN_CLAMP_DB. 0 = unity. Applied
-// downstream by broadcast/queue.ts as a `liq_amplify` annotation. Uses the
+// persona's own trim, clamped to ±TTS_GAIN_CLAMP_DB. 0 = unity. The handoff to
+// the mixer optionally adds each clip's levelling trim and clamps the total to
+// the same range (audio/clip-level.ts) before stamping `liq_amplify`. Uses the
 // RESOLVED engine so the gain matches whichever engine actually speaks.
 export function voiceGainDb(kind: string, persona?: any): number {
   const personaTts = djPersonaTts(kind, persona);
   const { engine } = resolveEngine(personaTts);
   const tts: any = settings.get().tts || {};
   const engineGain = settings.clampTtsGain(tts.gainDb?.[engine]);
-  const personaGain = personaTts ? settings.clampTtsGain(personaTts.gainDb) : 0;
+  // A global kind takes a voice from its caller, never that slot's trim.
+  const personaGain = personaTts && !GLOBAL_VOICE_KINDS.has(kind) ? settings.clampTtsGain(personaTts.gainDb) : 0;
   return settings.clampTtsGain(engineGain + personaGain);
 }
 
@@ -201,9 +206,8 @@ export function speechPaceScale(kind: string, persona?: any, liveOverride?: numb
 }
 
 // The operator's Gemini choice — model + voice — and the precedence that puts a
-// persona's own pick on top of it. Extracted because three call sites need it
-// (the single-speaker branch below, the admin preview, the multi-speaker
-// exchange) and a copy per site is how they end up disagreeing.
+// persona's own pick on top of it. Broadcast speech and admin previews share
+// this resolution through speakWith().
 //
 // Voice: a persona that names a voice wins, and one that doesn't inherits the
 // station default rather than the engine's own — otherwise the panel's "default
@@ -382,57 +386,12 @@ export async function synthesizeSample(
   return speakWith(engine, sample, { speedScale: scale, language: language || '', soul: '', voiceStyle, lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
 }
 
-// Experimental conversational renderer for all-Gemini lines. The broadcast
-// queue uses speak() per line until batching preserves each speaker's gain,
-// attribution and live-edge marker. This helper alone cannot provide those.
-export async function speakExchange(
-  lines: { persona: any; text: string }[],
-  { kind = 'banter', outPath }: { kind?: string; outPath?: string } = {},
-): Promise<string> {
-  const resolved = lines.map((l) => {
-    const personaTts = resolvePersonaVoiceSlot(l.persona?.tts || null, settings.get().tts);
-    return { line: l, engine: resolveEngine(personaTts).engine, personaTts };
-  });
-  if (resolved.length === 0 || !resolved.every((r) => r.engine === 'gemini')) {
-    throw new Error('speakExchange only supports an all-gemini exchange');
-  }
-  // Same floor as the single-speaker path, so the operator's Voice-panel pick
-  // governs an exchange too: a persona on gemini keeps its OWN voice, and
-  // anything else takes the station voice instead of the engine's hardcoded
-  // default. The model is station-level — every turn in one request shares it,
-  // so it is resolved once here rather than per line.
-  const { model } = stationGeminiPick({}, resolved[0].personaTts);
-  const geminiLines = resolved.map(({ line: l, personaTts }) => ({
-    text: normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections, String(l.persona?.language || ''), 'gemini'),
-    voice: stationGeminiPick({}, personaTts).voice,
-    style: typeof (l.persona as any)?.voiceStyle === 'string' ? (l.persona as any).voiceStyle : undefined,
-    // Each speaker's own character, so a host and a guest don't come out of one
-    // render sounding like the same person. Composed per turn inside the engine.
-    soul: typeof (l.persona as any)?.soul === 'string' ? (l.persona as any).soul : undefined,
-  }));
-
-  const started = Date.now();
-  try {
-    const result = await gemini.speakMulti(geminiLines, { outPath, model });
-    if (typeof result === 'string') await applyEdgeFades(result);
-    const combinedText = lines.map((l) => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n').slice(0, 240);
-    recordTts({
-      kind, requested: 'gemini', chars: combinedText.length,
-      text: combinedText, persona: 'Multi-Speaker',
-      engine: 'gemini', fellBack: false,
-      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
-    });
-    return result;
-  } catch (err) {
-    recordTts({
-      kind, requested: 'gemini', chars: 0,
-      text: 'Multi-speaker exchange failed', persona: 'Multi-Speaker',
-      engine: 'gemini', fellBack: false,
-      ok: false, ms: Date.now() - started, error: (err as any).message,
-      t: new Date().toISOString(),
-    });
-    throw err;
-  }
+// Every rendered clip, whichever engine made it: edge fades (WAV only), then
+// opt-in levelling, measured once here for the handoff to the mixer. A jingle
+// never takes that handoff (it airs from the playlist), so it is not measured.
+async function finishClip(path: string, kind?: string): Promise<void> {
+  await applyEdgeFades(path);
+  if (kind !== 'jingle' && voiceLevellingEnabled()) await measureClipLevel(path);
 }
 
 // Public entry point. Tries the configured engine; on failure falls back so the
@@ -502,7 +461,7 @@ export async function speak(
     // Bake 40ms edge fades in so hard file boundaries never reach the broadcast
     // compressor as a click. Render time is the only place the tail can be
     // faded. Best-effort: non-WAV output (cloud mp3) is left as-is.
-    if (typeof result === 'string') await applyEdgeFades(result);
+    if (typeof result === 'string') await finishClip(result, kind);
     recordTts({
       ...callBase, engine: primary, fellBack: primaryFellBack,
       ok: true, ms: Date.now() - started, t: new Date().toISOString(),
@@ -531,7 +490,7 @@ export async function speak(
         // slot's own override (null for hardcoded rungs, the operator's
         // engine+voice for their configured one), so probe and call agree.
         const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, soul, voiceStyle }, slot.personaTts);
-        if (typeof result === 'string') await applyEdgeFades(result);
+        if (typeof result === 'string') await finishClip(result, kind);
         recordTts({
           ...callBase, engine: fallback, fellBack: true,
           ok: true, ms: Date.now() - started, t: new Date().toISOString(),

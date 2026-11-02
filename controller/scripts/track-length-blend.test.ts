@@ -11,6 +11,7 @@ const settings = await import('../src/settings.js');
 const { setCache } = await import('../src/settings/store.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { config } = await import('../src/config.js');
+const { CLIP_SEAM_CROSS_SEC } = await import('../src/broadcast/stem-seam.js');
 type Item = Parameters<typeof queue.removeUpcomingItem>[0];
 
 async function stage(outSec: number, inSec: number) {
@@ -96,6 +97,10 @@ test('a published outgoing blend commits its successor across a live mode change
     await draining;
     await waitUntil(() => consumed.length === 3);
     assert.deepEqual(queue.upcoming, [outgoing, incoming]);
+    // Both sides of the X -> clip seam carry the cue lead radio.liq aligns on.
+    const lead = `liq_clip_lead="${CLIP_SEAM_CROSS_SEC}"`;
+    assert.ok(consumed[0].includes(lead), 'the outgoing track carries the clip lead');
+    assert.ok(consumed[1].includes(lead), 'the clip carries the clip lead');
     assert.ok(consumed[1].includes('subwave_clip="1"'));
     assert.ok(consumed[2].includes('liq_cue_in="20"'));
     assert.ok(!consumed[2].includes('liq_cue_out="1200'));
@@ -129,6 +134,7 @@ for (const originalExit of [undefined, { crossSec: 6 }]) {
   const uri = readFileSync(config.liquidsoap.queueFile, 'utf8');
   assert.ok(!uri.includes('liq_cue_out'), 'no unpublished tail is cut off');
   assert.ok(!uri.includes('liq_cross_duration="0.3"'), 'clip timing cannot survive without a clip');
+  assert.ok(!uri.includes('liq_clip_lead'), 'no clip seam alignment without a clip');
   if (originalExit) assert.ok(uri.includes('liq_cross_duration="6"'), 'saved intrinsic timing is restored');
   assert.equal(existsSync(clipPath), false, 'unused recovered render is removed');
   rmSync(config.liquidsoap.queueFile, { force: true });
@@ -192,6 +198,7 @@ for (const scenario of [
       const uri = readFileSync(config.liquidsoap.queueFile, 'utf8');
       assert.ok(!uri.includes('liq_cue_out'), 'cancelled clip cannot shorten the outgoing audio');
       assert.ok(!uri.includes('liq_cross_duration="0.3"'), 'cancelled clip cannot retain its seam timing');
+      assert.ok(!uri.includes('liq_clip_lead'), 'cancelled clip cannot retain its seam alignment');
       if (scenario.originalExit === savedExit) assert.ok(uri.includes('liq_cross_duration="6"'));
       assert.equal(existsSync(oldClip), false, 'superseded unused audio is removed');
       assert.equal(existsSync(newClip), false, 'cancelled replacement audio is removed');

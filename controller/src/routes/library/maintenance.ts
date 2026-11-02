@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'node:path';
 import { requireAdmin } from '../../middleware/auth.js';
 import * as library from '../../music/library.js';
 import * as blocklist from '../../music/blocklist.js';
@@ -14,7 +15,9 @@ import { tagBatch, TAGGER_CONTRACT_VERSION } from '../../music/tagger-core.js';
 import { promptVocabHash } from '../../music/embeddings.js';
 import { activeModelLabel } from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
-import { tagger, taggerView, startAnalyzer, startReconcile } from '../../broadcast/tagger.js';
+import {
+  tagger, taggerView, startAnalyzer, startReconcile, taggerLogSince, taggerLogFiles, taggerLogFile,
+} from '../../broadcast/tagger.js';
 import { validateBodyAsync } from '../../middleware/validate.js';
 import { manualTagSchema, originalYearSchema } from '../../schemas/library.js';
 import type { z } from 'zod';
@@ -171,6 +174,40 @@ router.get('/library/tagger', requireAdmin, (_req, res) => {
   res.json({ tagger: taggerView() });
 });
 
+// The current run's log after sequence number `after`, so a page polling every
+// few seconds misses nothing. `run` is the id the cursor belongs to: a cursor
+// from an earlier run reads the new one from its start. `log: null` = no run
+// since the controller started (earlier runs are in the files below).
+router.get('/library/tagger/log', requireAdmin, (req, res) => {
+  // RunLog.since() sanitises the cursor: NaN or a negative reads from the start.
+  const run = typeof req.query.run === 'string' ? req.query.run : null;
+  res.json({ log: taggerLogSince(Number(req.query.after), run) });
+});
+
+// The kept run logs, newest first (state/tagger-logs/, the last ten runs).
+router.get('/library/tagger/logs', requireAdmin, (_req, res) => {
+  res.json({ logs: taggerLogFiles() });
+});
+
+// One run log as a text download. The id is checked against the writer's own
+// name pattern, so nothing outside those files can be read through it.
+router.get('/library/tagger/logs/:id', requireAdmin, (req, res) => {
+  const file = taggerLogFile(req.params.id);
+  if (!file) return res.status(404).json({ error: 'no such run log' });
+  // A root keeps a hidden parent of the state dir (a clone under ~/.local, say)
+  // out of sendFile's dotfile check, as util/audio-response.ts does. The headers
+  // ride the file, so a file pruned since the check answers a plain 404.
+  res.sendFile(path.basename(file), {
+    root: path.dirname(file),
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${req.params.id}.log"`,
+    },
+  }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'no such run log' });
+  });
+});
+
 // The admin "Analyze audio" button: bpm/key/intro plus CLAP vector backfill.
 // Shares the tagger's single-flight state; stop via /tag-library/stop.
 router.post('/library/analyze', requireAdmin, (req, res) => {
@@ -187,7 +224,10 @@ router.post('/library/analyze', requireAdmin, (req, res) => {
 // at 100% coverage; shares the tagger's single-flight slot.
 router.post('/library/reconcile', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'a tagger/analyzer run is already active', tagger });
-  startReconcile();
+  startReconcile({
+    confirmReplaced: req.body?.confirmReplaced === true,
+    acceptReplaced: req.body?.acceptReplaced === true,
+  });
   res.json({ ok: true, tagger });
 });
 
@@ -229,6 +269,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     // Tri-state gate shared with tag-library.phaseEnrich: true always enriches,
     // false never, unset enriches when a Last.fm key is present (#532).
     const lastfmEnabled = lastfm.lastfmEnrichEnabled(enrichCfg.lastfmTags, lastfm.hasLastfmKey());
+    const trackTagsOn = lastfm.lastfmTrackTagsEnabled(enrichCfg, lastfm.hasLastfmKey());
     const lyricsEnabled = enrichCfg.lyrics !== false;
 
     // 1. Ensure the track row exists so the upserts below have a row to attach to.
@@ -245,8 +286,12 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     if (lastfmEnabled && song.artist) {
       try {
         // Same source as the bulk tagger: direct Last.fm when a key is present,
-        // else Navidrome's getArtistInfo2 (#532).
-        lastfmTags = await lastfm.getArtistTags(song.artist, { count: 10 });
+        // else Navidrome's getArtistInfo2 (#532). With track tags on, the same
+        // merge and the same write as its track pass: the upsert below then sees
+        // an unchanged list and leaves the stamp alone.
+        lastfmTags = trackTagsOn
+          ? db.recordLastfmTrackTags(id, await lastfm.getMergedTags(song.artist, song.title, { count: 10 }))
+          : await lastfm.getArtistTags(song.artist, { count: 10 });
       } catch (err) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
       }
@@ -308,6 +353,9 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
             ? {
                 bpm: rec.bpm, musicalKey: rec.musicalKey, audioMoods: rec.audioMoods,
                 vocalRanges: rec.vocalRanges,
+                vocalRangesInvalid: rec.vocalRangesInvalid,
+                tailVocalRanges: rec.tailVocalRanges,
+                tailVocalRangesInvalid: rec.tailVocalRangesInvalid,
               }
             : null,
         );

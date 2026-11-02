@@ -1,10 +1,16 @@
 'use client';
 
+// Platter — the flagship vinyl face: a reference turntable beside the column
+// of facts. Focus mode (desktop, F) folds the column away and lifts the deck
+// into 30° isometric (IsoDeck), handing the column's facts to the things on
+// and round it.
 
-import { useCallback, useRef } from 'react';
-import { AnimatePresence, m } from 'motion/react';
-import { ArrowUpRight, Heart, Play, Square } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
+import { ArrowUpRight, Heart, PanelRightClose, PanelRightOpen, Play, Square } from 'lucide-react';
+import { useMediaQuery } from 'usehooks-ts';
 import styles from './Platter.module.css';
+import IsoDeck from './IsoDeck';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -30,8 +36,14 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
+import { CAP_CENTRE, CAP_CENTRE_16 } from '../capCentre';
+import { useDjOnAir, useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
+
+/** Focus mode is a listener's own preference, remembered per browser. */
+const FOCUS_KEY = 'subwave:platter-focus';
+/** Tailwind's lg: the width the deck and the column sit side by side from. */
+const DESKTOP = '(min-width: 64rem)';
 
 /* Shares the tonearm's easing curve (Platter.module.css) so the deck reads as
    one mechanism. */
@@ -66,18 +78,23 @@ const LABEL_CUT = {
 };
 
 /** Sized to fill its square container so it scales fluidly; reused (parked,
- *  not playing) inside the tune-in gate. */
+ *  not playing) inside the tune-in gate. The arm reads --pf, set on the arm
+ *  itself. */
 function Deck({
   playing,
+  ratio = null,
   stationName,
   title,
   artist,
 }: {
   playing: boolean;
+  ratio?: number | null;
   stationName: string;
   title: string;
   artist: string;
 }) {
+  const armRef = useRef<SVGSVGElement | null>(null);
+  useDynamicStyle(armRef, { '--pf': ratio ?? 0 });
   return (
     <div className="[container-type:inline-size] relative aspect-square w-[min(52vw,29vh,210px)] lg:w-[min(42vw,72vh,520px)]">
       <div
@@ -123,6 +140,7 @@ function Deck({
 
       {/* Match the pivot at 86% 19% to .arm transform-origin in Platter.module.css. */}
       <svg
+        ref={armRef}
         viewBox="0 0 100 100"
         className={cn(
           'pointer-events-none absolute inset-0 h-full w-full overflow-visible',
@@ -196,9 +214,12 @@ export default function PlatterSkin(_props: SkinProps) {
     [setVolume],
   );
 
-  // Progress + volume fills ride CSS vars, never an inline style attr.
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  useDynamicStyle(rootRef, { '--pf': ratio ?? 0, '--vf': volume });
+  // Progress and volume ride CSS vars (never an inline style attr), each set
+  // on the element whose children read it: on the skin's root, the progress
+  // var's change every second restyled the whole skin.
+  const progRef = useRef<HTMLDivElement | null>(null);
+  useDynamicStyle(progRef, { '--pf': ratio ?? 0 });
+  useDynamicStyle(faderRef, { '--vf': volume });
 
   const slip = useRequestSlip({
     sent: 'Slip on the platter — the booth has your note.',
@@ -207,26 +228,90 @@ export default function PlatterSkin(_props: SkinProps) {
   });
   const reqInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Focus mode lives on the desktop layout only: below lg the deck and the
+  // column already stack, and there's no column beside the deck to fold. The
+  // preference is hydrated in an effect to avoid an SSR mismatch, and the
+  // media query answers false until mount for the same reason.
+  const [focus, setFocus] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(FOCUS_KEY) === '1') setFocus(true);
+    } catch {}
+  }, []);
+  const desktop = useMediaQuery(DESKTOP, { initializeWithValue: false });
+  const focusOn = focus && desktop;
+  const toggleFocus = () => {
+    setFocus(v => {
+      const next = !v;
+      try { localStorage.setItem(FOCUS_KEY, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
+  const reduced = useReducedMotion();
+  const stageMoves = spins && !reduced;
+  const onMic = useDjOnAir();
+  const talk = playing && onMic && !!voice;
+
   useKeyboardShortcuts({
     space: handleTune,
     k: handleTune,
     arrowup: () => adjustVolume(0.05),
     arrowdown: () => adjustVolume(-0.05),
     m: toggleMute,
-    r: () => { if (!showTuneIn) reqInputRef.current?.focus(); },
+    r: () => {
+      if (showTuneIn) return;
+      // The slip lives in the folded column: unfold it first. The keydown is
+      // a discrete event, so React commits before the next frame.
+      if (focusOn) { toggleFocus(); requestAnimationFrame(() => reqInputRef.current?.focus()); }
+      else reqInputRef.current?.focus();
+    },
+    f: () => { if (desktop) toggleFocus(); },
+    // Only while focus is on, so Escape still reaches menus otherwise.
+    escape: focusOn ? toggleFocus : undefined,
   });
 
+  // The column's facts, worded for the things round the deck.
+  const next = upNext[0];
+  const isoDeck = focusOn ? (
+    <IsoDeck
+      playing={playing}
+      arm={playing ? 'play' : tunedIn && !offline ? 'cue' : 'rest'}
+      ratio={offline ? null : ratio}
+      stationName={stationName}
+      title={title}
+      artist={artist}
+      detail={offline ? 'nothing on the stream' : [artist, nowPlaying?.album, nowPlaying?.year].filter(Boolean).join(' · ')}
+      elapsed={offline ? '--:--' : fmtTime(elapsed)}
+      duration={nowPlaying?.duration && !offline ? fmtTime(nowPlaying.duration) : 'live'}
+      facts={offline ? [] : [...meta.facts.filter(f => f.endsWith('BPM')), ...meta.facts.filter(f => !f.endsWith('BPM'))]}
+      coverUrl={nowPlaying?.subsonic_id && !offline ? client.coverUrl(nowPlaying.subsonic_id) : null}
+      next={next && !offline
+        ? { title: next.title ?? '—', artist: next.artist ?? '', coverUrl: next.subsonic_id ? client.coverUrl(next.subsonic_id) : null }
+        : null}
+      label={offline
+        ? `${stationName} turntable — off air`
+        : [
+            `Now spinning: ${title}${artist ? ` by ${artist}` : ''}`,
+            nowPlaying?.duration ? `${fmtTime(elapsed)} of ${fmtTime(nowPlaying.duration)}` : null,
+            next?.title ? `next: ${next.title}${next.artist ? ` by ${next.artist}` : ''}` : null,
+          ].filter(Boolean).join('; ')}
+    />
+  ) : null;
+
   return (
-    <div ref={rootRef} className="absolute inset-0 flex flex-col overflow-hidden bg-bg font-sans text-ink">
+    <div className="absolute inset-0 flex flex-col overflow-hidden bg-bg font-sans text-ink">
       <div className="flex flex-none items-center justify-between gap-x-6 border-b border-ink px-5 py-3 sm:px-8">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex-none text-[15px] font-extrabold tracking-[0.14em]">{stationName.toUpperCase()}</span>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <div className="hidden items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase md:flex">
+        {/* One baseline for the run; the icons sit on its cap centre. The run
+            is hidden below md, so the palette's nudge (CAP_CENTRE_16) starts there
+            too — alone, it centres as a box. */}
+        <div className="flex shrink-0 items-baseline gap-3 font-mono text-[11px]">
+          <div className="hidden items-baseline gap-3 tracking-[0.16em] uppercase md:flex">
             {showName && (
-              <span className="flex min-w-0 items-center gap-1.5">
-                <Play className="size-2.5 flex-none fill-current" />
+              <span className="flex min-w-0 items-baseline gap-1.5">
+                <Play className={cn('size-2.5 flex-none fill-current', CAP_CENTRE)} />
                 <span className="max-w-[22vw] truncate">{showName}</span>
               </span>
             )}
@@ -235,19 +320,66 @@ export default function PlatterSkin(_props: SkinProps) {
               {contextLine(context) || (offline ? 'off air' : 'on air')}
             </span>
           </div>
-          <ThemeSwitcher />
+          <button
+            type="button"
+            onClick={toggleFocus}
+            aria-pressed={focusOn}
+            aria-label="Focus mode"
+            title={focusOn ? 'Show the column (F)' : 'Focus — fold the column away (F)'}
+            className={cn(
+              'v3-focus hidden shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none lg:inline-flex',
+              CAP_CENTRE_16,
+              focusOn ? 'text-[var(--accent)]' : 'text-muted hover:text-ink',
+            )}
+          >
+            {focusOn
+              ? <PanelRightOpen className="size-4" aria-hidden="true" />
+              : <PanelRightClose className="size-4" aria-hidden="true" />}
+          </button>
+          <ThemeSwitcher className="md:-my-2 md:translate-y-[calc(50%-0.5cap)]" />
         </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        <div className="relative flex flex-none flex-col items-center gap-3 border-b border-ink bg-linear-to-br from-[var(--field)] to-[color-mix(in_oklab,var(--field)_82%,var(--bg))] px-6 py-3 lg:w-[46%] lg:max-w-[680px] lg:flex-1 lg:flex-row lg:justify-center lg:gap-0 lg:border-r lg:border-b-0 lg:py-10">
+        <div
+          className={cn(
+            'relative flex flex-none flex-col items-center gap-3 border-b border-ink px-6 py-3 lg:flex-1 lg:flex-row lg:justify-center lg:gap-0 lg:border-b-0 lg:py-10',
+            styles.deckTable,
+            focusOn ? 'lg:w-full' : 'lg:w-[46%] lg:max-w-[680px] lg:border-r',
+          )}
+        >
           <span className="absolute top-5 left-6 font-mono text-[9px] tracking-[0.24em] text-muted uppercase">
-            direct drive · quartz lock
+            {focusOn ? 'direct drive · drawn at 30°' : 'direct drive · quartz lock'}
           </span>
 
-          <div className="flex w-full items-center justify-center pt-8 lg:contents">
-            <Deck playing={playing} stationName={stationName} title={title} artist={artist} />
-          </div>
+          {focusOn ? (
+            <div className={cn('absolute inset-x-6 top-12 bottom-6', stageMoves && styles.stageIn)}>{isoDeck}</div>
+          ) : (
+            <div className="flex w-full items-center justify-center pt-8 lg:contents">
+              <Deck playing={playing} ratio={ratio} stationName={stationName} title={title} artist={artist} />
+            </div>
+          )}
+
+          {/* Focus mode's subtitles: the DJ's words only while they're on
+              the mic, in the corner the drawing leaves empty. */}
+          <AnimatePresence>
+            {focusOn && talk && voice && (
+              <m.div
+                key="caption"
+                initial={stageMoves ? { opacity: 0, y: -6 } : false}
+                animate={{ opacity: 1, y: 0 }}
+                exit={stageMoves ? { opacity: 0 } : {}}
+                transition={{ duration: stageMoves ? 0.3 : 0, ease: DECK_EASE }}
+                className={cn('absolute top-14 left-8 flex max-w-[min(34%,420px)] flex-col gap-2 border border-ink bg-bg px-4 py-3', styles.slab)}
+              >
+                <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
+                  <span className={cn('size-[7px] rounded-full bg-[var(--accent)]', styles.pulse, styles.playing)} />
+                  on air — {djName}
+                </span>
+                <span className="line-clamp-4 font-display text-[17px] leading-snug italic">“{voice.text}”</span>
+              </m.div>
+            )}
+          </AnimatePresence>
 
           <div className="flex w-full items-end justify-between gap-4 lg:contents">
             <div className="flex items-end gap-3 lg:absolute lg:bottom-6 lg:left-6">
@@ -257,7 +389,8 @@ export default function PlatterSkin(_props: SkinProps) {
                 aria-label={tunedIn ? 'Tune out' : 'Tune in'}
                 className={cn(
                   'v3-focus flex size-20 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-full border border-ink',
-                  tunedIn ? 'bg-[var(--accent)] text-bg' : 'bg-bg text-ink hover:bg-[var(--field)]',
+                  styles.isoKey,
+                  tunedIn ? cn('bg-[var(--accent)] text-bg', styles.isoKeyDown) : 'bg-bg text-ink hover:bg-[var(--field)]',
                 )}
               >
                 {tunedIn
@@ -272,7 +405,8 @@ export default function PlatterSkin(_props: SkinProps) {
                 aria-label={muted ? 'Unmute' : 'Mute'}
                 className={cn(
                   'v3-focus grid size-14 cursor-pointer place-items-center rounded-full border border-ink font-mono text-[9px] font-bold tracking-[0.1em]',
-                  muted ? 'bg-ink text-bg' : 'bg-bg hover:bg-[var(--field)]',
+                  styles.isoKey,
+                  muted ? cn('bg-ink text-bg', styles.isoKeyDown) : 'bg-bg hover:bg-[var(--field)]',
                 )}
               >
                 {muted ? 'MUTED' : 'MUTE'}
@@ -286,7 +420,8 @@ export default function PlatterSkin(_props: SkinProps) {
                   aria-label={like.liked ? 'Liked' : 'Like this track'}
                   className={cn(
                     'v3-focus flex size-14 flex-col items-center justify-center rounded-full border border-ink font-mono text-[9px] font-bold tracking-[0.1em]',
-                    like.liked ? 'bg-[var(--accent)] text-bg' : 'cursor-pointer bg-bg hover:bg-[var(--field)]',
+                    styles.isoKey,
+                    like.liked ? cn('bg-[var(--accent)] text-bg', styles.isoKeyDown) : 'cursor-pointer bg-bg hover:bg-[var(--field)]',
                     like.pending && 'opacity-60',
                   )}
                 >
@@ -311,7 +446,7 @@ export default function PlatterSkin(_props: SkinProps) {
                   if (e.key === 'ArrowUp') { e.preventDefault(); adjustVolume(0.05); }
                   else if (e.key === 'ArrowDown') { e.preventDefault(); adjustVolume(-0.05); }
                 }}
-                className="v3-focus relative h-16 w-7 cursor-pointer touch-none border border-ink bg-bg lg:h-36"
+                className={cn('v3-focus relative h-16 w-7 cursor-pointer touch-none border border-ink bg-bg lg:h-36', styles.slab)}
               >
                 <span className="pointer-events-none absolute top-2 bottom-2 left-1/2 w-px -translate-x-1/2 bg-soft-border" aria-hidden="true" />
                 <span className="pointer-events-none absolute top-2 left-1 h-px w-[3px] bg-[var(--accent)]" aria-hidden="true" />
@@ -324,9 +459,9 @@ export default function PlatterSkin(_props: SkinProps) {
           </div>
         </div>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-hidden p-4 lg:gap-4 lg:overflow-hidden lg:p-6">
+        <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-hidden p-4 lg:gap-4 lg:overflow-hidden lg:p-6', focusOn && 'hidden')}>
           <div className="flex items-start gap-5">
-            <div className="relative size-[104px] flex-none border border-ink bg-[var(--field)] sm:size-[128px]">
+            <div className={cn('relative size-[104px] flex-none border border-ink bg-[var(--field)] sm:size-[128px]', styles.slab)}>
               {nowPlaying?.subsonic_id && !offline ? (
                 <AnimatePresence mode="popLayout" initial={false}>
                   <m.img
@@ -378,7 +513,7 @@ export default function PlatterSkin(_props: SkinProps) {
 
           <div className="flex items-center gap-3">
             <span className="font-mono text-[13px] font-bold tabular-nums">{fmtTime(elapsed)}</span>
-            <div className="relative h-[6px] flex-1 bg-[color-mix(in_oklab,var(--ink)_14%,var(--bg))]">
+            <div ref={progRef} className="relative h-[6px] flex-1 bg-[color-mix(in_oklab,var(--ink)_14%,var(--bg))]">
               <div className={cn('absolute inset-y-0 left-0 bg-[var(--accent)]', ratio == null ? 'w-full opacity-40' : styles.progFill)} />
               {ratio != null && <div className={cn('absolute top-[-5px] h-[13px] w-[3px] bg-ink', styles.progHead)} />}
             </div>
@@ -389,7 +524,7 @@ export default function PlatterSkin(_props: SkinProps) {
 
           <div className="h-px bg-soft-border" />
 
-          <div className="flex flex-col border border-ink bg-surface">
+          <div className={cn('relative flex flex-col border border-ink bg-surface', styles.slab)}>
             <div className="border-b border-[var(--line)] px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
               next on the platter
             </div>
@@ -420,7 +555,7 @@ export default function PlatterSkin(_props: SkinProps) {
           </div>
 
           {voice && (
-            <div className="hidden flex-none flex-col gap-2 border border-ink bg-surface px-4 py-3.5 lg:flex">
+            <div className={cn('relative hidden flex-none flex-col gap-2 border border-ink bg-surface px-4 py-3.5 lg:flex', styles.slab)}>
               <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
                 <span className={cn('size-[7px] rounded-full bg-[var(--accent)]', styles.pulse, playing && styles.playing)} />
                 on air — {djName}
@@ -429,7 +564,7 @@ export default function PlatterSkin(_props: SkinProps) {
             </div>
           )}
 
-          <div className="hidden min-h-0 flex-1 flex-col border border-ink bg-surface lg:flex">
+          <div className={cn('relative hidden min-h-0 flex-1 flex-col border border-ink bg-surface lg:flex', styles.slab)}>
             <div className="flex-none border-b border-[var(--line)] px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
               recently spun
             </div>
@@ -459,7 +594,7 @@ export default function PlatterSkin(_props: SkinProps) {
           </div>
 
           <form
-            className="border border-ink bg-surface px-4 py-3"
+            className={cn('relative border border-ink bg-surface px-4 py-3', styles.slab)}
             onSubmit={e => { e.preventDefault(); void slip.send(); }}
           >
             {slip.ack ? (

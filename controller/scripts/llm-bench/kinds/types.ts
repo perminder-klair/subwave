@@ -15,7 +15,8 @@ export interface KindSpec {
   /** CLI filter group: pick | segment | request | scripts | banter | programme */
   group: string;
   /** which picker mode this kind represents; 'any' kinds behave identically in
-   *  both and run once regardless of --modes */
-  mode: 'pool' | 'agent' | 'any';
+   *  every mode and run once regardless of --modes. 'shortlist' is the Track
+   *  Shortlist selection route, which has only a pick kind. */
+  mode: 'pool' | 'agent' | 'shortlist' | 'any';
   scenarios: Scenario[];
 }

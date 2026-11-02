@@ -6,6 +6,17 @@ export const description = 'Search the web for a specific, verifiable detail abo
 
 export const ready = (services) => services.searchReady();
 
+// A generic track title can appear in entirely unrelated results. A result is
+// only evidence for this exact-track skill when it names the current artist.
+function mentionsArtist(text, artist) {
+  const escaped = artist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try {
+    return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}([^\\p{L}\\p{N}]|$)`, 'iu').test(text);
+  } catch {
+    return text.toLowerCase().includes(artist.toLowerCase());
+  }
+}
+
 export default async function digCurrentTrack(ctx, state, services) {
   const cur = services.nowPlaying();
   const artist = cur?.artist;
@@ -17,6 +28,7 @@ export default async function digCurrentTrack(ctx, state, services) {
   state.lastDugTrack = trackKey;
   const answer = (data.answer || '').trim();
   const sources = (data.results || [])
+    .filter(r => mentionsArtist(`${r.title || ''} ${r.content || ''}`, artist))
     .slice(0, 3)
     .map(r => `${r.title}: ${(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 240)}`);
   if (!answer && sources.length === 0) return { available: false };

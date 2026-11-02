@@ -1,7 +1,7 @@
 // Unit tests for the playlist builder's pure helpers (music/playlist-gen-pure.ts):
 // dedupe/merge, cap, energy-arc arrangement, artist spacing, the deterministic
 // fallback's never-empty invariant, id resolution, and count fitting.
-// Run: `tsx scripts/playlist-gen-pure.test.ts` (auto-discovered by run-tests.ts).
+// Run: `npm test -- playlist-gen-pure`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
 

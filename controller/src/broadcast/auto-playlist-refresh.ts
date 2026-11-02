@@ -1,6 +1,7 @@
 // Serialize all fallback writers, retaining only a need to rebuild, never a
 // snapshot of a show that may have ended while the programme was paused.
-export type RefreshResult = 'refreshed' | 'deferred';
+// 'unreloaded': written, but the mixer did not confirm the reload.
+export type RefreshResult = 'refreshed' | 'unreloaded' | 'deferred';
 
 export function createAutoPlaylistRefresh({ isIdle, build, onDeferred = () => {} }: {
   isIdle: () => boolean;

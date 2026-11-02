@@ -70,22 +70,22 @@ function buildSyntheticTools() {
     searchLibrary: tool({
       description: 'Search the music library by artist name, song title, or real genre (e.g. "jazz", "punjabi"). Returns matching songs.',
       inputSchema: z.object({ query: z.string() }),
-      execute: async ({ query }) => wrap(FAKE_SONGS.slice(0, 6)),
+      execute: async () => wrap(FAKE_SONGS.slice(0, 6)),
     }),
     similarSongs: tool({
       description: 'Find songs similar to a given song id. Pass the currently-playing song id to keep the flow going.',
       inputSchema: z.object({ songId: z.string() }),
-      execute: async ({ songId }) => wrap(FAKE_SONGS.slice(5, 11)),
+      execute: async () => wrap(FAKE_SONGS.slice(5, 11)),
     }),
     topSongsByArtist: tool({
       description: 'Top songs for a named artist.',
       inputSchema: z.object({ artist: z.string() }),
-      execute: async ({ artist }) => wrap(FAKE_SONGS.slice(8, 13)),
+      execute: async () => wrap(FAKE_SONGS.slice(8, 13)),
     }),
     tracksByMood: tool({
       description: 'Songs tagged with a mood: energetic, calm, reflective, celebratory, romantic, spiritual, focus, workout, driving, cooking, rainy, sunny, night, morning, evening, festival, cultural.',
       inputSchema: z.object({ mood: z.string() }),
-      execute: async ({ mood }) => wrap(FAKE_SONGS.slice(2, 9)),
+      execute: async () => wrap(FAKE_SONGS.slice(2, 9)),
     }),
     recentlyAdded: tool({
       description: 'A sample of tracks from recently-added albums.',
@@ -150,7 +150,7 @@ async function runOnce(label, messagesMode) {
       messages,
       tools,
       schema: pickSchema(),
-      // Mirror the live picker call site (dj-agent.js pickViaAgent).
+      // Mirror the live picker call site (dj-agent.js pickViaSelectionRoute).
       // maxSteps/timeoutMs overridable via argv for tuning runs.
       maxSteps: TEST_MAX_STEPS,
       timeoutMs: TEST_TIMEOUT_MS,

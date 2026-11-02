@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { chatCompletionResponse } from './test-utils/llm.js';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,11 +27,7 @@ const base = {
   headers: { 'api-key': 'test-secret' },
 };
 
-async function coldLoad(llm: Record<string, unknown>, embedding: Record<string, unknown> = {}) {
-  writeFileSync(path.join(stateRoot, 'settings.json'), JSON.stringify({ llm: { ...base, ...llm }, embedding }));
-  setCache(null);
-  await settings.load();
-}
+async function coldLoad(llm: Record<string, unknown>, embedding: Record<string, unknown> = {}) { await coldLoadSettings({ llm: { ...base, ...llm }, embedding }); }
 
 test('hosted mode survives save and cold load independently for both legs', async () => {
   await coldLoad({ compatibleMode: 'hosted', fallback: {
@@ -47,7 +44,7 @@ test('hosted mode survives save and cold load independently for both legs', asyn
   await assert.rejects(settings.update({ llm: { compatibleMode: 'other' } } as never), /compatibleMode/);
 });
 
-test('hosted mode uses native objects and skips local request extensions', async () => {
+test('hosted mode uses native objects and skips local request extensions', async (t) => {
   await coldLoad({ compatibleMode: 'hosted', repeatPenalty: 1.2 });
   const cfg = { ...base, compatibleMode: 'hosted', repeatPenalty: 1.2 };
   assert.equal(needsToolCallObject(cfg), false);
@@ -55,27 +52,22 @@ test('hosted mode uses native objects and skips local request extensions', async
   assert.equal(appliedRepeatPenalty(cfg), null);
   assert.notEqual(languageModel(cfg), languageModel({ ...cfg, compatibleMode: 'local' }));
 
-  const real = globalThis.fetch;
   let request: { headers: Headers; body: Record<string, unknown> } | undefined;
-  globalThis.fetch = (async (_url, init) => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', (async (_url, init) => {
     request = { headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) };
-    return new Response(JSON.stringify({
-      id: 'x', object: 'chat.completion', created: 1, model: cfg.model,
-      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    }), { status: 200, headers: { 'content-type': 'application/json' } });
-  }) as typeof fetch;
+    return chatCompletionResponse({ model: cfg.model,
+      message: { role: 'assistant', content: 'ok' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+  }) as typeof fetch);
   try {
     await generateText({ model: languageModel(cfg), prompt: 'hi', maxRetries: 0 });
   } finally {
-    globalThis.fetch = real;
+    fetchMock.mock.restore();
   }
   assert.equal(request?.headers.get('api-key'), 'test-secret');
-  assert.equal(request?.body.repeat_penalty, undefined);
-  assert.equal(request?.body.chat_template_kwargs, undefined);
 });
 
-test('embedding headers survive cold load, are redacted, and reach the wire', async () => {
+test('embedding headers survive cold load, are redacted, and reach the wire', async (t) => {
   await coldLoad({ compatibleMode: 'hosted' }, {
     provider: 'openai-compatible', model: 'vectors',
     headers: { 'api-key': 'embedding-secret' },
@@ -89,17 +81,16 @@ test('embedding headers survive cold load, are redacted, and reach the wire', as
   assert.equal(resolveEmbeddingCfg().headers?.['api-key'], 'embedding-secret');
   await assert.rejects(settings.update({ embedding: { headers: { 'bad header': 'x' } } } as never), /invalid header name/);
 
-  const real = globalThis.fetch;
   let header = '';
-  globalThis.fetch = (async (_url, init) => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', (async (_url, init) => {
     header = new Headers(init?.headers).get('api-key') || '';
     return new Response(JSON.stringify({ data: [{ object: 'embedding', index: 0, embedding: [0.1, 0.2] }], model: 'vectors', usage: { prompt_tokens: 1, total_tokens: 1 } }),
       { status: 200, headers: { 'content-type': 'application/json' } });
-  }) as typeof fetch;
+  }) as typeof fetch);
   try {
     await embed({ model: embeddingModel(), value: 'test' });
   } finally {
-    globalThis.fetch = real;
+    fetchMock.mock.restore();
   }
   assert.equal(header, 'embedding-secret');
   assert.ok(buildEmbeddingModel(resolveEmbeddingCfg()));
@@ -112,7 +103,7 @@ test('embedding headers inherit the matching chat leg when no override is set', 
   assert.deepEqual(resolveEmbeddingCfg().headers, {});
 });
 
-test('model discovery sends the saved hosted service header', async () => {
+test('model discovery sends the saved hosted service header', async (t) => {
   await coldLoad({ compatibleMode: 'hosted' });
   const express = (await import('express')).default;
   const { router } = await import('../src/routes/settings/llm.js');
@@ -125,14 +116,14 @@ test('model discovery sends the saved hosted service header', async () => {
   const authorization = `Basic ${Buffer.from('hosted-test:hosted-test').toString('base64')}`;
   const real = globalThis.fetch;
   let header = '';
-  globalThis.fetch = (async (input, init) => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', (async (input, init) => {
     if (String(input) === 'https://api.example/v1/models') {
       header = new Headers(init?.headers).get('api-key') || '';
       return new Response(JSON.stringify({ data: [{ id: 'vendor/chat' }] }),
         { status: 200, headers: { 'content-type': 'application/json' } });
     }
     return real(input, init);
-  }) as typeof fetch;
+  }) as typeof fetch);
   try {
     const response = await fetch(`${baseUrl}/settings/llm/models?provider=openai-compatible&baseUrl=${encodeURIComponent(base.baseUrl)}`,
       { headers: { authorization } });
@@ -140,7 +131,7 @@ test('model discovery sends the saved hosted service header', async () => {
     assert.deepEqual((await response.json() as { models: string[] }).models, ['vendor/chat']);
     assert.equal(header, 'test-secret');
   } finally {
-    globalThis.fetch = real;
+    fetchMock.mock.restore();
     server.close();
   }
 });
@@ -161,8 +152,11 @@ const LOCAL_ONLY_KEYS = [
   'reasoning_effort', 'repeat_penalty', 'parallel_tool_calls',
 ] as const;
 
-function assertHostedClean(body: Record<string, any>, where: string) {
+// `allow` names the one field a proxied Claude model may carry: its reasoning
+// level, which the proxy translates into Claude's thinking setting.
+function assertHostedClean(body: Record<string, any>, where: string, allow: readonly string[] = []) {
   for (const key of LOCAL_ONLY_KEYS) {
+    if (allow.includes(key)) continue;
     assert.equal(body[key], undefined, `${where}: hosted body carries local-only field ${key}`);
   }
 }
@@ -188,11 +182,10 @@ function chatReply(body: Record<string, any>): Response {
   } else {
     message = { role: 'assistant', content: '{"id":"a"}' };
   }
-  return new Response(JSON.stringify({
-    id: 'x', object: 'chat.completion', created: 1, model: body.model,
-    choices: [{ index: 0, message, finish_reason: finish }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  return chatCompletionResponse({ model: body.model,
+    message: message,
+    finishReason: finish,
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 }
 
 // Runs fn with globalThis.fetch capturing every chat-completion body.
@@ -221,7 +214,11 @@ test('hosted mode sends no local-only fields on any transport variant (#1693)', 
       for (const forceNoThink of [false, true]) {
         const cfg = { ...mistral, model, reasoning };
         const where = `${model} reasoning=${reasoning} forceNoThink=${forceNoThink}`;
-        assert.equal(reasoningFor(cfg, { forceNoThink }), undefined, `${where}: reasoningFor`);
+        // A Claude id is driven like the native anthropic provider; anything
+        // else keeps the plain hosted body.
+        const claude = model.startsWith('claude-');
+        const expected = claude ? reasoningFor({ provider: 'anthropic', model, reasoning }, { forceNoThink }) : undefined;
+        assert.equal(reasoningFor(cfg, { forceNoThink }), expected, `${where}: reasoningFor`);
         const bodies = await captureBodies(async () => {
           await generateText({ model: languageModel(cfg, { forceNoThink }), prompt: 'hi', maxRetries: 0 });
           await generateText({
@@ -231,7 +228,7 @@ test('hosted mode sends no local-only fields on any transport variant (#1693)', 
         });
         assert.equal(bodies.length, 2, where);
         assert.equal(bodies[1].tool_choice, 'required', `${where}: forced tool request reached the wire`);
-        bodies.forEach(b => assertHostedClean(b, where));
+        bodies.forEach(b => assertHostedClean(b, where, claude ? ['reasoning_effort'] : []));
       }
     }
   }
@@ -260,6 +257,41 @@ test('hosted fallback leg is clean on model, noThinkModel and objectViaToolCall 
   assert.ok(bodies.every(b => b.model === 'ministral-8b-latest'));
   assert.equal(bodies[4].tool_choice, 'required', 'objectViaToolCall forced the emit tool');
   bodies.forEach((b, i) => assertHostedClean(b, `fallback body ${i}`));
+});
+
+test('a proxied Claude model gets its reasoning level on every strategy path; other hosted models do not', async () => {
+  const { djAgent } = await import('../src/llm/internal/strategy/agent.js');
+  const { djObject } = await import('../src/llm/internal/strategy/object.js');
+  const { djText } = await import('../src/llm/internal/strategy/text.js');
+  const schema = z.object({ id: z.string() });
+  const run = () => captureBodies(async () => {
+    await djObject({ system: 'You are a DJ.', prompt: 'pick', schema });
+    await djText({ system: 'You are a DJ.', prompt: 'say hi' });
+    await djAgent({
+      system: 'You are a DJ.', messages: [{ role: 'user' as const, content: 'pick' }], schema, providerDiscoveryBudget: true,
+      tools: { search: tool({ description: 'search', inputSchema: z.object({ query: z.string() }), execute: async () => ({ ids: ['a'] }) }) },
+    });
+  });
+  const proxy = { provider: 'openai-compatible', baseUrl: 'http://100.64.0.9:8317/v1', headers: {}, compatibleMode: 'hosted', reasoning: false };
+
+  // Reasoning off: 'none' turns thinking off; a generation whose thinking cannot
+  // be disabled gets its 'minimal' floor, exactly as on the native provider.
+  for (const [model, level] of [['claude-haiku-5-5', 'none'], ['claude-sonnet-5-5', 'minimal'], ['anthropic/claude-haiku-4.5', 'none']] as const) {
+    await coldLoad({ ...proxy, model });
+    const bodies = await run();
+    assert.ok(bodies.length >= 3, model);
+    bodies.forEach((b, i) => {
+      assert.equal(b.reasoning_effort, level, `${model} body ${i}`);
+      assertHostedClean(b, `${model} body ${i}`, ['reasoning_effort']);
+    });
+  }
+  // Reasoning on: the native provider's 'medium' opt-in, except on forced-tool legs.
+  await coldLoad({ ...proxy, model: 'claude-haiku-5-5', reasoning: true });
+  assert.ok((await run()).some(b => b.reasoning_effort === 'medium'), 'reasoning on reaches the wire');
+
+  // Any other hosted model keeps the plain body (#1693).
+  await coldLoad({ ...proxy, model: 'ministral-3b-latest', baseUrl: 'https://api.mistral.ai/v1' });
+  (await run()).forEach((b, i) => assertHostedClean(b, `ministral body ${i}`));
 });
 
 test('hosted strategy paths never pair response_format with a forced tool_choice (#1693 case D)', async () => {

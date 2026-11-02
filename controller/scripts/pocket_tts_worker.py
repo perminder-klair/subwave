@@ -49,6 +49,7 @@ def main():
     try:
         from pocket_tts import TTSModel
         import scipy.io.wavfile as wavfile
+        from voice_level import level, target_from_env
     except Exception as e:
         emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
         sys.exit(1)
@@ -172,23 +173,13 @@ def main():
             audio = np.asarray(audio, dtype=np.float32)
             # Loudness. PocketTTS is the operator's chosen on-air voice and was
             # perceived quiet on the (ducked) music bed, so we drive it
-            # deliberately hot: RMS-normalize to a high target, then soft-limit
-            # peaks instead of hard-clipping — so the louder level never chops
-            # into harsh clipping. POCKET_TTS_TARGET_RMS tunes it without a code
-            # change (0.245 linear ≈ -12.2 dBFS RMS, ~+2 dB over the old -14.3).
-            target_rms = float(os.environ.get("POCKET_TTS_TARGET_RMS", "0.245"))
-            rms = float(np.sqrt(np.mean(audio * audio))) if audio.size else 0.0
-            if rms > 0:
-                audio = audio * (target_rms / rms)
-            # Soft-knee limiter: transparent below `knee`, then tanh-shaped up to
-            # `ceiling` (~-0.26 dBFS). Tames the hotter signal's peaks smoothly
-            # and adds a touch of presence, where a hard clip would distort.
-            knee, ceiling = 0.70, 0.97
-            mag = np.abs(audio)
-            over = mag > knee
-            audio[over] = np.sign(audio[over]) * (
-                knee + (ceiling - knee) * np.tanh((mag[over] - knee) / (ceiling - knee))
-            )
+            # deliberately hot: voice_level.level() RMS-normalizes to a high
+            # target and soft-limits the peaks that pushes up, adding a touch of
+            # presence where a hard clip would distort. POCKET_TTS_TARGET_RMS
+            # tunes it without a code change (0.245 linear ≈ -12.2 dBFS RMS,
+            # ~+2 dB over the old -14.3).
+            target_rms = target_from_env("POCKET_TTS_TARGET_RMS", 0.245, log)
+            audio = level(audio, target_rms)
             # Save as 16-bit PCM (matches the other engines' output format).
             audio_i16 = (audio * 32767.0).astype(np.int16)
             sample_rate = int(getattr(model, "sample_rate", 24000))

@@ -21,7 +21,7 @@ if (!modelSpecs.length || !option('--out')) {
   throw new Error('Specify --models provider:model,... and --out /path/to/report.json');
 }
 const reportPath = z.string().min(1).parse(option('--out'));
-const compatibleMode = z.enum(['hosted', 'local']).parse(option('--compatible-mode') ?? 'hosted');
+const compatibleMode = z.enum(['hosted', 'local', 'auto']).parse(option('--compatible-mode') ?? 'hosted');
 const credentialNames = [
   'OPENROUTER_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'DEEPSEEK_API_KEY',
   'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ELEVENLABS_API_KEY',

@@ -16,10 +16,29 @@ export interface PickFailure {
 }
 
 export function classifyPickFailure(
-  { pickedId, seedId, candidates, toolCalls }:
-  { pickedId: string | null; seedId: string | null; candidates: number; toolCalls: number },
+  { pickedId, seedId, candidates, toolCalls, shortlist }:
+  {
+    pickedId: string | null; seedId: string | null; candidates: number; toolCalls: number;
+    // Present on the Track Shortlist route, where the controller runs the
+    // sources and an empty list means no model was asked at all. `returned` is
+    // what the sources handed back before the show's filters.
+    shortlist?: { returned: number };
+  },
 ): PickFailure {
   const echoed = !!pickedId && !!seedId && pickedId === seedId;
+
+  // The Shortlist runs its own sources, so neither agent message fits: there
+  // was no answer to mismatch and no model failing to call tools. Name what
+  // actually emptied the list, so a thin show reads as a library question.
+  if (shortlist && candidates === 0) {
+    return {
+      kind: 'no-candidates',
+      message: shortlist.returned > 0
+        ? `Track Shortlist had nothing to choose from: ${toolCalls} source run(s) returned ${shortlist.returned} track(s) and none passed this show's filters (genre/era locks, track length, recent plays, blocklist), so no model was asked`
+        : `Track Shortlist had nothing to choose from: ${toolCalls} source run(s) returned no tracks for this show, so no model was asked`,
+      countsAgainstBreaker: false,
+    };
+  }
 
   // `toolCalls` counts real discovery calls (the synthetic `done` is excluded),
   // so zero means the model never explored: a harness failure, not a coverage

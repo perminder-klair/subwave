@@ -4,7 +4,9 @@
 
 import { requireDb } from './handle.js';
 import { moveFacetRows, syncTrackFacets } from './facets.js';
+import { touchGenreInputs } from './genre-inputs.js';
 import { canonicalId } from '../id-canonical.js';
+import { SEARCH_KEY_DDL } from './search-keys.js';
 
 // Carry physical track columns by default, excluding ID/generated columns and walk-owned
 // metadata. columnPlan and the drift test require every column to be classified.
@@ -15,16 +17,27 @@ const NEVER_WRITTEN = ['id', 'genre'];
 // inserted row's copy is the current truth and adoption must leave it alone.
 // original_year / original_year_source are walk-written too but are NOT here —
 // they need the precedence rule below, not a blanket "new wins".
+// The search keys (search-keys.ts) belong here too: they are derived, and the
+// new row starts stale (search_fresh NULL, or reset by the stale trigger when
+// adoption carries tags onto it), so the next search re-keys it from the merged
+// sources. Carrying them could leave old keys marked fresh.
 const WALK_OWNED = [
   'title', 'artist', 'album', 'album_id', 'artist_id', 'year',
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
+  'explicit_status',
+  ...SEARCH_KEY_DDL.columns,
+  // The file as Navidrome reports it (walkFileInfo): the new id's own walk
+  // writes them, and an old id's path may name a file that moved.
+  'file_path', 'file_suffix', 'file_size', 'bit_rate',
 ];
 
 // Carry each writer's column group atomically unless the new row has its anchor. Analysis
 // failure counters follow analysis_version so successful new analysis does not inherit old
 // failures.
 const GROUPS: Array<{ anchor: string; cols: string[] }> = [
-  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lyric_excerpt', 'enriched_at'] },
+  // lastfm_track_tags_at describes lastfm_tags, so the two move together: a
+  // stamp carried onto a new row's own artist-only list would falsely mark it done.
+  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lastfm_track_tags_at', 'lyric_excerpt', 'enriched_at'] },
   { anchor: 'moods', cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at'] },
   {
     anchor: 'analysis_version',
@@ -33,6 +46,7 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
       'lead_silence_ms', 'analyze_error', 'analyze_failed_at', 'analyze_fail_count'],
   },
   { anchor: 'audio_moods', cols: ['audio_moods', 'audio_mood_scores_json'] },
+  { anchor: 'audio_descriptors', cols: ['audio_descriptors', 'audio_descriptor_scores_json'] },
   { anchor: 'map_x', cols: ['map_x', 'map_y'] },
 ];
 
@@ -183,6 +197,14 @@ export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
   const putAudioVec = d.prepare('INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)');
   const delAudioVec = d.prepare('DELETE FROM track_audio_vectors WHERE id = ?');
   const movePlays = d.prepare('UPDATE plays SET track_id = ? WHERE track_id = ?');
+  // The operator's lyric timing fix follows the track. The new id's own row
+  // wins when it already has one (the `new ?? old` rule the columns follow).
+  const moveLyricOffset = d.prepare('UPDATE OR IGNORE lyric_offsets SET track_id = ? WHERE track_id = ?');
+  const dropLyricOffset = d.prepare('DELETE FROM lyric_offsets WHERE track_id = ?');
+  // LRCLIB's stored answer follows too, by the same rule, so a rotation does
+  // not cost a second lookup.
+  const moveExternalLyrics = d.prepare('UPDATE OR IGNORE lyrics_external SET track_id = ? WHERE track_id = ?');
+  const dropExternalLyrics = d.prepare('DELETE FROM lyrics_external WHERE track_id = ?');
   const delTrack = d.prepare('DELETE FROM tracks WHERE id = ?');
   const journal = d.prepare('INSERT OR REPLACE INTO id_rotation_journal (old_id, new_id) VALUES (?, ?)');
 
@@ -224,6 +246,10 @@ export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
       carry.run(...cols.map((c) => merged[c] ?? null), neu);
 
       movePlays.run(neu, old);
+      moveLyricOffset.run(neu, old);
+      dropLyricOffset.run(old);
+      moveExternalLyrics.run(neu, old);
+      dropExternalLyrics.run(old);
       journal.run(old, neu);
       delTrack.run(old);
       // Facet rows follow the merged columns: carry the old id's rows where the
@@ -232,6 +258,7 @@ export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
       syncTrackFacets(neu);
       applied.push([old, neu]);
     }
+    if (applied.length) touchGenreInputs(d);
   });
   run(pairs);
 

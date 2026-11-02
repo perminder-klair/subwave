@@ -46,7 +46,7 @@ Channels map to build profiles in `eas.json` (`preview` / `production`). Store-s
 The default/featured station is one line in `app.json`:
 
 ```json
-"extra": { "featuredStation": { "url": "https://radio.getsubwave.com", "name": "SUB/WAVE" } }
+"extra": { "featuredStation": { "url": "https://www.getsubwave.com", "name": "SUB/WAVE" } }
 ```
 
 Listeners can still enter any station URL on first launch and switch between them (stored locally in AsyncStorage). The app talks to `{stationURL}/api/*` and streams `{stationURL}/stream.mp3` (MP3 by default; the SIGNAL picker offers optional formats when the station and platform support them).
@@ -57,14 +57,14 @@ The structural difference from the web player: the web bakes its base URL in at 
 
 - `src/config/StationContext.tsx` — active station + recents + switch/forget (the runtime base)
 - `src/theme/ThemeContext.tsx` — station theme via NativeWind `vars()`; per-listener override
-- `src/audio/player.ts` + `src/hooks/usePlayer.ts` + `service.ts` — the RNTP audio layer (isolated so it's swappable)
+- `src/audio/player.ts` + `src/hooks/usePlayer.ts` + `src/hooks/useNowPlayingInfo.ts` + `service.ts` — the RNTP audio layer (kept to these files so it stays swappable)
 - `src/hooks/*` — ports of the web hooks (`useStationFeed`, `useSignal`, `useNowPlayingInfo`, `useCoverColors`, `useSpectrum`)
 - `src/player/*` — the player UI (TopBar, CenterStage, Waveform, TransportBar, FreqBand, drawers)
 - `src/lib/{types,format,sessionFeed,tagline}.ts` — copied verbatim from `../web/lib` (source of truth noted in each file header)
 
 ## Known risks (validate in the device spike — M0)
 
-- **react-native-track-player + New Architecture.** RN 0.86 mandates the New Architecture on **both** platforms (`app.json` no longer carries a `newArchEnabled` flag; a leftover `newArchEnabled=false` in a generated `gradle.properties` is an ignored no-op since RN 0.82). Reanimated 4.5.1 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files: a Unit-returning `launch` helper in `MusicModule.kt`, and `currentReactContextCompat()` in `MusicService.kt` — without it Android crashes on the first playback event). Validated: iOS live playback on the simulator + Android `BUILD SUCCESSFUL`. See `docs/TESTING.md` → "Architecture-critical facts". The audio layer is still isolated behind `src/audio/player.ts` + `usePlayer` + `service.ts` should a swap to `expo-audio` ever be needed. (The doctor warning for this package is intentionally excluded in `package.json`.)
+- **react-native-track-player + New Architecture.** RN 0.86 mandates the New Architecture on **both** platforms (`app.json` no longer carries a `newArchEnabled` flag; a leftover `newArchEnabled=false` in a generated `gradle.properties` is an ignored no-op since RN 0.82). Reanimated 4.5.1 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `patches/react-native-track-player+4.1.2.patch` carries the fix (its New Architecture half is two source edits: a Unit-returning `launch` helper in `MusicModule.kt`, and `currentReactContextCompat()` in `MusicService.kt` — without it Android crashes on the first playback event; the rest is the live-progress and iOS metadata fixes). Validated: iOS live playback on the simulator + Android `BUILD SUCCESSFUL`. See `docs/TESTING.md` → "Architecture-critical facts". The audio layer is still isolated behind `src/audio/player.ts` + `usePlayer` + `useNowPlayingInfo` + `service.ts` should a swap to `expo-audio` ever be needed. (The doctor warning for this package is intentionally excluded in `package.json`.)
 - **HTTP-only stations.** iOS App Transport Security blocks plain HTTP. Stations should be HTTPS; `NSAllowsLocalNetworking` is on for LAN dev against a local controller. For a non-HTTPS dev controller over Wi-Fi, add a temporary ATS exception in `app.json` → `ios.infoPlist`.
 - **Background-audio review.** iOS declares `UIBackgroundModes: ["audio"]` (legitimate — live radio). Android uses RNTP's foreground service (`FOREGROUND_SERVICE_MEDIA_PLAYBACK`).
 

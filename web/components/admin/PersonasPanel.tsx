@@ -28,7 +28,7 @@ import { DIAL_NEUTRAL, HOUSE_RULES_MAX, PERSONA_MAX } from './personas/constants
 import {
   clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl,
   voiceForSave, cloudIssue, formFromSettings, personaFromSettings, personasEqual,
-  promptLibraryFromSettings,
+  promptLibraryFromSettings, personaRemovalImpact, activeAfterDelete,
 } from './personas/helpers';
 import { PersonaHero } from './personas/PersonaHero';
 import { SystemPromptModal } from './personas/SystemPromptModal';
@@ -42,12 +42,13 @@ import {
 } from './personas/roster-order';
 import { useRosterSort } from '../../lib/adminView';
 import { PersonaEditor } from './personas/PersonaEditor';
-import { useCommunityPersonas } from './personas/queries';
+import { patchPersonaDelete, useCommunityPersonas, type PersonaDeleteResult } from './personas/queries';
 import {
   settingsKeys,
   useSettingsMutation,
   useSettingsQuery,
 } from './settings/queries';
+import { useScheduleOverrideQuery } from './schedule/queries';
 
 // `activePersonaId` / `activeDjPromptId` / `djHouseRules` stay out of the
 // resolver: they aren't array rows, and the patch registry validates each as
@@ -56,6 +57,17 @@ const formSchema = z.object({
   personas: z.array(personaSchema),
   djPrompts: z.array(djPromptSchema),
 });
+
+// The controller's own refusal reads better than the generic
+// "<path> failed (409): …" wrapper, as on the Shows panel.
+function personaWriteError(error: unknown): string {
+  if (error instanceof AdminResponseError) {
+    return typeof error.body.error === 'string' && error.body.error
+      ? error.body.error
+      : `failed (${error.status})`;
+  }
+  return errorMessage(error);
+}
 
 export default function PersonasPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
@@ -79,6 +91,12 @@ export default function PersonasPanel() {
   const [avatarTick, setAvatarTick] = useState(0);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
+  // When Remove was pressed: the takeover line re-checks expiry against it.
+  // State, not a render-time Date.now().
+  const [deleteAskedAt, setDeleteAskedAt] = useState(0);
+  // Read only while the Delete confirm is open, through the Schedule panel's
+  // own key, so the page load pays nothing for it.
+  const takeoverQuery = useScheduleOverrideQuery(adminFetch, hydrated && !needsAuth && confirmDeleteIdx !== null);
   // Raised when the editor is closed by ×/Escape with the focused persona dirty.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // Best-effort; null = still loading.
@@ -137,6 +155,23 @@ export default function PersonasPanel() {
   }>({
     adminFetch,
     request: (vars, fetcher) => adminJson<Record<string, unknown>>(fetcher, vars.path, vars.init),
+    toastOnError: false,
+  });
+
+  const deletePersonaMutation = useAdminMutation<PersonaDeleteResult | null, string>({
+    adminFetch,
+    request: async (id, fetcher) => {
+      try {
+        return await adminJson<PersonaDeleteResult>(fetcher, `/personas/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      } catch (error) {
+        // Never saved server-side (added in this session): the local splice is enough.
+        if (error instanceof AdminResponseError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    onDone: (result, _id, client) => {
+      if (result) patchPersonaDelete(client, result);
+    },
     toastOnError: false,
   });
 
@@ -320,20 +355,61 @@ export default function PersonasPanel() {
     } finally { setImportingBundle(false); }
   };
 
-  const removePersona = (i: number) => {
+  // Persisted immediately, the way the Shows panel deletes (#1950). The
+  // controller deletes from the STORED roster, so unsaved edits to other
+  // personas are neither saved nor lost: the row leaves the form values and the
+  // form's baseline together, which keeps whatever else was dirty dirty (and
+  // unsaved) and a clean form clean, so the hydration effect above still knows
+  // which server revisions it may apply. The row only leaves once the write has
+  // landed, so a failure has nothing to restore.
+  const removePersona = async (i: number) => {
     const currentPersonas = getValues('personas');
     if (currentPersonas.length <= 1) return;
     const target = currentPersonas[i];
     if (!target) return;
-    // Replace with the complete remaining value array: `remove(i)` unregisters
-    // the open editor's inputs before RHF commits, leaving a shell of the
-    // deleted row with its `id` missing.
-    replacePersonaFields(currentPersonas.filter((_, idx) => idx !== i));
-    setActivePersonaId(cur => {
-      if (target.id !== cur) return cur;
-      const remaining = currentPersonas.filter((_, idx) => idx !== i);
-      return remaining[0]?.id ?? cur;
-    });
+    setBusy(true);
+    let result: PersonaDeleteResult | null;
+    try {
+      result = await deletePersonaMutation.mutateAsync(target.id);
+    } catch (e) {
+      notify.err(`Delete failed: ${personaWriteError(e)}`);
+      return;
+    } finally { setBusy(false); }
+
+    // Resolved by id after the await: a background re-hydration may already
+    // have dropped the row, or shifted the rows around it.
+    const latest = getValues('personas');
+    const idx = latest.findIndex(p => p.id === target.id);
+    const remaining = latest.filter(p => p.id !== target.id);
+    if (idx !== -1) {
+      // The complete remaining array, not `remove(i)`: remove unregisters an
+      // open editor's inputs before RHF commits, leaving a shell of the row.
+      replacePersonaFields(remaining);
+      setFocusIdx(cur => (cur >= idx ? Math.max(0, cur - 1) : cur));
+    }
+    const base = baselineRef.current;
+    const serverActive = typeof result?.activePersonaId === 'string' ? result.activePersonaId : null;
+    if (base) {
+      const nextBase = {
+        ...base,
+        personas: base.personas.filter(p => p.id !== target.id),
+        activePersonaId: serverActive ?? base.activePersonaId,
+      };
+      // keepValues: the baseline moves and the values the operator holds do
+      // not; RHF recomputes isDirty/dirtyFields against the new baseline.
+      resetForm({ personas: nextBase.personas, djPrompts: base.djPrompts }, { keepValues: true, keepErrors: true });
+      baselineRef.current = nextBase;
+      void form.trigger();
+    }
+    setActivePersonaId(cur => activeAfterDelete({
+      current: cur,
+      deletedId: target.id,
+      baselineActive: base?.activePersonaId ?? null,
+      serverActive,
+      remainingIds: remaining.map(p => p.id),
+    }));
+    setCreatingId(cur => (cur === target.id ? null : cur));
+    notify.ok(`Deleted “${target.name.trim() || 'persona'}”.`);
   };
 
   // Avatar mutations update the local form too, so the basename round-trips
@@ -620,6 +696,11 @@ export default function PersonasPanel() {
   const onAirCloudIssue = onAirPersona ? cloudIssue(onAirPersona, data) : null;
   const defaultEngine = data?.values?.tts?.defaultEngine || 'piper';
   const skillCatalog = data?.skills?.catalog || [];
+  const deleteTarget = confirmDeleteIdx !== null ? personas[confirmDeleteIdx] : undefined;
+  const deleteImpact = deleteTarget
+    ? personaRemovalImpact(deleteTarget.id, data, { override: takeoverQuery.data?.override ?? null, now: deleteAskedAt })
+    : null;
+  const oneHosted = deleteImpact?.hosts.length === 1;
 
   return (
     <div className="grid gap-4">
@@ -762,6 +843,15 @@ export default function PersonasPanel() {
       </Modal>
 
       <PersonaEditor
+        // Keyed by id, as ShowsPanel keys ShowEditor. EditorDialog's
+        // AnimatePresence keeps a closing editor's element tree mounted with its
+        // OLD props for the exit animation, so after a removal its controllers
+        // are still bound to `personas.<removed index>.*`. RHF's post-replace
+        // broadcast re-renders them, `register()` re-creates that path, and a
+        // half-row with no `id` or `name` reappears in `watch` (#1950). Removing
+        // the focused row always changes `focused.id`, so the new key unmounts
+        // the frozen tree in the same commit as the removal.
+        key={focused.id}
         persona={focused}
         index={safeIdx}
         position={focusedPosition}
@@ -787,7 +877,7 @@ export default function PersonasPanel() {
         onGenerateAvatar={generateAvatar}
         onClearAvatar={clearAvatar}
         onSetActive={() => setActivePersonaId(focused.id)}
-        onRemove={() => setConfirmDeleteIdx(safeIdx)}
+        onRemove={() => { setDeleteAskedAt(Date.now()); setConfirmDeleteIdx(safeIdx); }}
         exporting={exportingId === focused.id}
         exportStale={focusedDirty}
         onExportBundle={() => { void exportPersona(focused.id, focused.name); }}
@@ -823,18 +913,33 @@ export default function PersonasPanel() {
         description={
           <>
             Remove{' '}
-            <b>{confirmDeleteIdx !== null ? (personas[confirmDeleteIdx]?.name.trim() || 'this persona') : 'this persona'}</b>
-            {' '}from the roster? Nothing is permanent until you Save persona.
+            <b>{deleteTarget?.name.trim() || 'this persona'}</b>
+            {' '}from the roster? This deletes it from the station right away. You don&apos;t need to
+            Save persona, and unsaved changes to other personas stay as they are.
+            {deleteImpact && deleteImpact.hosts.length > 0 && (
+              <span className="mt-2 block">
+                It also deletes {oneHosted ? 'the show' : `the ${deleteImpact.hosts.length} shows`} this
+                persona hosts, <b>{deleteImpact.hosts.join(', ')}</b>, and {oneHosted ? 'its' : 'their'} schedule
+                hours. To keep {oneHosted ? 'it' : 'them'}, give {oneHosted ? 'it' : 'them'} a new host under Shows first.
+              </span>
+            )}
+            {deleteImpact?.endsTakeoverOf && (
+              <span className="mt-2 block">
+                The takeover putting <b>{deleteImpact.endsTakeoverOf}</b> on air right now is cancelled too.
+              </span>
+            )}
+            {deleteImpact && deleteImpact.guestOn.length > 0 && (
+              <span className="mt-2 block">
+                It also leaves the guest line-up of <b>{deleteImpact.guestOn.join(', ')}</b>.
+              </span>
+            )}
           </>
         }
         confirmLabel="Delete"
         cancelLabel="Cancel"
         danger
         onConfirm={() => {
-          if (confirmDeleteIdx !== null) {
-            removePersona(confirmDeleteIdx);
-            setFocusIdx(i => Math.max(0, i - 1));
-          }
+          if (confirmDeleteIdx !== null) void removePersona(confirmDeleteIdx);
           setConfirmDeleteIdx(null);
           setEditorOpen(false);
         }}

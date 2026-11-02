@@ -12,7 +12,8 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import { slugify } from '../util/slug.js';
 
 // Hard ceiling on any effect, generated or uploaded: Liquidsoap mixes these at
-// 0.7 gain with only a light duck, so a long clip drones on past the voice.
+// unity over only a light duck (the programme drops to 0.7), so a long clip
+// drones on past the voice.
 // Held in the shared imaging schema so the admin form can't disagree with this.
 export const MAX_DURATION_SEC = SFX_MAX_SEC;
 

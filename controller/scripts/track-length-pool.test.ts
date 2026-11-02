@@ -1,9 +1,10 @@
 // Real pool and SDK with synthetic HTTP responses, isolated from station state.
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 const root = mkdtempSync(join(tmpdir(), 'subwave-length-pool-'));
 process.env.STATE_DIR = root;
 process.env.NAVIDROME_URL = 'http://length-library.invalid';
@@ -50,11 +51,11 @@ before(async () => {
       } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
   };
 });
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   Math.random = realRandom;
   library.shutdown();
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 function snapshot() {
   const q = Object.create(queue);

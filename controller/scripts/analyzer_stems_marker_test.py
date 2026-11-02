@@ -9,7 +9,9 @@ the sidecar forwards the flag (pinned in analyzer_sidecar_contract_test.py).
 Pure stdlib: no numpy, librosa or models.
 """
 
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 import types
@@ -33,6 +35,7 @@ def test(name, fn):
 
 
 root = tempfile.mkdtemp(prefix="subwave-stems-marker-")
+atexit.register(shutil.rmtree, root, ignore_errors=True)
 track_dir = os.path.join(root, "track-1")
 
 

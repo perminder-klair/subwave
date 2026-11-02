@@ -29,14 +29,14 @@ export default function Faq() {
         <p className="bs-eyebrow">MODEST HARDWARE</p>
         <h2>Does it work with a small model?</h2>
         <p>
-          Yes. The AI DJ doesn&rsquo;t need a frontier model; a modest one running on
-          your own hardware is plenty. A 9B-class local model such as Qwen3.5 9B
-          comfortably picks tracks and writes the DJ&rsquo;s lines, as long as you run the
-          station on its <em>lean</em> settings: reasoning off, the simpler track-picker,
-          concise scripts. Step up to a 12B-class model like <strong>Gemma 4 12B</strong>{' '}
-          and you can leave the richer dials on, including the full picker agent,
-          while still paying nothing per token. The full set of dials, and what to
-          turn which way, is on the{' '}
+          Yes. Start with <strong>Track Shortlist</strong>: the controller finds the
+          eligible tracks and the model makes one structured choice, so it does not need
+          to support a chain of tool calls. Direct request matching and the direct
+          segments-and-skills runtime can also be selected independently to keep the work
+          within a smaller model&rsquo;s comfort zone. Larger or cloud-hosted models can use
+          Agentic Tools where that suits the station. Track selection lives under{' '}
+          <strong>Settings &rarr; Music Selection</strong>; direct segments and skills
+          remain under <strong>Settings &rarr; DJ Behaviour</strong>. More model guidance is on the{' '}
           <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link> page.
         </p>
       </section>
@@ -73,19 +73,18 @@ export default function Faq() {
 
       <section className="bs-section">
         <p className="bs-eyebrow">CHOOSING THE NEXT SONG</p>
-        <h2>What are the candidate pool and the agentic picker?</h2>
+        <h2>What are Track Shortlist and Agentic Tools?</h2>
         <p>
-          Two ways the DJ chooses what to play next. With the{' '}
-          <strong>candidate pool</strong>, the station gathers a shortlist from your
-          library and asks the model once to pick one from it. With the{' '}
-          <strong>agentic picker</strong> &mdash; the default &mdash; the model searches
-          the library itself with a set of tools, so its choices stay coherent across a
-          run. If the agent ever fails or runs slow the station quietly falls back to the
-          pool, so the music never stops either way.
+          They are two selectable ways to choose the next song. <strong>Track
+          Shortlist</strong> has the station prepare a varied list of eligible tracks,
+          then asks the model to choose one. <strong>Agentic Tools</strong> lets a
+          tool-capable model search the library itself before it decides. Both respect the
+          same show, recency and artist rules; neither is presented as the more musical
+          choice.
         </p>
         <p>
-          Which one suits you comes down to your model. The full comparison, and how to
-          decide, is on{' '}
+          Which one suits you comes down to your model, hardware and token budget. The
+          full comparison is on{' '}
           <Link href="/manual/concepts" className="bs-link">Concepts</Link>; the model
           side is on{' '}
           <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.

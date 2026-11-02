@@ -7,10 +7,9 @@
 // Run: npm test -- scene-references
 
 import assert from 'node:assert/strict';
+import { listen as listenHttp } from './test-utils/http.js';
 import { writeFileSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -332,12 +331,10 @@ db.upsertTrackMeta('t2', { title: 't2', artist: 'Someone', album: 'A Record', ge
 const app = express();
 app.use(express.json());
 app.use(router);
-const server = createServer(app);
-await new Promise<void>(r => { server.listen(0, '127.0.0.1', () => r()); });
+const { server, url: base } = await listenHttp(app);
 // unref, or the listening socket holds the event loop open and the test FILE
 // never exits — which under run-tests.ts (concurrency 1) wedges the suite.
 server.unref();
-const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
 const post = async (path: string, body: unknown) => {
   const res = await fetch(`${base}${path}`, {

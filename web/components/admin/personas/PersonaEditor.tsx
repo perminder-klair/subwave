@@ -146,7 +146,8 @@ export function PersonaEditor({
               label: 'Remove',
               tone: 'danger',
               onClick: onRemove,
-              disabled: personaCount <= 1,
+              // Deletes persist at once (#1950); never two in flight.
+              disabled: busy || personaCount <= 1,
               title: personaCount > 1 ? 'Remove this persona' : 'At least one persona is required',
             },
             {

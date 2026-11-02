@@ -46,7 +46,7 @@ export const SKINS: SkinManifest[] = [
     id: 'tty',
     name: 'TTY',
     description:
-      'The station as a live process — panes and a status line, everything tails.',
+      'The station as a live process — panes and a key bar; focus draws an ANSI landscape.',
     skinApiVersion: SKIN_API_VERSION,
     load: () => import('./tty/TtySkin'),
   },

@@ -228,6 +228,12 @@ interface WorkerMessage {
   vocal_activity_capable?: boolean;
   tail_vocal_capable?: boolean;
   text_embedding_capable?: boolean;
+  // Facet protocol (version signal): {"facets": [...]} requests. Absent on
+  // workers that predate it.
+  facets_capable?: boolean;
+  // Facet-shape answer.
+  facets?: Record<string, { status?: string; reason?: string; data?: WorkerMessage }>;
+  source?: Record<string, unknown>;
   // Capabilities advertised at ready but lost when the model was asked to load.
   // Rides on EVERY message: the failure it exists for answers ok=true with the
   // field absent.
@@ -273,6 +279,7 @@ const pending = new Map<string, Pending>();
 let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
 let _localTailVocalCapable: boolean | null = null;
+let _localFacetsCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
 // Local twins of _sidecarAudioError / _sidecarVocalError — see there.
 let _localAudioError: string | null = null;
@@ -332,6 +339,7 @@ function startWorker(): Promise<void> {
           if (typeof msg.vocal_activity_capable === 'boolean' && _localVocalError === null) _localVocalCapable = msg.vocal_activity_capable;
           if (typeof msg.tail_vocal_capable === 'boolean' && _localVocalError === null) _localTailVocalCapable = msg.tail_vocal_capable;
           if (typeof msg.text_embedding_capable === 'boolean' && _localAudioError === null) _localTextCapable = msg.text_embedding_capable;
+          _localFacetsCapable = msg.facets_capable === true;
         }
         // After the ready assignments, so a reported loss always wins.
         noteLocalCapabilityLoss(msg);
@@ -386,17 +394,10 @@ export interface AnalyzeRequestOpts {
   embedding_only?: boolean;
 }
 
-// Carries either `url` (worker downloads) or `path` (already-local).
-function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
-  const id = `a${++reqSeq}`;
-  return new Promise<AnalysisResult>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error('analyze request timed out'));
-    }, config.analyzer.requestTimeoutMs);
-    pending.set(id, {
-      resolve: (msg: WorkerMessage) =>
-        resolve({
+// The flat field names (worker message, sidecar body, facet `data`) mapped to
+// an AnalysisResult; absent fields read null.
+function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
+  return {
           bpm: msg.bpm ?? null,
           musicalKey: msg.key ?? null,
           introMs: msg.intro_ms ?? null,
@@ -415,10 +416,23 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
           tailStartMs: parseSilenceMs(msg.tail_start_ms),
           stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
-        }),
-      reject,
-      timer,
-    });
+  };
+}
+
+// Carries either `url` (worker downloads) or `path` (already-local).
+function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
+  return localRequestRaw(req).then(toAnalysisResult);
+}
+
+// The worker's raw answer (flat or facet shape), for the facet protocol.
+function localRequestRaw(req: object): Promise<WorkerMessage> {
+  const id = `a${++reqSeq}`;
+  return new Promise<WorkerMessage>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error('analyze request timed out'));
+    }, config.analyzer.requestTimeoutMs);
+    pending.set(id, { resolve, reject, timer });
     proc?.stdin.write(JSON.stringify({ id, ...req }) + '\n');
   });
 }
@@ -480,6 +494,8 @@ let _sidecarVocalCapable: boolean | null = null;
 // feature never emit the field, so this stays null and the backfill widening
 // (which requires === true) can't churn.
 let _sidecarTailVocalCapable: boolean | null = null;
+// Facet protocol (version signal; null on old sidecars).
+let _sidecarFacetsCapable: boolean | null = null;
 // The CLAP TEXT tower (embed-text).
 let _sidecarTextCapable: boolean | null = null;
 // Why a capability is false, when the cause is a failed model load rather than
@@ -502,6 +518,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_vocal_capable?: boolean | null;
       analyze_tail_vocal_capable?: boolean | null;
       analyze_text_capable?: boolean | null;
+      analyze_facets_capable?: boolean | null;
       analyze_audio_error?: string | null;
       analyze_vocal_error?: string | null;
     };
@@ -511,6 +528,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarAudioCapable = typeof body.analyze_audio_capable === 'boolean' ? body.analyze_audio_capable : null;
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
       _sidecarTailVocalCapable = typeof body.analyze_tail_vocal_capable === 'boolean' ? body.analyze_tail_vocal_capable : null;
+      _sidecarFacetsCapable = typeof body.analyze_facets_capable === 'boolean' ? body.analyze_facets_capable : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
       _sidecarAudioError = typeof body.analyze_audio_error === 'string' ? body.analyze_audio_error : null;
       _sidecarVocalError = typeof body.analyze_vocal_error === 'string' ? body.analyze_vocal_error : null;
@@ -1024,6 +1042,137 @@ export async function analyzePathWithUrlFallback(
     delete urlOpts.stems_require_marker;
     onUrlFallback?.();
     return analyze(songId, urlOpts);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Facet protocol: ask the backend for named facets, each answered on its own
+// (ok + data | unmeasurable | unavailable | failed + reason). Only sent when
+// the backend advertises it; callers fall back to the flat request otherwise.
+// ---------------------------------------------------------------------------
+
+export type FacetName = 'head' | 'loudness' | 'tail' | 'clap' | 'vocal' | 'stems';
+export type FacetAnswerStatus = 'ok' | 'unmeasurable' | 'unavailable' | 'failed';
+
+export interface FacetAnswer {
+  status: FacetAnswerStatus;
+  reason: string | null;
+  // The facet's data in AnalysisResult terms (only its own fields matter).
+  result: AnalysisResult;
+  // vocal: the outro's vocal ranges (absolute ms) when the tail was measured.
+  tailVocalRanges: Section[] | null;
+}
+
+export interface FacetSourceInfo {
+  kind: string; // 'path' | 'capped-download'
+  durationS: number | null;
+  complete: boolean | null;
+}
+
+export interface FacetAnalysis {
+  facets: Partial<Record<FacetName, FacetAnswer>>;
+  source: FacetSourceInfo;
+}
+
+export interface FacetRequestOpts {
+  facets: FacetName[];
+  // Tail facet also carries the outro's vocal ranges (Demucs on the tail only).
+  tailVocals?: boolean;
+  stems_dir?: string;
+  complete?: boolean;
+}
+
+// null = unknown (not probed / old backend). Callers use the facet protocol
+// only on === true.
+export async function facetsAvailable(): Promise<boolean | null> {
+  const backend = await resolveBackend();
+  if (backend === 'sidecar') return _sidecarFacetsCapable;
+  if (backend === 'local') {
+    if (!ready) await startWorker();
+    return _localFacetsCapable;
+  }
+  return null;
+}
+
+const FACET_STATUSES: readonly string[] = ['ok', 'unmeasurable', 'unavailable', 'failed'];
+
+export function parseFacetAnswer(msg: WorkerMessage): FacetAnalysis {
+  const facets: Partial<Record<FacetName, FacetAnswer>> = {};
+  for (const [name, cell] of Object.entries(msg.facets ?? {})) {
+    if (!cell || typeof cell !== 'object') continue;
+    const status = FACET_STATUSES.includes(String(cell.status)) ? (cell.status as FacetAnswerStatus) : 'failed';
+    const data = (cell.data && typeof cell.data === 'object' ? cell.data : {}) as WorkerMessage & {
+      tail_vocal_ranges?: unknown;
+    };
+    facets[name as FacetName] = {
+      status,
+      reason: typeof cell.reason === 'string' ? cell.reason : null,
+      result: toAnalysisResult(data),
+      tailVocalRanges: parseVocalRanges(data.tail_vocal_ranges),
+    };
+  }
+  const src = (msg.source ?? {}) as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return {
+    facets,
+    source: {
+      kind: typeof src.kind === 'string' ? src.kind : 'unknown',
+      durationS: num(src.duration_s),
+      complete: typeof src.complete === 'boolean' ? src.complete : null,
+    },
+  };
+}
+
+async function facetRequest(body: Record<string, unknown>): Promise<FacetAnalysis> {
+  const backend = await resolveBackend();
+  if (!backend) throw new Error('no analysis backend available');
+  let msg: WorkerMessage;
+  if (backend === 'sidecar') {
+    const res = await fetchWithTimeout(`${_sidecarBase}/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      timeoutMs: config.analyzer.requestTimeoutMs,
+      bodyDeadline: true,
+    });
+    if (!res.ok) return sidecarFailure(res);
+    msg = (await res.json()) as WorkerMessage;
+  } else {
+    if (!ready) await startWorker();
+    msg = await localRequestRaw(body);
+  }
+  if (!msg.ok) throw new Error(msg.error || 'analysis failed');
+  return parseFacetAnswer(msg);
+}
+
+// Facet request for one track. A pre-fetched `localPath` is preferred, with
+// the same url retry as the flat path when the sidecar can't see the
+// controller's staging dir. A stems target always travels with
+// stems_require_marker, as on the flat path, so an unmounted share on the
+// analyzer's machine is never written to as if it were the cache.
+export async function analyzeFacets(
+  songId: string,
+  opts: FacetRequestOpts,
+  localPath?: string,
+): Promise<FacetAnalysis> {
+  const body: Record<string, unknown> = { facets: opts.facets };
+  if (opts.tailVocals) body.tail_vocals = true;
+  const stems = opts.stems_dir ? { stems_dir: opts.stems_dir, stems_require_marker: true } : {};
+  const url = subsonic.getRawStreamUrl(songId);
+  if (!localPath) return facetRequest({ url, ...body, ...stems });
+  try {
+    return await facetRequest({
+      path: localPath,
+      ...body,
+      ...(opts.complete !== undefined ? { complete: opts.complete } : {}),
+      ...stems,
+    });
+  } catch (err) {
+    if (!(err instanceof AnalyzerPathUnavailableError)) throw err;
+    // Same degrade as analyzePathWithUrlFallback: no stems without shared state.
+    const facets = opts.facets.filter(f => f !== 'stems');
+    return facets.length ? facetRequest({ url, ...body, facets })
+      : { facets: {}, source: { kind: 'unknown', durationS: null, complete: null } };
   }
 }
 

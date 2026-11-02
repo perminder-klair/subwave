@@ -11,7 +11,7 @@
 // allowlist went the same way — a skill assigned to one DJ fired under whoever
 // happened to be on air.
 //
-// Run: `tsx scripts/skill-eligibility.test.ts`.
+// Run: `npm test -- skill-eligibility`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

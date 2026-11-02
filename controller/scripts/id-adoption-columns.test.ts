@@ -20,7 +20,7 @@
 // is checked against the schema `migrate()` actually builds, not a copy of it.
 // STATE_DIR is set before library-db is imported (dynamic import below),
 // matching scripts/stem-backfill.test.ts.
-// Run: `tsx scripts/id-adoption-columns.test.ts` (folded into `npm test`).
+// Run: `npm test -- id-adoption-columns`.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -100,6 +100,16 @@ test('the analyze-failure counters ride the analysis group, not COALESCE', () =>
     assert.ok(analysis.cols.includes(col), `${col} belongs to the analysis group`);
     assert.ok(!plan.coalesced.includes(col), `${col} must not be a plain COALESCE`);
   }
+});
+
+// The stamp describes the list. COALESCE-carried, an old row's stamp would land
+// on a new row's own artist-only list and mark it done for good.
+test('the track-tag stamp rides the enrichment group with the list it describes', () => {
+  const enrichment = plan.grouped.find((g) => g.anchor === 'enriched_at');
+  assert.ok(enrichment, 'enrichment group present');
+  assert.ok(enrichment.cols.includes('lastfm_tags'));
+  assert.ok(enrichment.cols.includes('lastfm_track_tags_at'));
+  assert.ok(!plan.coalesced.includes('lastfm_track_tags_at'));
 });
 
 test('walk-owned columns are never written by adoption', () => {

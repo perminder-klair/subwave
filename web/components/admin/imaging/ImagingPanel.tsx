@@ -21,6 +21,7 @@ import { JinglesSection } from './JinglesSection';
 import { SfxSection } from './SfxSection';
 import { BedsSection } from './BedsSection';
 import { VoicesSection } from './VoicesSection';
+import type { VoiceSlot } from '../tts/EngineVoiceFields';
 import { MonoLabel, TabMetric, pad2 } from './parts';
 import {
   imagingKeys,
@@ -118,7 +119,7 @@ export default function ImagingPanel() {
     setBusy(true);
     try {
       const j = await saveMutation.mutateAsync(patch);
-      // A jingle-ratio change needs a mixer restart (control in Settings → Danger zone).
+      // A jingle-ratio change needs a mixer restart (control in Settings → Broadcast & mixer).
       if (j.refreshError) notify.err(`saved, but refresh failed: ${j.refreshError}`);
       else notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
       return true;
@@ -135,7 +136,7 @@ export default function ImagingPanel() {
   // Each create/import modal owns a react-hook-form instance validated against
   // schemas.generated.ts (#1337). These submitters do the round trip and return
   // ImagingSubmitResult so the modal can route a refusal onto the right input.
-  const createJingle = async (values: { text: string }): Promise<ImagingSubmitResult> => {
+  const createJingle = async (values: { text: string; tts?: VoiceSlot }): Promise<ImagingSubmitResult> => {
     setBusy(true);
     try {
       await resourceMutation.mutateAsync({
@@ -385,7 +386,7 @@ export default function ImagingPanel() {
             <p className="mt-1 max-w-[62ch] text-[11px] leading-[1.6] [text-wrap:pretty] text-muted">
               Everything your DJ slips between and over the music:{' '}
               <strong className="font-semibold text-ink">jingles</strong> are the station idents
-              between tracks, <strong className="font-semibold text-ink">SFX</strong> are the little
+              between or over songs, <strong className="font-semibold text-ink">SFX</strong> are the little
               stingers under the voice,{' '}
               <strong className="font-semibold text-ink">beds</strong> are instrumentals to talk
               over when a link runs long, and{' '}

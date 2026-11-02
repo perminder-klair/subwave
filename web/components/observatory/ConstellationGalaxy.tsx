@@ -1,6 +1,7 @@
 /* Render on demand and skip offscreen frames. Coordinates use a centred 1000x1000 space with meet
    scaling: screen = origin + (translation + user * zoom) * min(width, height) / 1000. Keep the SVG
-   overlay aligned with this transform. */
+   overlay aligned with this transform. Colours follow the live theme (palette.ts); the stage
+   re-declares --bg/--ink/--muted as its night palette, so the overlays inside inherit it. */
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -9,14 +10,17 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { createColorProbe, readThemeRgb, THEME_RGB_FALLBACK, watchTheme, type Rgb } from '@/lib/theme-rgb';
 import {
   buildSynapseLinks,
-  nodeColor,
+  LLM_TONE,
   nodeFilled,
+  nodeTone,
   type ColorBy,
   type ObsTrack,
   type LibraryData,
 } from './data';
+import { galaxyPalette, rampGradient, rgbCss, samePalette, toneRgb, type GalaxyPalette } from './palette';
 
 interface Props {
   lib: LibraryData;
@@ -42,7 +46,7 @@ const K_MIN = 0.65;
 const K_MAX = 10;
 const SIZE_EXP = 0.45; // star screen-size ∝ k^SIZE_EXP: closer, not fatter
 const HALO = 1.9; // sprite is HALO× the node radius; the skirt glows
-const NIGHT = '#0d0b09';
+const TONE_STEPS = 256; // the ramp is precomputed at this resolution per palette
 
 const ENTRANCE_SPREAD = 620; // ms of stagger from centre to rim
 const ENTRANCE_FADE = 450; // ms each star takes to fade+grow in
@@ -61,31 +65,30 @@ function fit(w: number, h: number) {
   return { S, ox: (w - S) / 2, oy: (h - S) / 2, f: S / 1000 };
 }
 
-// parse 'rgb(r,g,b)' or '#rgb'/'#rrggbb' → [r,g,b]
-function parseRGB(c: string): [number, number, number] {
-  if (c[0] === '#') {
-    const h = c.slice(1);
-    const n = h.length === 3 ? h.split('').map((x) => x + x).join('') : h;
-    const v = parseInt(n, 16);
-    return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
-  }
-  const m = c.match(/\d+/g);
-  return m && m.length >= 3 ? [Number(m[0]), Number(m[1]), Number(m[2])] : [74, 68, 61];
+// Tokens are read off <html>: the stage itself re-declares them as its night.
+function readPalette(probe: CanvasRenderingContext2D | null): GalaxyPalette {
+  return galaxyPalette(probe ? readThemeRgb(document.documentElement, probe) : THEME_RGB_FALLBACK);
 }
 
-// Lift palette colours below a luminance floor toward warm paper so hue
-// survives the night stage. Legend swatches use it too, so the key can't lie.
-export function liftNight(c: string): [number, number, number] {
-  const [r, g, b] = parseRGB(c);
-  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  const FLOOR = 96;
-  if (lum >= FLOOR) return [r, g, b];
-  const t = ((FLOOR - lum) / FLOOR) * 0.75;
-  return [r + (207 - r) * t, g + (200 - g) * t, b + (187 - b) * t];
+function useGalaxyPalette(): GalaxyPalette {
+  const [palette, setPalette] = useState(() =>
+    typeof document === 'undefined' ? galaxyPalette(THEME_RGB_FALLBACK) : readPalette(createColorProbe()),
+  );
+  useEffect(() => {
+    const probe = createColorProbe();
+    const update = () => {
+      const next = readPalette(probe);
+      setPalette((cur) => (samePalette(cur, next) ? cur : next));
+    };
+    update();
+    return watchTheme(update);
+  }, []);
+  return palette;
 }
-function liftNightCss(c: string): string {
-  const [r, g, b] = liftNight(c);
-  return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+
+// sRGB bytes → three's linear working space.
+function linear(c: Rgb, into: THREE.Color): THREE.Color {
+  return into.setRGB(c[0] / 255, c[1] / 255, c[2] / 255, THREE.SRGBColorSpace);
 }
 
 const STAR_VERT = /* glsl */ `
@@ -202,6 +205,35 @@ export default function ConstellationGalaxy({
   const glRef = useRef<GlState | null>(null);
   const [failed, setFailed] = useState(false);
 
+  const palette = useGalaxyPalette();
+  const paletteRef = useRef(palette);
+  paletteRef.current = palette;
+  // The ramp in three's linear space, TONE_STEPS entries, then the faint tone.
+  const toneLut = useMemo(() => {
+    const lut = new Float32Array((TONE_STEPS + 1) * 3);
+    const c = new THREE.Color();
+    for (let k = 0; k <= TONE_STEPS; k++) {
+      linear(k < TONE_STEPS ? toneRgb(palette, k / (TONE_STEPS - 1)) : palette.faint, c);
+      lut[k * 3] = c.r;
+      lut[k * 3 + 1] = c.g;
+      lut[k * 3 + 2] = c.b;
+    }
+    return lut;
+  }, [palette]);
+  // The stage's night tokens, for the overlays and labels drawn over it.
+  const stageVars = useMemo(
+    () =>
+      ({
+        '--bg': rgbCss(palette.night),
+        '--ink': rgbCss(palette.light),
+        '--muted': rgbCss(palette.faint),
+        '--gx-scene': rgbCss(palette.sceneLabel),
+        '--gx-track': rgbCss(palette.trackLabel),
+      }) as React.CSSProperties,
+    [palette],
+  );
+  const toneCss = (tone: number | null) => rgbCss(toneRgb(palette, tone));
+
   const [view, setView] = useState<View>({ k: 1, tx: 0, ty: 0 });
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -291,7 +323,7 @@ export default function ConstellationGalaxy({
       const pr = Math.min(window.devicePixelRatio || 1, 2);
       renderer.setPixelRatio(pr);
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(NIGHT);
+      scene.background = linear(paletteRef.current.night, new THREE.Color());
       const camera = new THREE.OrthographicCamera(0, 1000, 0, 1000, -10, 10);
       const composer = new EffectComposer(renderer);
       composer.addPass(new RenderPass(scene, camera));
@@ -321,7 +353,7 @@ export default function ConstellationGalaxy({
         blending: THREE.AdditiveBlending,
       });
       const linkMat = new THREE.LineBasicMaterial({
-        color: new THREE.Color(liftNightCss('#4a443d')),
+        color: linear(paletteRef.current.quiet, new THREE.Color()),
         transparent: true,
         opacity: 0,
         depthWrite: false,
@@ -361,6 +393,15 @@ export default function ConstellationGalaxy({
       gl.renderer.dispose();
     };
   }, [reducedMotion, invalidate]);
+
+  // A theme switch recolours the sky and the links; the stars follow below.
+  useEffect(() => {
+    const gl = glRef.current;
+    if (!gl) return;
+    linear(palette.night, gl.scene.background as THREE.Color);
+    linear(palette.quiet, gl.linkMat.color);
+    invalidate();
+  }, [palette, invalidate]);
 
   // geometry, rebuilt only when the dataset changes
   const entranceStart = useRef(0);
@@ -488,8 +529,6 @@ export default function ConstellationGalaxy({
     const sarr = sizeA.array as Float32Array;
     const aarr = alpha.array as Float32Array;
     const rarr = ring.array as Float32Array;
-    const scratch = new THREE.Color();
-    const cache = new Map<string, [number, number, number]>();
     for (let i = 0; i < n; i++) {
       const t = tracks[i]!;
       const matched = matchSet.has(t.idx);
@@ -500,17 +539,11 @@ export default function ConstellationGalaxy({
       let op = matched ? 1 : 0.07;
       if (selected && matched && !isSel && !isNb) op = filtering ? 0.5 : 0.32;
       aarr[i] = op;
-      const cssCol = isSel ? '#d94b2a' : nodeColor(t, colorBy);
-      let lin = cache.get(cssCol);
-      if (!lin) {
-        const [r, g, b] = liftNight(cssCol);
-        scratch.setRGB(r / 255, g / 255, b / 255, THREE.SRGBColorSpace);
-        lin = [scratch.r, scratch.g, scratch.b];
-        cache.set(cssCol, lin);
-      }
-      carr[i * 3] = lin[0];
-      carr[i * 3 + 1] = lin[1];
-      carr[i * 3 + 2] = lin[2];
+      const tone = isSel ? 1 : nodeTone(t, colorBy);
+      const k = 3 * (tone == null ? TONE_STEPS : Math.round(Math.max(0, Math.min(1, tone)) * (TONE_STEPS - 1)));
+      carr[i * 3] = toneLut[k]!;
+      carr[i * 3 + 1] = toneLut[k + 1]!;
+      carr[i * 3 + 2] = toneLut[k + 2]!;
       rarr[i] = !nodeFilled(t, colorBy) && !isSel && !isNb ? 1 : 0;
     }
     color.needsUpdate = true;
@@ -518,7 +551,7 @@ export default function ConstellationGalaxy({
     alpha.needsUpdate = true;
     ring.needsUpdate = true;
     invalidate();
-  }, [lib, matchSet, colorBy, selected, neighbourSet, filtering, invalidate]);
+  }, [lib, matchSet, colorBy, selected, neighbourSet, filtering, toneLut, invalidate]);
 
   // camera + point scale follow the view
   useEffect(() => {
@@ -852,7 +885,7 @@ export default function ConstellationGalaxy({
 
   if (failed) {
     return (
-      <div className="cmap cmap-galaxy" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div className="cmap cmap-galaxy" style={{ ...stageVars, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <span className="t-caption ad-muted">WEBGL UNAVAILABLE — THE OBSERVATORY NEEDS A GPU-CAPABLE BROWSER</span>
       </div>
     );
@@ -862,7 +895,7 @@ export default function ConstellationGalaxy({
     <div
       className="cmap cmap-galaxy"
       ref={wrapRef}
-      style={{ cursor: dragging ? 'grabbing' : hovered ? 'pointer' : 'grab' }}
+      style={{ ...stageVars, cursor: dragging ? 'grabbing' : hovered ? 'pointer' : 'grab' }}
       tabIndex={0}
       role="application"
       aria-label="library map — arrow keys pan, plus and minus zoom, zero resets, click a star to inspect it"
@@ -970,7 +1003,7 @@ export default function ConstellationGalaxy({
         {colorBy === 'energy' || colorBy === 'confidence' || colorBy === 'loudness' || colorBy === 'pace' ? (
           <>
             <div className="legend-ramp">
-              <span className="lr-bar" />
+              <span className="lr-bar" style={{ background: rampGradient(palette) }} />
               <span className="t-caption ad-muted">{RAMP_ENDS[colorBy][0]}</span>
               <span className="t-caption ad-muted" style={{ marginLeft: 'auto' }}>
                 {RAMP_ENDS[colorBy][1]}
@@ -979,7 +1012,7 @@ export default function ConstellationGalaxy({
             {(colorBy === 'loudness' || colorBy === 'pace') && (
               <div className="legend-keys">
                 <span>
-                  <i className="lk hollow" style={{ borderColor: liftNightCss('#9b948a') }} />
+                  <i className="lk hollow" style={{ borderColor: toneCss(null) }} />
                   NOT MEASURED
                 </span>
               </div>
@@ -988,45 +1021,45 @@ export default function ConstellationGalaxy({
         ) : colorBy === 'source' ? (
           <div className="legend-keys">
             <span>
-              <i className="lk" style={{ background: liftNightCss('#d94b2a') }} />
+              <i className="lk" style={{ background: toneCss(1) }} />
               MANUAL
             </span>
             <span>
-              <i className="lk" style={{ background: liftNightCss('#9a5b1f') }} />
+              <i className="lk" style={{ background: toneCss(LLM_TONE) }} />
               LLM
             </span>
             <span>
-              <i className="lk" style={{ background: liftNightCss('#4a443d') }} />
+              <i className="lk" style={{ background: toneCss(0) }} />
               PROPAGATED
             </span>
             <span>
-              <i className="lk hollow" style={{ borderColor: liftNightCss('#9b948a') }} />
+              <i className="lk hollow" style={{ borderColor: toneCss(null) }} />
               UNCERTAIN · LEGACY
             </span>
           </div>
         ) : colorBy === 'vocal' ? (
           <div className="legend-keys">
             <span>
-              <i className="lk" style={{ background: liftNightCss('#d94b2a') }} />
+              <i className="lk" style={{ background: toneCss(1) }} />
               VOCAL
             </span>
             <span>
-              <i className="lk" style={{ background: liftNightCss('#4a443d') }} />
+              <i className="lk" style={{ background: toneCss(0) }} />
               INSTRUMENTAL
             </span>
             <span>
-              <i className="lk hollow" style={{ borderColor: liftNightCss('#9b948a') }} />
+              <i className="lk hollow" style={{ borderColor: toneCss(null) }} />
               NOT ANALYSED
             </span>
           </div>
         ) : (
           <div className="legend-keys">
             <span>
-              <i className="lk" style={{ background: liftNightCss('#d94b2a') }} />
+              <i className="lk" style={{ background: toneCss(1) }} />
               ANALYSED
             </span>
             <span>
-              <i className="lk hollow" style={{ borderColor: liftNightCss('#9b948a') }} />
+              <i className="lk hollow" style={{ borderColor: toneCss(null) }} />
               NOT ANALYSED
             </span>
           </div>

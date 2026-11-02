@@ -1,5 +1,5 @@
 import { preparationSkillAt, prepareEpisodeContext } from '../broadcast/show-preparation.js';
-// Segment-director agent. agenticTick() (the 5-minute scheduler.skillsTick)
+// Segment-director agent. agenticTick() (the talk table's 5-minute segment row)
 // hands a tool-loop agent a snapshot of the moment plus real-world data tools
 // (llm/segment-tools.js) and asks whether anything is worth saying between
 // tracks; it writes ONE spoken line or stays silent. It is deliberately NOT
@@ -21,10 +21,11 @@ import * as session from '../broadcast/session.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
 import { djObject, modelTolerant } from '../llm/sdk.js';
-import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
+import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase, onAirLocationGrounding } from '../llm/dj.js';
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
+import { searchKeyProblem } from './web-search.js';
 import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
@@ -39,6 +40,13 @@ export { dataBlock };
 // toggles all iterate THIS. Read live so a rescan takes effect at once.
 function allCapabilities() {
   return loadedCapabilities();
+}
+
+// The refused-key sentence when the search key is what's stopping this skill, or
+// null. A skill that never asks about search isn't stopped by that key.
+function refusedKeyProblem(cap: any): string | null {
+  const problem = searchKeyProblem();
+  return problem && cap.asksSearchReady?.() ? problem : null;
 }
 
 // Default per-skill context profile: every "right now" field EXCEPT weather.
@@ -145,7 +153,7 @@ ${list}`;
 
 let tickBusy = false;
 const lastFired = new Map<string, number>(); // kind → ms timestamp of last aired segment
-const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of last unusable pool-mode fetch
+const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of the last run with nothing to air: an unusable fetch, a co-hosted stand-down or a stand-in line
 
 // An unavailable source shouldn't retry on the very next 5-minute tick, nor
 // inherit a multi-hour on-air cooldown when the next track may change its
@@ -226,11 +234,12 @@ function availableCapabilities(ctx, now: Date) {
 // tool exploration are conveyed through the AI SDK's own channels (tool and
 // schema field descriptions, the done tool, the buildSituation() user message),
 // same principle as pickSystem.
-function directorSystem(persona, caps, freq: string, sfxCatalog) {
+export function directorSystem(persona, caps, freq: string, sfxCatalog) {
   const capList = caps.map((c) => `- ${c.kind}: ${c.desc}`).join('\n');
   const tone = stationTone(freq);
 
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 Your job: decide whether to air ONE between-track segment, or stay silent. You are NOT choosing music. ${tone}
 
@@ -268,6 +277,10 @@ export const directorAgent = defineAgent({
   // widening is opt-in precisely so it can't override this; the director does
   // not opt in.
   maxSteps: 2,
+  // Deciding to stay silent reads no data, so a native "air: false" with no
+  // tool call is a finished answer, not a miss. Only silence: a line that
+  // airs may need a data tool, and the forced agents never opt in.
+  settledWithoutTools: (object) => object?.air === false,
   // Wall-clock ceiling. Without it a model that ignores toolChoice can drive the
   // done-tool recovery into a multi-step stall (#555) and hang the tick; the
   // deadline turns that into a clean throw, handled as silence below.
@@ -320,10 +333,9 @@ function buildCohostedSituation(ctx, cap, { forced = false, brief = null }: { fo
   return situation;
 }
 
-// Simple (non-agentic) director, the pool-mode counterpart of directorAgent.
-// `settings.llm.pickerAgent` off is the operator's signal that the model can't
-// be trusted with tool loops, so the segment path must not be the one place
-// still running one. Code picks the capability, calls its data tool directly,
+// Simple (non-agentic) director, the direct-mode counterpart of directorAgent.
+// The explicit `settings.llm.segmentRuntime` choice keeps the segment path
+// independent from the track picker. Code picks the capability, calls its data tool directly,
 // inlines the result and asks for the same {air, text, sfx} decision, so the
 // model still gets to choose silence. Everything downstream is shared with
 // agenticTick.
@@ -364,6 +376,7 @@ export function simpleSegmentSchema() {
 
 export function simpleSystem(persona, cap, freq: string, sfxCatalog) {
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 Your job: decide whether to air ONE between-track "${cap.kind}" segment, or stay silent. You are NOT choosing music. ${stationTone(freq)}
 
@@ -481,7 +494,7 @@ export async function agenticTick(ctx) {
     let exchange: { kind: string; lines: Array<{ persona: any; text: string }>; castNames: string[] } | null = null;
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
-    if (!settings.get().llm?.pickerAgent) {
+    if (settings.get().llm?.segmentRuntime === 'direct') {
       ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
     } else {
       // Brief the agent with aired curiosity so a pool-exhausted fallback
@@ -559,7 +572,13 @@ export async function agenticTick(ctx) {
       sfx: selectedSfx,
       hostSpeech,
     });
-    if (!delivery.accepted) return;
+    if (!delivery.accepted) {
+      // A stand-in means the skill had nothing to say: back off like the
+      // "nothing to say" stand-down, or the segment row re-runs the director
+      // and the skill model every few minutes for a line dropped again.
+      if (delivery.reason === 'stand-in') lastUnavailable.set(seg.kind, Date.now());
+      return;
+    }
 
     // Reserve the kind as soon as it owns an air path so a held segment is not
     // generated twice. Durable "aired" facts wait for the voice lifecycle.
@@ -628,6 +647,7 @@ export function forcedSystem(persona, cap, sfxCatalog, { mayAbstain = false }: {
     ? 'write it from the source data you were given, and nothing else. If that data is empty, or turns out to be about something other than what this segment covers, set "air" to false and say nothing — standing down is the right answer, and a fabricated line is far worse than no segment. Never fill the gap from memory, from what you said earlier in the show, or from what sounds plausible.'
     : 'you must produce a line, silence is not an option.';
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 The operator asked you to air ONE ${cap.kind} segment now — ${mandate} You are NOT choosing music.
 
@@ -698,8 +718,11 @@ export async function runCapability(
     // Hint at the missing key when the capability is keyed.
     let hint = '';
     const searchProvider = settings.get().search?.provider;
-    if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
-      const name = searchProvider === 'brave' ? 'Brave Search' : 'Tavily';
+    const keyProblem = refusedKeyProblem(cap);
+    if (keyProblem) {
+      hint = ` — ${keyProblem}. Paste one into Settings → Web search`;
+    } else if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave' || searchProvider === 'firecrawl')) {
+      const name = searchProvider === 'brave' ? 'Brave Search' : searchProvider === 'firecrawl' ? 'Firecrawl' : 'Tavily';
       hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
     } else if (cap.toolPending && !cap.toolFn) {
       hint = ' — its tool.mjs is awaiting your review in /admin/skills';
@@ -724,6 +747,8 @@ export async function runCapability(
       capability: cap, host, guests, context: ctx, situation, segmentState, forced: true,
     });
     if (!result.aired || !result.lines) {
+      // The same backoff as a solo forced run that wrote a stand-in, below.
+      if (result.standIn) lastUnavailable.set(cap.kind, Date.now());
       const reason = result.reason || 'nothing usable to discuss';
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
       return { aired: false, queued: false, deferred: false, text: null, reason };
@@ -760,7 +785,7 @@ export async function runCapability(
   };
 
   let object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined;
-  if (!settings.get().llm?.pickerAgent) {
+  if (settings.get().llm?.segmentRuntime === 'direct') {
     // Pool mode: fetch the data directly, one structured call. A skill that
     // writes from the moment survives a failed fetch (it writes from the brief
     // and the moment alone); a GROUNDED skill does not, since its whole segment
@@ -829,6 +854,14 @@ export async function runCapability(
       }
     : { pauseTalkEligible, sfx: selectedSfx });
   if (!delivery.accepted) {
+    if (delivery.reason === 'stand-in') {
+      // Nothing was rendered: the model wrote a stand-in, not speech. Other
+      // forced stand-downs leave the backoff alone. A stand-in sets it, here and
+      // on the co-hosted path, so the director is not offered a skill that has
+      // just written one.
+      lastUnavailable.set(cap.kind, Date.now());
+      return standDown('the DJ wrote a stand-in, not a line, so nothing aired');
+    }
     const reason = 'the station could not queue the rendered segment';
     queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
     return { aired: false, queued: false, deferred: false, text: null, reason };
@@ -864,7 +897,7 @@ export function skillCatalog() {
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
     // web-search's key requirement depends on the active provider:
-    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo needs nothing.
+    // Tavily/Brave/Firecrawl need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -875,15 +908,23 @@ export function skillCatalog() {
       } else if (searchProvider === 'brave') {
         requiresKey = 'SEARCH_API_KEY';
         keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
+      } else if (searchProvider === 'firecrawl') {
+        requiresKey = 'SEARCH_API_KEY';
+        keyUrl = 'https://www.firecrawl.dev/app/api-keys';
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;
         hint = 'SearXNG self-hosted meta-search. Configure base URL in admin → Settings → Search.';
+      } else if (searchProvider === 'keenable') {
+        requiresKey = null;
+        keyUrl = null;
+        hint = 'Keenable web search, keyless. An optional Keenable key (SEARCH_API_KEY) raises the rate limit.';
       } else {
         requiresKey = null;
         keyUrl = null;
       }
     }
+    const ready = typeof c.ready === 'function' ? !!c.ready() : true;
     return {
       name: c.skill,
       hasTool: typeof c.toolFn === 'function',
@@ -899,10 +940,13 @@ export function skillCatalog() {
       // an operator-authored skill and explain the off-by-default behaviour.
       custom: !c.seeded,
       // `ready` is false when a required env key isn't set; `requiresKey` names
-      // it and `keyUrl` links to its source.
-      ready: typeof c.ready === 'function' ? !!c.ready() : true,
+      // it and `keyUrl` links to its source. `keyProblem` is set instead when a
+      // key is on file and the search provider refuses it, so setting the env
+      // var wouldn't help.
+      ready,
       requiresKey,
       keyUrl,
+      keyProblem: ready ? null : refusedKeyProblem(c),
       hint,
       // The "right now" fields this situation may include (#471), resolved to
       // the default profile when unset so the admin UI needn't guess.

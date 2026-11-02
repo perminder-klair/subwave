@@ -39,6 +39,8 @@ import { syncBuiltinESMExports } from 'node:module';
 let port;
 const listen = net.Server.prototype.listen;
 net.Server.prototype.listen = function(...args) {
+  // PORT is a port the test holds; bind an ephemeral one in its place.
+  if (args[0] === Number(process.env.PORT)) args[0] = 0;
   this.once('listening', () => { port = this.address().port; });
   return listen.apply(this, args);
 };
@@ -82,12 +84,14 @@ globalThis.fetch = (input, init) => {
   const mockAddress = mock.address();
   assert.ok(mockAddress && typeof mockAddress === 'object');
   const mockUrl = `http://127.0.0.1:${mockAddress.port}`;
-  // PORT=0 is invalid boot config; reserve a valid port so a live station can coexist.
+  // PORT=0 is invalid boot config, so the server is handed a real port that the
+  // test keeps bound until the end, and the preload binds an ephemeral port in
+  // its place. Releasing the reservation for the server to re-bind would let
+  // another process take it in between.
   const reservation = createPortReservation();
   await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
   const address = reservation.address();
   assert.ok(address && typeof address === 'object');
-  await new Promise<void>(resolve => reservation.close(() => resolve()));
   const orphan = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
   const orphanExit = once(orphan, 'exit');
   writeFileSync(join(state, 'tagger.pid'), JSON.stringify({
@@ -162,6 +166,7 @@ globalThis.fetch = (input, init) => {
     await orphanExit;
     mock.closeAllConnections();
     await new Promise<void>(resolve => mock.close(() => resolve()));
+    await new Promise<void>(resolve => reservation.close(() => resolve()));
     rmSync(state, { recursive: true, force: true });
   }
 });

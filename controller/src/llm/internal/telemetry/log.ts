@@ -5,9 +5,11 @@ import { statSync, renameSync } from 'node:fs';
 import { STATE_DIR } from '../../../config.js';
 import { logEvent, cap } from '../../../observability/events.js';
 import { addDailyUsage } from './budget.js';
+import { ContextMeasurements } from './context-window.js';
 
 const MAX_CALLS = 120;
 export const recentCalls: any[] = [];
+export const contextMeasurements = new ContextMeasurements();
 
 // Monotonic, since-boot sum of tokens reported by successful calls. Unlike the
 // ring buffer above (a rolling window of the last MAX_CALLS calls), this only
@@ -27,6 +29,7 @@ function logSuccess(call: any) {
 }
 
 export function record(call: any) {
+  contextMeasurements.record(call);
   recentCalls.unshift(call);
   if (recentCalls.length > MAX_CALLS) recentCalls.length = MAX_CALLS;
   // Metadata only: prompts and responses stay in /debug and events.jsonl.

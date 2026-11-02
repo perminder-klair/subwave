@@ -32,6 +32,7 @@ export const showKeys = {
   community: () => ['shows', 'community'] as const,
   preparation: () => ['shows', 'preparation'] as const,
   blocklist: () => ['shows', 'blocklist'] as const,
+  playlistPosition: (showId: string) => ['shows', 'playlist-position', showId] as const,
 };
 
 export function patchShowSettings(
@@ -167,5 +168,41 @@ export function useRetryShowPreparation(adminFetch: AdminFetch) {
       return preparationStatusSchema.parse(body.status);
     },
     onDone: (status, _vars, client) => { client.setQueryData(showKeys.preparation(), status); },
+  });
+}
+
+/** Play in order: where a saved show's walk through its playlist stands. */
+export interface PlaylistPosition {
+  /** The SAVED show plays in order. False while the switch is only on in the draft. */
+  inOrder: boolean;
+  /** The track its next in-order pick would choose; index is 0-based. */
+  next: { index: number; total: number; title: string | null; artist: string | null } | null;
+  /** Why there is no next track (anchor unresolved, everything filtered out…). */
+  reason?: string;
+}
+
+export function usePlaylistPositionQuery(adminFetch: AdminFetch, showId: string, enabled: boolean) {
+  return useAdminQuery<PlaylistPosition>({
+    key: showKeys.playlistPosition(showId),
+    adminFetch,
+    enabled,
+    refetchInterval: 5000,
+    request: (fetcher, signal) => adminJson<PlaylistPosition>(
+      fetcher, `/shows/${encodeURIComponent(showId)}/playlist-position`, undefined, signal,
+    ),
+    toastOnError: false,
+  });
+}
+
+/** Back to the top: the show's next in-order pick is track 1. */
+export function useResetPlaylistPositionMutation(adminFetch: AdminFetch) {
+  return useAdminMutation<{ ok: boolean }, string>({
+    adminFetch,
+    request: (showId, fetcher) => adminJson<{ ok: boolean }>(
+      fetcher, `/shows/${encodeURIComponent(showId)}/playlist-position`, { method: 'DELETE' },
+    ),
+    onDone: async (_data, showId, client) => {
+      await client.invalidateQueries({ queryKey: showKeys.playlistPosition(showId), exact: true });
+    },
   });
 }

@@ -97,6 +97,20 @@ test('an unknown themeId is dropped to "", a known one preserved', () => {
   // palette id.
   assert.equal(strict({ themeId: 'vinyl' }).themeId, 'vinyl');
   assert.equal(strict({ themeId: 'sunset' }).themeId, '');
+  assert.equal(strict({ themeId: '' }).themeId, '');
+});
+
+test('a retired theme on a sibling cannot block a show edit (#917)', () => {
+  // update() validates the whole shows array on show and schedule saves. A
+  // sibling pinned to a renamed built-in palette used to brick every edit.
+  const out = validateShowsStrict([
+    show({ themeId: 'vinyl' }),
+    show({ name: 'Old Show', personaId: 'p_guest', themeId: 'sunset' }),
+  ], personas, themes, moodNames);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].themeId, 'vinyl');
+  assert.equal(out[1].themeId, '');
+  assert.equal(out[1].name, 'Old Show');
 });
 
 test('maxTrackSeconds honours the crossfade-derived floor, and 0 always passes', () => {
@@ -133,6 +147,18 @@ test('booleans read as `=== true`, matching both paths before the schema', () =>
   assert.equal(strict({ banter: true }).banter, true);
   assert.equal(strict({ banter: 'yes' }).banter, false);
   assert.equal(strict({ programme: 1 }).programme, false);
+});
+
+test('playlist switches round-trip through strict saves and lenient loads', () => {
+  for (const value of [true, false, 'yes', undefined]) {
+    const raw = show({ playlistExhaust: value, playlistInOrder: value });
+    const saved = strict(raw);
+    const [loaded] = normalizeShows([raw], personaIds);
+    for (const field of ['playlistExhaust', 'playlistInOrder'] as const) {
+      assert.equal(saved[field], value === true);
+      assert.equal(loaded[field], saved[field]);
+    }
+  }
 });
 
 test('the array cap is enforced', () => {
@@ -248,6 +274,7 @@ test('load keeps an unknown themeId; the strict path drops it', () => {
   const [s] = normalizeShows([show({ themeId: 'sunset' })], personaIds);
   assert.equal(s.themeId, 'sunset');
   assert.equal(strict({ themeId: 'sunset' }).themeId, '');
+  assert.equal(strict({ themeId: '' }).themeId, '');
 });
 
 test('load caps the list at SHOWS_LIMIT', () => {

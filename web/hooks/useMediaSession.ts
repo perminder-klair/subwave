@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { talkingState } from '@/lib/sessionFeed';
+import { useEffect } from 'react';
 import { useStationClient } from '@/lib/stationClient';
+import { useTalking } from './useTalking';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
 
 export interface UseMediaSessionParams {
@@ -41,23 +41,8 @@ export function useMediaSession({
   personaName,
 }: UseMediaSessionParams): void {
   const client = useStationClient();
-  // True while one of the DJ's lines is being heard (talkingState). Held in
-  // state and re-evaluated on its own timer, so the window opens and closes on
-  // time with no feed update.
-  const [talking, setTalking] = useState(false);
-  useEffect(() => {
-    let timer: number | null = null;
-    const apply = () => {
-      const now = Date.now();
-      const { talking: next, nextChangeMs } = talkingState(boothFeed, leadMs, now);
-      setTalking(next);
-      timer = nextChangeMs == null ? null : window.setTimeout(apply, Math.max(0, nextChangeMs - now));
-    };
-    apply();
-    return () => {
-      if (timer != null) window.clearTimeout(timer);
-    };
-  }, [boothFeed, leadMs]);
+  // True while one of the DJ's lines is being heard.
+  const talking = useTalking(boothFeed, leadMs);
   // The browser renders the lock-screen play/pause glyph from this, so it stays
   // correct even while the <audio> readyState is still loading.
   useEffect(() => {

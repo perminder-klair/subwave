@@ -8,7 +8,7 @@ export interface CoverColors {
 
 const EMPTY: CoverColors = { vibrant: null, average: null };
 
-export function useCoverColors(coverSrc: string | null): CoverColors {
+export function useCoverColors(coverSrc: string | null, headers?: Record<string, string>): CoverColors {
   const [colors, setColors] = useState<CoverColors>(EMPTY);
 
   useEffect(() => {
@@ -17,7 +17,7 @@ export function useCoverColors(coverSrc: string | null): CoverColors {
       return;
     }
     let cancelled = false;
-    getColors(coverSrc, { cache: true, key: coverSrc, quality: 'low' })
+    getColors(coverSrc, { cache: true, key: coverSrc, quality: 'low', headers })
       .then((res) => {
         if (cancelled) return;
         if (res.platform === 'ios') {
@@ -34,7 +34,7 @@ export function useCoverColors(coverSrc: string | null): CoverColors {
     return () => {
       cancelled = true;
     };
-  }, [coverSrc]);
+  }, [coverSrc, headers]);
 
   return colors;
 }

@@ -17,7 +17,7 @@
 // Run: npm test -- track-floor
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -37,14 +37,8 @@ const { PICKER_MIN_TRACK_LENGTH_BOUNDS } = await import('../src/schemas/settings
 const { SHOW_MIN_TRACK_LENGTH_MAX } = await import('../src/schemas/show.js');
 const { durationSeconds } = await import('../src/music/recency.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
-async function coldLoad(stored: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify(stored));
-  setCache(null);
-  await settings.load();
-  return settings.get();
-}
+async function coldLoad(stored: Record<string, unknown>) { return (await coldLoadSettings(stored)); }
 
 // ── the pure policy ────────────────────────────────────────────────────────
 

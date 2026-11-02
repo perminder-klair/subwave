@@ -11,14 +11,13 @@
 //   - djAgent's earlier legs when a later leg throws
 // Plus the done-only recovery carrying EVERY discovery step, not the last one.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import test, { after, type TestContext } from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { z } from 'zod';
 
-const previousStateDir = process.env.STATE_DIR;
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-usage-accounting-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-usage-accounting-'));
 process.env.STATE_DIR = stateRoot;
 
 const store = await import('../src/settings/store.js');
@@ -27,15 +26,7 @@ const { primaryLeg } = await import('../src/llm/internal/provider/legs.js');
 const { djObject, djAgent } = await import('../src/llm/sdk.js');
 const { recentCalls } = await import('../src/llm/log.js');
 const { objectViaToolCall } = await import('../src/llm/internal/strategy/object-via-tool.js');
-const previousCache = store.peek();
 const schema = z.object({ name: z.string() });
-
-after(() => {
-  store.setCache(previousCache);
-  if (previousStateDir === undefined) delete process.env.STATE_DIR;
-  else process.env.STATE_DIR = previousStateDir;
-  rmSync(stateRoot, { recursive: true, force: true });
-});
 
 const PER_CALL = 3;
 const usage = {
@@ -110,16 +101,23 @@ test('djObject counts both attempts when both fail', async (t) => {
 test('djAgent counts a native leg that hits its step cap before falling back', async (t) => {
   const leg = configure(t, 'openai');
   // Native leg: only `sample` is offered, and the model never stops calling it,
-  // so the run ends on the step cap and its output getter throws. The done-tool
-  // main run then explores once and commits.
-  const calls = mockModel(t, leg, (o) => (toolNames(o) === 'done' ? call('done', { name: 'ok' }) : call('sample', {})));
+  // so the run ends on the step cap and its output getter throws. Those three
+  // steps spent the whole discovery budget, so the done-tool run commits at
+  // once with their results carried in.
+  const calls = mockModel(t, leg, (o, n) => ({
+    ...(toolNames(o) === 'done' ? call('done', { name: 'ok' }) : call('sample', {})),
+    // The largest request belongs to the discarded native leg, not the
+    // successful final call. Context guidance must retain its peak.
+    usage: n === 0 ? { ...usage, inputTokens: { ...usage.inputTokens, total: 20, noCache: 20 } } : usage,
+  }));
   const r = await djAgent({
     system: 'Pick', messages: [{ role: 'user', content: 'pick' }], tools, schema, maxSteps: 3,
   });
   assert.deepEqual(r.object, { name: 'ok' });
-  assert.equal(calls(), 3 + 2, 'three native steps, then discovery + done');
+  assert.equal(calls(), 3 + 1, 'three native steps, then done');
   assert.equal(lastRecord()?.ok, true);
-  assert.equal(lastRecord()?.usage?.total, 5 * PER_CALL, 'the native leg is on the record');
+  assert.equal(lastRecord()?.usage?.total, 4 * PER_CALL + 18, 'the native leg is on the record');
+  assert.equal(lastRecord()?.contextPeakInput, 20, 'context capacity is the peak request, not cumulative spend');
 });
 
 test('djAgent counts every leg when the terminal collapse declines too', async (t) => {
@@ -165,4 +163,6 @@ test('the done-only recovery carries every discovery step, not just the last', a
     .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
     .filter((p: any) => p?.type === 'tool-call' && p.toolName === 'sample');
   assert.equal(discoveryCalls.length, 2, 'both discovery steps reach the recovery prompt');
+  assert.equal(lastRecord()?.usage?.total, 4 * PER_CALL, 'discovery, decline and recovery are each billed once');
+  assert.equal(lastRecord()?.contextPeakInput, 2, 'context guidance survives a declined forced tool');
 });

@@ -31,18 +31,18 @@ assert.doesNotMatch(pickSystem(), /the "say" link/,
 
 const here = dirname(fileURLToPath(import.meta.url));
 const agentSource = readFileSync(resolve(here, '../src/broadcast/dj-agent.ts'), 'utf8');
-const agentStart = agentSource.indexOf('async function pickViaAgent');
+const agentStart = agentSource.indexOf('async function pickViaSelectionRoute');
 const agentEnd = agentSource.indexOf('\nasync function ', agentStart + 1);
-const pickViaAgentSource = agentSource.slice(agentStart, agentEnd < 0 ? undefined : agentEnd);
-const timingAt = pickViaAgentSource.indexOf('const linkAirAt = clockAllowed ? linkClockAt(showAt, Date.now()) : null;');
-const writerAt = pickViaAgentSource.indexOf('const generated = await generatePickLink');
-const finalGuardAt = pickViaAgentSource.indexOf('const albumHours =');
+const pickViaSelectionRouteSource = agentSource.slice(agentStart, agentEnd < 0 ? undefined : agentEnd);
+const timingAt = pickViaSelectionRouteSource.indexOf('const linkAirAt = clockAllowed ? linkClockAt(showAt, Date.now()) : null;');
+const writerAt = pickViaSelectionRouteSource.indexOf('const generated = await generatePickLink');
+const finalGuardAt = pickViaSelectionRouteSource.indexOf('const albumHours =');
 assert.ok(timingAt > finalGuardAt && timingAt < writerAt,
   'the writer clock must be recomputed after selection guards and immediately before link generation');
 assert.doesNotMatch(
-  pickViaAgentSource.slice(0, pickViaAgentSource.indexOf('{\n', pickViaAgentSource.indexOf('async function'))),
+  pickViaSelectionRouteSource.slice(0, pickViaSelectionRouteSource.indexOf('{\n', pickViaSelectionRouteSource.indexOf('async function'))),
   /linkAirAt/,
-  'pickViaAgent must not accept a cycle-level clock estimate',
+  'pickViaSelectionRoute must not accept a cycle-level clock estimate',
 );
 
 console.log('agent say boundary: all tests passed');

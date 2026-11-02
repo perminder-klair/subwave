@@ -13,7 +13,7 @@
 // Run: `npm test -- archive-download`.
 
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { listen as listenHttp } from './test-utils/http.js';
 import { appendFileSync, chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -33,10 +33,8 @@ const { router } = await import('../src/routes/archives.js');
 
 const app = express();
 app.use(router);
-const server = createServer(app);
-await new Promise<void>((r) => { server.listen(0, '127.0.0.1', () => r()); });
+const { server, url: base } = await listenHttp(app);
 server.unref();
-const base = `http://127.0.0.1:${(server.address() as any).port}`;
 
 // A route that never answers must fail its test, not wedge the suite.
 const get = (hour: string, signal: AbortSignal = AbortSignal.timeout(5000)) =>

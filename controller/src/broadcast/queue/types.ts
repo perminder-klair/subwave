@@ -140,6 +140,11 @@ export interface QueueItem {
   // Picker's padded show forecast, independent of whether its link spoke a
   // clock. Persisted so selection checks follow that show's live length limit.
   selectionShowAt?: number | null;
+  // The show this item was chosen for (show-boundary showKeyAt, at its
+  // selection moment), stamped when queued. Kept, not recomputed later: a
+  // takeover that has since expired or a grid edited meanwhile would change
+  // the answer for a moment in the past.
+  showKey?: string | null;
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
   // Epoch ms of the air moment this item's link was WRITTEN against — stamped
   // only when the generator actually handed the model a clock to speak

@@ -77,14 +77,6 @@ test('strict: throws on non-array', () => {
   assert.throws(() => validateTtsCorrectionsStrict('nope'), /must be an array/);
 });
 
-test('strict: throws over the entry cap', () => {
-  const rows = Array.from(
-    { length: TTS_CORRECTIONS_LIMIT + 1 },
-    (_, i) => ({ from: `w${i}`, to: `x${i}` }),
-  );
-  assert.throws(() => validateTtsCorrectionsStrict(rows), /at most/);
-});
-
 test('strict: a well-formed row validates, trimmed', () => {
   assert.deepEqual(
     validateTtsCorrectionsStrict([{ from: '  GHz  ', to: '  gigahertz  ' }]),

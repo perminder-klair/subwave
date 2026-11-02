@@ -114,7 +114,7 @@ const violations: string[] = [];
 function requireEqual(actual: unknown, expected: unknown, label: string) {
   try { assert.deepEqual(actual, expected, label); } catch { violations.push(label); }
 }
-const reloads = () => (execFileSync('sudo', ['-n', 'cat', join(rootfs, 'var/log/liquidsoap/radio.log')], { encoding: 'utf8' }).match(/\[auto:3\] Reloading playlist/g) || []).length;
+const reloads = () => (execFileSync('sudo', ['-n', 'cat', join(rootfs, 'var/log/liquidsoap/radio.log')], { encoding: 'utf8' }).match(/\[auto(?:\.\d+)?:3\] (?:Reloading playlist|Initial load)/g) || []).length;
 const snapshot = () => ({ streams: streams.length, metadata: metadata.length, reloads: reloads() });
 async function stage(label: string, fn: () => Promise<void>) {
   const before = snapshot();

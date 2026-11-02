@@ -1,5 +1,5 @@
 // Regression tests for the pick-attached link's spoken clock (#1314).
-// Run: `tsx scripts/link-clock.test.ts`.
+// Run: `npm test -- link-clock`.
 //
 // A link is written when the pick is MADE but airs when the pick STARTS, so the
 // time it may speak is a forecast: `linkAirDate(showAt)` = now + whatever is
@@ -29,8 +29,8 @@
 //                       hand-off beats a wrong time, exactly the trade
 //                       shouldDropStaleLink already makes for a wrong name.
 //
-// node:assert-via-tsx style, matching scripts/handoff-boundary.test.ts.
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   LINK_CLOCK_DRIFT_TOLERANCE_SEC,
@@ -44,175 +44,149 @@ import {
 } from '../src/broadcast/queue/pure.js';
 import { DRAIN_DEADLINE_SEC, HARD_DEADLINE_SEC } from '../src/broadcast/drain-policy.js';
 
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err: any) {
-    failures++;
-    console.error(`  ✗ ${name}\n      ${err?.message || err}`);
-  }
-}
-
 // The showAt a pick cycle builds for a given lead: `now + leadSec + padding`.
 function showAtFor(nowMs: number, leadSec: number) {
   return new Date(nowMs + (leadSec + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
 }
 
-function main() {
-  const NOW = Date.parse('2026-08-04T17:38:00.000Z');
+const NOW = Date.parse('2026-08-04T17:38:00.000Z');
 
-  console.log('when a link may speak the clock (linkClockAt):');
+test('no look-ahead → no clock, unchanged from #864', () => {
+  assert.equal(linkClockAt(null, NOW), null);
+  assert.equal(linkClockAt(undefined, NOW), null);
+});
 
-  test('no look-ahead → no clock, unchanged from #864', () => {
-    assert.equal(linkClockAt(null, NOW), null);
-    assert.equal(linkClockAt(undefined, NOW), null);
-  });
+test('a full track of runway keeps its clock, and it is the AIR moment', () => {
+  const lead = 240;
+  const at = linkClockAt(showAtFor(NOW, lead), NOW);
+  assert.ok(at, 'expected a clock with 4 minutes of runway');
+  // Exactly linkAirDate's answer — the padding is inverted, not re-added.
+  assert.equal(at!.getTime(), NOW + lead * 1000);
+  assert.equal(at!.getTime(), linkAirDate(showAtFor(NOW, lead)).getTime());
+});
 
-  test('a full track of runway keeps its clock, and it is the AIR moment', () => {
-    const lead = 240;
-    const at = linkClockAt(showAtFor(NOW, lead), NOW);
-    assert.ok(at, 'expected a clock with 4 minutes of runway');
-    // Exactly linkAirDate's answer — the padding is inverted, not re-added.
-    assert.equal(at!.getTime(), NOW + lead * 1000);
-    assert.equal(at!.getTime(), linkAirDate(showAtFor(NOW, lead)).getTime());
-  });
+test('the floor is the drain deadline — the endgame window never speaks', () => {
+  assert.equal(LINK_CLOCK_MIN_RUNWAY_SEC, DRAIN_DEADLINE_SEC);
+  // maybeDeadlinePick fires across [HARD_DEADLINE_SEC, DRAIN_DEADLINE_SEC).
+  // Every lead in that window must come back clockless — that is the whole
+  // population the issue was reported from.
+  for (let lead = HARD_DEADLINE_SEC; lead < DRAIN_DEADLINE_SEC; lead += 5) {
+    assert.equal(linkClockAt(showAtFor(NOW, lead), NOW), null, `lead=${lead}s`);
+  }
+});
 
-  test('the floor is the drain deadline — the endgame window never speaks', () => {
-    assert.equal(LINK_CLOCK_MIN_RUNWAY_SEC, DRAIN_DEADLINE_SEC);
-    // maybeDeadlinePick fires across [HARD_DEADLINE_SEC, DRAIN_DEADLINE_SEC).
-    // Every lead in that window must come back clockless — that is the whole
-    // population the issue was reported from.
-    for (let lead = HARD_DEADLINE_SEC; lead < DRAIN_DEADLINE_SEC; lead += 5) {
-      assert.equal(linkClockAt(showAtFor(NOW, lead), NOW), null, `lead=${lead}s`);
-    }
-  });
+test('exactly at the floor speaks; one second under does not', () => {
+  assert.ok(linkClockAt(showAtFor(NOW, LINK_CLOCK_MIN_RUNWAY_SEC), NOW));
+  assert.equal(linkClockAt(showAtFor(NOW, LINK_CLOCK_MIN_RUNWAY_SEC - 1), NOW), null);
+});
 
-  test('exactly at the floor speaks; one second under does not', () => {
-    assert.ok(linkClockAt(showAtFor(NOW, LINK_CLOCK_MIN_RUNWAY_SEC), NOW));
-    assert.equal(linkClockAt(showAtFor(NOW, LINK_CLOCK_MIN_RUNWAY_SEC - 1), NOW), null);
-  });
+test('runway is measured LIVE, so a slow pick call can spend it', () => {
+  const showAt = showAtFor(NOW, 240);
+  // Same showAt, asked 2.5 minutes later (the pool path writes its link after
+  // the pick call has returned): only 90s of runway is left, so no clock.
+  assert.ok(linkClockAt(showAt, NOW), 'fresh');
+  assert.equal(linkClockAt(showAt, NOW + 150_000), null, 'after a 150s round');
+});
 
-  test('runway is measured LIVE, so a slow pick call can spend it', () => {
-    const showAt = showAtFor(NOW, 240);
-    // Same showAt, asked 2.5 minutes later (the pool path writes its link after
-    // the pick call has returned): only 90s of runway is left, so no clock.
-    assert.ok(linkClockAt(showAt, NOW), 'fresh');
-    assert.equal(linkClockAt(showAt, NOW + 150_000), null, 'after a 150s round');
-  });
+test('a forecast already in the past never speaks', () => {
+  assert.equal(linkClockAt(showAtFor(NOW, 0), NOW + 60_000), null);
+});
 
-  test('a forecast already in the past never speaks', () => {
-    assert.equal(linkClockAt(showAtFor(NOW, 0), NOW + 60_000), null);
-  });
+test('no stamp → never dropped (the link named no time)', () => {
+  for (const bad of [null, undefined, NaN, Infinity, '123'] as any[]) {
+    assert.equal(linkClockDrifted(bad, NOW), false, `stamp=${String(bad)}`);
+  }
+});
 
-  console.log('\nair-time drift guard (linkClockDrifted):');
+test('airing on schedule is not drift', () => {
+  assert.equal(linkClockDrifted(NOW, NOW), false);
+  assert.equal(linkClockDrifted(NOW, NOW + LINK_CLOCK_DRIFT_TOLERANCE_SEC * 1000), false);
+});
 
-  test('no stamp → never dropped (the link named no time)', () => {
-    for (const bad of [null, undefined, NaN, Infinity, '123'] as any[]) {
-      assert.equal(linkClockDrifted(bad, NOW), false, `stamp=${String(bad)}`);
-    }
-  });
+test('structural slack stays inside tolerance', () => {
+  // Crossfade start (12s early) + a jingle (15s late) + the listener buffer
+  // (22s) is the worst honest case; it must not cost a link.
+  assert.equal(linkClockDrifted(NOW, NOW - 12_000), false, 'seam fired early');
+  assert.equal(linkClockDrifted(NOW, NOW + 37_000), false, 'jingle + buffer');
+});
 
-  test('airing on schedule is not drift', () => {
-    assert.equal(linkClockDrifted(NOW, NOW), false);
-    assert.equal(linkClockDrifted(NOW, NOW + LINK_CLOCK_DRIFT_TOLERANCE_SEC * 1000), false);
-  });
+test('a missed slot filled by an auto track is dropped', () => {
+  // The reported case: forecast 18:38, aired 18:41:47.
+  const aired = NOW + (3 * 60 + 47) * 1000;
+  assert.equal(linkClockDrifted(NOW, aired), true);
+});
 
-  test('structural slack stays inside tolerance', () => {
-    // Crossfade start (12s early) + a jingle (15s late) + the listener buffer
-    // (22s) is the worst honest case; it must not cost a link.
-    assert.equal(linkClockDrifted(NOW, NOW - 12_000), false, 'seam fired early');
-    assert.equal(linkClockDrifted(NOW, NOW + 37_000), false, 'jingle + buffer');
-  });
+test('drift is absolute — an early seam is just as wrong', () => {
+  assert.equal(linkClockDrifted(NOW, NOW - 4 * 60_000), true);
+});
 
-  test('a missed slot filled by an auto track is dropped', () => {
-    // The reported case: forecast 18:38, aired 18:41:47.
-    const aired = NOW + (3 * 60 + 47) * 1000;
-    assert.equal(linkClockDrifted(NOW, aired), true);
-  });
+// The stamp is the only thing standing between "a link written under a clock
+// ban" and the drift guard above, which cannot tell the difference — it sees a
+// number or it sees nothing. Both pick paths reach one enqueuePick from code
+// 170 lines apart, so this is where they are made to agree.
+const AIR = new Date(NOW + 4 * 60_000);
 
-  test('drift is absolute — an early seam is just as wrong', () => {
-    assert.equal(linkClockDrifted(NOW, NOW - 4 * 60_000), true);
-  });
+test('a clock the model was offered is stamped', () => {
+  assert.equal(linkClockStampFor(AIR, true), AIR);
+});
 
-  console.log('\nwhat may be stamped in the first place (linkClockStampFor):');
+test('a forecastable air moment the model was NOT offered is not stamped', () => {
+  // The station clock switch (djSpeakClock: false) and, on the agent path, a
+  // context carrying no clock at all. The link named no time, so it must not
+  // be droppable for naming the wrong one.
+  assert.equal(linkClockStampFor(AIR, false), null);
+});
 
-  // The stamp is the only thing standing between "a link written under a clock
-  // ban" and the drift guard above, which cannot tell the difference — it sees a
-  // number or it sees nothing. Both pick paths reach one enqueuePick from code
-  // 170 lines apart, so this is where they are made to agree.
-  const AIR = new Date(NOW + 4 * 60_000);
+test('no forecast is never stamped, offered or not', () => {
+  for (const airAt of [null, undefined] as const) {
+    assert.equal(linkClockStampFor(airAt, true), null, `airAt=${String(airAt)}, offered`);
+    assert.equal(linkClockStampFor(airAt, false), null, `airAt=${String(airAt)}, banned`);
+  }
+});
 
-  test('a clock the model was offered is stamped', () => {
-    assert.equal(linkClockStampFor(AIR, true), AIR);
-  });
+test('a withheld stamp survives the drift guard at any distance', () => {
+  // The property the two halves exist to produce, asserted end to end rather
+  // than as two independent facts: a banned clock cannot cost the link.
+  const banned = linkClockStampFor(AIR, false);
+  for (const aired of [NOW, NOW + 4 * 60_000, NOW + 40 * 60_000, NOW - 40 * 60_000]) {
+    assert.equal(linkClockDrifted(banned?.getTime() ?? null, aired), false, `aired=${aired}`);
+  }
+  // ...while the same seam DOES drop the link when a clock really was offered,
+  // so the case above can't pass by the guard being toothless.
+  const offered = linkClockStampFor(AIR, true);
+  assert.equal(linkClockDrifted(offered?.getTime() ?? null, NOW + 40 * 60_000), true);
+});
 
-  test('a forecastable air moment the model was NOT offered is not stamped', () => {
-    // The station clock switch (djSpeakClock: false) and, on the agent path, a
-    // context carrying no clock at all. The link named no time, so it must not
-    // be droppable for naming the wrong one.
-    assert.equal(linkClockStampFor(AIR, false), null);
-  });
+const PREV = { id: 't-prev', title: 'Previous Track' };
 
-  test('no forecast is never stamped, offered or not', () => {
-    for (const airAt of [null, undefined] as const) {
-      assert.equal(linkClockStampFor(airAt, true), null, `airAt=${String(airAt)}, offered`);
-      assert.equal(linkClockStampFor(airAt, false), null, `airAt=${String(airAt)}, banned`);
-    }
-  });
+test('a good link still owns the boundary, so the ident waits', () => {
+  assert.equal(
+    boundaryCarriesTrackVoice(
+      { introScript: "here's something new", introKind: 'link', linkClockAt: NOW },
+      PREV,
+      { nowMs: NOW + 10_000 },
+    ),
+    true,
+  );
+});
 
-  test('a withheld stamp survives the drift guard at any distance', () => {
-    // The property the two halves exist to produce, asserted end to end rather
-    // than as two independent facts: a banned clock cannot cost the link.
-    const banned = linkClockStampFor(AIR, false);
-    for (const aired of [NOW, NOW + 4 * 60_000, NOW + 40 * 60_000, NOW - 40 * 60_000]) {
-      assert.equal(linkClockDrifted(banned?.getTime() ?? null, aired), false, `aired=${aired}`);
-    }
-    // ...while the same seam DOES drop the link when a clock really was offered,
-    // so the case above can't pass by the guard being toothless.
-    const offered = linkClockStampFor(AIR, true);
-    assert.equal(linkClockDrifted(offered?.getTime() ?? null, NOW + 40 * 60_000), true);
-  });
+test('a link about to be dropped for drift frees the boundary for the ident', () => {
+  assert.equal(
+    boundaryCarriesTrackVoice(
+      { introScript: "here's something new", introKind: 'link', linkClockAt: NOW },
+      PREV,
+      { nowMs: NOW + 4 * 60_000 },
+    ),
+    false,
+  );
+});
 
-  console.log('\nident collision defers to the same drop (boundaryCarriesTrackVoice):');
-
-  const PREV = { id: 't-prev', title: 'Previous Track' };
-
-  test('a good link still owns the boundary, so the ident waits', () => {
-    assert.equal(
-      boundaryCarriesTrackVoice(
-        { introScript: "here's something new", introKind: 'link', linkClockAt: NOW },
-        PREV,
-        { nowMs: NOW + 10_000 },
-      ),
-      true,
-    );
-  });
-
-  test('a link about to be dropped for drift frees the boundary for the ident', () => {
-    assert.equal(
-      boundaryCarriesTrackVoice(
-        { introScript: "here's something new", introKind: 'link', linkClockAt: NOW },
-        PREV,
-        { nowMs: NOW + 4 * 60_000 },
-      ),
-      false,
-    );
-  });
-
-  test('without nowMs the rule assumes the clock is good (existing callers)', () => {
-    assert.equal(
-      boundaryCarriesTrackVoice(
-        { introScript: "here's something new", introKind: 'link', linkClockAt: NOW },
-        PREV,
-      ),
-      true,
-    );
-  });
-
-  console.log(failures ? `\n${failures} failing` : '\nall passing');
-  if (failures) process.exit(1);
-}
-
-main();
+test('without nowMs the rule assumes the clock is good (existing callers)', () => {
+  assert.equal(
+    boundaryCarriesTrackVoice(
+      { introScript: "here's something new", introKind: 'link', linkClockAt: NOW },
+      PREV,
+    ),
+    true,
+  );
+});

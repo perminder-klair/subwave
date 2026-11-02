@@ -11,11 +11,12 @@
 // Run: npm test -- llm-local-parse-errors
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { z } from 'zod';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-local-parse-errors-'));
 process.env.STATE_DIR = stateRoot;
@@ -25,7 +26,7 @@ const settings = await import('../src/settings.js');
 const { primaryLeg, fallbackLeg } = await import('../src/llm/internal/provider/legs.js');
 const { djObject } = await import('../src/llm/sdk.js');
 const pure = await import('../src/llm/internal/core/pure.js');
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(() => removeTempDir(stateRoot));
 
 // The classifiers take a duck-typed ErrorLike; real Error objects are passed as-is.
 const syntaxErrorOf = (text: string): any => {

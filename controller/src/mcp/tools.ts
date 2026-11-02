@@ -10,6 +10,7 @@ import { z } from "zod";
 import { SubwaveError, type RequestStatus, type SubwaveClient } from "./client.js";
 // Zod-only module, so it resolves in the standalone stdio server's build too.
 import { REQUEST_NAME_MAX, REQUEST_TEXT_MAX } from "../schemas/request.js";
+import { skipBodyShape } from "../schemas/dj.js";
 
 /** Render any value as a text content block. */
 function text(value: unknown): { type: "text"; text: string } {
@@ -503,14 +504,38 @@ export function registerSubwaveTools(
       description:
         "Force-end the track playing right now and move to the next item — an operator " +
         "override, since every listener hears the same broadcast. ADMIN endpoint. Use " +
-        "sparingly and deliberately; there is intentionally no listener-facing skip.",
-      inputSchema: {},
-      outputSchema: output({ ok: z.boolean() }),
+        "sparingly and deliberately; there is intentionally no listener-facing skip. " +
+        "Pass `expectId` to skip only a specific track: if it has already ended, or a " +
+        "jingle, bed or pause-and-talk break is on air instead, nothing is skipped.",
+      inputSchema: {
+        expectId: skipBodyShape.expectId.describe(
+          "Optional. The subsonic_id of the track you mean to skip, from subwave_now_playing. " +
+            "Omit it to end whatever is on air.",
+        ),
+      },
+      // Every field POST /dj/skip answers with. A client validates structured
+      // content against this with no additional properties allowed, so an
+      // undeclared `pending`/`committed` turned every skip — and every
+      // refusal — into a thrown -32602 after the skip had already run.
+      outputSchema: output({
+        ok: z.boolean(),
+        pending: z.boolean().optional(),
+        committed: z.boolean().optional(),
+        reason: z.string().optional(),
+        error: z.string().optional(),
+        onAirId: z.string().nullable().optional(),
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
-    () =>
+    ({ expectId }) =>
       run(async () => {
-        const result = await client.skipTrack();
+        const result = await client.skipTrack(expectId);
+        if (!result.ok) {
+          return {
+            content: [text(`Skip refused (${result.reason}): ${result.error ?? "nothing skipped"}.`)],
+            structuredContent: { ...result },
+          };
+        }
         return { content: [text("Track skipped — the next queue item is taking over.")], structuredContent: { ...result } };
       }),
   );

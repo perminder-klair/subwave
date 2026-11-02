@@ -14,22 +14,24 @@ export default function HowTheDjWorks() {
         <p className="bs-eyebrow">PICKING TRACKS</p>
         <h2>One song ends, the DJ chooses the next.</h2>
         <p>
-          Every transition is a decision. By default the DJ runs as a small agent: it digs
-          through your library with real tools (similar artists, mood tags, playlists,
-          even a &ldquo;sounds like&rdquo; audio search) and picks the next track itself,
-          steering by the time of day, the weather, and the current mood. If the agent
-          fails or runs slow, the station quietly falls back to a simpler pick: it gathers
-          a pool of candidates — songs in a similar mood, similar artists, recently-added
-          and frequently-played albums, matching playlists — and the model chooses one
-          from the pool.
+          Every transition is a decision. In <strong>Agentic Tools</strong> mode the DJ
+          explores your library with tools — similar artists, mood tags, playlists and a
+          &ldquo;sounds like&rdquo; audio search — before choosing a track. In <strong>Track
+          Shortlist</strong> mode, the station first builds a varied, eligible shortlist
+          from those same kinds of signals, then asks the model to make one bounded
+          choice from it. Both modes follow the show, the current mood and the same
+          artist and recency protections.
         </p>
         <p>
-          And if the model can&rsquo;t be reached at all, a pre-built playlist keyed to
-          the current mood keeps the station on the air. The music never stops; the DJ
-          just goes quiet until the model comes back.
+          Track Shortlist is useful where tool calling is slow, unreliable or costly;
+          Agentic Tools remains available for models that are comfortable with an
+          exploratory, multi-step search. Choose either under <strong>Settings &rarr; Music
+          Selection</strong>. If the model can&rsquo;t be reached at all, a pre-built playlist
+          keyed to the current mood keeps the station on the air. The music never stops;
+          the DJ just goes quiet until the model comes back.
         </p>
         <p className="text-muted">
-          The two pickers are compared in the <Link href="/manual/faq">FAQ</Link>. A
+          The two paths are compared in the <Link href="/manual/faq">FAQ</Link>. A
           persona with DJ mode switched on goes further still — plotting short
           two-or-three-track runs through tempo and key, and timing its mixes to how each
           track actually ends, using the station&rsquo;s{' '}

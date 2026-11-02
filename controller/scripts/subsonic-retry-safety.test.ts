@@ -4,12 +4,13 @@
 // lost. Reads and explicitly idempotent operations retry; unknown writes do not.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { createServer, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 type RequestHandler = (endpoint: string, url: URL, res: ServerResponse) => void;
 
@@ -61,7 +62,7 @@ test.afterEach(() => {
 
 test.after(async () => {
   await new Promise<void>((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 test('a lost read response is retried once over real localhost HTTP', async () => {

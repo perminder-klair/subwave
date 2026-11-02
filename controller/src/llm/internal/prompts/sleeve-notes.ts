@@ -3,6 +3,7 @@
 // the model prompt: it is a small trusted packet for the main DJ link path.
 
 import { trackEraYear } from '../../../music/show-filter.js';
+import { albumIsCompilation } from '../../../music/album-facts.js';
 import { unairedFlag, type AiredIndex } from '../../../music/airing.js';
 
 export const RELEASE_YEAR_MENTION_FREQUENCIES = ['regular', 'occasional', 'rare'] as const;
@@ -17,7 +18,7 @@ export function sleeveNotesFor(track: any): string[] {
   const notes: string[] = [];
   const album = text(track?.album);
   const title = text(track?.title);
-  if (album && album.toLocaleLowerCase() !== title.toLocaleLowerCase()) {
+  if (album && album.toLocaleLowerCase() !== title.toLocaleLowerCase() && !albumIsCompilation(track)) {
     notes.push(`Album: ${album}.`);
   }
   const year = trackEraYear(track);

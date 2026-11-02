@@ -29,7 +29,8 @@ a no-op). Don't rely on such flags anywhere; they do nothing on this RN version.
 RNTP 4.1.2 is not natively New-Architecture-compatible — out of the box, Android
 playback crashes with `You should not use ReactNativeHost directly in the New
 Architecture` from `MusicService`. **The fix is `patches/react-native-track-player+4.1.2.patch`**,
-which makes two source edits:
+whose New Architecture half is two source edits (the rest of the patch is the
+progress and iOS metadata fixes described below):
 
 - `MusicModule.kt` — routes async `@ReactMethod`s through a Unit-returning
   `launch` helper (TurboModule interop requires void-returning async methods).
@@ -41,6 +42,28 @@ which makes two source edits:
 > playback event. iOS (SwiftAudioEx path) is unaffected by the crash but the
 > patch is harmless there. Validated: Android `BUILD SUCCESSFUL` and iOS live
 > playback both with the patch applied.
+
+The patch also fixes live song progress (#857). RNTP 4.1.2's Android bridge
+ignores `elapsedTime`; KotlinAudio normally reports ExoPlayer's continuous
+stream position. `NowPlayingProgress` wraps only the session-facing player,
+retaining the existing remote-control interception. KotlinAudio 2.1.0's private
+`NotificationManager.player` and `mediaSessionConnector` fields are pinned by
+consumer ProGuard rules. Recheck this adapter when upgrading either dependency.
+The iOS metadata patch clears omitted song-clock fields and preserves artwork
+on progress-only refreshes, while retaining `isLiveStream` and the LIVE controls.
+These changes require a new binary, not an OTA update.
+
+For a device smoke test, play a track with a known duration and inspect
+`adb shell dumpsys media_session`: its duration should be the song's duration
+in milliseconds, and position should match the app's elapsed time, including
+the advertised listener buffer. Check that artwork remains visible during
+progress refreshes and changes with the track/persona. During DJ speech and
+on a track with no duration, the previous song's progress must disappear.
+Repeat after a track change, screen lock, reconnect, and tune-out/tune-in.
+Verify a release build too, so the reflection keep rules are exercised.
+On iOS, confirm the LIVE controls, artwork, and Live Activity still work;
+Cast should still tear down the local session. Bluetooth display of artwork
+and progress must also be checked in the car.
 
 ### Other load-bearing facts
 
@@ -64,6 +87,14 @@ which makes two source edits:
   `react-native-google-cast` runs under the New Architecture in **compat
   (interop) mode** (v5 will be native); if a Cast API breaks after an RN/Expo
   upgrade, check the library's v5 status before patching.
+- **The Android Cast SDK is pinned** (`androidPlayServicesCastFrameworkVersion`
+  on the `react-native-google-cast` plugin in `app.json`). The library defaults
+  to `play-services-cast-framework:+`, so every build takes Google's newest, and
+  23.0.0 pulls `androidx.mediarouter:mediarouter:1.9.0-beta01`, which needs
+  compileSdk 37 and AGP 9.1: `:app:checkReleaseAarMetadata` fails the build.
+  Raise the pin alongside an Expo SDK upgrade that moves compileSdk/AGP, and
+  ship it in a binary for both platforms, because the plugin options are in the
+  shared app config, so the pin is in the iOS fingerprint too.
 
 ---
 
@@ -171,6 +202,16 @@ Background audio (lock screen / CarPlay / headphones) and metadata can only be
 properly judged on a **physical device** — the remote-control wiring lives in
 `service.ts` (Play/Pause/Stop; Next/Seek intentionally omitted for a live
 stream).
+
+On Android, `PlaybackService` must **never resolve**. It runs as RNTP's
+headless JS task, and React Native fires JS timers behind a paused activity only
+while a headless task is active. Every background poll is a timer, including the
+`/now-playing` poll that feeds lock-screen and Bluetooth metadata. RN 0.85 never
+registered `HeadlessJsTaskSupport` under bridgeless, so the task never finished.
+RN 0.86 (Expo SDK 57) registers it, and app 1.6.0 shipped with metadata frozen
+behind the lock screen until the phone was unlocked. Device check: tune in, lock
+the phone, and wait through a track change. The notification (or a Bluetooth
+head unit) should show the new title without unlocking.
 
 ### CarPlay — Now-Playing in the car (iOS only)
 
@@ -300,12 +341,39 @@ eas submit --profile production --platform ios     # uploads to App Store Connec
 
 ---
 
+## A listener's playback log
+
+A store build prints nothing a listener can reach, so it keeps the last 300
+`plog` lines (`src/hooks/usePlayer.ts`) in memory instead: the playback state
+events and errors, iOS route changes, and every hold and reload
+`src/lib/stream-recovery.ts` decides, with its reason. Ask a listener with a
+playback problem for **About SUB/WAVE → Share playback log** (the share sheet
+has Copy on iOS and Android 10+; older Android sends it to a mail or notes app)
+before they kill the app, which empties it.
+
+The first line names the app version, the JS bundle (`OTA <id>` or
+`built-in <id>`, and the channel) and the OS. Times are the phone's clock in
+UTC. Each `reload [reason] #n` line should match one new stream request (its
+`t=` cache-buster) in the station's Icecast access log; a `skipped` line loads
+nothing. `(failure n)` on an automatic reload is its place on the backoff: it
+climbs while loads fail or items fail within 4 s of playing, and it starts over
+at 1 once an item stays up or stalls. A playback error reads `event playback-error code=<code> msg=<text>`:
+Android sends both, and its code is the part that tells a refused stream
+(`android-io-bad-http-status`) from a dead link
+(`android-io-network-connection-failed`); iOS sends only the text, AVPlayer's
+own description. Lines are redacted before they are stored
+(`src/lib/playback-log.ts`): URLs keep only scheme, host and path, the station
+password, Station login and `Authorization` values are gone, and a route lists
+port types without device names, with `Other` for a word that isn't a known port.
+
+---
+
 ## Known issues / gotchas
 
-- **`patches/react-native-track-player+4.1.2.patch`** is the RNTP new-arch fix
-  (2 source files — see "Architecture-critical facts"). It was previously bloated
-  to 229 files with accidental Gradle build artifacts; **slimmed to just the 2
-  `.kt` source files** (2026-06) and re-verified with a clean `BUILD SUCCESSFUL`.
+- **`patches/react-native-track-player+4.1.2.patch`** contains the RNTP new-arch
+  and media-session progress fixes (see "Architecture-critical facts"). It was previously bloated
+  to 229 files with accidental Gradle build artifacts; slimmed in 2026-06 and
+  re-verified with a clean `BUILD SUCCESSFUL` before the progress fix was added.
   Keep it lean — never run `patch-package` after a Gradle build has populated
   `node_modules/react-native-track-player/android/build/`, or it recaptures the
   junk.
@@ -326,7 +394,7 @@ eas submit --profile production --platform ios     # uploads to App Store Connec
 |---|---|---|
 | `tsc --noEmit` | ✅ | ✅ |
 | Native build | ✅ simulator (new arch ON) | ✅ emulator + APK (new arch ON, JDK 17) |
-| RNTP slim patch (2 files) | ✅ live playback | ✅ `BUILD SUCCESSFUL` after slim |
+| RNTP New Architecture patch | ✅ live playback | ✅ `BUILD SUCCESSFUL` after slim |
 | Install + launch | ✅ | ✅ (emulator install) |
 | JS bundle | ✅ 4075 modules | ✅ build path |
 | Onboarding → health check | ✅ all 4 probes OK | (same JS; via skill on device) |

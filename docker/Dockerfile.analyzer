@@ -8,7 +8,7 @@
 #   * subwave-analyzer        — LEAN (default), ~1.1GB, multi-arch, no torch.
 #   * subwave-analyzer-heavy  — CLAP + Demucs baked (~1.9GB), amd64-only,
 #       CPU torch. Selected by ANALYZER_HEAVY=1 in .env.
-#   * subwave-analyzer-cuda   — heavy + cu124 torch, amd64-only. Selected by
+#   * subwave-analyzer-cuda   — heavy + cu128 torch, amd64-only. Selected by
 #       the docker-compose.analyzer-gpu.yml overlay (a device reservation
 #       can't be toggled from .env).
 # Models are NOT baked — the heavy worker downloads weights into HF_HOME on
@@ -33,16 +33,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # toggle); with the stack absent those are clean no-ops.
 #
 # All pins exact for reproducible rebuilds — keep in lockstep with the mirrored
-# analyzer block in docker/Dockerfile.aio. torch/torchaudio held at 2.6.0
-# (chatterbox's pin — one torch version repo-wide); WITH_CUDA only switches
-# which 2.6.0 build is installed (cpu wheel index vs cu124, whose wheels vendor
-# the CUDA runtime as nvidia-*-cu12 deps).
+# analyzer block in docker/Dockerfile.aio. torch/torchaudio held at 2.7.1 on
+# both cpu and cu128 indexes, including cp313 wheels for the AIO. cu128 adds
+# Blackwell (sm_120) kernels and vendors the runtime as nvidia-*-cu12 deps.
+# Chatterbox's separate venv keeps its own upstream torch pin.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
 ENV ANALYZER_HF_HOME=/opt/analyzer/hf-cache
 RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
-    if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu124"; fi && \
+    if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu128"; fi && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
@@ -53,7 +53,7 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.6.0 transformers==5.13.0 onnxruntime==1.27.0 && \
+        torch==2.7.1 transformers==5.13.0 onnxruntime==1.27.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
@@ -64,8 +64,8 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
-      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \
+        torch==2.7.1 torchaudio==2.7.1 demucs==4.0.1 diffq==0.2.4 && \
+      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs, diffq" && \
       apt-get purge -y gcc libc6-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
@@ -76,7 +76,8 @@ RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir \
       fastapi==0.139.0 "uvicorn[standard]==0.49.0" pydantic==2.13.4
 
-ENV PATH=/opt/server/venv/bin:$PATH \
+# Maintenance pip targets the analyzer; the server uses its own venv below.
+ENV PATH=/opt/analyzer/venv/bin:/opt/server/venv/bin:$PATH \
     ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
     ANALYZE_WORKER=/app/workers/analyze_worker.py
 
@@ -104,4 +105,4 @@ RUN groupadd -g 10001 subwave && \
 USER 10001:10001
 
 EXPOSE 8080
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["/opt/server/venv/bin/uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]

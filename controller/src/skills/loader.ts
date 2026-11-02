@@ -63,7 +63,7 @@ import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
 import { parseConfigFields, type SkillConfigField } from './config-fields.js';
-import { FEED_CONFIG_FIELDS, makeFeedTool, resolveFeedConfig } from './feed.js';
+import { FEED_CONFIG_FIELDS, makeFeedTool, resolveFeedConfig, unreadFeedKeys } from './feed.js';
 import { declaredBool } from './abstain-policy.js';
 import {
   SKILL_SLUG_RE,
@@ -95,8 +95,10 @@ export const PENDING_TOOL_FILE = 'tool.mjs.pending';
 export const SLUG_RE = SKILL_SLUG_RE;
 
 // Kinds the queue reserves for its own voice channels — a custom skill may not
-// shadow these (seeded kinds are added below, once discovered).
-const QUEUE_INTERNAL_KINDS = ['link', 'dj-speak', 'announcement', 'station-id', 'hourly', 'hourly-check'];
+// shadow these (seeded kinds are added below, once discovered). 'jingle' and
+// 'default' are the station-voice kinds in audio/tts.ts: a skill announcing
+// under one would speak outside the persona rules every other skill gets.
+const QUEUE_INTERNAL_KINDS = ['link', 'dj-speak', 'announcement', 'station-id', 'hourly', 'hourly-check', 'jingle', 'default'];
 
 // Derived at boot from the template directories. Exported as live sets that
 // callers (.has()) read after boot. `SEEDED_KINDS` is the set of shipped kinds;
@@ -397,7 +399,7 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // False, absent and malformed values preserve the historical solo path.
     cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
     // Operator-editable knobs this skill declares for itself (tool.mjs
-    // `configFields`, or the generic feed pair for a skill without a tool.mjs).
+    // `configFields`, or the generic feed knobs for a skill without a tool.mjs).
     // Drives the admin editor's settings section — see config-fields.ts. Empty
     // only for a skill whose tool.mjs declares none.
     configFields: [] as SkillConfigField[],
@@ -414,6 +416,17 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     cap.ready = () => false;
   } else if (toolMod?.ready) {
     cap.ready = () => toolMod.ready(buildStationServices());
+    // ready() can't say why it's false, and a refused search key needs different
+    // advice from a missing one, so watch whether it asks searchReady(). That
+    // covers web-search, now-playing-dig and any custom skill copying the manual's
+    // example, which a list of kinds wouldn't. The services object is one shared
+    // instance, so wrap it, never patch it.
+    cap.asksSearchReady = () => {
+      const services = buildStationServices();
+      let asked = false;
+      toolMod.ready({ ...services, searchReady: () => { asked = true; return services.searchReady(); } });
+      return asked;
+    };
   } else if (requiresKey) {
     cap.ready = () => !!process.env[requiresKey];
   }
@@ -431,6 +444,12 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // Operator knobs travel with the tool, not the kind — a duplicated skill
     // copies tool.mjs and keeps its settings form (#1300).
     cap.configFields = toolMod.configFields || [];
+    // The case that bites: a station seeded before #1616 still runs news' old
+    // tool.mjs, so these keys would validate, save and do nothing, unsaid.
+    const unread = unreadFeedKeys(data, cap.configFields);
+    if (unread.length) {
+      queue.log('warn', `[skills] "${slug}" ${unread.join(', ')}: set, but this skill's own tool.mjs replaces the generated feed tool that reads them`);
+    }
     // Whether a forced run may stand down when this tool returns nothing usable
     // (issue #1412). Tri-state on purpose: undefined means the skill didn't say,
     // and abstain-policy.ts decides. `cap.config` already carries the operator's
@@ -451,7 +470,7 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     const { feed, warnings } = resolveFeedConfig(data);
     for (const warning of warnings) queue.log('warn', `[skills] "${slug}" ${warning}`);
     if (feed) {
-      cap.toolFn = makeFeedTool(name, feed);
+      cap.toolFn = makeFeedTool(name, feed, (message) => queue.log('warn', `[skills] "${slug}" ${message}`));
       cap.toolName = toolNameFor(name);
       cap.toolDesc = (data.toolDescription || '').trim()
         || `Fetch the latest items from the ${label} feed before speaking. Returns only items not already used on air, or { available: false } when none are left.`;

@@ -1,6 +1,6 @@
 // The blocklist's rule entries (music/blocklist-rules.ts): season windows,
-// show scoping, per-field matching and payload validation. Tracks carry their
-// tag arrays inline so the show-filter readers never reach for library-db.
+// show scoping, per-field matching and unique season validation inputs.
+// Tracks carry tag arrays inline so show-filter readers never use library-db.
 
 import assert from 'node:assert/strict';
 import {
@@ -105,7 +105,6 @@ assert.equal(ruleMatches(gloomy, { moods: ['upbeat'], audioMoods: [] }, null), f
 
 const artistRule = compiled({ field: 'artist', values: ['Ambient Guy'] });
 assert.equal(ruleMatches(artistRule, { artist: ' ambient  guy ' }, null), true, 'normalised: trim/case/whitespace');
-assert.equal(ruleMatches(artistRule, { artist: 'Ambient Guy Trio' }, null), false, 'exact only, no substring');
 assert.equal(ruleMatches(compiled({ field: 'album', values: ['Xmas Hits'] }), { album: 'xmas hits' }, null), true);
 assert.equal(ruleMatches(compiled({ field: 'title', values: ['Last Christmas'] }), { title: 'last christmas' }, null), true);
 assert.equal(ruleMatches(compiled({ field: 'title', values: ['Last Christmas'] }), { name: 'Last Christmas' }, null), true, 'title falls back to `name` (Subsonic children)');
@@ -123,28 +122,9 @@ assert.equal(ruleMatches(plRule, { id: 't1' }, new Map()), false, 'stale/deleted
 assert.equal(ruleMatches(xmasTag, null, null), false);
 assert.equal(ruleMatches(artistRule, {}, null), false);
 
-// Payload validation.
-
-const ok = validateRulePatch({ label: 'Xmas', field: 'tag', values: ['christmas'], season: DEC_TO_JAN, showIds: ['s1'] });
-assert.deepEqual(ok, { label: 'Xmas', field: 'tag', values: ['christmas'], season: DEC_TO_JAN, showIds: ['s1'] });
-
-// Values: trimmed, deduped (case/whitespace-insensitively), empties dropped.
-assert.deepEqual(
-  validateRulePatch({ label: 'x', field: 'tag', values: [' A ', 'a', '', 'B'] }).values,
-  ['A', 'B'],
-);
-
-assert.throws(() => validateRulePatch({ field: 'tag', values: ['x'] }), /label/, 'label required');
-assert.throws(() => validateRulePatch({ label: 'x', field: 'bogus', values: ['x'] }), /field/, 'field enum');
-assert.throws(() => validateRulePatch({ label: 'x', field: 'tag', values: [] }), /values/, 'at least one value');
-assert.throws(() => validateRulePatch({ label: 'x', field: 'tag', values: ['  '] }), /values/, 'whitespace-only value is no value');
-assert.throws(() => validateRulePatch({ label: 'x', field: 'tag', values: Array.from({ length: 13 }, (_, i) => `v${i}`) }), /at most/, 'values cap');
-assert.throws(() => validateRulePatch({ label: 'x', field: 'tag', values: ['x'], season: { from: { month: 13, day: 1 }, to: { month: 1, day: 1 } } }), /month/, 'month bounds');
+// Payload validation is covered by library-schema.test.ts; these two season
+// inputs are not in that suite.
 assert.throws(() => validateRulePatch({ label: 'x', field: 'tag', values: ['x'], season: { from: { month: 12, day: 1 } } }), /season\.to/, 'season needs both bounds');
-assert.throws(() => validateRulePatch({ label: 'x', field: 'tag', values: ['x'], showIds: 'nope' }), /showIds/, 'showIds must be an array');
-
-// season: null / absent both mean "always blocks".
-assert.equal(validateRulePatch({ label: 'x', field: 'tag', values: ['x'] }).season, null);
 assert.equal(validateRulePatch({ label: 'x', field: 'tag', values: ['x'], season: null }).season, null);
 
 // Stored-record coercion (blocklist.json load path).

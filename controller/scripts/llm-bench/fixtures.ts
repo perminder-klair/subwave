@@ -82,7 +82,7 @@ export function candidateSet(shape: 'baseline' | 'analysed' | 'same-artist-trap'
   if (shape === 'same-artist-trap') {
     // 9 candidates by the artist who just played twice, 1 by someone else —
     // measures whether the model follows the VARIETY criterion under pressure.
-    const trap = LIBRARY.slice(0, 9).map((s, i) => src({ ...s, artist: 'Sidhu Moose Wala' }, 'similar'));
+    const trap = LIBRARY.slice(0, 9).map((s) => src({ ...s, artist: 'Sidhu Moose Wala' }, 'similar'));
     return [...trap, src(LIBRARY[10], 'random')];
   }
   // big — the full pool-cap of 18
@@ -111,13 +111,19 @@ export function pickerToolsSynthetic() {
   };
   const tools: any = {
     searchLibrary: tool({
-      description: 'Search the music library by artist name, song title, or real genre (e.g. "jazz", "punjabi"). Returns matching songs.',
+      description: 'Search the music library by artist name, song title, or real genre (e.g. "jazz", "punjabi"). Pass a title or an artist alone, never "X by Y": every word must match, so "by" alone finds nothing. Returns matching songs.',
       inputSchema: z.object({ query: z.string() }),
+      // search3's rule: every word must match, and a miss is empty. A fake that
+      // answered a miss with library rows could never show a model's "X by Y"
+      // query failing (#2195). The answer is the live tool's empty shape, never
+      // a bare [], which draws a fabricated id.
       execute: async ({ query }: any) => {
-        const q = String(query || '').toLowerCase();
-        const hits = LIBRARY.filter(s =>
-          s.title.toLowerCase().includes(q) || s.artist.toLowerCase().includes(q) || s.genre.toLowerCase().includes(q));
-        return wrap(hits.length ? hits.slice(0, 6) : LIBRARY.slice(0, 6));
+        const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+        const hits = LIBRARY.filter(s => {
+          const text = `${s.title} ${s.artist} ${s.album} ${s.genre}`.toLowerCase();
+          return words.every(word => text.includes(word));
+        });
+        return hits.length ? wrap(hits.slice(0, 6)) : { tracks: [], note: 'nothing matched this search — choose from your other tool results this round' };
       },
     }),
     similarSongs: tool({

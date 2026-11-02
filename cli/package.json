@@ -1,6 +1,6 @@
 {
   "name": "subwave-cli",
-  "version": "1.19.0",
+  "version": "1.29.0",
   "private": true,
   "type": "module",
   "description": "SUB/WAVE operator CLI — status, doctor, lifecycle.",
@@ -11,11 +11,12 @@
     "typecheck": "tsc --noEmit",
     "embed-assets": "tsx scripts/embed-assets.ts",
     "patch-clack": "node scripts/patch-clack.mjs",
+    "check-clack-patch": "node scripts/check-clack-patch.mjs",
     "prebuild": "npm run embed-assets && npm run patch-clack",
-    "build:linux-x64": "npm run prebuild && bun build src/cli.ts --compile --target=bun-linux-x64    --outfile=dist/subwave-linux-x64",
-    "build:linux-arm64": "npm run prebuild && bun build src/cli.ts --compile --target=bun-linux-arm64  --outfile=dist/subwave-linux-arm64",
-    "build:darwin-x64": "npm run prebuild && bun build src/cli.ts --compile --target=bun-darwin-x64   --outfile=dist/subwave-darwin-x64",
-    "build:darwin-arm64": "npm run prebuild && bun build src/cli.ts --compile --target=bun-darwin-arm64 --outfile=dist/subwave-darwin-arm64",
+    "build:linux-x64": "npm run prebuild && bun build src/cli.ts --compile --target=bun-linux-x64    --outfile=dist/subwave-linux-x64 && npm run check-clack-patch -- dist/subwave-linux-x64",
+    "build:linux-arm64": "npm run prebuild && bun build src/cli.ts --compile --target=bun-linux-arm64  --outfile=dist/subwave-linux-arm64 && npm run check-clack-patch -- dist/subwave-linux-arm64",
+    "build:darwin-x64": "npm run prebuild && bun build src/cli.ts --compile --target=bun-darwin-x64   --outfile=dist/subwave-darwin-x64 && npm run check-clack-patch -- dist/subwave-darwin-x64",
+    "build:darwin-arm64": "npm run prebuild && bun build src/cli.ts --compile --target=bun-darwin-arm64 --outfile=dist/subwave-darwin-arm64 && npm run check-clack-patch -- dist/subwave-darwin-arm64",
     "build:all": "npm run build:linux-x64 && npm run build:linux-arm64 && npm run build:darwin-x64 && npm run build:darwin-arm64"
   },
   "dependencies": {

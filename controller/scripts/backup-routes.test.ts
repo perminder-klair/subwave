@@ -20,7 +20,7 @@
 // Run: `npm test -- backup-routes`.
 
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { listen as listenHttp } from './test-utils/http.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
@@ -41,14 +41,12 @@ const { isScheduledBackupName, scheduledBackupName } = await import('../src/back
 const app = express();
 app.use(express.json());
 app.use(router);
-const server = createServer(app);
-await new Promise<void>(r => { server.listen(0, '127.0.0.1', () => r()); });
+const { server, url: base } = await listenHttp(app);
 // unref, or the listening socket holds the event loop open and the test FILE
 // never exits — which under scripts/run-tests.ts (concurrency 1) wedges the
 // whole suite rather than failing it. An in-flight fetch still keeps the loop
 // alive on its own while a request is being served.
 server.unref();
-const base = `http://127.0.0.1:${(server.address() as any).port}`;
 
 // Two files one word apart: the schedule's own, and the one an operator
 // downloaded and copied back to restore past a proxy's upload cap (#612).

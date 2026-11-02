@@ -8,6 +8,7 @@ import * as blocklist from './blocklist.js';
 import { preparationArtistSchema, preparationTrackSchema, type PreparationTrack } from '../schemas/show-preparation.js';
 import { resolveExcludedPlaylistIds, resolveShowPlaylistPool } from './show-playlist.js';
 import { applyStrictLocks } from './show-filter.js';
+import { excludesExplicit, withoutExplicit } from './explicit-policy.js';
 import { applyTrackFloor } from './track-floor.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
 import { mapPool } from '../util/async-pool.js';
@@ -57,6 +58,9 @@ export async function resolveArtistEpisodeSource(artistId: string, show: Episode
     if (!playlist) throw new Error('The strict playlist could not be resolved for this artist episode');
     tracks = tracks.filter(t => playlist.ids.has(t.id));
   }
+  // Before the never-starve locks, so a lock that found only tagged tracks is
+  // the one that gives way. Hard: an episode with nothing clean stands down below.
+  tracks = withoutExplicit(tracks, excludesExplicit(show));
   if (show.filtersStrict) {
     const genres = (await Promise.all(show.genres.map(g => subsonic.resolveGenreName(g)))).filter((g): g is string => typeof g === 'string');
     tracks = applyStrictLocks(tracks, {

@@ -14,6 +14,12 @@ import { createIdRotationRecovery, type RotationRecoveryResult, type RotatedIdEv
 import { refreshTaggerFallback, runTaggerFollowups, type MaintenanceMode } from './tagger-followups.js';
 import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, CATALOGUE_PREFIX, type TaggerProgress, type TaggerEvent, type TaggerRotation } from '../music/tagger-progress.js';
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
+import path from 'node:path';
+import { STATE_DIR } from '../config.js';
+import {
+  openRunLog, listRunLogs, runLogPath, RUN_LOG_DIR_NAME,
+  type RunLog, type RunLogPage, type RunLogFileInfo,
+} from './tagger-run-log.js';
 
 type TaggerMode = MaintenanceMode;
 
@@ -41,11 +47,41 @@ type TaggerState = {
   // Latest [progress] sentinel; left in place after exit, UI gates display on `running`.
   progress: TaggerProgress | null;
   lastRun: TaggerLastRun | null;
+  // Id of the current (or last) run's full log: the cursor feed below and its
+  // file under state/tagger-logs/. null before the first run of this process.
+  runLogId: string | null;
+  // What the current (or last) run held back for the operator, in its words. A
+  // held run exits 0, so this outlives it, until the next run starts.
+  holds: string[];
 };
 
 export const tagger: TaggerState = {
   running: false, startedAt: null, pid: null, lastLog: [], mode: null, progress: null, lastRun: null,
+  runLogId: null, holds: [],
 };
+
+// The full run log. `lastLog` above stays the short tail every snapshot carries;
+// this one is read by sequence number, so a page polling every few seconds gets
+// every line however fast the child prints, and each run is also kept on disk.
+const RUN_LOG_DIR = path.join(STATE_DIR, RUN_LOG_DIR_NAME);
+let runLog: RunLog | null = null;
+
+// Lines after `after` for the run `runId`. A cursor from another run (the page
+// was open across a new start) reads from the beginning. null = no run yet.
+export function taggerLogSince(after: number, runId?: string | null): RunLogPage | null {
+  if (!runLog) return null;
+  return runLog.since(runId && runId !== runLog.runId ? 0 : after);
+}
+
+export function taggerLogFiles(): RunLogFileInfo[] {
+  return listRunLogs(RUN_LOG_DIR);
+}
+
+// Absolute, so the route can split it into sendFile's root and name.
+export function taggerLogFile(id: unknown): string | null {
+  const p = runLogPath(RUN_LOG_DIR, id);
+  return p ? path.resolve(p) : null;
+}
 
 const idRotationRecovery = createIdRotationRecovery({
   maintenanceRunning: () => tagger.running,
@@ -117,6 +153,17 @@ async function applyRotationNow(): Promise<boolean> {
   }
 }
 
+// The operator's answer to a replaced-file hold (music/replaced-file-policy.ts),
+// for the two runs that walk. The admin UI sends neither: both are API-only.
+type ReplacedAnswer = { confirmReplaced?: boolean; acceptReplaced?: boolean };
+
+function replacedFlags({ confirmReplaced, acceptReplaced }: ReplacedAnswer): string[] {
+  return [
+    ...(confirmReplaced ? ['--confirm-replaced'] : []),
+    ...(acceptReplaced ? ['--accept-replaced'] : []),
+  ];
+}
+
 // Spawn the tagger as a detached-from-our-event-loop child process. Caller is
 // responsible for rejecting the request if `tagger.running` is already true.
 // The re-* flags map straight to music/tag-library.ts: `reseed` drops + rebuilds
@@ -140,7 +187,7 @@ export function startTagger(
     analyze?: boolean;
     // Per-run Demucs override; undefined defers to the setting.
     vocal?: boolean;
-  } = {},
+  } & ReplacedAnswer = {},
 ) {
   const { limit, reseed, reEnrich, reAnalyze, upgrade, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
   const args = ['src/music/tag-library.ts'];
@@ -164,6 +211,8 @@ export function startTagger(
   if (reconcile === false) args.push('--no-prune');
   if (analyze !== false && vocal === true) args.push('--vocal');
   if (analyze !== false && vocal === false) args.push('--no-vocal');
+  const replaced = replacedFlags(opts);
+  args.push(...replaced);
 
   const detail = [
     Number.isFinite(limit) && (limit as number) > 0 ? `limit=${limit}` : null,
@@ -179,6 +228,7 @@ export function startTagger(
     reconcile === false ? 'no-prune' : null,
     analyze !== false && vocal === true ? 'vocal' : null,
     analyze !== false && vocal === false ? 'no-vocal' : null,
+    ...replaced,
   ]
     .filter(Boolean)
     .join(', ');
@@ -207,11 +257,12 @@ export function startAnalyzer(opts: { limit?: number; audio?: boolean; vocal?: b
 // Walk Navidrome and prune library rows it no longer contains. No embeddings, no
 // LLM. The walk stamps era verdicts (#1418) and chains the incremental MusicBrainz
 // original-year backfill. Same single-flight slot; caller rejects when running.
-export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence } = {}) {
+export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence } & ReplacedAnswer = {}) {
+  const replaced = replacedFlags(opts);
   spawnChild(
     'reconcile',
-    ['src/music/tag-library.ts', '--reconcile-only'],
-    opts.automaticIdRotation ? 'automatic Navidrome ID-rotation recovery' : '',
+    ['src/music/tag-library.ts', '--reconcile-only', ...replaced],
+    opts.automaticIdRotation ? 'automatic Navidrome ID-rotation recovery' : replaced.join(', '),
     opts,
   );
 }
@@ -240,6 +291,15 @@ function spawnChild(
   tagger.lastLog = [];
   tagger.mode = mode;
   tagger.progress = null;
+  tagger.holds = [];
+  // One log and one file per run; openRunLog owns the id, retention and the
+  // refused-file fallback. The previous id is passed so a run started in the
+  // same second never shares it. The previous log is left open: 'exit' (which
+  // frees the slot) can come before its child's last output has drained, and
+  // its own 'close' handler below closes it once that output is in the file.
+  runLog = openRunLog(RUN_LOG_DIR, new Date(startedAt), mode, runLog?.runId ?? null);
+  tagger.runLogId = runLog.runId;
+  const thisRunLog = runLog;
 
   let catalogueReady = false;
   let earlyRefresh: Promise<boolean> | null = null;
@@ -315,10 +375,13 @@ function spawnChild(
             const last = tagger.lastLog[tagger.lastLog.length - 1];
             if (typeof last === 'string' && stripLogPrefix(last) === ev.text) tagger.lastLog.pop();
             tagger.lastLog.push({ kind: ev.kind, text: ev.text, at: ev.at });
+            if (ev.hold) tagger.holds.push(ev.text);
+            thisRunLog.event(ev, (raw) => stripLogPrefix(raw) === ev.text);
           } catch { /* malformed sentinel — drop */ }
           continue;
         }
         tagger.lastLog.push(line);
+        thisRunLog.raw(line);
       }
       if (tagger.lastLog.length > 100) tagger.lastLog = tagger.lastLog.slice(-100);
     };
@@ -335,6 +398,8 @@ function spawnChild(
     activeChild = null;
     clearPidfile();
     tagger.lastLog.push(`[error] ${err.message}`);
+    thisRunLog.raw(`[error] ${err.message}`);
+    thisRunLog.close();
     tagger.lastRun = {
       mode,
       outcome: 'failed',
@@ -345,6 +410,12 @@ function spawnChild(
       finishedAt: new Date().toISOString(),
     };
     queue.log('error', `${label} could not start: ${err.message}`);
+  });
+  // The run log closes on 'close', not 'exit': 'exit' can fire while the
+  // child's last output is still in the pipes, and the file must hold it.
+  child.on('close', (code, signal) => {
+    thisRunLog.raw(`[exit ${signal || code}]`);
+    thisRunLog.close();
   });
   child.on('exit', (code, signal) => {
     tagger.running = false;

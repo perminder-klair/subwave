@@ -17,7 +17,7 @@
 // in either direction.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -32,15 +32,9 @@ const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const { bedWanted } = await import('../src/broadcast/bed-policy.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(beds: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ beds }));
-  setCache(null);
-  await settings.load();
-  return settings.get().beds;
-}
+async function coldLoad(beds: Record<string, unknown>) { return (await coldLoadSettings({ beds })).beds; }
 
 test('requestIntros survives a controller restart', async () => {
   assert.equal((await coldLoad({ enabled: true, requestIntros: false })).requestIntros, false);

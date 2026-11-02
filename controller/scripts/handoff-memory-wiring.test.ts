@@ -18,12 +18,15 @@
 // Run: npm test -- handoff-memory-wiring
 
 import assert from 'node:assert/strict';
-import { after, test, type TestContext } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
+import { emptyWeek as emptyScheduleWeek } from '../src/schemas/schedule.js';
+import { test, type TestContext } from 'node:test';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-handoff-wiring-'));
+const root = createTempDir(join(tmpdir(), 'subwave-handoff-wiring-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
@@ -35,10 +38,6 @@ const { currentTalkAir } = await import('../src/broadcast/talk-air.js');
 const { config } = await import('../src/config.js');
 const contextHelpers = await import('../src/context.js');
 const promptScripts = await import('../src/llm/internal/prompts/scripts.js');
-
-after(() => {
-  rmSync(root, { recursive: true, force: true });
-});
 
 // Cloned off the shipped default rather than hand-built: the persona schema
 // validates tts slots, frequency and soul, and none of that is what this file
@@ -76,12 +75,29 @@ function restorePromptSettingsAfter(t: TestContext) {
 // Recovery now verifies show continuity against the station grid. These
 // handoff fixtures must schedule the incoming show they put in the context.
 async function scheduleIncoming() {
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
+  const week: Record<number, string[]> = fullScheduleWeek('s_incoming');
   await settings.update({
     shows: [{ id: 's_incoming', name: 'Cultural Currents', topic: 'culture', programme: true, personaId: GIGI.id }],
     schedule: week,
   });
+}
+
+async function armIncoming({
+  atMs = Date.now(), finalTrack, scheduled = false,
+  patch = {},
+}: {
+  atMs?: number;
+  finalTrack?: Parameters<typeof session.armBoundaryHandoff>[1];
+  scheduled?: boolean;
+  patch?: Parameters<typeof settings.update>[0];
+} = {}) {
+  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id, ...patch } as never);
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, atMs));
+  await settings.update({ activePersonaId: GIGI.id } as never);
+  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, atMs + 60_000);
+  if (scheduled) await scheduleIncoming();
+  assert.equal(session.armBoundaryHandoff(incoming, finalTrack), true);
+  return incoming;
 }
 
 // Records what each generator was handed. Neither returns anything the test
@@ -142,28 +158,21 @@ async function rollWithMicPass() {
   await session.maybeRoll(context({ id: 's_cultural', name: 'Cultural Currents' }, t0 + 60_000));
 }
 
-test('the mic-pass hands each half the session it actually belongs to', async () => {
+test('the mic-pass hands each half the session it actually belongs to', async (t) => {
   queue.djLog = [];
   await rollWithMicPass();
   assert.ok(session.pendingHandoff(), 'the roll armed a mic-pass');
 
   const { seen, deps } = generators();
   const announced: { text: string; personaId: string }[] = [];
-  const realAnnounce = (queue as any).announce;
-  const realExchange = (queue as any).announceExchange;
-  (queue as any).announce = async (text: string, _kind: string, opts: any = {}) => {
+  t.mock.method(queue, 'announce', async (text: string, _kind: string, opts: any = {}) => {
     announced.push({ text, personaId: opts?.meta?.personaId });
-  };
-  (queue as any).announceExchange = async (lines: any[]) => {
+  });
+  t.mock.method(queue, 'announceExchange', async (lines: any[]) => {
     announced.push(...lines.map(line => ({ text: line.text, personaId: line.persona.id })));
     return true;
-  };
-  try {
-    await djAgent.runPersonaHandoff(queue, context({ id: 's_cultural', name: 'Cultural Currents' }, Date.now()), deps);
-  } finally {
-    (queue as any).announce = realAnnounce;
-    (queue as any).announceExchange = realExchange;
-  }
+  });
+  await djAgent.runPersonaHandoff(queue, context({ id: 's_cultural', name: 'Cultural Currents' }, Date.now()), deps);
 
   assert.ok(seen.signoff, 'the sign-off was generated');
   assert.ok(seen.greeting, 'the greeting was generated');
@@ -185,29 +194,24 @@ test('the mic-pass hands each half the session it actually belongs to', async ()
   );
 });
 
-test('a failed sign-off still leaves the greeting on a clean slate', async () => {
+test('a failed sign-off still leaves the greeting on a clean slate', async (t) => {
   queue.djLog = [];
   await rollWithMicPass();
 
   const { seen, deps } = generators();
-  const realAnnounce = (queue as any).announce;
-  (queue as any).announce = async () => {};
-  try {
-    await djAgent.runPersonaHandoff(
-      queue,
-      context({ id: 's_cultural', name: 'Cultural Currents' }, Date.now()),
-      { ...deps, generateSignoff: async () => { throw new Error('tts down'); } },
-    );
-  } finally {
-    (queue as any).announce = realAnnounce;
-  }
+  t.mock.method(queue, 'announce', async () => {});
+  await djAgent.runPersonaHandoff(
+    queue,
+    context({ id: 's_cultural', name: 'Cultural Currents' }, Date.now()),
+    { ...deps, generateSignoff: async () => { throw new Error('tts down'); } },
+  );
 
   assert.equal(seen.signoff, undefined, 'the sign-off never reported its arguments');
   assert.ok(seen.greeting, 'the greeting still ran — it stands alone');
   assert.equal(seen.greeting.recap, null);
 });
 
-test('an enabled same-host show change renders one acknowledgement, not a self-handoff', async () => {
+test('an enabled same-host show change renders one acknowledgement, not a self-handoff', async (t) => {
   queue.djLog = [];
   await settings.update({
     personas: [WREN], activePersonaId: WREN.id,
@@ -222,23 +226,18 @@ test('an enabled same-host show change renders one acknowledgement, not a self-h
   let acknowledgement: any = null;
   const announced: string[] = [];
   const sameHostContext = context({ id: 's_go', name: 'Get up and Go!' }, Date.now());
-  const realAnnounce = (queue as any).announce;
-  (queue as any).announce = async (text: string) => { announced.push(text); };
-  try {
-    await djAgent.runPersonaHandoff(
-      queue,
-      sameHostContext,
-      {
-        generateSignoff: async () => { signoffs++; return 'This must not be used.'; },
-        generateHandoffGreeting: async (args: any) => {
-          acknowledgement = args;
-          return 'A fresh start for Get up and Go!';
-        },
+  t.mock.method(queue, 'announce', async (text: string) => { announced.push(text); });
+  await djAgent.runPersonaHandoff(
+    queue,
+    sameHostContext,
+    {
+      generateSignoff: async () => { signoffs++; return 'This must not be used.'; },
+      generateHandoffGreeting: async (args: any) => {
+        acknowledgement = args;
+        return 'A fresh start for Get up and Go!';
       },
-    );
-  } finally {
-    (queue as any).announce = realAnnounce;
-  }
+    },
+  );
 
   assert.equal(signoffs, 0, 'the host does not sign off to themself');
   assert.equal(acknowledgement.sameHost, true);
@@ -248,7 +247,7 @@ test('an enabled same-host show change renders one acknowledgement, not a self-h
   assert.deepEqual(announced, ['A fresh start for Get up and Go!']);
 });
 
-test('a final-track handoff uses the incoming identity captured at arm time', async () => {
+test('a final-track handoff uses the incoming identity captured at arm time', async (t) => {
   queue.djLog = [];
   await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
   const t0 = Date.now();
@@ -263,8 +262,7 @@ test('a final-track handoff uses the incoming identity captured at arm time', as
   // still Wren, while the next show belongs to Gigi.
   const priorShows = settings.get().shows;
   const priorSchedule = settings.get().schedule;
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
+  const week: Record<number, string[]> = fullScheduleWeek('s_incoming');
   await settings.update({
     activePersonaId: GIGI.id,
     shows: [{
@@ -283,16 +281,11 @@ test('a final-track handoff uses the incoming identity captured at arm time', as
 
   const { seen, deps } = generators();
   const aired: string[] = [];
-  const realExchange = (queue as any).announceExchange;
-  (queue as any).announceExchange = async (lines: any[]) => {
+  t.mock.method(queue, 'announceExchange', async (lines: any[]) => {
     aired.push(...lines.map(line => line.persona.name));
     return true;
-  };
-  try {
-    await djAgent.runPersonaHandoff(queue, incoming, deps);
-  } finally {
-    (queue as any).announceExchange = realExchange;
-  }
+  });
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
 
   assert.equal(seen.signoff.personaOut, WREN.name);
   assert.equal(seen.signoff.personaIn, GIGI.name);
@@ -374,13 +367,8 @@ test('a final-track handoff grounds both rendered prompts at the stored boundary
   });
 
   const { seen, deps } = generators();
-  const realExchange = (queue as any).announceExchange;
-  (queue as any).announceExchange = async () => true;
-  try {
-    await djAgent.runPersonaHandoff(queue, incoming, deps);
-  } finally {
-    (queue as any).announceExchange = realExchange;
-  }
+  t.mock.method(queue, 'announceExchange', async () => true);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
 
   for (const half of [seen.signoff, seen.greeting]) {
     assert.match(half.prompt, /Day: Friday, 18 September \(autumn\)/);
@@ -429,12 +417,11 @@ test('boundary prompt clocks stay on the stored side of calendar and daypart tra
     (session.getSession() as any).boundaryHandoff.boundaryAt = sample.boundaryAt;
 
     const { seen, deps } = generators();
-    const realExchange = (queue as any).announceExchange;
-    (queue as any).announceExchange = async () => true;
+    const exchangeMock = t.mock.method(queue, 'announceExchange', async () => true);
     try {
       await djAgent.runPersonaHandoff(queue, incoming, deps);
     } finally {
-      (queue as any).announceExchange = realExchange;
+      exchangeMock.mock.restore();
       await settings.update({ activePersonaId: WREN.id } as never);
     }
 
@@ -465,12 +452,11 @@ test('a boundary handoff omits all temporal prompt facts when its stored boundar
     else handoff.boundaryAt = invalid;
 
     const { seen, deps } = generators();
-    const realExchange = (queue as any).announceExchange;
-    (queue as any).announceExchange = async () => true;
+    const exchangeMock = t.mock.method(queue, 'announceExchange', async () => true);
     try {
       await djAgent.runPersonaHandoff(queue, incoming, deps);
     } finally {
-      (queue as any).announceExchange = realExchange;
+      exchangeMock.mock.restore();
       await settings.update({ activePersonaId: WREN.id } as never);
     }
 
@@ -503,13 +489,8 @@ test('the station clock switch still withholds boundary numerals after normaliza
   (session.getSession() as any).boundaryHandoff.boundaryAt = boundaryAt;
 
   const { seen, deps } = generators();
-  const realExchange = (queue as any).announceExchange;
-  (queue as any).announceExchange = async () => true;
-  try {
-    await djAgent.runPersonaHandoff(queue, incoming, deps);
-  } finally {
-    (queue as any).announceExchange = realExchange;
-  }
+  t.mock.method(queue, 'announceExchange', async () => true);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
 
   for (const half of [seen.signoff, seen.greeting]) {
     assert.doesNotMatch(half.prompt, /^Local time:/m);
@@ -521,13 +502,8 @@ test('the station clock switch still withholds boundary numerals after normaliza
 
 test('a queued final-track handoff survives a controller restart for re-rendering', async (t) => {
   restorePromptSettingsAfter(t);
-  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
   const t0 = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
-  await settings.update({ activePersonaId: GIGI.id } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
-  await scheduleIncoming();
-  assert.equal(session.armBoundaryHandoff(incoming), true);
+  const incoming = await armIncoming({ atMs: t0, scheduled: true });
   const storedBoundaryAt = t0;
   (session.getSession() as any).boundaryHandoff.boundaryAt = storedBoundaryAt;
   session.markHandoffQueued();
@@ -543,13 +519,8 @@ test('a queued final-track handoff survives a controller restart for re-renderin
   assert.ok(session.pendingHandoff(), 'the lost in-memory WAV pair is regenerated on the next queue cycle');
 
   const { seen, deps } = generators();
-  const realExchange = (queue as any).announceExchange;
-  (queue as any).announceExchange = async () => true;
-  try {
-    await djAgent.runPersonaHandoff(queue, incoming, deps);
-  } finally {
-    (queue as any).announceExchange = realExchange;
-  }
+  t.mock.method(queue, 'announceExchange', async () => true);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
   assert.equal(seen.signoff.context.at, new Date(storedBoundaryAt).toISOString());
   assert.equal(seen.greeting.context.at, new Date(storedBoundaryAt).toISOString());
   assert.equal(session.boundaryHandoffStatus()?.boundaryAt, storedBoundaryAt,
@@ -558,22 +529,12 @@ test('a queued final-track handoff survives a controller restart for re-renderin
     'regeneration leaves the future identity timestamp unchanged');
 });
 
-test('a refused final-track handoff remains armed for retry', async () => {
-  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
-  const t0 = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
-  await settings.update({ activePersonaId: GIGI.id } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
-  assert.equal(session.armBoundaryHandoff(incoming), true);
+test('a refused final-track handoff remains armed for retry', async (t) => {
+  const incoming = await armIncoming();
 
   const { deps } = generators();
-  const realExchange = (queue as any).announceExchange;
-  (queue as any).announceExchange = async () => false;
-  try {
-    await djAgent.runPersonaHandoff(queue, incoming, deps);
-  } finally {
-    (queue as any).announceExchange = realExchange;
-  }
+  t.mock.method(queue, 'announceExchange', async () => false);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
 
   assert.equal(session.boundaryHandoffStatus()?.state, 'armed',
     'a pause-owned seam cannot be recorded as though the handoff reached the voice queue');
@@ -582,15 +543,9 @@ test('a refused final-track handoff remains armed for retry', async () => {
 
 test('an armed handoff survives a restart that crosses the boundary', async (t) => {
   restorePromptSettingsAfter(t);
-  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
-  const t0 = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
-  await settings.update({ activePersonaId: GIGI.id } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
-  await scheduleIncoming();
-  assert.equal(session.armBoundaryHandoff(incoming, {
-    id: 'final-track', title: 'Last Song', artist: 'Wren',
-  }), true);
+  const incoming = await armIncoming({ scheduled: true,
+    finalTrack: { id: 'final-track', title: 'Last Song', artist: 'Wren' },
+  });
 
   await new Promise(resolve => setTimeout(resolve, 1_100));
   await session.recover(incoming);
@@ -602,13 +557,8 @@ test('an armed handoff survives a restart that crosses the boundary', async (t) 
 
 test('an aired boundary handoff survives a restart without reopening the incoming show', async (t) => {
   restorePromptSettingsAfter(t);
-  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
   const t0 = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
-  await settings.update({ activePersonaId: GIGI.id } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
-  await scheduleIncoming();
-  assert.equal(session.armBoundaryHandoff(incoming), true);
+  const incoming = await armIncoming({ atMs: t0, scheduled: true });
   session.attachBoundaryProgramme({
     status: 'ok', plan: { angle: 'Already introduced angle' }, beats: {}, introAiredAt: null,
   });
@@ -637,14 +587,8 @@ test('an aired boundary handoff survives a restart without reopening the incomin
 
 test('an armed handoff waits for confirmed playback of its final outgoing track', async (t) => {
   restorePromptSettingsAfter(t);
-  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
-  const t0 = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
-  await settings.update({ activePersonaId: GIGI.id } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
-  await scheduleIncoming();
   const finalTrack = { id: 'final-track', title: 'Last Song', artist: 'Wren' };
-  assert.equal(session.armBoundaryHandoff(incoming, finalTrack), true);
+  const incoming = await armIncoming({ scheduled: true, finalTrack });
 
   assert.equal(session.boundaryHandoffReadyForTrack({
     id: 'preceding-track', title: 'One Song Early', artist: 'Wren',
@@ -662,17 +606,11 @@ test('an armed handoff waits for confirmed playback of its final outgoing track'
 });
 
 test('the queue runs an armed handoff only while the recorded final track is live', async () => {
-  await settings.update({
-    personas: [WREN, GIGI], activePersonaId: WREN.id,
+  const finalTrack = { id: 'final-track', title: 'Last Song', artist: 'Wren' };
+  const incoming = await armIncoming({ finalTrack, patch: {
     djTalkOnlyBetweenTracks: true,
     tts: { ...settings.get().tts, enabled: false },
-  } as never);
-  const t0 = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
-  await settings.update({ activePersonaId: GIGI.id } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
-  const finalTrack = { id: 'final-track', title: 'Last Song', artist: 'Wren' };
-  assert.equal(session.armBoundaryHandoff(incoming, finalTrack), true);
+  } });
 
   const calls: string[] = [];
   const deps = {
@@ -699,12 +637,7 @@ test('the queue runs an armed handoff only while the recorded final track is liv
 });
 
 test('a handoff pair settles only after its final live-edge marker', async () => {
-  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
-  const t0 = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
-  await settings.update({ activePersonaId: GIGI.id } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
-  assert.equal(session.armBoundaryHandoff(incoming), true);
+  await armIncoming();
   session.markHandoffQueued();
 
   let resolveSignoff!: (at: number) => void;
@@ -738,11 +671,9 @@ test('a handoff pair settles only after its final live-edge marker', async () =>
     'the final line marker settles the complete pair');
 });
 
-
 test('same-show recovery repairs the host without disturbing armed, queued, or aired boundary handoffs', async () => {
   for (const state of ['armed', 'queued', 'aired'] as const) {
-    const emptyWeek: Record<number, (string | null)[]> = {};
-    for (let day = 0; day < 7; day++) emptyWeek[day] = Array(24).fill(null);
+    const emptyWeek: Record<number, (string | null)[]> = emptyScheduleWeek();
     await settings.update({
       personas: [WREN, GIGI], activePersonaId: WREN.id,
       shows: [], schedule: emptyWeek, scheduleOverride: null,
@@ -763,8 +694,7 @@ test('same-show recovery repairs the host without disturbing armed, queued, or a
     const before = { id: stale.id, key: stale.key, startedAt: stale.startedAt, messages: stale.messages.length };
     await new Promise(resolve => setTimeout(resolve, 1_100));
 
-    const week: Record<number, string[]> = {};
-    for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_same_show');
+    const week: Record<number, string[]> = fullScheduleWeek('s_same_show');
     await settings.update({
       activePersonaId: WREN.id,
       shows: [{ id: 's_same_show', name: 'Same Show', topic: 'tests', personaId: GIGI.id }],

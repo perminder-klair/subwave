@@ -81,8 +81,14 @@ export interface Show {
   /** Every track in the anchor plays once before any repeats (#1612). Inert
    *  without playlistStrict. */
   playlistExhaust: boolean;
+  /** Play the anchor top to bottom, resuming where the last airing left off and
+   *  looping at the end. Inert without playlistStrict; supersedes playlistExhaust. */
+  playlistInOrder: boolean;
   /** Excluded from the candidate pool regardless of the other filters. */
   excludedPlaylistIds: string[];
+  /** A clean show: tracks tagged explicit stay off air. Only a positive tag
+   *  counts, so an untagged track still plays. */
+  excludeExplicit: boolean;
   /** The show airs as a produced episode: intro, feature segment, sign-off. */
   programme: boolean;
   /** Pin the feature segment to one skill. Empty = producer picks per episode.

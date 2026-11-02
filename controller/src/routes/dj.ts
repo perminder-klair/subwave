@@ -16,6 +16,7 @@ import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist, syncSkillCrons } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
+import { VERBATIM_META } from '../broadcast/prompt-memory.js';
 import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { communitySkillConfig } from '../community/registry.js';
 import {
@@ -52,10 +53,14 @@ import { nextShowBoundaryMs } from '../broadcast/show-boundary.js';
 import { planBlock, blockLabel, blockPlayableSec, type BlockSong } from '../broadcast/block-queue.js';
 import {
   queueBlockSchema,
+  skipBodySchema,
   QUEUE_BLOCK_ARTIST_LIMIT_DEFAULT,
   QUEUE_BLOCK_MAX_TRACKS,
   type QueueBlockBody,
+  type SkipBody,
+  type SkipRefusalReason,
 } from '../schemas/dj.js';
+import { SKIP_REFUSAL_MESSAGES } from '../broadcast/skip-policy.js';
 
 export const router = express.Router();
 
@@ -696,7 +701,9 @@ router.delete('/dj/skills/:slug', requireAdmin, async (req, res) => {
 
 // Manual voice DJ. mode 'raw' speaks text verbatim, 'styled' has the LLM write it
 // in persona first. `sfx` airs under the opening words and, being a manual
-// trigger, ignores the settings.sfx.enabled autonomy toggle.
+// trigger, ignores the settings.sfx.enabled autonomy toggle. A raw line is
+// stamped verbatim so later prompts never read it back (#1908); a styled one is
+// the model's own words and stays in its memory like any other segment.
 router.post('/dj/say', requireAdmin, async (req, res) => {
   const text = (typeof req.body?.text === 'string' ? req.body.text : '').trim().slice(0, SAY_TEXT_MAX);
   if (!text) return res.status(400).json({ error: 'text is required' });
@@ -722,7 +729,12 @@ router.post('/dj/say', requireAdmin, async (req, res) => {
         recentOpeners: queue.getRecentOpeners(),
       });
     }
-    await queue.announce(spoken, kind);
+    const outcome = await queue.announce(spoken, kind, mode === 'raw' ? { meta: { ...VERBATIM_META } } : {});
+    // Only a styled line can be one (raw is exempt). No voice, so no effect
+    // under it, and an error so the Say box keeps the text for a retry.
+    if (outcome.reason === 'stand-in') {
+      return res.status(502).json({ error: 'the DJ wrote a stand-in, not a line, so nothing aired' });
+    }
     if (sfxName) void queue.playSfx(sfxName, { underVoice: true });
     res.json({ ok: true, mode, kind, spoken, sfx: sfxName || null });
   } catch (err) {
@@ -752,7 +764,11 @@ router.post('/dj/segment', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: `type must be one of: ${Object.keys(SEGMENTS).join(', ')}` });
   }
   try {
+    // null: the queue refused the line. An error, not a success in the words of
+    // a line that never aired: the dash toast prints `spoken` as "on air", and
+    // the booth log already says why.
     const spoken = await run();
+    if (spoken === null) return res.status(502).json({ error: 'nothing aired, see the booth log' });
     res.json({ ok: true, type, spoken });
   } catch (err) {
     queue.log('error', `/dj/segment ${type} failed: ${err.message}`);
@@ -806,9 +822,33 @@ router.post('/dj/auto-link', requireAdmin, (req, res) => {
 // Force-end the current track. Admin-only: there is no listener-facing skip.
 // Commits the queued pick first (#1300) so the skip airs what the admin queue
 // shows as next rather than an auto.m3u fill; the response says which happened.
-router.post('/dj/skip', requireAdmin, async (req, res) => {
+//
+// `expectId` (#2017) makes it a TARGETED skip: 409 with skip-policy's reason,
+// nothing skipped, unless that track is still on air. Checked twice: before the
+// commit, so a skip already moot forces no drain and waits out no 20s, and
+// again after it, immediately before the telnet skip, because the song can end
+// inside that wait. A refusal after the commit leaves the pick committed; it
+// airs next anyway, as the admin queue shows. No id: the bare skip, unchanged.
+router.post('/dj/skip', requireAdmin, validateBody(skipBodySchema), async (req, res) => {
+  const { expectId } = req.body as SkipBody;
+  const refuse = (
+    refusal: { reason: SkipRefusalReason; onAirId: string | null },
+    prep: { pending: boolean; committed: boolean } = { pending: false, committed: false },
+  ) => {
+    const error = SKIP_REFUSAL_MESSAGES[refusal.reason];
+    queue.log('scheduler', `operator skip refused — ${error}`, { reason: refusal.reason, expectId });
+    return res.status(409).json({ error, reason: refusal.reason, onAirId: refusal.onAirId, pending: prep.pending, committed: prep.committed });
+  };
   try {
+    if (expectId) {
+      const refusal = await queue.skipTargetRefusal(expectId);
+      if (refusal) return refuse(refusal);
+    }
     const prep = await queue.commitBeforeSkip();
+    if (expectId) {
+      const refusal = await queue.skipTargetRefusal(expectId);
+      if (refusal) return refuse(refusal, prep);
+    }
     await skipTrack();
     if (prep.pending && !prep.committed) {
       queue.log('scheduler', `track skipped by operator — queued pick not confirmed in dj_queue after ${Math.round(prep.waitedMs / 1000)}s; the auto playlist may fill the slot first`);
@@ -871,8 +911,8 @@ function toAdminRow(s: AdminSong) {
     musicalKey: tag?.musicalKey ?? null,
     loudnessLufs: tag?.loudnessLufs ?? null,
     paceMean: tag?.paceMean ?? null,
-    // As /library/browse: [] = analysed, no vocals detected.
-    instrumental: isInstrumental(tag?.vocalRanges),
+    // Shared measured-duration classification, as in /library/browse.
+    instrumental: isInstrumental(tag),
     // /dj/search returns blocked rows on purpose; this is what marks them.
     blockedBy: blocked ? blocklist.refOf(blocked) : null,
   };

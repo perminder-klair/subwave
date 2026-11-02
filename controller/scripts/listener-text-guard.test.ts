@@ -63,6 +63,9 @@ async function withFetch<T>(
   try {
     await settings.update({ llm: {
       provider: 'openai-compatible', model: 'fixture-model',
+      // Pinned: these tests read the prompt the model receives, and an `auto`
+      // connection would send its detection probes to this stub first.
+      compatibleMode: 'local',
       baseUrl: 'http://127.0.0.1:9/v1', fallback: { enabled: false },
     } } as never);
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -239,7 +242,7 @@ test('the stateless intro retry is built without the missed artist name', async 
 
 test('the cascade artist-miss ack is fixed copy, and the route hands the prompt only the cleaned name', () => {
   const route = readFileSync(join(process.cwd(), 'src/routes/request.ts'), 'utf8');
-  const ackLine = route.split('\n').find(l => l.includes("in the crates — here's something that fits the moment instead"));
+  const ackLine = route.split('\n').find(l => l.includes("Couldn't match that request exactly — here's an alternative from the library."));
   assert.ok(ackLine, 'the artist-miss ack is present');
   assert.doesNotMatch(ackLine!, /\$\{/, 'the ack interpolates nothing a listener supplied');
   assert.match(route, /entry\.missedArtist = cleanMissedArtist\(matched\.artist\)/);

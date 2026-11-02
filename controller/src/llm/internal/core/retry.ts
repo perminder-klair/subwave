@@ -4,6 +4,7 @@
 //   withDeadline       — a hard wall-clock ceiling (Promise.race + AbortSignal).
 
 import { throwIfCancelled } from './generation.js';
+import { shouldFailoverRefusal } from './retry-policy.js';
 import { isTransient, errReason, unwrapSdkError } from './pure.js';
 
 // Retry-After (seconds, or an HTTP-date) — RFC 9110 §10.2.3. Providers rate-
@@ -48,6 +49,11 @@ export const MAX_RETRY_AFTER_MS = 15_000;
 // jittered backoff is enough — beyond that the upstream is genuinely down and
 // the failure should surface.
 //
+// A refused or unresolvable host (ECONNREFUSED/ENOTFOUND) is a verdict, not a
+// blip: it will not come back within a 0.5s backoff, so same-leg retry is
+// skipped for it and withFailover decides at once. A service mid-restart is
+// better served by the backup leg than by waiting out its port.
+//
 // A Retry-After header on the error overrides the fixed delay (jitter is kept
 // so a fleet of callers released by the same header doesn't stampede back in
 // sync); a header LONGER than MAX_RETRY_AFTER_MS aborts same-leg retry
@@ -76,6 +82,11 @@ export async function withTransientRetry<T>(
       throwIfCancelled(signal);
       lastErr = err;
       if (!isTransient(err) || attempt === delays.length || signal?.aborted) throw err;
+      // Only an unpinned primary with a usable backup can give up its retries.
+      if (shouldFailoverRefusal(err)) {
+        console.log(`[${kind}] ${errReason(err)} — host down, not retrying this leg`);
+        throw err;
+      }
       const jitter = Math.floor(Math.random() * 200);
       const hinted = retryAfterMs(err);
       if (hinted != null && hinted > MAX_RETRY_AFTER_MS) {

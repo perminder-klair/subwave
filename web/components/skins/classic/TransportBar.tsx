@@ -229,9 +229,14 @@ export default memo(function TransportBar({
           </m.button>
         </div>
 
-        <div className="relative flex min-w-0 items-center justify-center px-2 [border-left:1px_solid_var(--fz-line)] md:px-5 lg:px-6">
-          <div className="flex w-full flex-col justify-center gap-1 font-mono lg:gap-1.5">
-            <div className="flex items-baseline justify-between gap-2 lg:gap-4">
+        {/* From lg the side columns stack a caption over a 50px control, so this
+            column mirrors that stack — same padding, a 15px label line, the same
+            gap, a 50px scale row — to put its label on the captions' line and the
+            scale on the knobs' centre. Below lg there are no captions and the
+            label + scale block simply centres against the knobs. */}
+        <div className="relative flex min-w-0 items-center justify-center px-2 [border-left:1px_solid_var(--fz-line)] md:px-5 lg:px-6 lg:pt-1.5 lg:pb-3">
+          <div className="flex w-full flex-col justify-center gap-1 font-mono lg:gap-2">
+            <div className="flex items-baseline justify-between gap-2 lg:gap-4 lg:leading-[15px]">
               <span className="text-[11px] font-semibold tracking-[0.04em] whitespace-nowrap text-ink lg:text-[12px]">
                 Signal · <b className={cn('font-bold', qualityTone)}>{qualityLabel}</b>
               </span>
@@ -243,7 +248,7 @@ export default memo(function TransportBar({
                 {listeners != null ? `${listeners} ♪ · ${latencyText}` : latencyText}
               </span>
             </div>
-            <div className="fz-scale h-8 lg:h-[42px]" aria-hidden="true">
+            <div className="fz-scale h-8 lg:my-1 lg:h-[42px]" aria-hidden="true">
               <div className="fz-ticks" />
               <div
                 className="fz-needle"
@@ -266,7 +271,7 @@ export default memo(function TransportBar({
             // iOS: volume is hardware-only (see iosVolumeLocked above), so
             // echo a volume rocker rather than ship a dead knob.
             <div
-              className="flex h-10 items-center gap-1.5 text-muted lg:h-[48px]"
+              className="flex h-10 items-center gap-1.5 text-muted lg:h-[50px]"
               title="On iOS, volume is set with your device's buttons"
               aria-label="Volume is controlled by your device's hardware buttons"
             >
@@ -277,7 +282,8 @@ export default memo(function TransportBar({
               </span>
             </div>
           ) : (
-            <div className="flex items-center gap-3 lg:gap-4">
+            // 50px from lg like the power key, so both captions start on one line.
+            <div className="flex items-center gap-3 lg:h-[50px] lg:gap-4">
               <div
                 ref={knobWrapRef}
                 role="slider"

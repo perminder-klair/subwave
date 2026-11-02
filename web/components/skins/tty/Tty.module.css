@@ -18,11 +18,12 @@
 }
 
 .bootline:nth-child(1) { animation-delay: 0.05s; }
-.bootline:nth-child(2) { animation-delay: 0.35s; }
-.bootline:nth-child(3) { animation-delay: 0.65s; }
-.bootline:nth-child(4) { animation-delay: 0.95s; }
+.bootline:nth-child(2) { animation-delay: 0.3s; }
+.bootline:nth-child(3) { animation-delay: 0.6s; }
+.bootline:nth-child(4) { animation-delay: 0.9s; }
 .bootline:nth-child(5) { animation-delay: 1.2s; }
-.bootline:nth-child(6) { animation-delay: 1.55s; }
+.bootline:nth-child(6) { animation-delay: 1.45s; }
+.bootline:nth-child(7) { animation-delay: 1.8s; }
 
 /* Boot lines normally become visible through animation. Set opacity explicitly when lite mode disables it. */
 :global(html.lite) .bootline {

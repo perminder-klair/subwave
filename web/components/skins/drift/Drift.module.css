@@ -1,32 +1,72 @@
-/* Register --sw-drift-c for colour transitions. Unsupported browsers switch instantly. */
-
-@property --sw-drift-c {
-  syntax: '<color>';
-  inherits: false;
-  initial-value: transparent;
-}
-
+/* A drifting pool of cover colour (DriftSkin's Wash). The box carries the
+   position and the drift keyframes, whose running animation already gives it
+   its own compositing layer, so it needs no will-change. Its two layers carry
+   the colour and crossfade opacity on a change (../crossfade.ts): each
+   gradient paints once per track, where a twenty-second colour transition
+   re-rasterised all three on the CPU every frame on an iPad. */
 .wash {
   position: absolute;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, var(--sw-drift-c), transparent);
-  transition: --sw-drift-c 20s linear;
   pointer-events: none;
-  will-change: transform;
 }
 
-/* Support explicit dark themes and dark OS preferences without a theme override. */
-:global([data-theme='dark']) .wash {
-  filter: saturate(1.35) brightness(1.2);
+/* Laid out at a quarter of the pool and scaled up 4x. A soft radial gradient
+   upscales invisibly, and an engine that rasterises a composited layer at its
+   own size (WebKit) holds 1/16 of the pixels while a fade runs. */
+.layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 25%;
+  height: 25%;
+  transform: scale(4);
+  transform-origin: 0 0;
+  background: radial-gradient(closest-side, var(--sw-drift-paint, var(--sw-drift-c)), transparent);
+  opacity: 0;
+  /* Keep in step with WASH_FADE_MS in DriftSkin.tsx. */
+  transition: opacity 20s linear;
 }
-@media (prefers-color-scheme: dark) {
-  :global(:root:not([data-theme='light'])) .wash {
+.front {
+  opacity: 1;
+}
+
+/* Dark pools run richer and brighter: saturate(1.35) brightness(1.2), baked
+   into the stop colour as that filter's own sRGB colour matrix, since WebKit
+   paints a filter on the main thread. Exact, not a lookalike: the gradient's
+   colour is constant and only its alpha ramps, and the filter leaves alpha
+   alone. The filter stays only where relative colour (with calc on a channel)
+   is missing. Explicit dark themes and dark OS preferences both count. */
+@supports (color: color(from red srgb clamp(0, 1.5 * r, 1) g b)) {
+  .layer {
+    --sw-drift-boost: color(
+      from var(--sw-drift-c) srgb
+      clamp(0, 1.53054 * r - 0.3003 * g - 0.03024 * b, 1)
+      clamp(0, -0.08946 * r + 1.3197 * g - 0.03024 * b, 1)
+      clamp(0, -0.08946 * r - 0.3003 * g + 1.58976 * b, 1) / alpha
+    );
+  }
+  :global([data-theme='dark']) .layer {
+    --sw-drift-paint: var(--sw-drift-boost);
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .layer {
+      --sw-drift-paint: var(--sw-drift-boost);
+    }
+  }
+}
+@supports not (color: color(from red srgb clamp(0, 1.5 * r, 1) g b)) {
+  :global([data-theme='dark']) .layer {
     filter: saturate(1.35) brightness(1.2);
+  }
+  @media (prefers-color-scheme: dark) {
+    :global(:root:not([data-theme='light'])) .layer {
+      filter: saturate(1.35) brightness(1.2);
+    }
   }
 }
 
-/* Disable this full-screen gradient transition explicitly; global lite rules disable only keyframes. */
-:global(html.lite) .wash {
+/* Lite snaps the colour instead of fading it; global lite rules disable only
+   keyframes. */
+:global(html.lite) .layer {
   transition: none;
 }
 

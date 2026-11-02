@@ -105,7 +105,9 @@ export async function resolvePlaylistMemberSets(ids: string[]): Promise<Map<stri
   const out = new Map<string, Set<string>>();
   for (const id of [...new Set(ids.filter(Boolean))]) {
     try {
-      const songs = await memoFetch(`playlist:${id}`, () => subsonic.getPlaylist(id));
+      // Unfiltered, under its own key: this set is what the blocklist filter
+      // reads, so the filtered fetch would drop the rule's own members.
+      const songs = await memoFetch(`playlist-raw:${id}`, () => subsonic.getPlaylist(id, { includeBlocked: true }));
       out.set(id, new Set((songs || []).map((t: any) => t?.id).filter(Boolean)));
     } catch (err) {
       console.warn(`[show-playlist] rule playlist ${id} failed to resolve: ${(err as Error)?.message}`);

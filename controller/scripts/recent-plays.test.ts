@@ -1,7 +1,7 @@
 // Regression test for the count-based no-repeat guard's data source —
 // queue.recentlyPlayedByCount(n) — and the events-backfill dedup that keeps the
 // recent-plays sidecar from double-counting every play (live-repeats fix).
-// Run: `tsx scripts/recent-plays.test.ts`.
+// Run: `npm test -- recent-plays`.
 //
 // node:assert-via-tsx style, matching scripts/picker-recency-regression.test.ts and
 // scripts/request-dedup.test.ts.

@@ -53,6 +53,9 @@ export async function phaseEmbed(
         {
           bpm: t.bpm, musicalKey: t.musicalKey, audioMoods: t.audioMoods,
           vocalRanges: t.vocalRanges,
+          vocalRangesInvalid: t.vocalRangesInvalid,
+          tailVocalRanges: t.tailVocalRanges,
+          tailVocalRangesInvalid: t.tailVocalRangesInvalid,
         },
       ),
     );

@@ -177,7 +177,7 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   // Transition effects on the pool path too: the queue's applyMixTransition
   // validates/strips whatever any pick strategy asks for, so a DJ-mode persona
   // keeps its craft even while picks run through this fallback (breaker open,
-  // soft budget tier, pickerAgent off). Unlike the agent's session-anchored
+  // soft budget tier, a failed or empty Shortlist/Agentic run). Unlike the agent's session-anchored
   // schema pair (PICK_SCHEMA / PICK_SCHEMA_NO_FX), this is a one-shot call with
   // no history to poison — when effects are off the field simply doesn't exist.
   // Both halves must agree: with every effect switched off there is no

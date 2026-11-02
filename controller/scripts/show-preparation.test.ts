@@ -157,7 +157,7 @@ test('source research reaches track links and both handoff voices with temporal 
   }
 });
 
-test('producer planning, solo beats and guest exchanges send the same accepted research to the model', async () => {
+test('producer planning, solo beats and guest exchanges send the same accepted research to the model', async (t) => {
   const f = fixture('programme-grounding');
   const owner = createShowPreparation(f.options);
   const view = await owner.ensure({ context });
@@ -171,9 +171,8 @@ test('producer planning, solo beats and guest exchanges send the same accepted r
   const args = { show, host, guests: [guest], persona: host, plan, context: { ...context, episodeEditorial: view.editorial } };
   const prompts: string[] = [];
   const oldConfig = structuredClone(settings.get().llm);
-  const realFetch = globalThis.fetch;
   await settings.update({ llm: { provider: 'openai-compatible', model: 'fixture-model', baseUrl: 'http://127.0.0.1:9/v1', fallback: { enabled: false } } });
-  globalThis.fetch = async (_input, init) => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (_input, init) => {
     const body = z.object({
       messages: z.array(z.object({ content: z.string().nullish() })),
       tools: z.array(z.object({ function: z.object({ name: z.string() }) })).optional(),
@@ -185,7 +184,7 @@ test('producer planning, solo beats and guest exchanges send the same accepted r
       ? { role: 'assistant', content: null, tool_calls: [{ id: 'fixture', type: 'function', function: { name: toolName, arguments: JSON.stringify(output) } }] }
       : { role: 'assistant', content: 'Artist records.' };
     return new Response(JSON.stringify({ id: 'fixture', object: 'chat.completion', created: 1, model: 'fixture-model', choices: [{ index: 0, message, finish_reason: toolName ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } }), { headers: { 'content-type': 'application/json' } });
-  };
+  });
   try {
     assert.deepEqual(await generators.generateProgrammePlan(args), plan);
     await generators.generateProgrammeIntro(args);
@@ -201,7 +200,7 @@ test('producer planning, solo beats and guest exchanges send the same accepted r
     }
     assert.equal(f.counts().calls, 1);
   } finally {
-    globalThis.fetch = realFetch;
+    fetchMock.mock.restore();
     await settings.update({ llm: oldConfig });
   }
 });

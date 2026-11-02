@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
+import { listen as listenHttp } from './test-utils/http.js';
 import { after, test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express from 'express';
-import type { AddressInfo } from 'node:net';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-gemini-style-'));
 process.env.STATE_DIR = root;
@@ -69,8 +69,7 @@ test('the preview HTTP route forwards the unsaved delivery style to Google', asy
   const { router } = await import('../src/routes/settings/tts.js');
   const app = express();
   app.use(express.json(), router);
-  const server = app.listen(0, '127.0.0.1');
-  await new Promise<void>(resolve => server.once('listening', resolve));
+  const { server, port, close } = await listenHttp(app);
   const realFetch = globalThis.fetch;
   let style = '';
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
@@ -79,7 +78,6 @@ test('the preview HTTP route forwards the unsaved delivery style to Google', asy
     return Response.json({ output_audio: { data: Buffer.from('preview audio').toString('base64') } });
   });
   try {
-    const { port } = server.address() as AddressInfo;
     const response = await fetch(`http://127.0.0.1:${port}/settings/tts/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Basic dGVzdDp0ZXN0' },
       body: JSON.stringify({ engine: 'gemini', voice: 'Puck', voiceStyle: 'Dry and understated.', speed: 1 }),
@@ -89,6 +87,6 @@ test('the preview HTTP route forwards the unsaved delivery style to Google', asy
     assert.match(style, /^Dry and understated\./);
   } finally {
     server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
+    await close();
   }
 });

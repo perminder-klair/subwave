@@ -15,15 +15,17 @@
 // (tts.cloud.compatParams, llm.repeatPenalty), so pin it the way
 // scripts/llm-repeat-penalty.test.ts does.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 // STATE_DIR redirected BEFORE the first import of anything config-derived.
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-gemini-safety-'));
 process.env.STATE_DIR = stateRoot;
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(() => removeTempDir(stateRoot));
 
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
@@ -70,12 +72,9 @@ test('every other provider gets an empty object', () => {
 // Load a hand-written settings.json the way a controller restart would.
 const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({
+  return (await coldLoadSettings({
     llm: { provider: 'google', model: 'gemini-2.5-flash', ...llm },
-  }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
+  })).llm;
 }
 
 test('the operator\'s boxes survive a controller restart', async () => {

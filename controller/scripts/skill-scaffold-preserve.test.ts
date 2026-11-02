@@ -15,7 +15,7 @@
 // The opposite must hold too: a declared knob the operator CLEARED stays
 // cleared, or the form could never delete a line.
 //
-// Run: `tsx scripts/skill-scaffold-preserve.test.ts`.
+// Run: `npm test -- skill-scaffold-preserve`.
 
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';

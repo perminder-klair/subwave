@@ -57,10 +57,10 @@ git log -1 --stat        # or: git diff --stat <base>..HEAD
 | The change touched… | Ship via |
 |---|---|
 | **`app/src/**` only** — components, hooks, styles, copy, business logic, JS/TS assets | ✅ **OTA** (this skill) |
-| `package.json` deps (ran `npx expo install …`), anything under `app/patches/` or `plugins/`, `app.json` `ios`/`android`/`infoPlist`/`plugins`/`expo-build-properties` | ❌ **New build** — fingerprint shifts; old binaries can't receive it. Use the release skills. |
+| `package.json` deps (ran `npx expo install …`), anything under `app/patches/` or `plugins/`, native code under `app/targets/` or `app/modules/*/ios` (the Live Activity), `app.json` `ios`/`android`/`infoPlist`/`plugins`/`expo-build-properties` | ❌ **New build** — fingerprint shifts; old binaries can't receive it. Use the release skills. |
 
 Rule of thumb: **only `src/**` (and other Metro-bundled assets) changed → OTA.
-Ran `expo install` or edited `patches/`/`plugins`/native `app.json` → build.** When
+Ran `expo install` or edited `patches/`/`plugins`/`targets`/`modules/*/ios`/native `app.json` → build.** When
 unsure, the stat output is the tell — if every changed path is under `app/src/`,
 it's OTA.
 

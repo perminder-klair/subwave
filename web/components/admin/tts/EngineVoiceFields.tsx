@@ -62,6 +62,11 @@ export const ENGINE_UNAVAILABLE: Record<string, ReactNode> = {
       The remote endpoint isn’t reachable. Configure its URL in
       Settings &rarr; Voice.
     </>
+  ),  gemini: (
+    <>
+      Gemini isn’t available: it needs the Google API key, the same one the
+      Gemini LLM provider uses.
+    </>
   ),
 };
 
@@ -503,7 +508,7 @@ export function EngineVoiceFields({
                 />
               </div>
               <div className="field max-w-[420px]">
-                {geminiAvail === false && notice('gemini')}
+                {geminiSelected && geminiAvail === false && notice('gemini')}
                 <Label>{geminiSelected ? 'Voice' : 'Cloud voice'}</Label>
                 {!hasList ? (
                   <>

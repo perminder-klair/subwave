@@ -9,7 +9,7 @@ const dir = createTempDir(join(tmpdir(), 'subwave-library-discovery-'));
 process.env.STATE_DIR = dir;
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
-const { buildGenreSuggest } = await import('../src/music/genre-suggest.js');
+const { genreSuggest, genreSuggestIdle, GENRE_SUGGEST_REFRESH_FLOOR_MS } = await import('../src/music/genre-suggest.js');
 const { projectionStatus } = await import('../src/music/map-projection.js');
 await db.open({ embeddingDim: 3 });
 await library.load();
@@ -18,7 +18,16 @@ after(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('genre neighbours preserve ties, counts, threshold and the eight-result cap', () => {
+test('genre neighbours preserve ties, counts, threshold and the eight-result cap', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  // A changed library is re-read behind the answer, at most once per floor
+  // (#1976): pass the floor, let that walk land, then read its result.
+  const reread = async () => {
+    t.mock.timers.tick(GENRE_SUGGEST_REFRESH_FLOOR_MS);
+    await genreSuggest();
+    await genreSuggestIdle();
+    return genreSuggest();
+  };
   const genres = Array.from({ length: 11 }, (_, i) => `Genre ${i}`);
   genres.push('Orthogonal', 'Opposite');
   for (const genre of genres) {
@@ -28,19 +37,19 @@ test('genre neighbours preserve ties, counts, threshold and the eight-result cap
   db.upsertTrackMeta('second', { title: 'Second track', artist: 'Artist', genres: ['Genre 0'] });
   db.upsertTrackTags('second', { moods: ['calm'], energy: 'low', source: 'manual' });
 
-  const withoutVectors = buildGenreSuggest();
+  const withoutVectors = await genreSuggest();
   assert.equal(withoutVectors.hasEmbeddings, false);
   assert.deepEqual(withoutVectors.related, {});
   assert.deepEqual(withoutVectors.genres[0], { value: 'Genre 0', songCount: 2 });
 
   for (const genre of genres.slice(0, 2)) db.upsertTrackVector(genre, [1, 0, 0], null);
-  assert.equal(buildGenreSuggest().hasEmbeddings, false);
+  assert.equal((await reread()).hasEmbeddings, false);
   for (const genre of genres.slice(2)) {
     const vector = genre === 'Orthogonal' ? [0, 1, 0] : genre === 'Opposite' ? [-1, 0, 0] : [1, 0, 0];
     db.upsertTrackVector(genre, vector, null);
   }
 
-  const result = buildGenreSuggest();
+  const result = await reread();
   const centroidOrder = db.genreCentroids().map(c => c.genre);
   assert.equal(result.hasEmbeddings, true);
   for (const genre of genres.slice(0, 11)) {
@@ -52,7 +61,7 @@ test('genre neighbours preserve ties, counts, threshold and the eight-result cap
   }
   assert.deepEqual(result.related.Orthogonal, []);
   assert.deepEqual(result.related.Opposite, []);
-  assert.strictEqual(buildGenreSuggest(), result, 'unchanged library uses the cached result');
+  assert.strictEqual(await genreSuggest(), result, 'unchanged library uses the cached result');
 });
 
 test('map status reads its count and metadata once and retains drift thresholds', () => {

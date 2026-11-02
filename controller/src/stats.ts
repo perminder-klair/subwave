@@ -10,6 +10,8 @@
 
 const MAX_TTS_CALLS = 120;
 export const ttsCalls: any[] = [];
+const MAX_SHORTLIST_PICKS = 40;
+export const shortlistPicks: any[] = [];
 
 // Recorded by audio/tts.js on every speak(): one entry per spoken segment,
 // success or failure, including whether the engine fell back to a local one.
@@ -20,6 +22,11 @@ export const ttsCalls: any[] = [];
 export function recordTts(call: any) {
   ttsCalls.unshift(call);
   if (ttsCalls.length > MAX_TTS_CALLS) ttsCalls.length = MAX_TTS_CALLS;
+}
+
+export function recordShortlistPick(call: any) {
+  shortlistPicks.unshift(call);
+  if (shortlistPicks.length > MAX_SHORTLIST_PICKS) shortlistPicks.length = MAX_SHORTLIST_PICKS;
 }
 
 // --- generic helpers ----------------------------------------------------
@@ -49,6 +56,17 @@ function latencyStats(values) {
   };
 }
 
+export function summarizeShortlistPicks(calls: any[]) {
+  const primary = calls.filter(call => call.primary && typeof call.ms === 'number');
+  const latency = latencyStats(primary.map(call => call.ms));
+  // Five completed primary picks avoids treating a cold-start outlier as a
+  // station characteristic. 30s is deliberately conservative until then.
+  const warningMs = primary.length >= 5
+    ? Math.max(30_000, Math.ceil((latency.p95 * 1.5) / 1000) * 1000)
+    : 30_000;
+  return { count: primary.length, latency, warningMs, warmingUp: primary.length < 5 };
+}
+
 // --- cost estimation ----------------------------------------------------
 
 // Rough per-1M-token USD pricing for the cloud providers SUB/WAVE can be
@@ -67,12 +85,26 @@ const PRICING = [
   { provider: 'google',    match: 'pro',         in: 1.25,  out: 5 },
 ];
 
+// A gateway serves someone else's model, so it is priced as the family its
+// model id names. Only the model part is read: "openai-compatible" itself
+// names no family.
+const GATEWAYS = new Set(['openai-compatible', 'openrouter', 'requesty', 'gateway']);
+
+function gatewayFamily(model: string): string | null {
+  if (model.includes('claude')) return 'anthropic';
+  if (model.includes('gemini')) return 'google';
+  if (/gpt-|(^|[/:])o[13]($|-)/.test(model)) return 'openai';
+  return null;
+}
+
 // modelLabel is "<provider>:<model>[:…]" as built by llm/provider.js.
 export function estimateCost(modelLabel, usage) {
   const label = (modelLabel || '').toLowerCase();
-  const provider = label.split(':')[0];
+  const [provider, ...rest] = label.split(':');
+  const model = rest.join(':');
   if (provider === 'ollama') return { usd: 0, priced: true };
-  const row = PRICING.find(p => p.provider === provider && label.includes(p.match));
+  const family = GATEWAYS.has(provider) ? gatewayFamily(model) : provider;
+  const row = family && PRICING.find(p => p.provider === family && model.includes(p.match));
   if (!row) return { usd: 0, priced: false };
   const usd = (usage.input / 1e6) * row.in + (usage.output / 1e6) * row.out;
   return { usd, priced: true };
@@ -80,9 +112,34 @@ export function estimateCost(modelLabel, usage) {
 
 // --- LLM summary --------------------------------------------------------
 
+// A failed call that ran for the whole agent deadline: what the Dash redline
+// means by "hitting fallbacks" (#392). djAgent's own deadline is recorded at or
+// past it. A cancellation is a failure record too, carrying
+// GenerationCancelledError's message, and it counts only when its cause names
+// a deadline: the simple-segment and co-hosted pool paths cancel their djObject
+// call AT the agent deadline (it has none of its own), and their timer starts
+// before withFailover's clock, so the record can land a few ms short of it.
+// Any other cancellation is the caller walking away, not the model running slow.
+// The Leanings review has the same skew without the cancellation: it wraps its
+// djObject in withDeadline at the agent deadline, whose AgentDeadlineError is
+// recorded as-is and names the budget it enforced ("… exceeded 45000ms
+// deadline"), so a named budget at least the agent's counts as well.
+const CANCELLED_RE = /cancelled by caller/i;
+const DEADLINE_CAUSE_RE = /deadline/i;
+const NAMED_BUDGET_RE = /exceeded (\d+)ms deadline/;
+
+export function isDeadlineHit(c, agentTimeoutMs: number): boolean {
+  if (!c || c.ok !== false || typeof c.ms !== 'number') return false;
+  if (CANCELLED_RE.test(String(c.error ?? ''))) return DEADLINE_CAUSE_RE.test(String(c.causeMessage ?? ''));
+  if (c.ms >= agentTimeoutMs) return true;
+  const budget = NAMED_BUDGET_RE.exec(String(c.error ?? ''));
+  return budget != null && Number(budget[1]) >= agentTimeoutMs;
+}
+
 // Roll the LLM call ring (llm/log.js recentCalls) into success/latency/token
 // /cost totals plus per-kind and per-model breakdowns. `calls` is newest-first.
-export function summarizeLlm(calls) {
+// `agentTimeoutMs` is the live agent deadline; without it `deadlineHits` is null.
+export function summarizeLlm(calls, { agentTimeoutMs }: { agentTimeoutMs?: number } = {}) {
   const ok = calls.filter(c => c.ok);
   const tokens = { input: 0, output: 0, total: 0 };
   let cost = 0;
@@ -147,6 +204,18 @@ export function summarizeLlm(calls) {
     failed: calls.length - ok.length,
     successRate: calls.length ? ok.length / calls.length : null,
     latency: latencyStats(calls.map(c => c.ms).filter(n => typeof n === 'number')),
+    // Successful calls only, for the Dash DJ Latency needle: a failed call's
+    // duration is how long it took to give up (a timeout, a retry budget), not
+    // how long the DJ takes to answer. On a ring of 20 calls or fewer (just
+    // after a restart) one such failure IS the all-calls p95; on a full ring it
+    // takes 5% of calls. `latency` above stays all-calls for Stats.
+    okLatency: latencyStats(ok.map(c => c.ms).filter(n => typeof n === 'number')),
+    // The needle above can no longer reach the deadline on the agent path (a
+    // successful agent run finishes under it by construction), so the Dash
+    // redlines on this count instead.
+    deadlineHits: typeof agentTimeoutMs === 'number' && agentTimeoutMs > 0
+      ? calls.filter(c => isDeadlineHit(c, agentTimeoutMs)).length
+      : null,
     tokens: anyTokens ? tokens : null,
     cost: anyTokens ? { usd: cost, complete: allPriced } : null,
     byKind,
@@ -178,6 +247,11 @@ function groupCalls(calls, keyFn, keyName) {
 export function summarizeTts(calls) {
   const ok = calls.filter(c => c.ok);
   const fellBack = calls.filter(c => c.fellBack);
+  // The one slowest render and what it was, so the page can name it.
+  let slowest: { ms: number; kind: string | null } | null = null;
+  for (const c of calls) {
+    if (typeof c.ms === 'number' && (!slowest || c.ms > slowest.ms)) slowest = { ms: c.ms, kind: c.kind || null };
+  }
   return {
     window: 120,
     count: calls.length,
@@ -187,6 +261,7 @@ export function summarizeTts(calls) {
     fallbackRate: calls.length ? fellBack.length / calls.length : null,
     latency: latencyStats(calls.map(c => c.ms).filter(n => typeof n === 'number')),
     chars: calls.reduce((a, c) => a + (c.chars || 0), 0),
+    slowest,
     byEngine: groupCalls(calls, c => c.engine, 'engine'),
     byKind: groupCalls(calls, c => c.kind, 'kind'),
   };

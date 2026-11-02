@@ -30,7 +30,7 @@ const forecast = (temp: number) => new Response(JSON.stringify({
   current: { temperature_2m: temp, weather_code: 0, is_day: 1 },
 }));
 
-function stubForecast(t: TestContext, answer: () => Promise<Response>) {
+function stubForecast(t: TestContext, answer: (url: string) => Promise<Response>) {
   let n = 0;
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -39,7 +39,7 @@ function stubForecast(t: TestContext, answer: () => Promise<Response>) {
       n++;
       return new Response(JSON.stringify({ results: [{ name: 'Leeds', country: 'UK', latitude: 53.8, longitude: -1.55 }] }));
     }
-    if (url.includes('api.open-meteo.com')) { n++; return answer(); }
+    if (url.includes('api.open-meteo.com')) { n++; return answer(url); }
     throw new Error(`unexpected fetch ${url}`);
   });
   return () => n;
@@ -118,4 +118,19 @@ test('GET /geocode needs the admin credential and bounds the query', async (t) =
   const body = await ok.json() as { results: Array<{ name: string }> };
   assert.equal(body.results[0]?.name, 'Leeds');
   assert.equal(fetches(), 1);
+});
+
+// #1411: onboarding saved Buenos Aires while the running context kept Punjab.
+test('a settings.update weather change reaches the next context fetch without a restart', async t => {
+  invalidateWeatherCache();
+  const urls: string[] = [];
+  const fetches = stubForecast(t, async url => { urls.push(url); return forecast(25); });
+  assert.equal((await getWeather()).location, 'Punjab');
+  await settings.update({ weather: {
+    lat: -34.6037, lng: -58.3816,
+    locationName: 'Buenos Aires, Buenos Aires F.D., Argentina', units: 'metric',
+  } });
+  assert.equal((await getWeather()).location, 'Buenos Aires, Buenos Aires F.D., Argentina');
+  assert.equal(fetches(), 2, 'changed coordinates bypass the old 30-minute cache entry');
+  assert.match(urls[1], /latitude=-34\.6037&longitude=-58\.3816/);
 });

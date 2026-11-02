@@ -14,8 +14,10 @@
 // Run: npm test -- album-guard-run
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { alternativeAlbumCandidates, runAlbumGuard } from '../src/broadcast/dj-agent/album-guard.js';
+import { albumGuardAnchorRoot, alternativeAlbumCandidates, runAlbumGuard } from '../src/broadcast/dj-agent/album-guard.js';
+import { runArtistGuard } from '../src/broadcast/dj-agent/artist-guard.js';
 import { albumKey, artistRootKey } from '../src/music/recency.js';
 
 type Cand = {
@@ -116,6 +118,191 @@ for (const window of [0, 5]) {
     assert.equal(h.calls.repick, 0);
   });
 }
+
+// ── the anchor, whatever the artist guard decided (L2) ─────────────────────
+
+// Production, 8 Oct (trace 412fbc72), replayed: "Jesse James Bolero" by Prefab
+// Sprout on air (the pick anchor). The run's only discovery call returned the
+// on-air track's neighbours; the agent picked Cocosuma off "Reindeer Show The
+// Way", an album aired 10 min earlier. The artist guard KEPT it (Cocosuma was
+// a recent artist, every alternative too: spacing yielded). The album guard
+// then had one other-album candidate — Prefab Sprout — starved on the recent
+// window, waived the artist exclusion and aired Prefab Sprout twice in a row.
+const onAir: Cand = { id: 'p0', title: 'Jesse James Bolero', artist: 'Prefab Sprout', album: 'Jordan: The Comeback' };
+const cocosuma: Cand = { id: 'c0', title: 'Sparks', artist: 'Cocosuma', album: 'Reindeer Show The Way' };
+const cocosumaPick: Cand = { id: 'c2', title: 'Mocking Stars', artist: 'Cocosuma', album: 'Reindeer Show The Way' };
+const prefab: Cand = { id: 'p2', title: 'Earth, the Story So Far', artist: 'Prefab Sprout', album: 'Crimson/Red' };
+
+function replay(avoidAnchorRoot: string) {
+  const h = harness({ repick: (alt) => alt.get(prefab.id) ?? null });
+  return {
+    h,
+    out: runAlbumGuard<Cand>({
+      song: cocosumaPick, object: { id: cocosumaPick.id },
+      seen: seenOf(cocosumaPick, prefab),
+      recentAlbums: albumsOf(cocosuma),
+      avoidArtistRoots: rootsOf('Prefab Sprout', 'Cocosuma'),
+      avoidAnchorRoot, albumKeyOf: albumKey, hours: 12, ...h.deps,
+    }),
+  };
+}
+
+test('the old call-site rule reproduces the repeat: no artist re-pick, no anchor', async () => {
+  const { h, out } = replay('');
+  const r = await out;
+  assert.equal(r.kind, 'repicked');
+  assert.equal(r.kind === 'repicked' && r.song.artist, 'Prefab Sprout', 'the on-air artist again');
+  assert.equal(h.calls.repick, 1);
+});
+
+test('with the anchor always passed, the on-air artist is never the album re-pick', async () => {
+  const { h, out } = replay(albumGuardAnchorRoot(onAir, cocosumaPick, false));
+  const r = await out;
+  assert.equal(r.kind, 'kept', 'an album repeat beats the same artist twice in a row');
+  assert.equal(h.calls.repick, 0, 'and it costs no model call');
+});
+
+test('a pick kept because only the anchor artist had another record says so, not "one album"', async () => {
+  // The run surfaced Crimson/Red; the booth must not claim every candidate
+  // came off the recent record, or the operator diagnosing the repeat is told
+  // the run was single-album.
+  const { h, out } = replay(albumGuardAnchorRoot(onAir, cocosumaPick, false));
+  await out;
+  assert.equal(h.events[0].payload.reason, 'only-anchor-artist');
+  assert.equal(h.events[0].payload.anchorSkipped, 1);
+  assert.match(h.lines[0], /only other-album candidate\(s\) were by the pick-anchor artist/);
+  assert.doesNotMatch(h.lines[0], /every candidate in the run came off it/);
+});
+
+test('alternatives count what the anchor exclusion removed', () => {
+  const { alt, anchorSkipped } = alternativeAlbumCandidates(
+    seenOf(cocosumaPick, prefab, clash), albumsOf(cocosuma), albumKey, new Set(), artistRootKey('Prefab Sprout'),
+  );
+  assert.deepEqual([...alt.keys()], [clash.id]);
+  assert.equal(anchorSkipped, 1);
+  assert.equal(
+    alternativeAlbumCandidates(seenOf(kidA2, clash), albumsOf(kidA1), albumKey).anchorSkipped, 0,
+    'no anchor, nothing skipped',
+  );
+});
+
+test('albumGuardAnchorRoot: the anchor artist on every agent pick, nothing for an episode or a conceded repeat', () => {
+  assert.equal(albumGuardAnchorRoot(onAir, cocosumaPick, false), artistRootKey('Prefab Sprout'));
+  assert.equal(albumGuardAnchorRoot(onAir, cocosumaPick, true), '', 'an episode runs no artist guard, by design');
+  assert.equal(albumGuardAnchorRoot(null, cocosumaPick, false), '', 'no anchor, no exclusion');
+  assert.equal(albumGuardAnchorRoot({ artist: 'The Clash' }, cocosumaPick, false), artistRootKey('Clash'));
+  assert.equal(albumGuardAnchorRoot(onAir, prefab, false), '', 'the pick already IS the anchor artist');
+  assert.equal(
+    albumGuardAnchorRoot(onAir, { artist: 'Prefab Sprout • Thomas Dolby' }, false), '',
+    'a credit overlapping the anchor is the same conceded repeat',
+  );
+});
+
+test('the agent path wires the album guard through albumGuardAnchorRoot, with the surviving pick', () => {
+  // The bug lived at the call site, not in the guard, so pin the call site.
+  const src = readFileSync(new URL('../src/broadcast/dj-agent.ts', import.meta.url), 'utf8');
+  assert.match(src, /avoidAnchorRoot:\s*albumGuardAnchorRoot\(pickAnchor,\s*song,\s*!!episodeSource\)/);
+  assert.doesNotMatch(src, /avoidAnchorRoot:\s*guarded\.kind === 'repicked'/, 'the old re-pick-only rule is gone');
+});
+
+// ── both guards, composed as pickViaSelectionRoute composes them ───────────
+
+// The real artist guard, then the real album guard on whatever pick it left
+// standing, with the anchor root resolved through the same helper the call
+// site uses. The album guard alone cannot show the conceded case below: it
+// only arises when the artist guard hands back an anchor-artist pick as kept.
+async function composeGuards(o: {
+  song: Cand; pickAnchor: Cand; seen: Map<string, Cand>;
+  neighbourRoots: Set<string>; recentAlbums: Set<string>;
+  rescue: 'queued' | 'empty' | 'collision';
+  repick?: (alt: Map<string, Cand>) => Cand | null;
+}) {
+  const h = harness({ repick: o.repick });
+  const guarded = await runArtistGuard<Cand>({
+    song: o.song, object: { id: o.song.id }, pickAnchor: o.pickAnchor, seen: o.seen,
+    recentRoots: o.neighbourRoots, window: 5, poolRescue: async () => o.rescue, ...h.deps,
+  });
+  const song = guarded.kind === 'repicked' ? guarded.song : o.song;
+  const album = guarded.kind === 'rescued' ? null : await runAlbumGuard<Cand>({
+    song, object: { id: song.id }, seen: o.seen, recentAlbums: o.recentAlbums,
+    avoidArtistRoots: o.neighbourRoots,
+    avoidAnchorRoot: albumGuardAnchorRoot(o.pickAnchor, song, false),
+    albumKeyOf: albumKey, hours: 6, ...h.deps,
+  });
+  return { h, guarded, album };
+}
+
+for (const rescue of ['empty', 'collision'] as const) {
+  test(`a conceded anchor repeat (pool rescue ${rescue}) still moves off the on-air record`, async () => {
+    // A discography-style run: the agent picked another track off the record
+    // on air, and every other candidate is by that same artist. The artist
+    // guard fires on the anchor, the pool has nothing else, and it concedes
+    // the repeat. Excluding the anchor in the album guard now could not stop
+    // that repeat — it would only strip Steve McQueen and air the same record
+    // back to back as well.
+    const langley: Cand = { id: 'l0', title: 'Cars and Girls', artist: 'Prefab Sprout', album: 'From Langley Park to Memphis' };
+    const langleyPick: Cand = { id: 'l1', title: 'The King of Rock n Roll', artist: 'Prefab Sprout', album: 'From Langley Park to Memphis' };
+    const mcqueen: Cand = { id: 'm1', title: 'Appetite', artist: 'Prefab Sprout', album: 'Steve McQueen' };
+    const { h, guarded, album } = await composeGuards({
+      song: langleyPick, pickAnchor: langley, seen: seenOf(langleyPick, mcqueen),
+      neighbourRoots: rootsOf('Prefab Sprout'), recentAlbums: albumsOf(langley),
+      rescue, repick: (alt) => alt.get(mcqueen.id) ?? null,
+    });
+    assert.equal(guarded.kind, 'kept', 'the artist guard conceded the anchor repeat');
+    assert.equal(album?.kind, 'repicked', 'the album cooldown still does its job');
+    assert.equal(album?.kind === 'repicked' && album.song.album, 'Steve McQueen');
+    assert.equal(h.calls.repick, 1, 'one album re-pick, nothing more');
+  });
+}
+
+test('a conceded anchor repeat still prefers another artist\'s record when the run has one', async () => {
+  // The artist guard offered The Clash and the model declined; the pool had
+  // nothing. The album guard's neighbour preference (the anchor is in the
+  // window) still steers its re-pick away from the anchor artist.
+  const langley: Cand = { id: 'l0', title: 'Cars and Girls', artist: 'Prefab Sprout', album: 'From Langley Park to Memphis' };
+  const langleyPick: Cand = { id: 'l1', title: 'The King of Rock n Roll', artist: 'Prefab Sprout', album: 'From Langley Park to Memphis' };
+  const mcqueen: Cand = { id: 'm1', title: 'Appetite', artist: 'Prefab Sprout', album: 'Steve McQueen' };
+  let call = 0;
+  const { guarded, album } = await composeGuards({
+    song: langleyPick, pickAnchor: langley, seen: seenOf(langleyPick, mcqueen, clash),
+    neighbourRoots: rootsOf('Prefab Sprout'), recentAlbums: albumsOf(langley), rescue: 'empty',
+    repick: (alt) => {
+      call += 1;
+      if (call === 1) return null;
+      assert.deepEqual([...alt.keys()], [clash.id], 'the anchor artist only as a starved fallback');
+      return clash;
+    },
+  });
+  assert.equal(guarded.kind, 'kept');
+  assert.equal(album?.kind === 'repicked' && album.song.artist, 'The Clash');
+});
+
+test('composed: the trace\'s kept spacing pick never re-picks onto the anchor artist', async () => {
+  const { h, guarded, album } = await composeGuards({
+    song: cocosumaPick, pickAnchor: onAir, seen: seenOf(cocosumaPick, prefab),
+    neighbourRoots: rootsOf('Prefab Sprout', 'Cocosuma'), recentAlbums: albumsOf(cocosuma),
+    rescue: 'empty', repick: (alt) => alt.get(prefab.id) ?? null,
+  });
+  assert.equal(guarded.kind, 'kept', 'spacing yielded: every alternative was a recent artist');
+  assert.equal(album?.kind, 'kept', 'no Prefab Sprout straight after Prefab Sprout');
+  assert.equal(h.calls.repick, 0);
+});
+
+test('composed: a successful artist re-pick keeps its anchor exclusion', async () => {
+  // The re-pick is never by the anchor, so the helper still passes it, and the
+  // album guard cannot walk the slot back onto the artist just avoided.
+  const doolittle: Cand = { id: 'd0', title: 'Debaser', artist: 'Pixies', album: 'Doolittle' };
+  const doolittlePick: Cand = { id: 'd1', title: 'Hey', artist: 'Pixies', album: 'Doolittle' };
+  const surfer: Cand = { id: 'd2', title: 'Where Is My Mind?', artist: 'Pixies', album: 'Surfer Rosa' };
+  const { h, guarded, album } = await composeGuards({
+    song: doolittlePick, pickAnchor: doolittle, seen: seenOf(doolittlePick, kidA2, surfer),
+    neighbourRoots: new Set(), recentAlbums: albumsOf(doolittle, kidA1), rescue: 'empty',
+    repick: (alt) => alt.get(kidA2.id) ?? alt.get(surfer.id) ?? null,
+  });
+  assert.equal(guarded.kind === 'repicked' && guarded.song.id, kidA2.id);
+  assert.equal(album?.kind, 'kept', 'Surfer Rosa is the anchor artist: the artist-safe pick stands');
+  assert.equal(h.calls.repick, 1, 'the artist re-pick only');
+});
 
 // ── the guard ──────────────────────────────────────────────────────────────
 

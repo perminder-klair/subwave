@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { clientIp, LIMITER_MAX_KEYS } from './ratelimit.js';
 import { BoundedKeyMap } from '../util/bounded-key-map.js';
+import { envEnum } from '../util/env.js';
 
 // Admin basic auth. In production ADMIN_USER/ADMIN_PASS are MANDATORY and the
 // controller refuses to start without them; in dev the gate is opt-in.
@@ -12,6 +13,14 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 // address must survive a few typos.
 const MAX_AUTH_FAILURES = 10;
 const AUTH_LOCKOUT_MS = 15 * 60 * 1000;
+// The operator's final say over the lock. Env only: a switch inside the console
+// is out of reach at the one moment it is needed, and setting this takes the
+// same host access that reads ADMIN_PASS. Anything but `off` keeps the lock.
+const LOCKOUT_ENABLED = envEnum('ADMIN_LOCKOUT', ['on', 'off'] as const, 'on') === 'on';
+// Sent by the web console, which draws its own sign-in. Its 401 must not carry a
+// challenge: the browser's native dialog would open over the page, hold the 401
+// back from adminFetch, and replay whatever is typed to every held request.
+const CONSOLE_HEADER = 'x-subwave-console';
 
 // The strike counter is keyed on WHO is failing, and that is not always the
 // address. Behind an edge that hides client addresses (the AIO behind the
@@ -30,6 +39,11 @@ const AUTH_LOCKOUT_MS = 15 * 60 * 1000;
 //      handle); it only says "this client has signed in before", which no
 //      stranger can mint. A stranger's failures therefore land on the address
 //      counter and cannot lock out a signed-in console.
+//   3. A strike is a new GUESS, not a request. A browser tab holding a password
+//      from before a rotation sends it on every poll and on every query of a
+//      page load, and an integration does the same; counted per request, one
+//      stale credential locked the station in under a second. Repeating a guess
+//      tests nothing new, so the cap on distinct guesses is exactly what it was.
 //
 // The lock still refuses the RIGHT password while it holds, because a lock that
 // admits a correct guess caps nothing — so a client WITHOUT a cookie (a first
@@ -37,10 +51,11 @@ const AUTH_LOCKOUT_MS = 15 * 60 * 1000;
 // shares its address's lock. That residual is the price of keeping the guess
 // cap: nothing on a shared address can tell a stranger from a fresh operator
 // before the password is compared.
-interface StrikeRecord { failures: number[]; lockedUntil: number }
+interface Strike { at: number; guess: string }
+interface StrikeRecord { failures: Strike[]; lockedUntil: number }
 const authStrikes = new BoundedKeyMap<StrikeRecord>({
   maxKeys: LIMITER_MAX_KEYS,
-  isLive: (rec, now) => rec.lockedUntil > now || rec.failures.some(t => now - t < AUTH_LOCKOUT_MS),
+  isLive: (rec, now) => rec.lockedUntil > now || rec.failures.some(s => now - s.at < AUTH_LOCKOUT_MS),
 });
 
 const DEVICE_COOKIE = 'subwave_admin_device';
@@ -52,6 +67,12 @@ const DEVICE_SECRET = randomBytes(32);
 
 function deviceMac(id: string): string {
   return createHmac('sha256', DEVICE_SECRET).update(id).digest('base64url');
+}
+
+// Keyed, so the strike table never holds anything a password can be tested
+// against. Prefixed, so it can never equal a device MAC.
+function guessMac(authorization: string): string {
+  return createHmac('sha256', DEVICE_SECRET).update(`guess:${authorization}`).digest('base64url');
 }
 
 // The verified device id, or null for an absent, malformed or forged cookie.
@@ -104,6 +125,9 @@ export function assertAdminConfigured() {
     process.exit(1);
   }
   console.log(`[auth] admin gate ${ADMIN_AUTH_REQUIRED ? 'ENABLED' : 'disabled (set ADMIN_USER+ADMIN_PASS to enable)'}`);
+  if (ADMIN_AUTH_REQUIRED && !LOCKOUT_ENABLED) {
+    console.warn('[auth] admin lockout DISABLED (ADMIN_LOCKOUT=off): password guesses are not limited');
+  }
 }
 
 function authenticateAdmin(req, res, next, challenge = true) {
@@ -116,12 +140,13 @@ function authenticateAdmin(req, res, next, challenge = true) {
   const now = Date.now();
   const device = deviceIdFrom(req);
   const key = device ? `device:${device}` : `ip:${clientIp(req)}`;
-  const rec = authStrikes.get(key);
+  const rec = LOCKOUT_ENABLED ? authStrikes.get(key) : undefined;
 
   if (rec && rec.lockedUntil > now) {
     const retryAfter = Math.ceil((rec.lockedUntil - now) / 1000);
     res.setHeader('Retry-After', String(retryAfter));
-    return res.status(429).json({ error: 'too many failed attempts, try again later' });
+    // `code` tells this lock from an admin route's own 429.
+    return res.status(429).json({ error: 'too many failed attempts, try again later', code: 'admin_locked' });
   }
 
   const header = req.headers.authorization || '';
@@ -143,20 +168,25 @@ function authenticateAdmin(req, res, next, challenge = true) {
   // Only a presented password is a guess. A request with no Basic header tested
   // nothing, and counting it let any page that probes an admin route unsigned
   // spend a shared address's strikes.
-  if (header.startsWith('Basic ')) {
+  if (LOCKOUT_ENABLED && header.startsWith('Basic ')) {
     // A lapsed lock starts a fresh window, or the next wrong attempt re-locks
     // immediately and the operator gets one try every 15 minutes.
     const entry: StrikeRecord = rec && rec.lockedUntil === 0 ? rec : { failures: [], lockedUntil: 0 };
-    entry.failures = entry.failures.filter(t => now - t < AUTH_LOCKOUT_MS);
-    entry.failures.push(now);
-    if (entry.failures.length >= MAX_AUTH_FAILURES) {
-      entry.lockedUntil = now + AUTH_LOCKOUT_MS;
-      entry.failures = [];
+    entry.failures = entry.failures.filter(s => now - s.at < AUTH_LOCKOUT_MS);
+    // A repeat keeps its original timestamp, so a stale poller's one strike
+    // still decays by time like any other (rule 1).
+    const guess = guessMac(header);
+    if (!entry.failures.some(s => s.guess === guess)) {
+      entry.failures.push({ at: now, guess });
+      if (entry.failures.length >= MAX_AUTH_FAILURES) {
+        entry.lockedUntil = now + AUTH_LOCKOUT_MS;
+        entry.failures = [];
+      }
     }
     authStrikes.set(key, entry, now);
   }
 
-  if (challenge) res.setHeader('WWW-Authenticate', 'Basic realm="SUB/WAVE admin"');
+  if (challenge && !req.headers[CONSOLE_HEADER]) res.setHeader('WWW-Authenticate', 'Basic realm="SUB/WAVE admin"');
   return res.status(401).json({ error: 'admin auth required' });
 }
 

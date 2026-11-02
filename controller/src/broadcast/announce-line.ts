@@ -40,6 +40,21 @@ export interface AnnounceLineOptions {
 }
 
 /**
+ * Can the station frame these names in a line of composed English itself? Not
+ * for a persona that speaks something other than English, and not for a name
+ * in a script an English frame can't carry. announceLine's gate, shared with
+ * the request claim guard's plain copy (util/request-claim.ts, #1918) so the
+ * two composed-English lines can't disagree about when they may air.
+ */
+export function composedEnglishFits(persona: unknown, ...names: unknown[]): boolean {
+  const language = String(
+    (persona as { language?: unknown } | null | undefined)?.language ?? '',
+  ).trim();
+  if (language && !ENGLISH_LANGUAGE.test(language)) return false;
+  return names.every((name) => !NON_LATIN_NAME.test(String(name ?? '')));
+}
+
+/**
  * `This is <artist>.` or `Next up, <artist>.` — or `''` when the station
  * cannot compose the line itself and the model has to write it: no artist to
  * name, a persona that speaks something other than English, or an artist tag
@@ -52,11 +67,7 @@ export function announceLine(
   { lastLine = null, currentIsOnAir = false }: AnnounceLineOptions = {},
 ): string {
   const trimmed = String(artist ?? '').trim();
-  if (!trimmed || NON_LATIN_NAME.test(trimmed)) return '';
-  const language = String(
-    (persona as { language?: unknown } | null | undefined)?.language ?? '',
-  ).trim();
-  if (language && !ENGLISH_LANGUAGE.test(language)) return '';
+  if (!trimmed || !composedEnglishFits(persona, trimmed)) return '';
   const form = currentIsOnAir ? 'this-is' : nextAnnounceForm(lastLine);
   return form === 'this-is' ? `This is ${trimmed}.` : `Next up, ${trimmed}.`;
 }

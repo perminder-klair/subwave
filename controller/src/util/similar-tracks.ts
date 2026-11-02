@@ -2,7 +2,7 @@
 // fields; exclude tagger provenance, era trust and audioMoods.
 // library.tracksLikeThisAudio already applies the blocklist.
 import { resolveEraYear } from '../music/era-year.js';
-import { isInstrumental } from '../music/lyric-vocal.js';
+import { isInstrumental, type VocalEvidence } from '../music/lyric-vocal.js';
 
 // The default matches subwave_search_library's 12-result page.
 export const SIMILAR_LIMIT_DEFAULT = 12;
@@ -85,7 +85,7 @@ export function similarTracksOutcome(i: SimilarOutcomeInputs): SimilarOutcome {
 }
 
 /** The narrow row shape the KNN hands back (library slimTrack + `_similarity`). */
-export interface SimilarSourceRow {
+export interface SimilarSourceRow extends VocalEvidence {
   id?: string;
   title?: string | null;
   artist?: string | null;
@@ -100,7 +100,6 @@ export interface SimilarSourceRow {
   durationSec?: number | null;
   bpm?: number | null;
   musicalKey?: string | null;
-  vocalRanges?: unknown[] | null;
   _similarity?: number | null;
 }
 
@@ -137,8 +136,8 @@ export function publicSimilarTrack(t: SimilarSourceRow): PublicSimilarTrack {
     energy: t.energy ?? null,
     bpm: t.bpm ?? null,
     musicalKey: t.musicalKey ?? null,
-    // [] = analysed, no vocals detected; null = never analysed.
-    instrumental: isInstrumental(t.vocalRanges),
+    // Shared measured-duration classification; null = unknown.
+    instrumental: isInstrumental(t),
     similarity: typeof t._similarity === 'number' ? t._similarity : null,
   };
 }

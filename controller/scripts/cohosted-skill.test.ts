@@ -120,7 +120,7 @@ test('pool mode fetches in code and makes ONE structured call — never a tool l
   // call), so it stood down every tick after a full wasted agent run.
   const settings = await import('../src/settings.js');
   await settings.load();
-  await settings.update({ llm: { pickerAgent: false } });
+  await settings.update({ llm: { pickerAgent: false, segmentRuntime: 'direct' } });
   try {
     let toolCalls = 0;
     const capability = {
@@ -140,13 +140,13 @@ test('pool mode fetches in code and makes ONE structured call — never a tool l
     assert.match(String(objectArgs.prompt), /Bakersfield/, 'the fetched source data is inlined into the prompt');
     assert.ok(objectArgs.signal, 'the unbounded djObject call carries a deadline signal');
   } finally {
-    await settings.update({ llm: { pickerAgent: true } });
+    await settings.update({ llm: { pickerAgent: true, segmentRuntime: 'agentic' } });
   }
 });
 
 test('pool mode stands a grounded discussion down BEFORE any model call', async () => {
   const settings = await import('../src/settings.js');
-  await settings.update({ llm: { pickerAgent: false } });
+  await settings.update({ llm: { pickerAgent: false, segmentRuntime: 'direct' } });
   try {
     for (const returned of [{ available: false }, { error: 'search offline' }]) {
       const capability = {
@@ -164,7 +164,7 @@ test('pool mode stands a grounded discussion down BEFORE any model call', async 
       assert.ok(result.reason);
     }
   } finally {
-    await settings.update({ llm: { pickerAgent: true } });
+    await settings.update({ llm: { pickerAgent: true, segmentRuntime: 'agentic' } });
   }
 });
 
@@ -206,6 +206,34 @@ test('a solo show stands a forced co-hosted skill down — reported, not thrown'
     !queue.djLog.some((e: any) => e.kind === 'error'),
     'a solo hour is not an error condition',
   );
+});
+
+const answering = (lines: { speaker: string; text: string }[]) => ({
+  capability: { kind: 'case-discussion', desc: 'Discuss one case.' },
+  host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
+  runAgent: async () => ({ object: { reason: 'Tests.', air: true, lines }, steps: 0, toolCalls: [] }),
+});
+
+test('a discussion of nothing but stand-ins is a stand-down, even when forced', async () => {
+  // A speaker label is what a model adds most readily, so it comes off first.
+  const result = await runCohostedCapability(answering([
+    { speaker: 'p_host', text: 'placeholder' },
+    { speaker: 'p_ada', text: 'Ada: TBD' },
+    { speaker: 'p_sol', text: '[Insert reply here]' },
+  ]));
+  assert.equal(result.aired, false);
+  assert.equal(result.lines, null);
+  assert.match(String(result.reason), /stand-in/);
+});
+
+test('a stand-in among real lines is left out of what the run reports', async () => {
+  const result = await runCohostedCapability(answering([
+    full.lines[0],
+    { speaker: 'p_ada', text: 'placeholder' },
+    full.lines[2],
+  ]));
+  assert.equal(result.aired, true);
+  assert.deepEqual(result.lines?.map((line) => line.persona.id), ['p_host', 'p_sol']);
 });
 
 test('the programme producer is only offered a co-hosted kind when the episode has guests', async () => {

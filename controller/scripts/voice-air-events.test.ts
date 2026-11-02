@@ -2,12 +2,11 @@
 // and how each degrades on a mixer that predates the marker.
 
 import assert from 'node:assert/strict';
+import { listen as listenHttp } from './test-utils/http.js';
 import test, { after } from 'node:test';
-import { createServer, type Server } from 'node:http';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, unlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AddressInfo } from 'node:net';
 
 // config.ts resolves state paths at import time, so STATE_DIR comes first.
 const STATE = mkdtempSync(join(tmpdir(), 'subwave-voice-'));
@@ -361,7 +360,7 @@ interface Received { event: string; body: Record<string, any> }
 
 async function withHookServer(fn: (received: Received[]) => Promise<void>) {
   const received: Received[] = [];
-  const server: Server = createServer((req, res) => {
+  const { server, port, close } = await listenHttp((req, res) => {
     let raw = '';
     req.on('data', c => { raw += c; });
     req.on('end', () => {
@@ -372,8 +371,6 @@ async function withHookServer(fn: (received: Received[]) => Promise<void>) {
       res.writeHead(200).end('ok');
     });
   });
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
-  const { port } = server.address() as AddressInfo;
   setCache({
     stream: { bufferSeconds: 22 },
     webhooks: [{
@@ -390,7 +387,7 @@ async function withHookServer(fn: (received: Received[]) => Promise<void>) {
     setCache(null);
     // undici keeps the connection alive, so close() alone never resolves.
     server.closeAllConnections();
-    await new Promise<void>(r => server.close(() => r()));
+    await close();
   }
 }
 

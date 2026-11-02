@@ -3,6 +3,7 @@
 // cold recovery, without discarding editorial continuity.
 
 import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { after, test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,11 +22,7 @@ const SARA = { ...template, id: 'p_sara', name: 'Sara' };
 const WESTIN = { ...template, id: 'p_westin', name: 'DJ Westin' };
 const SHOW_ID = 's_relay';
 
-function weekFor(showId: string | null) {
-  const week: Record<number, (string | null)[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill(showId);
-  return week;
-}
+function weekFor(showId: string | null) { return fullScheduleWeek(showId); }
 
 function show(personaId: string) {
   return {

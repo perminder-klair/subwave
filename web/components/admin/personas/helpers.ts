@@ -4,7 +4,7 @@ import {
   CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE,
 } from './constants';
 import { CLOUD_PROVIDER_ENV_KEY, cloudProviderLabel } from '../tts/cloudProviderMeta';
-import { PERSONA_TTS_INHERIT, resolvePersonaVoiceSlot } from '../../../lib/schemas.generated';
+import { PERSONA_TTS_INHERIT, resolvePersonaVoiceSlot, takeoverShowId } from '../../../lib/schemas.generated';
 
 /**
  * The slot a persona will actually be voiced by: the 'inherit' sentinel
@@ -111,6 +111,53 @@ export function personasEqual(a: Persona | undefined, b: Persona | undefined): b
   const canonical = (p: Persona) =>
     JSON.stringify({ ...p, avatar: '', skills: [...p.skills].sort() });
   return canonical(a) === canonical(b);
+}
+
+// What deleting this persona takes with it. The controller never refuses the
+// removal: the post-patch integrity sweep (`prepareUpdate` in
+// controller/src/settings.ts) deletes every show the persona hosts, along with
+// those shows' schedule hours and any takeover pinning one, and drops it from
+// guest line-ups. Reads the SAVED shows, the same list the sweep will see.
+//
+// `live` is the takeover as GET /schedule reports it (already null once expired
+// or dangling) plus the moment the operator asked; `now` re-checks expiry
+// because that read can be up to a cache lifetime old. A Default-programming
+// takeover pins no show, so it never ends with one.
+export function personaRemovalImpact(
+  personaId: string,
+  data: SettingsResponse | null,
+  live: { override: { showId?: string | null; expiresAt?: number } | null; now: number } | null = null,
+): { hosts: string[]; guestOn: string[]; endsTakeoverOf: string | null } {
+  const shows = Array.isArray(data?.values?.shows) ? data.values.shows : [];
+  const label = (s: { name?: string }) => (typeof s.name === 'string' && s.name.trim()) || 'Untitled show';
+  const hosted = shows.filter(s => s.personaId === personaId);
+  const pinnedId = takeoverShowId(live?.override);
+  const pinned = pinnedId && typeof live?.override?.expiresAt === 'number' && live.override.expiresAt > live.now
+    ? hosted.find(s => s.id === pinnedId)
+    : undefined;
+  return {
+    hosts: hosted.map(label),
+    guestOn: shows
+      .filter(s => s.personaId !== personaId && Array.isArray(s.guestPersonaIds) && s.guestPersonaIds.includes(personaId))
+      .map(label),
+    endsTakeoverOf: pinned ? label(pinned) : null,
+  };
+}
+
+// Which persona the local "default" points at once a delete has landed. An
+// unsaved "Set as default" survives unless it named the deleted persona;
+// otherwise the default follows the controller's re-point (or the baseline's,
+// for a persona that was never saved). Always lands on a surviving row.
+export function activeAfterDelete(o: {
+  current: string;
+  deletedId: string;
+  baselineActive: string | null;
+  serverActive: string | null;
+  remainingIds: string[];
+}): string {
+  const unsavedChoice = o.current !== o.deletedId && o.current !== o.baselineActive;
+  const candidates = unsavedChoice ? [o.current] : [o.serverActive, o.baselineActive];
+  return [...candidates, o.remainingIds[0]].find(id => !!id && o.remainingIds.includes(id)) ?? o.current;
 }
 
 export function initialsFor(name: string): string {

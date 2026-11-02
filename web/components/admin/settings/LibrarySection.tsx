@@ -12,40 +12,20 @@ import {
 } from '../../ui/select';
 import { Card, Btn, Seg } from '../ui';
 import { Advanced } from './section-chrome';
-import { EmbeddingProviderSelector } from '../embedding/EmbeddingProviderSelector';
+import { ProviderPicker } from '../llm/ProviderPicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
-import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { EMBED_MODEL_SUGGESTIONS, LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { EMBEDDING_PROVIDER_IDS } from '../../../lib/schemas.generated';
 import { cn } from '../../../lib/cn';
 import { HeaderRowsEditor } from './LlmSection';
+import { effectiveCompatMode } from './compat-mode';
+import { scrobbleReadiness } from './ScrobbleSection';
+import { lastfmTrackTagsBlocker } from './lastfm-track-tags';
 import {
   SectionHeader, SaveBar, KeyStatus,
   headerMap,
   type SectionProps,
 } from './shared';
-
-// Ollama wants the short tag, not an HF/locca repo id (those 404). dim is
-// shown so an already-tagged library can be matched.
-const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
-  ollama: [
-    { id: 'nomic-embed-text', dim: 768 },
-    { id: 'mxbai-embed-large', dim: 1024 },
-    { id: 'bge-m3', dim: 1024 },
-    { id: 'all-minilm', dim: 384 },
-  ],
-  openai: [
-    { id: 'text-embedding-3-small', dim: 1536 },
-    { id: 'text-embedding-3-large', dim: 3072 },
-  ],
-  google: [{ id: 'text-embedding-004', dim: 768 }],
-  openrouter: [
-    { id: 'openai/text-embedding-3-small', dim: 1536 },
-    { id: 'openai/text-embedding-3-large', dim: 3072 },
-  ],
-  requesty: [
-    { id: 'openai/text-embedding-3-small', dim: 1536 },
-    { id: 'openai/text-embedding-3-large', dim: 3072 },
-  ],
-};
 
 const LLM_BATCH_SIZES = [5, 10, 25] as const;
 
@@ -56,6 +36,7 @@ interface LibrarySectionProps extends SectionProps {
 
 export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LibrarySectionProps) {
   const e = form.embedding;
+  const trackTagsBlocker = lastfmTrackTagsBlocker(scrobbleReadiness(form, data).lfApiKeySet, e.enrichment.lastfmTags);
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
   const [compatEmbedKeyInput, setCompatEmbedKeyInput] = useState('');
 
@@ -103,6 +84,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         batchSize: parseInt(e.batchSize, 10) || 25,
         enrichment: {
           lastfmTags: e.enrichment.lastfmTags,
+          lastfmTrackTags: e.enrichment.lastfmTrackTags,
           lyrics: e.enrichment.lyrics,
         },
         // Write only when typed; getRedacted()'s 'set' sentinel is ignored
@@ -126,13 +108,14 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
 
   const savedEmbedding = data.values?.embedding || {};
   const llmProvider = data.values?.llm?.provider || 'ollama';
+  // The chat connection's mode as in force, `auto` resolved to its detection.
+  const llmCompatMode = effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary);
   const effectiveProvider = e.provider || llmProvider;
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
   // Embedding-capable subset, not the full LLM list: deepseek, gateway and
   // anthropic have no embeddings endpoint (#493, #522).
-  const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
+  const embedProviders = data.embedding?.providers || [...EMBEDDING_PROVIDER_IDS];
   // Keep a stale explicit choice visible so the Select isn't blank.
   const providers = e.provider && !embedProviders.includes(e.provider)
     ? [e.provider, ...embedProviders]
@@ -351,11 +334,14 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           )}
           <div className="field">
             <Label>Provider</Label>
-            <EmbeddingProviderSelector
+            <ProviderPicker
               // A blank stored provider resolves to the DJ's provider, so the
               // grid always shows an explicit selection (no "Follow LLM" card).
               value={effectiveProvider}
+              // The embedding-capable ids, possibly with a stale explicit choice
+              // prepended.
               providerIds={providers}
+              label="Embedding provider"
               env={data.env}
               onChange={v =>
                 setForm(f => ({ ...f, embedding: { ...f.embedding, provider: v } }))
@@ -485,7 +471,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                {effectiveProvider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
+                {effectiveProvider === 'openai-compatible' && llmCompatMode === 'hosted'
                   ? <>Leave blank to use the chat service&apos;s embedding endpoint. For Azure, enter a different resource URL ending in <code>/openai/v1</code> only when embeddings live on another resource. Enter the embedding deployment name above. </>
                   : <>Embeddings need a <strong>dedicated</strong> server when a local chat server cannot embed. </>}
                 {effectiveProvider === 'locca' ? (
@@ -495,7 +481,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                     with <code>locca embed nomic</code>. Override only for a
                     non-default port or remote host.
                   </>
-                ) : form.llm.compatibleMode === 'hosted' ? null : (
+                ) : llmCompatMode === 'hosted' ? null : (
                   <>
                     Leave blank only if this server itself does embeddings;
                     otherwise run a separate embedding server (
@@ -809,6 +795,43 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 }))
               }
             />
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Last.fm track tags</div>
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                Last.fm tags above describe the artist, so every song by an act
+                gets the same list. This adds each song&apos;s own tags ahead of
+                them, so two songs by one artist can read differently. It needs
+                one Last.fm call per track, about 50 minutes on a 10,000-track
+                library, on the next tagging run and resuming on the runs after
+                it, then re-embeds the tracks that changed.
+              </div>
+            </div>
+            {trackTagsBlocker ? (
+              <div className="text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
+                {trackTagsBlocker}
+              </div>
+            ) : (
+              <Seg
+                accent
+                value={e.enrichment.lastfmTrackTags ? 'on' : 'off'}
+                options={[
+                  { id: 'off', label: 'Off' },
+                  { id: 'on', label: 'On' },
+                ]}
+                onChange={v =>
+                  setForm(f => ({
+                    ...f,
+                    embedding: {
+                      ...f.embedding,
+                      enrichment: { ...f.embedding.enrichment, lastfmTrackTags: v === 'on' },
+                    },
+                  }))
+                }
+              />
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">

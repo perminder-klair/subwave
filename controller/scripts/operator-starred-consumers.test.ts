@@ -14,9 +14,10 @@
 
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-operator-starred-'));
 process.env.STATE_DIR = root;
@@ -81,10 +82,10 @@ before(async () => {
       } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
   };
 });
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   library.shutdown();
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 function snapshot() {

@@ -1,15 +1,23 @@
 'use client';
 
-// AXO — the player drawn as a hi-fi stack at 30° isometric. The drawing is the
-// interface (see AxoScene); the column beside it carries the facts a drawing
-// can't, and the dashed construction lines before tune-in are the gate.
+// AXO — the player as a hi-fi stack drawn in pen at 30° isometric. The
+// drawing is the interface (see AxoScene); the column beside it is a brushed
+// plate in Unit SW-9's hardware carrying the facts a drawing can't, the
+// now-playing card on display glass, and the dimmed glass before tune-in is
+// the gate. Focus
+// mode (desktop, F) folds the column away and hands the now-playing card to the
+// open dust cover, lit as a screen (screen.ts lays it out).
 // Desktop and mobile are two trees switched by CSS rather than a JS media
-// query, so SSR paints the right one first; the hidden scene's loop idles.
+// query, so SSR paints the right one first. Each tree has a drawing of its own
+// (a portrait tablet's mobile tree draws the desk scene), but once hydrated
+// only the one on screen stays mounted: each is some 450 SVG nodes and a
+// loop, and the skin re-renders every second.
 
-import { useEffect, useRef, useState } from 'react';
-import { Play, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { PanelLeftClose, PanelLeftOpen, Play, X } from 'lucide-react';
 import styles from './Axo.module.css';
 import AxoScene, { type AxoSceneProps } from './AxoScene';
+import type { LidScreenInfo } from './screen';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -39,6 +47,7 @@ import {
   tuningStatus,
   turnClock,
 } from '../shared';
+import { CAP_CENTRE, CAP_CENTRE_16 } from '../capCentre';
 import {
   useDjOnAir,
   useRequestSlip,
@@ -51,6 +60,9 @@ import type { SkinProps } from '../types';
 
 const OFFLINE_COPY = 'Nothing is on the stream right now. Power is disabled until the station comes back.';
 
+/** Focus mode is a listener's own preference, remembered per browser. */
+const FOCUS_KEY = 'subwave:axo-focus';
+
 /** Clip a label to the width of the window it's printed in. */
 function fit(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
@@ -59,6 +71,30 @@ function fit(s: string, max: number): string {
 function counterOf(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** Which drawing the viewport shows, by the breakpoints the trees below are
+ *  switched on: the desktop tree from lg, a portrait tablet's desk scene from
+ *  sm, the phone's scene otherwise. */
+type Layout = 'desk' | 'tablet' | 'mobile';
+const DESK_QUERY = '(min-width: 64rem)';
+const TABLET_QUERY = '(min-width: 40rem) and (orientation: portrait)';
+
+function subscribeLayout(onChange: () => void): () => void {
+  const lists = [DESK_QUERY, TABLET_QUERY].map(q => window.matchMedia(q));
+  for (const l of lists) l.addEventListener('change', onChange);
+  return () => { for (const l of lists) l.removeEventListener('change', onChange); };
+}
+
+function layoutNow(): Layout {
+  if (window.matchMedia(DESK_QUERY).matches) return 'desk';
+  return window.matchMedia(TABLET_QUERY).matches ? 'tablet' : 'mobile';
+}
+
+/** Null through SSR and hydration, so all three drawings hydrate as the
+ *  server printed them; the one on screen after that. */
+function useLayout(): Layout | null {
+  return useSyncExternalStore(subscribeLayout, layoutNow, () => null);
 }
 
 export default function AxoSkin(_props: SkinProps) {
@@ -97,6 +133,7 @@ export default function AxoSkin(_props: SkinProps) {
         ? 'now playing — muted'
         : 'now playing — side a';
   const statusText = tuningStatus(phase, muted);
+  // The display scrolls a line too long for its window, so this only caps it.
   const lcd = fit(
     offline
       ? 'OFF AIR · NO SIGNAL'
@@ -105,7 +142,7 @@ export default function AxoSkin(_props: SkinProps) {
         : phase === 'connecting'
           ? 'TUNING IN…'
           : [title, artist].filter(Boolean).join(' — ').toUpperCase(),
-    26,
+    64,
   );
 
   const adjustVolume = useVolumeNudge();
@@ -119,6 +156,26 @@ export default function AxoSkin(_props: SkinProps) {
   });
   const closeReq = () => { setReqOpen(false); slip.reset(); };
 
+  // Focus mode (desktop): the column folds away and the dust cover becomes a
+  // screen carrying its facts. Hydrated in an effect to avoid an SSR mismatch;
+  // `focusMoved` holds the column's glide back until the listener toggles, so
+  // a remembered focus mode doesn't animate shut on every load.
+  const [focus, setFocus] = useState(false);
+  const [focusMoved, setFocusMoved] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(FOCUS_KEY) === '1') setFocus(true);
+    } catch {}
+  }, []);
+  const toggleFocus = () => {
+    setFocusMoved(true);
+    setFocus(v => {
+      const next = !v;
+      try { localStorage.setItem(FOCUS_KEY, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
+
   useKeyboardShortcuts({
     space: handleTune,
     k: handleTune,
@@ -126,12 +183,29 @@ export default function AxoSkin(_props: SkinProps) {
     arrowdown: () => adjustVolume(-0.05),
     m: toggleMute,
     r: () => { if (!showTuneIn) setReqOpen(true); },
-    // Only while the card is up, so Escape still reaches menus otherwise.
-    escape: reqOpen ? closeReq : undefined,
+    f: toggleFocus,
+    // Only while the card is up or focus is on, so Escape still reaches
+    // menus otherwise. The card closes first.
+    escape: reqOpen ? closeReq : focus ? toggleFocus : undefined,
   });
 
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  useDynamicStyle(rootRef, { '--pf': ratio ?? 0 });
+  const layout = useLayout();
+  const shows = (l: Layout) => layout == null || layout === l;
+
+  // The scene is memoised, so all it's handed must hold still between ticks.
+  // The tune-in gate's handlers are new every render, so it gets fixed ones
+  // that call the latest.
+  const gate = useRef({ tuneInFromOverlay, handleTune });
+  gate.current = { tuneInFromOverlay, handleTune };
+  const onGateTap = useCallback(() => gate.current.tuneInFromOverlay(), []);
+  const onPower = useCallback(() => gate.current.handleTune(), []);
+  const onRequest = useCallback(() => setReqOpen(true), []);
+  const likeTrack = like.like;
+  const onLike = useCallback(() => void likeTrack(), [likeTrack]);
+  const likeState = useMemo(
+    () => ({ available: like.available, liked: like.liked, count: like.count, pending: like.pending }),
+    [like.available, like.liked, like.count, like.pending],
+  );
 
   const scene: Omit<AxoSceneProps, 'variant'> = {
     phase,
@@ -142,34 +216,45 @@ export default function AxoSkin(_props: SkinProps) {
     counter: live ? counterOf(elapsed) : '--:--',
     duration: nowPlaying?.duration ? fmtTime(nowPlaying.duration) : 'LIVE',
     lcd,
-    tapeLabel: fit((artist || stationName).toUpperCase(), 24),
+    tapeLabel: fit((artist || stationName).toUpperCase(), 22),
     djName,
     bpm: typeof nowPlaying?.bpm === 'number' ? nowPlaying.bpm : null,
     calm,
     audioRef,
-    like: { available: like.available, liked: like.liked, count: like.count, pending: like.pending },
+    like: likeState,
     gateTap: showOverlay && !offline,
-    onGateTap: tuneInFromOverlay,
-    onPower: handleTune,
+    onGateTap,
+    onPower,
     onMute: toggleMute,
-    onVolume: v => setVolume(v),
-    onRequest: () => setReqOpen(true),
-    onLike: () => void like.like(),
+    onVolume: setVolume,
+    onRequest,
+    onLike,
   };
 
+  // The column's facts, worded for the cover's screen.
+  const next = upNext[0];
+  const screen: LidScreenInfo | null = focus
+    ? {
+        eyebrow: talk ? `on air — ${djName}` : offline ? 'off air · no signal' : eyebrow,
+        onAir: talk,
+        title,
+        artist,
+        detail: offline ? '' : [nowPlaying?.album, nowPlaying?.year].filter(Boolean).join(' · '),
+        elapsed: offline ? '--:--' : fmtTime(elapsed),
+        duration: nowPlaying?.duration && !offline ? fmtTime(nowPlaying.duration) : 'live',
+        ratio: offline ? null : ratio,
+        foot: offline
+          ? null
+          : talk && voice
+            ? { kind: 'quote', text: voice.text }
+            : next
+              ? { kind: 'next', text: [next.title ?? '—', next.artist].filter(Boolean).join(' — ') }
+              : null,
+      }
+    : null;
+
   const progress = (size: 'lg' | 'sm') => (
-    <div className={cn('flex items-center', size === 'lg' ? 'gap-3 pt-1.5' : 'gap-2.5')}>
-      <span className={cn('font-mono font-bold tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
-        {fmtTime(elapsed)}
-      </span>
-      <div className="relative h-[6px] flex-1 bg-[color-mix(in_oklab,var(--ink)_14%,var(--bg))]">
-        <div className={cn('absolute inset-y-0 left-0 bg-[var(--accent)]', ratio == null ? 'w-full opacity-40' : styles.progFill)} />
-        {ratio != null && <div className={cn('absolute -top-[3.5px] h-[13px] w-[3px] bg-ink', styles.progHead)} />}
-      </div>
-      <span className={cn('font-mono text-muted tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
-        {nowPlaying?.duration ? fmtTime(nowPlaying.duration) : 'live'}
-      </span>
-    </div>
+    <Progress size={size} elapsed={elapsed} ratio={ratio} duration={nowPlaying?.duration} />
   );
 
   const eyebrowEl = offline ? (
@@ -181,7 +266,7 @@ export default function AxoSkin(_props: SkinProps) {
 
   const onAirTag = (
     <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
-      <span className={cn('size-[7px] rounded-full bg-[var(--accent)]', styles.pulse)} />
+      <span className={cn('size-[7px] rounded-full', styles.ledOn, styles.pulse)} />
       on air — {djName}
     </span>
   );
@@ -189,12 +274,7 @@ export default function AxoSkin(_props: SkinProps) {
   const statusBar = (pad: string) => (
     <div className={cn('flex flex-none items-center gap-4 border-t border-ink bg-field font-mono text-[10px] tracking-[0.16em] uppercase', pad)}>
       <span className={cn('flex items-center gap-2 font-bold whitespace-nowrap', powered ? 'text-[var(--accent)]' : 'text-muted')}>
-        <span
-          className={cn(
-            'size-2 rounded-full',
-            powered ? 'bg-[var(--accent)]' : 'border border-[var(--muted)]',
-          )}
-        />
+        <span className={cn('size-2 rounded-full', powered ? styles.ledOn : styles.ledOff)} />
         {statusText}
       </span>
       {listenerCount != null && (
@@ -216,7 +296,7 @@ export default function AxoSkin(_props: SkinProps) {
   );
 
   return (
-    <div ref={rootRef} className="absolute inset-0 overflow-hidden bg-bg font-sans text-ink">
+    <div className="absolute inset-0 overflow-hidden bg-bg font-sans text-ink">
       {/* ── Desktop ─────────────────────────────────────────────── */}
       <div className="absolute inset-0 hidden flex-col lg:flex">
         <div className="flex flex-none items-center justify-between gap-6 border-b border-ink px-8 py-1.5">
@@ -224,11 +304,12 @@ export default function AxoSkin(_props: SkinProps) {
             <span className="font-display text-[22px] font-extrabold tracking-[0.02em]">{stationName.toUpperCase()}</span>
             <span className="font-mono text-[10px] tracking-[0.24em] whitespace-nowrap text-muted uppercase">axo-1 · hi-fi stack</span>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <div className="flex items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase">
+          {/* One baseline for the run; the icons sit on its cap centre. */}
+          <div className="flex shrink-0 items-baseline gap-3 font-mono text-[11px]">
+            <div className="flex items-baseline gap-3 tracking-[0.16em] uppercase">
               {showName && (
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <Play className="size-2.5 flex-none fill-current" />
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <Play className={cn('size-2.5 flex-none fill-current', CAP_CENTRE)} />
                   <span className="max-w-[18vw] truncate">{showName}</span>
                 </span>
               )}
@@ -237,117 +318,142 @@ export default function AxoSkin(_props: SkinProps) {
                 <span className="max-w-[22vw] truncate border-l border-soft-border pl-3 text-muted">{contextLine(context)}</span>
               )}
             </div>
-            <ThemeSwitcher />
+            <button
+              type="button"
+              onClick={toggleFocus}
+              aria-pressed={focus}
+              aria-label="Focus mode"
+              title={focus ? 'Show the column (F)' : 'Focus — fold the column away (F)'}
+              className={cn(
+                'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none',
+                CAP_CENTRE_16,
+                focus ? 'text-[var(--accent)]' : 'text-muted hover:text-ink',
+              )}
+            >
+              {focus
+                ? <PanelLeftOpen className="size-4" aria-hidden="true" />
+                : <PanelLeftClose className="size-4" aria-hidden="true" />}
+            </button>
+            <ThemeSwitcher className={CAP_CENTRE_16} />
           </div>
         </div>
 
         <div className="flex min-h-0 flex-1">
-          <div className="flex w-[clamp(380px,32vw,460px)] flex-none flex-col gap-[22px] overflow-hidden border-r border-ink px-8 pt-8 pb-6">
-            <div className="flex flex-col gap-2.5">
-              {eyebrowEl}
-              <div className="line-clamp-3 font-display text-[clamp(40px,4.2vw,60px)] leading-[0.95] font-extrabold tracking-[-0.01em] text-balance italic">
-                {title}
+          <div
+            className={cn(
+              'flex-none overflow-hidden border-r border-ink',
+              styles.plate,
+              styles.side,
+              focus && styles.sideFocus,
+              focusMoved && styles.sideMoves,
+            )}
+          >
+            <div className="flex h-full w-[clamp(380px,32vw,460px)] flex-col gap-[26px] overflow-hidden px-6 pt-8 pb-6">
+              <div className={cn(styles.bay, styles.glassBay, !powered && styles.dimGlass, 'flex flex-none flex-col gap-2.5 px-5 pt-6 pb-5')}>
+                <span className={styles.legend}>Display</span>
+                {eyebrowEl}
+                <div className={cn(styles.dotTitle, 'line-clamp-3 text-[clamp(30px,2.9vw,42px)] leading-[1.08] text-balance')}>
+                  {title}
+                </div>
+                {offline ? (
+                  <span className="text-[15px] leading-relaxed text-pretty text-muted">{OFFLINE_COPY}</span>
+                ) : (
+                  <>
+                    {artist && <span className="truncate font-mono text-[14px] tracking-[0.14em] uppercase">{artist}</span>}
+                    {(nowPlaying?.album || nowPlaying?.year) && (
+                      <span className="truncate font-mono text-[11px] tracking-[0.12em] text-muted uppercase">
+                        {[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
+                    {(meta.facts.length > 0 || meta.moods.length > 0) && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {meta.facts.map(f => <Badge key={f} variant="ink" className="whitespace-nowrap">{f}</Badge>)}
+                        {meta.moods.map(m => <Badge key={m} variant="accent" className="whitespace-nowrap">{m}</Badge>)}
+                      </div>
+                    )}
+                    {progress('lg')}
+                  </>
+                )}
               </div>
-              {offline ? (
-                <span className="text-[15px] leading-relaxed text-pretty text-muted">{OFFLINE_COPY}</span>
-              ) : (
+
+              {!offline && (
                 <>
-                  {artist && <span className="truncate font-mono text-[14px] tracking-[0.14em] uppercase">{artist}</span>}
-                  {(nowPlaying?.album || nowPlaying?.year) && (
-                    <span className="truncate font-mono text-[11px] tracking-[0.12em] text-muted uppercase">
-                      {[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}
-                    </span>
-                  )}
-                  {(meta.facts.length > 0 || meta.moods.length > 0) && (
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {meta.facts.map(f => <Badge key={f} variant="ink" className="whitespace-nowrap">{f}</Badge>)}
-                      {meta.moods.map(m => <Badge key={m} variant="accent" className="whitespace-nowrap">{m}</Badge>)}
+                  {voice && (
+                    <div className={cn(styles.bay, 'flex flex-none flex-col gap-2.5 px-4 pt-5 pb-4')}>
+                      <span className={styles.legend}>Booth</span>
+                      {talk ? (
+                        <>
+                          {onAirTag}
+                          <span className="line-clamp-5 font-display text-[22px] leading-[1.35] font-medium text-pretty italic">
+                            “{voice.text}”
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-mono text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
+                            last on air · {turnClock(voice.t, timezone, stationLocale)} — {djName}
+                          </span>
+                          <span className="line-clamp-4 font-display text-[17px] leading-[1.45] font-medium text-pretty italic">
+                            “{voice.text}”
+                          </span>
+                        </>
+                      )}
                     </div>
                   )}
-                  {progress('lg')}
-                </>
-              )}
-            </div>
-
-            {!offline && (
-              <>
-                <div className="h-px flex-none bg-soft-border" />
-                {voice && (
-                  <div className="flex flex-col gap-2.5">
-                    {talk ? (
-                      <>
-                        {onAirTag}
-                        <span className="line-clamp-5 font-display text-[22px] leading-[1.35] font-medium text-pretty italic">
-                          “{voice.text}”
-                        </span>
-                      </>
+                  <div className={cn(styles.bay, 'flex flex-none flex-col pt-2.5')}>
+                    <span className={styles.legend}>Next on the stack</span>
+                    {upNext.length > 0 ? (
+                      upNext.map((t, i) => (
+                        <div
+                          key={`${t.title ?? i}-${i}`}
+                          className={cn('flex items-center gap-3 px-3.5 py-2.5', i < upNext.length - 1 && 'border-b border-soft-border')}
+                        >
+                          <span className={cn('font-mono text-[9px] tracking-[0.18em]', i === 0 ? 'text-[var(--accent)]' : 'text-muted')}>
+                            {i === 0 ? 'CUED' : 'THEN'}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[14px] font-bold">{t.title ?? '—'}</div>
+                            {t.artist && <div className="truncate text-[11px] text-muted">{t.artist}</div>}
+                          </div>
+                        </div>
+                      ))
                     ) : (
-                      <>
-                        <span className="font-mono text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
-                          last on air · {turnClock(voice.t, timezone, stationLocale)} — {djName}
-                        </span>
-                        <span className="line-clamp-4 font-display text-[17px] leading-[1.45] font-medium text-pretty italic">
-                          “{voice.text}”
-                        </span>
-                      </>
+                      <div className="px-3.5 py-2.5 font-mono text-[11px] text-muted">
+                        nothing cued — {djName} picks at the run-out
+                      </div>
                     )}
                   </div>
-                )}
-                <div className="flex flex-none flex-col border border-ink">
-                  <div className="border-b border-line px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
-                    next on the stack
-                  </div>
-                  {upNext.length > 0 ? (
-                    upNext.map((t, i) => (
-                      <div
-                        key={`${t.title ?? i}-${i}`}
-                        className={cn('flex items-center gap-3 px-3.5 py-2.5', i < upNext.length - 1 && 'border-b border-soft-border')}
-                      >
-                        <span className={cn('font-mono text-[9px] tracking-[0.18em]', i === 0 ? 'text-[var(--accent)]' : 'text-muted')}>
-                          {i === 0 ? 'CUED' : 'THEN'}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-[14px] font-bold">{t.title ?? '—'}</div>
-                          {t.artist && <div className="truncate text-[11px] text-muted">{t.artist}</div>}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="px-3.5 py-2.5 font-mono text-[11px] text-muted">
-                      nothing cued — {djName} picks at the run-out
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+                </>
+              )}
 
-            {!talk && history.length > 0 && (
-              <div className="flex w-full flex-none flex-col gap-0.5">
-                <span className="pb-1.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">recently spun</span>
-                {history.map((h, i) => (
-                  <div
-                    key={`${entryTime(h) ?? ''}-${h.title ?? i}`}
-                    className="flex gap-3 border-b border-soft-border py-[5px] text-[13px] last:border-b-0"
-                  >
-                    <span className="pt-0.5 font-mono text-[10px] text-muted tabular-nums">
-                      {turnClock(entryTime(h), timezone, stationLocale)}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">
-                      <b>{h.title ?? '—'}</b>
-                      {h.artist && <> — {h.artist}</>}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+              {!talk && history.length > 0 && (
+                <div className={cn(styles.bay, 'flex w-full flex-none flex-col gap-0.5 px-3.5 pt-4 pb-1.5')}>
+                  <span className={styles.legend}>Recently spun</span>
+                  {history.map((h, i) => (
+                    <div
+                      key={`${entryTime(h) ?? ''}-${h.title ?? i}`}
+                      className="flex gap-3 border-b border-soft-border py-[5px] text-[13px] last:border-b-0"
+                    >
+                      <span className="pt-0.5 font-mono text-[10px] text-muted tabular-nums">
+                        {turnClock(entryTime(h), timezone, stationLocale)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">
+                        <b>{h.title ?? '—'}</b>
+                        {h.artist && <> — {h.artist}</>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className={cn('relative min-w-0 flex-1', styles.gridDesk)}>
             <span className="absolute top-5 left-6 font-mono text-[9px] tracking-[0.24em] whitespace-nowrap text-muted uppercase">
-              receiver · tape · turntable — drawn at 30°
+              receiver · tape deck · turntable — 30° iso
             </span>
             <div className="absolute inset-x-4 top-9 bottom-3">
-              <AxoScene variant="desk" {...scene} />
+              {shows('desk') && <AxoScene variant="desk" {...scene} screen={screen} />}
             </div>
             {reqOpen && (
               <div className="absolute right-6 bottom-6 flex w-[360px] flex-col border border-ink bg-bg shadow-drawer">
@@ -367,7 +473,7 @@ export default function AxoSkin(_props: SkinProps) {
             {stationName.toUpperCase()}
           </span>
           <span className="min-w-0 flex-1 truncate font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
-            {showName && <><Play className="inline size-2 fill-current" /> {showName} · </>}
+            {showName && <><Play className="inline size-2 fill-current align-[calc(0.5cap-4px)]" /> {showName} · </>}
             <span className="text-[var(--accent)]">with {djName}</span>
           </span>
           <ThemeSwitcher />
@@ -386,35 +492,37 @@ export default function AxoSkin(_props: SkinProps) {
             )}
           >
             <div className="absolute inset-x-0 inset-y-1.5 sm:portrait:hidden">
-              <AxoScene variant="mobile" {...scene} />
+              {shows('mobile') && <AxoScene variant="mobile" {...scene} />}
             </div>
             <div className="absolute inset-x-4 inset-y-3 hidden sm:portrait:block">
-              <AxoScene variant="desk" {...scene} />
+              {shows('tablet') && <AxoScene variant="desk" {...scene} />}
             </div>
           </div>
 
           {/* Rows never shrink: squeezed, a clamped title collapses to
               nothing. The column clips at the bottom instead. */}
-          <div className="flex flex-none flex-col gap-1.5 overflow-hidden px-4 py-2.5 *:shrink-0 sm:portrait:px-6 sm:portrait:pb-4 landscape:min-w-0 landscape:flex-1 landscape:justify-center">
-            {eyebrowEl}
-            <div className="line-clamp-1 font-display text-[24px] leading-[1.1] font-extrabold tracking-[-0.01em] italic landscape:line-clamp-2">
-              {title}
+          <div className={cn(styles.plate, 'flex flex-none flex-col gap-2 overflow-hidden px-3 py-2.5 *:shrink-0 sm:portrait:px-6 sm:portrait:pb-4 landscape:min-w-0 landscape:flex-1 landscape:justify-center')}>
+            <div className={cn(styles.bay, styles.glassBay, !powered && styles.dimGlass, 'flex flex-col gap-1.5 px-3.5 py-2.5')}>
+              {eyebrowEl}
+              <div className={cn(styles.dotTitle, 'line-clamp-1 text-[22px] leading-[1.15] landscape:line-clamp-2')}>
+                {title}
+              </div>
+              {offline ? (
+                <span className="line-clamp-2 text-[13px] leading-snug text-muted">{OFFLINE_COPY}</span>
+              ) : (
+                <>
+                  {artist && (
+                    <span className="truncate font-mono text-[11px] tracking-[0.14em] uppercase">
+                      {artist}
+                      {nowPlaying?.year && <span className="text-muted"> · {nowPlaying.year}</span>}
+                    </span>
+                  )}
+                  {progress('sm')}
+                </>
+              )}
             </div>
-            {offline ? (
-              <span className="line-clamp-2 text-[13px] leading-snug text-muted">{OFFLINE_COPY}</span>
-            ) : (
-              <>
-                {artist && (
-                  <span className="truncate font-mono text-[11px] tracking-[0.14em] uppercase">
-                    {artist}
-                    {nowPlaying?.year && <span className="text-muted"> · {nowPlaying.year}</span>}
-                  </span>
-                )}
-                {progress('sm')}
-              </>
-            )}
             {talk && voice && (
-              <div className="flex flex-col gap-1 border-t border-soft-border pt-1.5">
+              <div className="flex flex-col gap-1 px-1">
                 {onAirTag}
                 <span className="line-clamp-2 font-display text-[14px] leading-[1.35] font-medium italic">
                   “{voice.text}”
@@ -422,7 +530,7 @@ export default function AxoSkin(_props: SkinProps) {
               </div>
             )}
             {!talk && !offline && upNext[0] && (
-              <div className="flex items-center gap-3 border-t border-soft-border pt-1.5">
+              <div className="flex items-center gap-3 px-1">
                 <span className="font-mono text-[9px] tracking-[0.18em] text-[var(--accent)]">CUED</span>
                 <div className="min-w-0 flex-1 truncate text-[13px]">
                   <b>{upNext[0].title ?? '—'}</b>
@@ -441,6 +549,33 @@ export default function AxoSkin(_props: SkinProps) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** On the glass: a lit fill, and a cream mark where the song has got to. The
+ *  track carries --pf itself: on the skin's root, its change every second
+ *  restyled every node of the drawing too. */
+function Progress({ size, elapsed, ratio, duration }: {
+  size: 'lg' | 'sm';
+  elapsed: number;
+  ratio: number | null;
+  duration: number | undefined;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  useDynamicStyle(trackRef, { '--pf': ratio ?? 0 });
+  return (
+    <div className={cn('flex items-center', size === 'lg' ? 'gap-3 pt-1.5' : 'gap-2.5')}>
+      <span className={cn('font-mono font-bold tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
+        {fmtTime(elapsed)}
+      </span>
+      <div ref={trackRef} className={cn('relative h-[5px] flex-1', styles.progTrack)}>
+        <div className={cn('absolute inset-y-0 left-0', styles.progFill, ratio == null && 'w-full opacity-40')} />
+        {ratio != null && <div className={cn('absolute -top-[4px] h-[13px] w-[3px]', styles.progMark, styles.progHead)} />}
+      </div>
+      <span className={cn('font-mono text-muted tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
+        {duration ? fmtTime(duration) : 'live'}
+      </span>
     </div>
   );
 }

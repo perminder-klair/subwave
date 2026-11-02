@@ -5,7 +5,7 @@
 // Adding a token: a descriptor here AND a :root fallback in web/app/globals.css,
 // then regenerate the mirror.
 
-export type TokenType = 'color' | 'font' | 'grain';
+export type TokenType = 'color' | 'font' | 'grain' | 'keyword';
 export type TokenGroup =
   | 'surface'
   | 'text'
@@ -25,9 +25,12 @@ export interface TokenDescriptor {
   type: TokenType;
   /** For `type: 'font'` — which curated font set the value is drawn from. */
   fontSet?: FontSet;
+  /** For `type: 'keyword'` — which closed keyword set the value is drawn from. */
+  keywordSet?: KeywordSet;
 }
 
 export type FontSet = 'display' | 'mono';
+export type KeywordSet = 'texture' | 'finish';
 
 // Curated display faces. The id is what a theme stores in --display-font; the
 // web layer resolves it to a font-family stack (next/font variables live there).
@@ -39,6 +42,8 @@ export const DISPLAY_FONT_IDS = [
   'anton',
   'chakra-petch',
   'saira-stencil-one',
+  'vt323',
+  'bricolage-grotesque',
 ] as const;
 export type DisplayFontId = (typeof DISPLAY_FONT_IDS)[number];
 
@@ -50,11 +55,26 @@ export const MONO_FONT_IDS = [
   'fira-code',
   'courier-prime',
   'overpass-mono',
+  'dm-mono',
 ] as const;
 export type MonoFontId = (typeof MONO_FONT_IDS)[number];
 
 export function fontIdsFor(set: FontSet): readonly string[] {
   return set === 'mono' ? MONO_FONT_IDS : DISPLAY_FONT_IDS;
+}
+
+// A pattern laid over the player (--texture) and a filter pass over the whole
+// player (--finish). Closed sets, because the web layer renders each value as a
+// stylesheet rule keyed off a data attribute on <html> — CSS cannot branch on a
+// custom property's value. Omitted = off, so there is no 'none'.
+export const TEXTURE_IDS = ['scanline', 'halftone'] as const;
+export type TextureId = (typeof TEXTURE_IDS)[number];
+
+export const FINISH_IDS = ['bloom', 'misregister'] as const;
+export type FinishId = (typeof FINISH_IDS)[number];
+
+export function keywordIdsFor(set: KeywordSet): readonly string[] {
+  return set === 'finish' ? FINISH_IDS : TEXTURE_IDS;
 }
 
 export const THEME_TOKENS: readonly TokenDescriptor[] = [
@@ -80,6 +100,8 @@ export const THEME_TOKENS: readonly TokenDescriptor[] = [
   { key: '--mono-font', label: 'mono font', group: 'type', type: 'font', fontSet: 'mono' },
   // Texture
   { key: '--grain', label: 'grain', group: 'texture', type: 'grain' },
+  { key: '--texture', label: 'texture', group: 'texture', type: 'keyword', keywordSet: 'texture' },
+  { key: '--finish', label: 'finish', group: 'texture', type: 'keyword', keywordSet: 'finish' },
 ] as const;
 
 export const THEME_TOKEN_KEYS: readonly string[] = THEME_TOKENS.map((t) => t.key);
@@ -100,7 +122,8 @@ export function tokenType(key: string): TokenType | undefined {
 export const COLOR_VAL_RE = /^[^;{}<>]{1,100}$/;
 
 // Colour → the safety regex. Font → a curated id, never a free font string.
-// Grain → a number in [0,1]. Unknown key → false.
+// Grain → a number in [0,1]. Keyword → a member of its closed set. Unknown key →
+// false.
 export function isValidTokenValue(key: string, value: string): boolean {
   const desc = TOKEN_BY_KEY.get(key);
   switch (desc?.type) {
@@ -108,6 +131,8 @@ export function isValidTokenValue(key: string, value: string): boolean {
       return COLOR_VAL_RE.test(value);
     case 'font':
       return fontIdsFor(desc.fontSet ?? 'display').includes(value);
+    case 'keyword':
+      return keywordIdsFor(desc.keywordSet ?? 'texture').includes(value);
     case 'grain': {
       const v = value.trim();
       // Plain decimal only: Number('') is 0 and Number('0x1') is 1, so a bare

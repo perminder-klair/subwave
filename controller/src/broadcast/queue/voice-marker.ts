@@ -1,6 +1,6 @@
 // Match voice IDs against voice-playing.json for the mixer's actual startedAt, not handoff
 // time. Polling latency does not change that timestamp. A missing marker returns null
-// immediately for older mixers. #1382.
+// immediately for unverified mixers; verified overlays wait for the first marker. #1382.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { config } from '../../config.js';
@@ -133,13 +133,16 @@ function markerFilePresent(): boolean {
 export function awaitVoiceAir(
   voiceId: string,
   timeoutMs: number = VOICE_AIR_TIMEOUT_MS,
+  { requireMarker = false }: { requireMarker?: boolean } = {},
 ): Promise<number | null> {
   const seen = _recent.get(voiceId);
   if (seen) {
     _recent.delete(voiceId);
     return Promise.resolve(seen.airedAt);
   }
-  if (!markerFilePresent()) return Promise.resolve(null);
+  // Optional overlays have already verified mixer capability. On a fresh
+  // station their first start creates this file, so absence is not a fallback.
+  if (!requireMarker && !markerFilePresent()) return Promise.resolve(null);
   startPoller();
   return new Promise<number | null>(resolve => {
     const timer = setTimeout(() => {

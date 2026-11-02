@@ -8,7 +8,7 @@
 // separator: any character that cannot be part of a name delimits two acts,
 // and one credit matching a delimited act inside the other counts as the same
 // artist, on the agent guard and on the pool picker's spacing alike.
-// Run: `tsx --test scripts/artist-credit-overlap.test.ts` (folded into `npm test`).
+// Run: `npm test -- artist-credit-overlap`.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';

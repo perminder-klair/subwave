@@ -7,6 +7,7 @@ import * as settings from '../../../settings.js';
 import { soulBrief } from '../core/pure.js';
 import { djObject } from '../strategy/object.js';
 import { buildContextLines } from './context.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471 — it dominated every segment); the dedicated
@@ -47,6 +48,7 @@ Rules:
 - Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
 - This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.
 - No greetings or sign-offs — the show is already rolling. No invented listener messages, callers, or events.
+- ${onAirLocationGrounding()}
 - Plain spoken words only: no stage directions, no asterisks, no emoji. Speaker names in supplied recap are reference-only: never prefix a spoken line with any speaker name or a name-and-colon label; the separate speaker field already routes each line to the right voice.${langClause}${settings.castHouseRulesBlock()}`;
 }
 

@@ -101,7 +101,12 @@ test('every field the pool is steered by moves the key', () => {
     filtersStrict: false,
     playlistIds: ['different-playlist'],
     playlistStrict: false,
+    // A full rotation coasts on its longest-waiting tracks (#1919), so turning
+    // it on or off changes the fallback's contents.
+    playlistExhaust: true,
     excludedPlaylistIds: ['blocked-playlist'],
+    // A clean show's coast holds different tracks.
+    excludeExplicit: true,
     maxTrackSeconds: 420,
     // The minimum-track-length floor (#1573) changes WHICH tracks the coast may
     // contain, not just how they are stamped — so it has to rebuild too.
