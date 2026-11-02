@@ -13,6 +13,7 @@ import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 import { libraryMountProven } from './library-mount.js';
+import { headTitle, normalizeTitle, tailTitle, titleVerdict } from './tag-title.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -960,8 +961,11 @@ function localPathCandidates(libRoot: string, songPath: string): { direct: strin
   };
 }
 
-// The two ends of a file, where audio formats keep their tags: ID3v2, FLAC, Ogg
-// and a fast-start M4A at the head, APE, ID3v1 and a late `moov` at the tail.
+// The two ends of a file, where tags sit: ID3v2, FLAC's and Ogg's comments and a
+// fast-start M4A's `moov` at the head, a late `moov` and ID3v1 at the tail. A
+// title outside both is never read, so that track streams: cover art ahead of it
+// (a FLAC PICTURE block, an ID3v2 APIC frame), or a late `moov` whose cover art
+// follows `©nam` and leaves the title that far from the end.
 const TAG_WINDOW_BYTES = 64 * 1024;
 
 // The same `song.size` a Subsonic server reports: the file's bytes, tags included.
@@ -974,40 +978,57 @@ function fileSizeOnDisk(file: string): number | null {
   }
 }
 
-// A byte search, not a tag parser, so one rule covers every format. The spellings
-// are the ones tags use. A title it can't find (cover art ahead of the text
-// frames, UTF-16BE, a title Navidrome took from the file name) only costs that
-// track its local play.
-function tagsHoldTitle(file: string, size: number, title: string): boolean {
-  const spellings = (['utf8', 'latin1', 'utf16le'] as const).map(encoding => Buffer.from(title, encoding));
+// Does the title field in this file's tags hold the server's title? tag-title.ts
+// reads the field of each layout as its whole value, so the same words in another
+// field, the cover art or the audio don't count. `none` is a file whose tags hold
+// no title it can read in the two windows: the field is past them, or the format
+// has no ID3, Vorbis or MP4 tags. One open, the head read, and the tail read only
+// when the head holds no title field.
+function titleInTags(file: string, size: number, title: string): 'same' | 'other' | 'none' {
   const window = Buffer.alloc(Math.min(TAG_WINDOW_BYTES, size));
   try {
     const fd = fs.openSync(file, 'r');
     try {
-      for (const from of [0, size - window.length]) {
-        const seen = window.subarray(0, fs.readSync(fd, window, 0, window.length, from));
-        if (spellings.some(spelling => seen.includes(spelling))) return true;
+      const head = window.subarray(0, fs.readSync(fd, window, 0, window.length, 0));
+      let field = headTitle(head);
+      if (field === null) {
+        // A file that fits in the window has its tail in the head already.
+        const tail = size <= window.length ? head : window.subarray(0, fs.readSync(fd, window, 0, window.length, size - window.length));
+        field = tailTitle(tail);
       }
+      return titleVerdict(field, title);
     } finally {
       fs.closeSync(fd);
     }
-  } catch { /* unreadable: not proved */ }
-  return false;
+  } catch {
+    // Unreadable: not proved.
+    return 'none';
+  }
+}
+
+// What a server's song offers as proof: its byte count and its title, or null
+// when either is missing, which streams the right song: a server that sends no
+// `size`, a shape that dropped it. Checked before any stat, so that costs nothing.
+function proofOf(song): { size: number; title: string } | null {
+  const size = Number(song.size);
+  const title = normalizeTitle(String(song.title ?? ''));
+  return Number.isSafeInteger(size) && size > 0 && title ? { size, title } : null;
 }
 
 // Is this mapped guess the track the server means? A file existing proves
 // nothing: a second library, or a mount that holds part of the library, can have
 // another song at the same folder and file name, and it would air under this
 // song's title and id. So the file has to match two things the server read from
-// the real one. The size alone isn't enough: same-length CBR files with
-// same-length tags come out byte for byte the same size. Anything missing is no
-// proof, which streams the right song: a server that sends no `size`, a shape
-// that dropped it. Checked before any stat, so that case costs nothing.
+// the real one: its size, and the title field of its tags. The size alone isn't
+// enough: same-length CBR files with same-length tags come out byte for byte the
+// same size. What's left is a different recording at the same folder and file
+// name, with the same size and the same title in its title field: the same album
+// in two editions, two compilations' `Intro`. Nothing short of the audio tells
+// those apart.
 function isRequestedFile(file: string, song): boolean {
-  const size = Number(song.size);
-  const title = String(song.title ?? '').trim();
-  if (!Number.isSafeInteger(size) || size <= 0 || !title) return false;
-  return fileSizeOnDisk(file) === size && tagsHoldTitle(file, size, title);
+  const proof = proofOf(song);
+  if (!proof) return false;
+  return fileSizeOnDisk(file) === proof.size && titleInTags(file, proof.size, proof.title) === 'same';
 }
 
 // The song's file as the CONTROLLER sees it on the MUSIC_LIBRARY_PATH mount, else
@@ -1021,8 +1042,10 @@ function isRequestedFile(file: string, song): boolean {
 // what the mixer gets next.
 //
 // Cost per call: one stat, or for a mapped path one stat per guess, which is
-// path depth - 2 on a miss, and on a hit one open and at most two reads of the
-// file that matched the size. A `size` this can't use costs no stat at all.
+// path depth - 2 on a miss, and one open and at most two 64 KiB reads for each
+// guess that matched the size. A `size` this can't use costs no stat at all. It
+// is synchronous and nothing is cached: the coast build pays it for every pool
+// track on every rebuild, and a push three times.
 export function findLibraryFile(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !song.path) return null;

@@ -31,6 +31,7 @@ import { checkNavidrome } from '../src/doctor/checks-services.js';
 import { realPathTick } from '../src/broadcast/scheduler.js';
 import { _markLibraryMountProven } from '../src/music/library-mount.js';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
+import { audioBytes, id3v2, textFrame } from './test-utils/tags.js';
 
 const express = (await import('express')).default;
 const { router: settingsRouter } = await import('../src/routes/settings/core.js');
@@ -52,9 +53,9 @@ const ODD: FakeSong = { id: 's-odd', title: 'Odd Title', artist: 'Odd Artist', a
 const VA_ONE: FakeSong = { id: 's-va-one', title: 'ONE-VA-GH-01', artist: 'One', album: 'One', tagPath: 'One/One/01 - ONE-VA-GH-01.mp3', file: 'Various Artists/Greatest Hits/01.mp3' };
 const VA_TWO: FakeSong = { ...VA_ONE, id: 's-va-two', title: 'TWO-VA-GH-01', root: '/library/two' };
 
-// A track's file: stand-in audio with its title in the tags. The fake's `size`
-// is this file's length, as a real server reports it.
-const fileBytes = (song: { title: string }) => Buffer.from(`ID3 TIT2 ${song.title} and then the audio`);
+// A track's file: an ID3v2.3 tag holding its title, then stand-in audio. The
+// fake's `size` is this file's length, as a real server reports it.
+const fileBytes = (song: { title: string }) => Buffer.concat([id3v2([textFrame('TIT2', song.title)]), audioBytes(64)]);
 
 const fake = {
   // `not-navidrome` answers 404 to everything, `no-native` only to Navidrome's own API.
