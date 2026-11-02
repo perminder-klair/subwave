@@ -206,19 +206,79 @@ test('a released dir drops its quarantine stamp', async () => {
   assert.ok(!existsSync(join(ROOT, id, '.orphaned-at')));
 });
 
-test('a pass that changed the cache keeps the usage figure, flagged stale', async () => {
-  // Deleted outright, the budget field lost its figure and a lowering Save went
-  // through with no confirm. The figure stays, and the next sweep re-measures.
+const SNAP = join(stateDir, 'stem-cache-usage.json');
+// A real walk's totals, stored as the snapshot: what a purge must keep true.
+async function storeMeasuredSnapshot(): Promise<void> {
+  rmSync(SNAP, { force: true });
+  await cache.usage();
+}
+// What a walk would find now, leaving the stored snapshot as it was.
+async function freshWalk(): Promise<{ bytes: number; dirs: number }> {
+  const kept = readFileSync(SNAP, 'utf8');
+  rmSync(SNAP, { force: true });
+  const u = await cache.usage();
+  writeFileSync(SNAP, kept);
+  return { bytes: u.bytes, dirs: u.dirs };
+}
+const liveDirs = () => readdirSync(ROOT).filter(n => !n.startsWith('.'));
+
+test('a pass\'s moves keep the stored size true, and nothing walks the cache for it', async () => {
+  // Marked stale instead, the next read walked every stem dir: on a share of
+  // ~70k dirs that held an import's stems step for 16 minutes with no worker.
+  const N = NOW_BASE + 900 * DAY;
+  // Proved the same recording (#2224): a tail-meta.json whose duration matches the row's.
+  const revival = seedStem({ tailSec: 200 });
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: N });
+  const gone = seedStem();
+  writeFileSync(join(ROOT, gone, 'tail-vocals.flac'), 'y'.repeat(4096));
+  const kept = seedStem();
+  await storeMeasuredSnapshot();
+  const rep = await purge.runOrphanPurge({ knownIds: [revival, kept, '_sentinel'], confirm: true, now: N + DAY, ...SAME });
+  assert.ok(rep.released.includes(revival), 'released one');
+  assert.ok(rep.quarantined >= 1 && existsSync(join(QU, gone)), 'quarantined one');
+  const stored = await cache.storedUsage();
+  assert.equal(stored?.fresh, true);
+  assert.equal(stored?.stale, false);
+  const walks = cache._cacheWalksForTests();
+  await cache.usage();
+  await cache.headroomTracks();
+  assert.equal(cache._cacheWalksForTests(), walks, 'the next reads use the stored size');
+  const walked = await freshWalk();
+  assert.deepEqual({ bytes: stored?.bytes, dirs: stored?.dirs }, walked, 'the stored size is what a walk finds');
+});
+
+test('deleting aged quarantines alone leaves the stored size exactly as it was', async () => {
+  // The quarantine is outside the cache total, so its deletes change nothing there.
+  const N = NOW_BASE + 920 * DAY;
+  seedStem();
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: N });
+  await storeMeasuredSnapshot();
+  const before = readFileSync(SNAP, 'utf8');
+  const rep = await purge.runOrphanPurge({ knownIds: [...liveDirs(), '_sentinel'], confirm: true, now: N + 8 * DAY });
+  assert.ok(rep.deletedCount >= 1, 'deleted for good');
+  assert.equal(rep.quarantined, 0);
+  assert.equal(readFileSync(SNAP, 'utf8'), before);
+  assert.equal((await cache.storedUsage())?.fresh, true);
+});
+
+test('with a pass writing stems, a pass\'s moves keep the figure, flagged stale', async () => {
+  // The analysis pass settles onto its own base, and a dir it wrote could be
+  // among the moved ones, so no delta goes in: the figure stays for the budget
+  // field, and the next sweep re-measures.
+  const N = NOW_BASE + 940 * DAY;
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: N });
   seedStem();
   const measuredAt = new Date().toISOString();
-  writeFileSync(join(stateDir, 'stem-cache-usage.json'), JSON.stringify({
+  writeFileSync(SNAP, JSON.stringify({
     version: 1, root: ROOT, bytes: 5_000_000_000, dirs: 400, measuredAt, updatedAt: measuredAt,
   }));
-  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 2 * DAY });
+  assert.equal(await cache.markPassPending(), true);
+  const rep = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: N + DAY });
+  assert.ok(rep.quarantined >= 1);
   const usage = await cache.storedUsage();
   assert.equal(usage?.bytes, 5_000_000_000, 'the figure is still reported');
-  assert.equal(usage?.fresh, false);
   assert.equal(usage?.stale, true);
+  rmSync(SNAP, { force: true });
 });
 
 test('a dry run leaves the usage figure as it found it', async () => {
