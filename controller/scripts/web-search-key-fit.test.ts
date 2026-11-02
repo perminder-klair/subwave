@@ -45,10 +45,7 @@ function stubSearch(t: TestContext) {
       authorization: headers.get('authorization'),
       token: headers.get('x-subscription-token'),
     });
-    // An empty answer in each provider's own shape: Brave's reply must carry web
-    // results to count as one.
-    const body = String(input).includes('search.brave.com') ? { web: { results: [] } } : { answer: '', results: [] };
-    return new Response(JSON.stringify(body), { status: 200 });
+    return new Response(JSON.stringify({ answer: '', results: [] }), { status: 200 });
   }) as typeof fetch);
   t.after(async () => {
     delete process.env.SEARCH_API_KEY;

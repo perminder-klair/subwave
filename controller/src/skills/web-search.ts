@@ -335,14 +335,27 @@ export async function braveSearch(
   });
   if (!res.ok) throw new Error(`Brave Search HTTP ${res.status}`);
   const data = await res.json();
-  if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    throw new Error('Brave Search returned malformed JSON');
-  }
-  const shape = data as Record<string, unknown>;
-  if (!('web' in shape) && !('news' in shape) && !('infobox' in shape)) {
-    throw new Error('Brave Search returned malformed JSON');
-  }
+  if (!braveShapeFits(data)) throw new Error('Brave Search returned malformed JSON');
   return parseBraveResponse(data);
+}
+
+// Brave answers a search with no results as an object with none of web, news
+// or infobox (scripts/fixtures/brave-empty.json), and that is an empty result.
+// Only a body that isn't an object, or one of those fields present in another
+// shape, is malformed.
+function braveShapeFits(data: unknown): boolean {
+  const object = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!object(data)) return false;
+  return (['web', 'news', 'infobox'] as const).every(key => {
+    const field = data[key];
+    if (field === undefined || field === null) return true;
+    if (!object(field)) return false;
+    const results = field.results;
+    if (results === undefined || results === null) return true;
+    // The infobox's results arrive as an object or a one-element array.
+    return key === 'infobox' ? typeof results === 'object' : Array.isArray(results);
+  });
 }
 
 // Strips residual markup from a search snippet. Brave and Firecrawl both pass

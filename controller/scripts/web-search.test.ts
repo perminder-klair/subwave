@@ -233,6 +233,25 @@ test('malformed provider data becomes a typed failure and is never cached', asyn
   assert.equal(calls, 2);
 });
 
+test("Brave's recorded answer with no results is an empty result through searchWeb", async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'brave', apiKey: 'fixture-key' } });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(fixture('brave-empty.json')));
+  assert.deepEqual(await searchWeb(`brave-empty-${Date.now()}`), { answer: '', results: [] });
+});
+
+test('a Brave field in the wrong shape is still a malformed reply', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'brave', apiKey: 'fixture-key' } });
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ web: { results: 'nope' } }));
+  await assert.rejects(searchWeb(`brave-shape-${Date.now()}`), error => {
+    assert.ok(isWebSearchProviderError(error));
+    assert.equal(error.provider, 'brave');
+    assert.equal(error.reason, 'malformed');
+    return true;
+  });
+});
+
 test('dispatcher honors every configured search provider without cross-provider fallback', async t => {
   await settings.load();
   const calls: string[] = [];
