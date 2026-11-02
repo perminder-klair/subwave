@@ -313,9 +313,15 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 // - a pick-time separation (broadcast/pick-stems.ts) writes one dir at a
 //   time and adds what it grew at once (settleTrackWrite);
 // - evictions are made by sweep(), which rewrites the snapshot from its walk,
-//   and by forgetStems(), which marks it `stale` as the purge does;
-// - the orphan purge marks it `stale` (markUsageStale): the next read walks, and
-//   until then the figure stays readable for the budget field;
+//   and by forgetStems() (a replaced file's stems), which measures the dirs it
+//   drops and takes them off the totals (adjustUsage);
+// - the orphan purge does the same for the dirs it moves into its quarantine
+//   or releases from it. Its deletes change nothing here: the quarantine is
+//   outside the cache total (scanDirs skips dot entries);
+// - a change that cannot be counted exactly (a delete refused part-way, a dir
+//   that cannot be measured, a pass writing right now) marks it `stale`
+//   instead (markUsageStale): the next read walks, and until then the figure
+//   stays readable for the budget field;
 // - anything else (dirs deleted or copied in by hand, a pass that died before
 //   settling) is caught by a full walk at least every SNAPSHOT_MAX_AGE_MS.
 export const SNAPSHOT_MAX_AGE_MS = 24 * 3600_000;
@@ -441,6 +447,45 @@ export async function markUsageStale(): Promise<void> {
   if (!marked) await rm(snapshotPath(), { force: true }).catch(() => {});
 }
 
+// For a writer outside the pass and the sweep that knows exactly what it
+// changed: move the stored totals by that much and keep them trusted. Marking
+// them stale instead costs the next read a full walk, and on a network share
+// holding tens of thousands of dirs that walk takes many minutes, during which
+// an import's stems step starts no worker: one replaced file, or a night's
+// purge, must not cost that. Only a snapshot the next read would use as is
+// moves; one it would walk for anyway (none, stale, too old, another root) is
+// left to that walk. With a pass writing, the delta is not applied: the pass
+// settles onto its own base, and a dir it wrote could be among the ones moved,
+// so the snapshot is marked stale as before. `measuredAt` is kept, so the
+// daily full walk still comes due on time.
+export async function adjustUsage(delta: { bytes: number; dirs: number }): Promise<'adjusted' | 'stale' | 'unchanged'> {
+  if (delta.bytes === 0 && delta.dirs === 0) return 'unchanged';
+  const { snap, verdict } = await snapshotState();
+  if (!snap) return 'unchanged';
+  if (verdict !== 'use' || !Number.isFinite(delta.bytes) || !Number.isFinite(delta.dirs)) {
+    await markUsageStale();
+    return 'stale';
+  }
+  const moved = await writeSnapshot({
+    ...snap,
+    bytes: Math.max(0, snap.bytes + delta.bytes),
+    dirs: Math.max(0, snap.dirs + delta.dirs),
+    updatedAt: new Date().toISOString(),
+  });
+  if (!moved) {
+    await rm(snapshotPath(), { force: true }).catch(() => {});
+    return 'stale';
+  }
+  return 'adjusted';
+}
+
+// What one track dir adds to the cache total, measured the way the walk
+// measures it (measureDir), so an adjusted total equals a fresh walk's.
+// Null when it cannot be read.
+export async function measuredDirBytes(dir: string): Promise<number | null> {
+  return (await measureDir(dir))?.bytes ?? null;
+}
+
 function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   if (pid === process.pid) return true;
@@ -471,10 +516,23 @@ function snapshotFromWalk(bytes: number, dirs: number, unevictableBytes: number)
   return buildSnapshot({ version: 1, root: stemsRoot(), bytes, dirs, measuredAt: now, updatedAt: now }, unevictableBytes);
 }
 
+function walkReason(snap: UsageSnapshot | null): string {
+  if (!snap) return 'no stored size';
+  if (snap.pending) return 'a pass that wrote stems did not settle';
+  if (snap.stale) return 'the stored size was marked stale';
+  if (snapshotUntrusted) return 'the stored size could not be saved';
+  return 'the stored size is over a day old';
+}
+
 async function walkUsage(): Promise<{ bytes: number; dirs: number }> {
   const before = await snapshotState();
+  // On a network share this is minutes with nothing else to show, and a caller
+  // such as an import's stems step waits on it: say so before and after.
+  const t0 = Date.now();
+  console.log(`[stem-cache] measuring the stem cache (${walkReason(before.snap)}): walking every stem folder…`);
   const scanned = await scanDirs();
   const bytes = scanned.reduce((n, d) => n + d.bytes, 0);
+  console.log(`[stem-cache] measured ${scanned.length} stem folders, ${(bytes / 1024 ** 3).toFixed(1)} GB, in ${Math.round((Date.now() - t0) / 1000)} s`);
   const after = await snapshotState();
   // A live pass owns the additive baseline. A read must not count its writes
   // into that baseline, including when the pass starts during this walk.
@@ -699,23 +757,36 @@ export async function forgetStems(trackIds: readonly string[]): Promise<{ remove
   if (!root.online) return { removed: 0, failed: 0, offline: root.message };
   let removed = 0;
   let failed = 0;
+  let freed = 0;
+  let exact = true;
   for (const id of trackIds) {
     const dir = dirFor(id);
     const there = await stat(dir).then(() => true, () => false);
     if (!there) continue;
+    const bytes = await measuredDirBytes(dir);
+    let gone = true;
     try {
       await rm(dir, { recursive: true, force: true });
+    } catch { gone = false; }
+    gone = gone && await stat(dir).then(() => false, () => true);
+    if (gone) {
       removed += 1;
-    } catch { failed += 1; }
+      if (bytes === null) exact = false;
+      else freed += bytes;
+    } else {
+      failed += 1;
+      // A delete refused part-way left some of the files: what it freed is unknown.
+      exact = false;
+    }
   }
   // The usage snapshot still counts those dirs' bytes, which would size the
-  // backfill too small (headroomTracks) until the next full walk. The walk
-  // runs in the tagger's process, so the mark goes in the file, not just an
-  // in-memory flag: whichever process sweeps next walks again.
-  if (removed > 0) {
-    snapshotUntrusted = true;
-    await markUsageStale();
-  }
+  // backfill too small (headroomTracks). They were measured before the delete,
+  // so the totals move by exactly that, and the next read needs no walk. What
+  // cannot be counted marks the snapshot stale in the file, not just in this
+  // process: the walk that drops stems is the tagger's, and whichever process
+  // reads next must walk again.
+  if (!exact) await markUsageStale();
+  else if (removed > 0) await adjustUsage({ bytes: -freed, dirs: -removed });
   return { removed, failed };
 }
 
