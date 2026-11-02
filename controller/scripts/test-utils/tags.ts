@@ -51,7 +51,8 @@ export const textFrame = (id: string, value: string, encoding: Id3Encoding = 0,
   ({ id, data: id3TextData(value, encoding, { terminator, bigEndianBom }), flags });
 
 // Frame flags in the spec's order: grouping byte, then the data length, and on
-// 2.4 unsynchronisation over all of it.
+// 2.4 unsynchronisation over all of it. The spec makes the data length optional
+// with unsynchronisation, so it is there only when asked for, or compressed.
 function id3Frame(frame: Id3Frame, version: 2 | 3 | 4): Buffer {
   if (version === 2) return Buffer.concat([latin1(frame.id), u24be(frame.data.length), frame.data]);
   const f = frame.flags ?? {};
@@ -63,15 +64,22 @@ function id3Frame(frame: Id3Frame, version: 2 | 3 | 4): Buffer {
     return Buffer.concat([latin1(frame.id), u32be(data.length), Buffer.from([flags >> 8, flags & 0xff]), data]);
   }
   const original = data.length;
-  if (f.dataLength || f.compressed || f.unsync) { flags |= 0x0001; data = Buffer.concat([syncsafe(original), data]); }
+  if (f.dataLength || f.compressed) { flags |= 0x0001; data = Buffer.concat([syncsafe(original), data]); }
   if (f.grouping) { flags |= 0x0040; data = Buffer.concat([Buffer.from([7]), data]); }
   if (f.compressed) flags |= 0x0008;
   if (f.unsync) { flags |= 0x0002; data = unsync(data); }
   return Buffer.concat([latin1(frame.id), syncsafe(data.length), Buffer.from([flags >> 8, flags & 0xff]), data]);
 }
 
-/** A whole ID3v2 tag. `unsync` on 2.2/2.3 applies to the tag; on 2.4 set it per frame. */
-export function id3v2(frames: Id3Frame[], { version = 3 as 2 | 3 | 4, padding = 64, unsync: tagUnsync = false, extended = false, footer = false } = {}): Buffer {
+/** A user text frame: a description, then its values. */
+export const txxxFrame = (description: string, value: string, encoding: Id3Encoding = 0): Id3Frame =>
+  ({ id: 'TXXX', data: id3TextData(`${description}\0${value}`, encoding) });
+
+/**
+ * A whole ID3v2 tag. `unsync` on 2.2/2.3 applies to the tag; on 2.4 set it per
+ * frame. `major` writes another version number over frames laid out as `version`.
+ */
+export function id3v2(frames: Id3Frame[], { version = 3 as 2 | 3 | 4, padding = 64, unsync: tagUnsync = false, extended = false, footer = false, major = 0 } = {}): Buffer {
   let body: Buffer = Buffer.concat(frames.map(f => id3Frame(f, version)));
   let flags = 0;
   if (extended && version === 3) { flags |= 0x40; body = Buffer.concat([u32be(6), Buffer.alloc(6), body]); }
@@ -79,7 +87,7 @@ export function id3v2(frames: Id3Frame[], { version = 3 as 2 | 3 | 4, padding = 
   if (tagUnsync && version < 4) { flags |= 0x80; body = unsync(body); }
   if (footer && version === 4) flags |= 0x10;
   body = Buffer.concat([body, Buffer.alloc(footer ? 0 : padding)]);
-  const header = (magic: string) => Buffer.concat([latin1(magic), Buffer.from([version, 0, flags]), syncsafe(body.length)]);
+  const header = (magic: string) => Buffer.concat([latin1(magic), Buffer.from([major || version, 0, flags]), syncsafe(body.length)]);
   return Buffer.concat([header('ID3'), body, footer ? header('3DI') : Buffer.alloc(0)]);
 }
 
@@ -162,14 +170,20 @@ export function ogg(kind: 'vorbis' | 'opus' | 'flac', comments: Comments, { segm
 
 // ---- MP4 --------------------------------------------------------------------
 
-const atom = (type: string | Buffer, ...payload: Buffer[]) => {
+export const atom = (type: string | Buffer, ...payload: Buffer[]) => {
   const body = Buffer.concat(payload);
   return Buffer.concat([u32be(body.length + 8), typeof type === 'string' ? latin1(type) : type, body]);
 };
 const NAM = Buffer.from([0xa9, 0x6e, 0x61, 0x6d]);
 const ALB = Buffer.from([0xa9, 0x61, 0x6c, 0x62]);
 const ART = Buffer.from([0xa9, 0x41, 0x52, 0x54]);
-const dataAtom = (value: Buffer, type: number) => atom('data', u32be(type), u32be(0), value);
+/** A `data` atom: its type and version word (1 is UTF-8, version 0), a locale, the value. */
+export const dataAtom = (value: Buffer, type: number) => atom('data', u32be(type), u32be(0), value);
+/** An iTunes freeform item, `----` with `mean`, `name` and UTF-8 values. */
+export const freeform = (name: string, values: string[], mean = 'com.apple.iTunes') =>
+  atom('----', atom('mean', u32be(0), Buffer.from(mean, 'utf8')), atom('name', u32be(0), Buffer.from(name, 'utf8')),
+    ...values.map(v => dataAtom(Buffer.from(v, 'utf8'), 1)));
+export { NAM };
 
 /**
  * An M4A: `ftyp`, then `moov` ahead of `mdat` (fast start) or after it (the default
@@ -179,16 +193,24 @@ const dataAtom = (value: Buffer, type: number) => atom('data', u32be(type), u32b
  * puts a `free` atom holding an old `ilst` with that `©nam` just ahead of `moov`,
  * as retagging in place leaves it.
  */
-export function mp4({ title, album, artist, utf16 = false }: { title?: string; album?: string; artist?: string; utf16?: boolean },
-  { layout = 'fast' as 'fast' | 'late', tables = 2000, cover = 0, audio = 4096, words = '', stale = undefined as string | undefined } = {}): Buffer {
+export function mp4({ title, album, artist, utf16 = false, subtitle }: { title?: string; album?: string; artist?: string; utf16?: boolean; subtitle?: string },
+  { layout = 'fast' as 'fast' | 'late', tables = 2000, cover = 0, audio = 4096, words = '', stale = undefined as string | undefined,
+    items = [] as Buffer[], moovExtra = [] as Buffer[], moovBefore = [] as Buffer[], fullMeta = true, trakItems = undefined as Buffer[] | undefined } = {}): Buffer {
   const text = (s: string) => utf16 ? dataAtom(Buffer.from(s, 'utf16le').swap16(), 2) : dataAtom(Buffer.from(s, 'utf8'), 1);
   const ilst = atom('ilst',
     ...(album !== undefined ? [atom(ALB, text(album))] : []),
     ...(artist !== undefined ? [atom(ART, text(artist))] : []),
     ...(title !== undefined ? [atom(NAM, text(title))] : []),
+    ...(subtitle !== undefined ? [freeform('SUBTITLE', [subtitle])] : []),
+    ...items,
     ...(cover ? [atom('covr', dataAtom(Buffer.alloc(cover, 0xd8), 13))] : []));
-  const meta = atom('meta', Buffer.alloc(4), atom('hdlr', Buffer.alloc(8), latin1('mdirappl'), Buffer.alloc(13)), ilst);
-  const moov = atom('moov', atom('mvhd', Buffer.alloc(100)), atom('trak', Buffer.alloc(tables, 0x11)), atom('udta', meta));
+  const meta = atom('meta', ...(fullMeta ? [Buffer.alloc(4)] : []), atom('hdlr', Buffer.alloc(8), latin1('mdirappl'), Buffer.alloc(13)), ilst);
+  // `tables` stands in for a trak's sample tables: a trak/mdia/minf/stbl chain, as
+  // TagLib parses it, around one leaf of that size.
+  // `trakItems` puts an ilst in the trak's own udta, ahead of the moov's.
+  const trakUdta = trakItems ? [atom('udta', atom('meta', Buffer.alloc(4), atom('ilst', ...trakItems)))] : [];
+  const trak = atom('trak', atom('mdia', atom('minf', atom('stbl', atom('stsz', Buffer.alloc(Math.max(0, tables - 32), 0x11))))), ...trakUdta);
+  const moov = atom('moov', atom('mvhd', Buffer.alloc(100)), trak, ...moovBefore, atom('udta', meta), ...moovExtra);
   const ftyp = atom('ftyp', latin1('M4A '), u32be(512), latin1('M4A isomiso2'));
   const mdat = atom('mdat', audioBytes(audio, words));
   const old = stale === undefined ? [] : [atom('free', atom('ilst', atom(NAM, text(stale))))];

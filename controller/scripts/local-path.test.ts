@@ -16,14 +16,14 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test, { after, beforeEach, type TestContext } from 'node:test';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
-import { apeTag, audioBytes, flac, id3v1, id3v2, mp4, ogg, textFrame, type Comments, type Id3Encoding, type Id3Frame } from './test-utils/tags.js';
+import { apeTag, atom, audioBytes, dataAtom, flac, freeform, id3v1, id3v2, mp4, NAM, ogg, textFrame, txxxFrame, type Comments, type Id3Encoding, type Id3Frame } from './test-utils/tags.js';
 
 const base = createTempDir(join(tmpdir(), 'subwave-local-path-'));
 process.env.STATE_DIR = join(base, 'state');
 mkdirSync(process.env.STATE_DIR, { recursive: true });
 const { findLibraryFile, getAnnotatedUri, getLocalPath, getPlayableUri, localFileState } = await import('../src/music/subsonic.js');
 const { _markLibraryMountProven } = await import('../src/music/library-mount.js');
-const { MAX_TITLE_CHARS, _ilstScan, fileTitle, normalizeTitle, titleVerdict } = await import('../src/music/tag-title.js');
+const { MAX_REPORTED_TITLE_BYTES, MAX_TAG_BYTES, _mp4Steps, cutTag, fileTitle, normalizeTitle } = await import('../src/music/tag-title.js');
 
 const SONG = 'Artist/Album/01 - Song.mp3';
 const BYTES = 4096;
@@ -329,7 +329,6 @@ const LAYOUTS: { name: string; ext: string; title: string; build: (f: Fields) =>
   { name: 'Ogg FLAC', ext: 'oga', title: 'Go', build: f => ogg('flac', comments(f), { words: f.words }) },
   { name: 'M4A, fast start', ext: 'm4a', title: WIDE, build: f => mp4({ title: f.title, album: f.album }, { layout: 'fast', words: f.words }) },
   { name: 'M4A, moov at the end', ext: 'm4a', title: 'Go', build: f => mp4({ title: f.title, album: f.album }, { layout: 'late', words: f.words }) },
-  { name: 'M4A, UTF-16 text', ext: 'm4a', title: WIDE, build: f => mp4({ title: f.title, album: f.album, utf16: true }, { words: f.words }) },
 ];
 
 // A stand-in at the guess, named with `ext`, asked for under `title` at its own size.
@@ -449,15 +448,130 @@ test('a NUL-separated ID3v2 title is its first value, as Navidrome reports it', 
   }
 });
 
-test('MP4 titles that disagree are unsure: a stale ilst left in a free atom by retagging in place', () => {
+// ---- The subtitle Navidrome appends ------------------------------------------------
+//
+// Navidrome's Subsonic API reports `Title (Subtitle)` when a file has a subtitle
+// tag (`TIT3`, a `SUBTITLE` comment, an iTunes `SUBTITLE` item), so a file whose
+// title field alone matches is another recording to Navidrome: "Intro" asked for,
+// "Intro (Remastered 2011)" on the mount. The right file matches the whole form.
+
+test('a subtitle is appended as Navidrome appends it, in each tag kind', () => {
+  const v24 = (frames: Id3Frame[]) => Buffer.concat([id3v2(frames, { version: 4 }), audioBytes(4096)]);
+  for (const [label, bytes, ext] of [
+    ['ID3v2.4 TIT3', v24([textFrame('TIT2', 'Intro', 3), textFrame('TIT3', 'Remastered 2011', 3)]), 'mp3'],
+    ['ID3v2.3 TIT3 ahead of TIT2', Buffer.concat([id3v2([textFrame('TIT3', 'Remastered 2011'), textFrame('TIT2', 'Intro')]), audioBytes(4096)]), 'mp3'],
+    ['ID3v2.2 TT3', Buffer.concat([id3v2([textFrame('TT2', 'Intro'), textFrame('TT3', 'Remastered 2011')], { version: 2 }), audioBytes(4096)]), 'mp3'],
+    ['a TXXX described SUBTITLE', v24([textFrame('TIT2', 'Intro', 3), txxxFrame('Subtitle', 'Remastered 2011', 3)]), 'mp3'],
+    ['FLAC SUBTITLE=', flac([['TITLE', 'Intro'], ['SUBTITLE', 'Remastered 2011']]), 'flac'],
+    ['FLAC subtitle=, in lower case', flac([['TITLE', 'Intro'], ['subtitle', 'Remastered 2011']]), 'flac'],
+    ['Ogg Opus SUBTITLE=', ogg('opus', [['TITLE', 'Intro'], ['SUBTITLE', 'Remastered 2011']]), 'opus'],
+    ['M4A ----:com.apple.iTunes:SUBTITLE', mp4({ title: 'Intro', subtitle: 'Remastered 2011' }), 'm4a'],
+    ['M4A, the mean in lower case', mp4({ title: 'Intro' }, { items: [freeform('SUBTITLE', ['Remastered 2011'], 'com.apple.itunes')] }), 'm4a'],
+  ] as const) {
+    assert.equal(asked(bytes, 'Intro (Remastered 2011)', ext).found, join(root, `Artist/Album/01 - Song.${ext}`), label);
+    assert.equal(asked(bytes, 'Intro', ext).found, null, `${label}: not the title alone`);
+  }
+});
+
+test('the subtitle\'s form: trimmed, bracketed unless it brings its own pair, the first value that isn\'t empty', () => {
+  const tagged = (...frames: Id3Frame[]) => Buffer.concat([id3v2([textFrame('TIT2', 'Go', 3), ...frames], { version: 4 }), audioBytes(4096)]);
+  for (const [label, bytes, title] of [
+    ['its own brackets', tagged(textFrame('TIT3', '[Live]', 3)), 'Go [Live]'],
+    ['its own parentheses, padded', tagged(textFrame('TIT3', '  (Live) ', 3)), 'Go (Live)'],
+    ['an unclosed parenthesis', tagged(textFrame('TIT3', '(Live', 3)), 'Go ((Live)'],
+    ['a mismatched pair', tagged(textFrame('TIT3', '(Live]', 3)), 'Go ((Live])'],
+    ['only spaces', tagged(textFrame('TIT3', '   ', 3)), 'Go ()'],
+    ['an empty first value', tagged(textFrame('TIT3', '\0Live', 3)), 'Go (Live)'],
+    ['TIT3, then a TXXX SUBTITLE: frame order', tagged(textFrame('TIT3', 'Live', 3), txxxFrame('SUBTITLE', 'Demo', 3)), 'Go (Live)'],
+    ['a TXXX SUBTITLE, then TIT3: frame order', tagged(txxxFrame('SUBTITLE', 'Demo', 3), textFrame('TIT3', 'Live', 3)), 'Go (Demo)'],
+    ['an empty TIT3 is none', tagged(textFrame('TIT3', '', 3)), 'Go'],
+  ] as const) {
+    assert.equal(asked(bytes, title).found, join(root, MP3), label);
+  }
+  // Two iTunes subtitle items under keys Navidrome lowers alike: it keeps one at random.
+  const two = mp4({ title: 'Go' }, { items: [freeform('SUBTITLE', ['Live']), freeform('Subtitle', ['Live'])] });
+  assert.equal(asked(two, 'Go (Live)', 'm4a').found, null, 'two iTunes subtitle items');
+  // A TXXX described as another of Navidrome's title keys would reorder them.
+  assert.equal(asked(tagged(txxxFrame('TIT3', 'Live', 3)), 'Go').found, null, 'a TXXX described TIT3');
+});
+
+test('a right file with a subtitle reads as unread, not a miss, where the server reports the title alone', () => {
+  // Navidrome with Subsonic.AppendSubtitle off, or another server.
+  const bytes = Buffer.concat([id3v2([textFrame('TIT2', 'Intro', 3), textFrame('TIT3', 'Live', 3)], { version: 4 }), audioBytes(4096)]);
+  put(join(root, MP3), bytes);
+  assert.equal(localFileState(song(`/srv/library/${MP3}`, 'Intro', bytes.length)), 'unread');
+  assert.equal(localFileState(song(`/srv/library/${MP3}`, 'Intro (Live)', bytes.length)), 'proved');
+  assert.equal(localFileState(song(`/srv/library/${MP3}`, 'Outro', bytes.length)), 'none', 'another title is a miss');
+});
+
+test('Vorbis comment keys are matched as TagLib upper-cases them, and Navidrome\'s other title keys count', () => {
+  const FLAC_SONG = 'Artist/Album/01 - Song.flac';
+  const cases: [string, Comments, string][] = [
+    ['title=', [['title', 'Go']], 'Go'],
+    ['Title=', [['Title', 'Go']], 'Go'],
+    ['title= then TITLE=: one key, in field order', [['title', 'Go'], ['TITLE', 'Up']], 'Go'],
+    ['TITLE= empty, then TITLE=Go: the empty value is dropped', [['TITLE', ''], ['TITLE', 'Go']], 'Go'],
+    ['TIT2= ahead of TITLE= in Navidrome\'s order', [['TITLE', 'Up'], ['TIT2', 'Go']], 'Go'],
+    ['a NUL ends the value', [['TITLE', 'Go\0Up']], 'Go'],
+  ];
+  for (const [label, fields, title] of cases) {
+    assert.equal(asked(flac(fields), title, 'flac').found, join(root, FLAC_SONG), label);
+  }
+  assert.equal(asked(flac([['title', 'Go'], ['TITLE', 'Up']]), 'Up', 'flac').found, null, 'the second value is not the title');
+});
+
+test('MP4 is read only at moov/udta/meta/ilst, as TagLib reads it: a stale ilst in a free atom is never the title', () => {
   const M4A = 'Artist/Album/01 - Song.m4a';
   for (const layout of ['late', 'fast'] as const) {
     const stale = mp4({ title: 'Up' }, { layout, stale: 'Go' });
     assert.equal(asked(stale, 'Go', 'm4a').found, null, `${layout}: the stale title`);
-    assert.equal(asked(stale, 'Up', 'm4a').found, null, `${layout}: nor the live one, which can't be told from it here`);
-    const agree = mp4({ title: 'Go' }, { layout, stale: 'Go' });
-    assert.equal(asked(agree, 'Go', 'm4a').found, join(root, M4A), `${layout}: two that agree`);
+    assert.equal(asked(stale, 'Up', 'm4a').found, join(root, M4A), `${layout}: the live one, which Navidrome reports`);
+    // The real ilst has no ©nam: Navidrome titles the file from its name.
+    assert.equal(asked(mp4({ album: 'Album' }, { layout, stale: 'Go' }), 'Go', 'm4a').found, null, `${layout}: no live title`);
   }
+  // A ©nam anywhere else: under a trak's udta, ahead of the moov's, or a top-level udta.
+  const trakUdta = mp4({ album: 'Album' }, { trakItems: [atom(NAM, dataAtom(Buffer.from('Go'), 1))] });
+  assert.equal(asked(trakUdta, 'Go', 'm4a').found, null, 'under trak/udta');
+  const topUdta = Buffer.concat([mp4({ album: 'Album' }), atom('udta', atom('meta', Buffer.alloc(4), atom('ilst', atom(NAM, dataAtom(Buffer.from('Go'), 1)))))]);
+  assert.equal(asked(topUdta, 'Go', 'm4a').found, null, 'a top-level udta');
+  // A meta written without version and flags (QuickTime's) is read as TagLib reads it.
+  assert.equal(asked(mp4({ title: 'Go' }, { fullMeta: false }), 'Go', 'm4a').found, join(root, M4A), 'meta without version and flags');
+});
+
+test('MP4 values are UTF-8 data atoms of version 0 only, and the first ©nam item counts', () => {
+  const M4A = 'Artist/Album/01 - Song.m4a';
+  const nam = (...data: Buffer[]) => atom(NAM, ...data);
+  const utf16 = (v: string) => dataAtom(Buffer.from(v, 'utf16le').swap16(), 2);
+  const utf8 = (v: string) => dataAtom(Buffer.from(v, 'utf8'), 1);
+  const version1 = (v: string) => dataAtom(Buffer.from(v, 'utf8'), 0x01000001);
+  for (const [label, items, title, plays] of [
+    ['UTF-16 (type 2) only', [nam(utf16('Go'))], 'Go', false],
+    ['type 2 "Go", then UTF-8 "Up"', [nam(utf16('Go'), utf8('Up'))], 'Up', true],
+    ['type 2 "Go", then UTF-8 "Up": not "Go"', [nam(utf16('Go'), utf8('Up'))], 'Go', false],
+    ['version 1', [nam(version1('Go'))], 'Go', false],
+    ['an empty value, then "Go": Navidrome drops the empty one', [nam(utf8(''), utf8('Go'))], 'Go', true],
+    ['two ©nam items: the first', [nam(utf8('Up')), nam(utf8('Go'))], 'Up', true],
+    ['two ©nam items: not the second', [nam(utf8('Up')), nam(utf8('Go'))], 'Go', false],
+    ['a ©nam with no UTF-8 value, then one with: the second', [nam(utf16('Up')), nam(utf8('Go'))], 'Go', true],
+  ] as const) {
+    assert.equal(asked(mp4({}, { items: [...items] }), title, 'm4a').found, plays ? join(root, M4A) : null, label);
+  }
+});
+
+test('an MP4 Navidrome wouldn\'t index streams: an atom TagLib rejects ahead of the ilst', () => {
+  const M4A = 'Artist/Album/01 - Song.m4a';
+  const broken = Buffer.from([0, 0, 0, 4, 0x66, 0x72, 0x65, 0x65]); // `free` claiming 4 bytes
+  assert.equal(asked(mp4({ title: 'Go' }, { moovBefore: [broken] }), 'Go', 'm4a').found, null, 'inside moov, ahead of udta');
+  assert.equal(asked(mp4({ title: 'Go' }, { items: [broken] }), 'Go', 'm4a').found, null, 'inside the ilst');
+  // Past the ilst the walk stops, so a broken atom there isn't seen: the file
+  // plays, though Navidrome doesn't index it (a stated residual).
+  assert.equal(asked(mp4({ title: 'Go' }, { moovExtra: [broken] }), 'Go', 'm4a').found, join(root, M4A), 'inside moov, after udta');
+  const before = mp4({ title: 'Go' }, { layout: 'late' });
+  const mdat = before.indexOf('mdat') - 4;
+  const bad = Buffer.concat([before.subarray(0, mdat), broken, before.subarray(mdat)]);
+  assert.equal(asked(bad, 'Go', 'm4a').found, null, 'ahead of moov');
+  // Behind a sound moov, TagLib takes it for trailing garbage.
+  assert.equal(asked(Buffer.concat([mp4({ title: 'Go' }), broken]), 'Go', 'm4a').found, join(root, M4A), 'after it');
 });
 
 test('the extension picks the reader, as Navidrome\'s does', () => {
@@ -468,25 +582,87 @@ test('the extension picks the reader, as Navidrome\'s does', () => {
   assert.equal(asked(tagged, 'Go', 'MP3').found, join(root, 'Artist/Album/01 - Song.MP3'), 'case does not matter');
 });
 
-test('ID3v2 is read past unsynchronisation, an extended header, a grouping byte and a data length; a compressed frame is not', () => {
+test('ID3v2 is read past unsynchronisation, a 2.4 extended header and a footer', () => {
   for (const [label, tag] of [
     ['2.2, the whole tag unsynchronised', id3v2([textFrame('TT2', WIDE, 1)], { version: 2, unsync: true })],
     ['2.3, the whole tag unsynchronised', id3v2([textFrame('TIT2', WIDE, 1)], { version: 3, unsync: true })],
     ['2.4, the frame unsynchronised', id3v2([textFrame('TIT2', WIDE, 1, { flags: { unsync: true } })], { version: 4 })],
-    ['2.3 with an extended header', id3v2([textFrame('TIT2', WIDE, 1)], { version: 3, extended: true })],
     ['2.4 with an extended header and a footer', id3v2([textFrame('TIT2', WIDE, 3)], { version: 4, extended: true, footer: true })],
-    ['2.3 with a grouping byte', id3v2([textFrame('TIT2', WIDE, 1, { flags: { grouping: true } })], { version: 3 })],
-    ['2.4 with a grouping byte and a data length', id3v2([textFrame('TIT2', WIDE, 3, { flags: { grouping: true, dataLength: true } })], { version: 4 })],
   ] as const) {
     const { onMount, found } = asked(Buffer.concat([tag, audioBytes(4096)]), WIDE);
     assert.equal(found, onMount, label);
   }
+});
+
+test('ID3v2 that TagLib reads its own way streams: Navidrome reports another title for each', () => {
+  // On stock Navidrome 0.64.2: a 2.3 extended header leaves TagLib no frames (the
+  // file's name, or its ID3v1 title); a grouping byte is read as the text encoding
+  // (`\x03Go`); a data length cuts the text (`GoUp` with 3 reads `Go`); and a major
+  // version past 4 is read anyway, where an ID3v1 title behind it is not.
   for (const [label, tag] of [
+    ['2.3 with an extended header', id3v2([textFrame('TIT2', WIDE, 1)], { version: 3, extended: true })],
+    ['2.3 with a grouping byte', id3v2([textFrame('TIT2', WIDE, 1, { flags: { grouping: true } })], { version: 3 })],
+    ['2.4 with a grouping byte', id3v2([textFrame('TIT2', WIDE, 3, { flags: { grouping: true } })], { version: 4 })],
+    ['2.4 with a data length', id3v2([textFrame('TIT2', WIDE, 3, { flags: { dataLength: true } })], { version: 4 })],
+    ['2.4 unsynchronised with a data length', id3v2([textFrame('TIT2', WIDE, 1, { flags: { unsync: true, dataLength: true } })], { version: 4 })],
+    ['2.4 with a grouping byte and a data length', id3v2([textFrame('TIT2', WIDE, 3, { flags: { grouping: true, dataLength: true } })], { version: 4 })],
     ['2.3, compressed', id3v2([textFrame('TIT2', WIDE, 1, { flags: { compressed: true } })], { version: 3 })],
     ['2.4, compressed', id3v2([textFrame('TIT2', WIDE, 3, { flags: { compressed: true } })], { version: 4 })],
   ] as const) {
     assert.equal(asked(Buffer.concat([tag, audioBytes(4096)]), WIDE).found, null, label);
   }
+  // A subtitle frame read differently is as unsure as a title frame.
+  const groupedSubtitle = id3v2([textFrame('TIT2', 'Go', 3), textFrame('TIT3', 'Live', 3, { flags: { grouping: true } })], { version: 4 });
+  assert.equal(asked(Buffer.concat([groupedSubtitle, audioBytes(4096)]), 'Go').found, null, 'a grouped TIT3');
+  for (const major of [1, 5, 6]) {
+    const odd = Buffer.concat([id3v2([textFrame('TIT2', 'Up')], { version: 4, major }), audioBytes(4096), id3v1({ title: 'Go' })]);
+    assert.equal(asked(odd, 'Go').found, null, `major version ${major}, ID3v1 "Go" behind it`);
+    assert.equal(asked(odd, 'Up').found, null, `major version ${major}, its own title`);
+  }
+});
+
+test('TagLib stops reading frames while fewer than 10 bytes of the tag are left, after a footer\'s 10 come off', () => {
+  // On stock Navidrome 0.64.2 each of the first two is titled from its file name.
+  const footer = (frames: Id3Frame[]) => {
+    const tag = id3v2(frames, { version: 4, footer: true });
+    return Buffer.concat([tag, audioBytes(4096)]);
+  };
+  for (const [label, bytes, plays] of [
+    ['2.2, no padding, TT2 in the last 9 bytes', Buffer.concat([id3v2([textFrame('TP1', 'Someone'), textFrame('TT2', 'Go')], { version: 2, padding: 0 }), audioBytes(4096)]), false],
+    ['2.4 with a footer, TIT2 the last frame', footer([textFrame('TPE1', 'Someone', 3), textFrame('TIT2', 'Go', 3)]), false],
+    // Under 10 bytes in all, the unsigned length wraps and every frame is read.
+    ['2.2, no padding, only TT2', Buffer.concat([id3v2([textFrame('TT2', 'Go')], { version: 2, padding: 0 }), audioBytes(4096)]), true],
+    ['2.4 with a footer, TIT2 then TPE1', footer([textFrame('TIT2', 'Go', 3), textFrame('TPE1', 'Someone', 3)]), true],
+  ] as const) {
+    assert.equal(asked(bytes, 'Go').found, plays ? join(root, MP3) : null, label);
+  }
+});
+
+test('an ID3v1 title is stripped as TagLib strips it, so one of spaces is no title', () => {
+  const spaces = Buffer.concat([audioBytes(4096), id3v1({ title: ' '.repeat(30) })]);
+  put(join(root, MP3), spaces);
+  assert.equal(localFileState(song(`/srv/library/${MP3}`, '01 - Song', spaces.length)), 'unread', 'Navidrome titles it from its name');
+});
+
+test('ID3v2 values are TagLib\'s: empty ones skipped, a UTF-16 value without a byte order mark taking the first one\'s', () => {
+  const tag = (data: Buffer, version: 3 | 4 = 4) => Buffer.concat([id3v2([{ id: 'TIT2', data }], { version }), audioBytes(4096)]);
+  const bom = (v: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(v, 'utf16le')]);
+  for (const [label, bytes, title] of [
+    ['Latin-1, an empty first value', tag(Buffer.from('\0\0Go', 'latin1')), 'Go'],
+    ['UTF-8, two empty values first', tag(Buffer.from('\x03\0\0Go\0Up', 'latin1')), 'Go'],
+    ['UTF-16, an empty first value', tag(Buffer.concat([Buffer.from([1]), Buffer.alloc(2), bom('Go')])), 'Go'],
+    ['UTF-16, a first value of only a byte order mark', tag(Buffer.concat([Buffer.from([1]), bom(''), Buffer.alloc(2), bom('Go')])), 'Go'],
+    ['UTF-16, the second value without a mark', tag(Buffer.concat([Buffer.from([1]), bom(''), Buffer.alloc(2), Buffer.from('Go', 'utf16le')])), 'Go'],
+    ['two TIT2 frames, the first empty', Buffer.concat([id3v2([textFrame('TIT2', ''), textFrame('TIT2', 'Go')], { version: 4 }), audioBytes(4096)]), 'Go'],
+  ] as const) {
+    const { onMount, found } = asked(bytes, title);
+    assert.equal(found, onMount, label);
+  }
+  // Invalid UTF-8 reads as no title, as TagLib reads it.
+  assert.equal(asked(tag(Buffer.from([3, 0x47, 0xff, 0x6f])), 'G\ufffdo').found, null, 'invalid UTF-8');
+  // iTunes once wrote 2.2 ids into 2.3 tags; TagLib reads them as 2.2's.
+  const itunes = Buffer.concat([id3v2([{ id: 'TT2\0', data: Buffer.from('\0Go', 'latin1') }]), audioBytes(4096)]);
+  assert.equal(asked(itunes, 'Go').found, join(root, MP3), 'a 2.2 id in a 2.3 tag');
 });
 
 test('an Ogg comment header that spans pages is read whole', () => {
@@ -505,8 +681,8 @@ test('a title past the first and last 64 KiB is not read, and that track streams
     ['Ogg, a picture comment ahead of TITLE', ogg('vorbis', [['METADATA_BLOCK_PICTURE', 'A'.repeat(big)], ['TITLE', 'Song']], { audio: big }), 'ogg', false],
     ['M4A, a late moov whose cover follows the title', mp4({ title: 'Song' }, { layout: 'late', cover: big, audio: big }), 'm4a', false],
     ['M4A, fast start with sample tables past the window', mp4({ title: 'Song' }, { layout: 'fast', tables: big, audio: big }), 'm4a', false],
-    // Found by its type, the `ilst` needs no walk down from the file's first atom.
-    ['M4A, a late moov that starts before the last 64 KiB', mp4({ title: 'Song' }, { layout: 'late', tables: big, audio: big }), 'm4a', true],
+    // Read by atom path, the walk needs the moov's own header in a window.
+    ['M4A, a late moov that starts before the last 64 KiB', mp4({ title: 'Song' }, { layout: 'late', tables: big, audio: big }), 'm4a', false],
   ] as const) {
     const { onMount, found } = asked(bytes, 'Song', ext);
     assert.equal(found, plays ? onMount : null, label);
@@ -544,7 +720,7 @@ test('garbage, cut-off tags and lying sizes read as no title, and never throw', 
   const lying = Buffer.from('ID3\x04\x00\x00\x7f\x7f\x7f\x7fTIT2\x7f\x7f\x7f\x7f\0\0\0Song', 'latin1');
   assert.deepEqual(fileTitle('mp3', lying, tail(lying)), { kind: 'none' }, 'a frame longer than the tag');
   const zero = Buffer.from('\0\0\0\x1cftypM4A \0\0\0\0\0\0\0\x08ilst\0\0\0\0\xa9nam', 'latin1');
-  assert.deepEqual(fileTitle('m4a', zero, tail(zero)), { kind: 'none' }, 'a zero-sized atom');
+  assert.deepEqual(fileTitle('m4a', zero, tail(zero)), { kind: 'unsure' }, 'no moov: Navidrome doesn\'t index it');
 });
 
 // ---- No input costs more than linear time --------------------------------------
@@ -577,20 +753,27 @@ const bombM4a = () => {
   return Buffer.concat([real.subarray(0, moov), free, real.subarray(moov)]);
 };
 
-const HOSTILE: { name: string; ext: string; bytes: () => Buffer }[] = [
+// Combining marks in descending class order, the order NFC has the most work to sort.
+const MARKS = Array.from({ length: 4096 }, (_, i) => ['\u0345', '\u0315', '\u0300', '\u0316', '\u0334'][i % 5]).join('');
+
+const HOSTILE: { name: string; ext: string; title?: string; bytes: () => Buffer }[] = [
   { name: 'ID3v2.3 TIT2, 65,000 spaces then x', ext: 'mp3', bytes: () => Buffer.concat([id3v2([textFrame('TIT2', runThenX(65000))], { padding: 0 }), audioBytes(200_000)]) },
   { name: 'ID3v2.3 TIT2, 65,000 NULs then x', ext: 'mp3', bytes: () => Buffer.concat([id3v2([textFrame('TIT2', runThenX(65000, '\0'))], { padding: 0 }), audioBytes(200_000)]) },
   { name: 'FLAC TITLE=, 65,000 spaces then x', ext: 'flac', bytes: () => flac([['TITLE', runThenX(65000)]], { audio: 200_000 }) },
   { name: 'MP4 ©nam, 65,000 spaces then x', ext: 'm4a', bytes: () => mp4({ title: runThenX(65000) }, { tables: 100, audio: 200_000 }) },
   { name: 'MP4, an ilst in every 12-byte child', ext: 'm4a', bytes: bombM4a },
+  // NFC reorders a run of combining marks in quadratic time; the cut bounds the run.
+  { name: 'ID3v2.4 TIT2, 4,096 combining marks', ext: 'mp3', title: `a${MARKS.slice(0, 511)}`, bytes: () => Buffer.concat([id3v2([textFrame('TIT2', `a${MARKS}`, 3)], { version: 4, padding: 0 }), audioBytes(200_000)]) },
+  { name: 'ID3v2.4, 2 × 4,096 combining marks in TIT2 and TIT3', ext: 'mp3', title: `a${MARKS.slice(0, 511)} (${MARKS.slice(0, 512)})`, bytes: () => Buffer.concat([id3v2([textFrame('TIT2', `a${MARKS}`, 3), textFrame('TIT3', MARKS, 3)], { version: 4, padding: 0 }), audioBytes(200_000)]) },
+  { name: 'MP4, 7,000 empty containers ahead of the udta', ext: 'm4a', bytes: () => mp4({ title: 'Song' }, { moovBefore: Array.from({ length: 7000 }, () => atom('trak')), audio: 200_000 }) },
 ];
 
-for (const { name, ext, bytes } of HOSTILE) {
+for (const { name, ext, title = 'Song', bytes } of HOSTILE) {
   test(`hostile: ${name} costs a proof well under ${PROOF_BUDGET_MS} ms, on every path`, () => {
     const rel = `Hostile/Album/01 - Song.${ext}`;
     const data = bytes();
     put(join(root, rel), data);
-    const track = song(`/srv/library/${rel}`, 'Song', data.length);
+    const track = song(`/srv/library/${rel}`, title, data.length);
     for (const [path, call] of [['findLibraryFile', findLibraryFile], ['getLocalPath', getLocalPath], ['the Doctor', localFileState]] as const) {
       const ms = elapsed(() => call(track));
       assert.ok(ms < PROOF_BUDGET_MS, `${path}: ${ms.toFixed(1)} ms`);
@@ -608,30 +791,44 @@ test('the trim is linear, whatever run it meets', () => {
   assert.equal(normalizeTitle('Café '), 'Café');
 });
 
-test('a field longer than any title a server reports is another song, and is not normalised', () => {
-  const at = (n: number) => ({ kind: 'title' as const, value: 'Song'.padEnd(n, ' ') });
-  assert.equal(titleVerdict(at(MAX_TITLE_CHARS), 'Song'), 'same', 'at the bound, trailing spaces trim as ever');
-  assert.equal(titleVerdict(at(MAX_TITLE_CHARS + 1), 'Song'), 'other', 'past it');
-  const tag = Buffer.concat([id3v2([textFrame('TIT2', 'Song'.padEnd(MAX_TITLE_CHARS + 1, ' '))]), audioBytes(4096)]);
-  assert.equal(asked(tag, 'Song').found, null, 'through a file');
+test('a field is cut at 1,024 bytes, never half a character, as Navidrome cuts it', () => {
+  assert.equal(cutTag('x'.repeat(MAX_TAG_BYTES)), 'x'.repeat(MAX_TAG_BYTES));
+  assert.equal(cutTag('x'.repeat(MAX_TAG_BYTES + 1)), 'x'.repeat(MAX_TAG_BYTES));
+  assert.equal(cutTag(`x${'é'.repeat(600)}`), `x${'é'.repeat(511)}`, 'a two-byte character the cut would halve is dropped');
+  assert.equal(cutTag(`xy${'😀'.repeat(300)}`), `xy${'😀'.repeat(255)}`, 'and a four-byte one');
+  const tagged = (title: string) => Buffer.concat([id3v2([textFrame('TIT2', title, 3)], { version: 4, padding: 0 }), audioBytes(4096)]);
+  for (const [label, field, title, plays] of [
+    ['longer than the cut, asked for as Navidrome reports it', 'x'.repeat(1030), 'x'.repeat(MAX_TAG_BYTES), true],
+    ['longer than the cut, asked for whole', 'x'.repeat(1030), 'x'.repeat(1030), false],
+    ['padded far past the cut with spaces', `Song${' '.repeat(5000)}`, 'Song', true],
+    ['spaces ahead of the title, past the cut', `${' '.repeat(1100)}Song`, 'Song', false],
+  ] as const) {
+    assert.equal(asked(tagged(field), title).found, plays ? join(root, MP3) : null, label);
+  }
 });
 
-test('a server title longer than that is no proof, and costs no stat', (t) => {
+test('a server title longer than Navidrome can report is no proof, and costs no stat', (t) => {
   audio(join(root, SONG));
   const cost = diskCost(t);
-  const long = song(`/srv/library/${SONG}`, 'Song'.padEnd(MAX_TITLE_CHARS + 1, ' '));
+  const long = song(`/srv/library/${SONG}`, 'Song'.padEnd(MAX_REPORTED_TITLE_BYTES + 1, ' '));
   assert.deepEqual(cost(() => assert.equal(getLocalPath(long), null)), { stats: 0, opens: 0 });
-  assert.equal(getLocalPath(song(`/srv/library/${SONG}`, 'Song'.padEnd(MAX_TITLE_CHARS, ' '))), join(root, SONG), 'at the bound it proves');
+  const wide = song(`/srv/library/${SONG}`, `Song${'é'.repeat(1024)}`);
+  assert.deepEqual(cost(() => assert.equal(getLocalPath(wide), null)), { stats: 0, opens: 0 }, 'counted in bytes');
+  assert.equal(getLocalPath(song(`/srv/library/${SONG}`, 'Song'.padEnd(MAX_REPORTED_TITLE_BYTES, ' '))), join(root, SONG), 'at the bound it proves');
 });
 
-test('the ilst search walks each atom once: at most one step per 8 bytes of window', () => {
-  const bomb = ilstBomb(64 * 1024 - 8);
-  const scan = _ilstScan(bomb);
-  assert.ok(scan.steps <= bomb.length / 8, `${scan.steps} steps for ${bomb.length} bytes`);
-  assert.deepEqual(scan.names, []);
-  const real = _ilstScan(mp4({ title: 'Song', album: 'Album', artist: 'Artist' }));
-  assert.deepEqual(real.names, ['Song']);
-  assert.ok(real.steps <= 4, `${real.steps} steps for a real ilst`);
+test('the MP4 walk reads each header once: at most one step per 8 bytes', () => {
+  // A moov of 8-byte empty containers ahead of its udta, the most atoms a window
+  // can hold, each parsed whole as TagLib parses it.
+  const wide = atom('moov', ...Array.from({ length: 8000 }, () => atom('trak')), atom('udta'));
+  const bytes = Buffer.concat([atom('ftyp', Buffer.from('M4A ')), wide]);
+  const steps = _mp4Steps(bytes);
+  assert.ok(steps <= bytes.length / 8, `${steps} steps for ${bytes.length} bytes`);
+  assert.ok(_mp4Steps(mp4({ title: 'Song', album: 'Album', artist: 'Artist' })) <= 16, 'a real file');
+  // Nested past TagLib's depth, which stops descending there: unsure.
+  let deep = atom('ilst');
+  for (let i = 0; i < 70; i++) deep = atom('udta', deep);
+  assert.deepEqual(fileTitle('m4a', Buffer.concat([atom('ftyp', Buffer.from('M4A ')), atom('moov', deep)]), () => Buffer.alloc(0)), { kind: 'unsure' });
 });
 
 test('a coast of 40 tracks with two hostile files builds in well under a second', () => {
@@ -643,7 +840,7 @@ test('a coast of 40 tracks with two hostile files builds in well under a second'
   }
   const ws = Buffer.concat([id3v2([textFrame('TIT2', `Hostile${runThenX(65000)}`)], { padding: 0 }), audioBytes(200_000)]);
   put(join(root, 'Coast/Hostile/01 - Ws.mp3'), ws);
-  // Navidrome cuts the title it reports at 1,024 characters.
+  // Navidrome cuts the title it reports at 1,024 bytes.
   tracks.push(song('/srv/library/Coast/Hostile/01 - Ws.mp3', `Hostile${' '.repeat(1017)}`, ws.length));
   const bomb = bombM4a();
   put(join(root, 'Coast/Hostile/02 - Ilst.m4a'), bomb);
@@ -651,7 +848,8 @@ test('a coast of 40 tracks with two hostile files builds in well under a second'
   let lines: string[] = [];
   const ms = elapsed(() => { lines = tracks.map(s => getAnnotatedUri(s, {})); });
   assert.ok(ms < 1000, `${ms.toFixed(1)} ms for 40 tracks`);
-  assert.equal(lines.filter(l => !l.includes('subhttp:')).length, 38, 'the 38 right files still play from disk');
+  // Both hostile files hold the title Navidrome reports, so they play too.
+  assert.equal(lines.filter(l => !l.includes('subhttp:')).length, 40, 'every right file plays from disk');
 });
 
 test('a mapped miss costs a stat a guess, and a read only for the file that matched', (t) => {
