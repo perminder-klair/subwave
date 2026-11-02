@@ -3,7 +3,9 @@
 // fetch so the keyless/keyed endpoint choice is checked through the real
 // settings + SEARCH_API_KEY resolution. The fixture is a recorded keyless
 // response: `description` is empty and the page text sits in `snippet`, which
-// is the shape every real result has.
+// is the shape every real result has. keenableKeySource(), which GET /settings
+// serves so the admin can show a keen_ key that lives only in .env, is pinned
+// at the end.
 // Run: `npm test -- web-search-keenable`.
 
 import assert from 'node:assert/strict';
@@ -13,14 +15,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
+import { listen as listenHttp } from './test-utils/http.js';
 
 const stateDir = createTempDir(join(tmpdir(), 'subwave-keenable-'));
 process.env.STATE_DIR = stateDir;
 delete process.env.SEARCH_API_KEY;
+delete process.env.ADMIN_USER;
+delete process.env.ADMIN_PASS;
 after(() => removeTempDir(stateDir));
 
 const settings = await import('../src/settings.js');
-const { buildKeenableRequest, parseKeenableResponse, keenableSearch } =
+const { buildKeenableRequest, parseKeenableResponse, keenableSearch, keenableKeySource } =
   await import('../src/skills/web-search.js');
 await settings.load();
 
@@ -131,4 +136,39 @@ test('keenableSearch: settings key picks the endpoint; HTTP errors throw', async
     globalThis.fetch = realFetch;
     await settings.update({ search: originalSearch });
   }
+});
+
+// SEARCH_API_KEY being set can't say whose key it is, so the admin asks this.
+// A saved key shadows the env one whoever's it is, exactly as keenableSearch
+// reads the slot (#2130).
+test('keenableKeySource: where the key a search would send lives, or null', async (t) => {
+  const originalSearch = structuredClone(settings.get().search);
+  t.after(async () => {
+    delete process.env.SEARCH_API_KEY;
+    await settings.update({ search: originalSearch });
+  });
+
+  assert.equal(keenableKeySource(), null, 'no key anywhere');
+  process.env.SEARCH_API_KEY = 'tvly-left-over';
+  assert.equal(keenableKeySource(), null, "another provider's key in env");
+  process.env.SEARCH_API_KEY = 'keen_env';
+  assert.equal(keenableKeySource(), 'env');
+  await settings.update({ search: { apiKey: 'tvly-saved' } });
+  assert.equal(keenableKeySource(), null, 'a saved Tavily key shadows the env keen_ key');
+  await settings.update({ search: { apiKey: 'keen_saved' } });
+  assert.equal(keenableKeySource(), 'settings');
+});
+
+test('GET /settings serves keenableKeySource', async (t) => {
+  process.env.SEARCH_API_KEY = 'keen_env';
+  t.after(() => { delete process.env.SEARCH_API_KEY; });
+  const express = (await import('express')).default;
+  const { router } = await import('../src/routes/settings/core.js');
+  const app = express();
+  app.use(express.json());
+  app.use(router);
+  const { server, url } = await listenHttp(app);
+  server.unref();
+  const body = await (await fetch(`${url}/settings`)).json() as { search: { keenableKeySource: unknown } };
+  assert.equal(body.search.keenableKeySource, 'env');
 });

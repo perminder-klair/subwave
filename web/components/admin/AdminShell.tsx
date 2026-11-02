@@ -276,7 +276,7 @@ const FULL_BLEED_ROUTES = ['/admin/shows/schedule'];
 export default function AdminShell({ children, defaultOpen = true }: AdminShellProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
+  const { auth, needsAuth, hydrated, lockedUntil, signIn, signOut, adminFetch } = useAdminAuth();
   const fullBleed = !!pathname && FULL_BLEED_ROUTES.some(r => pathname.startsWith(r));
   // Navidrome down raises the starve banner too; show only the specific one.
   const [navidromeOk, setNavidromeOk] = useState(true);
@@ -314,7 +314,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
       <div className="admin-root paper min-h-screen">
         <SignedOutHeader />
         <div className="mx-auto max-w-[1440px] px-7 py-12">
-          <SignInForm onSubmit={handleSignIn} />
+          <SignInForm onSubmit={handleSignIn} lockedUntil={lockedUntil} />
         </div>
       </div>
     );

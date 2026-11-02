@@ -28,7 +28,7 @@ export default function WizardShell() {
           Sign in with the <code>ADMIN_USER</code> + <code>ADMIN_PASS</code> you set in your
           <code> .env</code>.
         </p>
-        <SignInForm onSubmit={w.auth.signIn} />
+        <SignInForm onSubmit={w.auth.signIn} lockedUntil={w.auth.lockedUntil} />
       </div>
     );
   }

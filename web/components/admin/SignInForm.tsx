@@ -1,22 +1,31 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { FieldGroup, Field, FieldDescription, FieldError } from '../ui/field';
+import { lockRemaining } from '../../lib/admin-lock';
 import type { SignInResult } from '../../lib/adminAuth';
 
 export interface SignInFormProps {
   onSubmit: (user: string, pass: string) => Promise<SignInResult>;
+  lockedUntil?: number | null;
 }
 
-export default function SignInForm({ onSubmit }: SignInFormProps) {
+export default function SignInForm({ onSubmit, lockedUntil = null }: SignInFormProps) {
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const errId = useId();
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!lockedUntil) return;
+    const id = setInterval(() => setTick(t => t + 1), 1_000);
+    return () => clearInterval(id);
+  }, [lockedUntil]);
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e?.preventDefault?.();
@@ -26,7 +35,7 @@ export default function SignInForm({ onSubmit }: SignInFormProps) {
     const res = await onSubmit(user, pass);
     // On success the gate swaps this form out; only handle failure here.
     if (res && !res.ok) {
-      setErr(res.error || 'sign-in failed');
+      setErr(res.error ?? 'sign-in failed');
       setBusy(false);
     }
   };
@@ -70,6 +79,14 @@ export default function SignInForm({ onSubmit }: SignInFormProps) {
             />
             <FieldError id={errId}>{err}</FieldError>
           </Field>
+          {/* The button stays live: a try can't extend the lock, and after a
+              restart it is the way back in. */}
+          {lockedUntil ? (
+            <p role="alert" className="text-sm text-ink">
+              Sign-in is locked for {lockRemaining(lockedUntil)} after too many wrong passwords, and
+              the right one won&apos;t work until then. Restarting the controller clears it now.
+            </p>
+          ) : null}
           <Button type="submit" variant="accent" disabled={!user || !pass || busy}>
             {busy ? 'signing in…' : 'sign in'}
           </Button>

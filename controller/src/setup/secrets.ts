@@ -15,6 +15,7 @@ import { chmod, readFile } from 'node:fs/promises';
 import { parse as parseDotenv } from 'dotenv';
 import { STATE_DIR } from '../config.js';
 import { LLM_KEY_ENV_VARS } from '../schemas/providers.js';
+import { SECRET_CONTROL_CHAR_RE, stripSecretControlChars } from '../schemas/settings.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
 const PATH = `${STATE_DIR}/secrets.env`;
@@ -42,8 +43,9 @@ export const SECRET_ENV_KEYS = [
 // can't go in an HTTP header: fetch throws, and its message quotes the whole
 // header value, key included. Every route that probes a key asks this before
 // the probe, so the operator gets this answer instead of the key on screen.
+// Saving strips the same characters instead (schemas/settings.ts).
 export function secretValueIssue(value: string): string | null {
-  return /[\x00-\x1F\x7F]/.test(value)
+  return SECRET_CONTROL_CHAR_RE.test(value)
     ? 'The key has a line break or other control character in it. Paste it again as one line.'
     : null;
 }
@@ -117,7 +119,12 @@ export async function loadSecretsIntoEnv(): Promise<{ loaded: string[]; skipped:
 
 // Persist a batch of API keys, merged over what is already there. An empty value
 // is written as `KEY=` rather than deleted, so the next boot falls back to env.
-export async function saveSecrets(patch: Record<string, string>): Promise<void> {
+export async function saveSecrets(rawPatch: Record<string, string>): Promise<void> {
+  // Control characters stripped as every secret's save path does
+  // (schemas/settings.ts), so a key with a line break is joined, not refused.
+  const patch = Object.fromEntries(
+    Object.entries(rawPatch).map(([key, value]) => [key, stripSecretControlChars(value)]),
+  );
   // Same reader as the boot path: this rewrites the whole file, so a value read
   // wrong here is a stored secret destroyed on disk.
   const current: Record<string, string> = existsSync(PATH)

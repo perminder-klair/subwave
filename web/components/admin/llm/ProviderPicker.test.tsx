@@ -68,6 +68,26 @@ test('the picker renders one labelled radiogroup, gateways as rows', () => {
   assert.match(section('gateway'), /aria-checked="true"[^>]*>[\s\S]*?Requesty/);
 });
 
+// Columns follow each card group's size against the picker's own width, so no
+// row strands one card: the LLM picker's four vendors go two by two, then four
+// across, and the embedding picker's two fill their row (#2130).
+test('card columns follow the group size, measured against the picker', () => {
+  const columns = (providerIds: readonly string[]) => {
+    const html = renderToStaticMarkup(createElement(ProviderPicker, {
+      value: '', providerIds: [...providerIds], label: 'p', env: {}, onChange: () => {},
+    }));
+    assert.match(html, /role="radiogroup"[^>]*class="[^"]*@container/);
+    return Object.fromEntries(
+      [...html.matchAll(/data-group="([^"]+)"[\s\S]*?<div class="([^"]*)" data-layout="cards"/g)].map(m => [m[1], m[2]]),
+    );
+  };
+  const llm = columns(LLM_PROVIDER_IDS);
+  assert.equal(llm.network, 'grid gap-2.5 grid-cols-2 @md:grid-cols-3');
+  assert.equal(llm.vendor, 'grid gap-2.5 grid-cols-2 @2xl:grid-cols-4');
+  assert.equal(columns(EMBEDDING_PROVIDER_IDS).vendor, 'grid gap-2.5 grid-cols-2');
+  assert.equal(columns(['anthropic', 'openai', 'google', 'deepseek', 'brand-new']).vendor, 'grid gap-2.5 grid-cols-2 @md:grid-cols-3');
+});
+
 test('the search Select groups keyless, keyed and self-hosted backends', () => {
   assert.deepEqual(groupSearchProviders(['duckduckgo', 'tavily', 'brave', 'searxng', 'keenable']), [
     { label: 'No key needed', ids: ['duckduckgo', 'keenable'] },

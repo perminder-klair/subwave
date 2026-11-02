@@ -86,6 +86,8 @@ context: time, festival   # OPTIONAL: "right now" fields it may mention (see bel
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; unset → stays inert
 feed: https://…/rss.xml   # OPTIONAL: a feed to read before speaking (see below)
 feedMaxItems: 10          # OPTIONAL: how much of it per fire (1–50, default 10)
+feedMaxAgeDays: 7         # OPTIONAL: skip items older than this (1–365 days)
+feed2: https://…/rss.xml  # OPTIONAL: a second feed (feed3: a third), merged
 ---
 If tonight's moon is at a notable phase, work it into one short, in-character
 line, the way a late-night presenter might glance out the window. Skip it when
@@ -136,7 +138,35 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           </li>
           <li>
             <code className="bs-code-inline">feedMaxItems</code> (1–50, default 10) caps how
-            much of the feed is read per fire.
+            much of the feed is read per fire. With{' '}
+            <code className="bs-code-inline">feed2</code> or{' '}
+            <code className="bs-code-inline">feed3</code> it is read from each feed, and a
+            fire offers no more than that many items in total; the next fire moves on to
+            the ones left. The merged list holds at most 60 items, taken round-robin: three
+            full 50-item feeds offer 60 of their 150, then report that every item has aired
+            until new ones appear.
+          </li>
+          <li>
+            <code className="bs-code-inline">feedMaxAgeDays</code> (1–365, default no limit)
+            skips items published longer ago than that. Search feeds need it: they mix in
+            items months old. Undated items are kept.
+          </li>
+          <li>
+            Every item the feed dates reaches the DJ with its day in the station&rsquo;s
+            timezone, so it can tell news from history. A feed that gives a day and no clock
+            keeps that day as written. This is on for every skill the generated tool serves,
+            with no key to set; a skill with its own{' '}
+            <code className="bs-code-inline">tool.mjs</code> passes on what its code returns.
+          </li>
+          <li>
+            <code className="bs-code-inline">feed2</code> and{' '}
+            <code className="bs-code-inline">feed3</code> add further feeds, merged
+            round-robin with the first, and a headline in two of them is offered once. One
+            that fails, takes more than six seconds or answers with something that isn&rsquo;t
+            a feed is skipped while another answers, with a warning in the log naming it
+            (once, until it recovers). If the feeds that
+            answered have no items, the failure is the fetch error, naming every feed that
+            failed by its key.
           </li>
           <li>
             Items are <strong>burned on read</strong>: at most six fresh ones reach a
@@ -153,7 +183,15 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           Only an <code className="bs-code-inline">http</code> or{' '}
           <code className="bs-code-inline">https</code> URL creates the tool — anything else
           is logged as a warning naming the skill, so a{' '}
-          <code className="bs-code-inline">feed:</code> line never quietly does nothing. A
+          <code className="bs-code-inline">feed:</code> line never quietly does nothing. On a
+          skill with its own <code className="bs-code-inline">tool.mjs</code>,{' '}
+          <code className="bs-code-inline">feedMaxAgeDays</code>,{' '}
+          <code className="bs-code-inline">feed2</code> and{' '}
+          <code className="bs-code-inline">feed3</code> do nothing unless that code reads
+          them, and the log says so. A station that still has News&rsquo;s old{' '}
+          <code className="bs-code-inline">tool.mjs</code> gets none of these keys and no{' '}
+          <code className="bs-code-inline">published</code> date until{' '}
+          <strong>Reset to default</strong> removes it. A
           skill that ships its own <code className="bs-code-inline">tool.mjs</code> keeps it;
           the generated tool fills a gap, it never displaces a fetcher you wrote.
         </p>

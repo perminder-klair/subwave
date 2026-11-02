@@ -98,6 +98,7 @@ import {
   removeQueuedRow,
   runDashAction,
 } from './dash/queries';
+import { useCardHashJump } from '../../hooks/useCardHashJump';
 
 // Listeners-table header cells. `sticky top-0` resolves against the ScrollArea
 // viewport, and the opaque card-bg stops rows showing through. The rule is an
@@ -110,6 +111,8 @@ export default function DashPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
+  // Stats' health lamps link to cards here by hash (#llm-recent-calls).
+  useCardHashJump();
 
   const [sayText, setSayText] = useState('');
   const [sayMode, setSayMode] = useState('raw');

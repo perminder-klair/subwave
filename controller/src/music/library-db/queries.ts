@@ -1,11 +1,11 @@
 import { z } from 'zod';
-import { parseVocalRangesJson } from '../lyric-vocal.js';
+import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
 import { preparationTrackSchema } from '../../schemas/show-preparation.js';
 import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
-import { SQL_HAS_MOODS, SQL_NO_MOODS, requireDb } from './handle.js';
-import type { EnergyValue, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
+import { SQL_HAS_MOODS, SQL_NO_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
+import type { EnergyValue, ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
 import { rowToMoodPool, rowToEnergyPool, safeParseArray } from './rows.js';
 
 // Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
@@ -38,7 +38,7 @@ export function ruleMatchRows(): Array<{
 }
 
 const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artist_id,
-  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec`;
+  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec, t.explicit_status`;
 
 export function songsByMood(mood: string): MoodPoolRecord[] {
   // Start at the covering membership index, never scan tracks/json_each.
@@ -54,7 +54,8 @@ export function songsByEnergy(energy: EnergyValue): EnergyPoolRecord[] {
   const rows = requireDb().prepare(`SELECT ${MOOD_POOL_COLUMNS},
     t.original_year, t.is_compilation, t.era_untrusted, t.audio_moods,
     t.bpm, t.musical_key, t.intro_ms, t.loudness_lufs,
-    t.structure_json, t.vocal_ranges_json, t.pace_json
+    t.structure_json, t.vocal_ranges_json, t.pace_json,
+    ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json
     FROM tracks t WHERE t.energy = ? AND ${SQL_HAS_MOODS} ORDER BY t.rowid`).all(energy) as EnergyPoolRow[];
   return rows.map(rowToEnergyPool);
 }
@@ -262,9 +263,13 @@ export function candidateFilterTracks(): Array<{
   energy: EnergyValue;
   vocalRanges: unknown[] | null;
   vocalRangesInvalid: boolean;
+  tailVocalRanges: unknown[] | null;
+  tailVocalRangesInvalid: boolean;
   // For the minimum-track-length floor (#1573); without this column every row
   // reads as unknown length and the funnel over-counts.
   durationSec: number | null;
+  // Carried, so a clean show's walk over this whole projection is no per-row read.
+  explicitStatus: ExplicitStatus | null;
 }> {
   type CandidateFilterRow = {
     id: string;
@@ -280,11 +285,13 @@ export function candidateFilterTracks(): Array<{
     audio_moods: string | null;
     energy: EnergyValue;
     vocal_ranges_json: string | null;
+    tail_vocal_ranges_json: string | null;
     duration_sec: number | null;
+    explicit_status: ExplicitStatus | null;
   };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
-    vocal_ranges_json
+    vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
     FROM tracks`).all() as CandidateFilterRow[];
   return rows.map((row) => ({
     id: row.id,
@@ -302,7 +309,9 @@ export function candidateFilterTracks(): Array<{
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     energy: row.energy ?? null,
     ...parseVocalRangesJson(row.vocal_ranges_json),
+    ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
     durationSec: row.duration_sec ?? null,
+    explicitStatus: row.explicit_status ?? null,
   }));
 }
 

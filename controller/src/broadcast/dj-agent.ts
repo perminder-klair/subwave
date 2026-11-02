@@ -16,6 +16,7 @@ import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary, type CandidateLike } from '../music/recency.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
+import { excludesExplicit } from '../music/explicit-policy.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
@@ -229,8 +230,10 @@ function misnamedRepickReason(song: any, misnamed: MisnamedLine[]): string {
 // itself, under the run's own scope, so its hits went through the same
 // recency/blocklist filtering and slim projection as every other candidate.
 // Bounded by the tool deadline; any failure only means no extra candidates.
+// A fresh tool set would look the listener's words up again, so requestText
+// stays out: this is one search, for the name the lines claimed.
 async function lookupRequestClaim(query: string, scope: PickerScope): Promise<Map<string, any>> {
-  const { tools, seen } = buildPickerTools(scope);
+  const { tools, seen } = buildPickerTools({ ...scope, requestText: null });
   const search = (tools as Record<string, any>).searchLibrary;
   try {
     await search?.execute?.({ query }, {
@@ -426,6 +429,8 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
     // paths cannot disagree about how short is too short.
     minTrackSec,
     maxTrackSec,
+    // A clean show. Like the floor, not gated on `strict`.
+    excludeExplicit: excludesExplicit(activeShow),
     playlistLock,
     playlistTracks,
     // A strict playlist or a prepared episode already names its own source.
@@ -1126,7 +1131,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  const say = dropEchoedLink(trimLinkToIntro(rawLink, song, linkPersona), queue) || '';
+  const say = dropEchoedLink(trimLinkToIntro(rawLink, song, linkPersona, queue), queue) || '';
   const link = say || null;
   const fxActive = settings.effectsActive();
   // The no-FX schema tells the model to leave transition null, but a model can
@@ -1790,8 +1795,11 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
 
     // A request runs with recency only — no show locks. An explicit listener
     // ask wins over the show's strict filters, which is why the scope stops
-    // here rather than being built from the active show.
-    const scope = pickerScope({ recentIds });
+    // here rather than being built from the active show. A clean show is the
+    // one exception: the model never sees what the route would refuse.
+    // requestText lets searchLibrary find what the listener named however the
+    // model words its query (#2195).
+    const scope = pickerScope({ recentIds, requestText: text, excludeExplicit: excludesExplicit(settings.resolveActiveShow()) });
     const run = await requestAgent.run({
       messages,
       scope,
@@ -2062,6 +2070,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // in the intro, after misnaming the track) — join rather than let one
     // verdict hide another.
     const guardVerdict = [claimGuard, spacingGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
+    let introDropped = false;
     const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
@@ -2071,6 +2080,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       // Voice the intro as whoever wrote it (see the pool-pick push above).
       introPersona: currentSpeech.persona,
       introHostSpeech: currentSpeech.hostSpeech,
+      onStandInDropped: () => { introDropped = true; },
     });
     // Never-play blocklist refused the pick — throw so the route's stateless
     // fallback cascade runs; its own resolution is blocklist-filtered, so the
@@ -2092,19 +2102,20 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       // for the same reason as the cooldown branch: nothing was queued here.
       return { ack: dupAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: guardVerdict, refused: 'already-queued' };
     }
+    const airedIntro = introDropped ? null : intro || null;
     session.appendTurn({
       role: 'dj', kind: 'request',
       // `ack` is guaranteed non-empty (screenAck substitutes), so it always
       // wins over the title fallback when there's no intro — the fallback is
       // kept only as a guard against a future edit making `ack` optional.
-      text: intro || ack || `Queued "${song.title}".`,
+      text: airedIntro || ack || `Queued "${song.title}".`,
       meta: { trackId: song.id, requester, toolCalls },
     });
 
     return {
       ack,
       track: { title: song.title, artist: song.artist, id: song.id },
-      introScript: intro || null,
+      introScript: airedIntro,
       guard: guardVerdict,
     };
   });

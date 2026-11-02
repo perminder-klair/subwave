@@ -121,6 +121,7 @@ import {
   type ScheduledBackupSettings,
   type JingleRotateOwner,
   type TtsPatch,
+  stripSecretControlChars,
 } from './schemas/settings.js';
 import { jinglePlacement, jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
@@ -1204,6 +1205,10 @@ export async function load() {
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
             ? stored.embedding.enrichment.lastfmTags
             : DEFAULTS.embedding.enrichment.lastfmTags,
+        lastfmTrackTags:
+          typeof stored.embedding?.enrichment?.lastfmTrackTags === 'boolean'
+            ? stored.embedding.enrichment.lastfmTrackTags
+            : DEFAULTS.embedding.enrichment.lastfmTrackTags,
         lyrics:
           typeof stored.embedding?.enrichment?.lyrics === 'boolean'
             ? stored.embedding.enrichment.lyrics
@@ -1230,6 +1235,10 @@ export async function load() {
       stemCacheGb: Number.isFinite(stored.audio?.stemCacheGb) && stored.audio.stemCacheGb > 0
         ? stored.audio.stemCacheGb
         : DEFAULTS.audio.stemCacheGb,
+      stemOrphanPurgeEnabled:
+        typeof stored.audio?.stemOrphanPurgeEnabled === 'boolean'
+          ? stored.audio.stemOrphanPurgeEnabled
+          : DEFAULTS.audio.stemOrphanPurgeEnabled,
       analyzeQuietOnly:
         typeof stored.audio?.analyzeQuietOnly === 'boolean'
           ? stored.audio.analyzeQuietOnly
@@ -1378,6 +1387,12 @@ export async function load() {
         typeof stored.lyrics?.lrclib === 'boolean'
           ? stored.lyrics.lrclib
           : DEFAULTS.lyrics.lrclib,
+    },
+    musicSource: {
+      reportRealPath:
+        typeof stored.musicSource?.reportRealPath === 'boolean'
+          ? stored.musicSource.reportRealPath
+          : DEFAULTS.musicSource.reportRealPath,
     },
   };
   setCache(loaded);
@@ -1984,7 +1999,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       // 'set' is the redaction sentinel from getRedacted() — ignore it so a
       // round-tripped settings form doesn't overwrite the real key.
       if (c.apiKey !== undefined && c.apiKey !== 'set') {
-        next.tts.cloud.apiKey = String(c.apiKey);
+        next.tts.cloud.apiKey = stripSecretControlChars(String(c.apiKey));
       } else if (c.provider !== undefined && c.provider !== savedCloudProvider) {
         // The shared inline slot belongs to the provider that created it. A
         // provider transition without an explicit replacement must clear it,
@@ -1995,7 +2010,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       // Dedicated compatibility bearer. Unlike the legacy shared slot, this
       // may safely persist while another managed provider is selected globally.
       if (c.compatApiKey !== undefined && c.compatApiKey !== 'set') {
-        next.tts.cloud.compatApiKey = String(c.compatApiKey);
+        next.tts.cloud.compatApiKey = stripSecretControlChars(String(c.compatApiKey));
       }
       if (c.baseUrl !== undefined) {
         const v = String(c.baseUrl).trim();
@@ -2328,7 +2343,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       next.embedding.ollamaUrl = v.replace(/\/+$/, '');
     }
     if (e.apiKey !== undefined && e.apiKey !== 'set') {
-      const v = String(e.apiKey).trim();
+      const v = stripSecretControlChars(String(e.apiKey).trim());
       if (v.length > EMBEDDING_API_KEY_MAX) throw new Error(`embedding.apiKey must be 0-${EMBEDDING_API_KEY_MAX} chars`);
       next.embedding.apiKey = v;
     }
@@ -2392,6 +2407,9 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       if (en.lastfmTags !== undefined) {
         next.embedding.enrichment.lastfmTags = !!en.lastfmTags;
       }
+      if (en.lastfmTrackTags !== undefined) {
+        next.embedding.enrichment.lastfmTrackTags = !!en.lastfmTrackTags;
+      }
       if (en.lyrics !== undefined) {
         next.embedding.enrichment.lyrics = !!en.lyrics;
       }
@@ -2449,6 +2467,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       'stemCacheGb',
       'analyzeQuietOnly',
       'analyzeQuietMinutes',
+      'stemOrphanPurgeEnabled',
     ] as const) {
       if (au[k] !== undefined) (next.audio as Record<string, unknown>)[k] = au[k];
     }
@@ -2658,6 +2677,11 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     const ly = parseSettingsPatchKey<Record<string, unknown>>('lyrics', patch.lyrics);
     if (ly.enabled !== undefined) next.lyrics.enabled = ly.enabled as boolean;
     if (ly.lrclib !== undefined) next.lyrics.lrclib = ly.lrclib as boolean;
+  }
+
+  if ('musicSource' in patch) {
+    const ms = parseSettingsPatchKey<Record<string, unknown>>('musicSource', patch.musicSource);
+    if (ms.reportRealPath !== undefined) next.musicSource.reportRealPath = ms.reportRealPath as boolean;
   }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may

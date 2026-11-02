@@ -12,6 +12,7 @@ import type { EngineAvailability } from '../tts/engineMeta';
 import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
+import { ownsErrorPath } from './form-diff';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
 import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety } from '../../../lib/schemas.generated';
@@ -197,6 +198,7 @@ export interface SearchForm {
 
 export interface EmbeddingEnrichmentForm {
   lastfmTags: boolean;
+  lastfmTrackTags: boolean;
   lyrics: boolean;
 }
 
@@ -599,6 +601,14 @@ export interface SettingsData {
   };
   search?: {
     providers?: string[];
+    // Where the key a Keenable search sends comes from; null when it runs keyless.
+    keenableKeySource?: 'settings' | 'env' | null;
+    // Where the key a Firecrawl search sends comes from; null when the slot holds
+    // none, or holds another provider's, which searches refuse.
+    firecrawlKeySource?: 'settings' | 'env' | null;
+    // The keyed providers (Tavily, Brave, Firecrawl) whose searches would refuse
+    // the key on file, because it is another provider's. Empty with no key.
+    keyRefusedBy?: string[];
   };
   defaults?: {
     search?: Partial<SearchForm>;
@@ -801,9 +811,9 @@ export function ownedFieldErrors(
   ownedKeys: readonly string[] | undefined,
 ): Array<[string, string]> {
   if (!errors || !ownedKeys?.length) return [];
-  return Object.entries(errors).filter(([path]) =>
-    ownedKeys.some((key) => path === key || path.startsWith(`${key}.`)),
-  );
+  // Through the aliases: a form key can save under another name (the stem
+  // cache lives under `transitions` and saves to `audio.*`).
+  return Object.entries(errors).filter(([path]) => ownsErrorPath(ownedKeys, path));
 }
 
 /** Portal section-owned saves into the sticky bar to retain their closures and field-error scope.
@@ -842,9 +852,11 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
 interface KeyStatusProps {
   envVar: string;
   present: boolean;
+  /** Replaces the stock sentence, for a provider where neither "ready to use" nor "not set" fits. */
+  detail?: ReactNode;
 }
 
-export function KeyStatus({ envVar, present }: KeyStatusProps) {
+export function KeyStatus({ envVar, present, detail }: KeyStatusProps) {
   const toneClass = present
     ? 'border-[var(--accent)] text-[color:var(--accent)]'
     : 'border-[var(--danger)] text-[var(--danger)]';
@@ -866,14 +878,14 @@ export function KeyStatus({ envVar, present }: KeyStatusProps) {
           {present ? 'API key found in environment' : 'API key missing'}
         </span>
         <span className="text-[14px] leading-[1.5] text-muted">
-          {present ? (
+          {detail ?? (present ? (
             <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (
             <>
               <code>{envVar}</code> is not set. Paste the key in the field above and save,
               or set it in <code>.env</code> and restart.
             </>
-          )}
+          ))}
         </span>
       </div>
     </div>

@@ -69,6 +69,10 @@ each one:
   without handing it the admin console.
 - **admin** — HTTP Basic with `ADMIN_USER` / `ADMIN_PASS`. `/dj/*`, `/library/*`,
   `/settings`, `/sfx`, `/jingles`, and everything else operational.
+  Ten different wrong passwords lock the client for 15 minutes: a `429` with
+  `Retry-After` and `{"code":"admin_locked"}`, which refuses the right password
+  too. Re-sending one wrong password counts once. See
+  [the login recovery notes](updating.md#the-admin-console-wont-accept-your-login).
 
 A station-gated read takes the password in any of three carriers, tried in that
 order:

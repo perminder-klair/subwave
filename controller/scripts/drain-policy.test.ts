@@ -5,9 +5,9 @@
 
 import assert from 'node:assert/strict';
 import {
-  remainingSec, drainAction, shouldDeadlinePick, introRenderBudgetSec, cueProbeBudgetMs,
+  remainingSec, drainAction, shouldDeadlinePick, introRenderBudgetSec, cueProbeBudgetMs, mountCheckBudgetMs,
   DRAIN_DEADLINE_SEC, HARD_DEADLINE_SEC, DEADLINE_PICK_COOLDOWN_SEC,
-  DRAIN_COMMIT_RESERVE_SEC, MIN_PRERENDER_BUDGET_SEC, CUE_PROBE_TIMEOUT_MS,
+  DRAIN_COMMIT_RESERVE_SEC, MIN_PRERENDER_BUDGET_SEC, CUE_PROBE_TIMEOUT_MS, MOUNT_CHECK_TIMEOUT_MS,
 } from '../src/broadcast/drain-policy.js';
 
 // ── remainingSec ─────────────────────────────────────────────────────────────
@@ -189,6 +189,22 @@ for (const r of [-100, -1, 0, 1, 11, 12, 12.001, 12.5, 13, 14, 17, 45, 600]) {
   const b = cueProbeBudgetMs(r);
   assert.ok(b >= 0 && b <= CUE_PROBE_TIMEOUT_MS, `probe budget for remaining=${r} is within [0, ceiling]`);
   assert.ok(b <= Math.max(0, (r - DRAIN_COMMIT_RESERVE_SEC) * 1000), `probe budget for remaining=${r} leaves the reserve`);
+}
+
+// ── mountCheckBudgetMs ───────────────────────────────────────────────────────
+// The pick's own path_readable question (#2222) sits in the same pre-commit
+// window as the cue probe, so it shares the reserve arithmetic under its own
+// ceiling. Zero asks nothing and the pick streams.
+assert.equal(mountCheckBudgetMs(null), MOUNT_CHECK_TIMEOUT_MS, 'unknown clock → the ceiling');
+assert.equal(mountCheckBudgetMs(HARD_DEADLINE_SEC), MOUNT_CHECK_TIMEOUT_MS, 'hard-deadline runway → the ceiling');
+assert.equal(mountCheckBudgetMs(DRAIN_COMMIT_RESERVE_SEC + 0.5), 500, 'half a second past the reserve → 500ms');
+assert.equal(mountCheckBudgetMs(DRAIN_COMMIT_RESERVE_SEC), 0, 'at the reserve → stream without asking');
+assert.equal(mountCheckBudgetMs(-30), 0, 'expired clock → stream, never a negative timeout');
+assert.ok(MOUNT_CHECK_TIMEOUT_MS > 1000, "past radio.liq's own 1 s bound on a hung mount, so its no can arrive");
+for (const r of [-100, -1, 0, 1, 11, 12, 12.001, 12.5, 13, 14, 17, 45, 600]) {
+  const b = mountCheckBudgetMs(r);
+  assert.ok(b >= 0 && b <= MOUNT_CHECK_TIMEOUT_MS, `mount check budget for remaining=${r} is within [0, ceiling]`);
+  assert.ok(b <= Math.max(0, (r - DRAIN_COMMIT_RESERVE_SEC) * 1000), `mount check budget for remaining=${r} leaves the reserve`);
 }
 
 console.log('drain-policy: all assertions passed');

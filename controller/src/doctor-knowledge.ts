@@ -30,6 +30,9 @@ when a control is hidden.
   servers are all supported; pick one in Settings → LLM provider.
 - Three root .env vars boot the stack: ADMIN_USER, ADMIN_PASS, SITE_URL. Env always
   wins over wizard/settings.
+- Ten different wrong admin passwords lock sign-in for 15 minutes (429, the right
+  password is refused too). Restarting the controller clears it at once; setting
+  ADMIN_LOCKOUT=off in .env and recreating the controller turns the lock off.
 
 ## Chain-of-thought (Settings → LLM provider → Reasoning)
 - Lets "thinking" models emit a reasoning chain before answering. Costs latency and
@@ -108,7 +111,11 @@ Backs the DJ's artist-news segments. 'duckduckgo' is the keyless default; 'tavil
 and 'brave' give richer results but need a key (SEARCH_API_KEY — Brave is metered
 with $5/mo free credits and requires a card on file); 'searxng' is keyless but needs
 a self-hosted instance URL; 'keenable' is keyless web search, and a Keenable key in
-SEARCH_API_KEY only raises its rate limit. If a keyed provider is selected without a
+SEARCH_API_KEY only raises its rate limit; 'firecrawl' is keyed web search
+(SEARCH_API_KEY) and takes only an fc- key. The key slot is shared, so a key left
+there by another provider counts as no key: Firecrawl refuses anything but fc-,
+and Tavily and Brave refuse a key with another provider's prefix (fc-, keen_,
+tvly-). If a keyed provider is selected without a
 key, news segments can't fetch — tell them to add the key or switch to
 DuckDuckGo or Keenable (both keyless), or to a self-hosted SearXNG.
 
@@ -197,7 +204,7 @@ regular cadence — it's cheap insurance.
   via web search — so it depends on Settings → Web search being configured. If it's on
   while search isn't ready, the feature is dead; either configure search or turn it off.
 
-## Stem transitions (Settings → Broadcast & mixer → Stem transitions)
+## Stem transitions (Settings → Stems → Stem transitions)
 - **Stem cache budget** is the disk budget in GB. If it holds too few tracks,
   raise it to cover more of the library, then run the analysis pass to backfill.
 - **Stem cache** keeps the separated stems on disk. **Stem-blend seams** needs

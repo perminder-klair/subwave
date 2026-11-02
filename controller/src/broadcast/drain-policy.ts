@@ -94,14 +94,31 @@ export function introRenderBudgetSec(remaining: number | null): number | null {
 // The cue-landing probe's own ceiling (#2003): one ffprobe read of Y around its cue.
 export const CUE_PROBE_TIMEOUT_MS = 2000;
 
-// Cue-landing probe budget, in ms. The probe sits after the intro render and right
-// before Y's next.txt write, so it gets only what the commit reserve leaves, capped
-// at its own ceiling; an unknown clock gets the ceiling. Zero skips the probe: no
-// stamp, and the clip -> Y seam aligns on the cue as it did before the probe existed.
-export function cueProbeBudgetMs(remaining: number | null): number {
-  if (remaining == null) return CUE_PROBE_TIMEOUT_MS;
+// The mount check's own ceiling (#2222): one `path_readable` round trip about the
+// pick's file. radio.liq bounds its own test at 1 s on a hung mount, so this is a
+// little over that, and a slow but honest answer still counts.
+export const MOUNT_CHECK_TIMEOUT_MS = 1500;
+
+// What a question asked between the intro render and Y's next.txt write may spend,
+// in ms: what the commit reserve leaves, capped at the question's own ceiling. An
+// unknown clock gets the ceiling, and zero skips the question.
+function preCommitBudgetMs(remaining: number | null, ceilingMs: number): number {
+  if (remaining == null) return ceilingMs;
   const budgetMs = Math.floor((remaining - DRAIN_COMMIT_RESERVE_SEC) * 1000);
-  return budgetMs > 0 ? Math.min(CUE_PROBE_TIMEOUT_MS, budgetMs) : 0;
+  return budgetMs > 0 ? Math.min(ceilingMs, budgetMs) : 0;
+}
+
+// Cue-landing probe budget, in ms. Zero skips the probe: no stamp, and the
+// clip -> Y seam aligns on the cue as it did before the probe existed.
+export function cueProbeBudgetMs(remaining: number | null): number {
+  return preCommitBudgetMs(remaining, CUE_PROBE_TIMEOUT_MS);
+}
+
+// Budget for asking the mixer whether it can read the pick's own file, in ms
+// (music/library-mount.ts mixerReadablePath). Zero asks nothing and the pick
+// streams, the side that never loses the music.
+export function mountCheckBudgetMs(remaining: number | null): number {
+  return preCommitBudgetMs(remaining, MOUNT_CHECK_TIMEOUT_MS);
 }
 
 type DrainAction = 'send-pair' | 'send-intrinsic' | 'hold';

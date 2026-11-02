@@ -1,10 +1,10 @@
 # Updating, rolling back, and recovering
 
-Updating SUB/WAVE is one command on every install shape. This page is mostly
-about the other half — what to do when an update lands badly, which is the part
-that was missing.
+Updating SUB/WAVE takes at most three commands on any install shape. This page
+is mostly about the other half — what to do when an update lands badly, which is
+the part that was missing.
 
-> Just want the command? Jump to [Update](#update). Something already broken?
+> Just want the commands? Jump to [Update](#update). Something already broken?
 > Jump to [Recovery](#recovery-when-an-update-goes-wrong).
 
 ---
@@ -28,6 +28,9 @@ Two things it deliberately does **not** contain:
   cloud keys afterwards.
 - **Archives.** `state/archive/` (hourly stream recordings) is excluded because
   it's enormous. Back that up separately, or accept losing it.
+
+`library.db` does hold each track's file path as Navidrome reports it, so a
+backup you share shows your folder layout.
 
 Restoring runs the archive through the same checks the dedicated imports
 use. `jingles.m3u` is never copied: it is rebuilt from the restored
@@ -105,20 +108,27 @@ than after.
 ### Standalone CLI install (the default)
 
 ```bash
-subwave update        # pull new images, recreate what changed
 subwave self-update   # replace the `subwave` binary itself
+subwave sync          # refresh compose files that are behind the new binary
+subwave update        # pull new images, recreate what changed
 ```
+
+Run them in that order:
+
+1. **`self-update`** goes first because `subwave update` pins the stack to **the
+   CLI binary's own release**, so if the binary is behind, so is the stack.
+2. **`sync`** goes next because new services and changed env wiring don't ride
+   an image bump, and only `sync` re-materialises the compose files. It backs up
+   the current ones first, and changes nothing if they're already current.
+3. **`update`** goes last, so the stack is recreated once, with the new compose
+   files and the new images together.
 
 `subwave update` moves the `SUBWAVE_VERSION` pin in `.env` forward to match the
 CLI's own release, then pulls and recreates. It only moves a **concrete**
 version pin — an install deliberately following `latest` stays on `latest`.
 
-`subwave update` pins the stack to **the CLI binary's own release**, so if the
-binary is behind, so is the stack. To land on the newest release, run
-`self-update` first and `update` second. If `update` then warns that your
-compose files are behind the CLI, run `subwave sync` — new services and changed
-env wiring don't ride an image bump, and only `sync` re-materialises the compose
-files (it backs up the current ones first).
+If `update` warns that your compose files are behind the CLI, `sync` was
+skipped: run it, then run `subwave update` again.
 
 ### Images, no CLI
 
@@ -265,7 +275,7 @@ grep -E '^(ADMIN_USER|ADMIN_PASS)=' .env
 docker compose logs controller | grep -i 'auth'
 ```
 
-Three things to check:
+Four things to check:
 
 1. **Are they set at all?** In production the controller refuses to start
    without both and says so:
@@ -292,8 +302,35 @@ Three things to check:
    confirm the diagnosis, then pick a permanent one that survives the round
    trip.
 
-On AIO/Unraid the same two values are container environment variables in the
-template rather than lines in a `.env`.
+4. **Is sign-in locked?** Ten different wrong passwords lock sign-in for 15
+   minutes. The sign-in form says so and counts down, and the right password is
+   refused until it lifts. It's a timed lock, not a ban: it's held in memory, it
+   lifts by itself, and restarting the controller clears it at once. The music
+   keeps playing while you do:
+
+   ```bash
+   docker compose restart controller
+   ```
+
+   A client re-sending one old password counts once, however often it tries, so
+   a forgotten tab or an integration still holding the old `ADMIN_PASS` can't
+   trip it.
+
+   The final say is yours. If the station can't be reached from the internet and
+   you'd rather not have the lock, add this to `.env` and recreate the controller:
+
+   ```bash
+   ADMIN_LOCKOUT=off
+   docker compose up -d --force-recreate controller
+   ```
+
+   Nothing then limits password guesses, so `ADMIN_PASS` alone guards the admin
+   API. The controller logs a warning at every boot while it's off. Don't use this
+   on a station exposed to the internet.
+
+On AIO/Unraid the same values are container environment variables in the
+template rather than lines in a `.env`, and restarting the container clears a
+lock, though that restarts the stream too.
 
 ### The stream is silent but containers are healthy
 
