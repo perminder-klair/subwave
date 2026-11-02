@@ -308,17 +308,19 @@ const comments = (f: Fields): Comments => [
 ];
 
 const WIDE = 'Café カフェ';
+// A byte outside ASCII, so Latin-1 read as anything else is caught.
+const LATIN = 'Café';
 const LAYOUTS: { name: string; title: string; build: (f: Fields) => Buffer }[] = [
-  { name: 'ID3v2.2, Latin-1', title: 'Go', build: id3Layout(2, 0) },
+  { name: 'ID3v2.2, Latin-1', title: LATIN, build: id3Layout(2, 0) },
   { name: 'ID3v2.2, UTF-16', title: WIDE, build: id3Layout(2, 1) },
-  { name: 'ID3v2.3, Latin-1', title: 'Go', build: id3Layout(3, 0) },
+  { name: 'ID3v2.3, Latin-1', title: LATIN, build: id3Layout(3, 0) },
   { name: 'ID3v2.3, UTF-16 with a little-endian BOM', title: WIDE, build: id3Layout(3, 1) },
   { name: 'ID3v2.3, UTF-16 with a big-endian BOM', title: WIDE, build: id3Layout(3, 1, true) },
-  { name: 'ID3v2.4, Latin-1', title: 'Go', build: id3Layout(4, 0) },
+  { name: 'ID3v2.4, Latin-1', title: LATIN, build: id3Layout(4, 0) },
   { name: 'ID3v2.4, UTF-16 with a BOM', title: WIDE, build: id3Layout(4, 1) },
   { name: 'ID3v2.4, UTF-16BE', title: WIDE, build: id3Layout(4, 2) },
   { name: 'ID3v2.4, UTF-8', title: WIDE, build: id3Layout(4, 3) },
-  { name: 'ID3v1', title: 'Go', build: f => Buffer.concat([audioBytes(4096, f.words), id3v1({ title: f.title, album: f.album })]) },
+  { name: 'ID3v1', title: LATIN, build: f => Buffer.concat([audioBytes(4096, f.words), id3v1({ title: f.title, album: f.album })]) },
   { name: 'FLAC', title: WIDE, build: f => flac(comments(f), { words: f.words }) },
   { name: 'FLAC behind an ID3v2 tag', title: 'Go', build: f => flac(comments(f), { words: f.words, id3: id3v2([textFrame('TPE1', 'Someone')]) }) },
   { name: 'Ogg Vorbis', title: WIDE, build: f => ogg('vorbis', comments(f), { words: f.words }) },
