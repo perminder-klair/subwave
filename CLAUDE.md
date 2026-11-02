@@ -113,6 +113,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Write `genres`, never `genre` (a generated column); `subsonic.songGenres()` is the one ingest normaliser. Genre matching is one-directional.
 - Judge era with `resolveEraYear` and `yearUntrusted`, never raw `year`, and keep the JS and SQL era filters in agreement.
 - Silence trim measures against an absolute floor, and `music/silence-trim.ts` owns every onset shift.
+- A track's instrumental verdict is `isInstrumental` over both measured windows, each judged alone (`music/lyric-vocal.ts`). A row carrying `vocalRanges` carries the tail evidence too, and SQL reads it through `SQL_TAIL_VOCAL_RANGES`, never the whole `outro_json`.
 - Library coverage never counts on the read path; only `refresh()` counts it.
 - Anything going to Liquidsoap uses `getAnnotatedUri`.
 - The tagger's own `moods`/`energy` never enter the embed text. Bump `TAGGER_CONTRACT_VERSION` (`music/tagger-core.ts`) when the prompt asks for something different.
@@ -122,9 +123,11 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - The track-length cap and floor are different mechanisms; never unify them. A never-starve filter never returns its input array.
 - Tempo-derived timing is octave-safe: fold, then halve, never clamp.
 - The seed track id is not a pick (`util/pick-seed.ts`).
+- A clean show (`show.excludeExplicit`) holds back only a positive `explicit` tag; no tag and unknown pass (`music/explicit-policy.ts`). It filters before every never-starve step, is hard on the pick paths and requests, and only the coast may relax it, last, in the booth log. The drain judges an unsent automatic pick again, and a tagged pick running into one fades where it begins (`music.md`).
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
 - The analyzer writes shared folders 777 and files 666 whatever its umask, and a folder the sweep cannot delete leaves the budget check, before any delete if the `access()` probe catches it, otherwise once its own delete fails (`broadcast.md`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
+- Track-level Last.fm tags are opt-in and `lastfm_tags` stays the one list: `lastfm.getMergedTags` is the bulk pass's and the retag route's one read, `db.recordLastfmTrackTags` their one write, and only a genuine answer stamps `lastfm_track_tags_at`. A failure never does, or an outage marks the library done. The merge is additive, the song's own tags ahead of the artist's whole list, so turning this on can only make a `tag` rule match more, never less (`music.md`).
 - The orphan purge moves only what reads as a stem dir, deletes only from its quarantine, only what still reads as stems, and only past the grace (one exception: a newer live copy replaces a quarantined one of the same id, on a fresh stamp), and keeps quarantine bytes outside the budget (`music/orphan-purge.ts`).
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).
 - `getLocalPath()` is for Liquidsoap: it answers only for a mount the mixer proved it can read (`music/library-mount.ts`), and anything short of that proof streams. A reader in the controller uses `findLibraryFile()`.

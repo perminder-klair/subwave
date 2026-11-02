@@ -261,6 +261,7 @@ export default function PlayerScreen() {
     tunedIn,
     status,
     stop,
+    tune,
   });
   const hideFace = gate.solid && gate.phase !== 'ok';
   // A refused Station login (#1873) stops the player and covers it, over

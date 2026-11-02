@@ -8,7 +8,7 @@
 // absent instrument from a rare one (docs/internals/music.md).
 
 import crypto from 'node:crypto';
-import { isInstrumental } from './lyric-vocal.js';
+import { isInstrumental, type VocalEvidence } from './lyric-vocal.js';
 import {
   centeredScores,
   DEFAULT_MARGIN_SD,
@@ -111,10 +111,10 @@ export function selectAudioDescriptors(
   return out;
 }
 
-export interface DescribedTrack {
+// VocalEvidence carries both windows, so the vocal labels follow the same
+// verdict as every other reader.
+export interface DescribedTrack extends VocalEvidence {
   audioDescriptors?: readonly string[] | null;
-  vocalRanges?: unknown[] | null;
-  vocalRangesInvalid?: boolean;
 }
 
 // What a consumer may read of a track's stored labels. isInstrumental owns the
@@ -122,6 +122,6 @@ export interface DescribedTrack {
 // time: a later change in the verdict flows through without a re-score.
 export function usableDescriptors(track?: DescribedTrack | null): string[] {
   const labels = (track?.audioDescriptors ?? []).map((l) => String(l || '').trim()).filter(Boolean);
-  if (isInstrumental(track?.vocalRanges, track?.vocalRangesInvalid) !== true) return labels;
+  if (isInstrumental(track) !== true) return labels;
   return labels.filter((l) => GROUP_OF.get(l) !== 'vocal');
 }

@@ -323,6 +323,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Audio fusion weight', section: 'library', card: 'Propagation', keywords: 'clap audio text fusion analyzer' },
   { label: 'Active-learning rounds', section: 'library', card: 'Propagation', keywords: 'rounds least confident passes' },
   { label: 'Last.fm tags', section: 'library', card: 'Enrichment', keywords: 'crowd tags embed text' },
+  { label: 'Last.fm track tags', section: 'library', card: 'Enrichment', keywords: 'lastfm per song crowd tags backfill' },
   { label: 'Lyrics', section: 'library', card: 'Enrichment', keywords: 'lyrics embed text' },
 
   // ── web search ─────────────────────────────────────────────────────────────

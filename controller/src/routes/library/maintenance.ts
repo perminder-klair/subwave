@@ -269,6 +269,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     // Tri-state gate shared with tag-library.phaseEnrich: true always enriches,
     // false never, unset enriches when a Last.fm key is present (#532).
     const lastfmEnabled = lastfm.lastfmEnrichEnabled(enrichCfg.lastfmTags, lastfm.hasLastfmKey());
+    const trackTagsOn = lastfm.lastfmTrackTagsEnabled(enrichCfg, lastfm.hasLastfmKey());
     const lyricsEnabled = enrichCfg.lyrics !== false;
 
     // 1. Ensure the track row exists so the upserts below have a row to attach to.
@@ -285,8 +286,12 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     if (lastfmEnabled && song.artist) {
       try {
         // Same source as the bulk tagger: direct Last.fm when a key is present,
-        // else Navidrome's getArtistInfo2 (#532).
-        lastfmTags = await lastfm.getArtistTags(song.artist, { count: 10 });
+        // else Navidrome's getArtistInfo2 (#532). With track tags on, the same
+        // merge and the same write as its track pass: the upsert below then sees
+        // an unchanged list and leaves the stamp alone.
+        lastfmTags = trackTagsOn
+          ? db.recordLastfmTrackTags(id, await lastfm.getMergedTags(song.artist, song.title, { count: 10 }))
+          : await lastfm.getArtistTags(song.artist, { count: 10 });
       } catch (err) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
       }
@@ -349,6 +354,8 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
                 bpm: rec.bpm, musicalKey: rec.musicalKey, audioMoods: rec.audioMoods,
                 vocalRanges: rec.vocalRanges,
                 vocalRangesInvalid: rec.vocalRangesInvalid,
+                tailVocalRanges: rec.tailVocalRanges,
+                tailVocalRangesInvalid: rec.tailVocalRangesInvalid,
               }
             : null,
         );

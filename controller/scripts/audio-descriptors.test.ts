@@ -323,6 +323,16 @@ test('vocal labels drop for a measured instrumental and only for one', () => {
     stored,
     'an invalid measurement cannot earn instrumental',
   );
+  assert.deepEqual(
+    usableDescriptors({ audioDescriptors: stored, vocalRanges: [], tailVocalRanges: [{ startMs: 200_000, endMs: 215_000 }] }),
+    stored,
+    'a song sung only in its last 20 s keeps it',
+  );
+  assert.deepEqual(
+    usableDescriptors({ audioDescriptors: stored, vocalRanges: [], tailVocalRanges: [{ startMs: 200_000, endMs: 203_000 }] }),
+    [instrument, production],
+    'tail bleed under the tolerance is still instrumental',
+  );
 });
 
 test('the drop happens at use time, so the verdict can change without a re-score', () => {
