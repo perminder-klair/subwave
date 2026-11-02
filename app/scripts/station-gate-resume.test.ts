@@ -2,7 +2,8 @@
 // no device here, and this wiring (the hold, the `api` it names, tune() toggling) is what gate-resume.ts
 // can't see. `react` is swapped for the few hooks it uses: effects run in order after each render,
 // and state set in one tick lands together, as React batches it. The player is the real one's
-// shape: tune() toggles on what it knows now, stop() always stops.
+// shape: tune() toggles on what it knows now, stop() always stops, and each render hands over a new
+// tune(), so a resume through an old one shows up as 'stale'.
 
 import assert from 'node:assert/strict';
 import Module from 'node:module';
@@ -114,6 +115,7 @@ function station(password: string, answers: StationAuthResult[] = []) {
 function mount(first: StationApi, privacy: StationPrivacy | null, saved: string | null = null) {
   const h = new Host();
   const tunes: string[] = [];
+  let renders = 0;
   const rig = {
     api: first,
     privacy,
@@ -134,6 +136,7 @@ function mount(first: StationApi, privacy: StationPrivacy | null, saved: string 
     },
     flush() {
       h.render(() => {
+        const render = (renders += 1);
         rig.gate = useStationGate({
           api: rig.api,
           privacy: rig.privacy,
@@ -144,7 +147,7 @@ function mount(first: StationApi, privacy: StationPrivacy | null, saved: string 
           tunedIn: rig.tunedIn,
           status: rig.tunedIn ? 'playing' : 'idle',
           stop,
-          tune,
+          tune: () => tune(render),
         });
       });
     },
@@ -165,7 +168,8 @@ function mount(first: StationApi, privacy: StationPrivacy | null, saved: string 
     rig.tunedIn = false;
     h.dirty = true;
   };
-  const tune = () => {
+  const tune = (render: number) => {
+    if (render !== renders) tunes.push('stale');
     if (rig.tunedIn) return stop();
     tunes.push('tune');
     rig.tunedIn = true;
