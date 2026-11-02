@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # subwave-analyzer — acoustic-analysis sidecar (bpm/key/intro/loudness, plus
 # optional CLAP "sounds-like" embeddings and Demucs vocal-activity ranges).
 # Default-on service in every compose file; the controller POSTs to it via
@@ -19,11 +18,11 @@
 # docs/tts-heavy.md — a host without reach fails there, and the analyzer now
 # reports the reason on /health rather than degrading silently.
 #
-# One model IS baked, into every flavour: the Beat This! downbeat tracker
-# (ANALYZE_DOWNBEATS=beat-this, off by default), ~10 MB of ONNX fetched by a
-# checksum-pinned ADD below. ADD --checksum needs Dockerfile frontend 1.6+,
-# which the `# syntax=` line guarantees on any BuildKit, as in
-# docker/Dockerfile.aio and docker/Dockerfile.broadcast.
+# One small model IS baked, into the WITH_DEMUCS=1 flavours only: the Beat
+# This! downbeat tracker (ANALYZE_DOWNBEATS=beat-this, off by default), ~10 MB
+# of ONNX fetched checksum-pinned below. The bar grid it improves is read only
+# by stem blends and the stem cache, which need Demucs stems, so the lean
+# image ships neither it nor onnxruntime.
 
 FROM python:3.11-slim-bookworm
 
@@ -44,13 +43,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # both cpu and cu128 indexes, including cp313 wheels for the AIO. cu128 adds
 # Blackwell (sm_120) kernels and vendors the runtime as nvidia-*-cu12 deps.
 # Chatterbox's separate venv keeps its own upstream torch pin.
-#
-# onnxruntime is in the LEAN set (the Beat This downbeat model needs it, and
-# it is torch-free), so every tier gets the one pin and the heavy tier's CLAP
-# ONNX route reuses it. It stays the CPU build even under WITH_CUDA: the ONNX
-# paths are the downbeat model and the CLAP_MODEL_PATH custom-export route,
-# and onnxruntime-gpu drags in a fragile CUDA/cuDNN matrix. The transformers
-# path runs on the GPU.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
@@ -59,8 +51,16 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
     if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu128"; fi && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 \
-      onnxruntime==1.27.0 && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
+    if [ "$WITH_CLAP" = "1" ] || [ "$WITH_DEMUCS" = "1" ]; then \
+      # One onnxruntime pin for both heavy flags: CLAP's CLAP_MODEL_PATH
+      # custom-export route runs on it, and so does the Beat This downbeat
+      # model that WITH_DEMUCS builds fetch below. It stays the CPU build
+      # even under WITH_CUDA: onnxruntime-gpu drags in a fragile CUDA/cuDNN
+      # matrix, and the transformers path runs on the GPU.
+      /opt/analyzer/venv/bin/pip install --no-cache-dir onnxruntime==1.27.0 && \
+      /opt/analyzer/venv/bin/python -c "import onnxruntime" ; \
+    fi && \
     if [ "$WITH_CLAP" = "1" ]; then \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
@@ -82,6 +82,21 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 
+# The Beat This! downbeat model at the worker's default BEAT_THIS_MODEL, in
+# WITH_DEMUCS=1 builds only: stems are what make its grid audible, and those
+# builds have onnxruntime (above). tools/beat-this/export.py's small0 export,
+# published as a prerelease asset on this repo; sha256sum -c fails the build
+# on any other bytes. Keep the URL and hash in lockstep with
+# docker/Dockerfile.aio; tools/beat-this/README.md says how to publish a new
+# version.
+RUN if [ "$WITH_DEMUCS" = "1" ]; then \
+      mkdir -p /opt/analyzer/models && \
+      curl -fsSL --retry 3 -o /opt/analyzer/models/beat_this-small0.onnx \
+        https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx && \
+      echo "5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf  /opt/analyzer/models/beat_this-small0.onnx" | sha256sum -c - && \
+      chmod 644 /opt/analyzer/models/beat_this-small0.onnx ; \
+    fi
+
 # --- Server venv (FastAPI only — spawns the stdio worker, no model loading) --
 RUN python3 -m venv /opt/server/venv && \
     /opt/server/venv/bin/pip install --no-cache-dir --upgrade pip && \
@@ -97,16 +112,6 @@ WORKDIR /app
 COPY docker/analyzer/server.py /app/server.py
 # The SAME worker the controller runs in-process — single source of truth.
 COPY controller/scripts/analyze_worker.py /app/workers/analyze_worker.py
-# The Beat This! downbeat model at the worker's default BEAT_THIS_MODEL:
-# tools/beat-this/export.py's small0 export, published as a prerelease asset
-# on this repo. --checksum fails the build on any other bytes, and --chmod
-# because ADD gives a downloaded file mode 600 and the server runs as 10001.
-# One file for every architecture. Keep the URL and hash in lockstep with
-# docker/Dockerfile.aio; tools/beat-this/README.md says how to publish a new
-# version.
-ADD --chmod=644 --checksum=sha256:5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf \
-    https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx \
-    /opt/analyzer/models/beat_this-small0.onnx
 
 # Shared state mount — the controller pre-fetches tracks into
 # /var/sub-wave/analyze-tmp. mkdir'd here so the image runs standalone too.

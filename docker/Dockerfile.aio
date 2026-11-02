@@ -172,9 +172,7 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # Pins mirror docker/Dockerfile.analyzer — keep the two in lockstep. This venv
 # runs on the system python3 (trixie → 3.13, unlike the analyzer image's 3.11);
 # torch/torchaudio 2.7.1 publish cp313 wheels on both cpu and cu128 indexes;
-# cu128 includes Blackwell (sm_120) kernels (#1340, #1738). onnxruntime is in
-# the lean set for the Beat This downbeat model, one pin for every tier — see
-# docker/Dockerfile.analyzer.
+# cu128 includes Blackwell (sm_120) kernels (#1340, #1738).
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
@@ -182,11 +180,14 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
     if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu128"; fi && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 \
-      onnxruntime==1.27.0 && \
+    /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
+    if [ "$WITH_CLAP" = "1" ] || [ "$WITH_DEMUCS" = "1" ]; then \
+      # One onnxruntime pin for CLAP's ONNX route and the Beat This model,
+      # the CPU build even under WITH_CUDA — see docker/Dockerfile.analyzer.
+      /opt/analyzer/venv/bin/pip install --no-cache-dir onnxruntime==1.27.0 && \
+      /opt/analyzer/venv/bin/python -c "import onnxruntime" ; \
+    fi && \
     if [ "$WITH_CLAP" = "1" ]; then \
-      # onnxruntime (above) stays the CPU build even under WITH_CUDA — see
-      # docker/Dockerfile.analyzer.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
@@ -212,12 +213,16 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
 ENV ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
     HF_HOME=/var/sub-wave/hf-cache
 # The Beat This! downbeat model (ANALYZE_DOWNBEATS=beat-this) at the worker's
-# default BEAT_THIS_MODEL, checksum-pinned from this repo's prerelease asset.
-# Same URL and hash as docker/Dockerfile.analyzer (its comment has the why);
-# keep the two in lockstep.
-ADD --chmod=644 --checksum=sha256:5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf \
-    https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx \
-    /opt/analyzer/models/beat_this-small0.onnx
+# default BEAT_THIS_MODEL, WITH_DEMUCS=1 builds only, checksum-pinned from
+# this repo's prerelease asset. Same URL and hash as docker/Dockerfile.analyzer
+# (its comment has the why); keep the two in lockstep.
+RUN if [ "$WITH_DEMUCS" = "1" ]; then \
+      mkdir -p /opt/analyzer/models && \
+      curl -fsSL --retry 3 -o /opt/analyzer/models/beat_this-small0.onnx \
+        https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx && \
+      echo "5cff50fb031bc4a43b036f0af4835cf60bf8d43e6ccc8a7e676ed89db53f6eaf  /opt/analyzer/models/beat_this-small0.onnx" | sha256sum -c - && \
+      chmod 644 /opt/analyzer/models/beat_this-small0.onnx ; \
+    fi
 # Expose analyzer pip for maintenance while system python3 keeps precedence.
 # Kokoro and analyzer workers still use their explicit *_PYTHON paths.
 ENV PATH=$PATH:/opt/analyzer/venv/bin
