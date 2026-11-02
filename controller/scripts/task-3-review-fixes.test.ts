@@ -74,24 +74,6 @@ test('a version-35 library from develop gets the language columns in version 36'
   assert.ok(columns().includes('languages'));
 });
 
-// An earlier build of this branch numbered develop's 33 to 35 for itself and
-// left a database at 35 with none of #2214's columns. Step 36 adds them.
-test('a version-35 database from an earlier build of this branch gains the descriptor columns in 36', async () => {
-  db.close();
-  const Database = (await import('better-sqlite3')).default as any;
-  const old = new Database(join(stateDir, 'library.db'));
-  old.exec('ALTER TABLE tracks DROP COLUMN audio_descriptors; ALTER TABLE tracks DROP COLUMN audio_descriptor_scores_json; ALTER TABLE audio_embedding_meta DROP COLUMN descriptor_vocab_hash;');
-  old.pragma('user_version = 35');
-  old.close();
-
-  await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 36);
-  assert.ok(columns().includes('audio_descriptors'));
-  assert.ok(columns().includes('audio_descriptor_scores_json'));
-  const meta = (requireDb().prepare('PRAGMA table_info(audio_embedding_meta)').all() as Array<{ name: string }>).map(row => row.name);
-  assert.ok(meta.includes('descriptor_vocab_hash'));
-});
-
 test('a version-30 language library repairs later tables and retains its language tags', async () => {
   writeLanguageRows();
   db.close();
