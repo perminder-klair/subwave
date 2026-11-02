@@ -851,31 +851,58 @@ def dj_transition(a, b) =
           end
         9000.0 * pow(1100.0 / 9000.0, depth)      # 9 kHz open → 1.1 kHz floor
       end
-      # Makeup on the choked branch: the filter guts the outgoing's energy while
-      # the incoming is only half-faded, so lift the residual +2.6 dB as the
-      # cutoff bottoms out. Without it the mid-blend goes near-quiet.
+      # LEVEL. Heard on air as a step: the sweep's level jumped twice, which
+      # stands out once plain seams hold their level (the equal-power curve).
+      # Measured with `fx-render-test.sh sweepstep` (pink noise A/B, sweep
+      # minus the LINEAR plain fade): −1.4 dB the instant it engaged, then a
+      # 3.5 dB climb to +1.8 dB from 35% to 45% of the blend; on real pairs
+      # (14 s cross) the climb reached +4.9 dB.
+      # ENGAGE: the filtered mix is not transparent even at its open 9 kHz
+      # cutoff, so swapping the raw track for it stepped the level down. The
+      # raw track hands over to it over the first 6% of the blend instead.
+      # MAKEUP: the choke loses about 1 dB of the outgoing early, so +1 dB while
+      # it closes; but the hot log fade keeps the outgoing up late, where the old
+      # +2.6 dB makeup (×1.35 from 30% to 50%) became the climb, so it eases to
+      # −1.1 dB from 40% to 70%. The blend now holds within −0.4..+0.6 dB of the
+      # linear plain fade on pink noise. A bright outgoing still dips while the
+      # cutoff bottoms out (the choke itself, up to −3 dB on real music).
+      # The sweep never takes the equal-power curve (equal_power_seam excludes
+      # it), so against an equal-power plain seam it still sits about 2 dB
+      # under from 25% to 67% of the blend: a gradual dip, not a step.
+      def sweep_engage() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        t_eng = 0.06 * d
+        x = if e >= t_eng then 1.0 else e / t_eng end
+        3.0 * x * x - 2.0 * x * x * x
+      end
       def sweep_gain() =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
-        g_max = 1.35
-        t_from = 0.30 * d
-        t_to   = 0.50 * d
-        if e <= t_from then 1.0
-        elsif e >= t_to then g_max
-        else
-          x = (e - t_from) / (t_to - t_from)
-          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
-        end
+        g_early = 1.12
+        g_late  = 0.88
+        t_from = 0.40 * d
+        t_to   = 0.70 * d
+        g =
+          if e <= t_from then g_early
+          elsif e >= t_to then g_late
+          else
+            x = (e - t_from) / (t_to - t_from)
+            g_early + (3.0 * x * x - 2.0 * x * x * x) * (g_late - g_early)
+          end
+        1.0 + sweep_engage() * (g - 1.0)
       end
       # PARALLEL DRY BLEED — why the stages run full-wet. Wetness on cascaded
       # stages MULTIPLIES the dry path (0.35 x 0.35 ~= 12% ~= -18 dB), so a
       # wetness cap craters the mid-band. An explicit dry branch around a
-      # full-wet chain gives a hard floor: 30% of the untouched track reaches
-      # the mix (~-10 dB, ~-8 dB after makeup) however deep the cutoff dives.
+      # full-wet chain gives a hard floor: once engaged, 30% of the untouched
+      # track reaches the mix however deep the cutoff dives, ~-9.5 dB under the
+      # early makeup (x1.12) and ~-11.6 dB under the late one (x0.88).
       swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
                 filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_source))
       amplify(override=null, sweep_gain, add(normalize=false,
-        [amplify(override=null, 0.30, a_source), amplify(override=null, 0.75, swept)]))
+        [amplify(override=null, fun () -> 1.0 - 0.70 * sweep_engage(), a_source),
+         amplify(override=null, fun () -> 0.75 * sweep_engage(), swept)]))
     else
       a_source
     end
@@ -2626,6 +2653,27 @@ server.register(
   description="Consume a proto_subhttp completion outcome: ready / failed / pending",
   usage="subhttp_probe_status <probe-id>",
   fun(arg) -> take_subhttp_outcome(string.trim(arg))
+)
+
+# Whether this container can read a regular file. The controller asks with a
+# real file off its MUSIC_LIBRARY_PATH mount (music/library-mount.ts) and only
+# sends a local path once this says "yes", because the mixer is what opens the
+# file and the default compose files mount no library here. Read-only: `test`
+# stats the path and opens nothing, so a large file costs nothing. The timeout
+# bounds a hung mount, and an unanswered question reads "no", the safe side: the
+# track streams.
+server.register(
+  "path_readable",
+  description="Whether the mixer can read a regular file at this path: yes / no",
+  usage="path_readable <path>",
+  fun(arg) -> begin
+    path = process.quote(string.trim(arg))
+    try
+      if process.test(timeout=1., "test -f #{path} && test -r #{path}") then "yes" else "no" end
+    catch _ do
+      "no"
+    end
+  end
 )
 
 # What a skip would air next from dj_queue: "ready" (a resolved request is

@@ -2,13 +2,15 @@
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
-import { FACETS, clearFacetFailures, clearFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
-import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
-import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
+import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, restampFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
+import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
+import { keepStoredTags } from '../lastfm-tag-policy.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
+import { acceptedAt, fileReplaced } from '../replaced-file-policy.js';
 
 export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
@@ -142,10 +144,7 @@ export function resolvedEraYearForTrack(id: string): number | null {
   return row ? resolvedStoredEra(row) : null;
 }
 
-function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
-  if (!before) return;
-  const after = storedEra(id);
-  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+function markTextVectorDirty(id: string): void {
   requireDb()
     .prepare(
       `UPDATE tracks SET text_vector_dirty = 1
@@ -154,8 +153,16 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
     .run(id);
 }
 
-// Existing vectors whose era-bearing source text changed. They remain in the
-// KNN index until phaseEmbed successfully replaces them.
+function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
+  if (!before) return;
+  const after = storedEra(id);
+  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+  markTextVectorDirty(id);
+}
+
+// Existing vectors whose source text changed: an era edit, (opt-in) the track's
+// Last.fm tags, or migration 32's tail verdict. They remain in the KNN index until
+// phaseEmbed successfully replaces them.
 export function textVectorDirtyIds(): string[] {
   return (requireDb()
     .prepare(
@@ -166,13 +173,124 @@ export function textVectorDirtyIds(): string[] {
     .all() as Array<{ id: string }>).map(r => r.id);
 }
 
-export function upsertTrackMeta(id: string, meta: TrackMeta): void {
+// Rounds before it checks, so the test is on the value that gets stored: a stored
+// 0 is not NULL, and it would overwrite a good value through the COALESCE.
+function positiveInt(v: unknown): number | null {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// The one cleaning rule for a track's file facts. Anything it nulls counts as not
+// reported, so COALESCE keeps what is stored. Running it twice changes nothing.
+export function cleanFileInfo(raw: { [K in keyof FileInfo]?: unknown }): FileInfo {
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v : null);
+  return {
+    filePath: text(raw.filePath),
+    fileSuffix: text(raw.fileSuffix)?.toLowerCase() ?? null,
+    fileSize: positiveInt(raw.fileSize),
+    bitRate: positiveInt(raw.bitRate),
+  };
+}
+
+// When the whole track was last measured: its OLDEST analysis facet row, the
+// time every answer has stood since. NULL = never measured. Not the newest
+// row: a write of one facet (the CLAP-only fast path, a facet plan) re-measures
+// that facet alone, and would pass the rest off as measured after a replacement.
+// Caveat: the seed dates every row of a track from when the facet table was
+// created, so a file replaced before that reads as measured after its change
+// and is left to the size signal.
+export function lastMeasuredAt(id: string): string | null {
+  const r = requireDb()
+    .prepare('SELECT MIN(at) AS at FROM track_facet_status WHERE track_id = ?')
+    .get(id) as { at: string | null } | undefined;
+  return r?.at ?? null;
+}
+
+// The oldest measurement in the library: a file Navidrome last changed before
+// it cannot be stale for any track (file-changes.changedFiles' first floor).
+export function earliestMeasuredAt(): string | null {
+  const r = requireDb()
+    .prepare('SELECT MIN(at) AS at FROM track_facet_status')
+    .get() as { at: string | null } | undefined;
+  return r?.at ?? null;
+}
+
+// Everything the analyzer measured from a track's audio, for one track: the
+// head analysis and its loudness, the tail, vocal ranges, the stems stamp, CLAP
+// and the audio moods and descriptors derived from it, the map position derived
+// from CLAP, and the failure history that described the old file. Unlike clearAnalysis()
+// nothing is kept: every figure was measured on a file that is gone. Metadata,
+// tags, years, lyrics and plays are not audio measurements and stay. The stem
+// files themselves are the caller's (stem-cache.forgetStems), since this runs
+// inside the walk's sync write. `fileSize`, from the walk's size signal, is
+// stored here with the clear: upsertTrackMeta keeps the old size until then, so
+// a held clear is found again by the next walk.
+// An analysis pass runs in its own process: one that read the old file before
+// the walk cleared it can still write that measurement afterwards, and then the
+// replacement is not revisited (a narrow window; a later edit re-triggers it).
+export function clearTrackAudio(id: string, fileSize?: number | null): void {
+  const d = requireDb();
+  d.transaction(() => {
+    const size = positiveInt(fileSize);
+    if (size != null) d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?').run(size, id);
+    d.prepare(
+      `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL, analysis_confidence = NULL,
+         analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL,
+         structure_json = NULL, vocal_ranges_json = NULL, pace_json = NULL, beats_json = NULL,
+         bars_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
+         audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
+         outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, lead_silence_ms = NULL,
+         stems_at = NULL, map_x = NULL, map_y = NULL,
+         analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL
+       WHERE id = ?`,
+    ).run(id);
+    d.prepare('DELETE FROM track_audio_vectors WHERE id = ?').run(id);
+    // The analysis rows (and the unmeasurable answers they carry) described the
+    // old file.
+    deleteFacetRows(id);
+    syncTrackFacets(id);
+  })();
+}
+
+// The operator's other answer to a replaced file: the audio did not change (a
+// tag editor's "save all", a restore that reset file dates), so nothing is
+// cleared and every measurement stands for the file as it is now. `files` is
+// the walk's candidates: id -> the walked size, or null from the change-time
+// signal. `changedAt` is what Navidrome dated each, where it said (acceptedAt).
+// One transaction, so a walk that dies here asks again in full.
+export function acceptReplacedFiles(
+  files: ReadonlyMap<string, number | null>,
+  changedAt: ReadonlyMap<string, string> = new Map(),
+): void {
+  const d = requireDb();
+  const setSize = d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?');
+  d.transaction(() => {
+    for (const [id, fileSize] of files) {
+      const size = positiveInt(fileSize);
+      if (size != null) setSize.run(size, id);
+      restampFacetRows(id, acceptedAt(changedAt.get(id)));
+    }
+  })();
+}
+
+// Returns true when the walk found the file replaced (replaced-file-policy
+// fileReplaced: its size changed). Nothing is cleared here: the walk gathers
+// every candidate and clears them at its end, behind a mass hold
+// (replaced-file-policy.decideReplacedClear), with clearTrackAudio(id, size).
+// Until then the stored size is kept, so a held candidate is found again.
+export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
   const eraBefore = storedEra(id);
+  const file = cleanFileInfo(meta);
+  const walkedSize = file.fileSize;
+  const storedSize = walkedSize == null ? null
+    : (requireDb().prepare('SELECT file_size AS s FROM tracks WHERE id = ?').get(id) as { s: number | null } | undefined)?.s ?? null;
+  const replaced = fileReplaced(storedSize, walkedSize);
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec,
+                          file_path, file_suffix, file_size, bit_rate, explicit_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -206,7 +324,15 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
         is_compilation = COALESCE(excluded.is_compilation, tracks.is_compilation),
         era_untrusted  = COALESCE(excluded.era_untrusted, tracks.era_untrusted),
         genres       = COALESCE(excluded.genres, tracks.genres),
-        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
+        duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
+        -- File facts: only the library walks pass them; any other writer passes NULL.
+        file_path    = COALESCE(excluded.file_path, tracks.file_path),
+        file_suffix  = COALESCE(excluded.file_suffix, tracks.file_suffix),
+        file_size    = COALESCE(excluded.file_size, tracks.file_size),
+        bit_rate     = COALESCE(excluded.bit_rate, tracks.bit_rate),
+        -- A CASE, not COALESCE: the walk must be able to clear a removed tag,
+        -- and every other writer (undefined) must leave the walked value alone.
+        explicit_status = CASE WHEN ? = 1 THEN excluded.explicit_status ELSE tracks.explicit_status END
     `,
     )
     .run(
@@ -223,8 +349,15 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.eraUntrusted == null ? null : meta.eraUntrusted ? 1 : 0,
       meta.genres?.length ? JSON.stringify(meta.genres) : null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
+      file.filePath,
+      file.fileSuffix,
+      replaced ? storedSize : walkedSize,
+      file.bitRate,
+      normaliseExplicitStatus(meta.explicitStatus),
+      meta.explicitStatus === undefined ? 0 : 1,
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);
+  return replaced;
 }
 
 // Tracks still owed an original-year lookup (#842). Not scoped to the tagger's
@@ -297,17 +430,79 @@ export function setManualOriginalYear(id: string, year: number | null): void {
   markTextVectorDirtyIfEraChanged(id, eraBefore);
 }
 
+// The stamp describes the stored list, so a write that replaces the list clears
+// it and the row is owed a lookup again: with the opt-in off, a re-enrich puts
+// the artist-only list back, and turning it on later has to see that. A station
+// that never turned it on has no stamps, so this changes nothing there.
 export function upsertTrackEnrichment(id: string, enrich: TrackEnrichment): void {
+  const lastfmTags = enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null;
   requireDb()
     .prepare(
-      `UPDATE tracks SET lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ? WHERE id = ?`,
+      `UPDATE tracks SET
+         lastfm_track_tags_at = CASE WHEN lastfm_tags IS ? THEN lastfm_track_tags_at END,
+         lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ?
+       WHERE id = ?`,
     )
     .run(
-      enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null,
+      lastfmTags,
+      lastfmTags,
       enrich.lyricExcerpt ?? null,
       new Date().toISOString(),
       id,
     );
+}
+
+// Tracks still owed a track.getTopTags lookup. Not scoped to the tagger's
+// untagged/enriched sets, for the same reason as idsNeedingOriginalYear. A row
+// with no artist or title can't be asked about, so it is never owed.
+export function idsNeedingLastfmTrackTags(): string[] {
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks
+          WHERE lastfm_track_tags_at IS NULL
+            AND TRIM(COALESCE(artist, '')) <> ''
+            AND TRIM(COALESCE(title, '')) <> ''`,
+      )
+      .all() as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+// The one write of a track-aware Last.fm list, shared by the bulk pass and the
+// retag route. A genuine answer stamps the row, hit or miss, and replaces the
+// list if it has tags on it: one with none says nothing about a list that may
+// have come from Navidrome. A row's first answer also keeps what the row already
+// held (keepStoredTags): only a row that has been answered holds its own old
+// tags, which are the ones to let go of. Anything else stamps nothing and never
+// costs a row the list it has, so an outage leaves the library as it found it; a
+// row with no list takes what did come back, so a new track isn't embedded bare.
+// Only a real
+// change touches the list or dirties the vector: `lastfm_tags` is in the search
+// keys' trigger, and the embed text is built from this exact order. Returns the
+// stored list.
+export function recordLastfmTrackTags(
+  id: string,
+  lookup: { tags: string[]; answered: boolean },
+): string[] | null {
+  const d = requireDb();
+  const row = d.prepare(`SELECT lastfm_tags, lastfm_track_tags_at FROM tracks WHERE id = ?`).get(id) as
+    | Pick<TrackRow, 'lastfm_tags' | 'lastfm_track_tags_at'>
+    | undefined;
+  if (!row) return null;
+  const stored = row.lastfm_tags ? safeParseArray(row.lastfm_tags) : [];
+  const replaces = lookup.answered && lookup.tags.length > 0;
+  const next = replaces && !row.lastfm_track_tags_at
+    ? keepStoredTags(lookup.tags, stored)
+    : replaces || stored.length === 0 ? lookup.tags : stored;
+  if (JSON.stringify(next) !== JSON.stringify(stored)) {
+    d.prepare(`UPDATE tracks SET lastfm_tags = ? WHERE id = ?`)
+      .run(next.length ? JSON.stringify(next) : null, id);
+    markTextVectorDirty(id);
+  }
+  if (lookup.answered) {
+    d.prepare(`UPDATE tracks SET lastfm_track_tags_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+  }
+  return next.length ? next : null;
 }
 
 export function upsertTrackTags(id: string, tags: TagWrite): void {
@@ -733,12 +928,13 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
       key_ranges_json = NULL, outro_json = NULL,
       lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
+      audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
       -- The failure history goes with the analysis it describes, or the tracks
       -- most in need of a retry would be the only ones skipped.
       analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL`,
   ).run();
-  // CLAP vectors are written in the same pass, and the audio moods cleared
-  // above are derived from them.
+  // CLAP vectors are written in the same pass, and the audio moods and
+  // descriptors cleared above are derived from them.
   d.prepare('DELETE FROM track_audio_vectors').run();
   clearFacetRows(opts);
   })();

@@ -625,6 +625,11 @@ export const DEFAULTS = {
       // images and tags always came back empty; it stays as the fallback when
       // forced on with no api_key, for custom Navidromes that DO expose tag[].
       lastfmTags: null as boolean | null,
+      // Add each song's own tags (track.getTopTags) ahead of its artist's, in the
+      // same lastfm_tags list. Off by default, unlike the rest of this block:
+      // it costs one call per track plus a re-embed of whatever changes, about 50
+      // minutes on a 10k library. Needs an api_key and lastfmTags not forced off.
+      lastfmTrackTags: false,
       lyrics: true,       // fetch + include lyric excerpt in embed text
       // Resolve original release years for compilation tracks via MusicBrainz
       // (#842) — a compilation's `year` tag is the compilation's release date, so
@@ -834,6 +839,14 @@ export const DEFAULTS = {
     // with the panel: it sends each such track's artist, title, album and
     // length to lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
     lrclib: true,
+  },
+  // The Navidrome connection itself is in setup-config.json; this block is the
+  // station's behaviour toward it. `reportRealPath`: keep Navidrome's "Report
+  // Real Path" ticked on SUB/WAVE's own player rows (hourly + at boot), so
+  // `path` is the file on disk rather than one built from tags. Off by default:
+  // it writes to the operator's Navidrome. See music/navidrome-players-policy.ts.
+  musicSource: {
+    reportRealPath: false,
   },
 };
 
