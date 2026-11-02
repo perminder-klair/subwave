@@ -607,6 +607,14 @@ test('MP4 items TagLib reads its own way are unsure: Navidrome reports another t
   }
 });
 
+test('MP4 items after one whose data lies past the windows are still checked by name', () => {
+  // A 70 KB freeform item leaves the head window; the atom named TIT2 after it is
+  // in the tail window, and Navidrome would title the file `Up`.
+  const big = freeform('iTunNORM', ['x'.repeat(70 * 1024)]);
+  const bytes = mp4({ title: 'Go' }, { items: [big, atom(Buffer.from('TIT2'), dataAtom(Buffer.from('Up'), 1))], audio: 4096 });
+  assert.equal(asked(bytes, 'Go', 'm4a').found, null);
+});
+
 test('MP4 atoms TagLib reads as its spec has them: a 64-bit size and a size of 0 on the path', () => {
   const M4A = 'Artist/Album/01 - Song.m4a';
   const late = mp4({ title: 'Go' }, { layout: 'late' });
@@ -762,6 +770,9 @@ test('a title or subtitle value that isn\'t text is unsure, even after a valid o
   const right = flac([['TITLE', 'Go'], ['SUBTITLE', latin('Live at the Caf\xe9')]]);
   put(join(root, FLAC_SONG), right);
   assert.equal(localFileState(song(`/srv/library/${FLAC_SONG}`, 'Go (Live at the Caf\ufffd)', right.length)), 'unread');
+  const paired = v24({ id: 'TIT2', data: surrogate });
+  put(join(root, MP3), paired);
+  assert.equal(localFileState(song(`/srv/library/${MP3}`, '\u{11847}o', paired.length)), 'unread', 'a lone surrogate, as Navidrome reports it');
   // Past a frame's first value that isn't empty nothing is decoded: Navidrome
   // reports that first value.
   assert.equal(asked(v24(raw('TIT2', '\x03Go\0G\xffo')), 'Go').found, join(root, MP3), 'a bad second value in one frame');
