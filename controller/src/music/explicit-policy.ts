@@ -35,10 +35,15 @@ export function excludesExplicit(show: CleanShowFlag): boolean {
 // A candidate that carries the field is judged on it, null and '' included: a
 // library row knows its own column, and a raw child is the server's live answer.
 // Undefined is a source that never reported it, so the library is asked, and a
-// track with no row is unknown.
+// track with no row is unknown. So is one the library cannot answer for: this
+// runs on the drain, and a failing read must not stop the music.
 export function trackExplicitStatus(t: ExplicitTrack | null | undefined): ExplicitStatus | null {
   if (t?.explicitStatus !== undefined) return normaliseExplicitStatus(t.explicitStatus);
-  return normaliseExplicitStatus(t?.id ? library.get(t.id)?.explicitStatus : null);
+  try {
+    return normaliseExplicitStatus(t?.id ? library.get(t.id)?.explicitStatus : null);
+  } catch {
+    return null;
+  }
 }
 
 // Hard, even to empty. Always a fresh array, on or off: the coast rebuilds its
@@ -75,8 +80,14 @@ export function explicitGate<T extends ExplicitTrack>(show: CleanShowFlag): Expl
   };
 }
 
-// A listener's ask during a clean show. Operator pushes never reach this: the
-// studio routes go straight to queue.push(), which does not ask.
-export function heldBackFromRequest(track: ExplicitTrack | null | undefined, show: CleanShowFlag): boolean {
+// One track against one show: a listener's ask, or an unsent automatic pick at
+// the drain. Operator pushes never reach this: the studio routes go straight to
+// queue.push(), which does not ask, and the drain leaves whatever was requested.
+export function heldBackFromShow(track: ExplicitTrack | null | undefined, show: CleanShowFlag): boolean {
   return excludesExplicit(show) && trackExplicitStatus(track) === 'explicit';
+}
+
+// Whether any show is clean at all, so a station with none does no work.
+export function anyCleanShow(shows: readonly CleanShowFlag[] | null | undefined): boolean {
+  return Array.isArray(shows) && shows.some(excludesExplicit);
 }

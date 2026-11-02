@@ -31,7 +31,7 @@ import { classifyUnsupportedLabels, directRequestUnsupported, isRefusedOutcome, 
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
 import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
-import { heldBackFromRequest } from '../music/explicit-policy.js';
+import { heldBackFromShow } from '../music/explicit-policy.js';
 
 export const router = express.Router();
 
@@ -190,7 +190,7 @@ function withWaitNotice(ack: string | null | undefined, trackId: string | null |
 // show on air now, and an operator's own push does not come through this route.
 function heldBackForShow(track: any): boolean {
   const show = settings.resolveActiveShow();
-  if (!heldBackFromRequest(track, show)) return false;
+  if (!heldBackFromShow(track, show)) return false;
   queue.log('blocked', `${track?.title} — ${track?.artist} (request held back: tagged explicit, clean show "${show?.name}")`);
   return true;
 }

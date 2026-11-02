@@ -17,8 +17,9 @@ process.env.STATE_DIR = dir;
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
 const {
-  excludesExplicit, explicitGate, heldBackFromRequest, trackExplicitStatus, withoutExplicit,
+  anyCleanShow, excludesExplicit, explicitGate, heldBackFromShow, trackExplicitStatus, withoutExplicit,
 } = await import('../src/music/explicit-policy.js');
+const { requireDb } = await import('../src/music/library-db/handle.js');
 const { airableAnchorTracks, showNoRepeatGuard, strictShowLibraryPool } = await import('../src/music/show-recency.js');
 const { showDestinationPool } = await import('../src/music/journey-destination.js');
 const { buildShowCandidateDiagnostic, diagnoseShowCandidates } = await import('../src/music/show-candidates.js');
@@ -81,13 +82,34 @@ test('a gate remembers what it held, once per track, across a whole build', () =
   assert.deepEqual(ids(gate.held()), ['e']);
 });
 
-test('a request is held back only by a clean show, and only for a positive tag', () => {
+test('a track is held back only by a clean show, and only for a positive tag', () => {
   const clean = { excludeExplicit: true };
-  assert.equal(heldBackFromRequest(EXPLICIT, clean), true);
-  assert.equal(heldBackFromRequest(CLEAN, clean), false);
-  assert.equal(heldBackFromRequest(NO_TAG, clean), false);
-  assert.equal(heldBackFromRequest(EXPLICIT, {}), false);
-  assert.equal(heldBackFromRequest(EXPLICIT, null), false);
+  assert.equal(heldBackFromShow(EXPLICIT, clean), true);
+  assert.equal(heldBackFromShow(CLEAN, clean), false);
+  assert.equal(heldBackFromShow(NO_TAG, clean), false);
+  assert.equal(heldBackFromShow(EXPLICIT, {}), false);
+  assert.equal(heldBackFromShow(EXPLICIT, null), false);
+});
+
+test('whether any show is clean, for a station that has none to pay nothing', () => {
+  assert.equal(anyCleanShow([{ excludeExplicit: false }, { excludeExplicit: true }]), true);
+  for (const shows of [[], [{}], [{ excludeExplicit: false }], null, undefined]) {
+    assert.equal(anyCleanShow(shows), false, JSON.stringify(shows));
+  }
+});
+
+test('a library that cannot answer reads as unknown, so the check never stops the music', () => {
+  // A real read failure: the table is gone, so better-sqlite3 throws on prepare.
+  db.upsertTrackMeta('readable', { title: 'r', explicitStatus: 'explicit' });
+  const d = requireDb();
+  d.exec('ALTER TABLE tracks RENAME TO tracks_gone');
+  try {
+    assert.equal(trackExplicitStatus({ id: 'readable' }), null);
+    assert.deepEqual(ids(withoutExplicit([{ id: 'readable' }], true)), ['readable'], 'unknown passes');
+    assert.equal(trackExplicitStatus({ id: 'readable', explicitStatus: 'explicit' }), 'explicit', 'the field needs no library');
+  } finally {
+    d.exec('ALTER TABLE tracks_gone RENAME TO tracks');
+  }
 });
 
 test('an anchor loses its tagged tracks before a never-starve lock can bring them back', () => {
