@@ -334,8 +334,9 @@ services:
       - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
-      # Real downbeats for the bar grid: beat-this (Beat This!, baked into
-      # the image). Unset/anything else = librosa's every-4th-beat grid.
+      # Real downbeats for the bar grid: beat-this (Beat This!, heavy image
+      # only, ANALYZER_HEAVY=1; audible with stem blends on). Unset, anything
+      # else or a lean image = librosa's every-4th-beat grid.
       - ANALYZE_DOWNBEATS=${ANALYZE_DOWNBEATS:-}
       - ANALYZE_DOWNBEAT_THREADS=${ANALYZE_DOWNBEAT_THREADS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.

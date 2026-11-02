@@ -28,9 +28,9 @@ Usage:
       --out beat_this-small0.onnx --audio some.wav [--audio more.mp3 ...]
 
 Exit status is non-zero on a hash mismatch or a parity failure. The images do
-not run this: they ADD the published export by URL and sha256, and this is
-how that file is rebuilt or audited. Publish nothing from a run that did not
-exit 0 (README.md, "Publishing a new model version").
+not run this: the heavy ones download the published export and check its
+sha256, and this is how that file is rebuilt or audited. Publish nothing from
+a run that did not exit 0 (README.md, "Publishing a new model version").
 """
 
 import argparse
