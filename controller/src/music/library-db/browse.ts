@@ -13,10 +13,15 @@ export const ERA_YEAR_SQL =
   `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
 
 // The verdict for a WHERE scan, head first: the tail can only turn a verdict vocal,
-// so a row the head already calls vocal never reads outro_json, which sits past the
-// beat grids (#1937). CASE, because SQLite promises no evaluation order for AND.
-const IS_INSTRUMENTAL_SQL = `CASE is_instrumental(vocal_ranges_json, NULL) WHEN 0 THEN 0
-  ELSE is_instrumental(vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES}) END`;
+// so outro_json, which sits past the beat grids (#1937), is read only when it can
+// change the answer. A row the head calls vocal never reads it, and neither does the
+// instrumental filter on an unmeasured head, which is every row of a library with no
+// vocal analysis. CASE, because SQLite promises no evaluation order for AND.
+const TWO_WINDOW_VERDICT_SQL = `is_instrumental(vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES})`;
+const IS_INSTRUMENTAL_SQL = `CASE is_instrumental(vocal_ranges_json, NULL) WHEN 1
+  THEN ${TWO_WINDOW_VERDICT_SQL} END = 1`;
+const IS_VOCAL_SQL = `CASE is_instrumental(vocal_ranges_json, NULL) WHEN 0 THEN 0
+  ELSE ${TWO_WINDOW_VERDICT_SQL} END = 0`;
 
 // `reindexing` (set only for a query search): the stored search keys are still
 // being rebuilt after a bulk change, so the answer may be missing tracks.
@@ -49,9 +54,9 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     params.push(genre);
   }
   if (vocal === 'instrumental') {
-    where.push(`${IS_INSTRUMENTAL_SQL} = 1`);
+    where.push(IS_INSTRUMENTAL_SQL);
   } else if (vocal === 'vocal') {
-    where.push(`${IS_INSTRUMENTAL_SQL} = 0`);
+    where.push(IS_VOCAL_SQL);
   }
   if (yearFrom != null) { where.push(`${ERA_YEAR_SQL} >= ?`); params.push(yearFrom); }
   if (yearTo != null) { where.push(`${ERA_YEAR_SQL} <= ?`); params.push(yearTo); }

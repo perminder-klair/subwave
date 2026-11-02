@@ -443,4 +443,15 @@ test('a filter scan never reads the outro of a row the head already calls vocal'
     assert.ok(!read.includes(headVocal), `${vocal}: a row the head settled is not`);
   }
   assert.equal(db.filter({ q: 'settled-by-head', vocal: 'vocal' }).total, 1);
+
+  // No head measurement means never instrumental, so that filter needs no tail. On a
+  // library with no vocal analysis that is every row, and it gains nothing from the read.
+  const unmeasuredHead = outro([tail(200_000, 4_321)]);
+  seed('unmeasured-head', null, unmeasuredHead);
+  read.length = 0;
+  assert.equal(db.filter({ q: 'unmeasured-head', vocal: 'instrumental' }).total, 0);
+  assert.ok(!read.includes(unmeasuredHead), 'instrumental: an unmeasured head settles the answer');
+  read.length = 0;
+  assert.equal(db.filter({ q: 'unmeasured-head', vocal: 'vocal' }).total, 0);
+  assert.ok(read.includes(unmeasuredHead), 'vocal: the tail can still prove singing');
 });
