@@ -1,7 +1,7 @@
 // Per-track reads and writes: metadata, tags, enrichment, analysis and vectors.
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
-import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
+import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, restampFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
@@ -11,6 +11,8 @@ import { resolveEraYear } from '../era-year.js';
 import { keepStoredTags } from '../lastfm-tag-policy.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 import { acceptedAt, fileReplaced } from '../replaced-file-policy.js';
+import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
+import { soundWords, type SoundPart, type SoundWords } from '../sound-line.js';
 
 export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
@@ -160,9 +162,56 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
   markTextVectorDirty(id);
 }
 
+// text_vector_sound, the Sound: words the vector was built from (migration 36).
+// Anything unreadable is unknown, like NULL.
+function parseVectorSound(json: string | null): SoundWords | null {
+  if (json == null) return null;
+  try {
+    const v = JSON.parse(json);
+    if (Array.isArray(v?.moods) && Array.isArray(v?.measured)) {
+      return { moods: v.moods.map(String), measured: v.measured.map(String) };
+    }
+  } catch { /* unknown */ }
+  return null;
+}
+
+const sameWords = (a: string[], b: string[]) => a.length === b.length && a.every((w, i) => w === b[i]);
+
+// A measurement that lands after its vector (#2236): a new track is embedded in
+// phase 1 and analysed in phase 5, so its first vector has no Sound: line. The
+// one rule: a write marks the vector when the words of a part it writes now
+// differ from the words the vector was built from. Against the vector, never the
+// row before the write: a re-analyze clears the row first, so a before/after
+// compare would call every row changed. By part, because the parts land at
+// different times (sound-line.ts). Unknown (NULL) never marks, so a vector from
+// before the upgrade stays on manual Re-embed. One-way, like the era mark: equal
+// words never clear a flag another writer set. The row is read as getTrack()
+// would see it, with the tail through SQL_TAIL_VOCAL_RANGES, never outro_json.
+export function markTextVectorDirtyIfSoundChanged(id: string, parts: readonly SoundPart[]): void {
+  const row = requireDb()
+    .prepare(
+      `SELECT bpm, musical_key, audio_moods, vocal_ranges_json,
+              ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, text_vector_sound
+         FROM tracks WHERE id = ?`,
+    )
+    .get(id) as (Pick<TrackRow, 'bpm' | 'musical_key' | 'audio_moods' | 'vocal_ranges_json' | 'text_vector_sound'> & {
+      tail_vocal_ranges_json: string | null;
+    }) | undefined;
+  const built = parseVectorSound(row?.text_vector_sound ?? null);
+  if (!row || !built) return;
+  const now = soundWords({
+    bpm: row.bpm, musicalKey: row.musical_key,
+    audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
+    ...parseVocalRangesJson(row.vocal_ranges_json),
+    ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
+  });
+  if (parts.every(p => sameWords(now[p], built[p]))) return;
+  markTextVectorDirty(id);
+}
+
 // Existing vectors whose source text changed: an era edit, (opt-in) the track's
-// Last.fm tags, or migration 32's tail verdict. They remain in the KNN index until
-// phaseEmbed successfully replaces them.
+// Last.fm tags, a measurement that moved its Sound: words, or migration 32's tail
+// verdict. They remain in the KNN index until phaseEmbed successfully replaces them.
 export function textVectorDirtyIds(): string[] {
   return (requireDb()
     .prepare(
@@ -675,6 +724,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
     source: a.source ?? 'unknown',
     tailReason: a.source === 'capped' ? 'capped-download' : undefined,
   });
+  markTextVectorDirtyIfSoundChanged(id, ['measured']);
   })();
 }
 
@@ -804,6 +854,11 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
     }
     syncTrackFacets(id, { fresh, tried, source: w.source, unmeasurable });
     if (w.clap) upsertTrackAudioVector(id, w.clap);
+    // Only the facets that write a measured word's columns: a stems-only or
+    // loudness-only answer moved none, so it never marks.
+    if (w.head || w.vocal || (w.tail && !('unmeasurable' in w.tail))) {
+      markTextVectorDirtyIfSoundChanged(id, ['measured']);
+    }
   })();
 }
 
@@ -940,10 +995,14 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   })();
 }
 
+// `builtSound` is the Sound: words the vector's text was built from
+// (sound-line.soundWords), stored beside it for markTextVectorDirtyIfSoundChanged.
+// Omitted = unknown (NULL), which no later measurement marks.
 export function upsertTrackVector(
   id: string,
   vector: number[] | Float32Array,
   expectedEraYear: number | null,
+  builtSound?: SoundWords | null,
 ): void {
   if (getEmbeddingDim() === null) {
     throw new Error('library-db opened without embedding dim');
@@ -965,17 +1024,24 @@ export function upsertTrackVector(
   // Embedding is an external await: compare the era this vector was built from
   // against the row at completion, so a stale writer can't clear the refresh
   // marker a concurrent metadata/manual edit set.
-  d.prepare(
-    `UPDATE tracks
-        SET text_vector_dirty = CASE
-          WHEN (CASE
-            WHEN original_year > 0 THEN original_year
-            WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL
-            WHEN year > 0 THEN year
-            ELSE NULL
-          END) IS ? THEN 0 ELSE 1 END
-      WHERE id = ?`,
-  ).run(expectedEraYear, id);
+  d.transaction(() => {
+    d.prepare(
+      `UPDATE tracks
+          SET text_vector_dirty = CASE
+            WHEN (CASE
+              WHEN original_year > 0 THEN original_year
+              WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL
+              WHEN year > 0 THEN year
+              ELSE NULL
+            END) IS ? THEN 0 ELSE 1 END,
+            text_vector_sound = ?
+        WHERE id = ?`,
+    ).run(expectedEraYear, builtSound ? JSON.stringify(builtSound) : null, id);
+    // The same check for the Sound: words, after the era CASE, which would reset
+    // its mark: a measurement written during the await was compared against the
+    // old vector, or found no vector to mark.
+    if (builtSound) markTextVectorDirtyIfSoundChanged(id, ['moods', 'measured']);
+  })();
 }
 
 export function dropVectors(): void {
@@ -987,7 +1053,7 @@ export function dropVectors(): void {
       `id TEXT PRIMARY KEY, embedding FLOAT[${getEmbeddingDim()}] distance_metric=cosine)`,
   );
   touchGenreInputs(d);
-  d.prepare(`UPDATE tracks SET text_vector_dirty = 0`).run();
+  d.prepare(`UPDATE tracks SET text_vector_dirty = 0, text_vector_sound = NULL`).run();
 }
 
 // Independent of getEmbeddingDim() (that is the TEXT index): the audio space is

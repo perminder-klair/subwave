@@ -14,7 +14,7 @@ import {
 } from './audio-scores.js';
 // Every backfill scope must keep this exclusion, or an unanalysable file is
 // re-attempted forever (#1300).
-import { analysisFailureExclusion } from './tracks.js';
+import { analysisFailureExclusion, markTextVectorDirtyIfSoundChanged } from './tracks.js';
 import { deleteFacetRows } from './facets.js';
 import { touchGenreInputs } from './genre-inputs.js';
 
@@ -66,6 +66,20 @@ export function setTrackAudioMoodLabelsBulk(
   rows: Array<{ id: string; moods: string[] }>,
 ): void {
   writeLabels('audio_moods', rows.map(({ id, moods }) => ({ id, labels: moods })));
+}
+
+// The incremental pass's write, for tracks that had no labels. The moods are
+// words on the embed text's Sound: line, so a vector built without these marks
+// itself for the next phaseEmbed (#2236). Moods only: the measured words are
+// the analysis writes', and on a re-analyze they land before these do.
+export function setNewTrackAudioMoodLabelsBulk(
+  rows: Array<{ id: string; moods: string[] }>,
+): void {
+  if (rows.length === 0) return;
+  requireDb().transaction(() => {
+    setTrackAudioMoodLabelsBulk(rows);
+    for (const { id } of rows) markTextVectorDirtyIfSoundChanged(id, ['moods']);
+  })();
 }
 
 // Scope of the audio-derived energy correction (#1362). Restricted to

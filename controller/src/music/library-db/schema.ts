@@ -544,6 +544,18 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 35');
   }
 
+  if (userVersion < 36) {
+    // The Sound: words each text vector was built from, as two parts (moods,
+    // measured), so a measurement landing after its vector can tell whether it
+    // moved them (#2236, tracks.ts markTextVectorDirtyIfSoundChanged). It
+    // describes the vector, like text_vector_dirty. NULL = unknown, which never
+    // marks: every vector written before this step, so the upgrade re-embeds
+    // nothing. Added only if missing, for a database wound back below it (see 28).
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('text_vector_sound')) runDdl(d, `ALTER TABLE tracks ADD COLUMN text_vector_sound TEXT;`);
+    d.pragma('user_version = 36');
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
@@ -683,7 +695,7 @@ export const TAIL_SUNG_VECTORS_SQL = `UPDATE tracks SET text_vector_dirty = 1
 // Same-format text changed on some rows, so this is the dirty flag's job and not an
 // EMBED_TEXT_VERSION bump: only those rows are paid for, on the next tag run, with no
 // banner and nothing for an operator to do. It covers what is stored at the upgrade;
-// a measurement landing after its vector is a separate gap (music.md). A stale word in
+// a measurement landing after its vector marks it itself (migration 36). A stale word in
 // a vector that still works is no reason to stop a station, so a failure warns, with
 // nothing half marked, and the steps after it still run. They move user_version past
 // 32, so a failed mark is final: those rows keep the text they had, which still works.

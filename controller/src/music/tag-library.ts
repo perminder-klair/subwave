@@ -1,5 +1,6 @@
 // Library tagger orchestrator. Phases: 0 enrich → 1 embed → 2 seed →
-// 3 KNN-propagate → 4 active-learn → 5 acoustic analyze. Each phase
+// 3 KNN-propagate → 4 active-learn → 5 acoustic analyze, then a forward run
+// re-embeds the vectors phase 5's measurements marked. Each phase
 // short-circuits cleanly so partial runs make progress.
 //
 // Run:  docker exec sub-wave-controller npx tsx src/music/tag-library.ts
@@ -557,6 +558,19 @@ async function main() {
     }
   }
   lap('analyze');
+
+  // Phase 5 measures the tracks phase 1 just embedded, so their Sound: words
+  // land after their vectors and mark them dirty (#2236). Re-embed only the
+  // marked rows now, so a new track gets its Sound: line in the run that
+  // analysed it. Best-effort: a failure leaves the marks for the next run.
+  if (plan.forwardTag && plan.analyze) {
+    try {
+      await phaseEmbed([], tagBatchSize, textMode);
+    } catch (err) {
+      logEvent('warning', `Re-embedding analysed tracks failed (non-fatal; the next run retries): ${err?.message || err}`);
+    }
+    lap('embed');
+  }
 
   finish(startedAt, llmCalls, llmTagged, byLeg, timings);
 }
