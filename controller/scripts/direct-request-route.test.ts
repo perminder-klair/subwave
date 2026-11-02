@@ -57,6 +57,8 @@ let libraryStalls = false;
 let libraryDelayMs = 0;
 let librarySearchFails = false;
 let librarySignals: Array<AbortSignal | null | undefined> = [];
+// The words of every song search the library was sent.
+let songSearches: string[] = [];
 
 beforeEach(async context => {
   const t = context as TestContext;
@@ -92,6 +94,7 @@ beforeEach(async context => {
   libraryDelayMs = 0;
   librarySearchFails = false;
   librarySignals = [];
+  songSearches = [];
   modelOutput = { kind: 'track', title: exact.title, artist: 'Queen', search_terms: [exact.title, 'Queen'], genre: 'Rock', scope: 'song' };
   t.mock.method(requestAgent, 'run', async () => {
     agentCalls++;
@@ -120,6 +123,7 @@ beforeEach(async context => {
     if (url.origin === base) return realFetch(input, init);
     if (url.hostname !== 'direct-library.invalid') throw Error('synthetic offline dependency');
     librarySignals.push(init?.signal);
+    if (url.pathname.endsWith('/search3') && Number(url.searchParams.get('songCount')) > 0) songSearches.push(url.searchParams.get('query') || '');
     if (libraryStalls) return new Promise<Response>(() => {});
     if (libraryDelayMs) await new Promise(resolve => setTimeout(resolve, libraryDelayMs));
     const endpoint = url.pathname.split('/').at(-1);
@@ -2154,6 +2158,65 @@ test('the request deadline reaches the library step that runs with no interprete
   assert.equal(entry.outcome, 'timeout');
   assert.ok(librarySignals.length > 0);
   assert.equal(librarySignals.at(-1)?.aborted, true);
+});
+
+// A bare string that misses as a title is tried as an exact artist before any
+// near title, with or without a reading, so a one-word act never lands on
+// another act's track one letter away. A reading whose title is its own artist
+// asks for the act the same way.
+const queens = { id: 'queens', title: 'Queens', artist: 'Mr Little Jeans', genre: 'Indie', duration: 200 };
+for (const [condition, reading] of [
+  ['interpreter down', null],
+  ['a reading of search terms alone', read({ search_terms: ['Queen'] })],
+  ['the act read as a title', read({ title: 'Queen', search_terms: ['Queen'] })],
+  ['the act read as title and artist', read({ title: 'Queen', artist: 'Queen', search_terms: ['Queen'] })],
+] as const) {
+  test(`"play Queen" is the act, never another act's "Queens" (${condition})`, async () => {
+    catalogueSongs = [queens, filler];
+    artistSongs = [exact];
+    if (reading) modelOutput = reading;
+    else modelError = true;
+    const result = await submit('play Queen');
+    assert.equal(result.outcome, 'matched');
+    assert.equal(queue.upcoming[0].track.id, exact.id);
+    assert.equal(requestLog.snapshot(1)[0].pickSource, 'artist-albums');
+  });
+}
+
+test('"play Kiss" is still the title when the library holds it', async () => {
+  catalogueSongs = [titled('Kiss', 'Prince'), filler];
+  artistSongs = [exact];
+  modelError = true;
+  const result = await submit('play Kiss');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.title, 'Kiss');
+});
+
+// The exact-artist step takes only the act the words name, inside the
+// request's hard conditions, and reuses the title's search hits.
+test('"play Queens" is never a match on Queen when the artist search answers Queen', async () => {
+  catalogueSongs = [filler];
+  artistSongs = [exact];
+  modelError = true;
+  const result = await submit('play Queens');
+  assert.notEqual(result.outcome, 'matched');
+  assert.notEqual(queue.upcoming.at(-1)?.track?.id, exact.id);
+});
+
+test('the act read as a title still meets the request\'s hard language', async () => {
+  catalogueSongs = [filler];
+  artistSongs = [exact];
+  modelOutput = read({ title: 'Queen', language: 'Punjabi', search_terms: ['Queen'] });
+  const result = await submit('play Queen in Punjabi');
+  assert.notEqual(result.outcome, 'matched');
+  assert.equal(queue.upcoming.length, 0);
+});
+
+test('a bare string tried as an artist doesn\'t search the same words twice', async () => {
+  catalogueSongs = [filler];
+  modelError = true;
+  await submit('play Imaginary Song');
+  assert.equal(songSearches.filter(query => query === 'Imaginary Song').length, 1, songSearches.join(' | '));
 });
 
 // Last, because it leaves a mood in the library for every test after it.

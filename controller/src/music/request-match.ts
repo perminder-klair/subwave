@@ -1272,6 +1272,9 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   // candidate, so a draw lands on what can air. If the ask itself is all there
   // is, it comes back so the caller can refuse it by name.
   heldBack?(song: RequestSong): boolean;
+  // Hits a caller already has for these words, so a nested lookup of the same
+  // words doesn't pay for that search again.
+  searchedFor?: { term: string; songs: RequestSong[] };
 }): Promise<RequestSelection> {
   const { catalog, recentIds, queuedIds, currentId } = deps;
   const errors: string[] = [];
@@ -1292,6 +1295,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   let title = requestedTitle(match, deps.text);
   let artistName = match.artist;
   let titleOnlyArtistFallback = false;
+  let actTried = false;
   const requiredGenre = !!match.genre && (deps.text === undefined || explicitRequestAttribute(deps.text, match, match.genre));
   const requiredLanguage = !!match.language && (deps.text === undefined || explicitRequestAttribute(deps.text, match, match.language));
   const required = [requiredGenre && 'genre', requiredLanguage && 'language'].filter((value): value is string => !!value);
@@ -1531,6 +1535,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   }
 
   const search = async (term: string) => {
+    if (deps.searchedFor && requestName(term) === requestName(deps.searchedFor.term)) return deps.searchedFor.songs;
     const found: RequestSong[] = [];
     const normalized = requestName(term);
     const tokens = normalized.split(' ').filter(token => token.length >= 3);
@@ -1567,6 +1572,23 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       if (exact) return exact;
       const heldExact = refusal();
       if (heldExact) return heldExact;
+      // A bare string is tried as an artist after it misses as a title, and
+      // before any near title, so "play Queen" is the act and never another
+      // act's "Queens". A reading whose title is its own artist is the same ask.
+      const act = !match.album && !match.releaseContext && !match.similarTo
+        && (!artistName || requestName(artistName) === requestName(title)) ? artistName || title : null;
+      if (act) {
+        actTried = true;
+        const byAct = await resolveDirectRequest({
+          kind: 'track', title: null, artist: act, album: null, scope: 'song', literal: true,
+          mood: match.mood, genre: requiredGenre ? match.genre : null, language: requiredLanguage ? match.language : null,
+        }, {
+          ...deps, text: undefined, exactOnly: true, exactIdentity: true, searchedFor: { term: title, songs: searched },
+          similarSongs: undefined, similarSeedSongs: undefined, fallbackSongs: async () => [],
+        });
+        errors.push(...byAct.errors);
+        if (byAct.track) return byAct;
+      }
       const fuzzy = selectFuzzy(searched, 'search');
       if (fuzzy) return fuzzy;
       // Navidrome's token search is intentionally bounded and may miss a
@@ -1649,14 +1671,14 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
 
   // A one-word title miss can also be an artist name. Try that exact artist
   // catalogue before refusing, but retain the no-stand-in policy below.
-  if (exactOnly && match.titleOnly && !artistName && title) {
+  if (exactOnly && match.titleOnly && !artistName && title && !actTried) {
     artistName = title;
     resolvedArtistName = title;
     title = null;
     titleOnlyArtistFallback = true;
   }
 
-  if (match.literal && !exactOnly && !match.titleOnly && !match.releaseContext && !match.similarTo && !artistName && title) {
+  if (match.literal && !exactOnly && !match.titleOnly && !match.releaseContext && !match.similarTo && !artistName && title && !actTried) {
     artistName = title;
     resolvedArtistName = title;
     title = null;
