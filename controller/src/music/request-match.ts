@@ -1102,6 +1102,10 @@ export function requestedRecording(text: string | null | undefined): RequestedRe
 export function repairRequestMatch(match: RequestMatch, text: string): RequestMatch {
   if (match.kind === 'chat') return match;
   const literal = modelFreeRequest(text);
+  // A valid empty plan read nothing, so it takes no attribute from the parse:
+  // "play Love Song" read as nothing is no request for romantic music.
+  const emptyPlan = !classifyUnsupportedLabels(match.unsupported).conditions.length
+    && ![match.title, match.album, match.artist, match.genre, match.language, match.mood, ...(match.search_terms || [])].some(Boolean);
   // The deterministic parser owns relationship semantics. An interpreter may
   // omit soundtrack context or turn it into an artist, but it cannot rewrite
   // that relationship.
@@ -1124,7 +1128,7 @@ export function repairRequestMatch(match: RequestMatch, text: string): RequestMa
   // especially important for combined requests such as "energetic rock in
   // Punjabi": the model may identify the intent but return only one field.
   for (const key of ['mood', 'genre', 'language'] as const) {
-    if (!match[key] && literal[key]) match = { ...match, [key]: literal[key] };
+    if (!emptyPlan && !match[key] && literal[key]) match = { ...match, [key]: literal[key] };
   }
   // A song quoted right after the request's framing is explicit even if the
   // model supplies a different search term. Only the quoted span is the name,
@@ -1134,8 +1138,7 @@ export function repairRequestMatch(match: RequestMatch, text: string): RequestMa
   if (quoted && !match.title && !match.album && match.scope !== 'album' && !literal.artist
     && !requestArtistMatches(quoted, { id: 'literal', artist: match.artist || '' })) return { ...match, title: quoted };
   if (!literal.artist || !literal.title) return match;
-  if (!classifyUnsupportedLabels(match.unsupported).conditions.length
-    && ![match.title, match.album, match.artist, match.genre, match.language, match.mood, ...(match.search_terms || [])].some(Boolean)) {
+  if (emptyPlan) {
     // A valid empty plan is not a failure. Keep an unambiguous name pair when
     // the words hold one; generic asks still proceed as "anything".
     return { ...match, title: literal.title, artist: literal.artist, literal: true, reversible: literal.reversible,

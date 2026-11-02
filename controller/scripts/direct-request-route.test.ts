@@ -2080,6 +2080,17 @@ test('a seed the parse read as an attribute is no seed, so a track of that name 
   assert.match(result.ack, /alternative/);
 });
 
+for (const [text, title] of [['play Love Song', 'Love Song'], ['play Rock Music', 'Rock Music'], ['rock', 'Rock']]) {
+  test(`an empty plan takes no attribute from the parse, so no pool claims a match: ${text}`, async () => {
+    catalogueSongs = [filler, titled(title)];
+    genreSongs = [filler];
+    modelOutput = read({});
+    const result = await submit(text);
+    assert.equal(result.outcome, 'substituted');
+    assert.match(result.ack, /alternative/);
+  });
+}
+
 test('a pair the interpreter left empty keeps the alternative', async () => {
   catalogueSongs = [filler];
   searchEmpty = true;
