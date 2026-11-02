@@ -569,9 +569,21 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
           updated_at TEXT NOT NULL
         );
       `);
-      const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
-      const add = ['language_primary', 'languages'].filter(column => !have.has(column));
-      if (add.length) runDdl(d, add.map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`).join('\n'));
+      // An earlier build of this branch numbered develop's steps 33 to 35 for
+      // itself, so a database it left at 35 never got #2214's columns, and one
+      // it left at 32 may lack 33 and 34's. Each column develop's steps add is
+      // added here when missing; on develop's own lineage they all exist.
+      const columnsOf = (table: string) =>
+        new Set((d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name));
+      const tracks = columnsOf('tracks');
+      const add = [
+        'language_primary', 'languages',
+        'explicit_status', 'lastfm_track_tags_at', 'audio_descriptors', 'audio_descriptor_scores_json',
+      ].filter(column => !tracks.has(column)).map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`);
+      if (!columnsOf('audio_embedding_meta').has('descriptor_vocab_hash')) {
+        add.push('ALTER TABLE audio_embedding_meta ADD COLUMN descriptor_vocab_hash TEXT;');
+      }
+      if (add.length) runDdl(d, add.join('\n'));
       d.pragma('user_version = 36');
     }).immediate();
   }
