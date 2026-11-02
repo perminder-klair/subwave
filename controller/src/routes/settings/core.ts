@@ -5,6 +5,8 @@ import express from 'express';
 import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
+import { realPathStatus } from '../../music/navidrome-players.js';
+import type { RealPathStatus } from '../../music/navidrome-players-policy.js';
 import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
@@ -28,7 +30,7 @@ import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
-import { keenableKeySource } from '../../skills/web-search.js';
+import { firecrawlKeySource, keenableKeySource } from '../../skills/web-search.js';
 import { planLlmSwap, LlmSwapError } from '../../settings/llm-swap.js';
 import { llmSwapFit } from '../../settings/llm-swap-fit.js';
 import { recentCalls } from '../../llm/log.js';
@@ -194,6 +196,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // 'settings' | 'env' | null: where the key a Keenable search sends comes
         // from. The env flag below can't tell a keen_ key from a Tavily one.
         keenableKeySource: keenableKeySource(),
+        // The same answer for Firecrawl; null with a key on file means that key
+        // is another provider's, and searches refuse it.
+        firecrawlKeySource: firecrawlKeySource(),
       },
       // Which writable keys (SECRET_ENV_KEYS) are present in the environment,
       // as booleans only; the UI keys its "key missing" alerts off this.
@@ -410,6 +415,37 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message || 'save failed' });
   }
+});
+
+// "Report Real Path" on SUB/WAVE's own Navidrome player rows: GET reads them,
+// POST switches every one still off (the operator's button, so it runs whatever
+// the opt-in `musicSource.reportRealPath` says). Row ids stay server-side.
+function realPathView(st: RealPathStatus) {
+  return {
+    state: st.state,
+    reason: st.reason ?? null,
+    server: st.server ?? null,
+    switched: st.switched.length,
+    autoEnable: settings.get().musicSource?.reportRealPath === true,
+    players: st.players.map(p => ({
+      client: p.client,
+      userAgent: p.userAgent,
+      reportRealPath: p.reportRealPath,
+      lastSeen: p.lastSeen,
+    })),
+  };
+}
+
+router.get('/settings/navidrome/players', requireAdmin, async (_req, res) => {
+  res.json(realPathView(await realPathStatus()));
+});
+
+router.post('/settings/navidrome/players/real-path', requireAdmin, async (_req, res) => {
+  const st = await realPathStatus({ enable: true });
+  if (st.switched.length) {
+    queue.log('scheduler', `Navidrome: Report Real Path switched on for ${st.switched.length} SUB/WAVE player(s) (operator)`);
+  }
+  res.json(realPathView(st));
 });
 
 // Non-mutating test. Merges over the effective values like save does, so Test

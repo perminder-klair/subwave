@@ -9,6 +9,7 @@ import { Label } from '../../ui/label';
 import { Btn, Card } from '../ui';
 import { cn } from '../../../lib/cn';
 import { SectionHeader, SaveBar, type SettingsData } from './shared';
+import { NavidromeRealPathCard } from './NavidromeRealPathCard';
 
 // Unlike the other sections this one does NOT ride the shared FormState /
 // saveSettings pair: Navidrome creds live in state/setup-config.json (the wizard's
@@ -195,6 +196,8 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
           </div>
         </div>
       </Card>
+
+      <NavidromeRealPathCard adminFetch={adminFetch} />
 
       {allEnv ? (
         <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3 text-[12px] leading-[1.5] text-muted">

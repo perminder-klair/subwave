@@ -121,6 +121,8 @@ router.post('/tag-library', requireAdmin, (req, res) => {
     tagMoods: stepBool(req.body?.tagMoods),
     analyze: stepBool(req.body?.analyze),
     vocal: stepBool(req.body?.vocal),
+    confirmReplaced: req.body?.confirmReplaced === true,
+    acceptReplaced: req.body?.acceptReplaced === true,
   });
   res.json({ ok: true, tagger });
 });

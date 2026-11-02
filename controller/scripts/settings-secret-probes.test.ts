@@ -107,6 +107,7 @@ test('a key with a control character is refused before any probe, without echoin
     { key: 'SEARCH_API_KEY', provider: 'tavily' },
     { key: 'SEARCH_API_KEY', provider: 'brave' },
     { key: 'SEARCH_API_KEY', provider: 'keenable' },
+    { key: 'SEARCH_API_KEY', provider: 'firecrawl' },
     { key: 'ELEVENLABS_API_KEY' },
     { key: 'LISTENBRAINZ_USER_TOKEN' },
     { key: 'EMBEDDING_API_KEY' },
@@ -160,4 +161,51 @@ test('Keenable: a keen_ key is probed against the keyed endpoint', async (t) => 
   assert.equal(outbound.length, 1);
   assert.equal(outbound[0].url, 'https://api.keenable.ai/v1/search');
   assert.equal(outbound[0].headers.get('x-api-key'), 'keen_good');
+});
+
+test('Firecrawl: a key is probed against the free /v2/team/credit-usage; a 401 reads as rejected', async (t) => {
+  const outbound = stubProvider(t, 200, { success: true, data: { remainingCredits: 500, planCredits: 500, billingPeriodStart: null, billingPeriodEnd: null } });
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-good', provider: 'firecrawl' });
+  assert.equal(r.ok, true);
+  assert.equal(r.message, '✓ Firecrawl key valid · 500 credits left');
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].url, 'https://api.firecrawl.dev/v2/team/credit-usage');
+  assert.equal(outbound[0].method, 'GET');
+  assert.equal(outbound[0].headers.get('authorization'), 'Bearer fc-good');
+  t.mock.restoreAll();
+
+  stubProvider(t, 401, { success: false, error: 'Unauthorized: Invalid token' });
+  const rejected = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-bad', provider: 'firecrawl' });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.message, 'Key rejected — check it\'s correct and active');
+});
+
+test("Firecrawl: another provider's key is refused without a request", async (t) => {
+  const outbound = stubProvider(t, 200);
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'tvly-left-over', provider: 'firecrawl' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, 'Not a Firecrawl key (they start with fc-)');
+  assert.equal(outbound.length, 0);
+});
+
+test('Firecrawl: a drained key does not read as valid', async (t) => {
+  stubProvider(t, 200, { success: true, data: { remainingCredits: 0, planCredits: 500 } });
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-drained', provider: 'firecrawl' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, 'Firecrawl key valid, but it has no credits left');
+});
+
+test('Firecrawl: one credit reads in the singular, and a body with no count stays a plain pass', async (t) => {
+  stubProvider(t, 200, { success: true, data: { remainingCredits: 1 } });
+  const one = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-good', provider: 'firecrawl' });
+  assert.equal(one.message, '✓ Firecrawl key valid · 1 credit left');
+  t.mock.restoreAll();
+
+  for (const body of [{}, { data: {} }, { data: { remainingCredits: '500' } }]) {
+    stubProvider(t, 200, body);
+    const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-good', provider: 'firecrawl' });
+    assert.equal(r.ok, true);
+    assert.equal(r.message, '✓ Firecrawl key valid');
+    t.mock.restoreAll();
+  }
 });

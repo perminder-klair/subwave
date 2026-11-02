@@ -22,6 +22,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../ui/select';
 import SkillEditModal from './skills/SkillEditModal';
+import SkillKeyAlert from './skills/SkillKeyAlert';
 import type { PersonaLite } from './skills/SkillEditModal';
 import SkillsTable from './skills/SkillsTable';
 import { cooldownLabel, iconFor } from './skills/shared';
@@ -577,27 +578,7 @@ export default function SkillsPanel() {
                       then it can&apos;t air.
                     </V3Alert>
                   )}
-                  {s.ready === false && !s.toolPending && (
-                    <V3Alert tone="error" title="API key not set">
-                      This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
-                      variable set in <code>.env</code>. Until then it stays inert and never
-                      fires autonomously, even when enabled.
-                      {s.keyUrl && (
-                        <>
-                          {' '}
-                          <a
-                            href={s.keyUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={e => e.stopPropagation()}
-                            className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
-                          >
-                            Get a key here
-                          </a>.
-                        </>
-                      )}
-                    </V3Alert>
-                  )}
+                  {s.ready === false && !s.toolPending && <SkillKeyAlert skill={s} />}
 
                   <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
                     <SkillDescription text={s.description} keyUrl={s.keyUrl} />
