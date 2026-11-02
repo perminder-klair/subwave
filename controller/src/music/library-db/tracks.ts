@@ -211,8 +211,8 @@ export function earliestMeasuredAt(): string | null {
 
 // Everything the analyzer measured from a track's audio, for one track: the
 // head analysis and its loudness, the tail, vocal ranges, the stems stamp, CLAP
-// and the audio moods derived from it, the map position derived from CLAP, and
-// the failure history that described the old file. Unlike clearAnalysis()
+// and the audio moods and descriptors derived from it, the map position derived
+// from CLAP, and the failure history that described the old file. Unlike clearAnalysis()
 // nothing is kept: every figure was measured on a file that is gone. Metadata,
 // tags, years, lyrics and plays are not audio measurements and stay. The stem
 // files themselves are the caller's (stem-cache.forgetStems), since this runs
@@ -232,6 +232,7 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
          analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL,
          structure_json = NULL, vocal_ranges_json = NULL, pace_json = NULL, beats_json = NULL,
          bars_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
+         audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
          outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, lead_silence_ms = NULL,
          stems_at = NULL, map_x = NULL, map_y = NULL,
          analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL
