@@ -1,4 +1,5 @@
 // Configurable on-disk fat-row comparison; structural gates live in library-lookups.
+// The last case times a strict show's pool over unmeasured rows (#2235).
 // Reopened means a new connection, not flushed OS caches. Timers measure query +
 // mapping (serialization is outside the timing). Bytes are internal DB records;
 // outward payload compatibility is separately pinned. maxRSS is cumulative for
@@ -66,5 +67,23 @@ try {
     }
     const old = await measure(`${mode} old energy`, () => (db.getDb()!.prepare('SELECT * FROM tracks NOT INDEXED WHERE energy=?').all('low') as TrackRow[]).map(db.rowToTrack));
     assert.equal(await measure(`${mode} current energy`, () => db.songsByEnergy('low')), old);
+  }
+  // #2235: a strict show's per-pick pool over what a lean install leaves unknown
+  // (no vocal ranges, energy or genres). A show filter that looked each such row
+  // up again (library.get, the whole fat row) cost 2-3 s at 50k for the same
+  // answer. The library module is loaded so a lookup would really read.
+  db.getDb()!.prepare('UPDATE tracks SET vocal_ranges_json = NULL, energy = NULL, genres = NULL').run();
+  const library = await import('../src/music/library.js');
+  const { strictShowLibraryPool } = await import('../src/music/show-recency.js');
+  await library.load();
+  const shows: Array<[string, { vocals?: string; energies?: string[]; genres?: string[] }]> = [
+    ['vocals', { vocals: 'instrumental' }],
+    ['energy', { energies: ['low'] }],
+    ['genre', { genres: ['Ambient'] }],
+  ];
+  for (const [lock, show] of shows) {
+    await measure(`strict pool ${lock}`, () => strictShowLibraryPool(library.candidateFilterTracks(), {
+      show: { filtersStrict: true, ...show }, excludedIds: null, resolvedGenres: show.genres ?? [],
+    }) ?? []);
   }
 } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
