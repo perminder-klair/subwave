@@ -881,3 +881,12 @@ test('lyric identification verifies Preet Re edition metadata and composite arti
     await settings.update({ llm: originalLlm, search: originalSearch } as never);
   }
 });
+
+test('a search result with no url is not a trusted lyric host', () => {
+  const hints = identifyModule.extractLyricTrackHints({ results: [
+    { title: 'No Link Act - No Link Song Lyrics', content: 'lyrics' },
+    { title: 'Other Act - Other Song Lyrics', content: 'lyrics', url: 'https://example.com/other' },
+    { title: 'Trusted Act - Trusted Song Lyrics', content: 'lyrics', url: 'https://genius.com/trusted' },
+  ] });
+  assert.deepEqual(hints.map((hint: { title: string }) => hint.title), ['Trusted Song', 'Other Song', 'No Link Song']);
+});

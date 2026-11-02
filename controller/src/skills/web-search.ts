@@ -498,7 +498,9 @@ export async function firecrawlSearch(
   const { url, init } = buildFirecrawlRequest({ query, apiKey, recency });
   const res = await fetchWithTimeout(url, { ...init, signal, timeoutMs: 30_000, bodyDeadline: true });
   if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
-  const data = await res.json();
+  const data: any = await res.json();
+  // A 200 can carry {success:false,error}, which is a failed search, not an empty one.
+  if (!Array.isArray(data?.data?.web)) throw new Error('Firecrawl returned malformed JSON');
   return parseFirecrawlResponse(data);
 }
 
@@ -564,7 +566,8 @@ export function parseFirecrawlResponse(data: unknown): SearchResponse {
     const title = text(rec.title);
     const content = text(rec.description).slice(0, 300);
     if (!title || !content) continue;
-    results.push({ title, content });
+    const url = typeof rec.url === 'string' ? rec.url.trim() : '';
+    results.push({ title, content, ...(url ? { url } : {}) });
     if (results.length >= 5) break;
   }
 

@@ -117,7 +117,7 @@ export function extractLyricTrackHints(web: { results?: WebTrackResult[] }): Lyr
   for (const result of web.results || []) {
     const title = String(result.title || '').trim();
     const content = String(result.content || '').trim();
-    const trusted = !result.url || (() => {
+    const trusted = !!result.url && (() => {
       try { return TRUSTED_LYRIC_HOSTS.test(new URL(result.url).hostname); } catch { return false; }
     })();
     // A pair is useful only in a lyric context. Domain recognition improves

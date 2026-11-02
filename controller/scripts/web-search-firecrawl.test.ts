@@ -158,6 +158,25 @@ test('searchWeb: a request deadline reaches Firecrawl, and its failure is typed'
   await assert.rejects(searchWeb('typed failure probe'), { provider: 'firecrawl', providerFailure: true });
 });
 
+test('searchWeb: a 200 with the wrong shape is a failed search, not an empty one', async (t) => {
+  stubSearch(t);
+  await settings.update({ search: { provider: 'firecrawl', apiKey: 'fc-shape' } });
+  const { mock } = globalThis.fetch as Mock<typeof fetch>;
+  for (const [n, body] of [{ success: false, error: 'quota exceeded' }, { success: true }, { data: { web: 'nope' } }, []].entries()) {
+    mock.mockImplementation(async () => new Response(JSON.stringify(body), { status: 200 }));
+    await assert.rejects(searchWeb(`shape probe ${n}`), { provider: 'firecrawl', providerFailure: true, reason: 'malformed' });
+  }
+  mock.mockImplementation(async () => new Response(JSON.stringify({ success: true, data: { web: [] } }), { status: 200 }));
+  assert.deepEqual(await searchWeb('an honest empty search'), { answer: '', results: [] });
+});
+
+test('parse: a result keeps its url, as every other provider does', () => {
+  const out = parseFirecrawlResponse(fixture('firecrawl-artist.json'));
+  assert.equal(out.results[0].url, 'https://www.sabrinacarpenter.com/');
+  const bare = parseFirecrawlResponse({ data: { web: [{ title: 'No link', description: 'Some text' }] } });
+  assert.equal('url' in bare.results[0], false);
+});
+
 test('isFirecrawlKey: only an fc- value counts', () => {
   assert.equal(isFirecrawlKey('fc-abc'), true);
   assert.equal(isFirecrawlKey(' fc-abc '), true);
