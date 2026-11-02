@@ -972,7 +972,9 @@ export function findLibraryFile(song) {
 
 // The file to hand LIQUIDSOAP, else null so the pick streams. It opens the file
 // in the broadcast container, which only a proof from the mixer speaks for
-// (library-mount.ts): this reads the cached answer and never waits on one.
+// (library-mount.ts): this reads the cached answer and never waits on one. The
+// proof covers the mount, not this file, so the drain also asks about the file
+// itself before a pick goes out local (mixerReadablePath, #2222).
 export function getLocalPath(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !libraryMountProven(libRoot)) return null;
@@ -991,7 +993,7 @@ export function getPlayableUri(song, resolveProbeId: string | null = null) {
 export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null; clipLeadSec?: number | null; clipCueLateSec?: number | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null; clipLeadSec?: number | null; clipCueLateSec?: number | null; localPath?: string | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -1063,7 +1065,13 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   if (opts.cueInSec != null && opts.cueInSec > 0) {
     fields.push(`liq_cue_in="${escAnnotate(opts.cueInSec)}"`);
   }
-  return `annotate:${fields.join(',')}:${getPlayableUri(song, opts.resolveProbeId ?? null)}`;
+  // The drain has already decided local or stream for its handoff (#2222), so
+  // its probe id and URI agree: it passes the file, or null to stream. Left out,
+  // the choice is made here from the cached proof (the coast).
+  const target = opts.localPath === undefined
+    ? getPlayableUri(song, opts.resolveProbeId ?? null)
+    : opts.localPath || getStreamUrl(song.id, opts.resolveProbeId ?? null);
+  return `annotate:${fields.join(',')}:${target}`;
 }
 
 // Annotate URI for a pre-rendered stem-blend transition CLIP. It carries the

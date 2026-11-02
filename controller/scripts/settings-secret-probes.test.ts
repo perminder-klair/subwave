@@ -188,6 +188,57 @@ test("Firecrawl: another provider's key is refused without a request", async (t)
   assert.equal(outbound.length, 0);
 });
 
+// Tavily and Brave searches refuse a key with another provider's prefix (#2223),
+// so the probe refuses it too: a key typed under the wrong provider never
+// reaches that provider. Their own formats aren't confirmed, so anything else is
+// still probed.
+test("Tavily and Brave: another provider's key is refused without a request", async (t) => {
+  const cases: Array<[string, string, string]> = [
+    ['tavily', 'fc-left-over', 'A Firecrawl key, not a Tavily key'],
+    ['tavily', 'keen_left-over', 'A Keenable key, not a Tavily key'],
+    ['brave', 'fc-left-over', 'A Firecrawl key, not a Brave Search key'],
+    ['brave', 'tvly-left-over', 'A Tavily key, not a Brave Search key'],
+    ['brave', 'keen_left-over', 'A Keenable key, not a Brave Search key'],
+  ];
+  for (const [provider, value, message] of cases) {
+    const outbound = stubProvider(t, 200);
+    const r = await testKey({ key: 'SEARCH_API_KEY', value, provider });
+    assert.equal(r.ok, false, `${provider} ${value}`);
+    assert.equal(r.message, message);
+    assert.equal(outbound.length, 0, `${provider} ${value} reached a provider`);
+    t.mock.restoreAll();
+  }
+});
+
+test("Tavily and Brave: an env key from another provider is refused too", async (t) => {
+  const outbound = stubProvider(t, 200);
+  process.env.SEARCH_API_KEY = 'fc-from-env';
+  t.after(() => { delete process.env.SEARCH_API_KEY; });
+  for (const provider of ['tavily', 'brave']) {
+    const r = await testKey({ key: 'SEARCH_API_KEY', provider });
+    assert.equal(r.ok, false, provider);
+    assert.match(r.message, /^A Firecrawl key, not a /);
+  }
+  assert.equal(outbound.length, 0);
+});
+
+test('Tavily and Brave: their own keys, and keys of any other format, are still probed', async (t) => {
+  const cases: Array<[string, string, string]> = [
+    ['tavily', 'tvly-good', 'https://api.tavily.com/search'],
+    ['tavily', 'an-unprefixed-key', 'https://api.tavily.com/search'],
+    ['brave', 'BSAgood', 'https://api.search.brave.com/res/v1/web/search'],
+    ['brave', 'an-unprefixed-key', 'https://api.search.brave.com/res/v1/web/search'],
+  ];
+  for (const [provider, value, endpoint] of cases) {
+    const outbound = stubProvider(t, 200, { results: [] });
+    const r = await testKey({ key: 'SEARCH_API_KEY', value, provider });
+    assert.equal(r.ok, true, `${provider} ${value}: ${r.message}`);
+    assert.equal(outbound.length, 1);
+    assert.equal(outbound[0].url.split('?')[0], endpoint);
+    t.mock.restoreAll();
+  }
+});
+
 test('Firecrawl: a drained key does not read as valid', async (t) => {
   stubProvider(t, 200, { success: true, data: { remainingCredits: 0, planCredits: 500 } });
   const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-drained', provider: 'firecrawl' });

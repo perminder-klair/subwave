@@ -689,8 +689,8 @@ export async function sweep(budget = budgetBytes(), { force = false }: { force?:
   }
   if (failedDirs > 0) {
     console.warn(
-      `[stem-cache] ${failedDirs} folder(s) (${Math.round(unevictable / 1024 ** 2)} MB) cannot be deleted by this user: ` +
-      'left out of the budget check, so nothing is evicted in their place. Open them as their owner (docs/deployment.md).',
+      `[stem-cache] ${failedDirs} folder(s) (${Math.round(unevictable / 1024 ** 2)} MB) cannot be deleted by this user ` +
+      'and are left out of the budget check. Open them as their owner (docs/deployment.md).',
     );
   }
   await writeSnapshot(snapshotFromWalk(total, dirs.length - removed));

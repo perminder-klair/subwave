@@ -114,8 +114,25 @@ test('a Firecrawl key clears it', async (t) => {
   }
 });
 
-test('another keyed provider never refuses the key on file', async (t) => {
+// Tavily and Brave refuse only a key carrying another provider's prefix (#2223),
+// so a key in a format nobody claims still clears them.
+test("Tavily and Brave name another provider's key too, and pass any other", async (t) => {
   await setSearch(t, { provider: 'tavily', apiKey: 'fc-left-over' });
+  assert.equal(searchKeyProblem(), 'The key on file is a Firecrawl key, not a Tavily key');
+  assert.equal(row('web-search').ready, false);
+  assert.equal(row('web-search').keyProblem, 'The key on file is a Firecrawl key, not a Tavily key');
+
+  await settings.update({ search: { provider: 'brave', apiKey: 'tvly-left-over' } });
+  assert.equal(row('web-search').keyProblem, 'The key on file is a Tavily key, not a Brave Search key');
+
+  await settings.update({ search: { provider: 'brave', apiKey: 'BSA-a-real-one' } });
+  assert.equal(searchKeyProblem(), null);
+  assert.equal(row('web-search').ready, true);
+  assert.equal(row('web-search').keyProblem, null);
+});
+
+test('Keenable never has a key problem: a foreign key just runs it keyless', async (t) => {
+  await setSearch(t, { provider: 'keenable', apiKey: 'fc-left-over' });
   assert.equal(searchKeyProblem(), null);
   assert.equal(row('web-search').keyProblem, null);
 });

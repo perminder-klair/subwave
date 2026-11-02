@@ -35,11 +35,16 @@ const NOW_BASE = Date.now();
 process.umask(0o022);
 
 let seq = 0;
-function seedStem(opts: { fresh?: boolean } = {}): string {
+// `tailSec` writes the tail-meta.json the analyzer keeps beside tail stems, with
+// the decoded duration a release compares against the returning row's.
+function seedStem(opts: { fresh?: boolean; tailSec?: number } = {}): string {
   const id = `track-${seq++}`;
   const dir = join(ROOT, id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'head-drums.flac'), 'x'.repeat(1024));
+  if (opts.tailSec !== undefined) {
+    writeFileSync(join(dir, 'tail-meta.json'), JSON.stringify({ tail_start_sec: opts.tailSec - 30, duration_sec: opts.tailSec }));
+  }
   if (!opts.fresh) {
     // Two days behind `nowBase` below; passes use nowBase so it is not in-flight.
     const t = new Date(NOW_BASE - 2 * DAY);
@@ -47,6 +52,10 @@ function seedStem(opts: { fresh?: boolean } = {}): string {
   }
   return id;
 }
+
+// The library row that came back, for a release's same-audio check: this file
+// has no library DB, so a pass that should release is told the row's duration.
+const SAME = { rowDurationSec: () => 200 };
 
 test('an orphan is moved into the quarantine, and it leaves the cache root', async () => {
   const gone = seedStem();
@@ -99,9 +108,9 @@ test('a quarantine inside the grace period only ages', async () => {
 });
 
 test('a quarantined id that walked back into the library is released to its live slot', async () => {
-  const revival = seedStem();
+  const revival = seedStem({ tailSec: 200 });
   await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE });
-  const rep = await purge.runOrphanPurge({ knownIds: [revival, '_sentinel'], confirm: true, now: NOW_BASE + DAY });
+  const rep = await purge.runOrphanPurge({ knownIds: [revival, '_sentinel'], confirm: true, now: NOW_BASE + DAY, ...SAME });
   assert.ok(rep.released.includes(revival));
   assert.ok(existsSync(join(ROOT, revival)));
   assert.ok(!existsSync(join(QU, revival)));
@@ -190,9 +199,9 @@ test('a move whose stamp cannot be written is undone and counted', async () => {
 });
 
 test('a released dir drops its quarantine stamp', async () => {
-  const id = seedStem();
+  const id = seedStem({ tailSec: 200 });
   await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: NOW_BASE + 700 * DAY });
-  await purge.runOrphanPurge({ knownIds: [id, '_sentinel'], confirm: true, now: NOW_BASE + 701 * DAY });
+  await purge.runOrphanPurge({ knownIds: [id, '_sentinel'], confirm: true, now: NOW_BASE + 701 * DAY, ...SAME });
   assert.ok(existsSync(join(ROOT, id)));
   assert.ok(!existsSync(join(ROOT, id, '.orphaned-at')));
 });
@@ -424,13 +433,13 @@ test('a collision whose stale copy refuses to go leaves the live copy in the cac
 });
 
 test('a release that fails is counted as failed, and not reported as released', async () => {
-  const id = seedStem();
+  const id = seedStem({ tailSec: 200 });
   const now = NOW_BASE + 1000 * DAY;
   await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now });
   chmodSync(ROOT, 0o555);
   let rep;
   try {
-    rep = await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: true, now: now + DAY });
+    rep = await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: true, now: now + DAY, ...SAME });
   } finally {
     chmodSync(ROOT, 0o777);
   }
@@ -438,9 +447,9 @@ test('a release that fails is counted as failed, and not reported as released', 
   assert.equal(rep.failed, 1);
   assert.ok(existsSync(join(QU, id)), 'still quarantined');
   // A dry run names what a pass would release, which is the same word.
-  const dry = await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: false, now: now + DAY });
+  const dry = await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: false, now: now + DAY, ...SAME });
   assert.ok(dry.released.includes(id));
-  await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: true, now: now + DAY });
+  await purge.runOrphanPurge({ knownIds: ['_sentinel', id], confirm: true, now: now + DAY, ...SAME });
 });
 
 test('a dry run names the ceiling the automatic pass would refuse at, without refusing itself', async () => {
@@ -462,13 +471,14 @@ test('a refused automatic pass still releases what came back, and holds the aged
   // The ceiling trips when the library looks half-loaded. A release is safe on
   // that reading; a delete is the one step nothing undoes.
   const t0 = NOW_BASE + 1040 * DAY;
-  const back = seedStem();
+  const back = seedStem({ tailSec: 200 });
   const aged = seedStem();
   await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: t0 });
   const known: string[] = [back];
   for (let i = 0; i < 20; i++) known.push(seedStem());
   for (let i = 0; i < 120; i++) seedStem();
-  const rep = await purge.runScheduledOrphanPurge(known, t0 + 8 * DAY);
+  // The nightly pass's own options, with the returning row's duration told.
+  const rep = await purge.runOrphanPurge({ knownIds: known, confirm: true, automatic: true, now: t0 + 8 * DAY, ...SAME });
   assert.equal(rep.refused, true);
   assert.deepEqual(rep.released, [back]);
   assert.ok(existsSync(join(ROOT, back)), 'released');
@@ -520,4 +530,51 @@ test('the report counts every quarantine entry, whatever a pass would do with it
   assert.equal(dry.quarantineEntries, onDisk);
   assert.ok(onDisk >= 2);
   assert.ok(existsSync(join(QU, aged)));
+});
+
+test('an id back as a different recording keeps its quarantine, and the report counts it (#2224)', async () => {
+  // Navidrome derives the id from the path, so another recording put back at
+  // the same path returns under the same id. Released, its blends would render
+  // the old recording's stems.
+  const id = seedStem({ tailSec: 200 });
+  const now = NOW_BASE + 1200 * DAY;
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now });
+  const other = { rowDurationSec: () => 312 };
+  const dry = await purge.runOrphanPurge({ knownIds: [id, '_sentinel'], confirm: false, now: now + DAY, ...other });
+  assert.deepEqual(dry.released, []);
+  assert.equal(dry.mismatchedCount, 1);
+  const rep = await purge.runOrphanPurge({ knownIds: [id, '_sentinel'], confirm: true, now: now + DAY, ...other });
+  assert.deepEqual(rep.released, []);
+  assert.equal(rep.mismatchedCount, 1);
+  assert.equal(rep.supersededCount, 0);
+  assert.match(purge.purgeSummary(rep), /1 back in the library but held/);
+  assert.ok(existsSync(join(QU, id)), 'still quarantined');
+  assert.ok(!existsSync(join(ROOT, id)), 'the live slot stays free for stems of its own');
+  // It ages out on its own stamp, like a superseded copy.
+  await purge.runOrphanPurge({ knownIds: [id, '_sentinel'], confirm: true, now: now + 8 * DAY, ...other });
+  assert.ok(!existsSync(join(QU, id)), 'deleted once past the grace');
+});
+
+test('a head-only quarantine is held: with no tail-meta.json nothing proves the audio', async () => {
+  const id = seedStem();
+  const now = NOW_BASE + 1220 * DAY;
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now });
+  const rep = await purge.runOrphanPurge({ knownIds: [id, '_sentinel'], confirm: true, now: now + DAY, ...SAME });
+  assert.deepEqual(rep.released, []);
+  assert.equal(rep.mismatchedCount, 1);
+  assert.ok(existsSync(join(QU, id)));
+  rmSync(join(QU, id), { recursive: true, force: true });
+});
+
+test('a library that cannot say what came back holds the release', async () => {
+  // No library DB in this file: the default lookup has no row to read, and a
+  // release that cannot be proven the same audio is held.
+  const id = seedStem({ tailSec: 200 });
+  const now = NOW_BASE + 1240 * DAY;
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now });
+  const rep = await purge.runOrphanPurge({ knownIds: [id, '_sentinel'], confirm: true, now: now + DAY });
+  assert.deepEqual(rep.released, []);
+  assert.equal(rep.mismatchedCount, 1);
+  assert.ok(existsSync(join(QU, id)));
+  rmSync(join(QU, id), { recursive: true, force: true });
 });
