@@ -140,7 +140,7 @@ export function NavidromeRealPathCard({ adminFetch }: { adminFetch: AdminFetch }
             files from a tag-built path only when its folders match the tags; the real path finds
             them however they&apos;re laid out. If the mount sits somewhere other than
             Navidrome&apos;s own folder, a file plays only when its size matches the track and
-            the title tag Navidrome reads holds the track&apos;s title; at Navidrome&apos;s own
+            its tags give it the title Navidrome reports for the track; at Navidrome&apos;s own
             path nothing has to match.
             The controller and broadcast containers both need the library, at the same path. Until
             the mixer can read it, or for any file it can&apos;t find or can&apos;t prove, the track
