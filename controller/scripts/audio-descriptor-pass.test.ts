@@ -65,7 +65,7 @@ const db = await import('../src/music/library-db.js');
 const { requireDb } = await import('../src/music/library-db/handle.js');
 const library = await import('../src/music/library.js');
 const settings = await import('../src/settings.js');
-const { EMBED_TEXT_VERSION, soundDescriptors, formatTrackText } = await import('../src/music/embeddings.js');
+const { EMBED_TEXT_VERSION, formatTrackText } = await import('../src/music/embeddings.js');
 const { runAudioDescriptorPass } = await import('../src/music/audio-descriptor-pass.js');
 const { runAudioMoodPass } = await import('../src/music/audio-moods.js');
 const { runAnalysisPass } = await import('../src/music/analyze.js');
@@ -268,7 +268,7 @@ test('a descriptor failure never fails the analysis pass', async () => {
   await runAudioDescriptorPass();
 });
 
-test('the Sound line reads a real row, and the verdict flows through without a re-score', () => {
+test('the verdict flows through to the labels without a re-score', () => {
   const vocal = DESCRIPTOR_VOCAB.find((d) => d.group === 'vocal')!.label;
   const instrument = DESCRIPTOR_VOCAB.find((d) => d.group === 'instrument')!.label;
   db.setTrackAudioDescriptorLabelsBulk([{ id: idOf(5), labels: [instrument, vocal] }]);
@@ -279,13 +279,25 @@ test('the Sound line reads a real row, and the verdict flows through without a r
   setVocal(null);
   assert.deepEqual(usableDescriptors(db.getTrack(idOf(5))), [instrument, vocal]);
   setVocal([]);
-  const t = db.getTrack(idOf(5))!;
-  assert.deepEqual(usableDescriptors(t), [instrument]);
-  assert.ok(soundDescriptors(t).includes('instrumental'));
-  assert.ok(!soundDescriptors(t).includes(vocal));
+  assert.deepEqual(usableDescriptors(db.getTrack(idOf(5))), [instrument]);
   assert.deepEqual(labelsOf(idOf(5)), [instrument, vocal], 'the stored labels were never rewritten');
   setVocal([{ startMs: 0, endMs: 60_000 }]);
-  assert.ok(formatTrackText({ title: 'x' }, null, db.getTrack(idOf(5))).includes(vocal));
+  assert.deepEqual(usableDescriptors(db.getTrack(idOf(5))), [instrument, vocal]);
+  setVocal(null);
+});
+
+// docs/internals/music.md says what has to be true before these words go in. The
+// whole row is handed over, so a Sound line that starts reading them fails here.
+test('selected descriptors change nothing in the embed text', () => {
+  const id = idOf(5);
+  const song = { title: 'T', artist: 'A', album: 'B', year: 2001, genres: ['Rock'] };
+  const enrich = { lastfmTags: ['rock'], lyricExcerpt: 'la la' };
+  db.setTrackAudioDescriptorLabelsBulk([{ id, labels: [] }]);
+  const without = formatTrackText(song, enrich, db.getTrack(id));
+  db.setTrackAudioDescriptorLabelsBulk([{ id, labels: ['piano', 'female vocals', 'lo-fi'] }]);
+  const withLabels = formatTrackText(song, enrich, db.getTrack(id));
+  assert.match(without, /Sound: /, 'the row has a Sound line to change');
+  assert.equal(withLabels, without);
 });
 
 test('the operator dossier shows the usable labels, behind the admin gate', async () => {
@@ -319,34 +331,22 @@ test('the operator dossier shows the usable labels, behind the admin gate', asyn
   }
 });
 
-test('labels count as musical signal for a vector that has nothing else', () => {
+test('labels are no musical signal in a vector, which never holds them', () => {
   const id = 'label-only';
   db.upsertTrackMeta(id, { title: 'Label', artist: 'Only', album: 'Row', duration: 200 });
   db.upsertTrackVector(id, new Array<number>(db.getEmbeddingDim() ?? 8).fill(0.1), null);
-  db.invalidateStats();
-  assert.equal(db.labelOnlyVectorCount(), 1);
   db.setTrackAudioDescriptorLabelsBulk([{ id, labels: ['piano'] }]);
   db.invalidateStats();
-  assert.equal(db.labelOnlyVectorCount(), 0);
-  db.setTrackAudioDescriptorLabelsBulk([{ id, labels: [] }]);
-  db.invalidateStats();
-  assert.equal(db.labelOnlyVectorCount(), 1, 'an empty selection is no signal');
+  assert.equal(db.labelOnlyVectorCount(), 1);
   requireDb().prepare('DELETE FROM track_vectors WHERE id = ?').run(id);
   requireDb().prepare('DELETE FROM tracks WHERE id = ?').run(id);
 });
 
-test('the re-embed advisory waits until a station has descriptors', async () => {
+test('selected descriptors ask nobody to re-embed', async () => {
   const coverage = await import('../src/music/library-coverage.js');
-  const stale = async () => (await coverage.get()).embeddingFormatStale;
-  const dim = db.getEmbeddingDim() ?? 8;
-  db.setEmbeddingMeta('fixture-model', dim, 'plain', 3);
-
-  db.setAudioDescriptorVocabHash(`${audioDescriptorVocabHash()}:0`);
-  assert.equal(await stale(), false, 'under the floor nothing would change');
-  db.setAudioDescriptorVocabHash(CURRENT);
-  assert.equal(await stale(), true, 'labels exist, so a re-embed folds them in');
-  db.setEmbeddingMeta('fixture-model', dim, 'plain', EMBED_TEXT_VERSION);
-  assert.equal(await stale(), false, 'already re-embedded');
+  db.setEmbeddingMeta('fixture-model', db.getEmbeddingDim() ?? 8, 'plain', EMBED_TEXT_VERSION);
+  assert.equal(db.getAudioDescriptorVocabHash(), CURRENT, 'labels exist');
+  assert.equal((await coverage.get()).embeddingFormatStale, false);
   requireDb().prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
 });
 
@@ -399,7 +399,7 @@ test('labels never reach a projection the picker or a public read is built from'
   assert.deepEqual(db.getTrack(id)?.audioDescriptors, ['piano', 'male vocals', 'lo-fi']);
 });
 
-test('only the embed text and the operator dossier read the labels', () => {
+test('only the operator dossier reads the labels', () => {
   const src = resolvePath(dirname(fileURLToPath(import.meta.url)), '../src');
   const files: string[] = [];
   const walk = (dir: string) => {
@@ -416,11 +416,8 @@ test('only the embed text and the operator dossier read the labels', () => {
     .sort();
   assert.deepEqual(readers, [
     'music/audio-descriptors.ts',          // defines them
-    'music/embeddings.ts',                 // the Sound: line
     'music/library-db/rows.ts',            // the row mapper
     'music/library-db/types.ts',
-    'music/tag-library/embed.ts',          // hands them to the Sound: line
-    'routes/library/maintenance.ts',       // same, on a single-track retag
     'routes/library/observatory.ts',       // the admin dossier, behind requireAdmin
   ], 'a new reader is a decision: descriptors are CLAP guesses, not facts');
 });

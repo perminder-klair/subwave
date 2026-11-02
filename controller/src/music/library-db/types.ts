@@ -60,8 +60,8 @@ export interface TrackRecord {
   // Zero-shot audio moods; [] until scored. Complement the LLM `moods`.
   audioMoods: string[];
   // Zero-shot sound descriptors; [] until scored or selected. CLAP guesses, for
-  // the embed text and the operator's dossier only: never add this to a
-  // projection, and read it through audio-descriptors.usableDescriptors.
+  // the operator's dossier only: never add this to a projection or the embed
+  // text, and read it through audio-descriptors.usableDescriptors.
   audioDescriptors: string[];
   // null = no outro signal.
   outro: TrackOutro | null;

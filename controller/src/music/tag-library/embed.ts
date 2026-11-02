@@ -52,7 +52,6 @@ export async function phaseEmbed(
         // here: phases 2-4 vote over the graph these vectors form.
         {
           bpm: t.bpm, musicalKey: t.musicalKey, audioMoods: t.audioMoods,
-          audioDescriptors: t.audioDescriptors,
           vocalRanges: t.vocalRanges,
           vocalRangesInvalid: t.vocalRangesInvalid,
         },

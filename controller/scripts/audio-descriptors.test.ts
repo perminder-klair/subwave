@@ -13,7 +13,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   audioDescriptorVocabHash,
-  descriptorsSelected,
   DESCRIPTOR_GROUP_CAPS,
   DESCRIPTOR_MIN_Z,
   DESCRIPTOR_VOCAB,
@@ -333,13 +332,6 @@ test('the drop happens at use time, so the verdict can change without a re-score
   assert.deepEqual(usableDescriptors(track), []);
   track.vocalRanges = [{ startMs: 0, endMs: 60_000 }];
   assert.deepEqual(usableDescriptors(track), [vocal], 'the stored label was kept all along');
-});
-
-test('only a calibrated state counts as a station with descriptors', () => {
-  assert.equal(descriptorsSelected(null), false, 'never scored');
-  assert.equal(descriptorsSelected('abc123:0'), false, 'under the floor, so no labels exist');
-  assert.equal(descriptorsSelected('abc123'), false, 'a bare hash reads as uncalibrated');
-  assert.equal(descriptorsSelected('abc123:1'), true);
 });
 
 test('absent or junk labels read as none', () => {

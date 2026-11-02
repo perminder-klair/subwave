@@ -347,7 +347,6 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
           rec
             ? {
                 bpm: rec.bpm, musicalKey: rec.musicalKey, audioMoods: rec.audioMoods,
-                audioDescriptors: rec.audioDescriptors,
                 vocalRanges: rec.vocalRanges,
                 vocalRangesInvalid: rec.vocalRangesInvalid,
               }

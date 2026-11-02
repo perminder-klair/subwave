@@ -34,7 +34,7 @@ export function idsNeedingAudioDescriptors(): string[] {
   return idsMissingLabels(LABELS);
 }
 
-// Dossier only; the embed text reads the pre-picked labels.
+// Dossier only.
 export function getAudioDescriptorScores(id: string): Record<string, number> | null {
   return readScoreMap(SCORES, id);
 }

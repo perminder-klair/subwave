@@ -41,7 +41,6 @@ import { adoptAndPrune } from './id-rotation.js';
 import { reportProgress, reportCatalogueReady, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
 import { planRun } from './rescan-scope.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
-import { descriptorsSelected } from './audio-descriptors.js';
 import { phaseEmbed } from './tag-library/embed.js';
 import { logEvent } from './tag-library/log.js';
 import { phaseEnrich } from './tag-library/enrich.js';
@@ -130,7 +129,6 @@ async function main() {
   // rule as textMode: stays at the older format until a reseed rebuilds it.
   const textFormat = embeddings.resolveIndexTextFormat(
     db.getEmbeddingMeta()?.textFormat, db.vectorCount(), flags.reseed,
-    descriptorsSelected(db.getAudioDescriptorVocabHash()),
   );
   db.setEmbeddingMeta(embeddings.activeModelLabel(), embeddingDim, textMode, textFormat);
   if (textMode === 'plain' && embeddings.preferredTextMode() === 'prefixed') {

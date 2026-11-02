@@ -15,7 +15,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   EMBED_TEXT_VERSION,
-  embedTextStale,
   formatTrackText,
   resolveIndexTextFormat,
   soundDescriptors,
@@ -27,68 +26,6 @@ test('audio moods lead, then tempo, then mode', () => {
     soundDescriptors({ audioMoods: ['dreamy', 'melancholic'], bpm: 92, musicalKey: '8A' }),
     ['dreamy', 'melancholic', 'mid-tempo', 'minor key'],
   );
-});
-
-test('sound descriptors ride the Sound line beside the audio moods', () => {
-  assert.deepEqual(
-    soundDescriptors({ audioMoods: ['dreamy'], audioDescriptors: ['tabla', 'lo-fi'], bpm: 92 }),
-    ['dreamy', 'tabla', 'lo-fi', 'mid-tempo'],
-  );
-  const text = formatTrackText(
-    { title: 'T', artist: 'A', album: 'B', year: 2001 },
-    null,
-    { audioMoods: ['dreamy'], audioDescriptors: ['tabla', 'female vocals'] },
-  );
-  assert.match(text, /^Sound: dreamy, tabla, female vocals$/m);
-});
-
-test('a measured instrumental never carries a vocal descriptor into the text', () => {
-  assert.deepEqual(
-    soundDescriptors({ audioDescriptors: ['tabla', 'female vocals'], vocalRanges: [] }),
-    ['tabla', 'instrumental'],
-  );
-  assert.deepEqual(
-    soundDescriptors({ audioDescriptors: ['tabla', 'female vocals'], vocalRanges: null }),
-    ['tabla', 'female vocals'],
-    'unknown is not instrumental',
-  );
-});
-
-test('a track with no descriptors produces exactly the v3 text', () => {
-  const song = { title: 'T', artist: 'A', album: 'B', year: 2001, genres: ['Rock'], eraYear: 2001 };
-  const acoustics = { audioMoods: ['dreamy'], bpm: 92, musicalKey: '8A', vocalRanges: [] };
-  const expected =
-    'A — T · B (2001) [Rock]\n' +
-    'Sound: dreamy, mid-tempo, minor key, instrumental\n' +
-    'Era: 2000s';
-  for (const audioDescriptors of [undefined, null, [], ['', ' ']]) {
-    assert.equal(formatTrackText(song, null, { ...acoustics, audioDescriptors }), expected);
-  }
-  // A lean-tier row: no heavy analysis at all, so no Sound line either.
-  assert.equal(
-    formatTrackText({ title: 'T', artist: 'A', album: 'B', year: 2001, genres: ['Rock'] }, null, { audioDescriptors: [] }),
-    'A — T · B (2001) [Rock]',
-  );
-});
-
-test('a lean station is not told to re-embed for a text that did not change', () => {
-  // The bump only moves a track carrying descriptors. Advising a re-embed off the
-  // version alone would cost every lean-tier station a full pass for nothing.
-  assert.equal(embedTextStale(3, false), false);
-  assert.equal(embedTextStale(3, true), true, 'a station with descriptors has something to gain');
-  assert.equal(embedTextStale(EMBED_TEXT_VERSION, true), false);
-  assert.equal(embedTextStale(EMBED_TEXT_VERSION + 1, true), false, 'a newer index is never stale');
-});
-
-test('an older shape is still stale, with or without descriptors', () => {
-  for (const stored of [null, undefined, 1, 2]) {
-    assert.equal(embedTextStale(stored, false), true, String(stored));
-    assert.equal(embedTextStale(stored, true), true, String(stored));
-  }
-});
-
-test('the text shape records the descriptor change', () => {
-  assert.equal(EMBED_TEXT_VERSION, 4);
 });
 
 test('tempo bands', () => {
@@ -203,20 +140,6 @@ test('an empty index adopts the current format', () => {
   // A fresh install uses the current format, so it never shows the advisory.
   assert.equal(resolveIndexTextFormat(null, 0), EMBED_TEXT_VERSION);
   assert.equal(resolveIndexTextFormat(1, 0), EMBED_TEXT_VERSION);
-});
-
-test('an index built before any descriptor was selected still owes the advisory', () => {
-  // A fresh heavy station embeds before its first analysis, and a lean one can
-  // re-embed and go heavy later. Neither index holds a descriptor, so stamping the
-  // current shape would hide the only prompt those words ever get.
-  const beforeDescriptors = EMBED_TEXT_VERSION - 1;
-  assert.equal(resolveIndexTextFormat(null, 0, false, false), beforeDescriptors);
-  assert.equal(resolveIndexTextFormat(3, 20_000, true, false), beforeDescriptors);
-  assert.equal(embedTextStale(beforeDescriptors, false), false, 'quiet while no label exists');
-  assert.equal(embedTextStale(beforeDescriptors, true), true, 'said once a pass has selected labels');
-  assert.equal(resolveIndexTextFormat(null, 0, false, true), EMBED_TEXT_VERSION, 'with labels it is current');
-  assert.equal(resolveIndexTextFormat(3, 20_000, true, true), EMBED_TEXT_VERSION);
-  assert.equal(resolveIndexTextFormat(3, 20_000, false, false), 3, 'a forward run still reports what is stored');
 });
 
 test('a populated index keeps its older format — the advisory must persist', () => {

@@ -3,24 +3,23 @@
 // (music/audio-descriptor-pass.ts). This module owns the vocabulary and every
 // decision about a label. Pure. docs/internals/music.md has the reasoning.
 //
-// Descriptors are hints, never facts: they go in the embed text and the
-// operator's dossier and nowhere else.
+// Descriptors are hints, never facts: they go in the operator's dossier and
+// nowhere else. They stay out of the embed text until selection can tell an
+// absent instrument from a rare one (docs/internals/music.md).
 
 import crypto from 'node:crypto';
 import { isInstrumental } from './lyric-vocal.js';
 import {
   centeredScores,
   DEFAULT_MARGIN_SD,
-  parseMoodStateHash,
   prunedBaselines,
-  UNCALIBRATED_VERSION,
   type MoodBaselines,
 } from './audio-calibration.js';
 
 export type DescriptorGroup = 'instrument' | 'vocal' | 'production';
 
 export interface Descriptor {
-  label: string; // the word that reaches the Sound: line
+  label: string; // the word the operator sees
   group: DescriptorGroup;
   prompt: string; // a caption, because CLAP was trained on audio captions
 }
@@ -110,14 +109,6 @@ export function selectAudioDescriptors(
     }
   }
   return out;
-}
-
-// Whether a stored state hash means labels were selected at all. The state, not
-// a count of rows: coverage reads this on a poll, and no labels exist until a
-// pass has calibrated.
-export function descriptorsSelected(storedState: string | null): boolean {
-  const state = parseMoodStateHash(storedState);
-  return !!state && state.version !== UNCALIBRATED_VERSION;
 }
 
 export interface DescribedTrack {
