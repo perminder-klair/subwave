@@ -99,10 +99,11 @@ export function id3v1({ title = '', artist = '', album = '' }: { title?: string;
 
 // ---- Vorbis comments: FLAC and Ogg -----------------------------------------
 
-export type Comments = [string, string][];
+/** Comment fields; a Buffer value is written as its bytes, which need not be UTF-8. */
+export type Comments = [string, string | Buffer][];
 
 export function vorbisComment(comments: Comments, vendor = 'reference libFLAC 1.4.3'): Buffer {
-  const fields = comments.map(([k, v]) => Buffer.from(`${k}=${v}`, 'utf8'));
+  const fields = comments.map(([k, v]) => Buffer.concat([Buffer.from(`${k}=`, 'utf8'), typeof v === 'string' ? Buffer.from(v, 'utf8') : v]));
   return Buffer.concat([u32le(Buffer.byteLength(vendor)), Buffer.from(vendor), u32le(fields.length), ...fields.flatMap(f => [u32le(f.length), f])]);
 }
 
@@ -179,11 +180,17 @@ const ALB = Buffer.from([0xa9, 0x61, 0x6c, 0x62]);
 const ART = Buffer.from([0xa9, 0x41, 0x52, 0x54]);
 /** A `data` atom: its type and version word (1 is UTF-8, version 0), a locale, the value. */
 export const dataAtom = (value: Buffer, type: number) => atom('data', u32be(type), u32be(0), value);
-/** An iTunes freeform item, `----` with `mean`, `name` and UTF-8 values. */
-export const freeform = (name: string, values: string[], mean = 'com.apple.iTunes') =>
+/** An iTunes freeform item, `----` with `mean`, `name` and values of type 1 (UTF-8); a Buffer value is written as its bytes. */
+export const freeform = (name: string, values: (string | Buffer)[], mean = 'com.apple.iTunes') =>
   atom('----', atom('mean', u32be(0), Buffer.from(mean, 'utf8')), atom('name', u32be(0), Buffer.from(name, 'utf8')),
-    ...values.map(v => dataAtom(Buffer.from(v, 'utf8'), 1)));
-export { NAM };
+    ...values.map(v => dataAtom(typeof v === 'string' ? Buffer.from(v, 'utf8') : v, 1)));
+/** The same atom with a 64-bit size: a size of 1, then the real one in the 8 bytes after the type. */
+export const wideAtom = (whole: Buffer) => {
+  const size = Buffer.alloc(8);
+  size.writeBigUInt64BE(BigInt(whole.length + 8));
+  return Buffer.concat([u32be(1), whole.subarray(4, 8), size, whole.subarray(8)]);
+};
+export { NAM, u32be };
 
 /**
  * An M4A: `ftyp`, then `moov` ahead of `mdat` (fast start) or after it (the default
@@ -206,10 +213,14 @@ export function mp4({ title, album, artist, utf16 = false, subtitle }: { title?:
     ...(cover ? [atom('covr', dataAtom(Buffer.alloc(cover, 0xd8), 13))] : []));
   const meta = atom('meta', ...(fullMeta ? [Buffer.alloc(4)] : []), atom('hdlr', Buffer.alloc(8), latin1('mdirappl'), Buffer.alloc(13)), ilst);
   // `tables` stands in for a trak's sample tables: a trak/mdia/minf/stbl chain, as
-  // TagLib parses it, around one leaf of that size.
+  // TagLib parses it, around an `stsd` as encoders write it (a version and flags
+  // word and an entry count ahead of its `mp4a` child, which TagLib skips) and one
+  // `stsz` leaf that takes the rest of the size.
   // `trakItems` puts an ilst in the trak's own udta, ahead of the moov's.
   const trakUdta = trakItems ? [atom('udta', atom('meta', Buffer.alloc(4), atom('ilst', ...trakItems)))] : [];
-  const trak = atom('trak', atom('mdia', atom('minf', atom('stbl', atom('stsz', Buffer.alloc(Math.max(0, tables - 32), 0x11))))), ...trakUdta);
+  const stsd = atom('stsd', u32be(0), u32be(1), atom('mp4a', Buffer.alloc(28, 0x22), atom('esds', Buffer.alloc(30, 0x33))));
+  const stsz = atom('stsz', Buffer.alloc(Math.max(0, tables - 32 - stsd.length), 0x11));
+  const trak = atom('trak', atom('mdia', atom('minf', atom('stbl', stsd, stsz))), ...trakUdta);
   const moov = atom('moov', atom('mvhd', Buffer.alloc(100)), trak, ...moovBefore, atom('udta', meta), ...moovExtra);
   const ftyp = atom('ftyp', latin1('M4A '), u32be(512), latin1('M4A isomiso2'));
   const mdat = atom('mdat', audioBytes(audio, words));

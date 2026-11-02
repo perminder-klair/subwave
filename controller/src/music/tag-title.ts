@@ -31,16 +31,22 @@
 //   atoms of type 1, version 0 (UTF-8), and the first of two `©nam` items.
 //   TagLib parses every atom in file order, and Navidrome doesn't index a file it
 //   can't parse, so every atom up to the end of that `ilst` has to lie in a window
-//   and be sound; anything else is unsure, as is an ID3v2 tag in front of the file.
+//   and be sound. Unsure: anything else on the way, an ID3v2 tag in front of the
+//   file, another item whose name Navidrome lower-cases into one of its title or
+//   subtitle keys (`TIT2`, `inam`, `©NAM`, a freeform `TITLE`), a `©nam` or
+//   freeform item with a 64-bit size, and a `data` atom TagLib reads its own way:
+//   under 16 bytes, of 2^31 or more, or running past its item.
 // - Anything else (WAV, AIFF, WavPack, APE, WMA…) has no title this reads.
 // Each value is read up to its first NUL, as TagLib reads it, and Navidrome drops
-// empty values, so the title is the first that isn't. Invalid UTF-8 is no value
-// here, and streams: Navidrome's TagLib replaces the bad bytes, and this doesn't
-// try to match how. The same words in another field, in cover art or in the audio
-// are no title.
-// What this can't see still lets a wrong file of the right size and title play:
-// a subtitle, or another of Navidrome's title keys, past the windows behind a
-// title that matches (a title past them streams), and an MP4 with a broken atom
+// empty values, so the title is the first that isn't. A title or subtitle value
+// that isn't text (bytes that aren't UTF-8, a lone UTF-16 surrogate) is unsure,
+// even after a valid one: Navidrome's TagLib replaces the bad bytes, and this
+// doesn't try to match how. Within one ID3 frame nothing after its first value
+// that isn't empty is decoded, since Navidrome never reports it. The same words in
+// another field, in cover art or in the audio are no title.
+// Two shapes this can't see still let a wrong file of the right size and title
+// play: a subtitle, or another of Navidrome's title keys, past the windows behind
+// a title that matches (a title past them streams), and an MP4 with a broken atom
 // after its `ilst`, which Navidrome doesn't index.
 //
 // Every walk is linear in the window, whatever the file holds: no regex runs on
@@ -71,6 +77,12 @@ export type TitleField = { kind: 'title'; value: string; plain?: string } | { ki
 
 const NONE: TitleField = { kind: 'none' };
 const UNSURE: TitleField = { kind: 'unsure' };
+
+// Text TagLib decodes with replacement characters: bytes that aren't UTF-8, or a
+// lone UTF-16 surrogate. Navidrome then reports U+FFFD, which this doesn't try to
+// match, so under a title or subtitle key it is unsure (reported()). A NUL, which
+// no value read here holds: each is cut at its first.
+const INVALID = '\u0000';
 
 /**
  * Both sides of the comparison: NFC, trimmed, trailing NULs dropped. The trim is
@@ -124,9 +136,15 @@ const TITLE_KEYS = ['tit2', 'title', '©nam', 'inam'];
 const SUBTITLE_KEYS = ['tit3', 'subtitle', '----:com.apple.itunes:subtitle', 'wm/subtitle'];
 const NAVIDROME_KEYS = new Set([...TITLE_KEYS, ...SUBTITLE_KEYS]);
 
+function isAscii(s: string): boolean {
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) > 0x7f) return false;
+  return true;
+}
+
 // Go's strings.ToLower over the keys met here: ASCII, plus the two characters whose
 // lower case is ASCII (`İ` and the Kelvin sign).
 function goLower(key: string): string {
+  if (isAscii(key)) return key.toLowerCase();
   let out = '';
   for (const c of key) out += c === 'İ' ? 'i' : c === 'K' ? 'k' : c >= 'A' && c <= 'Z' ? c.toLowerCase() : c;
   return out;
@@ -134,6 +152,7 @@ function goLower(key: string): string {
 
 // TagLib's String::upper(): ASCII letters only.
 function asciiUpper(key: string): string {
+  if (isAscii(key)) return key.toUpperCase();
   let out = '';
   for (const c of key) out += c >= 'a' && c <= 'z' ? c.toUpperCase() : c;
   return out;
@@ -180,7 +199,7 @@ function reported(props: Map<string, string[]>): TitleField {
   const lowered = new Map<string, string[]>();
   for (const [key, values] of props) {
     const k = goLower(key);
-    if (lowered.has(k) && NAVIDROME_KEYS.has(k)) return UNSURE;
+    if (NAVIDROME_KEYS.has(k) && (lowered.has(k) || values.includes(INVALID))) return UNSURE;
     lowered.set(k, values);
   }
   const first = (keys: string[]) => {
@@ -213,14 +232,23 @@ function upToNul(s: string): string {
   return nul < 0 ? s : s.slice(0, nul);
 }
 
-// A UTF-8 value up to its first NUL. Invalid UTF-8 is no value (see the header).
+// A UTF-8 value up to its first NUL, or INVALID.
 function utf8(bytes: Buffer): string {
-  return isUtf8(bytes) ? upToNul(bytes.toString('utf8')) : '';
+  return isUtf8(bytes) ? upToNul(bytes.toString('utf8')) : INVALID;
 }
 
+// A UTF-16 value up to its first NUL, or INVALID for a surrogate without its pair.
 function utf16(bytes: Buffer, bigEndian: boolean): string {
   const even = Buffer.from(bytes.subarray(0, bytes.length - (bytes.length % 2)));
-  return upToNul((bigEndian ? even.swap16() : even).toString('utf16le'));
+  const s = (bigEndian ? even.swap16() : even).toString('utf16le');
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0xd800 || c > 0xdfff) continue;
+    const next = s.charCodeAt(i + 1);
+    if (c > 0xdbff || !(next >= 0xdc00 && next <= 0xdfff)) return INVALID;
+    i++;
+  }
+  return upToNul(s);
 }
 
 // ---- MP3 ----------------------------------------------------------------------
@@ -272,6 +300,10 @@ function resync(bytes: Buffer): Buffer {
 // (a TXXX keeps its first, the description), each piece decoded alone. A UTF-16
 // piece without a byte order mark takes the first piece's, and the first piece
 // without one reads as empty. Null for an encoding TagLib doesn't define.
+// Only what Navidrome can report is decoded: the split stops at the frame's first
+// value that isn't empty, since every value after it comes after it in TagLib's
+// list too, and at a TXXX's description unless that is `TITLE` or `SUBTITLE`.
+// Empty values aren't returned: Navidrome drops them.
 function id3Values(data: Buffer, txxx: boolean): string[] | null {
   if (data.length < 2) return [];
   const encoding = data[0];
@@ -281,36 +313,43 @@ function id3Values(data: Buffer, txxx: boolean): string[] | null {
   while (length > 0 && data[length] === 0) length--;
   while (length % align !== 0) length++;
   const body = data.subarray(1, 1 + length);
-  // Only the pieces TagLib keeps are made: an empty one is skipped unless it is a
-  // TXXX's first, so a run of NULs costs no allocation.
-  const pieces: { bytes: Buffer; first: boolean }[] = [];
-  let from = 0;
-  let index = 0;
-  const cut = (to: number) => {
-    if (to > from || (index === 0 && txxx)) pieces.push({ bytes: body.subarray(from, to), first: index === 0 });
-    index++;
-  };
-  for (let at = 0; at + align <= body.length; at += align) {
-    if (body[at] === 0 && (align === 1 || body[at + 1] === 0)) {
-      cut(at);
-      from = at + align;
-    }
-  }
-  if (from < body.length) cut(body.length);
   const values: string[] = [];
+  let index = 0;
   let firstBom = 0;
-  for (const { bytes: piece, first } of pieces) {
-    if (encoding === 0) values.push(upToNul(piece.toString('latin1')));
-    else if (encoding === 3) values.push(utf8(piece));
-    else if (encoding === 2) values.push(utf16(piece, true));
+  // Decodes one piece; true when the split can stop.
+  const take = (from: number, to: number): boolean => {
+    const first = index++ === 0;
+    const description = first && txxx;
+    if (to === from && !description) return false;
+    const piece = body.subarray(from, to);
+    let value: string;
+    if (encoding === 0) value = upToNul(piece.toString('latin1'));
+    else if (encoding === 3) value = utf8(piece);
+    else if (encoding === 2) value = utf16(piece, true);
     else {
       const bom = piece.length >= 2 ? piece.readUInt16BE(0) : 0;
       if (first) firstBom = bom;
-      if (bom === 0xfeff || bom === 0xfffe) values.push(utf16(piece.subarray(2), bom === 0xfeff));
-      else if (!first && (firstBom === 0xfeff || firstBom === 0xfffe)) values.push(utf16(piece, firstBom === 0xfeff));
-      else values.push('');
+      if (bom === 0xfeff || bom === 0xfffe) value = utf16(piece.subarray(2), bom === 0xfeff);
+      else if (!first && (firstBom === 0xfeff || firstBom === 0xfffe)) value = utf16(piece, firstBom === 0xfeff);
+      else value = '';
+    }
+    if (description) {
+      values.push(value);
+      const key = asciiUpper(value);
+      return key !== 'TITLE' && key !== 'SUBTITLE';
+    }
+    if (value === '') return false;
+    values.push(value);
+    return true;
+  };
+  let from = 0;
+  for (let at = 0; at + align <= body.length; at += align) {
+    if (body[at] === 0 && (align === 1 || body[at + 1] === 0)) {
+      if (take(from, at)) return values;
+      from = at + align;
     }
   }
+  if (from < body.length) take(from, body.length);
   return values;
 }
 
@@ -544,7 +583,9 @@ const CONTAINERS = new Set(['moov', 'udta', 'mdia', 'meta', 'ilst', 'stbl', 'min
 const META_CHILDREN = new Set(['hdlr', 'ilst', 'mhdr', 'ctry', 'lang']);
 const NAM = '©nam';
 
-interface Header { name: string; offset: number; length: number; body: number }
+// `wide` is a 64-bit size, which TagLib reads past for a container but takes for
+// the start of an item's data.
+interface Header { name: string; offset: number; length: number; body: number; wide: boolean }
 type Stop = 'invalid' | 'unseen';
 const PATH = ['moov', 'udta', 'meta', 'ilst'];
 
@@ -568,11 +609,12 @@ function mp4Items(at: (offset: number, length: number) => Buffer | null, size: n
     if (!head) return pos + 8 > size ? 'invalid' : 'unseen';
     let length = head.readUInt32BE(0);
     let body = pos + 8;
+    const wide = length === 1;
     if (length === 0) length = size - pos;
-    else if (length === 1) {
-      const wide = at(pos + 8, 8);
-      if (!wide) return pos + 16 > size ? 'invalid' : 'unseen';
-      length = Number(wide.readBigUInt64BE(0));
+    else if (wide) {
+      const big = at(pos + 8, 8);
+      if (!big) return pos + 16 > size ? 'invalid' : 'unseen';
+      length = Number(big.readBigUInt64BE(0));
       body = pos + 16;
     }
     if (length < 8 || length > size - pos) return 'invalid';
@@ -585,7 +627,7 @@ function mp4Items(at: (offset: number, length: number) => Buffer | null, size: n
     } else if (name === 'stsd') {
       body += 8;
     }
-    return { name, offset: pos, length, body };
+    return { name, offset: pos, length, body, wide };
   };
   // An atom parsed whole, children and all; where TagLib goes on from, which for a
   // container is its last child's end, wherever that is.
@@ -634,23 +676,26 @@ function mp4Items(at: (offset: number, length: number) => Buffer | null, size: n
 }
 
 // The `data` atoms of an item as TagLib's parseData2 reads them, after `mean` and
-// `name` for a freeform one: each at least 12 bytes, a type and version word, and
-// the value from byte 16; a `data` that runs past the item keeps what is there.
-function mp4Data(item: Buffer, freeform: boolean): { flags: number; value: Buffer }[] {
+// `name` for a freeform one: a type and version word, then the value from byte 16.
+// TagLib reads each length as a signed int and cuts the value to the length less
+// 16, so a data atom under 16 bytes, of 2^31 or more, or running past its item
+// reads its own way there: null, unsure. A short or misnamed `mean` or `name` ends
+// the item, as in TagLib, which then drops it.
+function mp4Data(item: Buffer, freeform: boolean): { flags: number; value: Buffer }[] | null {
   const out: { flags: number; value: Buffer }[] = [];
   for (let pos = 0, i = 0; pos < item.length; i++) {
-    if (pos + 12 > item.length) break;
+    const named = freeform && i < 2;
+    if (pos + (named ? 12 : 16) > item.length) return named ? out : null;
     const length = item.readUInt32BE(pos);
-    if (length < 12) break;
     const name = item.toString('latin1', pos + 4, pos + 8);
     const flags = item.readUInt32BE(pos + 8);
-    const end = Math.min(pos + length, item.length);
-    if (freeform && i < 2) {
-      if (name !== (i === 0 ? 'mean' : 'name')) break;
-      out.push({ flags, value: item.subarray(pos + 12, end) });
+    if (named) {
+      if (length < 12 || length >= 2 ** 31 || name !== (i === 0 ? 'mean' : 'name')) return out;
+      out.push({ flags, value: item.subarray(pos + 12, Math.min(pos + length, item.length)) });
     } else {
+      if (length < 16 || length >= 2 ** 31 || pos + length > item.length) return null;
       if (name !== 'data') break;
-      out.push({ flags, value: item.subarray(Math.min(pos + 16, end), end) });
+      out.push({ flags, value: item.subarray(pos + 16, pos + length) });
     }
     pos += length;
   }
@@ -677,26 +722,36 @@ function mp4FileTitle(head: Buffer, readTail: () => Buffer, size: number): Title
   const subtitles = new Set<string>();
   let subtitle: string[] | null = null;
   let complete = result.complete;
+  // False once an item's data lay outside the windows: the items after it are
+  // still checked by name and size, never read.
+  let reading = true;
   for (const item of result.items) {
+    // TagLib hands Navidrome any other atom as a key named after it, which Navidrome
+    // lower-cases: `TIT2`, `inam`, `©NAM` would be another title or subtitle.
+    if (item.name !== NAM && NAVIDROME_KEYS.has(goLower(item.name))) return UNSURE;
     if (item.name !== NAM && item.name !== '----') continue;
-    if (item.name === NAM && title) continue;
+    // TagLib reads an item's data from 8 bytes in, so a 64-bit size reads as data.
+    if (item.wide) return UNSURE;
+    if (!reading || (item.name === NAM && title)) continue;
     const bytes = at(item.body, item.offset + item.length - item.body);
     // Past the windows, like an item header there: a title is unseen, a subtitle unread.
-    if (!bytes) { complete = false; break; }
+    if (!bytes) { complete = false; reading = false; continue; }
+    const data = mp4Data(bytes, item.name === '----');
+    if (!data) return UNSURE;
     if (item.name === NAM) {
       // TagLib keeps the first `©nam` with a UTF-8 value; a later one is a duplicate.
-      const data = mp4Data(bytes, false).filter(d => d.flags === 1);
-      if (data.length) title = data.map(d => utf8(d.value));
+      const text = data.filter(d => d.flags === 1);
+      if (text.length) title = text.map(d => utf8(d.value));
       continue;
     }
-    const data = mp4Data(bytes, true);
     if (data.length <= 2) continue;
     const mean = utf8(data[0].value);
     const name = utf8(data[1].value);
     // TagLib keys the item by its mean and name, and maps the iTunes ones to a
-    // property by name; Navidrome lower-cases both kinds of key.
+    // property by name; Navidrome lower-cases both kinds of key. One named after a
+    // title key is unsure whatever its mean.
+    if (TITLE_KEYS.includes(goLower(name))) return UNSURE;
     const key = mean === 'com.apple.iTunes' ? goLower(name) : null;
-    if (key !== null && TITLE_KEYS.includes(key)) return UNSURE;
     if (!((key !== null && SUBTITLE_KEYS.includes(key)) || goLower(`----:${mean}:${name}`) === '----:com.apple.itunes:subtitle')) continue;
     // TagLib keeps the first item of a key; of two keys, Navidrome keeps one at random.
     const exact = `${mean}:${name}`;
@@ -706,7 +761,6 @@ function mp4FileTitle(head: Buffer, readTail: () => Buffer, size: number): Title
     subtitle = data.slice(2).map(d => utf8(d.value));
   }
   if (!title) return complete ? NONE : UNSURE;
-  if (!title) return NONE;
   const props = new Map([['TITLE', title]]);
   if (subtitle) props.set('SUBTITLE', subtitle);
   return reported(props);

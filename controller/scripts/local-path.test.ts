@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test, { after, beforeEach, type TestContext } from 'node:test';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
-import { apeTag, atom, audioBytes, dataAtom, flac, freeform, id3v1, id3v2, mp4, NAM, ogg, textFrame, txxxFrame, type Comments, type Id3Encoding, type Id3Frame } from './test-utils/tags.js';
+import { apeTag, atom, audioBytes, dataAtom, flac, freeform, id3v1, id3v2, mp4, NAM, ogg, textFrame, txxxFrame, u32be, wideAtom, type Comments, type Id3Encoding, type Id3Frame } from './test-utils/tags.js';
 
 const base = createTempDir(join(tmpdir(), 'subwave-local-path-'));
 process.env.STATE_DIR = join(base, 'state');
@@ -558,6 +558,67 @@ test('MP4 values are UTF-8 data atoms of version 0 only, and the first ©nam ite
   }
 });
 
+test('MP4 items TagLib reads its own way are unsure: Navidrome reports another title for each', () => {
+  // Each mount file below reads as the asked title to a reader that skips the rule,
+  // and stock Navidrome 0.64.2 reports another: an atom named after one of its title
+  // or subtitle keys is that key; TagLib reads a 64-bit item's size as its data; a
+  // data atom under 16 bytes runs its value on into the next atom (`data`); and a
+  // length of 2^31 or more is negative to it, which ends the item.
+  const go = dataAtom(Buffer.from('Go'), 1);
+  const up = atom(NAM, dataAtom(Buffer.from('Up'), 1));
+  const named = (name: string, value: string) => atom(Buffer.from(name, 'latin1'), dataAtom(Buffer.from(value), 1));
+  // A data atom whose size field says `length`, whatever follows it.
+  const data = (length: number, value: string) => Buffer.concat([u32be(length), Buffer.from('data'), u32be(1), u32be(0), Buffer.from(value)]);
+  // A data atom of 12 to 15 bytes, all of it there.
+  const short = (length: number) => Buffer.concat([u32be(length), Buffer.from('data'), u32be(1), Buffer.alloc(length - 12)]);
+  const subtitle = (...data: Buffer[]) => atom('----', atom('mean', u32be(0), Buffer.from('com.apple.iTunes')), atom('name', u32be(0), Buffer.from('SUBTITLE')), ...data);
+  for (const [label, items, title] of [
+    // Navidrome: `Up`, `Up`, `Go (Live)`, `Up`.
+    ['an atom named TIT2', [atom(NAM, go), named('TIT2', 'Up')], 'Go'],
+    ['an atom named tit2', [atom(NAM, go), named('tit2', 'Up')], 'Go'],
+    ['an atom named TIT3', [atom(NAM, go), named('TIT3', 'Live')], 'Go'],
+    ['an iTunes freeform TIT2', [atom(NAM, go), freeform('TIT2', ['Up'])], 'Go'],
+    // Navidrome: the file's name, `Up`, and `Go` with the subtitle item dropped.
+    ['a ©nam with a 64-bit size', [wideAtom(atom(NAM, go))], 'Go'],
+    ['a ©nam with a 64-bit size, then ©nam "Up"', [wideAtom(atom(NAM, go)), up], 'Go'],
+    ['an iTunes SUBTITLE with a 64-bit size', [atom(NAM, go), wideAtom(freeform('SUBTITLE', ['Live']))], 'Go (Live)'],
+    // Navidrome: `data`, `Up`, the file's name, `Go (data)`.
+    ['a 12-byte data atom, then "Go"', [atom(NAM, short(12), go)], 'Go'],
+    ['a data atom of 2^31 bytes or more, then ©nam "Up"', [atom(NAM, data(0xfffffff0, 'Go')), up], 'Go'],
+    ['a data atom of type 21, then one cut off, then ©nam "Go"', [atom(NAM, dataAtom(Buffer.from('X'), 21), Buffer.from('\0\0\0\x0cdata\x01', 'latin1')), atom(NAM, go)], 'Go'],
+    ['an iTunes SUBTITLE with a 12-byte data atom', [atom(NAM, go), subtitle(short(12), dataAtom(Buffer.from('Live'), 1))], 'Go (Live)'],
+  ] as const) {
+    assert.equal(asked(mp4({}, { items: [...items] }), title, 'm4a').found, null, label);
+  }
+  // Broader than TagLib, and no tagger writes them: Navidrome reports `Go` for each
+  // of these, and they stream. Two `TITLE` keys, or a key Navidrome ranks behind
+  // `title`, happen to resolve to `©nam` here; this doesn't lean on how.
+  for (const [label, items] of [
+    ['an atom named ©NAM', [atom(NAM, go), named('\xa9NAM', 'Up')]],
+    ['an atom named INAM ahead of ©nam', [named('INAM', 'Up'), atom(NAM, go)]],
+    ['an iTunes freeform TITLE', [atom(NAM, go), freeform('TITLE', ['Up'])]],
+    ['a freeform tit2 under another mean', [atom(NAM, go), freeform('tit2', ['Up'], 'org.example')]],
+    ['a ©nam, then one with a 64-bit size', [atom(NAM, go), wideAtom(up)]],
+    ['a 15-byte data atom, then "Go"', [atom(NAM, short(15), go)]],
+    ['a data atom running past its item', [atom(NAM, data(40, 'Go'))]],
+    ['a data atom, then an 8-byte atom in the item', [atom(NAM, go, atom('free'))]],
+  ] as const) {
+    assert.equal(asked(mp4({}, { items: [...items] }), 'Go', 'm4a').found, null, label);
+  }
+});
+
+test('MP4 atoms TagLib reads as its spec has them: a 64-bit size and a size of 0 on the path', () => {
+  const M4A = 'Artist/Album/01 - Song.m4a';
+  const late = mp4({ title: 'Go' }, { layout: 'late' });
+  const moov = late.lastIndexOf('moov') - 4;
+  // A 64-bit moov, as a writer may make any atom.
+  assert.equal(asked(Buffer.concat([late.subarray(0, moov), wideAtom(late.subarray(moov))]), 'Go', 'm4a').found, join(root, M4A), 'a 64-bit moov');
+  // A size of 0: the moov runs to the end of the file.
+  const open = Buffer.from(late);
+  open.writeUInt32BE(0, moov);
+  assert.equal(asked(open, 'Go', 'm4a').found, join(root, M4A), 'a moov of size 0 at the end');
+});
+
 test('an MP4 Navidrome wouldn\'t index streams: an atom TagLib rejects ahead of the ilst', () => {
   const M4A = 'Artist/Album/01 - Song.m4a';
   const broken = Buffer.from([0, 0, 0, 4, 0x66, 0x72, 0x65, 0x65]); // `free` claiming 4 bytes
@@ -658,11 +719,52 @@ test('ID3v2 values are TagLib\'s: empty ones skipped, a UTF-16 value without a b
     const { onMount, found } = asked(bytes, title);
     assert.equal(found, onMount, label);
   }
-  // Invalid UTF-8 reads as no title, as TagLib reads it.
-  assert.equal(asked(tag(Buffer.from([3, 0x47, 0xff, 0x6f])), 'G\ufffdo').found, null, 'invalid UTF-8');
-  // iTunes once wrote 2.2 ids into 2.3 tags; TagLib reads them as 2.2's.
-  const itunes = Buffer.concat([id3v2([{ id: 'TT2\0', data: Buffer.from('\0Go', 'latin1') }]), audioBytes(4096)]);
-  assert.equal(asked(itunes, 'Go').found, join(root, MP3), 'a 2.2 id in a 2.3 tag');
+  // iTunes once wrote 2.2 ids into 2.3 tags, ending in a NUL or a space; TagLib
+  // reads them as 2.2's.
+  for (const id of ['TT2\0', 'TT2 ']) {
+    const itunes = Buffer.concat([id3v2([{ id, data: Buffer.from('\0Go', 'latin1') }]), audioBytes(4096)]);
+    assert.equal(asked(itunes, 'Go').found, join(root, MP3), `a 2.2 id in a 2.3 tag, ${JSON.stringify(id)}`);
+  }
+});
+
+test('a title or subtitle value that isn\'t text is unsure, even after a valid one: Navidrome replaces it', () => {
+  // Stock Navidrome 0.64.2 reports bytes that aren't UTF-8 as U+FFFD (`G\ufffdo`,
+  // `Go (\ufffd)`, `Go (Live at the Caf\ufffd)`), and a lone surrogate as something
+  // else again (a high one takes the next unit as its pair: `\u{11847}o`), where
+  // dropping the bad value would read `Go`. After a valid value it reports the valid
+  // one, but this doesn't lean on the order: any bad value read under a title or
+  // subtitle key streams.
+  const v24 = (...frames: Id3Frame[]) => Buffer.concat([id3v2(frames, { version: 4 }), audioBytes(4096)]);
+  const raw = (id: string, bytes: string) => ({ id, data: Buffer.from(bytes, 'latin1') });
+  const latin = (s: string) => Buffer.from(s, 'latin1');
+  const surrogate = Buffer.concat([Buffer.from([1, 0xff, 0xfe, 0x3d, 0xd8]), Buffer.from('Go', 'utf16le')]);
+  const item = (...data: Buffer[]) => atom(NAM, ...data);
+  for (const [label, bytes, ext] of [
+    ['ID3v2, the only value', v24(raw('TIT2', '\x03G\xffo')), 'mp3'],
+    ['ID3v2, a bad value then "Go" in one frame', v24(raw('TIT2', '\x03G\xffo\0Go')), 'mp3'],
+    ['ID3v2, a second TIT2 frame', v24(textFrame('TIT2', 'Go', 3), raw('TIT2', '\x03G\xffo')), 'mp3'],
+    ['ID3v2, TIT3 "\\xff" beside TIT2 "Go"', v24(textFrame('TIT2', 'Go', 3), raw('TIT3', '\x03\xff')), 'mp3'],
+    ['ID3v2, a TXXX SUBTITLE of Latin-1 marked UTF-8', v24(textFrame('TIT2', 'Go', 3), raw('TXXX', '\x03SUBTITLE\0Caf\xe9')), 'mp3'],
+    ['ID3v2.3, TIT3 of Latin-1 marked UTF-8', Buffer.concat([id3v2([textFrame('TIT2', 'Go'), raw('TIT3', '\x03Live at the Caf\xe9')]), audioBytes(4096)]), 'mp3'],
+    ['ID3v2, a lone UTF-16 surrogate', v24({ id: 'TIT2', data: surrogate }), 'mp3'],
+    ['FLAC, TITLE=G\\xffo then TITLE=Go', flac([['TITLE', latin('G\xffo')], ['TITLE', 'Go']]), 'flac'],
+    ['FLAC, TITLE=Go then TITLE=G\\xffo', flac([['TITLE', 'Go'], ['TITLE', latin('G\xffo')]]), 'flac'],
+    ['FLAC, SUBTITLE in Latin-1', flac([['TITLE', 'Go'], ['SUBTITLE', latin('Live at the Caf\xe9')]]), 'flac'],
+    ['Ogg Opus, SUBTITLE in Latin-1', ogg('opus', [['TITLE', 'Go'], ['SUBTITLE', latin('Caf\xe9')]]), 'opus'],
+    ['M4A, \u00a9nam data "\\xff" then "Go"', mp4({}, { items: [item(dataAtom(latin('\xff'), 1), dataAtom(latin('Go'), 1))] }), 'm4a'],
+    ['M4A, an iTunes SUBTITLE in Latin-1', mp4({ title: 'Go' }, { items: [freeform('SUBTITLE', [latin('Caf\xe9')])] }), 'm4a'],
+  ] as const) {
+    assert.equal(asked(bytes, 'Go', ext).found, null, label);
+  }
+  // A right file with a Latin-1 subtitle streams too, and the Doctor says why: its
+  // tags hold no title the check can be sure of, not another title.
+  const FLAC_SONG = 'Artist/Album/01 - Song.flac';
+  const right = flac([['TITLE', 'Go'], ['SUBTITLE', latin('Live at the Caf\xe9')]]);
+  put(join(root, FLAC_SONG), right);
+  assert.equal(localFileState(song(`/srv/library/${FLAC_SONG}`, 'Go (Live at the Caf\ufffd)', right.length)), 'unread');
+  // Past a frame's first value that isn't empty nothing is decoded: Navidrome
+  // reports that first value.
+  assert.equal(asked(v24(raw('TIT2', '\x03Go\0G\xffo')), 'Go').found, join(root, MP3), 'a bad second value in one frame');
 });
 
 test('an Ogg comment header that spans pages is read whole', () => {
@@ -766,6 +868,10 @@ const HOSTILE: { name: string; ext: string; title?: string; bytes: () => Buffer 
   { name: 'ID3v2.4 TIT2, 4,096 combining marks', ext: 'mp3', title: `a${MARKS.slice(0, 511)}`, bytes: () => Buffer.concat([id3v2([textFrame('TIT2', `a${MARKS}`, 3)], { version: 4, padding: 0 }), audioBytes(200_000)]) },
   { name: 'ID3v2.4, 2 × 4,096 combining marks in TIT2 and TIT3', ext: 'mp3', title: `a${MARKS.slice(0, 511)} (${MARKS.slice(0, 512)})`, bytes: () => Buffer.concat([id3v2([textFrame('TIT2', `a${MARKS}`, 3), textFrame('TIT3', MARKS, 3)], { version: 4, padding: 0 }), audioBytes(200_000)]) },
   { name: 'MP4, 7,000 empty containers ahead of the udta', ext: 'm4a', bytes: () => mp4({ title: 'Song' }, { moovBefore: Array.from({ length: 7000 }, () => atom('trak')), audio: 200_000 }) },
+  // Only a frame's first value is decoded, however many it splits into.
+  { name: 'ID3v2.4 TIT2 and TIT3 of 15,000 NUL-split values each', ext: 'mp3', title: 'a (a)', bytes: () => Buffer.concat([id3v2([textFrame('TIT2', 'a\0'.repeat(15000)), textFrame('TIT3', 'a\0'.repeat(15000))], { version: 4, padding: 0 }), audioBytes(200_000)]) },
+  { name: 'ID3v2.4, 2,500 TXXX SUBTITLE frames, then TIT2', ext: 'mp3', title: 'Go (b)', bytes: () => Buffer.concat([id3v2([...Array.from({ length: 2500 }, () => txxxFrame('SUBTITLE', 'b\0'.repeat(6), 3)), textFrame('TIT2', 'Go', 3)], { version: 4, padding: 0 }), audioBytes(200_000)]) },
+  { name: 'ID3v2.4, 4,000 TXXX frames of other descriptions', ext: 'mp3', title: 'Go', bytes: () => Buffer.concat([id3v2([...Array.from({ length: 4000 }, () => txxxFrame('xxx', 'v', 3)), textFrame('TIT2', 'Go', 3)], { version: 4, padding: 0 }), audioBytes(200_000)]) },
 ];
 
 for (const { name, ext, title = 'Song', bytes } of HOSTILE) {
@@ -824,7 +930,7 @@ test('the MP4 walk reads each header once: at most one step per 8 bytes', () => 
   const bytes = Buffer.concat([atom('ftyp', Buffer.from('M4A ')), wide]);
   const steps = _mp4Steps(bytes);
   assert.ok(steps <= bytes.length / 8, `${steps} steps for ${bytes.length} bytes`);
-  assert.ok(_mp4Steps(mp4({ title: 'Song', album: 'Album', artist: 'Artist' })) <= 16, 'a real file');
+  assert.ok(_mp4Steps(mp4({ title: 'Song', album: 'Album', artist: 'Artist' })) <= 18, 'a real file');
   // Nested past TagLib's depth, which stops descending there: unsure.
   let deep = atom('ilst');
   for (let i = 0; i < 70; i++) deep = atom('udta', deep);
