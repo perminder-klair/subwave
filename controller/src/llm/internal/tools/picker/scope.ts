@@ -171,7 +171,8 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   // #1655: only ~7% of the reported library passed instrumental + low energy.
   // A bounded 5x fetch gives the hard filters more neighbours to work with,
   // without increasing the model's cap or adding retries.
-  // Unlocked/request runs retain their historical source sizes.
+  // Unlocked runs, and request runs outside a clean show, retain their historical
+  // source sizes.
   const hasDiscoveryLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || vocalLock || excludeExplicit || playlistLock);
   const candidateLimit = (limit: number) => hasDiscoveryLock ? limit * 5 : limit;
 
