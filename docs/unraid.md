@@ -254,7 +254,8 @@ Both heavy images are **amd64-only** (~1.9 GB); on an arm64 box you'd also need
 amd64-only too, and there's no arm64/Jetson build.
 
 > Verify with `docker ps --filter name=sub-wave-analyzer`. Full details, the
-> `ANALYZE_AUDIO_EMBEDDING`/`ANALYZE_VOCAL_ACTIVITY` runtime flags, and
+> `ANALYZE_AUDIO_EMBEDDING`/`ANALYZE_VOCAL_ACTIVITY` runtime flags, the
+> `ANALYZE_DOWNBEATS` bar-grid switch (every image, the AIO included), and
 > troubleshooting are in [`tts-heavy.md`](tts-heavy.md).
 
 **Expressive voices** — Chatterbox / PocketTTS — stay opt-in in the separate
