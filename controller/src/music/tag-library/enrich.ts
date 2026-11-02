@@ -69,15 +69,16 @@ export async function phaseEnrich(
     if (!t) return;
     if (!reEnrich && t.enrichedAt) return;
 
-    let lastfmTags: string[] | null = null;
-    if (trackTagsOn) {
-      // The track pass below owns the list on this path. It must find the row
-      // as it stands: an artist-only rewrite here would read as a change to
-      // every row it re-merged, and an outage would lose the merged list.
-      lastfmTags = t.lastfmTags;
-    } else if (lastfmEnabled && t.artist) {
+    // The track pass below owns a stored list on this path. It must find the row
+    // as it stands: an artist-only rewrite here would read as a change to every
+    // row it re-merged, and an outage would lose the merged list. A row with no
+    // list still gets the artist's, as it would with track tags off. The pass can
+    // end short of it, this write marks it enriched so no later run fills it, and
+    // a never-play rule on the act would miss it. The pass adds to what it finds.
+    let lastfmTags: string[] | null = trackTagsOn ? t.lastfmTags : null;
+    if (lastfmEnabled && t.artist && !lastfmTags?.length) {
       const tags = await artistTags(t.artist);
-      lastfmTags = tags.length ? tags : null;
+      if (tags.length) lastfmTags = tags;
     }
 
     let lyricExcerpt: string | null = null;

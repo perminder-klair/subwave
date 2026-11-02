@@ -147,6 +147,12 @@ function seed(id: string, artist: string, title: string, opts: { tags?: string[]
   }
 }
 const row = (id: string) => db.getTrack(id)!;
+// A never-play `tag` rule through the real compile and match.
+const blocks = (id: string, value: string) => ruleMatches(
+  compileRules([{ id: 'r', field: 'tag', values: [value], showIds: [], addedAt: '2026-01-01' } as unknown as BlockRule])[0],
+  row(id),
+  null,
+);
 const methods = () => asked.map(a => a.query.get('method'));
 const trackAsks = () => asked.filter(a => a.query.get('method') === 'track.getTopTags').map(a => a.query.get('track'));
 const artistAsks = () => asked.filter(a => a.query.get('method') === 'artist.getTopTags').map(a => a.query.get('artist'));
@@ -396,11 +402,6 @@ test('a row\'s first answer keeps every tag it had, so turning this on can only 
   trackReplies.set('Gone|Song', tagReply('solo'));
   artistReplies.set('Drift', tagReply('a0', 'a1', 'new tail'));
   artistReplies.set('Gone', { body: { error: 6, message: 'The artist you supplied could not be found' } });
-  const blocks = (id: string, value: string) => ruleMatches(
-    compileRules([{ id: 'r', field: 'tag', values: [value], showIds: [], addedAt: '2026-01-01' } as unknown as BlockRule])[0],
-    row(id),
-    null,
-  );
   assert.equal(blocks('moved', 'old tail'), true);
   assert.equal(blocks('gone', 'g0'), true);
 
@@ -430,6 +431,29 @@ test('a new track still gets whatever came back when its own lookup fails', asyn
   await phaseEnrich(['new'], false);
   assert.deepEqual(row('new').lastfmTags, ['rock', 'indie'], 'as good as today, and still owed');
   assert.equal(row('new').lastfmTrackTagsAt, null);
+});
+
+// A pass can give up or be stopped short of a new row, and the loop ahead of it
+// has already marked that row enriched, so nothing fills it later. A limit below
+// the row count ends the pass at the same place a give-up does, without the wait.
+test('a new track the pass never reaches keeps its artist\'s list, so a rule on the act holds', async () => {
+  const ids = ['n0', 'n1', 'n2'];
+  for (const id of ids) seed(id, 'Blocked Act', `Song ${id}`);
+  artistReplies.set('Blocked Act', tagReply('metal', 'loud'));
+  trackReplies.set('Blocked Act|Song n0', tagReply('own'));
+  trackReplies.set('Blocked Act|Song n1', tagReply('own'));
+  trackReplies.set('Blocked Act|Song n2', tagReply('own'));
+
+  await phaseEnrich(ids, false, 1);
+
+  assert.equal(trackAsks().length, 1, 'the pass ended with two rows unreached');
+  for (const id of ids) assert.equal(blocks(id, 'metal'), true, `${id} escaped a rule on its act`);
+  assert.equal(db.idsNeedingLastfmTrackTags().length, 2, 'and the two it missed are still owed');
+
+  await phaseEnrich([], false);
+
+  for (const id of ids) assert.deepEqual(row(id).lastfmTags, ['own', 'metal', 'loud']);
+  assert.deepEqual(db.idsNeedingLastfmTrackTags(), []);
 });
 
 // The stored list may come from Navidrome's getArtistInfo2, and Last.fm's error 6
