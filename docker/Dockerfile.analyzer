@@ -95,14 +95,24 @@ RUN mkdir -p /var/sub-wave && chmod 777 /var/sub-wave
 # JIT cache. HOME/XDG/NUMBA point at a user-owned tree so numba's cache=True
 # JIT files land somewhere writable; the hf-cache chown makes the compose named
 # volume inherit ownership on first create.
+# NUMBA_CPU_NAME=generic keys the JIT cache on no particular CPU, so the cache
+# pre-warmed below (on the build machine) is the one every host reads.
 ENV HOME=/home/subwave \
     XDG_CACHE_HOME=/home/subwave/.cache \
-    NUMBA_CACHE_DIR=/home/subwave/.cache/numba
+    NUMBA_CACHE_DIR=/home/subwave/.cache/numba \
+    NUMBA_CPU_NAME=generic
 RUN groupadd -g 10001 subwave && \
     useradd -u 10001 -g 10001 -m -d /home/subwave -s /usr/sbin/nologin subwave && \
     mkdir -p /home/subwave/.cache/numba /opt/analyzer/hf-cache && \
     chown -R 10001:10001 /home/subwave /opt/analyzer/hf-cache
 USER 10001:10001
+
+# Ship librosa's numba kernels compiled. Left to runtime, every worker in the
+# pool compiles them on its first job at once, the concurrent cache writes tear
+# the cache, and each later worker that loads it segfaults (one pool slot
+# crash-loops after every recreate). docker/analyzer/prewarm_numba.py explains.
+COPY docker/analyzer/prewarm_numba.py /opt/analyzer/prewarm_numba.py
+RUN /opt/analyzer/venv/bin/python /opt/analyzer/prewarm_numba.py
 
 EXPOSE 8080
 CMD ["/opt/server/venv/bin/uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080"]
