@@ -166,7 +166,7 @@ async function everyDraw(text: string) {
     queue.upcoming = [];
     const { outcome } = await request(text);
     assert.equal(outcome.status, 'resolved', outcome.message ?? '');
-    aired.add(queue.upcoming.at(-1)?.track?.id);
+    aired.add(String(queue.upcoming.at(-1)?.track?.id));
   }
   return [...aired];
 }
@@ -204,7 +204,7 @@ test('a show that is not clean draws from the whole pool, as it always did', asy
   for (let i = 0; i < 30; i++) {
     queue.upcoming = [];
     await request('Tagged Song by Tagged Act please');
-    aired.add(queue.upcoming.at(-1)?.track?.id);
+    aired.add(String(queue.upcoming.at(-1)?.track?.id));
   }
   assert.deepEqual([...aired].sort(), ['clean-cut', 'tagged']);
 });
