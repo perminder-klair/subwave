@@ -645,8 +645,11 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       interpreterAnswered = true;
       // What the model itself read. A title repair took from the literal pair is
       // the parse speaking unless a search term beside the artist says so too,
-      // and a term with no artist can be a vibe echoed back.
-      modelNamed = Boolean(interpreted.title?.trim()
+      // a term with no artist can be a vibe echoed back, and a title that is the
+      // reading's own genre or mood ("rock" read as both) is that attribute.
+      const readTitle = interpreted.title?.trim()
+        && ![interpreted.genre, interpreted.mood].some(value => value && requestName(value) === requestName(interpreted.title));
+      modelNamed = Boolean(readTitle
         || (reading.artist?.trim() && (!reading.title || nameSearchTerms(interpreted).length)));
       modelReadGenre = Boolean(interpreted.genre);
       // A comma, dash or "by" is a parse for the catalogue to try, so a reading

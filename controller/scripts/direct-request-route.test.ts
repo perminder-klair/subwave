@@ -2251,6 +2251,22 @@ for (const state of ['on cooldown', 'already queued']) {
   });
 }
 
+// A title the same as the reading's own genre or mood is that attribute echoed,
+// so it holds nothing: the request keeps develop's alternative.
+for (const [text, reading] of [
+  ['play rock', read({ title: 'Rock', genre: 'Rock', search_terms: ['Rock'] })],
+  ['play chill', read({ title: 'Chill', mood: 'chill', search_terms: ['Chill'] })],
+] as const) {
+  test(`a title that is the reading's own attribute is no name: ${text}`, async () => {
+    catalogueSongs = [filler];
+    genreSongs = [filler];
+    modelOutput = reading;
+    const result = await submit(text);
+    assert.equal(result.outcome, 'substituted');
+    assert.equal(queue.upcoming.length, 1);
+  });
+}
+
 // Last, because it leaves a mood in the library for every test after it.
 test('with no model the rest of a request is an alternative once its genre is dropped', async () => {
   const db = await import('../src/music/library-db.js');
