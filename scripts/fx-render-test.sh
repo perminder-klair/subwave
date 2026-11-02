@@ -41,8 +41,10 @@
 #       seam block and the jingle mark from radio.liq.
 #   scripts/fx-render-test.sh sweepstep
 #       Regression check — the sweep must not step the level when it engages,
-#       must hold the blend within 1 dB of the plain crossfade, and must still
-#       choke the outgoing's highs. Lifts both sweep blocks from radio.liq.
+#       must hold the blend within 1 dB of the linear plain crossfade, and must
+#       still choke the outgoing's highs. Lifts both sweep blocks from radio.liq.
+#       A sweep seam never takes the equal-power curve, so the reference is the
+#       linear fade.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
@@ -1095,10 +1097,12 @@ LIQ
 
 # sweepstep — the sweep must
 # not change the level when it engages, and must hold the blend within 1 dB of
-# the plain crossfade, while still choking the outgoing's highs. The a-side and
-# b-side sweep blocks are LIFTED from radio.liq so the harness cannot drift from
-# the mixer. Deterministic pink noise, A and B at the same level.
+# the linear plain crossfade, while still choking the outgoing's highs. The
+# a-side and b-side sweep blocks are LIFTED from radio.liq so the harness cannot
+# drift from the mixer. Deterministic pink noise, A and B at the same level.
 sweepstep_render() { # sweepstep_render <mode dry|sweep> <out>
+  # Drop the last run's output first, so a failed render is never measured.
+  rm -f "$WORK/$2"
   cat > "$WORK/sweepstep.liq" <<LIQ
 settings.log.stdout := true
 settings.log.level := 2
@@ -1121,7 +1125,8 @@ output.file(%wav, fallible=true, "/work/$2", music)
 clock.assign_new(sync="none", [music])
 thread.run(delay=40., fun() -> shutdown())
 LIQ
-  liq sweepstep.liq >/dev/null
+  local log
+  log=$(liq sweepstep.liq) || { echo "$log"; echo "SWEEPSTEP FAIL — the $1 render failed (Liquidsoap log above)"; return 1; }
 }
 
 sweepstep() {
@@ -1132,32 +1137,35 @@ sweepstep() {
     || { echo "SWEEPSTEP FAIL — could not lift the sweep blocks from radio.liq"; return 1; }
   ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=1:duration=50" -af volume=-14dB -ar 44100 -ac 2 "$WORK/sweepstep-a.wav"
   ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=2:duration=40" -af volume=-14dB -ar 44100 -ac 2 "$WORK/sweepstep-b.wav"
-  sweepstep_render dry sweepstep-dry.wav
-  sweepstep_render sweep sweepstep-sweep.wav
+  sweepstep_render dry sweepstep-dry.wav || return 1
+  sweepstep_render sweep sweepstep-sweep.wav || return 1
   # A is 50 s and cross() buffers its final 12 s: the blend runs 38 s -> 50 s.
-  local fail=0 x0 dry sw delta
-  diff_db() { # diff_db <start> <len> [filter] — sweep minus dry, dB
+  local fail=0 x0 delta
+  diff_db() { # diff_db <start> <len> [filter] — sweep minus dry, dB; fails when either side measures nothing
     local f="${3:-anull}" a b
     a=$(ffmpeg -hide_banner -nostats -ss "$1" -t "$2" -i "$WORK/sweepstep-dry.wav" -af "$f,astats=metadata=0:reset=0" -f null - 2>&1 | awk '/Overall/{o=1} o && /RMS level dB/{print $NF; exit}')
     b=$(ffmpeg -hide_banner -nostats -ss "$1" -t "$2" -i "$WORK/sweepstep-sweep.wav" -af "$f,astats=metadata=0:reset=0" -f null - 2>&1 | awk '/Overall/{o=1} o && /RMS level dB/{print $NF; exit}')
+    # A short or silent render reads empty or -inf, which awk would score as a
+    # 0 dB difference and pass.
+    [[ "$a" =~ ^-?[0-9]+(\.[0-9]+)?$ && "$b" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || return 1
     awk -v a="$a" -v b="$b" 'BEGIN { printf "%.2f", b - a }'
   }
-  delta=$(diff_db 38.0 0.25)
-  echo "engage (first 0.25 s): ${delta} dB against the plain fade"
+  delta=$(diff_db 38.0 0.25) || { echo "SWEEPSTEP FAIL — no level measured at the engage (a render came out short or silent)"; return 1; }
+  echo "engage (first 0.25 s): ${delta} dB against the linear fade"
   awk -v d="$delta" 'BEGIN { exit !(d >= -0.5 && d <= 0.5) }' || { echo "SWEEPSTEP FAIL — the level steps when the sweep engages"; fail=1; }
   for x0 in 38 39 40 41 42 43 44 45 46 47 48 49; do
-    delta=$(diff_db "$x0" 1)
+    delta=$(diff_db "$x0" 1) || { echo "SWEEPSTEP FAIL — no level measured at ${x0} s (a render came out short or silent)"; return 1; }
     echo "  ${x0}-$((x0 + 1)) s: ${delta} dB"
-    awk -v d="$delta" 'BEGIN { exit !(d >= -1.0 && d <= 1.0) }' || { echo "SWEEPSTEP FAIL — blend level off the plain fade by more than 1 dB at ${x0} s"; fail=1; }
+    awk -v d="$delta" 'BEGIN { exit !(d >= -1.0 && d <= 1.0) }' || { echo "SWEEPSTEP FAIL — blend level off the linear fade by more than 1 dB at ${x0} s"; fail=1; }
   done
   # Still a sweep: the outgoing's highs are choked mid-blend.
   # 40-42 s: the cutoff is diving while the outgoing still carries the blend
-  # (the plain fade's highs come mostly from it here); later the incoming is
+  # (the linear fade's highs come mostly from it here); later the incoming is
   # fully open and its own highs fill the band.
-  delta=$(diff_db 40 2 "highpass=f=4000,highpass=f=4000")
-  echo "highs (>4 kHz) mid-blend: ${delta} dB against the plain fade"
+  delta=$(diff_db 40 2 "highpass=f=4000,highpass=f=4000") || { echo "SWEEPSTEP FAIL — no high-band level measured at 40 s"; return 1; }
+  echo "highs (>4 kHz) mid-blend: ${delta} dB against the linear fade"
   awk -v d="$delta" 'BEGIN { exit !(d <= -6.0) }' || { echo "SWEEPSTEP FAIL — the sweep no longer chokes the highs"; fail=1; }
-  [ "$fail" = 0 ] && echo "SWEEPSTEP PASS — no step at the engage, blend within 1 dB of the plain fade, highs still choked"
+  [ "$fail" = 0 ] && echo "SWEEPSTEP PASS — no step at the engage, blend within 1 dB of the linear fade, highs still choked"
   return "$fail"
 }
 

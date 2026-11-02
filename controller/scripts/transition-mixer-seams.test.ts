@@ -19,6 +19,11 @@
 // they can be rendered offline, and a harness that has drifted from the mixer
 // proves nothing about the mixer. Rule 1 needs no mirror — the harness LIFTS
 // those lines out of radio.liq.
+//
+// The outgoing SWEEP (cutoff, engage ramp, makeup, dry bleed) is mirrored by
+// hand into the harness's `render` transition, so it is compared whole, code
+// line for code line. `fx-render-test.sh sweepstep` lifts radio.liq's own block
+// and cannot drift; `render … sweep` hears only the mirror.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -94,3 +99,27 @@ for (const [name, body] of [['liquidsoap/radio.liq', radio], ['scripts/fx-render
     assert.match(body, /fade\.in\(duration=b_fade, /, 'the incoming fade uses it');
   });
 }
+
+// The outgoing sweep's body, from `sweep_src = <src>` to its branch's `else`,
+// with each script's name for the outgoing source folded to one, trailing
+// comments dropped and spacing collapsed. The mixer's log line sits above it.
+function sweepBody(body: string, src: string): string[] {
+  const lines = body.split('\n');
+  const start = lines.findIndex(l => l.trim() === `sweep_src = ${src}`);
+  assert.ok(start >= 0, `the outgoing sweep starts at sweep_src = ${src}`);
+  const end = lines.findIndex((l, i) => i > start && /^ {4}else\b/.test(l));
+  assert.ok(end > start, 'and ends at its branch\'s else');
+  const name = new RegExp(`\\b${src}\\b`, 'g');
+  return lines.slice(start, end)
+    .map(l => l.replace(/\s+#.*$/, '').replace(name, 'SRC').replace(/\s+/g, ' ').trim())
+    .filter(l => l !== '');
+}
+
+test('the harness\'s outgoing sweep is radio.liq\'s, line for line', () => {
+  const mixer = sweepBody(radio, 'a_source');
+  const mirror = sweepBody(harness, 'a_src');
+  for (const def of ['def sweep_cut() =', 'def sweep_engage() =', 'def sweep_gain() =']) {
+    assert.ok(mixer.includes(def), `the compared block holds ${def}`);
+  }
+  assert.deepEqual(mirror, mixer);
+});
