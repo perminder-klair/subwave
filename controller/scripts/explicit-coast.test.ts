@@ -69,6 +69,8 @@ after(async () => {
 await settings.load();
 await library.load();
 
+const { showPreparation } = await import('../src/broadcast/show-preparation.js');
+
 const coastIds = () => readFileSync(join(root, 'auto.m3u'), 'utf8').split('\n')
   .filter(line => line.includes('subsonic_id='))
   .map(line => line.match(/subsonic_id="([^"]+)"/)![1]);
@@ -244,4 +246,33 @@ test('turning the switch on rebuilds the file already on disk', async () => {
   const deadline = Date.now() + 5_000;
   while (coastIds().includes('tagged') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(coastIds(), ['marked'], 'settings changes publish through the coast policy seam');
+});
+
+test('an episode with nothing airable left does not empty the coast', async (t) => {
+  // Prepared before the show went clean, or before the walk that tagged its
+  // artist. The episode branch has no sources of its own to fall back on.
+  await onAir({ excludeExplicit: true });
+  const tracks = [track('episode-1', 'explicit'), track('episode-2', 'explicit')];
+  t.mock.method(showPreparation, 'read', () => ({
+    music: { kind: 'artist', identity: 'episode', artist: { id: 'a', name: 'A' }, tracks, ids: new Set(tracks.map(s => s.id)) },
+    status: { kind: 'ready', occurrence: { id: 'o' } },
+    editorial: null,
+  }) as never);
+  random = [track('clean-1', ''), track('clean-2', '')];
+  await build();
+  assert.deepEqual(coastIds().sort(), ['clean-1', 'clean-2'], 'the show gives way before the tag does');
+});
+
+test('an episode whose whole library is tagged still leaves the station something to play', async (t) => {
+  await onAir({ excludeExplicit: true });
+  const tracks = [track('episode-1', 'explicit')];
+  t.mock.method(showPreparation, 'read', () => ({
+    music: { kind: 'artist', identity: 'episode', artist: { id: 'a', name: 'A' }, tracks, ids: new Set(tracks.map(s => s.id)) },
+    status: { kind: 'ready', occurrence: { id: 'o' } },
+    editorial: null,
+  }) as never);
+  random = [];
+  await build();
+  assert.deepEqual(coastIds(), ['episode-1']);
+  assert.equal(lastResort(boothLines()).length, 1, 'and the booth log says so');
 });

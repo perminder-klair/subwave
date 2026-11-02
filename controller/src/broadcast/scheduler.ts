@@ -514,7 +514,10 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // back empty (see 5).
   if (!pool.length && listenerStarred.length) take('starred', enforce(listenerStarred), TARGET_POOL);
 
-  // A clean show with nothing to air. Everything else gives way first: one
+  }
+
+  // A clean show with nothing to air, on every branch above: an episode has no
+  // other source to fall back on. Everything else gives way first: one
   // library-wide draw that ignores the show's filters and recency, which a
   // strict playlist has not had. Only then does the filter itself: this coast
   // is the last dead-air guard, so the station keeps making sound, and says so.
@@ -528,8 +531,6 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
       builder.take('explicit-last-resort', shuffle(clean.held()), TARGET_POOL, { neverStarve: true, maxPerArtist: Infinity });
       queue.log('scheduler', `Auto-playlist: clean show "${show?.name}" has nothing else to air — keeping ${pool.length} track(s) tagged explicit so the station stays on air`);
     }
-  }
-
   }
 
   // Strict playlist: drop every off-playlist track, but never-starve to the
