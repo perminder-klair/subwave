@@ -607,12 +607,22 @@ test('MP4 items TagLib reads its own way are unsure: Navidrome reports another t
   }
 });
 
-test('MP4 items after one whose data lies past the windows are still checked by name', () => {
+test('MP4 items after one whose data lies past the windows are checked by name, and a ©nam or freeform one is unsure', () => {
   // A 70 KB freeform item leaves the head window; the atom named TIT2 after it is
   // in the tail window, and Navidrome would title the file `Up`.
   const big = freeform('iTunNORM', ['x'.repeat(70 * 1024)]);
   const bytes = mp4({ title: 'Go' }, { items: [big, atom(Buffer.from('TIT2'), dataAtom(Buffer.from('Up'), 1))], audio: 4096 });
-  assert.equal(asked(bytes, 'Go', 'm4a').found, null);
+  assert.equal(asked(bytes, 'Go', 'm4a').found, null, 'an atom named TIT2');
+  // The review's w02: a late moov under 64 KiB of audio, an 80 KB freeform item in
+  // neither window, then an iTunes SUBTITLE in the tail window. Stock Navidrome
+  // 0.64.2 titles it `Go (Live)`; the freeform item's key is in its data, so
+  // nothing after the unread one is read.
+  const notes = freeform('NOTES', ['n'.repeat(80_000)]);
+  const w02 = mp4({ title: 'Go' }, { layout: 'late', items: [notes, freeform('SUBTITLE', ['Live'])], audio: 4096 });
+  assert.equal(asked(w02, 'Go', 'm4a').found, null, 'an iTunes SUBTITLE after an unread freeform item');
+  // A second ©nam after it streams too: TagLib keeps the first, but this doesn't
+  // lean on that past an item it couldn't read.
+  assert.equal(asked(mp4({ title: 'Go' }, { layout: 'late', items: [notes, atom(NAM, dataAtom(Buffer.from('Up'), 1))], audio: 4096 }), 'Go', 'm4a').found, null, 'a second ©nam after it');
 });
 
 test('MP4 atoms TagLib reads as its spec has them: a 64-bit size and a size of 0 on the path', () => {
@@ -773,6 +783,10 @@ test('a title or subtitle value that isn\'t text is unsure, even after a valid o
   const paired = v24({ id: 'TIT2', data: surrogate });
   put(join(root, MP3), paired);
   assert.equal(localFileState(song(`/srv/library/${MP3}`, '\u{11847}o', paired.length)), 'unread', 'a lone surrogate, as Navidrome reports it');
+  // A lone low surrogate in TIT3 (the review's v03): Navidrome reports `Go (\ufffd\ufffd\ufffdLive)`.
+  const low = v24(textFrame('TIT2', 'Go', 3), { id: 'TIT3', data: Buffer.concat([Buffer.from([1, 0xff, 0xfe, 0x00, 0xdc]), Buffer.from('Live', 'utf16le')]) });
+  put(join(root, MP3), low);
+  assert.equal(localFileState(song(`/srv/library/${MP3}`, 'Go (\ufffd\ufffd\ufffdLive)', low.length)), 'unread', 'a lone low surrogate, as Navidrome reports it');
   // Past a frame's first value that isn't empty nothing is decoded: Navidrome
   // reports that first value.
   assert.equal(asked(v24(raw('TIT2', '\x03Go\0G\xffo')), 'Go').found, join(root, MP3), 'a bad second value in one frame');

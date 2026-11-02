@@ -722,8 +722,10 @@ function mp4FileTitle(head: Buffer, readTail: () => Buffer, size: number): Title
   const subtitles = new Set<string>();
   let subtitle: string[] | null = null;
   let complete = result.complete;
-  // False once an item's data lay outside the windows: the items after it are
-  // still checked by name and size, never read.
+  // False once an item's data lay outside the windows. The atoms after it are
+  // still checked by name and size, and a `©nam` or freeform item after it is
+  // unsure: the unread one may be a subtitle or title ahead of it, and a freeform
+  // item's key is in its data.
   let reading = true;
   for (const item of result.items) {
     // TagLib hands Navidrome any other atom as a key named after it, which Navidrome
@@ -732,7 +734,8 @@ function mp4FileTitle(head: Buffer, readTail: () => Buffer, size: number): Title
     if (item.name !== NAM && item.name !== '----') continue;
     // TagLib reads an item's data from 8 bytes in, so a 64-bit size reads as data.
     if (item.wide) return UNSURE;
-    if (!reading || (item.name === NAM && title)) continue;
+    if (!reading) return UNSURE;
+    if (item.name === NAM && title) continue;
     const bytes = at(item.body, item.offset + item.length - item.body);
     // Past the windows, like an item header there: a title is unseen, a subtitle unread.
     if (!bytes) { complete = false; reading = false; continue; }
