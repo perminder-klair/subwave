@@ -4,8 +4,11 @@ import { settingsForm } from '../components/admin/settings/form-state';
 import { archivesSavePayload, dangerSavePayload, stemsSavePayload } from '../components/admin/settings/save-payload';
 import { countLeafDiffs, dirtyPaths, restorePaths, ownsErrorPath, mergePatchErrors } from '../components/admin/settings/form-diff';
 import { RESTART_PATHS, sectionById } from '../components/admin/settings/registry';
-import { samePath } from '../components/admin/settings/form-diff';
-import { lastfmTrackTagsBlocker } from '../components/admin/settings/lastfm-track-tags';
+import { samePath, sameForm } from '../components/admin/settings/form-diff';
+import { rebaselineSavedPatch } from '../components/admin/settings/form-reconciliation';
+import {
+  lastfmTagsChoice, lastfmTagsEnabled, lastfmTagsFromChoice, lastfmTrackTagsBlocker,
+} from '../components/admin/settings/lastfm-track-tags';
 
 test('cold hydration preserves defaults and independent primary/fallback fields', () => {
   const form = settingsForm({
@@ -130,6 +133,49 @@ test('Last.fm track tags hydrate off, and read as unavailable without what they 
   assert.match(lastfmTrackTagsBlocker(false, true) ?? '', /API key/);
   assert.match(lastfmTrackTagsBlocker(false, false) ?? '', /API key/, 'the key is the first thing to fix');
   assert.match(lastfmTrackTagsBlocker(true, false) ?? '', /Last\.fm tags/);
+  // Auto turns Last.fm tags on with the key the first check already asked for.
+  assert.equal(lastfmTrackTagsBlocker(true, null), null);
+  assert.match(lastfmTrackTagsBlocker(false, null) ?? '', /API key/);
+});
+
+test('Last.fm tags keep Auto through the Library form (#2233)', () => {
+  // Unset hydrates as Auto, never as Off: Off was what the next save wrote.
+  assert.equal(settingsForm({}).embedding.enrichment.lastfmTags, null);
+  assert.equal(settingsForm({ embedding: { enrichment: { lastfmTags: null } } }).embedding.enrichment.lastfmTags, null);
+  assert.equal(settingsForm({ embedding: { enrichment: { lastfmTags: false } } }).embedding.enrichment.lastfmTags, false);
+  assert.equal(settingsForm({ embedding: { enrichment: { lastfmTags: true } } }).embedding.enrichment.lastfmTags, true);
+
+  // The control shows each value as its own choice and maps back to it.
+  assert.equal(lastfmTagsChoice(null), 'auto');
+  assert.equal(lastfmTagsChoice(false), 'off');
+  assert.equal(lastfmTagsChoice(true), 'on');
+  for (const value of [null, false, true]) assert.equal(lastfmTagsFromChoice(lastfmTagsChoice(value)), value);
+
+  // What Auto resolves to, as the controller's lastfmEnrichEnabled decides it.
+  assert.equal(lastfmTagsEnabled(null, true), true);
+  assert.equal(lastfmTagsEnabled(null, false), false);
+  assert.equal(lastfmTagsEnabled(true, false), true, 'forced on takes the keyless path');
+  assert.equal(lastfmTagsEnabled(false, true), false);
+
+  // A save that leaves Auto alone: clean before, posts null, clean after, and
+  // the read that follows (the controller keeps null) hydrates the same form.
+  const keys = sectionById('library')!.formKeys;
+  const baseline = settingsForm({});
+  const form = structuredClone(baseline);
+  assert.deepEqual(dirtyPaths(form, baseline, keys), [], 'an untouched Auto is not an unsaved change');
+  form.embedding.enrichment.lyrics = false;
+  assert.deepEqual(dirtyPaths(form, baseline, keys), ['embedding']);
+  // The enrichment block LibrarySection.save() posts.
+  const enrichment = {
+    lastfmTags: form.embedding.enrichment.lastfmTags,
+    lastfmTrackTags: form.embedding.enrichment.lastfmTrackTags,
+    lyrics: form.embedding.enrichment.lyrics,
+  };
+  assert.equal(enrichment.lastfmTags, null);
+  const rebased = rebaselineSavedPatch(baseline, form, { embedding: { enrichment } });
+  assert.deepEqual(dirtyPaths(form, rebased, keys), []);
+  const reread = settingsForm({ embedding: { enrichment } });
+  assert.ok(sameForm(reread, rebased), 'the post-save read matches the new baseline');
 });
 
 test('Broadcast & mixer and Stems split transitions at the leaf: each page sees and saves only its own fields', () => {

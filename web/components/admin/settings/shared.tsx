@@ -197,7 +197,8 @@ export interface SearchForm {
 }
 
 export interface EmbeddingEnrichmentForm {
-  lastfmTags: boolean;
+  /** null is auto: on when a Last.fm key is set (lastfm.lastfmEnrichEnabled). */
+  lastfmTags: boolean | null;
   lastfmTrackTags: boolean;
   lyrics: boolean;
 }
