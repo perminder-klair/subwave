@@ -1011,8 +1011,8 @@ function titleInTags(file: string, size: number, title: string): 'same' | 'other
 
 // What a server's song offers as proof: its byte count and its title, or null
 // when either is missing, which streams the right song: a server that sends no
-// `size`, a shape that dropped it. A title longer than any tag field could match
-// is no proof either, and is never normalised, whatever the server sends.
+// `size`, a shape that dropped it. A title longer than MAX_TITLE_CHARS is no
+// proof either, and is never normalised, whatever the server sends.
 // Checked before any stat, so all of that costs nothing.
 function proofOf(song): { size: number; title: string } | null {
   const size = Number(song.size);

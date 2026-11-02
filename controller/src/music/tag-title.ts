@@ -32,10 +32,11 @@
 // throw would cost the pick.
 
 /**
- * Longer than any title the comparison can use. Navidrome cuts the title it
+ * The longest field the comparison normalises. Navidrome cuts the title it
  * reports at 1,024 characters, and NFC folds at most four UTF-16 units of a
- * decomposed character into one, so a field four times longer can't equal it.
- * A server title over this proves nothing either, whatever the server.
+ * decomposed character into one, so a longer field could equal it only once
+ * trimmed: a title padded with thousands of spaces. That file streams. A server
+ * title over this proves nothing either, whatever the server.
  */
 export const MAX_TITLE_CHARS = 4096;
 
@@ -65,7 +66,7 @@ export function normalizeTitle(value: string): string {
  */
 export function titleVerdict(field: TitleField, title: string): 'same' | 'other' | 'none' {
   if (field.kind !== 'title') return 'none';
-  // It can't equal any title the server sends, so it isn't normalised at all.
+  // Never normalised, so never the title, even if a trim would leave one.
   if (field.value.length > MAX_TITLE_CHARS) return 'other';
   const want = normalizeTitle(title);
   return want && normalizeTitle(field.value) === want ? 'same' : 'other';
