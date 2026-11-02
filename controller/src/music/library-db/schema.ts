@@ -545,17 +545,29 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 35');
   }
 
+  if (userVersion < 36) {
+    // The Sound: words each text vector was built from, as two parts (moods,
+    // measured), so a measurement landing after its vector can tell whether it
+    // moved them (#2236, tracks.ts markTextVectorDirtyIfSoundChanged). It
+    // describes the vector, like text_vector_dirty. NULL = unknown, which never
+    // marks: every vector written before this step, so the upgrade re-embeds
+    // nothing. Added only if missing, for a database wound back below it (see 28).
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('text_vector_sound')) runDdl(d, `ALTER TABLE tracks ADD COLUMN text_vector_sound TEXT;`);
+    d.pragma('user_version = 36');
+  }
+
   const hasLanguageColumns = ['language_primary', 'languages'].every(column => columnsAtOpen.has(column));
   // The earlier request branch also used version 32, for the language columns
   // below, so a database that ran it sits at 32 without develop's tail marks.
   // Develop's own 32 never adds those columns, so they tell the two apart.
   if (userVersion === 32 && hasLanguageColumns) markTailSungVectorsForLanguageV32(d);
 
-  if (userVersion < 36) {
+  if (userVersion < 37) {
     // Serialize the schema check, DDL and version write. A second process can
     // have read the old user_version before waiting on this connection's lock.
     d.transaction(() => {
-      if ((d.pragma('user_version', { simple: true }) as number) >= 36) return;
+      if ((d.pragma('user_version', { simple: true }) as number) >= 37) return;
 
       // Language tags are optional metadata, but request queries need their
       // nullable storage columns on every fresh and upgraded library. #2080
@@ -569,22 +581,24 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
           updated_at TEXT NOT NULL
         );
       `);
-      // An earlier build of this branch numbered develop's steps 33 to 35 for
-      // itself, so a database it left at 35 never got #2214's columns, and one
-      // it left at 32 may lack 33 and 34's. Each column develop's steps add is
-      // added here when missing; on develop's own lineage they all exist.
+      // An earlier build of this branch numbered develop's steps 33 to 36 for
+      // itself, so a database it left at 35 never got #2214's columns, one it
+      // left at 32 may lack 33 and 34's, and one it left at 36 lacks #2240's.
+      // Each column develop's steps add is added here when missing; on
+      // develop's own lineage they all exist.
       const columnsOf = (table: string) =>
         new Set((d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name));
       const tracks = columnsOf('tracks');
       const add = [
         'language_primary', 'languages',
         'explicit_status', 'lastfm_track_tags_at', 'audio_descriptors', 'audio_descriptor_scores_json',
+        'text_vector_sound',
       ].filter(column => !tracks.has(column)).map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`);
       if (!columnsOf('audio_embedding_meta').has('descriptor_vocab_hash')) {
         add.push('ALTER TABLE audio_embedding_meta ADD COLUMN descriptor_vocab_hash TEXT;');
       }
       if (add.length) runDdl(d, add.join('\n'));
-      d.pragma('user_version = 36');
+      d.pragma('user_version = 37');
     }).immediate();
   }
 
@@ -727,7 +741,7 @@ export const TAIL_SUNG_VECTORS_SQL = `UPDATE tracks SET text_vector_dirty = 1
 // Same-format text changed on some rows, so this is the dirty flag's job and not an
 // EMBED_TEXT_VERSION bump: only those rows are paid for, on the next tag run, with no
 // banner and nothing for an operator to do. It covers what is stored at the upgrade;
-// a measurement landing after its vector is a separate gap (music.md). A stale word in
+// a measurement landing after its vector marks it itself (migration 36). A stale word in
 // a vector that still works is no reason to stop a station, so a failure warns, with
 // nothing half marked, and the steps after it still run. They move user_version past
 // 32, so a failed mark is final: those rows keep the text they had, which still works.

@@ -2404,8 +2404,11 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     }
     if (e.enrichment !== undefined) {
       const en = e.enrichment || {};
+      // Tri-state, like the default: null is auto (on when a Last.fm key is set)
+      // and stays null. Coercing it with !! stored false, so a save that kept
+      // auto switched enrichment off (#2233).
       if (en.lastfmTags !== undefined) {
-        next.embedding.enrichment.lastfmTags = !!en.lastfmTags;
+        next.embedding.enrichment.lastfmTags = en.lastfmTags === null ? null : !!en.lastfmTags;
       }
       if (en.lastfmTrackTags !== undefined) {
         next.embedding.enrichment.lastfmTrackTags = !!en.lastfmTrackTags;

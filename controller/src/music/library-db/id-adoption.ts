@@ -52,7 +52,7 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
 
 // Columns whose value can't be decided by "is it null" alone. Each is handled
 // explicitly in mergeRow(); listed here so columnPlan() can account for them.
-const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty'];
+const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty', 'text_vector_sound'];
 
 // Default carried values to new ?? old. This list documents an explicit choice for columnPlan;
 // unlisted carried columns use the same behavior.
@@ -149,6 +149,8 @@ function mergeRow(plan: ColumnPlan, oldRow: Row, newRow: Row, movedTextVector: b
   // old row's embedding was the one moved across. Otherwise the new row keeps
   // its own flag — its vector is its own.
   merged.text_vector_dirty = movedTextVector ? (oldRow.text_vector_dirty ?? 0) : (newRow.text_vector_dirty ?? 0);
+  // The Sound: words the vector was built from describe the vector too (#2236).
+  merged.text_vector_sound = movedTextVector ? (oldRow.text_vector_sound ?? null) : (newRow.text_vector_sound ?? null);
 
   return merged;
 }

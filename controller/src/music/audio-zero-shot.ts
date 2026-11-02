@@ -45,6 +45,11 @@ export interface ZeroShotSpec {
   iterateScores(): Iterable<ScoreRow>;
   pageScores(afterId: string, limit: number): { items: ScoreRow[]; lastId: string | null };
   writeLabels(rows: Array<{ id: string; labels: string[] }>): void;
+  // The incremental branch's write, for tracks that had no labels (new, or
+  // cleared by a re-analyze or a replaced file). Defaults to writeLabels. Moods
+  // set it because their labels are words in the embed text, which a new track
+  // was embedded without (#2236); a relabel-all never comes this way.
+  writeNewLabels?(rows: Array<{ id: string; labels: string[] }>): void;
   select(scores: Record<string, number>, baselines: MoodBaselines | null): string[];
   // select() returns nothing without baselines, so a library still under the
   // floor has no labels to re-derive. Moods fall back to raw and leave this off.
@@ -193,16 +198,17 @@ export async function runZeroShotPass(spec: ZeroShotSpec): Promise<ZeroShotStats
   if (relabelAll) {
     relabelled = relabelAllFromStoredScores(spec, baselines);
   } else {
+    const writeNew = spec.writeNewLabels ?? spec.writeLabels;
     let batchLabels: Array<{ id: string; labels: string[] }> = [];
     for (const { id, scores } of scoredRows) {
       batchLabels.push({ id, labels: spec.select(scores, baselines) });
       relabelled += 1;
       if (batchLabels.length >= 500) {
-        spec.writeLabels(batchLabels);
+        writeNew(batchLabels);
         batchLabels = [];
       }
     }
-    spec.writeLabels(batchLabels);
+    writeNew(batchLabels);
   }
 
   spec.writeState(moodStateHashFor(hash, !!baselines, spec.version));
