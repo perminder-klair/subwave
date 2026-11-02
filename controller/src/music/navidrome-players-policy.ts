@@ -113,6 +113,11 @@ export interface LocalPathSample {
   missed: string[];
   /** Paths inside the mount whose file's size differs from Navidrome's: these play. */
   unproved: string[];
+  /**
+   * Paths with a file of the track's size on the mount whose tags hold no title
+   * the check can read: these stream, though the file is likely the track.
+   */
+  unread: string[];
 }
 
 export interface ServerIdentity {
@@ -203,22 +208,34 @@ const WHAT_TO_DO =
 
 type RealPathFinding = { status: 'ok' | 'warn' | 'skip'; detail: string; hint?: string };
 
+// The remedy that needs no proof at all: a real path inside the mount plays as it is.
+const MOUNT_AT_NAVIDROME_PATH =
+  'mount the library in the controller and broadcast containers at the path Navidrome uses, and set MUSIC_LIBRARY_PATH to it, '
+  + 'so nothing has to be proved';
+
 // Every row on says nothing about the mount. `ok` also needs the sampled tracks
-// to be proved: a file existing isn't the right file. The two ways of failing
-// are told apart, because one streams the right song and the other plays what's
-// on the mount, and a hint saying "stream" over the second would be false.
+// to be proved: a file existing isn't the right file. The ways of failing are
+// told apart. A track that plays what's on the mount must not read "stream". A
+// file of the track's size whose title can't be read is likely the track on a
+// mount that is right, so pointing the mount elsewhere would be the wrong fix.
 function mountFinding(flags: string, sample: LocalPathSample | null | undefined): RealPathFinding {
   if (!sample?.sampled) {
     return { status: 'skip', detail: `${flags} · could not sample tracks against MUSIC_LIBRARY_PATH` };
   }
-  const notProved = sample.missed.length + sample.unproved.length;
+  const notProved = sample.missed.length + sample.unproved.length + sample.unread.length;
   if (!notProved) {
     return { status: 'ok', detail: `${flags} · ${sample.sampled} of ${sample.sampled} sampled tracks proved on MUSIC_LIBRARY_PATH` };
   }
   const hints: string[] = [];
   if (sample.missed.length) {
-    hints.push(`${sample.missed.length} stream instead of playing from disk, for example ${sample.missed[0]}: no file on the mount proved to be the track, by its size and title. `
-      + 'Point MUSIC_LIBRARY_PATH at the folder Navidrome scans, or its parent, with the same layout below it. Tracks in a library the mount does not hold stream, as they should.');
+    hints.push(`${sample.missed.length} stream instead of playing from disk, for example ${sample.missed[0]}: no file on the mount proved to be the track, by its size and the title in its tags. `
+      + `Point MUSIC_LIBRARY_PATH at the folder Navidrome scans, or its parent, with the same layout below it, or ${MOUNT_AT_NAVIDROME_PATH}. `
+      + 'Tracks in a library the mount does not hold stream, as they should.');
+  }
+  if (sample.unread.length) {
+    hints.push(`${sample.unread.length} stream though a file of the track's size is on the mount, for example ${sample.unread[0]}: `
+      + 'its tags hold no title the check can read in the first or last 64 KiB, as when cover art sits ahead of the title, or the format has no ID3, Vorbis or MP4 tags. '
+      + `To play these from disk, ${MOUNT_AT_NAVIDROME_PATH}.`);
   }
   if (sample.unproved.length) {
     hints.push(`${sample.unproved.length} play the file at that path, whose size differs from what Navidrome holds, for example ${sample.unproved[0]}. `

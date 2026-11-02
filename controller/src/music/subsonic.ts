@@ -1069,11 +1069,20 @@ export function getLocalPath(song) {
 // findLibraryFile() finds at the size the server holds for it; a mapped guess has
 // already passed the stricter test to get here. `unproved` plays anyway: a relative
 // path or a real path inside the mount needs no proof to play, so a stale or
-// different file there is not a miss. `none` streams.
-export function localFileState(song): 'proved' | 'unproved' | 'none' {
+// different file there is not a miss. `unread` streams although a guess has the
+// track's size, because its tags hold no title the check can read: the likely
+// track, and a mount at Navidrome's own path would play it with no proof. `none`
+// streams. The extra walk for `unread` is the Doctor's alone; the push path stops
+// at findLibraryFile().
+export function localFileState(song): 'proved' | 'unproved' | 'unread' | 'none' {
   const local = findLibraryFile(song);
-  if (!local) return 'none';
-  return fileSizeOnDisk(local) === Number(song.size) ? 'proved' : 'unproved';
+  if (local) return fileSizeOnDisk(local) === Number(song.size) ? 'proved' : 'unproved';
+  const libRoot = process.env.MUSIC_LIBRARY_PATH;
+  const proof = proofOf(song);
+  if (!libRoot || !song.path || !proof) return 'none';
+  const { mapped } = localPathCandidates(libRoot, String(song.path));
+  const unread = mapped.some(p => fileSizeOnDisk(p) === proof.size && titleInTags(p, proof.size, proof.title) === 'none');
+  return unread ? 'unread' : 'none';
 }
 
 // Best URI for Liquidsoap — local file if available, otherwise stream URL

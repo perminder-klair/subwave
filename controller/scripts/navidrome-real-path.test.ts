@@ -966,6 +966,7 @@ test('a file that merely exists is not ok, and the Doctor says which way it fail
     assert.equal(streamed?.status, 'warn');
     assert.match(streamed?.detail || '', /1 of 1 sampled tracks not proved/);
     assert.match(streamed?.hint || '', /1 stream instead of playing from disk, for example \/library\/two\//);
+    assert.match(streamed?.hint || '', /Point MUSIC_LIBRARY_PATH at the folder Navidrome scans.*, or mount the library in the controller and broadcast containers at the path Navidrome uses/);
 
     // The real path inside the mount, a different file at it. That plays, since
     // a path taken as it is needs no proof, so the hint must not promise a stream.
@@ -982,6 +983,36 @@ test('a file that merely exists is not ok, and the Doctor says which way it fail
     // The same path with the right file is proved.
     addTracks(root, ALIGNED);
     assert.equal((await doctorFinding())?.status, 'ok');
+  } finally {
+    await settings.update({ musicSource: { reportRealPath: false } });
+  }
+});
+
+test('a file of the track\'s size whose title can\'t be read is told apart, and the hint names mounting at Navidrome\'s own path', async () => {
+  await settings.update({ musicSource: { reportRealPath: true } });
+  try {
+    await realPathStatus({ enable: true });
+    // The right place and the right size, but no title the check can read in
+    // the windows, as with cover art ahead of it. Likely the track, so the hint
+    // must not send the operator to move a mount that is right.
+    const root = mount();
+    fake.songs = [ALIGNED];
+    mkdirSync(dirname(join(root, ALIGNED.file)), { recursive: true });
+    writeFileSync(join(root, ALIGNED.file), audioBytes(fileBytes(ALIGNED).length));
+    assert.match(await mixerUri(ALIGNED.id), /^subhttp:/, 'unread is not proved, so it streams');
+    const f = await doctorFinding();
+    assert.equal(f?.status, 'warn');
+    assert.match(f?.detail || '', /1 of 1 sampled tracks not proved/);
+    assert.match(f?.hint || '', /1 stream though a file of the track's size is on the mount, for example \/music\/Aligned Artist\//);
+    assert.match(f?.hint || '', /its tags hold no title the check can read/);
+    assert.match(f?.hint || '', /mount the library in the controller and broadcast containers at the path Navidrome uses, and set MUSIC_LIBRARY_PATH to it, so nothing has to be proved/);
+    assert.doesNotMatch(f?.hint || '', /Point MUSIC_LIBRARY_PATH at the folder Navidrome scans/);
+
+    // A file of that size whose title field names another song is that song: a miss.
+    writeFileSync(join(root, ALIGNED.file), fileBytes({ title: 'Aligned Titlf' }));
+    const other = await doctorFinding();
+    assert.match(other?.hint || '', /1 stream instead of playing from disk/);
+    assert.doesNotMatch(other?.hint || '', /a file of the track's size/);
   } finally {
     await settings.update({ musicSource: { reportRealPath: false } });
   }

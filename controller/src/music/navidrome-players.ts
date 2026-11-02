@@ -244,11 +244,12 @@ export async function passiveRealPathStatus(): Promise<RealPathStatus> {
 export async function sampleLocalPaths(): Promise<LocalPathSample | null> {
   try {
     const songs = await getRandomSongs({ size: SAMPLE_SIZE });
-    const sample: LocalPathSample = { sampled: songs.length, missed: [], unproved: [] };
+    const sample: LocalPathSample = { sampled: songs.length, missed: [], unproved: [], unread: [] };
     for (const song of songs) {
       const state = localFileState(song);
       if (state === 'none') sample.missed.push(String(song.path));
       if (state === 'unproved') sample.unproved.push(String(song.path));
+      if (state === 'unread') sample.unread.push(String(song.path));
     }
     return sample;
   } catch {
