@@ -675,16 +675,16 @@ test('a row with no vector is never marked', async () => {
   assert.equal(dirty.text_vector_dirty, 0);
 });
 
-test('a v31 database gains the column on its next open, with every row owed', async () => {
+test('a v33 database gains the column on its next open, with every row owed', async () => {
   seed('a', 'Act', 'Song', { tags: ['rock'] });
   const raw = db.requireDb();
-  assert.equal(raw.pragma('user_version', { simple: true }), 32);
+  assert.equal(raw.pragma('user_version', { simple: true }), 34);
   raw.exec('ALTER TABLE tracks DROP COLUMN lastfm_track_tags_at');
-  raw.pragma('user_version = 31');
+  raw.pragma('user_version = 33');
   const dim = db.getEmbeddingDim()!;
   db.close();
   await db.open({ embeddingDim: dim, adoptStoredDim: true });
-  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 32);
+  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 34);
   assert.equal(row('a').lastfmTrackTagsAt, null);
   assert.deepEqual(row('a').lastfmTags, ['rock']);
   assert.deepEqual(db.idsNeedingLastfmTrackTags(), ['a']);

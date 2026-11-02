@@ -200,7 +200,7 @@ test('walkNavidrome stores what Navidrome reports', async () => {
 
 test('the analyzer walk stores what Navidrome reports', async () => {
   songs = [{ id: 'analyzer-walk', title: 'Song', artist: 'Artist', album: 'Album', duration: 200,
-    path: '/music/Artist/Album/02.FLAC', suffix: 'FLAC', size: 30_000_000, bitRate: 900 }];
+    path: '/music/Artist/Album/02.FLAC', suffix: 'FLAC', size: 30_000_000, bitRate: 900, explicitStatus: 'explicit' }];
   const cliDir = createTempDir(join(tmpdir(), 'subwave-file-info-cli-'));
   try {
     // Its own state dir: this walk prunes whatever Navidrome did not report.
@@ -220,6 +220,8 @@ test('the analyzer walk stores what Navidrome reports', async () => {
     try {
       assert.deepEqual(stored.prepare(FACTS).get('analyzer-walk'),
         { file_path: '/music/Artist/Album/02.FLAC', file_suffix: 'flac', file_size: 30_000_000, bit_rate: 900 });
+      // A catalogue this walk built is the only one such a station has.
+      assert.deepEqual(stored.prepare('SELECT explicit_status FROM tracks WHERE id = ?').get('analyzer-walk'), { explicit_status: 'explicit' });
     } finally {
       stored.close();
     }

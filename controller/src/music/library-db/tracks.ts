@@ -4,7 +4,7 @@
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, restampFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
-import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
+import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
@@ -160,9 +160,9 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
   markTextVectorDirty(id);
 }
 
-// Existing vectors whose source text changed: the era, or (opt-in) the track's
-// Last.fm tags. They remain in the KNN index until phaseEmbed successfully
-// replaces them.
+// Existing vectors whose source text changed: an era edit, (opt-in) the track's
+// Last.fm tags, or migration 32's tail verdict. They remain in the KNN index until
+// phaseEmbed successfully replaces them.
 export function textVectorDirtyIds(): string[] {
   return (requireDb()
     .prepare(
@@ -288,8 +288,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
     .prepare(
       `
       INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec,
-                          file_path, file_suffix, file_size, bit_rate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          file_path, file_suffix, file_size, bit_rate, explicit_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -328,7 +328,10 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
         file_path    = COALESCE(excluded.file_path, tracks.file_path),
         file_suffix  = COALESCE(excluded.file_suffix, tracks.file_suffix),
         file_size    = COALESCE(excluded.file_size, tracks.file_size),
-        bit_rate     = COALESCE(excluded.bit_rate, tracks.bit_rate)
+        bit_rate     = COALESCE(excluded.bit_rate, tracks.bit_rate),
+        -- A CASE, not COALESCE: the walk must be able to clear a removed tag,
+        -- and every other writer (undefined) must leave the walked value alone.
+        explicit_status = CASE WHEN ? = 1 THEN excluded.explicit_status ELSE tracks.explicit_status END
     `,
     )
     .run(
@@ -349,6 +352,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
       file.fileSuffix,
       replaced ? storedSize : walkedSize,
       file.bitRate,
+      normaliseExplicitStatus(meta.explicitStatus),
+      meta.explicitStatus === undefined ? 0 : 1,
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);
   return replaced;

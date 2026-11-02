@@ -3,7 +3,7 @@
 // go through it.
 
 import { embedMany } from 'ai';
-import { isInstrumental } from './lyric-vocal.js';
+import { isInstrumental, type VocalEvidence } from './lyric-vocal.js';
 import {
   embeddingModel,
   activeEmbeddingModelLabel,
@@ -49,16 +49,13 @@ export interface TrackEnrichment {
 
 // Measured acoustics from the analyzer pass (#1246). Never the tagger's own
 // `moods` / `energy`: those are decided from these vectors, so feeding them
-// back is circular.
-export interface TrackAcoustics {
+// back is circular. VocalEvidence is tracks.vocal_ranges plus the tail's spans:
+// sung duration decides instrumental status, and null/undefined = not computed.
+export interface TrackAcoustics extends VocalEvidence {
   bpm?: number | null;
   musicalKey?: string | null;      // Camelot code, e.g. '8A'
   // Zero-shot CLAP moods (music/audio-moods.ts). Heavy analyzer tier only.
   audioMoods?: string[] | null;
-  // tracks.vocal_ranges. Total sung duration determines instrumental status;
-  // null/undefined = not computed.
-  vocalRanges?: unknown[] | null;
-  vocalRangesInvalid?: boolean;
   // The pace curve is deliberately not an input: its range (~0.02–0.5) makes a
   // fixed threshold stamp one word on ~everything.
 }
@@ -101,7 +98,7 @@ export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
   const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
   if (mode) words.push(mode);
   // [] is a measurement ("no vocals found"), null is its absence.
-  if (isInstrumental(acoustics.vocalRanges, acoustics.vocalRangesInvalid) === true) {
+  if (isInstrumental(acoustics) === true) {
     words.push('instrumental');
   }
   return words;
