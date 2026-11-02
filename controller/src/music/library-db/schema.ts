@@ -562,6 +562,29 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
       d.pragma('user_version = 35');
     }).immediate();
   }
+  // Version 35 was assigned to different additive columns on the two parent
+  // branches: listener languages/Last.fm timestamps here, and CLAP descriptors
+  // on develop. Version 36 is the convergence step. Inspect the actual schema
+  // so databases already stamped 35 on either lineage gain only the columns
+  // they lack, without losing their existing metadata.
+  if (userVersion < 36 && tailMigrationComplete) {
+    d.transaction(() => {
+      if ((d.pragma('user_version', { simple: true }) as number) >= 36) return;
+      const columnsOf = (table: string) =>
+        new Set((d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name));
+      const tracks = columnsOf('tracks');
+      const add = [
+        'language_primary', 'languages', 'explicit_status', 'lastfm_track_tags_at',
+        'audio_descriptors', 'audio_descriptor_scores_json',
+      ].filter(column => !tracks.has(column)).map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`);
+      if (!columnsOf('audio_embedding_meta').has('descriptor_vocab_hash')) {
+        add.push('ALTER TABLE audio_embedding_meta ADD COLUMN descriptor_vocab_hash TEXT;');
+      }
+      if (add.length) runDdl(d, add.join('\n'));
+      d.pragma('user_version = 36');
+    }).immediate();
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above

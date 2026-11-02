@@ -54,13 +54,13 @@ test('upgrading a version-29 library adds language columns without losing rows',
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((raw().pragma('user_version', { simple: true }) as number), 35);
+  assert.equal((raw().pragma('user_version', { simple: true }) as number), 36);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
   assert.equal(db.getTrack('spanish')?.title, 'Uno');
 });
 
-test('a version-32 library from develop gets the language columns in version 33', async () => {
+test('a version-32 library from develop gains language columns and reaches the merged schema', async () => {
   db.close();
   const Database = (await import('better-sqlite3')).default as any;
   const old = new Database(join(stateDir, 'library.db'));
@@ -69,7 +69,7 @@ test('a version-32 library from develop gets the language columns in version 33'
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 36);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
 });
@@ -84,7 +84,7 @@ test('a version-30 language library repairs later tables and retains its languag
   old.close();
 
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 36);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
   assert.ok(requireDb().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lyrics_external'").get());
@@ -98,7 +98,7 @@ test('concurrent version-32 opens serialize additive track-column migrations', a
   db.close();
   const Database = (await import('better-sqlite3')).default as any;
   const old = new Database(join(stateDir, 'library.db'));
-  old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages; ALTER TABLE tracks DROP COLUMN explicit_status; ALTER TABLE tracks DROP COLUMN lastfm_track_tags_at;');
+  old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages; ALTER TABLE tracks DROP COLUMN explicit_status; ALTER TABLE tracks DROP COLUMN lastfm_track_tags_at; ALTER TABLE tracks DROP COLUMN audio_descriptors; ALTER TABLE tracks DROP COLUMN audio_descriptor_scores_json; ALTER TABLE audio_embedding_meta DROP COLUMN descriptor_vocab_hash;');
   old.pragma('user_version = 32');
   old.close();
 
@@ -108,8 +108,10 @@ test('concurrent version-32 opens serialize additive track-column migrations', a
   const code = `const db=await import(${JSON.stringify(moduleUrl)}); await db.open({embeddingDim:4});
     const {requireDb}=await import(${JSON.stringify(handleUrl)});
     const columns=new Set(requireDb().prepare('PRAGMA table_info(tracks)').all().map(row=>row.name));
-    if(!columns.has('language_primary')||!columns.has('languages')||!columns.has('explicit_status')||!columns.has('lastfm_track_tags_at')) throw new Error('migrated track columns missing');
-    if(requireDb().pragma('user_version',{simple:true})!==35) throw new Error('schema version is not 35');
+    if(!columns.has('language_primary')||!columns.has('languages')||!columns.has('explicit_status')||!columns.has('lastfm_track_tags_at')||!columns.has('audio_descriptors')||!columns.has('audio_descriptor_scores_json')) throw new Error('migrated track columns missing');
+    const audioMeta=new Set(requireDb().prepare('PRAGMA table_info(audio_embedding_meta)').all().map(row=>row.name));
+    if(!audioMeta.has('descriptor_vocab_hash')) throw new Error('descriptor hash column missing');
+    if(requireDb().pragma('user_version',{simple:true})!==36) throw new Error('schema version is not 36');
     db.close();`;
   const run = () => new Promise<string>((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], { env: process.env });
@@ -122,7 +124,66 @@ test('concurrent version-32 opens serialize additive track-column migrations', a
 
   await Promise.all(Array.from({ length: 12 }, run));
   await db.open({ embeddingDim: 4 });
-  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 35);
+  assert.equal((requireDb().pragma('user_version', { simple: true }) as number), 36);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
+});
+
+test('a version-35 develop library gains the request language columns', async () => {
+  db.close();
+  const Database = (await import('better-sqlite3')).default as any;
+  const old = new Database(join(stateDir, 'library.db'));
+  old.exec(`
+    ALTER TABLE tracks DROP COLUMN language_primary;
+    ALTER TABLE tracks DROP COLUMN languages;
+    ALTER TABLE tracks DROP COLUMN audio_descriptors;
+    ALTER TABLE tracks DROP COLUMN audio_descriptor_scores_json;
+    ALTER TABLE audio_embedding_meta DROP COLUMN descriptor_vocab_hash;
+    ALTER TABLE tracks ADD COLUMN audio_descriptors TEXT;
+    ALTER TABLE tracks ADD COLUMN audio_descriptor_scores_json TEXT;
+    ALTER TABLE audio_embedding_meta ADD COLUMN descriptor_vocab_hash TEXT;
+  `);
+  old.prepare('UPDATE tracks SET audio_descriptors = ?, audio_descriptor_scores_json = ? WHERE id = ?')
+    .run('["piano"]', '{"piano":0.9}', 'spanish');
+  old.pragma('user_version = 35');
+  old.close();
+
+  await db.open({ embeddingDim: 4 });
+  const have = new Set(columns());
+  assert.ok(have.has('language_primary'));
+  assert.ok(have.has('languages'));
+  assert.ok(have.has('audio_descriptors'));
+  assert.ok(have.has('audio_descriptor_scores_json'));
+  assert.ok((requireDb().prepare('PRAGMA table_info(audio_embedding_meta)').all() as Array<{ name: string }>)
+    .some(row => row.name === 'descriptor_vocab_hash'));
+  assert.deepEqual(requireDb().prepare('SELECT audio_descriptors, audio_descriptor_scores_json FROM tracks WHERE id = ?')
+    .get('spanish'), { audio_descriptors: '["piano"]', audio_descriptor_scores_json: '{"piano":0.9}' });
+  assert.equal(requireDb().pragma('user_version', { simple: true }), 36);
+});
+
+test('a version-35 request library gains the descriptor columns', async () => {
+  db.close();
+  const Database = (await import('better-sqlite3')).default as any;
+  const old = new Database(join(stateDir, 'library.db'));
+  old.prepare('UPDATE tracks SET language_primary = ?, languages = ? WHERE id = ?')
+    .run('Hindi', '["Hindi"]', 'spanish');
+  old.exec(`
+    ALTER TABLE tracks DROP COLUMN audio_descriptors;
+    ALTER TABLE tracks DROP COLUMN audio_descriptor_scores_json;
+    ALTER TABLE audio_embedding_meta DROP COLUMN descriptor_vocab_hash;
+  `);
+  old.pragma('user_version = 35');
+  old.close();
+
+  await db.open({ embeddingDim: 4 });
+  const have = new Set(columns());
+  assert.ok(have.has('language_primary'));
+  assert.ok(have.has('languages'));
+  assert.ok(have.has('audio_descriptors'));
+  assert.ok(have.has('audio_descriptor_scores_json'));
+  assert.ok((requireDb().prepare('PRAGMA table_info(audio_embedding_meta)').all() as Array<{ name: string }>)
+    .some(row => row.name === 'descriptor_vocab_hash'));
+  assert.deepEqual(requireDb().prepare('SELECT language_primary, languages FROM tracks WHERE id = ?').get('spanish'),
+    { language_primary: 'Hindi', languages: '["Hindi"]' });
+  assert.equal(requireDb().pragma('user_version', { simple: true }), 36);
 });
