@@ -170,3 +170,42 @@ test('the emptied slot gets a fresh pick for the show that is now on', async () 
   q.maybeDeadlinePick();
   assert.equal(picks, 1);
 });
+
+// The other half of the boundary. A pick that starts more than the look-ahead
+// before a clean show is rightly the outgoing show's, but it can still run into
+// the new one. It is too late to swap, so it fades where the show begins,
+// through the show-boundary cut (#1574).
+const handedOver = () => readFileSync(config.liquidsoap.queueFile, 'utf8');
+
+test('a tagged pick running into a clean show fades where the show begins', async () => {
+  // Airs 180s out and ends at 420s; the show starts at 350s, so 70s would spill.
+  const q = stage({ fromSec: 350 });
+  await enqueue(q, TAGGED);
+  await drain(q);
+  assert.deepEqual(queued(q), ['tagged'], 'it starts in the outgoing show, so it airs');
+  const cue = Number(handedOver().match(/liq_cue_out="([\d.]+)"/)?.[1]);
+  assert.ok(Math.abs(cue - 170) < 3, `cued out at the show's start, got ${cue}`);
+  assert.match(handedOver(), /liq_show_fade="true"/);
+  assert.ok(booth(q).some((l: string) => /show boundary fade: "Tagged"/.test(l)), booth(q).join(' | '));
+});
+
+test('an untagged pick plays on into a clean show', async () => {
+  const q = stage({ fromSec: 350 });
+  await enqueue(q, PLAIN);
+  await drain(q);
+  assert.doesNotMatch(handedOver(), /liq_show_fade|liq_cue_out/);
+});
+
+test('a tagged pick running into a show that is not clean plays out', async () => {
+  const q = stage({ fromSec: 350, flag: false });
+  await enqueue(q, TAGGED);
+  await drain(q);
+  assert.doesNotMatch(handedOver(), /liq_show_fade|liq_cue_out/);
+});
+
+test('a listener\'s track is never cut for a clean show', async () => {
+  const q = stage({ fromSec: 350 });
+  await q.push({ track: TAGGED, requestedBy: 'Tester' });
+  await drain(q);
+  assert.doesNotMatch(handedOver(), /liq_show_fade/);
+});
