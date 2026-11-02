@@ -22,7 +22,7 @@ import { bpmCompat, keyCompat } from './mix.js';
 // Keep the long-standing request-match exports stable for scripts and route
 // consumers while the shared normalization helpers live in their own module.
 export { requestName, looksLikeLyricRequest } from './request-normalize.js';
-export { isLyricOrFilmDescription, isGreetingLikeRequest, isGenericRequestPhrase } from './request-normalize.js';
+export { isLyricOrFilmDescription } from './request-normalize.js';
 
 export interface RequestMatch {
   kind?: string;
@@ -59,8 +59,8 @@ export interface RequestMatch {
   };
   // The listener's whole wording, set when the parse found no title in it
   // ("play Focus", "Love Song", "something like Olivia"). The words can still
-  // be one, so resolveExactName offers them to the catalogue before any
-  // attribute or similarity reading.
+  // be one, so with no interpreter resolveExactName offers them to the
+  // catalogue, and the agent's searchLibrary looks for them.
   bareName?: string;
   // A named similarity request is resolved through the same recording
   // identity verifier before its neighbours are considered.
@@ -265,7 +265,7 @@ const REQUEST_LEAD = /^\s*(?:(?:please\s+)?(?:can|could|would)\s+you\s+)?(?:(?:p
 // The name quoted right after the request's framing, without whatever follows
 // its closing quote: `play "X" for my mum` names X. A bare "please" frames a
 // quote too (`please "X"`), though never an unquoted name ("Please Please Me").
-function leadingQuotedName(text: string): string | null {
+export function leadingQuotedName(text: string): string | null {
   const head = text.replace(REQUEST_LEAD, '').replace(/^please\s+/i, '');
   const span = head.match(QUOTED_NAMES)?.[0];
   return span && head.startsWith(span) ? span.slice(1, -1).trim() || null : null;
@@ -802,21 +802,6 @@ export function asksForKindOfMusic(text: string): boolean {
   return KIND_OF_MUSIC.test(text) && !leadingQuotedName(text);
 }
 
-// With no model to read them, an unknown phrase can't be told from a mood the
-// aliases don't list ("lazy sunday"), so a miss keeps its honest alternative
-// and holding it to an exact title needs proof. A quote is proof, and so is a
-// word no attribute reading can absorb standing beside one: letters and digits
-// in one token ("U2 rock", "2Pac rap") or another script ("तेरे बिना love").
-function nameToken(token: string): boolean {
-  return (/\p{L}/u.test(token) && /\p{N}/u.test(token)) || /(?!\p{Script=Latin})\p{L}/u.test(token);
-}
-
-export function wordsProveName(text: string): boolean {
-  if (leadingQuotedName(text)) return true;
-  const tokens = requestName(text.replace(REQUEST_LEAD, '')).split(' ').filter(Boolean);
-  return tokens.some(knownAttributeToken) && tokens.some(token => !knownAttributeToken(token) && nameToken(token));
-}
-
 export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): boolean {
   const lyricLike = looksLikeLyricRequest(text);
   return lyricLike
@@ -855,7 +840,7 @@ export function modelFreeRequest(text: string): RequestMatch {
   // semantic lane. Treat only the unquoted "something/anything like this"
   // frame as similarity; a quoted or otherwise named recording keeps its
   // literal identity.
-  if (!lyricLike && /^(?:(?:something|anything|more)\s+like\s+this|like\s+(?:this|that))\b/iu.test(cleaned)
+  if (!lyricLike && /^(?:(?:something|anything|more)\s+like\s+(?:this|that)|like\s+(?:this|that))\b/iu.test(cleaned)
     && !/["'“‘]/u.test(cleaned)) {
     return {
       kind: 'track', title: null, album: null, artist: null, genre: null,
@@ -874,7 +859,7 @@ export function modelFreeRequest(text: string): RequestMatch {
       language: null, mood: null, sort: null, scope: 'song',
       search_terms: [],
       similarTo: {
-        title: seed.title || seed.bareName || null,
+        title: seed.title || null,
         artist: seed.artist || null,
         album: seed.album || null,
         releaseContext: seed.releaseContext,
@@ -1012,9 +997,7 @@ export function modelFreeRequest(text: string): RequestMatch {
 
 // A deliberately small, deterministic classifier. It does not decide which
 // track wins; it only chooses the resolver lane and provides durable
-// diagnostics. Catalogue lookup still gets first refusal for short inputs in
-// the route, because a title such as "Daaku" can otherwise resemble ordinary
-// prose in an unfamiliar language.
+// diagnostics.
 export function classifyListenerRequest(text: string, literal = modelFreeRequest(text)): ListenerRequestClass {
   const normalized = text.normalize('NFKC').replace(/\s+/gu, ' ').trim();
   const musicFraming = /\b(?:play|queue|request|song|track|music|album|artist|band|dj|more like|surprise)\b/iu.test(normalized);
@@ -1126,7 +1109,7 @@ export function repairRequestMatch(match: RequestMatch, text: string): RequestMa
   if (literal.similarTo) {
     return {
       ...match,
-      kind: 'track', title: null, artist: null, album: null,
+      kind: 'track', title: null, artist: null, album: null, search_terms: [],
       similarTo: literal.similarTo, scope: 'song', literal: false,
     };
   }
@@ -1169,9 +1152,11 @@ export function repairRequestMatch(match: RequestMatch, text: string): RequestMa
   return match;
 }
 
-// The literal title and artist are the identity claim for an explicit request.
-// Keep this policy beside the catalogue resolver so HTTP and future
-// request route cannot accidentally let an interpreter rewrite the recording.
+// The literal title and artist, for the catalogue to try first behind a reading
+// that named something. Keep this policy beside the catalogue resolver so HTTP
+// and future request routes share it. The route falls back to the reading itself
+// when the catalogue hasn't got the pair, because a parse can be wrong: "hey dj,
+// Creep by Radiohead" parses as the title "hey dj, Creep".
 export function pinExplicitRequestMatch(match: RequestMatch, text: string): RequestMatch | null {
   const literal = modelFreeRequest(text);
   if (!literal.title?.trim() || !literal.artist?.trim()) return null;
@@ -1242,9 +1227,8 @@ export function normalizeRequestMatch(match: RequestMatch, options: { moods?: re
 }
 
 // The listener's words as an exact title, then an exact artist: no fuzzy
-// reading, so "rock" can't land on "Rocks", and no pools. It needs no model, so
-// it holds with the interpreter down. It runs before any reading because an
-// attribute is a good answer to a miss but never to a song the library has.
+// reading, so "rock" can't land on "Rocks", and no pools. This is what the
+// words get when no interpreter can answer. One that can reads first.
 export function resolveExactName(name: string, deps: Pick<Parameters<typeof resolveDirectRequest>[1], 'catalog' | 'recentIds' | 'queuedIds' | 'currentId' | 'signal'>): Promise<RequestSelection> {
   return resolveDirectRequest({
     kind: 'track', title: name, artist: null, album: null, scope: 'song', literal: true, titleOnly: true,
@@ -1304,6 +1288,11 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   const requiredGenre = !!match.genre && (deps.text === undefined || explicitRequestAttribute(deps.text, match, match.genre));
   const requiredLanguage = !!match.language && (deps.text === undefined || explicitRequestAttribute(deps.text, match, match.language));
   const required = [requiredGenre && 'genre', requiredLanguage && 'language'].filter((value): value is string => !!value);
+  // A hold is for a name the catalogue lacks. A hard condition can be what
+  // missed ("Nirvana rock", with the act filed under Grunge), so a request with
+  // one keeps its alternative, inside that condition. The nested lookups below
+  // pass no text and hold regardless: their fallbacks are no answer.
+  const exactOnly = deps.exactOnly && (deps.text === undefined || !required.length);
   // #1961's reply shape with more than framing around the song ("Play
   // Bohemian Rhapsody by Queen, it is my birthday"): no title, and attributes
   // the listener's words never asked for. The search terms those words hold
@@ -1649,14 +1638,14 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
 
   // A one-word title miss can also be an artist name. Try that exact artist
   // catalogue before refusing, but retain the no-stand-in policy below.
-  if (deps.exactOnly && match.titleOnly && !artistName && title) {
+  if (exactOnly && match.titleOnly && !artistName && title) {
     artistName = title;
     resolvedArtistName = title;
     title = null;
     titleOnlyArtistFallback = true;
   }
 
-  if (match.literal && !deps.exactOnly && !match.titleOnly && !match.releaseContext && !match.similarTo && !artistName && title) {
+  if (match.literal && !exactOnly && !match.titleOnly && !match.releaseContext && !match.similarTo && !artistName && title) {
     artistName = title;
     resolvedArtistName = title;
     title = null;
@@ -1735,7 +1724,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   const identityRefusal = refusal();
   if (identityRefusal) return identityRefusal;
   if (unverifiedConditions.length) return { track: null, source: 'unsupported', outcome: 'unsupported', errors, unsupported: unverifiedConditions };
-  if (deps.exactOnly && artistName && !title && !match.album) {
+  if (exactOnly && artistName && !title && !match.album) {
     // A named artist may select one of that artist's own recordings above,
     // but an absent artist is not permission to draw unrelated fallback music.
     return { track: null, source: errors.length ? 'lookup-error' : 'no-match', outcome: 'no-match', errors, required, alternatives };
@@ -1744,7 +1733,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   // Exact identity requests may inspect the named artist's real catalogue for
   // aliases and alternatives, but they never enter similarity, mood, genre,
   // language, or starred fallback pools.
-  if (deps.exactOnly && (title || match.album)) {
+  if (exactOnly && (title || match.album)) {
     if (unverifiedConditions.length) {
       return { track: null, source: 'unsupported', outcome: 'unsupported', errors, unsupported: unverifiedConditions };
     }

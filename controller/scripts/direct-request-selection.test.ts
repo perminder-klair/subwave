@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, explicitRequestAttribute, isFramedTitleOnlyRequest, isGenericRequestPhrase, isGreetingLikeRequest, isLyricOrFilmDescription, looksLikeLyricRequest, modelFreeRequest, requestedTitle, rankRequestCandidates, repairRequestMatch, requestArtistMatches, requestCandidateArtistMatches, requestReleaseRank, requestTitleMatches,
+  classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, explicitRequestAttribute, isFramedTitleOnlyRequest, isLyricOrFilmDescription, looksLikeLyricRequest, modelFreeRequest, requestedTitle, rankRequestCandidates, repairRequestMatch, requestArtistMatches, requestCandidateArtistMatches, requestReleaseRank, requestTitleMatches,
   resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
-  asksForKindOfMusic, resolveExactName, wordsProveName,
+  asksForKindOfMusic, resolveExactName,
 } from '../src/music/request-match.js';
 
 test('listener requests are classified into deterministic resolver lanes', () => {
@@ -26,15 +26,6 @@ test('language-plus-genre requests keep both deterministic constraints', () => {
 test('film evidence keeps the in form without capturing language requests', () => {
   assert.equal(isLyricOrFilmDescription('play song in Dune'), true);
   assert.equal(isLyricOrFilmDescription('play some music in Punjabi'), false);
-});
-
-test('greeting matching handles normalized apostrophes', () => {
-  assert.equal(isGreetingLikeRequest("what's up"), true);
-});
-
-test('generic request phrases are centralized with greeting matching', () => {
-  assert.equal(isGenericRequestPhrase('surprise me'), true);
-  assert.equal(isGenericRequestPhrase('play something for the evening'), false);
 });
 
 const exact: RequestSong = { id: 'exact', title: 'Bohemian Rhapsody', artist: 'Queen', album: 'A Night at the Opera', genre: 'Rock' };
@@ -1162,15 +1153,8 @@ test('the whole wording is offered to the catalogue, never the word inside a fra
   assert.equal(modelFreeRequest('play Love Song').bareName, 'Love Song');
   assert.equal(modelFreeRequest('play some rock').bareName, 'some rock');
   assert.equal(modelFreeRequest('something like Focus').bareName, 'something like Focus');
-  assert.equal(modelFreeRequest('something like Focus').similarTo?.title, 'Focus');
+  assert.equal(modelFreeRequest('something like Focus').similarTo?.title, null, 'a seed the parse read as an attribute is no seed');
   assert.equal(modelFreeRequest('like this').bareName, 'like this');
-});
-
-test('words alone prove a name only with a quote, or a mixed or foreign word beside an attribute', () => {
-  for (const text of ['play U2 rock', 'play 2Pac rap', 'तेरे बिना love', 'play "Rock"', '"lazy sunday"']) assert.equal(wordsProveName(text), true, text);
-  for (const text of ['lazy sunday', 'Smells Like Teen Spirit', 'top 40 rock', 'música rock', 'рок музыка', 'रोमांटिक गाने', 'something chill', 'U2']) {
-    assert.equal(wordsProveName(text), false, text);
-  }
 });
 
 test('a kind of music is asked for anywhere in the words, never inside a quote', () => {

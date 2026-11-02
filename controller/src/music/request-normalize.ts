@@ -78,8 +78,6 @@ const GENRE_ALIASES: Record<string, string> = {
 // same expression when deciding whether a framed request needs evidence.
 export const LYRIC_CUE = /\b(?:lyrics?|words?|line\s+from|verse|song\s+goes|sung\s+by|gane\s+ke\s+bol|gaane\s+ke\s+bol|gane\s+ke\s+lyrics|gaane\s+ke\s+lyrics|geet\s+ke\s+bol)\b/iu;
 const LANGUAGE_CUE = /(?:^|\s)(?:in|en|de|में|ਵਿੱਚ)\s+([\p{L}][\p{L} -]*?)(?:[.!?]*$|\s)/iu;
-export const GREETING_CUE = /^(?:hello|hi|hey|how are you|whats up|good morning|good evening)\b/iu;
-const GENERIC_REQUEST_CUE = /^(?:surprise|anything|something|music)(?:\s+(?:me|dj|radio|there|subwave|chill\s+zone))?$/iu;
 
 function compact(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -199,14 +197,6 @@ export function languageDisplayName(value: unknown): string | null {
 export function hasRequestLanguage(text: string): boolean {
   const match = text.match(LANGUAGE_CUE);
   return !!match && !!resolveLanguageCode(match[1]);
-}
-
-export function isGreetingLikeRequest(text: string): boolean {
-  return GREETING_CUE.test(requestName(text));
-}
-
-export function isGenericRequestPhrase(text: string): boolean {
-  return GENERIC_REQUEST_CUE.test(requestName(text));
 }
 
 // The library tagger stores ISO 639-3 values, while speech recognition and
