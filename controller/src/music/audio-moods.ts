@@ -60,7 +60,9 @@ const MOOD_PASS: ZeroShotSpec = {
   iterateScores: db.iterateAudioMoodScores,
   pageScores: db.pageAudioMoodScores,
   writeLabels: (rows) =>
-    db.setTrackAudioMoodLabelsBulk(rows.map(({ id, labels }) => ({ id, moods: labels }))),
+    db.setRelabelledTrackAudioMoodLabelsBulk(rows.map(({ id, labels }) => ({ id, moods: labels }))),
+  writeNewLabels: (rows) =>
+    db.setNewTrackAudioMoodLabelsBulk(rows.map(({ id, labels }) => ({ id, moods: labels }))),
   select: (scores, baselines) => selectAudioMoods(scores, baselines),
   say: {
     relabelled: (count, calibrated) =>

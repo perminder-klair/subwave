@@ -150,6 +150,8 @@ export interface TrackRow {
   is_compilation: number | null;
   era_untrusted: number | null;
   text_vector_dirty: number;
+  // The Sound: words the text vector was built from (tracks.ts); NULL = unknown.
+  text_vector_sound: string | null;
   genres: string | null; // JSON array; `genre` is generated from genres[0]
   genre: string | null;
   duration_sec: number | null;

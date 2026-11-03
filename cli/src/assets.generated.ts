@@ -1289,11 +1289,18 @@ SITE_URL=
 # and Liquidsoap, in broadcast, opens it. No compose file mounts it for you, so
 # add the volume to both services. Until the mixer has proved it can read the
 # mount every track streams, and the Doctor says so under "library mount".
-# Note Navidrome's Subsonic \`path\` is built from tags, not read off disk, unless
-# "Report Real Path" is on, so it often disagrees with your real folder names
-# (e.g. the API says "Chunga's Revenge" where the folder is "Chunga's Revenge
-# (1970)"). Every mismatch falls back to streaming, so it is safe to leave on —
-# it just does nothing for the tracks whose paths don't line up.
+# Note Navidrome's Subsonic \`path\` is built from tags, not read off disk, so it
+# often disagrees with your real folder names (e.g. the API says "Chunga's
+# Revenge" where the folder is "Chunga's Revenge (1970)"). Turn on Settings ->
+# Music source -> "Keep Report Real Path on" and it sends the real path instead.
+# If Navidrome mounts the library at this same path, that path is used as it is.
+# If not, SUB/WAVE looks for it under this folder, and plays a file only when its
+# size matches the track and its tags give it the title Navidrome reports for the
+# track, subtitle included. Anything it can't find or can't prove falls back to
+# streaming, so those tracks play as they would without this. A different
+# recording at the same folder and file name, with the same size and the same
+# title, would still play. With "Keep Report Real Path on" set, the Doctor samples a few tracks
+# under "real file paths" to show whether they line up.
 # MUSIC_LIBRARY_PATH=
 # TTS_SPEED=0.85
 # Routine fallback refresh uses hourly minute-step cadence, rotated off :00/:02:

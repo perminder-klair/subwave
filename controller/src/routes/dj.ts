@@ -120,6 +120,7 @@ interface AdminSong {
   genre?: string | null;
   duration?: number | null;
   path?: string | null;
+  size?: number | null;
   replayGain?: { trackGain?: number | null; trackPeak?: number | null } | null;
 }
 
@@ -901,6 +902,8 @@ function toAdminRow(s: AdminSong) {
     duration: s.duration ?? null,
     // Lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH is mounted.
     path: s.path ?? null,
+    // What it checks a real path mapped onto the mount against, with the title.
+    size: s.size ?? null,
     // Deliberately NOT `?? null`: an absent key drops out of the JSON round trip
     // and stays undefined, telling applyLoudnessGain to re-fetch the song.
     replayGain: s.replayGain,

@@ -20,7 +20,7 @@ import { cn } from '../../../lib/cn';
 import { HeaderRowsEditor } from './LlmSection';
 import { effectiveCompatMode } from './compat-mode';
 import { scrobbleReadiness } from './ScrobbleSection';
-import { lastfmTrackTagsBlocker } from './lastfm-track-tags';
+import { lastfmTagsChoice, lastfmTagsEnabled, lastfmTagsFromChoice, lastfmTrackTagsBlocker } from './lastfm-track-tags';
 import {
   SectionHeader, SaveBar, KeyStatus,
   headerMap,
@@ -36,7 +36,8 @@ interface LibrarySectionProps extends SectionProps {
 
 export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LibrarySectionProps) {
   const e = form.embedding;
-  const trackTagsBlocker = lastfmTrackTagsBlocker(scrobbleReadiness(form, data).lfApiKeySet, e.enrichment.lastfmTags);
+  const lfKeySet = scrobbleReadiness(form, data).lfApiKeySet;
+  const trackTagsBlocker = lastfmTrackTagsBlocker(lfKeySet, e.enrichment.lastfmTags);
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
   const [compatEmbedKeyInput, setCompatEmbedKeyInput] = useState('');
 
@@ -773,15 +774,24 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 With a Last.fm API key configured (Scrobbling), crowd tags come
                 straight from the Last.fm API and work on vanilla Navidrome.
-                Without a key it falls back to Navidrome&apos;s{' '}
+                Auto fetches them when a key is set and skips them when none is.
+                On without a key falls back to Navidrome&apos;s{' '}
                 <code>getArtistInfo2</code>, which only surfaces tags on a custom
-                Navidrome, so leave off unless you have a key or that setup.
+                Navidrome, so leave it on Auto unless you have that setup.
               </div>
+              {e.enrichment.lastfmTags === null && (
+                <div className="mt-1 max-w-[480px] text-[13px] leading-[1.5] text-ink">
+                  {lastfmTagsEnabled(null, lfKeySet)
+                    ? 'Auto is on: a Last.fm key is set.'
+                    : 'Auto is off: no Last.fm key is set.'}
+                </div>
+              )}
             </div>
             <Seg
               accent
-              value={e.enrichment.lastfmTags ? 'on' : 'off'}
+              value={lastfmTagsChoice(e.enrichment.lastfmTags)}
               options={[
+                { id: 'auto', label: 'Auto' },
                 { id: 'off', label: 'Off' },
                 { id: 'on', label: 'On' },
               ]}
@@ -790,7 +800,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                   ...f,
                   embedding: {
                     ...f.embedding,
-                    enrichment: { ...f.embedding.enrichment, lastfmTags: v === 'on' },
+                    enrichment: { ...f.embedding.enrichment, lastfmTags: lastfmTagsFromChoice(v) },
                   },
                 }))
               }

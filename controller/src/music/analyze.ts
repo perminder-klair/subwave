@@ -14,7 +14,7 @@ import { runAudioMoodPass } from './audio-moods.js';
 import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
-import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
+import { quietGateDecision, quietOnlyEnabled, type QuietState } from './analyze-quiet-pure.js';
 import { dispatchAnalysis, type DispatchOutcome } from './analyze-dispatch.js';
 import {
   analysisModeForTrack,
@@ -24,6 +24,7 @@ import {
   tailVocalBackfillAvailable,
 } from './analyze-capability.js';
 import { probeListenerCount } from '../broadcast/listeners.js';
+import { sweepKeepLastFromDisk } from '../broadcast/pick-stems.js';
 import { planAcoustics, type AcousticsPlan, type WorkRequest } from './acoustics-plan.js';
 import type { Facet } from './library-db/facets.js';
 
@@ -89,9 +90,6 @@ interface QuietConfig {
 }
 
 async function readQuietConfig(): Promise<QuietConfig> {
-  const v = (process.env.ANALYZE_QUIET_ONLY || '').toLowerCase();
-  const envOn = v === '1' || v === 'true' || v === 'yes';
-  let enabled = envOn;
   let minutes = 10;
   let audio: any = null;
   try {
@@ -103,7 +101,7 @@ async function readQuietConfig(): Promise<QuietConfig> {
       audio = null;
     }
   }
-  if (!enabled) enabled = audio?.analyzeQuietOnly === true;
+  const enabled = quietOnlyEnabled(process.env.ANALYZE_QUIET_ONLY, audio);
   const m = audio?.analyzeQuietMinutes;
   if (Number.isFinite(m) && m >= 1 && m <= 120) minutes = Math.floor(m);
   return { enabled, minutes };
@@ -920,9 +918,16 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
     const settled = await stemCacheStore.settlePassWrites(newStemIds, undefined, {
       rewroteExisting: rewroteExistingStems,
     }).catch(() => null);
+    // With pick-time stems on, the dirs of tracks still in the queue go last,
+    // as in the hourly sweep. This process has no live queue, so the set comes
+    // from the queue's snapshot (pick-stems.ts sweepKeepLastFromDisk); off, it
+    // is undefined and the order is the ranking alone.
     const swept = settled?.withinBudget
       ? null
-      : await stemCacheStore.sweep(undefined, { force: true }).catch(() => null);
+      : await stemCacheStore.sweep(undefined, {
+        force: true,
+        keepLast: await sweepKeepLastFromDisk().catch(() => undefined),
+      }).catch(() => null);
     if (swept && swept.removed > 0) {
       console.log(`[analyze] stem cache sweep: evicted ${swept.removed} track dirs (${Math.round(swept.freedBytes / 1024 ** 2)} MB)`);
     }
