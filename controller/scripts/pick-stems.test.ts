@@ -581,6 +581,27 @@ test('no Demucs, or ANALYZE_QUIET_ONLY, is said once in the booth log, not once 
   assert.equal((await warns()).outcome.ran, true);
 });
 
+test('an analyzer that does not answer is not blamed on its image', async () => {
+  // No sidecar answers (port 9 is the discard port) and no local worker is
+  // configured: facetsAvailable() is null, the same answer an old image gives.
+  const urls = [...config.analyzer.urls];
+  config.analyzer.urls.splice(0, urls.length, 'http://127.0.0.1:9');
+  analyzer._resetBackendCacheForTests();
+  addTrack('n2');
+  try {
+    const { lines, outcome } = run('n2');
+    assert.deepEqual(await outcome, { ran: false, veto: 'no-facets' });
+    const warns = lines.filter(l => l.startsWith('[warn]'));
+    assert.equal(warns.length, 1, lines.join('\n'));
+    assert.match(warns[0], /not answering/, 'the operator is told to check it is running');
+  } finally {
+    config.analyzer.urls.splice(0, config.analyzer.urls.length, ...urls);
+    analyzer._resetBackendCacheForTests();
+  }
+  // With the sidecar back, the next pick separates and clears the notice.
+  assert.equal((await run('n2').outcome).ran, true);
+});
+
 // ---- vetoes that send nothing --------------------------------------------
 
 test('vetoes: nothing reaches the worker or Navidrome', async () => {

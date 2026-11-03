@@ -205,8 +205,10 @@ export const NOTICE_MESSAGES: Record<PickStemsNotice, string> = {
     + 'so no new track is separated until the hourly sweep makes room',
   'no-demucs': 'pick-time stems: on, but the analyzer has no Demucs (a light image, or the model failed to load), '
     + 'so nothing is separated',
-  'no-facets': 'pick-time stems: on, but the analyzer predates per-facet requests, so nothing is separated; '
-    + 'update the analyzer image',
+  // facetsAvailable() is null both for an image that predates the facet
+  // protocol and for no analyzer answering at all, so name both.
+  'no-facets': 'pick-time stems: on, but the analyzer is not answering or predates per-facet requests, '
+    + 'so nothing is separated; check that it is running and up to date',
   'quiet-only-env': 'pick-time stems: on, but ANALYZE_QUIET_ONLY is set, and quiet-only analysis switches '
     + 'pick-time separation off',
 };
