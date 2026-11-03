@@ -5,7 +5,7 @@ import {
   requestTitleSimilarity, resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
   asksForKindOfMusic, resolveExactName,
 } from '../src/music/request-match.js';
-import { transliterationBridges } from '../src/music/request-normalize.js';
+import { requestName, transliterationBridges } from '../src/music/request-normalize.js';
 
 test('listener requests are classified into deterministic resolver lanes', () => {
   assert.equal(classifyListenerRequest('Bohemian Rhapsody by Queen'), 'named-song-or-artist');
@@ -1123,6 +1123,79 @@ test('two Greek titles that read alike are a near title, never a match', async (
   assert.equal(result.track?.id, pain.id);
   assert.equal(result.outcome, 'substituted');
   assert.equal(result.source, 'local-fuzzy:fuzzy');
+});
+
+test('a digit outside Latin makes a value non-Latin, so it bridges', () => {
+  assert.equal(transliterationBridges('२९५', '295'), true);
+  assert.equal(requestTitleMatches('२९५', '295'), true);
+  assert.equal(requestTitleMatches('Track २', 'Track 2'), true);
+});
+
+// A Latin spelling that bridges to two titles different as written names
+// neither: "Krov" reads as both Кровь (blood) and Кров (shelter).
+const blood = { id: 'krov-blood', title: 'Кровь', artist: 'Группа А' };
+const shelter = { id: 'krov-shelter', title: 'Кров', artist: 'Группа Б' };
+
+test('a Latin spelling that bridges to one title is that title', async () => {
+  const f = fixture({ ...noServer, fuzzySearch: async () => [shelter] });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Krov'), literal: true }, { ...f.deps, text: 'play Krov' });
+  assert.equal(result.track?.id, shelter.id);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(result.source, 'local-library');
+});
+
+test('a Latin spelling that bridges to two titles is neither, and a held name lists both', async () => {
+  const f = fixture({ ...noServer, fuzzySearch: async () => [blood, shelter] });
+  const held = await resolveDirectRequest({ title: 'Krov', artist: null, search_terms: ['Krov'], scope: 'song' }, { ...f.deps, exactOnly: true });
+  assert.equal(held.track, null);
+  assert.equal(held.outcome, 'no-match');
+  assert.deepEqual(held.alternatives?.map(row => row.id).sort(), [blood.id, shelter.id].sort());
+  const literal = await resolveDirectRequest({ ...modelFreeRequest('play Krov'), literal: true }, { ...f.deps, text: 'play Krov' });
+  assert.notEqual(literal.outcome, 'matched');
+  assert.ok(![blood.id, shelter.id].includes(literal.track?.id ?? ''), String(literal.track?.id));
+});
+
+test("a two-title bridge counts the library's candidates when the server finds only one", async () => {
+  const f = fixture({
+    ...noServer,
+    searchPage: async query => ({ songs: requestName(query) === 'krov' ? [blood] : [], rawCount: requestName(query) === 'krov' ? 1 : 0 }),
+    fuzzySearch: async () => [blood, shelter],
+  });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Krov'), literal: true }, { ...f.deps, text: 'play Krov' });
+  assert.notEqual(result.outcome, 'matched');
+});
+
+test('a two-title bridge with one on cooldown never matches the other', async () => {
+  // Decided before eligibility: the one left can still go out as a near
+  // title, labelled an alternative, never as the name.
+  const f = fixture({ ...noServer, fuzzySearch: async () => [blood, shelter] });
+  f.deps.recentIds.add(blood.id);
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Krov'), literal: true }, { ...f.deps, text: 'play Krov' });
+  assert.notEqual(result.outcome, 'matched');
+  assert.notEqual(result.outcome, 'cooldown');
+});
+
+test("a two-title bridge with both on cooldown is refused by nobody's name", async () => {
+  const f = fixture({ ...noServer, fuzzySearch: async () => [blood, shelter] });
+  f.deps.recentIds.add(blood.id);
+  f.deps.recentIds.add(shelter.id);
+  const result = await resolveDirectRequest({ title: 'Krov', artist: null, search_terms: ['Krov'], scope: 'song' }, { ...f.deps, exactOnly: true });
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(result.track, null);
+  assert.equal(result.alternatives?.length, 2);
+});
+
+test('a Latin act name that bridges to two acts is neither', async () => {
+  // A search that folds scripts answers "Krov" with both acts' tracks.
+  const one = { id: 'act-blood', title: 'Песня', artist: 'Кровь' };
+  const two = { id: 'act-shelter', title: 'Вечер', artist: 'Кров' };
+  const f = fixture({ ...noServer, searchPage: async () => ({ songs: [one, two], rawCount: 2 }) });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Krov'), literal: true }, { ...f.deps, text: 'play Krov' });
+  assert.notEqual(result.outcome, 'matched');
+  const single = fixture({ ...noServer, searchPage: async () => ({ songs: [one], rawCount: 1 }) });
+  const control = await resolveDirectRequest({ ...modelFreeRequest('play Krov'), literal: true }, { ...single.deps, text: 'play Krov' });
+  assert.equal(control.track?.id, one.id);
+  assert.equal(control.outcome, 'matched');
 });
 
 test('ambiguous fuzzy title matching returns alternatives instead of guessing', async () => {

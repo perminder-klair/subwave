@@ -136,7 +136,9 @@ export function transliteratedRequestName(value: unknown): string {
 //   letters on top of that: سيف (sword) and صيف (summer) are both "syf".
 // The other scripts bridge Latin although some letters merge on the way, so a
 // Latin "Krov" is both Кровь and Кров: that cross-script homograph is the
-// accepted cost of "Кино" being "Kino". Traditional and simplified Chinese are
+// accepted cost of "Кино" being "Kino". When the library holds both, neither
+// is the name: they are near titles, listed for the listener to choose
+// (request-match.ts select). Traditional and simplified Chinese are
 // one character mapping apart, but no table of it ships here, so 後來 meets
 // 后来 only through pinyin, as a near title.
 const LOSSY_TRANSLITERATION = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Thai}\p{scx=Lao}\p{scx=Myanmar}\p{scx=Arabic}\p{scx=Hebrew}\p{scx=Syriac}]/u;

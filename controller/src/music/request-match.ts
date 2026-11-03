@@ -537,9 +537,11 @@ function artistIdentityVariants(value: unknown, other: unknown): string[] {
     .filter(Boolean);
 }
 
-// Whether two credits name one act, in the spellings above. A credit with no
-// letters or digits is compared as a whole name instead.
-function sameActName(want: string, credit: string): boolean {
+// Whether two credits name one act, in the spellings above, or only as written
+// (`same`, develop's own key). A credit with no letters or digits is compared
+// as a whole name instead.
+function sameActName(want: string, credit: string, scripts: TitleScripts = 'across'): boolean {
+  if (scripts === 'same') return artistIdentityKey(want) === artistIdentityKey(credit);
   const wanted = artistIdentityVariants(want, credit);
   const credited = artistIdentityVariants(credit, want);
   if (!wanted.length || !credited.length) return nameKey(want) === nameKey(credit);
@@ -604,11 +606,19 @@ function candidateArtistCredits(song: RequestSong): string[] {
   return credits.flatMap(candidateArtistParts);
 }
 
-export function requestCandidateArtistMatches(want: unknown, song: RequestSong): boolean {
+export function requestCandidateArtistMatches(want: unknown, song: RequestSong, scripts: TitleScripts = 'across'): boolean {
   const wanted = candidateArtistValues(want);
   if (!wanted.length) return true;
   const credits = candidateArtistCredits(song).flatMap(candidateArtistValues);
-  return wanted.some(value => credits.some(credit => sameActName(value, credit)));
+  return wanted.some(value => credits.some(credit => sameActName(value, credit, scripts)));
+}
+
+// A song's acts that a bridge alone makes the one asked for, as written.
+function bridgedActNames(want: unknown, song: RequestSong): string[] {
+  const wanted = candidateArtistValues(want);
+  return candidateArtistCredits(song).flatMap(candidateArtistValues)
+    .filter(credit => wanted.some(value => sameActName(value, credit) && !sameActName(value, credit, 'same')))
+    .map(credit => artistIdentityKey(credit));
 }
 
 function requestCandidateArtistSimilarity(want: unknown, song: RequestSong): number {
@@ -1485,8 +1495,33 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   };
   let held: { track: RequestSong; source: string } | null = null;
   let heldByShow: { track: RequestSong; source: string } | null = null;
-  const select = (songs: RequestSong[], source: string, exact = true, scripts: TitleScripts = 'across'): RequestSelection | null => {
-    const found = unique(songs).filter(s => constraints(s, source) && (!exact || identity(s, scripts)));
+  // A bridge is the name only when everything it reaches is one name as
+  // written. "Krov" with both Кровь and Кров in the library names neither, so
+  // neither is exact: the near-title step lists them both, as it does 雨 and
+  // 鱼 for 语, and nothing is drawn or refused by one of their names. Several
+  // tracks under one written title (Кровь by two acts) are still one name.
+  // Judged over every candidate the bridge reaches (`judged`), before any
+  // condition, show filter or eligibility, so one on cooldown never leaves the
+  // other standing alone.
+  const bridgedTitle = (song: RequestSong) => title && !requestTitleMatches(title, song.title, 'same')
+    ? titleIdentityKey(undecorated(song.title, [...FEATURED_CREDIT, ...EDITION])) : null;
+  const bridgedActs = (song: RequestSong) => resolvedArtistName && !requestCandidateArtistMatches(resolvedArtistName, song, 'same')
+    ? bridgedActNames(resolvedArtistName, song) : [];
+  const ambiguousBridges = (songs: RequestSong[], scripts: TitleScripts) => {
+    const titles = new Set<string>();
+    const acts = new Set<string>();
+    for (const song of unique(songs).filter(s => identity(s, scripts))) {
+      const reached = bridgedTitle(song);
+      if (reached) titles.add(reached);
+      for (const act of bridgedActs(song)) acts.add(act);
+    }
+    return { titles: titles.size > 1, acts: acts.size > 1 };
+  };
+  const select = (songs: RequestSong[], source: string, exact = true, scripts: TitleScripts = 'across', judged: RequestSong[] = songs): RequestSelection | null => {
+    const tie = exact ? ambiguousBridges(judged, scripts) : { titles: false, acts: false };
+    const isName = (s: RequestSong) => identity(s, scripts)
+      && !(tie.titles && bridgedTitle(s)) && !(tie.acts && bridgedActs(s).length);
+    const found = unique(songs).filter(s => constraints(s, source) && (!exact || isName(s)));
     const pool = deps.heldBack ? found.filter(s => !deps.heldBack!(s)) : found;
     const track = choose(pool.filter(eligible));
     const named = exact && !standingIn;
@@ -1675,7 +1710,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       // ("play Кино", the band) outranks another act's title only a
       // transliteration makes equal (Flora's "Kino"). Within one script, or
       // through a lossy reading, nothing is equal here: Брат is not Брать.
-      const localExact = select(searched, 'search-transliterated') || select(local, 'local-library') || refusal();
+      // Both judge a bridge over the server's and the library's candidates.
+      const bridged = [...searched, ...local];
+      const localExact = select(searched, 'search-transliterated', true, 'across', bridged)
+        || select(local, 'local-library', true, 'across', bridged) || refusal();
       if (localExact) return localExact;
       const fuzzy = selectFuzzy(searched, 'search') || (localAsked ? selectFuzzy(local, 'local-fuzzy') : null);
       if (fuzzy) return fuzzy;
