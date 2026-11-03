@@ -630,6 +630,8 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   let interpreterAnswered = false;
   let modelNamed = false;
   let modelReadGenre = false;
+  // Search terms and nothing else: no title, artist, album or attribute.
+  let modelReadTermsOnly = false;
   let readingBehind: typeof matched | null = null;
   if (budget.requestsAllowed()) {
     try {
@@ -653,6 +655,8 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       modelNamed = Boolean(readTitle
         || (reading.artist?.trim() && (!reading.title || nameSearchTerms(interpreted).length)));
       modelReadGenre = Boolean(interpreted.genre);
+      modelReadTermsOnly = Boolean(nameSearchTerms(interpreted).length) && ![interpreted.title, interpreted.artist,
+        interpreted.album, interpreted.mood, interpreted.genre, interpreted.language].some(value => value?.trim());
       // A comma, dash or "by" is a parse for the catalogue to try, so a reading
       // with no name takes the request off it. Behind one, the listener's own
       // wording goes first, since a track those words prove outranks a model's
@@ -953,7 +957,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // does behind a title-only one: "Vertigo by Queen" read as ["Vertigo",
   // "Queen"] finds U2's "Vertigo", which is an alternative, never a match. The
   // same track goes out; only its label changes.
-  if (selection.outcome === 'matched' && selection.track && interpreterAnswered && !modelNamed
+  if (selection.outcome === 'matched' && selection.track && modelReadTermsOnly
     && explicitNamedRequest && !literal.reversible && !carriesListenerCredit(literal.artist!, selection.track)) {
     selection = { ...selection, outcome: 'substituted' };
   }

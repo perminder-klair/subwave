@@ -427,6 +427,16 @@ test('"by" keeps its credit behind a reading of search terms alone', async () =>
   assert.equal(hit.outcome, 'matched');
 });
 
+test('an attribute reading of words holding "by" keeps its match', async () => {
+  // "rock songs by candlelight" parses as a pair, but the reading is a genre,
+  // so no credit was dropped and the genre's track is a match.
+  genreSongs = [exact];
+  modelOutput = { kind: 'track', title: null, artist: null, genre: 'Rock', search_terms: [], scope: 'song' };
+  const result = await submit('rock songs by candlelight');
+  assert.equal(result.track?.title, exact.title);
+  assert.equal(result.outcome, 'matched');
+});
+
 test('a blocked local candidate is no near title, and nothing names it', async () => {
   const library = await import('../src/music/library.js');
   const db = await import('../src/music/library-db.js');
