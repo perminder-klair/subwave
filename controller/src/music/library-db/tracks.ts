@@ -23,6 +23,22 @@ export function getTrack(id: string): TrackRecord | null {
   return row ? rowToTrack(row) : null;
 }
 
+// Whether a row exists for this id, without reading the row itself.
+export function trackExists(id: string): boolean {
+  return requireDb().prepare('SELECT 1 FROM tracks WHERE id = ?').get(id) !== undefined;
+}
+
+// Every track's name fields and length, for matching a stored snapshot back to
+// its row after a file comes back under a new id (music/heart-follow.ts). A full
+// scan, about a second on a 70k-track library: run it only when something is
+// owed a match, never on a read path.
+export function trackNameRows(): Array<{ id: string; title: string | null; artist: string | null; album: string | null; durationSec: number | null }> {
+  return (requireDb()
+    .prepare('SELECT id, title, artist, album, duration_sec FROM tracks')
+    .all() as Array<{ id: string; title: string | null; artist: string | null; album: string | null; duration_sec: number | null }>)
+    .map((r) => ({ id: r.id, title: r.title, artist: r.artist, album: r.album, durationSec: r.duration_sec }));
+}
+
 export function getTaggedAt(id: string): string | null {
   const row = requireDb()
     .prepare<[string], Pick<TrackRow, 'tagged_at'>>('SELECT tagged_at FROM tracks WHERE id = ?')

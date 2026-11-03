@@ -159,6 +159,17 @@ export async function remapTrackIds(trackMap: ReadonlyMap<string, string>): Prom
     }
     if (touched) changed++;
   }
+  // Two old ids can land on one new id (hearts on two copies of a re-imported
+  // song, music/heart-follow.ts): keep one operator heart per song, so
+  // operatorLike stays idempotent and an unlike leaves no second heart behind.
+  // Listener likes all stay, each its own airing.
+  const operatorSongs = new Set<string>();
+  records = records.filter((r) => {
+    if (!isOperator(r)) return true;
+    if (operatorSongs.has(r.songId)) return false;
+    operatorSongs.add(r.songId);
+    return true;
+  });
   // Retry the write even when an earlier attempt already changed the cache.
   await flushStrict();
   return changed;
