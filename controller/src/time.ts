@@ -117,8 +117,11 @@ export function isStationHourStart(date = new Date()) {
 // the roll by this. Zone offsets are whole quarter hours, so process :00 lands
 // on station :00, :15, :30 or :45, and the hourly row's ten-minute window,
 // still on process minutes, closes by station :54, inside the station hour
-// whose :00 rolled. A DST fall-back hour repeats its key, and its second roll
-// replaces the first.
+// whose :00 rolled. A whole-hour DST fall-back repeats its key, and its second
+// roll replaces the first. The exception is a zone whose DST shift is 30 or
+// 45 minutes (Lord Howe, Chatham). There a transition hour can have no station
+// :00 at all, so it gets no roll, and its hourly row pairs with the previous
+// hour's roll.
 export function stationHourKey(date = new Date()) {
   const { year, month, day, hour } = zonedParts(date);
   return `${year}-${month}-${day}-${hour}`;
