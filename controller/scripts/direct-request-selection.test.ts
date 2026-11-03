@@ -1008,6 +1008,17 @@ test("the server's transliterated query never feeds the first exact-title rung",
   assert.equal(result.outcome, 'matched');
 });
 
+test('a search that folds scripts itself still puts the act ahead of a title in another script', async () => {
+  // A backend may answer "Кино" with Latin rows. The first rung takes only a
+  // title in the listener's own script, so the band comes before Flora's "Kino".
+  const flora = { id: 'kino', title: 'Kino', artist: 'Flora' };
+  const blood = { id: 'gruppa-krovi', title: 'Gruppa Krovi', artist: 'Kino' };
+  const f = fixture({ ...noServer, searchPage: async () => ({ songs: [flora, blood], rawCount: 2 }) });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Кино'), literal: true }, { ...f.deps, text: 'play Кино' });
+  assert.equal(result.track?.id, blood.id);
+  assert.equal(result.outcome, 'matched');
+});
+
 test('an act credited in Latin outranks a Latin title the transliterated query also finds', async () => {
   // "play Кино" with the band tagged "Kino": the server can't resolve the
   // Cyrillic act, and its "kino" query returns both the band and Flora's
