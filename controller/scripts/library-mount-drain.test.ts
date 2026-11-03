@@ -133,9 +133,11 @@ test('a pick the mixer says it can read goes out local, with no probe to chase',
 
 test('a pick the mixer\'s copy lacks streams with a probe, though the mount is proven', async () => {
   const OTHER = 'Other/Album/01 - Elsewhere.flac';
+  // Proven first, on SONG: the walk's sample is whichever file readdir lists
+  // last, and on ext4 that would be the file the mixer lacks.
+  assert.equal((await proveLibraryMount())?.sample, join(root, SONG));
   put(join(root, OTHER));
   missing.add(join(root, OTHER));
-  await proveLibraryMount();
   const item = pick(OTHER);
   q.upcoming = [item];
   await queue.drainToLiquidsoap(true);
