@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, explicitRequestAttribute, isFramedTitleOnlyRequest, isLyricOrFilmDescription, looksLikeLyricRequest, modelFreeRequest, requestedTitle, rankRequestCandidates, repairRequestMatch, requestArtistMatches, requestCandidateArtistMatches, requestReleaseRank, requestTitleMatches,
-  resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
+  requestTitleSimilarity, resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
   asksForKindOfMusic, resolveExactName,
 } from '../src/music/request-match.js';
 
@@ -914,6 +914,114 @@ test('an act named in its own script outranks a title only a transliteration mak
   assert.equal(result.track?.id, blood.id);
   assert.equal(result.outcome, 'matched');
   assert.equal(result.source, 'artist-albums');
+});
+
+// A transliteration counts as the name only when it is lossless
+// (request-normalize.ts lossyTransliteration). Han reads as toneless pinyin, so
+// 鱼 (fish) and 雨 (rain) are both "Yu".
+const noServer = { searchPage: async () => ({ songs: [], rawCount: 0 }), resolveArtist: async () => null };
+
+test('a title equal only through a lossy transliteration is a near title, never a match', async () => {
+  const rain = { id: 'rain', title: '雨', artist: '张学友' };
+  const f = fixture({ ...noServer, fuzzySearch: async () => [rain] });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play 鱼'), literal: true }, { ...f.deps, text: 'play 鱼' });
+  assert.equal(result.track?.id, rain.id);
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(result.source, 'local-fuzzy:fuzzy');
+});
+
+test("a lossy homophone on cooldown is refused by nobody's name", async () => {
+  const rain = { id: 'rain', title: '雨', artist: '张学友' };
+  const f = fixture({ ...noServer, fuzzySearch: async () => [rain] });
+  f.deps.recentIds.add(rain.id);
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play 鱼'), literal: true }, { ...f.deps, text: 'play 鱼' });
+  assert.notEqual(result.outcome, 'cooldown');
+  assert.notEqual(result.track?.id, rain.id);
+});
+
+test('a Latin title the server finds through a lossy query is a near title', async () => {
+  const yu = { id: 'yu-latin', title: 'Yu', artist: 'Someone' };
+  const f = fixture({ ...noServer, searchPage: async query => ({ songs: query === 'yu' ? [yu] : [], rawCount: query === 'yu' ? 1 : 0 }) });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play 鱼'), literal: true }, { ...f.deps, text: 'play 鱼' });
+  assert.equal(result.track?.id, yu.id);
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(result.source, 'search:fuzzy');
+});
+
+test('traditional and simplified Chinese meet only as a near title, with no character table', async () => {
+  const later = { id: 'houlai', title: '后来', artist: '刘若英' };
+  const f = fixture({ ...noServer, fuzzySearch: async () => [later] });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play 後來'), literal: true }, { ...f.deps, text: 'play 後來' });
+  assert.equal(result.track?.id, later.id);
+  assert.equal(result.outcome, 'substituted');
+});
+
+test('the server finds a title in another script through its lossless transliterated query', async () => {
+  const star = { id: 'zvezda', title: 'Zvezda', artist: 'Someone' };
+  const f = fixture({ ...noServer, searchPage: async query => ({ songs: query === 'zvezda' ? [star] : [], rawCount: query === 'zvezda' ? 1 : 0 }) });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Звезда'), literal: true }, { ...f.deps, text: 'play Звезда' });
+  assert.equal(result.track?.id, star.id);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(result.source, 'search-transliterated');
+});
+
+test('a title a lossless transliteration makes equal is refused by name on cooldown', async () => {
+  // "Zvezdy" is a near title that could stand in, but the asked-for
+  // recording is "Zvezda", and it is on cooldown.
+  const star = { id: 'zvezda', title: 'Zvezda', artist: 'Someone' };
+  const near = { id: 'zvezdy', title: 'Zvezdy', artist: 'Someone Else' };
+  const f = fixture({ ...noServer, fuzzySearch: async () => [star, near] });
+  f.deps.recentIds.add(star.id);
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Звезда'), literal: true }, { ...f.deps, text: 'play Звезда' });
+  assert.equal(result.track?.id, star.id);
+  assert.equal(result.outcome, 'cooldown');
+  assert.equal(result.source, 'local-library');
+});
+
+test('only a lossless transliteration makes two titles or two acts the same', () => {
+  assert.equal(requestTitleMatches('Звезда', 'Zvezda'), true);
+  assert.equal(requestTitleMatches('Звезда', 'Zvezda', 'same'), false);
+  assert.equal(requestTitleMatches('鱼', '雨'), false);
+  assert.equal(requestTitleMatches('楓', 'Feng'), false);
+  assert.equal(requestTitleMatches('ゆ', 'ユー'), false);
+  assert.equal(requestTitleMatches('ใกล้', 'ไกล'), false);
+  assert.equal(requestTitleMatches('雨', '雨', 'same'), true);
+  assert.equal(requestArtistMatches('Кино', { id: 'band', artist: 'Kino' }), true);
+  assert.equal(requestArtistMatches('周杰伦', { id: 'jay', artist: 'Zhou Jie Lun' }), false);
+  // A lossy pair is still a near title, offered below any exact name.
+  const homophone = requestTitleSimilarity('鱼', '雨');
+  assert.ok(homophone < 1 && homophone >= 0.85, String(homophone));
+  assert.equal(requestTitleSimilarity('Звезда', 'Zvezda'), 1);
+});
+
+test("the server's transliterated query never feeds the first exact-title rung", async () => {
+  // Only the "kino" query found anything, a Cyrillic title among it. A hit
+  // that query alone found waits until after the act.
+  const flora = { id: 'kino-cyrillic', title: 'Кино', artist: 'Flora' };
+  const blood = { id: 'gruppa-krovi', title: 'Gruppa Krovi', artist: 'Kino' };
+  const f = fixture({
+    ...noServer,
+    searchPage: async query => ({ songs: query === 'kino' ? [flora, blood] : [], rawCount: query === 'kino' ? 2 : 0 }),
+  });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Кино'), literal: true }, { ...f.deps, text: 'play Кино' });
+  assert.equal(result.track?.id, blood.id);
+  assert.equal(result.outcome, 'matched');
+});
+
+test('an act credited in Latin outranks a Latin title the transliterated query also finds', async () => {
+  // "play Кино" with the band tagged "Kino": the server can't resolve the
+  // Cyrillic act, and its "kino" query returns both the band and Flora's
+  // "Kino". The act comes first (the verifier's finding 4).
+  const flora = { id: 'kino', title: 'Kino', artist: 'Flora' };
+  const blood = { id: 'gruppa-krovi', title: 'Gruppa Krovi', artist: 'Kino' };
+  const f = fixture({
+    ...noServer,
+    searchPage: async query => ({ songs: query === 'kino' ? [flora, blood] : [], rawCount: query === 'kino' ? 2 : 0 }),
+    fuzzySearch: async () => [flora],
+  });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Кино'), literal: true }, { ...f.deps, text: 'play Кино' });
+  assert.equal(result.track?.id, blood.id);
+  assert.equal(result.outcome, 'matched');
 });
 
 test('ambiguous fuzzy title matching returns alternatives instead of guessing', async () => {

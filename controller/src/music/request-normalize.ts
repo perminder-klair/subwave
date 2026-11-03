@@ -107,11 +107,45 @@ export function transliteratedRequestName(value: unknown): string {
   }
 }
 
+// The scripts whose transliteration drops what tells two words apart, so it is
+// a near name, never the name. This is the one list; every identity check asks
+// lossyTransliteration().
+// - Han, so Chinese and Japanese kanji, reads as toneless pinyin: 鱼 (fish) and
+//   雨 (rain) are both "yu", 楓 and 風 both "feng". 88,572 characters read as
+//   670 syllables.
+// - Japanese kana drop the long vowel and the small kana: ゆ and ユー are both
+//   "yu", きって and きつて both "kitute".
+// - Thai, Lao and Myanmar drop their tones: ใกล้ (near) and ไกล (far) are both
+//   "aikl".
+// - Arabic, Hebrew and Syriac write no vowels, and their transliteration merges
+//   letters on top of that: سيف (sword) and صيف (summer) are both "syf".
+// Cyrillic, Greek, the Indic scripts, Hangul and the rest map letter for
+// letter. They merge a few pairs, as Cyrillic does е and э, and still count:
+// "Кино" is "Kino". Traditional and simplified Chinese are one character
+// mapping apart, but no table of it ships here, so 後來 meets 后来 only
+// through pinyin, as a near title.
+const LOSSY_TRANSLITERATION = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Thai}\p{scx=Lao}\p{scx=Myanmar}\p{scx=Arabic}\p{scx=Hebrew}\p{scx=Syriac}]/u;
+
+export function lossyTransliteration(value: unknown): boolean {
+  return LOSSY_TRANSLITERATION.test(String(value ?? ''));
+}
+
+// Every spelling a value can be searched under, its lossy transliteration too.
 export function requestNameVariants(value: unknown): string[] {
   const original = requestName(value);
   const translit = transliteratedRequestName(value);
   return [...new Set([original, translit].filter(Boolean))];
 }
+
+// The spellings that are the value itself: the transliteration only when it is
+// lossless.
+export function requestIdentityVariants(value: unknown): string[] {
+  return lossyTransliteration(value) ? [requestName(value)].filter(Boolean) : requestNameVariants(value);
+}
+
+// What a title equal only through a lossy transliteration scores: a near
+// title, below any exact name, so it can be offered but never matched.
+export const LOSSY_READING_SIMILARITY = 0.9;
 
 export function resolveLanguageCode(value: unknown): string | undefined {
   const names = requestNameVariants(value);
@@ -252,13 +286,21 @@ function levenshtein(a: string, b: string): number {
   return previous[b.length]!;
 }
 
+// Each spelling, and whether it came through a lossy transliteration.
+function similarityVariants(value: unknown): Array<{ name: string; lossy: boolean }> {
+  const identity = new Set(requestIdentityVariants(value));
+  return requestNameVariants(value).map(name => ({ name, lossy: !identity.has(name) }));
+}
+
 export function requestTextSimilarity(want: unknown, got: unknown): number {
-  const wanted = requestNameVariants(want);
-  const actual = requestNameVariants(got);
+  const wanted = similarityVariants(want);
+  const actual = similarityVariants(got);
   if (!wanted.length || !actual.length) return 0;
   let best = 0;
-  for (const left of wanted) for (const right of actual) {
-    if (left === right) best = Math.max(best, 1);
+  for (const { name: left, lossy: leftLossy } of wanted) for (const { name: right, lossy: rightLossy } of actual) {
+    // A pair met only through a lossy transliteration is a near name at best.
+    const ceiling = leftLossy || rightLossy ? LOSSY_READING_SIMILARITY : 1;
+    if (left === right) best = Math.max(best, ceiling);
     const leftTokens = new Set(left.split(' ').filter(Boolean));
     const rightTokens = new Set(right.split(' ').filter(Boolean));
     const overlap = [...leftTokens].filter(token => rightTokens.has(token)).length;
@@ -269,7 +311,7 @@ export function requestTextSimilarity(want: unknown, got: unknown): number {
     // edit score is also important for a single speech-recognition typo in a
     // longer title, where one misspelled token would otherwise dilute an
     // otherwise high-confidence identity.
-    best = Math.max(best, tokenScore * 0.45 + editScore * 0.55, editScore);
+    best = Math.max(best, ceiling * Math.max(tokenScore * 0.45 + editScore * 0.55, editScore));
   }
   return Math.max(0, Math.min(1, best));
 }

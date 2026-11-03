@@ -5,7 +5,9 @@ import {
   languageTerms,
   requestName,
   requestNameVariants,
+  requestIdentityVariants,
   requestNameWithin,
+  transliteratedRequestName,
   requestTextSimilarity,
   languageDisplayName,
   resolveLanguageCode,
@@ -525,8 +527,10 @@ function artistIdentityKey(value: unknown): string {
   return requestName(key).replace(/^the (?=\S)/, '') || key;
 }
 
+// An act's name in any lossless spelling ("Кино" is "Kino"), never through a
+// lossy transliteration (lossyTransliteration).
 function artistIdentityVariants(value: unknown): string[] {
-  return requestNameVariants(value)
+  return requestIdentityVariants(value)
     .map(key => key.replace(/^the (?=\S)/, '').trim())
     .filter(Boolean);
 }
@@ -650,17 +654,23 @@ function undecorated(value: unknown, patterns: RegExp[]): string {
   return requestName(title);
 }
 
-export function requestTitleMatches(want: unknown, got: unknown): boolean {
+// `same` compares the titles as written, so a title in another script never
+// counts; `lossless` also lets a lossless transliteration make two titles
+// equal ("Zvezda" is "Звезда"). A lossy one never does: 鱼 is not 雨.
+export type TitleScripts = 'same' | 'lossless';
+
+export function requestTitleMatches(want: unknown, got: unknown, scripts: TitleScripts = 'lossless'): boolean {
   // Names such as "?" and "!!!" are real identities, not two empty keys.
   if (!requestName(want) || !requestName(got)) return nameKey(want) === nameKey(got);
-  const wantKeys = requestNameVariants(want).map(titleIdentityKey);
-  const gotKeys = requestNameVariants(got).map(titleIdentityKey);
+  const variants = (value: unknown) => (scripts === 'same' ? [requestName(value)] : requestIdentityVariants(value))
+    .filter(Boolean).map(titleIdentityKey);
+  const wantKeys = variants(want);
+  const gotKeys = variants(got);
   if (wantKeys.some(key => gotKeys.includes(key))) return true;
   const wanted = undecorated(want, FEATURED_CREDIT);
   const edition = undecorated(want, [...FEATURED_CREDIT, ...EDITION]) !== wanted;
   const gotTitle = undecorated(got, edition ? FEATURED_CREDIT : [...FEATURED_CREDIT, ...EDITION]);
-  return requestNameVariants(wanted).map(titleIdentityKey)
-    .some(key => requestNameVariants(gotTitle).map(titleIdentityKey).includes(key));
+  return variants(wanted).some(key => variants(gotTitle).includes(key));
 }
 
 export function requestTitleSimilarity(want: unknown, got: unknown): number {
@@ -1092,6 +1102,13 @@ export function requestedRecording(text: string | null | undefined): RequestedRe
   };
 }
 
+// Whether a song carries the credit a listener wrote after "by": the act, or a
+// library credit heading those words with only framing after it ("Queen
+// please, it's for my mum"), as requestedRecording accepts it.
+export function carriesListenerCredit(credit: string, song: RequestSong): boolean {
+  return requestArtistMatches(credit, song) || creditKeys(song).some(key => headsLiteral(credit, key));
+}
+
 // A model reply repaired against the literal reading of the same words.
 export function repairRequestMatch(match: RequestMatch, text: string): RequestMatch {
   if (match.kind === 'chat') return match;
@@ -1329,7 +1346,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   const contextProven = (song: RequestSong) => !match.releaseContext
     || title === match.releaseContext.wholeTitle
     || releaseContextMatches(match.releaseContext, song);
-  const identity = (song: RequestSong) => (!title || requestTitleMatches(title, song.title))
+  const identity = (song: RequestSong, scripts: TitleScripts = 'lossless') => (!title || requestTitleMatches(title, song.title, scripts))
     && requestCandidateArtistMatches(resolvedArtistName, song)
     && (!match.album || requestName(song.album) === requestName(match.album))
     && contextProven(song);
@@ -1438,8 +1455,8 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   };
   let held: { track: RequestSong; source: string } | null = null;
   let heldByShow: { track: RequestSong; source: string } | null = null;
-  const select = (songs: RequestSong[], source: string, exact = true): RequestSelection | null => {
-    const found = unique(songs).filter(s => constraints(s, source) && (!exact || identity(s)));
+  const select = (songs: RequestSong[], source: string, exact = true, scripts: TitleScripts = 'lossless'): RequestSelection | null => {
+    const found = unique(songs).filter(s => constraints(s, source) && (!exact || identity(s, scripts)));
     const pool = deps.heldBack ? found.filter(s => !deps.heldBack!(s)) : found;
     const track = choose(pool.filter(eligible));
     const named = exact && !standingIn;
@@ -1524,6 +1541,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     standingIn = true;
   }
 
+  // By search term, the hits only its transliterated query found. Those never
+  // stand as a same-script exact title: the act named in the listener's own
+  // script comes first ("play Кино" is the band Kino, not Flora's "Kino").
+  const transliteratedOnly = new Map<string, Set<string>>();
   const search = async (term: string) => {
     if (deps.searchedFor && requestName(term) === requestName(deps.searchedFor.term)) return deps.searchedFor.songs;
     const found: RequestSong[] = [];
@@ -1534,31 +1555,46 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       ...requestNameVariants(term),
       ...(tokens.length > 1 ? [tokens.sort((a, b) => b.length - a.length)[0]] : []),
     ].filter(Boolean))].filter(query => !primaryQueries.includes(query)).slice(0, 4);
+    const crossScriptQuery = transliteratedRequestName(term);
+    const sameScriptIds = new Set<string>();
+    const crossScriptIds = new Set<string>();
     // Preserve the normal catalogue query and its bounded page budget. Extra
     // transliteration/token queries are only a fallback after the primary
     // spelling produced no rows. This prevents a single miss from multiplying
     // every normal request into several full pagination walks.
     const queryGroups = [primaryQueries, fallbackQueries].filter(group => group.length);
     // Bounded, deterministic pages. rawCount includes filtered/blocked rows.
-    for (const queries of queryGroups) {
+    for (const [group, queries] of queryGroups.entries()) {
       const errorsBefore = errors.length;
+      // The primary spellings are the listener's own script, so only a title
+      // in it ends their walk.
+      const scripts: TitleScripts = group === 0 ? 'same' : 'lossless';
+      const exactFound = () => found.some(s => identity(s, scripts) && constraints(s, 'search') && (Boolean(title) || eligible(s)));
       for (const query of queries) {
+        const viaTransliteration = query === crossScriptQuery && crossScriptQuery !== normalized;
         for (let songOffset = 0; songOffset < 100; songOffset += 25) {
     const page = await safe('search', () => catalog.searchPage(query, { songCount: 25, songOffset, signal: deps.signal }), { songs: [], rawCount: 0 });
           found.push(...page.songs);
-          if (found.some(s => identity(s) && constraints(s, 'search') && (Boolean(title) || eligible(s))) || page.rawCount < 25) break;
+          for (const song of page.songs) if (song?.id) (viaTransliteration ? crossScriptIds : sameScriptIds).add(song.id);
+          if (exactFound() || page.rawCount < 25) break;
         }
-        if (found.some(s => identity(s) && constraints(s, 'search') && (Boolean(title) || eligible(s)))) break;
+        if (exactFound()) break;
       }
       if (found.length || errors.length > errorsBefore) break;
     }
+    transliteratedOnly.set(normalized, new Set([...crossScriptIds].filter(id => !sameScriptIds.has(id))));
     return unique(found);
   };
   let searched: RequestSong[] = [];
   const artistAlternatives: RequestSong[] = [];
   if (title) {
     searched = await search(title);
-      const exact = select(searched, 'search');
+      // The order for a bare string: a title in the listener's own script, the
+      // act (in that script or through a lossless transliteration), a title only
+      // a lossless transliteration makes equal, then any near title, a lossy
+      // transliteration's included (request-normalize.ts lossyTransliteration).
+      const crossScriptOnly = transliteratedOnly.get(requestName(title));
+      const exact = select(searched.filter(song => !crossScriptOnly?.has(song.id)), 'search', true, 'same');
       if (exact) return exact;
       const heldExact = refusal();
       if (heldExact) return heldExact;
@@ -1600,12 +1636,14 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       const local = localAsked
         ? await safe('local fuzzy search', () => catalog.fuzzySearch!(title!, { signal: deps.signal }), [])
         : [];
-      // The server's search can't cross scripts, so a title the local library
-      // holds exactly, through the request's transliterations ("Kino" is
-      // "Кино"), is still an exact title, and a match. It comes after the exact
-      // artist: an act named in its own script ("play Кино", the band) outranks
-      // another act's title only a transliteration makes equal (Flora's "Kino").
-      const localExact = select(local, 'local-library') || refusal();
+      // A title equal through a lossless transliteration ("Zvezda" for
+      // "Звезда") is still an exact title, and a match: from the server's
+      // transliterated query, or from the local library, whose candidates also
+      // hold any same-script exact title the server's 100-row walk missed. It
+      // comes after the act, so an act named in its own script ("play Кино",
+      // the band) outranks another act's title only a transliteration makes
+      // equal (Flora's "Kino"). A lossy transliteration is never equal here.
+      const localExact = select(searched, 'search-transliterated') || select(local, 'local-library') || refusal();
       if (localExact) return localExact;
       const fuzzy = selectFuzzy(searched, 'search') || (localAsked ? selectFuzzy(local, 'local-fuzzy') : null);
       if (fuzzy) return fuzzy;

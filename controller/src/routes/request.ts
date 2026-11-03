@@ -28,7 +28,7 @@ import {
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
-import { asksForKindOfMusic, classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, leadingQuotedName, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestTitleSimilarity, resolveDirectRequest, resolveExactName } from '../music/request-match.js';
+import { asksForKindOfMusic, carriesListenerCredit, classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, leadingQuotedName, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestTitleSimilarity, resolveDirectRequest, resolveExactName } from '../music/request-match.js';
 import { canonicalLanguage } from '../music/request-normalize.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
@@ -948,6 +948,14 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     recordReading();
     selection = await resolveReading();
     if (!interpreterAnswered && selection.outcome === 'matched') selection = { ...selection, outcome: 'substituted' };
+  }
+  // "by" keeps its credit behind a reading of search terms alone too, as it
+  // does behind a title-only one: "Vertigo by Queen" read as ["Vertigo",
+  // "Queen"] finds U2's "Vertigo", which is an alternative, never a match. The
+  // same track goes out; only its label changes.
+  if (selection.outcome === 'matched' && selection.track && interpreterAnswered && !modelNamed
+    && explicitNamedRequest && !literal.reversible && !carriesListenerCredit(literal.artist!, selection.track)) {
+    selection = { ...selection, outcome: 'substituted' };
   }
   throwIfRequestResolutionAborted(signal);
   if (exactName && selection !== exactName) selection.errors.unshift(...exactName.errors);

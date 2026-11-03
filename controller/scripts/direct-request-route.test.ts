@@ -408,6 +408,50 @@ test('a framed impossible title stays no-match instead of taking an agent vibe f
   assert.equal(agentCalls, 1, 'agentic mode tries the agent before direct fallback');
 });
 
+test('"by" keeps its credit behind a reading of search terms alone', async () => {
+  // The library has U2's Vertigo and no Queen recording of it, so it can go
+  // out, but as an alternative, never "Found a match".
+  const vertigo = { id: 'u2-vertigo', title: 'Vertigo', artist: 'U2', duration: 190 };
+  catalogueSongs = [vertigo];
+  modelOutput = { kind: 'track', title: null, artist: null, search_terms: ['Vertigo', 'Queen'], scope: 'song' };
+  const miss = await submit('play Vertigo by Queen');
+  assert.equal(miss.track?.title, 'Vertigo');
+  assert.equal(miss.track?.artist, 'U2');
+  assert.equal(miss.outcome, 'substituted');
+
+  queue.upcoming = [];
+  catalogueSongs = [filler, exact];
+  modelOutput = { kind: 'track', title: null, artist: null, search_terms: [exact.title, 'Queen'], scope: 'song' };
+  const hit = await submit(`play ${exact.title} by Queen`);
+  assert.equal(hit.track?.title, exact.title);
+  assert.equal(hit.outcome, 'matched');
+});
+
+test('a blocked local candidate is no near title, and nothing names it', async () => {
+  const library = await import('../src/music/library.js');
+  const db = await import('../src/music/library-db.js');
+  const blocklist = await import('../src/music/blocklist.js');
+  await library.load();
+  await blocklist.load();
+  db.upsertTrackMeta('lanterns-blocked', { title: 'Paper Lanterns', artist: 'Blocked Act', duration: 200 });
+  db.upsertTrackMeta('lanterne-open', { title: 'Paper Lanterne', artist: 'Open Act', duration: 200 });
+  await blocklist.add({ type: 'track', id: 'lanterns-blocked', name: 'Paper Lanterns', artist: 'Blocked Act' });
+  try {
+    catalogueSongs = [filler];
+    searchEmpty = true;
+    modelOutput = { kind: 'track', title: 'Paper Lantern', artist: null, search_terms: ['Paper Lantern'], scope: 'song' };
+    const result = await submit('play Paper Lantern');
+    // The blocked recording and the open one would tie as near titles; with
+    // the blocked one gone the open one stands in alone.
+    assert.doesNotMatch(JSON.stringify(result), /Paper Lanterns|Blocked Act/);
+    assert.equal(result.track?.title, 'Paper Lanterne');
+    assert.equal(result.outcome, 'substituted');
+  } finally {
+    await blocklist.remove('track', 'lanterns-blocked');
+    db.getDb()!.prepare("DELETE FROM tracks WHERE id IN ('lanterns-blocked', 'lanterne-open')").run();
+  }
+});
+
 test('a one-word artist remains artist-capable after a title miss', async () => {
   catalogueSongs = [filler];
   artistSongs = [exact];
