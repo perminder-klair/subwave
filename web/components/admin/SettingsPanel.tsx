@@ -59,7 +59,7 @@ import {
   useSettingsQuery,
   useStemUsageQuery,
 } from './settings/queries';
-import { fmtGb, fmtMeasured, stemBudgetImpact, usageCaveat } from './settings/stem-budget';
+import { fmtGb, fmtMeasured, pickTimeOvershoot, stemBudgetImpact, usageCaveat } from './settings/stem-budget';
 import {
   cloudSaveSnapshot, cloudSaveReadReady, rebaselineSavedPatch, reconcileSavedCloud,
   adoptServerPaths, committedReadReady, LLM_SWAP_FORM_KEYS,
@@ -133,7 +133,8 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
   // The stem cache's stored size, for the budget field's "cache used"
   // line and the lowered-budget warning. The snapshot, never a walk.
-  const stemUsage = useStemUsageQuery({ adminFetch, enabled: hydrated && !needsAuth }).data?.usage ?? null;
+  const stemUsageResponse = useStemUsageQuery({ adminFetch, enabled: hydrated && !needsAuth }).data;
+  const stemUsage = stemUsageResponse?.usage ?? null;
   const [confirmStemBudget, setConfirmStemBudget] = useState(false);
   const [commandBusy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
@@ -834,6 +835,9 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                         );
                       }
                       const impact = stemBudgetImpact(stemUsage, Number(form.transitions.stemCacheGb));
+                      // Pick-time stems runs the cache over its budget between
+                      // sweeps by design: not a fault while it stays inside that.
+                      const pickTimeOver = pickTimeOvershoot(stemUsageResponse, Number(form.transitions.stemCacheGb));
                       const at = fmtMeasured(stemUsage.measuredAt);
                       return (
                         <>
@@ -842,7 +846,14 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                             {' '}&middot; {stemUsage.dirs.toLocaleString('en-GB')} tracks
                             {at ? ` (measured ${at}${usageCaveat(stemUsage)})` : ''}
                           </div>
-                          {impact && (
+                          {pickTimeOver !== null ? (
+                            <div className="field-hint" role="status">
+                              Pick-time stems has taken the cache{' '}
+                              <span className="mono-num">{fmtGb(pickTimeOver)}</span> over this budget,
+                              as it may; the next hourly sweep trims it back, lowest stem priority
+                              first.
+                            </div>
+                          ) : impact && (
                             <div className="field-hint text-destructive" role="status">
                               This budget is below what the cache holds: the next hourly sweep
                               deletes about <strong>{fmtGb(impact.deleteBytes)}</strong>, the stems

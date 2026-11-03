@@ -143,6 +143,13 @@ export function overshootAllowanceBytes(budgetBytes: number, estTrackBytes: numb
   return Math.max(estTrackBytes, Math.min(OVERSHOOT_DIRS * estTrackBytes, OVERSHOOT_FRACTION * budgetBytes));
 }
 
+// How far over its budget pick-time stems may take the cache by design: the
+// allowance, plus the one separation admitted just under it. The Stems page
+// reads it (GET /stem-cache/usage) so that overshoot is not shown as a fault.
+export function designedOvershootBytes(budgetBytes: number, estTrackBytes: number): number {
+  return overshootAllowanceBytes(budgetBytes, estTrackBytes) + estTrackBytes;
+}
+
 // One rule for a net-new dir and for a tail added to a dir already there:
 // admitted while the cache is under budget + allowance. A separation writes one
 // dir and the runner settles it before the next one may start, so the cache
