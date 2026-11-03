@@ -1,6 +1,7 @@
 // Brave response fixtures (#623), SearXNG response fixtures and URL pins
 // (#1353). Recorded JSON keeps parser coverage tied to real provider shapes.
-// The dispatcher keeps provider and recency selection deterministic.
+// The dispatcher memo must separate recency windows for segment and picker tools,
+// and the dispatcher keeps provider selection deterministic.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -191,6 +192,24 @@ test('the pin rides alongside time_range, not instead of it', () => {
 test('a base URL with a path still resolves to /search', () => {
   const url = buildSearxngUrl({ baseUrl: 'http://searx.lan:8888/', query: 'x' });
   assert.equal(url.pathname, '/search');
+});
+
+test('dispatcher cache separates recency windows and reuses each answer', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://search.test' } });
+  const windows: Array<string | null> = [];
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    windows.push(url.searchParams.get('time_range'));
+    return new Response(JSON.stringify({ results: [{ title: 'Foo', content: `window ${windows.at(-1)}` }] }));
+  });
+  const all = await searchWeb('recency-cache-regression');
+  const week = await searchWeb('recency-cache-regression', { recency: 'week' });
+  assert.deepEqual(windows, [null, 'week']);
+  assert.notDeepEqual(all, week, 'the two windows have their own data');
+  assert.deepEqual(await searchWeb('RECENCY-CACHE-REGRESSION'), all);
+  assert.deepEqual(await searchWeb('RECENCY-CACHE-REGRESSION', { recency: 'week' }), week);
+  assert.equal(windows.length, 2, 'repeats of both windows use their cached answers');
 });
 
 test('rate limits become typed provider failures and are never cached', async t => {
