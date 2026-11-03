@@ -24,6 +24,7 @@ const settings = await import('../src/settings.js');
 const { SECRET_ENV_KEYS } = await import('../src/setup/secrets.js');
 const { capabilitiesFor, reasoningFor, REASONING_RULES, embeddingSharesChatCredential } =
   await import('../src/llm/internal/provider/capabilities.js');
+const { languageModel } = await import('../src/llm/internal/provider/registry.js');
 
 const DEFAULT_CAPS = capabilitiesFor('no-such-provider');
 
@@ -58,6 +59,15 @@ test('every provider key may be saved, and only through SECRET_ENV_KEYS', () => 
 test('every provider has a capability descriptor, generated for a fixed-endpoint gateway', () => {
   for (const p of LLM_PROVIDER_CATALOG) {
     assert.notEqual(capabilitiesFor(p.id), DEFAULT_CAPS, `${p.id} has no capability descriptor`);
+  }
+});
+
+// languageModel()'s switch falls through to Ollama, so a provider with no case
+// there would quietly build an Ollama client on localhost:11434.
+test('every provider but Ollama gets its own client from the registry', () => {
+  for (const p of LLM_PROVIDER_CATALOG) {
+    const { provider } = languageModel({ provider: p.id, model: 'x', baseUrl: 'http://127.0.0.1:1/v1' });
+    assert.equal(provider === 'ollama', p.id === 'ollama', `${p.id}: the registry built a "${provider}" model`);
   }
 });
 

@@ -47,6 +47,20 @@ export function groupSearchProviders(ids: readonly string[]): { label: string; i
   ].filter(g => g.ids.length > 0);
 }
 
+// True when a key is on file but the picked provider's searches would refuse it,
+// because it is another provider's (a Firecrawl key under Tavily, a Tavily key
+// under Firecrawl). The key reaches this page redacted, so the controller decides,
+// through keyRefusedBy: the keyed providers that would refuse it. That covers the
+// picked provider before a save. `undefined` is a controller that doesn't send
+// the field, which says nothing about the key.
+export function searchKeyIsForeign(
+  provider: string,
+  keyOnFile: boolean,
+  refusedBy: string[] | undefined,
+): boolean {
+  return keyOnFile && !!refusedBy?.includes(provider);
+}
+
 interface SearchSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
@@ -107,6 +121,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         && ((form.search.baseUrl ?? '') !== (savedSearch.baseUrl || '')
             || (form.search.searxngEngines ?? '') !== (savedSearch.searxngEngines || '')));
   const apiKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
+  const foreignKey = searchKeyIsForeign(provider, apiKeySet, data.search?.keyRefusedBy);
 
   const testApiKey = async () => {
     const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
@@ -118,7 +133,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `provider` tells the controller which endpoint to probe — the same
-        // SEARCH_API_KEY slot holds a Tavily, Brave or Keenable key.
+        // SEARCH_API_KEY slot holds a Tavily, Brave, Keenable or Firecrawl key.
         body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim(), provider }),
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
@@ -138,7 +153,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         sub={<>
           The segment director can air a single line of recent artist context between
           tracks, when the active backend returns something worth saying. DuckDuckGo
-          is free and keyless; Tavily and Brave are keyed but return full web results;
+          is free and keyless; Tavily, Brave and Firecrawl are keyed but return full web results;
           SearXNG is keyless if you self-host it; Keenable returns web results with no
           key. Switching here reroutes the next call, no restart.
         </>}
@@ -225,10 +240,27 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                   one or the other, not both.
                 </div>
               </div>
-              {/* A keyless provider isn't "missing" anything, so skip the red banner,
-                  and a key on file may be another provider's, which a prefix-gated
-                  provider ignores, so "ready to use" would overclaim. */}
-              {keyed.key !== 'optional' && <KeyStatus envVar="SEARCH_API_KEY" present={apiKeySet} />}
+              {/* A keyless provider isn't "missing" anything, so skip the red banner.
+                  A key on file may be another provider's, which the picked provider
+                  refuses, so "ready to use" would overclaim and the banner names the
+                  wrong key. */}
+              {keyed.key !== 'optional' && (
+                <KeyStatus
+                  envVar="SEARCH_API_KEY"
+                  present={apiKeySet && !foreignKey}
+                  detail={foreignKey ? <>The key on file is not a {keyed.keyName} key, so searches won&apos;t run. Paste a {keyed.keyName} key in the field above and save.</> : undefined}
+                />
+              )}
+              {/* The controller knows whether the key Keenable would send is a keen_
+                  one. A saved key already shows in the field's placeholder, so only
+                  an env key needs saying. */}
+              {provider === 'keenable' && data.search?.keenableKeySource === 'env' && (
+                <KeyStatus
+                  envVar="SEARCH_API_KEY"
+                  present
+                  detail={<><code>SEARCH_API_KEY</code> holds a Keenable key, so searches use it and get the higher rate limit.</>}
+                />
+              )}
               {keyTest && <KeyTestResult result={keyTest} />}
             </>
           )}

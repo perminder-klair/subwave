@@ -24,10 +24,14 @@ export function movePinInEnv(
   target: string,
 ): { text: string; from: string } | null {
   const lines = envText.split('\n');
-  for (let i = 0; i < lines.length; i++) {
+  // Last line first: with a duplicated pin, compose and a compiled binary's .env
+  // load both take the last one, so that's the only line whose move takes effect.
+  for (let i = lines.length - 1; i >= 0; i--) {
     const m = (lines[i] as string).match(/^SUBWAVE_VERSION\s*=\s*(.*)$/);
     if (!m) continue;
-    let current = (m[1] ?? '').trim();
+    // An inline comment goes first: `from` has to equal what a compiled binary
+    // loaded into process.env, or update.ts can't recognise the old pin there.
+    let current = (m[1] ?? '').trim().replace(/\s+#.*$/, '');
     if (
       (current.startsWith('"') && current.endsWith('"')) ||
       (current.startsWith("'") && current.endsWith("'"))

@@ -60,3 +60,29 @@ test('gateway is tested against Vercel AI Gateway, not the Ollama default', asyn
     assert.equal(call.auth, 'Bearer gw-test-key');
   }
 });
+
+// fetch rejects a header value with a line break in it, and every SDK passes
+// its error on, quoting the whole header: the key would come back on screen.
+test('a key with a control character is refused before any call, without echoing it', async (t) => {
+  const realFetch = globalThis.fetch;
+  let outbound = 0;
+  t.mock.method(globalThis, 'fetch', (async (url: string | URL | Request, init?: RequestInit) => {
+    const target = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+    if (target.startsWith(base)) return realFetch(url, init);
+    outbound += 1;
+    return new Response('{}', { status: 401, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch);
+
+  for (const provider of ['openai', 'anthropic', 'requesty']) {
+    const res = await fetch(`${base}/onboarding/test-llm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider, model: 'm', apiKey: 'sk-SECRET\npart2' }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json() as { ok: boolean; error: string };
+    assert.equal(body.ok, false, provider);
+    assert.equal(body.error, 'The key has a line break or other control character in it. Paste it again as one line.', provider);
+  }
+  assert.equal(outbound, 0, 'a malformed key reached a provider');
+});

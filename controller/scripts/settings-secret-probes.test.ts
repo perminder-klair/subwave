@@ -1,6 +1,8 @@
 // POST /settings/secrets/test: the admin "Test key" button. Each probe is
 // checked through the real route against a fetch stub, so the endpoint, the
-// credential header and the operator-facing message are pinned together.
+// credential header and the operator-facing message are pinned together. The
+// malformed-key refusal is pinned here for POST /settings/embedding/probe too,
+// which sits on the same router.
 //
 // requireAdmin is a no-op with ADMIN_USER/ADMIN_PASS unset, so the router mounts
 // bare over real HTTP against a temp state dir.
@@ -94,6 +96,63 @@ test('Keenable: a non-keen_ value is reported as unused, and never sent', async 
   assert.equal(outbound.length, 0);
 });
 
+// fetch rejects a header value with a line break, NUL or other control
+// character, and its error quotes the whole value. A key pasted across a line
+// wrap must be refused before any probe runs, never echoed back.
+const MALFORMED_KEY_MESSAGE = 'The key has a line break or other control character in it. Paste it again as one line.';
+
+test('a key with a control character is refused before any probe, without echoing it', async (t) => {
+  const cases: Record<string, string>[] = [
+    { key: 'REQUESTY_API_KEY' },
+    { key: 'SEARCH_API_KEY', provider: 'tavily' },
+    { key: 'SEARCH_API_KEY', provider: 'brave' },
+    { key: 'SEARCH_API_KEY', provider: 'keenable' },
+    { key: 'SEARCH_API_KEY', provider: 'firecrawl' },
+    { key: 'ELEVENLABS_API_KEY' },
+    { key: 'LISTENBRAINZ_USER_TOKEN' },
+    { key: 'EMBEDDING_API_KEY' },
+  ];
+  for (const c of cases) {
+    for (const value of ['keen_SECRET\npart2', 'keen_SECRET\rpart2', 'keen_SECRET\u0000part2', 'keen_SECRET\u007fpart2']) {
+      const outbound = stubProvider(t, 200);
+      const r = await testKey({ ...c, value });
+      const label = `${c.key}${c.provider ? `/${c.provider}` : ''} ${JSON.stringify(value)}`;
+      assert.equal(r.ok, false, label);
+      assert.equal(r.message, MALFORMED_KEY_MESSAGE, label);
+      assert.doesNotMatch(r.message, /SECRET/, label);
+      assert.equal(outbound.length, 0, `${label} reached a provider`);
+      t.mock.restoreAll();
+    }
+  }
+});
+
+// With no typed value the route probes the env key, which the admin never
+// displays otherwise.
+test('an env key with a control character is refused too', async (t) => {
+  const outbound = stubProvider(t, 200);
+  process.env.ELEVENLABS_API_KEY = 'el-SECRET\npart2';
+  t.after(() => { delete process.env.ELEVENLABS_API_KEY; });
+  const r = await testKey({ key: 'ELEVENLABS_API_KEY' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, MALFORMED_KEY_MESSAGE);
+  assert.equal(outbound.length, 0);
+});
+
+test('embedding probe: a typed key with a control character is refused, not echoed', async (t) => {
+  const outbound = stubProvider(t, 200);
+  const res = await fetch(`${base}/settings/embedding/probe`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'openai', model: 'text-embedding-3-small', apiKey: 'sk-SECRET\npart2' }),
+  });
+  assert.equal(res.status, 200);
+  const r = await res.json() as { ok: boolean; code: string; message: string };
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'invalid');
+  assert.equal(r.message, MALFORMED_KEY_MESSAGE);
+  assert.equal(outbound.length, 0);
+});
+
 test('Keenable: a keen_ key is probed against the keyed endpoint', async (t) => {
   const outbound = stubProvider(t, 200, { results: [] });
   const r = await testKey({ key: 'SEARCH_API_KEY', value: 'keen_good', provider: 'keenable' });
@@ -102,4 +161,102 @@ test('Keenable: a keen_ key is probed against the keyed endpoint', async (t) => 
   assert.equal(outbound.length, 1);
   assert.equal(outbound[0].url, 'https://api.keenable.ai/v1/search');
   assert.equal(outbound[0].headers.get('x-api-key'), 'keen_good');
+});
+
+test('Firecrawl: a key is probed against the free /v2/team/credit-usage; a 401 reads as rejected', async (t) => {
+  const outbound = stubProvider(t, 200, { success: true, data: { remainingCredits: 500, planCredits: 500, billingPeriodStart: null, billingPeriodEnd: null } });
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-good', provider: 'firecrawl' });
+  assert.equal(r.ok, true);
+  assert.equal(r.message, '✓ Firecrawl key valid · 500 credits left');
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].url, 'https://api.firecrawl.dev/v2/team/credit-usage');
+  assert.equal(outbound[0].method, 'GET');
+  assert.equal(outbound[0].headers.get('authorization'), 'Bearer fc-good');
+  t.mock.restoreAll();
+
+  stubProvider(t, 401, { success: false, error: 'Unauthorized: Invalid token' });
+  const rejected = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-bad', provider: 'firecrawl' });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.message, 'Key rejected — check it\'s correct and active');
+});
+
+test("Firecrawl: another provider's key is refused without a request", async (t) => {
+  const outbound = stubProvider(t, 200);
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'tvly-left-over', provider: 'firecrawl' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, 'Not a Firecrawl key (they start with fc-)');
+  assert.equal(outbound.length, 0);
+});
+
+// Tavily and Brave searches refuse a key with another provider's prefix (#2223),
+// so the probe refuses it too: a key typed under the wrong provider never
+// reaches that provider. Their own formats aren't confirmed, so anything else is
+// still probed.
+test("Tavily and Brave: another provider's key is refused without a request", async (t) => {
+  const cases: Array<[string, string, string]> = [
+    ['tavily', 'fc-left-over', 'A Firecrawl key, not a Tavily key'],
+    ['tavily', 'keen_left-over', 'A Keenable key, not a Tavily key'],
+    ['brave', 'fc-left-over', 'A Firecrawl key, not a Brave Search key'],
+    ['brave', 'tvly-left-over', 'A Tavily key, not a Brave Search key'],
+    ['brave', 'keen_left-over', 'A Keenable key, not a Brave Search key'],
+  ];
+  for (const [provider, value, message] of cases) {
+    const outbound = stubProvider(t, 200);
+    const r = await testKey({ key: 'SEARCH_API_KEY', value, provider });
+    assert.equal(r.ok, false, `${provider} ${value}`);
+    assert.equal(r.message, message);
+    assert.equal(outbound.length, 0, `${provider} ${value} reached a provider`);
+    t.mock.restoreAll();
+  }
+});
+
+test("Tavily and Brave: an env key from another provider is refused too", async (t) => {
+  const outbound = stubProvider(t, 200);
+  process.env.SEARCH_API_KEY = 'fc-from-env';
+  t.after(() => { delete process.env.SEARCH_API_KEY; });
+  for (const provider of ['tavily', 'brave']) {
+    const r = await testKey({ key: 'SEARCH_API_KEY', provider });
+    assert.equal(r.ok, false, provider);
+    assert.match(r.message, /^A Firecrawl key, not a /);
+  }
+  assert.equal(outbound.length, 0);
+});
+
+test('Tavily and Brave: their own keys, and keys of any other format, are still probed', async (t) => {
+  const cases: Array<[string, string, string]> = [
+    ['tavily', 'tvly-good', 'https://api.tavily.com/search'],
+    ['tavily', 'an-unprefixed-key', 'https://api.tavily.com/search'],
+    ['brave', 'BSAgood', 'https://api.search.brave.com/res/v1/web/search'],
+    ['brave', 'an-unprefixed-key', 'https://api.search.brave.com/res/v1/web/search'],
+  ];
+  for (const [provider, value, endpoint] of cases) {
+    const outbound = stubProvider(t, 200, { results: [] });
+    const r = await testKey({ key: 'SEARCH_API_KEY', value, provider });
+    assert.equal(r.ok, true, `${provider} ${value}: ${r.message}`);
+    assert.equal(outbound.length, 1);
+    assert.equal(outbound[0].url.split('?')[0], endpoint);
+    t.mock.restoreAll();
+  }
+});
+
+test('Firecrawl: a drained key does not read as valid', async (t) => {
+  stubProvider(t, 200, { success: true, data: { remainingCredits: 0, planCredits: 500 } });
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-drained', provider: 'firecrawl' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, 'Firecrawl key valid, but it has no credits left');
+});
+
+test('Firecrawl: one credit reads in the singular, and a body with no count stays a plain pass', async (t) => {
+  stubProvider(t, 200, { success: true, data: { remainingCredits: 1 } });
+  const one = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-good', provider: 'firecrawl' });
+  assert.equal(one.message, '✓ Firecrawl key valid · 1 credit left');
+  t.mock.restoreAll();
+
+  for (const body of [{}, { data: {} }, { data: { remainingCredits: '500' } }]) {
+    stubProvider(t, 200, body);
+    const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-good', provider: 'firecrawl' });
+    assert.equal(r.ok, true);
+    assert.equal(r.message, '✓ Firecrawl key valid');
+    t.mock.restoreAll();
+  }
 });

@@ -27,6 +27,9 @@ subwave status       # is it on air?
 uninstall` tears the stack down and removes the install, keeping `state/` unless
 you pass `--purge`.
 
+To update a station, run `subwave self-update`, `subwave sync` and `subwave
+update`, in that order ([why](../docs/updating.md#update)).
+
 ## Commands
 
 | Command | What it does |
@@ -82,10 +85,11 @@ npx tsx src/cli.ts status
 npm run typecheck        # tsc --noEmit
 ```
 
-There are no tests, and CI does not typecheck this package — `lint.yml` covers
-`controller/`, `web/` and `mcp-subwave/` only. Run `npm run typecheck` yourself
-before pushing. The one CI job that does gate on `cli/` is the embedded-asset
-check below.
+There are no unit tests, and CI does not typecheck this package — `lint.yml`
+covers `controller/`, `web/` and `mcp-subwave/` only. Run `npm run typecheck`
+yourself before pushing. Two CI jobs do look at `cli/`: the embedded-asset check
+below, and `cli-smoke.yml`, which compiles the binary on a pull request and runs
+`scripts/smoke-update-pin.sh` against it.
 
 ### Embedded assets
 
@@ -113,6 +117,17 @@ so images track the binary rather than floating on `:latest` and drifting ahead
 of the frozen compose files it carries. `update` moves that pin forward. A dev
 build has no published tag and stays on `:latest`.
 
+A compiled binary loads the working directory's `.env` into `process.env` at
+boot, which a `tsx` run doesn't, and compose prefers the environment over `.env`.
+So `update` has to move the pin in `process.env` as well as in the file, or a run
+from the install directory hands `pull` and `up` the old version (#2196). Only a
+compiled binary can show this, so that's what the regression check runs against:
+
+```bash
+npm run build:linux-x64
+scripts/smoke-update-pin.sh dist/subwave-linux-x64
+```
+
 `CLI_VERSION` is baked in at embed time and carries an
 `x-release-please-version` marker so release-please bumps it during the release
 PR. Keep the marker on the same line as the version.
@@ -128,7 +143,8 @@ Three things guard against it, and they work together:
 - `src/tty.ts` opens `/dev/tty` directly and hands it to Clack as the prompt's
   `input`, sidestepping `process.stdin`.
 - `scripts/patch-clack.mjs` runs at build time, because `@clack/prompts`'
-  high-level wrappers don't forward that `input` option.
+  high-level wrappers don't forward that `input` option. Every build path must
+  run it; `scripts/check-clack-patch.mjs` checks the compiled binary.
 - `src/ui.ts` arms a watchdog on the first prompt, but only when launched from a
   piped parent, turning any remaining hang into a fast, actionable exit.
 
@@ -153,8 +169,13 @@ npm run build:all           # linux + darwin, x64 + arm64 → dist/
 npm run build:linux-x64     # or just one
 ```
 
-`prebuild` runs `embed-assets` and `patch-clack` first, so a build always
-carries current assets.
+`npm run build:*` runs `prebuild` (`embed-assets` + `patch-clack`) first, so a
+local build carries current assets and the Clack patch, then runs
+`check-clack-patch` on the binary it wrote. CI doesn't use these scripts:
+`publish-cli.yml` and `cli-smoke.yml` run `patch-clack` themselves after
+`bun install`, then run `scripts/check-clack-patch.mjs` on every compiled
+binary. The check fails the build if a binary doesn't forward `input` at the
+prompt sites (#2202). Any new build path must do both.
 
 ### Layout
 

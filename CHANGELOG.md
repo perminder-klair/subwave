@@ -12,6 +12,71 @@
   independent. Operators who already reconfigured profiles under #1777 must
   mark those profiles before upgrading. See [upgrade and recovery steps](docs/multi-station.md#upgrading-existing-profiles).
 
+## [1.29.0](https://github.com/perminder-klair/subwave/compare/v1.28.0...v1.29.0) (2026-10-31)
+
+
+### Features
+
+* **admin:** show a Keenable key that lives only in .env ([#2148](https://github.com/perminder-klair/subwave/issues/2148)) ([691cedd](https://github.com/perminder-klair/subwave/commit/691cedd8b0332e55d500e955f096903d21775e0d))
+* **app:** edit or remove a saved station login, and say when it's rejected ([#2119](https://github.com/perminder-klair/subwave/issues/2119)) ([cc103c9](https://github.com/perminder-klair/subwave/commit/cc103c9c0c2bc736c94bbc6cacfde46ff1363b08))
+* **app:** keep a playback log in store builds that a listener can share ([#2156](https://github.com/perminder-klair/subwave/issues/2156)) ([8864876](https://github.com/perminder-klair/subwave/commit/886487638342b7e7aba80fbb45573fb1255cba2e))
+* **queue:** length and air-time forecast on /state queue items ([#2146](https://github.com/perminder-klair/subwave/issues/2146)) ([fb62a2f](https://github.com/perminder-klair/subwave/commit/fb62a2f64c8af6d4b52ba9139fd34b62bac8306d))
+* **search:** Keenable as a web-search backend ([#1902](https://github.com/perminder-klair/subwave/issues/1902)) ([d996919](https://github.com/perminder-klair/subwave/commit/d99691922b263f630a09a15a827d5026806755ec))
+* **stats:** rebuild the Stats page as a numbered front page with a weekly recap ([#2123](https://github.com/perminder-klair/subwave/issues/2123)) ([82e31b1](https://github.com/perminder-klair/subwave/commit/82e31b19157af5c74e95f35d168e97ff2bef17fc))
+* **stats:** replace the numbered section rules with a tuner dial ([#2167](https://github.com/perminder-klair/subwave/issues/2167)) ([de09d8f](https://github.com/perminder-klair/subwave/commit/de09d8f2a4117f20c59a087bd1b13375442b0029))
+* **transitions:** optional equal-power curve for plain crossfades ([#2002](https://github.com/perminder-klair/subwave/issues/2002)) ([4dd559a](https://github.com/perminder-klair/subwave/commit/4dd559a4ee2568baf2df3caa9907613506341999))
+* **web:** group the provider pickers by kind, gateways as one-line rows ([#2126](https://github.com/perminder-klair/subwave/issues/2126)) ([46de52e](https://github.com/perminder-klair/subwave/commit/46de52eef8bcdf1a5e6a8faddf10558aa38cbf2f))
+
+
+### Bug Fixes
+
+* **admin:** count wrong guesses, not requests, and let the operator turn the lockout off ([#2165](https://github.com/perminder-klair/subwave/issues/2165)) ([b41a344](https://github.com/perminder-klair/subwave/commit/b41a3442e590d3fa106dd573b7c4bcb48f21fdc9))
+* **admin:** refuse a key with a control character before probing it ([#2145](https://github.com/perminder-klair/subwave/issues/2145)) ([bc17397](https://github.com/perminder-klair/subwave/commit/bc1739780c8e56f37e712bb4d022645361d69584))
+* **app:** abort a stalled station body at its deadline, and let a caller's abort reach it ([#2172](https://github.com/perminder-klair/subwave/issues/2172)) ([c92f5f9](https://github.com/perminder-klair/subwave/commit/c92f5f9756e629652789b06ba62c95879b4ea6da))
+* **app:** close the playback log's redaction gaps, and let no log line cost playback ([#2171](https://github.com/perminder-klair/subwave/issues/2171)) ([d0927da](https://github.com/perminder-klair/subwave/commit/d0927da023f860cfe711f2bcefe785c22154ed7d))
+* **app:** give every station body read a deadline, and rename refusalBody ([#2174](https://github.com/perminder-klair/subwave/issues/2174)) ([f0d4432](https://github.com/perminder-klair/subwave/commit/f0d44323ff80cacdfab10cd1eb0e255f7d7b27ab))
+* **app:** keep checking a stuck station login, and refuse only on a Basic challenge ([#2137](https://github.com/perminder-klair/subwave/issues/2137)) ([66c1ce6](https://github.com/perminder-klair/subwave/commit/66c1ce6021c7c943565c8ba401d2f4c3a0b2b9f5)), closes [#2114](https://github.com/perminder-klair/subwave/issues/2114)
+* **app:** keep only Apple's port types in a route line ([#2173](https://github.com/perminder-klair/subwave/issues/2173)) ([a1ecde6](https://github.com/perminder-klair/subwave/commit/a1ecde64264855abc71dcc9d4c2b4ae16f0b89b6))
+* **app:** keep re-checking a stuck station password, and forget it only on the controller's refusal ([#2152](https://github.com/perminder-klair/subwave/issues/2152)) ([65b44d3](https://github.com/perminder-klair/subwave/commit/65b44d3f9c3153ba6582a6308e21f75e34d23bf8))
+* **app:** re-send the lock-screen card only when it changes, and probe the live dot with the saved login ([#2151](https://github.com/perminder-klair/subwave/issues/2151)) ([247a21d](https://github.com/perminder-klair/subwave/commit/247a21d005a3adc3b9bf62a0cf46e586f4b76080))
+* **app:** reload the live stream only when its media clock has stalled ([#2121](https://github.com/perminder-klair/subwave/issues/2121)) ([b3f2fa1](https://github.com/perminder-klair/subwave/commit/b3f2fa1425303d55289a8e6a309a759d414cf14a))
+* **app:** send a remote Play through the stream recovery, and back off a hung reload ([#2155](https://github.com/perminder-klair/subwave/issues/2155)) ([73a4959](https://github.com/perminder-klair/subwave/commit/73a4959a2788f738c4ac4975e73c58cab0a23d9a))
+* **app:** send the lock-screen cover on an item's first playing, not at load ([#2168](https://github.com/perminder-klair/subwave/issues/2168)) ([1ac76b7](https://github.com/perminder-klair/subwave/commit/1ac76b77f7ff2fbf02d4cae94263aa5f2d965cce)), closes [#2162](https://github.com/perminder-klair/subwave/issues/2162)
+* **app:** stop the synced lyrics crashing the app on Android ([#2100](https://github.com/perminder-klair/subwave/issues/2100)) ([45725ad](https://github.com/perminder-klair/subwave/commit/45725ad7e7b76279bf75b6a7e457c7691ec85f8a))
+* **broadcast:** advertise the rendered listener buffer, and hand Liquidsoap the burst's bitrate ([#2158](https://github.com/perminder-klair/subwave/issues/2158)) ([2411ffa](https://github.com/perminder-klair/subwave/commit/2411ffa4a2f88ebe35554e5d10c90f382ce43b3b))
+* **broadcast:** harden the marker writers and the bitrate handoff, in both scripts ([#2170](https://github.com/perminder-klair/subwave/issues/2170)) ([b83dde7](https://github.com/perminder-klair/subwave/commit/b83dde76a9a3e4ce0f5922ec5c23ddef535bd343))
+* **broadcast:** read radio.liq's Opus encoder the way the CBR test does, in both scripts ([#2175](https://github.com/perminder-klair/subwave/issues/2175)) ([00a7eeb](https://github.com/perminder-klair/subwave/commit/00a7eeb5284267d86eb607169be8989c92bb30e9))
+* **controller:** wake an idle station within a second of a listener tuning in ([#2109](https://github.com/perminder-klair/subwave/issues/2109)) ([9394ecd](https://github.com/perminder-klair/subwave/commit/9394ecdeee5cf6fc548aef1267d2feb343bb7ecc))
+* **dj:** stop naming a compilation's title as the song's album ([#2120](https://github.com/perminder-klair/subwave/issues/2120)) ([4cc9ada](https://github.com/perminder-klair/subwave/commit/4cc9ada2f73a7ae7396aa010b98dc60a58534bc2)), closes [#2117](https://github.com/perminder-klair/subwave/issues/2117)
+* **dj:** stop the location grounding naming a place the operator dropped ([#2110](https://github.com/perminder-klair/subwave/issues/2110)) ([cd7977f](https://github.com/perminder-klair/subwave/commit/cd7977fc0323f35449225eaac026a34fce67f06d))
+* **liquidsoap:** encode the Opus mount as hard CBR so its burst is time-sized ([#2157](https://github.com/perminder-klair/subwave/issues/2157)) ([fd35a85](https://github.com/perminder-klair/subwave/commit/fd35a854f2b9734ca87af2c295bee36e78a1670a))
+* **llm:** fail over when Gemini says "models/&lt;id&gt; is not found" ([#2108](https://github.com/perminder-klair/subwave/issues/2108)) ([b3244f0](https://github.com/perminder-klair/subwave/commit/b3244f02f9e1524fb2ee3f53bec8ed481b52401f))
+* **llm:** retry OpenRouter's "reasoning is mandatory" rejection at minimal effort ([#2107](https://github.com/perminder-klair/subwave/issues/2107)) ([1bea8b6](https://github.com/perminder-klair/subwave/commit/1bea8b680218dadf344cce37bbfe9fcf37375134))
+* pin the /station-auth contract, read radio.liq's comments in the Opus check, and cover the playback log in the privacy policy ([#2169](https://github.com/perminder-klair/subwave/issues/2169)) ([2def860](https://github.com/perminder-klair/subwave/commit/2def860d6ae6a1cea69dff88f63b4333e1b8c992))
+* **providers:** AI Gateway onboarding test, Requesty Test key, Keenable key copy ([#2122](https://github.com/perminder-klair/subwave/issues/2122)) ([60d5dd0](https://github.com/perminder-klair/subwave/commit/60d5dd0be1839da118c08f55788edec78487aeaf))
+* **providers:** small follow-ups from the provider catalogue PRs ([#2135](https://github.com/perminder-klair/subwave/issues/2135)) ([84d8f93](https://github.com/perminder-klair/subwave/commit/84d8f931eedeefddb3d1b9125a63c4b4f2de2b35))
+* **requests:** stop refusing dedications as unsupported conditions ([#2149](https://github.com/perminder-klair/subwave/issues/2149)) ([572cbf2](https://github.com/perminder-klair/subwave/commit/572cbf2eda6aa49ba48582862b1008dd38c71ce8)), closes [#2133](https://github.com/perminder-klair/subwave/issues/2133)
+* **settings:** strip control characters from a secret as it is saved ([#2153](https://github.com/perminder-klair/subwave/issues/2153)) ([da39505](https://github.com/perminder-klair/subwave/commit/da3950521759b7a7672e83f1de9d536cdb3a8e9b))
+* **tts:** expand £/€ amounts, clock meridiems and No. into spoken forms ([#2104](https://github.com/perminder-klair/subwave/issues/2104)) ([6bd7444](https://github.com/perminder-klair/subwave/commit/6bd74445e3dffde14f6ca2d8521245f1d85f1c9d)), closes [#2103](https://github.com/perminder-klair/subwave/issues/2103)
+* **tts:** level Chatterbox, build the tts-heavy sidecar on arm64, update PocketTTS to 4.0.1 ([#2105](https://github.com/perminder-klair/subwave/issues/2105)) ([81275f6](https://github.com/perminder-klair/subwave/commit/81275f647091ee20318b91bfae12f3f6ae2ac370))
+* **web:** ask again about a saved station password while the player is stuck ([#2186](https://github.com/perminder-klair/subwave/issues/2186)) ([7b41c8f](https://github.com/perminder-klair/subwave/commit/7b41c8ff6a1d75610bc10376afcd0cc379633aec))
+* **web:** keep the station password prompt above every skin, and lock the skin beneath it ([#2187](https://github.com/perminder-klair/subwave/issues/2187)) ([b6f2eab](https://github.com/perminder-klair/subwave/commit/b6f2eabfed6df433fe75abfa8fb7408a3de11264))
+* **web:** make the listener drawer and top bar opaque wherever their blur is stripped ([#2147](https://github.com/perminder-klair/subwave/issues/2147)) ([655149e](https://github.com/perminder-klair/subwave/commit/655149ea1b87d7603b0714078cd773ec1219b424)), closes [#2132](https://github.com/perminder-klair/subwave/issues/2132)
+* **web:** reconnect after the stream ends, and keep watching a stall ([#2188](https://github.com/perminder-klair/subwave/issues/2188)) ([bad6ef8](https://github.com/perminder-klair/subwave/commit/bad6ef804bddd4606726d7ba054ecd7df1bfa7ee))
+* **web:** size provider card columns by group, against the picker's width ([#2154](https://github.com/perminder-klair/subwave/issues/2154)) ([a0fbb50](https://github.com/perminder-klair/subwave/commit/a0fbb504622dc7be392c5d78076139802a1f5b68))
+* **web:** skip a woken station's stale idle silence on tune-in ([#2125](https://github.com/perminder-klair/subwave/issues/2125)) ([1fd51ee](https://github.com/perminder-klair/subwave/commit/1fd51ee19c7ee2f914a817f884df0cce70f50500))
+* **web:** trust only the controller's answers at the station gate, and keep a password it can't check ([#2176](https://github.com/perminder-klair/subwave/issues/2176)) ([5f61612](https://github.com/perminder-klair/subwave/commit/5f616122cabc87afb89c42a7f8814a19417a47dc))
+
+
+### Documentation
+
+* **manual:** add LFM3 1.7B to the model bench table ([#2144](https://github.com/perminder-klair/subwave/issues/2144)) ([22c809f](https://github.com/perminder-klair/subwave/commit/22c809f7dc0161841443b767cc37beb10cc75f9f))
+
+
+### Refactors
+
+* **providers:** one provider catalogue for the controller, web and CLI ([#2124](https://github.com/perminder-klair/subwave/issues/2124)) ([48e5937](https://github.com/perminder-klair/subwave/commit/48e5937a0d4a9170e5785b38dd84a3c69d8ad674))
+
 ## [1.28.0](https://github.com/perminder-klair/subwave/compare/v1.27.0...v1.28.0) (2026-10-26)
 
 

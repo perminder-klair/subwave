@@ -122,6 +122,7 @@ interface AdminSong {
   genre?: string | null;
   duration?: number | null;
   path?: string | null;
+  size?: number | null;
   replayGain?: { trackGain?: number | null; trackPeak?: number | null } | null;
 }
 
@@ -731,7 +732,12 @@ router.post('/dj/say', requireAdmin, async (req, res) => {
         recentOpeners: queue.getRecentOpeners(),
       });
     }
-    await queue.announce(spoken, kind, mode === 'raw' ? { meta: { ...VERBATIM_META } } : {});
+    const outcome = await queue.announce(spoken, kind, mode === 'raw' ? { meta: { ...VERBATIM_META } } : {});
+    // Only a styled line can be one (raw is exempt). No voice, so no effect
+    // under it, and an error so the Say box keeps the text for a retry.
+    if (outcome.reason === 'stand-in') {
+      return res.status(502).json({ error: 'the DJ wrote a stand-in, not a line, so nothing aired' });
+    }
     if (sfxName) void queue.playSfx(sfxName, { underVoice: true });
     res.json({ ok: true, mode, kind, spoken, sfx: sfxName || null });
   } catch (err) {
@@ -761,7 +767,11 @@ router.post('/dj/segment', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: `type must be one of: ${Object.keys(SEGMENTS).join(', ')}` });
   }
   try {
+    // null: the queue refused the line. An error, not a success in the words of
+    // a line that never aired: the dash toast prints `spoken` as "on air", and
+    // the booth log already says why.
     const spoken = await run();
+    if (spoken === null) return res.status(502).json({ error: 'nothing aired, see the booth log' });
     res.json({ ok: true, type, spoken });
   } catch (err) {
     queue.log('error', `/dj/segment ${type} failed: ${err.message}`);
@@ -894,6 +904,8 @@ function toAdminRow(s: AdminSong) {
     duration: s.duration ?? null,
     // Lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH is mounted.
     path: s.path ?? null,
+    // What it checks a real path mapped onto the mount against, with the title.
+    size: s.size ?? null,
     // Deliberately NOT `?? null`: an absent key drops out of the JSON round trip
     // and stays undefined, telling applyLoudnessGain to re-fetch the song.
     replayGain: s.replayGain,
@@ -905,7 +917,7 @@ function toAdminRow(s: AdminSong) {
     loudnessLufs: tag?.loudnessLufs ?? null,
     paceMean: tag?.paceMean ?? null,
     // Shared measured-duration classification, as in /library/browse.
-    instrumental: isInstrumental(tag?.vocalRanges, tag?.vocalRangesInvalid),
+    instrumental: isInstrumental(tag),
     // /dj/search returns blocked rows on purpose; this is what marks them.
     blockedBy: blocked ? blocklist.refOf(blocked) : null,
   };

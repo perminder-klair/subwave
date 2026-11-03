@@ -27,7 +27,7 @@ export default function PrivacyPage() {
           does happen.
         </p>
         <p className="bs-article-byline">
-          <time dateTime="2026-06-10">Last updated 10 June 2026</time>
+          <time dateTime="2026-10-30">Last updated 30 October 2026</time>
         </p>
       </header>
 
@@ -41,6 +41,17 @@ export default function PrivacyPage() {
           sessions. That list never leaves your device and is not sent to us.
           Delete the app and it&apos;s gone. We have no servers that store
           anything about you.
+        </p>
+        <p>
+          The app also keeps a short playback log so that a sound problem can be
+          traced: the last 300 lines of playback events, such as connecting,
+          stalling, and reloading the stream, with their times. It is held in
+          memory only and never written to storage, so it is gone once the app
+          is fully closed. Passwords, logins, and the names of your audio
+          devices are taken out before a line is kept. It leaves your phone only
+          if you tap Share playback log and send it somewhere yourself. A shared
+          log starts with the app and system versions, and can include the
+          address of the station you were tuned to.
         </p>
 
         <h2>What happens when you press play</h2>
@@ -56,7 +67,8 @@ export default function PrivacyPage() {
           standard request information such as your IP address and the times you
           connect. That server is run by whoever operates the station — for your
           own station, that&apos;s you; for the public station, it&apos;s us at
-          getsubwave.com. The app itself does not log or collect this.
+          getsubwave.com. The app itself does not collect this. Its one log is
+          the on-device playback log described above.
         </p>
         <p>
           If you send a song request, the text you write and the name you

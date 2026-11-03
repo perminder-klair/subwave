@@ -12,6 +12,7 @@ import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { isNamedRequester } from '../../../util/request-guard.js';
 import { introBudgetPhrase, introMsFor, firstVocalMsFor } from './intro-budget.js';
 import { trackEraYear } from '../../../music/show-filter.js';
+import { albumIsCompilation } from '../../../music/album-facts.js';
 import { trackFeelSuffix } from './track-feel.js';
 import { announceLine, nextAnnounceForm } from '../../../broadcast/announce-line.js';
 import * as library from '../../../music/library.js';
@@ -167,7 +168,10 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   // decade" rule reaching the microphone.
   const eraYear = trackEraYear(track);
   const feelSuffix = trackFeelSuffix(track);
-  ctxLines.push(`Now starting: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${eraYear ? ` (${eraYear})` : ''}${feelSuffix}`);
+  // A compilation's title is not the song's album, so it is left out the way
+  // an unknown year is (#2117).
+  const album = track.album && !albumIsCompilation(track) ? track.album : null;
+  ctxLines.push(`Now starting: "${track.title}" by ${track.artist}${album ? ` from ${album}` : ''}${eraYear ? ` (${eraYear})` : ''}${feelSuffix}`);
 
   // Talk-within-the-intro (A.3 phase 1): when the track's intro runway is
   // known, budget the line to land before the vocals. Advisory + additive —

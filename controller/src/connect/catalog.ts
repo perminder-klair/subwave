@@ -182,12 +182,18 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         summary: 'Queue & history',
         description:
           'The upcoming queue and recent play history, plus the active theme id and ' +
-          'station timezone. Polled by the web player every 5s alongside /now-playing. ' +
+          'station timezone. Current and upcoming items carry `duration` (playable seconds); ' +
+          'upcoming items carry `airsAt`, a live-edge forecast of when they start. Both are ' +
+          'absent when the station cannot measure them. ' +
+          'Polled by the web player every 5s alongside /now-playing. ' +
           'The DJ booth log is operator diagnostics and is not part of this read.',
         auth: 'none',
         responseExample: {
           current: { title: 'Midnight City', artist: 'M83', source: 'auto', startedAt: 1720000000000 },
-          upcoming: [{ title: 'Open Eye Signal', artist: 'Jon Hopkins', requestedBy: 'auto' }],
+          upcoming: [{
+            title: 'Open Eye Signal', artist: 'Jon Hopkins', requestedBy: 'auto',
+            duration: 468.2, airsAt: '2026-10-30T14:32:05.000Z',
+          }],
           history: [{ title: 'Nightcall', artist: 'Kavinsky' }],
           autoPick: true,
           autoLink: true,

@@ -12,6 +12,7 @@ import type { EngineAvailability } from '../tts/engineMeta';
 import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
+import { ownsErrorPath } from './form-diff';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
 import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety } from '../../../lib/schemas.generated';
@@ -196,7 +197,9 @@ export interface SearchForm {
 }
 
 export interface EmbeddingEnrichmentForm {
-  lastfmTags: boolean;
+  /** null is auto: on when a Last.fm key is set (lastfm.lastfmEnrichEnabled). */
+  lastfmTags: boolean | null;
+  lastfmTrackTags: boolean;
   lyrics: boolean;
 }
 
@@ -305,6 +308,7 @@ export interface LoudnessForm {
 export interface TransitionsForm {
   pairDrain: boolean;   // hold picks until the successor is known (#749 fix)
   stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
+  pickTimeStems: boolean;  // separate a held pick's missing stems while it waits (#2197)
   equalPowerCrossfade: boolean;  // plain crossfade curve: false = linear, true = equal-power (mixer restart)
   stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
   stemCacheGb: string;  // settings.audio.stemCacheGb — byte budget the LRU sweep enforces
@@ -442,10 +446,17 @@ export interface SettingsData {
     transitions?: {
       pairDrain?: boolean;
       stemBlends?: boolean;
+      pickTimeStems?: boolean;
       equalPowerCrossfade?: boolean;
       effects?: Partial<Record<TransitionEffect, boolean>>;
     };
-    audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
+    audio?: {
+      embeddings?: boolean;
+      vocalActivity?: boolean;
+      stemCache?: boolean;
+      stemCacheGb?: number;
+      analyzeQuietOnly?: boolean;
+    };
     stream?: {
       opusEnabled?: boolean;
       opusBitrate?: number;
@@ -601,6 +612,14 @@ export interface SettingsData {
   };
   search?: {
     providers?: string[];
+    // Where the key a Keenable search sends comes from; null when it runs keyless.
+    keenableKeySource?: 'settings' | 'env' | null;
+    // Where the key a Firecrawl search sends comes from; null when the slot holds
+    // none, or holds another provider's, which searches refuse.
+    firecrawlKeySource?: 'settings' | 'env' | null;
+    // The keyed providers (Tavily, Brave, Firecrawl) whose searches would refuse
+    // the key on file, because it is another provider's. Empty with no key.
+    keyRefusedBy?: string[];
   };
   defaults?: {
     search?: Partial<SearchForm>;
@@ -803,9 +822,9 @@ export function ownedFieldErrors(
   ownedKeys: readonly string[] | undefined,
 ): Array<[string, string]> {
   if (!errors || !ownedKeys?.length) return [];
-  return Object.entries(errors).filter(([path]) =>
-    ownedKeys.some((key) => path === key || path.startsWith(`${key}.`)),
-  );
+  // Through the aliases: a form key can save under another name (the stem
+  // cache lives under `transitions` and saves to `audio.*`).
+  return Object.entries(errors).filter(([path]) => ownsErrorPath(ownedKeys, path));
 }
 
 /** Portal section-owned saves into the sticky bar to retain their closures and field-error scope.
@@ -830,7 +849,9 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
       )}
       <span className="min-w-0 flex-1 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
-        <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
+        {/* whileTap makes motion give the span tabIndex 0 unless one is set,
+            which would put a dead Tab stop before Save. */}
+        <m.span whileTap={{ scale: 0.97 }} tabIndex={-1} className="inline-flex flex-1 sm:flex-none">
           <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>
       </span>
@@ -842,9 +863,11 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
 interface KeyStatusProps {
   envVar: string;
   present: boolean;
+  /** Replaces the stock sentence, for a provider where neither "ready to use" nor "not set" fits. */
+  detail?: ReactNode;
 }
 
-export function KeyStatus({ envVar, present }: KeyStatusProps) {
+export function KeyStatus({ envVar, present, detail }: KeyStatusProps) {
   const toneClass = present
     ? 'border-[var(--accent)] text-[color:var(--accent)]'
     : 'border-[var(--danger)] text-[var(--danger)]';
@@ -866,14 +889,14 @@ export function KeyStatus({ envVar, present }: KeyStatusProps) {
           {present ? 'API key found in environment' : 'API key missing'}
         </span>
         <span className="text-[14px] leading-[1.5] text-muted">
-          {present ? (
+          {detail ?? (present ? (
             <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (
             <>
               <code>{envVar}</code> is not set. Paste the key in the field above and save,
               or set it in <code>.env</code> and restart.
             </>
-          )}
+          ))}
         </span>
       </div>
     </div>

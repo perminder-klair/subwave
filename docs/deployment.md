@@ -60,7 +60,7 @@ Icecast falls through to the Next.js catch-all and 404s. On one hostname:
 | Path | Upstream | Notes |
 |---|---|---|
 | `/api/listener-auth*` | — | Return 404 at the edge, matched as a case-insensitive prefix (the controller also answers a trailing slash and any case). Icecast calls it directly over the internal network; exposed publicly it's an unthrottled password oracle (#478). This rule must win before the general `/api/*` rule. |
-| `/stream.mp3` `/stream.opus` `/stream.flac` `/stream.aac` | Icecast `:7702` | Opus/FLAC/AAC are off by default but **still need routing** — enabling one in admin must not also need a proxy edit. Disable response buffering on these (Caddy `flush_interval -1`, nginx `proxy_buffering off`) or the audio arrives in lumps. |
+| `/stream.mp3` `/stream.opus` `/stream.flac` `/stream.aac` | Icecast `:7702` | Opus/FLAC/AAC are off by default but **still need routing** — enabling one in admin must not also need a proxy edit. Disable response buffering on these (Caddy `flush_interval -1`, nginx `proxy_buffering off`) or the audio arrives in lumps. Drop `WWW-Authenticate` from the response only for a client that can't answer it: see [the stream's 401 challenge](reverse-proxy.md#the-streams-401-challenge). |
 | `/listen.pls` `/listen.m3u` | Controller `:7701` | Playlist files for hardware radios / VLC. Keep the path unchanged: they are controller routes served at the **root**, not under `/api`. |
 | `/api/*` | Controller `:7701` | Strip the `/api` prefix (Caddy `handle_path`). |
 | everything else | Web `:7700` | |
@@ -213,6 +213,74 @@ the graphical operator UI.
 
 ---
 
+## Replacing music files
+
+Navidrome builds a track's id from its path, so a file replaced at the same path
+looks like the same track, with the old file's analysis. A tagger run or a
+reconcile spots the replacement and clears that analysis, so the next analysis
+run measures the new audio. Tags, the year and plays stay.
+
+It looks for a changed file size, and on Navidrome for a file dated after the
+track was last measured. Navidrome has to have re-read the file first, and a
+replacement that keeps its folder's date is only seen by a full scan.
+
+### When a replacement is held
+
+A tag editor's "save all", or a restore that reset file dates, makes a whole
+library look replaced. So above 200 tracks or 2% of the library, whichever is
+larger, a walk clears nothing, logs a warning, and leaves a banner on the admin
+Library page saying the files are on hold. The banner stays after the run ends,
+until the next run starts. Until you answer, every walk finds the same files
+again and raises it again, and any real replacement waits with them.
+
+**The audio did not change** (only tags or dates did). Accept the files. This
+keeps their analysis and stems, and they are not found again:
+
+```bash
+curl -u "$ADMIN_USER:$ADMIN_PASS" -X POST https://radio.example.com/api/library/reconcile \
+  -H 'Content-Type: application/json' -d '{"acceptReplaced": true}'
+```
+
+**The files really were replaced.** Confirm the clear. This throws away their
+analysis and stems, and measuring them again can take days on a large library:
+
+```bash
+curl -u "$ADMIN_USER:$ADMIN_PASS" -X POST https://radio.example.com/api/library/reconcile \
+  -H 'Content-Type: application/json' -d '{"confirmReplaced": true}'
+```
+
+Then start an analysis run from the admin Library page. To clear and measure in
+one go, send the same body to `/api/tag-library` instead, for a full tagger run.
+That run needs embeddings on, and stops before the walk without them.
+
+Both answers cover every file the walk finds that time, not just a held batch.
+Only one run happens at a time, and a request made during another answers 409.
+The same answers work from inside the controller container, as flags:
+
+```bash
+docker compose exec controller npx tsx src/music/tag-library.ts --reconcile-only --accept-replaced
+docker compose exec controller npx tsx src/music/tag-library.ts --reconcile-only --confirm-replaced
+```
+
+### What it can miss
+
+Each of these only affects a replacement of exactly the same size. A different
+size is found once the track has a stored size to compare with: the first walk
+after an upgrade only stores it, and a server that reports no sizes never does.
+
+- **An old file date.** A file copied with `cp -p` or `rsync -t`, moved in with
+  `mv`, or restored from a backup keeps its date. If that date is older than the
+  newest change the last walk saw, less 6 hours, it isn't read.
+- **Navidrome on a large library.** It stops answering past about 51,000 rows of
+  this list, so an older change isn't reached. A walk logs when its read was
+  partial.
+- **A server other than Navidrome.** Only Navidrome reports change times.
+- **Navidrome over plain http on a public address.** Reading change times needs
+  the password, which the station only sends over https or to a local address.
+  The Doctor says so under "real file paths".
+
+---
+
 ## State layout
 
 Everything that survives `docker compose down` lives in `state/`:
@@ -229,7 +297,7 @@ Everything that survives `docker compose down` lives in `state/`:
 | `voice/` | Controller | TTS WAVs rendered for each spoken segment |
 | `archive/` | Liquidsoap | Hourly MP3 archive (`YYYY-MM-DD/HH-00.mp3`) |
 | `logs/` | Controller + Liquidsoap | Event logs |
-| `stems/` | Analyzer | Cached Demucs stem windows for stem-blend transitions — byte-budgeted by `audio.stemCacheGb` (Settings → Transitions) |
+| `stems/` | Analyzer | Cached Demucs stem windows for stem-blend transitions — byte-budgeted by `audio.stemCacheGb` (Settings → Stems) |
 | `transitions/` | Analyzer | Rendered stem-blend clips (swept after ~1h) |
 | `next.txt`, `jingle-now.txt`, `say.txt`, `intro.txt`, `auto.m3u`, `now-playing.json` | Controller ⇄ Liquidsoap | File-based IPC (see `CLAUDE.md`) |
 
@@ -281,7 +349,7 @@ It has to stay split, because Navidrome credentials are per-station: two
 stations can index different libraries, and this cache is keyed by track id
 alone.
 
-Three things to know before you do it:
+Before you do it, know this:
 
 - **Mount it in the controller *and* the analyzer, at the identical path.**
   The controller hands the analyzer a filesystem *path*, not audio (the same
@@ -295,6 +363,43 @@ Three things to know before you do it:
   every boot, exactly as it already did for `voice/`, `sfx/` and the rest —
   and, when `STEMS_DIR` is set, the relocated root as well, which the in-state
   loop never reaches.
+- **What the analyzer writes inside the cache stays deletable.** The
+  per-track folders (`stems/<id>/`) and the stem files are created 777 / 666
+  whatever the analyzer's umask, so a controller that is a different user on
+  the share (a remote analyzer, or NFS squashing root to `nobody`) can still
+  evict them. Before, they came out 755 / 644 and eviction failed with
+  `dir delete(s) failed — check ownership/permissions on state/stems`; a
+  `umask 0000` override on the analyzer's command was the workaround, and can
+  go.
+
+  Folders already on disk keep their old mode, because a cached track is not
+  written again. If you saw that error, open them once after upgrading, from
+  inside the analyzer, which is the user that owns them. Run this wherever the
+  analyzer runs. With a remote analyzer that is the GPU host, not the station:
+  `ANALYZER_REPLICAS=0` removes the station's `analyzer` container, and the
+  [compose file on the GPU host](tts-heavy.md#running-the-analyzer-on-another-machine)
+  uses the same service name and mount, so the command is the same:
+
+  ```sh
+  docker compose exec analyzer find /var/sub-wave/stems -mindepth 1 -type d ! -perm 777 -exec chmod 777 {} +
+  ```
+
+  On a multi-station install without `STEMS_DIR`, run it once per station on
+  `/var/sub-wave/stations/<id>/stems`. A `chmod` error names a folder the
+  analyzer cannot change: run `chmod 777` on it as root on the machine that
+  holds the files (the file server, on NFS). Until a stuck folder is opened the
+  sweep leaves it out of the budget check and warns, but its bytes still count
+  as used. A folder the sweep's permission check catches costs no other track.
+  One that passes the check and then refuses its delete leaves the budget check
+  only when that delete fails, so the tracks the sweep deleted before reaching
+  it may have gone in its place. A cache held over budget by stuck folders alone
+  writes no new stems.
+- **Transition clips are not part of this cache.** The rendered clips live in
+  `state/transitions` (multi-station: `state/stations/<id>/transitions`), so
+  `STEMS_DIR` does not move them and they do not count against the stem
+  budget. The analyzer writes them 666 too. The controller's hourly sweep
+  removes any clip over an hour old, unless it is still queued for a seam that
+  hasn't aired.
 - **A mount that refuses `chmod` no longer stops the station.** Read-only
   binds, some NFS exports and exFAT/NTFS disks won't take the permission
   change. That used to abort the broadcast entrypoint before Icecast started,
