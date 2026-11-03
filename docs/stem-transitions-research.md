@@ -451,8 +451,10 @@ is sent, the drain separates the missing windows of the track it now holds
 has already rendered, but its tail has the outgoing track's whole runtime to
 land before the seam out of it, and its head is cached for its next pick. A
 full cache takes these writes a bounded way over its budget, and the hourly
-sweep evicts never-aired dirs to make room, so the cache turns over to what
-the station plays rather than stopping where the backfill filled it.
+sweep evicts the lowest-priority dirs to make room, the dirs of tracks still
+in the queue last (a pick that has not aired yet scores below any dir that
+has), so the cache turns over to what the station plays rather than stopping
+where the backfill filled it.
 
 The cache changes the render job's *cost*, not its existence — the blend is a
 pair artifact and the pair is only known at pick time.
