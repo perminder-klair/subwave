@@ -137,8 +137,9 @@ export function transliteratedRequestName(value: unknown): string {
 // The other scripts bridge Latin although some letters merge on the way, so a
 // Latin "Krov" is both Кровь and Кров: that cross-script homograph is the
 // accepted cost of "Кино" being "Kino". When the library holds both, neither
-// is the name: they are near titles, listed for the listener to choose
-// (request-match.ts select). Traditional and simplified Chinese are
+// is the name: they are near titles. A held request lists them for the listener
+// to choose, and when only one can play, that one goes out labelled an
+// alternative (request-match.ts select). Traditional and simplified Chinese are
 // one character mapping apart, but no table of it ships here, so 後來 meets
 // 后来 only through pinyin, as a near title.
 const LOSSY_TRANSLITERATION = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Thai}\p{scx=Lao}\p{scx=Myanmar}\p{scx=Arabic}\p{scx=Hebrew}\p{scx=Syriac}]/u;
