@@ -107,9 +107,24 @@ export function transliteratedRequestName(value: unknown): string {
   }
 }
 
-// The scripts whose transliteration drops what tells two words apart, so it is
-// a near name, never the name. This is the one list; every identity check asks
-// lossyTransliteration().
+// When a transliteration is the name. It reads a value into Latin letters, and
+// most scripts lose something on the way, so it is identity only as the bridge
+// between a value written in Latin and one that isn't ("Zvezda" is "Звезда",
+// "Sarang" is 사랑). Two values in one script compare as written
+// (requestName), so different words never meet through their reading:
+// - Hangul joins syllables with no separator: 가나 and 간아 are both "gana".
+// - Cyrillic drops ь and ъ: Кровь (blood) and Кров (shelter) are both "krov".
+// - Greek merges ο/ω and η/ι: Πονώ (I hurt) and Πόνο (pain) are both "pono".
+// - Devanagari merges ँ and ं: हँस (laugh) and हंस (swan) are both "hNs".
+// Two values both outside Latin, in one script or two, have no bridge either:
+// each side is only a reading. A value is written in Latin when every letter
+// and digit in it is Latin, or common to all scripts. One letter or digit from
+// any other script makes it non-Latin, so "Love 사랑" bridges to "Love Sarang"
+// and "Love 가나" never meets "Love 간아". A pair equal only through a reading
+// that is no bridge is a near name at LOSSY_READING_SIMILARITY, never the name.
+//
+// Some scripts lose too much to bridge even Latin, so their reading is a near
+// name across scripts too. This is the one list:
 // - Han, so Chinese and Japanese kanji, reads as toneless pinyin: 鱼 (fish) and
 //   雨 (rain) are both "yu", 楓 and 風 both "feng". 88,572 characters read as
 //   670 syllables.
@@ -119,15 +134,27 @@ export function transliteratedRequestName(value: unknown): string {
 //   "aikl".
 // - Arabic, Hebrew and Syriac write no vowels, and their transliteration merges
 //   letters on top of that: سيف (sword) and صيف (summer) are both "syf".
-// Cyrillic, Greek, the Indic scripts, Hangul and the rest map letter for
-// letter. They merge a few pairs, as Cyrillic does е and э, and still count:
-// "Кино" is "Kino". Traditional and simplified Chinese are one character
-// mapping apart, but no table of it ships here, so 後來 meets 后来 only
-// through pinyin, as a near title.
+// The other scripts bridge Latin although some letters merge on the way, so a
+// Latin "Krov" is both Кровь and Кров: that cross-script homograph is the
+// accepted cost of "Кино" being "Kino". Traditional and simplified Chinese are
+// one character mapping apart, but no table of it ships here, so 後來 meets
+// 后来 only through pinyin, as a near title.
 const LOSSY_TRANSLITERATION = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Thai}\p{scx=Lao}\p{scx=Myanmar}\p{scx=Arabic}\p{scx=Hebrew}\p{scx=Syriac}]/u;
+const NON_LATIN = /[^\P{L}\p{scx=Latin}\p{scx=Common}]|[^\P{N}\p{scx=Latin}\p{scx=Common}]/u;
 
 export function lossyTransliteration(value: unknown): boolean {
   return LOSSY_TRANSLITERATION.test(String(value ?? ''));
+}
+
+function writtenInLatin(value: unknown): boolean {
+  return !NON_LATIN.test(String(value ?? ''));
+}
+
+// Whether a transliteration may make two values one name: one is written in
+// Latin and the other isn't, and neither reads lossily.
+export function transliterationBridges(value: unknown, other: unknown): boolean {
+  return writtenInLatin(value) !== writtenInLatin(other)
+    && !lossyTransliteration(value) && !lossyTransliteration(other);
 }
 
 // Every spelling a value can be searched under, its lossy transliteration too.
@@ -137,14 +164,14 @@ export function requestNameVariants(value: unknown): string[] {
   return [...new Set([original, translit].filter(Boolean))];
 }
 
-// The spellings that are the value itself: the transliteration only when it is
-// lossless.
-export function requestIdentityVariants(value: unknown): string[] {
-  return lossyTransliteration(value) ? [requestName(value)].filter(Boolean) : requestNameVariants(value);
+// The spellings under which a value is the same name as `other`: as written,
+// and its transliteration only where that bridges the two (above).
+export function requestIdentityVariants(value: unknown, other: unknown): string[] {
+  return transliterationBridges(value, other) ? requestNameVariants(value) : [requestName(value)].filter(Boolean);
 }
 
-// What a title equal only through a lossy transliteration scores: a near
-// title, below any exact name, so it can be offered but never matched.
+// What a pair equal only through a reading that is no bridge scores: a near
+// name, below any exact one, so it can be offered but never matched.
 export const LOSSY_READING_SIMILARITY = 0.9;
 
 export function resolveLanguageCode(value: unknown): string | undefined {
@@ -286,20 +313,21 @@ function levenshtein(a: string, b: string): number {
   return previous[b.length]!;
 }
 
-// Each spelling, and whether it came through a lossy transliteration.
-function similarityVariants(value: unknown): Array<{ name: string; lossy: boolean }> {
-  const identity = new Set(requestIdentityVariants(value));
-  return requestNameVariants(value).map(name => ({ name, lossy: !identity.has(name) }));
+// Each spelling of `value`, and whether it is only a reading against `other`:
+// a transliteration that is no bridge between the two (requestIdentityVariants).
+function similarityVariants(value: unknown, other: unknown): Array<{ name: string; reading: boolean }> {
+  const identity = new Set(requestIdentityVariants(value, other));
+  return requestNameVariants(value).map(name => ({ name, reading: !identity.has(name) }));
 }
 
 export function requestTextSimilarity(want: unknown, got: unknown): number {
-  const wanted = similarityVariants(want);
-  const actual = similarityVariants(got);
+  const wanted = similarityVariants(want, got);
+  const actual = similarityVariants(got, want);
   if (!wanted.length || !actual.length) return 0;
   let best = 0;
-  for (const { name: left, lossy: leftLossy } of wanted) for (const { name: right, lossy: rightLossy } of actual) {
-    // A pair met only through a lossy transliteration is a near name at best.
-    const ceiling = leftLossy || rightLossy ? LOSSY_READING_SIMILARITY : 1;
+  for (const { name: left, reading: leftReading } of wanted) for (const { name: right, reading: rightReading } of actual) {
+    // A pair met only through a reading that is no bridge is a near name at best.
+    const ceiling = leftReading || rightReading ? LOSSY_READING_SIMILARITY : 1;
     if (left === right) best = Math.max(best, ceiling);
     const leftTokens = new Set(left.split(' ').filter(Boolean));
     const rightTokens = new Set(right.split(' ').filter(Boolean));

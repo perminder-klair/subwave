@@ -527,12 +527,34 @@ function artistIdentityKey(value: unknown): string {
   return requestName(key).replace(/^the (?=\S)/, '') || key;
 }
 
-// An act's name in any lossless spelling ("Кино" is "Kino"), never through a
-// lossy transliteration (lossyTransliteration).
-function artistIdentityVariants(value: unknown): string[] {
-  return requestIdentityVariants(value)
+// The spellings under which an act is the same as `other`: as written, and
+// across scripts through a transliteration that bridges them ("Кино" is
+// "Kino"), never within one script (Мат is not Мать) and never through a
+// lossy one (request-normalize.ts requestIdentityVariants).
+function artistIdentityVariants(value: unknown, other: unknown): string[] {
+  return requestIdentityVariants(value, other)
     .map(key => key.replace(/^the (?=\S)/, '').trim())
     .filter(Boolean);
+}
+
+// Whether two credits name one act, in the spellings above. A credit with no
+// letters or digits is compared as a whole name instead.
+function sameActName(want: string, credit: string): boolean {
+  const wanted = artistIdentityVariants(want, credit);
+  const credited = artistIdentityVariants(credit, want);
+  if (!wanted.length || !credited.length) return nameKey(want) === nameKey(credit);
+  return wanted.some(variant => credited.includes(variant));
+}
+
+// The best similarity between two credits' spellings, with nameKey standing in
+// for a credit that has none, as in sameActName.
+function actNameSimilarity(want: string, credit: string): number {
+  const wanted = artistIdentityVariants(want, credit);
+  const credited = artistIdentityVariants(credit, want);
+  const left = wanted.length ? wanted : [nameKey(want)].filter(Boolean);
+  const right = credited.length ? credited : [nameKey(credit)].filter(Boolean);
+  return left.reduce((best, value) => Math.max(best,
+    right.reduce((inner, other) => Math.max(inner, requestTextSimilarity(value, other)), 0)), 0);
 }
 
 function creditKeys(song: RequestSong): string[] {
@@ -541,18 +563,20 @@ function creditKeys(song: RequestSong): string[] {
 }
 
 export function requestArtistMatches(want: unknown, song: RequestSong): boolean {
-  const artists = artistIdentityVariants(want);
   const rawWant = String(want ?? '').trim();
   if (!rawWant) return true;
   // requestName intentionally drops punctuation. Punctuation-only recordings
   // are still real identities, so an unnormalizable request may only match its
   // exact NFC/case-folded spelling rather than acting as a wildcard.
-  if (!artists.length) {
+  if (!requestName(rawWant)) {
     const wantedKey = nameKey(rawWant);
     const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])];
     return credits.some(credit => nameKey(credit) === wantedKey);
   }
-  return creditKeys(song).some(key => artistIdentityVariants(key).some(variant => artists.includes(variant)));
+  return creditKeys(song).some(key => {
+    const credited = artistIdentityVariants(key, rawWant);
+    return artistIdentityVariants(rawWant, key).some(variant => credited.includes(variant));
+  });
 }
 
 function candidateArtistParts(value: unknown): string[] {
@@ -565,13 +589,11 @@ function candidateArtistParts(value: unknown): string[] {
   return raw.split(/\s+\/\s+|\b(?:feat(?:uring)?|ft)\.?\s+/iu).map(part => part.trim()).filter(Boolean);
 }
 
-function candidateArtistVariants(value: unknown): string[] {
+// The credit's acts, each compared alone (sameActName).
+function candidateArtistValues(value: unknown): string[] {
   const parts = candidateArtistParts(value);
-  const values = parts.length ? parts : [String(value ?? '')];
-  return values.flatMap(part => {
-    const variants = artistIdentityVariants(part);
-    return variants.length ? variants : [nameKey(part)];
-  }).filter(Boolean);
+  return (parts.length ? parts : [String(value ?? '')])
+    .filter(part => requestName(part) || nameKey(part));
 }
 
 function candidateArtistCredits(song: RequestSong): string[] {
@@ -583,27 +605,28 @@ function candidateArtistCredits(song: RequestSong): string[] {
 }
 
 export function requestCandidateArtistMatches(want: unknown, song: RequestSong): boolean {
-  const wanted = candidateArtistVariants(want);
+  const wanted = candidateArtistValues(want);
   if (!wanted.length) return true;
-  const credits = candidateArtistCredits(song).flatMap(candidateArtistVariants);
-  return wanted.some(value => credits.includes(value));
+  const credits = candidateArtistCredits(song).flatMap(candidateArtistValues);
+  return wanted.some(value => credits.some(credit => sameActName(value, credit)));
 }
 
 function requestCandidateArtistSimilarity(want: unknown, song: RequestSong): number {
-  const wanted = candidateArtistVariants(want);
+  const wanted = candidateArtistValues(want);
   if (!wanted.length) return 1;
-  const credits = candidateArtistCredits(song).flatMap(candidateArtistVariants);
+  const credits = candidateArtistCredits(song).flatMap(candidateArtistValues);
   return wanted.reduce((best, value) => Math.max(best,
-    credits.reduce((inner, credit) => Math.max(inner, requestTextSimilarity(value, credit)), 0)), 0);
+    credits.reduce((inner, credit) => Math.max(inner, actNameSimilarity(value, credit)), 0)), 0);
 }
 
 export function requestArtistSimilarity(want: unknown, song: RequestSong): number {
-  const requested = artistIdentityVariants(want);
-  if (!requested.length) return 1;
+  const wanted = String(want ?? '');
+  if (!requestName(wanted)) return 1;
   const credits = [song.artist, ...(Array.isArray(song.artists) ? song.artists.map(a => (a as { name?: string })?.name) : [])]
     .filter(Boolean) as string[];
   return credits.reduce((best, credit) => {
-    const variants = artistIdentityVariants(credit);
+    const requested = artistIdentityVariants(wanted, credit);
+    const variants = artistIdentityVariants(credit, wanted);
     const score = requested.reduce((inner, value) => {
       const valueScore = variants.reduce((variantBest, candidate) =>
         Math.max(variantBest, requestTextSimilarity(value, candidate)), 0);
@@ -655,22 +678,25 @@ function undecorated(value: unknown, patterns: RegExp[]): string {
 }
 
 // `same` compares the titles as written, so a title in another script never
-// counts; `lossless` also lets a lossless transliteration make two titles
-// equal ("Zvezda" is "Звезда"). A lossy one never does: 鱼 is not 雨.
-export type TitleScripts = 'same' | 'lossless';
+// counts; `across` also lets a transliteration that bridges two scripts make
+// two titles equal ("Zvezda" is "Звезда"). Within one script, or through a
+// lossy reading, none does: 간아 is not 가나, and 鱼 is not 雨
+// (request-normalize.ts requestIdentityVariants).
+export type TitleScripts = 'same' | 'across';
 
-export function requestTitleMatches(want: unknown, got: unknown, scripts: TitleScripts = 'lossless'): boolean {
+export function requestTitleMatches(want: unknown, got: unknown, scripts: TitleScripts = 'across'): boolean {
   // Names such as "?" and "!!!" are real identities, not two empty keys.
   if (!requestName(want) || !requestName(got)) return nameKey(want) === nameKey(got);
-  const variants = (value: unknown) => (scripts === 'same' ? [requestName(value)] : requestIdentityVariants(value))
+  const variants = (value: unknown, other: unknown) => (scripts === 'same' ? [requestName(value)] : requestIdentityVariants(value, other))
     .filter(Boolean).map(titleIdentityKey);
-  const wantKeys = variants(want);
-  const gotKeys = variants(got);
+  const wantKeys = variants(want, got);
+  const gotKeys = variants(got, want);
   if (wantKeys.some(key => gotKeys.includes(key))) return true;
   const wanted = undecorated(want, FEATURED_CREDIT);
   const edition = undecorated(want, [...FEATURED_CREDIT, ...EDITION]) !== wanted;
   const gotTitle = undecorated(got, edition ? FEATURED_CREDIT : [...FEATURED_CREDIT, ...EDITION]);
-  return variants(wanted).some(key => variants(gotTitle).includes(key));
+  const gotKeysUndecorated = variants(gotTitle, wanted);
+  return variants(wanted, gotTitle).some(key => gotKeysUndecorated.includes(key));
 }
 
 export function requestTitleSimilarity(want: unknown, got: unknown): number {
@@ -729,7 +755,11 @@ function webEvidenceScore(requestedTitle: string | null, requestedArtist: string
   const named = (values: string[]) => values.some(value => requestNameWithin(blob, value));
   const localTitle = named(requestNameVariants(song.title));
   const artistTerms = candidateArtistCredits(song).flatMap(requestNameVariants);
-  const requestedArtistTerms = candidateArtistVariants(requestedArtist).flatMap(requestNameVariants);
+  // Web text is searched under every spelling, as a search query is.
+  const requestedArtistTerms = candidateArtistValues(requestedArtist).flatMap(part => {
+    const spellings = requestNameVariants(part).map(key => key.replace(/^the (?=\S)/, '').trim()).filter(Boolean);
+    return spellings.length ? spellings : [nameKey(part)];
+  }).flatMap(requestNameVariants);
   const artistInWeb = named(requestedArtist ? requestedArtistTerms : artistTerms);
   const requestedTitleInWeb = requestedTitle ? named(requestNameVariants(requestedTitle)) : false;
   if (localTitle && artistInWeb && (!requestedTitle || requestedTitleInWeb)) return 1;
@@ -1346,7 +1376,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   const contextProven = (song: RequestSong) => !match.releaseContext
     || title === match.releaseContext.wholeTitle
     || releaseContextMatches(match.releaseContext, song);
-  const identity = (song: RequestSong, scripts: TitleScripts = 'lossless') => (!title || requestTitleMatches(title, song.title, scripts))
+  const identity = (song: RequestSong, scripts: TitleScripts = 'across') => (!title || requestTitleMatches(title, song.title, scripts))
     && requestCandidateArtistMatches(resolvedArtistName, song)
     && (!match.album || requestName(song.album) === requestName(match.album))
     && contextProven(song);
@@ -1455,7 +1485,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   };
   let held: { track: RequestSong; source: string } | null = null;
   let heldByShow: { track: RequestSong; source: string } | null = null;
-  const select = (songs: RequestSong[], source: string, exact = true, scripts: TitleScripts = 'lossless'): RequestSelection | null => {
+  const select = (songs: RequestSong[], source: string, exact = true, scripts: TitleScripts = 'across'): RequestSelection | null => {
     const found = unique(songs).filter(s => constraints(s, source) && (!exact || identity(s, scripts)));
     const pool = deps.heldBack ? found.filter(s => !deps.heldBack!(s)) : found;
     const track = choose(pool.filter(eligible));
@@ -1568,7 +1598,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       const errorsBefore = errors.length;
       // The primary spellings are the listener's own script, so only a title
       // in it ends their walk.
-      const scripts: TitleScripts = group === 0 ? 'same' : 'lossless';
+      const scripts: TitleScripts = group === 0 ? 'same' : 'across';
       const exactFound = () => found.some(s => identity(s, scripts) && constraints(s, 'search') && (Boolean(title) || eligible(s)));
       for (const query of queries) {
         const viaTransliteration = query === crossScriptQuery && crossScriptQuery !== normalized;
@@ -1590,9 +1620,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   if (title) {
     searched = await search(title);
       // The order for a bare string: a title in the listener's own script, the
-      // act (in that script or through a lossless transliteration), a title only
-      // a lossless transliteration makes equal, then any near title, a lossy
-      // transliteration's included (request-normalize.ts lossyTransliteration).
+      // act (as written, or across scripts through a transliteration that
+      // bridges them), a title only such a bridge makes equal, then any near
+      // title, a reading that is no bridge included (request-normalize.ts
+      // requestIdentityVariants).
       const crossScriptOnly = transliteratedOnly.get(requestName(title));
       const exact = select(searched.filter(song => !crossScriptOnly?.has(song.id)), 'search', true, 'same');
       if (exact) return exact;
@@ -1636,13 +1667,14 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       const local = localAsked
         ? await safe('local fuzzy search', () => catalog.fuzzySearch!(title!, { signal: deps.signal }), [])
         : [];
-      // A title equal through a lossless transliteration ("Zvezda" for
-      // "Звезда") is still an exact title, and a match: from the server's
-      // transliterated query, or from the local library, whose candidates also
-      // hold any same-script exact title the server's 100-row walk missed. It
-      // comes after the act, so an act named in its own script ("play Кино",
-      // the band) outranks another act's title only a transliteration makes
-      // equal (Flora's "Kino"). A lossy transliteration is never equal here.
+      // A title equal across scripts through a transliteration that bridges
+      // them ("Zvezda" for "Звезда") is still an exact title, and a match: from
+      // the server's transliterated query, or from the local library, whose
+      // candidates also hold any same-script exact title the server's 100-row
+      // walk missed. It comes after the act, so an act named in its own script
+      // ("play Кино", the band) outranks another act's title only a
+      // transliteration makes equal (Flora's "Kino"). Within one script, or
+      // through a lossy reading, nothing is equal here: Брат is not Брать.
       const localExact = select(searched, 'search-transliterated') || select(local, 'local-library') || refusal();
       if (localExact) return localExact;
       const fuzzy = selectFuzzy(searched, 'search') || (localAsked ? selectFuzzy(local, 'local-fuzzy') : null);

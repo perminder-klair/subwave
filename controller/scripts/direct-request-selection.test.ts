@@ -5,6 +5,7 @@ import {
   requestTitleSimilarity, resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
   asksForKindOfMusic, resolveExactName,
 } from '../src/music/request-match.js';
+import { transliterationBridges } from '../src/music/request-normalize.js';
 
 test('listener requests are classified into deterministic resolver lanes', () => {
   assert.equal(classifyListenerRequest('Bohemian Rhapsody by Queen'), 'named-song-or-artist');
@@ -916,9 +917,9 @@ test('an act named in its own script outranks a title only a transliteration mak
   assert.equal(result.source, 'artist-albums');
 });
 
-// A transliteration counts as the name only when it is lossless
-// (request-normalize.ts lossyTransliteration). Han reads as toneless pinyin, so
-// 鱼 (fish) and 雨 (rain) are both "Yu".
+// A transliteration counts as the name only across scripts, and never when it
+// is lossy (request-normalize.ts requestIdentityVariants). Han reads as
+// toneless pinyin, so 鱼 (fish) and 雨 (rain) are both "Yu".
 const noServer = { searchPage: async () => ({ songs: [], rawCount: 0 }), resolveArtist: async () => null };
 
 test('a title equal only through a lossy transliteration is a near title, never a match', async () => {
@@ -978,7 +979,7 @@ test('a title a lossless transliteration makes equal is refused by name on coold
   assert.equal(result.source, 'local-library');
 });
 
-test('only a lossless transliteration makes two titles or two acts the same', () => {
+test('a lossy transliteration never makes two titles or two acts the same', () => {
   assert.equal(requestTitleMatches('Звезда', 'Zvezda'), true);
   assert.equal(requestTitleMatches('Звезда', 'Zvezda', 'same'), false);
   assert.equal(requestTitleMatches('鱼', '雨'), false);
@@ -1033,6 +1034,88 @@ test('an act credited in Latin outranks a Latin title the transliterated query a
   const result = await resolveDirectRequest({ ...modelFreeRequest('play Кино'), literal: true }, { ...f.deps, text: 'play Кино' });
   assert.equal(result.track?.id, blood.id);
   assert.equal(result.outcome, 'matched');
+});
+
+// Two values in one script compare as written, so words that only read alike
+// never meet: Hangul joins syllables with no separator (가나 and 간아 are both
+// "gana"), Cyrillic drops ь (Кровь and Кров are both "krov"), and Greek merges
+// ο and ω (Πονώ and Πόνο are both "pono").
+test('a transliteration bridges only a Latin spelling and another script', () => {
+  assert.equal(transliterationBridges('사랑', 'Sarang'), true);
+  assert.equal(transliterationBridges('가나', '간아'), false);
+  assert.equal(transliterationBridges('Love 사랑', 'Love Sarang'), true);
+  assert.equal(transliterationBridges('Love 가나', 'Love 간아'), false);
+  assert.equal(transliterationBridges('雨', 'Yu'), false);
+  assert.equal(requestTitleMatches('사랑', 'Sarang'), true);
+  assert.equal(requestTitleMatches('Кровь', 'Krov'), true);
+  for (const [want, got] of [['가나', '간아'], ['Кровь', 'Кров'], ['Πονώ', 'Πόνο'], ['हँस', 'हंस']]) {
+    assert.equal(requestTitleMatches(want, got), false, `${want} / ${got}`);
+    assert.equal(requestTitleSimilarity(want, got), 0.9, `${want} / ${got}`);
+  }
+  assert.equal(requestArtistMatches('Мат', { id: 'act', artist: 'Мать' }), false);
+  assert.equal(requestArtistMatches('Мать', { id: 'act', artist: 'Мать' }), true);
+});
+
+test('two Hangul titles that read alike are a near title, never a match', async () => {
+  const other = { id: 'gan-a', title: '간아', artist: '밴드갑' };
+  const f = fixture({ ...noServer, fuzzySearch: async () => [other] });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play 가나'), literal: true }, { ...f.deps, text: 'play 가나' });
+  assert.equal(result.track?.id, other.id);
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(result.source, 'local-fuzzy:fuzzy');
+});
+
+test("a Hangul title that only reads alike, on cooldown, is refused by nobody's name", async () => {
+  const other = { id: 'gan-a', title: '간아', artist: '밴드갑' };
+  const f = fixture({ ...noServer, fuzzySearch: async () => [other] });
+  f.deps.recentIds.add(other.id);
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play 가나'), literal: true }, { ...f.deps, text: 'play 가나' });
+  assert.notEqual(result.outcome, 'cooldown');
+  assert.notEqual(result.track?.id, other.id);
+});
+
+test('two Cyrillic titles that read alike are a near title, never a match', async () => {
+  const shelter = { id: 'krov', title: 'Кров', artist: 'Группа' };
+  const f = fixture({ ...noServer, fuzzySearch: async () => [shelter] });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Кровь'), literal: true }, { ...f.deps, text: 'play Кровь' });
+  assert.equal(result.track?.id, shelter.id);
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(result.source, 'local-fuzzy:fuzzy');
+});
+
+test('a Cyrillic title the server finds that only reads alike is a near title, never a match', async () => {
+  // A prefix search, as Navidrome's is, answers "Брат" (brother) with "Брать"
+  // (to take).
+  const take = { id: 'brat', title: 'Брать', artist: 'Группа Б' };
+  const f = fixture({ ...noServer, searchPage: async query => ({ songs: query === 'брат' ? [take] : [], rawCount: query === 'брат' ? 1 : 0 }) });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Брат'), literal: true }, { ...f.deps, text: 'play Брат' });
+  assert.equal(result.track?.id, take.id);
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(result.source, 'search:fuzzy');
+});
+
+test('a Cyrillic act that only reads alike is no act step', async () => {
+  // The server resolves "Мат" to the act "Мать"; one letter apart as written,
+  // so the bare name is not that act.
+  const home = { id: 'dom', title: 'Песня о доме', artist: 'Мать', album: 'Альбом' };
+  const f = fixture({
+    ...noServer,
+    resolveArtist: async () => ({ id: 'mat', name: 'Мать' }),
+    getArtist: async () => ({ album: [{ id: 'album', name: 'Альбом', year: 2000 }] }),
+    getAlbum: async () => [home],
+  });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Мат'), literal: true }, { ...f.deps, text: 'play Мат' });
+  assert.notEqual(result.outcome, 'matched');
+  assert.notEqual(result.source, 'artist-albums');
+});
+
+test('two Greek titles that read alike are a near title, never a match', async () => {
+  const pain = { id: 'pono', title: 'Πόνο', artist: 'Τραγουδιστής' };
+  const f = fixture({ ...noServer, fuzzySearch: async () => [pain] });
+  const result = await resolveDirectRequest({ ...modelFreeRequest('play Πονώ'), literal: true }, { ...f.deps, text: 'play Πονώ' });
+  assert.equal(result.track?.id, pain.id);
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(result.source, 'local-fuzzy:fuzzy');
 });
 
 test('ambiguous fuzzy title matching returns alternatives instead of guessing', async () => {
