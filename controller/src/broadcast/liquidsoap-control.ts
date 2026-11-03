@@ -154,11 +154,11 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
 // mixer older than the command, whose reply is an "ERROR: unknown command" line.
 export type PathReadable = 'yes' | 'no' | 'unknown';
 
-export async function pathReadable(path: string): Promise<PathReadable> {
+export async function pathReadable(path: string, timeoutMs = 2000): Promise<PathReadable> {
   // One telnet line: a path that can't be sent on it can't be asked about.
   if (!path || /[\r\n\0]/.test(path)) return 'unknown';
   try {
-    const reply = await sendCommand(`path_readable ${path}`, 2000, { requireComplete: true });
+    const reply = await sendCommand(`path_readable ${path}`, timeoutMs, { requireComplete: true });
     return reply === 'yes' || reply === 'no' ? reply : 'unknown';
   } catch {
     return 'unknown';

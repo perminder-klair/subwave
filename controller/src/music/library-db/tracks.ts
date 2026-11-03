@@ -1,15 +1,18 @@
 // Per-track reads and writes: metadata, tags, enrichment, analysis and vectors.
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
-import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
+import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, restampFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
-import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
+import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
+import { keepStoredTags } from '../lastfm-tag-policy.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 import { acceptedAt, fileReplaced } from '../replaced-file-policy.js';
+import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
+import { soundWords, type SoundPart, type SoundWords } from '../sound-line.js';
 
 export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
@@ -143,10 +146,7 @@ export function resolvedEraYearForTrack(id: string): number | null {
   return row ? resolvedStoredEra(row) : null;
 }
 
-function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
-  if (!before) return;
-  const after = storedEra(id);
-  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+function markTextVectorDirty(id: string): void {
   requireDb()
     .prepare(
       `UPDATE tracks SET text_vector_dirty = 1
@@ -155,7 +155,89 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
     .run(id);
 }
 
-// Existing vectors whose source text changed: an era edit, or migration 32's tail
+function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): void {
+  if (!before) return;
+  const after = storedEra(id);
+  if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
+  markTextVectorDirty(id);
+}
+
+// text_vector_sound, the Sound: words the vector was built from (migration 36),
+// by part. A null part is one a relabel-all forgot (forgetVectorSoundIfMoved).
+// Anything unreadable is unknown, like NULL.
+type BuiltSound = { [P in SoundPart]: string[] | null };
+function parseVectorSound(json: string | null): BuiltSound | null {
+  if (json == null) return null;
+  try {
+    const v = JSON.parse(json);
+    const part = (x: unknown) => (Array.isArray(x) ? x.map(String) : x === null ? null : undefined);
+    const moods = part(v?.moods);
+    const measured = part(v?.measured);
+    if (moods !== undefined && measured !== undefined) return { moods, measured };
+  } catch { /* unknown */ }
+  return null;
+}
+
+const sameWords = (a: string[], b: string[]) => a.length === b.length && a.every((w, i) => w === b[i]);
+
+// The row's Sound: words now, beside the words its vector was built from. Null
+// when the row is gone or the vector's words are unknown. The row is read as
+// getTrack() would see it, with the tail through SQL_TAIL_VOCAL_RANGES, never
+// outro_json.
+function soundAgainstVector(id: string): { now: SoundWords; built: BuiltSound } | null {
+  const row = requireDb()
+    .prepare(
+      `SELECT bpm, musical_key, audio_moods, vocal_ranges_json,
+              ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, text_vector_sound
+         FROM tracks WHERE id = ?`,
+    )
+    .get(id) as (Pick<TrackRow, 'bpm' | 'musical_key' | 'audio_moods' | 'vocal_ranges_json' | 'text_vector_sound'> & {
+      tail_vocal_ranges_json: string | null;
+    }) | undefined;
+  const built = parseVectorSound(row?.text_vector_sound ?? null);
+  if (!row || !built) return null;
+  const now = soundWords({
+    bpm: row.bpm, musicalKey: row.musical_key,
+    audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
+    ...parseVocalRangesJson(row.vocal_ranges_json),
+    ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
+  });
+  return { now, built };
+}
+
+// A measurement that lands after its vector (#2236): a new track is embedded in
+// phase 1 and analysed in phase 5, so its first vector has no Sound: line. The
+// one rule: a write marks the vector when the words of a part it writes now
+// differ from the words the vector was built from. Against the vector, never the
+// row before the write: a re-analyze clears the row first, so a before/after
+// compare would call every row changed. By part, because the parts land at
+// different times (sound-line.ts). Unknown (NULL, or a part a relabel-all forgot)
+// never marks, so a vector from before the upgrade stays on manual Re-embed.
+// One-way, like the era mark: equal words never clear a flag another writer set.
+export function markTextVectorDirtyIfSoundChanged(id: string, parts: readonly SoundPart[]): void {
+  const s = soundAgainstVector(id);
+  if (!s) return;
+  if (parts.every(p => s.built[p] == null || sameWords(s.now[p], s.built[p]))) return;
+  markTextVectorDirty(id);
+}
+
+// A relabel-all (a vocabulary or calibration change, or crossing the floor) moves
+// a part's words on every row at once and marks nothing, or it would re-embed the
+// whole library. The vectors still hold the old words, though, and an identical
+// --re-analyze relabels every row again through the incremental branch, which
+// would find each one changed and mark it: the same whole library, one re-analyze
+// later. So the relabel forgets the part where it moved the vector's words, and
+// that part stays unknown until the vector is rebuilt.
+export function forgetVectorSoundIfMoved(id: string, part: SoundPart): void {
+  const s = soundAgainstVector(id);
+  if (!s || s.built[part] == null || sameWords(s.now[part], s.built[part])) return;
+  requireDb()
+    .prepare(`UPDATE tracks SET text_vector_sound = ? WHERE id = ?`)
+    .run(JSON.stringify({ ...s.built, [part]: null }), id);
+}
+
+// Existing vectors whose source text changed: an era edit, (opt-in) the track's
+// Last.fm tags, a measurement that moved its Sound: words, or migration 32's tail
 // verdict. They remain in the KNN index until phaseEmbed successfully replaces them.
 export function textVectorDirtyIds(): string[] {
   return (requireDb()
@@ -211,8 +293,8 @@ export function earliestMeasuredAt(): string | null {
 
 // Everything the analyzer measured from a track's audio, for one track: the
 // head analysis and its loudness, the tail, vocal ranges, the stems stamp, CLAP
-// and the audio moods derived from it, the map position derived from CLAP, and
-// the failure history that described the old file. Unlike clearAnalysis()
+// and the audio moods and descriptors derived from it, the map position derived
+// from CLAP, and the failure history that described the old file. Unlike clearAnalysis()
 // nothing is kept: every figure was measured on a file that is gone. Metadata,
 // tags, years, lyrics and plays are not audio measurements and stay. The stem
 // files themselves are the caller's (stem-cache.forgetStems), since this runs
@@ -232,6 +314,7 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
          analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL,
          structure_json = NULL, vocal_ranges_json = NULL, pace_json = NULL, beats_json = NULL,
          bars_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
+         audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
          outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, lead_silence_ms = NULL,
          stems_at = NULL, map_x = NULL, map_y = NULL,
          analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL
@@ -282,8 +365,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
     .prepare(
       `
       INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec,
-                          file_path, file_suffix, file_size, bit_rate)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          file_path, file_suffix, file_size, bit_rate, explicit_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -322,7 +405,10 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
         file_path    = COALESCE(excluded.file_path, tracks.file_path),
         file_suffix  = COALESCE(excluded.file_suffix, tracks.file_suffix),
         file_size    = COALESCE(excluded.file_size, tracks.file_size),
-        bit_rate     = COALESCE(excluded.bit_rate, tracks.bit_rate)
+        bit_rate     = COALESCE(excluded.bit_rate, tracks.bit_rate),
+        -- A CASE, not COALESCE: the walk must be able to clear a removed tag,
+        -- and every other writer (undefined) must leave the walked value alone.
+        explicit_status = CASE WHEN ? = 1 THEN excluded.explicit_status ELSE tracks.explicit_status END
     `,
     )
     .run(
@@ -343,6 +429,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
       file.fileSuffix,
       replaced ? storedSize : walkedSize,
       file.bitRate,
+      normaliseExplicitStatus(meta.explicitStatus),
+      meta.explicitStatus === undefined ? 0 : 1,
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);
   return replaced;
@@ -418,17 +506,79 @@ export function setManualOriginalYear(id: string, year: number | null): void {
   markTextVectorDirtyIfEraChanged(id, eraBefore);
 }
 
+// The stamp describes the stored list, so a write that replaces the list clears
+// it and the row is owed a lookup again: with the opt-in off, a re-enrich puts
+// the artist-only list back, and turning it on later has to see that. A station
+// that never turned it on has no stamps, so this changes nothing there.
 export function upsertTrackEnrichment(id: string, enrich: TrackEnrichment): void {
+  const lastfmTags = enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null;
   requireDb()
     .prepare(
-      `UPDATE tracks SET lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ? WHERE id = ?`,
+      `UPDATE tracks SET
+         lastfm_track_tags_at = CASE WHEN lastfm_tags IS ? THEN lastfm_track_tags_at END,
+         lastfm_tags = ?, lyric_excerpt = ?, enriched_at = ?
+       WHERE id = ?`,
     )
     .run(
-      enrich.lastfmTags ? JSON.stringify(enrich.lastfmTags) : null,
+      lastfmTags,
+      lastfmTags,
       enrich.lyricExcerpt ?? null,
       new Date().toISOString(),
       id,
     );
+}
+
+// Tracks still owed a track.getTopTags lookup. Not scoped to the tagger's
+// untagged/enriched sets, for the same reason as idsNeedingOriginalYear. A row
+// with no artist or title can't be asked about, so it is never owed.
+export function idsNeedingLastfmTrackTags(): string[] {
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks
+          WHERE lastfm_track_tags_at IS NULL
+            AND TRIM(COALESCE(artist, '')) <> ''
+            AND TRIM(COALESCE(title, '')) <> ''`,
+      )
+      .all() as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+// The one write of a track-aware Last.fm list, shared by the bulk pass and the
+// retag route. A genuine answer stamps the row, hit or miss, and replaces the
+// list if it has tags on it: one with none says nothing about a list that may
+// have come from Navidrome. A row's first answer also keeps what the row already
+// held (keepStoredTags): only a row that has been answered holds its own old
+// tags, which are the ones to let go of. Anything else stamps nothing and never
+// costs a row the list it has, so an outage leaves the library as it found it; a
+// row with no list takes what did come back, so a new track isn't embedded bare.
+// Only a real
+// change touches the list or dirties the vector: `lastfm_tags` is in the search
+// keys' trigger, and the embed text is built from this exact order. Returns the
+// stored list.
+export function recordLastfmTrackTags(
+  id: string,
+  lookup: { tags: string[]; answered: boolean },
+): string[] | null {
+  const d = requireDb();
+  const row = d.prepare(`SELECT lastfm_tags, lastfm_track_tags_at FROM tracks WHERE id = ?`).get(id) as
+    | Pick<TrackRow, 'lastfm_tags' | 'lastfm_track_tags_at'>
+    | undefined;
+  if (!row) return null;
+  const stored = row.lastfm_tags ? safeParseArray(row.lastfm_tags) : [];
+  const replaces = lookup.answered && lookup.tags.length > 0;
+  const next = replaces && !row.lastfm_track_tags_at
+    ? keepStoredTags(lookup.tags, stored)
+    : replaces || stored.length === 0 ? lookup.tags : stored;
+  if (JSON.stringify(next) !== JSON.stringify(stored)) {
+    d.prepare(`UPDATE tracks SET lastfm_tags = ? WHERE id = ?`)
+      .run(next.length ? JSON.stringify(next) : null, id);
+    markTextVectorDirty(id);
+  }
+  if (lookup.answered) {
+    d.prepare(`UPDATE tracks SET lastfm_track_tags_at = ? WHERE id = ?`).run(new Date().toISOString(), id);
+  }
+  return next.length ? next : null;
 }
 
 export function upsertTrackTags(id: string, tags: TagWrite): void {
@@ -601,6 +751,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
     source: a.source ?? 'unknown',
     tailReason: a.source === 'capped' ? 'capped-download' : undefined,
   });
+  markTextVectorDirtyIfSoundChanged(id, ['measured']);
   })();
 }
 
@@ -730,6 +881,11 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
     }
     syncTrackFacets(id, { fresh, tried, source: w.source, unmeasurable });
     if (w.clap) upsertTrackAudioVector(id, w.clap);
+    // Only the facets that write a measured word's columns: a stems-only or
+    // loudness-only answer moved none, so it never marks.
+    if (w.head || w.vocal || (w.tail && !('unmeasurable' in w.tail))) {
+      markTextVectorDirtyIfSoundChanged(id, ['measured']);
+    }
   })();
 }
 
@@ -854,21 +1010,26 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
       key_ranges_json = NULL, outro_json = NULL,
       lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
+      audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
       -- The failure history goes with the analysis it describes, or the tracks
       -- most in need of a retry would be the only ones skipped.
       analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL`,
   ).run();
-  // CLAP vectors are written in the same pass, and the audio moods cleared
-  // above are derived from them.
+  // CLAP vectors are written in the same pass, and the audio moods and
+  // descriptors cleared above are derived from them.
   d.prepare('DELETE FROM track_audio_vectors').run();
   clearFacetRows(opts);
   })();
 }
 
+// `builtSound` is the Sound: words the vector's text was built from
+// (sound-line.soundWords), stored beside it for markTextVectorDirtyIfSoundChanged.
+// Omitted = unknown (NULL), which no later measurement marks.
 export function upsertTrackVector(
   id: string,
   vector: number[] | Float32Array,
   expectedEraYear: number | null,
+  builtSound?: SoundWords | null,
 ): void {
   if (getEmbeddingDim() === null) {
     throw new Error('library-db opened without embedding dim');
@@ -890,17 +1051,24 @@ export function upsertTrackVector(
   // Embedding is an external await: compare the era this vector was built from
   // against the row at completion, so a stale writer can't clear the refresh
   // marker a concurrent metadata/manual edit set.
-  d.prepare(
-    `UPDATE tracks
-        SET text_vector_dirty = CASE
-          WHEN (CASE
-            WHEN original_year > 0 THEN original_year
-            WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL
-            WHEN year > 0 THEN year
-            ELSE NULL
-          END) IS ? THEN 0 ELSE 1 END
-      WHERE id = ?`,
-  ).run(expectedEraYear, id);
+  d.transaction(() => {
+    d.prepare(
+      `UPDATE tracks
+          SET text_vector_dirty = CASE
+            WHEN (CASE
+              WHEN original_year > 0 THEN original_year
+              WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL
+              WHEN year > 0 THEN year
+              ELSE NULL
+            END) IS ? THEN 0 ELSE 1 END,
+            text_vector_sound = ?
+        WHERE id = ?`,
+    ).run(expectedEraYear, builtSound ? JSON.stringify(builtSound) : null, id);
+    // The same check for the Sound: words, after the era CASE, which would reset
+    // its mark: a measurement written during the await was compared against the
+    // old vector, or found no vector to mark.
+    if (builtSound) markTextVectorDirtyIfSoundChanged(id, ['moods', 'measured']);
+  })();
 }
 
 export function dropVectors(): void {
@@ -912,7 +1080,7 @@ export function dropVectors(): void {
       `id TEXT PRIMARY KEY, embedding FLOAT[${getEmbeddingDim()}] distance_metric=cosine)`,
   );
   touchGenreInputs(d);
-  d.prepare(`UPDATE tracks SET text_vector_dirty = 0`).run();
+  d.prepare(`UPDATE tracks SET text_vector_dirty = 0, text_vector_sound = NULL`).run();
 }
 
 // Independent of getEmbeddingDim() (that is the TEXT index): the audio space is

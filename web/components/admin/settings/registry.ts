@@ -48,7 +48,8 @@ export const LLM_PROVIDER_FORM_KEYS = [
 // stem cache under transitions; it saves to `audio.*`). One list, read by the
 // section's dirty check and its SaveBar's error scope.
 export const STEM_FORM_KEYS = [
-  'transitions.pairDrain', 'transitions.stemBlends', 'transitions.stemCache', 'transitions.stemCacheGb',
+  'transitions.pairDrain', 'transitions.stemBlends', 'transitions.pickTimeStems',
+  'transitions.stemCache', 'transitions.stemCacheGb',
 ] as const;
 
 // `satisfies`, never a `readonly SectionSpec[]` annotation: the annotation
@@ -323,6 +324,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Audio fusion weight', section: 'library', card: 'Propagation', keywords: 'clap audio text fusion analyzer' },
   { label: 'Active-learning rounds', section: 'library', card: 'Propagation', keywords: 'rounds least confident passes' },
   { label: 'Last.fm tags', section: 'library', card: 'Enrichment', keywords: 'crowd tags embed text' },
+  { label: 'Last.fm track tags', section: 'library', card: 'Enrichment', keywords: 'lastfm per song crowd tags backfill' },
   { label: 'Lyrics', section: 'library', card: 'Enrichment', keywords: 'lyrics embed text' },
 
   // ── web search ─────────────────────────────────────────────────────────────

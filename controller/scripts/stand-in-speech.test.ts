@@ -1,9 +1,9 @@
-// A stand-in line never airs. A model told "silence is not an option" but
-// handed no data answered {"text": "placeholder"}, and the DJ read the word
-// out (eleven times, from a prompt-only skill). stand-in-policy decides what
-// a stand-in is; these pin the matcher and the speech paths that must consult
-// it (announce, announceAtNextTrack, announceExchange, and a pushed pick's
-// link or request intro), asserting on what reaches _speak.
+// A stand-in line is dropped before TTS. A model told "silence is not an
+// option" but handed no data answered {"text": "placeholder"}, and the DJ read
+// the word out (eleven times, from a prompt-only skill). stand-in-policy
+// decides what a stand-in is; these pin the matcher and the speech paths that
+// must consult it (announce, announceAtNextTrack, announceExchange, and a
+// pushed pick's link or request intro), asserting on what reaches _speak.
 //
 // Run: npm test -- stand-in-speech
 
@@ -70,6 +70,10 @@ test('markup that leaves nothing to say is a stand-in, not an empty line', () =>
   for (const [shape, line] of Object.entries(TEMPLATES)) assert.ok(standInToken(line), shape);
   assert.ok(standInToken('[Music swells]'), 'a cue with no words after it never aired');
   assert.ok(standInToken('<br>'), 'a bare tag normalises to nothing');
+  // Normalising empties a cue or tag but keeps the quotes round it, so only the
+  // last rule (no words left in the display form) stops the quotes reaching TTS.
+  for (const line of ['"[laughs]"', '“[music swells]”', '"<pause>"'])
+    assert.ok(standInToken(line), `a quoted cue leaves only its quotes: ${line}`);
 });
 
 test('todo and null are words elsewhere, so only the capitals are a stand-in', () => {

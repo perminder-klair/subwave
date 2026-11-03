@@ -24,6 +24,7 @@ const NEVER_WRITTEN = ['id', 'genre'];
 const WALK_OWNED = [
   'title', 'artist', 'album', 'album_id', 'artist_id', 'year',
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
+  'explicit_status',
   ...SEARCH_KEY_DDL.columns,
   // The file as Navidrome reports it (walkFileInfo): the new id's own walk
   // writes them, and an old id's path may name a file that moved.
@@ -34,7 +35,9 @@ const WALK_OWNED = [
 // failure counters follow analysis_version so successful new analysis does not inherit old
 // failures.
 const GROUPS: Array<{ anchor: string; cols: string[] }> = [
-  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lyric_excerpt', 'enriched_at'] },
+  // lastfm_track_tags_at describes lastfm_tags, so the two move together: a
+  // stamp carried onto a new row's own artist-only list would falsely mark it done.
+  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lastfm_track_tags_at', 'lyric_excerpt', 'enriched_at'] },
   { anchor: 'moods', cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at'] },
   {
     anchor: 'analysis_version',
@@ -43,12 +46,13 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
       'lead_silence_ms', 'analyze_error', 'analyze_failed_at', 'analyze_fail_count'],
   },
   { anchor: 'audio_moods', cols: ['audio_moods', 'audio_mood_scores_json'] },
+  { anchor: 'audio_descriptors', cols: ['audio_descriptors', 'audio_descriptor_scores_json'] },
   { anchor: 'map_x', cols: ['map_x', 'map_y'] },
 ];
 
 // Columns whose value can't be decided by "is it null" alone. Each is handled
 // explicitly in mergeRow(); listed here so columnPlan() can account for them.
-const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty'];
+const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty', 'text_vector_sound'];
 
 // Default carried values to new ?? old. This list documents an explicit choice for columnPlan;
 // unlisted carried columns use the same behavior.
@@ -145,6 +149,8 @@ function mergeRow(plan: ColumnPlan, oldRow: Row, newRow: Row, movedTextVector: b
   // old row's embedding was the one moved across. Otherwise the new row keeps
   // its own flag — its vector is its own.
   merged.text_vector_dirty = movedTextVector ? (oldRow.text_vector_dirty ?? 0) : (newRow.text_vector_dirty ?? 0);
+  // The Sound: words the vector was built from describe the vector too (#2236).
+  merged.text_vector_sound = movedTextVector ? (oldRow.text_vector_sound ?? null) : (newRow.text_vector_sound ?? null);
 
   return merged;
 }

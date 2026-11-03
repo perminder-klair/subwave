@@ -228,6 +228,8 @@ async function main() {
           year: song.year,
           genres: subsonic.songGenres(song),
           duration: song.duration,
+          // A walk, so always a value: this is how a tag that has gone clears.
+          explicitStatus: db.normaliseExplicitStatus(song.explicitStatus),
           ...walkFileInfo(song),
         });
         liveIds.add(song.id);

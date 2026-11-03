@@ -67,6 +67,14 @@ test('a dry run never reports a delete or a release as done', () => {
   assert.match(html, /back in the library, ready to release/);
 });
 
+test('a dry run says when a track back in the library is held, and offers no release for it (#2224)', () => {
+  const html = view(dry({ mismatchedCount: 1, agingCount: 1, quarantineEntries: 1 }));
+  assert.match(html, /<strong class="mono-num">1<\/strong> back in the library but not proven the same recording, left to age out/);
+  assert.doesNotMatch(html, /ready to release/);
+  assert.equal(pendingWork(dry({ mismatchedCount: 1 })), 0, 'nothing for the button to do');
+  assert.doesNotMatch(view(dry()), /not proven the same recording/, 'silent with none held');
+});
+
 test('the footer says what happens with the daily pass off', () => {
   assert.match(view(dry()), /With the daily pass off, nothing ages out or comes back on its own/);
 });

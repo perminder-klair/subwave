@@ -118,6 +118,29 @@ async function main() {
     assert.deepEqual([...(await stemCache.cachedTrackIdSet())].sort(), ['mid', 'new']);
   });
 
+  await test('no keep-last set, or an empty one, evicts exactly as before', async () => {
+    // What a station with pick-time stems off gets (pick-stems-policy.ts
+    // sweepKeepLast returns no set): the same dirs in the same order.
+    const evicted = async (opts?: { keepLast?: ReadonlySet<string> }) => {
+      resetCache();
+      for (let i = 0; i < 6; i++) makeDir(`k${i}`, 10 * MB, 6000 - i * 1000);
+      await stemCache.sweep(25 * MB, { force: true, ...opts });
+      const left = await stemCache.cachedTrackIdSet();
+      return ['k0', 'k1', 'k2', 'k3', 'k4', 'k5'].filter(id => !left.has(id));
+    };
+    const plain = await evicted();
+    assert.deepEqual(plain, ['k0', 'k1', 'k2', 'k3'], 'oldest first');
+    assert.deepEqual(await evicted({ keepLast: undefined }), plain);
+    assert.deepEqual(await evicted({ keepLast: new Set() }), plain);
+    // And a queued track's dir goes after the rest, still down to the budget.
+    assert.deepEqual(await evicted({ keepLast: new Set(['k0']) }), ['k1', 'k2', 'k3', 'k4']);
+    resetCache();
+    makeDir('old', 10 * MB, 3000);
+    makeDir('mid', 10 * MB, 2000);
+    makeDir('new', 10 * MB, 1000);
+    await stemCache.sweep(25 * MB, { force: true });
+  });
+
   await test('a cache inside its budget is a no-op', async () => {
     const res = await stemCache.sweep(25 * MB);
     // The previous sweep's walk left a usage snapshot inside this budget, so
@@ -233,6 +256,46 @@ async function main() {
       assert.deepEqual([...(await stemCache.cachedTrackIdSet())].sort(), ['mid', 'new', 'stuck']);
     } finally {
       unstick();
+    }
+  });
+
+  await test('a delete refused after the probe passed leaves the budget check only once it fails', async (t) => {
+    // The catch the probe can't replace (#2225): a share that answers access()
+    // and then refuses the delete. The sweep learns of it only by failing, so
+    // the folders ranked before it are gone already, and the warning must not
+    // say otherwise. Staged with a 0755 folder holding a 0555 subfolder: the
+    // probe sees a folder it can write, rm -r is refused inside it.
+    if (skipAsRoot()) return;
+    const warn = t.mock.method(console, 'warn', () => {});
+    resetCache();
+    makeDir('old-a', 2 * MB, 9000);
+    makeDir('old-b', 2 * MB, 8000);
+    const refused = makeDir('refused', 10 * MB, 7000);
+    makeDir('new', 20 * MB, 100);
+    // Backdated, or the subfolder's own mtime would rank the folder newest.
+    const locked = join(refused, 'locked');
+    mkdirSync(locked);
+    writeFileSync(join(locked, 'x'), 'x');
+    const ts = (Date.now() - 7000 * 1000) / 1000;
+    utimesSync(join(locked, 'x'), ts, ts);
+    utimesSync(locked, ts, ts);
+    chmodSync(locked, 0o555);
+    forgetSnapshot();
+    try {
+      const res = await stemCache.sweep(25 * MB);
+      assert.equal(res.failedDirs, 1);
+      assert.equal(res.removed, 2, 'the folders ranked before it went in its place');
+      assert.deepEqual(
+        [...(await stemCache.cachedTrackIdSet())].sort(),
+        ['new', 'refused'],
+        'once it failed, its bytes left the check: the newest folder survives',
+      );
+      assert.equal(warn.mock.callCount(), 1);
+      const msg = String(warn.mock.calls[0].arguments[0]);
+      assert.match(msg, /1 folder/);
+      assert.doesNotMatch(msg, /nothing is evicted/, 'the warning makes no claim the catch path breaks');
+    } finally {
+      chmodSync(locked, 0o755);
     }
   });
 

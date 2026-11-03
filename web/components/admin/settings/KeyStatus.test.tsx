@@ -1,25 +1,36 @@
-// The key banner under Settings → Web search. Firecrawl searches refuse any key
-// that isn't an fc- one, so a key left in the shared slot by another provider
-// has to read as missing, not as "ready to use". The banner is rendered to
-// static markup, because web has no DOM harness.
+// The key banner under Settings → Web search. Tavily, Brave and Firecrawl
+// searches refuse a key left in the shared slot by another provider, so it has
+// to read as missing, not as "ready to use". The controller says which providers
+// refuse the key on file (keyRefusedBy). The banner is rendered to static
+// markup, because web has no DOM harness.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { firecrawlKeyIsForeign } from './SearchSection';
+import { searchKeyIsForeign } from './SearchSection';
 import { KeyStatus } from './shared';
 
-test('a key on file that is not an fc- one counts as foreign, only for Firecrawl', () => {
-  assert.equal(firecrawlKeyIsForeign('firecrawl', true, null), true);
-  assert.equal(firecrawlKeyIsForeign('firecrawl', true, 'settings'), false);
-  assert.equal(firecrawlKeyIsForeign('firecrawl', true, 'env'), false);
-  assert.equal(firecrawlKeyIsForeign('firecrawl', false, null), false, 'no key is plain missing');
-  assert.equal(firecrawlKeyIsForeign('tavily', true, null), false);
+test('a key on file is foreign to exactly the providers that refuse it', () => {
+  // A Firecrawl key: Tavily and Brave refuse it.
+  const fc = ['tavily', 'brave'];
+  assert.equal(searchKeyIsForeign('tavily', true, fc), true);
+  assert.equal(searchKeyIsForeign('brave', true, fc), true);
+  assert.equal(searchKeyIsForeign('firecrawl', true, fc), false);
+  // A Tavily key: Brave and Firecrawl refuse it.
+  assert.equal(searchKeyIsForeign('firecrawl', true, ['brave', 'firecrawl']), true);
+  assert.equal(searchKeyIsForeign('tavily', true, ['brave', 'firecrawl']), false);
+  assert.equal(searchKeyIsForeign('tavily', true, []), false);
+});
+
+test('no key on file is plain missing, never foreign', () => {
+  assert.equal(searchKeyIsForeign('firecrawl', false, ['firecrawl']), false);
+  assert.equal(searchKeyIsForeign('tavily', false, ['tavily']), false);
 });
 
 test('a controller that does not send the field never shows the warning', () => {
-  assert.equal(firecrawlKeyIsForeign('firecrawl', true, undefined), false);
+  assert.equal(searchKeyIsForeign('firecrawl', true, undefined), false);
+  assert.equal(searchKeyIsForeign('tavily', true, undefined), false);
 });
 
 test('KeyStatus keeps its stock sentences without a detail', () => {

@@ -280,6 +280,7 @@ export default function ShowsPanel() {
       filtersStrict: false, maxTrackSeconds: null, minTrackLengthSeconds: null,
       fadeAtShowEnd: null,
       playlistIds: [], playlistStrict: false, playlistExhaust: false, playlistInOrder: false, excludedPlaylistIds: [],
+      excludeExplicit: false,
       programme: false, segmentSkill: '', preparationSkill: '', tags: [],
     });
     // errors populate only once a field is touched, so without this the new

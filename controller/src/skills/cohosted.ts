@@ -254,10 +254,10 @@ async function generateCohostedCapability({
   if (lines.some(line => !line.persona || !line.text)) {
     throw new Error(`skill "${capability.skill || capability.kind}" produced no co-hosted discussion`);
   }
-  // A stand-in never airs (queue.speakable), so `lines` leaves it out: callers
-  // report and record these lines as what aired. A discussion with nothing left
-  // is a stand-down the callers already back off on, not a failed render, and
-  // that holds for a forced run too.
+  // The gate drops a stand-in before TTS (queue.speakable), so `lines` leaves
+  // it out: callers report and record these lines as what aired. A discussion
+  // with nothing left is a stand-down the callers already back off on, not a
+  // failed render, and that holds for a forced run too.
   const spoken = withoutStandIns(lines, cast.map((persona) => persona.name || ''));
   // Notebook updates reference the original turn numbers. Stand down rather
   // than attach an update to a different turn after removing a stand-in.

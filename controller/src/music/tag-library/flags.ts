@@ -158,6 +158,9 @@ export async function walkNavidrome(
       eraUntrusted: song.albumEraUntrusted ?? null,
       genres: subsonic.songGenres(song),
       duration: song.duration,
+      // Always a value: null is how a walk clears a tag that has gone, so a
+      // server that omits the field reads as no tag rather than as no opinion.
+      explicitStatus: db.normaliseExplicitStatus(song.explicitStatus),
       ...fileInfo,
     });
     if (fileReplaced) candidates.set(song.id, fileInfo.fileSize);
@@ -188,7 +191,7 @@ export async function walkNavidrome(
   }
   // One line per walk on the change-time signal, whatever it found.
   logEvent('info', walked === 0 ? 'Replaced-file check: skipped (empty walk)'
-    : !fileChanges ? 'Replaced-file check: size only (no change times: the server is not Navidrome, its API refused or timed out, or the station kept the password back; the Doctor says which)'
+    : !fileChanges ? 'Replaced-file check: size only (no change times: the server is not Navidrome or did not answer, its API refused or timed out, or the station kept the password back)'
       : `Replaced-file check: ${fileChanges.changes.length.toLocaleString('en-GB')} change(s) read since `
         + `${fileChanges.since ?? 'the start'}${fileChanges.complete ? '' : ' (partial: the read stopped before its floor, the mark stays)'}`
         + (fileChanges.futureDated ? `, ${fileChanges.futureDated} future-dated file(s) skipped (a wrong clock on the files)` : '')

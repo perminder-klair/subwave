@@ -631,6 +631,11 @@ export const DEFAULTS = {
       // images and tags always came back empty; it stays as the fallback when
       // forced on with no api_key, for custom Navidromes that DO expose tag[].
       lastfmTags: null as boolean | null,
+      // Add each song's own tags (track.getTopTags) ahead of its artist's, in the
+      // same lastfm_tags list. Off by default, unlike the rest of this block:
+      // it costs one call per track plus a re-embed of whatever changes, about 50
+      // minutes on a 10k library. Needs an api_key and lastfmTags not forced off.
+      lastfmTrackTags: false,
       lyrics: true,       // fetch + include lyric excerpt in embed text
       // Resolve original release years for compilation tracks via MusicBrainz
       // (#842) — a compilation's `year` tag is the compilation's release date, so
@@ -694,6 +699,12 @@ export const DEFAULTS = {
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
+    // Separate a picked track's missing stem windows while it is held behind
+    // the on-air one (broadcast/pick-stems.ts, #2197), so the cache fills with
+    // what the station plays instead of waiting for the bulk backfill. Off
+    // until its load on the mixer has been measured: it runs Demucs during
+    // the broadcast, on the same worker as the blend render.
+    pickTimeStems: false,
     // Fade curve for PLAIN song-to-song crossfades: false = linear (two
     // different songs dip ~3 dB mid-fade), true = equal-power (cos out, sin^1.5
     // in, level held within 0.7 dB). Effects, stem-blend clip seams, jingles
