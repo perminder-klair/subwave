@@ -45,7 +45,7 @@ export async function resolveInOrderNext(
     maxTrackSec: settings.effectiveTrackLengthLimits(show).selectionMaxSec,
   });
   if (!airable.length) {
-    return { ok: false, reason: 'no track in its anchor passes the show\'s filters (exclusions, length limits, strict locks)', warnings };
+    return { ok: false, reason: 'no track in its anchor passes the show\'s filters (exclusions, length limits, strict locks, a clean show)', warnings };
   }
   const airableIds = new Set<string>(airable.map(t => t.id));
   const sig = anchorSignature(show.playlistIds);

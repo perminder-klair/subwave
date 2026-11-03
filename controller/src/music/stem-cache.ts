@@ -1,13 +1,13 @@
 // The analyzer writes cached head/tail stems on the shared volume. The controller manages
 // paths and evicts by the same priority the backfill uses.
 
-import { readdir, stat, rm, readFile, mkdir, chmod, writeFile } from 'node:fs/promises';
+import { access, constants, readdir, stat, rm, readFile, mkdir, chmod, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as db from './library-db.js';
 import * as likes from '../broadcast/likes.js';
-import { stemEvictionOrder, UNKNOWN_TRACK_PRIORITY } from './stem-priority.js';
+import { evictQueuedLast, stemEvictionOrder, UNKNOWN_TRACK_PRIORITY } from './stem-priority.js';
 import { mapPool } from '../util/async-pool.js';
 import type { StemScanOpts } from './library-db.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
@@ -292,6 +292,12 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
   } catch {
     return []; // no cache dir yet
   }
+  // Dot entries are never track dirs: the root marker, and the orphan purge's
+  // .orphan-quarantine, whose few-KB inode size would otherwise rank it first
+  // in the eviction order (no library row) and let an over-budget sweep
+  // rm -rf the whole quarantine past its grace, while freeing far more than
+  // the sweep counted. stemsRootStatus skips them the same way.
+  entries = entries.filter(name => !name.startsWith('.'));
   const measured = await mapPool(entries, SCAN_CONCURRENCY, name => measureDir(path.join(root, name)));
   return measured.filter((d): d is { dir: string; bytes: number; mtimeMs: number } => d !== null);
 }
@@ -302,9 +308,14 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 // on a network share, takes minutes. Nearly every hour nothing has changed, so
 // the last walk's totals are kept in <stateDir>/stem-cache-usage.json and
 // reused while they can be trusted:
-// - the only writer of stem dirs is the analysis pass, which marks the
-//   snapshot `pending` while it runs and adds the dirs it wrote when it ends;
-// - evictions are made by sweep(), which rewrites the snapshot from its walk;
+// - the analysis pass writes stem dirs in bulk: it marks the snapshot
+//   `pending` while it runs and adds the dirs it wrote when it ends;
+// - a pick-time separation (broadcast/pick-stems.ts) writes one dir at a
+//   time and adds what it grew at once (settleTrackWrite);
+// - evictions are made by sweep(), which rewrites the snapshot from its walk,
+//   and by forgetStems(), which marks it `stale` as the purge does;
+// - the orphan purge marks it `stale` (markUsageStale): the next read walks, and
+//   until then the figure stays readable for the budget field;
 // - anything else (dirs deleted or copied in by hand, a pass that died before
 //   settling) is caught by a full walk at least every SNAPSHOT_MAX_AGE_MS.
 export const SNAPSHOT_MAX_AGE_MS = 24 * 3600_000;
@@ -322,6 +333,8 @@ export interface UsageSnapshot {
   updatedAt: string;
   // An analysis pass that may be writing stem dirs right now.
   pending?: { pid: number; since: string };
+  // The cache changed outside the pass and the sweep: these are last-known totals.
+  stale?: boolean;
 }
 
 export type SnapshotVerdict = 'use' | 'walk' | 'pass-running';
@@ -344,6 +357,7 @@ export function snapshotVerdict(opts: {
     // written dirs nobody counted.
     return opts.pendingAlive && fresh ? 'pass-running' : 'walk';
   }
+  if (snap.stale) return 'walk';
   const measured = Date.parse(snap.measuredAt);
   if (!Number.isFinite(measured) || opts.nowMs - measured > SNAPSHOT_MAX_AGE_MS || measured > opts.nowMs + 60_000) return 'walk';
   return 'use';
@@ -371,6 +385,20 @@ async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
     snapshotUntrusted = true;
     return false;
   }
+}
+
+// For a writer outside the pass and the sweep (the orphan purge, forgetStems, a
+// pick-time separation whose request failed mid-write): the stored
+// totals no longer match the disk, so the next read walks instead of trusting
+// them. The file stays, because the budget field reads it (storedUsage) and an
+// operator about to lower the budget is better served by a flagged figure than
+// by none: with no figure the warning and the confirm both go. Totals that
+// cannot be marked must not outlive this, so a failed write removes them.
+export async function markUsageStale(): Promise<void> {
+  const snap = await readSnapshot();
+  if (!snap) return;
+  const marked = await writeSnapshot({ ...snap, stale: true, updatedAt: new Date().toISOString() });
+  if (!marked) await rm(snapshotPath(), { force: true }).catch(() => {});
 }
 
 function pidAlive(pid: number): boolean {
@@ -425,6 +453,44 @@ export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBy
   return { bytes, dirs, estTrackBytes: estimateTrackBytes(bytes, dirs) };
 }
 
+// The STORED cache size, for a surface that must answer at once (the stem
+// budget field). Never walks: a walk of a large cache on a network share
+// takes minutes, and this is read whenever the Settings page opens. A
+// snapshot the sweep would not trust (older than a day, a pass writing) is
+// still reported, flagged, because an operator about to lower the budget is
+// better served by an old figure with its age than by none. Null when there
+// is no usable snapshot of THIS root.
+export interface StoredUsage {
+  bytes: number;
+  dirs: number;
+  estTrackBytes: number;
+  /** Last full walk. */
+  measuredAt: string;
+  updatedAt: string;
+  /** The sweep would use this figure as is (measured within a day, no pass writing). */
+  fresh: boolean;
+  /** An analysis pass is adding stems right now; the figure is a floor. */
+  passRunning: boolean;
+  /** The cache changed since this was measured (an orphan pass); the sweep re-measures it. */
+  stale: boolean;
+}
+
+export async function storedUsage(): Promise<StoredUsage | null> {
+  const { snap, verdict } = await snapshotState();
+  if (!snap || snap.version !== 1 || snap.root !== stemsRoot()) return null;
+  if (!Number.isFinite(snap.bytes) || !Number.isFinite(snap.dirs) || snap.bytes < 0 || snap.dirs < 0) return null;
+  return {
+    bytes: snap.bytes,
+    dirs: snap.dirs,
+    estTrackBytes: estimateTrackBytes(snap.bytes, snap.dirs),
+    measuredAt: snap.measuredAt,
+    updatedAt: snap.updatedAt,
+    fresh: verdict === 'use',
+    passRunning: verdict === 'pass-running',
+    stale: snap.stale === true,
+  };
+}
+
 // The analysis pass marks the snapshot while it may write stem dirs. Called
 // after its headroom read, so that read could still use the snapshot.
 export async function markPassPending(): Promise<boolean> {
@@ -452,7 +518,8 @@ async function dirBytes(dir: string): Promise<number | null> {
 // End of an analysis pass: add the NET-NEW dirs it allocated to the snapshot
 // (measuring just those), clear the pending mark, and say whether the cache is
 // still inside the budget. Existing dirs may gain a missing tail, so a pass
-// that rewrote one invalidates the snapshot and takes a full walk instead.
+// that rewrote one invalidates the snapshot and takes a full walk instead, as
+// does one a purge marked stale mid-pass, since its base no longer holds.
 // An untrusted settlement also invalidates old totals, even if its file remains.
 export async function settlePassWrites(
   newTrackIds: Iterable<string>,
@@ -462,7 +529,7 @@ export async function settlePassWrites(
   const snap = await readSnapshot();
   const mine = snap?.pending?.pid === process.pid;
   const base = snapshotVerdict({ snap, root: stemsRoot(), nowMs: Date.now(), pendingAlive: true });
-  if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running') {
+  if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running' || snap.stale) {
     snapshotUntrusted = true;
     return null;
   }
@@ -479,12 +546,44 @@ export async function settlePassWrites(
   return { bytes, dirs, withinBudget: bytes <= budget };
 }
 
+// Bytes under one track's dir, null when it has none. A pick-time separation
+// reads it before writing, to hand settleTrackWrite what it started from.
+export async function trackDirBytes(trackId: string): Promise<number | null> {
+  return dirBytes(dirFor(trackId));
+}
+
+// After a pick-time separation: add what the track's dir grew by to the
+// snapshot, so the hourly sweep's budget check counts it without a walk. A
+// snapshot that can't take an addition (none, untrusted, stale, or a pass
+// writing, whose settle owns the baseline) is marked stale instead, and the
+// next read walks. Totals that can't be updated must not outlive this, as in
+// markUsageStale.
+export async function settleTrackWrite(trackId: string, bytesBefore: number | null): Promise<void> {
+  const after = await dirBytes(dirFor(trackId));
+  const grew = (after ?? 0) - (bytesBefore ?? 0);
+  const newDir = bytesBefore === null && after !== null;
+  if (grew === 0 && !newDir) return;
+  const { snap, verdict } = await snapshotState();
+  if (verdict !== 'use' || !snap) {
+    await markUsageStale();
+    return;
+  }
+  const settled: UsageSnapshot = {
+    ...snap,
+    bytes: Math.max(0, snap.bytes + grew),
+    dirs: snap.dirs + (newDir ? 1 : 0),
+    updatedAt: new Date().toISOString(),
+  };
+  if (!(await writeSnapshot(settled))) await rm(snapshotPath(), { force: true }).catch(() => {});
+}
+
 // Track ids with a stem dir on disk: one readdir, no per-dir walk. The analysis
 // pass snapshots this to tell a rewrite from net-new growth (stemWriteDecision).
 export async function cachedTrackIdSet(): Promise<Set<string>> {
   cacheWalks += 1;
   try {
-    return new Set((await readdir(stemsRoot())).filter(n => n !== STEMS_MARKER));
+    // Dot entries (the marker, the orphan quarantine) are not track ids.
+    return new Set((await readdir(stemsRoot())).filter(n => !n.startsWith('.')));
   } catch {
     return new Set(); // no cache dir yet
   }
@@ -532,10 +631,56 @@ function withPriorities(
   }));
 }
 
+// Drop the stem dirs of tracks whose file was replaced at the same path
+// (library-db.clearTrackAudio cleared their stamps): the render is cache-hit-
+// only (hasWindow), so stems cut from the old audio would otherwise keep
+// playing under the new file. Never touches an offline root (an unmounted
+// share). Best-effort, like the sweep: a dir that refuses is counted, and its
+// cleared stamp has the backfill separate the track again either way.
+export async function forgetStems(trackIds: readonly string[]): Promise<{ removed: number; failed: number; offline?: string }> {
+  if (trackIds.length === 0) return { removed: 0, failed: 0 };
+  const root = await stemsRootStatus({ readOnly: true });
+  if (!root.online) return { removed: 0, failed: 0, offline: root.message };
+  let removed = 0;
+  let failed = 0;
+  for (const id of trackIds) {
+    const dir = dirFor(id);
+    const there = await stat(dir).then(() => true, () => false);
+    if (!there) continue;
+    try {
+      await rm(dir, { recursive: true, force: true });
+      removed += 1;
+    } catch { failed += 1; }
+  }
+  // The usage snapshot still counts those dirs' bytes, which would size the
+  // backfill too small (headroomTracks) until the next full walk. The walk
+  // runs in the tagger's process, so the mark goes in the file, not just an
+  // in-memory flag: whichever process sweeps next walks again.
+  if (removed > 0) {
+    snapshotUntrusted = true;
+    await markUsageStale();
+  }
+  return { removed, failed };
+}
+
+// Probed before any delete rather than learned from a failed one: a fresh unplayed
+// track ranks below a stuck played one, so it would be gone before the sweep met the
+// first folder it could not delete. rm's catch still covers what this can't see.
+async function canDeleteInside(dir: string): Promise<boolean> {
+  return access(dir, constants.W_OK | constants.X_OK).then(() => true, () => false);
+}
+
 // Evict by ascending stem priority, then mtime, until the byte budget fits. Report failedDirs
 // and overBudgetBytes so callers can expose deletion failures; retry failed deletions next
-// sweep. #1257.
-export async function sweep(budget = budgetBytes(), { force = false }: { force?: boolean } = {}): Promise<{
+// sweep. #1257. A folder that can't be deleted stays in the reported overage but leaves the
+// budget check: counting it would delete every folder that can go, and free nothing it holds.
+// `keepLast` names tracks still waiting to air, whose dirs go after every other
+// (stem-priority.ts evictQueuedLast). Only pick-time stems passes one
+// (pick-stems-policy.ts sweepKeepLast); without it the order is unchanged.
+export async function sweep(
+  budget = budgetBytes(),
+  { force = false, keepLast }: { force?: boolean; keepLast?: ReadonlySet<string> } = {},
+): Promise<{
   removed: number;
   freedBytes: number;
   failedDirs: number;
@@ -566,18 +711,27 @@ export async function sweep(budget = budgetBytes(), { force = false }: { force?:
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 };
   }
 
-  const ordered = stemEvictionOrder(withPriorities(dirs));
+  const ordered = evictQueuedLast(stemEvictionOrder(withPriorities(dirs)), keepLast, d => path.basename(d.dir));
+  const canGo = await mapPool(ordered, SCAN_CONCURRENCY, d => canDeleteInside(d.dir));
+  const stuck = ordered.filter((_, i) => !canGo[i]);
   let removed = 0;
   let freedBytes = 0;
-  let failedDirs = 0;
-  for (const d of ordered) {
-    if (total <= budget) break;
+  let failedDirs = stuck.length;
+  let unevictable = stuck.reduce((n, d) => n + d.bytes, 0);
+  for (const d of ordered.filter((_, i) => canGo[i])) {
+    if (total - unevictable <= budget) break;
     try {
       await rm(d.dir, { recursive: true, force: true });
       total -= d.bytes;
       freedBytes += d.bytes;
       removed += 1;
-    } catch { failedDirs += 1; /* best-effort — retry next sweep */ }
+    } catch { failedDirs += 1; unevictable += d.bytes; /* best-effort — retry next sweep */ }
+  }
+  if (failedDirs > 0) {
+    console.warn(
+      `[stem-cache] ${failedDirs} folder(s) (${Math.round(unevictable / 1024 ** 2)} MB) cannot be deleted by this user ` +
+      'and are left out of the budget check. Open them as their owner (docs/deployment.md).',
+    );
   }
   await writeSnapshot(snapshotFromWalk(total, dirs.length - removed));
   return { removed, freedBytes, failedDirs, overBudgetBytes: Math.max(0, total - budget) };

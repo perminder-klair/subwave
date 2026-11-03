@@ -5,6 +5,10 @@
 import { getAnnotatedUri, getClipUri } from '../src/music/subsonic.js';
 import { CLIP_SEAM_CROSS_SEC, clipSeamCues } from '../src/broadcast/stem-seam.js';
 import { probeCueLanding } from '../src/music/cue-landing.js';
+import { _markLibraryMountProven } from '../src/music/library-mount.js';
+
+// stem-seam-test.sh bind-mounts this directory into its own mixer.
+_markLibraryMountProven(process.env.MUSIC_LIBRARY_PATH as string);
 
 const [mode, station, blend, incoming] = process.argv.slice(2);
 const stationSec = Number(station);

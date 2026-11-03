@@ -9,13 +9,8 @@ import { createPausedMediaUrl } from '@/lib/pausedMedia';
 import { useStationClient } from '@/lib/stationClient';
 import { SKIP_CUSHION_SECONDS } from '@/lib/idleSkip';
 import { skipIdleSilence } from '@/lib/idleSkipPlayback';
-import { HAVE_FUTURE_DATA, watchdogCall } from '@/lib/streamWatchdog';
-
-// Reconnect backoff for a stream that errored or ended: quick first retry, doubling to a minute.
-const RECONNECT_BASE_MS = 500;
-const RECONNECT_MAX_MS = 60_000;
-// How long the media clock may stand still before the watchdog reconnects.
-const WATCHDOG_MS = 5000;
+import { HAVE_FUTURE_DATA, WATCHDOG_MS, watchdogCall } from '@/lib/streamWatchdog';
+import { NO_BACKOFF, connectionClosed, connectionStarted, reachedPlaying } from '@/lib/reconnectBackoff';
 
 // Idle cutoff (#343). A forgotten tab counts as a listener and holds the DJ's
 // pause-when-empty gate open, so tune out after this long with no pointer/key/focus activity.
@@ -140,8 +135,8 @@ export function usePlayer({ initialVolume = 1, opusEnabled = null, bufferSeconds
   const volumeRef = useRef(volume);
   // Media clock at arm time — the baseline the fire compares against.
   const watchdogArmedAt = useRef(0);
-  // Consecutive failed reconnects since the last 'playing'; drives the backoff.
-  const retryCount = useRef(0);
+  // The reconnect delay for a stream that closed or errored (lib/reconnectBackoff.ts).
+  const backoff = useRef(NO_BACKOFF);
   // Last listener activity, read by the idle sweep. Seeded by the sweep effect at mount
   // (render must stay pure) so a fresh tab gets the full idle window.
   const lastActivityAt = useRef(0);
@@ -232,14 +227,15 @@ export function usePlayer({ initialVolume = 1, opusEnabled = null, bufferSeconds
       if (call === 'stand-down') return;
       // The media clock moved while the watchdog was pending, so the listener is hearing
       // audio. Re-setting src would cut sound for nothing; reconcile the UI instead (#1232),
-      // and look again, since the bytes behind that clock may already be gone.
+      // and look again, since the bytes behind that clock may already be gone. The backoff
+      // needs no word here: a later close judges this connection by its time since `playing`.
       if (call === 'keep-watching') {
-        retryCount.current = 0;
         setStatus('playing');
         armWatchdog(WATCHDOG_MS, true);
         return;
       }
       const myGen = ++gen.current;
+      backoff.current = connectionStarted(backoff.current);
       audio.src = freshStreamUrl(streamUrlRef.current, myGen);
       startIdleSkip(audio);
       audio.volume = volumeRef.current;
@@ -262,15 +258,15 @@ export function usePlayer({ initialVolume = 1, opusEnabled = null, bufferSeconds
       watchdogTimer.current = setTimeout(() => reconnect(rewatch), delay);
     };
     const reconnectWithBackoff = () => {
-      const delay = Math.min(RECONNECT_BASE_MS * 2 ** retryCount.current, RECONNECT_MAX_MS);
-      retryCount.current += 1;
-      armWatchdog(delay);
+      const { delayMs, next } = connectionClosed(backoff.current, Date.now());
+      backoff.current = next;
+      armWatchdog(delayMs);
     };
 
     const onPlaying = () => {
       if (!isLive() || el.paused) return;
       clearWatchdog();
-      retryCount.current = 0;
+      backoff.current = reachedPlaying(backoff.current, Date.now());
       setStatus('playing');
     };
     // 'waiting' is a PLAYBACK event: the element ran out of decoded audio and has gone silent.
@@ -406,7 +402,7 @@ export function usePlayer({ initialVolume = 1, opusEnabled = null, bufferSeconds
     // A fresh tune-in is listener activity: restart the idle window, clear the idle prompt, reset backoff.
     lastActivityAt.current = Date.now();
     setIdleStopped(false);
-    retryCount.current = 0;
+    backoff.current = NO_BACKOFF;
     clearWatchdog();
     el.src = freshStreamUrl(streamUrlRef.current, myGen);
     el.load();

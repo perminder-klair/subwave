@@ -414,6 +414,13 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production without the bundled re
 # Split hostnames need a web rebuild with NEXT_PUBLIC_API_URL /
 # NEXT_PUBLIC_STREAM_URL (baked at build time).
 #
+# On /stream*, drop WWW-Authenticate from the response when the request has an
+# \`auth\` query parameter, or Sec-Fetch-Dest: audio|video with Sec-Fetch-Site:
+# same-origin, and ONLY then. Browsers answer Icecast's 401 challenge with a native
+# dialog over the whole player, but ffmpeg, mpv and GStreamer send \`user:pass@\` only
+# once challenged, so a blanket strip locks them out. docs/reverse-proxy.md has the
+# recipes.
+#
 # Block /api/listener-auth at your proxy: it is Icecast's URL-auth callback and
 # answers 200/401 on the shared privacy.password, so routing it hands the
 # internet a password oracle (#478). Icecast reaches the controller directly
@@ -1271,12 +1278,23 @@ SITE_URL=
 # NAVIDROME_USER=
 # NAVIDROME_PASS=
 # Optional: play tracks straight off disk instead of streaming them over HTTP.
-# Only worth setting when the controller container mounts the SAME library
-# Navidrome scans. Note Navidrome's Subsonic \`path\` is built from tags, not read
-# off disk, so it often disagrees with your real folder names (e.g. the API says
-# "Chunga's Revenge" where the folder is "Chunga's Revenge (1970)"). Every
-# mismatch falls back to streaming, so it is safe to leave on — it just does
-# nothing for the tracks whose paths don't line up.
+# Only worth setting when BOTH the controller and broadcast containers mount the
+# SAME library Navidrome scans, at this same path: the controller finds the file
+# and Liquidsoap, in broadcast, opens it. No compose file mounts it for you, so
+# add the volume to both services. Until the mixer has proved it can read the
+# mount every track streams, and the Doctor says so under "library mount".
+# Note Navidrome's Subsonic \`path\` is built from tags, not read off disk, so it
+# often disagrees with your real folder names (e.g. the API says "Chunga's
+# Revenge" where the folder is "Chunga's Revenge (1970)"). Turn on Settings ->
+# Music source -> "Keep Report Real Path on" and it sends the real path instead.
+# If Navidrome mounts the library at this same path, that path is used as it is.
+# If not, SUB/WAVE looks for it under this folder, and plays a file only when its
+# size matches the track and its tags give it the title Navidrome reports for the
+# track, subtitle included. Anything it can't find or can't prove falls back to
+# streaming, so those tracks play as they would without this. A different
+# recording at the same folder and file name, with the same size and the same
+# title, would still play. With "Keep Report Real Path on" set, the Doctor samples a few tracks
+# under "real file paths" to show whether they line up.
 # MUSIC_LIBRARY_PATH=
 # TTS_SPEED=0.85
 # Routine fallback refresh uses hourly minute-step cadence, rotated off :00/:02:
@@ -1304,7 +1322,8 @@ SITE_URL=
 # ELEVENLABS_API_KEY=
 # FISH_API_KEY=
 # SEARCH_API_KEY=tvly-...           # Tavily or Brave Search key (optional, paid/metered),
-#                                   # or a keen_... Keenable key (optional, raises its free limit)
+#                                   # or a keen_... Keenable key (optional, raises its free limit),
+#                                   # or an fc-... Firecrawl key
 # SearXNG: no env var. Configure base URL in admin UI → Settings → Search.
 # Embedding key — only when embeddings use a different provider/key than chat
 # (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the

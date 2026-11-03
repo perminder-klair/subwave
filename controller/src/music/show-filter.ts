@@ -5,7 +5,7 @@
 // attribute, AND across attributes. An empty list means "no constraint".
 
 import * as library from './library.js';
-import { isInstrumental } from './lyric-vocal.js';
+import { carriesVocalEvidence, isInstrumental, type VocalEvidence } from './lyric-vocal.js';
 import { resolveEraYear } from './era-year.js';
 // The genre fold lives in a leaf module so library-db can register its SQL twin
 // without importing this one (which imports library).
@@ -16,7 +16,7 @@ export { resolveEraYear };
 
 // Raw Subsonic children and slimTrack library rows both satisfy this
 // structurally; every field is optional so a source omitting one still passes.
-export interface FilterTrack {
+export interface FilterTrack extends VocalEvidence {
   id?: string;
   // Library rows: strings. Raw Subsonic children: OpenSubsonic {name} objects.
   genres?: Array<string | { name?: unknown }> | null;
@@ -34,17 +34,22 @@ export interface FilterTrack {
   energy?: string | null;
   moods?: string[] | null;
   audioMoods?: string[] | null;
-  // Measured timing spans; isInstrumental owns classification. Null = unknown.
-  vocalRanges?: unknown[] | null;
-  vocalRangesInvalid?: boolean;
   // Part of trackAllTags' any-namespace union.
   lastfmTags?: string[] | null;
+  // OpenSubsonic advisory tag; music/explicit-policy.ts owns reading it.
+  explicitStatus?: string | null;
 }
 
 // Raw Subsonic children carry OpenSubsonic `genres: [{name}]` objects, not
 // strings; returned as-is they reached normGenre as "[object Object]" and no
 // genre filter could match them. Flatten both shapes, like subsonic.songGenres
 // (not imported: subsonic.ts already imports this module).
+//
+// An untagged library row carries both keys, `genre` as an explicit null and
+// `genres` as [] (or null, in the blocklist projection), so it answers from
+// itself (#2235). Only a shape without them looks the track up: a raw Subsonic
+// child omits an empty `genre`, and its `genres` alone is not the library's
+// answer, which scene aliases rewrite and a later empty walk keeps.
 export function trackGenres(t: FilterTrack | null | undefined): string[] {
   if (Array.isArray(t?.genres) && t.genres.length) {
     const flat = (t.genres as unknown[])
@@ -53,6 +58,7 @@ export function trackGenres(t: FilterTrack | null | undefined): string[] {
     if (flat.length) return flat;
   }
   if (t?.genre) return [t.genre];
+  if (t?.genre === null && (Array.isArray(t.genres) || t.genres === null)) return [];
   const rec = t?.id ? library.get(t.id) : null;
   if (Array.isArray(rec?.genres) && rec.genres.length) return rec.genres;
   return rec?.genre ? [rec.genre] : [];
@@ -189,9 +195,12 @@ export function preferEra<T extends FilterTrack>(tracks: T[], eras?: YearRange[]
   return match.length ? match : tracks;
 }
 
-// null when un-analysed.
+// null when un-analysed. Every library-row mapper carries `energy`, an untagged
+// track's as an explicit null, so a library row answers from itself; only a shape
+// without the key (a raw Subsonic child) looks the track up (#2235).
 export function trackEnergy(t: FilterTrack | null | undefined): string | null {
   if (t?.energy) return t.energy;
+  if (t?.energy === null) return null;
   const rec = t?.id ? library.get(t.id) : null;
   return rec?.energy ?? null;
 }
@@ -274,17 +283,21 @@ export type VocalMode = '' | 'instrumental' | 'vocal';
 
 // Tri-state track classification, shared with embedding descriptors:
 //
-//   total sung time <5s   → measured instrumental (including [], #1655)
-//   total sung time >=5s  → measured vocal
-//   vocalRanges == null   → not measured, which is NOT the same as "vocal"
+//   each window sung <5s  → measured instrumental (including [], #1655)
+//   either window >=5s    → measured vocal
+//   vocalRanges == null   → not measured, which is NOT the same as "vocal", unless
+//                           the tail alone proves singing
 //
 // Demucs is opt-in, so on most libraries every track is null; collapsing null to
 // "has vocals" makes an instrumental show reject its whole library.
+//
+// A library row answers from itself, unmeasured or not; only a shape without the
+// fields looks the track up (lyric-vocal.carriesVocalEvidence, #2235).
 export function trackInstrumental(t: FilterTrack | null | undefined): boolean | null {
-  const source = Array.isArray(t?.vocalRanges)
+  const source = carriesVocalEvidence(t)
     ? t
     : (t?.id ? library.get(t.id) : null);
-  return isInstrumental(source?.vocalRanges, source?.vocalRangesInvalid);
+  return isInstrumental(source);
 }
 
 // Soft lean: un-measured tracks stay eligible, never-starve. It fills

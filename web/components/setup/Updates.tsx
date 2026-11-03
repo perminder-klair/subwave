@@ -42,16 +42,19 @@ docker compose up -d --build controller web
           <div className="bs-eyebrow">USING THE STANDALONE CLI?</div>
           <p>
             If you installed via{' '}
-            <code className="bs-code-inline">curl cli.getsubwave.com | sh</code>, two
-            commands cover the two things you might want to update:
+            <code className="bs-code-inline">curl cli.getsubwave.com | sh</code>, three
+            commands update the station, in this order:
           </p>
-          <CodeBlock>{`subwave update`}</CodeBlock>
-          <CodeBlock>{`subwave self-update`}</CodeBlock>
+          <CodeBlock>{`subwave self-update
+subwave sync
+subwave update`}</CodeBlock>
           <p className="text-muted">
-            <code className="bs-code-inline">subwave update</code> wraps docker
-            pull + up -d and knows which compose file is live.{' '}
             <code className="bs-code-inline">self-update</code> re-runs the
-            installer in place.
+            installer in place.{' '}
+            <code className="bs-code-inline">sync</code> refreshes any compose
+            files that are behind the new binary.{' '}
+            <code className="bs-code-inline">update</code> wraps docker pull +
+            up -d and knows which compose file is live.
           </p>
         </div>
 
