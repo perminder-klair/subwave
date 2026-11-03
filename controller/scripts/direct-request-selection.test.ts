@@ -987,6 +987,13 @@ test('a lossy transliteration never makes two titles or two acts the same', () =
   assert.equal(requestTitleMatches('ゆ', 'ユー'), false);
   assert.equal(requestTitleMatches('ใกล้', 'ไกล'), false);
   assert.equal(requestTitleMatches('雨', '雨', 'same'), true);
+  // Two values in one script never meet through their reading anyway, so each
+  // lossy script is pinned against the Latin spelling of that reading.
+  for (const [lossy, reading] of [['楓', 'Feng'], ['ゆ', 'Yu'], ['ユー', 'Yu'], ['ไกล', 'Aikl'], ['ກາ', 'Kaa'], ['မ', 'M'],
+    ['سيف', 'Syf'], ['שלום', 'Shlvm'], ['ܫܠܡܐ', 'Shlm']]) {
+    assert.equal(requestTitleMatches(lossy, reading), false, `${lossy} / ${reading}`);
+    assert.equal(requestArtistMatches(lossy, { id: 'act', artist: reading }), false, `${lossy} / ${reading}`);
+  }
   assert.equal(requestArtistMatches('Кино', { id: 'band', artist: 'Kino' }), true);
   assert.equal(requestArtistMatches('周杰伦', { id: 'jay', artist: 'Zhou Jie Lun' }), false);
   // A lossy pair is still a near title, offered below any exact name.
