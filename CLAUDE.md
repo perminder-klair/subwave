@@ -115,7 +115,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Silence trim measures against an absolute floor, and `music/silence-trim.ts` owns every onset shift.
 - A track's instrumental verdict is `isInstrumental` over both measured windows, each judged alone (`music/lyric-vocal.ts`). A row carrying `vocalRanges` carries the tail evidence too, and SQL reads it through `SQL_TAIL_VOCAL_RANGES`, never the whole `outro_json`.
 - Library coverage never counts on the read path; only `refresh()` counts it.
-- Show filters answer from the row they are given: a library-row mapper carries `energy`, `genre`/`genres` and the vocal windows even when unknown (an explicit `null`), and only a shape without the key looks the track up, so a mapper never emits one of these keys for a column it did not select (`music.md`).
+- Show filters answer from the row they are given: a library-row mapper writes each `energy`, `genre`/`genres` and vocal-window column it selects even when unknown (an explicit `null`, or `[]`), the readers trust that, and only a shape lacking it looks the track up, so a mapper never emits one of these keys for a column it did not select (`music.md`).
 - Anything going to Liquidsoap uses `getAnnotatedUri`.
 - The tagger's own `moods`/`energy` never enter the embed text. Bump `TAGGER_CONTRACT_VERSION` (`music/tagger-core.ts`) when the prompt asks for something different.
 - CLAP cosines are not comparable across moods, so calibrate per mood.
