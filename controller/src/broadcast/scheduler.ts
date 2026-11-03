@@ -63,7 +63,7 @@ import * as pickStems from './pick-stems.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 import * as backup from '../backup/scheduled.js';
-import { autoEnableRealPath } from '../music/navidrome-players.js';
+import { autoEnableRealPath, realPathOptedIn } from '../music/navidrome-players.js';
 import { onLibraryMountLost, proveLibraryMount } from '../music/library-mount.js';
 
 // take() hard-stops at the target, so TARGET_POOL must exceed the sum of the
@@ -1402,7 +1402,7 @@ onLibraryMountLost(() => {
 // the operator opted in (musicSource.reportRealPath). On a timer, not once: a
 // new client or user agent gets a fresh row with the flag off. Never throws.
 export async function realPathTick() {
-  if (settings.get().musicSource?.reportRealPath !== true) return;
+  if (!realPathOptedIn()) return;
   try {
     await autoEnableRealPath(line => queue.log('scheduler', line));
   } catch (err) {
