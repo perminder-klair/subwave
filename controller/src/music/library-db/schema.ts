@@ -451,10 +451,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     // columns are added — a database whose user_version was wound back below
     // this step (a downgrade, a hand repair) still has them, and ADD COLUMN on
     // an existing column throws.
-    const have = new Set((d.prepare('PRAGMA table_info(plays)').all() as Array<{ name: string }>).map(c => c.name));
-    const add = ['transition', 'transition_ask', 'transition_drops'].filter(c => !have.has(c));
-    if (add.length) runDdl(d, add.map(c => `ALTER TABLE plays ADD COLUMN ${c} TEXT;`).join('\n'));
-    d.pragma('user_version = 28');
+    addColumnsOnce(d, 28, { plays: { transition: 'TEXT', transition_ask: 'TEXT', transition_drops: 'TEXT' } });
   }
 
   if (userVersion < 29) {
@@ -463,10 +460,9 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     // native LIKE/= instead of running JS per row. Plain nullable columns an
     // older controller never names. Their stale trigger and index are ensured
     // on every open below, and the keys filled after that.
-    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
-    const add = SEARCH_KEY_DDL.columns.filter(c => !have.has(c));
-    if (add.length) runDdl(d, add.map(c => `ALTER TABLE tracks ADD COLUMN ${c} ${c === 'search_fresh' ? 'INTEGER' : 'TEXT'};`).join('\n'));
-    d.pragma('user_version = 29');
+    addColumnsOnce(d, 29, {
+      tracks: Object.fromEntries(SEARCH_KEY_DDL.columns.map((c): [string, string] => [c, c === 'search_fresh' ? 'INTEGER' : 'TEXT'])),
+    });
   }
 
   if (userVersion < 30) {
@@ -509,9 +505,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     // `explicitStatus`): 'explicit', 'clean' or NULL. The walk owns it, so it
     // stays NULL on an existing library until the next walk. Added only when
     // missing, as above: a wound-back user_version still has the column.
-    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
-    if (!have.has('explicit_status')) runDdl(d, `ALTER TABLE tracks ADD COLUMN explicit_status TEXT;`);
-    d.pragma('user_version = 33');
+    addColumnsOnce(d, 33, { tracks: { explicit_status: 'TEXT' } });
   }
 
   if (userVersion < 34) {
@@ -519,11 +513,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     // (music/tag-library/enrich.ts). It describes the stored lastfm_tags, so
     // NULL means the row is owed a lookup while the setting is on. Added only
     // if missing, for a database wound back below this step (see 28).
-    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
-    if (!have.has('lastfm_track_tags_at')) {
-      runDdl(d, `ALTER TABLE tracks ADD COLUMN lastfm_track_tags_at TEXT;`);
-    }
-    d.pragma('user_version = 34');
+    addColumnsOnce(d, 34, { tracks: { lastfm_track_tags_at: 'TEXT' } });
   }
 
   if (userVersion < 35) {
@@ -531,17 +521,10 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     // moods: audio_descriptors = the selected labels, audio_descriptor_scores_json
     // = the full {label: cosine} map, descriptor_vocab_hash invalidates both.
     // Only the missing columns are added, as in migration 28.
-    const columnsOf = (table: string) =>
-      new Set((d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name));
-    const tracks = columnsOf('tracks');
-    const add = ['audio_descriptors', 'audio_descriptor_scores_json']
-      .filter(c => !tracks.has(c))
-      .map(c => `ALTER TABLE tracks ADD COLUMN ${c} TEXT;`);
-    if (!columnsOf('audio_embedding_meta').has('descriptor_vocab_hash')) {
-      add.push('ALTER TABLE audio_embedding_meta ADD COLUMN descriptor_vocab_hash TEXT;');
-    }
-    if (add.length) runDdl(d, add.join('\n'));
-    d.pragma('user_version = 35');
+    addColumnsOnce(d, 35, {
+      tracks: { audio_descriptors: 'TEXT', audio_descriptor_scores_json: 'TEXT' },
+      audio_embedding_meta: { descriptor_vocab_hash: 'TEXT' },
+    });
   }
 
   if (userVersion < 36) {
@@ -551,9 +534,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     // describes the vector, like text_vector_dirty. NULL = unknown, which never
     // marks: every vector written before this step, so the upgrade re-embeds
     // nothing. Added only if missing, for a database wound back below it (see 28).
-    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
-    if (!have.has('text_vector_sound')) runDdl(d, `ALTER TABLE tracks ADD COLUMN text_vector_sound TEXT;`);
-    d.pragma('user_version = 36');
+    addColumnsOnce(d, 36, { tracks: { text_vector_sound: 'TEXT' } });
   }
 
   // Before the vector reconcile below, which bumps it when it drops vectors.
@@ -673,6 +654,39 @@ export function clearEchoedAlbumTagYears(d: Database.Database): number {
     )
     .run();
   return r.changes;
+}
+
+// The column-adding steps (28, 29, 33 to 36): add each of `columns` ({table:
+// {column: type}}, in order) that is still missing, and stamp user_version, in
+// one write transaction. Several processes open this DB, and two can both find a
+// column missing on the first open after an upgrade: unlocked, the second ALTER
+// would throw "duplicate column name" and fail that process's open(). Locked
+// before the recheck, as in migration 32: an opener that waited here while a
+// rival ran the step finds user_version past it, so it adds nothing and never
+// stamps the version back. The columns are read only under the lock, which only
+// an open that finds the step unfinished takes: the step's gate keeps every later
+// open off it. The unlocked read first is fresh: that gate read user_version
+// before the earlier steps ran, and a step a rival has finished since needs no
+// lock. Only missing columns are added, since a database wound back below a step
+// still has them (see 28). Any failure throws out of open(), as before, with
+// nothing of the step applied, and the next open runs it again.
+export function addColumnsOnce(
+  d: Database.Database,
+  version: number,
+  columns: Record<string, Record<string, string>>,
+): void {
+  const reached = () => (d.pragma('user_version', { simple: true }) as number) >= version;
+  if (reached()) return;
+  d.transaction(() => {
+    if (reached()) return;
+    for (const [table, wanted] of Object.entries(columns)) {
+      const have = new Set((d.pragma(`table_info(${table})`) as Array<{ name: string }>).map(c => c.name));
+      for (const [name, type] of Object.entries(wanted)) {
+        if (!have.has(name)) runDdl(d, `ALTER TABLE ${table} ADD COLUMN ${name} ${type};`);
+      }
+    }
+    d.pragma(`user_version = ${version}`);
+  }).immediate();
 }
 
 // The vectors whose embed text the tail verdict changed, for migration 32. The word
