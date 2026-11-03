@@ -24,7 +24,7 @@
 // (budgetVeto): a pick-time write may take a full cache a bounded way over,
 // for the hourly sweep to evict back down.
 
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as analyzer from '../music/analyzer.js';
@@ -55,6 +55,31 @@ function requestDeadlineMs(): number {
 // Whether a pick-time separation holds the analyzer worker right now.
 export function separationInFlight(): boolean {
   return separating;
+}
+
+function enabled(): boolean {
+  return settings.get()?.transitions?.pickTimeStems === true;
+}
+
+// The tracks whose stem dirs a sweep evicts last (policy.sweepKeepLast), for
+// the hourly sweep (scheduler.ts), from the live queue.
+export function sweepKeepLast(queuedTrackIds: Iterable<unknown>): ReadonlySet<string> | undefined {
+  return policy.sweepKeepLast({ enabled: enabled(), queuedTrackIds });
+}
+
+// The same, for the analysis pass's own end-of-pass sweep (analyze.ts). The
+// pass runs in the tagger's child process, which has no live queue, so this
+// reads the queue's snapshot on disk. Off, it reads nothing; an unreadable
+// snapshot gives no set, which is develop's order.
+export async function sweepKeepLastFromDisk(): Promise<ReadonlySet<string> | undefined> {
+  if (!enabled()) return undefined;
+  let snapshot: unknown = null;
+  try {
+    snapshot = JSON.parse(await readFile(config.queue.file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  return policy.sweepKeepLast({ enabled: true, queuedTrackIds: policy.queuedTrackIdsFromSnapshot(snapshot) });
 }
 
 export interface PickStemsOpts {

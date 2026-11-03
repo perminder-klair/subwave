@@ -117,13 +117,14 @@ export function describeNeed(need: PickStemsNeed): string {
 // add nothing new, and nothing would ever make room either, because the sweep
 // evicts only a cache that is over budget. So a pick-time write may run over,
 // and the hourly sweep (scheduler.ts, at :02) evicts back down in stem-priority
-// order (stem-priority.ts): lowest priority first, then oldest. A
-// just-separated track is the newest dir, so it goes last among dirs worth the
-// same, and once it airs (minutes later: it is the track after next) it
-// outranks every never-aired dir nobody liked, which is what the backfill
-// mostly wrote. A one-sided track is worth half, so until it airs it can go
-// before a two-sided one. The pass's own rule is untouched: over budget, its
-// headroom stays 0 and it adds nothing.
+// order (stem-priority.ts): lowest priority first, then oldest. That order
+// alone would put a just-separated track first: until it airs it scores as
+// never-aired (200 with both grids, 100 with one), below a two-sided dir aired
+// in the last 90 days (320 and up), and once pick-time stems has run for a
+// while nearly every dir left in the cache has aired. So while this is on, both sweeps
+// evict the dirs of tracks still in the queue last (sweepKeepLast below); once
+// a track airs it leaves the queue and ranks on its airplay. The pass's own
+// rule is untouched: over budget, its headroom stays 0 and it adds nothing.
 //
 // The overshoot is bounded. Writes stop once the cache is OVERSHOOT_DIRS dirs
 // (at its own measured average) over budget, and start again when the sweep
@@ -146,11 +147,45 @@ export function overshootAllowanceBytes(budgetBytes: number, estTrackBytes: numb
 // admitted while the cache is under budget + allowance. A separation writes one
 // dir and the runner settles it before the next one may start, so the cache
 // stops at budget + allowance + one dir, however many picks come before the
-// sweep. (A request that timed out may still be writing, unmeasured, so the
-// worst case after one is one dir more.)
+// sweep. A request that timed out releases the claim while its worker may
+// still be writing, unmeasured, and the next pick may start another: with one
+// worker it queues behind the first and, if it too times out while queued,
+// finds its staging file gone and writes nothing, so the worst case is one dir
+// more; with a sidecar pool each member can hold one such orphan, so it is up
+// to ANALYZE_CONCURRENCY (at most 8) dirs more.
 export function budgetVeto(u: { usedBytes: number; budgetBytes: number; estTrackBytes: number }): PickStemsVeto | null {
   const ceiling = u.budgetBytes + overshootAllowanceBytes(u.budgetBytes, u.estTrackBytes);
   return u.usedBytes < ceiling ? null : 'budget-full';
+}
+
+// ---- the sweep ------------------------------------------------------------
+// The tracks whose stem dirs both sweeps (the hourly one and the analysis
+// pass's own) evict last: those still in the queue, not yet aired. Only while
+// pick-time stems is on; off, or with nothing queued, there is no set and both
+// sweeps keep develop's order exactly. Kept last, never kept: a sweep still
+// evicts them once nothing else is left over budget, so the bound above holds.
+export function sweepKeepLast(s: { enabled: boolean; queuedTrackIds: Iterable<unknown> }): ReadonlySet<string> | undefined {
+  if (!s.enabled) return undefined;
+  const ids = new Set<string>();
+  for (const id of s.queuedTrackIds) {
+    if (typeof id === 'string' && id) ids.add(id);
+  }
+  return ids.size ? ids : undefined;
+}
+
+// The queued track ids in the queue's own snapshot (queue.json, written by
+// Queue.persist). The analysis pass runs in a child process with no live
+// queue, so its sweep reads them here. Anything unexpected reads as none,
+// which leaves that sweep in plain stem-priority order.
+export function queuedTrackIdsFromSnapshot(snapshot: unknown): string[] {
+  const upcoming = (snapshot as { upcoming?: unknown } | null)?.upcoming;
+  if (!Array.isArray(upcoming)) return [];
+  const ids: string[] = [];
+  for (const item of upcoming) {
+    const id = (item as { track?: { id?: unknown } } | null)?.track?.id;
+    if (typeof id === 'string' && id) ids.push(id);
+  }
+  return ids;
 }
 
 // ---- the request ----------------------------------------------------------

@@ -7,7 +7,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as db from './library-db.js';
 import * as likes from '../broadcast/likes.js';
-import { stemEvictionOrder, UNKNOWN_TRACK_PRIORITY } from './stem-priority.js';
+import { evictQueuedLast, stemEvictionOrder, UNKNOWN_TRACK_PRIORITY } from './stem-priority.js';
 import { mapPool } from '../util/async-pool.js';
 import type { StemScanOpts } from './library-db.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
@@ -674,7 +674,13 @@ async function canDeleteInside(dir: string): Promise<boolean> {
 // and overBudgetBytes so callers can expose deletion failures; retry failed deletions next
 // sweep. #1257. A folder that can't be deleted stays in the reported overage but leaves the
 // budget check: counting it would delete every folder that can go, and free nothing it holds.
-export async function sweep(budget = budgetBytes(), { force = false }: { force?: boolean } = {}): Promise<{
+// `keepLast` names tracks still waiting to air, whose dirs go after every other
+// (stem-priority.ts evictQueuedLast). Only pick-time stems passes one
+// (pick-stems-policy.ts sweepKeepLast); without it the order is unchanged.
+export async function sweep(
+  budget = budgetBytes(),
+  { force = false, keepLast }: { force?: boolean; keepLast?: ReadonlySet<string> } = {},
+): Promise<{
   removed: number;
   freedBytes: number;
   failedDirs: number;
@@ -705,7 +711,7 @@ export async function sweep(budget = budgetBytes(), { force = false }: { force?:
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 };
   }
 
-  const ordered = stemEvictionOrder(withPriorities(dirs));
+  const ordered = evictQueuedLast(stemEvictionOrder(withPriorities(dirs)), keepLast, d => path.basename(d.dir));
   const canGo = await mapPool(ordered, SCAN_CONCURRENCY, d => canDeleteInside(d.dir));
   const stuck = ordered.filter((_, i) => !canGo[i]);
   let removed = 0;

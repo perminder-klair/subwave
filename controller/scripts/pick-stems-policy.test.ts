@@ -156,6 +156,29 @@ test('budget: many picks between two sweeps never pass budget + allowance + one 
   }
 });
 
+// ---- the sweep ------------------------------------------------------------
+
+test('sweep: queued tracks are kept last only while pick-time stems is on', () => {
+  assert.equal(policy.sweepKeepLast({ enabled: false, queuedTrackIds: ['held', 'next'] }), undefined,
+    'off: no set, so both sweeps keep their plain order');
+  assert.equal(policy.sweepKeepLast({ enabled: true, queuedTrackIds: [] }), undefined, 'nothing queued');
+  assert.deepEqual(
+    [...policy.sweepKeepLast({ enabled: true, queuedTrackIds: ['held', null, '', undefined, 7, 'next', 'held'] })!],
+    ['held', 'next'],
+    'an item without a track id (a jingle, a clip) is skipped',
+  );
+});
+
+test('sweep: the queue snapshot gives its queued track ids, and anything else none', () => {
+  assert.deepEqual(policy.queuedTrackIdsFromSnapshot({
+    upcoming: [{ track: { id: 'held', title: 'Held' } }, { track: { title: 'no id' } }, null, { track: { id: 'next' } }],
+    current: { track: { id: 'on-air' } },
+  }), ['held', 'next'], 'upcoming only: the track on air has a play row already');
+  for (const bad of [null, undefined, 'x', 42, {}, { upcoming: 'x' }, { upcoming: null }]) {
+    assert.deepEqual(policy.queuedTrackIdsFromSnapshot(bad), [], JSON.stringify(bad));
+  }
+});
+
 // ---- the request ----------------------------------------------------------
 
 test('request: its deadline outlasts the slowest measured separation and the pass\'s own', () => {

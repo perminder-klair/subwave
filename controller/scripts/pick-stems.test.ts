@@ -145,6 +145,8 @@ const pickStems = await import('../src/broadcast/pick-stems.js');
 const policy = await import('../src/broadcast/pick-stems-policy.js');
 const stemBlend = await import('../src/broadcast/stem-blend.js');
 const { pidfilePath } = await import('../src/music/tagger-lock.js');
+const { stemCacheSweepTick } = await import('../src/broadcast/scheduler.js');
+const { queue } = await import('../src/broadcast/queue.js');
 
 await settings.load();
 await settings.update({
@@ -410,6 +412,106 @@ test('once it airs, a separated dir outranks newer never-aired ones', async () =
   await stemCache.sweep((await stemCache.trackDirBytes('aired-1'))!);
   assert.equal(existsSync(stemCache.dirFor('aired-1')), true, 'airplay ranks it above every never-aired dir');
   for (const id of ['unaired-1', 'bf-4', 'bf-5']) assert.equal(existsSync(stemCache.dirFor(id)), false, id);
+});
+
+// ---- the hourly sweep keeps the queue last ------------------------------
+// Once pick-time stems has run for a while, the cache has turned over to
+// tracks that aired: a two-sided dir aired 30 days ago scores
+// 2 * (100 + 20 + 40) = 320. A just-separated pick has not aired, so it scores
+// 200 (100 one-sided, 280 if it aired more than 90 days ago) and stem-priority
+// alone would evict it first, before its seam renders. These run the real
+// separation and the real hourly tick (scheduler.ts stemCacheSweepTick) on a
+// 1 GB budget filled with sparse 16 MB dirs, so the pick takes it just over.
+
+function clearCache(): void {
+  for (const name of readdirSync(stemCache.stemsRoot())) {
+    if (!name.startsWith('.')) rmSync(path.join(stemCache.stemsRoot(), name), { recursive: true, force: true });
+  }
+  rmSync(snapFile, { force: true });
+}
+function airedDaysAgo(id: string, days: number): void {
+  db.recordPlay({
+    trackId: id, title: `Song ${id}`, artist: 'A', album: 'B',
+    playedAt: new Date(Date.now() - days * DAY_S * 1000).toISOString(),
+    source: 'ai', requestedBy: null, showId: null, showName: null,
+  });
+}
+
+interface SweepScenario {
+  cacheAiredDaysAgo: number | null; // null: a never-aired backfill
+  pick: string;
+  pickGrids?: { head?: boolean; tail?: boolean };
+  pickAiredDaysAgo?: number;
+  queued?: boolean;         // the pick still waits in the queue at the sweep
+  enabledAtSweep?: boolean; // transitions.pickTimeStems when the tick runs
+}
+
+async function sweepScenario(sc: SweepScenario): Promise<{ pickSurvives: boolean; evicted: string[] }> {
+  clearCache();
+  await settings.update({ audio: { stemCacheGb: 1 } });
+  const backfill: string[] = [];
+  sparseStemBytes = 2 * MB; // 8 stem files: a 16 MB dir
+  const item = { track: { id: sc.pick, title: `Song ${sc.pick}` }, queuedAt: new Date().toISOString(), sent: false };
+  try {
+    for (let i = 0; i < 63; i++) { // 1008 MB: under the 1 GB budget
+      const id = `${sc.pick}-bf-${i}`;
+      addTrack(id);
+      db.stampStemsCached(id);
+      writeStems(stemCache.dirFor(id), 'head');
+      writeStems(stemCache.dirFor(id), 'tail');
+      ageDir(id, 3 * DAY_S);
+      if (sc.cacheAiredDaysAgo !== null) airedDaysAgo(id, sc.cacheAiredDaysAgo);
+      backfill.push(id);
+    }
+    addTrack(sc.pick, sc.pickGrids);
+    if (sc.pickAiredDaysAgo !== undefined) airedDaysAgo(sc.pick, sc.pickAiredDaysAgo);
+    const result = await run(sc.pick).outcome;
+    assert.equal(result.ran && result.ok, true, JSON.stringify(result));
+    if (sc.queued !== false) queue.upcoming.push(item as unknown as (typeof queue.upcoming)[number]);
+    if (sc.enabledAtSweep === false) await settings.update({ transitions: { pickTimeStems: false } });
+    await stemCacheSweepTick();
+    return {
+      pickSurvives: existsSync(stemCache.dirFor(sc.pick)),
+      evicted: backfill.filter(id => !existsSync(stemCache.dirFor(id))),
+    };
+  } finally {
+    sparseStemBytes = 0;
+    queue.upcoming = queue.upcoming.filter(i => i.track?.id !== sc.pick);
+    await settings.update({ audio: { stemCacheGb: 15 }, transitions: { pickTimeStems: true } });
+  }
+}
+
+test('a cache of aired dirs: the hourly sweep keeps a never-aired pick still in the queue', async () => {
+  const r = await sweepScenario({ cacheAiredDaysAgo: 30, pick: 'mature-1' });
+  assert.equal(r.pickSurvives, true, 'stem-priority alone would evict it first (200 vs 320)');
+  assert.equal(r.evicted.length, 1, 'the oldest of the aired dirs went instead');
+});
+
+test('a cache of aired dirs: a pick that last aired 120 days ago is kept too', async () => {
+  const r = await sweepScenario({ cacheAiredDaysAgo: 30, pick: 'mature-2', pickAiredDaysAgo: 120 });
+  assert.equal(r.pickSurvives, true, '280 vs 320');
+  assert.equal(r.evicted.length, 1);
+});
+
+test('a one-sided pick is kept over two-sided never-aired dirs (round 2 Decision 3)', async () => {
+  const r = await sweepScenario({ cacheAiredDaysAgo: null, pick: 'one-sided-1', pickGrids: { head: true } });
+  assert.equal(r.pickSurvives, true, '100 vs 200');
+  assert.equal(r.evicted.length, 1);
+});
+
+test('a never-aired backfill: the pick survives either way (the newest of equals)', async () => {
+  const r = await sweepScenario({ cacheAiredDaysAgo: null, pick: 'young-1' });
+  assert.equal(r.pickSurvives, true);
+  assert.equal(r.evicted.length, 1);
+});
+
+test('pick-time stems off at the sweep, or the pick no longer queued: the plain stem-priority order', async () => {
+  const off = await sweepScenario({ cacheAiredDaysAgo: 30, pick: 'mature-off', enabledAtSweep: false });
+  assert.equal(off.pickSurvives, false, 'off, the sweep is develop\'s: the lowest score goes first');
+  assert.deepEqual(off.evicted, []);
+  const gone = await sweepScenario({ cacheAiredDaysAgo: 30, pick: 'mature-gone', queued: false });
+  assert.equal(gone.pickSurvives, false, 'only the queue is kept last');
+  clearCache();
 });
 
 // ---- the request deadline ------------------------------------------------
