@@ -12,6 +12,88 @@
   independent. Operators who already reconfigured profiles under #1777 must
   mark those profiles before upgrading. See [upgrade and recovery steps](docs/multi-station.md#upgrading-existing-profiles).
 
+## [1.30.0](https://github.com/perminder-klair/subwave/compare/v1.29.0...v1.30.0) (2026-11-03)
+
+
+### Features
+
+* **doctor:** warn when the mixer can't read the library mount ([7050ac4](https://github.com/perminder-klair/subwave/commit/7050ac46f78838b0c31eb7ad6c4a4afe77fa0228))
+* **library:** accept replaced files without clearing their analysis ([9f4b3c0](https://github.com/perminder-klair/subwave/commit/9f4b3c09e69495b2cda2573a98fe4cfe125f1e6a))
+* **library:** explicit flag and clean shows ([#2215](https://github.com/perminder-klair/subwave/issues/2215)) ([48845fe](https://github.com/perminder-klair/subwave/commit/48845fedfba84d9a9b44840a6fc88d215b7d36fb))
+* **library:** forward the replaced-file answers from the API ([ddf19c9](https://github.com/perminder-klair/subwave/commit/ddf19c9ec57954752ed38606dafc27389fb36de1))
+* **library:** keep each track's file path, format, size and bitrate from the walk ([666f6d9](https://github.com/perminder-klair/subwave/commit/666f6d9867f9903c28bf9b093c4713656562f02d))
+* **library:** opt-in track-level Last.fm tags ([#2216](https://github.com/perminder-klair/subwave/issues/2216)) ([3a752cf](https://github.com/perminder-klair/subwave/commit/3a752cf370ed3f75e735c651d8cb232471ce5c4e))
+* **library:** score CLAP sound descriptors and show them to the operator ([#2214](https://github.com/perminder-klair/subwave/issues/2214)) ([9b24b17](https://github.com/perminder-klair/subwave/commit/9b24b17f88c96b14d224e6b7b5ef6375a69a8d59))
+* **music:** keep Navidrome's Report Real Path on for SUB/WAVE's players ([05dd74e](https://github.com/perminder-klair/subwave/commit/05dd74e5366ab95e0461c919bdcd809e9a8c9026))
+* **search:** Firecrawl as a web-search backend ([#2128](https://github.com/perminder-klair/subwave/issues/2128)) ([4b9d015](https://github.com/perminder-klair/subwave/commit/4b9d015cd98eab443bb6debfdc69abbbdaf2d9b5))
+* **skills:** feed item age cap, dates to the DJ, and further feeds per skill ([#2184](https://github.com/perminder-klair/subwave/issues/2184)) ([53dac49](https://github.com/perminder-klair/subwave/commit/53dac4991ae2f52c531cc6ab65c68645c3518438))
+* **stems:** purge orphan stem dirs, on one Stems settings page ([#2178](https://github.com/perminder-klair/subwave/issues/2178)) ([5a9d539](https://github.com/perminder-klair/subwave/commit/5a9d539602a7adcfaa431c349cac5e309cdfd056))
+* **stems:** separate a held pick's missing stems while it waits (opt-in) ([#2250](https://github.com/perminder-klair/subwave/issues/2250)) ([c246de5](https://github.com/perminder-klair/subwave/commit/c246de5b2ce1bdb605853fcd6dd48ae42336e000))
+
+
+### Bug Fixes
+
+* **analyzer:** keep the file facts from the analyzer's own walk ([7fcbd87](https://github.com/perminder-klair/subwave/commit/7fcbd87bb17b3e190d480bbbd03b0f96a68dcf9d))
+* **analyzer:** write shared stems and transition clips 777/666 ([#2177](https://github.com/perminder-klair/subwave/issues/2177)) ([01efbd2](https://github.com/perminder-klair/subwave/commit/01efbd2da869d5d1c8af5d1d9a782d65ca4df90e))
+* **app:** back off a stream that dies just after it starts playing ([#2209](https://github.com/perminder-klair/subwave/issues/2209)) ([971ab33](https://github.com/perminder-klair/subwave/commit/971ab33ad33415f6be1cae9e016049b2e7f4199f))
+* **ci:** hold the CLI release until its images are on GHCR ([#2220](https://github.com/perminder-klair/subwave/issues/2220)) ([1f8ec72](https://github.com/perminder-klair/subwave/commit/1f8ec72a2f099263e6bf4945d559bf4a2d62f253))
+* **cli:** hand compose the moved version pin on the first update ([#2199](https://github.com/perminder-klair/subwave/issues/2199)) ([7045c21](https://github.com/perminder-klair/subwave/commit/7045c211bb2511b51f983ea4ba0d1a8bfecd9eb7)), closes [#2196](https://github.com/perminder-klair/subwave/issues/2196)
+* **cli:** ship the clack input patch in release builds ([#2227](https://github.com/perminder-klair/subwave/issues/2227)) ([de7f29a](https://github.com/perminder-klair/subwave/commit/de7f29a736d9abbcfe017b18c64f6380d43bcda3))
+* **dj:** never air a stand-in line such as "placeholder" ([#2183](https://github.com/perminder-klair/subwave/issues/2183)) ([ba76ff9](https://github.com/perminder-klair/subwave/commit/ba76ff9829857797a162dbb82ef7256ebe3be772))
+* **edge:** stop the stream's Basic challenge opening a sign-in dialog over the web player ([#2193](https://github.com/perminder-klair/subwave/issues/2193)) ([d41f752](https://github.com/perminder-klair/subwave/commit/d41f7520d6f10ac54fc058a465a0fc9264ede59f))
+* **library:** add each migration's columns under the write lock ([#2251](https://github.com/perminder-klair/subwave/issues/2251)) ([001aee3](https://github.com/perminder-klair/subwave/commit/001aee3e40c8c8015a165caf9cf759e216276f69))
+* **library:** add the file columns under the write lock ([4c444f8](https://github.com/perminder-klair/subwave/commit/4c444f8500cb440160aff240df1d734f85e2ad58))
+* **library:** ask the mixer about each local pick's own file ([#2232](https://github.com/perminder-klair/subwave/issues/2232)) ([d3aad51](https://github.com/perminder-klair/subwave/commit/d3aad51ad194049ef6284e044f5ae60d0d61d25f))
+* **library:** count tail vocals in the instrumental verdict ([#2218](https://github.com/perminder-klair/subwave/issues/2218)) ([2d81aff](https://github.com/perminder-klair/subwave/commit/2d81afffeb368e24764535e0bfb1a78b50cf9764))
+* **library:** give Last.fm tags an Auto choice, and keep it through a save ([#2241](https://github.com/perminder-klair/subwave/issues/2241)) ([06f7d6b](https://github.com/perminder-klair/subwave/commit/06f7d6b4d7f9c11507e500c8ea944f20f08d2e2a)), closes [#2233](https://github.com/perminder-klair/subwave/issues/2233)
+* **library:** give the file facts one cleaning rule ([4329bf9](https://github.com/perminder-klair/subwave/commit/4329bf9c4741768b003bc59e54302b214d48a11a))
+* **library:** hold a mass replaced-file clear, and ignore future file dates ([4a0f276](https://github.com/perminder-klair/subwave/commit/4a0f2769403cf565c9517309a19b6b72b5ff006b))
+* **library:** judge a replaced file against its oldest measurement ([f64c2f4](https://github.com/perminder-klair/subwave/commit/f64c2f44a0300f134c6859b9db3f939a7120b18c))
+* **library:** keep a hold visible after the run ends ([01c259f](https://github.com/perminder-klair/subwave/commit/01c259fc75e79780829d7e60837a3f279a2ca5ed))
+* **library:** make an accept stick for a file dated ahead ([e454010](https://github.com/perminder-klair/subwave/commit/e45401083e0471c0cd9d9e93319dea5ea4be7e15))
+* **library:** re-analyse a file replaced at the same path ([fd30e16](https://github.com/perminder-klair/subwave/commit/fd30e16003ed160136638ffc6e3afef7db863527))
+* **library:** re-embed a vector when a later measurement moves its Sound: words ([#2240](https://github.com/perminder-klair/subwave/issues/2240)) ([5cac768](https://github.com/perminder-klair/subwave/commit/5cac7681bdb80a33dd3540c35e006e125cb661c3)), closes [#2236](https://github.com/perminder-klair/subwave/issues/2236)
+* **library:** read a walk that runs out of pages as partial, and reword the size-only log ([a02ed47](https://github.com/perminder-klair/subwave/commit/a02ed47815f0a71806a099f51e39ec29d5c8a7a4))
+* **library:** say what actually stopped a replaced-file read ([9c11074](https://github.com/perminder-klair/subwave/commit/9c1107433a73e50d64fbe2b8e23ab4d35c5872ab))
+* **library:** say when Reconcile leaves replaced files on hold ([ff394c1](https://github.com/perminder-klair/subwave/commit/ff394c179c596b975a7517653ab2ca001a48fcee))
+* **liquidsoap:** the sweep no longer steps the level when it engages or mid-blend ([#2210](https://github.com/perminder-klair/subwave/issues/2210)) ([81d6883](https://github.com/perminder-klair/subwave/commit/81d688384d038facc4642ec95612e5ef387e96d4))
+* **liquidsoap:** transition gains ignore the per-track liq_amplify ([#2179](https://github.com/perminder-klair/subwave/issues/2179)) ([996320a](https://github.com/perminder-klair/subwave/commit/996320aeec8f30e45e1487a2b4840eed625db989))
+* **music:** accept more private suffixes for the Navidrome password ([8c205fe](https://github.com/perminder-klair/subwave/commit/8c205fe30df24ca6e69b044deb4972fadd4c5794))
+* **music:** let the password reach any private host ([d2d2fa3](https://github.com/perminder-klair/subwave/commit/d2d2fa3c03ce7e32e9606d236ec8403ea0b8461b))
+* **music:** play a mapped real path only when the file proves it is the track ([#2247](https://github.com/perminder-klair/subwave/issues/2247)) ([1c4a9ff](https://github.com/perminder-klair/subwave/commit/1c4a9ff229e2bf4f12e6d911ff6f9c036f2ab3c6))
+* **music:** play a real Navidrome path off the library mount ([7d688fa](https://github.com/perminder-klair/subwave/commit/7d688fac73eb63cee4cfb17c31e9a0825d71aed0))
+* **music:** play from disk only once the mixer proves it can read the mount ([ecd0472](https://github.com/perminder-klair/subwave/commit/ecd0472fd2ec50ab5d776c0967657bcdc0ba8ca7))
+* **music:** send the Navidrome password only over https or to a local host ([fef659b](https://github.com/perminder-klair/subwave/commit/fef659bbf8f0aa3e78e91366e117921d856b0d6f))
+* **music:** stop stripping a real path at three segments ([37457b7](https://github.com/perminder-klair/subwave/commit/37457b7d0a949ce97dd4db77b3d2df6d20afcd5c))
+* **music:** warn in the Doctor when Navidrome refuses the login ([e60e66c](https://github.com/perminder-klair/subwave/commit/e60e66c6bc427b17c67297e9dc6606dc3d699bdd))
+* **requests:** look a named track up from the listener's words ([#2200](https://github.com/perminder-klair/subwave/issues/2200)) ([e06e48b](https://github.com/perminder-klair/subwave/commit/e06e48b7879bbf5bf0d7a506667c3ac4f07bdf3d)), closes [#2195](https://github.com/perminder-klair/subwave/issues/2195)
+* **scheduler:** roll the show at the station's top of the hour, not the container's ([#2246](https://github.com/perminder-klair/subwave/issues/2246)) ([29df0d2](https://github.com/perminder-klair/subwave/commit/29df0d23f42d7091c86c5137a5ee230c52043f51)), closes [#2234](https://github.com/perminder-klair/subwave/issues/2234)
+* **search:** Tavily and Brave refuse another provider's key in the shared slot ([#2231](https://github.com/perminder-klair/subwave/issues/2231)) ([b4d5d59](https://github.com/perminder-klair/subwave/commit/b4d5d59331284a9482beb06a2647c618cc5aecec)), closes [#2223](https://github.com/perminder-klair/subwave/issues/2223)
+* **stems:** drop the sweep warning's claim that nothing is evicted ([#2230](https://github.com/perminder-klair/subwave/issues/2230)) ([533b7b3](https://github.com/perminder-klair/subwave/commit/533b7b3d682c5c69d93c24d234d5089bc6a7cb4f)), closes [#2225](https://github.com/perminder-klair/subwave/issues/2225)
+* **stems:** keep the budget figure when a replaced file drops its stems ([7b97a09](https://github.com/perminder-klair/subwave/commit/7b97a09b5f2e67d5fa45a833467cf35649b2059e))
+* **stems:** release a quarantined stem dir only for the same recording ([#2228](https://github.com/perminder-klair/subwave/issues/2228)) ([9721211](https://github.com/perminder-klair/subwave/commit/97212119d66a8c8bcacf839c41ad64f142457a7e)), closes [#2224](https://github.com/perminder-klair/subwave/issues/2224)
+* **web,app:** the right station password tunes a stopped listener back in ([#2217](https://github.com/perminder-klair/subwave/issues/2217)) ([1aa7c34](https://github.com/perminder-klair/subwave/commit/1aa7c345496db3a00e4fe3088f153ba9c5aa242f))
+* **web:** back off a connection that dies just after it starts playing ([#2194](https://github.com/perminder-klair/subwave/issues/2194)) ([bc5c125](https://github.com/perminder-klair/subwave/commit/bc5c12573c4922cb1e158487395ab6bdcb5401f9))
+* **web:** the Stats page uses the admin's type scale ([#2212](https://github.com/perminder-klair/subwave/issues/2212)) ([d101562](https://github.com/perminder-klair/subwave/commit/d10156207c68e2bab28faf47307ec2c7aad48f37))
+
+
+### Performance
+
+* **library:** show filters answer from the row they are given ([#2245](https://github.com/perminder-klair/subwave/issues/2245)) ([fc6b69f](https://github.com/perminder-klair/subwave/commit/fc6b69f8b39303a6b68d3eec0d1a1b0fe5ced714)), closes [#2235](https://github.com/perminder-klair/subwave/issues/2235)
+
+
+### Documentation
+
+* **library:** document the replaced-file answers and their limits ([3a0fa5b](https://github.com/perminder-klair/subwave/commit/3a0fa5b25fcb37eca6c7cbe49c71870ca8c28c1d))
+* **library:** say how to read the file facts, and what a backup now holds ([4656742](https://github.com/perminder-klair/subwave/commit/4656742861923f829dd52172449769315fbbbb15))
+* **schemas:** correct the count of converted settings keys ([9e4411e](https://github.com/perminder-klair/subwave/commit/9e4411e2a57f4ee2f0431edceb93d3aef4f7a1fe))
+
+
+### Refactors
+
+* **library:** clear facet rows through deleteFacetRows, and fix stale comments ([58fa18b](https://github.com/perminder-klair/subwave/commit/58fa18b7ffc93e14f873984737458ebecd6ede1f))
+* **music:** ask one place whether Navidrome's own API may be used ([8273a63](https://github.com/perminder-klair/subwave/commit/8273a63aa0e25a579bf087d0d611efde1b018c79))
+
 ## [1.29.0](https://github.com/perminder-klair/subwave/compare/v1.28.0...v1.29.0) (2026-10-31)
 
 
