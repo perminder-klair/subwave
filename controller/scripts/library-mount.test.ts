@@ -396,9 +396,10 @@ test('a pick goes local only on the mixer\'s yes to its own file', async () => {
 });
 
 test('a file the mixer\'s copy lacks streams, and the mount stays proven for the rest', async () => {
+  await proveLibraryMount();
+  assert.equal(libraryMountProven(root), true);
   put(join(root, OTHER));
   missing.add(join(root, OTHER));
-  await proveLibraryMount();
   assert.equal(getLocalPath(other), `${root}/${OTHER}`, 'the proof alone would have sent it local');
   commands.length = 0;
 
