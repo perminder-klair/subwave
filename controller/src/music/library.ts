@@ -323,6 +323,9 @@ type SlimTrackInput = Pick<TrackRecord,
   structure?: TrackRecord['structure'];
   vocalRanges?: TrackRecord['vocalRanges'];
   vocalRangesInvalid?: boolean;
+  tailVocalRanges?: TrackRecord['tailVocalRanges'];
+  tailVocalRangesInvalid?: boolean;
+  explicitStatus?: TrackRecord['explicitStatus'];
   pace?: TrackRecord['pace'];
 };
 

@@ -151,7 +151,12 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
             musicalKey: era?.musicalKey ?? null,
             loudnessLufs: era?.loudnessLufs ?? null,
             paceMean: era?.paceMean ?? null,
-            instrumental: era ? isInstrumental(era.vocalRanges, era.vocalRangesInvalid) : null,
+            instrumental: era ? isInstrumental({
+              vocalRanges: era.vocalRanges,
+              vocalRangesInvalid: era.vocalRangesInvalid,
+              tailVocalRanges: era.tailVocalRanges,
+              tailVocalRangesInvalid: era.tailVocalRangesInvalid,
+            }) : null,
           });
           if (rows.length >= limit) {
             nextCursor = encodeCursor({
