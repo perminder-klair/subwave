@@ -251,6 +251,13 @@ app.listen(config.server.port, async (err?: Error) => {
   } catch (err: any) {
     console.error('[remote] tts probe start failed:', err.message);
   }
+  // The shared Kokoro server's probe (KOKORO_URL; no-op without it), so the
+  // first DJ link already knows whether it can render there.
+  try {
+    kokoro.start();
+  } catch (err: any) {
+    console.error('[kokoro] shared server probe start failed:', err.message);
+  }
 
   // Resume today's LLM token tally from the durable event log. Must run ONCE and
   // before any new model call records, or it double-counts.
