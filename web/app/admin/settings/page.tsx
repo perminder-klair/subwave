@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import SettingsPanel from '../../../components/admin/SettingsPanel';
-import { HostedProvider, hostedFromEnv } from '../../../components/admin/HostedContext';
+import { HostedProvider } from '../../../components/admin/HostedContext';
+import { hostedFromEnv } from '../../../lib/hosted';
 
 // Resolve the alpha opt-in at runtime, including in prebuilt Docker images.
 export const dynamic = 'force-dynamic';
