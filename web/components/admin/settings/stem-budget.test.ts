@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { stemBudgetImpact, fmtGb, usageCaveat } from './stem-budget';
+import { stemBudgetImpact, fmtGb, usageCaveat, pickTimeOvershoot } from './stem-budget';
 
 const GB = 1024 ** 3;
 const usage = { bytes: 778 * GB, dirs: 76_000, estTrackBytes: Math.round((778 * GB) / 76_000) };
@@ -58,4 +58,21 @@ test('the measured note names why a figure is not current, and only then', () =>
   assert.equal(usageCaveat({ bytes: 1, dirs: 1, estTrackBytes: 1, fresh: false, passRunning: true }), ', analysis pass adding more');
   assert.equal(usageCaveat({ bytes: 1, dirs: 1, estTrackBytes: 1, fresh: false, stale: true }), ', a cleanup pass has run since');
   assert.equal(usageCaveat({ bytes: 1, dirs: 1, estTrackBytes: 1, fresh: false }), ', over a day old');
+});
+
+test('pick-time stems: a cache over its unchanged budget by no more than the designed overshoot is not a fault', () => {
+  const MB = 1024 ** 2;
+  const usageAt = (bytes: number) => ({ bytes, dirs: 1000, estTrackBytes: 15 * MB });
+  const resp = (bytes: number, extra: object = {}) => ({
+    usage: usageAt(bytes), budgetBytes: 15 * GB, pickTimeOvershootBytes: 315 * MB, ...extra,
+  });
+  assert.equal(pickTimeOvershoot(resp(15 * GB + 200 * MB), 15), 200 * MB, 'between sweeps: say so, no warning');
+  assert.equal(pickTimeOvershoot(resp(15 * GB + 315 * MB), 15), 315 * MB, 'at the edge of the design');
+  assert.equal(pickTimeOvershoot(resp(15 * GB + 316 * MB), 15), null, 'past it: the warning stands');
+  assert.equal(pickTimeOvershoot(resp(15 * GB), 15), null, 'not over at all');
+  assert.equal(pickTimeOvershoot(resp(15 * GB + 200 * MB), 14), null, 'a lowered budget deletes stems: the warning stands');
+  assert.equal(pickTimeOvershoot(resp(15 * GB + 200 * MB, { pickTimeOvershootBytes: undefined }), 15), null,
+    'the feature off: the controller sends no overshoot, so nothing changes');
+  assert.equal(pickTimeOvershoot({ usage: null, budgetBytes: 15 * GB, pickTimeOvershootBytes: 315 * MB }, 15), null);
+  assert.equal(pickTimeOvershoot(null, 15), null);
 });

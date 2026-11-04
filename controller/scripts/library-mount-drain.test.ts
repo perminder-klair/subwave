@@ -133,10 +133,10 @@ test('a pick the mixer says it can read goes out local, with no probe to chase',
 
 test('a pick the mixer\'s copy lacks streams with a probe, though the mount is proven', async () => {
   const OTHER = 'Other/Album/01 - Elsewhere.flac';
-  // Prove the mount using the known-readable song before adding the narrower
-  // mixer-only miss. Otherwise findSample may choose OTHER as its sample and
-  // the test starts with an unproven mount instead of exercising the per-pick check.
-  await proveLibraryMount();
+  // Prove first, on SONG, before adding the narrower mixer-only miss. Otherwise
+  // findSample may choose OTHER as its sample and leave the mount unproven.
+  const proof = await proveLibraryMount();
+  assert.equal(proof?.sample, join(root, SONG));
   assert.equal(libraryMountProven(root), true);
   put(join(root, OTHER));
   missing.add(join(root, OTHER));

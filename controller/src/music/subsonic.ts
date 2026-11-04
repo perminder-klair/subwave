@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { extname, isAbsolute, resolve, sep } from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
@@ -13,6 +13,7 @@ import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 import { libraryMountProven } from './library-mount.js';
+import { fileTitle, MAX_REPORTED_TITLE_BYTES, normalizeTitle, titleVerdict } from './tag-title.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -107,16 +108,17 @@ const RETRY_FAST_TRANSPORT: Readonly<CallOptions> = { retryFastTransport: true }
 // undici collapses every connect/socket error into `TypeError: fetch failed`, so
 // name the endpoint, the origin and the underlying code. Never the URL — it
 // carries the auth token.
-function describeTransportError(endpoint: string, err: any): Error {
+export function transportDetail(err: any): string {
   const cause = err?.cause;
   const code = cause?.code || cause?.errno || null;
   const detail = cause?.message && cause.message !== err?.message ? cause.message : null;
-  let origin = config.navidrome.url;
-  try { origin = new URL(config.navidrome.url).origin; } catch { /* keep as configured */ }
-  return new Error(
-    `Subsonic ${endpoint} could not reach ${origin}: ${err?.message || 'fetch failed'}`
-    + `${code ? ` (${code})` : ''}${detail ? ` — ${detail}` : ''}`,
-  );
+  return `${err?.message || 'fetch failed'}${code ? ` (${code})` : ''}${detail ? ` — ${detail}` : ''}`;
+}
+
+function describeTransportError(endpoint: string, err: any, url: string = config.navidrome.url): Error {
+  let origin = url;
+  try { origin = new URL(url).origin; } catch { /* keep as configured */ }
+  return new Error(`Subsonic ${endpoint} could not reach ${origin}: ${transportDetail(err)}`);
 }
 
 // Bounded fetch: a hung Navidrome must not pin the admin routes behind it (#786).
@@ -279,7 +281,7 @@ async function pingWithOnce({
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
       return { ok: false, error: 'Navidrome did not respond within 5s' };
     }
-    return { ok: false, error: err?.message || 'Navidrome unreachable' };
+    return { ok: false, error: describeTransportError('ping', err, url).message };
   }
 }
 
@@ -930,44 +932,136 @@ export function getRawStreamUrl(songId: string): string {
   return buildUrl('stream', { id: songId, format: 'raw' });
 }
 
-// Where a song's `path` could be on the library mount, best guess first. Three
-// shapes reach here:
+// Where a song's `path` could be on the library mount. Three shapes reach here:
 // - relative: built from the tags, joined to the mount as it always was.
 // - absolute and inside the mount: Report Real Path on a Navidrome that sees the
 //   library at the same place. The path is the file.
 // - absolute and outside it: Navidrome's root differs from the mount, and no
-//   setting maps one to the other. So leading segments come off one at a time,
-//   longest remainder first, stopping at three: artist, album and file. Fewer
-//   can match another record (`Greatest Hits/01 - Intro.flac`), and the wrong
-//   song would air under this track's metadata. A miss streams the right one.
+//   setting maps one to the other. So `mapped` holds guesses: the whole path
+//   under the mount, for a mount above Navidrome's root, then leading segments
+//   off one at a time, longest remainder first, stopping at three: artist, album
+//   and file. Fewer can match another record (`Greatest Hits/01 - Intro.flac`).
 // A path comes from the server, so any `..` segment rejects it outright, and
 // every candidate must stay under the mount. Lexical on purpose: a symlink the
 // operator put inside the library still plays.
-function localPathCandidates(libRoot: string, songPath: string): string[] {
+function localPathCandidates(libRoot: string, songPath: string): { direct: string[]; mapped: string[] } {
   const segments = songPath.split('/');
-  if (segments.includes('..')) return [];
+  if (segments.includes('..')) return { direct: [], mapped: [] };
   const root = resolve(libRoot);
   const prefix = root.endsWith(sep) ? root : root + sep;
   const inside = (candidate: string) => resolve(candidate).startsWith(prefix);
-  if (!isAbsolute(songPath)) return [`${libRoot}/${songPath}`].filter(inside);
-  if (inside(songPath)) return [songPath];
+  if (!isAbsolute(songPath)) return { direct: [`${libRoot}/${songPath}`].filter(inside), mapped: [] };
+  if (inside(songPath)) return { direct: [songPath], mapped: [] };
   const parts = segments.filter(Boolean);
-  return parts
-    .slice(0, -2)
-    .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
-    .filter(inside);
+  return {
+    direct: [],
+    mapped: parts
+      .slice(0, -2)
+      .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
+      .filter(inside),
+  };
+}
+
+// The two ends of a file, where tags sit: ID3v2, FLAC's and Ogg's comments and a
+// fast-start M4A's `moov` at the head, a late `moov`, APEv2 and ID3v1 at the
+// tail. A title outside both is never read, so that track streams: cover art
+// ahead of it (a FLAC PICTURE block, an ID3v2 APIC frame, an Ogg picture
+// comment), or an M4A whose atoms leave both windows on the way to `ilst` (a
+// late `moov` over 64 KiB, a fast-start one whose sample tables push `udta` out).
+const TAG_WINDOW_BYTES = 64 * 1024;
+
+// The same `song.size` a Subsonic server reports: the file's bytes, tags included.
+function fileSizeOnDisk(file: string): number | null {
+  try {
+    const st = fs.statSync(file, { throwIfNoEntry: false });
+    return st?.isFile() ? st.size : null;
+  } catch {
+    return null;
+  }
+}
+
+// Does this file's title, as Navidrome reports it, equal the server's? tag-title.ts
+// reads the file's tags the way stock Navidrome and its TagLib do: the format by
+// the extension, one tag read whole, the subtitle appended, the 1,024-byte cut;
+// so the same words in another field, the cover art or the audio don't count.
+// `none` is a file whose tags give no title it can read in the two windows, or
+// none it can be sure Navidrome reports the same way. One open, the head read,
+// and the tail read only when the format keeps tags there and asks for it.
+function titleInTags(file: string, size: number, title: string): 'same' | 'other' | 'none' {
+  const length = Math.min(TAG_WINDOW_BYTES, size);
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const read = (from: number) => {
+        const window = Buffer.alloc(length);
+        return window.subarray(0, fs.readSync(fd, window, 0, length, from));
+      };
+      const head = read(0);
+      let tail: Buffer | null = null;
+      // A file that fits in the window has its tail in the head already.
+      const readTail = () => (tail ??= size <= length ? head : read(size - length));
+      return titleVerdict(fileTitle(extname(file).slice(1), head, readTail, size), title);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // Unreadable: not proved.
+    return 'none';
+  }
+}
+
+// What a server's song offers as proof: its byte count and its title, or null
+// when either is missing, which streams the right song: a server that sends no
+// `size`, a shape that dropped it. A title longer than MAX_REPORTED_TITLE_BYTES,
+// more than Navidrome can report, is no proof either, and is never normalised,
+// whatever the server sends. Checked before any stat, so all of that costs nothing.
+function proofOf(song): { size: number; title: string } | null {
+  const size = Number(song.size);
+  const raw = String(song.title ?? '');
+  if (raw.length > MAX_REPORTED_TITLE_BYTES || Buffer.byteLength(raw, 'utf8') > MAX_REPORTED_TITLE_BYTES) return null;
+  const title = normalizeTitle(raw);
+  return Number.isSafeInteger(size) && size > 0 && title ? { size, title } : null;
+}
+
+// Is this mapped guess the track the server means? A file existing proves
+// nothing: a second library, or a mount that holds part of the library, can have
+// another song at the same folder and file name, and it would air under this
+// song's title and id. So the file has to match two things the server read from
+// the real one: its size, and the title its tags give it as Navidrome reports it.
+// The size alone isn't enough: same-length CBR files with same-length tags come
+// out byte for byte the same size. What's left is a different recording at the
+// same folder and file name, with the same size and the same title as Navidrome
+// reports it: the same album in two editions, two compilations' `Intro`. Nothing
+// short of the audio tells those apart (tag-title.ts lists the narrower cases).
+function isRequestedFile(file: string, proof: { size: number; title: string }): boolean {
+  return fileSizeOnDisk(file) === proof.size && titleInTags(file, proof.size, proof.title) === 'same';
 }
 
 // The song's file as the CONTROLLER sees it on the MUSIC_LIBRARY_PATH mount, else
 // null, for a reader in this container (the cue probe's ffprobe). Navidrome's
 // `path` is usually synthetic (built from tags, not read off disk), so it
 // routinely disagrees with the real layout; an unchecked guess resolves to
-// nothing in Liquidsoap and kills the pick (#1405). Existence is checked here and
-// a miss falls back to the stream URL.
+// nothing in Liquidsoap and kills the pick (#1405). A relative path or a real
+// path inside the mount is checked for existence, as the plain join always was.
+// A mapped guess has to prove it is this track. Anything else falls back to the
+// stream URL. Stateless on purpose: a Doctor run or any other read can't change
+// what the mixer gets next.
+//
+// Cost per call: one stat, or for a mapped path one stat per guess, which is
+// path depth - 2 on a miss, and one open and at most two 64 KiB reads for each
+// guess that matched the size. A `size` this can't use costs no stat at all. It
+// is synchronous and nothing is cached: the coast build pays it for every pool
+// track on every rebuild, and a push once (getLocalPath), twice when a stem
+// seam's cue probe reads the file.
 export function findLibraryFile(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !song.path) return null;
-  return localPathCandidates(libRoot, String(song.path)).find(p => fs.existsSync(p)) ?? null;
+  const { direct, mapped } = localPathCandidates(libRoot, String(song.path));
+  const found = direct.find(p => fs.existsSync(p));
+  if (found || !mapped.length) return found ?? null;
+  // Once for every guess: the server's title is normalised here, not per guess.
+  const proof = proofOf(song);
+  return proof ? mapped.find(p => isRequestedFile(p, proof)) ?? null : null;
 }
 
 // The file to hand LIQUIDSOAP, else null so the pick streams. It opens the file
@@ -979,6 +1073,28 @@ export function getLocalPath(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !libraryMountProven(libRoot)) return null;
   return findLibraryFile(song);
+}
+
+// The Doctor's reading of a track, as the controller sees it: whether the mixer can
+// read the mount is the `library mount` line's to say. `proved` is the file
+// findLibraryFile() finds at the size the server holds for it; a mapped guess has
+// already passed the stricter test to get here. `unproved` plays anyway: a relative
+// path or a real path inside the mount needs no proof to play, so a stale or
+// different file there is not a miss. `unread` streams although a guess has the
+// track's size, because its tags hold no title the check can read, or none it
+// can be sure Navidrome reports the same way: the likely track, and a mount at
+// Navidrome's own path would play it with no proof. `none`
+// streams. The extra walk for `unread` is the Doctor's alone; the push path stops
+// at findLibraryFile().
+export function localFileState(song): 'proved' | 'unproved' | 'unread' | 'none' {
+  const local = findLibraryFile(song);
+  if (local) return fileSizeOnDisk(local) === Number(song.size) ? 'proved' : 'unproved';
+  const libRoot = process.env.MUSIC_LIBRARY_PATH;
+  const proof = proofOf(song);
+  if (!libRoot || !song.path || !proof) return 'none';
+  const { mapped } = localPathCandidates(libRoot, String(song.path));
+  const unread = mapped.some(p => fileSizeOnDisk(p) === proof.size && titleInTags(p, proof.size, proof.title) === 'none');
+  return unread ? 'unread' : 'none';
 }
 
 // Best URI for Liquidsoap — local file if available, otherwise stream URL

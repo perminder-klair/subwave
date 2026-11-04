@@ -440,6 +440,22 @@ of the library heavily, so even a few-GB cache hits constantly. Backfill works
 like the existing `--vocal` backfill: already-analyzed tracks get stems on a
 re-analysis pass or lazily on first use.
 
+*As built:* the render stayed cache-hit-only, and "lazily on first use" never
+shipped in that form: a separation at render time cannot fit the render's
+window (the seam renders the moment its successor is picked, about a minute
+before the drain's hard fallback). The tag-time half became the stem backfill
+(`tracks.stems_at`, ranked by `music/stem-priority.ts`). The first-use half is
+**pick-time stems** (`transitions.pickTimeStems`, opt-in, #2197): after a pair
+is sent, the drain separates the missing windows of the track it now holds
+(`broadcast/pick-stems.ts`). That cannot serve the seam into the track, which
+has already rendered, but its tail has the outgoing track's whole runtime to
+land before the seam out of it, and its head is cached for its next pick. A
+full cache takes these writes a bounded way over its budget, and the hourly
+sweep evicts the lowest-priority dirs to make room, the dirs of tracks still
+in the queue last (a pick that has not aired yet scores below any dir that
+has), so the cache turns over to what the station plays rather than stopping
+where the backfill filled it.
+
 The cache changes the render job's *cost*, not its existence — the blend is a
 pair artifact and the pair is only known at pick time.
 
