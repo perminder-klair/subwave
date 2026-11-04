@@ -25,10 +25,19 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../../ui/select';
 import { cn } from '../../../lib/cn';
+import { useHosted } from '../HostedContext';
 
 const ENGINE_IDS = ENGINES.map(e => e.id);
 // Personas may also follow the station default; the fallback slot may not.
 const PERSONA_ENGINE_IDS = PERSONA_ENGINES.map(e => e.id);
+
+// Hosted (SUB/WAVE Cloud): a persona may pin only an engine the box runs, or
+// the brain's cloud voice on a station that speaks through it (premium). The
+// controller turns any other pin into `inherit` on save (setup/hosted.ts).
+function hostedPersonaEngineIds(defaultEngine: unknown): string[] {
+  const allowed = ['inherit', 'kokoro', 'piper', ...(defaultEngine === 'cloud' ? ['cloud'] : [])];
+  return PERSONA_ENGINE_IDS.filter(id => allowed.includes(id));
+}
 
 // Matches the controller's shared voice-slot shape (settings/validate.ts
 // validateTtsBlock).
@@ -121,6 +130,7 @@ export function EngineVoiceFields({
   unavailableNote, cloudIssue, engineHint, previewHint,
   allowInherit = false, inheritNote, inheritResolvesTo,
 }: EngineVoiceFieldsProps) {
+  const { hosted } = useHosted();
   const inheriting = value.engine === INHERIT_ENGINE.id;
   // What will actually speak. Identical to `value` unless the slot inherits.
   const effective = inheriting && inheritResolvesTo ? inheritResolvesTo : value;
@@ -223,7 +233,9 @@ export function EngineVoiceFields({
         <Label>Engine</Label>
         <EngineSelector
           value={value.engine}
-          engineIds={allowInherit ? PERSONA_ENGINE_IDS : ENGINE_IDS}
+          engineIds={allowInherit
+            ? (hosted ? hostedPersonaEngineIds(inheritResolvesTo?.engine) : PERSONA_ENGINE_IDS)
+            : ENGINE_IDS}
           available={selectorAvailable}
           showStatusHint={!cloudAlerted}
           onChange={selectEngine}

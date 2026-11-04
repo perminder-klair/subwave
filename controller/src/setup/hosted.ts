@@ -3,12 +3,16 @@
 // writes those into settings.json itself; this module is the station's side of
 // that contract, so the wizard and the settings API can't overwrite them.
 //
-// Managed: everything under `llm`, and the voice engine choice plus each
-// engine's provider config. Still the operator's: whether the DJ speaks, the
-// Kokoro voice and language, gain/speed, voice levelling, pronunciation
-// corrections, personas, and every non-voice setting. API keys for LLM and
-// voice providers are dropped too (the brain token is the only one in use);
-// other keys (web search, scrobbling) still save.
+// Managed: everything under `llm`; the voice engine choice plus each engine's
+// provider config; and the embedding route (provider, model, endpoint, key),
+// which also goes through the brain. A persona may only pin an engine the box
+// runs (or the brain's cloud voice on a premium station); any other pin
+// becomes `inherit`. Still the operator's: whether the DJ speaks, the Kokoro
+// voice and language, gain/speed, voice levelling, pronunciation corrections,
+// personas (bar that engine rule), the tagger's tuning (on/off, seed count,
+// propagation, enrichment), and every non-voice setting. API keys for LLM,
+// voice and embedding providers are dropped too (the brain token is the only
+// one in use); other keys (web search, scrobbling) still save.
 
 import { LLM_KEY_ENV_VARS } from '../schemas/providers.js';
 
@@ -19,12 +23,28 @@ export function isHosted(): boolean {
 // tts.* keys the agent owns on a hosted station.
 export const HOSTED_TTS_KEYS = ['defaultEngine', 'cloud', 'remote', 'gemini', 'chatterbox', 'pocketTts', 'heavyEnabled', 'fallback'] as const;
 
-// Voice provider keys; LLM ones come from the provider table.
-const HOSTED_SECRET_KEYS = new Set<string>([...LLM_KEY_ENV_VARS, 'ELEVENLABS_API_KEY', 'FISH_API_KEY']);
+// embedding.* keys that pick where embeddings come from. The rest of the block
+// (enabled, seedCount, propagation, enrichment) is the operator's tuning.
+export const HOSTED_EMBEDDING_KEYS = ['provider', 'model', 'providerBaseUrls', 'baseUrl', 'ollamaUrl', 'apiKey', 'headers'] as const;
+
+// LLM, voice and embedding provider keys; LLM ones come from the provider table.
+const HOSTED_SECRET_KEYS = new Set<string>([...LLM_KEY_ENV_VARS, 'ELEVENLABS_API_KEY', 'FISH_API_KEY', 'EMBEDDING_API_KEY']);
+
+// The engines a persona may pin on a hosted station: the station default
+// (inherit) and the two local engines the box runs, plus the brain's cloud
+// voice when the station itself speaks through it (premium). Heavy engines
+// aren't on hosted boxes, and a cloud pin on a base station would need a key
+// of the owner's own, which hosted mode doesn't store.
+export function hostedPersonaEngines(defaultEngine: unknown): string[] {
+  return ['inherit', 'kokoro', 'piper', ...(defaultEngine === 'cloud' ? ['cloud'] : [])];
+}
 
 // A settings patch with the managed keys removed. Returns the paths it dropped
 // so a caller can tell the operator. Never mutates the input.
-export function stripManagedSettings(patch: Record<string, any>): { patch: Record<string, any>; dropped: string[] } {
+export function stripManagedSettings(
+  patch: Record<string, any>,
+  { defaultEngine }: { defaultEngine?: unknown } = {},
+): { patch: Record<string, any>; dropped: string[] } {
   if (!isHosted() || !patch || typeof patch !== 'object') return { patch, dropped: [] };
   const out: Record<string, any> = { ...patch };
   const dropped: string[] = [];
@@ -42,6 +62,26 @@ export function stripManagedSettings(patch: Record<string, any>): { patch: Recor
     }
     if (Object.keys(tts).length) out.tts = tts;
     else delete out.tts;
+  }
+  if (out.embedding && typeof out.embedding === 'object' && !Array.isArray(out.embedding)) {
+    const embedding = { ...out.embedding };
+    for (const k of HOSTED_EMBEDDING_KEYS) {
+      if (k in embedding) {
+        delete embedding[k];
+        dropped.push(`embedding.${k}`);
+      }
+    }
+    if (Object.keys(embedding).length) out.embedding = embedding;
+    else delete out.embedding;
+  }
+  if (Array.isArray(out.personas)) {
+    const allowed = hostedPersonaEngines(defaultEngine);
+    out.personas = out.personas.map((p: any, i: number) => {
+      const engine = p?.tts?.engine;
+      if (typeof engine !== 'string' || allowed.includes(engine)) return p;
+      dropped.push(`personas.${p?.id ?? i}.tts.engine`);
+      return { ...p, tts: { ...p.tts, engine: 'inherit' } };
+    });
   }
   return { patch: out, dropped };
 }

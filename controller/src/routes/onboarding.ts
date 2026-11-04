@@ -187,7 +187,9 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     if (typeof b.station === 'string') settingsPatch.station = b.station;
     if (typeof b.timezone === 'string') settingsPatch.timezone = b.timezone;
     // A hosted station's LLM route and voice engine belong to its box agent.
-    const { patch: allowedPatch } = stripManagedSettings(settingsPatch);
+    const { patch: allowedPatch } = stripManagedSettings(settingsPatch, {
+      defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
+    });
     if (Object.keys(allowedPatch).length) await settings.update(allowedPatch);
 
     // Mark setup complete so the wizard exits even if Navidrome was skipped.

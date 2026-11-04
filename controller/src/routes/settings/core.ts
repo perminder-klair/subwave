@@ -245,7 +245,9 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
   try {
     // A hosted station's LLM route and voice engine belong to its box agent
     // (setup/hosted.ts): those keys are dropped, the rest of the save applies.
-    const { patch: body, dropped } = stripManagedSettings(req.body || {});
+    const { patch: body, dropped } = stripManagedSettings(req.body || {}, {
+      defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
+    });
     const result = await settings.update(body);
     // context.ts reads the live settings cache, so the update already applies;
     // the route only owns the operator-facing log.

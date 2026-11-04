@@ -36,7 +36,7 @@ const express = (await import('express')).default;
 const { router: onboarding } = await import('../src/routes/onboarding.js');
 const { router: settingsCore } = await import('../src/routes/settings/core.js');
 const settings = await import('../src/settings.js');
-const { stripManagedSecrets, stripManagedSettings } = await import('../src/setup/hosted.js');
+const { hostedPersonaEngines, stripManagedSecrets, stripManagedSettings } = await import('../src/setup/hosted.js');
 
 const app = express();
 app.use(express.json());
@@ -108,4 +108,36 @@ test('the strip helpers: managed paths only, never mutating the input', () => {
   assert.deepEqual(dropped, ['llm', 'tts.fallback']);
   assert.ok('llm' in input);
   assert.deepEqual(stripManagedSecrets({ OPENAI_API_KEY: 'a', FISH_API_KEY: 'b', SEARCH_API_KEY: 'c' }), { SEARCH_API_KEY: 'c' });
+});
+
+test('the embedding route is managed; the tagger tuning still saves', async () => {
+  const r = await post('/settings', {
+    embedding: { provider: 'openai', model: 'text-embedding-3-large', apiKey: 'sk-nope', enabled: false, seedCount: 300 },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.managed, ['embedding.provider', 'embedding.model', 'embedding.apiKey']);
+  const e = stored().embedding;
+  assert.notEqual(e.provider, 'openai');
+  assert.notEqual(e.model, 'text-embedding-3-large');
+  assert.equal(e.enabled, false);
+  assert.equal(e.seedCount, 300);
+  const keys = await post('/settings/secrets', { EMBEDDING_API_KEY: 'sk-nope' });
+  assert.deepEqual(keys.body.saved, []);
+});
+
+test('a persona may pin only the box engines (or the cloud voice on premium); others become inherit', () => {
+  assert.deepEqual(hostedPersonaEngines('kokoro'), ['inherit', 'kokoro', 'piper']);
+  assert.deepEqual(hostedPersonaEngines('cloud'), ['inherit', 'kokoro', 'piper', 'cloud']);
+  const personas = [
+    { id: 'a', tts: { engine: 'kokoro', voice: 'bm_george' } },
+    { id: 'b', tts: { engine: 'chatterbox', voice: 'clip.wav' } },
+    { id: 'c', tts: { engine: 'cloud', voice: 'alloy' } },
+    { id: 'd', name: 'no tts block' },
+  ];
+  const base = stripManagedSettings({ personas }, { defaultEngine: 'kokoro' });
+  assert.deepEqual(base.patch.personas.map((p: any) => p.tts?.engine), ['kokoro', 'inherit', 'inherit', undefined]);
+  assert.equal(base.patch.personas[1].tts.voice, 'clip.wav'); // only the engine changes
+  assert.deepEqual(base.dropped, ['personas.b.tts.engine', 'personas.c.tts.engine']);
+  const premium = stripManagedSettings({ personas }, { defaultEngine: 'cloud' });
+  assert.deepEqual(premium.patch.personas.map((p: any) => p.tts?.engine), ['kokoro', 'inherit', 'cloud', undefined]);
 });
