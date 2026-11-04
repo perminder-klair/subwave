@@ -266,7 +266,6 @@ export function directRequestUnsupported(text: string, match: RequestMatch = {})
   if (/\b(?:instrumental|acoustic|live)\s+(?:only|music|songs?|tracks?|versions?)\b|\b(?:only|strictly)\s+(?:instrumental|acoustic|live)\b|\bwithout\s+(?:vocals|singing|lyrics)\b/i.test(prose)) reasons.add('recording condition');
   if (!match.soundtrackContext
     && /\b(?:song|track|one|music)\s+(?:from|in)\s+(?:(?:that|the|a)\s+)?(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
-    && /\b(?:song|track|one|music)\s+(?:from|in)\s+(?:(?:that|the|a)\s+)?(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
   if (/\b(?:one|song|track|music)\s+(?:we|you|I)\s+(?:discussed|mentioned|requested|talked about)\s+(?:earlier|before|yesterday|last)\b/i.test(prose)) reasons.add('earlier conversation');
   return [...reasons];
 }
@@ -1019,6 +1018,7 @@ function modelFreeAttributeRequest(cleaned: string): RequestMatch | null {
     sort: null, scope: 'song', search_terms: framed.artist ? [framed.artist] : [],
     unsupported: [], unverifiedConditions: unresolvedLanguage ? ['unparsed language condition'] : [],
     intent: conditions.join(' ') || 'Wants music matching the requested attributes.', ack: '',
+    bareName: cleaned.replace(/[.!?]+$/u, '').trim(),
   };
 }
 
@@ -1187,7 +1187,7 @@ export function modelFreeRequest(text: string): RequestMatch {
     return {
       kind: 'track', title: null, album: null, artist: null, genre: null,
       language: null, mood: null, sort: null, scope: 'song',
-      search_terms: [], intent: 'Wants more like the current track.', ack: '',
+      search_terms: [], intent: 'Wants more like the current track.', ack: '', bareName: wholeWording,
     };
   }
   // Named similarity is a separate relation from lyric or vibe search. Keep
@@ -1252,7 +1252,7 @@ export function modelFreeRequest(text: string): RequestMatch {
       genre: inferredGenre,
       language: languageRequested ? inferredLanguage : null,
       mood: inferredMood, sort: null, scope: 'song', search_terms: [],
-      unsupported: [], intent: conditions.join(' '), ack: '',
+      unsupported: [], intent: conditions.join(' '), ack: '', bareName: wholeWording,
     };
   }
   // A trailing language condition stays explicit even without interpretation.
@@ -1973,11 +1973,11 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     return null;
   };
   const selectAlbumFuzzy = (songs: RequestSong[], source: string): RequestSelection | null => {
-    // A misspelled bare album is not enough identity evidence: the global
-    // search can return a same-looking track title from an unrelated release.
-    // Album typo tolerance is deliberately limited to the artist catalogue,
-    // where the artist and the unique album name prove the recording context.
-    if (!match.album || !resolvedArtistName) return null;
+    // A misspelled album is safe only when the local fuzzy result carries an
+    // album name that is uniquely close to the requested one. The album field
+    // and unique-name check prove the release context even without an artist
+    // clause; unrelated title collisions do not pass this boundary.
+    if (!match.album) return null;
     const candidates = unique(songs).filter(song => constraints(song, source)
       && albumNameFuzzyMatches(match.album!, song.album)
       && (!resolvedArtistName || requestCandidateArtistMatches(resolvedArtistName, song)));

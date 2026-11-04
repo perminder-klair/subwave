@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, explicitRequestAttribute, isFramedTitleOnlyRequest, isLyricOrFilmDescription, looksLikeLyricRequest, modelFreeRequest, requestedTitle, rankRequestCandidates, repairRequestMatch, requestArtistMatches, requestCandidateArtistMatches, requestReleaseRank, requestTitleMatches,
   requestTitleSimilarity, resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
+  isGreetingLikeRequest, isGenericRequestPhrase,
   asksForKindOfMusic, resolveExactName,
 } from '../src/music/request-match.js';
 import { requestName, transliterationBridges } from '../src/music/request-normalize.js';
