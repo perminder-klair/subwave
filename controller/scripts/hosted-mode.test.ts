@@ -37,6 +37,7 @@ const { router: onboarding } = await import('../src/routes/onboarding.js');
 const { router: settingsCore } = await import('../src/routes/settings/core.js');
 const settings = await import('../src/settings.js');
 const { hostedPersonaEngines, stripManagedSecrets, stripManagedSettings } = await import('../src/setup/hosted.js');
+const { installPersona } = await import('../src/personas/install.js');
 
 const app = express();
 app.use(express.json());
@@ -87,7 +88,7 @@ test('a settings save drops managed keys, keeps operator ones, and says what it 
     tts: { defaultEngine: 'cloud', enabled: false, kokoro: { voice: 'bm_george', lang: 'en-gb' } },
   });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.managed, ['llm', 'tts.defaultEngine']);
+  assert.deepEqual(r.body.managed, ['llm.provider', 'tts.defaultEngine']);
   const s = stored();
   assert.equal(s.llm.provider, 'openai-compatible');
   assert.equal(s.tts.defaultEngine, 'kokoro');
@@ -105,7 +106,7 @@ test('the strip helpers: managed paths only, never mutating the input', () => {
   const input = { llm: { model: 'x' }, tts: { fallback: { enabled: true }, gainDb: { kokoro: 2 } }, station: 'A' };
   const { patch, dropped } = stripManagedSettings(input);
   assert.deepEqual(patch, { tts: { gainDb: { kokoro: 2 } }, station: 'A' });
-  assert.deepEqual(dropped, ['llm', 'tts.fallback']);
+  assert.deepEqual(dropped, ['llm.model', 'tts.fallback']);
   assert.ok('llm' in input);
   assert.deepEqual(stripManagedSecrets({ OPENAI_API_KEY: 'a', FISH_API_KEY: 'b', SEARCH_API_KEY: 'c' }), { SEARCH_API_KEY: 'c' });
 });
@@ -140,4 +141,24 @@ test('a persona may pin only the box engines (or the cloud voice on premium); ot
   assert.deepEqual(base.dropped, ['personas.b.tts.engine', 'personas.c.tts.engine']);
   const premium = stripManagedSettings({ personas }, { defaultEngine: 'cloud' });
   assert.deepEqual(premium.patch.personas.map((p: any) => p.tts?.engine), ['kokoro', 'inherit', 'cloud', undefined]);
+});
+
+test('DJ tuning that lives under llm still saves; only the LLM route is managed', async () => {
+  const r = await post('/settings', { llm: { provider: 'ollama', noRepeatWindow: 40, artistVarietyWindow: 3 } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.managed, ['llm.provider']);
+  const llm = stored().llm;
+  assert.equal(llm.provider, 'openai-compatible');
+  assert.equal(llm.noRepeatWindow, 40);
+  assert.equal(llm.artistVarietyWindow, 3);
+});
+
+test('an imported or installed persona gets the hosted engine rule too', async () => {
+  // A complete persona, as a bundle carries one: a stock persona under a new
+  // name, pinned to an engine hosted boxes don't run.
+  const { id: _id, ...stock } = (settings.get() as any).personas[0];
+  const r = await installPersona({ ...stock, name: 'Bundle DJ', tts: { ...stock.tts, engine: 'chatterbox', voice: 'clip.wav' } });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  const p = stored().personas.find((x: any) => x.name === 'Bundle DJ');
+  assert.equal(p.tts.engine, 'inherit');
 });

@@ -19,6 +19,7 @@
 // once nothing can still refuse. Asking twice is not redundant — this is the
 // answer that counts, the import's is a dry run.
 import * as settings from '../settings.js';
+import { stripManagedSettings } from '../setup/hosted.js';
 
 export type PersonaInstallFailure = { ok: false; status: number; error: string };
 export type PersonaInstallSuccess = {
@@ -73,6 +74,12 @@ export async function installPersona(persona: Record<string, unknown>): Promise<
   const personas = settings.get().personas || [];
   const slotError = personaSlotError(personas, persona.name);
   if (slotError) return slotError;
+
+  // Hosted: an imported persona gets the same engine rule as an edited one
+  // (setup/hosted.ts): a heavy or keyed engine the box doesn't run becomes
+  // inherit. A no-op on a self-hosted station.
+  const { patch } = stripManagedSettings({ personas: [persona] }, { defaultEngine: (settings.get() as any)?.tts?.defaultEngine });
+  persona = (patch.personas as Record<string, unknown>[])[0];
 
   try {
     await settings.update({ personas: [...personas, persona] });

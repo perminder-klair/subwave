@@ -3,7 +3,10 @@
 // writes those into settings.json itself; this module is the station's side of
 // that contract, so the wizard and the settings API can't overwrite them.
 //
-// Managed: everything under `llm`; the voice engine choice plus each engine's
+// Managed: the LLM route under `llm` (provider, model, endpoint, keys,
+// fallback; HOSTED_LLM_KEYS), not the DJ tuning that also lives there (track
+// selection, no-repeat and variety windows, request matching, segment
+// runtime...); the voice engine choice plus each engine's
 // provider config; and the embedding route (provider, model, endpoint, key),
 // which also goes through the brain. A persona may only pin an engine the box
 // runs (or the brain's cloud voice on a premium station); any other pin
@@ -19,6 +22,13 @@ import { LLM_KEY_ENV_VARS } from '../schemas/providers.js';
 export function isHosted(): boolean {
   return ['1', 'true', 'yes'].includes((process.env.SUBWAVE_HOSTED || '').trim().toLowerCase());
 }
+
+// llm.* keys that pick where the DJ's LLM runs. The rest of the block is the
+// operator's tuning, which the Music selection and DJ behaviour pages save.
+export const HOSTED_LLM_KEYS = [
+  'provider', 'model', 'baseUrl', 'apiKey', 'keys', 'providerBaseUrls', 'ollamaUrl', 'headers',
+  'compatibleMode', 'fallback', 'numCtx', 'repeatPenalty', 'reasoning', 'toolChoice', 'geminiSafety',
+] as const;
 
 // tts.* keys the agent owns on a hosted station.
 export const HOSTED_TTS_KEYS = ['defaultEngine', 'cloud', 'remote', 'gemini', 'chatterbox', 'pocketTts', 'heavyEnabled', 'fallback'] as const;
@@ -48,7 +58,17 @@ export function stripManagedSettings(
   if (!isHosted() || !patch || typeof patch !== 'object') return { patch, dropped: [] };
   const out: Record<string, any> = { ...patch };
   const dropped: string[] = [];
-  if ('llm' in out) {
+  if (out.llm && typeof out.llm === 'object' && !Array.isArray(out.llm)) {
+    const llm = { ...out.llm };
+    for (const k of HOSTED_LLM_KEYS) {
+      if (k in llm) {
+        delete llm[k];
+        dropped.push(`llm.${k}`);
+      }
+    }
+    if (Object.keys(llm).length) out.llm = llm;
+    else delete out.llm;
+  } else if ('llm' in out) {
     delete out.llm;
     dropped.push('llm');
   }

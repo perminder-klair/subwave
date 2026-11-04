@@ -515,6 +515,23 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // back empty (see 5).
   if (!pool.length && listenerStarred.length) take('starred', enforce(listenerStarred), TARGET_POOL);
 
+  // Rested fallback (a small library): when every track has aired inside the
+  // recency window, every source above comes back empty and the mixer airs the
+  // emergency loop until someone queues a track by hand. Air the longest-rested
+  // tracks instead: recency ignored, dedup and the artist cap still applied. A
+  // strict playlist keeps its own floor below.
+  if (!pool.length && !strictPlaylist) {
+    try {
+      const rested = await subsonic.getRandomSongs({ size: TARGET_POOL * 2 });
+      take('rested', freshnessBiasedOrder(rested, library.lastAiredInfo(), Date.now()), TARGET_POOL, { ignoreRecency: true });
+      if (pool.length) {
+        queue.log('scheduler', `Auto-playlist: every track aired inside the recency window — repeating the ${pool.length} longest-rested instead of the emergency loop`);
+      }
+    } catch (err) {
+      queue.log('error', `Rested fallback failed: ${err.message}`);
+    }
+  }
+
   }
 
   // A clean show with nothing to air, on every branch above: an episode has no
