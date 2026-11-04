@@ -8,6 +8,14 @@ export const metadata: Metadata = {
   title: 'Settings',
 };
 
+// SUBWAVE_HOSTED: run by SUB/WAVE Cloud, whose box agent manages the LLM and
+// the voice engine (controller setup/hosted.ts), so those controls are hidden.
 export default function AdminSettingsPage() {
-  return <SettingsPanel djBrainEnabled={process.env.SUBWAVE_DJ_BRAIN_ENABLED === 'true'} />;
+  const hosted = ['1', 'true', 'yes'].includes((process.env.SUBWAVE_HOSTED || '').trim().toLowerCase());
+  return (
+    <SettingsPanel
+      djBrainEnabled={!hosted && process.env.SUBWAVE_DJ_BRAIN_ENABLED === 'true'}
+      hosted={hosted}
+    />
+  );
 }

@@ -28,6 +28,7 @@ import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
 import { saveSecrets, SECRET_ENV_KEYS, secretValueIssue } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
+import { stripManagedSecrets, stripManagedSettings } from '../setup/hosted.js';
 import { pingWith } from '../music/subsonic.js';
 
 export const router = express.Router();
@@ -173,7 +174,8 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
       for (const k of SECRET_ENV_KEYS) {
         if (typeof b.apiKeys[k] === 'string') patch[k] = b.apiKeys[k];
       }
-      if (Object.keys(patch).length) await saveSecrets(patch);
+      const allowed = stripManagedSecrets(patch);
+      if (Object.keys(allowed).length) await saveSecrets(allowed);
     }
 
     const settingsPatch: any = {};
@@ -184,7 +186,9 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     if (b.weather && typeof b.weather === 'object') settingsPatch.weather = b.weather;
     if (typeof b.station === 'string') settingsPatch.station = b.station;
     if (typeof b.timezone === 'string') settingsPatch.timezone = b.timezone;
-    if (Object.keys(settingsPatch).length) await settings.update(settingsPatch);
+    // A hosted station's LLM route and voice engine belong to its box agent.
+    const { patch: allowedPatch } = stripManagedSettings(settingsPatch);
+    if (Object.keys(allowedPatch).length) await settings.update(allowedPatch);
 
     // Mark setup complete so the wizard exits even if Navidrome was skipped.
     await saveSetupConfig({ setupCompletedAt: new Date().toISOString() });

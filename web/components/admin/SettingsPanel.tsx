@@ -118,10 +118,12 @@ const AAC_BITRATES = SETTINGS_AAC_BITRATES;
  */
 const JUMP_MAX_FRAMES = 60;
 
-export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabled?: boolean }) {
+export default function SettingsPanel({ djBrainEnabled = false, hosted = false }: { djBrainEnabled?: boolean; hosted?: boolean }) {
+  // Hosted (SUB/WAVE Cloud): the LLM provider page is the agent's, so it goes;
+  // the voice page stays for what the operator still owns (see TtsSection).
   const sections = useMemo(
-    () => SECTIONS.filter(s => s.id !== 'brain' || djBrainEnabled),
-    [djBrainEnabled],
+    () => SECTIONS.filter(s => (s.id !== 'brain' || djBrainEnabled) && (s.id !== 'llm' || !hosted)),
+    [djBrainEnabled, hosted],
   );
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const settingsQuery = useSettingsQuery<SettingsData>({
@@ -567,6 +569,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               <TtsSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+                hosted={hosted}
               />
             )}
             {activeSection === 'behaviour' && (
@@ -581,7 +584,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
               />
             )}
-            {activeSection === 'llm' && data.llm && (
+            {!hosted && activeSection === 'llm' && data.llm && (
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
