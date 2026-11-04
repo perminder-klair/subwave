@@ -1104,6 +1104,14 @@ test('a transliteration bridges only a Latin spelling and another script', () =>
   assert.equal(requestArtistMatches('Мать', { id: 'act', artist: 'Мать' }), true);
 });
 
+test('a bare non-Latin name is not inferred as a language without request framing', () => {
+  for (const [text, title] of [['play 가나', '가나'], ['play Мат', 'Мат']]) {
+    const match = modelFreeRequest(text);
+    assert.equal(match.language, null, text);
+    assert.equal(match.title, title, text);
+  }
+});
+
 test('two Hangul titles that read alike are a near title, never a match', async () => {
   const other = { id: 'gan-a', title: '간아', artist: '밴드갑' };
   const f = fixture({ ...noServer, fuzzySearch: async () => [other] });

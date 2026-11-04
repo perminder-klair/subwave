@@ -938,10 +938,21 @@ export function modelFreeRequest(text: string): RequestMatch {
   // phrase after it. Scanning the whole request first lets a genre such as
   // "pop" win as the ISO code `pop` before the actual unresolved language
   // after "in" is considered.
-  const languageSpan = findRequestLanguageSpan(languagePhrase?.[1] || attributeBody, {
-    allowBareCode: Boolean(languagePhrase),
-    allowFuzzy: Boolean(languagePhrase) || /\b(?:music|songs?|tracks?|language|sung|spoken|vocals?)\b/iu.test(cleaned),
-  });
+  // A bare one-word request is ambiguous with a recording title. Require
+  // language framing before a registry name can claim that word; combined
+  // descriptors such as "Punjabi pop" still provide enough context through
+  // their genre/mood/era term. This keeps native-script titles such as "가나"
+  // and "Мат" on the named-recording path without narrowing framed language
+  // requests.
+  const languageContext = Boolean(languagePhrase)
+    || /(?:\b(?:music|songs?|tracks?|language|sung|spoken|vocals?)\b|संगीत|गाना|गाने|गीत|बजाओ|चलाओ|सुनाओ|लगाओ|ਸੰਗੀਤ|ਗਾਣਾ|ਗਾਣੇ|ਗੀਤ|ਚਲਾਓ|ਸੁਣਾਓ|ਲਗਾਓ)/iu.test(cleaned)
+    || Boolean(resolveRequestGenreAlias(attributeBody) || resolveRequestMood(attributeBody) || parseRequestEra(attributeBody));
+  const languageSpan = languageContext
+    ? findRequestLanguageSpan(languagePhrase?.[1] || attributeBody, {
+      allowBareCode: Boolean(languagePhrase),
+      allowFuzzy: Boolean(languagePhrase) || /\b(?:music|songs?|tracks?|language|sung|spoken|vocals?)\b/iu.test(cleaned),
+    })
+    : null;
   const unresolvedLanguage = languagePhrase && !languageSpan
     ? languagePhrase[1].trim()
     : null;
