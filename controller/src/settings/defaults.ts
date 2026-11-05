@@ -96,8 +96,10 @@ export const DEFAULTS = {
     // entrypoint converts per mount (#993).
     //
     // This is also how far behind the live edge every listener sits for their
-    // whole connection, so /now-playing publishes it as stream.bufferSeconds and
-    // players subtract it to line titles up with the audio in someone's ears (#1114).
+    // whole connection, so /now-playing publishes the burst last rendered
+    // (stream-mounts.json, #2142; this setting when there is no usable one) as
+    // stream.bufferSeconds, and players subtract that to line titles up with the
+    // audio in someone's ears (#1114).
     bufferSeconds: 22,
     // Legacy ICY (out-of-band) title compatibility for the Opus mount. FLAC
     // always uses native chained Ogg tags; MP3/AAC behavior is unaffected. Keep
@@ -623,6 +625,11 @@ export const DEFAULTS = {
       // images and tags always came back empty; it stays as the fallback when
       // forced on with no api_key, for custom Navidromes that DO expose tag[].
       lastfmTags: null as boolean | null,
+      // Add each song's own tags (track.getTopTags) ahead of its artist's, in the
+      // same lastfm_tags list. Off by default, unlike the rest of this block:
+      // it costs one call per track plus a re-embed of whatever changes, about 50
+      // minutes on a 10k library. Needs an api_key and lastfmTags not forced off.
+      lastfmTrackTags: false,
       lyrics: true,       // fetch + include lyric excerpt in embed text
       // Resolve original release years for compilation tracks via MusicBrainz
       // (#842) — a compilation's `year` tag is the compilation's release date, so
@@ -633,7 +640,8 @@ export const DEFAULTS = {
   },
   // Web-search backend for the segment director's web-search capability.
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
-  // override here).
+  // override here); `keenable` needs no key but uses a `keen_` one if set;
+  // `firecrawl` reads SEARCH_API_KEY like Tavily and Brave.
   search: {
     provider: 'duckduckgo',
     apiKey: '',
@@ -664,6 +672,9 @@ export const DEFAULTS = {
     // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
+    // Daily orphan stem-dir purge (quarantine, then delete after a week).
+    // Off by default — deleting operator files is opt-in (#1570 discipline).
+    stemOrphanPurgeEnabled: false,
     // Pause the analysis pass while anyone is listening, resuming once the stream
     // has been listener-free for analyzeQuietMinutes (#1099). Checked between
     // tracks inside runAnalysisPass, so it covers the tagger child, `npm run
@@ -681,6 +692,18 @@ export const DEFAULTS = {
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
+    // Separate a picked track's missing stem windows while it is held behind
+    // the on-air one (broadcast/pick-stems.ts, #2197), so the cache fills with
+    // what the station plays instead of waiting for the bulk backfill. Off
+    // until its load on the mixer has been measured: it runs Demucs during
+    // the broadcast, on the same worker as the blend render.
+    pickTimeStems: false,
+    // Fade curve for PLAIN song-to-song crossfades: false = linear (two
+    // different songs dip ~3 dB mid-fade), true = equal-power (cos out, sin^1.5
+    // in, level held within 0.7 dB). Effects, stem-blend clip seams, jingles
+    // and beds keep their own curves. Read once by the mixer at startup, so a
+    // change needs a restart.
+    equalPowerCrossfade: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
     // and lose all six. Resolved through settings/transition-effects.ts, which
@@ -822,6 +845,14 @@ export const DEFAULTS = {
     // with the panel: it sends each such track's artist, title, album and
     // length to lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
     lrclib: true,
+  },
+  // The Navidrome connection itself is in setup-config.json; this block is the
+  // station's behaviour toward it. `reportRealPath`: keep Navidrome's "Report
+  // Real Path" ticked on SUB/WAVE's own player rows (hourly + at boot), so
+  // `path` is the file on disk rather than one built from tags. Off by default:
+  // it writes to the operator's Navidrome. See music/navidrome-players-policy.ts.
+  musicSource: {
+    reportRealPath: false,
   },
 };
 

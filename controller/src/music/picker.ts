@@ -21,6 +21,7 @@ import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor } from './track-floor.js';
 import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, unairedFlag, type AiredIndex } from './airing.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
+import { explicitGate } from './explicit-policy.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import { allowsMoodPlaylistDiscovery } from './discovery-policy.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
@@ -41,6 +42,7 @@ interface Candidate {
   yearUntrusted?: boolean | null;
   year?: number | string | null;
   genre?: string | null;
+  explicitStatus?: string | null;
   duration?: number | null;
   // Library rows spell it `durationSec`; both names must stay or the #1573
   // floor reads library rows as unknown.
@@ -168,7 +170,7 @@ function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key:
 // Show music-steering filters, never-starve by default; `strict`
 // (show.filtersStrict) filters discovery sources too. Lists are OR within an
 // attribute, AND across them (#929); empty list = no constraint.
-type ShowFilter = { moods: string[]; genres: string[]; eras: YearRange[]; energies: string[]; vocals: VocalMode; strict?: boolean } | null;
+type ShowFilter = { moods: string[]; genres: string[]; eras: YearRange[]; energies: string[]; vocals: VocalMode; strict?: boolean; excludeExplicit?: boolean } | null;
 export type StrictGenreResolution = { genres: string[]; warnings: string[] };
 
 // Exported for the in-order walk (music/playlist-order-next.ts), which needs the
@@ -237,9 +239,12 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
 async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtistRoots: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, lengthLimits: { minTrackSec: number | null; maxTrackSec: number | null } = { minTrackSec: null, maxTrackSec: null }, exhaustiveRotation = false, excludedIds: Set<string> | null = null, episodeSource: ArtistEpisodeSource | null = null, hasPlaylistAnchor = false) {
   await library.load();
   const { minTrackSec, maxTrackSec } = lengthLimits;
+  // A clean show, applied where each source enters: every never-starve step
+  // below then runs inside what may air, so those are what give way.
+  const clean = explicitGate<Candidate>(showFilter);
   // Prohibited rows must not consume a source's finite sampling slots.
   const sampleFresh = (items: Candidate[], ids: Set<string>, cap: number) =>
-    sampleFreshCandidates(applyKnownTrackCeiling(items, maxTrackSec), ids, cap);
+    sampleFreshCandidates(clean.pass(applyKnownTrackCeiling(items, maxTrackSec)), ids, cap);
   // knnExclude pushes the recency union INTO the KNN queries so an aired
   // cluster answers with the next neighbours out, not with fewer rows.
   const aired = library.lastAiredInfo();
@@ -249,7 +254,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   const sources: Record<string, number> = {};
   const add = (label: string, items: Candidate[]) => {
     if (!items?.length) return;
-    items = applyKnownTrackCeiling(items, maxTrackSec);
+    items = clean.pass(applyKnownTrackCeiling(items, maxTrackSec));
     pool.push(...items.map((t) => ({ ...t, _source: label })));
     sources[label] = (sources[label] || 0) + items.length;
   };
@@ -269,8 +274,8 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // Hard-prefer every set filter in strict mode; a no-op otherwise. Each
   // prefer* never-starves, so leaning a source can only tighten it.
   const lean = (items: Candidate[]): Candidate[] => {
-    if (!strict) return items;
-    let out = items;
+    let out = clean.pass(items);
+    if (!strict) return out;
     if (strictGenres.length) out = preferGenre(out, strictGenres);
     out = preferEra(out, showFilter!.eras);
     out = preferMood(out, showFilter!.moods);
@@ -353,16 +358,16 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const perGenre = await mapPool(targets, SHOW_GENRE_FETCH_CONCURRENCY, async (genreName) => {
         const got: Candidate[] = [];
         try {
-          got.push(...await subsonic.getRandomSongs({
+          got.push(...clean.pass(await subsonic.getRandomSongs({
             size: Math.ceil(randomSize / Math.max(1, genreNames.length)),
             genre: genreName,
             fromYear: span.fromYear ?? undefined,
             toYear: span.toYear ?? undefined,
-          }));
+          })));
         } catch {}
         if (genreName) {
           try {
-            const g = await subsonic.getSongsByGenreSampled(genreName, { count: Math.ceil(genreSetSize / genreNames.length) });
+            const g = clean.pass(await subsonic.getSongsByGenreSampled(genreName, { count: Math.ceil(genreSetSize / genreNames.length) }));
             const ranged = inYearRange(g, showFilter!.eras);
             got.push(...(ranged.length ? ranged : g));
           } catch {}
@@ -379,7 +384,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
 
   // 1f. Show-anchored Navidrome playlist(s); in strict mode the whole universe.
   if (hasPlaylist) {
-    add('show-playlist', sampleShowSource(shuffle(applyKnownTrackCeiling(playlistPool!.tracks, maxTrackSec)), recentIds, strictPlaylist ? CAP_SHOW_PLAYLIST_STRICT : CAP_SHOW_PLAYLIST, exhaustiveRotation ? { ids: hardRecentIds, keys: hardRecentKeys } : null));
+    add('show-playlist', sampleShowSource(shuffle(clean.pass(applyKnownTrackCeiling(playlistPool!.tracks, maxTrackSec))), recentIds, strictPlaylist ? CAP_SHOW_PLAYLIST_STRICT : CAP_SHOW_PLAYLIST, exhaustiveRotation ? { ids: hardRecentIds, keys: hardRecentKeys } : null));
   }
 
   // 2. Mood-tagged library. A multi-mood show pools ALL its moods equally (#929).
@@ -394,7 +399,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
         moodPool.push(t);
       }
     }
-    const moodHits = shuffle(lean(preferEnergy(moodPool, showFilter?.energies)));
+    const moodHits = shuffle(lean(preferEnergy(clean.pass(moodPool), showFilter?.energies)));
     add('mood-library', sampleFresh(moodHits, recentIds, CAP_MOOD_LIBRARY));
 
     // Autonomous hours only (a show's pinned moods are operator intent): only
@@ -600,7 +605,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     };
   }
 
-  return { candidates: final, sources, strictInfo, playlistInfo };
+  return { candidates: final, sources, strictInfo, playlistInfo, explicitHeld: clean.held().length };
 }
 
 // The on-air track and the last HISTORY_DEPTH plays, most recent first, with
@@ -664,6 +669,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
         energies: activeShow.energies ?? [],
         vocals: (activeShow.vocals ?? '') as VocalMode,
         strict: activeShow.filtersStrict,
+        excludeExplicit: activeShow.excludeExplicit,
       }
     : null;
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
@@ -709,7 +715,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtistRoots, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, { minTrackSec, maxTrackSec }, noRepeat.exhaustive, excludedIds, episodeSource, !!activeShow?.playlistIds?.length);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo, explicitHeld } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtistRoots, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, { minTrackSec, maxTrackSec }, noRepeat.exhaustive, excludedIds, episodeSource, !!activeShow?.playlistIds?.length);
 
   // Excluded playlists: hard drop, no never-starve fallback.
   const candidates = excludedIds
@@ -721,6 +727,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     queue.log('picker', avoided
       ? `no candidates available excluding "${avoided}", skipping LLM pick`
       : 'no candidates available, skipping LLM pick');
+    // Hard here, as the excluded playlists are: null leaves this slot to the
+    // coast, the one place a clean show can give way.
+    if (explicitHeld) queue.log('picker', `clean show "${activeShow?.name}": nothing left once ${explicitHeld} track(s) tagged explicit were held back — leaving this slot to the auto-playlist`);
     return null;
   }
 
@@ -817,7 +826,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // Mirrors the agent picker's `sections`.
           sections: library.sectionCount(c) ?? library.sectionCount(rec) ?? undefined,
           // Instrumental flag from the shared measured-duration policy.
-          instrumental: isInstrumental(rec?.vocalRanges, rec?.vocalRangesInvalid) ?? undefined,
+          instrumental: isInstrumental(rec) ?? undefined,
           unaired: neverAired,
           source: c._source || null,
           // Cosine similarity to the expected predecessor, KNN sources only.

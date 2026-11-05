@@ -26,7 +26,8 @@ import {
   SETTINGS_STATION_NAME_MAX,
 } from '@/lib/schemas.generated';
 import type { WizardController, WizardData } from './useWizard';
-import { ProviderSelector } from '../admin/llm/ProviderSelector';
+import { ProviderPicker } from '../admin/llm/ProviderPicker';
+import { useSettingsQuery } from '../admin/settings/queries';
 import { ModelCombobox } from '../admin/llm/ModelCombobox';
 import { PROVIDER_IDS } from '../admin/llm/providerMeta';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
@@ -258,6 +259,14 @@ export function LlmStep({ w }: { w: WizardController }) {
     adminFetch: w.auth.adminFetch,
   });
 
+  // The server's provider list, as Settings renders it; the client's copy of
+  // the catalogue stands in until it arrives, or if the read fails.
+  const settingsQuery = useSettingsQuery<{ llm?: { providers?: string[] } }>({
+    adminFetch: w.auth.adminFetch,
+    enabled: true,
+  });
+  const serverProviders = settingsQuery.data?.llm?.providers;
+
   const onNext = form.handleSubmit(vals => {
     const v = vals as unknown as WizardData['llm'];
     w.patch({
@@ -287,12 +296,13 @@ export function LlmStep({ w }: { w: WizardController }) {
             {isDjBrain ? '✓ Using DJ Brain' : 'Use DJ Brain'}
           </Button>
         </div>
-        {/* ProviderSelector labels its radiogroup. A wrapping label would hijack clicks. */}
+        {/* ProviderPicker labels its radiogroup. A wrapping label would hijack clicks. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Provider</span>
-          <ProviderSelector
+          <ProviderPicker
             value={providerField.field.value}
-            providerIds={PROVIDER_IDS}
+            providerIds={serverProviders ?? PROVIDER_IDS}
+            label="LLM provider"
             keyAware={false}
             onChange={providerField.field.onChange}
           />

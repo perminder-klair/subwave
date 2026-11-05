@@ -21,9 +21,10 @@ There are two independent empty-room settings, both off by default:
 | `llm.pauseWhenEmpty` | Stops autonomous DJ model calls. Liquidsoap continues broadcasting music from the fallback playlist and fetching tracks. |
 | `stream.idleWhenEmpty` | After `stream.idleAfterMinutes`, freezes the programme mid-track. Icecast mounts stay connected and serve silence. A listener connection resumes the programme. |
 
-The idle monitor polls **Icecast**, not Navidrome, every five seconds while
-paused so it can detect a new listener. A sustained Icecast status failure
-releases the pause to keep the station available. Check `streamIdle` on
+The idle monitor polls **Icecast**, not Navidrome, while paused so it can
+detect a new listener: a light status read every second, and the poll that
+decides every five seconds. A sustained Icecast status failure releases the
+pause to keep the station available. Check `streamIdle` on
 `GET /state` and the booth log's pause/resume lines (admin → Debug) to establish whether the
 programme actually stayed idle. A running broadcast is expected to fetch
 tracks even if its DJ is asleep. For scale, four-minute tracks played

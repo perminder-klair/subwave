@@ -75,11 +75,24 @@ function isLiquidsoapReachable(timeoutMs = 800): Promise<boolean> {
   });
 }
 
+const mixerRestartListeners = new Set<() => void>();
+
+// Told as a restart starts and again once it has landed: whatever was known
+// about the running mixer says nothing about the one that comes back.
+export function onMixerRestart(listener: () => void): void {
+  mixerRestartListeners.add(listener);
+}
+
+function mixerRestarting(): void {
+  for (const listener of mixerRestartListeners) listener();
+}
+
 export async function restartLiquidsoap() {
   // sendCommand resolving is NOT proof the restart landed — the telnet socket
   // can close cleanly with an empty buffer. Confirm by watching the port go
   // down, and resend if it doesn't.
   invalidateStreamStatus();
+  mixerRestarting();
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -94,7 +107,10 @@ export async function restartLiquidsoap() {
     // so a port still accepting after the window means the command was dropped.
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
-      if (!(await isLiquidsoapReachable())) return; // confirmed down → restart took
+      if (!(await isLiquidsoapReachable())) { // confirmed down → restart took
+        mixerRestarting();
+        return;
+      }
       await sleep(250);
     }
   }
@@ -127,6 +143,23 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
     return parseResolveProbeOutcome(
       await sendCommand(`subhttp_probe_status ${probeId}`, 2000),
     );
+  } catch {
+    return 'unknown';
+  }
+}
+
+// Whether the broadcast container can read this file (radio.liq `path_readable`),
+// a different question from whether the controller can: Liquidsoap opens it. Only
+// a complete, exact answer counts. 'unknown' is a telnet failure, a timeout, or a
+// mixer older than the command, whose reply is an "ERROR: unknown command" line.
+export type PathReadable = 'yes' | 'no' | 'unknown';
+
+export async function pathReadable(path: string, timeoutMs = 2000): Promise<PathReadable> {
+  // One telnet line: a path that can't be sent on it can't be asked about.
+  if (!path || /[\r\n\0]/.test(path)) return 'unknown';
+  try {
+    const reply = await sendCommand(`path_readable ${path}`, timeoutMs, { requireComplete: true });
+    return reply === 'yes' || reply === 'no' ? reply : 'unknown';
   } catch {
     return 'unknown';
   }

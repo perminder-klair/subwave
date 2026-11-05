@@ -26,11 +26,6 @@ export function isStreamFormat(v: unknown): v is StreamFormat {
   return typeof v === 'string' && (ALL_FORMATS as string[]).includes(v);
 }
 
-/** Icecast mount path, matching the Liquidsoap outputs and the Caddy routes. */
-export function mountFor(format: StreamFormat): string {
-  return `/stream.${format}`;
-}
-
 /** Can this device's engine decode the format? ExoPlayer demuxes Ogg so
  *  everything plays; AVPlayer does not, ruling out Opus and FLAC. Any other
  *  platform gets the MP3 floor only. */

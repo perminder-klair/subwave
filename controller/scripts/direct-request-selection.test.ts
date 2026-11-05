@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  directRequestUnsupported, explicitRequestAttribute, modelFreeRequest, requestedTitle, repairRequestMatch, requestArtistMatches, requestReleaseRank, requestTitleMatches,
+  classifyUnsupportedLabels, directRequestUnsupported, explicitRequestAttribute, modelFreeRequest, requestedTitle, repairRequestMatch, requestArtistMatches, requestReleaseRank, requestTitleMatches,
   resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
 } from '../src/music/request-match.js';
 
@@ -70,6 +70,59 @@ test('common exclusion and era wording survives a model omission', () => {
     assert.ok(directRequestUnsupported(text).length, text);
   }
   assert.deepEqual(directRequestUnsupported('play something by Queen', { unsupported: ['previous conversation'] }), ['previous conversation']);
+});
+
+test('a model label refuses only when it names one of the five conditions (#2133)', async () => {
+  // The prompt's wording, the backstop's own labels and variants models wrote.
+  const kept = ['exclusions', 'exclusions/negation', 'negation', 'era', 'era or year ranges', 'year ranges', '1990s',
+    'instrumental-only filters', 'recording condition', 'live only', 'lyric/film/trending-song identification',
+    'lyric identification', 'film identification', 'external identification', 'earlier conversation',
+    'references to earlier conversations', 'previous conversation'];
+  // Labels models filed dedications under, invented categories included.
+  const invented = ['dedication', 'dedication request', 'dedication/tribute', 'tribute', 'shout-out',
+    'journey identification', 'journey/destination identification', 'for a person'];
+  assert.deepEqual(classifyUnsupportedLabels([...kept, ...invented, ' ']), { conditions: kept, ignored: invented });
+  assert.deepEqual(directRequestUnsupported('Dedicate a song to my late aunt, I will miss you', { unsupported: ['dedication'] }), []);
+  assert.deepEqual(directRequestUnsupported('play anything except Queen for my mum', { unsupported: ['dedication', 'exclusions'] }), ['exclusions']);
+  // An ignored label leaves a valid empty plan, so the literal name pair is kept.
+  assert.equal(repairRequestMatch({ unsupported: ['dedication'] }, 'Play Bohemian Rhapsody by Queen').title, exact.title);
+  const f = fixture();
+  const r = await resolveDirectRequest({ ...songRequest, unsupported: ['dedication'] }, f.deps);
+  assert.equal(r.outcome, 'matched');
+  assert.equal(r.track?.id, exact.id);
+});
+
+test('a bare decade is an era unless it gives a person’s age', () => {
+  for (const text of ['Play some rock from the 80s, for my brother', 'play 80s rock', "something from the '80s",
+    "play some 80's pop", 'play ’90s hip hop', 'music from the eighties', 'play seventies disco', 'hits from the mid-80s',
+    'late 90s dance please', 'Play some 80s for my dad, he is in his 60s']) {
+    assert.deepEqual(directRequestUnsupported(text), ['era'], text);
+  }
+  for (const text of ['Play something for my mum, she is in her 60s', 'a song for people in their late twenties',
+    'something for my nan in her mid-80s', 'a song for the over-60s club']) {
+    assert.deepEqual(directRequestUnsupported(text), [], text);
+  }
+});
+
+test('a decade inside a named song or artist is not an era condition', async () => {
+  for (const text of ['Play 80s Ladies by K.T. Oslin', 'Play Back to the 80’s by Aqua', 'Play Eighties by Killing Joke',
+    'Play Summer of 69 by Bryan Adams', "Play Summer of '69 by Bryan Adams"]) {
+    assert.deepEqual(directRequestUnsupported(text, modelFreeRequest(text)), [], text);
+  }
+  assert.deepEqual(directRequestUnsupported('Play something by The Eighties Matchbox B-Line Disaster',
+    { artist: 'The Eighties Matchbox B-Line Disaster' }), []);
+  // The raw words still carry the decade, so the name needs catalogue proof
+  // before any stand-in, as a condition word inside any name does.
+  const text = 'Play 80s Ladies by K.T. Oslin';
+  const named = { ...exact, id: 'ladies', title: '80s Ladies', artist: 'K.T. Oslin' };
+  const found = fixture({ searchPage: async () => ({ songs: [named], rawCount: 1 }) });
+  const r = await resolveDirectRequest({ title: named.title, artist: named.artist }, { ...found.deps, text });
+  assert.equal(r.outcome, 'matched');
+  assert.equal(r.track?.id, named.id);
+  const missing = fixture({ searchPage: async () => ({ songs: [], rawCount: 0 }) });
+  const refused = await resolveDirectRequest({ title: named.title, artist: named.artist }, { ...missing.deps, text });
+  assert.equal(refused.outcome, 'unsupported');
+  assert.equal(missing.fallbackCalls(), 0);
 });
 
 test('names and quoted titles are not mistaken for unsupported conditions', () => {

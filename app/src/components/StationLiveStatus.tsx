@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import LiveDot from '@/components/LiveDot';
-import { createApi } from '@/lib/api';
+import { useStation } from '@/config/StationContext';
+import { liveStatusClient } from '@/lib/live-status';
 import { useTheme } from '@/theme/ThemeContext';
 
 const POLL_MS = 30_000;
@@ -13,16 +14,17 @@ interface Live {
 
 export default function StationLiveStatus({ url }: { url: string }) {
   const { colors } = useTheme();
+  const { credentialsFor } = useStation();
   const [live, setLive] = useState<Live | null>(null);
 
   useEffect(() => {
     let alive = true;
-    const api = createApi(url);
+    const client = liveStatusClient(url, credentialsFor);
     const ctrl = new AbortController();
 
     const probe = async () => {
       try {
-        const np = await api.nowPlaying(ctrl.signal);
+        const np = await (await client).nowPlaying(ctrl.signal);
         if (!alive) return;
         const online = np.streamOnline !== false; // absent → assume up (controller answered)
         const t = np.nowPlaying;
@@ -40,7 +42,7 @@ export default function StationLiveStatus({ url }: { url: string }) {
       ctrl.abort();
       clearInterval(id);
     };
-  }, [url]);
+  }, [url, credentialsFor]);
 
   const online = live?.online === true;
   const label = live == null ? '' : online ? (live.track ? `on air · ${live.track}` : 'on air') : 'offline';

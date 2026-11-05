@@ -87,8 +87,10 @@ export default function Concepts() {
           It doesn&rsquo;t add facts: the place, the weather and the clock reach the DJ
           either way, and the dial only decides whether it leans on them. It can&rsquo;t
           invent a second location either &mdash; exactly one place name reaches any
-          script, the on-air location under Settings &rarr; Station. A persona left at the
-          defaults writes exactly what it wrote before the dials existed. Find them under{' '}
+          script, the on-air location under Settings &rarr; Station, and none does once you
+          drop <code className="bs-code-inline">{'{location}'}</code> from the DJ prompt
+          template. A persona left at the defaults writes exactly what it wrote before the
+          dials existed. Find them under{' '}
           <Link href="/admin/personas" className="bs-link">Personas</Link> &rarr;
           Behaviour.
         </p>

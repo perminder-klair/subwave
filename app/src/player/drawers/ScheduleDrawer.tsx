@@ -197,6 +197,7 @@ function SlotRow({ slot, isNow, locale, api }: { slot: Slot; isNow: boolean; loc
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const blurbs = personaBlurbs(slot.persona);
+  const avatar = slot.persona?.avatar ? api.avatar(slot.persona.avatar) : '';
   return (
     <View
       className="flex-row items-start"
@@ -211,9 +212,9 @@ function SlotRow({ slot, isNow, locale, api }: { slot: Slot; isNow: boolean; loc
       <Text className="font-mono" style={{ fontSize: 11, width: 92, paddingTop: 2, color: isNow ? colors.accent : colors.muted }}>
         {fmtHourRange(slot.hour, slot.endHour, locale)}
       </Text>
-      {slot.persona?.avatar ? (
+      {avatar ? (
         <Image
-          source={{ uri: api.avatar(slot.persona.avatar) }}
+          source={{ uri: avatar, headers: api.imageHeaders(avatar) }}
           style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.field }}
           contentFit="cover"
         />

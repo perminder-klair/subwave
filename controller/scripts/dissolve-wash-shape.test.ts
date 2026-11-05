@@ -52,7 +52,7 @@ for (const { name, path, src } of SOURCES) {
 
     // ONE subtraction for the cluster, sized to the number of taps.
     assert.ok(
-      code.includes(`amplify(-4., ${src})`),
+      code.includes(`amplify(override=null, -4., ${src})`),
       `${name} subtracts the dry once, scaled to the four taps`,
     );
 

@@ -4,7 +4,6 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -17,6 +16,7 @@ import { ArrowLeftRight, ArrowUpRight, ChevronDown, ChevronRight, ChevronUp, Key
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DiscMark from '@/components/DiscMark';
 import LiveDot from '@/components/LiveDot';
+import LoginFields, { confirmCleartextLogin } from '@/components/LoginFields';
 import StationLiveStatus from '@/components/StationLiveStatus';
 import { createApi, normalizeBase, type HealthResult, type StationApi } from '@/lib/api';
 import { useStation } from '@/config/StationContext';
@@ -51,20 +51,6 @@ const isLocalHost = (h: string) =>
 
 // Cleartext-warning / http-scheme accent. Mirrors HealthCheck's local copy.
 const DANGER = '#c5302a';
-
-function confirmCleartextLogin(): Promise<boolean> {
-  return new Promise((resolve) => {
-    Alert.alert(
-      'Send station login over HTTP?',
-      'Plain HTTP exposes the username and password to the network. Only continue for a station and network you trust.',
-      [
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-        { text: 'Continue over HTTP', style: 'destructive', onPress: () => resolve(true) },
-      ],
-      { cancelable: true, onDismiss: () => resolve(false) },
-    );
-  });
-}
 
 // TLS "CA isn't trusted" failure, spelt differently per platform (Android:
 // trust anchor / CertPathValidatorException; iOS: certificate invalid).
@@ -451,75 +437,13 @@ export default function Onboarding() {
               </Pressable>
 
               {showLogin ? (
-                <View style={{ gap: 8, paddingBottom: 4 }}>
-                  <View>
-                    <Text
-                      className="font-mono text-muted"
-                      style={{ fontSize: 9, letterSpacing: 1.4, textTransform: 'uppercase', marginBottom: 5 }}
-                    >
-                      Username
-                    </Text>
-                    <TextInput
-                      value={username}
-                      onChangeText={setUsername}
-                      placeholder="dj"
-                      placeholderTextColor={colors.muted}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      spellCheck={false}
-                      autoComplete="username"
-                      textContentType="username"
-                      returnKeyType="next"
-                      accessibilityLabel="Station username"
-                      className="font-mono"
-                      style={{
-                        color: colors.ink,
-                        backgroundColor: colors.field,
-                        borderWidth: 1,
-                        borderColor: colors.muted,
-                        fontSize: 14,
-                        paddingVertical: 12,
-                        paddingHorizontal: 13,
-                      }}
-                    />
-                  </View>
-                  <View>
-                    <Text
-                      className="font-mono text-muted"
-                      style={{ fontSize: 9, letterSpacing: 1.4, textTransform: 'uppercase', marginBottom: 5 }}
-                    >
-                      Password
-                    </Text>
-                    <TextInput
-                      value={password}
-                      onChangeText={setPassword}
-                      placeholder="Password"
-                      placeholderTextColor={colors.muted}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      spellCheck={false}
-                      autoComplete="password"
-                      textContentType="password"
-                      secureTextEntry
-                      returnKeyType="go"
-                      onSubmitEditing={submitEntry}
-                      accessibilityLabel="Station password"
-                      className="font-mono"
-                      style={{
-                        color: colors.ink,
-                        backgroundColor: colors.field,
-                        borderWidth: 1,
-                        borderColor: colors.muted,
-                        fontSize: 14,
-                        paddingVertical: 12,
-                        paddingHorizontal: 13,
-                      }}
-                    />
-                  </View>
-                  <Text className="font-mono text-muted" style={{ fontSize: 9.5, lineHeight: 14 }}>
-                    Saved in this device&apos;s secure credential storage.
-                  </Text>
-                </View>
+                <LoginFields
+                  username={username}
+                  password={password}
+                  onChangeUsername={setUsername}
+                  onChangePassword={setPassword}
+                  onSubmit={submitEntry}
+                />
               ) : null}
 
               {/* HTTPS is tried first for a bare public station; authenticated

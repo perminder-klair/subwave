@@ -58,7 +58,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 | `sfx.txt` | 0.5 s poll | sound effect → `sfx_queue` |
 | `auto.m3u` | telnet `auto.reload` | the coast playlist for the current mood |
 | `jingles.m3u` | telnet `jingles.reload` | the mixer's own jingle rotate, rebuilt by `broadcast/jingles.ts` |
-| `liquidsoap_*.txt` | once, at startup | crossfade, jingle ratio, duck depths, per-mount enable/bitrate…, written by `settings.update()`; a change needs `/restart-mixer` |
+| `liquidsoap_*.txt` | once, at startup | crossfade, jingle ratio, duck depths, per-mount enable…, written by `settings.update()`; a change needs `/restart-mixer`. The Icecast renderers read the stream bitrates and hand them on as `SUBWAVE_*_BITRATE` (`infrastructure.md`) |
 
 **Liquidsoap → Controller.** Marker files written by `radio.liq` (the rules are in `liquidsoap/CLAUDE.md`):
 - `now-playing.json`: the live track, from `music_meta`, the pre-cross handle.
@@ -80,15 +80,18 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - **One writer per file**: `queue.playJingle()` is the only writer of `jingle-now.txt` (the automatic rotate calls it), and `queue.onSpoken()` is the only place post-air bookkeeping happens.
 - **A pushed track is "handed over", never "playable".** Resolution is the `proto_subhttp` probe outcome, consumed by `queue.verifyPushResolved()`; never infer it from `dj_queue.queue()` membership.
 - **Policy lives in its own module** (`*-policy.ts`, `dj-budget.ts`, `talk-scheduler.ts`, `util/request-guard.ts`, `music/blocklist-rules.ts`, …). A decision reached from several call sites is made in one place, and a second copy of the check is the bug.
-- **A gate's failure direction is deliberate; never unify two.** `POST /listener-auth` fails open while listener auth is off, while `POST /station-auth` and `middleware/station-auth.ts` fail closed. The listener-count gates fail open on an unknown count, while `presentListeners()` fails closed. `validate*Strict` throws and `normalize*` repairs or drops, and neither restates a rule.
+- **A gate's failure direction is deliberate; never unify two.** `POST /listener-auth` fails open while listener auth is off, while `POST /station-auth` and `middleware/station-auth.ts` fail closed. The listener-count gates fail open on an unknown count, while `presentListeners()` fails closed, and the idle wake probe (`peekListeners()`) commits nothing and acts only on a positive reading. `validate*Strict` throws and `normalize*` repairs or drops, and neither restates a rule.
 - **A validated shape is defined once**, in `controller/src/schemas/<feature>.ts`, and mirrored to `web/lib/schemas.generated.ts` by `npm run gen:schemas` (CI diffs it; never hand-edit it). Those files import only `zod`; impure rules go in a `*-server.ts` sibling.
 - **A behaviour-preserving refactor preserves behaviour, accidental leniency included.** Tightening it is a separate PR, stated as a behaviour change (`schemas.md`, on the patch registry).
-- **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and four tests drive both copies), so fix one, fix both.
+- **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and six tests drive both copies), so fix one, fix both.
 - **State bootstrap is never fatal.** Guard each step and warn; Icecast and the dead-air guard must still come up.
+- **The admin lockout counts distinct guesses, never requests**, and `ADMIN_LOCKOUT=off` (env only) is the operator's final say (`infrastructure.md`). The web console sends `X-Subwave-Console` so it is never answered with a Basic challenge.
+- **The edge drops Icecast's Basic challenge only for a client that can't answer it** (`?auth=`, or `Sec-Fetch-Dest: audio|video` from the same origin), in both Caddyfiles and every `docs/reverse-proxy.md` recipe. Unconditional either way is the bug: stripped, ffmpeg and mpv can't log in; kept, the browser's "Sign in" dialog covers the player (`infrastructure.md`).
 - **The listener-country chain fails open link by link** (`broadcast/listener-country.ts`). A later link runs when an earlier one misses (`XX`/`T1`), not only when it is absent.
 
 **Timing** (`broadcast.md`)
-- **Published timestamps are live-edge**, and listeners sit `stream.bufferSeconds` (22 s) behind. Listener surfaces add the offset; operator surfaces don't. `<burst-size>` is bytes, computed per mount. Never judge the cushion with `buffered.end − currentTime`.
+- **Published timestamps are live-edge**, and listeners sit `stream.bufferSeconds` (22 s) behind. What `/now-playing` advertises is the burst the running mounts were rendered with (`stream-mounts.json`), never a setting saved since. Listener surfaces add the offset (`useStationFeed.leadMs`, which is less whatever the web player skipped); operator surfaces don't. `<burst-size>` is bytes, computed per mount from the bitrate liquidsoap is handed. Never judge the cushion with `buffered.end − currentTime`.
+- **The web player skips only stale idle silence, never music, and only on the MP3 mount** (`web/lib/idleSkip.ts`). Opus is CBR since #2138, but an older broadcast image's VBR Opus burst reaches back past the pause, and the player cannot tell which one it is tuned to.
 - **Every scheduled spoken segment is a row in one slot table** (`broadcast/talk-scheduler.ts`), driven by one per-minute `talkTick`, one talker per minute. A slot is a window, and a held row postpones, never cancels. A second talk cron is the bug.
 - **The one sanctioned exception is the over-music jingle ID** (`jinglePlacement: over | both`): the now-playing watcher offers it once per song, at the opening, and it stands down to any speech rather than taking a slot (`broadcast.md`).
 - **A rendered segment is placed, not trimmed**: the lever at a boundary is which boundary it takes (`broadcast/vocal-runway.ts`).
@@ -104,24 +107,36 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Ducking is `smooth_add`, never an RMS follower; `p` is the fraction of the music left up.
 - Every transition effect runs on Liquidsoap's single streaming thread, so its cost is its shape: the dissolve sums its combs and subtracts the dry once, never per tap.
 - Both sides of a rendered seam are gained by `music/loudness.ts` `resolveGainDb`, never from the analyzer's LUFS.
+- The Opus encoder is hard CBR (`vbr="none"`): `<burst-size>` is bytes, and VBR idle silence stretched a new listener's burst back past the pause (#2138).
 
 **Library, picker, LLM, TTS** (`music.md`, `broadcast.md`)
 - Write `genres`, never `genre` (a generated column); `subsonic.songGenres()` is the one ingest normaliser. Genre matching is one-directional.
 - Judge era with `resolveEraYear` and `yearUntrusted`, never raw `year`, and keep the JS and SQL era filters in agreement.
 - Silence trim measures against an absolute floor, and `music/silence-trim.ts` owns every onset shift.
+- A track's instrumental verdict is `isInstrumental` over both measured windows, each judged alone (`music/lyric-vocal.ts`). A row carrying `vocalRanges` carries the tail evidence too, and SQL reads it through `SQL_TAIL_VOCAL_RANGES`, never the whole `outro_json`.
+- A write that moves a `Sound:` word marks the vector through `markTextVectorDirtyIfSoundChanged`: by part (measured or moods), against the words stored with the vector (`text_vector_sound`), never the row before the write. An unknown part never marks: NULL, or the moods a relabel-all moved, which it forgets (`forgetVectorSoundIfMoved`) rather than marks (`music.md`, #2236).
 - Library coverage never counts on the read path; only `refresh()` counts it.
+- Show filters answer from the row they are given: a library-row mapper writes each `energy`, `genre`/`genres` and vocal-window column it selects even when unknown (an explicit `null`, or `[]`), the readers trust that, and only a shape lacking it looks the track up, so a mapper never emits one of these keys for a column it did not select (`music.md`).
 - Anything going to Liquidsoap uses `getAnnotatedUri`.
 - The tagger's own `moods`/`energy` never enter the embed text. Bump `TAGGER_CONTRACT_VERSION` (`music/tagger-core.ts`) when the prompt asks for something different.
 - CLAP cosines are not comparable across moods, so calibrate per mood.
+- Sound descriptors (`music/audio-descriptors.ts`) are CLAP guesses, stored and read only through `usableDescriptors`, by the admin dossier: never the embed text, Sleeve Notes, fact packets, the picker payload or a public read. They stay out of the `Sound:` line until selection can tell an absent instrument from a rare one, measured on real masters across genres (`music.md`). Below the baseline floor they select nothing, and `isInstrumental` alone owns the vocal question.
 - Enforce variety (artist spacing, album cooldown) at the point of choice, never inside the discovery tools.
 - The track-length cap and floor are different mechanisms; never unify them. A never-starve filter never returns its input array.
 - Tempo-derived timing is octave-safe: fold, then halve, never clamp.
 - The seed track id is not a pick (`util/pick-seed.ts`).
+- A clean show (`show.excludeExplicit`) holds back only a positive `explicit` tag; no tag and unknown pass (`music/explicit-policy.ts`). It filters before every never-starve step, is hard on the pick paths and requests, and only the coast may relax it, last, in the booth log. The drain judges an unsent automatic pick again, and a tagged pick running into one fades where it begins (`music.md`).
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
+- The analyzer writes shared folders 777 and files 666 whatever its umask, and a folder the sweep cannot delete leaves the budget check, before any delete if the `access()` probe catches it, otherwise once its own delete fails (`broadcast.md`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
+- Pick-time stems start only after the pair is sent, for the held track, and the drain never awaits them. They may take a full stem cache over its budget, by a bounded allowance the hourly sweep evicts, and never touch the pass's own budget rule; while they are on, both sweeps evict a queued track's stems last; quiet-only analysis switches them off, and the blend render stands down while one runs unless the sidecar pool has a spare member (`broadcast/pick-stems-policy.ts`, `broadcast.md`).
+- Track-level Last.fm tags are opt-in and `lastfm_tags` stays the one list: `lastfm.getMergedTags` is the bulk pass's and the retag route's one read, `db.recordLastfmTrackTags` their one write, and only a genuine answer stamps `lastfm_track_tags_at`. A failure never does, or an outage marks the library done. The merge is additive, the song's own tags ahead of the artist's whole list, so turning this on can only make a `tag` rule match more, never less (`music.md`).
+- The orphan purge moves only what reads as a stem dir, deletes only from its quarantine, only what still reads as stems, and only past the grace (one exception: a newer live copy replaces a quarantined one of the same id, on a fresh stamp), releases only stems proven to be the returning row's audio (`sameAudio`, failing closed: a returning id is not returning audio), and keeps quarantine bytes outside the budget (`music/orphan-purge.ts`).
 - LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up when a track is queued and again at air time, never on the read path (`music/lyrics-sources.ts`).
+- `getLocalPath()` is for Liquidsoap: it answers only for a mount the mixer proved it can read (`music/library-mount.ts`), and anything short of that proof streams. The proof covers the mount, not a file, so the drain also asks about each pick's own file (`mixerReadablePath`) within its budget, decides local or stream once per handoff, and streams on anything but a timely yes. A reader in the controller uses `findLibraryFile()`. A file existing is not proof it is the track: a real path outside the mount plays only when its size matches and its tags give it the title stock Navidrome reports (the subtitle appended, cut at 1,024 bytes), and every tag shape the reader knows Navidrome reads another way streams (`music/tag-title.ts` lists them, and the shapes that still play a wrong file; `music.md`).
 - LLM calls go through the `llm/sdk` primitives, and provider quirks live only in `llm/internal/provider/capabilities.ts`. The default provider is a slow homelab Ollama, so add no aggressive retry.
 - TTS goes through `tts.speak(text, {kind})`. The rescue chain is a list of voice slots, and a rescue target is engine + provider.
+- A whole line that is a listed stand-in (`placeholder`, `TBD`, template text) is dropped before TTS: `queue.speakable` judges model-written speech with `broadcast/stand-in-policy.ts`, on the line both before and after `normalizeForDisplay` and past any leading label, and `push()` reports a dropped intro so no caller records it as said. The list is a net, not a guarantee: `[laughs] placeholder` and `{text}` still air.
 
 **Product behaviour**
 - The station keeps making sound: the token cap, a muted voice and an LLM outage never stop the music.
@@ -130,7 +145,8 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - `requestedBy` says which exemptions a track gets, not who is waiting. Count waiting listeners as `queue.pendingListenerRequests()` plus the requests still resolving in `routes/request.ts`, which hold no queue slot yet.
 - Gate before generation, never at `speak()`.
 - Public reads are explicit allowlists: never widen one to TTS config, skills or behaviour dials. A persona's `soul` is a system prompt, published only behind `publishPersonaSouls`, and absent (not empty) when off.
-- Absent or malformed settings coerce to the pre-existing behaviour, so an upgrade is byte-identical. The exceptions, each announced, are legacy `llm.pickerAgent: false` → Track Shortlist, and the Lyrics panel with its LRCLIB fallback (`settings.lyrics`), which an upgrade turns on.
+- A DJ template without `{location}` withholds the place from every model: prompts and skill tools see the live context only through `settings.spokenContext()` (`buildContextLines`, `segment-tools.ts`); display and operator surfaces keep it (#2099).
+- Absent or malformed settings coerce to the pre-existing behaviour, so an upgrade is byte-identical. The exceptions, each announced, are legacy `llm.pickerAgent: false` → Track Shortlist, the Lyrics panel with its LRCLIB fallback (`settings.lyrics`), which an upgrade turns on, and the `published` day on each dated item from the generated feed tool, which reaches the DJ with no key to set.
 - A multi-station switch is a pointer write + mixer restart + controller `process.exit`; never hot-swap state paths in-process.
 - A scheduled job deletes only files it wrote itself, matched on an anchored name (`backup/pure.ts`).
 - Operator curation outranks listener signal: an operator heart skips the `topLiked` cutoff and survives the trim.

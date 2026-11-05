@@ -56,7 +56,11 @@ Three things it does **not** do:
   context regardless; the dial only decides whether the DJ leans on them.
 - It doesn't invent a second location. Exactly one place name reaches any
   prompt (the on-air location you set under Settings → Station). If the DJ names
-  a different city, that's the model improvising, not the dial.
+  a different city, that's the model improvising, not the dial. Drop
+  `{location}` from the DJ prompt template and the station hands that place to
+  no prompt: the weather arrives without it, and every prompt tells the DJ not
+  to say where you are, so a high dial leans on the weather and the hour
+  instead.
 - A persona left at the defaults renders a **byte-identical** prompt to a
   station that never had the dials, which is why upgrading changes nothing.
 
@@ -178,7 +182,7 @@ unanchored. Re-select the playlists in the show editor to fix it.
 
 ## The stem cache
 
-**Where:** Admin → Settings → Transitions.
+**Where:** Admin → Settings → Stems.
 
 Stem-blend transitions mix the outgoing and incoming tracks by *instrument*
 rather than crossfading two finished mixes: the outgoing drums duck out under

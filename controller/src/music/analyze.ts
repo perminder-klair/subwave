@@ -11,9 +11,10 @@ import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { deriveVocalFromLyrics, clipRangesToTail, type LyricVocalResult } from './lyric-vocal.js';
 import { runAudioMoodPass } from './audio-moods.js';
+import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
-import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
+import { quietGateDecision, quietOnlyEnabled, type QuietState } from './analyze-quiet-pure.js';
 import { dispatchAnalysis, type DispatchOutcome } from './analyze-dispatch.js';
 import {
   analysisModeForTrack,
@@ -23,6 +24,7 @@ import {
   tailVocalBackfillAvailable,
 } from './analyze-capability.js';
 import { probeListenerCount } from '../broadcast/listeners.js';
+import { sweepKeepLastFromDisk } from '../broadcast/pick-stems.js';
 import type { AcousticsPlan, WorkRequest } from './acoustics-plan.js';
 import type { Facet } from './library-db/facets.js';
 
@@ -88,9 +90,6 @@ interface QuietConfig {
 }
 
 async function readQuietConfig(): Promise<QuietConfig> {
-  const v = (process.env.ANALYZE_QUIET_ONLY || '').toLowerCase();
-  const envOn = v === '1' || v === 'true' || v === 'yes';
-  let enabled = envOn;
   let minutes = 10;
   let audio: any = null;
   try {
@@ -102,7 +101,7 @@ async function readQuietConfig(): Promise<QuietConfig> {
       audio = null;
     }
   }
-  if (!enabled) enabled = audio?.analyzeQuietOnly === true;
+  const enabled = quietOnlyEnabled(process.env.ANALYZE_QUIET_ONLY, audio);
   const m = audio?.analyzeQuietMinutes;
   if (Number.isFinite(m) && m >= 1 && m <= 120) minutes = Math.floor(m);
   return { enabled, minutes };
@@ -173,12 +172,18 @@ export interface AnalyzeStats {
 // Provenance label stamped into audio_embedding_meta; the worker owns the model.
 const AUDIO_MODEL_LABEL = process.env.CLAP_MODEL || 'laion-clap';
 
-// Best-effort: a mood failure must never fail the pass; the next one retries.
+// Best-effort: a mood or descriptor failure must never fail the pass; the next
+// one retries.
 async function scoreAudioMoods(): Promise<void> {
   try {
     await runAudioMoodPass();
   } catch (err: any) {
     console.error(`[audio-moods] pass failed (non-fatal): ${err?.message || err}`);
+  }
+  try {
+    await runAudioDescriptorPass();
+  } catch (err: any) {
+    console.error(`[audio-descriptors] pass failed (non-fatal): ${err?.message || err}`);
   }
   // Must run AFTER the mood pass, which writes the cosines it calibrates
   // against. Separately wrapped so a failure here doesn't cost the mood labels.
@@ -343,7 +348,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       console.log(
         stemSlotsLeft <= 0
           ? `[analyze] stem backfill skipped — cache is at its ${settings.get()?.audio?.stemCacheGb ?? 15} GB budget ` +
-              '(raise it in Settings → Transitions to cache more tracks)'
+              '(raise it in Settings → Stems to cache more tracks)'
           : `[analyze] stem backfill skipped — the ${reserved} ride-along stem writes already queued this pass ` +
               `claim the budget's remaining ~${stemSlotsLeft} track slots`,
       );
@@ -445,7 +450,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   if (ids.length === 0) {
     console.log('[analyze] nothing to analyse — all tracks current');
-    // Mood scoring can still have work (older vectors, changed vocabulary).
+    // Zero-shot scoring can still have work (older vectors, changed vocabulary).
     await scoreAudioMoods();
     return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
@@ -521,7 +526,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       stemGateAnnounced = true;
       console.log(
         `[analyze] stem cache budget reached mid-pass — stems skipped for the remaining net-new tracks ` +
-          '(raise audio.stemCacheGb in Settings → Transitions to cache more)',
+          '(raise audio.stemCacheGb in Settings → Stems to cache more)',
       );
     }
     return trackStemDecision.want ? stemCacheStore.dirFor(id) : undefined;
@@ -844,9 +849,16 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     const settled = await stemCacheStore.settlePassWrites(newStemIds, undefined, {
       rewroteExisting: rewroteExistingStems,
     }).catch(() => null);
+    // With pick-time stems on, the dirs of tracks still in the queue go last,
+    // as in the hourly sweep. This process has no live queue, so the set comes
+    // from the queue's snapshot (pick-stems.ts sweepKeepLastFromDisk); off, it
+    // is undefined and the order is the ranking alone.
     const swept = settled?.withinBudget
       ? null
-      : await stemCacheStore.sweep(undefined, { force: true }).catch(() => null);
+      : await stemCacheStore.sweep(undefined, {
+        force: true,
+        keepLast: await sweepKeepLastFromDisk().catch(() => undefined),
+      }).catch(() => null);
     if (swept && swept.removed > 0) {
       console.log(`[analyze] stem cache sweep: evicted ${swept.removed} track dirs (${Math.round(swept.freedBytes / 1024 ** 2)} MB)`);
     }
@@ -860,8 +872,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     }
   }
 
-  // Zero-shot audio moods over the vectors this and past passes wrote; no-op
-  // when there is nothing new or the backend has no text tower.
+  // Zero-shot audio moods and sound descriptors over the vectors this and past
+  // passes wrote; no-op when there is nothing new or the backend has no text
+  // tower.
   await scoreAudioMoods();
 
   // The worker degrades silently when Demucs fails to load: every track reads

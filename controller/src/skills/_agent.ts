@@ -25,6 +25,7 @@ import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase, onAirLocat
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
+import { searchKeyProblem } from './web-search.js';
 import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
@@ -39,6 +40,13 @@ export { dataBlock };
 // toggles all iterate THIS. Read live so a rescan takes effect at once.
 function allCapabilities() {
   return loadedCapabilities();
+}
+
+// The refused-key sentence when the search key is what's stopping this skill, or
+// null. A skill that never asks about search isn't stopped by that key.
+function refusedKeyProblem(cap: any): string | null {
+  const problem = searchKeyProblem();
+  return problem && cap.asksSearchReady?.() ? problem : null;
 }
 
 // Default per-skill context profile: every "right now" field EXCEPT weather.
@@ -145,7 +153,7 @@ ${list}`;
 
 let tickBusy = false;
 const lastFired = new Map<string, number>(); // kind → ms timestamp of last aired segment
-const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of last unusable pool-mode fetch
+const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of the last run with nothing to air: an unusable fetch, a co-hosted stand-down or a stand-in line
 
 // An unavailable source shouldn't retry on the very next 5-minute tick, nor
 // inherit a multi-hour on-air cooldown when the next track may change its
@@ -597,7 +605,13 @@ export async function agenticTick(ctx) {
       sfx: selectedSfx,
       hostSpeech,
     });
-    if (!delivery.accepted) return;
+    if (!delivery.accepted) {
+      // A stand-in means the skill had nothing to say: back off like the
+      // "nothing to say" stand-down, or the segment row re-runs the director
+      // and the skill model every few minutes for a line dropped again.
+      if (delivery.reason === 'stand-in') lastUnavailable.set(seg.kind, Date.now());
+      return;
+    }
 
     // Reserve the kind as soon as it owns an air path so a held segment is not
     // generated twice. Durable "aired" facts wait for the voice lifecycle.
@@ -737,8 +751,11 @@ export async function runCapability(
     // Hint at the missing key when the capability is keyed.
     let hint = '';
     const searchProvider = settings.get().search?.provider;
-    if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
-      const name = searchProvider === 'brave' ? 'Brave Search' : 'Tavily';
+    const keyProblem = refusedKeyProblem(cap);
+    if (keyProblem) {
+      hint = ` — ${keyProblem}. Paste one into Settings → Web search`;
+    } else if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave' || searchProvider === 'firecrawl')) {
+      const name = searchProvider === 'brave' ? 'Brave Search' : searchProvider === 'firecrawl' ? 'Firecrawl' : 'Tavily';
       hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
     } else if (cap.toolPending && !cap.toolFn) {
       hint = ' — its tool.mjs is awaiting your review in /admin/skills';
@@ -763,6 +780,8 @@ export async function runCapability(
       capability: cap, host, guests, context: ctx, situation, segmentState, forced: true,
     });
     if (!result.aired || !result.lines) {
+      // The same backoff as a solo forced run that wrote a stand-in, below.
+      if (result.standIn) lastUnavailable.set(cap.kind, Date.now());
       const reason = result.reason || 'nothing usable to discuss';
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
       return { aired: false, queued: false, deferred: false, text: null, reason };
@@ -872,6 +891,14 @@ export async function runCapability(
       }
     : { pauseTalkEligible, sfx: selectedSfx });
   if (!delivery.accepted) {
+    if (delivery.reason === 'stand-in') {
+      // Nothing was rendered: the model wrote a stand-in, not speech. Other
+      // forced stand-downs leave the backoff alone. A stand-in sets it, here and
+      // on the co-hosted path, so the director is not offered a skill that has
+      // just written one.
+      lastUnavailable.set(cap.kind, Date.now());
+      return standDown('the DJ wrote a stand-in, not a line, so nothing aired');
+    }
     const reason = 'the station could not queue the rendered segment';
     queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
     return { aired: false, queued: false, deferred: false, text: null, reason };
@@ -907,7 +934,7 @@ export function skillCatalog() {
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
     // web-search's key requirement depends on the active provider:
-    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo needs nothing.
+    // Tavily/Brave/Firecrawl need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -918,15 +945,23 @@ export function skillCatalog() {
       } else if (searchProvider === 'brave') {
         requiresKey = 'SEARCH_API_KEY';
         keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
+      } else if (searchProvider === 'firecrawl') {
+        requiresKey = 'SEARCH_API_KEY';
+        keyUrl = 'https://www.firecrawl.dev/app/api-keys';
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;
         hint = 'SearXNG self-hosted meta-search. Configure base URL in admin → Settings → Search.';
+      } else if (searchProvider === 'keenable') {
+        requiresKey = null;
+        keyUrl = null;
+        hint = 'Keenable web search, keyless. An optional Keenable key (SEARCH_API_KEY) raises the rate limit.';
       } else {
         requiresKey = null;
         keyUrl = null;
       }
     }
+    const ready = typeof c.ready === 'function' ? !!c.ready() : true;
     return {
       name: c.skill,
       hasTool: typeof c.toolFn === 'function',
@@ -942,10 +977,13 @@ export function skillCatalog() {
       // an operator-authored skill and explain the off-by-default behaviour.
       custom: !c.seeded,
       // `ready` is false when a required env key isn't set; `requiresKey` names
-      // it and `keyUrl` links to its source.
-      ready: typeof c.ready === 'function' ? !!c.ready() : true,
+      // it and `keyUrl` links to its source. `keyProblem` is set instead when a
+      // key is on file and the search provider refuses it, so setting the env
+      // var wouldn't help.
+      ready,
       requiresKey,
       keyUrl,
+      keyProblem: ready ? null : refusedKeyProblem(c),
       hint,
       // The "right now" fields this situation may include (#471), resolved to
       // the default profile when unset so the admin UI needn't guess.
