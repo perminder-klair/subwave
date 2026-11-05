@@ -221,7 +221,12 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
      Driver*) and reboot if it asks. Note your GPU's UUID from
      **Settings → Nvidia Driver**.
   2. **Docker** tab → **subwave** → **Edit** (*Advanced View* on).
-  3. **Repository** → `ghcr.io/perminder-klair/subwave-aio-cuda:latest`.
+  3. **Repository** → choose one of the two published CUDA builds: `:cu128`
+     (`:latest`) or `:cu124`. Architecture tags are stable shortcuts to the
+     newest compatible build. Today `:maxwell`, `:pascal`, and `:volta` point
+     at cu124; `:turing`, `:ampere`, `:ada`, `:hopper`, and `:blackwell` point
+     at cu128. Pick the build tag directly or the tag named for your GPU
+     architecture.
   4. **Extra Parameters** → append `--runtime=nvidia` (keep the existing
      `--add-host` value; the field takes both).
   5. Set the two variables the template already ships (both blank by default):

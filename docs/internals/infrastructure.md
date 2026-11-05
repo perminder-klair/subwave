@@ -126,13 +126,21 @@ the function are driven from one table by `scripts/max-listeners.test.ts`.
 
 **The off switch is `ANALYZER_REPLICAS=0` (#1570)**, rendered as `deploy.replicas: ${ANALYZER_REPLICAS:-1}` on the service — the next `up -d` stops AND removes the container, and it stays gone across restarts, which `docker compose stop analyzer` (the old advice) did not: `up` restarts a hand-stopped service. **A profile could not express this** and the reason is measured, not stylistic: profiles are opt-in only, so gating the analyzer behind one forces every existing install to add `COMPOSE_PROFILES=analyzer` to keep what it has, and the inverted trick — `profiles: ["${ANALYZER_DISABLED:+off}"]`, empty by default — drops the service for anyone who sets `COMPOSE_PROFILES` **at all**, because a non-empty `COMPOSE_PROFILES` switches compose from the default set to the named set and an empty-string profile is in neither. `docs/tts-heavy.md` tells every Unraid/Portainer operator to set `COMPOSE_PROFILES=tts-heavy`, so that population would silently lose analysis on upgrade. `deploy.replicas` has neither failure: unset and empty both render `1`, so a default-on install is byte-identical, and the `deploy` map merges key-wise with `docker-compose.analyzer-gpu.yml`'s `deploy.resources` reservation rather than replacing it. Three consequences worth knowing. **Only `0` and `1` are valid**: the service pins `container_name: sub-wave-analyzer`, and compose refuses a fixed container name for more than one replica, so `ANALYZER_REPLICAS=2` fails *every* compose command (`can't set container_name and analyzer as container name must be unique`) rather than scaling — a non-integer (`false`) is likewise a hard interpolation error rather than a silent fallback, which is why the var is named for a count and not a boolean. `docker compose config` still LISTS the service at `replicas: 0` (unlike a profile, which omits it), so verify with the rendered `replicas:` line or `docker compose ps`, never `config --services`. And the variable is **inert on the AIO**, which runs the analyzer in-process (`ANALYZE_PYTHON`) rather than as a service — so `docker/aio/supervisor.sh` `warn_if_analyzer_replicas_ignored` warns at boot when it is set to `0` there, for the same reason `warn_if_analyzer_heavy_ignored` exists (#1300 bug 9: a compose-only var that an operator sets, watches do nothing, and concludes the feature is broken). This one fails worse than `ANALYZER_HEAVY` did — an operator setting `0` to reclaim RAM keeps paying for analysis it believes it switched off — so the warning names the AIO's real off switch, an **empty `ANALYZE_PYTHON`** (`config.ts` reads an empty path as no local backend). `scripts/aio-analyzer-heavy.test.ts` pins the warning, and `scripts/analyzer-replicas-compose.test.ts` drives all three composes from one table so the `deploy.replicas` line cannot drift between them.
 
-**Analyzer torch and maintenance commands (#1340, #1738).** The AIO and
-standalone analyzer share torch/torchaudio **2.7.1** for both heavy CPU and CUDA
-builds. The CUDA flavour uses the **cu128** index, which includes Blackwell
-sm_120 kernels. Both indexes publish cp313 wheels for the AIO's system Python
-3.13, as well as cp311 wheels for the standalone image. Keep these two
-Dockerfiles in lockstep, including Demucs 4.0.1, diffq 0.2.4, transformers
-5.13.0 and CPU onnxruntime 1.27.0. Chatterbox runs in a separate venv with its
+**Analyzer torch and maintenance commands (#1340, #1738).** Heavy CPU builds
+and the default CUDA build share torch/torchaudio **2.7.1**. That CUDA wheel
+is the **cu128** index (`:latest` — Turing sm_75 through Blackwell sm_120).
+`TORCH_CUDA=cu124` is AIO-only and pins torch **2.6.0**, the newest wheel that
+still has Maxwell (sm_50), Pascal (sm_60), and Volta (sm_70) SASS. The
+published builds are `:cu124` and `:cu128` (`:latest`). `:maxwell`, `:pascal`,
+`:volta`, `:turing`, `:ampere`, `:ada`, `:hopper`, and `:blackwell` are
+shortcuts, each pointed at the newest build that still supports that GPU.
+Today the first three point at cu124 and the rest at cu128. A later wheel can
+move one shortcut without moving the others (`CLAUDE.md`). The standalone
+analyzer image has no cu124 build.
+Both wheels publish cp313 for the AIO's system Python 3.13 and cp311 for the
+standalone image. Keep the shared pins in lockstep (Demucs 4.0.1, diffq 0.2.4,
+transformers 5.13.0, CPU onnxruntime 1.27.0). The cu124 torch pin is the
+exception. Chatterbox runs in a separate venv with its
 own upstream torch pin and Blackwell override, described in `docs/gpu-tts.md`.
 The AIO appends `/opt/analyzer/venv/bin` to PATH so `docker exec subwave pip`
 targets analyzer packages while system `python3` keeps precedence. Its analyzer

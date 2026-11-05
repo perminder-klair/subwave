@@ -217,6 +217,11 @@ To keep the overlay across normal rebuilds and restarts, set `COMPOSE_FILE` in
 All-in-one installs have no `analyzer` service to swap, so they take the GPU on
 the image instead: pull `subwave-aio-cuda` and hand the container the card
 (`--gpus all`, or the Unraid steps in [`docs/unraid.md`](docs/unraid.md)).
+Two CUDA builds are published: `:cu128` (`:latest`) and `:cu124`. Architecture
+tags are stable shortcuts to the newest compatible build. Today `:maxwell`,
+`:pascal`, and `:volta` point at cu124; `:turing`, `:ampere`, `:ada`, `:hopper`,
+and `:blackwell` point at cu128. The split-stack analyzer CUDA image stays on
+cu128.
 
 ### Local dev (contributors)
 
