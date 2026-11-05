@@ -35,7 +35,7 @@ update`, in that order ([why](../docs/updating.md#update)).
 | Command | What it does |
 | --- | --- |
 | `subwave` | interactive menu (Esc goes back, Ctrl-C exits) |
-| `init` | scaffold a fresh install: compose files, `.env`, recorded home |
+| `init` | scaffold a fresh install: compose files, `.env`, recorded home (re-running keeps existing `.env` settings) |
 | `setup` | configuration wizard — Navidrome, LLM, timezone, jingles |
 | `start [dev\|prod\|prod-byo]` | `docker compose up -d`; dev also starts the web dev server |
 | `stop` | `docker compose down`; dev also kills the web dev server |
