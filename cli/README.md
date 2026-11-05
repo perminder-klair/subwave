@@ -43,7 +43,7 @@ update`, in that order ([why](../docs/updating.md#update)).
 | `logs [svc\|all]` | tail compose logs |
 | `status` | glance-able stack + now-playing snapshot |
 | `doctor` | full diagnostic sweep — host, compose, controller, Icecast, state, logs |
-| `update` | pull new images and recreate what changed |
+| `update` | pull new images and recreate what changed; exits non-zero if any step fails |
 | `sync` | refresh compose files that have fallen behind this binary (`--check` to dry-run) |
 | `listen` / `admin` | open the player or admin console in a browser |
 | `self-update` | replace this binary with the latest release |
