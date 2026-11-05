@@ -191,16 +191,12 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
-      # diffq ships sdist-only: lend it a toolchain and purge in the SAME
-      # layer (see docker/Dockerfile.analyzer). Unlike that image, this base's
-      # apt python3 has no headers — python3-dev supplies Python.h.
-      apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev python3-dev && \
+      # No diffq, so no build toolchain — see docker/Dockerfile.analyzer.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.7.1 torchaudio==2.7.1 demucs==4.0.1 diffq==0.2.4 && \
-      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs, diffq" && \
-      apt-get purge -y gcc libc6-dev python3-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
+        torch==2.7.1 torchaudio==2.7.1 demucs==4.0.1 && \
+      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs" ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 # ANALYZE_PYTHON flips on the controller's local analyze backend; HF_HOME puts

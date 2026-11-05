@@ -131,9 +131,11 @@ standalone analyzer share torch/torchaudio **2.7.1** for both heavy CPU and CUDA
 builds. The CUDA flavour uses the **cu128** index, which includes Blackwell
 sm_120 kernels. Both indexes publish cp313 wheels for the AIO's system Python
 3.13, as well as cp311 wheels for the standalone image. Keep these two
-Dockerfiles in lockstep, including Demucs 4.0.1, diffq 0.2.4, transformers
-5.13.0 and CPU onnxruntime 1.27.0. Chatterbox runs in a separate venv with its
-own upstream torch pin and Blackwell override, described in `docs/gpu-tts.md`.
+Dockerfiles in lockstep, including Demucs 4.0.1, transformers 5.13.0 and CPU
+onnxruntime 1.27.0. Neither ships diffq, so a quantised `DEMUCS_MODEL=*_q`
+loads `htdemucs` instead (`analyze_worker.py` `demucs_model()`). Chatterbox
+runs in a separate venv with its own upstream torch pin and Blackwell override,
+described in `docs/gpu-tts.md`.
 The AIO appends `/opt/analyzer/venv/bin` to PATH so `docker exec subwave pip`
 targets analyzer packages while system `python3` keeps precedence. Its analyzer
 and Kokoro workers use explicit interpreter paths. The standalone analyzer
