@@ -33,3 +33,11 @@ test('music URLs: https only, and only when hosted', () => {
   assert.deepEqual(hostedFromEnv(env), { hosted: false });
   assert.deepEqual(hostedFromEnv({ ...env, SUBWAVE_HOSTED: '1' }), { hosted: true, musicUploadUrl: 'https://up.example/x' });
 });
+
+test('listener cap: a whole number from SUBWAVE_LISTENER_CAP, only when hosted', () => {
+  assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_LISTENER_CAP: '15' }).listenerCap, 15);
+  assert.equal(hostedFromEnv({ SUBWAVE_LISTENER_CAP: '15' }).listenerCap, undefined);
+  for (const bad of ['0', '-3', '2.5', 'many', '']) {
+    assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_LISTENER_CAP: bad }).listenerCap, undefined, bad);
+  }
+});

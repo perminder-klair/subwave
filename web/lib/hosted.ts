@@ -13,6 +13,9 @@ export interface HostedInfo {
   // where its owner uploads and browses. Absent = they bring their own server.
   musicUploadUrl?: string;
   musicLibraryUrl?: string;
+  // The plan's concurrent-listener ceiling (SUBWAVE_LISTENER_CAP, set by the box
+  // agent to the ICECAST_MAX_CLIENTS it gives the broadcast container).
+  listenerCap?: number;
 }
 
 // The hosted info from this process's env. Only https URLs are passed
@@ -20,9 +23,14 @@ export interface HostedInfo {
 export function hostedFromEnv(env: Record<string, string | undefined>): HostedInfo {
   const hosted = ['1', 'true', 'yes'].includes((env.SUBWAVE_HOSTED || '').trim().toLowerCase());
   const url = (v?: string) => (v && /^https:\/\/[^\s"'<>]+$/.test(v.trim()) ? v.trim() : undefined);
+  const cap = (v?: string) => {
+    const n = Number((v || '').trim());
+    return Number.isInteger(n) && n >= 1 && n <= 10000 ? n : undefined;
+  };
   return {
     hosted,
     ...(hosted && url(env.SUBWAVE_MUSIC_UPLOAD_URL) ? { musicUploadUrl: url(env.SUBWAVE_MUSIC_UPLOAD_URL) } : {}),
     ...(hosted && url(env.SUBWAVE_MUSIC_LIBRARY_URL) ? { musicLibraryUrl: url(env.SUBWAVE_MUSIC_LIBRARY_URL) } : {}),
+    ...(hosted && cap(env.SUBWAVE_LISTENER_CAP) ? { listenerCap: cap(env.SUBWAVE_LISTENER_CAP) } : {}),
   };
 }

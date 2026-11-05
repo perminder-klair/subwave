@@ -162,3 +162,13 @@ test('an imported or installed persona gets the hosted engine rule too', async (
   const p = stored().personas.find((x: any) => x.name === 'Bundle DJ');
   assert.equal(p.tts.engine, 'inherit');
 });
+
+test('the listener ceiling is the plan\'s: a hosted save drops stream.maxListeners, keeps the rest', async () => {
+  const before = stored().stream?.maxListeners;
+  const r = await post('/settings', { stream: { maxListeners: 37, idleWhenEmpty: true } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.managed, ['stream.maxListeners']);
+  const st = stored().stream;
+  assert.equal(st.maxListeners, before);
+  assert.equal(st.idleWhenEmpty, true);
+});

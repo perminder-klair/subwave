@@ -30,6 +30,11 @@ export const HOSTED_LLM_KEYS = [
   'compatibleMode', 'fallback', 'numCtx', 'repeatPenalty', 'reasoning', 'toolChoice', 'geminiSafety',
 ] as const;
 
+// stream.* keys the agent owns: the listener ceiling is the plan's (the agent
+// sets ICECAST_MAX_CLIENTS on the broadcast container, which wins over this
+// setting anyway), so saving another number would only mislead the owner.
+export const HOSTED_STREAM_KEYS = ['maxListeners'] as const;
+
 // tts.* keys the agent owns on a hosted station.
 export const HOSTED_TTS_KEYS = ['defaultEngine', 'cloud', 'remote', 'gemini', 'chatterbox', 'pocketTts', 'heavyEnabled', 'fallback'] as const;
 
@@ -82,6 +87,17 @@ export function stripManagedSettings(
     }
     if (Object.keys(tts).length) out.tts = tts;
     else delete out.tts;
+  }
+  if (out.stream && typeof out.stream === 'object' && !Array.isArray(out.stream)) {
+    const stream = { ...out.stream };
+    for (const k of HOSTED_STREAM_KEYS) {
+      if (k in stream) {
+        delete stream[k];
+        dropped.push(`stream.${k}`);
+      }
+    }
+    if (Object.keys(stream).length) out.stream = stream;
+    else delete out.stream;
   }
   if (out.embedding && typeof out.embedding === 'object' && !Array.isArray(out.embedding)) {
     const embedding = { ...out.embedding };

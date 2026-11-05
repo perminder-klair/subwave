@@ -33,10 +33,11 @@ import {
 } from '@/lib/schemas.generated';
 import { AlertTriangle } from 'lucide-react';
 import {
-  SectionHeader, SaveBar, SettingsFieldError,
+  SectionHeader, SaveBar, SettingsFieldError, NowBanner,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
   type LoudnessSource, type TransitionEffect,
 } from './settings/shared';
+import { useHosted } from './HostedContext';
 import {
   SECTIONS, SECTION_GROUPS, RESTART_PATHS, STEM_FORM_KEYS, sectionById, type SectionId,
 } from './settings/registry';
@@ -119,6 +120,8 @@ const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 const JUMP_MAX_FRAMES = 60;
 
 export default function SettingsPanel({ djBrainEnabled = false, hosted = false }: { djBrainEnabled?: boolean; hosted?: boolean }) {
+  // Hosted: the plan's listener ceiling, shown instead of the editable field.
+  const { listenerCap } = useHosted();
   // Hosted (SUB/WAVE Cloud): the LLM provider page is the agent's, so it goes;
   // the voice page stays for what the operator still owns (see TtsSection).
   const sections = useMemo(
@@ -1743,7 +1746,16 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
               </Card>
             )}
 
-            {form && (
+            {form && hosted && (
+              <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
+                <NowBanner label={<>Max listeners · Managed by SUB/WAVE Cloud</>}>
+                  {listenerCap
+                    ? <>Up to <strong>{listenerCap}</strong> people can listen at once on this station&apos;s plan.</>
+                    : <>Your plan sets how many people can listen at once.</>}
+                </NowBanner>
+              </Card>
+            )}
+            {form && !hosted && (
               <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
                 <div className="field">
                   <div className="flex items-center gap-2">
