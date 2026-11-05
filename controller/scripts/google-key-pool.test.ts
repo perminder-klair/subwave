@@ -1124,7 +1124,7 @@ test('the single-key field is greyed out while a pool exists, and says so', asyn
     'the pool variable must reach the Google probe branch');
 
   const core = readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
-  assert.match(core, /GOOGLE_GENERATIVE_AI_API_KEY: !!process\.env\.GOOGLE_GENERATIVE_AI_API_KEY \|\| poolConfigured\(\)/,
+  assert.match(core, /GOOGLE_GENERATIVE_AI_API_KEY:\s*\n?\s*!!process\.env\.GOOGLE_GENERATIVE_AI_API_KEY \|\| poolConfigured\(\)/,
     'a pool-only station must still report a Google key on file, or Test stays disabled');
 });
 
