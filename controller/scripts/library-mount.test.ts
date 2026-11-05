@@ -396,9 +396,11 @@ test('a pick goes local only on the mixer\'s yes to its own file', async () => {
 });
 
 test('a file the mixer\'s copy lacks streams, and the mount stays proven for the rest', async () => {
+  // Proven first, on SONG: the walk's sample is whichever file readdir lists
+  // last, and on ext4 that would be the file the mixer lacks.
+  assert.equal((await proveLibraryMount())?.sample, join(root, SONG));
   put(join(root, OTHER));
   missing.add(join(root, OTHER));
-  await proveLibraryMount();
   assert.equal(getLocalPath(other), `${root}/${OTHER}`, 'the proof alone would have sent it local');
   commands.length = 0;
 

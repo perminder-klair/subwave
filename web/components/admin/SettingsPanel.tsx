@@ -59,7 +59,7 @@ import {
   useSettingsQuery,
   useStemUsageQuery,
 } from './settings/queries';
-import { fmtGb, fmtMeasured, stemBudgetImpact, usageCaveat } from './settings/stem-budget';
+import { fmtGb, fmtMeasured, pickTimeOvershoot, stemBudgetImpact, usageCaveat } from './settings/stem-budget';
 import {
   cloudSaveSnapshot, cloudSaveReadReady, rebaselineSavedPatch, reconcileSavedCloud,
   adoptServerPaths, committedReadReady, LLM_SWAP_FORM_KEYS,
@@ -133,7 +133,8 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
   // The stem cache's stored size, for the budget field's "cache used"
   // line and the lowered-budget warning. The snapshot, never a walk.
-  const stemUsage = useStemUsageQuery({ adminFetch, enabled: hydrated && !needsAuth }).data?.usage ?? null;
+  const stemUsageResponse = useStemUsageQuery({ adminFetch, enabled: hydrated && !needsAuth }).data;
+  const stemUsage = stemUsageResponse?.usage ?? null;
   const [confirmStemBudget, setConfirmStemBudget] = useState(false);
   const [commandBusy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
@@ -838,6 +839,9 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                         );
                       }
                       const impact = stemBudgetImpact(stemUsage, Number(form.transitions.stemCacheGb));
+                      // Pick-time stems runs the cache over its budget between
+                      // sweeps by design: not a fault while it stays inside that.
+                      const pickTimeOver = pickTimeOvershoot(stemUsageResponse, Number(form.transitions.stemCacheGb));
                       const at = fmtMeasured(stemUsage.measuredAt);
                       return (
                         <>
@@ -846,7 +850,14 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                             {' '}&middot; {stemUsage.dirs.toLocaleString('en-GB')} tracks
                             {at ? ` (measured ${at}${usageCaveat(stemUsage)})` : ''}
                           </div>
-                          {impact && (
+                          {pickTimeOver !== null ? (
+                            <div className="field-hint" role="status">
+                              Pick-time stems has taken the cache{' '}
+                              <span className="mono-num">{fmtGb(pickTimeOver)}</span> over this budget,
+                              as it may; the next hourly sweep trims it back, lowest stem priority
+                              first.
+                            </div>
+                          ) : impact && (
                             <div className="field-hint text-destructive" role="status">
                               This budget is below what the cache holds: the next hourly sweep
                               deletes about <strong>{fmtGb(impact.deleteBytes)}</strong>, the stems
@@ -889,6 +900,43 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       any miss. Needs pair-aware transitions + the stem cache; the Doctor flags a
                       config that can&rsquo;t deliver.
                     </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Separate stems when a track is picked</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.pickTimeStems ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, pickTimeStems: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      While a picked track waits behind the one about to air, separate whatever stems
+                      it is missing, so the cache turns over to what the station actually plays. A
+                      full cache may run a little over its budget for this (about an hour of picks, or
+                      5% of a small budget, plus the track being separated) until the hourly cleanup
+                      trims it back, lowest stem priority first, leaving tracks still waiting to air
+                      until last. Its tail is usually ready for the seam out of it; the seam into it
+                      renders before this starts, so its head pays off the next time it is picked.
+                      This runs Demucs on air, one track at a time, on the same analyzer the blends
+                      use, and keeps the model loaded, so on a GPU its memory stays in use. Not
+                      recommended below about 4 CPU cores: watch the stream for dropouts before
+                      leaving it on. Needs stem-blend seams and the stem cache, and only separates
+                      tracks the analysis pass has already measured.
+                    </div>
+                    {form.transitions.pickTimeStems && data?.values?.audio?.analyzeQuietOnly === true && (
+                      <div className="field-hint text-destructive" role="status">
+                        Quiet-only analysis is on (Library), so nothing is separated at pick time.
+                      </div>
+                    )}
                   </div>
                 </div>
               </Card>

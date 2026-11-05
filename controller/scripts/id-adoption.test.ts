@@ -50,6 +50,7 @@ const stemCache = await import('../src/music/stem-cache.js');
 const rotation = await import('../src/music/id-rotation.js');
 const { ROTATION_PREFIX } = await import('../src/music/tagger-progress.js');
 const { checkFacets } = await import('../src/music/facet-check.js');
+const { soundWords, trackAcoustics } = await import('../src/music/sound-line.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 const sql = db.requireDb();
 
@@ -68,7 +69,9 @@ db.upsertTrackAnalysis(OLD_HEX, {
 db.setOriginalYear(OLD_HEX, 1978); // MusicBrainz resolution — must outrank walk-time album-tag year
 // 1978 is the era the row resolves to at this point, so the write leaves
 // text_vector_dirty = 0 — the state the adoption must carry across.
-db.upsertTrackVector(OLD_HEX, [1, 2, 3, 4, 5, 6, 7, 8], 1978);
+// With the Sound: words it was built from (#2236), which describe the vector too.
+const OLD_SOUND = soundWords(trackAcoustics(db.getTrack(OLD_HEX)!));
+db.upsertTrackVector(OLD_HEX, [1, 2, 3, 4, 5, 6, 7, 8], 1978, OLD_SOUND);
 db.upsertTrackAudioVector(OLD_HEX, new Float32Array(512).fill(0.25));
 // …then something changed the row's era text, so the stored vector no longer
 // describes it (#1418 follow-up). The marker is NOT NULL DEFAULT 0, so a
@@ -201,6 +204,11 @@ await test('the stale-vector marker rides with the vector it describes', () => {
   // Nothing moved onto NANO (neither side had a vector), so it keeps its own.
   const untouched = sql.prepare('SELECT text_vector_dirty FROM tracks WHERE id = ?').get(NEW_NANO) as { text_vector_dirty: number };
   assert.equal(untouched.text_vector_dirty, 0);
+  const sound = (id: string) =>
+    (sql.prepare('SELECT text_vector_sound AS s FROM tracks WHERE id = ?').get(id) as { s: string | null }).s;
+  assert.ok(OLD_SOUND.measured.length > 0, 'the fixture vector was built from some words');
+  assert.deepEqual(JSON.parse(sound(NEW_HEX) ?? 'null'), OLD_SOUND, 'and so do the words it was built from');
+  assert.equal(sound(NEW_NANO), null);
 });
 
 await test('play history follows the track', () => {

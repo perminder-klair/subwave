@@ -339,6 +339,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         const eraYear = resolveEraYear(
           rec?.year ?? song.year, rec?.originalYear ?? null, rec?.yearUntrusted ?? null,
         );
+        const acoustics = rec ? embeddings.trackAcoustics(rec) : null;
         const text = embeddings.formatTrackText(
           {
             title: song.title,
@@ -349,15 +350,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
             eraYear,
           },
           { lastfmTags, lyricExcerpt },
-          rec
-            ? {
-                bpm: rec.bpm, musicalKey: rec.musicalKey, audioMoods: rec.audioMoods,
-                vocalRanges: rec.vocalRanges,
-                vocalRangesInvalid: rec.vocalRangesInvalid,
-                tailVocalRanges: rec.tailVocalRanges,
-                tailVocalRangesInvalid: rec.tailVocalRangesInvalid,
-              }
-            : null,
+          acoustics,
         );
         // Must match the task-prefix mode the rest of the index was built in.
         const textMode = embeddings.resolveIndexTextMode(
@@ -365,7 +358,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
           db.vectorCount(),
         );
         const [vec] = await embeddings.embedDocTexts([text], textMode);
-        if (vec) db.upsertTrackVector(id, vec, eraYear);
+        if (vec) db.upsertTrackVector(id, vec, eraYear, embeddings.soundWords(acoustics));
       } catch (err) {
         queue.log('warn', `/library/retag embed ${id}: ${err.message}`);
       }

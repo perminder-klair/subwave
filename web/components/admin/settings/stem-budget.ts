@@ -23,6 +23,8 @@ export interface StemUsage {
 export interface StemUsageResponse {
   usage: StemUsage | null;
   budgetBytes?: number;
+  /** Sent only while pick-time stems is on: how far over `budgetBytes` the cache may run by design. */
+  pickTimeOvershootBytes?: number;
 }
 
 export interface StemBudgetImpact {
@@ -40,6 +42,24 @@ export function stemBudgetImpact(usage: StemUsage | null | undefined, budgetGb: 
   const avg = usage.dirs > 0 ? usage.bytes / usage.dirs : usage.estTrackBytes;
   const deleteTracks = Math.min(usage.dirs, Math.max(1, Math.round(deleteBytes / Math.max(1, avg))));
   return { deleteBytes, deleteTracks, keepTracks: Math.max(0, usage.dirs - deleteTracks) };
+}
+
+/**
+ * How far pick-time stems has taken the cache over the budget in force, when
+ * that is within the overshoot it is allowed by design. The next hourly sweep
+ * trims it, so the budget field says so instead of warning. Null when the
+ * feature is off (no `pickTimeOvershootBytes`), when the budget being typed is
+ * not the one in force (a cut deletes stems, and keeps the warning), or when
+ * the cache is past the designed overshoot (that is a fault).
+ */
+export function pickTimeOvershoot(resp: StemUsageResponse | null | undefined, budgetGb: number): number | null {
+  const usage = resp?.usage;
+  const allowed = resp?.pickTimeOvershootBytes;
+  const inForce = resp?.budgetBytes;
+  if (!usage || typeof allowed !== 'number' || typeof inForce !== 'number') return null;
+  if (!Number.isFinite(budgetGb) || budgetGb * GB !== inForce) return null;
+  const over = usage.bytes - inForce;
+  return over > 0 && over <= allowed ? over : null;
 }
 
 /** Why a stored figure is not the sweep's own, for the "measured" note. */

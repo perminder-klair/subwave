@@ -55,14 +55,15 @@ import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog, runCapability } from '../skills/_agent.js';
 import { loadedCapabilities } from '../skills/loader.js';
 import { skillEligible } from '../skills/eligibility.js';
-import { getStationTimezone, onStationTimezoneChange } from '../time.js';
+import { getStationTimezone, isStationHourStart, onStationTimezoneChange, stationHourKey } from '../time.js';
 import { withTrace, pruneOldEvents } from '../observability/events.js';
 import * as archives from './archives.js';
 import * as stemCacheStore from '../music/stem-cache.js';
+import * as pickStems from './pick-stems.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 import * as backup from '../backup/scheduled.js';
-import { autoEnableRealPath } from '../music/navidrome-players.js';
+import { autoEnableRealPath, realPathOptedIn } from '../music/navidrome-players.js';
 import { onLibraryMountLost, proveLibraryMount } from '../music/library-mount.js';
 
 // take() hard-stops at the target, so TARGET_POOL must exceed the sum of the
@@ -947,12 +948,11 @@ const talkLogged: Partial<Record<TalkKind, string | null>> = {};
 
 // The :00 session roll's outcome. The hourly row's window runs to :09, so a
 // postponed check resolves on a tick where no roll happened but still needs the
-// roll's result as a gate (#310). Keyed by hour so it can't gate the next one.
+// roll's result as a gate (#310). Keyed by STATION hour, like the roll itself
+// (#2234), so it can't gate the next one; time.ts says why the row's process
+// minutes still find it.
 type SessionRoll = Awaited<ReturnType<typeof rollSessionNow>>;
 let lastRoll: { hourKey: string; roll: SessionRoll } | null = null;
-
-const hourKey = (now: Date) =>
-  `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}-${now.getHours()}`;
 
 // Whether a row due this minute may fire. The live gates, still owned by their
 // own modules; resolved lazily by the planner for open, unfired rows only.
@@ -1096,16 +1096,17 @@ async function talkTick() {
   // outside the table — not a talk action, so a muted, empty or over-budget
   // station must still roll (#1500 finding 3). It is NOT the boundary for the
   // AIR: airHandoff false leaves the mic-pass for the next track boundary.
-  if (now.getMinutes() === 0) {
+  // The STATION's :00, where the grid changes, not the process's (#2234).
+  if (isStationHourStart(now)) {
     // rollSessionNow traps each step, but a rejection here must not take the
     // minute every scheduled segment shares — or the process — with it.
     const roll = await rollSessionNow({ airHandoff: false, reason: 'scheduled boundary' }).catch(err => {
       queue.log('error', `Session roll failed: ${err.message}`);
       return null;
     });
-    lastRoll = roll ? { hourKey: hourKey(now), roll } : null;
+    lastRoll = roll ? { hourKey: stationHourKey(now), roll } : null;
   }
-  const rolled = lastRoll?.hourKey === hourKey(now) ? lastRoll.roll : null;
+  const rolled = lastRoll?.hourKey === stationHourKey(now) ? lastRoll.roll : null;
 
   // runTalkSlot traps the segments themselves; this covers the planning.
   let plans: TalkPlan[] = [];
@@ -1181,31 +1182,7 @@ async function cleanup() {
   } catch (err) {
     queue.log('error', `Archive retention failed: ${err.message}`);
   }
-  // Stem cache sweep — keep the per-track Demucs stem windows inside the
-  // operator's byte budget (feature: stem-blend transitions), evicting by the
-  // music/stem-priority.ts ranking rather than by age. The analysis pass
-  // settles after itself too. Most hours this reads the usage snapshot and
-  // walks nothing (stem-cache.ts); a full walk runs at least once a day, which
-  // is what catches dirs added or removed by hand.
-  try {
-    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep();
-    if (offline) queue.log('error', offline);
-    if (removed) {
-      queue.log('scheduler',
-        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
-    }
-    // A sweep that couldn't reach the budget is an operator problem, not a
-    // no-op (#1257) — say so every hour it persists. Usual cause: the
-    // controller can't delete what the analyzer wrote (state/stems ownership).
-    if (overBudgetBytes > 0) {
-      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
-      queue.log('error',
-        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
-        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
-    }
-  } catch (err) {
-    queue.log('error', `Stem cache sweep failed: ${err.message}`);
-  }
+  await stemCacheSweepTick();
   // Rendered transition clips are single-use, so anything over an hour old is
   // an orphan — except clips still queued for a seam that hasn't aired, which
   // can legitimately out-age the window.
@@ -1224,6 +1201,38 @@ async function nightlyDoctor() {
     await withTrace({ kind: 'doctor' }, () => doctor.runDoctor());
   } catch (err) {
     queue.log('error', `Nightly health check failed: ${err.message}`);
+  }
+}
+
+// Stem cache sweep — keep the per-track Demucs stem windows inside the
+// operator's byte budget (feature: stem-blend transitions), evicting by the
+// music/stem-priority.ts ranking rather than by age. The analysis pass
+// settles after itself too. Most hours this reads the usage snapshot and
+// walks nothing (stem-cache.ts); a full walk runs at least once a day, which
+// is what catches dirs added or removed by hand. With pick-time stems on, the
+// dirs of tracks still in the queue go last (pick-stems-policy.ts
+// sweepKeepLast); off, there is no set and the order is the ranking alone.
+// Run by the hourly cleanup; exported for scripts/pick-stems.test.ts.
+export async function stemCacheSweepTick() {
+  try {
+    const keepLast = pickStems.sweepKeepLast(queue.upcoming.map(item => item?.track?.id));
+    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep(undefined, { keepLast });
+    if (offline) queue.log('error', offline);
+    if (removed) {
+      queue.log('scheduler',
+        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
+    }
+    // A sweep that couldn't reach the budget is an operator problem, not a
+    // no-op (#1257) — say so every hour it persists. Usual cause: the
+    // controller can't delete what the analyzer wrote (state/stems ownership).
+    if (overBudgetBytes > 0) {
+      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
+      queue.log('error',
+        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
+        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
+    }
+  } catch (err) {
+    queue.log('error', `Stem cache sweep failed: ${err.message}`);
   }
 }
 
@@ -1393,7 +1402,7 @@ onLibraryMountLost(() => {
 // the operator opted in (musicSource.reportRealPath). On a timer, not once: a
 // new client or user agent gets a fresh row with the flag off. Never throws.
 export async function realPathTick() {
-  if (settings.get().musicSource?.reportRealPath !== true) return;
+  if (!realPathOptedIn()) return;
   try {
     await autoEnableRealPath(line => queue.log('scheduler', line));
   } catch (err) {

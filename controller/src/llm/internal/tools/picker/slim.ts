@@ -6,7 +6,7 @@
 
 import * as subsonic from '../../../../music/subsonic.js';
 import * as library from '../../../../music/library.js';
-import { isInstrumental } from '../../../../music/lyric-vocal.js';
+import { carriesVocalEvidence, isInstrumental } from '../../../../music/lyric-vocal.js';
 import { durationSeconds } from '../../../../music/recency.js';
 import { unairedFlag } from '../../../../music/airing.js';
 import { resolveEraYear } from '../../../../music/show-filter.js';
@@ -57,7 +57,7 @@ export function slim(s: any) {
   // Classify measured sung duration over both windows; a null verdict is
   // unknown (omit rather than guess "has vocals"). The spans themselves stay
   // out of this whitelist: the model reads the verdict, never the evidence.
-  const vocalSource = Array.isArray(s.vocalRanges) ? s : rec;
+  const vocalSource = carriesVocalEvidence(s) ? s : rec;
   const instrumental = isInstrumental(vocalSource);
   // realBpm: a non-positive bpm means unknown — never emitted, never allowed
   // to mask the analyzed value.
