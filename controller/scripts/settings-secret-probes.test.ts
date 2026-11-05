@@ -276,7 +276,7 @@ test('Outcrawl: a key is probed with a one-result search; 401 reads as rejected,
   stubProvider(t, 401, { error: 'invalid api key' });
   const rejected = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_bad.secret', provider: 'outcrawl' });
   assert.equal(rejected.ok, false);
-  assert.equal(rejected.message, 'Key rejected: check it\'s correct and active');
+  assert.equal(rejected.message, 'Key rejected — check it\'s correct and active');
   t.mock.restoreAll();
 
   stubProvider(t, 402, { error: 'out of credits' });

@@ -216,7 +216,7 @@ async function probeKey(
         });
         if (r.status === 402) return { ok: false, message: 'Outcrawl key valid, but it has no credits left' };
         if (!r.ok) {
-          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected: check it\'s correct and active' : `Request failed (${r.status})` };
+          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
         }
         return { ok: true, message: '✓ Outcrawl key valid' };
       }
