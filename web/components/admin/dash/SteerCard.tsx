@@ -19,6 +19,7 @@ import {
   STEER_MIN_MINUTES,
   STEER_MAX_MINUTES,
   STEER_PROMPT_MAX,
+  steerActiveAt,
   type Steer,
 } from '@/lib/schemas.generated';
 import {
@@ -31,7 +32,7 @@ import {
   type SteerTrack,
   type TakeoverWindow,
 } from './queries';
-import { previewKey, previewState, startSentence, type SteerPreview } from './steer-start';
+import { previewKeyOf, previewSizeKey, previewState, startSentence, type SteerPreview, type SteerStartInputs } from './steer-start';
 
 const PRESETS = [15, 30, 60, 120];
 // Seg ids for the two ends that are not a minute count.
@@ -46,6 +47,8 @@ interface StartResult {
   /** The opening tracks the controller queued, in play order. */
   tracks?: SteerTrack[];
   skipped?: number;
+  /** Opening tracks left out because they would start after the steer ends. */
+  unfit?: number;
   warnings?: string[];
   dropped?: number;
   kept?: number;
@@ -88,8 +91,12 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
   const until = form.watch('until');
   const promptValue = form.watch('prompt') || '';
   const promptLength = promptValue.length;
-  const formKey = previewKey(form.watch('playlistId'), promptValue, until === 'once');
-  const shown = previewState(preview, formKey, now);
+  const inputs: SteerStartInputs = {
+    // `minutes` is the coerced field's raw input: only a number sizes anything.
+    playlistId: form.watch('playlistId'), prompt: promptValue, until,
+    minutes: typeof minutes === 'number' ? minutes : undefined, startNow: form.watch('startNow'),
+  };
+  const shown = previewState(preview, inputs, now);
   // The resolved end for "until the schedule changes", read only while that is
   // selected (the takeover card's own preview, and the same reason).
   const untilSchedule = until === 'schedule-change';
@@ -110,7 +117,7 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
     return () => window.clearInterval(id);
   }, []);
 
-  const live = steer && steer.expiresAt > now ? steer : null;
+  const live = steerActiveAt(steer, now);
 
   const startMutation = useAdminMutation<StartResult, SteerVars>({
     adminFetch,
@@ -147,7 +154,7 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
     },
     onDone: (_data, _vars, client) => writeSteer(client, null),
   });
-  const previewMutation = useAdminMutation<{ picks?: SteerTrack[]; warnings?: string[] }, SteerVars>({
+  const previewMutation = useAdminMutation<{ picks?: SteerTrack[]; fit?: number; warnings?: string[] }, SteerVars>({
     adminFetch,
     toastOnError: false,
     request: async (values, fetcher) => {
@@ -157,7 +164,7 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
         body: JSON.stringify(values),
       });
       const body = await response.json().catch(() => ({})) as {
-        picks?: SteerTrack[]; warnings?: string[]; error?: string; fieldErrors?: Record<string, string>;
+        picks?: SteerTrack[]; fit?: number; warnings?: string[]; error?: string; fieldErrors?: Record<string, string>;
       };
       if (!response.ok) throw new SteerError(body.error || `failed (${response.status})`, body.fieldErrors);
       return body;
@@ -171,7 +178,8 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
       // Stamped on the card's own clock, which ticks every 30 s, not the
       // controller's: the two may disagree. A list the controller has since
       // forgotten is caught when Start answers.
-      setPreview({ key: previewKey(values.playlistId, values.prompt, values.until === 'once'), at: now, picks: result.picks ?? [] });
+      const picks = result.picks ?? [];
+      setPreview({ key: previewKeyOf(values), size: previewSizeKey(values), at: now, picks, fit: result.fit ?? picks.length });
       for (const warning of result.warnings ?? []) notify.err(`Steer: ${warning}`);
     } catch (e) {
       if (e instanceof SteerError) applyServerFieldErrors(form, e.fieldErrors);
@@ -181,7 +189,7 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
 
   const start = form.handleSubmit(async (values) => {
     try {
-      const promised = shown === 'valid';
+      const promised = shown === 'valid' || shown === 'resized';
       const started = await startMutation.mutateAsync(values);
       setPreview(null);
       if (promised && started.cached === false) {
@@ -192,11 +200,16 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
         notify.ok(queued ? `Queued: ${queued.title}.` : 'That track is already queued or on air.');
         return;
       }
+      const queuedCount = started.tracks?.length ?? 0;
+      const opening = queuedCount === 1 ? '1 opening track queued' : `${queuedCount} opening tracks queued`;
+      const unfit = started.unfit
+        ? `; ${started.unfit} more would have started after it ends`
+        : '';
       notify.ok(started.pickInFlight
-        ? 'Steer started — a pick was already running, so it applies to the one after.'
+        ? `Steer started — ${opening}${unfit}. A pick already under way lands after them, chosen before the steer.`
         : values.startNow && started.kept
-          ? 'Steer started — one track was already on its way to air and will play first.'
-          : 'Steer started — its opening tracks are queued.');
+          ? `Steer started — ${opening}${unfit}. One track was already on its way to air and plays first.`
+          : `Steer started — ${opening}${unfit}.`);
       for (const warning of started.warnings ?? []) notify.err(`Steer: ${warning}`);
     } catch (e) {
       if (e instanceof SteerError) applyServerFieldErrors(form, e.fieldErrors);
@@ -247,7 +260,7 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
           {budgetMode !== 'normal' && (
             <div className="text-[10px] text-muted">
               {budgetMode === 'hard'
-                ? 'the daily token cap is reached — picks are paused, so the steer has nothing to act on'
+                ? 'the daily token cap is reached — its opening tracks still play, then picks pause and the station coasts on the auto-playlist'
                 : 'the token budget is in its saving tier — the steer only re-orders the tracks already in reach'}
             </div>
           )}
@@ -308,7 +321,7 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
                     aria-label="Steer duration"
                     value={field.value === 'once' ? ONCE_SEG : field.value === 'schedule-change' ? SCHEDULE_SEG : String(minutes ?? '')}
                     options={[
-                      { id: ONCE_SEG, label: 'once', title: 'Queue one track; nothing else changes' },
+                      { id: ONCE_SEG, label: 'once', title: 'Queue one track and store no steer' },
                       ...PRESETS.map(m => ({ id: String(m), label: m < 60 ? `${m}m` : `${m / 60}h` })),
                       { id: SCHEDULE_SEG, label: 'til change', title: 'End when the weekly schedule moves on' },
                     ]}
@@ -359,24 +372,35 @@ export function SteerCard({ tz, locale }: { tz?: string; locale?: StationLocale 
             description="one host link before the first track that says where the music is heading, in the host's own words, and trails what follows (an announce-only host just names the track). The opening tracks otherwise play back to back with no links"
           />
           {preview && preview.picks.length > 0 && (
-            <div className={cn('grid gap-0.5 border px-2.5 py-2 text-[11px]', shown === 'valid' ? 'border-ink/30 text-ink' : 'border-ink/15 text-muted line-through')}>
-              <span className="text-[10px] text-muted no-underline">a sample of what this steer would pick, not the whole queue</span>
+            <div className={cn('grid gap-0.5 border px-2.5 py-2 text-[11px]', shown === 'stale' ? 'border-ink/15 text-muted line-through' : 'border-ink/30 text-ink')}>
+              <span className="text-[10px] text-muted no-underline">what this steer opens with, not the whole queue</span>
               {preview.picks.map((t, i) => (
-                <span key={t.id} className="truncate">
+                <span key={t.id} className={cn('truncate', shown === 'valid' && i >= preview.fit && 'text-muted')}>
                   <span className="mono-num text-muted">{i + 1}.</span> {t.title} <span className="text-muted">— {t.artist}</span>
                 </span>
               ))}
+              {shown === 'valid' && preview.fit < preview.picks.length && (
+                <span className="text-[10px] text-muted">
+                  {preview.picks.length - preview.fit === 1
+                    ? 'the last would start after the steer ends, so it is not queued'
+                    : `the last ${preview.picks.length - preview.fit} would start after the steer ends, so they are not queued`}
+                </span>
+              )}
             </div>
           )}
-          <div className="text-[11px] text-ink">{startSentence(preview, formKey, now, until === 'once')}</div>
+          <div className="text-[11px] text-ink">{startSentence(preview, inputs, now)}</div>
           <div className="grid grid-cols-2 gap-2">
             <Btn
               sm
               disabled={busy || !form.formState.isValid || shown === 'valid'}
               onClick={runPreview}
-              title={shown === 'valid' ? 'Change the playlist or direction to preview again' : 'One model call'}
+              title={shown === 'valid'
+                ? 'Change the playlist, direction or length to preview again'
+                : shown === 'resized' ? 'No model call: the tracks are remembered' : 'One model call'}
             >
-              {previewMutation.isPending ? 'working it out…' : 'Preview (one model call)'}
+              {previewMutation.isPending
+                ? 'working it out…'
+                : shown === 'resized' ? 'Preview (no model call)' : 'Preview (one model call)'}
             </Btn>
             <Btn tone="accent" sm disabled={busy || !form.formState.isValid} onClick={start}>
               {startMutation.isPending ? 'starting…' : 'Start steer →'}
