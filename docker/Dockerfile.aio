@@ -169,12 +169,15 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # picks its device (ANALYZE_DEVICE=auto), so it degrades to CPU on a driverless
 # host. See docs/unraid.md.
 #
-# Default pins match docker/Dockerfile.analyzer (torch 2.7.1). This venv runs
-# on the system python3 (trixie → 3.13). WITH_CUDA=1 defaults to the cu128
-# index (sm_75 through sm_120). TORCH_CUDA=cu124 is the other AIO build:
-# torch 2.6.0, whose cu124 wheel still ships sm_50, sm_60 and sm_70. cu128
-# dropped those three, and CUDA 13 cannot emit them. Which tags each build
-# publishes under: the AIO CUDA tag table in docs/internals/infrastructure.md.
+# Pins mirror docker/Dockerfile.analyzer — keep the two in lockstep. The one
+# exception is TORCH_CUDA=cu124, the AIO's second CUDA build, which pins torch
+# 2.6.0 because its cu124 wheel still ships sm_50, sm_60 and sm_70: cu128
+# dropped those three, and CUDA 13 cannot emit them. The analyzer image has no
+# cu124 build. This venv runs on the system python3 (trixie → 3.13, unlike the
+# analyzer image's 3.11). WITH_CUDA=1 defaults to the cu128 index (sm_75
+# through sm_120). publish-images.yml passes each build's cuda_family as
+# TORCH_CUDA; which tags each build publishes under is the AIO CUDA tag table
+# in docs/internals/infrastructure.md.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0

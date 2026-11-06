@@ -176,8 +176,11 @@ never fold several GPUs into one tag.
 
 `publish-images.yml` encodes this per matrix entry. Each `subwave-aio-cuda`
 entry sets `cuda_family`, `primary` and `arch_tags`, so moving a GPU to
-another build moves one word between two `arch_tags` lines. Each job sees
-only its own entry, so the `tagplan` step checks only that entry's shape (a `cuda_family` build says `primary: true` or
+another build moves one word between two `arch_tags` lines. `cuda_family` is
+also the wheel: the build step passes it to `Dockerfile.aio` as `TORCH_CUDA`,
+whose `case` fails on a family it has no index for, so a build's tags and its
+wheel can't disagree. Each job sees only its own entry, so the `tagplan` step
+checks only that entry's shape (a `cuda_family` build says `primary: true` or
 `false`, and `arch_tags` needs a `cuda_family`). The rules across entries run
 in `lint.yml` on every PR: `controller/scripts/check-publish-matrix.ts` fails an
 image with no primary or two, and a build or architecture tag on more than one

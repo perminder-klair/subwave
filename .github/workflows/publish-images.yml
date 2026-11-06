@@ -54,7 +54,8 @@ jobs:
       # list too (the aio images are deliberately not waited on).
       #
       # An image built by more than one entry (today only subwave-aio-cuda)
-      # names each build with `cuda_family`. Every such entry
+      # names each build with `cuda_family`, which is also its torch wheel: the
+      # build step passes it to the Dockerfile as TORCH_CUDA. Every such entry
       # sets `primary`, and exactly one is `true`; that one alone takes the
       # image's plain tags (:latest, :<version>, :<major>.<minor>, sha-). An
       # entry without `cuda_family` is its image's only build, so it is
@@ -126,7 +127,6 @@ jobs:
               WITH_CLAP=1
               WITH_DEMUCS=1
               WITH_CUDA=1
-              TORCH_CUDA=cu128
           # torch 2.6.0+cu124 still ships SASS for sm_50, sm_60 and sm_70, which
           # cu128 dropped: the build for Maxwell, Pascal and Volta cards.
           - image: subwave-aio-cuda
@@ -140,7 +140,6 @@ jobs:
               WITH_CLAP=1
               WITH_DEMUCS=1
               WITH_CUDA=1
-              TORCH_CUDA=cu124
           - image: subwave-tts-heavy
             dockerfile: docker/Dockerfile.tts-heavy
             platforms: linux/amd64
@@ -304,6 +303,9 @@ jobs:
             # The build and architecture shortcuts, when this run moves them.
             ${{ steps.tagplan.outputs.floating }}
 
+      # A CUDA build's torch wheel is its cuda_family, named once per entry, so
+      # the wheel and its :cu124 / :pascal tags can't disagree. Dockerfile.aio
+      # fails on a family it has no index for. Other builds get an empty line.
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -311,6 +313,7 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build_args }}
+            ${{ matrix.cuda_family && format('TORCH_CUDA={0}', matrix.cuda_family) || '' }}
             SUBWAVE_BUILD_VERSION=${{ steps.version.outputs.version }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
