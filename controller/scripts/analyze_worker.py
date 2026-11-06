@@ -2309,7 +2309,10 @@ WHOLE_FILE_FACETS = ("loudness", "edges")
 # Below the BS.1770 absolute gate nothing counts: ffmpeg prints -70 LUFS for
 # digital silence. Treated as "no loudness", like measure_loudness's -inf.
 _WHOLE_LOUDNESS_FLOOR_LUFS = -69.9
-WHOLE_FILE_TIMEOUT_S = _env_float("ANALYZE_WHOLE_FILE_TIMEOUT_S", 900.0)
+# Wall-clock bound for one whole-file run, seconds. 30-7200, warn-and-fall-back
+# like the sidecar (docker/analyzer/server.py), which passes its own reading
+# down; the controller's ANALYZE_WHOLE_FILE_TIMEOUT_MS waits 60 s past it.
+WHOLE_FILE_TIMEOUT_S = _env_float("ANALYZE_WHOLE_FILE_TIMEOUT_S", 900.0, minimum=30.0, maximum=7200.0)
 # PCM read size off ffmpeg's stdout (bytes): ~1.5 s of 44.1 kHz stereo float.
 _WHOLE_FILE_CHUNK = 1 << 19
 

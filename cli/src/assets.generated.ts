@@ -376,6 +376,7 @@ services:
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       # Whole-file facets (loudness v2, edges): their own lane width on this host.
       - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
@@ -733,6 +734,7 @@ services:
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       # Whole-file facets (loudness v2, edges): their own lane width on this host.
       - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -1028,6 +1030,7 @@ services:
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       # Whole-file facets (loudness v2, edges): their own lane width on this host.
       - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -1407,6 +1410,13 @@ SITE_URL=
 #                        # pool; set the SAME value on station and analyzer
 #                        # hosts. The bound is mostly reading files from the
 #                        # music server.
+# ANALYZE_WHOLE_FILE_TIMEOUT_S=900  # analyzer host: wall-clock limit for ONE
+#                        # whole-file run, in seconds (30-7200). Raise it for
+#                        # DJ sets of several hours streamed from a slow server.
+# ANALYZE_WHOLE_FILE_TIMEOUT_MS=960000  # station host: how long the controller
+#                        # waits for that answer (90000-7260000). Keep it 60 s
+#                        # above the analyzer's limit, so the analyzer reports
+#                        # its own timeout first.
 # ANALYZE_PROBE_MS=60000  # how long "no analyzer at all" is cached before the
 #                         # /health probe runs again. A backend that ANSWERED is
 #                         # remembered until restart; only the miss is timed, so

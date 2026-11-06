@@ -92,9 +92,10 @@ export const config = {
     concurrency: envInt('ANALYZE_CONCURRENCY', 1, { min: 1, max: 8 }),
     requestTimeoutMs: envInt('ANALYZE_REQUEST_TIMEOUT_MS', 120_000),
     // A request carrying the whole-file facets (loudness v2, edges) reads the
-    // whole file, so it gets its own deadline; kept above the worker's own
-    // ANALYZE_WHOLE_FILE_TIMEOUT_S (900 s) so the worker reports its timeout.
-    wholeFileTimeoutMs: envInt('ANALYZE_WHOLE_FILE_TIMEOUT_MS', 960_000, { min: 1000 }),
+    // whole file, so it gets its own deadline. Keep it 60 s above the
+    // analyzer's ANALYZE_WHOLE_FILE_TIMEOUT_S (30-7200 s, default 900) so the
+    // analyzer reports its own timeout first; hence 90 s to 7260 s.
+    wholeFileTimeoutMs: envInt('ANALYZE_WHOLE_FILE_TIMEOUT_MS', 960_000, { min: 90_000, max: 7_260_000 }),
     // In-flight jobs for a pass that plans ONLY whole-file facets: the sidecar
     // runs those in their own lane (no model, one CPU thread each), so they can
     // go wider than ANALYZE_CONCURRENCY. Capped by the sidecar's own figure.

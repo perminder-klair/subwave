@@ -433,8 +433,35 @@ def test_concurrency_env_validation():
             os.environ["SUBWAVE_TEST_CONCURRENCY"] = old
 
 
+def test_whole_file_timeout_env_matches_the_worker():
+    # ANALYZE_WHOLE_FILE_TIMEOUT_S is read by the sidecar (which hands its
+    # reading to each one-shot worker) and by the worker itself on the local
+    # backend: one bound, one fall-back, never a clamp, on both sides.
+    sys.path.insert(0, str(Path(__file__).parent))
+    import analyze_worker as worker
+
+    name = "SUBWAVE_TEST_WHOLE_FILE_TIMEOUT"
+    old = os.environ.get(name)
+    try:
+        for raw, expected in ((None, 900.0), ("", 900.0), ("1800", 1800.0), ("45.5", 45.5), ("0", 900.0),
+                              ("-5", 900.0), ("29", 900.0), ("7201", 900.0), ("nan", 900.0), ("inf", 900.0),
+                              ("soon", 900.0)):
+            if raw is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = raw
+            assert server._bounded_float_env(name, 900.0, 30.0, 7200.0) == expected, (raw, "sidecar")
+            assert worker._env_float(name, 900.0, minimum=30.0, maximum=7200.0) == expected, (raw, "worker")
+    finally:
+        if old is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = old
+
+
 async def main():
     test_concurrency_env_validation()
+    test_whole_file_timeout_env_matches_the_worker()
     await test_pool_concurrency()
     await test_waiter_uses_worker_that_becomes_ready()
     await test_unavailable_selection_retries_another_ready_worker()

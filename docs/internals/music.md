@@ -567,8 +567,10 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
    the same quiet gate and failure rules; it widens only on an analyzer that
    positively reports the capability. Off by default, so an upgrade is
    byte-identical: a first library pass reads every file once. Requests carrying
-   them get `ANALYZE_WHOLE_FILE_TIMEOUT_MS` (960 s), above the worker's own
-   `ANALYZE_WHOLE_FILE_TIMEOUT_S` (900 s) so the worker reports the timeout.
+   them get `ANALYZE_WHOLE_FILE_TIMEOUT_MS` (960 s, 90-7260 s), 60 s above the
+   analyzer's own `ANALYZE_WHOLE_FILE_TIMEOUT_S` (900 s, 30-7200 s) so the
+   analyzer reports the timeout. A caller's own deadline can lengthen that,
+   never shorten it. Every other request keeps a caller's deadline as given.
 8. **Whole-file requests alone take their own lane.** The sidecar runs a request
    whose facets are all whole-file in a one-shot `analyze_worker.py
    --whole-file` process under its own semaphore
