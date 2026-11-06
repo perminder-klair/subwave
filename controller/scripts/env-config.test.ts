@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { envEnum, envFloat, envInt, envIssues, envStr, envUrl } from '../src/util/env.js';
+import { envBool, envEnum, envFloat, envInt, envIssues, envStr, envUrl } from '../src/util/env.js';
 
 // Each case sets its own var name so the shared `envIssues` ledger stays
 // readable and cases can't interfere with each other.
@@ -101,4 +101,19 @@ test('config.ts builds on real defaults with a hostile environment', async () =>
   assert.equal(config.navidrome.url, 'http://navidrome:4533');
   assert.equal(config.analyzer.concurrency, 1);
   assert.ok(Number.isFinite(config.tts.cloudSpeed), 'no NaN reaches the TTS layer');
+});
+
+test('an on/off var reads its words in any case, and warns on anything else', () => {
+  const before = envIssues().length;
+  for (const on of ['1', 'true', 'YES', 'On']) assert.equal(envBool(withEnv(on), false), true, on);
+  for (const off of ['0', 'False', 'no', 'OFF']) assert.equal(envBool(withEnv(off), true), false, off);
+  assert.equal(envBool(withEnv(''), true), true, 'empty is unset');
+  assert.equal(envIssues().length, before);
+  // A typo used to read as off with nothing said.
+  const typo = withEnv('enable');
+  assert.equal(envBool(typo, false), false);
+  const issues = envIssues();
+  assert.equal(issues.length, before + 1);
+  assert.equal(issues[issues.length - 1].name, typo);
+  assert.equal(issues[issues.length - 1].usedInstead, 'false');
 });

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { resolveActiveStationDir } from './stations/resolve.js';
 import { migrateNavidromeProfiles } from './stations/navidrome-migration.js';
-import { envEnum, envFloat, envInt, envStr, envUrl } from './util/env.js';
+import { envBool, envEnum, envFloat, envInt, envStr, envUrl } from './util/env.js';
 
 // Shared state ROOT. Compose passes STATE_DIR=/var/sub-wave; native dev falls
 // back to the repo-local state/ dir.
@@ -103,7 +103,7 @@ export const config = {
     // Opt-in backfill of the whole-file facets on every regular analysis run
     // (off = upgrade byte-identical). Without it they run only when asked for
     // (`npm run analyze -- --facets loudness,edges`).
-    wholeFile: ['1', 'true', 'yes', 'on'].includes(envStr('ANALYZE_WHOLE_FILE', '').toLowerCase()),
+    wholeFile: envBool('ANALYZE_WHOLE_FILE', false),
     // Shorter deadline for transition renders: they run inside the pair-drain
     // window and must lose the race to the drain's fallback crossfade.
     renderTimeoutMs: envInt('ANALYZE_RENDER_TIMEOUT_MS', 60_000),

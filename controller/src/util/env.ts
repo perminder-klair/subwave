@@ -82,6 +82,20 @@ export function envStr(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
 }
 
+const ON_WORDS = ['1', 'true', 'yes', 'on'];
+const OFF_WORDS = ['0', 'false', 'no', 'off'];
+
+/** An on/off var: 1/true/yes/on or 0/false/no/off, in any case. Anything else
+ *  (`enable`, a typo) warns and keeps the fallback rather than reading as off. */
+export function envBool(name: string, fallback: boolean): boolean {
+  const schema = z
+    .string()
+    .refine((v) => ON_WORDS.includes(v.toLowerCase()) || OFF_WORDS.includes(v.toLowerCase()),
+      'is not on or off (1/true/yes/on, 0/false/no/off)')
+    .transform((v) => ON_WORDS.includes(v.toLowerCase()));
+  return read(name, schema, fallback);
+}
+
 /** A string var constrained to a fixed set of values. */
 export function envEnum<T extends string>(name: string, values: readonly T[], fallback: T): T {
   const schema = z.enum(values as unknown as [T, ...T[]]);
