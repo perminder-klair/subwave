@@ -54,13 +54,17 @@ jobs:
       # list too (the aio images are deliberately not waited on).
       #
       # An image built by more than one entry (today only subwave-aio-cuda)
-      # names each build with `cuda_family`, and every such entry sets
-      # `primary`: exactly one `true`, which alone takes the image's plain tags
-      # (:latest, :<version>, :<major>.<minor>, sha-). An entry without
-      # `cuda_family` is its image's only build, so it is primary. `arch_tags`
-      # lists the GPU shortcuts a build owns. Each architecture sits on exactly
-      # one entry, the newest build that still supports it (the tag table in
-      # docs/internals/infrastructure.md). The tagplan step enforces both keys.
+      # names each build with `cuda_family`. Every such entry
+      # sets `primary`, and exactly one is `true`; that one alone takes the
+      # image's plain tags (:latest, :<version>, :<major>.<minor>, sha-). An
+      # entry without `cuda_family` is its image's only build, so it is
+      # primary. `arch_tags` lists the GPU shortcuts a build owns, each on
+      # exactly one entry: the newest build that still supports that GPU (the
+      # tag table in docs/internals/infrastructure.md).
+      # A job sees only its own entry, so the tagplan step checks only that
+      # entry's shape. The rules across entries (one primary per image, each
+      # build or architecture tag on one entry) are lint.yml's
+      # `check:publish-matrix` step (controller/scripts/check-publish-matrix.ts).
       matrix:
         include:
           - image: subwave-caddy
@@ -220,10 +224,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Which tags this build may take, worked out once so the rules below stay
-      # plain (the matrix keys are described above the matrix).
-      #   primary     owns the image's plain tags; a missing `primary` on a
-      #               cuda_family entry fails here rather than letting a second
-      #               build race the first for :latest.
+      # plain (the matrix keys are described above the matrix). This step sees
+      # only its own entry, so it checks only that entry's shape: a cuda_family
+      # build must say primary: true or false, and arch_tags needs a
+      # cuda_family. One primary per image and one owner per tag are checked
+      # across the matrix by lint.yml.
+      #   primary     owns the image's plain tags.
       #   sha_prefix  a non-primary build's commit tag carries its family, so
       #               two builds can't overwrite one sha- tag.
       #   floating    the build and GPU-architecture shortcuts (:cu124, :pascal,
