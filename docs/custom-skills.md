@@ -66,7 +66,7 @@ cooldown: 6h              # hard min gap between autonomous firings — "90m" | 
 cron: 0 * * * *           # OPTIONAL: fire on a fixed schedule instead of/alongside the cooldown gate (see below)
 cronOnly: true            # OPTIONAL: with a cron: set, withhold this skill from random autonomous picks entirely
 cohosts: true             # OPTIONAL: host + every active guest each speak in their own voice (see below)
-voiceEngine: remote       # OPTIONAL: this skill's own TTS voice — with voiceId / voiceProvider (see below)
+voiceEngine: remote       # OPTIONAL: this skill's own TTS voice, with voiceId and voiceProvider (see below)
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
@@ -235,10 +235,12 @@ investigation. Give every host a distinct perspective; do not write name labels.
 
 ### `voiceEngine:` / `voiceId:` / `voiceProvider:` — the skill's own voice
 
-Absent everything, a skill airs in the on-air DJ's voice. Set these three and
-it always speaks in its own — the same engine + voice picker personas use
-(`/admin/skills → Edit → Voice`, with a sample button to audition before
-saving).
+Absent everything, a skill airs in the on-air DJ's voice. Set `voiceEngine`
+(with `voiceId`, and `voiceProvider` for cloud) and it always speaks in its
+own, through the same engine and voice picker personas use (`/admin/skills →
+Edit → Voice`, with a sample button to audition before saving). Only the voice
+changes: the segment is still the speaker's, at the speaker's own loudness and
+pace.
 
 ```yaml
 ---
@@ -250,15 +252,41 @@ voiceId: newsreader
 ---
 ```
 
-`voiceId` is engine-shaped like a persona's: a Kokoro id, a `.wav` clone
-reference, a cloud voice id, or free text for `remote` — empty means that
-engine's default. `voiceProvider` matters only for `cloud` (default `openai`).
+`voiceId` follows the same rules as a persona's voice, per engine:
+
+| `voiceEngine` | `voiceId` | Empty means |
+| --- | --- | --- |
+| `piper` | an `.onnx` filename in the voice folder | the built-in voice |
+| `kokoro` | a Kokoro id such as `bf_isabella` | not allowed |
+| `chatterbox` | a `.wav` clone reference in the voice folder | the built-in voice |
+| `pocket-tts` | a built-in id such as `alba`, or a `.wav` clone reference | `alba` |
+| `gemini` | a Google voice name | the station's Gemini voice |
+| `remote` | whatever id your remote server understands | its default |
+| `cloud` | the provider's voice id | not allowed, except on `openai-compatible`, where the server picks |
+
+`voiceProvider` is read only for `cloud`: `openai` (the default), `elevenlabs`,
+`fish-audio` or `openai-compatible`.
+
+The admin form refuses a voice that breaks these rules. A hand-edited
+`SKILL.md` is read leniently instead, so the skill still loads:
+
+- An unknown `voiceEngine` reads as no override, and the skill speaks in the
+  DJ's voice.
+- A blank `voiceId` for ElevenLabs or Fish Audio also reads as no override,
+  because neither has a default voice to fall back on. A blank OpenAI voice is
+  `alloy`.
+- Any other voice the engine can't use is reset the way a persona's would be:
+  a bad Kokoro id becomes `bf_isabella`, a bad PocketTTS voice becomes `alba`,
+  and a bad Piper or Chatterbox file, a path among them, becomes the built-in
+  voice.
+
+If the chosen engine is unavailable when the skill airs, the line is read by
+the station's fallback or default voice instead.
+
 A co-hosted skill ignores its voice: every contribution speaks in its roster
-persona's own voice. A hand-edited bad engine — or a path-like voice id —
-reads as "no override" so the skill still loads; the admin form refuses it
-loudly instead. A voice does not travel through the community catalog — clone
-references and server-specific ids are station-local — but a zip export
-carries it, arriving disabled for review like everything else.
+persona's own voice. A voice does not travel through the community catalog,
+because clone references and server-specific ids are station-local, but a zip
+export carries it, arriving disabled for review like everything else.
 
 ### `context:` — what the segment is allowed to mention
 
