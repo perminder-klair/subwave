@@ -542,24 +542,21 @@ export async function outcrawlSearch(query: string): Promise<SearchResponse> {
   return parseOutcrawlResponse(data);
 }
 
-// "Is this an Outcrawl key", with the rule in search-key-policy.ts. Outcrawl keys
-// are `ock_<keyId>.<secret>`.
-export function isOutcrawlKey(key: string): boolean {
-  return searchKeyFits('outcrawl', key);
-}
-
 // Pure request builder for an Outcrawl search, exported so endpoint, headers
-// and body can be pinned without mocking fetch.
+// and body can be pinned without mocking fetch. Keys are `ock_<keyId>.<secret>`
+// (search-key-policy.ts holds the rule). A search asks for 5 results; the admin
+// "Test key" probe asks for 1, because Outcrawl charges per result returned.
 export function buildOutcrawlRequest(opts: {
   query: string;
   apiKey: string;
+  limit?: number;
 }): { url: string; init: RequestInit } {
   return {
     url: OUTCRAWL_ENDPOINT,
     init: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey.trim()}` },
-      body: JSON.stringify({ query: opts.query, limit: 5 }),
+      body: JSON.stringify({ query: opts.query, limit: opts.limit ?? 5 }),
     },
   };
 }
@@ -622,6 +619,6 @@ export function searchReady(): boolean {
   const provider = s?.provider || 'duckduckgo';
   if (provider === 'duckduckgo' || provider === 'keenable') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
-  // tavily / brave / firecrawl (and any future keyed provider)
+  // tavily / brave / firecrawl / outcrawl (and any future keyed provider)
   return searchKeyFits(provider, searchKeySlot().key);
 }

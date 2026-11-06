@@ -2,7 +2,8 @@
 // are pure and pinned directly; outcrawlSearch() and searchWeb() run against a
 // stubbed fetch, so nothing reaches Outcrawl and the key is checked through the
 // real settings + SEARCH_API_KEY resolution, including the refusal of a key that
-// isn't an ock_ one. The fixture is a recorded /v1/search response.
+// isn't an ock_ one. Which key fits is pinned in web-search-key-fit with every
+// other provider's. The fixture is a recorded /v1/search response.
 // Run: `npm test -- web-search-outcrawl`.
 
 import assert from 'node:assert/strict';
@@ -23,7 +24,7 @@ after(() => removeTempDir(stateDir));
 const settings = await import('../src/settings.js');
 const {
   buildOutcrawlRequest, parseOutcrawlResponse, outcrawlSearch,
-  isOutcrawlKey, searchKeyProblem, searchReady, searchWeb,
+  searchKeyProblem, searchReady, searchWeb,
 } = await import('../src/skills/web-search.js');
 const { checkCapabilities } = await import('../src/doctor/checks-station.js');
 await settings.load();
@@ -89,6 +90,9 @@ test('request: posts the query to /v1/search with the key as a Bearer', () => {
   assert.equal(init.method, 'POST');
   assert.deepEqual(init.headers, { 'Content-Type': 'application/json', Authorization: 'Bearer ock_abc.def' });
   assert.deepEqual(JSON.parse(String(init.body)), { query: 'Sabrina Carpenter', limit: 5 });
+  // The Test key probe asks for one result, since Outcrawl charges per result.
+  const probe = buildOutcrawlRequest({ query: 'test', apiKey: 'ock_abc.def', limit: 1 });
+  assert.deepEqual(JSON.parse(String(probe.init.body)), { query: 'test', limit: 1 });
 });
 
 test('outcrawlSearch: sends the settings key; no key or HTTP errors throw', async () => {
@@ -131,14 +135,6 @@ test('searchWeb: dispatches to Outcrawl and sends no recency field', async (t) =
   assert.equal(calls[0].url, 'https://api.outcrawl.ai/v1/search');
   assert.deepEqual(JSON.parse(calls[0].body), { query: 'outcrawl dispatch regression', limit: 5 });
   assert.equal(out.results.length, 4);
-});
-
-test('isOutcrawlKey: only an ock_ value counts', () => {
-  assert.equal(isOutcrawlKey('ock_abc.def'), true);
-  assert.equal(isOutcrawlKey(' ock_abc.def '), true);
-  for (const other of ['', 'tvly-abc', 'BSAabc', 'keen_abc', 'fc-abc', 'OCK_abc', 'xock_abc']) {
-    assert.equal(isOutcrawlKey(other), false, other);
-  }
 });
 
 test("another provider's key in the slot is refused before anything is sent", async (t) => {

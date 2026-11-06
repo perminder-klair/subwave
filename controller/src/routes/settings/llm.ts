@@ -12,7 +12,7 @@ import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway } from '../../schem
 import { applyCustomHeadersPatch } from '../../settings/vocab.js';
 import type { EmbeddingCfg } from '../../llm/provider.js';
 import { listenbrainzApiBase } from '../../broadcast/scrobble.js';
-import { isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
+import { buildOutcrawlRequest, isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
 import { searchKeyMismatch } from '../../skills/search-key-policy.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
@@ -207,16 +207,25 @@ async function probeKey(
         // Outcrawl searches refuse anything but an ock_ key, so the probe does too.
         const refusal = refused('outcrawl');
         if (refusal) return refusal;
-        // A one-result search: 401 is a bad key, 402 a key with no credits left.
-        const r = await fetch('https://api.outcrawl.ai/v1/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${value}` },
-          body: JSON.stringify({ query: 'test', limit: 1 }),
-          signal: AbortSignal.timeout(10000),
-        });
-        if (r.status === 402) return { ok: false, message: 'Outcrawl key valid, but it has no credits left' };
+        // A one-result search, the cheapest call that proves the key.
+        const { url, init } = buildOutcrawlRequest({ query: 'test', apiKey: value, limit: 1 });
+        const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10000) });
         if (!r.ok) {
-          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
+          // Outcrawl's error body is { code, message, details }, and its docs map
+          // no HTTP status to a code, so a documented code decides first.
+          // `quota_exceeded` is a plan ceiling, either requests per minute or
+          // monthly credits, so the message names both. A body without a code
+          // falls back to the status.
+          const j = await r.json().catch(() => ({})) as { code?: unknown };
+          const code = typeof j?.code === 'string' ? j.code : '';
+          if (code === 'unauthorized' || r.status === 401 || r.status === 403) {
+            return { ok: false, message: 'Key rejected — check it\'s correct and active' };
+          }
+          if (code === 'quota_exceeded') {
+            return { ok: false, message: 'Outcrawl key valid, but the account is over its plan limit (monthly credits or requests per minute)' };
+          }
+          if (r.status === 402) return { ok: false, message: 'Outcrawl key valid, but it has no credits left' };
+          return { ok: false, message: `Request failed (${r.status})` };
         }
         return { ok: true, message: '✓ Outcrawl key valid' };
       }

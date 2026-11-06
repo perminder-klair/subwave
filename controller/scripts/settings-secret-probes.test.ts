@@ -32,7 +32,7 @@ app.use(router);
 const { server, url: base } = await listenHttp(app);
 server.unref();
 
-type Outbound = { url: string; method: string; headers: Headers };
+type Outbound = { url: string; method: string; headers: Headers; body: string };
 
 // Stubs every provider call with `status`; the test's own calls pass through.
 function stubProvider(t: TestContext, status: number, body: unknown = {}) {
@@ -41,7 +41,7 @@ function stubProvider(t: TestContext, status: number, body: unknown = {}) {
   t.mock.method(globalThis, 'fetch', (async (url: string | URL | Request, init?: RequestInit) => {
     const target = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
     if (target.startsWith(base)) return realFetch(url, init);
-    outbound.push({ url: target, method: init?.method || 'GET', headers: new Headers(init?.headers) });
+    outbound.push({ url: target, method: init?.method || 'GET', headers: new Headers(init?.headers), body: String(init?.body ?? '') });
     return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch);
   return outbound;
@@ -200,6 +200,8 @@ test("Tavily and Brave: another provider's key is refused without a request", as
     ['brave', 'fc-left-over', 'A Firecrawl key, not a Brave Search key'],
     ['brave', 'tvly-left-over', 'A Tavily key, not a Brave Search key'],
     ['brave', 'keen_left-over', 'A Keenable key, not a Brave Search key'],
+    ['tavily', 'ock_left.over', 'An Outcrawl key, not a Tavily key'],
+    ['brave', 'ock_left.over', 'An Outcrawl key, not a Brave Search key'],
   ];
   for (const [provider, value, message] of cases) {
     const outbound = stubProvider(t, 200);
@@ -271,6 +273,7 @@ test('Outcrawl: a key is probed with a one-result search; 401 reads as rejected,
   assert.equal(outbound[0].url, 'https://api.outcrawl.ai/v1/search');
   assert.equal(outbound[0].method, 'POST');
   assert.equal(outbound[0].headers.get('authorization'), 'Bearer ock_good.secret');
+  assert.deepEqual(JSON.parse(outbound[0].body), { query: 'test', limit: 1 });
   t.mock.restoreAll();
 
   stubProvider(t, 401, { error: 'invalid api key' });
@@ -283,6 +286,28 @@ test('Outcrawl: a key is probed with a one-result search; 401 reads as rejected,
   const drained = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_drained.secret', provider: 'outcrawl' });
   assert.equal(drained.ok, false);
   assert.equal(drained.message, 'Outcrawl key valid, but it has no credits left');
+});
+
+// Outcrawl's error body is { code, message, details } and its docs map no HTTP
+// status to a code, so a documented code decides before the status does.
+test('Outcrawl: a documented error code decides the message, whatever the status', async (t) => {
+  const cases: Array<[number, unknown, string]> = [
+    [429, { code: 'quota_exceeded', message: 'over plan', details: {} },
+      'Outcrawl key valid, but the account is over its plan limit (monthly credits or requests per minute)'],
+    [402, { code: 'quota_exceeded', message: 'over plan', details: {} },
+      'Outcrawl key valid, but the account is over its plan limit (monthly credits or requests per minute)'],
+    [400, { code: 'unauthorized', message: 'bad key', details: {} }, 'Key rejected — check it\'s correct and active'],
+    [403, {}, 'Key rejected — check it\'s correct and active'],
+    [429, { code: 'something_else' }, 'Request failed (429)'],
+    [500, 'not an envelope', 'Request failed (500)'],
+  ];
+  for (const [status, body, message] of cases) {
+    stubProvider(t, status, body);
+    const r = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_any.secret', provider: 'outcrawl' });
+    assert.equal(r.ok, false, `${status}`);
+    assert.equal(r.message, message, `${status} ${JSON.stringify(body)}`);
+    t.mock.restoreAll();
+  }
 });
 
 test("Outcrawl: another provider's key is refused without a request", async (t) => {
