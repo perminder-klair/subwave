@@ -137,6 +137,22 @@ test('window figures on the track object do not beat stored edges', () => {
   assert.equal(own.cueOutSec, null);
 });
 
+test('a shape that carries the edges key answers for itself, so it is not looked up', () => {
+  // A library row read before the edges were measured: the mapper wrote the
+  // key as null, which says "no edges", so the resolver takes the window
+  // figures it carries rather than reading the stored row again.
+  const t = resolveSilenceTrim({
+    id: 'edged', duration: 200, leadSilenceMs: 2_000, tailSilenceMs: 0, tailStartMs: 200_000,
+    edgeLeadMs: null, edgeTailMs: null, decodedDurationMs: null,
+  });
+  assert.equal(t.cueInSec, 1.75);
+  assert.equal(t.cueOutSec, null);
+  // The library's own shape carries the key, and the stored edges with it.
+  const rec = library.get('edged');
+  assert.ok('decodedDurationMs' in rec);
+  assert.equal(resolveSilenceTrim(rec).cueOutSec, 189.25);
+});
+
 test('with the trim off, the playable span still ends on the decoded length', async () => {
   await settings.update({ silenceTrim: { enabled: false } } as never);
   try {
