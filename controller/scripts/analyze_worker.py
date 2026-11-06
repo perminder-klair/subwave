@@ -2629,6 +2629,14 @@ class FfmpegLog:
     _TAIL_LINES = 40
     _SUMMARY_LINES = 40
     _PCM_STREAM_RE = re.compile(r"Audio: pcm_f32le\b")
+    # ffmpeg's own messages start with `[component @ 0x…] ` (two of them when
+    # the component has a parent). Everything else is the header dump, whose
+    # Metadata blocks print the file's tags verbatim, so the read and the
+    # summary are judged only on these.
+    _COMPONENT_RE = re.compile(r"(?:\[[^\[\]]+ @ 0x[0-9a-fA-F]+\] )+")
+    # The summary block: ebur128's own line, never a tag that says "Summary:".
+    # The figures follow it unprefixed, printed with it in one message.
+    _SUMMARY_RE = re.compile(r"\[Parsed_ebur128_\d+ @ 0x[0-9a-fA-F]+\] Summary:")
     # A read that ended before the input did. ffmpeg logs it and still exits
     # 0 with what it decoded (no -xerror), so the exit code alone would store
     # a cut-off stream as a whole-file measurement.
@@ -2637,18 +2645,32 @@ class FfmpegLog:
     # ...except a server that sent no Content-Length: ffmpeg expects 2^64 - 1
     # bytes, so even a COMPLETE read ends with "Stream ends prematurely ...,
     # should be 18446744073709551615" and the "Input/output error" that
-    # follows it. Those say nothing; decoded_short_of judges that read.
+    # follows it. Those say nothing; decoded_short_of judges that read
+    # (`length_unknown`).
     _UNKNOWN_LENGTH = str(2 ** 64 - 1)
 
-    def __init__(self):
+    def __init__(self, src=None):
         self.frames = FrameLog()
         self.input_error = None
-        self._length_unknown = False
+        self.length_unknown = False
+        # ffmpeg 5.1 reports a read error on the input as `<input>: <error>`
+        # (6.1 on, prefixed like any other message).
+        self._input_prefix = f"{src}: " if src else None
         self._summary = []
         self._output = []
         self._in_output = False
         self._first_hint = None
         self._tail = collections.deque(maxlen=self._TAIL_LINES)
+
+    def _message(self, line):
+        """The text of one of ffmpeg's own messages, past its prefix; None for
+        the header dump (a tag's text included)."""
+        m = self._COMPONENT_RE.match(line)
+        if m:
+            return line[m.end():]
+        if self._input_prefix and line.startswith(self._input_prefix):
+            return line[len(self._input_prefix):]
+        return None
 
     def feed(self, line):
         line = line.rstrip("\r\n")
@@ -2656,16 +2678,20 @@ class FfmpegLog:
         if frame is not None:
             self.frames[frame[0]] = frame[1]
             return
-        premature = self._PREMATURE_RE.search(line)
-        if premature and premature.group(1) == self._UNKNOWN_LENGTH:
-            self._length_unknown = True
-        elif self.input_error is None and (premature or (
-                any(h in line.lower() for h in self._INPUT_ERRORS) and
-                not (self._length_unknown and "input/output error" in line.lower()))):
-            self.input_error = redact_urls(line.strip())[:300]
-        if self._summary or "Summary:" in line:
-            if len(self._summary) < self._SUMMARY_LINES:
-                self._summary.append(line)
+        message = self._message(line)
+        if message is not None:
+            low = message.lower()
+            premature = self._PREMATURE_RE.search(message)
+            if premature and premature.group(1) == self._UNKNOWN_LENGTH:
+                self.length_unknown = True
+            elif self.input_error is None and (premature or (
+                    any(h in low for h in self._INPUT_ERRORS) and
+                    not (self.length_unknown and "input/output error" in low))):
+                self.input_error = redact_urls(line.strip())[:300]
+        if self._SUMMARY_RE.match(line):
+            self._summary = [line]
+        elif self._summary and len(self._summary) < self._SUMMARY_LINES:
+            self._summary.append(line)
         if not self._output and "Output #0" in line:
             self._output.append(line)
             self._in_output = True
@@ -2801,7 +2827,7 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
 
     t0 = time.monotonic()
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    log = FfmpegLog()
+    log = FfmpegLog(src)
 
     # stderr drains on its own thread: a chatty decoder must never block the
     # PCM pipe (or the reverse) and deadlock the pass. Each line is parsed as

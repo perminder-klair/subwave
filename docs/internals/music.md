@@ -562,7 +562,10 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
 5. **ffmpeg 5.1 is the floor.** `ebur128=...:framelog=verbose`, never `quiet`
    (ffmpeg 6+ only; 5.1 rejects the whole filter and every pass fails with
    "Conversion failed!"). The PCM is `-ac 2 -f f32le` at the file's own rate;
-   the rate is read from the OUTPUT stream line.
+   the rate is read from the OUTPUT stream line. The summary is read from
+   ebur128's own `[Parsed_ebur128_N @ 0x…] Summary:` line on, never from a
+   tag that says "Summary:", which used the capture up before the real block
+   and stored a loud track as `unmeasurable: silent`.
 6. **Capability is a version signal**: `whole_file_capable` on the worker's
    ready line, `analyze_whole_file_capable` on the sidecar's `/health`. A
    backend known to lack it gets the facets skipped as `no-whole-file`, never

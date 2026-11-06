@@ -147,8 +147,8 @@ def t_output_rate_is_the_output_streams_not_the_inputs():
     assert aw.parse_output_rate("Input #0\n  Stream #0:0: Audio: mp3, 44100 Hz") is None
 
 
-def feed_log(text):
-    log = aw.FfmpegLog()
+def feed_log(text, src=None):
+    log = aw.FfmpegLog(src)
     for line in text.splitlines(keepends=True):
         log.feed(line)
     return log
@@ -645,21 +645,71 @@ def t_a_decode_well_short_of_the_header_is_cut_off():
     assert not aw.decoded_short_of(102_900, 133_600), "a decode LONGER than the tag is the file playing on"
 
 
+NAVI = "http://navi:4533/rest/stream?u=dj&t=secret"
+
+
 def t_log_flags_an_input_that_ended_early():
     log = feed_log(STDERR_HEAD + "[http @ 0x5] Stream ends prematurely at 469387, should be 938774\n"
-                   "http://navi:4533/rest/stream?u=dj&t=secret: Input/output error\n" + SUMMARY)
+                   f"{NAVI}: Input/output error\n" + SUMMARY, NAVI)
     assert log.input_error == "[http @ 0x5] Stream ends prematurely at 469387, should be 938774", log.input_error
-    io = feed_log("http://navi:4533/rest/stream?u=dj&t=secret: Input/output error\n")
+    assert not log.length_unknown
+    # ffmpeg 5.1 names the input; 6.1 on prefixes the demuxer like any message.
+    io = feed_log(f"{NAVI}: Input/output error\n", NAVI)
     assert io.input_error == "http://navi:4533/… Input/output error", io.input_error
-    assert feed_log(STDERR_HEAD + SUMMARY).input_error is None
+    io6 = feed_log("[in#0/flac @ 0x7] Error during demuxing: Input/output error\n", NAVI)
+    assert io6.input_error == "[in#0/flac @ 0x7] Error during demuxing: Input/output error", io6.input_error
+    assert feed_log(STDERR_HEAD + SUMMARY, NAVI).input_error is None
     # A server that sent no Content-Length: even a complete read ends this way
     # (ffmpeg 5.1 expects 2^64 - 1 bytes), so the length check judges it.
     unknown = feed_log("[http @ 0x5] Stream ends prematurely at 938774, should be 18446744073709551615\n"
-                       "http://navi:4533/rest/stream?t=secret: Input/output error\n" + SUMMARY)
-    assert unknown.input_error is None, unknown.input_error
+                       f"{NAVI}: Input/output error\n" + SUMMARY, NAVI)
+    assert unknown.input_error is None and unknown.length_unknown, unknown.input_error
     reset = feed_log("[http @ 0x5] Stream ends prematurely at 1, should be 18446744073709551615\n"
-                     "[tcp @ 0x6] Connection reset by peer\n")
+                     "[tcp @ 0x6] Connection reset by peer\n", NAVI)
     assert reset.input_error == "[tcp @ 0x6] Connection reset by peer", reset.input_error
+
+
+def tagged_head(src, tags):
+    """STDERR_HEAD for `src` with `tags` [(key, value)] printed as ffmpeg 5.1
+    dumps them: in the input's Metadata block, then copied to the output's,
+    a multi-line value continued on indented lines."""
+    def block(indent):
+        out = f"{indent}Metadata:\n"
+        for key, value in tags:
+            first, *rest = value.split("\n")
+            out += f"{indent}  {key:<16}: {first}\n"
+            out += "".join(f"{indent}  {'':<16}: {more}\n" for more in rest)
+        return out
+    head = STDERR_HEAD.replace("Input #0, flac, from 'x.flac':\n", f"Input #0, flac, from '{src}':\n" + block("  "))
+    return head.replace("Output #0, f32le, to 'pipe:1':\n", "Output #0, f32le, to 'pipe:1':\n" + block("  "))
+
+
+def t_log_reads_no_read_error_out_of_the_files_tags():
+    # A tag's text is the file's, not news about the read: these failed both
+    # facets on every run, then dropped the track out of every analysis scope.
+    src = "/music/Input/Output Error/01.flac"
+    tags = [("title", "Connection Reset By Peer"), ("comment", "live at the Input/Output Error club"),
+            ("lyrics", "first line\nwhen the connection timed out\nlast line"),
+            ("description", f"{src}: Input/output error")]
+    log = feed_log(tagged_head(src, tags) + SUMMARY, src)
+    assert log.input_error is None, log.input_error
+    assert not log.length_unknown
+    # The same file's real read error is still one.
+    log = feed_log(tagged_head(src, tags) + f"{src}: Input/output error\n" + SUMMARY, src)
+    assert log.input_error == f"{src}: Input/output error", log.input_error
+
+
+def t_log_reads_only_ebur128s_own_summary():
+    # A "Summary:" tag started the capture early: its 40 lines ran out before
+    # the real block, and a non-silent track was stored as silent.
+    filler = [(f"custom_{i}", f"value {i}") for i in range(25)]
+    tags = [("comment", "Summary: a live set"), ("synopsis", "[Parsed_ebur128_0 @ 0x1] Summary:")] + filler
+    frames = frames_text([(i / 10.0, -14.0) for i in range(1, 60)])
+    log = feed_log(tagged_head("x.flac", tags) + frames + "\n" + SUMMARY)
+    got = aw.parse_ebur128_summary(log.summary_text())
+    assert got == {"loudness_lufs": -12.3, "lra_lu": 6.1, "sample_peak_db": -0.4, "true_peak_db": 0.3}, got
+    assert log.summary_text().startswith("[Parsed_ebur128_0 @ 0x55d] Summary:"), log.summary_text()[:80]
+    assert feed_log(tagged_head("x.flac", tags)).summary_text() == "", "a tag alone is no summary"
 
 
 class _Server:
@@ -727,6 +777,40 @@ def t_real_ffmpeg_fails_a_cut_off_stream_instead_of_measuring_it():
                     assert "secret" not in reason, (mode, reason)
         finally:
             server.close()
+
+
+def t_real_ffmpeg_measures_a_file_whose_tags_read_like_its_log():
+    # On the analyzer image's ffmpeg 5.1 the first two failed both facets
+    # ("the input ended early: title : Connection Reset By Peer"), and the
+    # third stored the tone as a silent file.
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        print("      (skipped: no ffmpeg/ffprobe on PATH)")
+        return
+    import subprocess
+    sr = 44100
+    cases = {
+        "reset": [("title", "Connection Reset By Peer")],
+        "io": [("comment", "live at the Input/Output Error club")],
+        "summary": [("comment", "Summary: a live set")] + [(f"custom_{i}", f"value {i}") for i in range(25)],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        wav = os.path.join(d, "x.wav")
+        write_wav(wav, stereo(0.5, 3.0, 0.5, sr, amp=amp_db(-12.0)), sr)
+        plain = os.path.join(d, "plain.flac")
+        subprocess.run(["ffmpeg", "-v", "error", "-i", wav, plain], check=True)
+        want = aw.whole_file_facets(plain, ["loudness", "edges"])
+        assert want["loudness"]["status"] == "ok" and want["edges"]["status"] == "ok", want
+        for name, tags in cases.items():
+            path = os.path.join(d, f"{name}.flac")
+            cmd = ["ffmpeg", "-v", "error", "-i", wav]
+            for key, value in tags:
+                cmd += ["-metadata", f"{key}={value}"]
+            subprocess.run(cmd + [path], check=True)
+            got = aw.whole_file_facets(path, ["loudness", "edges"])
+            assert got["loudness"]["status"] == "ok" and got["edges"]["status"] == "ok", (name, got)
+            for k in ("loudness_lufs", "peak_db", "sample_peak_db", "lra_lu"):
+                assert got["loudness"]["data"][k] == want["loudness"]["data"][k], (name, k, got)
+            assert got["edges"]["data"] == want["edges"]["data"], (name, got)
 
 
 def t_real_ffmpeg_failure_raises_with_the_reason():
