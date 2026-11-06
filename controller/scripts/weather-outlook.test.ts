@@ -13,6 +13,8 @@
 //    standing note from a new one (outlookChangedSinceLastMention).
 // 6. A changed outlook always has something in it: rain that is no longer
 //    coming brings its own note, and a temperature note going is not news.
+// 7. A forecast too old to stand behind (an outage), or none at all, is no
+//    outlook: kinds null, which is never news.
 //
 // Run: npm test -- weather-outlook
 import assert from 'node:assert/strict';
@@ -74,7 +76,7 @@ test('code 1 is clear, its wording rides along, and the public reading carries n
 test('the outlook comes from the same fetch, and never fetches on its own', async (t) => {
   invalidateWeatherCache();
   const urls = stubForecast(t);
-  assert.deepEqual(getWeatherOutlook(), { nextHours: [], notes: [], kinds: [] }, 'a cold cache is no outlook');
+  assert.deepEqual(getWeatherOutlook(), { nextHours: [], notes: [], kinds: null }, 'a cold cache is no outlook');
   assert.equal(urls.length, 0, 'no fetch from the outlook');
   await getWeather();
   const o = getWeatherOutlook();
@@ -93,6 +95,22 @@ test('the outlook is aged to when it is read, and names its kinds', async (t) =>
   const later = getWeatherOutlook(Date.now() + 50 * 60_000);
   assert.deepEqual(later.notes, ['rain likely in about 2 hours (70% chance)', 'down to 14 degrees Celsius in about 6 hours']);
   assert.deepEqual(later.kinds, fresh.kinds);
+});
+
+test('a forecast older than an hour and a half is no outlook, and never news', async (t) => {
+  invalidateWeatherCache();
+  stubForecast(t);
+  const weather = await getWeather();
+  const fetchedAt = Date.now();
+  assert.deepEqual(getWeatherOutlook(fetchedAt + 89 * 60_000).kinds, ['rain-likely', 'cooler'], 'still fresh enough at 89 minutes');
+  // An outage: getWeather keeps serving the last good reading, and its rows age.
+  // Six hours on, the showers have passed and the rows have nearly run out;
+  // reading them would say the rain is no longer coming.
+  assert.deepEqual(getWeatherOutlook(fetchedAt + 91 * 60_000), { nextHours: [], notes: [], kinds: null });
+  const stale = getWeatherOutlook(fetchedAt + 6 * 3_600_000);
+  assert.equal(stale.kinds, null);
+  const airedRain = { lastWeatherCondition: 'clear' as const, lastWeatherOutlook: 'rain' };
+  assert.deepEqual(weatherNews({ condition: weather.condition, kinds: stale.kinds }, airedRain), { skyChanged: false, outlookChanged: false, withdrawn: [] });
 });
 
 test('a standing outlook is not news to the tool; a new one is', async (t) => {
@@ -140,7 +158,6 @@ test('the tool never reports a changed outlook with nothing in it', async (t) =>
   assert.equal(cooled.outlookChangedSinceLastMention, false);
   assert.deepEqual(cooled.outlook, []);
 });
-
 
 test('the weather tool returns the conditions and the outlook; without services it still answers', async (t) => {
   invalidateWeatherCache();

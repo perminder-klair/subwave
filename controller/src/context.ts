@@ -70,6 +70,12 @@ let weatherCache: { data: any; fetchedAt: number; configKey: string; hourly: Hou
   readingTime: '',
 };
 const WEATHER_TTL_MS = 30 * 60 * 1000;
+// Past this age the cached forecast is an old one: getWeather serves a reading
+// that stale only through a failure (fetchWeather keeps the last good one), and
+// an outlook aged that far stops covering its window and changes as its rows
+// run out. The cache's own life plus an hour, the hour the fetch's spare row
+// (OUTLOOK_HOURS + 3) is there to cover.
+const OUTLOOK_MAX_AGE_MS = WEATHER_TTL_MS + 60 * 60 * 1000;
 // After a failed fetch, wait this long before asking Open-Meteo again. The
 // public /now-playing poll reaches getWeather() through getFullContext() every
 // few seconds per listener, so an uncached failure turned a down or
@@ -154,12 +160,23 @@ export async function getWeather() {
 // the fetch still says how far away the rain is from now. `kinds` names what
 // the notes are about, without their timing, so the skill can tell a standing
 // note from a new one.
-export function getWeatherOutlook(now = Date.now()): { nextHours: OutlookHour[]; notes: string[]; kinds: OutlookNoteKind[] } {
+//
+// `kinds: null` is no outlook known: a cold cache, a moved location, a reply
+// without hourly rows, or a forecast older than OUTLOOK_MAX_AGE_MS (an outage).
+// weather-policy.ts never calls that news. An empty array is a known outlook
+// with nothing in it, which can be (the rain is no longer coming), so it is
+// kept for a forecast fresh enough to stand behind.
+export function getWeatherOutlook(now = Date.now()): { nextHours: OutlookHour[]; notes: string[]; kinds: OutlookNoteKind[] | null } {
+  const unknown = { nextHours: [], notes: [], kinds: null };
   const current = weatherCache.data;
   if (!current || current.condition === 'unknown' || weatherCache.configKey !== weatherConfigKey(weatherConfig())) {
-    return { nextHours: [], notes: [], kinds: [] };
+    return unknown;
   }
-  const nextHours = buildOutlook(weatherCache.hourly, weatherCache.readingTime, OUTLOOK_HOURS, now - weatherCache.fetchedAt);
+  const ageMs = now - weatherCache.fetchedAt;
+  if (ageMs > OUTLOOK_MAX_AGE_MS) return unknown;
+  const nextHours = buildOutlook(weatherCache.hourly, weatherCache.readingTime, OUTLOOK_HOURS, ageMs);
+  // No rows in the window: the reply had none, or its clock didn't parse.
+  if (nextHours.length === 0) return unknown;
   const events = outlookEvents({ condition: current.condition, temp: current.temp ?? null, tempUnit: current.tempUnit }, nextHours);
   return { nextHours, notes: events.map(e => e.text), kinds: events.map(e => e.kind) };
 }

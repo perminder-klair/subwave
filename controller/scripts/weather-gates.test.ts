@@ -10,6 +10,8 @@
 //    and the station must still remember the outlook that went on air.
 // 3. A temperature note coming and going with the hour never wakes them: it
 //    drove most of the extra weather segments on real forecasts.
+// 4. Nor does a forecast aged past use during an outage, whose rows run out
+//    and would otherwise read as the rain no longer coming.
 //
 // Run: npm test -- weather-gates
 
@@ -79,7 +81,6 @@ const COOLER = {
   current,
   hourly: { ...QUIET.hourly, temperature_2m: [17, 16.5, 16, 15, 14.5, 14, 13.4, 13] },
 };
-
 
 let forecast: object = QUIET;
 let spoken: string[] = [];
@@ -260,4 +261,22 @@ test('a temperature note coming or going never wakes either gate', async (t) => 
   await agenticTick(await weatherIs(QUIET));
   await agenticTick(await weatherIs(COOLER));
   assert.equal(runs.count, 0, 'the agentic skip holds too');
+});
+
+test('a forecast aged past use in an outage never reads as the rain no longer coming', async (t) => {
+  stubForecast(t);
+  forecast = RAIN;
+  const cap = await station('direct');
+  stubModel(t);
+  const ctx = await weatherIs(RAIN);
+  await airWeather(ctx);
+  assert.equal(chooseCapability([cap], ctx), null, 'fresh: the rain aired is still coming');
+
+  // Six hours on with every fetch failing: the cached rows have nearly run
+  // out and the showers have passed. Read as a live forecast they would say
+  // the rain is off; read as what they are, they are no outlook at all.
+  const realNow = Date.now();
+  t.mock.method(Date, 'now', () => realNow + 6 * 3_600_000);
+  assert.equal(getWeatherOutlook().kinds, null);
+  assert.equal(chooseCapability([cap], ctx), null);
 });
