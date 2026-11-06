@@ -1,14 +1,22 @@
 // Pins the pure measurement behind tts-bench (scripts/tts-bench/measure.ts):
-// engine specs, the ffmpeg clip-analysis parse, the pace outliers and the
-// per-engine summary.
+// engine specs, the ffmpeg clip-analysis parse, voice substitution, the pace
+// outliers and the per-engine summary; and the environment it sets up before
+// importing src/ (scripts/tts-bench/isolate.ts). scripts/tts-bench-cli.test.ts
+// runs the whole bench.
 //
 // Run: `npm test -- tts-bench-measure`.
 import assert from 'node:assert/strict';
+import { lstatSync, mkdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { ENGINE_SPEED_ENV, neutralizeEngineEnv, shareStationVoices } from './tts-bench/isolate.js';
 import {
   clipFlags, flagPace, median, parseDurationSec, parseEdgeSilenceMs, parseEngineSpec, parseTruePeakDb,
-  percentile, summarize, type BenchRecord,
+  percentile, summarize, voiceSubstitution, type BenchRecord,
 } from './tts-bench/measure.js';
+import { createTempDir } from './test-utils/temp-dir.js';
 
 test('engine specs: the voice is everything after the engine, or after a cloud provider', () => {
   assert.deepEqual(parseEngineSpec('piper'), { label: 'piper', engine: 'piper', voice: '' });
@@ -86,9 +94,62 @@ test('median and percentile', () => {
   assert.equal(median([3, 1, 2]), 2);
   assert.equal(median([4, 1, 3, 2]), 2.5);
   assert.equal(percentile([], 50), null);
-  assert.equal(percentile([10, 20, 30, 40], 50), 20);
+  // src/stats.ts's rank, floor(p% × n): the station's own TTS p50 and p95.
+  assert.equal(percentile([40, 10, 30, 20], 50), 30);
   assert.equal(percentile([10, 20, 30, 40], 95), 40);
+  assert.equal(percentile(Array.from({ length: 20 }, (_, i) => i + 1), 95), 20);
+  assert.equal(percentile(Array.from({ length: 40 }, (_, i) => i + 1), 95), 39);
   assert.equal(percentile([5], 95), 5);
+});
+
+test('voice substitution: the engine\'s "not honoured" warning, from Remote or the sidecar', () => {
+  // The exact lines remoteTts.ts and ttsHeavyClient.ts log.
+  assert.deepEqual(
+    voiceSubstitution(['[remote] requested voice "jasper" not honoured (unknown voice); rendered "default"']),
+    { engine: 'remote', requested: 'jasper', reason: 'unknown voice', used: 'default' },
+  );
+  assert.deepEqual(
+    voiceSubstitution(['[kokoro] warmed', '[pocket-tts] requested voice "/var/sub-wave/voices/me.wav" not honoured (fell back); rendered "alba"']),
+    { engine: 'pocket-tts', requested: '/var/sub-wave/voices/me.wav', reason: 'fell back', used: 'alba' },
+  );
+  assert.equal(voiceSubstitution([]), null);
+  assert.equal(voiceSubstitution(['[pocket-tts] sidecar reports voice cloning UNAVAILABLE']), null);
+});
+
+test('engine env: every *_SPEED config.ts reads, and PIPER_OUT, are removed and reported', () => {
+  const config = readFileSync(fileURLToPath(new URL('../src/config.ts', import.meta.url)), 'utf8');
+  const read = [...config.matchAll(/env\w+\('([A-Z_]*SPEED)'/g)].map((m) => m[1]);
+  assert.ok(read.includes('TTS_SPEED'), 'the pattern still finds config.ts\'s speed vars');
+  assert.deepEqual([...new Set(read)].sort(), [...ENGINE_SPEED_ENV].sort(), 'a new engine speed var belongs in isolate.ts');
+
+  const env: NodeJS.ProcessEnv = { TTS_SPEED: '0.85', KOKORO_SPEED: '1.1', PIPER_OUT: '/var/sub-wave/voice', HOME: '/root' };
+  assert.deepEqual(neutralizeEngineEnv(env), { TTS_SPEED: '0.85', KOKORO_SPEED: '1.1', PIPER_OUT: '/var/sub-wave/voice' });
+  assert.deepEqual(env, { HOME: '/root' });
+  assert.deepEqual(neutralizeEngineEnv(env), {});
+});
+
+test('voices: the station\'s folders are read in place, an operator\'s own is kept, a missing one is not made', () => {
+  const station = createTempDir(join(tmpdir(), 'subwave-tts-bench-station-'));
+  const isolated = createTempDir(join(tmpdir(), 'subwave-tts-bench-isolated-'));
+
+  // A station with neither folder: nothing is created on either side.
+  const bare: NodeJS.ProcessEnv = {};
+  assert.equal(shareStationVoices(station, isolated, bare), join(station, 'voices'), 'where a named voice belongs');
+  assert.deepEqual(bare, {});
+  assert.throws(() => lstatSync(join(station, 'voices')));
+  assert.throws(() => lstatSync(join(isolated, 'chatterbox-voices')));
+
+  mkdirSync(join(station, 'voices'));
+  mkdirSync(join(station, 'chatterbox-voices'));
+  const env: NodeJS.ProcessEnv = {};
+  assert.equal(shareStationVoices(station, isolated, env), join(station, 'voices'));
+  assert.equal(env.TTS_VOICE_DIR, join(station, 'voices'), 'the real path, which the sidecar can read');
+  assert.equal(readlinkSync(join(isolated, 'chatterbox-voices')), join(station, 'chatterbox-voices'));
+
+  const isolated2 = createTempDir(join(tmpdir(), 'subwave-tts-bench-isolated-'));
+  const own: NodeJS.ProcessEnv = { CHATTERBOX_VOICE_DIR: '/srv/voices' };
+  assert.equal(shareStationVoices(station, isolated2, own), '/srv/voices');
+  assert.deepEqual(own, { CHATTERBOX_VOICE_DIR: '/srv/voices' });
 });
 
 function rec(engine: string, line: string, extra: Partial<BenchRecord> = {}): BenchRecord {
@@ -137,7 +198,7 @@ test('summary: cold kept out of warm figures, rescues counted as failures', () =
   assert.equal(piper.ok, 3);
   assert.equal(piper.failed, 2);
   assert.equal(piper.coldMs, 900);
-  assert.equal(piper.warmP50Ms, 100);
+  assert.equal(piper.warmP50Ms, 200);
   assert.equal(piper.warmP95Ms, 200);
   assert.equal(piper.rtfP50, 0.075);
   assert.equal(piper.lufs, -20);

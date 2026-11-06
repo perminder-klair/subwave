@@ -67,6 +67,24 @@ export function parseEdgeSilenceMs(stderr: string, durationSec: number): { leadM
   };
 }
 
+// A voice the engine was asked for but did not use. The engine still speaks,
+// so speak() reports success and the stats ring names the engine that was
+// asked for; the only sign is the warning the engine logs (#238): Remote on an
+// X-TTS-Fell-Back header (remoteTts.ts), and the tts-heavy sidecar on
+// `fell_back` (ttsHeavyClient.ts), both as
+//   [engine] requested voice "x" not honoured (reason); rendered "y"
+// scripts/tts-bench-cli.test.ts drives both real paths, so a change to that
+// line fails there rather than going quiet here.
+const VOICE_NOT_HONOURED = /^\[([\w-]+)\] requested voice "(.*)" not honoured \((.*)\); rendered "(.*)"$/;
+
+export function voiceSubstitution(warnings: string[]): { engine: string; requested: string; reason: string; used: string } | null {
+  for (const line of warnings) {
+    const m = VOICE_NOT_HONOURED.exec(line.trim());
+    if (m) return { engine: m[1], requested: m[2], reason: m[3], used: m[4] };
+  }
+  return null;
+}
+
 export type Outcome = 'ok' | 'fell-back' | 'thrown' | 'unavailable';
 
 export interface BenchRecord {
@@ -77,6 +95,7 @@ export interface BenchRecord {
   cold: boolean;           // the engine's first render this run: model load included
   outcome: Outcome;
   engineUsed?: string;     // what actually spoke, when speak() rescued
+  voiceUsed?: string;      // what actually spoke, when the engine substituted the voice
   error?: string;
   ms: number;
   chars: number;           // of the text the engine was handed, after normalizeForSpeech
@@ -100,11 +119,14 @@ export function median(values: number[]): number | null {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-// Nearest-rank percentile.
+// The rank rule src/stats.ts uses for the station's own TTS latency
+// (summarizeTts → latencyStats), so a bench p95 and the station's p95 are the
+// same statistic.
+// Empty is null here, not 0: no warm render is not a 0 ms render.
 export function percentile(values: number[], p: number): number | null {
   if (!values.length) return null;
   const s = [...values].sort((a, b) => a - b);
-  return s[Math.min(s.length - 1, Math.max(0, Math.ceil((p / 100) * s.length) - 1))];
+  return s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))];
 }
 
 // Thresholds for the per-clip flags.
