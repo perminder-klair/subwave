@@ -23,17 +23,22 @@
 // Real better-sqlite3 against a temp STATE_DIR, like facet-status.test.ts.
 // Run: `npm test -- whole-file-facets`.
 
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
-const stateDir = mkdtempSync(join(tmpdir(), 'subwave-whole-file-'));
+const stateDir = createTempDir(join(tmpdir(), 'subwave-whole-file-'));
 process.env.STATE_DIR = stateDir;
 
 const db = await import('../src/music/library-db.js');
 const { checkFacets } = await import('../src/music/facet-check.js');
+
+after(async () => {
+  db.close();
+  await removeTempDir(stateDir);
+});
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 const sql = { prepare: (q: string) => db.requireDb().prepare(q) };
 

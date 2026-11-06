@@ -19,11 +19,11 @@
 
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 const requests: Array<Record<string, unknown>> = [];
 let streamReads = 0;
@@ -83,7 +83,7 @@ function handler(req: IncomingMessage, res: ServerResponse) {
 const server = createServer(handler);
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
 const port = (server.address() as AddressInfo).port;
-const stateDir = mkdtempSync(join(tmpdir(), 'subwave-whole-pass-'));
+const stateDir = createTempDir(join(tmpdir(), 'subwave-whole-pass-'));
 process.env.STATE_DIR = stateDir;
 process.env.ANALYZE_URL = `http://127.0.0.1:${port}`;
 process.env.NAVIDROME_URL = `http://127.0.0.1:${port}`;
@@ -103,10 +103,11 @@ const { config } = await import('../src/config.js');
 const setWholeFile = (on: boolean) => { (config.analyzer as { wholeFile: boolean }).wholeFile = on; };
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 
-after(() => {
+after(async () => {
   analyzer.shutdown();
   server.close();
-  rmSync(stateDir, { recursive: true, force: true });
+  db.close();
+  await removeTempDir(stateDir);
 });
 
 for (const id of ['w1', 'w2', 'w3', 'w4']) {
