@@ -26,6 +26,8 @@ import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-t
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
 import { searchKeyProblem } from './web-search.js';
+import { searchKeyRequired } from './search-key-policy.js';
+import { searchProviderEntry, withIndefiniteArticle } from '../schemas/settings.js';
 import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
@@ -717,16 +719,13 @@ export async function runCapability(
   if (cap.ready && !cap.ready()) {
     // Hint at the missing key when the capability is keyed.
     let hint = '';
-    const searchProvider = settings.get().search?.provider;
+    const searchProvider = settings.get().search?.provider || 'duckduckgo';
     const keyProblem = refusedKeyProblem(cap);
     if (keyProblem) {
       hint = ` — ${keyProblem}. Paste one into Settings → Web search`;
-    } else if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave' || searchProvider === 'firecrawl' || searchProvider === 'outcrawl')) {
-      const name = searchProvider === 'brave' ? 'Brave Search'
-        : searchProvider === 'firecrawl' ? 'Firecrawl'
-        : searchProvider === 'outcrawl' ? 'Outcrawl'
-        : 'Tavily';
-      hint = ` — set SEARCH_API_KEY or paste ${name === 'Outcrawl' ? 'an' : 'a'} ${name} key into the admin UI`;
+    } else if (cap.kind === 'web-search' && searchKeyRequired(searchProvider)) {
+      const name = searchProviderEntry(searchProvider)?.keyName || searchProvider;
+      hint = ` — set SEARCH_API_KEY or paste ${withIndefiniteArticle(name)} key into the admin UI`;
     } else if (cap.toolPending && !cap.toolFn) {
       hint = ' — its tool.mjs is awaiting your review in /admin/skills';
     } else if (cap.requiresKey) {
@@ -899,24 +898,16 @@ export function skillCatalog() {
   const enabledMap = s.skills?.enabled || {};
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
-    // web-search's key requirement depends on the active provider:
-    // Tavily/Brave/Firecrawl/Outcrawl need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
+    // web-search's key requirement depends on the active provider: a keyed one
+    // (the catalogue's key: 'required') needs SEARCH_API_KEY and links to its
+    // catalogue keyUrl; DuckDuckGo, SearXNG and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
     if (c.kind === 'web-search') {
-      if (searchProvider === 'tavily') {
+      if (searchKeyRequired(searchProvider)) {
         requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://app.tavily.com/home';
-      } else if (searchProvider === 'brave') {
-        requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
-      } else if (searchProvider === 'firecrawl') {
-        requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://www.firecrawl.dev/app/api-keys';
-      } else if (searchProvider === 'outcrawl') {
-        requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://outcrawl.ai/console';
+        keyUrl = searchProviderEntry(searchProvider)?.keyUrl || null;
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;

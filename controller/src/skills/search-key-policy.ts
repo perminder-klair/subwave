@@ -14,7 +14,7 @@
 //
 // Pure: no settings, no env. The slot itself is web-search.ts searchKeySlot().
 
-import { SEARCH_PROVIDER_CATALOG } from '../schemas/settings.js';
+import { SEARCH_PROVIDER_CATALOG, searchProviderEntry, withIndefiniteArticle } from '../schemas/settings.js';
 
 // Each provider's own key prefix, where one is known. Tavily's is listed so
 // Brave and Firecrawl can refuse a Tavily key; Tavily itself doesn't require it.
@@ -28,14 +28,8 @@ const KEY_PREFIX: Readonly<Record<string, string>> = {
 // Providers that take only a key carrying their own prefix.
 const PREFIX_REQUIRED: ReadonlySet<string> = new Set(['firecrawl', 'keenable', 'outcrawl']);
 
-// "a Tavily key", "an Outcrawl key".
-function withArticle(name: string): string {
-  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
-}
-
 function keyName(provider: string): string {
-  const entry = SEARCH_PROVIDER_CATALOG.find((p) => p.id === provider);
-  return (entry && 'keyName' in entry && entry.keyName) || provider;
+  return searchProviderEntry(provider)?.keyName || provider;
 }
 
 // The provider whose known prefix this key carries, or null.
@@ -62,9 +56,9 @@ export function searchKeyMismatch(provider: string, key: string): string | null 
   const k = key.trim();
   if (!k || searchKeyFits(provider, k)) return null;
   if (PREFIX_REQUIRED.has(provider)) {
-    return `not ${withArticle(keyName(provider))} key (they start with ${KEY_PREFIX[provider]})`;
+    return `not ${withIndefiniteArticle(keyName(provider))} key (they start with ${KEY_PREFIX[provider]})`;
   }
-  return `${withArticle(keyName(prefixOwner(k) ?? ''))} key, not ${withArticle(keyName(provider))} key`;
+  return `${withIndefiniteArticle(keyName(prefixOwner(k) ?? ''))} key, not ${withIndefiniteArticle(keyName(provider))} key`;
 }
 
 // True when the provider can't search without a key (the catalogue's

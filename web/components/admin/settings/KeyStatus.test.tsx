@@ -1,5 +1,5 @@
-// The key banner under Settings → Web search. Tavily, Brave and Firecrawl
-// searches refuse a key left in the shared slot by another provider, so it has
+// The key banner under Settings → Web search. Tavily, Brave, Firecrawl and
+// Outcrawl searches refuse a key left in the shared slot by another provider, so it has
 // to read as missing, not as "ready to use". The controller says which providers
 // refuse the key on file (keyRefusedBy). The banner is rendered to static
 // markup, because web has no DOM harness.
@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { searchKeyIsForeign } from './SearchSection';
+import { foreignSearchKeyDetail, searchKeyIsForeign } from './SearchSection';
 import { KeyStatus } from './shared';
 
 test('a key on file is foreign to exactly the providers that refuse it', () => {
@@ -25,6 +25,20 @@ test('a key on file is foreign to exactly the providers that refuse it', () => {
   const oc = ['tavily', 'brave', 'firecrawl'];
   assert.equal(searchKeyIsForeign('firecrawl', true, oc), true);
   assert.equal(searchKeyIsForeign('outcrawl', true, oc), false);
+});
+
+// The article comes from the catalogue's one rule, the one the controller's
+// sentences use, so the banner reads "an Outcrawl key" like they do.
+test("the foreign-key banner names the picked provider's key with the right article", () => {
+  const outcrawl = foreignSearchKeyDetail('Outcrawl');
+  assert.match(outcrawl, /^The key on file is not an Outcrawl key, so searches won't run\./);
+  assert.match(outcrawl, /Paste an Outcrawl key in the field above and save\.$/);
+  assert.match(foreignSearchKeyDetail('Tavily'), /not a Tavily key.*Paste a Tavily key/);
+  assert.match(foreignSearchKeyDetail('Brave Search'), /not a Brave Search key.*Paste a Brave Search key/);
+  const html = renderToStaticMarkup(createElement(KeyStatus, {
+    envVar: 'SEARCH_API_KEY', present: false, detail: outcrawl,
+  }));
+  assert.match(html, /not an Outcrawl key/);
 });
 
 test('no key on file is plain missing, never foreign', () => {

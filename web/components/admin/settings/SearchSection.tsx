@@ -11,7 +11,8 @@ import {
 } from '../../ui/select';
 import {
   SEARCH_PROVIDER_CATALOG, SEARCH_PROVIDER_GROUPS, SETTINGS_SEARCH_PROVIDERS, SETTINGS_SEARXNG_ENGINES_MAX,
-  type SearchProviderEntry, type SearchProviderGroup,
+  searchProviderEntry, withIndefiniteArticle,
+  type SearchProviderGroup,
 } from '@/lib/schemas.generated';
 import { Card, Btn, Pill } from '../ui';
 import {
@@ -20,12 +21,11 @@ import {
 } from './shared';
 
 // Labels, hints and key fields come from the search catalogue
-// (controller/src/schemas/settings.ts, mirrored by gen:schemas).
-const searchProvider = (id: string | undefined): SearchProviderEntry | undefined =>
-  SEARCH_PROVIDER_CATALOG.find(p => p.id === id);
+// (controller/src/schemas/settings.ts, mirrored by gen:schemas), read through
+// its searchProviderEntry.
 
 const searchProviderLabel = (id: string | undefined): string =>
-  searchProvider(id)?.label || id || '—';
+  searchProviderEntry(id)?.label || id || '—';
 
 const SEARCH_GROUP_LABELS: Record<SearchProviderGroup, string> = {
   keyless: 'No key needed',
@@ -41,7 +41,7 @@ export function groupSearchProviders(ids: readonly string[]): { label: string; i
   return [
     ...SEARCH_PROVIDER_GROUPS.map(group => ({
       label: SEARCH_GROUP_LABELS[group],
-      ids: ids.filter(id => searchProvider(id)?.group === group),
+      ids: ids.filter(id => searchProviderEntry(id)?.group === group),
     })),
     { label: 'Other', ids: ids.filter(id => !known.has(id)) },
   ].filter(g => g.ids.length > 0);
@@ -59,6 +59,14 @@ export function searchKeyIsForeign(
   refusedBy: string[] | undefined,
 ): boolean {
   return keyOnFile && !!refusedBy?.includes(provider);
+}
+
+// The banner's sentence when the key on file is another provider's. The article
+// comes from the catalogue's one rule, which the controller's messages share
+// ("an Outcrawl key", "a Tavily key").
+export function foreignSearchKeyDetail(keyName: string): string {
+  const key = `${withIndefiniteArticle(keyName)} key`;
+  return `The key on file is not ${key}, so searches won't run. Paste ${key} in the field above and save.`;
 }
 
 interface SearchSectionProps extends SectionProps {
@@ -108,7 +116,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
   const savedSearch = data.values?.search || {};
   const providers = data.search?.providers || [...SETTINGS_SEARCH_PROVIDERS];
   const provider = form.search.provider;
-  const entry = searchProvider(provider);
+  const entry = searchProviderEntry(provider);
   // Keyed providers share the SEARCH_API_KEY slot; the controller probes the
   // right endpoint based on the provider sent along with a key test.
   const keyed = entry && entry.key !== 'none' ? entry : undefined;
@@ -248,7 +256,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 <KeyStatus
                   envVar="SEARCH_API_KEY"
                   present={apiKeySet && !foreignKey}
-                  detail={foreignKey ? <>The key on file is not a {keyed.keyName} key, so searches won&apos;t run. Paste a {keyed.keyName} key in the field above and save.</> : undefined}
+                  detail={foreignKey ? foreignSearchKeyDetail(keyed.keyName || provider) : undefined}
                 />
               )}
               {/* The controller knows whether the key Keenable would send is a keen_
