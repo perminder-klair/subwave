@@ -17,7 +17,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 ## Env and secrets
 
-- Read env through `util/env.ts` (`envInt`, `envFloat`, `envUrl`, `envEnum`, `envStr`), never `parseInt(process.env.X || …)`, whose NaN travels. A malformed value warns and falls back, never throws, and the warnings reach the booth log. A few legacy `parseInt` reads remain; don't add more.
+- Read env through `util/env.ts` (`envInt`, `envFloat`, `envUrl`, `envEnum`, `envStr`, `envBool`), never `parseInt(process.env.X || …)`, whose NaN travels. A malformed value warns and falls back, never throws, and the warnings reach the booth log. A few legacy `parseInt` reads remain; don't add more.
 - `state/secrets.env` has one parse (`setup/secrets.ts` `readSecretsFile`), shared by boot and `saveSecrets`' read-then-rewrite merge, and `envEscape` is its designed writer. A second parse that misreads a value destroys that secret on the next save.
 
 ## LLM layer (`llm/`)

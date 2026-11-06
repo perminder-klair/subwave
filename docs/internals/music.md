@@ -506,6 +506,173 @@ unknown support still allows missing head vocals but never widens tail backfill.
 Targeted runs that disable vocals preserve stored tail vocal ranges, including
 an instrumental `[]`, without marking the carried measurement fresh.
 
+**The whole-file facets: `loudness` v2 and `edges`.** Both read the WHOLE file
+at its native rate in ONE ffmpeg run per track (`analyze_worker.py`
+`measure_whole_file`): the `ebur128` filter's summary on stderr gives integrated
+loudness, true peak, sample peak and LRA, and the same decoded audio leaves on
+stdout as float PCM, which `EdgeScanner` reads for the first and last sample
+frame at or above the absolute `SILENCE_DBFS` floor and for the decoded length.
+A request for both pays one decode. ffmpeg's log is parsed a line at a time on
+the drain thread and dropped (`FfmpegLog`), so memory does not grow with the
+file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
+
+1. **The loudness version is the measurement's own.** Every head analysis still
+   writes the analysis window's figure (first `ANALYZE_SECONDS` at
+   `ANALYZE_SR`, sample peak); `deriveFacetRows` reads `loudness_version` (NULL
+   = 1) for the row's version, so a window figure is v1 and stays due, and a
+   whole-file one is v2. Never stamp a facet row at `FACET_VERSIONS.loudness`
+   just because a loudness column is set.
+2. **Nothing measuring less overwrites a v2 figure**: not a flat head analysis
+   (`upsertTrackAnalysis` keeps it), not a window answer from an older analyzer
+   (`writeFacetResults` drops it), not a `--re-analyze` clear (kept, with its
+   facet row). Loudness, true peak, sample peak and LRA are written together or
+   not at all; a silent file is `unmeasurable: silent`, never a half row.
+3. **Edges are their own columns and their own facet** (`edge_lead_ms`,
+   `edge_tail_ms`, `decoded_duration_ms`), untouched by every head/tail write
+   and by the `--re-analyze` clear (`clearAnalysis`). A replaced file is the
+   exception: `clearTrackAudio` drops them with every other measurement of the
+   old audio, the whole-file loudness and its curve included, or
+   `syncTrackFacets()` would mark both facets measured again for a file never
+   read. `music/silence-trim.ts` takes them as ONE set (lead, tail, decoded
+   end) over the window figures, whether on the track object or the stored row,
+   and the playable span ends on the decoded length. A track object that
+   carries the `decodedDurationMs` key (null included, as every library-row
+   mapper writes it) answers for its own edges; one without it has the stored
+   row read, at most once per resolve. Other users of the tagged
+   duration are unchanged. A file with nothing above the floor is
+   `unmeasurable: silent-file`, which settles at the current version.
+4. **The source is the stream URL unless the staged copy is complete.** The
+   window facets decode a byte-capped download; the whole-file ones must not.
+   A path request carries `stream_url` (`analyzer.analyzeFacets`), and the
+   worker reads the path only when `complete: true`. A track planned for the
+   whole-file facets alone is never staged at all: no capped download, one URL
+   request. Errors pass through `redact_urls`, because ffmpeg echoes its input
+   and a Subsonic URL carries a replayable token. **An input that ends early
+   fails both facets, never stores**: ffmpeg exits 0 on a dropped connection
+   with what it decoded, and stored, half a track would be a whole-file figure
+   and a decoded length that ends the track early on air, which nothing
+   measuring less may replace. Two nets. The first is ffmpeg's own "Stream
+   ends prematurely" or I/O error line (`FfmpegLog.input_error`), read only
+   from ffmpeg's own messages: a `[component @ 0x…]` prefix, or the input's
+   name (how 5.1 reports a read error). Never from the header dump, whose
+   Metadata blocks print the file's tags verbatim: a title "Connection Reset
+   By Peer" is the file's text, not news about the read. The second is a
+   decode more than max(5 s, 2 %) short of the length an `ffprobe` of the
+   header gives (`decoded_short_of`; a length ffprobe only estimated from the
+   bitrate judges nothing), and only on a read of unknown length: a server
+   that sends no Content-Length makes even a complete read end on "should be
+   18446744073709551615" and an I/O error (`FfmpegLog.length_unknown`), so
+   those two lines say nothing there and only the length check judges it. A
+   cut in such a stream is caught only for a format whose header carries the
+   length (FLAC, an MP3 with a Xing frame, MP4; not WAV or Ogg), and a file
+   short of its own header fails there too, since nothing tells the two apart.
+   Anywhere else the length check stays out: a read with a Content-Length logs
+   its own cut, and a local copy is whole, so a decode short of the header is
+   the file itself (truncated on disk, a stale Xing frame). That is what
+   airs, so it is measured, rather than failed every run until the shared
+   failure count drops the track out of every analysis scope.
+5. **ffmpeg 5.1 is the floor.** `ebur128=...:framelog=verbose`, never `quiet`
+   (ffmpeg 6+ only; 5.1 rejects the whole filter and every pass fails with
+   "Conversion failed!"). The PCM is `-ac 2 -f f32le` at the file's own rate;
+   the rate is read from the OUTPUT stream line. The summary is read from
+   ebur128's own `[Parsed_ebur128_N @ 0x…] Summary:` line on, never from a
+   tag that says "Summary:", which used the capture up before the real block
+   and stored a loud track as `unmeasurable: silent`.
+6. **Capability is a version signal**: `whole_file_capable` on the worker's
+   ready line, `analyze_whole_file_capable` on the sidecar's `/health`. A
+   backend known to lack it gets the facets skipped as `no-whole-file`, never
+   planned into a pass that can only write a window figure.
+7. **They run when asked**, through the planner (`npm run analyze -- --facets
+   loudness,edges`, `--where`, `--ids`), plus an opt-in backfill:
+   `ANALYZE_WHOLE_FILE=1` makes every regular analysis run end with the same
+   plan over the tracks that need either facet (`wholeFileBackfillPlan`), under
+   the same quiet gate and failure rules; it widens only on an analyzer that
+   positively reports the capability. Off by default, so an upgrade is
+   byte-identical: a first library pass reads every file once. Requests carrying
+   them get `ANALYZE_WHOLE_FILE_TIMEOUT_MS` (960 s, 90-7260 s), 60 s above the
+   analyzer's own `ANALYZE_WHOLE_FILE_TIMEOUT_S` (900 s, 30-7200 s) so the
+   analyzer reports the timeout. A caller's own deadline can lengthen that,
+   never shorten it. Every other request keeps a caller's deadline as given.
+8. **Whole-file requests alone take their own lane.** The sidecar runs a request
+   whose facets are all whole-file in a one-shot `analyze_worker.py
+   --whole-file` process under its own semaphore
+   (`ANALYZE_WHOLE_FILE_CONCURRENCY`, default 4, advertised on `/health`),
+   never on a pool worker that holds CLAP/Demucs, and a pass that plans only
+   whole-file facets sends that many at once instead of `ANALYZE_CONCURRENCY`.
+   A request mixing them with a window facet stays in the pool: one decode of
+   the capped copy for the window, one whole-file decode.
+9. **The loudness answer carries its short-term curve, stored raw.** The same
+   `ebur128` filter prints a short-term loudness S (EBU R128: K-weighted, 3 s
+   window, stamped at the window's end) every 100 ms at the verbose log level,
+   so the run logs at it and `loudness_curve_from_frames` keeps three series,
+   in tenths of a dB with silence at -100 LUFS: `whole` (one point a second over
+   the whole track), `head` (from 3 s to 30 s after the music starts) and
+   `tail` (from 30 s before the music stops to 5 s after it), both every 0.5 s.
+   "Starts"/"stops" are the first and last points above the BS.1770 absolute
+   gate (-70 LUFS), so a long silent tail never leaves the fine window on
+   silence. Stored as `loudness_curve_json` with every v2 figure
+   (`music/whole-loudness-curve.ts` is the one parser); nothing reads it yet:
+   level features (fade or cold ending, outro start, an energy envelope) become
+   computations on it, with no re-decode. A v2 figure stored WITHOUT a curve (an
+   analyzer that predates it) is derived one version below with reason
+   `no-curve`, and re-planned only on an analyzer that reports
+   `loudness_curve_capable` / `analyze_loudness_curve_capable` (skip `no-curve`):
+   an older one would answer without it again, every run. A file shorter than
+   one window stores an empty `whole` series and settles. A pass that ran and
+   had no curve to give settles too, never re-read in full every run. Either
+   its answer says why (`loudness_curve_unavailable`: ffmpeg printed no
+   per-frame line), or the controller's parser refuses the curve it sent (past
+   a day, malformed: `rejected`). Either way it stores
+   `{"unavailable": reason}` in the curve's column (`unavailableCurveJson`),
+   which reads as no curve.
+10. **Measured as it airs: stereo, at 48 kHz at most.** A file with more than
+   two channels (a 5.1 FLAC) is downmixed first, in float
+   (`aformat=sample_fmts=dbl:channel_layouts=stereo`): Liquidsoap airs fronts
+   1 + centre and surrounds 0.707, no LFE, unnormalised, which is what
+   ffmpeg's float downmix gives, while ebur128 over six channels read about
+   4 dB above the air and an integer downmix (normalised) 7.6 dB below it.
+   Mono's loudness is left alone: ebur128 reads it as Liquidsoap's upmix airs
+   it. Its edges are judged on the `-ac 2` upmix, 0.707 a side, which is what
+   Liquidsoap airs: on 2.4.6 a mono FLAC, MP3 or WAV peaking at -24.1 dBFS
+   airs at -27.1 on each side. That is 3 dB under the file's own samples,
+   where the window path's `silence_edges_ms` reads them, so on a mono file
+   the two paths' edges differ by those 3 dB, and the whole-file one is right.
+   `ebur128` also takes any rate, so a DSD file
+   decoded at 352.8 kHz had its ultrasonic noise (the DSD noise shaping)
+   K-weighted into the reading: a fade levelled off near -27 LUFS, and the
+   edges scan found no silence at either end of any `.dsf`. A source above
+   `MEASURE_MAX_RATE` gets `aresample=48000` ahead of both. Rate and channels
+   come from an `ffprobe` of the header first (`probe_audio_format`), because ffmpeg 5.1 cannot negotiate a
+   LIST of rates (`aformat` with several `sample_rates` fails on a 96 kHz
+   input). A stereo or mono 44.1/48 kHz file runs the command it always did
+   (a mono one upmixed for its edges, as above), and a failed probe measures
+   the file as it is, as before.
+
+The window path (the default, without `ANALYZE_WHOLE_FILE`) follows the same
+rule: `measure_loudness` measures a decode of more than two channels as its
+stereo downmix (`stereo_downmix`, the same matrix over the WAV/FLAC default
+channel orders for 3 to 8 channels). Before it, pyloudnorm refused anything
+over five channels ("Audio must have five channels or less"), so every 5.1
+track had no loudness at all and aired without gain normalisation. It also
+measured 3 to 5 channels with BS.1770's own surround weights rather than as
+they air, so those figures move as well, and the tail facet's outro loudness
+of every such file with them, when next analysed. The matrix is chosen by
+channel COUNT: librosa and soundfile return no layout, so a file whose order
+is not its count's default reads the wrong rows. FLAC fixes its order by
+count, so FLAC is always right; the exposure is a WAV with an unusual
+channel mask, or a 2.1, 3.1 or 4.0 decode. The whole-file lane has no such
+gap, because ffmpeg downmixes by the real layout, and its v2 figure outranks
+the window's.
+
+Pinned by `scripts/analyzer_whole_file_test.py` (parsers, chunk-independent edge
+scan, the absolute floor, one decode for both, the source rule, a real ffmpeg
+run when one is on PATH, the window path's downmix against ffmpeg's for 5.1 and 7.1), `scripts/whole-file-facets.test.ts` (versions, no
+overwrite, clear, step 37 on a database that already has the columns),
+`scripts/whole-file-pass.test.ts` (capability skip, no staging, `stream_url`,
+the opt-in backfill), the curve cases in both (parsing the per-frame lines,
+the three series, the `no-curve` rule and its capability skip) and `scripts/silence-trim-library.test.ts` (edges outrank
+the window figures).
+
 ## Prepared artist episodes
 
 `broadcast/show-preparation.ts` owns `state/show-preparations.json`. Its key is a
