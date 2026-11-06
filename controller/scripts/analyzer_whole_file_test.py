@@ -135,6 +135,52 @@ def t_output_rate_is_the_output_streams_not_the_inputs():
     assert aw.parse_output_rate("Input #0\n  Stream #0:0: Audio: mp3, 44100 Hz") is None
 
 
+def feed_log(text):
+    log = aw.FfmpegLog()
+    for line in text.splitlines(keepends=True):
+        log.feed(line)
+    return log
+
+
+def t_log_read_a_line_at_a_time_gives_what_the_whole_text_did():
+    frames = frames_text([(i / 10.0, -14.0 - (i % 5) / 10.0) for i in range(1, 120)])
+    text = STDERR_HEAD + frames + "\n" + SUMMARY
+    log = feed_log(text)
+    assert aw.parse_ebur128_summary(log.summary_text()) == aw.parse_ebur128_summary(text)
+    assert aw.parse_output_rate(log.output_text()) == 96000
+    assert dict((i, log.frames[i]) for i in log.frames) == aw.parse_ebur128_frames(text)
+    assert aw.loudness_curve_from_frames(log.frames) == aw.loudness_curve_from_frames(aw.parse_ebur128_frames(text))
+    # The frame lines themselves are not kept: only the short tail of the rest.
+    assert "TARGET" not in log.failure_text(), log.failure_text()
+
+
+def t_log_finds_the_output_rate_past_a_long_tag():
+    # Input tags are copied to the output header; a lyrics tag prints a line
+    # per lyric line before the PCM stream line.
+    lyrics = "".join(f"                    : verse line {i}\n" for i in range(300))
+    head = STDERR_HEAD.replace("Output #0, f32le, to 'pipe:1':\n",
+                               "Output #0, f32le, to 'pipe:1':\n  Metadata:\n    lyrics          : first\n" + lyrics)
+    assert aw.parse_output_rate(feed_log(head).output_text()) == 96000
+
+
+def t_log_failure_text_keeps_the_first_error_and_the_tail():
+    chatter = "".join(f"[mp3 @ 0x1] skipping frame {i}\n" for i in range(500))
+    log = feed_log("http://navi:4533/rest/stream?t=secret: Invalid data found\n" + chatter + "Conversion failed!\n")
+    got = aw.ffmpeg_failure_reason(log.failure_text())
+    assert got.startswith("http://navi:4533/… Invalid data found"), got
+    assert "secret" not in got, got
+
+
+def t_frame_log_reads_like_the_dict():
+    frames = aw.FrameLog()
+    for idx, tenths in ((30, -140), (31, -141), (35, -1000)):
+        frames[idx] = tenths
+    assert len(frames) == 3 and list(frames) == [30, 31, 35] and max(frames) == 35
+    assert 31 in frames and 32 not in frames and -1 not in frames and frames[35] == -1000
+    frames[10 ** 9] = -100  # a corrupt timestamp: dropped, never allocated
+    assert len(frames) == 3 and max(frames) == 35
+
+
 def t_failure_reason_redacts_stream_credentials():
     err = "http://navi:4533/rest/stream?u=dj&t=secret&s=salt: Invalid data found\nConversion failed!"
     got = aw.ffmpeg_failure_reason(err)

@@ -511,7 +511,9 @@ at its native rate in ONE ffmpeg run per track (`analyze_worker.py`
 loudness, true peak, sample peak and LRA, and the same decoded audio leaves on
 stdout as float PCM, which `EdgeScanner` reads for the first and last sample
 frame at or above the absolute `SILENCE_DBFS` floor and for the decoded length.
-A request for both pays one decode; constant memory. Ten rules:
+A request for both pays one decode. ffmpeg's log is parsed a line at a time on
+the drain thread and dropped (`FfmpegLog`), so memory does not grow with the
+file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
 
 1. **The loudness version is the measurement's own.** Every head analysis still
    writes the analysis window's figure (first `ANALYZE_SECONDS` at

@@ -36,6 +36,8 @@ natural-language "sounds like ..." search and zero-shot mood scoring against
 the stored audio vectors possible.
 """
 
+import array
+import collections
 import contextlib
 import ctypes
 import importlib.util
@@ -2290,7 +2292,9 @@ def facet_loudness(y_src, sr):
 # duration the controller has is the container tag.
 #
 # Both facets therefore read the WHOLE file at its native rate, in ONE ffmpeg
-# run with constant memory: the ebur128 filter prints integrated loudness, LRA,
+# run whose memory does not grow with the file's length, apart from the
+# loudness curve's frames at two bytes per 100 ms (FrameLog; the log itself is
+# parsed a line at a time and dropped): the ebur128 filter prints integrated loudness, LRA,
 # sample and true peak (4x oversampled) on stderr, and the same decoded audio
 # leaves on stdout as float PCM, which EdgeScanner reads for the edges and the
 # exact decoded length. A request for both pays one decode. CPU only, about
@@ -2392,20 +2396,68 @@ _CURVE_GATE_TENTHS = -700
 _EBUR128_FRAME_RE = re.compile(r"\bt:\s*([0-9.]+)\s+TARGET:.*?\bS:\s*(-?inf|nan|-?[0-9.]+)")
 
 
+def parse_ebur128_frame(line):
+    """(index, tenths) of one per-frame line's short-term loudness, index = t
+    in 100 ms steps (ffmpeg stamps t just under each tenth); None for any
+    other line. Pure."""
+    m = _EBUR128_FRAME_RE.search(line or "")
+    if not m:
+        return None
+    try:
+        idx = int(round(float(m.group(1)) * 10.0))
+        raw = m.group(2)
+        v = None if raw in ("-inf", "inf", "nan") else float(raw)
+    except ValueError:
+        return None
+    return idx, CURVE_FLOOR_TENTHS if v is None else max(CURVE_FLOOR_TENTHS, int(round(v * 10.0)))
+
+
 def parse_ebur128_frames(text):
-    """{index: tenths} of the per-frame short-term loudness, index = t in
-    100 ms steps (ffmpeg stamps t just under each tenth). Pure."""
+    """{index: tenths} of every per-frame line in `text`. Pure."""
     frames = {}
-    for m in _EBUR128_FRAME_RE.finditer(text or ""):
-        try:
-            idx = int(round(float(m.group(1)) * 10.0))
-            raw = m.group(2)
-            v = None if raw in ("-inf", "inf", "nan") else float(raw)
-        except ValueError:
-            continue
-        tenths = CURVE_FLOOR_TENTHS if v is None else max(CURVE_FLOOR_TENTHS, int(round(v * 10.0)))
-        frames[idx] = tenths
+    for line in (text or "").splitlines():
+        frame = parse_ebur128_frame(line)
+        if frame is not None:
+            frames[frame[0]] = frame[1]
     return frames
+
+
+class FrameLog:
+    """The per-frame short-term loudness of one run, two bytes a frame (a
+    6 h set is ~430 KB, where a dict of Python ints ran to tens of MB). Reads
+    like the {index: tenths} dict loudness_curve_from_frames takes. Frames
+    past _MAX_INDEX (48 h) are dropped, so a corrupt timestamp cannot make it
+    allocate without bound."""
+
+    _MISSING = -32768
+    _MAX_INDEX = 48 * 3600 * 10
+
+    def __init__(self):
+        self._v = array.array("h")
+        self._count = 0
+
+    def __setitem__(self, idx, tenths):
+        if idx < 0 or idx > self._MAX_INDEX:
+            return
+        if idx >= len(self._v):
+            self._v.extend([self._MISSING] * (idx + 1 - len(self._v)))
+        if self._v[idx] == self._MISSING:
+            self._count += 1
+        self._v[idx] = max(-32767, min(32767, tenths))
+
+    def __contains__(self, idx):
+        return 0 <= idx < len(self._v) and self._v[idx] != self._MISSING
+
+    def __getitem__(self, idx):
+        if idx not in self:
+            raise KeyError(idx)
+        return self._v[idx]
+
+    def __iter__(self):
+        return (i for i, v in enumerate(self._v) if v != self._MISSING)
+
+    def __len__(self):
+        return self._count
 
 
 def loudness_curve_from_frames(frames):
@@ -2480,6 +2532,62 @@ def ffmpeg_failure_reason(stderr):
         if low not in generic and any(h in low for h in _FFMPEG_ERROR_HINTS):
             return l[:300] if l == lines[-1] else f"{l[:300]} (… {lines[-1][:120]})"
     return lines[-1][:300]
+
+
+class FfmpegLog:
+    """ffmpeg's stderr for one whole-file run, fed a line at a time on the
+    drain thread. At the verbose level ebur128 logs ~2 KB a second of audio, so
+    the log itself is never kept: only what the pass reads from it. The frames
+    (FrameLog), the summary block, the output header and its PCM stream line
+    (the rate; a long tag such as lyrics can put many metadata lines between
+    them), and what ffmpeg_failure_reason needs: the first line naming an
+    error, and a short tail."""
+
+    _TAIL_LINES = 40
+    _SUMMARY_LINES = 40
+    _PCM_STREAM_RE = re.compile(r"Audio: pcm_f32le\b")
+
+    def __init__(self):
+        self.frames = FrameLog()
+        self._summary = []
+        self._output = []
+        self._in_output = False
+        self._first_hint = None
+        self._tail = collections.deque(maxlen=self._TAIL_LINES)
+
+    def feed(self, line):
+        line = line.rstrip("\r\n")
+        frame = parse_ebur128_frame(line)
+        if frame is not None:
+            self.frames[frame[0]] = frame[1]
+            return
+        if self._summary or "Summary:" in line:
+            if len(self._summary) < self._SUMMARY_LINES:
+                self._summary.append(line)
+        if not self._output and "Output #0" in line:
+            self._output.append(line)
+            self._in_output = True
+        elif self._in_output and self._PCM_STREAM_RE.search(line):
+            self._output.append(line)
+            self._in_output = False
+        low = line.strip().lower()
+        if self._first_hint is None and low and low != "conversion failed!" and \
+                any(h in low for h in _FFMPEG_ERROR_HINTS):
+            self._first_hint = line
+        if low:
+            self._tail.append(line)
+
+    def summary_text(self):
+        return "\n".join(self._summary)
+
+    def output_text(self):
+        return "\n".join(self._output)
+
+    def failure_text(self):
+        """Enough of the log for ffmpeg_failure_reason: the first line naming
+        an error (if it has left the tail), then the tail."""
+        head = [self._first_hint] if self._first_hint is not None and self._first_hint not in self._tail else []
+        return "\n".join(head + list(self._tail))
 
 
 class EdgeScanner:
@@ -2570,7 +2678,8 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
         # 5.1 (Debian bookworm, the analyzer image) rejects the whole filter.
         # The per-frame lines sit at the verbose level, so the run logs at it:
         # they are the loudness curve (loudness_curve_from_frames). ~150 bytes
-        # every 100 ms, read off the stderr thread (a 2 h mix: ~11 MB).
+        # every 100 ms, parsed a line at a time as they arrive (FfmpegLog),
+        # never held whole.
         cmd[1:1] = ["-loglevel", "verbose"]
         filters.append("ebur128=peak=sample+true:framelog=verbose")
     if filters:
@@ -2584,10 +2693,16 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
 
     t0 = time.monotonic()
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    err_chunks = []
+    log = FfmpegLog()
+
     # stderr drains on its own thread: a chatty decoder must never block the
-    # PCM pipe (or the reverse) and deadlock the pass.
-    drain = threading.Thread(target=lambda: err_chunks.append(proc.stderr.read()), daemon=True)
+    # PCM pipe (or the reverse) and deadlock the pass. Each line is parsed as
+    # it arrives and dropped (FfmpegLog), so memory does not grow with the
+    # file's length; a line is read at most 64 KB at a time.
+    def drain_log():
+        for raw in iter(lambda: proc.stderr.readline(1 << 16), b""):
+            log.feed(raw.decode("utf-8", errors="replace"))
+    drain = threading.Thread(target=drain_log, daemon=True)
     drain.start()
     timed_out = threading.Event()
 
@@ -2618,26 +2733,30 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
     finally:
         timer.cancel()
         drain.join(timeout=5)
-    err = (err_chunks[0] if err_chunks else b"").decode("utf-8", errors="replace")
     if timed_out.is_set():
         raise RuntimeError(f"whole-file pass timed out after {limit:.0f}s")
+    if drain.is_alive():
+        # ffmpeg has exited, so its stderr is closed: a reader still going
+        # would leave the figures below half read.
+        raise RuntimeError("ffmpeg's log was still being read after it exited")
     if code != 0:
-        raise RuntimeError(f"ffmpeg exited {code}: {ffmpeg_failure_reason(err)}")
+        raise RuntimeError(f"ffmpeg exited {code}: {ffmpeg_failure_reason(log.failure_text())}")
 
     out = {"loudness": None, "edges": None, "seconds": round(time.monotonic() - t0, 2)}
     if loudness:
-        if "Summary:" not in err:
+        summary = log.summary_text()
+        if "Summary:" not in summary:
             raise RuntimeError("ffmpeg printed no ebur128 summary")
-        fig = parse_ebur128_summary(err)
+        fig = parse_ebur128_summary(summary)
         if fig["loudness_lufs"] is None or fig["true_peak_db"] is None:
             # One measurement: a loudness without its peak would let a boost
             # through with no ceiling, so both go together or neither does.
             fig["loudness_lufs"] = None
             fig["true_peak_db"] = None
-        fig["loudness_curve"] = loudness_curve_from_frames(parse_ebur128_frames(err))
+        fig["loudness_curve"] = loudness_curve_from_frames(log.frames)
         out["loudness"] = fig
     if scanner is not None:
-        sr = parse_output_rate(err)
+        sr = parse_output_rate(log.output_text())
         if not sr:
             raise RuntimeError("ffmpeg did not report the output sample rate")
         out["edges"] = scanner.result(sr)
