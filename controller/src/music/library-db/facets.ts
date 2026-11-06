@@ -66,12 +66,14 @@ export const WHOLE_FILE_FACETS: readonly Facet[] = ['loudness', 'edges'];
 // loudness_lufs/peak_db are integrated loudness and true peak over the whole
 // file, stored with the extras below; NULL or 1 is the analysis window's
 // figure. SQL_WHOLE_FILE_LOUDNESS asks a stored row (a figure must be there),
-// isWholeFileLoudnessVersion an answer's or a row's version.
-export const WHOLE_FILE_LOUDNESS_VERSION = 2;
+// isWholeFileLoudnessVersion an answer's or a row's version. A threshold, the
+// FIRST whole-file version: it stays 2 when FACET_VERSIONS.loudness (the
+// version the analyzer stamps today) moves past it.
+export const MIN_WHOLE_FILE_LOUDNESS_VERSION = 2;
 export const SQL_WHOLE_FILE_LOUDNESS =
-  `(loudness_lufs IS NOT NULL AND COALESCE(loudness_version, 1) >= ${WHOLE_FILE_LOUDNESS_VERSION})`;
+  `(loudness_lufs IS NOT NULL AND COALESCE(loudness_version, 1) >= ${MIN_WHOLE_FILE_LOUDNESS_VERSION})`;
 export function isWholeFileLoudnessVersion(version: number | null | undefined): version is number {
-  return (version ?? 1) >= WHOLE_FILE_LOUDNESS_VERSION;
+  return (version ?? 1) >= MIN_WHOLE_FILE_LOUDNESS_VERSION;
 }
 // Written only with a whole-file figure, and dropped with it: a window figure
 // (or none) in its place leaves all four NULL.

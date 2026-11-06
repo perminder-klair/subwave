@@ -2302,8 +2302,10 @@ def facet_loudness(y_src, sr):
 # is reading the whole file (a FLAC is often 20-40 MB).
 
 # Version stamp the controller stores with whole-file loudness figures; a
-# window measurement carries none. Kept in step with the controller's
-# WHOLE_FILE_LOUDNESS_VERSION (library-db/facets.ts).
+# window measurement carries none. Kept equal to the controller's
+# FACET_VERSIONS.loudness (library-db/facets.ts), the current version: bump
+# both together. Never its MIN_WHOLE_FILE_LOUDNESS_VERSION, the threshold
+# that says which stored versions are whole-file at all.
 WHOLE_FILE_LOUDNESS_VERSION = 2
 WHOLE_FILE_FACETS = ("loudness", "edges")
 # Below the BS.1770 absolute gate nothing counts: ffmpeg prints -70 LUFS for
