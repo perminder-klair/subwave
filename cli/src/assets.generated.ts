@@ -1323,7 +1323,8 @@ SITE_URL=
 # FISH_API_KEY=
 # SEARCH_API_KEY=tvly-...           # Tavily or Brave Search key (optional, paid/metered),
 #                                   # or a keen_... Keenable key (optional, raises its free limit),
-#                                   # or an fc-... Firecrawl key
+#                                   # or an fc-... Firecrawl key,
+#                                   # or an ock_... Outcrawl key
 # SearXNG: no env var. Configure base URL in admin UI → Settings → Search.
 # Embedding key — only when embeddings use a different provider/key than chat
 # (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the

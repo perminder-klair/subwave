@@ -200,7 +200,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // The same answer for Firecrawl; null with a key on file means that key
         // is another provider's, and searches refuse it.
         firecrawlKeySource: firecrawlKeySource(),
-        // The keyed providers (Tavily, Brave, Firecrawl) that would refuse the
+        // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl) that would refuse the
         // key on file, so the page can warn for whichever one is picked.
         keyRefusedBy: searchKeyRefusedBy(),
       },

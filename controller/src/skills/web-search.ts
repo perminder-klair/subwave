@@ -1,6 +1,7 @@
 // All providers return { answer, results: [{ title, content }] } behind a 30-minute memo.
 // DDG instant answers may be empty; Tavily/Brave need keys; SearXNG needs a base URL;
-// Keenable is keyless, with an optional key that raises its rate limit; Firecrawl needs a key.
+// Keenable is keyless, with an optional key that raises its rate limit; Firecrawl and
+// Outcrawl need a key.
 // Brave supports artist-name queries (#623); searxngEngines pins only these calls (#1353).
 
 import { config } from '../config.js';
@@ -16,6 +17,7 @@ const DDG_ENDPOINT = 'https://api.duckduckgo.com/';
 const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const KEENABLE_ENDPOINT = 'https://api.keenable.ai/v1/search';
 const FIRECRAWL_ENDPOINT = 'https://api.firecrawl.dev/v2/search';
+const OUTCRAWL_ENDPOINT = 'https://api.outcrawl.ai/v1/search';
 
 type SearchResult = { title: string; content: string };
 type SearchResponse = { answer: string; results: SearchResult[] };
@@ -523,6 +525,65 @@ export function parseFirecrawlResponse(data: unknown): SearchResponse {
   return { answer: '', results };
 }
 
+// Outcrawl backend. Keyed via the shared settings.search.apiKey /
+// SEARCH_API_KEY slot, like Firecrawl. The slot may still hold another
+// provider's key, which must not reach Outcrawl, so anything but an `ock_`
+// value is refused here and reads as not ready in searchReady(). Outcrawl's
+// search takes no time window, so recency is not sent.
+export async function outcrawlSearch(query: string): Promise<SearchResponse> {
+  const apiKey = searchKeySlot().key;
+  if (!apiKey) throw new Error('Outcrawl API key not configured');
+  const refusal = keyOnFileRefusal('outcrawl', apiKey);
+  if (refusal) throw new Error(refusal);
+  const { url, init } = buildOutcrawlRequest({ query, apiKey });
+  const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
+  if (!res.ok) throw new Error(`Outcrawl HTTP ${res.status}`);
+  const data = await res.json();
+  return parseOutcrawlResponse(data);
+}
+
+// Pure request builder for an Outcrawl search, exported so endpoint, headers
+// and body can be pinned without mocking fetch. Keys are `ock_<keyId>.<secret>`
+// (search-key-policy.ts holds the rule). A search asks for 5 results; the admin
+// "Test key" probe asks for 1, because Outcrawl charges per result returned.
+export function buildOutcrawlRequest(opts: {
+  query: string;
+  apiKey: string;
+  limit?: number;
+}): { url: string; init: RequestInit } {
+  return {
+    url: OUTCRAWL_ENDPOINT,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey.trim()}` },
+      body: JSON.stringify({ query: opts.query, limit: opts.limit ?? 5 }),
+    },
+  };
+}
+
+// Pure parser for Outcrawl's search JSON (hits[] of url/title/snippet/rank).
+// Snippets go through the same cleanup as Brave's and Firecrawl's, then
+// whitespace is collapsed before the 300-char cap. There is no answer field.
+// Any shape mismatch yields { answer: '', results: [] }.
+export function parseOutcrawlResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const raw = (data as Record<string, unknown>).hits;
+
+  const text = (v: unknown): string => cleanSnippet(v).replace(/\s+/g, ' ').trim();
+  const results: SearchResult[] = [];
+  for (const r of Array.isArray(raw) ? raw : []) {
+    if (!r || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const title = text(rec.title);
+    const content = text(rec.snippet).slice(0, 300);
+    if (!title || !content) continue;
+    results.push({ title, content });
+    if (results.length >= 5) break;
+  }
+
+  return { answer: '', results };
+}
+
 // Provider dispatcher — reads the active provider from live settings on every
 // call so admin-UI changes take effect immediately. Wraps the backend in a
 // 30-min memo. Cache key includes recency so two callsites with different
@@ -540,6 +601,7 @@ export async function searchWeb(
     if (provider === 'brave') return braveSearch(query, recency);
     if (provider === 'keenable') return keenableSearch(query, recency);
     if (provider === 'firecrawl') return firecrawlSearch(query, recency);
+    if (provider === 'outcrawl') return outcrawlSearch(query);
     return duckduckgoSearch(query);
   });
 }
@@ -550,12 +612,13 @@ export async function searchWeb(
 //   tavily/brave: needs settings.search.apiKey, or SEARCH_API_KEY env, that
 //                 isn't another provider's (search-key-policy.ts)
 //   firecrawl:    the same, and it has to be an fc- key
+//   outcrawl:     the same, and it has to be an ock_ key
 //   searxng:      needs settings.search.baseUrl (no env fallback by design)
 export function searchReady(): boolean {
   const s = settings.get().search;
   const provider = s?.provider || 'duckduckgo';
   if (provider === 'duckduckgo' || provider === 'keenable') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
-  // tavily / brave / firecrawl (and any future keyed provider)
+  // tavily / brave / firecrawl / outcrawl (and any future keyed provider)
   return searchKeyFits(provider, searchKeySlot().key);
 }
