@@ -18,7 +18,7 @@ import { idleWindow, isIdle } from '../broadcast/stream-idle.js';
 import { currentStarve } from '../broadcast/music-starve.js';
 import { advertisedBufferSeconds } from '../broadcast/stream-mounts.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
-import { capStreamBitrates } from '../setup/hosted.js';
+import { advertisedMounts } from '../setup/hosted.js';
 import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
 import { composeBoothFeed } from '../broadcast/booth-carry.js';
 import { publicQueueState, publicSessionTurn } from '../util/public-feed.js';
@@ -297,15 +297,6 @@ router.get('/now-playing', async (req, res) => {
     publicError(res, '/now-playing', err);
   }
 });
-
-// Which optional mounts the mixer runs, as /now-playing and the tune-in files
-// advertise them: the saved flags through the same hosted bitrate ceiling
-// settings/liquidsoap.ts applies (setup/hosted.ts capStreamBitrates), so a
-// mount the ceiling switched off is never offered. No ceiling: the saved flags.
-function advertisedMounts(stream: any): { opusEnabled: boolean; flacEnabled: boolean; aacEnabled: boolean } {
-  const m = stream && typeof stream === 'object' ? capStreamBitrates(stream) : {} as any;
-  return { opusEnabled: m.opusEnabled === true, flacEnabled: m.flacEnabled === true, aacEnabled: m.aacEnabled === true };
-}
 
 // One-paste tune-in files. The always-served MP3 floor comes first; optional
 // Opus / FLAC / AAC mounts are appended only when enabled.

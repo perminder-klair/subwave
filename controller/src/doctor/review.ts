@@ -15,6 +15,7 @@ import { DJ_DOC_KNOWLEDGE } from '../doctor-knowledge.js';
 import type { DoctorReport, DoctorReview, FixId, StationSettings } from './types.js';
 import { fmtTokens, isSchemaErrorMessage } from './util.js';
 import { rememberReview } from './cache.js';
+import { advertisedMounts } from '../setup/hosted.js';
 
 // ---------------------------------------------------------------------------
 // reviewReport — hand the report to the LLM for a plain-English read.
@@ -127,10 +128,12 @@ export function renderSettingsSnapshot(): string {
   try { s = settings.get(); } catch { return ''; }
   const llm: NonNullable<StationSettings['llm']> = s?.llm || {};
   const st: NonNullable<StationSettings['stream']> = s?.stream || {};
+  // Through a hosted plan's ceiling, as the mixer files get them.
+  const running = advertisedMounts(st);
   const mounts = ['mp3'];
-  if (st.opusEnabled) mounts.push('opus');
-  if (st.flacEnabled) mounts.push('flac');
-  if (st.aacEnabled) mounts.push('aac');
+  if (running.opusEnabled) mounts.push('opus');
+  if (running.flacEnabled) mounts.push('flac');
+  if (running.aacEnabled) mounts.push('aac');
 
   let budget = 'unlimited';
   try {

@@ -13,17 +13,20 @@ import {
   type StreamMountDoc,
 } from '../connect/catalog.js';
 import { toOpenApi } from '../connect/openapi.js';
+import { advertisedMounts } from '../setup/hosted.js';
 
 export const router = express.Router();
 
 const VERSION = process.env.SUBWAVE_VERSION || 'latest';
 
-// The MP3 floor is always on; optional mounts follow their settings flag.
+// The MP3 floor is always on; optional mounts follow their settings flag,
+// through a hosted plan's bitrate ceiling (setup/hosted.ts advertisedMounts),
+// so the page never lists a mount the ceiling switched off.
 function mountsWithState(): (StreamMountDoc & { enabled: boolean })[] {
-  const stream = settings.get().stream || {};
+  const mounts = advertisedMounts(settings.get().stream);
   return STREAM_MOUNTS.map(m => ({
     ...m,
-    enabled: m.alwaysOn ? true : stream[m.settingFlag as keyof typeof stream] === true,
+    enabled: m.alwaysOn ? true : m.settingFlag ? mounts[m.settingFlag] : false,
   }));
 }
 
