@@ -70,8 +70,8 @@ import {
   SKILL_TAG_RE,
   TAGS_PER_SKILL_LIMIT,
   normalizeSkillTags,
-  normalizeSkillVoice,
 } from '../schemas/skill.js';
+import { normalizeSkillVoice } from '../schemas/skill-server.js';
 
 // Shipped built-in TEMPLATE store, resolved relative to this module so it works
 // under both dev (tsx on bind-mounted src) and prod (tsx on the COPYd src). This
@@ -385,7 +385,8 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     tags: parseTags(data.tags),
     // The skill's own TTS voice override, or null for the on-air DJ's voice.
     // Lenient by design (normalizeSkillVoice): a hand-edited bad engine reads
-    // as no override; the admin form refuses the same value loudly.
+    // as no override and a voice the engine can't use is repaired, while the
+    // admin form refuses both.
     voice: normalizeSkillVoice(data as Record<string, unknown>),
     // The skill's own frontmatter, handed to the tool as its 4th arg so a skill
     // can read its own knobs (e.g. news' feed / feedMaxItems).

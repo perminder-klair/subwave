@@ -1,7 +1,7 @@
 'use client';
 
 // Enable and Run now act immediately; Save writes the skill file.
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   Controller, useWatch,
@@ -27,6 +27,9 @@ import {
   TAGS_PER_SKILL_LIMIT,
   skillCreateSchema,
   skillFileSchema,
+  ttsVoiceSlotSchema,
+  withSkillVoice,
+  type SkillVoiceSlot,
 } from '@/lib/schemas.generated';
 import { skillSubmitUrl } from '../../../lib/repo';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
@@ -80,8 +83,15 @@ interface SkillFormValues {
   brief: string;
   window: 'any' | 'commute';
   requiresKey: string;
-  voice: { engine: string; voice: string; cloudProvider: string } | null;
+  voice: SkillVoiceSlot | null;
 }
+
+// The persona voice slot, the one home of the per-engine voice rules, behind
+// the skill's override posture. The controller's routes compose the same two
+// pieces (schemas/skill-server.ts).
+const voiceSlot = ttsVoiceSlotSchema('voice');
+// What the Voice switch turns on: the floor engine, on its built-in voice.
+const NEW_SKILL_VOICE: SkillVoiceSlot = { engine: 'piper', voice: '', cloudProvider: 'openai' };
 
 // The skill's current knob values as form strings.
 function configValues(j: SkillFileResponse): Record<string, string> {
@@ -107,7 +117,6 @@ function configKey(config: Record<string, string>): string {
 // GET /dj/skills/:kind/file -> the RHF defaultValues shape. Shared by the load
 // effect and Reset to default.
 function fileToFormValues(j: SkillFileResponse) {
-  const v = j.voice;
   return {
     label: j.label || '',
     cooldown: j.cooldown || '',
@@ -119,9 +128,8 @@ function fileToFormValues(j: SkillFileResponse) {
     tags: Array.isArray(j.tags) ? j.tags : [],
     brief: j.brief || '',
     requiresKey: j.requiresKey || '',
-    voice: v && typeof v === 'object' && typeof v.engine === 'string' && v.engine
-      ? { engine: v.engine, voice: typeof v.voice === 'string' ? v.voice : '', cloudProvider: typeof v.cloudProvider === 'string' && v.cloudProvider ? v.cloudProvider : 'openai' }
-      : null,
+    // The controller sends the override already normalised (normalizeSkillVoice).
+    voice: j.voice?.engine ? { ...j.voice } : null,
   };
 }
 
@@ -192,8 +200,10 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   // The same schema the controller runs, so a bad cooldown is caught at the
   // input. Declared as the widened ZodType rather than the create/edit union:
   // several fields are z.preprocess-wrapped, so the union's input collapses.
-  const schema: z.ZodType<FieldValues, FieldValues> =
-    mode === 'create' ? skillCreateSchema : skillFileSchema(custom);
+  const schema: z.ZodType<FieldValues, FieldValues> = useMemo(
+    () => withSkillVoice(mode === 'create' ? skillCreateSchema : skillFileSchema(custom), voiceSlot),
+    [mode, custom],
+  );
 
   const form = useZodForm(
     schema,
@@ -830,16 +840,14 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                 render={({ field, fieldState }) => {
                   const baseId = `${uid}-voice`;
                   const aria = fieldAria(baseId, fieldState.error);
-                  const slot = field.value as { engine: string; voice: string; cloudProvider: string } | null;
+                  const slot = field.value as SkillVoiceSlot | null;
                   return (
                     <>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         <Switch
                           {...aria.controlProps}
                           checked={!!slot}
-                          onCheckedChange={on => field.onChange(on
-                            ? { engine: 'piper', voice: '', cloudProvider: 'openai' }
-                            : null)}
+                          onCheckedChange={on => field.onChange(on ? { ...NEW_SKILL_VOICE } : null)}
                           onBlur={field.onBlur}
                           ref={field.ref}
                         />

@@ -19,14 +19,13 @@ import * as sfxLib from '../broadcast/sfx.js';
 import { VERBATIM_META } from '../broadcast/prompt-memory.js';
 import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { communitySkillConfig } from '../community/registry.js';
+import { skillFieldsFrom, type SkillFileParsed, type SkillVoiceSlot } from '../schemas/skill.js';
 import {
-  builtinSkillFileSchema,
-  customSkillFileSchema,
+  builtinSkillFileBodySchema,
+  customSkillFileBodySchema,
   normalizeSkillVoice,
-  skillCreateSchema,
-  skillFieldsFrom,
-  type SkillFileParsed,
-} from '../schemas/skill.js';
+  skillCreateBodySchema,
+} from '../schemas/skill-server.js';
 import { validateBody } from '../middleware/validate.js';
 import { firstMessage } from '../util/zod-error.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
@@ -79,7 +78,7 @@ interface SkillFields {
   configKeys?: string[];
   tags?: string[];
   brief?: string;
-  voice?: { engine: string; voice: string; cloudProvider: string } | null;
+  voice?: SkillVoiceSlot | null;
 }
 
 // Read off the LOADED capability, never off the kind string: hardcoding the kind
@@ -391,7 +390,7 @@ async function skillHasTool(slug: string): Promise<boolean> {
 // Adapter over the shared skill schema: throws Error(message) on the first
 // invalid field, which callers map to a 400. The slug is immutable identity.
 function buildCustomSkillFields(slug: string, b: unknown): SkillFields {
-  const parsed = customSkillFileSchema.safeParse(b);
+  const parsed = customSkillFileBodySchema.safeParse(b);
   if (!parsed.success) throw new Error(firstMessage(parsed.error));
   return skillFieldsFrom(slug, parsed.data);
 }
@@ -517,7 +516,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
 // Create a custom prompt-only skill; it arrives DISABLED (loader posture). Shape
 // is validated by the shared schema; the two rules left here are answers about
 // the live install, and both name a FIELD so the operator can retype the slug.
-router.post('/dj/skills', requireAdmin, validateBody(skillCreateSchema), async (req, res) => {
+router.post('/dj/skills', requireAdmin, validateBody(skillCreateBodySchema), async (req, res) => {
   const { name, ...rest } = req.body as { name: string } & SkillFileParsed;
   if (RESERVED_KINDS.has(name)) {
     return res.status(400).json({
@@ -583,7 +582,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
 
   // Built-in edit: same schema as a custom skill minus window/requiresKey, which
   // a built-in takes from its shipped template.
-  const parsed = builtinSkillFileSchema.safeParse(b);
+  const parsed = builtinSkillFileBodySchema.safeParse(b);
   if (!parsed.success) return res.status(400).json({ error: firstMessage(parsed.error) });
   const fields: SkillFields = skillFieldsFrom(kind, parsed.data);
   if (rejectInvalidCron(res, fields)) return;

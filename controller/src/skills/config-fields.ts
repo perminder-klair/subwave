@@ -2,15 +2,17 @@
 // as the tool's config argument. Derive forms from these fields, not skill names
 // (#1300 bug 11). Pure rules are pinned by scripts/skill-config-fields.test.ts.
 
+import { SKILL_VOICE_KEYS } from '../schemas/skill-server.js';
+
 // Frontmatter keys writeSkillFile EMITS from its own typed fields. Two jobs:
 // a skill may not redeclare one as a config field (the line would be written
 // twice), and the preserve pass below must not carry one through (the form is
 // authoritative for them — `contextFields` rides along as the legacy alias of
 // `context`, which writeSkillFile supersedes).
-export const OWNED_FRONTMATTER_KEYS = new Set([
+export const OWNED_FRONTMATTER_KEYS = new Set<string>([
   'name', 'label', 'cooldown', 'context', 'contextFields',
   'window', 'requiresKey', 'tags', 'cron', 'cronOnly', 'cohosts',
-  'voiceEngine', 'voiceId', 'voiceProvider',
+  ...Object.values(SKILL_VOICE_KEYS),
 ]);
 
 // Keys a skill may not declare as a knob: everything writeSkillFile owns, plus

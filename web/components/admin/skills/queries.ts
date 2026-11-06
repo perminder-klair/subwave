@@ -4,6 +4,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { adminJson, type AdminFetch } from '@/lib/admin-query';
 import { useAdminQuery } from '@/lib/admin-query';
 import type { Skill } from './shared';
+import type { SkillVoiceSlot } from '@/lib/schemas.generated';
 import { settingsKeys } from '../settings/queries';
 import { showKeys, showSkillsOf } from '../shows/queries';
 
@@ -69,7 +70,7 @@ export interface SkillFileResponse {
   window?: 'any' | 'commute';
   requiresKey?: string;
   hasTool?: boolean;
-  voice?: { engine: string; voice: string; cloudProvider: string } | null;
+  voice?: SkillVoiceSlot | null;
   // A tool.mjs that arrived by import/restore and has not been trusted yet.
   toolPending?: boolean;
   tags?: string[];
