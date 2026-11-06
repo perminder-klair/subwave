@@ -113,11 +113,12 @@ export const STEER_PREVIEW_MS = 5 * 60_000;
 
 /**
  * What an opening list is worked out FOR: the controller's memo key and the
- * card's. The playlist and the direction only: how long the steer runs and
- * "start now" decide how many of the list it plays, not which tracks it holds.
+ * card's. The playlist, the direction and "start now", which decides the track
+ * the list follows (with it, not the DJ picks Start drops). How long the steer
+ * runs decides only how many of the list it plays, not which tracks it holds.
  */
-export function steerPreviewKey(playlistId: string | null | undefined, prompt: string | null | undefined, once: boolean): string {
-  return `${once ? 1 : STEER_OPENING_TRACKS}\n${playlistId ?? ''}\n${collapse(prompt ?? '')}`;
+export function steerPreviewKey(playlistId: string | null | undefined, prompt: string | null | undefined, once: boolean, startNow: boolean): string {
+  return `${once ? 1 : STEER_OPENING_TRACKS}\n${startNow ? 1 : 0}\n${playlistId ?? ''}\n${collapse(prompt ?? '')}`;
 }
 
 /** The steer in force at `now`, or null. One reading for every caller. */

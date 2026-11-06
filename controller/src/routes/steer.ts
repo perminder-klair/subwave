@@ -61,10 +61,11 @@ export function forgetOpeningList(): void {
 type OpeningList = { picks: any[]; pool: number; held: number; spacingRelaxed: boolean; cached: boolean; at: number };
 
 // The opening tracks for a steer: remembered ones when they were worked out
-// for the same request, else one pool-picker call.
-async function openingList(steer: Steer, once: boolean): Promise<OpeningList> {
+// for the same request, else one pool-picker call. "Start now" is part of the
+// request: it decides which track the list follows.
+async function openingList(steer: Steer, once: boolean, startNow: boolean): Promise<OpeningList> {
   const count = once ? 1 : STEER_OPENING_TRACKS;
-  const key = steerPreviewKey(steer.playlistId, steer.prompt, once);
+  const key = steerPreviewKey(steer.playlistId, steer.prompt, once, startNow);
   if (memo && memo.key === key && Date.now() - memo.at < STEER_PREVIEW_MS) {
     return { picks: memo.picks, pool: memo.pool, held: memo.held, spacingRelaxed: memo.spacingRelaxed, cached: true, at: memo.at };
   }
@@ -75,7 +76,7 @@ async function openingList(steer: Steer, once: boolean): Promise<OpeningList> {
     // takeover's prepared episode. A single track leaves the takeover running.
     const endsTakeover = !once && !!settings.getScheduleOverride();
     const context = await getFullContext(undefined, { ignoreTakeover: endsTakeover });
-    result = await pickViaPool(queue, context, null, null, { preview: { steer, count, episode: !endsTakeover } });
+    result = await pickViaPool(queue, context, null, null, { preview: { steer, count, episode: !endsTakeover, startNow } });
   } catch (err: any) {
     throw new SteerRefused(502, `could not work out the opening tracks: ${err?.message || err}`);
   }
@@ -235,7 +236,7 @@ router.post('/steer/preview', requireAdmin, validateBody(steerRequestSchema), as
     const { steer, warnings } = await steerFromBody(body);
     const timing = once ? null : timingFor(steer, body.startNow);
     if (timing) refuseWithoutRoom(timing, body.startNow);
-    const opening = await openingList(steer, once);
+    const opening = await openingList(steer, once, body.startNow);
     const fit = timing ? openingTracksThatFit(opening.picks.map(lengthOf), timing.leadSec, timing.windowSec) : opening.picks.length;
     res.json({ picks: opening.picks.map(brief), fit, pool: opening.pool, cached: opening.cached, at: opening.at, warnings: [...warnings, ...openingWarnings(opening)] });
   } catch (err: any) {
@@ -253,7 +254,7 @@ router.post('/steer', requireAdmin, validateBody(steerRequestSchema), (req, res)
     const { steer, windowMinutes, untilSchedule, warnings } = await steerFromBody(body);
 
     if (body.until === 'once') {
-      const opening = await openingList(steer, true);
+      const opening = await openingList(steer, true, body.startNow);
       const { tracks, skipped, drop } = await queueOpening(opening.picks, STEER_ONCE_KEY, body);
       memo = null;
       queue.log('scheduler', `[steer] one track queued via admin UI${tracks.length ? '' : ' — it was already queued or on air'}`);
@@ -261,7 +262,7 @@ router.post('/steer', requireAdmin, validateBody(steerRequestSchema), (req, res)
     }
 
     refuseWithoutRoom(timingFor(steer, body.startNow), body.startNow);
-    const opening = await openingList(steer, false);
+    const opening = await openingList(steer, false, body.startNow);
 
     const takeover = settings.getScheduleOverride();
     const previous = settings.activeSteer();

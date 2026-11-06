@@ -639,3 +639,18 @@ test('when every eligible track is by one artist the list keeps them back to bac
     assert.match(start.body.warnings.join('\n'), /too few artists are eligible under this steer/);
   });
 });
+
+test('with start now the opening list follows what stays queued, and is worked out apart from one without it', async () => {
+  queue.current = { track: { id: 'on-air', title: 'On air', artist: 'Someone' } } as never;
+  await queue.push({ track: { id: 'dj-pick', title: 'DJ pick', artist: 'Someone Else' } as never, aiPicked: true });
+  const now = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 60, startNow: true });
+  assert.equal(now.status, 200);
+  assert.equal(lastPayload.now.current?.title, 'On air', 'not the DJ pick Start is about to drop');
+  const later = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 60 });
+  assert.equal(later.body.cached, false, 'another predecessor, so another list');
+  assert.equal(lastPayload.now.current?.title, 'DJ pick');
+  assert.equal(modelCalls, 2);
+  const start = await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 60 });
+  assert.equal(start.body.cached, true, 'Start uses the list worked out for its own "start now"');
+  assert.equal(modelCalls, 2);
+});

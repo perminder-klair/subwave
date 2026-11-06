@@ -642,7 +642,7 @@ function slimAlbum(album: string | null | undefined, title: string | null | unde
 // Build a candidate pool, ask the LLM to choose one; null when it can't.
 // Guard-rescue artist exclusions (#1187) hold through the whole starvation
 // cascade. Preserve the anchor as well as the rejected credit.
-export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null; preview?: { steer: Steer; count: number; episode?: boolean } } = {}): Promise<any> {
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null; preview?: { steer: Steer; count: number; episode?: boolean; startNow?: boolean } } = {}): Promise<any> {
   await library.load();
   // A preview works out a steer's opening tracks without airing anything: it
   // runs under the PROPOSED steer, writes no booth lines, charges no candidate
@@ -673,7 +673,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const recentAlbums = queue.recentAlbumKeys(settings.get().picker?.albumHours ?? 0);
   // Snapshot the predecessor this pick is expected to follow: the queued tail
   // wins over the track on air. Later queue mutations are not revalidated here.
-  const currentTrack = queue.upcoming?.at(-1)?.track ?? queue.current?.track ?? null;
+  // A preview follows the tail its Start will queue behind: with "start now",
+  // not a DJ pick that Start is about to drop (queue.tailTrack).
+  const currentTrack = preview
+    ? queue.tailTrack(preview.startNow === true)
+    : queue.upcoming?.at(-1)?.track ?? queue.current?.track ?? null;
   // Prefer the show already resolved into ctx: near a boundary that is a
   // look-ahead, so the pool follows the show on air when the pick plays.
   const activeShow = steeredShow(ctx?.activeShow !== undefined ? ctx.activeShow : settings.resolveActiveShow(pickAt), steer);
