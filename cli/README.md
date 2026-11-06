@@ -140,8 +140,11 @@ exactly the `curl … | sh` path. A prompt renders and then hangs un-killably.
 
 Three things guard against it, and they work together:
 
-- `src/tty.ts` opens `/dev/tty` directly and hands it to Clack as the prompt's
-  `input`, sidestepping `process.stdin`.
+- On macOS, `src/tty.ts` opens `/dev/tty` directly and hands it to Clack as the
+  prompt's `input`, sidestepping `process.stdin`. Linux doesn't have the bug and
+  keeps `process.stdin`: Bun's `/dev/tty` stream reads with `pread`, which a Linux
+  tty rejects with `ESPIPE: invalid seek` ([#2262](https://github.com/perminder-klair/subwave/issues/2262)).
+  `scripts/smoke-tty-prompt.sh` checks a Linux binary's prompts under a pty.
 - `scripts/patch-clack.mjs` runs at build time, because `@clack/prompts`'
   high-level wrappers don't forward that `input` option. Every build path must
   run it; `scripts/check-clack-patch.mjs` checks the compiled binary.
