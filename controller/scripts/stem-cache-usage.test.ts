@@ -10,9 +10,11 @@
 // - a snapshot older than a day, or with a pass writing, still reports, but
 //   says so (`fresh: false` / `passRunning: true`) — the operator sees an old
 //   figure with its age rather than nothing;
-// - a snapshot a purge or a replaced file's dropped stems marked stale still
-//   reports, flagged (`stale: true`), and the sweep re-measures it rather than
-//   trusting it;
+// - stems dropped for a replaced file come off the stored size by what they
+//   measured, so the next read needs no walk; a drop that cannot be counted
+//   (refused part-way) marks it stale instead;
+// - a stale snapshot still reports, flagged (`stale: true`), and the sweep
+//   re-measures it rather than trusting it; adjustUsage never moves one;
 // - no snapshot, another root, or a malformed one reports null;
 // - GET /stem-cache/usage carries it plus the budget in force.
 //
@@ -20,7 +22,7 @@
 
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listen } from './test-utils/http.js';
@@ -130,20 +132,66 @@ test('GET /stem-cache/usage: with pick-time stems on, how far over its budget th
   }
 });
 
-test('stems dropped for a replaced file keep the figure, flagged, and the next read walks', async () => {
+test('stems dropped for a replaced file come off the stored size, and the next read needs no walk', async () => {
+  // Marked stale instead, one replaced file (an MP3 swapped for a FLAC) cost the
+  // next read a walk of every stem dir: minutes on a share, holding an import.
   writeSnap({ bytes: 80 * GB, dirs: 4000 });
   mkdirSync(stemCache.dirFor('swapped'), { recursive: true });
+  writeFileSync(join(stemCache.dirFor('swapped'), 'head-drums.flac'), 'x'.repeat(1000));
 
   assert.equal((await stemCache.forgetStems(['swapped'])).removed, 1);
 
   const got = await stemCache.storedUsage();
-  assert.equal(got?.bytes, 80 * GB, 'with no figure the budget field loses its warning and its confirm');
-  assert.equal(got?.stale, true);
+  assert.equal(got?.bytes, 80 * GB - 1000);
+  assert.equal(got?.dirs, 3999);
+  assert.equal(got?.stale, false);
+  assert.equal(got?.fresh, true);
   // In the file, not this process: the walk that drops stems is the tagger's child.
-  assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).stale, true);
+  assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).bytes, 80 * GB - 1000);
   const walks = stemCache._cacheWalksForTests();
   await stemCache.usage();
-  assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the sweep re-measures it');
+  await stemCache.headroomTracks(100 * GB);
+  assert.equal(stemCache._cacheWalksForTests(), walks, 'no walk');
+});
+
+test('stems that refuse to go part-way keep the figure, flagged, and the next read walks', { skip: process.getuid?.() === 0 && 'root deletes through any mode' }, async () => {
+  writeSnap({ bytes: 80 * GB, dirs: 4000 });
+  const dir = stemCache.dirFor('stuck');
+  mkdirSync(join(dir, 'locked'), { recursive: true });
+  writeFileSync(join(dir, 'locked', 'head-drums.flac'), 'x');
+  chmodSync(join(dir, 'locked'), 0o555);
+  try {
+    assert.equal((await stemCache.forgetStems(['stuck'])).failed, 1);
+    const got = await stemCache.storedUsage();
+    assert.equal(got?.bytes, 80 * GB, 'what went is unknown, so nothing is taken off');
+    assert.equal(got?.stale, true);
+    const walks = stemCache._cacheWalksForTests();
+    await stemCache.usage();
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the next read re-measures it');
+  } finally {
+    chmodSync(join(dir, 'locked'), 0o755);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('adjustUsage moves only a snapshot the next read would use as is', async () => {
+  writeSnap({ bytes: 80 * GB, dirs: 4000 });
+  assert.equal(await stemCache.adjustUsage({ bytes: 0, dirs: 0 }), 'unchanged');
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'adjusted');
+  assert.deepEqual([(await stemCache.storedUsage())?.bytes, (await stemCache.storedUsage())?.dirs], [79 * GB, 3990]);
+  // A stale one is owed a walk: a delta onto it would launder the flag.
+  await stemCache.markUsageStale();
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'stale');
+  assert.equal((await stemCache.storedUsage())?.bytes, 79 * GB);
+  assert.equal((await stemCache.storedUsage())?.stale, true);
+  // Nothing stored stays nothing.
+  rmSync(snapFile, { force: true });
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'unchanged');
+  assert.equal(await stemCache.storedUsage(), null);
+  // The measuredAt of the last full walk is kept, so the daily walk still comes due.
+  const old = new Date(Date.now() - 2 * 24 * HOUR).toISOString();
+  writeSnap({ bytes: 80 * GB, dirs: 4000, measuredAt: old });
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }), 'stale', 'too old to move');
 });
 
 test('a stale snapshot is still reported, flagged, and never walked for', async () => {
