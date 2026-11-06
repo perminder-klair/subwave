@@ -180,7 +180,10 @@ ANALYZER_HEAVY=1`}</CodeBlock>
             The AIO has no separate analyzer to swap, so there&rsquo;s no overlay: the GPU
             rides on the image. Point the container at{' '}
             <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio-cuda</code>{' '}
-            (the same heavy features on CUDA) and hand it the card
+            (the same heavy features on CUDA) at the tag named for your card&rsquo;s
+            architecture, such as <code className="bs-code-inline">:pascal</code> for a GTX
+            10-series (<code className="bs-code-inline">:latest</code> needs Turing or
+            newer), and hand it the card
             (<code className="bs-code-inline">--gpus all</code>, or on Unraid the nvidia
             runtime plus <code className="bs-code-inline">NVIDIA_VISIBLE_DEVICES</code>;{' '}
             <a className="bs-link" href="/setup/unraid#acoustic-analysis">
