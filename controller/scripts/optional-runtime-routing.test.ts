@@ -44,8 +44,10 @@ test('the route switch is trackSelection, never the derived legacy toggle', () =
 });
 
 test('requests and segments choose their own runtime', () => {
-  assert.match(djAgent, /requestMatching !== 'agentic'/,
-    'direct request matching must bypass the request tool loop');
+  assert.match(djAgent, /function requestMatchingEnabled\(\)/,
+    'request matching must have an explicit runtime seam');
+  assert.match(djAgent, /requestMatchingEnabled\(\)/,
+    'direct request matching must bypass the request tool loop when disabled');
   assert.match(skills, /segmentRuntime === 'direct'/,
     'direct segments must be independently selectable');
 });

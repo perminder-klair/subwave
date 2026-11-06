@@ -6,6 +6,7 @@ export const PROGRESS_PREFIX = '[progress] ';
 export type TaggerPhase =
   | 'walk'
   | 'enrich'
+  | 'language'
   | 'embed'
   | 'seed'
   | 'propagate'

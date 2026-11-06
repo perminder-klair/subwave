@@ -69,6 +69,7 @@ export interface LibraryShared {
   flashId: string | null;
   editingId: string | null;
   manualBusy: string | null;
+  languageBusy: string | null;
   eraBusy: string | null;
   blocking: string | null;
   queueTrack: (t: Track) => Promise<void>;
@@ -79,6 +80,7 @@ export interface LibraryShared {
   saveManualTag: (
     t: Track, moods: string[], energy: string | null, applyToAlbum: boolean,
   ) => Promise<void>;
+  saveManualLanguage: (t: Track, language: string | null, applyToAlbum: boolean) => Promise<void>;
   saveEraYear: (t: Track, originalYear: number | null, applyToAlbum: boolean) => Promise<void>;
   blockTrack: (t: Track, type: BlockType) => Promise<void>;
   unblockRow: (t: Track, ref: BlockRef) => Promise<void>;
@@ -152,9 +154,15 @@ export function LibraryProvider({
   const wasRunning = useRef(false);
   useEffect(() => {
     const now = !!tagger?.running;
-    if (wasRunning.current && !now) void reloadCoverage();
+    if (wasRunning.current && !now) {
+      void reloadCoverage();
+      // A language-only run changes membership in both Needs-tags lists, while
+      // a normal run can change mood membership too. Refresh every cached row
+      // family once the child has committed its final DB writes.
+      void qc.invalidateQueries({ queryKey: libraryKeys.rows });
+    }
     wasRunning.current = now;
-  }, [tagger?.running, reloadCoverage]);
+  }, [tagger?.running, reloadCoverage, qc]);
 
   // Re-marks the loaded rows after a block write; block-actions has why.
   const restampBlockMarks = useCallback(
@@ -353,6 +361,7 @@ export function LibraryProvider({
   const [flashId, setFlashId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [manualBusy, setManualBusy] = useState<string | null>(null);
+  const [languageBusy, setLanguageBusy] = useState<string | null>(null);
   // Separate from manualBusy: one spinner covering both would grey out the tag
   // chips while a year is saving.
   const [eraBusy, setEraBusy] = useState<string | null>(null);
@@ -439,6 +448,35 @@ export function LibraryProvider({
       setRetagging(null);
     }
   }, [adminFetch, qc, flash, reloadCoverage]);
+
+  const saveManualLanguage = useCallback(async (
+    track: Track, language: string | null, applyToAlbum: boolean,
+  ) => {
+    setLanguageBusy(track.id);
+    try {
+      const j = await adminJson<{ updated?: number; cleared?: boolean; language?: string | null }>(
+        adminFetch,
+        '/library/manual-language',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: track.id, language, applyToAlbum }),
+        },
+      );
+      const n = j.updated ?? 1;
+      const scope = applyToAlbum ? `${n} album track${n === 1 ? '' : 's'}` : 'track';
+      notify.ok(j.cleared ? `cleared language override · ${scope}` : `language set to ${j.language || language} · ${scope}`);
+      setEditingId(null);
+      flash(track.id);
+      // Language is shared by browse, search, recent, liked, and untagged
+      // projections. Refresh the whole Track-row family after an override.
+      void qc.invalidateQueries({ queryKey: libraryKeys.rows });
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setLanguageBusy(null);
+    }
+  }, [adminFetch, qc, flash]);
 
   const onEditTrack = useCallback((t: Track) => {
     setEditingId(curr => {
@@ -569,8 +607,8 @@ export function LibraryProvider({
     selected, toggleSelect, toggleAllRows, clearSelection,
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
-    queuing, retagging, flashId, editingId, manualBusy, eraBusy, blocking,
-    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
+    queuing, retagging, flashId, editingId, manualBusy, languageBusy, eraBusy, blocking,
+    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveManualLanguage, saveEraYear,
     blockTrack, unblockRow, removeBlockEntry,
   }), [
     adminFetch, ready, coverage, reloadCoverage, tagger, restampBlockMarks,
@@ -578,8 +616,8 @@ export function LibraryProvider({
     selected, toggleSelect, toggleAllRows, clearSelection,
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
-    queuing, retagging, flashId, editingId, manualBusy, eraBusy, blocking,
-    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
+    queuing, retagging, flashId, editingId, manualBusy, languageBusy, eraBusy, blocking,
+    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveManualLanguage, saveEraYear,
     blockTrack, unblockRow, removeBlockEntry,
   ]);
 

@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { after, test, type TestContext } from 'node:test';
+import { after, test, type Mock, type TestContext } from 'node:test';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 import { listen as listenHttp } from './test-utils/http.js';
 
@@ -138,6 +138,69 @@ test('searchWeb: dispatches to Firecrawl and carries the recency through as tbs'
   assert.equal(calls[0].url, 'https://api.firecrawl.dev/v2/search');
   assert.equal(JSON.parse(calls[0].body).tbs, 'qdr:w');
   assert.equal(out.results.length, 5);
+});
+
+test('searchWeb: a request deadline reaches Firecrawl, and its failure is typed', async (t) => {
+  stubSearch(t);
+  await settings.update({ search: { provider: 'firecrawl', apiKey: 'fc-signal' } });
+  const { mock } = globalThis.fetch as Mock<typeof fetch>;
+  const deadline = new AbortController();
+  let sent: AbortSignal | null | undefined;
+  mock.mockImplementation(async (_input, init) => {
+    sent = init?.signal;
+    return new Response(JSON.stringify(fixture('firecrawl-artist.json')), { status: 200 });
+  });
+  await searchWeb('signal probe', { signal: deadline.signal });
+  deadline.abort();
+  assert.equal(sent?.aborted, true);
+
+  mock.mockImplementation(async () => new Response('nope', { status: 500 }));
+  await assert.rejects(searchWeb('typed failure probe'), { provider: 'firecrawl', providerFailure: true });
+});
+
+test('searchWeb: a 200 with the wrong shape is a failed search, not an empty one', async (t) => {
+  stubSearch(t);
+  await settings.update({ search: { provider: 'firecrawl', apiKey: 'fc-shape' } });
+  const { mock } = globalThis.fetch as Mock<typeof fetch>;
+  for (const [n, body] of [{ success: false, error: 'quota exceeded' }, { success: true }, { data: { web: 'nope' } }, []].entries()) {
+    mock.mockImplementation(async () => new Response(JSON.stringify(body), { status: 200 }));
+    await assert.rejects(searchWeb(`shape probe ${n}`), { provider: 'firecrawl', providerFailure: true, reason: 'malformed' });
+  }
+  mock.mockImplementation(async () => new Response(JSON.stringify({ success: true, data: { web: [] } }), { status: 200 }));
+  assert.deepEqual(await searchWeb('an honest empty search'), { answer: '', results: [] });
+});
+
+test('parse: a result keeps its url, as every other provider does', () => {
+  const out = parseFirecrawlResponse(fixture('firecrawl-artist.json'));
+  assert.equal(out.results[0].url, 'https://www.sabrinacarpenter.com/');
+  const bare = parseFirecrawlResponse({ data: { web: [{ title: 'No link', description: 'Some text' }] } });
+  assert.equal('url' in bare.results[0], false);
+});
+
+test('searchWeb: caller cancellation reaches the Firecrawl request', async (t) => {
+  const originalSearch = structuredClone(settings.get().search);
+  const controller = new AbortController();
+  let providerSignal: AbortSignal | undefined;
+  let markStarted!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  t.mock.method(globalThis, 'fetch', ((input: string | URL | Request, init?: RequestInit) => {
+    void input;
+    providerSignal = init?.signal ?? undefined;
+    markStarted();
+    return new Promise<Response>((resolve, reject) => {
+      providerSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      setTimeout(() => resolve(new Response(JSON.stringify(fixture('firecrawl-artist.json')), { status: 200 })), 50);
+    });
+  }) as typeof fetch);
+  t.after(async () => settings.update({ search: originalSearch }));
+  await settings.update({ search: { provider: 'firecrawl', apiKey: 'fc-test' } });
+
+  const pending = searchWeb('cancel Firecrawl request', { signal: controller.signal });
+  await started;
+  controller.abort();
+
+  await assert.rejects(pending, /abort/i);
+  assert.equal(providerSignal?.aborted, true);
 });
 
 test('isFirecrawlKey: only an fc- value counts', () => {

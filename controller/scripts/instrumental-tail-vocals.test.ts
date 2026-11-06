@@ -373,7 +373,9 @@ test('embed text: the Sound line drops the word for a tail-sung track, through b
 
 test('payloads and routes carry the verdict and never the evidence', async () => {
   subsonicSongs = raw(['reported']);
-  const similar = publicSimilarTrack(library.slimById('reported'));
+  const similarSource = library.slimById('reported');
+  assert.ok(similarSource, 'the seeded track must be available for the public projection');
+  const similar = publicSimilarTrack(similarSource);
   assert.equal(similar.instrumental, false, 'public similar-tracks row');
   assert.ok(!Object.keys(similar).some(key => /vocal/i.test(key)));
 

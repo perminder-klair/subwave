@@ -231,3 +231,16 @@ test('#1993: a spacing window of 0 turns stand-in spacing off, as it does for pi
   assert.equal(record.guard, null);
   assert.deepEqual(boothLines(), []);
 });
+
+
+test('#1993: a named seed the library holds still spaces its neighbours, best first', async (t) => {
+  const SEED = { id: 'seed-song', title: 'Seed Song', artist: 'Seed Artist', album: 'Seed', duration: 200, isDir: false };
+  const THIRD = { id: 'third-song', title: 'Third Song', artist: 'Third Artist', album: 'Third', duration: 200, isDir: false };
+  stubNetwork(t, { matcher: LIKE_MJ, similar: [HOLIDAY, GIRLS, THIRD], search: [SEED] });
+  // A random draw would land on the last neighbour; ranking keeps the second.
+  (Math.random as unknown as { mock: { mockImplementation(fn: () => number): void } }).mock.mockImplementation(() => 0.99);
+  const { outcome, record } = await request('something like Seed Song');
+  assert.equal(outcome.track?.artist, 'Cyndi Lauper', 'the top neighbour is by the on-air artist');
+  assert.equal(record.pickSource, 'similar-to-seed');
+  assert.equal(record.guard, 'artist-spaced');
+});

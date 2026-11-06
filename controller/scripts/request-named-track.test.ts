@@ -255,6 +255,14 @@ test('requestedRecording: only what a listener adds after a name may follow it',
   assert.equal(requestedRecording('Hello by Adele please')?.isExact(HELLO), true);
 });
 
+test('requestedRecording: words the parse reads as attributes keep their look-up', () => {
+  for (const [text, title] of [['play Focus', 'Focus'], ['play Love Song', 'Love Song'], ['play Rock Music', 'Rock Music'], ['Punjabi', 'Punjabi'], ['something like Olivia', 'something like Olivia']]) {
+    const asked = requestedRecording(text);
+    assert.equal(asked?.query, title, text);
+    assert.equal(asked?.isExact({ id: 'x', title, artist: 'Fixture Artist' }), true, text);
+  }
+});
+
 test('requestedRecording: a title of framing words is no proof of a title', () => {
   for (const [text, title, artist] of [
     ['play U2 please', 'Please', 'U2'], ['U2 please', 'Please', 'U2'],

@@ -58,7 +58,7 @@ const settings = await import('../src/settings.js');
 await settings.load();
 const { config } = await import('../src/config.js');
 const { queue } = await import('../src/broadcast/queue.js');
-const { proveLibraryMount, _resetLibraryMount } = await import('../src/music/library-mount.js');
+const { libraryMountProven, proveLibraryMount, _resetLibraryMount } = await import('../src/music/library-mount.js');
 // The queue's own fields this test sets and reads.
 type Pick = {
   track: { id: string; title: string; artist: string; album: string; path: string; duration: number };
@@ -133,14 +133,19 @@ test('a pick the mixer says it can read goes out local, with no probe to chase',
 
 test('a pick the mixer\'s copy lacks streams with a probe, though the mount is proven', async () => {
   const OTHER = 'Other/Album/01 - Elsewhere.flac';
-  // Proven first, on SONG: the walk's sample is whichever file readdir lists
-  // last, and on ext4 that would be the file the mixer lacks.
-  assert.equal((await proveLibraryMount())?.sample, join(root, SONG));
+  // Prove first, on SONG, before adding the narrower mixer-only miss. Otherwise
+  // findSample may choose OTHER as its sample and leave the mount unproven.
+  const proof = await proveLibraryMount();
+  assert.equal(proof?.sample, join(root, SONG));
+  assert.equal(libraryMountProven(root), true);
   put(join(root, OTHER));
   missing.add(join(root, OTHER));
   const item = pick(OTHER);
   q.upcoming = [item];
   await queue.drainToLiquidsoap(true);
+  // A per-file miss schedules an asynchronous mount re-proof. Finish it before
+  // the next test resets the shared mount state.
+  await proveLibraryMount();
 
   const uri = handedOver();
   assert.match(uri, /:subhttp:http:\/\/drain-library\.invalid\/rest\/stream\?/);

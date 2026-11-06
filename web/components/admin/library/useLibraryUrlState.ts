@@ -18,6 +18,7 @@ export interface LibraryUrlState {
   energy: Energy; setEnergy: (e: Energy) => void;
   vocal: Vocal; setVocal: (v: Vocal) => void;
   genre: string; setGenre: (g: string) => void;
+  language: string; setLanguage: (l: string) => void;
   yearFrom: string; setYearFrom: (y: string) => void;
   yearTo: string; setYearTo: (y: string) => void;
   q: string; setQ: (q: string) => void;
@@ -38,6 +39,7 @@ export function useLibraryUrlState(): LibraryUrlState {
   const [energy, setEnergy] = useState<Energy>('any');
   const [vocal, setVocal] = useState<Vocal>('any');
   const [genre, setGenre] = useState<string>('');
+  const [language, setLanguage] = useState<string>('');
   const [yearFrom, setYearFrom] = useState<string>('');
   const [yearTo, setYearTo] = useState<string>('');
   const [q, setQ] = useState<string>('');
@@ -67,6 +69,8 @@ export function useLibraryUrlState(): LibraryUrlState {
     if (vo === 'vocal' || vo === 'instrumental') setVocal(vo);
     const g = sp.get('genre');
     if (g) setGenre(g);
+    const lang = sp.get('language');
+    if (lang) setLanguage(lang);
     const yf = sp.get('from');
     if (yf) setYearFrom(yf);
     const yt = sp.get('to');
@@ -90,6 +94,7 @@ export function useLibraryUrlState(): LibraryUrlState {
     if (energy !== 'any') sp.set('energy', energy);
     if (vocal !== 'any') sp.set('vocal', vocal);
     if (genre) sp.set('genre', genre);
+    if (language) sp.set('language', language);
     if (yearFrom) sp.set('from', yearFrom);
     if (yearTo) sp.set('to', yearTo);
     if (q.trim()) sp.set('q', q.trim());
@@ -98,11 +103,11 @@ export function useLibraryUrlState(): LibraryUrlState {
     if (searchMode === 'sound') sp.set('smode', 'sound');
     const qs = sp.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
-  }, [restored, tab, trackMode, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, searchQuery, searchMode]);
+  }, [restored, tab, trackMode, moods, energy, vocal, genre, language, yearFrom, yearTo, q, sort, searchQuery, searchMode]);
 
   return {
     tab, setTab, trackMode, setTrackMode,
-    moods, setMoods, energy, setEnergy, vocal, setVocal, genre, setGenre,
+    moods, setMoods, energy, setEnergy, vocal, setVocal, genre, setGenre, language, setLanguage,
     yearFrom, setYearFrom, yearTo, setYearTo, q, setQ, sort, setSort,
     searchQuery, setSearchQuery, searchMode, setSearchMode,
     restored,
