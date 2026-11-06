@@ -171,6 +171,7 @@ const NAV_SECTIONS: NavSection[] = [
         icon: CalendarClock,
         children: [
           { href: '/admin/shows/schedule', id: 'shows-schedule', label: 'Schedule', icon: CalendarDays },
+          { href: '/admin/shows/templates', id: 'shows-templates', label: 'Sub/Shows', icon: Sparkles },
         ],
       },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
@@ -254,6 +255,7 @@ const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }
 function resolveCrumb(pathname: string | null): { section?: string; page: string } {
   if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
   if (pathname?.startsWith('/admin/shows/schedule')) return { section: 'Programming', page: 'Schedule' };
+  if (pathname?.startsWith('/admin/shows/templates')) return { section: 'Programming', page: 'Sub/Shows' };
   if (pathname?.startsWith('/admin/doctor')) return { section: 'Monitor', page: 'DJ Doc' };
   if (pathname?.startsWith('/admin/stations')) return { section: 'System', page: 'Stations' };
   for (const section of NAV_SECTIONS) {

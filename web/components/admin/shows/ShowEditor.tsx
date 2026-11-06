@@ -115,7 +115,8 @@ interface ShowEditorProps {
   onApplyDraft: (patch: Partial<Show>) => void;
   onSave: () => void; // Save show — persists just this show (POST /shows)
   onClose: () => void;
-  onRemove: () => void;
+  onRemove?: () => void;
+  title?: string;
 }
 
 export function ShowEditor({
@@ -145,6 +146,7 @@ export function ShowEditor({
   onSave,
   onClose,
   onRemove,
+  title,
 }: ShowEditorProps) {
   const uid = useId();
   const [tagDraftBlocked, setTagDraftBlocked] = useState(false);
@@ -292,7 +294,7 @@ export function ShowEditor({
       onOpenChange={o => {
         if (!o) onClose();
       }}
-      title={<Eyebrow className="text-vermilion">{isNew ? 'New show' : 'Edit show'}</Eyebrow>}
+      title={<Eyebrow className="text-vermilion">{title ?? (isNew ? 'New show' : 'Edit show')}</Eyebrow>}
       sub={
         <span className="caption block max-w-[42vw] truncate sm:max-w-[50vw]">
           {show.name.trim() || 'define a show'}
@@ -319,7 +321,7 @@ export function ShowEditor({
               </span>
             </>
           }
-          actions={[{ id: 'remove', label: 'Remove', tone: 'danger', onClick: onRemove }]}
+          actions={onRemove ? [{ id: 'remove', label: 'Remove', tone: 'danger', onClick: onRemove }] : []}
           primary={[
             { id: 'close', label: 'Close', onClick: onClose },
             {

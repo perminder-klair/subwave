@@ -252,6 +252,10 @@ export function candidateFilterTracks(): Array<{
   id: string;
   title: string | null;
   artist: string | null;
+  album: string | null;
+  albumId: string | null;
+  artistId: string | null;
+  lastfmTags: string[] | null;
   year: number | null;
   originalYear: number | null;
   isCompilation: boolean | null;
@@ -275,6 +279,10 @@ export function candidateFilterTracks(): Array<{
     id: string;
     title: string | null;
     artist: string | null;
+    album: string | null;
+    album_id: string | null;
+    artist_id: string | null;
+    lastfm_tags: string | null;
     year: number | null;
     original_year: number | null;
     is_compilation: number | null;
@@ -289,7 +297,7 @@ export function candidateFilterTracks(): Array<{
     duration_sec: number | null;
     explicit_status: ExplicitStatus | null;
   };
-  const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
+  const rows = requireDb().prepare(`SELECT id, title, artist, album, album_id, artist_id, lastfm_tags, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
     vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
     FROM tracks`).all() as CandidateFilterRow[];
@@ -297,6 +305,10 @@ export function candidateFilterTracks(): Array<{
     id: row.id,
     title: row.title ?? null,
     artist: row.artist ?? null,
+    album: row.album ?? null,
+    albumId: row.album_id ?? null,
+    artistId: row.artist_id ?? null,
+    lastfmTags: row.lastfm_tags ? safeParseArray(row.lastfm_tags) : null,
     year: row.year ?? null,
     originalYear: row.original_year ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,

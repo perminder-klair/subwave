@@ -14,27 +14,39 @@ import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { useUnsavedGuard } from '../../../hooks/useUnsavedGuard';
 import { cn } from '../../../lib/cn';
 import { Button } from '../../ui/button';
+import { Input } from '../../ui/input';
+import { Label } from '../../ui/label';
 import { Modal } from '../../ui/modal';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { Card } from '../ui';
+import { GuestPersonaPicker } from '../shows/ShowPickers';
 import Board from './Board';
 import SaveBar from './SaveBar';
 import EditorBand, { LineEditor } from './EditorBand';
-import type { EditorLine, Suggestion } from './EditorBand';
+import type { AirtimeRow, EditorLine, Suggestion } from './EditorBand';
 import { ColorChip, Mu } from './bits';
-import type { Block, DragPlan, Schedule, ScheduleShow } from './lib';
+import type { Block, DragPlan, GeneratedTemplateId, Schedule } from './lib';
 import {
-  DAYS, SHOW_COLORS, applyRunDrag, blockAhead, blockAt, bookedHours, cloneWeek, dayBlocks,
+  DAYS, GENERATED_SHOW_TEMPLATES, SHOW_COLORS,
+  applyRunDrag, blockAhead, blockAt, bookedHours, cloneWeek, dayBlocks, generatedShowColor, generatedShowLabel,
   dayName, diffCells, diffRanges, emptyWeek, fillDayToggle, fillHourToggle,
   hhmm, resizeBlock, setRange, showHours, weekOrders,
 } from './lib';
 import { settingsKeys, useSettingsQuery } from '../settings/queries';
 import { scheduleKeys, useScheduleOverrideQuery } from './queries';
 import { isDefaultTakeover, takeoverShowId } from '@/lib/schemas.generated';
+import type { ShowGenerationConfig } from '@/lib/schemas.generated';
+import { clientMintId, hydrateShow as hydrateFullShow, showPayload } from '../shows/lib';
+import type { Show } from '../shows/types';
+import { GUESTS_MAX, SHOWS_MAX } from '../shows/types';
+import { patchShowSettings } from '../shows/queries';
 
 /** The airtime-bar tick — hours a show "should" get in a week. */
 const WEEKLY_TARGET = 12;
+const RANDOM_HOST = '__random_host__';
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
 
 function scheduleWriteError(error: unknown): string {
   if (error instanceof AdminResponseError) {
@@ -52,37 +64,21 @@ interface Persona {
 
 interface SettingsResponse {
   values?: {
-    shows?: Array<Record<string, unknown>>;
+    shows?: Array<Partial<Show>>;
     schedule?: Schedule;
     personas?: Persona[];
     timezone?: string;
     locale?: StationLocale;
+    subShows?: { eligibleHostPersonaIds?: string[] | null };
   };
   serverTimezone?: string;
-}
-
-// Legacy singular fields hydrate as one-element lists (same coercion as ShowsPanel).
-function hydrateShow(raw: Record<string, unknown>): ScheduleShow | null {
-  const id = typeof raw.id === 'string' ? raw.id : '';
-  if (!id) return null;
-  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
-  return {
-    id,
-    name: name || 'untitled',
-    personaId: typeof raw.personaId === 'string' ? raw.personaId : '',
-    moods: Array.isArray(raw.moods)
-      ? (raw.moods as string[])
-      : typeof raw.mood === 'string' && raw.mood ? [raw.mood] : [],
-    energies: Array.isArray(raw.energies)
-      ? (raw.energies as string[])
-      : typeof raw.energy === 'string' && raw.energy ? [raw.energy] : [],
-  };
 }
 
 export default function SchedulePanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const router = useRouter();
-  const [shows, setShows] = useState<ScheduleShow[]>([]);
+  const [shows, setShows] = useState<Show[]>([]);
+  const [serverShows, setServerShows] = useState<Show[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [serverSchedule, setServerSchedule] = useState<Schedule | null>(null);
@@ -96,6 +92,8 @@ export default function SchedulePanel() {
     refetchOnMount: 'always',
   });
   const overrideQuery = useScheduleOverrideQuery(adminFetch, queryEnabled);
+  const commonGroundPool = settingsQuery.data?.values?.subShows?.eligibleHostPersonaIds;
+  const commonGroundPersonas = personas.filter(persona => commonGroundPool == null || commonGroundPool.includes(persona.id));
   const err = settingsQuery.error && !schedule ? errorMessage(settingsQuery.error) : null;
 
   // Board columns collapsed to rails, keyed by storage day (0=Sun..6=Sat).
@@ -110,6 +108,11 @@ export default function SchedulePanel() {
   // The armed show — the shelf chip acting as a brush (#1204). Deliberately not
   // `lineShowId`, which every card click sets: bulk fills must not ride on that.
   const [armedShowId, setArmedShowId] = useState<string | null>(null);
+  const [armedTemplateId, setArmedTemplateId] = useState<GeneratedTemplateId | null>(null);
+  const [generatedOptionsDraft, setGeneratedOptionsDraft] = useState<Show | null>(null);
+  // One page-local preset; selecting another template discards it.
+  const [templateOptions, setTemplateOptions] = useState<Show | null>(null);
+  const [editingTemplateOptions, setEditingTemplateOptions] = useState(false);
   const [density, setDensity] = useBoardDensity();
 
   const [dismissed, setDismissed] = useState<string[]>([]);
@@ -133,9 +136,10 @@ export default function SchedulePanel() {
         if (Array.isArray(day)) for (let h = 0; h < 24; h++) week[d]![h] = day[h] ?? null;
       }
       const loaded = (j.values?.shows || [])
-        .map(hydrateShow)
-        .filter((s): s is ScheduleShow => !!s);
+        .filter(show => typeof show.id === 'string' && !!show.id)
+        .map(show => hydrateFullShow(show));
       setShows(loaded);
+      setServerShows(loaded);
       setPersonas(j.values?.personas || []);
       setTz(j.values?.timezone || j.serverTimezone);
       setLocale(normalizeStationLocale(j.values?.locale));
@@ -176,15 +180,30 @@ export default function SchedulePanel() {
   }, [now, tz]);
 
   const colorOf = (id: string | null | undefined): string => {
+    const show = id ? shows.find(s => s.id === id) : null;
+    if (show?.generation?.mode === 'generated') return generatedShowColor(show.generation.template);
     const idx = id ? shows.findIndex(s => s.id === id) : -1;
     return idx >= 0 ? (SHOW_COLORS[idx % SHOW_COLORS.length] ?? 'transparent') : 'transparent';
   };
   const showById = (id: string | null) => shows.find(s => s.id === id) ?? null;
   const personaName = (id: string) => personas.find(p => p.id === id)?.name || '—';
+  const showLabel = (show: Show | null | undefined) => show?.generation?.mode === 'generated'
+    ? generatedShowLabel(show, personas)
+    : show?.name ?? 'show';
+  const showLabelOf = (id: string | null) => showLabel(showById(id));
   // Bare values only — "Saaya · night · low", no field labels.
   const metaOf = (id: string | null): string => {
     const s = showById(id);
     if (!s) return 'the station runs itself';
+    if (s.generation?.mode === 'generated') {
+      const host = s.generation.hostMode === 'random' ? 'Random host' : personaName(s.personaId);
+      const guests = s.generation.guestMode === 'none'
+        ? 'No guests'
+        : s.generation.guestMode === 'random'
+          ? s.generation.template === 'common-ground' ? 'Random guest' : `Random guests (${s.generation.guestCount.min}–${s.generation.guestCount.max})`
+          : 'Selected guests';
+      return `${host} · ${guests}`;
+    }
     const bits = [personaName(s.personaId), s.moods.join(', ')];
     if (s.energies.length) bits.push(s.energies.join(', '));
     return bits.filter(Boolean).join(' · ');
@@ -193,7 +212,14 @@ export default function SchedulePanel() {
 
   const booked = schedule ? bookedHours(schedule) : 0;
   const orders = useMemo(() => (schedule ? weekOrders(schedule) : []), [schedule]);
-  const dirty = schedule && serverSchedule ? diffCells(schedule, serverSchedule) : 0;
+  const serverShowById = new Map(serverShows.map(show => [show.id, show]));
+  const dirtyGeneratedShows = shows.filter(show => {
+    if (show.generation?.mode !== 'generated') return false;
+    const saved = serverShowById.get(show.id);
+    return !saved || JSON.stringify(showPayload(show)) !== JSON.stringify(showPayload(saved));
+  });
+  const dirty = (schedule && serverSchedule ? diffCells(schedule, serverSchedule) : 0)
+    + dirtyGeneratedShows.length;
 
   const liveOverride = override && override.expiresAt > now.getTime() ? override : null;
   const pinnedShowId = takeoverShowId(liveOverride);
@@ -210,19 +236,33 @@ export default function SchedulePanel() {
   /** The sentence editor follows the brush so the two editing paths agree. */
   const armShow = (id: string) => {
     setArmedShowId(cur => (cur === id ? null : id));
+    setArmedTemplateId(null);
     setLineShowId(id);
   };
 
+  const armTemplate = (templateId: GeneratedTemplateId) => {
+    const draft = makeGeneratedShow(templateId);
+    if (!draft) return;
+    if (templateOptions?.generation?.template !== templateId) setTemplateOptions(null);
+    setArmedShowId(null);
+    setArmedTemplateId(templateId);
+    setEditingTemplateOptions(true);
+    setGeneratedOptionsDraft(draft);
+  };
+
   useEffect(() => {
-    if (!armedId) return;
+    if (!armedId && !armedTemplateId) return;
     const onKeyDown = (e: KeyboardEvent) => {
       // Radix consumes Escape in a capture listener; closing an overlay must
       // not also drop the brush.
-      if (e.key === 'Escape' && !e.defaultPrevented) setArmedShowId(null);
+      if (e.key === 'Escape' && !e.defaultPrevented) {
+        setArmedShowId(null);
+        setArmedTemplateId(null);
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [armedId]);
+  }, [armedId, armedTemplateId]);
 
   /** Day header with a show armed: all 24 hours, or clear when the day already
    *  runs nothing else, so a second click undoes the first. */
@@ -233,7 +273,7 @@ export default function SchedulePanel() {
     const cleared = (next[day] ?? []).every(c => c == null);
     notify.ok(cleared
       ? `${dayName(day)} cleared — unsaved until you save the week.`
-      : `“${armedShow.name}” across ${dayName(day)} — unsaved until you save the week.`);
+      : `“${showLabel(armedShow)}” across ${dayName(day)} — unsaved until you save the week.`);
   };
 
   /** Gutter hour with a show armed: that hour every day, same toggle-off rule. */
@@ -244,13 +284,25 @@ export default function SchedulePanel() {
     const cleared = DAYS.every(d => next[d.key]?.[hour] == null);
     notify.ok(cleared
       ? `${hhmm(hour)} cleared all week — unsaved until you save the week.`
-      : `“${armedShow.name}” at ${hhmm(hour)} every day — unsaved until you save the week.`);
+      : `“${showLabel(armedShow)}” at ${hhmm(hour)} every day — unsaved until you save the week.`);
   };
 
   const pick = (b: Block) => {
+    const show = showById(b.showId);
     setLine({ day: b.day, start: b.start, end: b.start + b.span });
     setLineDays([b.day]);
     setLineShowId(b.showId ?? lineShowId ?? shows[0]?.id ?? null);
+    if (show?.generation?.mode === 'generated') {
+      setEditingTemplateOptions(false);
+      setGeneratedOptionsDraft({
+        ...show,
+        generation: {
+          ...show.generation,
+          guestCount: { ...show.generation.guestCount },
+        },
+      });
+      return;
+    }
     // block: 'nearest' makes this a no-op when the order desk is already visible.
     bandRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
@@ -269,7 +321,67 @@ export default function SchedulePanel() {
     setLineDays([b.day]);
     setLineShowId(showId);
     notify.ok(
-      `“${showById(showId)?.name ?? 'show'}” now ${dayName(b.day)} ${hhmm(b.start)} – ${hhmm(b.start + b.span)} — unsaved until you save the week.`,
+      `“${showLabelOf(showId)}” now ${dayName(b.day)} ${hhmm(b.start)} – ${hhmm(b.start + b.span)} — unsaved until you save the week.`,
+    );
+  };
+
+  const makeGeneratedShow = (templateId: GeneratedTemplateId): Show | null => {
+    const template = GENERATED_SHOW_TEMPLATES.find(item => item.id === templateId);
+    const personaIds = (templateId === 'common-ground' || templateId === 'outside-comfort-zone' ? commonGroundPersonas : personas).map(persona => persona.id).filter(Boolean);
+    if (templateId === 'common-ground' && personaIds.length < 2) {
+      notify.err('Enable at least two DJs in Sub/Shows → Random Hosts before adding Common Ground.');
+      return null;
+    }
+    if (!template || personaIds.length === 0) {
+      notify.err('Enable at least one DJ in Sub/Shows → Random Hosts before scheduling a generated show.');
+      return null;
+    }
+    if (shows.length >= SHOWS_MAX) {
+      notify.err(`The show list is full (${SHOWS_MAX} shows max). Remove one before adding a generated show.`);
+      return null;
+    }
+    if (templateOptions?.generation?.template === templateId) {
+      return hydrateFullShow({
+        ...templateOptions,
+        id: clientMintId(),
+        guestPersonaIds: [...templateOptions.guestPersonaIds],
+        generation: { ...templateOptions.generation, guestCount: { ...templateOptions.generation.guestCount } },
+      });
+    }
+    const generation: ShowGenerationConfig = {
+      mode: 'generated',
+      template: templateId,
+      planningPrompt: '',
+      nameMode: 'random',
+      customName: '',
+      hostMode: 'random',
+      guestMode: templateId === 'outside-comfort-zone' ? 'none' : 'random',
+      guestCount: templateId === 'outside-comfort-zone' ? { min: 0, max: 0 } : templateId === 'common-ground' ? { min: 1, max: 1 } : { min: 0, max: GUESTS_MAX },
+      minimumCoverage: null,
+    };
+    return hydrateFullShow({
+      id: clientMintId(),
+      name: template.label,
+      topic: '',
+      personaId: personaIds[0]!,
+      programme: false,
+      generation,
+    });
+  };
+
+  const dropTemplate = (b: Block, templateId: GeneratedTemplateId) => {
+    if (!schedule) return;
+    const show = makeGeneratedShow(templateId);
+    if (!show) return;
+    setShows(current => [...current, show]);
+    setSchedule(setRange(schedule, [b.day], b.start, b.start + b.span, show.id));
+    setLine({ day: b.day, start: b.start, end: b.start + b.span });
+    setLineDays([b.day]);
+    setLineShowId(show.id);
+    setArmedShowId(show.id);
+    setArmedTemplateId(null);
+    notify.ok(
+      `“${showLabel(show)}” now ${dayName(b.day)} ${hhmm(b.start)} – ${hhmm(b.start + b.span)} — unsaved until you save the week.`,
     );
   };
 
@@ -281,7 +393,7 @@ export default function SchedulePanel() {
     setLineDays([b.day]);
     setLineShowId(b.showId);
     notify.ok(
-      `“${showById(b.showId)?.name ?? 'show'}” now ${dayName(b.day)} ${hhmm(start)} – ${hhmm(end)} — unsaved until you save the week.`,
+      `“${showLabelOf(b.showId)}” now ${dayName(b.day)} ${hhmm(start)} – ${hhmm(end)} — unsaved until you save the week.`,
     );
   };
 
@@ -294,7 +406,7 @@ export default function SchedulePanel() {
     setLineDays([b.day]);
     setLineShowId(b.showId);
     notify.ok(
-      `“${showById(b.showId)?.name ?? 'show'}” now ${dayName(b.day)} ${hhmm(r.start)} – ${hhmm(r.end)}`
+      `“${showLabelOf(b.showId)}” now ${dayName(b.day)} ${hhmm(r.start)} – ${hhmm(r.end)}`
       + (r.shifted ? ` (${r.shifted} other show${r.shifted === 1 ? '' : 's'} shifted)` : '')
       + ' — unsaved until you save the week.',
     );
@@ -309,7 +421,7 @@ export default function SchedulePanel() {
     setLineDays([b.day]);
     setLineShowId(b.showId);
     notify.ok(
-      `“${showById(b.showId)?.name ?? 'show'}” off ${dayName(b.day)} ${hhmm(b.start)} – ${hhmm(b.start + b.span)} — unsaved until you save the week.`,
+      `“${showLabelOf(b.showId)}” off ${dayName(b.day)} ${hhmm(b.start)} – ${hhmm(b.start + b.span)} — unsaved until you save the week.`,
     );
   };
 
@@ -344,17 +456,47 @@ export default function SchedulePanel() {
     },
     toastOnError: false,
   });
-  const busy = saveScheduleMutation.isPending;
+  const saveGeneratedShowMutation = useAdminMutation<{
+    shows?: Array<Partial<Show>>;
+    show?: Partial<Show> | null;
+  }, Show>({
+    adminFetch,
+    request: (show, fetcher) => adminJson(fetcher, '/shows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ show: showPayload(show) }),
+    }),
+    onDone: (result, submitted, client) => {
+      const saved = result.show ? hydrateFullShow(result.show) : submitted;
+      setServerShows(current => {
+        const all = result.shows?.map(hydrateFullShow) ?? current;
+        return all.some(show => show.id === saved.id)
+          ? all
+          : [...all, saved];
+      });
+      setShows(current => current.some(show => show.id === saved.id)
+        ? current.map(show => show.id === saved.id ? saved : show)
+        : [...current, saved]);
+      if (result.shows) patchShowSettings(client, { shows: result.shows });
+    },
+    toastOnError: false,
+  });
+  const busy = saveScheduleMutation.isPending || saveGeneratedShowMutation.isPending;
 
   const saveWeek = async (): Promise<boolean> => {
     if (!schedule) return false;
     try {
+      for (const show of dirtyGeneratedShows) {
+        await saveGeneratedShowMutation.mutateAsync(show);
+      }
       const j = await saveScheduleMutation.mutateAsync(cloneWeek(schedule));
       setSchedule(cloneWeek(j.schedule));
       setServerSchedule(cloneWeek(j.schedule));
       notify.ok(j.dropped
         ? `Week saved — ${j.dropped} slot(s) skipped (unsaved shows). The current hour applies on the next pick.`
-        : 'Week saved — the current hour applies on the next pick.');
+        : dirtyGeneratedShows.length
+          ? 'Week and generated show options saved — the current hour applies on the next pick.'
+          : 'Week saved — the current hour applies on the next pick.');
       return true;
     } catch (e) {
       notify.err(scheduleWriteError(e));
@@ -364,6 +506,10 @@ export default function SchedulePanel() {
 
   const discardEdits = () => {
     if (serverSchedule) setSchedule(cloneWeek(serverSchedule));
+    setShows(serverShows);
+    setArmedShowId(null);
+    setArmedTemplateId(null);
+    setGeneratedOptionsDraft(null);
   };
 
   // ⌘S / Ctrl+S saves. Ref-held so the listener registers once but sees the current week.
@@ -390,13 +536,58 @@ export default function SchedulePanel() {
     router.push(href);
   };
 
+  const updateGeneratedDraft = (patch: Partial<ShowGenerationConfig>) => {
+    setGeneratedOptionsDraft(current => current?.generation
+      ? { ...current, generation: { ...current.generation, ...patch } }
+      : current);
+  };
+  const updateGeneratedGuestCount = (patch: Partial<ShowGenerationConfig['guestCount']>) => {
+    setGeneratedOptionsDraft(current => current?.generation
+      ? {
+          ...current,
+          generation: {
+            ...current.generation,
+            guestCount: { ...current.generation.guestCount, ...patch },
+          },
+        }
+      : current);
+  };
+  const applyGeneratedOptions = () => {
+    if (!generatedOptionsDraft) return;
+    if (generatedOptionsDraft.generation?.nameMode === 'custom' && !generatedOptionsDraft.generation.customName.trim()) {
+      notify.err('Enter a custom episode name before applying these options.');
+      return;
+    }
+    if (generatedOptionsDraft.generation?.template === 'common-ground') {
+      const draft = generatedOptionsDraft;
+      const eligibleIds = new Set(commonGroundPersonas.map(persona => persona.id));
+      if (eligibleIds.size < 2 || (draft.generation!.hostMode === 'fixed' && !eligibleIds.has(draft.personaId))
+        || (draft.generation!.guestMode === 'fixed' && (draft.guestPersonaIds.length !== 1
+          || !eligibleIds.has(draft.guestPersonaIds[0]!)
+          || (draft.generation!.hostMode === 'fixed' && draft.guestPersonaIds[0] === draft.personaId)))) {
+        notify.err('Common Ground needs two distinct DJs enabled in Random Hosts. Choose one eligible guest.');
+        return;
+      }
+    }
+    if (editingTemplateOptions) {
+      setTemplateOptions(generatedOptionsDraft);
+      setArmedShowId(null);
+      setArmedTemplateId(generatedOptionsDraft.generation!.template as GeneratedTemplateId);
+      notify.ok('Template options ready — drag into the grid, then save the week.');
+    } else {
+      setShows(current => current.map(show => show.id === generatedOptionsDraft.id ? generatedOptionsDraft : show));
+      notify.ok('Episode name, host and guest options updated — save the week to keep them.');
+    }
+    setGeneratedOptionsDraft(null);
+  };
+
   const suggestions: Suggestion[] = useMemo(() => {
     if (!schedule) return [];
     const out: Suggestion[] = [];
     // Gap: a silent block some show already covers at the same hours on ≥4 other days.
     for (const d of DAYS) {
       for (const b of dayBlocks(schedule, d.key).filter(x => !x.showId)) {
-        let best: { show: ScheduleShow; count: number } | null = null;
+        let best: { show: Show; count: number } | null = null;
         for (const s of shows) {
           let count = 0;
           for (const od of DAYS) {
@@ -413,8 +604,8 @@ export default function SchedulePanel() {
           out.push({
             key: `gap-${b.day}-${b.start}`,
             kind: 'Gap',
-            text: `${dayName(b.day)} ${hhmm(b.start)} → ${hhmm(b.start + b.span)} is silent. ${show.name} covers that slot most other days.`,
-            actionLabel: `Extend ${show.name}`,
+            text: `${dayName(b.day)} ${hhmm(b.start)} → ${hhmm(b.start + b.span)} is silent. ${showLabel(show)} covers that slot most other days.`,
+            actionLabel: `Extend ${showLabel(show)}`,
             onAction: () => setSchedule(cur => cur ? setRange(cur, [b.day], b.start, b.start + b.span, show.id) : cur),
             dismissLabel: 'Leave it quiet',
           });
@@ -440,28 +631,38 @@ export default function SchedulePanel() {
     }
     return out.filter(sug => !dismissed.includes(sug.key)).slice(0, 3);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schedule, shows, dismissed]);
+    }, [schedule, shows, personas, dismissed]);
 
   const airtime = useMemo(() => {
     if (!schedule) return { rows: [], tickPct: 0 };
-    const withHours = shows.map(s => ({ s, hours: showHours(schedule, s.id) }));
-    const maxHours = Math.max(0, ...withHours.map(x => x.hours));
+    const totals = new Map<string, Omit<AirtimeRow, 'pct' | 'under'>>();
+    for (const show of shows) {
+      const template = show.generation?.mode === 'generated' ? show.generation.template : null;
+      const id = template ? `template:${template}` : show.id;
+      const hours = showHours(schedule, show.id);
+      const previous = totals.get(id);
+      if (previous) previous.hours += hours;
+      else totals.set(id, {
+        id, hours,
+        name: template ? GENERATED_SHOW_TEMPLATES.find(item => item.id === template)?.label ?? show.name : show.name,
+        color: template ? generatedShowColor(template) : colorOf(show.id),
+      });
+    }
+    const withHours = [...totals.values()];
+    const maxHours = Math.max(0, ...withHours.map(row => row.hours));
     const scale = Math.max(maxHours, WEEKLY_TARGET * 1.4) * 1.06;
     return {
       rows: withHours
         .sort((a, b) => b.hours - a.hours)
-        .map(({ s, hours }) => ({
-          id: s.id,
-          name: s.name,
-          color: colorOf(s.id),
-          hours,
-          pct: scale ? (hours / scale) * 100 : 0,
-          under: hours < WEEKLY_TARGET,
+        .map(row => ({
+          ...row,
+          pct: scale ? (row.hours / scale) * 100 : 0,
+          under: row.hours < WEEKLY_TARGET,
         })),
       tickPct: scale ? (WEEKLY_TARGET / scale) * 100 : 0,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schedule, shows]);
+    }, [schedule, shows, personas]);
 
   if (err) {
     return (
@@ -573,7 +774,7 @@ export default function SchedulePanel() {
           <NowCell
             label="Up next"
             time={`${hhmm(nextBlock.start)} – ${hhmm(nextBlock.start + nextBlock.span)}`}
-            name={showById(nextBlock.showId)?.name ?? 'Nobody in the chair'}
+            name={nextBlock.showId ? showLabelOf(nextBlock.showId) : 'Nobody in the chair'}
             color={nextBlock.showId ? colorOf(nextBlock.showId) : null}
             meta={metaOf(nextBlock.showId)}
             // Last cell on a phone when "After that" is hidden; its own rule would
@@ -583,7 +784,7 @@ export default function SchedulePanel() {
           <NowCell
             label="After that"
             time={`${hhmm(laterBlock.start)} – ${hhmm(laterBlock.start + laterBlock.span)}`}
-            name={showById(laterBlock.showId)?.name ?? 'Nobody in the chair'}
+            name={laterBlock.showId ? showLabelOf(laterBlock.showId) : 'Nobody in the chair'}
             color={laterBlock.showId ? colorOf(laterBlock.showId) : null}
             meta={metaOf(laterBlock.showId)}
             last
@@ -597,11 +798,14 @@ export default function SchedulePanel() {
       <div className="min-w-0 px-5 pt-[22px] sm:px-[30px]">
         <div ref={bandRef} className="mb-5 scroll-mt-4">
           <LineEditor
-            shows={shows}
+            shows={shows.map(show => show.generation?.mode === 'generated'
+              ? { ...show, name: showLabel(show) }
+              : show)}
+            locale={locale}
             line={line}
             lineShowId={lineShowId}
             lineDays={lineDays.includes(line.day) ? lineDays : [...lineDays, line.day]}
-            currentName={showById(lineCurrent.showId)?.name ?? null}
+            currentName={lineCurrent.showId ? showLabelOf(lineCurrent.showId) : null}
             colorOf={colorOf}
             onLineChange={patch => {
               setLine(cur => ({ ...cur, ...patch }));
@@ -629,6 +833,7 @@ export default function SchedulePanel() {
         <Board
           schedule={schedule}
           shows={shows}
+          personas={personas}
           folded={folded}
           onToggleFold={d => setFolded(f => ({ ...f, [d]: !f[d] }))}
           todayKey={nowDay}
@@ -639,9 +844,12 @@ export default function SchedulePanel() {
           onRemove={removeRun}
           onResize={resizeRun}
           onDropShow={dropShow}
+          onDropTemplate={dropTemplate}
           onDragRun={dragRun}
           armedShowId={armedId}
+          armedTemplateId={armedTemplateId}
           onArmShow={armShow}
+          onArmTemplate={armTemplate}
           onFillDay={fillDay}
           onFillHour={fillHour}
           density={density}
@@ -673,10 +881,94 @@ export default function SchedulePanel() {
       />
 
       <Modal
+        open={generatedOptionsDraft !== null}
+        onOpenChange={open => { if (!open) setGeneratedOptionsDraft(null); }}
+        title={generatedOptionsDraft?.name ?? 'Template show'}
+        sub={editingTemplateOptions ? "Options for new slots · saved when you save the week" : "Host, guest and episode name · saved with the week"}
+        width={520}
+        footer={(
+          <div className="flex w-full items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setGeneratedOptionsDraft(null)}>
+              Cancel
+            </Button>
+            <span className="ml-auto">
+              <Button variant="accent" size="sm" onClick={applyGeneratedOptions}>
+                Apply options
+              </Button>
+            </span>
+          </div>
+        )}
+      >
+        {generatedOptionsDraft?.generation?.mode === 'generated' && (
+          <GeneratedShowOptions
+            show={generatedOptionsDraft}
+            personas={generatedOptionsDraft.generation.template === 'common-ground' ? commonGroundPersonas : personas}
+            apiBase={API_BASE}
+            onHostChange={value => {
+              setGeneratedOptionsDraft(current => current?.generation
+                ? value === RANDOM_HOST
+                  ? {
+                      ...current,
+                      generation: {
+                        ...current.generation,
+                        hostMode: 'random',
+                      },
+                    }
+                  : {
+                      ...current,
+                      personaId: value,
+                      guestPersonaIds: current.guestPersonaIds.filter(id => id !== value),
+                      generation: {
+                        ...current.generation,
+                        hostMode: 'fixed',
+                      },
+                    }
+                : current);
+            }}
+            onNameModeChange={value => updateGeneratedDraft({ nameMode: value })}
+            onCustomNameChange={value => updateGeneratedDraft({ customName: value })}
+            onGuestModeChange={value => {
+              if (value === 'none') {
+                setGeneratedOptionsDraft(current => current?.generation
+                  ? {
+                      ...current,
+                      guestPersonaIds: [],
+                      generation: {
+                        ...current.generation,
+                        guestMode: 'none',
+                        guestCount: { min: 0, max: 0 },
+                      },
+                    }
+                  : current);
+              } else if (value === 'fixed') {
+                updateGeneratedDraft({ guestMode: 'fixed' });
+              } else {
+                setGeneratedOptionsDraft(current => current?.generation
+                  ? {
+                      ...current,
+                      guestPersonaIds: [],
+                      generation: {
+                        ...current.generation,
+                        guestMode: 'random',
+                        guestCount: current.generation.template === 'common-ground' ? { min: 1, max: 1 } : { min: 0, max: GUESTS_MAX },
+                      },
+                    }
+                  : current);
+              }
+            }}
+            onGuestsChange={guestPersonaIds => setGeneratedOptionsDraft(current => current?.generation
+              ? { ...current, guestPersonaIds }
+              : current)}
+            onGuestCountChange={updateGeneratedGuestCount}
+          />
+        )}
+      </Modal>
+
+      <Modal
         open={reviewOpen}
         onOpenChange={setReviewOpen}
         title="Unsaved edits"
-        sub={`${dirty} hour${dirty === 1 ? '' : 's'} changed`}
+        sub={`${dirty} unsaved change${dirty === 1 ? '' : 's'}`}
         width={560}
         footer={
           <div className="flex w-full items-center gap-3">
@@ -704,7 +996,7 @@ export default function SchedulePanel() {
         }
       >
         <div className="grid gap-1">
-          {editedRanges.length === 0 && (
+          {editedRanges.length === 0 && dirtyGeneratedShows.length === 0 && (
             <Mu className="text-[9px]">Nothing pending — the week on air matches this screen.</Mu>
           )}
           {editedRanges.map(r => (
@@ -716,9 +1008,22 @@ export default function SchedulePanel() {
                 {dayName(r.day)} {hhmm(r.start)} – {hhmm(r.end)}
               </span>
               <span className="text-[12.5px] text-ink">
-                {showById(r.fromId)?.name ?? 'silent'}
+                {r.fromId ? showLabelOf(r.fromId) : 'silent'}
                 {' → '}
-                <b>{showById(r.toId)?.name ?? 'silent'}</b>
+                <b>{r.toId ? showLabelOf(r.toId) : 'silent'}</b>
+              </span>
+            </div>
+          ))}
+          {dirtyGeneratedShows.map(show => (
+            <div
+              key={`generated-${show.id}`}
+              className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-separator-soft px-1 py-1.5"
+            >
+              <span className="w-[150px] flex-none font-mono text-[11px] font-bold tracking-[0.06em] text-muted">
+                {serverShowById.has(show.id) ? 'Show options' : 'New generated show'}
+              </span>
+              <span className="text-[12.5px] text-ink">
+                {serverShowById.has(show.id) ? 'Updated' : 'Add'} <b>{showLabel(show)}</b> host and guest settings
               </span>
             </div>
           ))}
@@ -729,7 +1034,7 @@ export default function SchedulePanel() {
         open={pendingHref !== null}
         onOpenChange={open => { if (!open) setPendingHref(null); }}
         title="Leave without saving?"
-        sub={`${dirty} hour${dirty === 1 ? '' : 's'} changed`}
+        sub={`${dirty} unsaved change${dirty === 1 ? '' : 's'}`}
         width={520}
         footer={
           <div className="flex w-full flex-wrap items-center gap-2">
@@ -770,6 +1075,11 @@ export default function SchedulePanel() {
             {editedRanges.slice(0, 4).map(r => `${dayName(r.day)} ${hhmm(r.start)}–${hhmm(r.end)}`).join(' · ')}
             {editedRanges.length > 4 ? ` · +${editedRanges.length - 4} more` : ''}
           </Mu>
+          {dirtyGeneratedShows.length > 0 && (
+            <Mu className="text-[9px]">
+              {dirtyGeneratedShows.map(show => showLabel(show)).join(' · ')} host and guest options
+            </Mu>
+          )}
         </div>
       </Modal>
     </div>
@@ -829,6 +1139,150 @@ function NowCell({
       ) : (
         <div className="mt-1.5 h-[3px] bg-[var(--ink-soft)]" />
       )}
+    </div>
+  );
+}
+
+function GeneratedShowOptions({
+  show,
+  personas,
+  apiBase,
+  onNameModeChange,
+  onCustomNameChange,
+  onHostChange,
+  onGuestModeChange,
+  onGuestsChange,
+  onGuestCountChange,
+}: {
+  show: Show;
+  personas: Persona[];
+  apiBase: string;
+  onNameModeChange: (value: 'random' | 'custom') => void;
+  onCustomNameChange: (value: string) => void;
+  onHostChange: (value: string) => void;
+  onGuestModeChange: (value: string) => void;
+  onGuestsChange: (ids: string[]) => void;
+  onGuestCountChange: (patch: Partial<ShowGenerationConfig['guestCount']>) => void;
+}) {
+  const generation = show.generation!;
+  const guestCount = generation.guestCount;
+  const commonGround = generation.template === 'common-ground';
+  const solo = generation.template === 'outside-comfort-zone';
+  return (
+    <div className="grid gap-5">
+      <p className="text-[13px] leading-[1.6] text-ink">
+        {GENERATED_SHOW_TEMPLATES.find(template => template.id === generation.template)?.description}
+      </p>
+      <p className="text-[12px] leading-[1.6] text-muted">
+        {solo ? 'Choose the episode name and solo host. Random Host uses the pool in Sub/Shows settings.' : commonGround
+          ? 'Choose the host and one guest. Both DJs must be enabled in Sub/Shows → Random Hosts.'
+          : 'Choose the episode name, host and guest count. Random DJs draw from the pools in Sub/Shows settings.'}
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid content-start gap-2">
+          <Label htmlFor="generated-show-name-mode">Episode name</Label>
+          <Select value={generation.nameMode} onValueChange={value => onNameModeChange(value as 'random' | 'custom')}>
+            <SelectTrigger id="generated-show-name-mode"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="random">Random show name</SelectItem>
+              <SelectItem value="custom">Use a custom name</SelectItem>
+            </SelectContent>
+          </Select>
+          {generation.nameMode === 'custom' && (
+            <Input
+              aria-label="Custom episode name"
+              value={generation.customName}
+              onChange={event => onCustomNameChange(event.target.value)}
+              maxLength={60}
+              placeholder="Episode name"
+            />
+          )}
+        </div>
+        <div className="grid content-start gap-2">
+          <Label htmlFor="generated-show-host">Host</Label>
+          <Select
+            value={generation.hostMode === 'random' ? RANDOM_HOST : show.personaId}
+            onValueChange={onHostChange}
+          >
+            <SelectTrigger id="generated-show-host"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={RANDOM_HOST}>Random Host</SelectItem>
+              {personas.map(persona => (
+                <SelectItem key={persona.id} value={persona.id}>{persona.name || 'Unnamed DJ'}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {!solo && <div className="grid content-start gap-2">
+          <Label htmlFor="generated-show-guests">{commonGround ? 'Guest' : 'Guests'}</Label>
+          <Select value={generation.guestMode} onValueChange={onGuestModeChange}>
+            <SelectTrigger id="generated-show-guests"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="random">{commonGround ? 'One random guest' : 'Random Guests'}</SelectItem>
+              {!commonGround && <SelectItem value="none">No guests</SelectItem>}
+              <SelectItem value="fixed">{commonGround ? 'Choose one guest' : 'Selected guests'}</SelectItem>
+            </SelectContent>
+          </Select>
+          {generation.guestMode === 'fixed' && (
+            <div className="grid gap-2">
+              <Label className="text-xs">{commonGround ? 'Choose one guest' : `Choose up to ${GUESTS_MAX} guests`}</Label>
+              <GuestPersonaPicker
+                personas={personas.filter(persona => generation.hostMode === 'random' || persona.id !== show.personaId)}
+                value={show.guestPersonaIds}
+                onChange={onGuestsChange}
+                apiBase={apiBase}
+                max={commonGround ? 1 : GUESTS_MAX}
+              />
+              {personas.length <= (generation.hostMode === 'random' ? 0 : 1) && (
+                <Mu className="text-[9px]">Add another DJ before choosing a fixed guest.</Mu>
+              )}
+            </div>
+          )}
+          {generation.guestMode === 'random' && !commonGround && (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="grid gap-1.5">
+                <Label htmlFor="generated-show-guest-min" className="text-xs">Minimum</Label>
+                <Select
+                  value={String(guestCount.min)}
+                  onValueChange={value => {
+                    const min = Number(value);
+                    onGuestCountChange({ min, max: Math.max(min, guestCount.max) });
+                  }}
+                >
+                  <SelectTrigger id="generated-show-guest-min"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: GUESTS_MAX + 1 }, (_, count) => count).map(count => (
+                      <SelectItem key={count} value={String(count)}>{count}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="generated-show-guest-max" className="text-xs">Maximum</Label>
+                <Select
+                  value={String(guestCount.max)}
+                  onValueChange={value => {
+                    const max = Number(value);
+                    onGuestCountChange({ max, min: Math.min(guestCount.min, max) });
+                  }}
+                >
+                  <SelectTrigger id="generated-show-guest-max"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: GUESTS_MAX + 1 }, (_, count) => count)
+                      .filter(count => count >= guestCount.min)
+                      .map(count => <SelectItem key={count} value={String(count)}>{count}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+          {generation.guestMode === 'fixed' && (
+            <Mu className="text-[9px]">{commonGround ? 'Exactly one guest is required.' : 'Uses the guests already selected for this show.'}</Mu>
+          )}
+        </div>}
+      </div>
+      <Mu className="text-[9px]">{solo ? 'One host explores one neighbouring musical destination, with no guests.' : commonGround ? 'Common Ground always pairs two different DJs with equal musical influence.' : `Random Guests can range from 0 to ${GUESTS_MAX}. The selected host is never added as their own guest.`}</Mu>
     </div>
   );
 }

@@ -364,6 +364,20 @@ export function rejectBlocked<T>(arr: T[]): T[] {
   return (arr || []).filter((s) => !isBlocked(s));
 }
 
+// Same hard rules as rejectBlocked, evaluated for a forecast occurrence rather
+// than wall clock. Candidate diagnostics and generated-show coverage use this
+// before promising a pool size for a future show.
+export function rejectBlockedAt<T extends { id?: string | null; title?: string | null; artist?: string | null; album?: string | null; albumId?: string | null; artistId?: string | null }>(
+  arr: T[], { at, showId }: { at: number; showId: string | null },
+): T[] {
+  if (isEmpty()) return arr;
+  const { month, day } = zonedParts(new Date(at));
+  const ctx = { month, day, activeShowId: showId };
+  const active = compiledRules.filter(cr => ruleActive(cr.rule, ctx));
+  return (arr || []).filter(song => !matchOf(song)
+    && !active.some(cr => ruleMatches(cr, { ...song, id: song.id ?? undefined }, playlistMembers)));
+}
+
 // The admin-listing opposite of rejectBlocked: keep every row and stamp what
 // blocks it. Always stamps the field (null when clear), so one row shape.
 export function annotate<T extends object>(arr: T[]): Array<T & { blockedBy: BlockRef | null }> {
