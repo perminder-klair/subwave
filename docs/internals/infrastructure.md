@@ -126,20 +126,17 @@ the function are driven from one table by `scripts/max-listeners.test.ts`.
 
 **The off switch is `ANALYZER_REPLICAS=0` (#1570)**, rendered as `deploy.replicas: ${ANALYZER_REPLICAS:-1}` on the service — the next `up -d` stops AND removes the container, and it stays gone across restarts, which `docker compose stop analyzer` (the old advice) did not: `up` restarts a hand-stopped service. **A profile could not express this** and the reason is measured, not stylistic: profiles are opt-in only, so gating the analyzer behind one forces every existing install to add `COMPOSE_PROFILES=analyzer` to keep what it has, and the inverted trick — `profiles: ["${ANALYZER_DISABLED:+off}"]`, empty by default — drops the service for anyone who sets `COMPOSE_PROFILES` **at all**, because a non-empty `COMPOSE_PROFILES` switches compose from the default set to the named set and an empty-string profile is in neither. `docs/tts-heavy.md` tells every Unraid/Portainer operator to set `COMPOSE_PROFILES=tts-heavy`, so that population would silently lose analysis on upgrade. `deploy.replicas` has neither failure: unset and empty both render `1`, so a default-on install is byte-identical, and the `deploy` map merges key-wise with `docker-compose.analyzer-gpu.yml`'s `deploy.resources` reservation rather than replacing it. Three consequences worth knowing. **Only `0` and `1` are valid**: the service pins `container_name: sub-wave-analyzer`, and compose refuses a fixed container name for more than one replica, so `ANALYZER_REPLICAS=2` fails *every* compose command (`can't set container_name and analyzer as container name must be unique`) rather than scaling — a non-integer (`false`) is likewise a hard interpolation error rather than a silent fallback, which is why the var is named for a count and not a boolean. `docker compose config` still LISTS the service at `replicas: 0` (unlike a profile, which omits it), so verify with the rendered `replicas:` line or `docker compose ps`, never `config --services`. And the variable is **inert on the AIO**, which runs the analyzer in-process (`ANALYZE_PYTHON`) rather than as a service — so `docker/aio/supervisor.sh` `warn_if_analyzer_replicas_ignored` warns at boot when it is set to `0` there, for the same reason `warn_if_analyzer_heavy_ignored` exists (#1300 bug 9: a compose-only var that an operator sets, watches do nothing, and concludes the feature is broken). This one fails worse than `ANALYZER_HEAVY` did — an operator setting `0` to reclaim RAM keeps paying for analysis it believes it switched off — so the warning names the AIO's real off switch, an **empty `ANALYZE_PYTHON`** (`config.ts` reads an empty path as no local backend). `scripts/aio-analyzer-heavy.test.ts` pins the warning, and `scripts/analyzer-replicas-compose.test.ts` drives all three composes from one table so the `deploy.replicas` line cannot drift between them.
 
-**Analyzer torch and maintenance commands (#1340, #1738).** Heavy CPU builds
-and the default CUDA build share torch/torchaudio **2.7.1**. That CUDA wheel
-is the **cu128** index (`:latest` — Turing sm_75 through Blackwell sm_120).
-`TORCH_CUDA=cu124` is AIO-only and pins torch **2.6.0**, the newest wheel that
-still has Maxwell (sm_50), Pascal (sm_60), and Volta (sm_70) SASS. The
-published builds are `:cu124` and `:cu128` (`:latest`). `:maxwell`, `:pascal`,
-`:volta`, `:turing`, `:ampere`, `:ada`, `:hopper`, and `:blackwell` are
-shortcuts, each pointed at the newest build that still supports that GPU.
-Today the first three point at cu124 and the rest at cu128. A later wheel can
-move one shortcut without moving the others (`CLAUDE.md`). The standalone
-analyzer image has no cu124 build.
-Both wheels publish cp313 for the AIO's system Python 3.13 and cp311 for the
-standalone image. Keep the shared pins in lockstep (Demucs 4.0.1, diffq 0.2.4,
-transformers 5.13.0, CPU onnxruntime 1.27.0). The cu124 torch pin is the
+**Analyzer torch and maintenance commands (#1340, #1738).** Heavy CPU builds,
+the split-stack `subwave-analyzer-cuda` and the AIO's primary CUDA build share
+torch/torchaudio **2.7.1**, the CUDA ones from the **cu128** index (Turing
+sm_75 through Blackwell sm_120). The AIO has a second CUDA build,
+`TORCH_CUDA=cu124`, which pins torch **2.6.0** because that cu124 wheel still
+ships Maxwell (sm_50), Pascal (sm_60) and Volta (sm_70) SASS. cu128 dropped
+those three, and CUDA 13 cannot emit them. The standalone analyzer has no
+cu124 build. The cu128 index publishes cp313 wheels for the AIO's system
+Python 3.13 and cp311 for the standalone image; the AIO-only cu124 build uses
+cp313. Keep the shared pins in lockstep (Demucs 4.0.1, diffq 0.2.4,
+transformers 5.13.0, CPU onnxruntime 1.27.0); the cu124 torch pin is the one
 exception. Chatterbox runs in a separate venv with its
 own upstream torch pin and Blackwell override, described in `docs/gpu-tts.md`.
 The AIO appends `/opt/analyzer/venv/bin` to PATH so `docker exec subwave pip`
@@ -147,6 +144,48 @@ targets analyzer packages while system `python3` keeps precedence. Its analyzer
 and Kokoro workers use explicit interpreter paths. The standalone analyzer
 puts the analyzer venv first so pip targets it instead of the server venv,
 and starts FastAPI with `/opt/server/venv/bin/uvicorn` to preserve that isolation.
+
+<a id="aio-cuda-tags"></a>
+**AIO CUDA tags: an architecture tag names a GPU, not a wheel (#2265).**
+`subwave-aio-cuda` is published once per torch wheel, and operators pick it by
+their card's architecture. This table is the one place that maps a tag to a
+build; the README, `docs/unraid.md`, `docs/tts-heavy.md` and the in-app guides
+link here or name a tag by its card rather than restate it.
+
+| Tag | GPU (compute capability) | For example | Build today |
+| --- | --- | --- | --- |
+| `:maxwell` | sm_50–52 | GTX 750, GTX 900-series | cu124 |
+| `:pascal` | sm_60–61 | GTX 10-series, P40 | cu124 |
+| `:volta` | sm_70 | Titan V, V100 | cu124 |
+| `:turing` | sm_75 | RTX 20-series, GTX 16-series, T4 | cu128 |
+| `:ampere` | sm_80–86 | RTX 30-series, A100 | cu128 |
+| `:ada` | sm_89 | RTX 40-series, L4 | cu128 |
+| `:hopper` | sm_90 | H100 | cu128 |
+| `:blackwell` | sm_100–120 | RTX 50-series, B200 | cu128 |
+
+The build tags `:cu124` and `:cu128`, and the release pins
+`:<version>-cu124` and `:<version>-cu128`, name a wheel instead. `:latest` and
+the plain `:<version>` tags follow the **primary** build, today cu128, so they
+work only on Turing and newer. An architecture tag points at the newest build
+that still supports its GPU, which is why each GPU has its own: a later wheel
+can move one without the others (a cu130 that only adds Blackwell moves
+`:blackwell` and leaves `:hopper` on cu128), whereas a tag shared by several
+GPUs, or `:latest`, would strand the older cards the day a newer wheel drops
+them. Never point an architecture tag at a build that dropped its GPU, and
+never fold several GPUs into one tag.
+
+`publish-images.yml` encodes this per matrix entry. Each `subwave-aio-cuda`
+entry sets `cuda_family`, `primary` and `arch_tags`, so moving a GPU to
+another build moves one word between two `arch_tags` lines, and the `tagplan`
+step fails an entry that has a `cuda_family` but no `primary`. Only the
+primary build takes `:latest`, the plain version tags and the plain `sha-`
+commit tag; another build's commit tag is `sha-<family>-`. A non-primary build
+also sets the metadata-action flavor `latest=false`. The action adds `:latest`
+by itself for any enabled stable semver rule, whatever that rule's suffix, so
+without it the cu124 build's `:<version>-cu124` rule raced the primary for
+`:latest` on every release. The build and architecture tags move on a stable
+release or a dispatch from the default branch, never on a prerelease or a
+dispatch from another branch.
 
 **Analyzer concurrency (`ANALYZE_CONCURRENCY`, #1538).** One env var, read on BOTH sides and bounded `1-8` with a fall-back-to-1 (not a clamp) on anything empty, non-integer or out of range — `envInt` in `controller/src/config.ts`, `_bounded_int_env` in `docker/analyzer/server.py`. **The default of 1 is the pre-change station, byte for byte**, which is the whole reason the two code paths are kept side by side rather than unified: `music/analyze.ts` keeps its original one-ahead `prefetch()` loop verbatim at 1 and only takes `music/analyze-dispatch.ts` above it. Above 1 the pass admits jobs in **source order** through `dispatchAnalysis`, bounded by live count, and commits every outcome back **in source order too** — the systemic-failure guard (`failureCountsAgainstTrack`, the buffered `pendingFailureStamps`) reads a run of consecutive failures, so out-of-order commits would condemn tracks over a bad *pass*. The quiet gate is evaluated **before every admission and before that job's download** (`beforeStart`), so a paused pass never keeps pulling audio for work it isn't going to compute; its fail-open direction is untouched, and it still resolves through the one `analyze-quiet-pure.ts` decision. The win is specifically the **share-less remote topology**, where the path probe 422s and the analyzer fetches each track itself; a local shared-mount setup already overlapped via the prefetch, and **local `ANALYZE_PYTHON` stays single-flight regardless** (`backend === 'sidecar' ? requested : 1`) because one line-protocol stdio worker cannot multiplex.
 

@@ -240,12 +240,10 @@ a warning and falls back to CPU rather than failing the pass. `ANALYZER_HEAVY`
 is irrelevant while the overlay is applied — the image is overridden outright.
 
 Running the **all-in-one** container instead? It has no `analyzer` service to
-swap, so there's no overlay: pull `subwave-aio-cuda` and hand the container the
-GPU directly. Two builds are published: `:cu128` (`:latest`) and `:cu124`.
-Architecture tags are stable shortcuts to the newest compatible build. Today
-`:maxwell`, `:pascal`, and `:volta` point at cu124; `:turing`, `:ampere`,
-`:ada`, `:hopper`, and `:blackwell` point at cu128. Steps for Unraid, including
-the driver plugin and extra parameters, are in
+swap, so there's no overlay: pull `subwave-aio-cuda` at the tag named for your
+card's architecture ([the tag table](internals/infrastructure.md#aio-cuda-tags);
+`:latest` needs Turing or newer) and hand the container the GPU directly. Steps
+for Unraid, including the driver plugin and extra parameters, are in
 [unraid.md](unraid.md#acoustic-analysis-default-on--expressive-voices-opt-in);
 anywhere else it's `--gpus all` on your `docker run`. Everything below about
 device selection and VRAM applies there unchanged.

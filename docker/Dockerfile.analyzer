@@ -33,9 +33,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # toggle); with the stack absent those are clean no-ops.
 #
 # All pins exact for reproducible rebuilds — keep in lockstep with the mirrored
-# analyzer block in docker/Dockerfile.aio. torch/torchaudio held at 2.7.1 on
-# both cpu and cu128 indexes, including cp313 wheels for the AIO. cu128 adds
-# Blackwell (sm_120) kernels and vendors the runtime as nvidia-*-cu12 deps.
+# analyzer block in docker/Dockerfile.aio. The one exception is the AIO's
+# TORCH_CUDA=cu124 build, which pins torch 2.6.0 for pre-Turing cards and has
+# no counterpart here (docs/internals/infrastructure.md). torch/torchaudio held
+# at 2.7.1 on both cpu and cu128 indexes, including cp313 wheels for the AIO.
+# cu128 adds Blackwell (sm_120) kernels and vendors the runtime as
+# nvidia-*-cu12 deps.
 # Chatterbox's separate venv keeps its own upstream torch pin.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
