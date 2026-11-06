@@ -25,8 +25,8 @@ const scope = readFileSync(resolve(here, '../src/llm/internal/tools/picker/scope
 
 const currentTrackInitializer = picker.match(/^\s*const currentTrack = (.*);$/m)?.[1];
 assert.ok(currentTrackInitializer, 'no currentTrack initializer found in picker.ts');
-const resolveCurrentTrack = new Function('queue', `return (${currentTrackInitializer});`) as
-  (queue: Record<string, unknown>) => unknown;
+const resolveCurrentTrack = new Function('queue', 'preview', `return (${currentTrackInitializer});`) as
+  (queue: Record<string, unknown>, preview?: { startNow?: boolean }) => unknown;
 
 // The single line that adds a named source to the pool.
 const addLine = (src: string, label: string): string => {
@@ -170,6 +170,14 @@ for (const [name, queue, expected] of [
     assert.equal(resolveCurrentTrack(queue), expected);
   });
 }
+
+test('a steer preview follows the tail its Start will queue behind, "start now" included', () => {
+  const asked: boolean[] = [];
+  const queue = { current: { track: A }, upcoming: [{ track: B }], tailTrack: (startNow: boolean) => { asked.push(startNow); return startNow ? A : B; } };
+  assert.equal(resolveCurrentTrack(queue, { startNow: true }), A, 'not the DJ pick Start drops');
+  assert.equal(resolveCurrentTrack(queue, {}), B);
+  assert.deepEqual(asked, [true, false]);
+});
 
 test('the captured predecessor fans out to candidates and the model payload', () => {
   assert.match(picker, /buildCandidates\([^;]*\bcurrentTrack\s*,\s*rankTarget\s*,\s*audioWaypoint/);

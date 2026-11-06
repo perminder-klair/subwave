@@ -675,9 +675,8 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // wins over the track on air. Later queue mutations are not revalidated here.
   // A preview follows the tail its Start will queue behind: with "start now",
   // not a DJ pick that Start is about to drop (queue.tailTrack).
-  const currentTrack = preview
-    ? queue.tailTrack(preview.startNow === true)
-    : queue.upcoming?.at(-1)?.track ?? queue.current?.track ?? null;
+  // One line: scripts/picker-show-source.test.ts evaluates this initializer.
+  const currentTrack = preview ? queue.tailTrack(preview.startNow === true) : queue.upcoming?.at(-1)?.track ?? queue.current?.track ?? null;
   // Prefer the show already resolved into ctx: near a boundary that is a
   // look-ahead, so the pool follows the show on air when the pick plays.
   const activeShow = steeredShow(ctx?.activeShow !== undefined ? ctx.activeShow : settings.resolveActiveShow(pickAt), steer);
