@@ -13,7 +13,7 @@ import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capa
 import { acceptedAt, fileReplaced } from '../replaced-file-policy.js';
 import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
 import { soundWords, type SoundPart, type SoundWords } from '../sound-line.js';
-import type { WholeLoudnessCurve } from '../whole-loudness-curve.js';
+import { unavailableCurveJson, type WholeLoudnessCurve } from '../whole-loudness-curve.js';
 
 export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
@@ -801,8 +801,11 @@ export interface FacetWrite {
     loudnessRangeLu?: number | null;
     version?: number | null;
     // The same pass's short-term curve (whole-loudness-curve.ts); a v2 figure
-    // stored without one stays one version below (facets.ts, `no-curve`).
+    // stored without one stays one version below (facets.ts, `no-curve`)...
     curve?: WholeLoudnessCurve | null;
+    // ...unless the analyzer ran and had none to give: stored as the
+    // unavailable marker, which settles it (unavailableCurveJson).
+    curveUnavailable?: string | null;
   } | { unmeasurable: string };
   tail?: { outro: TrackOutro | null; tailSilenceMs: number | null; tailStartMs: number | null } | { unmeasurable: string };
   clap?: number[];
@@ -858,7 +861,8 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
             `UPDATE tracks SET loudness_lufs = ?, peak_db = ?, sample_peak_db = ?, loudness_range_lu = ?,
                loudness_version = ?, loudness_curve_json = ? WHERE id = ?`,
           ).run(finite(l.loudnessLufs), finite(l.peakDb), finite(l.samplePeakDb), finite(l.loudnessRangeLu),
-            Math.round(version), l.curve ? JSON.stringify(l.curve) : null, id);
+            Math.round(version),
+            l.curve ? JSON.stringify(l.curve) : l.curveUnavailable ? unavailableCurveJson(l.curveUnavailable) : null, id);
           fresh.push('loudness');
         } else if (!hasWholeFileLoudness(id)) {
           d.prepare('UPDATE tracks SET loudness_lufs = ?, peak_db = ?, loudness_version = NULL, loudness_curve_json = NULL WHERE id = ?')

@@ -594,8 +594,13 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
    `no-curve`, and re-planned only on an analyzer that reports
    `loudness_curve_capable` / `analyze_loudness_curve_capable` (skip `no-curve`):
    an older one would answer without it again, every run. A file shorter than
-   one window stores an empty `whole` series and settles; an answer with no
-   per-frame line at all stores none and stays due.
+   one window stores an empty `whole` series and settles. A pass that ran and
+   had no curve to give settles too, never re-read in full every run. Either
+   its answer says why (`loudness_curve_unavailable`: ffmpeg printed no
+   per-frame line), or the controller's parser refuses the curve it sent (past
+   a day, malformed: `rejected`). Either way it stores
+   `{"unavailable": reason}` in the curve's column (`unavailableCurveJson`),
+   which reads as no curve.
 10. **Measured as it airs: stereo, at 48 kHz at most.** A file with more than
    two channels (a 5.1 FLAC) is downmixed first, in float
    (`aformat=sample_fmts=dbl:channel_layouts=stereo`): Liquidsoap airs fronts

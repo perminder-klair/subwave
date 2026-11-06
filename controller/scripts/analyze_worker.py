@@ -2517,7 +2517,7 @@ def loudness_curve_from_frames(frames):
     first_idx = CURVE_WINDOW_MS // 100
     if not frames:
         # No per-frame line at all: the log level or the build did not print
-        # them. None keeps the facet due rather than settling on nothing.
+        # them. None: the answer says so (`loudness_curve_unavailable`).
         return None
     last = max(frames)
     if last < first_idx:
@@ -2890,6 +2890,12 @@ def whole_file_facets(src, wanted):
                     "sample_peak_db": fig["sample_peak_db"], "lra_lu": fig["lra_lu"]}
             if fig.get("loudness_curve") is not None:
                 data["loudness_curve"] = fig["loudness_curve"]
+            else:
+                # Said, not left out: an analyzer that predates the curve
+                # leaves it out, and the controller re-plans that figure for
+                # one. This analyzer ran and had none to give (ffmpeg printed
+                # no frame line), so asking again would only re-read the file.
+                data["loudness_curve_unavailable"] = "no-frames"
             data["loudness_version"] = WHOLE_FILE_LOUDNESS_VERSION
             out["loudness"] = _ok(data)
     if "edges" in names:

@@ -263,7 +263,7 @@ def t_both_facets_share_one_decode():
     assert calls == [("http://navi/stream", True, True)], calls
     assert out["loudness"] == {"status": "ok", "data": {
         "loudness_lufs": -12.3, "peak_db": 0.3, "sample_peak_db": -0.4, "lra_lu": 6.1,
-        "loudness_version": aw.WHOLE_FILE_LOUDNESS_VERSION}}, out
+        "loudness_curve_unavailable": "no-frames", "loudness_version": aw.WHOLE_FILE_LOUDNESS_VERSION}}, out
     assert out["edges"] == {"status": "ok", "data": {
         "edge_lead_ms": 500, "edge_tail_ms": 1000, "decoded_duration_ms": 200000}}, out
 
@@ -450,7 +450,7 @@ def t_curve_whole_head_and_tail_series():
 
 
 def t_curve_edge_cases():
-    assert aw.loudness_curve_from_frames({}) is None, "no frame line at all: stays due"
+    assert aw.loudness_curve_from_frames({}) is None, "no frame line at all: no curve"
     short = aw.loudness_curve_from_frames({1: -200, 20: -200})
     assert short == {"whole": {"startMs": 3000, "stepMs": 1000, "lufs": []}}, short
     silent = aw.loudness_curve_from_frames({i: -1000 for i in range(1, 100)})
@@ -465,6 +465,7 @@ def t_curve_rides_the_loudness_answer():
     with Patched(measure_whole_file=fake):
         got = aw.whole_file_facets("http://navi/stream", ["loudness"])
     assert got["loudness"]["data"]["loudness_curve"]["whole"]["lufs"] == [-120], got
+    assert "loudness_curve_unavailable" not in got["loudness"]["data"], got
 
 
 def t_real_ffmpeg_prints_the_curve():

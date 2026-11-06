@@ -43,7 +43,18 @@ function parseSeries(v: unknown): LoudnessSeries | null {
   return { startMs, stepMs, lufs };
 }
 
-/** A curve from the analyzer's answer or the stored JSON; null when malformed. */
+// A pass that ran and had no curve to give stores this marker in the curve's
+// column rather than NULL. Either the analyzer said so, or it sent one this
+// parser refuses (past a day, malformed). NULL means the figure predates the
+// curve, and the facet re-plans it for one (facets.ts, `no-curve`): asked
+// again, this analyzer would only re-read the whole file for the same answer,
+// every run. The marker settles the facet and reads as no curve.
+export function unavailableCurveJson(reason: string): string {
+  return JSON.stringify({ unavailable: reason.slice(0, 40) || 'unknown' });
+}
+
+/** A curve from the analyzer's answer or the stored JSON; null when malformed
+ *  or when the stored value is the unavailable marker. */
 export function parseWholeLoudnessCurve(v: unknown): WholeLoudnessCurve | null {
   let o = v;
   if (typeof o === 'string') {

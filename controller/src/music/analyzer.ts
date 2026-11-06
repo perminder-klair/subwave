@@ -88,6 +88,10 @@ export interface AnalysisResult {
   loudnessRangeLu?: number | null;
   // The same pass's short-term loudness curve (whole-loudness-curve.ts).
   wholeLoudnessCurve?: WholeLoudnessCurve | null;
+  // Why a whole-file answer has no curve, when the analyzer ran and had none
+  // to give: its own reason, or 'rejected' for one this controller's parser
+  // refuses. null for an analyzer that predates the curve (it says nothing).
+  loudnessCurveUnavailable?: string | null;
   edgeLeadMs?: number | null;
   edgeTailMs?: number | null;
   decodedDurationMs?: number | null;
@@ -252,6 +256,7 @@ interface WorkerMessage {
   // that predate it.
   loudness_curve_capable?: boolean;
   loudness_curve?: unknown;
+  loudness_curve_unavailable?: unknown;
   loudness_version?: unknown;
   sample_peak_db?: unknown;
   lra_lu?: unknown;
@@ -428,6 +433,7 @@ export interface AnalyzeRequestOpts {
 // The flat field names (worker message, sidecar body, facet `data`) mapped to
 // an AnalysisResult; absent fields read null.
 function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
+  const curve = msg.loudness_curve == null ? null : parseWholeLoudnessCurve(msg.loudness_curve);
   return {
           bpm: msg.bpm ?? null,
           musicalKey: msg.key ?? null,
@@ -450,7 +456,10 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           loudnessVersion: parseFinite(msg.loudness_version),
           samplePeakDb: parseFinite(msg.sample_peak_db),
           loudnessRangeLu: parseFinite(msg.lra_lu),
-          wholeLoudnessCurve: msg.loudness_curve == null ? null : parseWholeLoudnessCurve(msg.loudness_curve),
+          wholeLoudnessCurve: curve,
+          loudnessCurveUnavailable: curve ? null
+            : msg.loudness_curve != null ? 'rejected'
+            : typeof msg.loudness_curve_unavailable === 'string' ? msg.loudness_curve_unavailable : null,
           edgeLeadMs: parseSilenceMs(msg.edge_lead_ms),
           edgeTailMs: parseSilenceMs(msg.edge_tail_ms),
           decodedDurationMs: parseSilenceMs(msg.decoded_duration_ms),

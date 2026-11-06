@@ -3,7 +3,7 @@
 // (silence at both ends against the absolute floor, and the decoded length).
 //
 // The contracts pinned here:
-//   - schema step 32 adds the columns, and is safe on a database that already
+//   - schema step 37 adds the columns, and is safe on a database that already
 //     has some of them (a user_version wound back below the step);
 //   - a loudness figure's facet version is the measurement's own: the window
 //     figure every head analysis writes stays at v1 (so it is due for v2), a
@@ -15,7 +15,9 @@
 //   - a silent file settles as unmeasurable instead of staying due forever;
 //   - the short-term loudness curve is stored with every v2 figure; a v2
 //     figure without one (an analyzer that predates it) stays one version
-//     below, re-planned only on an analyzer that reports the curve;
+//     below, re-planned only on an analyzer that reports the curve; one from
+//     a pass that ran and had no curve to give settles (the unavailable
+//     marker) instead of being re-read in full on every run;
 //   - the facet table stays consistent with the columns (checkFacets) throughout.
 //
 // Real better-sqlite3 against a temp STATE_DIR, like facet-status.test.ts.
@@ -198,6 +200,36 @@ test('a v2 figure without its curve stays one version below, re-planned only for
   db.resyncAllFacets(db.requireDb());
   assert.deepEqual(facetRow('nocurve', 'loudness'), { status: 'ok', version: 2, reason: null });
   consistent();
+});
+
+test('a pass that ran and had no curve to give settles instead of re-reading every run', () => {
+  db.upsertTrackMeta('nocurve-said', { title: 'nocurve-said', artist: 'A', album: 'B', duration: 240 });
+  db.writeFacetResults('nocurve-said', { source: 'url', loudness: { ...WHOLE, curve: null, curveUnavailable: 'no-frames' } });
+  assert.deepEqual(facetRow('nocurve-said', 'loudness'), { status: 'ok', version: 2, reason: null });
+  assert.deepEqual(JSON.parse(storedCurve('nocurve-said')!), { unavailable: 'no-frames' });
+  assert.equal(parseWholeLoudnessCurve(storedCurve('nocurve-said')), null, 'the marker reads as no curve');
+  const p = P.planAcoustics({
+    ids: ['nocurve-said'], facets: ['loudness'], where: { kind: 'needs' }, state: db.loadFacetState(['loudness']),
+    capabilities: { clap: null, demucs: null, tailVocal: null, wholeFile: true, loudnessCurve: true },
+  });
+  assert.deepEqual(p.items, [], 'not planned again, even on a curve-capable analyzer');
+  db.resyncAllFacets(db.requireDb());
+  assert.deepEqual(facetRow('nocurve-said', 'loudness'), { status: 'ok', version: 2, reason: null });
+  consistent();
+});
+
+test('the answer says why a curve is missing; a curve the parser refuses counts as missing', async () => {
+  const analyzer = await import('../src/music/analyzer.js');
+  const result = (data: Record<string, unknown>) =>
+    analyzer.parseFacetAnswer({ facets: { loudness: { status: 'ok', data } } } as never).facets.loudness!.result;
+  const figures = { loudness_lufs: -14.2, peak_db: 0.4, sample_peak_db: -0.2, lra_lu: 7.5, loudness_version: 2 };
+  assert.equal(result({ ...figures, loudness_curve_unavailable: 'no-frames' }).loudnessCurveUnavailable, 'no-frames');
+  // Past a day: refused by the parser, so it settles rather than loops.
+  const tooLong = result({ ...figures, loudness_curve: { whole: { startMs: 3000, stepMs: 1000, lufs: Array(86_401).fill(-140) } } });
+  assert.equal(tooLong.wholeLoudnessCurve, null);
+  assert.equal(tooLong.loudnessCurveUnavailable, 'rejected');
+  assert.equal(result(figures).loudnessCurveUnavailable, null, 'an analyzer that predates the curve says nothing');
+  assert.equal(result({ ...figures, loudness_curve: CURVE }).loudnessCurveUnavailable, null);
 });
 
 test('a v2 figure stored before the curve existed is re-derived one version below', () => {

@@ -77,7 +77,7 @@ export interface FacetSourceRow {
   has_vocal: number;         // vocal_ranges_json IS NOT NULL ('[]' is measured, counts)
   has_stems: number;         // stems_at IS NOT NULL
   loudness_version: number;  // COALESCE(loudness_version, 1): which measurement loudness_lufs is
-  has_loudness_curve?: number; // loudness_curve_json IS NOT NULL (the whole-file pass's curve)
+  has_loudness_curve?: number; // loudness_curve_json IS NOT NULL (the whole-file pass's curve, or its unavailable marker)
   has_edges: number;         // decoded_duration_ms IS NOT NULL
   analyze_fail_count: number | null;
   analyze_error: string | null;
@@ -140,7 +140,9 @@ export function deriveFacetRows(
   if (row.has_loudness) {
     // A whole-file figure stored without its curve (an analyzer that predates
     // it) stays one version below: re-planned for the curve, but only on an
-    // analyzer that reports one (acoustics-plan, `no-curve`).
+    // analyzer that reports one (acoustics-plan, `no-curve`). A pass that ran
+    // and had no curve to give stored the unavailable marker instead, which
+    // counts as the curve column set: settled, never re-read for nothing.
     const v = row.loudness_version || 1;
     if (v >= 2 && !row.has_loudness_curve) ok('loudness', 'no-curve', v - 1);
     else ok('loudness', null, v);

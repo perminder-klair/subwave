@@ -646,6 +646,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
           loudnessLufs: r.loudnessLufs, peakDb: r.peakDb,
           samplePeakDb: r.samplePeakDb ?? null, loudnessRangeLu: r.loudnessRangeLu ?? null,
           version: r.loudnessVersion ?? null, curve: r.wholeLoudnessCurve ?? null,
+          curveUnavailable: r.loudnessCurveUnavailable ?? null,
         };
       } else if (f === 'edges') {
         if (r.edgeLeadMs == null || r.edgeTailMs == null || r.decodedDurationMs == null) {
