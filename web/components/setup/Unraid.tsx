@@ -358,8 +358,18 @@ export default function Unraid() {
             </li>
             <li>
               <strong>Repository</strong> &rarr;{' '}
-              <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio-cuda:latest</code>
-              .
+              <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-aio-cuda:&lt;arch&gt;</code>
+              , with the tag named for your card&apos;s GPU architecture:{' '}
+              <code className="bs-code-inline">pascal</code> for a GTX 10-series,{' '}
+              <code className="bs-code-inline">ampere</code> for an RTX 30-series,
+              and likewise <code className="bs-code-inline">maxwell</code>,{' '}
+              <code className="bs-code-inline">volta</code>,{' '}
+              <code className="bs-code-inline">turing</code>,{' '}
+              <code className="bs-code-inline">ada</code>,{' '}
+              <code className="bs-code-inline">hopper</code> and{' '}
+              <code className="bs-code-inline">blackwell</code>.{' '}
+              <code className="bs-code-inline">latest</code> works only on Turing
+              (RTX 20-series) and newer.
             </li>
             <li>
               <strong>Extra Parameters</strong> &rarr; append{' '}
