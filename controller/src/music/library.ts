@@ -323,6 +323,9 @@ type SlimTrackInput = Pick<TrackRecord,
   structure?: TrackRecord['structure'];
   vocalRanges?: TrackRecord['vocalRanges'];
   vocalRangesInvalid?: boolean;
+  tailVocalRanges?: TrackRecord['tailVocalRanges'];
+  tailVocalRangesInvalid?: boolean;
+  explicitStatus?: TrackRecord['explicitStatus'];
   pace?: TrackRecord['pace'];
 };
 
@@ -401,11 +404,7 @@ export function songsByEnergy(energy: string | null | undefined): LibraryTrack[]
 
 export function songsByLanguage(language: string | null | undefined): LibraryTrack[] {
   if (!language || !loaded) return [];
-  return blocklist.rejectBlocked(db.songsByLanguage(language).map(t => ({
-    ...slimTrack(t),
-    language: t.language?.primaryLanguage ?? null,
-    languages: t.language?.languages ?? [],
-  })));
+  return blocklist.rejectBlocked(db.songsByLanguage(language).map(slimTrack));
 }
 
 // KNN over the text embedding space. `seed` is normally a track id, but the

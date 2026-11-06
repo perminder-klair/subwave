@@ -5,8 +5,8 @@ import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
 import { SQL_HAS_MOODS, SQL_NO_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
-import type { EnergyValue, ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
-import { rowToMoodPool, rowToEnergyPool, safeParseArray } from './rows.js';
+import type { EnergyValue, ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackRecord, TrackRow } from './types.js';
+import { rowToMoodPool, rowToEnergyPool, rowToTrack, safeParseArray } from './rows.js';
 
 // Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
 // rowToTrack: GET /library/blocklist runs this over the whole library per request.
@@ -41,70 +41,18 @@ const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artis
   t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec, t.explicit_status,
   t.language_primary, t.languages`;
 
-export interface LanguagePoolRecord {
-  id: string;
-  title: string | null;
-  artist: string | null;
-  album: string | null;
-  albumId: string | null;
-  artistId: string | null;
-  year: number | null;
-  genres: string[];
-  genre: string | null;
-  moods: string[];
-  energy: EnergyValue;
-  language: string | null;
-  languages: string[];
-}
-
-type LanguagePoolRow = {
-  id: string;
-  title: string | null;
-  artist: string | null;
-  album: string | null;
-  album_id: string | null;
-  artist_id: string | null;
-  year: number | null;
-  genres: string | null;
-  genre: string | null;
-  moods: string | null;
-  energy: EnergyValue;
-  language_primary: string | null;
-  languages: string | null;
-};
-
-function rowToLanguagePool(row: LanguagePoolRow): LanguagePoolRecord {
-  return {
-    id: row.id,
-    title: row.title,
-    artist: row.artist,
-    album: row.album,
-    albumId: row.album_id ?? null,
-    artistId: row.artist_id ?? null,
-    year: row.year,
-    genres: row.genres ? safeParseArray(row.genres) : [],
-    genre: row.genre,
-    moods: row.moods ? safeParseArray(row.moods) : [],
-    energy: row.energy ?? null,
-    language: row.language_primary ?? null,
-    languages: row.languages ? safeParseArray(row.languages) : [],
-  };
-}
-
 // Language tagging is optional on older library databases. Keep this read
 // seam defensive so a request resolver deployed before the language migration
 // continues to behave exactly as before instead of failing the whole request.
-export function songsByLanguage(language: string): LanguagePoolRecord[] {
+export function songsByLanguage(language: string): TrackRecord[] {
   if (!language.trim()) return [];
   try {
-    const rows = requireDb().prepare(`SELECT t.id, t.title, t.artist, t.album,
-      t.album_id, t.artist_id, t.year, t.genres, t.genre, t.moods, t.energy,
-      t.language_primary, t.languages
+    const rows = requireDb().prepare(`SELECT t.*
       FROM tracks t
       WHERE t.language_primary = ?
          OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.languages) THEN t.languages ELSE '[]' END) WHERE value = ?)
-      ORDER BY t.rowid`).all(language, language) as LanguagePoolRow[];
-    return rows.map(rowToLanguagePool);
+      ORDER BY t.rowid`).all(language, language) as TrackRow[];
+    return rows.map(rowToTrack);
   } catch {
     return [];
   }
