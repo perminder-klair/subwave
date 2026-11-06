@@ -5290,17 +5290,22 @@ export function normalizeSkillVoice(data: Record<string, unknown> | null | undef
   if (voice && isUnsafeVoiceId(voice)) return null;
   const provider = String((data as Record<string, unknown>)[SKILL_VOICE_PROVIDER_KEY] ?? '').trim();
   const cloudProvider = (SKILL_VOICE_PROVIDERS as readonly string[]).includes(provider) ? provider : 'openai';
-  // Same rule the strict schema applies below, and the same one both persona
-  // paths already carry: a managed cloud provider needs a voice id, and an empty
-  // one is not "use the station default" — it reaches the provider as an empty
-  // `voice`/`reference_id` and the render fails into the rescue chain. The
-  // strict schema DEFAULTS to a valid id so the form round-trips; the disk path
-  // mirrors it rather than returning null, because a hand-written `voiceEngine:
-  // cloud` with no `voiceId` is an incomplete override, not a broken one.
+  // Same rule the strict schema applies below: a managed cloud provider needs a
+  // voice id. `alloy` is an OpenAI voice id, so it is a valid default for that
+  // provider alone — ElevenLabs and Fish-Audio receive nothing they host, and the
+  // render fails into the rescue chain. No shared default exists for them, so a
+  // blank voice reads as "no override" instead of being sent to fail.
   //
-  // `openai-compatible` is the exception in both directions: its voices are
-  // server-specific, so empty genuinely means "let the server pick".
-  if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
+  // `openai` keeps `alloy`; `openai-compatible` keeps empty (let the server pick).
+  if (
+    !voice &&
+    engine === 'cloud' &&
+    cloudProvider !== 'openai-compatible' &&
+    cloudProvider !== 'openai'
+  ) {
+    return null;
+  }
+  if (!voice && engine === 'cloud' && cloudProvider === 'openai') voice = 'alloy';
   return { engine, voice, cloudProvider };
 }
 
@@ -5357,7 +5362,13 @@ const skillVoiceSlotSchema = z
         return fail('voice.voice for pocket-tts must be a built-in voice id (e.g. alba) or a .wav filename');
       }
     }
-    if (engine === 'cloud' && providerRaw !== 'openai-compatible' && !voice) voice = 'alloy';
+    // openai/elevenlabs/fish-audio all require a voice id (sent as `voice` or
+    // `reference_id`). `alloy` is an OpenAI id, not a cross-provider default:
+    // persona.ts refuses the same input with `1-100 chars`, and an id the
+    // provider does not host fails every render into the rescue chain.
+    if (engine === 'cloud' && providerRaw !== 'openai-compatible' && !voice) {
+      return fail(`voice.voice must be 1-${SKILL_VOICE_MAX} chars for cloud/${providerRaw}`);
+    }
     if (engine === 'piper' && voice && !/^[A-Za-z0-9_.-]{1,100}\.onnx$/.test(voice) && !/^[a-z]{2}_[a-z0-9]+$/.test(voice)) {
       return fail('voice.voice for piper must be an .onnx filename (no path), or empty for the default voice');
     }

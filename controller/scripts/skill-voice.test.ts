@@ -164,18 +164,23 @@ test('SKILL.md round trip: voice lines written, read back, and cleared', async (
 
 // A managed cloud provider needs a voice id. Fish sends it as `reference_id`,
 // ElevenLabs as the voice name, and OpenAI as `voice`; an empty value reaches
-// all three as empty and the render fails into the rescue chain. Every other
-// normaliser in the station defaults it — the strict skill schema below does,
-// and so do both persona paths — so the disk path being the one that left it
-// blank made a hand-written `voiceEngine: cloud` override that could never
-// render.
-test('a managed cloud provider defaults a blank voice instead of rendering empty', () => {
-  for (const provider of ['openai', 'elevenlabs', 'fish-audio']) {
-    const out = normalizeSkillVoice({ voiceEngine: 'cloud', voiceId: '', voiceProvider: provider });
-    assert.equal(out?.voice, 'alloy',
-      `${provider} requires a voice id — an empty one fails every render and falls through `
-        + 'the rescue chain instead of leniently reading as "no override"');
-    assert.equal(out?.cloudProvider, provider, `${provider} must survive the default`);
+// all three as empty and the render fails into the rescue chain. The disk path
+// refuses what the strict schema refuses — with one provider-specific mercy:
+// `alloy` is an OpenAI voice id, so it is a genuine default for openai. There is
+// no shared default for ElevenLabs or Fish-Audio, so a blank voice from either
+// reads as "no override" rather than being sent to a provider that cannot host it.
+test('a managed cloud provider refuses a blank voice it cannot render', () => {
+  assert.equal(
+    normalizeSkillVoice({ voiceEngine: 'cloud', voiceId: '', voiceProvider: 'openai' })?.voice,
+    'alloy',
+    'openai has a shared default voice id; keep it',
+  );
+  for (const provider of ['elevenlabs', 'fish-audio']) {
+    assert.equal(
+      normalizeSkillVoice({ voiceEngine: 'cloud', voiceId: '', voiceProvider: provider }),
+      null,
+      `${provider} has no shared default id; an override without one is not an override`,
+    );
   }
 });
 
