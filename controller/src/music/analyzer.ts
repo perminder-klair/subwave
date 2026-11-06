@@ -10,7 +10,7 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
-import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { describeFetchError, fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
 
 // A structural span over the track, in ms. Contiguous over the analysed
@@ -509,7 +509,7 @@ let _sidecarBase = '';
 
 async function probeSidecar(url: string): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000 });
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000, retryStaleSocket: true });
     if (!res.ok) return false;
     const body = (await res.json()) as {
       ok?: boolean;
@@ -585,6 +585,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     body: JSON.stringify(body),
     timeoutMs: config.analyzer.requestTimeoutMs,
     bodyDeadline: true,
+    retryStaleSocket: true,
   });
   if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
@@ -784,6 +785,7 @@ export async function embedTexts(
         body: JSON.stringify({ texts }),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
         ...(signal ? { signal } : {}),
       });
       // 404 = pre-text-tower sidecar, 500 = lean build; both mean "no text
@@ -796,14 +798,20 @@ export async function embedTexts(
     if (signal?.aborted) return null;
     return await localEmbedTexts(texts, timeoutMs, signal);
   };
+  // A failure still degrades to null, but names its cause once: a caller's
+  // "text embedding failed" warning cannot see it.
+  const failed = (err: unknown): null => {
+    if (!signal?.aborted) console.warn(`[analyzer] text embedding failed: ${describeFetchError(err)}`);
+    return null;
+  };
   try {
     return await attempt();
   } catch (err) {
-    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return null;
+    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return failed(err);
     try {
       return await attempt();
-    } catch {
-      return null;
+    } catch (retryErr) {
+      return failed(retryErr);
     }
   }
 }
@@ -860,6 +868,7 @@ export async function renderTransition(
         body: JSON.stringify(payload),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
       });
       if (!res.ok) return null; // 404 = pre-render sidecar — silently no blend
       const body = (await res.json()) as WorkerMessage & { ok?: boolean };
@@ -1140,6 +1149,7 @@ async function facetRequest(
       body: JSON.stringify(body),
       timeoutMs,
       bodyDeadline: true,
+    retryStaleSocket: true,
     });
     if (!res.ok) return sidecarFailure(res);
     msg = (await res.json()) as WorkerMessage;
