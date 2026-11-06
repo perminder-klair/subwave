@@ -126,13 +126,18 @@ the function are driven from one table by `scripts/max-listeners.test.ts`.
 
 **The off switch is `ANALYZER_REPLICAS=0` (#1570)**, rendered as `deploy.replicas: ${ANALYZER_REPLICAS:-1}` on the service — the next `up -d` stops AND removes the container, and it stays gone across restarts, which `docker compose stop analyzer` (the old advice) did not: `up` restarts a hand-stopped service. **A profile could not express this** and the reason is measured, not stylistic: profiles are opt-in only, so gating the analyzer behind one forces every existing install to add `COMPOSE_PROFILES=analyzer` to keep what it has, and the inverted trick — `profiles: ["${ANALYZER_DISABLED:+off}"]`, empty by default — drops the service for anyone who sets `COMPOSE_PROFILES` **at all**, because a non-empty `COMPOSE_PROFILES` switches compose from the default set to the named set and an empty-string profile is in neither. `docs/tts-heavy.md` tells every Unraid/Portainer operator to set `COMPOSE_PROFILES=tts-heavy`, so that population would silently lose analysis on upgrade. `deploy.replicas` has neither failure: unset and empty both render `1`, so a default-on install is byte-identical, and the `deploy` map merges key-wise with `docker-compose.analyzer-gpu.yml`'s `deploy.resources` reservation rather than replacing it. Three consequences worth knowing. **Only `0` and `1` are valid**: the service pins `container_name: sub-wave-analyzer`, and compose refuses a fixed container name for more than one replica, so `ANALYZER_REPLICAS=2` fails *every* compose command (`can't set container_name and analyzer as container name must be unique`) rather than scaling — a non-integer (`false`) is likewise a hard interpolation error rather than a silent fallback, which is why the var is named for a count and not a boolean. `docker compose config` still LISTS the service at `replicas: 0` (unlike a profile, which omits it), so verify with the rendered `replicas:` line or `docker compose ps`, never `config --services`. And the variable is **inert on the AIO**, which runs the analyzer in-process (`ANALYZE_PYTHON`) rather than as a service — so `docker/aio/supervisor.sh` `warn_if_analyzer_replicas_ignored` warns at boot when it is set to `0` there, for the same reason `warn_if_analyzer_heavy_ignored` exists (#1300 bug 9: a compose-only var that an operator sets, watches do nothing, and concludes the feature is broken). This one fails worse than `ANALYZER_HEAVY` did — an operator setting `0` to reclaim RAM keeps paying for analysis it believes it switched off — so the warning names the AIO's real off switch, an **empty `ANALYZE_PYTHON`** (`config.ts` reads an empty path as no local backend). `scripts/aio-analyzer-heavy.test.ts` pins the warning, and `scripts/analyzer-replicas-compose.test.ts` drives all three composes from one table so the `deploy.replicas` line cannot drift between them.
 
-**Analyzer torch and maintenance commands (#1340, #1738).** The AIO and
-standalone analyzer share torch/torchaudio **2.7.1** for both heavy CPU and CUDA
-builds. The CUDA flavour uses the **cu128** index, which includes Blackwell
-sm_120 kernels. Both indexes publish cp313 wheels for the AIO's system Python
-3.13, as well as cp311 wheels for the standalone image. Keep these two
-Dockerfiles in lockstep, including Demucs 4.0.1, diffq 0.2.4, transformers
-5.13.0 and CPU onnxruntime 1.27.0. Chatterbox runs in a separate venv with its
+**Analyzer torch and maintenance commands (#1340, #1738).** Heavy CPU builds,
+the split-stack `subwave-analyzer-cuda` and the AIO's primary CUDA build share
+torch/torchaudio **2.7.1**, the CUDA ones from the **cu128** index (Turing
+sm_75 through Blackwell sm_120). The AIO has a second CUDA build,
+`TORCH_CUDA=cu124`, which pins torch **2.6.0** because that cu124 wheel still
+ships Maxwell (sm_50), Pascal (sm_60) and Volta (sm_70) SASS. cu128 dropped
+those three, and CUDA 13 cannot emit them. The standalone analyzer has no
+cu124 build. The cu128 index publishes cp313 wheels for the AIO's system
+Python 3.13 and cp311 for the standalone image; the AIO-only cu124 build uses
+cp313. Keep the shared pins in lockstep (Demucs 4.0.1, diffq 0.2.4,
+transformers 5.13.0, CPU onnxruntime 1.27.0); the cu124 torch pin is the one
+exception. Chatterbox runs in a separate venv with its
 own upstream torch pin and Blackwell override, described in `docs/gpu-tts.md`.
 The AIO appends `/opt/analyzer/venv/bin` to PATH so `docker exec subwave pip`
 targets analyzer packages while system `python3` keeps precedence. Its analyzer
@@ -140,9 +145,64 @@ and Kokoro workers use explicit interpreter paths. The standalone analyzer
 puts the analyzer venv first so pip targets it instead of the server venv,
 and starts FastAPI with `/opt/server/venv/bin/uvicorn` to preserve that isolation.
 
+<a id="aio-cuda-tags"></a>
+**AIO CUDA tags: an architecture tag names a GPU, not a wheel (#2265).**
+`subwave-aio-cuda` is published once per torch wheel, and operators pick it by
+their card's architecture. This table is the one place that maps a tag to a
+build; the README, `docs/unraid.md`, `docs/tts-heavy.md` and the in-app guides
+link here or name a tag by its card rather than restate it.
+
+| Tag | GPU (compute capability) | For example | Build today |
+| --- | --- | --- | --- |
+| `:maxwell` | sm_50–52 | GTX 750, GTX 900-series | cu124 |
+| `:pascal` | sm_60–61 | GTX 10-series, P40 | cu124 |
+| `:volta` | sm_70 | Titan V, V100 | cu124 |
+| `:turing` | sm_75 | RTX 20-series, GTX 16-series, T4 | cu128 |
+| `:ampere` | sm_80–86 | RTX 30-series, A100 | cu128 |
+| `:ada` | sm_89 | RTX 40-series, L4 | cu128 |
+| `:hopper` | sm_90 | H100 | cu128 |
+| `:blackwell` | sm_100–120 | RTX 50-series, B200 | cu128 |
+
+The build tags `:cu124` and `:cu128`, and the release pins
+`:<version>-cu124` and `:<version>-cu128`, name a wheel instead. `:latest` and
+the plain `:<version>` tags follow the **primary** build, today cu128, so they
+work only on Turing and newer. An architecture tag points at the newest build
+that still supports its GPU, which is why each GPU has its own: a later wheel
+can move one without the others (a cu130 that only adds Blackwell moves
+`:blackwell` and leaves `:hopper` on cu128), whereas a tag shared by several
+GPUs, or `:latest`, would strand the older cards the day a newer wheel drops
+them. Never point an architecture tag at a build that dropped its GPU, and
+never fold several GPUs into one tag.
+
+`publish-images.yml` encodes this per matrix entry. Each `subwave-aio-cuda`
+entry sets `cuda_family`, `primary` and `arch_tags`, so moving a GPU to
+another build moves one word between two `arch_tags` lines. `cuda_family` is
+also the wheel: the build step passes it to `Dockerfile.aio` as `TORCH_CUDA`,
+whose `case` fails on a family it has no index for, so a build's tags and its
+wheel can't disagree. Each job sees only its own entry, so the `tagplan` step
+checks only that entry's shape (a `cuda_family` build says `primary: true` or
+`false`, and `arch_tags` needs a `cuda_family`). The rules across entries run
+in `lint.yml` on every PR: `controller/scripts/check-publish-matrix.ts` fails an
+image with no primary or two, and a build or architecture tag on more than one
+entry, because either races two jobs for one tag on a release. Only the
+primary build takes `:latest`, the plain version tags and the plain `sha-`
+commit tag; another build's commit tag is `sha-<family>-`. A non-primary build
+also sets the metadata-action flavor `latest=false`. The action adds `:latest`
+by itself for any enabled stable semver rule, whatever that rule's suffix, so
+without it the cu124 build's `:<version>-cu124` rule raced the primary for
+`:latest` on every release. The build and architecture tags move on a stable
+release tag (`refs/tags/v*` with no `-`), pushed or dispatched, and on a
+dispatch from the default branch; never on a prerelease tag or a dispatch from
+another branch. `tagplan` decides this from the ref, not the event, because
+the action's semver rules (`:latest` among them) key on the ref too. Deciding
+on the event let a dispatch on a release tag move `:latest` but leave `:pascal`
+and the other shortcuts on the previous build.
+
 **Analyzer concurrency (`ANALYZE_CONCURRENCY`, #1538).** One env var, read on BOTH sides and bounded `1-8` with a fall-back-to-1 (not a clamp) on anything empty, non-integer or out of range — `envInt` in `controller/src/config.ts`, `_bounded_int_env` in `docker/analyzer/server.py`. **The default of 1 is the pre-change station, byte for byte**, which is the whole reason the two code paths are kept side by side rather than unified: `music/analyze.ts` keeps its original one-ahead `prefetch()` loop verbatim at 1 and only takes `music/analyze-dispatch.ts` above it. Above 1 the pass admits jobs in **source order** through `dispatchAnalysis`, bounded by live count, and commits every outcome back **in source order too** — the systemic-failure guard (`failureCountsAgainstTrack`, the buffered `pendingFailureStamps`) reads a run of consecutive failures, so out-of-order commits would condemn tracks over a bad *pass*. The quiet gate is evaluated **before every admission and before that job's download** (`beforeStart`), so a paused pass never keeps pulling audio for work it isn't going to compute; its fail-open direction is untouched, and it still resolves through the one `analyze-quiet-pure.ts` decision. The win is specifically the **share-less remote topology**, where the path probe 422s and the analyzer fetches each track itself; a local shared-mount setup already overlapped via the prefetch, and **local `ANALYZE_PYTHON` stays single-flight regardless** (`backend === 'sidecar' ? requested : 1`) because one line-protocol stdio worker cannot multiplex.
 
 **The download cap (`ANALYZE_MAX_BYTES`, #1549) is the other two-sided env var**, and it is parsed with the same posture for the same reason: `envInt` in `music/analyzer.ts` for the controller's own prefetch, `_env_int` in `scripts/analyze_worker.py` when the worker fetches the audio itself, both falling back to the shared 12 MB default on anything empty, non-integer or below 1. The two used to disagree on a typo — TS `parseInt` produced **NaN**, which is false in both comparisons (cap off AND every file flagged incomplete, so outro analysis went off library-wide with nothing logged), while Python's bare `int()` RAISED and killed the download. `_env_int` matches `envInt`'s grammar rather than deferring to `int()`, which is looser (`1_000`, non-ASCII digits) and would put the two fetch paths back on different caps. Pinned by `scripts/analyzer-max-bytes.test.ts`, which drives both sides from one table.
+
+**The whole-file lane's vars are two-sided as well, with the same warn-and-fall-back posture** (`docs/internals/music.md`, the whole-file facets). `ANALYZE_WHOLE_FILE_CONCURRENCY` is bounded `1-32` on both sides (`envInt`, `_bounded_int_env`), and the sidecar advertises its own figure on `/health` for the controller to take the smaller. `ANALYZE_WHOLE_FILE_TIMEOUT_S` is bounded `30-7200` seconds by the sidecar (`_bounded_float_env`) and the worker (`_env_float`) alike. The sidecar hands its reading to every one-shot worker, so the two cannot disagree. The controller's `ANALYZE_WHOLE_FILE_TIMEOUT_MS` (`90000-7260000`) is the wait on the other side and is kept 60 s above it, so the analyzer reports its own timeout rather than the controller abandoning a run that is still going.
 
 **An incomplete native FLAC prefix gets one bounded PCM recovery (#1670).** A byte-capped FLAC can still describe hours of highly compressible audio, so decoding the whole prefix to a temporary WAV can expand a 12 MB input until it fills the analyzer's writable layer. Every one-shot predecode now gives ffmpeg a 63 MiB `-fs` stop target (one MiB of packet-boundary headroom) and accepts no finalized WAV above a hard 64 MiB ceiling. A known-incomplete FLAC may use the valid audio ffmpeg finalized at that stop; a complete/unknown input on the older libsndfile fallback may not, because accepting a shortened file would falsify its duration, CLAP placement and outro. That path instead retains its old per-load decoder when it reaches the byte target. FLAC recovery deliberately has **no time cap**: baseline analysis and the heavy vocal head still receive their full `ANALYZE_SECONDS`, and CLAP can still place start/middle/late windows across all recovered audio under the byte ceiling. If the decodable prefix would exceed that ceiling, CLAP's middle/late positions are taken from the bounded recovered span rather than the entire compressed prefix; that loss of far-prefix coverage is the deliberate cost of the disk bound. Outro and tail-vocal analysis were already disabled for `complete: false`, so their duration semantics do not change. Recovery keeps the native channel layout: loudness sees it unchanged and CLAP performs its established mono decode. Demucs is the one exception because its model accepts exactly stereo, so mono is duplicated and wider WAVEX layouts are folded across every channel into its private two-channel detection mix. The same URL-owned source file is removed if recovery or any later analysis step is interrupted, and `fetch_audio` owns its descriptor through `fdopen` so cleanup never closes a stale descriptor another thread may have reused. Pinned by `scripts/analyzer_decode_test.py`, including real frame-truncated FLAC, multichannel WAVEX and opt-in actual-model integration fixtures.
 

@@ -47,8 +47,14 @@
   <ExtraSearchTerms>subwave sub-wave sub/wave subwave-aio radio internet radio icecast liquidsoap ai dj navidrome subsonic stream ollama station broadcast</ExtraSearchTerms>
   <Requires>A reachable Navidrome / Subsonic music server and an LLM provider (Ollama local/cloud or a cloud API key), both configured in the browser at /onboarding after first boot.</Requires>
 
-  <Date>2026-11-04</Date>
+  <Date>2026-11-06</Date>
   <Changes>
+### 2026-11-06
+- GPU analysis now runs on older NVIDIA cards too (Maxwell, Pascal, Volta:
+  GTX 900 and 10-series, Titan V). Point Repository at the subwave-aio-cuda tag
+  named for your card's architecture, e.g. subwave-aio-cuda:pascal. :latest
+  still needs Turing (RTX 20-series) or newer.
+
 ### 2026-11-04
 - The overview now shows as separate paragraphs instead of one block.
 
@@ -100,14 +106,14 @@
        nvidia runtime flag is in Extra Parameters (see the top of this file). If
        the card ends up not visible the analyze worker warns and stays on CPU. -->
   <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default=""
-          Description="GPU analysis only: the GPU UUID from Unraid's Nvidia Driver plugin (or 'all'). Leave EMPTY unless you are running the subwave-aio-cuda image with --runtime=nvidia in Extra Parameters."
+          Description="GPU analysis only: the GPU UUID from Unraid's Nvidia Driver plugin (or 'all'). Leave EMPTY unless Repository points at a subwave-aio-cuda tag and --runtime=nvidia is in Extra Parameters."
           Type="Variable" Display="advanced" Required="false" Mask="false"/>
 
   <Config Name="NVIDIA_DRIVER_CAPABILITIES" Target="NVIDIA_DRIVER_CAPABILITIES" Default=""
-          Description="GPU analysis only: set to 'compute,utility' when using the subwave-aio-cuda image. Leave EMPTY otherwise."
+          Description="GPU analysis only: set to 'compute,utility' when using subwave-aio-cuda. Leave EMPTY otherwise."
           Type="Variable" Display="advanced" Required="false" Mask="false"/>
 
   <Config Name="ANALYZE_DEVICE" Target="ANALYZE_DEVICE" Default=""
-          Description="Where the heavy acoustic models run: auto (default — GPU when one is visible, else CPU), cuda, or cpu. Leave EMPTY unless you want to pin it; only the -cuda image can use a GPU at all."
+          Description="Where the heavy acoustic models run: auto (default — GPU when one is visible, else CPU), cuda, or cpu. Leave EMPTY unless you want to pin it; only subwave-aio-cuda can use a GPU."
           Type="Variable" Display="advanced" Required="false" Mask="false"/>
 </Container>

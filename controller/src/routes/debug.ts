@@ -25,6 +25,7 @@ import * as library from '../music/library.js';
 import * as subsonicLog from '../music/subsonic-log.js';
 import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
+import { withSteer } from '../music/steer.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
@@ -37,6 +38,7 @@ import { handoverStatus } from '../broadcast/handover-policy.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
 import { publicOrigin } from './public.js';
+import { advertisedMounts, capStreamBitrates } from '../setup/hosted.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { BadStatePathError, listStateDir } from '../util/state-tree.js';
 import { buildPickerTools, PICKER_TOOLS } from '../llm/tools.js';
@@ -126,7 +128,8 @@ router.post('/debug/discovery/compare', requireAdmin, async (_req, res) => {
     const { scope, activeShow, playlistTracks, episodeSource, context: pickContext } = await livePickerScope(queue, { context: await getFullContext() });
     const current = queue.current?.track ?? null;
     const agentStarted = performance.now();
-    const agent = await pickerAgent.run({ messages: session.pickWindowMessages(), scope });
+    // The live pick's messages, steer included, so the dry run sees what a pick would.
+    const agent = await pickerAgent.run({ messages: withSteer(session.pickWindowMessages(), settings.activeSteer()?.prompt), scope });
     const agentElapsedMs = Math.round(performance.now() - agentStarted);
     const shortlistStarted = performance.now();
     const explore = shouldExplore({ inRun: runActive(), audioWaypoint: scope.audioWaypoint, strictPlaylist: activeShow?.playlistStrict });
@@ -289,9 +292,14 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
 
   // Per-mount config vs live Icecast status. `configured` is operator intent
   // (mp3 is the mandatory floor), `live` is whether Icecast has a source on it;
-  // configured-but-not-live means the encoder didn't connect.
+  // configured-but-not-live means the encoder didn't connect. Both read the
+  // saved settings through a hosted plan's ceiling (setup/hosted.ts), the
+  // values the mixer files get, so a mount the ceiling switched off is not
+  // "configured" and a capped bitrate is the one shown.
   {
-    const st = settingsSnapshot?.stream || {};
+    const saved = settingsSnapshot?.stream || {};
+    const st = capStreamBitrates({ ...saved });
+    const mounts = advertisedMounts(saved);
     const origin = publicOrigin(req);
     const audioParam = (src: any, key: 'samplerate' | 'channels'): number | null => {
       const direct = Number(src?.[key]);
@@ -325,9 +333,9 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     };
     const list = [
       mountEntry('/stream.mp3', 'MP3', true, st.bitrate ?? 192),
-      mountEntry('/stream.opus', 'Opus', st.opusEnabled === true, st.opusBitrate ?? 96),
-      mountEntry('/stream.flac', 'FLAC', st.flacEnabled === true, null),
-      mountEntry('/stream.aac', 'AAC-LC', st.aacEnabled === true, st.aacBitrate ?? 192),
+      mountEntry('/stream.opus', 'Opus', mounts.opusEnabled, st.opusBitrate ?? 96),
+      mountEntry('/stream.flac', 'FLAC', mounts.flacEnabled, null),
+      mountEntry('/stream.aac', 'AAC-LC', mounts.aacEnabled, st.aacBitrate ?? 192),
     ];
     out.mounts = {
       list,

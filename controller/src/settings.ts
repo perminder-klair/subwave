@@ -137,6 +137,7 @@ import {
   normalizeSchedule,
   normalizeScheduleOverride,
   normalizeShows,
+  normalizeSteer,
   normalizeWebhooks,
 } from './settings/normalize.js';
 import {
@@ -146,6 +147,7 @@ import {
   validateScheduleOverrideStrict,
   validateScheduleStrict,
   validateShowsStrict,
+  validateSteerStrict,
   validateTtsBlock,
   validateWebhooksStrict,
 } from './settings/validate.js';
@@ -158,6 +160,7 @@ import {
   LIQ_OPUS_ENABLED_PATH,
   LIQ_STREAM_BITRATE_PATH,
   LIQ_STREAM_BUFFER_SECONDS_PATH,
+  reconcileStreamMountFiles,
   writeLiquidsoapSettings,
 } from './settings/liquidsoap.js';
 
@@ -257,6 +260,7 @@ export {
   getActivePersona,
   getEffectivePersona,
   getOnAirRoster,
+  activeSteer,
   getScheduleOverride,
   guestEditorialNudge,
   guestEditorialNudgeFromGuests,
@@ -266,6 +270,7 @@ export {
   pickOnAirSpeaker,
   renderDjPrompt,
   resolveActiveShow,
+  resolvePickShow,
   resolveOnAirLocation,
   resolvePersonaById,
   resolveShowById,
@@ -806,6 +811,7 @@ export async function load() {
     shows,
     schedule,
     scheduleOverride,
+    steer: normalizeSteer(stored.steer),
     tts: {
       voiceLevelling: ttsVoiceLevellingSchema.catch(DEFAULTS.tts.voiceLevelling).parse(stored.tts?.voiceLevelling),
       // Station-wide voice switch. Coerce missing/non-boolean (every settings.json
@@ -1797,6 +1803,9 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   if ('scheduleOverride' in patch) {
     next.scheduleOverride = validateScheduleOverrideStrict(patch.scheduleOverride, next.shows);
   }
+  if ('steer' in patch) {
+    next.steer = validateSteerStrict(patch.steer);
+  }
   // In-use removal guard: run once the vocabulary AND any same-patch shows are
   // validated, so a mood dropped from the vocab is rejected only if something
   // still references it.
@@ -2779,8 +2788,13 @@ export async function update(patch) {
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
-// them on its next start. Idempotent.
-export async function ensureLiquidsoapSettingsFile() {
+// them on its next start. Idempotent. A missing file writes them all; files
+// already there keep what they say (the jingle ratio's reason is in
+// broadcast/jingle-rotate.ts), except the six listener-mount files, which are
+// reconciled with the saved stream settings under a hosted plan's ceiling
+// (settings/liquidsoap.ts reconcileStreamMountFiles). Returns the mount files
+// that boot rewrote, so the caller can say the mixer needs a restart.
+export async function ensureLiquidsoapSettingsFile(): Promise<{ rewroteMountFiles: string[] }> {
   const s = await load();
   if (
     !existsSync(LIQ_JINGLE_RATIO_PATH) ||
@@ -2793,5 +2807,7 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(ICECAST_LISTENER_AUTH_PATH)
   ) {
     await writeLiquidsoapSettings(s);
+    return { rewroteMountFiles: [] };
   }
+  return { rewroteMountFiles: await reconcileStreamMountFiles(s) };
 }

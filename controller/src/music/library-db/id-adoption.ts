@@ -3,7 +3,7 @@
 // #5824.
 
 import { requireDb } from './handle.js';
-import { moveFacetRows, syncTrackFacets } from './facets.js';
+import { WHOLE_FILE_LOUDNESS_EXTRAS, moveFacetRows, syncTrackFacets } from './facets.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { canonicalId } from '../id-canonical.js';
 import { SEARCH_KEY_DDL } from './search-keys.js';
@@ -43,8 +43,13 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
     anchor: 'analysis_version',
     cols: ['bpm', 'musical_key', 'intro_ms', 'analysis_confidence', 'analysis_version', 'loudness_lufs',
       'peak_db', 'structure_json', 'pace_json', 'beats_json', 'bars_json', 'key_ranges_json',
-      'lead_silence_ms', 'analyze_error', 'analyze_failed_at', 'analyze_fail_count'],
+      'lead_silence_ms', 'analyze_error', 'analyze_failed_at', 'analyze_fail_count',
+      // loudness_lufs/peak_db mean whatever loudness_version says, so the
+      // stamp and the whole-file figures measured with it travel together.
+      ...WHOLE_FILE_LOUDNESS_EXTRAS],
   },
+  // The whole-file edges facet: one measurement, carried as a set.
+  { anchor: 'decoded_duration_ms', cols: ['edge_lead_ms', 'edge_tail_ms', 'decoded_duration_ms'] },
   { anchor: 'audio_moods', cols: ['audio_moods', 'audio_mood_scores_json'] },
   { anchor: 'audio_descriptors', cols: ['audio_descriptors', 'audio_descriptor_scores_json'] },
   { anchor: 'map_x', cols: ['map_x', 'map_y'] },
