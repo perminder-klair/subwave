@@ -24,6 +24,7 @@ import { migrateImportedPersona } from '../personas/import-migration.js';
 import { requireAdmin } from '../middleware/auth.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as sfx from '../broadcast/sfx.js';
+import * as blocklist from '../music/blocklist.js';
 import {
   SKILL_BUNDLE_MAX_BYTES,
   restoreSkillMembers,
@@ -43,7 +44,9 @@ const RESTORABLE = new Set<string>([...INCLUDE_FILES, ...INCLUDE_DIRS]);
 // those modules apply to a bundled or uploaded file — and jingles.m3u is not
 // read at all: it is regenerated from the restored jingles.json. skills/** goes
 // through the skill import's guards, so any tool.mjs arrives quarantined.
-const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json']);
+// blocklist.json goes through blocklist.restore (the boot parser, and the live
+// in-memory list, which a file copy would leave stale until a restart).
+const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json', 'blocklist.json']);
 
 // manifest.json, settings.json, a theme and a sidecar are read into memory, so
 // each is bounded by its DECLARED size before it is inflated. Generous: a
@@ -163,6 +166,17 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     if (!isSidecar(read.data)) return { ok: false, status: 400, error: `${file} in backup is not a sidecar` };
     sidecars.push({ file, data: read.data });
   }
+  // The never-play list, checked here for the same reason. A backup made
+  // before it was included has none, and the station's list is left alone.
+  let blocklistDoc: unknown = undefined;
+  const blocklistRead = readJsonMember(zip, 'blocklist.json');
+  if (blocklistRead) {
+    if ('error' in blocklistRead) return { ok: false, status: 400, error: `${blocklistRead.error} in backup` };
+    if (!blocklist.isStoreDocument(blocklistRead.data)) {
+      return { ok: false, status: 400, error: 'blocklist.json in backup is not a never-play list' };
+    }
+    blocklistDoc = blocklistRead.data;
+  }
   const skillMembers: SkillMember[] = [];
   const skipped: string[] = [];
   for (const entry of zip.getEntries()) {
@@ -207,6 +221,11 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
         : await sfx.restoreMeta(data);
       for (const name of dropped) skipped.push(`${file}: "${name}" is not a usable entry`);
       restored.push(file);
+    }
+    if (blocklistDoc !== undefined) {
+      const { dropped } = await blocklist.restore(blocklistDoc);
+      if (dropped) skipped.push(`blocklist.json: ${dropped} unusable record(s)`);
+      restored.push('blocklist.json');
     }
 
     // 1c) Skills through the import's guards: any tool.mjs not already live

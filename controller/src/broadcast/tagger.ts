@@ -10,6 +10,7 @@ import { clearPoolCache } from '../music/picker.js';
 import { clearPlaylistCache } from '../music/show-playlist.js';
 import { syncAllAfterTag } from '../music/playlist-sync.js';
 import { applyPendingRotation } from '../music/id-rotation.js';
+import { followMovedHearts } from '../music/heart-follow.js';
 import { createIdRotationRecovery, type RotationRecoveryResult, type RotatedIdEvidence } from '../music/id-rotation-recovery.js';
 import { refreshTaggerFallback, runTaggerFollowups, type MaintenanceMode } from './tagger-followups.js';
 import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, CATALOGUE_PREFIX, type TaggerProgress, type TaggerEvent, type TaggerRotation } from '../music/tagger-progress.js';
@@ -449,6 +450,10 @@ function spawnChild(
           if (opts.automaticIdRotation && outcome === 'ok') idRotationRecovery.automaticReconcileFailed();
           return;
         }
+        // The walk may have pruned a hearted song's old id: move the heart to
+        // the same song under its new one (music/heart-follow.ts).
+        await followMovedHearts().catch((err: unknown) =>
+          queue.log('error', `following moved hearts failed (will retry): ${err instanceof Error ? err.message : String(err)}`));
         const fallbackRestored = await runTaggerFollowups({
           mode,
           outcome,
