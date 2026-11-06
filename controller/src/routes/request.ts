@@ -28,7 +28,7 @@ import {
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
-import { asksForKindOfMusic, carriesListenerCredit, classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, isGreetingLikeRequest, isGenericRequestPhrase, leadingQuotedName, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestTextSimilarity, requestTitleSimilarity, resolveDirectRequest, resolveExactName } from '../music/request-match.js';
+import { carriesListenerCredit, classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, isGreetingLikeRequest, isGenericRequestPhrase, leadingQuotedName, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestTextSimilarity, requestTitleSimilarity, resolveDirectRequest, resolveExactName } from '../music/request-match.js';
 import { canonicalLanguage } from '../music/request-normalize.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
@@ -536,12 +536,6 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   const artistPoolRequest = Boolean(literal.artist?.trim() && !literal.title?.trim() && !literal.album?.trim()
     && !literal.soundtrackContext && !literal.genre && !literal.language && !literal.mood);
   const explicitArtistOnlyRequest = artistPoolRequest && /\b(?:by|from)\b/iu.test(text);
-  // A bare title+artist pair is already a complete identity plan. Keep it on
-  // the local-first path instead of waiting on the optional interpreter; the
-  // interpreter is still useful when the same named request carries an
-  // explicit language, genre, or mood constraint that needs parsing.
-  const bareExplicitNamedRequest = explicitNamedRequest
-    && !literal.album && !literal.genre && !literal.language && !literal.mood;
   // A short, attribute-free request is more likely to be a title than a
   // conversational instruction. Resolve it against the local catalogue first
   // so a provider stall cannot delay a straightforward named request. It is an
@@ -883,11 +877,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     language: song.language ?? undefined,
     languages: Array.isArray(song.languages) ? song.languages : undefined,
   }));
-  // A miss ends the request only on a reading, a quote or that cue. The literal
-  // parse alone keeps the honest alternative, and so do words asking for a kind
-  // of music, whatever name a model took from them.
-  const heldToName = (modelNamed && !asksForKindOfMusic(text)) || quotedName || forcedNamedTitle;
-  const resolveReading = (exactOnly = heldToName) => resolveDirectRequest(matched, {
+  const resolveReading = () => resolveDirectRequest(matched, {
     text,
     catalog: {
       ...subsonic,
@@ -1066,7 +1056,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   throwIfRequestResolutionAborted(signal);
   // The wording ahead of a reading only ever tries for an exact track: its
   // alternative would answer before the reading had its turn.
-  let selection = exactName?.track ? exactName : await resolveReading(heldToName || !!readingBehind);
+  let selection = exactName?.track ? exactName : await resolveReading();
   if (!selection.track && readingBehind) {
     matched = normalizeRequestMatch(readingBehind, { moods: settings.moodVocab() });
     recordReading();
