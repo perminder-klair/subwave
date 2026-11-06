@@ -1,5 +1,7 @@
 
 import {
+  ALBUM_KINDS,
+  ALBUM_KIND_LABELS,
   EXCLUDED_PLAYLISTS_PER_SHOW,
   GUESTS_PER_SHOW,
   PLAYLISTS_PER_SHOW,
@@ -89,6 +91,8 @@ export interface Show {
   /** A clean show: tracks tagged explicit stay off air. Only a positive tag
    *  counts, so an untagged track still plays. */
   excludeExplicit: boolean;
+  /** Album kinds (Library → Era) never played on this show, e.g. 'dj-mix'. */
+  excludedAlbumKinds: string[];
   /** The show airs as a produced episode: intro, feature segment, sign-off. */
   programme: boolean;
   /** Pin the feature segment to one skill. Empty = producer picks per episode.
@@ -142,6 +146,8 @@ export const ENERGY_OPTIONS: readonly string[] = SHOW_ENERGY;
 // without a label here shows its raw key rather than vanishing.
 const VOCAL_LABELS: Record<string, string> = { instrumental: 'instrumental', vocal: 'vocals' };
 export const VOCAL_OPTIONS = SHOW_VOCALS.map((key) => ({ key, label: VOCAL_LABELS[key] ?? key }));
+// Album kinds a show can leave out (Library → Era sets one per album).
+export const ALBUM_KIND_OPTIONS = ALBUM_KINDS.map((value) => ({ value, label: ALBUM_KIND_LABELS[value] }));
 export const ANY_SENTINEL = '__any__';
 // Radix Select refuses an empty string value and `null` is not a value at all,
 // so the tri-state "inherit" needs its own token.

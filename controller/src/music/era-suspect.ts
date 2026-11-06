@@ -6,6 +6,29 @@
 
 import { artistRootKey, isVariousArtistsName } from './recency.js';
 
+// The STORED verdict every era reader composes: the walk's derived
+// `era_untrusted` wins once known, and Navidrome's raw `is_compilation` decides
+// only for a row the walk has not judged yet. The walk's verdict already
+// includes the compilation flag (albumEraSuspect's first marker), so on a walked
+// row this answers exactly what the old `is_compilation = 1 OR era_untrusted = 1`
+// did; the one case it changes is an operator's Trust override
+// (music/era-review.ts), which stores 0 on a flagged compilation. Readers in JS
+// call storedYearUntrusted, SQL readers eraSuspectSql; never re-compose the two
+// columns by hand, and keep these two in agreement.
+export function storedYearUntrusted(
+  isCompilation: number | boolean | null | undefined,
+  eraUntrusted: number | boolean | null | undefined,
+): boolean | null {
+  if (eraUntrusted != null) return eraUntrusted === 1 || eraUntrusted === true;
+  return isCompilation == null ? null : isCompilation === 1 || isCompilation === true;
+}
+
+/** SQL twin of storedYearUntrusted: true / false / NULL (never judged). `p` is
+ *  a table alias prefix such as `'t.'`. */
+export function eraSuspectSql(p = ''): string {
+  return `COALESCE(${p}era_untrusted, ${p}is_compilation) = 1`;
+}
+
 /** Album-level facts the walk can read without a single extra request. */
 export interface AlbumEraFacts {
   /** Navidrome's OpenSubsonic isCompilation, when it says anything. */

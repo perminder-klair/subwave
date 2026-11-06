@@ -25,6 +25,7 @@ import { cn } from '../../../lib/cn';
 import { fieldAria } from '@/lib/form';
 import { SelectField, SwitchField, TextField, TextareaField, ToggleGroupField } from '@/lib/form-fields';
 import {
+  ALBUM_KIND_OPTIONS,
   ANY_SENTINEL,
   INHERIT_SENTINEL,
   DECADES,
@@ -64,6 +65,7 @@ const FIELD_LABELS: Record<string, string> = {
   preparationSkill: 'episode preparation skill',
   playlistIds: 'playlists',
   excludedPlaylistIds: 'excluded playlists',
+  excludedAlbumKinds: 'album kinds left out',
 };
 
 // Some rules root on an ARRAY field (`eras.0.fromYear`), so walk down to the
@@ -885,6 +887,14 @@ export function ShowEditor({
                   </span>
                 </PlaylistIdsField>
               </Field>
+              <ToggleGroupField
+                control={control}
+                name={path('excludedAlbumKinds')}
+                label="album kinds left out"
+                description="Tracks from albums of these kinds never play during this show, like an excluded playlist. Each album's kind is set in Library → Era (pre-filled from its title). A track cut out of a DJ mix starts and ends mid-blend, so leave out DJ Mix for most shows."
+                multiple
+                options={ALBUM_KIND_OPTIONS}
+              />
             </div>
           </div>
           <Field>

@@ -557,6 +557,30 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     });
   }
 
+  if (userVersion < 38) {
+    // Era review. The walk stores WHY it distrusts an album (`era_reason`, the
+    // era-suspect.ts marker), the album artist the judgement keyed on
+    // (`album_artist`, not the per-track artist) and the album's effective kind
+    // (`album_kind`: the operator's, else the title's suggestion, which a show's
+    // excludedAlbumKinds reads). `era_override` holds the operator's record per
+    // album, keyed the way music/era-review.albumEraKey folds (album artist,
+    // album): an optional decision (`verdict`: 'trusted' = the album year is
+    // right, 'year' = one year for every track in `forced_year`, 'suspect' =
+    // per-track years) and/or the operator's `kind` (music/album-kind.ts).
+    // The table first, IF NOT EXISTS, then only the missing columns, as in 28.
+    runDdl(d, `
+      CREATE TABLE IF NOT EXISTS era_override (
+        album_key   TEXT PRIMARY KEY,
+        verdict     TEXT CHECK (verdict IS NULL OR verdict IN ('trusted','suspect','year')),
+        forced_year INTEGER,
+        kind        TEXT,
+        set_at      TEXT NOT NULL
+      );
+    `);
+    addColumnsOnce(d, 38, { tracks: { era_reason: 'TEXT', album_artist: 'TEXT', album_kind: 'TEXT' } });
+  }
+
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
