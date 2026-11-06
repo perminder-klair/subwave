@@ -550,15 +550,26 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
    fails both facets, never stores**: ffmpeg exits 0 on a dropped connection
    with what it decoded, and stored, half a track would be a whole-file figure
    and a decoded length that ends the track early on air, which nothing
-   measuring less may replace. Two nets: ffmpeg's own "Stream ends
-   prematurely" or I/O error line (`FfmpegLog.input_error`), and a decode
-   more than max(5 s, 2 %) short of the length an `ffprobe` of the header
-   gives (`decoded_short_of`; a length ffprobe only estimated from the bitrate
-   judges nothing). A server that sends no Content-Length makes even a
-   complete read end on "should be 18446744073709551615" and an I/O error, so
-   those two lines say nothing there and only the length check judges it: a
+   measuring less may replace. Two nets. The first is ffmpeg's own "Stream
+   ends prematurely" or I/O error line (`FfmpegLog.input_error`), read only
+   from ffmpeg's own messages: a `[component @ 0x…]` prefix, or the input's
+   name (how 5.1 reports a read error). Never from the header dump, whose
+   Metadata blocks print the file's tags verbatim: a title "Connection Reset
+   By Peer" is the file's text, not news about the read. The second is a
+   decode more than max(5 s, 2 %) short of the length an `ffprobe` of the
+   header gives (`decoded_short_of`; a length ffprobe only estimated from the
+   bitrate judges nothing), and only on a read of unknown length: a server
+   that sends no Content-Length makes even a complete read end on "should be
+   18446744073709551615" and an I/O error (`FfmpegLog.length_unknown`), so
+   those two lines say nothing there and only the length check judges it. A
    cut in such a stream is caught only for a format whose header carries the
-   length (FLAC, an MP3 with a Xing frame, MP4; not WAV or Ogg).
+   length (FLAC, an MP3 with a Xing frame, MP4; not WAV or Ogg), and a file
+   short of its own header fails there too, since nothing tells the two apart.
+   Anywhere else the length check stays out: a read with a Content-Length logs
+   its own cut, and a local copy is whole, so a decode short of the header is
+   the file itself (truncated on disk, a stale Xing frame). That is what
+   airs, so it is measured, rather than failed every run until the shared
+   failure count drops the track out of every analysis scope.
 5. **ffmpeg 5.1 is the floor.** `ebur128=...:framelog=verbose`, never `quiet`
    (ffmpeg 6+ only; 5.1 rejects the whole filter and every pass fails with
    "Conversion failed!"). The PCM is `-ac 2 -f f32le` at the file's own rate;

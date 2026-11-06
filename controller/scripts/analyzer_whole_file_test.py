@@ -829,6 +829,41 @@ def t_real_ffmpeg_failure_raises_with_the_reason():
     raise AssertionError("garbage decoded")
 
 
+def t_real_ffmpeg_measures_a_file_short_of_its_own_header():
+    # A FLAC cut short on disk keeps its header's length. Its decode is the
+    # file, and what airs: failed as "ended early", it was re-read every run,
+    # then dropped out of every analysis scope. Read locally or with a
+    # Content-Length, every byte arrived, so it is measured; only a read of
+    # unknown length cannot tell it from a cut stream.
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        print("      (skipped: no ffmpeg/ffprobe on PATH)")
+        return
+    import subprocess
+    sr = 22050
+    with tempfile.TemporaryDirectory() as d:
+        wav = os.path.join(d, "x.wav")
+        write_wav(wav, stereo(0.5, 11.0, 0.5, sr, amp=amp_db(-6.0)), sr)
+        full = os.path.join(d, "full.flac")
+        subprocess.run(["ffmpeg", "-v", "error", "-i", wav, full], check=True)
+        data = open(full, "rb").read()
+        short = os.path.join(d, "short.flac")
+        with open(short, "wb") as f:
+            f.write(data[: len(data) // 2])
+        local = aw.whole_file_facets(short, ["loudness", "edges"])
+        assert local["edges"]["status"] == "ok" and local["loudness"]["status"] == "ok", local
+        decoded = local["edges"]["data"]["decoded_duration_ms"]
+        assert 4000 < decoded < 8000, decoded
+        server = _Server(short)
+        try:
+            known = aw.whole_file_facets(f"{server.base}/full?u=dj&t=secret", ["loudness", "edges"])
+            assert known["edges"]["status"] == "ok" and known["loudness"]["status"] == "ok", known
+            assert known["edges"]["data"]["decoded_duration_ms"] == decoded, known
+            unknown = aw.whole_file_facets(f"{server.base}/nolen?u=dj&t=secret", ["loudness", "edges"])
+            assert unknown["edges"]["status"] == "failed" and "decoded" in unknown["edges"]["reason"], unknown
+        finally:
+            server.close()
+
+
 # ── one-shot mode (the sidecar's whole-file lane) ───────────────────────────
 
 def one_shot(req):

@@ -2424,9 +2424,9 @@ def probe_audio_format(src, limit=None):
     return parse_probe(r.stdout, r.stderr)
 
 
-# A decode that ends this far short of the length in the header was cut off
-# (a dropped connection, a truncated file): encoder delay, padding and edit
-# lists account for tens of milliseconds, never seconds.
+# On a read of unknown length (measure_whole_file), a decode that ends this
+# far short of the length in the header was cut off: encoder delay, padding
+# and edit lists account for tens of milliseconds, never seconds.
 _SHORTFALL_MIN_MS = 5000
 _SHORTFALL_SHARE = 0.02
 
@@ -2770,8 +2770,9 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
     "seconds"}. The four loudness figures are all set or all None (digital
     silence), never some without the others. Raises on any ffmpeg failure, and on
     an input that ended early (ffmpeg logged a premature end or an I/O error,
-    or the decode fell well short of the header's length: decoded_short_of),
-    so the caller records an attempt instead of a measurement."""
+    or a read of unknown length decoded well short of the header's length:
+    decoded_short_of), so the caller records an attempt instead of a
+    measurement."""
     import numpy as np
 
     if not shutil.which("ffmpeg"):
@@ -2904,14 +2905,18 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
         if not sr:
             raise RuntimeError("ffmpeg did not report the output sample rate")
         out["edges"] = scanner.result(sr)
-    # The second net, for a cut that logged nothing (a server that closed
-    # without a Content-Length): the decode against the header's length. The
-    # edges count the decoded samples; without them the last 100 ms frame does.
+    # The second net, for a read of unknown length (a server that sent no
+    # Content-Length), where the first says nothing: the decode against the
+    # header's length. Only there. A read whose length was known logs its own
+    # cut (the first net), and a local copy is whole, so a decode short of the
+    # header there is the file itself (truncated on disk, a stale Xing frame),
+    # which is what airs, so it is measured. The edges count the decoded
+    # samples; without them the last 100 ms frame does.
     if out["edges"] is not None:
         decoded_ms = out["edges"][2]
     else:
         decoded_ms = max(log.frames) * 100 if len(log.frames) else None
-    if decoded_short_of(probe.duration_ms, decoded_ms):
+    if log.length_unknown and decoded_short_of(probe.duration_ms, decoded_ms):
         raise RuntimeError(
             f"the input ended early: decoded {decoded_ms / 1000:.1f} s of the {probe.duration_ms / 1000:.1f} s "
             "its header gives")
