@@ -2757,10 +2757,13 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
         filters.append("ebur128=peak=sample+true:framelog=verbose")
     if filters:
         cmd += ["-af", ",".join(filters)]
+    # The PCM the edges are judged on, float at the measured rate. A mono file
+    # stays one channel: `-ac 2` upmixes it at 0.707 a side, which judged its
+    # edges 3 dB under the absolute floor silence_edges_ms reads the file at.
+    # Anything else is stereo (a surround file is already downmixed above).
+    pcm_channels = 1 if channels == 1 else 2
     if edges_wanted:
-        # Stereo float at the file's own rate (at most 48 kHz, above): a mono
-        # file is duplicated (same peaks).
-        cmd += ["-ac", "2", "-f", "f32le", "pipe:1"]
+        cmd += ["-ac", str(pcm_channels), "-f", "f32le", "pipe:1"]
     else:
         cmd += ["-f", "null", "-"]
 
@@ -2787,7 +2790,7 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
             pass
     timer = threading.Timer(limit, kill)
     timer.start()
-    scanner = EdgeScanner(channels=2) if edges_wanted else None
+    scanner = EdgeScanner(channels=pcm_channels) if edges_wanted else None
     try:
         if scanner is not None:
             pending = b""

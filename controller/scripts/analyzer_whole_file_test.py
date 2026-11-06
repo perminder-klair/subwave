@@ -355,10 +355,10 @@ def t_window_loudness_is_kept_without_a_whole_file_source():
 
 # ── end to end (ffmpeg) ─────────────────────────────────────────────────────
 
-def write_wav(path, buf, sr):
+def write_wav(path, buf, sr, channels=2):
     pcm = np.clip(buf, -1.0, 1.0)
     with wave.open(path, "wb") as w:
-        w.setnchannels(2)
+        w.setnchannels(channels)
         w.setsampwidth(2)
         w.setframerate(sr)
         w.writeframes(b"".join(struct.pack("<h", int(round(v * 32767))) for v in pcm))
@@ -380,6 +380,26 @@ def t_real_ffmpeg_decodes_once_and_measures_both():
     assert math.isfinite(loud["loudness_lufs"]) and -12 < loud["loudness_lufs"] < -6, loud
     assert abs(loud["true_peak_db"] - (-6.0)) < 0.5, loud
     assert loud["sample_peak_db"] <= loud["true_peak_db"] + 0.05, loud
+
+
+def t_real_ffmpeg_judges_a_mono_files_edges_at_its_own_level():
+    # `-ac 2` upmixes mono at 0.707 a side: a tone 1.5 dB over the floor read
+    # 1.5 dB under it, and the file as silent. One channel, as the window
+    # path's silence_edges_ms reads it.
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        print("      (skipped: no ffmpeg/ffprobe on PATH)")
+        return
+    sr = 44100
+    t = np.arange(2 * sr, dtype=np.float64) / sr
+    tone = amp_db(aw.SILENCE_DBFS + 1.5) * np.sin(2 * np.pi * 441.0 * t)
+    mono = np.concatenate([np.zeros(sr), tone, np.zeros(sr)]).astype(np.float32)
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "mono.wav")
+        write_wav(path, mono, sr, channels=1)
+        got = aw.measure_whole_file(path, loudness=True, edges_wanted=True, timeout_s=60)
+    lead, tail, dur = got["edges"]
+    assert dur == 4000, got["edges"]
+    assert lead is not None and 1000 <= lead <= 1002 and 999 <= tail <= 1001, got["edges"]
 
 
 # ── the loudness curve (ebur128 per-frame short-term) ──────────────────────
