@@ -37,12 +37,10 @@ import statistics
 import sys
 from pathlib import Path
 
-# The persona languages the bench lines use, as Whisper language codes. A line
-# in a language missing here is transcribed with Whisper's own detection.
-WHISPER_LANG = {
-    "english": "en", "spanish": "es", "french": "fr", "german": "de", "italian": "it",
-    "portuguese": "pt", "dutch": "nl", "japanese": "ja", "hindi": "hi",
-}
+# The persona languages the bench lines use (lines.ts), as Whisper language
+# codes. A line in a language missing here is transcribed with Whisper's own
+# detection, so a line in a new language adds its code here.
+WHISPER_LANG = {"english": "en", "spanish": "es"}
 
 SPEECHMOS_REPO = "tarepan/SpeechMOS:v1.2.0"
 
