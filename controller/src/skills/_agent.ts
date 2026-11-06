@@ -197,15 +197,17 @@ function frequencyFloorMs(freq: string) {
 }
 
 // A skill's own TTS voice override (SKILL.md voiceEngine/voiceId/voiceProvider).
-// Returns the speaker with its tts slot replaced for this clip only.
-// `overridden` is false (and persona untouched) when the skill carries no
-// override — the segment airs in the on-air DJ's voice. Applies even with no
-// speaker (Run now passes none): the override brings its own tts slot.
-// Co-hosted skills never reach here: each line speaks in its own roster
-// persona's voice. Exported for scripts/skill-voice.test.ts.
+// Returns the speaker with only its tts engine, voice and provider replaced, for
+// this clip: id, name, gain and speed stay the speaker's. With no override,
+// `overridden` is false and the speaker comes back as the same object. Both
+// solo sites always have a speaker (a Run now that names none speaks as the
+// on-air persona); the `|| {}` only keeps a missing one from throwing.
+// `cap.voice` is the loader's normalizeSkillVoice output, so all three of its
+// fields are set. Co-hosted skills never reach here: each line speaks in its
+// own roster persona's voice. Exported for scripts/skill-voice.test.ts.
 export function skillVoiceFor(cap, speaker) {
   const v = cap?.voice;
-  if (!v || !v.engine) return { persona: speaker, overridden: false };
+  if (!v?.engine) return { persona: speaker, overridden: false };
   const base = speaker || {};
   const baseTts = (base.tts && typeof base.tts === 'object' ? base.tts : {});
   return {
@@ -214,11 +216,8 @@ export function skillVoiceFor(cap, speaker) {
       tts: {
         ...baseTts,
         engine: v.engine,
-        voice: typeof v.voice === 'string' ? v.voice : '',
-        cloudProvider:
-          (typeof v.cloudProvider === 'string' && v.cloudProvider) ||
-          (typeof baseTts.cloudProvider === 'string' && baseTts.cloudProvider) ||
-          'openai',
+        voice: v.voice,
+        cloudProvider: v.cloudProvider,
         gainDb: typeof baseTts.gainDb === 'number' ? baseTts.gainDb : 0,
         speed: typeof baseTts.speed === 'number' ? baseTts.speed : 1,
       },
@@ -596,7 +595,7 @@ export async function agenticTick(ctx) {
 
     // The speaker's id rides in meta so session.windowMessages names a guest's
     // turn as theirs rather than the host's own words. A skill voice override
-    // replaces the speaker's tts slot for this clip only.
+    // changes only the voice (skillVoiceFor).
     const voiced = skillVoiceFor(cap, speaker);
     const delivery = await queue.announce(seg.text.trim(), seg.kind, {
       persona: voiced.persona,
@@ -876,20 +875,28 @@ export async function runCapability(
   }
 
   // A rotated speaker rides through announce so voice and session attribution
-  // agree (windowMessages names foreign speakers by meta id). A skill voice
-  // override replaces the speaker's tts slot for this clip only — and applies
-  // even with no speaker (Run now passes none), since it brings its own slot.
-  const slotVoiced = skillVoiceFor(cap, speaker);
-  const withPersona = persona || automaticHostSpeech || slotVoiced.overridden;
-  const delivery = await queue.announce(text, cap.kind, withPersona
+  // agree (windowMessages names foreign speakers by meta id). A Run now names
+  // no persona: `speaker` is then the on-air persona announce() resolves for
+  // itself, so it is not passed and the turn carries no speaker meta. A skill
+  // voice override changes only the voice. Its slot has to ride on a persona,
+  // so a Run now with one passes the on-air persona carrying it, still with no
+  // meta; the queued and spoken events, which name a passed persona, then name
+  // the persona that was speaking anyway.
+  const voiced = skillVoiceFor(cap, speaker);
+  const pinsSpeaker = Boolean(persona) || Boolean(automaticHostSpeech);
+  const delivery = await queue.announce(text, cap.kind, pinsSpeaker
     ? {
-        persona: slotVoiced.persona,
+        persona: voiced.persona,
         meta: { personaId: speaker?.id, personaName: speaker?.name },
         pauseTalkEligible,
         sfx: selectedSfx,
         hostSpeech: speechOwner.hostSpeech,
       }
-    : { pauseTalkEligible, sfx: selectedSfx });
+    : {
+        ...(voiced.overridden ? { persona: voiced.persona } : {}),
+        pauseTalkEligible,
+        sfx: selectedSfx,
+      });
   if (!delivery.accepted) {
     if (delivery.reason === 'stand-in') {
       // Nothing was rendered: the model wrote a stand-in, not speech. Other

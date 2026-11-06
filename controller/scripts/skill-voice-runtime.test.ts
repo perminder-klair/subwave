@@ -18,8 +18,11 @@
 //      speed intact.
 //   2. SOLO with NO override — the speaker object reaches announce() by
 //      IDENTITY, not a rebuilt copy, so an upgraded station is byte-identical.
-//   3. The speaker-less Run now — `withPersona` ORs in `overridden` precisely so
-//      a station with no effective persona still speaks the skill's voice.
+//   3. The speaker-less Run now — it names no persona, so announce() resolves
+//      the on-air one itself. With an override the slot has to ride on that
+//      persona, but the session turn still carries no speaker meta: the
+//      override changes the voice and nothing else. Without one, announce()
+//      gets no persona at all, exactly as before this feature.
 //   4. CO-HOSTED — the override must NOT be applied. Each line speaks in its own
 //      roster persona's voice, and an override would contradict the roster the
 //      admin UI shows. Asserted through runCapability()'s own co-hosted branch.
@@ -27,13 +30,15 @@
 // Run: `npm test -- skill-voice-runtime`.
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test, { after, beforeEach } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
+import type { SessionContext } from '../src/broadcast/session.js';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-skill-voice-runtime-'));
-process.env.STATE_DIR = root;
+// The runner hands this process its own empty STATE_DIR (scripts/run-tests.ts).
+const root = process.env.STATE_DIR ?? '';
+if (!root) throw new Error('STATE_DIR is unset: run this file through `npm test -- skill-voice-runtime`');
 
 // Two skills on disk, written BEFORE the imports so loadSkills() sees them.
 // `voiced-solo` pins a voice; `plain-solo` pins none — the control for "the
@@ -77,31 +82,58 @@ function ctx() {
     time: { period: 'day', vibe: 'day', mood: 'calm' },
     clock: {}, weather: null, festival: null, dominantMood: 'calm',
     activeShow: { id: SHOW, name: 'Voice Show', topic: 'tests' },
-  } as any;
+  } as unknown as SessionContext; // only the fields these skills read
 }
+
+// The persona fields this file reads off what TTS was handed.
+interface SpokenPersona {
+  id?: string;
+  name?: string;
+  tts: { engine: string; voice: string; cloudProvider?: string; gainDb?: number; speed?: number };
+}
+// The two queue internals stubbed below: the render and the handoff to air.
+interface VoicePath {
+  _speak: (text: string, opts?: { persona?: SpokenPersona | null }) => Promise<string>;
+  _airVoice: (
+    file: string, wav: string, text: string, gain: number,
+    opts?: { onQueued?: (q: { voiceId: string; clipMs: number; estimatedAirInMs: number }) => void },
+  ) => Promise<unknown>;
+}
+const voicePath = queue as unknown as VoicePath;
 
 // What TTS was handed. `_speak` is the ONE boundary every rendered segment
 // crosses (announce, announceExchange, airPendingVoice), so capturing the
 // persona there proves what speaks — not what the code intended to speak.
-const spoken: any[] = [];
+const spoken: Array<SpokenPersona | null> = [];
 let renders = 0;
 
-const realSpeak = (queue as any)._speak;
-const realAirVoice = (queue as any)._airVoice;
+const realSpeak = voicePath._speak;
+const realAirVoice = voicePath._airVoice;
 const realDirectorRun = directorAgent.run;
 const realForcedRun = forcedDirectorAgent.run;
 
 function stubVoicePath() {
-  (queue as any)._speak = async (_text: string, opts: any) => {
+  voicePath._speak = async (_text, opts) => {
     renders += 1;
     spoken.push(opts?.persona ?? null);
     return `/tmp/skill-voice-${renders}.wav`;
   };
-  (queue as any)._airVoice = async (_file: string, _wav: string, _text: string, _gain: number, opts: any) => {
+  voicePath._airVoice = async (_file, _wav, _text, _gain, opts) => {
     const id = `voice-${renders}`;
     opts?.onQueued?.({ voiceId: id, clipMs: 1_000, estimatedAirInMs: 0 });
     return { voiceId: id, clipMs: 1_000, aired: Promise.resolve(null) };
   };
+}
+
+// The session turn a skill's aired line left. Post-air bookkeeping runs once
+// the (stubbed, already resolved) aired promise settles, so give it a few turns.
+async function segmentTurn(kind: string) {
+  for (let i = 0; i < 100; i++) {
+    const turn = session.getSession()?.messages.find(m => m.role === 'segment' && m.kind === kind);
+    if (turn) return turn;
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.fail(`no session turn for ${kind}`);
 }
 
 // One deterministic line, from whichever agent the run is on. Both solo paths
@@ -150,11 +182,10 @@ beforeEach(async () => {
 after(async () => {
   directorAgent.run = realDirectorRun;
   forcedDirectorAgent.run = realForcedRun;
-  (queue as any)._speak = realSpeak;
-  (queue as any)._airVoice = realAirVoice;
+  voicePath._speak = realSpeak;
+  voicePath._airVoice = realAirVoice;
   queue.senderBusy = false;
-  await new Promise(resolve => setTimeout(resolve, 1_100));
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 test('the fixtures loaded, and only the solo skills carry a voice override', () => {
@@ -171,18 +202,30 @@ test('the fixtures loaded, and only the solo skills carry a voice override', () 
 });
 
 test('a forced solo run (Run now) hands TTS the skill voice, keeping the speaker identity', async () => {
-  // Run now passes NO `persona` — the historical shape, where announce() got
-  // none and spoke the station default. `withPersona` ORs in `overridden`, so
-  // this is the branch that has to keep working.
+  // Run now passes NO `persona`, so the speaker is the on-air one and
+  // announce() is not told to pin it. The override still has to reach TTS.
   stubAgents();
   const result = await runCapability('voiced-solo', ctx());
   assert.equal(result.queued, true);
 
   assert.equal(spoken.length, 1, 'one clip rendered');
   const persona = spoken[0];
+  assert.ok(persona);
   assert.equal(persona.tts.engine, 'remote', 'the override reached TTS, not just the booth log');
   assert.equal(persona.tts.voice, 'Tyrone');
   assert.equal(persona.id, H.id, 'speaker identity is preserved — only the tts slot moves');
+});
+
+test('the override changes only the voice: a speaker-less Run now still leaves no speaker meta', async () => {
+  // Without an override, a Run now's session turn carries no personaId, and
+  // prompt memory reads it as the session persona's own line. The override
+  // must not change that, or a line voiced differently would also be
+  // attributed differently.
+  stubAgents();
+  await runCapability('plain-solo', ctx());
+  assert.equal((await segmentTurn('plain-solo')).meta?.personaId, undefined, 'the baseline');
+  await runCapability('voiced-solo', ctx());
+  assert.equal((await segmentTurn('voiced-solo')).meta?.personaId, undefined, 'the same with an override');
 });
 
 test('a skill with no override hands announce the speaker itself, by identity', async () => {
@@ -193,30 +236,31 @@ test('a skill with no override hands announce the speaker itself, by identity', 
   assert.equal(result.queued, true);
   assert.equal(spoken.length, 1);
   assert.equal(spoken[0], H, 'the speaker object itself — not a copy');
-  assert.equal(spoken[0].tts.engine, 'piper', 'the on-air DJ keeps their own voice');
+  assert.equal(spoken[0]?.tts.engine, 'piper', 'the on-air DJ keeps their own voice');
 });
 
 test('the autonomous director applies the override on its own solo path', async () => {
   stubAgents();
   await agenticTick(ctx());
   assert.equal(spoken.length, 1, 'the director aired one segment');
-  assert.equal(spoken[0].tts.engine, 'remote');
-  assert.equal(spoken[0].tts.voice, 'Tyrone');
+  assert.equal(spoken[0]?.tts.engine, 'remote');
+  assert.equal(spoken[0]?.tts.voice, 'Tyrone');
 });
 
 test('a guest speaker keeps their id while speaking the skill voice', async () => {
   stubAgents();
   await runCapability('voiced-solo', ctx(), { persona: G, automaticHostSpeech: true });
   assert.equal(spoken.length, 1);
-  assert.equal(spoken[0].id, G.id);
-  assert.equal(spoken[0].tts.engine, 'remote');
-  // gainDb/speed are INHERITED from the speaker, so an override changes who
-  // speaks, never how loud or how fast.
-  assert.equal(spoken[0].tts.gainDb, G.tts.gainDb ?? 0);
+  assert.equal(spoken[0]?.id, G.id);
+  assert.equal(spoken[0]?.tts.engine, 'remote');
+  // gainDb/speed are INHERITED from the speaker, so an override changes the
+  // voice, never how loud or how fast.
+  assert.equal(spoken[0]?.tts.gainDb, G.tts.gainDb ?? 0);
+  // A named speaker is pinned, so its id rides in the turn as it always has.
+  assert.equal((await segmentTurn('voiced-solo')).meta?.personaId, G.id);
 });
 
 test('without an override the speaker-less Run now is unchanged: no persona at all', async () => {
-  // The other side of `withPersona = persona || automaticHostSpeech || overridden`.
   // Run now passes neither `persona` nor `automaticHostSpeech`, so a skill with
   // no override must still reach announce() with NO persona — the pre-existing
   // behaviour, where the station default speaks. Widening this would silently
@@ -264,7 +308,7 @@ test('a co-hosted run ignores the override: each line keeps its roster voice', a
   }
 
   assert.equal(spoken.length, 2, 'both cast members rendered');
-  const byId = Object.fromEntries(spoken.map(p => [p.id, p]));
+  const byId = Object.fromEntries(spoken.map(p => [p?.id, p]));
   assert.equal(byId[H.id].tts.engine, 'piper', 'the host keeps the host voice');
   assert.equal(byId[G.id].tts.engine, 'kokoro', 'the guest keeps the guest voice');
   assert.notEqual(byId[H.id].tts.engine, 'remote', 'the skill override never reaches a co-hosted line');
