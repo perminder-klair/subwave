@@ -2,8 +2,10 @@
 // inside the recency window, each source comes back empty, and without a
 // fallback the mixer airs the emergency loop until someone queues a track by
 // hand (seen on a hosted pilot station with 21 tracks). The rested fallback
-// fills the coast with the longest-rested tracks instead, and says so in the
-// booth log; with any fresh track available it never runs.
+// fills the coast with the longest-rested tracks instead, by when each last
+// went to air: the longest-waiting half, never the track on air, topped up to
+// an hour of audio (the rotation coast's rule, music/show-recency.ts). It says
+// so in the booth log, and with any fresh track available it never runs.
 // Run: `npm test -- rested-coast`.
 
 import assert from 'node:assert/strict';
@@ -27,8 +29,10 @@ const library = await import('../src/music/library.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { refreshAutoPlaylist } = await import('../src/broadcast/scheduler.js');
 
-const song = (i: number) => ({ id: `t${i}`, title: `Track ${i}`, artist: `Act ${i}`, duration: 200, genre: 'Hip-Hop' });
-const LIBRARY = Array.from({ length: 6 }, (_, i) => song(i + 1));
+// Five-minute tracks: twelve of them are exactly the coast's one-hour floor.
+const song = (i: number) => ({ id: `t${i}`, title: `Track ${i}`, artist: `Act ${i}`, duration: 300, genre: 'Hip-Hop' });
+const libraryOf = (n: number) => Array.from({ length: n }, (_, i) => song(i + 1));
+let LIBRARY = libraryOf(24);
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: string | URL | Request) => {
@@ -58,6 +62,7 @@ const coastIds = () => readFileSync(join(root, 'auto.m3u'), 'utf8').split('\n')
   .filter(line => line.includes('subsonic_id='))
   .map(line => line.match(/subsonic_id="([^"]+)"/)![1]);
 const boothLines = () => queue.djLog.map((e: any) => String(e.message));
+// Aired in the order given, the first most recently (a minute apart).
 const markAired = (ids: string[]) => {
   const now = Date.now();
   (queue as any)._recentPlays = ids.map((id, i) => {
@@ -65,17 +70,34 @@ const markAired = (ids: string[]) => {
     return { id, title: s.title, artist: s.artist, endedAt: new Date(now - i * 60_000).toISOString() };
   });
 };
+const onAir = (id: string | null) => {
+  (queue as any).current = id ? { track: LIBRARY.find(t => t.id === id) } : null;
+};
+const sorted = (ids: string[]) => [...ids].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
 
-test('every track aired inside the window: the coast repeats the longest-rested, not the emergency loop', async () => {
+test('every track aired inside the window: the coast is the longest-rested half, never the track on air', async () => {
+  LIBRARY = libraryOf(24);
+  // t1 aired last, t24 longest ago; t24 is also back on air right now.
   markAired(LIBRARY.map(t => t.id));
+  onAir('t24');
   await refreshAutoPlaylist();
-  const ids = coastIds();
-  assert.ok(ids.length > 0, 'the coast must not be empty');
-  assert.ok(ids.every(id => LIBRARY.some(t => t.id === id)));
-  assert.ok(boothLines().some(l => /longest-rested instead of the emergency loop/.test(l)), boothLines().join('\n'));
+  // The longest-waiting half of 24 is 12, an hour of audio: t23 back to t12.
+  // The most recent plays (t1..t11) and the on-air t24 are held back.
+  assert.deepEqual(sorted(coastIds()), LIBRARY.slice(11, 23).map(t => t.id));
+  assert.ok(boothLines().some(l => /repeating the 12 longest-rested .*instead of the emergency loop/.test(l)), boothLines().join('\n'));
+});
+
+test('a library too small for an hour tops up from the next longest-rested, still never the on-air track', async () => {
+  LIBRARY = libraryOf(6);
+  markAired(LIBRARY.map(t => t.id));
+  onAir('t3');
+  await refreshAutoPlaylist();
+  assert.deepEqual(sorted(coastIds()), ['t1', 't2', 't4', 't5', 't6']);
 });
 
 test('with a fresh track available the fallback does not run', async () => {
+  LIBRARY = libraryOf(6);
+  onAir(null);
   markAired(LIBRARY.slice(0, 4).map(t => t.id)); // t5, t6 never aired
   const before = boothLines().filter(l => /longest-rested/.test(l)).length;
   await refreshAutoPlaylist();

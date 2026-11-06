@@ -518,14 +518,24 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Rested fallback (a small library): when every track has aired inside the
   // recency window, every source above comes back empty and the mixer airs the
   // emergency loop until someone queues a track by hand. Air the longest-rested
-  // tracks instead: recency ignored, dedup and the artist cap still applied. A
-  // strict playlist keeps its own floor below.
+  // tracks instead, by when each last went to air (queue.rotationAirTimes: the
+  // durable plays index under this process's own, with the on-air track and
+  // everything queued stamped as just spent). A small library is a closed
+  // catalogue, like a full rotation, so it takes the rotation's coast rule
+  // (music/show-recency.ts rotationCoast): the longest-waiting half, never what
+  // is on air or queued, topped up to an hour of audio from the next longest.
+  // Liquidsoap randomizes the file, so the set is what counts, and the most
+  // recent plays stay out of it. Recency is ignored; the clean show, length
+  // ceiling, dedup and artist cap still apply. A strict playlist keeps its own
+  // floor below.
   if (!pool.length && !strictPlaylist) {
     try {
-      const rested = await subsonic.getRandomSongs({ size: TARGET_POOL * 2 });
-      take('rested', freshnessBiasedOrder(rested, library.lastAiredInfo(), Date.now()), TARGET_POOL, { ignoreRecency: true });
+      // Filtered as take() filters, before choosing, so what is chosen can air.
+      const eligible = clean.pass(applyKnownTrackCeiling(await subsonic.getRandomSongs({ size: TARGET_POOL * 2 }), selectionMaxSec));
+      const rested = rotationCoast(shuffle(eligible), queue.rotationAirTimes(), { cap: TARGET_POOL });
+      take('rested', rested, TARGET_POOL, { ignoreRecency: true });
       if (pool.length) {
-        queue.log('scheduler', `Auto-playlist: every track aired inside the recency window — repeating the ${pool.length} longest-rested instead of the emergency loop`);
+        queue.log('scheduler', `Auto-playlist: every track aired inside the recency window — repeating the ${pool.length} longest-rested (the most recent plays and the on-air track held back) instead of the emergency loop`);
       }
     } catch (err) {
       queue.log('error', `Rested fallback failed: ${err.message}`);
