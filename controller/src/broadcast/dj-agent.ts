@@ -3,7 +3,7 @@
 
 import { z } from 'zod';
 import * as settings from '../settings.js';
-import { withSteer } from '../music/steer.js';
+import { episodeUnderSteer, withSteer } from '../music/steer.js';
 import { steerClause } from '../schemas/steer.js';
 import * as session from './session.js';
 import * as picker from '../music/picker.js';
@@ -281,10 +281,11 @@ async function steerAwayCandidates<T>(
 // as the DJ rather than a convenient-but-different approximation.
 export async function livePickerScope(queue: any, { audioWaypoint = null, showAt = null, context = null }: { audioWaypoint?: number[] | null; showAt?: Date | null; context?: any } = {}) {
   const preparedContext = context ? await prepareEpisodeContext(context) : null;
-  // An artist episode replaces the whole pool, so a steered playlist sets it
-  // aside; otherwise the steer would be ignored on a show that prepared one.
-  const steeredPlaylist = settings.activeSteer((showAt ?? new Date()).getTime())?.playlistId;
-  const episodeSource = preparedContext && !steeredPlaylist ? showPreparation.read({ context: preparedContext }).music : null;
+  // A steered playlist sets the prepared episode aside, with its brief.
+  const { episodeSource, context: pickContext } = preparedContext
+    ? episodeUnderSteer(preparedContext, settings.activeSteer((showAt ?? new Date()).getTime()),
+      (c) => showPreparation.read({ context: c }).music)
+    : { episodeSource: null, context: null };
   await library.load();
   // Narrow, long-cached counts (#1723): the dashboard's stats() cost every
   // pick ~4.6 s of blocked thread on a 76k-track library.
@@ -448,9 +449,6 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
     listenerFavourites: favourites.length ? favourites : null,
   });
 
-  // The episode's brief goes with its tracks: under a playlist steer the model
-  // would otherwise be told to follow an artist the candidates are not by.
-  const pickContext = preparedContext && steeredPlaylist ? { ...preparedContext, episodeEditorial: '' } : preparedContext;
   return { scope, playlistTracks, activeShow, episodeSource, context: pickContext };
 }
 

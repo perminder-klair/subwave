@@ -21,6 +21,7 @@ import * as chatterbox from '../../audio/chatterbox.js';
 import * as piper from '../../audio/piper.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
+import { updateEndingSteer } from '../../broadcast/takeover-steer.js';
 import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
@@ -248,7 +249,12 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     return res.status(400).json({ error: 'start or clear a steer with POST or DELETE /steer' });
   }
   try {
-    const result = await settings.update(req.body || {});
+    // A takeover saved here ends a running steer, as one pinned through
+    // /schedule/override does (broadcast/takeover-steer.ts).
+    const body = req.body || {};
+    const result = 'scheduleOverride' in body
+      ? (await updateEndingSteer(body)).result
+      : await settings.update(body);
     // context.ts reads the live settings cache, so the update already applies;
     // the route only owns the operator-facing log.
     if ('weather' in (req.body || {})) {

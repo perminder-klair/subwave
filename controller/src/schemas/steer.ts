@@ -106,6 +106,20 @@ export const steerRequestSchema = z
     }
   });
 
+/** The most tracks a steer opens with (`routes/steer.ts`). */
+export const STEER_OPENING_TRACKS = 5;
+/** How long Preview's opening list is remembered for Start to queue unchanged. */
+export const STEER_PREVIEW_MS = 5 * 60_000;
+
+/**
+ * What an opening list is worked out FOR: the controller's memo key and the
+ * card's. The playlist and the direction only: how long the steer runs and
+ * "start now" decide how many of the list it plays, not which tracks it holds.
+ */
+export function steerPreviewKey(playlistId: string | null | undefined, prompt: string | null | undefined, once: boolean): string {
+  return `${once ? 1 : STEER_OPENING_TRACKS}\n${playlistId ?? ''}\n${collapse(prompt ?? '')}`;
+}
+
 /** The steer in force at `now`, or null. One reading for every caller. */
 export function steerActiveAt<T extends { startedAt: number; expiresAt: number }>(
   steer: T | null | undefined,

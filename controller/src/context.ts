@@ -435,7 +435,10 @@ export function showHandoverContext(
 // when it plays (issue: a pick made minutes before a show boundary followed the
 // outgoing show's brief). Weather and listener count stay live: they're
 // station-now facts and drift too little over one track to matter.
-export async function getFullContext(at?: Date) {
+// `ignoreTakeover` reads the moment as the weekly grid has it, for a caller
+// about to end a live takeover (a steer's opening list, routes/steer.ts), so
+// the show, its mood and everything derived from them are the grid's.
+export async function getFullContext(at?: Date, { ignoreTakeover = false }: { ignoreTakeover?: boolean } = {}) {
   const now = at ?? new Date();
   const time = getTimeContext(now);
   const weather = await getWeather();
@@ -452,7 +455,9 @@ export async function getFullContext(at?: Date) {
 
   // A scheduled show for this hour, if any. Its mood wins everything below —
   // an empty hour leaves the station running autonomously.
-  const activeShow: any = resolveActiveShow(now);
+  const activeShow: any = ignoreTakeover
+    ? resolveActiveShow(now, { ...getSettings(), scheduleOverride: null })
+    : resolveActiveShow(now);
 
   // Programme shows: ride today's episode angle on the show context so every
   // prompt built from it (links, picker brief, segments) breathes the same

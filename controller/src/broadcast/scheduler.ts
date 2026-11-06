@@ -1422,7 +1422,7 @@ export async function steerJanitor() {
     // In turn with Start and Clear, so it never clears a steer saved meanwhile.
     await serialSteer(async () => {
       const steer = settings.get()?.steer;
-      const live = steer && Date.now() < steer.expiresAt ? steer : null;
+      const live = settings.activeSteer();
       // Opening tracks still waiting go with their steer, including one that ran
       // out while the controller was down (the load path drops it, not its tracks).
       await queue.removeOrphanSteerQueued(live ? String(live.startedAt) : null);

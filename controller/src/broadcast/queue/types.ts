@@ -121,6 +121,10 @@ export interface QueueItem {
   // field list does not name it), so to a listener it is an ordinary pick.
   // A single queued track (`until: 'once'`) carries STEER_ONCE_KEY instead.
   steer?: string;
+  // This item's link was asked for by the operator by hand (a steer's "Introduce
+  // on air"): a manual trigger, so the station voice switch does not silence it
+  // (voice-policy.ts trackLineVoiceAllowed). Absent on every automatic line.
+  introByOperator?: boolean;
   intent?: string | null;
   introScript?: string | null;
   // Persist the one-label pass so retries/recovery cannot eat a second label

@@ -212,9 +212,9 @@ export function resolveShowById(id: string, s = get()) {
 
 // The takeover currently in force, or null (absent, expired, or a target that
 // names nothing real — a dangling or malformed show id). An explicit null
-// target is a valid Default programming takeover. Route/janitor helper.
-export function getScheduleOverride(now = Date.now()) {
-  const s = get();
+// target is a valid Default programming takeover. Route/janitor helper. `s`
+// lets a caller ask about settings it is about to save.
+export function getScheduleOverride(now = Date.now(), s = get()) {
   const ov = s?.scheduleOverride;
   if (!ov) return null;
   if (now >= ov.expiresAt) return null;

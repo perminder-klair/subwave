@@ -298,7 +298,7 @@ export const directorAgent = defineAgent({
 // queue.getDjRecap(), never the track-pick session history.
 export function buildSituation(ctx, { forced = false, contextFields, recentCuriosity }: { forced?: boolean; contextFields?: string[]; recentCuriosity?: string[] } = {}) {
   const lines = ['The current moment:'];
-  const ctxLines = buildContextLines(ctx, { contextFields });
+  const ctxLines = buildContextLines(ctx, { contextFields, steer: true });
   if (ctxLines.length) lines.push(...ctxLines);
   const cur = queue.current?.track;
   if (cur) lines.push(`On air now: "${cur.title}" by ${cur.artist || 'unknown'}`);

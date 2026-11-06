@@ -4,13 +4,13 @@
 // Run: npm test -- steer-preview
 import assert from 'node:assert/strict';
 import test, { after, before, beforeEach } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-steer-preview-'));
+const root = createTempDir(join(tmpdir(), 'subwave-steer-preview-'));
 process.env.STATE_DIR = root;
 process.env.NAVIDROME_URL = 'http://steer-library.invalid';
 process.env.LIQUIDSOAP_HOST = 'steer-mixer.invalid';
@@ -21,7 +21,9 @@ const settings = await import('../src/settings.js');
 const library = await import('../src/music/library.js');
 const { pickViaPool, clearPoolCache } = await import('../src/music/picker.js');
 const { queue } = await import('../src/broadcast/queue.js');
-const { router, forgetOpeningList, OPENING_TRACKS } = await import('../src/routes/steer.js');
+const { router, forgetOpeningList } = await import('../src/routes/steer.js');
+const { STEER_OPENING_TRACKS: OPENING_TRACKS } = await import('../src/schemas/steer.js');
+const { trackLineVoiceAllowed } = await import('../src/broadcast/voice-policy.js');
 
 // persist() writes JSON and drainToLiquidsoap() blocks on a mixer poll.
 (queue as any).persist = () => {};
@@ -31,6 +33,8 @@ queue.autoPick = false;
 const songs = Array.from({ length: 8 }, (_, i) => ({ id: `s${i}`, title: `Track ${i}`, artist: `Artist ${i}`, duration: 200 }));
 let modelCalls = 0;
 let lastSystem = '';
+let lastPayload: any = null;
+let linkText = 'Here is one to start with, and more to come.';
 let poolSize = 0;
 let linkCalls = 0;
 let linkDelayMs = 0;
@@ -75,12 +79,13 @@ before(async () => {
       if (linkDelayMs) await new Promise(resolve => setTimeout(resolve, linkDelayMs));
       lastLinkPrompt = body.messages.map((m: any) => m.content).join('\n');
       return Response.json({ id: 'l', object: 'chat.completion', created: 0, model: 'steer-test',
-        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'Here is one to start with, and more to come.' } }],
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: linkText } }],
         usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
     }
     modelCalls++;
     lastSystem = body.messages.filter((m: any) => m.role === 'system').map((m: any) => m.content).join('\n');
     const payload = JSON.parse(body.messages.find((m: any) => m.role === 'user').content.split('\n\n')[0]);
+    lastPayload = payload;
     const tool = body.tools[0].function;
     poolSize = payload.candidates.length;
     const args = answer(payload.candidates.map((t: any) => t.id), 'ids' in (tool.parameters?.properties ?? {}));
@@ -102,7 +107,8 @@ after(async () => {
   globalThis.fetch = realFetch;
   Math.random = realRandom;
   library.shutdown();
-  rmSync(root, { recursive: true, force: true });
+  if (queue._persistTimer) clearTimeout(queue._persistTimer);
+  await removeTempDir(root);
 });
 
 beforeEach(async () => {
@@ -110,6 +116,7 @@ beforeEach(async () => {
   queue.current = null;
   modelCalls = 0;
   linkCalls = 0;
+  linkText = 'Here is one to start with, and more to come.';
   forgetOpeningList();
   clearPoolCache();
   await settings.update({ steer: null, scheduleOverride: null });
@@ -346,15 +353,28 @@ test('a failed or refused start leaves no steer behind', async () => {
   }
   assert.equal(settings.get().steer, null);
   assert.equal(queue.upcoming.length, 0);
+});
 
+test('at the daily token cap Preview, Start and Once still run: they are manual operator triggers', async () => {
   await settings.update({ llm: { dailyTokenCap: 1 } });
   const { addDailyUsage } = await import('../src/llm/internal/telemetry/budget.js');
+  const { picksAllowed } = await import('../src/broadcast/dj-budget.js');
   addDailyUsage(10);
-  const capped = await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 60 });
-  assert.equal(capped.status, 409);
-  assert.match(capped.body.error, /daily token cap/);
-  assert.equal(settings.get().steer, null);
-  await settings.update({ llm: { dailyTokenCap: 0 } });
+  try {
+    assert.equal(picksAllowed(), false, 'the automatic picks are paused');
+    const preview = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 60 });
+    assert.equal(preview.status, 200);
+    const start = await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 60 });
+    assert.equal(start.status, 200);
+    assert.equal(start.body.queued, opening(), 'its opening tracks still play');
+    assert.equal(settings.activeSteer()?.prompt, 'more upbeat pop');
+    queue.upcoming = [];
+    const once = await call('POST', '/steer', { prompt: 'one for the road', until: 'once' });
+    assert.equal(once.status, 200);
+    assert.equal(once.body.queued, 1);
+  } finally {
+    await settings.update({ llm: { dailyTokenCap: 0 } });
+  }
 });
 
 test('starting a steer cancels a live takeover', async () => {
@@ -385,25 +405,44 @@ test('introduce: one host link rides the first opening track, told what follows,
   assert.ok(queue.upcoming.every(i => i.requestedBy === null && i.aiPicked === true), 'still ordinary picks');
 });
 
-test('introduce on a once steer, which stores nothing, still says where the music is heading', async () => {
+test('introduce on a once steer, which stores nothing, says what the one track brings', async () => {
   const start = await call('POST', '/steer', { prompt: 'one for the road', until: 'once', introduce: true });
   assert.equal(start.status, 200);
   assert.equal(linkCalls, 1);
   assert.equal(settings.get().steer, null);
-  assert.match(lastLinkPrompt, /In its first sentence, say in your own words, as your own idea, where the music is heading[^]*"one for the road"/);
-  assert.doesNotMatch(lastLinkPrompt, /Coming up right after this one|Never mention the operator, this direction/);
+  assert.match(lastLinkPrompt, /In its first sentence, say in your own words, as your own idea, what this track brings[^]*"one for the road"/);
+  assert.doesNotMatch(lastLinkPrompt, /Coming up right after this one|where the music is heading|Never mention the operator, this direction/);
 });
 
-test('without the switch, or with the station voice off, no line is written', async () => {
+test('without the switch no line is written', async () => {
   await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 60 });
   assert.equal(linkCalls, 0);
-  queue.upcoming = [];
-  await settings.update({ tts: { enabled: false } });
-  const start = await call('POST', '/steer', { prompt: 'something else', minutes: 60, introduce: true });
-  await settings.update({ tts: { enabled: true } });
-  assert.equal(start.status, 200);
-  assert.equal(linkCalls, 0);
   assert.ok(queue.upcoming.length > 0 && queue.upcoming.every(i => !i.introScript));
+});
+
+test('with the station voice off the introduction the operator asked for is still written, and still airs', async () => {
+  await settings.update({ tts: { enabled: false } });
+  try {
+    const start = await call('POST', '/steer', { prompt: 'something else', minutes: 60, introduce: true });
+    assert.equal(start.status, 200);
+    assert.equal(linkCalls, 1);
+    const [first, ...rest] = queue.upcoming;
+    assert.ok(first.introScript);
+    assert.equal(first.introByOperator, true, 'marked as the operator\'s own ask');
+    assert.equal(trackLineVoiceAllowed(first), true, 'so the queue\'s voice backstops let it through');
+    assert.equal(trackLineVoiceAllowed(rest[0] ?? { introByOperator: undefined }), false, 'an automatic line stays silent');
+  } finally {
+    await settings.update({ tts: { enabled: true } });
+  }
+});
+
+test('an introduction that reads the operator\'s direction out word for word is dropped; the tracks still play', async () => {
+  linkText = 'Right then, more upbeat pop and nothing but more upbeat pop all night, here we go.';
+  const start = await call('POST', '/steer', { prompt: 'more upbeat pop and nothing but more upbeat pop all night', minutes: 60, introduce: true });
+  assert.equal(start.status, 200);
+  assert.equal(linkCalls, 1);
+  assert.equal(start.body.queued, opening());
+  assert.ok(queue.upcoming.every(i => !i.introScript));
 });
 
 test('a request intro, written around a listener\'s own words, never carries the steer; a plain intro does', async () => {
@@ -438,5 +477,109 @@ test('the generic settings route refuses a steer: it starts and ends through /st
     assert.equal(settings.get().steer, null);
   } finally {
     await new Promise<void>(resolve => srv.close(() => resolve()));
+  }
+});
+
+// The fixture's tracks are 200 s long. The track on air sets the lead.
+const onAirFor = (remainingSec: number) => {
+  queue.current = {
+    track: { id: 'on-air', title: 'On air', artist: 'Someone', duration: 1000 },
+    startedAt: new Date(Date.now() - (1000 - remainingSec) * 1000).toISOString(),
+  } as never;
+};
+
+test('Start queues only the opening tracks that start before the steer ends, and Preview says how many', async () => {
+  onAirFor(600);
+  // A 15-minute window: they would start at ~600 s, ~800 s and ~1000 s, so two fit.
+  const preview = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 15 });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.body.picks.length, opening(), 'the whole list is shown');
+  assert.equal(preview.body.fit, 2, 'and how many of it the steer has time for');
+  const start = await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 15 });
+  assert.equal(start.status, 200);
+  assert.equal(start.body.cached, true);
+  assert.equal(start.body.queued, 2);
+  assert.equal(start.body.unfit, opening() - 2);
+  assert.deepEqual(queue.upcoming.map(i => i.track.id), preview.body.picks.slice(0, 2).map((p: any) => p.id));
+
+  // A longer steer plays the whole list, from the same remembered tracks.
+  await call('DELETE', '/steer');
+  const longer = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 60 });
+  assert.equal(longer.body.fit, opening());
+});
+
+test('a steer none of whose tracks could start before it ends is refused before any model call', async () => {
+  onAirFor(1000);
+  const preview = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 15 });
+  assert.equal(preview.status, 409);
+  assert.match(preview.body.error, /plays past the end of this steer[^]*Start now/);
+  const start = await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 15 });
+  assert.equal(start.status, 409);
+  assert.equal(modelCalls, 0);
+  assert.equal(settings.get().steer, null);
+});
+
+test('with start now the DJ\'s own queued picks do not count against the window', async () => {
+  onAirFor(100);
+  await queue.push({ track: { id: 'dj-pick', title: 'DJ pick', artist: 'Someone', duration: 900 } as never, aiPicked: true });
+  const kept = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 15 });
+  assert.equal(kept.status, 409, 'behind a 15-minute pick nothing starts in time');
+  const now = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 15, startNow: true });
+  assert.equal(now.status, 200);
+  assert.ok(now.body.fit >= 1);
+});
+
+test('a takeover saved through the generic settings route ends a running steer and takes its tracks back', async () => {
+  const { router: settingsRouter } = await import('../src/routes/settings/core.js');
+  const app = express();
+  app.use(express.json());
+  app.use(settingsRouter);
+  const srv = app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => srv.once('listening', () => resolve()));
+  try {
+    await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 60 });
+    assert.ok(settings.activeSteer());
+    await queue.push({ track: { id: 'req', title: 'Request', artist: 'Someone' } as never, requestedBy: 'a listener' });
+    const now = Date.now();
+    const r = await realFetch(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/settings`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ scheduleOverride: { showId: null, startedAt: now, expiresAt: now + 3_600_000 } }),
+    });
+    assert.equal(r.status, 200);
+    assert.ok(settings.getScheduleOverride());
+    assert.equal(settings.activeSteer(), null);
+    assert.deepEqual(queue.upcoming.map(i => i.track.id), ['req'], 'only the steer\'s own tracks go');
+
+    // A save that carries no live takeover leaves a steer alone.
+    await settings.update({ scheduleOverride: null });
+    await call('POST', '/steer', { prompt: 'something calm', minutes: 60 });
+    const plain = await realFetch(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/settings`, {
+      method: 'POST', headers, body: JSON.stringify({ scheduleOverride: null }),
+    });
+    assert.equal(plain.status, 200);
+    assert.equal(settings.activeSteer()?.prompt, 'something calm');
+  } finally {
+    await new Promise<void>(resolve => srv.close(() => resolve()));
+  }
+});
+
+test('during a takeover the opening list is worked out for the grid, which Start puts back; a single track keeps the takeover\'s', async () => {
+  // A mood the grid's own moment cannot have, so the two are told apart.
+  const { getFullContext } = await import('../src/context.js');
+  const gridMood = (await getFullContext()).dominantMood;
+  const mood = settings.get().moods.map((m: { name: string }) => m.name).find((name: string) => name !== gridMood)!;
+  const now = Date.now();
+  await settings.update({
+    shows: [{ id: 's_take', name: 'Takeover', topic: 'one night only', personaId: settings.get().personas[0].id, moods: [mood] }],
+    scheduleOverride: { showId: 's_take', startedAt: now - 60_000, expiresAt: now + 3_600_000 },
+  } as never);
+  try {
+    await call('POST', '/steer/preview', { prompt: 'one for the road', until: 'once' });
+    assert.equal(lastPayload.now.mood, mood, 'a single track leaves the takeover running, so it is chosen under it');
+    const preview = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 60 });
+    assert.equal(preview.status, 200);
+    assert.notEqual(lastPayload.now.mood, mood, 'a steer ends the takeover, so its list is not the takeover\'s');
+  } finally {
+    await settings.update({ scheduleOverride: null, shows: [] } as never);
   }
 });

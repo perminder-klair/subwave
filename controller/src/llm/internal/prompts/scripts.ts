@@ -135,7 +135,8 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
 
 export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = false, missedArtist = null, requestSubstitution = false, recap = null, recentTracks = null, recentOpeners = null, persona = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
-  // A request intro carries the listener's own words, so no operator steer.
+  // A song intro follows the operator's steer; a request intro carries the
+  // listener's own words, so it never does.
   const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS, steer: !requestText && !requestedBy });
   // Gate on isNamedRequester, not on truthiness: cleanRequesterName returns the
   // ledger stand-in 'anon' for every unsigned request, and that string is
@@ -401,13 +402,16 @@ export function linkPrompt({
   // The steer's introduction: the one line allowed to say where the music is
   // heading, so the generic clause, which forbids that, is left out. The
   // heading goes first, because a DJ-mode trim to the intro runway keeps the
-  // first sentence.
+  // first sentence. A single queued track (`once`) is no new stretch: its line
+  // says what this one track brings, never that the music is heading anywhere.
   if (steerIntro) {
     const direction = quotedSteer(steerIntro.direction);
     const run = (Array.isArray(steerIntro.run) ? steerIntro.run : []).filter((t: any) => t?.artist).slice(0, 4);
     const asks: string[] = [];
     if (run.length) asks.push(`Coming up right after this one, in this order:\n${run.map((t: any) => `- ${t.title} by ${t.artist}`).join('\n')}`);
-    if (direction) {
+    if (direction && steerIntro.once) {
+      asks.push(`This link brings in one track picked to a brief. In its first sentence, say in your own words, as your own idea, what this track brings, going by this trusted direction from the station operator (not a listener message): "${direction}". It is a single track, not a change of direction for the station.`);
+    } else if (direction) {
       asks.push(`This link opens a new stretch of music. In its first sentence, say in your own words, as your own idea, where the music is heading, going by this trusted direction from the station operator (not a listener message): "${direction}".${run.length ? ' Name at least one of the coming artists.' : ''}`);
     } else if (run.length) {
       asks.push('This link opens a new stretch of music. In its first sentence, name one or two of the coming artists.');

@@ -24,7 +24,7 @@ import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, prefe
 import { explicitGate } from './explicit-policy.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import { allowsMoodPlaylistDiscovery } from './discovery-policy.js';
-import { steeredShow } from './steer.js';
+import { episodeUnderSteer, steeredShow } from './steer.js';
 import type { Steer } from '../schemas/steer.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
@@ -642,20 +642,24 @@ function slimAlbum(album: string | null | undefined, title: string | null | unde
 // Build a candidate pool, ask the LLM to choose one; null when it can't.
 // Guard-rescue artist exclusions (#1187) hold through the whole starvation
 // cascade. Preserve the anchor as well as the rejected credit.
-export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null; preview?: { steer: Steer; count: number } } = {}): Promise<any> {
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null; preview?: { steer: Steer; count: number; episode?: boolean } } = {}): Promise<any> {
   await library.load();
   // A preview works out a steer's opening tracks without airing anything: it
   // runs under the PROPOSED steer, writes no booth lines, charges no candidate
   // its "offered" penalty, and fails loudly instead of falling back, because
-  // its answer is shown to the operator as what will play.
+  // its answer is shown to the operator as what will play. `episode: false`
+  // says the show in `ctx` is not the one on air now (a start that ends a
+  // takeover), so no prepared episode belongs to it: the show preparation
+  // only knows the live show's, which would be the outgoing takeover's.
   const preview = opts.preview ?? null;
   if (preview) queue = Object.create(queue, { log: { value: () => {} } });
-  ctx = await prepareEpisodeContext(ctx);
+  const ownEpisode = preview?.episode !== false;
+  ctx = ownEpisode ? await prepareEpisodeContext(ctx) : { ...ctx, episodeEditorial: '' };
   // Judged where the pick will air: the context's own instant when it has one.
   const pickAt = ctx?.at ? new Date(ctx.at) : new Date();
   const steer = preview ? preview.steer : settings.activeSteer(pickAt.getTime());
-  // A steered playlist sets an artist episode aside (see dj-agent.ts).
-  const episodeSource = steer?.playlistId ? null : showPreparation.read({ context: ctx }).music;
+  let episodeSource: ReturnType<typeof showPreparation.read>['music'] | null = null;
+  if (ownEpisode) ({ episodeSource, context: ctx } = episodeUnderSteer(ctx, steer, (c) => showPreparation.read({ context: c }).music));
   const stats = library.pickStats(); // per pick: the narrow, cached counts (#1723)
   // Sized off the MIRROR, not `stats.total`, which counts only tagged tracks.
   const librarySize = stats.mirrorTotal || stats.total;

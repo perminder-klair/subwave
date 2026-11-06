@@ -1,12 +1,12 @@
 // The operator steer: its schema, its settings lifecycle, and WHERE its text
 // reaches a model. Run: npm test -- steer-schema.
 import assert from 'node:assert/strict';
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test, { after } from 'node:test';
-import { createTempDir } from './test-utils/temp-dir.js';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = createTempDir(join(tmpdir(), 'subwave-steer-schema-'));
 process.env.STATE_DIR = stateRoot;
@@ -27,7 +27,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const NOW = Date.now();
 const steer = (over = {}) => ({ playlistId: null, prompt: 'more 2020s pop', startedAt: NOW, expiresAt: NOW + 60 * 60_000, ...over });
 
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(async () => { await removeTempDir(stateRoot); });
 
 test('the window bounds are the takeover\'s, restated', () => {
   assert.equal(STEER_MIN_MINUTES, OVERRIDE_MIN_MINUTES);

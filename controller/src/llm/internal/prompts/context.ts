@@ -142,11 +142,14 @@ export function steerLine(context: any): string {
 
 export function buildContextLines(
   context: any,
-  { recentTracks, contextFields, steer = true }: {
+  { recentTracks, contextFields, steer = false }: {
     recentTracks?: any[];
     contextFields?: string | readonly string[] | null;
-    // false for a prompt built around a listener's own words, whose output
-    // goes straight back to that listener.
+    // The operator's steer, opted into by the links and segments a steer leans
+    // (a song intro, a segment, banter, a programme feature) and by nothing
+    // else. Never a prompt built around a listener's own words, whose output
+    // goes straight back to that listener, nor anything whose output is kept
+    // past the steer (the programme plan, published as the episode angle).
     steer?: boolean;
   } = {},
 ) {
