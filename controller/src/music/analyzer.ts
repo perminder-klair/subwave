@@ -1217,12 +1217,13 @@ async function facetRequest(
 ): Promise<FacetAnalysis> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
-  // A request that reads the whole file gets the whole-file deadline, and a
-  // caller's own deadline (a pick-time separation's) only ever lengthens it.
-  const base = readsWholeFile(body)
-    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs)
-    : config.analyzer.requestTimeoutMs;
-  const timeoutMs = Math.max(base, deadlineMs ?? 0);
+  // A request that reads the whole file gets the whole-file deadline, which
+  // a caller's own deadline can only lengthen. Any other request keeps the
+  // caller's deadline as given, shorter than the pass's included (a pick-time
+  // separation's own budget, and the tests that shorten it), else the pass's.
+  const timeoutMs = readsWholeFile(body)
+    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs, deadlineMs ?? 0)
+    : deadlineMs ?? config.analyzer.requestTimeoutMs;
   let msg: WorkerMessage;
   if (backend === 'sidecar') {
     const res = await fetchWithTimeout(`${_sidecarBase}/analyze`, {
