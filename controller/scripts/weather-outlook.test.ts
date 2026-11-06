@@ -11,6 +11,8 @@
 //    carry (links, idents and handoffs get none, #471).
 // 5. The outlook is aged to the moment it is read, and the tool tells a
 //    standing note from a new one (outlookChangedSinceLastMention).
+// 6. A changed outlook always has something in it: rain that is no longer
+//    coming brings its own note, and a temperature note going is not news.
 //
 // Run: npm test -- weather-outlook
 import assert from 'node:assert/strict';
@@ -110,7 +112,35 @@ test('a standing outlook is not news to the tool; a new one is', async (t) => {
   // After a weather segment from a tool that gave no outlook, the sky alone decides.
   const oldTool = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: null }, services);
   assert.equal(oldTool.outlookChangedSinceLastMention, false);
+  // The same rain, now only possible, is not news either.
+  const surer = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: 'rain-possible' }, services);
+  assert.equal(surer.outlookChangedSinceLastMention, false);
 });
+
+test('the tool never reports a changed outlook with nothing in it', async (t) => {
+  const quiet = {
+    current: reply.current,
+    hourly: { ...reply.hourly, weather_code: Array(8).fill(1), precipitation_probability: Array(8).fill(0), temperature_2m: Array(8).fill(17) },
+  };
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(quiet)));
+  invalidateWeatherCache();
+  const weather = await getWeather();
+  const services = { weatherOutlook: getWeatherOutlook, weatherNews };
+  assert.deepEqual(getWeatherOutlook().kinds, [], 'nothing coming');
+
+  // Rain was said; the forecast no longer holds it: news, with a note saying so.
+  const after = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: 'rain' }, services);
+  assert.equal(after.changedSinceLastMention, false);
+  assert.equal(after.outlookChangedSinceLastMention, true);
+  assert.deepEqual(after.outlook, ['rain no longer expected in the next 6 hours']);
+  assert.deepEqual(after.outlookKinds, ['rain-withdrawn']);
+
+  // Only a cooler night was said, and it has gone: nothing new, nothing to air.
+  const cooled = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: 'cooler' }, services);
+  assert.equal(cooled.outlookChangedSinceLastMention, false);
+  assert.deepEqual(cooled.outlook, []);
+});
+
 
 test('the weather tool returns the conditions and the outlook; without services it still answers', async (t) => {
   invalidateWeatherCache();

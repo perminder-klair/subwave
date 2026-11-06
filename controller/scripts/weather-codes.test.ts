@@ -11,6 +11,7 @@ import {
   buildOutlook,
   outlookEvents,
   outlookNotes,
+  withdrawnNote,
   isWeatherCondition,
   OUTLOOK_HOURS,
   WEATHER_CONDITIONS,
@@ -31,6 +32,14 @@ describe('the outlook window and the six conditions', () => {
   it('isWeatherCondition accepts the six conditions and nothing else', () => {
     for (const c of WEATHER_CONDITIONS) assert.equal(isWeatherCondition(c), true, c);
     for (const v of ['unknown', 'windy', '', null, undefined, 3]) assert.equal(isWeatherCondition(v), false, String(v));
+  });
+});
+
+describe('withdrawnNote', () => {
+  it('names what is no longer coming, over the one outlook window', () => {
+    assert.deepEqual(withdrawnNote('rain'), { kind: 'rain-withdrawn', text: 'rain no longer expected in the next 6 hours' });
+    assert.deepEqual(withdrawnNote('snow'), { kind: 'snow-withdrawn', text: 'snow no longer expected in the next 6 hours' });
+    assert.deepEqual(withdrawnNote('storm'), { kind: 'storm-withdrawn', text: 'thunderstorms no longer expected in the next 6 hours' });
   });
 });
 

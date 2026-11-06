@@ -4,10 +4,14 @@
 // predates the outlook keeps working: it simply never asks for it.
 // The two "changed" flags come from services.weatherNews, the same helper the
 // segment gates use (skills/weather-policy.ts): the outlook is compared by what
-// its notes are about (their kinds, not their timing), so a standing "rain
-// likely in about 3 hours" is not news at every cooldown. `outlookKinds` is
-// returned so the station records exactly the outlook this call handed over.
-export const description = 'Get the current local weather (conditions and temperature), the next few hours of the forecast, and whether the weather has changed since the DJ last spoke about it. `outlook` lists plain-English notes worth saying (rain coming, clearing, a drop in temperature) and `outlookKinds` what each one is about; `nextHours` is the hour-by-hour detail behind them (`inHours: 0` is within the hour). `changedSinceLastMention` is about the sky right now, `outlookChangedSinceLastMention` about the outlook; when both are false there is nothing new and it is not worth airing. The temperature is in the unit indicated by `tempUnit` ("C" or "F") — read it on air in that unit, do not convert.';
+// its notes are about (not their timing, the temperature, or how sure the
+// forecast is), and only something new is news, so a standing "rain likely in
+// about 3 hours" is not news at every cooldown. When rain the last weather
+// segment promised is no longer coming, weatherNews hands back a note saying
+// so, added here, so a changed outlook always has something in it to say.
+// `outlookKinds` is returned so the station records exactly the outlook this
+// call handed over.
+export const description = 'Get the current local weather (conditions and temperature), the next few hours of the forecast, and whether the weather has changed since the DJ last spoke about it. `outlook` lists plain-English notes worth saying (rain coming, clearing, a drop in temperature, rain mentioned earlier that is no longer expected) and `outlookKinds` what each one is about; `nextHours` is the hour-by-hour detail behind them (`inHours: 0` is within the hour). `changedSinceLastMention` is about the sky right now, `outlookChangedSinceLastMention` about the outlook; when both are false there is nothing new and it is not worth airing. The temperature is in the unit indicated by `tempUnit` ("C" or "F") — read it on air in that unit, do not convert.';
 
 export default async function checkWeather(ctx, state, services) {
   const w = ctx.weather;
@@ -30,6 +34,11 @@ export default async function checkWeather(ctx, state, services) {
   const news = typeof services?.weatherNews === 'function'
     ? services.weatherNews({ condition: w.condition, kinds: outlookKinds }, state)
     : { skyChanged: w.condition !== state?.lastWeatherCondition, outlookChanged: false };
+  const withdrawn = Array.isArray(news.withdrawn) ? news.withdrawn : [];
+  if (withdrawn.length) {
+    outlook = [...outlook, ...withdrawn.map(n => n.text)];
+    if (outlookKinds) outlookKinds = [...outlookKinds, ...withdrawn.map(n => n.kind)];
+  }
   return {
     available: true,
     location: w.location,

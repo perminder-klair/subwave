@@ -13,7 +13,7 @@ export function isWeatherCondition(v: unknown): v is WeatherCondition {
 }
 
 // How far ahead the weather skill looks: the one number the fetch's row count
-// (context.ts) and buildOutlook's window share.
+// (context.ts), buildOutlook's window and the "no longer expected" note share.
 export const OUTLOOK_HOURS = 6;
 
 const DESCRIPTIONS: Record<number, string> = {
@@ -130,7 +130,7 @@ export function buildOutlook(
 }
 
 // Falling weather, snow included: a snowy row is neither dry nor "drying out".
-function isWet(cond: string): boolean {
+export function isWet(cond: string): boolean {
   return cond === 'rainy' || cond === 'stormy' || cond === 'snowy';
 }
 
@@ -165,19 +165,35 @@ function swingThreshold(unit: 'C' | 'F'): number {
   return unit === 'F' ? 5 : 3;
 }
 
+// What precipitation an outlook said was on the way, as weather-policy.ts
+// remembers it: rain (drizzle, showers, or a high chance on a dry-code row
+// above freezing), snow, or thunderstorms.
+export type ComingPrecip = 'rain' | 'snow' | 'storm';
+
 export type OutlookNoteKind =
   | 'rain-likely' | 'rain-possible'
   | 'snow-likely' | 'snow-possible'
   | 'storm-likely' | 'storm-possible'
   | 'precip-likely'
   | 'turning-rain' | 'turning-snow'
-  | 'drying' | 'clearing' | 'clouding' | 'warmer' | 'cooler';
+  | 'drying' | 'clearing' | 'clouding' | 'warmer' | 'cooler'
+  // Never from outlookEvents: weather-policy.ts adds one (withdrawnNote) when
+  // precipitation an aired outlook promised is no longer in the forecast.
+  | `${ComingPrecip}-withdrawn`;
 
 export interface OutlookNote {
   // What the note is about, without its timing: an unchanged list of kinds is
   // nothing new to say, however many hours away the rain has moved.
   kind: OutlookNoteKind;
   text: string;
+}
+
+// The note for precipitation an aired outlook promised and the forecast no
+// longer holds anywhere in the window, so the tool never reports a changed
+// outlook with nothing in it to say.
+export function withdrawnNote(what: ComingPrecip): OutlookNote {
+  const word = what === 'storm' ? 'thunderstorms' : what;
+  return { kind: `${what}-withdrawn`, text: `${word} no longer expected in the next ${OUTLOOK_HOURS} hours` };
 }
 
 export interface OutlookCurrent {

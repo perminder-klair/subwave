@@ -51,8 +51,10 @@ export interface StationServices {
   // "rain likely in about 3 hours". Empty when no forecast is known.
   weatherOutlook: typeof getWeatherOutlook;
   // Whether a reading ({ condition, kinds }) is news against the skill's state:
-  // { skyChanged, outlookChanged }. The same helper the segment gates use
-  // (skills/weather-policy.ts), so the tool and the gates cannot disagree.
+  // { skyChanged, outlookChanged, withdrawn }, where `withdrawn` holds a note for
+  // rain the last segment promised that is no longer coming. The same helper the
+  // segment gates use (skills/weather-policy.ts), so the tool and the gates
+  // cannot disagree.
   weatherNews: typeof weatherNews;
 }
 
