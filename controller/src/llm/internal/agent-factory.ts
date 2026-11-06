@@ -52,7 +52,7 @@ export interface DjAgentInstance<TArgs = Record<string, any>, TExtras = any> {
   readonly temperature: number | undefined;
   readonly maxOutputTokens: number | undefined;
   readonly providerDiscoveryBudget: boolean;
-  run(args: TArgs & { messages: any[]; telemetry?: Record<string, unknown> }): Promise<AgentRunResult<TExtras>>;
+  run(args: TArgs & { messages: any[]; telemetry?: Record<string, unknown>; abortSignal?: AbortSignal }): Promise<AgentRunResult<TExtras>>;
 }
 
 function resolveTimeout(t: number | (() => number) | undefined): number | undefined {
@@ -83,7 +83,7 @@ export function defineAgent<TArgs = Record<string, any>, TExtras = any>(
     temperature: def.temperature,
     maxOutputTokens: def.maxOutputTokens,
     providerDiscoveryBudget: def.providerDiscoveryBudget === true,
-    async run({ messages, telemetry, ...rest }) {
+    async run({ messages, telemetry, abortSignal, ...rest }) {
       const toolArgs = rest as TArgs;
       const system = timePhase(`${def.kind}.buildSystem`, () => def.buildSystem(toolArgs));
       // An agent with no buildTools has no extras. `extras` stays typed as
@@ -105,6 +105,7 @@ export function defineAgent<TArgs = Record<string, any>, TExtras = any>(
         maxOutputTokens: def.maxOutputTokens,
         kind: def.kind,
         ...(telemetry ? { telemetry } : {}),
+        ...(abortSignal ? { abortSignal } : {}),
         providerDiscoveryBudget: def.providerDiscoveryBudget === true,
         ...(def.settledWithoutTools ? { settledWithoutTools: def.settledWithoutTools } : {}),
         ...(def.validateObject

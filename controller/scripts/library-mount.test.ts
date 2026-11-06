@@ -396,9 +396,11 @@ test('a pick goes local only on the mixer\'s yes to its own file', async () => {
 });
 
 test('a file the mixer\'s copy lacks streams, and the mount stays proven for the rest', async () => {
-  // Proven first, on SONG: the walk's sample is whichever file readdir lists
-  // last, and on ext4 that would be the file the mixer lacks.
-  assert.equal((await proveLibraryMount())?.sample, join(root, SONG));
+  // Prove first, on SONG, before adding the narrower mixer-only miss. Otherwise
+  // findSample may choose OTHER as its sample and leave the mount unproven.
+  const proof = await proveLibraryMount();
+  assert.equal(proof?.sample, join(root, SONG));
+  assert.equal(libraryMountProven(root), true);
   put(join(root, OTHER));
   missing.add(join(root, OTHER));
   assert.equal(getLocalPath(other), `${root}/${OTHER}`, 'the proof alone would have sent it local');
