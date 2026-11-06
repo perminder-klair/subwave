@@ -2007,7 +2007,7 @@ for (const word of ['help', 'sorry', 'why', 'wow', 'stop', 'more', 'next', 'agai
   });
 }
 
-test('an explicit language is read, and the genre naming it is a match', async () => {
+test('an explicit language is hard-filtered by stored metadata, not a matching genre label', async () => {
   const punjabi = { id: 'punjabi', title: 'Punjabi Fixture', artist: 'Fixture Artist', genre: 'Punjabi Pop', duration: 200 };
   catalogueSongs = [filler];
   searchEmpty = true;
@@ -2015,8 +2015,8 @@ test('an explicit language is read, and the genre naming it is a match', async (
   modelOutput = read({ language: 'Punjabi' });
   const result = await submit('play something in Punjabi');
   assert.equal(bodies.length, 1);
-  assert.equal(result.outcome, 'matched');
-  assert.equal(requestLog.snapshot(1)[0].pickSource, 'language-genre:Punjabi Pop');
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(queue.upcoming.length, 0);
 });
 
 // A comma, dash or "by" is a parse for the catalogue to try, never an identity

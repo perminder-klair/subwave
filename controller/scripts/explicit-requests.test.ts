@@ -321,8 +321,8 @@ test('the reading behind a listener\'s pair draws a clean recording', async (t) 
 });
 
 test('the language-genre rung draws a clean track in the language', async (t) => {
-  const PB_TAGGED = { ...TAGGED, id: 'pb-tagged', title: 'Loud Punjabi', genre: 'Punjabi Pop' };
-  const PB_CLEAN = { ...OTHER, id: 'pb-clean', title: 'Soft Punjabi', genre: 'Punjabi Pop' };
+  const PB_TAGGED = { ...TAGGED, id: 'pb-tagged', title: 'Loud Punjabi', genre: 'Punjabi Pop', language: 'pan' };
+  const PB_CLEAN = { ...OTHER, id: 'pb-clean', title: 'Soft Punjabi', genre: 'Punjabi Pop', language: 'pan' };
   stubNetwork(t, {
     search: [], genreSongs: [PB_TAGGED, PB_CLEAN],
     matcher: { ...NAMED, title: null, artist: null, search_terms: [], language: 'Punjabi', intent: 'Wants Punjabi music.' },

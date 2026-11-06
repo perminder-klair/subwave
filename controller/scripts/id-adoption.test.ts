@@ -57,7 +57,7 @@ const sql = db.requireDb();
 // ---- seed the pre-rotation library ---------------------------------------
 db.upsertTrackMeta(OLD_HEX, { title: 'Old Title', artist: 'A', album: 'B', year: 1999, duration: 200 });
 db.upsertTrackTags(OLD_HEX, { moods: ['warm', 'dusty'], energy: 'medium', source: 'llm', confidence: 0.9 });
-db.upsertTrackEnrichment(OLD_HEX, { lastfmTags: ['classic rock'], lyricExcerpt: 'la la' });
+db.upsertTrackEnrichment(OLD_HEX, { lastfmTags: ['classic rock'], lyricExcerpt: 'la la', lyricLanguage: 'eng' });
 db.upsertTrackAnalysis(OLD_HEX, {
   bpm: 120, musicalKey: 'Am', introMs: 4200, loudnessLufs: -11.2, peakDb: -0.8,
   vocalRanges: [], outro: { ending: 'fade' } as never, stemsAttempted: true,
@@ -155,6 +155,7 @@ await test('derived data rides onto the new row; walk metadata wins', () => {
   assert.ok(row.stems_at, 'stem attempt stamp carried');
   assert.deepEqual(JSON.parse(row.lastfm_tags as string), ['classic rock']);
   assert.equal(row.lyric_excerpt, 'la la');
+  assert.equal(row.lyrics_language, 'eng');
 });
 
 // The columns whose absence from the old hand-written carry list was the

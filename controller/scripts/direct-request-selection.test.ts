@@ -547,7 +547,7 @@ test('artist, genre and language requirements are combined before a broad pick',
   assert.equal(r.outcome, 'matched');
 });
 
-test('a Punjabi genre tag can satisfy the overlapping Punjabi language request', async () => {
+test('stored Punjabi language metadata can satisfy an overlapping Punjabi genre request', async () => {
   const punjabi = { ...filler, id: 'punjabi-pop', genre: 'Punjabi Pop', language: 'pa' };
   const f = fixture({
     getGenres: async () => [{ value: 'Punjabi Pop', songCount: 1 }],

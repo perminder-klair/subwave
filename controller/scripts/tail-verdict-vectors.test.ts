@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
+import { dropLanguageStatsIndex } from './test-utils/legacy-schema.js';
 
 const root = createTempDir(join(tmpdir(), 'subwave-tail-vectors-'));
 const DIM = 8;
@@ -211,12 +212,14 @@ test('a version-32 language-schema database still runs tail-vocal invalidation',
 
 test('a version-32 database from develop gets no second tail-vocal pass', async () => {
   seed('develop-v32', '[]', outro(sung(15_000)));
+  dropLanguageStatsIndex(db.requireDb());
   db.requireDb().exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
 
   await upgrade(32);
 
   assert.equal(version(), LATEST);
   assert.deepEqual(db.textVectorDirtyIds(), []);
+  assert.ok(db.requireDb().prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_tracks_language_stats'").get());
 });
 
 test('a failure warns, the station still opens, and the later steps still run', async () => {

@@ -1396,7 +1396,8 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   // outside recognised names are hard requirements; guesses stay preferences.
   if (match.genre) genre = await safe('genre resolution', () => resolveRequestGenre(catalog, match.genre!, deps.signal), null);
   const languageMatches = (song: RequestSong) => !match.language
-    || [song.language, ...(song.languages || []), ...tags(song)].some(value => requestLanguageTagMatches(match.language!, String(value ?? '')));
+    || [song.language, ...(song.languages || [])]
+      .some(value => requestLanguageTagMatches(match.language!, String(value ?? '')));
   // Some language names are also commonly emitted as broad style tags (for
   // example, "Punjabi music"). When the parser records both interpretations,
   // first-class language metadata is the stronger evidence and must satisfy

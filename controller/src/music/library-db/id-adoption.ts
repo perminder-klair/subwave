@@ -37,7 +37,7 @@ const WALK_OWNED = [
 const GROUPS: Array<{ anchor: string; cols: string[] }> = [
   // lastfm_track_tags_at describes lastfm_tags, so the two move together: a
   // stamp carried onto a new row's own artist-only list would falsely mark it done.
-  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lastfm_track_tags_at', 'lyric_excerpt', 'enriched_at'] },
+  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lastfm_track_tags_at', 'lyric_excerpt', 'lyrics_language', 'enriched_at'] },
   {
     anchor: 'language_checked_at',
     cols: ['language_primary', 'languages', 'language_mode', 'language_source',

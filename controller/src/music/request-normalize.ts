@@ -1,17 +1,7 @@
+import { iso6393 } from 'iso-639-3';
 import { transliterate } from 'transliteration';
 
 export type RequestEnergy = 'low' | 'medium' | 'high';
-
-const LANGUAGE_CODES = [
-  'aa', 'ab', 'af', 'am', 'ar', 'as', 'az', 'ba', 'be', 'bg', 'bn', 'bo', 'br', 'bs',
-  'ca', 'cs', 'cy', 'da', 'de', 'el', 'en', 'es', 'et', 'eu', 'fa', 'fi', 'fil', 'fj',
-  'fo', 'fr', 'fy', 'ga', 'gd', 'gl', 'gu', 'ha', 'he', 'hi', 'hr', 'hu', 'hy', 'id',
-  'is', 'it', 'ja', 'jv', 'ka', 'kk', 'km', 'kn', 'ko', 'ku', 'ky', 'la', 'lb', 'lo',
-  'lt', 'lv', 'mg', 'mi', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt', 'my', 'ne', 'nl', 'no',
-  'oc', 'om', 'or', 'pa', 'pl', 'ps', 'pt', 'ro', 'ru', 'rw', 'sa', 'sd', 'si', 'sk',
-  'sl', 'so', 'sq', 'sr', 'su', 'sv', 'sw', 'ta', 'te', 'tg', 'th', 'tk', 'tl', 'tr',
-  'tt', 'ug', 'uk', 'ur', 'uz', 'vi', 'wo', 'xh', 'yi', 'yo', 'zh', 'zu', 'yue',
-] as const;
 
 const displayNames = new Intl.DisplayNames(['en'], { type: 'language' });
 
@@ -91,6 +81,36 @@ export function requestName(value: unknown): string {
     .toLocaleLowerCase('en')
     .replace(/[’‘']/g, '')
     .replace(/[^\p{L}\p{N}\p{M}]+/gu, ' '));
+}
+
+type IsoLanguage = (typeof iso6393)[number];
+
+// Keep the complete ISO 639-3 catalogue at the normalization boundary. The
+// supplemental aliases below are only for speech-friendly names that are not
+// official catalogue names; they must resolve through these same maps.
+const languageByCode = new Map<string, string>();
+const languageByName = new Map<string, string>();
+
+function registerLanguageName(language: IsoLanguage, value: string): void {
+  const name = requestName(value);
+  if (name) languageByName.set(name, language.iso6393);
+}
+
+for (const language of iso6393) {
+  for (const code of [language.iso6393, language.iso6391, language.iso6392B, language.iso6392T]) {
+    if (code) languageByCode.set(requestName(code), language.iso6393);
+  }
+  registerLanguageName(language, language.name);
+  const displayName = displayNames.of(language.iso6393);
+  if (displayName) registerLanguageName(language, displayName);
+}
+
+function languageCodeFor(value: unknown): string | undefined {
+  return languageByCode.get(requestName(value));
+}
+
+function languageNameCodeFor(value: unknown): string | undefined {
+  return languageByName.get(requestName(value));
 }
 
 // Whether requestName()-normalised text names a normalised value as whole
@@ -178,17 +198,26 @@ export function requestIdentityVariants(value: unknown, other: unknown): string[
 export const LOSSY_READING_SIMILARITY = 0.9;
 
 export function resolveLanguageCode(value: unknown): string | undefined {
-  const names = requestNameVariants(value);
+  // Do not feed an arbitrary title's transliteration into the complete
+  // catalogue. A non-Latin title can read like an unrelated language name
+  // (for example, a Hangul title reading as "gana"). Transliterated language
+  // spellings remain supported through explicit aliases and languageTerms().
+  const names = [requestName(value)];
   for (const name of names) {
     const explicit = LANGUAGE_ALIASES[name];
-    if (explicit) return explicit;
-    const match = LANGUAGE_CODES.find(code => requestName(displayNames.of(code)) === name);
-    if (match) return match;
+    if (explicit) return languageCodeFor(explicit) || languageNameCodeFor(explicit);
+    const code = languageCodeFor(name) || languageNameCodeFor(name);
+    if (code) return code;
     // ISO codes are accepted when the whole value is the code. A two-letter
     // alias must not be found inside prose: French "de", Spanish "en", and
     // similar words are ordinary prepositions, not language evidence.
     const token = name.split(' ').find(word => word.length > 2 && LANGUAGE_ALIASES[word]);
-    if (token) return LANGUAGE_ALIASES[token];
+    if (token) {
+      const alias = LANGUAGE_ALIASES[token];
+      return (alias && (languageCodeFor(alias) || languageNameCodeFor(alias)))
+        || languageCodeFor(token)
+        || languageNameCodeFor(token);
+    }
   }
   return undefined;
 }
@@ -201,7 +230,9 @@ export function languageTerms(value: unknown): string[] {
   // spellings that Intl.DisplayNames does not emit, such as francais,
   // espanol, deutsch, and transliterated regional names.
   for (const [alias, aliasCode] of Object.entries(LANGUAGE_ALIASES)) {
-    if (aliasCode === code) for (const variant of requestNameVariants(alias)) terms.add(variant);
+    if (languageCodeFor(aliasCode) === code || languageNameCodeFor(aliasCode) === code) {
+      for (const variant of requestNameVariants(alias)) terms.add(variant);
+    }
   }
   for (const locale of ['en', 'hi', 'pa', 'bn', 'ta', 'te', 'mr', 'ur']) {
     try {
@@ -255,7 +286,7 @@ export function resolveRequestGenre(value: unknown): string | null {
 export function languageDisplayName(value: unknown): string | null {
   const code = resolveLanguageCode(value);
   if (!code) return null;
-  return displayNames.of(code) || null;
+  return displayNames.of(code) || iso6393.find(language => language.iso6393 === code)?.name || null;
 }
 
 export function hasRequestLanguage(text: string): boolean {
@@ -263,38 +294,11 @@ export function hasRequestLanguage(text: string): boolean {
   return !!match && !!resolveLanguageCode(match[1]);
 }
 
-// The library tagger stores ISO 639-3 values, while speech recognition and
-// Intl.DisplayNames usually produce ISO 639-1 values. Keep this conversion at
-// the boundary so every supported language, including regional languages, can
-// use the same request and library indexes.
-const ISO6393: Record<string, string> = {
-  aa: 'aar', ab: 'abk', af: 'afr', am: 'amh', ar: 'ara', as: 'asm', az: 'aze', ba: 'bak',
-  be: 'bel', bg: 'bul', bn: 'ben', bo: 'bod', br: 'bre', bs: 'bos', ca: 'cat', cs: 'ces',
-  cy: 'cym', da: 'dan', de: 'deu', el: 'ell', en: 'eng', es: 'spa', et: 'est', eu: 'eus',
-  fa: 'fas', fi: 'fin', fil: 'fil', fj: 'fij', fo: 'fao', fr: 'fra', fy: 'fry', ga: 'gle',
-  gd: 'gla', gl: 'glg', gu: 'guj', ha: 'hau', he: 'heb', hi: 'hin', hr: 'hrv', hu: 'hun',
-  hy: 'hye', id: 'ind', is: 'isl', it: 'ita', ja: 'jpn', jv: 'jav', ka: 'kat', kk: 'kaz',
-  km: 'khm', kn: 'kan', ko: 'kor', ku: 'kur', ky: 'kir', la: 'lat', lb: 'ltz', lo: 'lao',
-  lt: 'lit', lv: 'lav', mg: 'mlg', mi: 'mri', mk: 'mkd', ml: 'mal', mn: 'mon', mr: 'mar',
-  ms: 'msa', mt: 'mlt', my: 'mya', ne: 'nep', nl: 'nld', no: 'nor', oc: 'oci', om: 'orm',
-  or: 'ori', pa: 'pan', pl: 'pol', ps: 'pus', pt: 'por', ro: 'ron', ru: 'rus', rw: 'kin',
-  sa: 'san', sd: 'snd', si: 'sin', sk: 'slk', sl: 'slv', so: 'som', sq: 'sqi', sr: 'srp',
-  su: 'sun', sv: 'swe', sw: 'swa', ta: 'tam', te: 'tel', tg: 'tgk', th: 'tha', tk: 'tuk',
-  tl: 'tgl', tr: 'tur', tt: 'tat', ug: 'uig', uk: 'ukr', ur: 'urd', uz: 'uzb', vi: 'vie',
-  wo: 'wol', xh: 'xho', yi: 'yid', yo: 'yor', zh: 'zho', zu: 'zul', yue: 'yue',
-  bgc: 'bgc', bho: 'bho', mai: 'mai', kok: 'kok', hne: 'hne',
-};
-const ISO6393_CODES = new Set(Object.values(ISO6393));
-
 export function canonicalLanguage(value: unknown): string | undefined {
   const raw = requestName(value);
   if (!raw) return undefined;
   if (raw === 'und' || raw === 'xxx' || raw === 'zxx') return raw;
-  if (ISO6393[raw]) return ISO6393[raw];
-  if (ISO6393_CODES.has(raw)) return raw;
-  if (/^[a-z]{3}$/u.test(raw) && ISO6393_CODES.has(raw)) return raw;
-  const two = resolveLanguageCode(raw);
-  return two ? ISO6393[two] ?? two : undefined;
+  return resolveLanguageCode(raw);
 }
 
 function levenshtein(a: string, b: string): number {

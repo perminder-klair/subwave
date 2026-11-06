@@ -113,5 +113,8 @@ test('a wound-back user_version does not trip over the column it still has', asy
 test('the walk owns it, so an id rotation leaves the new row its own answer', () => {
   const plan = db.columnPlan();
   assert.ok(plan.walkOwned.includes('explicit_status'));
+  const enrichment = plan.grouped.find(group => group.anchor === 'enriched_at');
+  assert.ok(enrichment, 'enrichment group present');
+  assert.ok(enrichment.cols.includes('lyrics_language'), 'lyrics language follows enrichment');
   assert.deepEqual(plan.unclassified, []);
 });

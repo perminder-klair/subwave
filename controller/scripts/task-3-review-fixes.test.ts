@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { removeTempDir } from './test-utils/temp-dir.js';
+import { dropLanguageStatsIndex } from './test-utils/legacy-schema.js';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-task-3-schema-'));
 process.env.STATE_DIR = stateDir;
@@ -13,6 +14,10 @@ const { requireDb } = await import('../src/music/library-db/handle.js');
 
 function columns(): string[] {
   return (requireDb().prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(row => row.name);
+}
+
+function hasIndex(name: string): boolean {
+  return !!requireDb().prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name);
 }
 
 function writeLanguageRows(): void {
@@ -49,6 +54,7 @@ test('upgrading a version-29 library adds language columns without losing rows',
   const Database = connection as any;
   const file = join(stateDir, 'library.db');
   const old = new Database(file);
+  dropLanguageStatsIndex(old);
   old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
   old.pragma('user_version = 29');
   old.close();
@@ -57,6 +63,7 @@ test('upgrading a version-29 library adds language columns without losing rows',
   assert.equal((raw().pragma('user_version', { simple: true }) as number), 37);
   assert.ok(columns().includes('language_primary'));
   assert.ok(columns().includes('languages'));
+  assert.equal(hasIndex('idx_tracks_language_stats'), true);
   assert.equal(db.getTrack('spanish')?.title, 'Uno');
 });
 
@@ -64,6 +71,7 @@ test('a version-35 library from develop gets the language columns in version 37'
   db.close();
   const Database = (await import('better-sqlite3')).default as any;
   const old = new Database(join(stateDir, 'library.db'));
+  dropLanguageStatsIndex(old);
   old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
   old.pragma('user_version = 35');
   old.close();
@@ -79,6 +87,7 @@ test('a version-36 library from develop gets the language columns in version 37'
   const Database = (await import('better-sqlite3')).default as any;
   const old = new Database(join(stateDir, 'library.db'));
   // Develop's own 36 (#2240) is the Sound: column, which this library has.
+  dropLanguageStatsIndex(old);
   old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
   old.prepare('UPDATE tracks SET text_vector_sound = ? WHERE id = ?').run('calm|piano', 'spanish');
   old.pragma('user_version = 36');
@@ -117,6 +126,7 @@ test('concurrent opens serialize the step at 37: language and the columns an ear
   const old = new Database(join(stateDir, 'library.db'));
   // Develop's own steps up to 36 are develop's; the step at 37 is this branch's.
   // A database an earlier build of it left at 36 has no #2214 or #2240 columns.
+  dropLanguageStatsIndex(old);
   old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages; ALTER TABLE tracks DROP COLUMN audio_descriptors; ALTER TABLE tracks DROP COLUMN audio_descriptor_scores_json; ALTER TABLE tracks DROP COLUMN text_vector_sound; ALTER TABLE audio_embedding_meta DROP COLUMN descriptor_vocab_hash;');
   old.pragma('user_version = 36');
   old.close();
@@ -152,6 +162,7 @@ test('a version-35 develop library gains the request language columns', async ()
   db.close();
   const Database = (await import('better-sqlite3')).default as any;
   const old = new Database(join(stateDir, 'library.db'));
+  dropLanguageStatsIndex(old);
   old.exec(`
     ALTER TABLE tracks DROP COLUMN language_primary;
     ALTER TABLE tracks DROP COLUMN languages;
@@ -186,6 +197,7 @@ test('a version-35 request library gains the descriptor columns', async () => {
   const old = new Database(join(stateDir, 'library.db'));
   old.prepare('UPDATE tracks SET language_primary = ?, languages = ? WHERE id = ?')
     .run('Hindi', '["Hindi"]', 'spanish');
+  dropLanguageStatsIndex(old);
   old.exec(`
     ALTER TABLE tracks DROP COLUMN audio_descriptors;
     ALTER TABLE tracks DROP COLUMN audio_descriptor_scores_json;

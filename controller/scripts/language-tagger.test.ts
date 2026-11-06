@@ -13,6 +13,8 @@ test('canonical language storage keeps regional languages distinct', () => {
   assert.equal(canonicalLanguage('sco'), 'sco');
   assert.equal(canonicalLanguage('Scots'), 'sco');
   assert.equal(canonicalLanguage('Zulu'), 'zul');
+  assert.equal(canonicalLanguage('Navajo'), 'nav');
+  assert.equal(canonicalLanguage('nv'), 'nav');
   assert.equal(canonicalLanguage('not-a-language'), undefined);
   assert.equal(resolveLanguageCode('Scots'), 'sco');
 });
