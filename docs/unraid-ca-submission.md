@@ -83,3 +83,28 @@ then finish `/onboarding` against a real Navidrome.
 - **Listing metadata** (description, screenshots, port defaults): edit
   `ca_profile.xml` / `templates/subwave.xml`, push, re-run Validate/Scan. Bump
   `<Date>` and add a `<Changes>` note in the template.
+- **CA reads the default branch, `develop`**, not `main`: the live listing's
+  Template URL is the `develop` copy, so a template change is live in the store
+  once it merges and CA rescans, ahead of the release that ships the image. A
+  template that needs an unreleased image (a new env var, a new port) waits for
+  the release before it merges.
+- **Overview formatting:** CA and the Apps tab collapse whitespace, so a blank
+  line is not a paragraph break. Use `[br][br]`, which both render as `<br>`.
+
+## Troubleshooting the listing
+
+**The icon is blank on ca.unraid.net.** Check whether it's ours before changing
+anything:
+
+```bash
+curl -sI https://raw.githubusercontent.com/perminder-klair/subwave/main/app/assets/icon.png | head -1   # 200
+curl -sI https://ca.unraid.net/apps | grep -io "img-src[^;]*"
+```
+
+If the icon returns 200 and the site's `img-src` allows only `'self'`, the site
+is blocking every app's icon, not ours (seen 2026-11-04: Jellyfin, Vaultwarden
+and the rest all showed the placeholder). App pages link icons straight to
+`raw.githubusercontent.com`, while README screenshots go through CA's own
+`/cdn/` proxy, which is why those still load. Report it upstream; don't point
+`<Icon>` at `ca.unraid.net/cdn/...` as a workaround, because Unraid servers
+download that same URL for the Docker tab and the proxy is undocumented.

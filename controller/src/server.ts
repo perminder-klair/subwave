@@ -14,6 +14,7 @@ import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import * as remoteTts from './audio/remoteTts.js';
 import * as kokoro from './audio/kokoro.js';
+import { hostedMaxBitrate, isHosted } from './setup/hosted.js';
 import * as chatterbox from './audio/chatterbox.js';
 import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
@@ -53,6 +54,7 @@ import { router as likesRoutes } from './routes/likes.js';
 import { router as lyricsRoutes } from './routes/lyrics.js';
 import { router as personasRoutes } from './routes/personas.js';
 import { router as showsRoutes } from './routes/shows.js';
+import { router as steerRoutes } from './routes/steer.js';
 import { router as communityRoutes } from './routes/community.js';
 import { router as backupRoutes } from './routes/backup.js';
 import { router as stemsRoutes } from './routes/stems.js';
@@ -158,6 +160,7 @@ app.use(likesRoutes);
 app.use(lyricsRoutes);
 app.use(personasRoutes);
 app.use(showsRoutes);
+app.use(steerRoutes);
 app.use(communityRoutes);
 app.use(backupRoutes);
 app.use(stemsRoutes);
@@ -182,6 +185,14 @@ app.listen(config.server.port, async (err?: Error) => {
     process.exit(1);
   }
   console.log(`SUB/WAVE controller on :${config.server.port}`);
+
+  // Hosted mode reads its env on use (setup/hosted.ts), so read it once here:
+  // a malformed SUBWAVE_HOSTED or SUBWAVE_MAX_BITRATE is then in envIssues for
+  // the booth-log repeat below, and the plan is on record at boot.
+  if (isHosted()) {
+    const ceiling = hostedMaxBitrate();
+    console.log(`[hosted] SUB/WAVE Cloud station${ceiling ? `; streams capped at ${ceiling} kbps` : ''}`);
+  }
 
   // Malformed env vars already fell back and warned on stdout; repeat them into
   // the booth log, which is the surface an operator actually reads.
@@ -219,7 +230,14 @@ app.listen(config.server.port, async (err?: Error) => {
   try {
     await settings.load();
     const s = settings.get();
-    await settings.ensureLiquidsoapSettingsFile();
+    const { rewroteMountFiles } = await settings.ensureLiquidsoapSettingsFile();
+    // A plan change (or a hand edit) reached the mount files at boot; the
+    // running mixer still has the old ones until it restarts.
+    if (rewroteMountFiles.length) {
+      const line = `[settings] stream mounts updated to match the saved settings${hostedMaxBitrate() ? ` and this plan's ${hostedMaxBitrate()} kbps ceiling` : ''} (${rewroteMountFiles.join(', ')}); they take effect when the mixer next restarts`;
+      console.log(line);
+      queue.log('scheduler', line);
+    }
     console.log(
       `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName} onAir=${settings.resolveOnAirLocation(s)}`,
     );
@@ -282,6 +300,13 @@ app.listen(config.server.port, async (err?: Error) => {
     remoteTts.start();
   } catch (err: any) {
     console.error('[remote] tts probe start failed:', err.message);
+  }
+  // The shared Kokoro server's probe (KOKORO_URL; no-op without it), so the
+  // first DJ link already knows whether it can render there.
+  try {
+    kokoro.start();
+  } catch (err: any) {
+    console.error('[kokoro] shared server probe start failed:', err.message);
   }
 
   // Resume today's LLM token tally from the durable event log. Must run ONCE and

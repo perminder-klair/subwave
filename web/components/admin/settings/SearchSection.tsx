@@ -11,7 +11,8 @@ import {
 } from '../../ui/select';
 import {
   SEARCH_PROVIDER_CATALOG, SEARCH_PROVIDER_GROUPS, SETTINGS_SEARCH_PROVIDERS, SETTINGS_SEARXNG_ENGINES_MAX,
-  type SearchProviderEntry, type SearchProviderGroup,
+  searchProviderEntry, withIndefiniteArticle,
+  type SearchProviderGroup,
 } from '@/lib/schemas.generated';
 import { Card, Btn, Pill } from '../ui';
 import {
@@ -20,12 +21,11 @@ import {
 } from './shared';
 
 // Labels, hints and key fields come from the search catalogue
-// (controller/src/schemas/settings.ts, mirrored by gen:schemas).
-const searchProvider = (id: string | undefined): SearchProviderEntry | undefined =>
-  SEARCH_PROVIDER_CATALOG.find(p => p.id === id);
+// (controller/src/schemas/settings.ts, mirrored by gen:schemas), read through
+// its searchProviderEntry.
 
 const searchProviderLabel = (id: string | undefined): string =>
-  searchProvider(id)?.label || id || '—';
+  searchProviderEntry(id)?.label || id || '—';
 
 const SEARCH_GROUP_LABELS: Record<SearchProviderGroup, string> = {
   keyless: 'No key needed',
@@ -41,22 +41,32 @@ export function groupSearchProviders(ids: readonly string[]): { label: string; i
   return [
     ...SEARCH_PROVIDER_GROUPS.map(group => ({
       label: SEARCH_GROUP_LABELS[group],
-      ids: ids.filter(id => searchProvider(id)?.group === group),
+      ids: ids.filter(id => searchProviderEntry(id)?.group === group),
     })),
     { label: 'Other', ids: ids.filter(id => !known.has(id)) },
   ].filter(g => g.ids.length > 0);
 }
 
-// True when a key is on file but Firecrawl searches would refuse it, because it
-// isn't an fc- one. The key reaches this page redacted, so the controller decides
-// through firecrawlKeySource. `undefined` is a controller that doesn't send the
-// field, which says nothing about the key.
-export function firecrawlKeyIsForeign(
+// True when a key is on file but the picked provider's searches would refuse it,
+// because it is another provider's (a Firecrawl key under Tavily, a Tavily key
+// under Firecrawl). The key reaches this page redacted, so the controller decides,
+// through keyRefusedBy: the keyed providers that would refuse it. That covers the
+// picked provider before a save. `undefined` is a controller that doesn't send
+// the field, which says nothing about the key.
+export function searchKeyIsForeign(
   provider: string,
   keyOnFile: boolean,
-  source: 'settings' | 'env' | null | undefined,
+  refusedBy: string[] | undefined,
 ): boolean {
-  return provider === 'firecrawl' && keyOnFile && source === null;
+  return keyOnFile && !!refusedBy?.includes(provider);
+}
+
+// The banner's sentence when the key on file is another provider's. The article
+// comes from the catalogue's one rule, which the controller's messages share
+// ("an Outcrawl key", "a Tavily key").
+export function foreignSearchKeyDetail(keyName: string): string {
+  const key = `${withIndefiniteArticle(keyName)} key`;
+  return `The key on file is not ${key}, so searches won't run. Paste ${key} in the field above and save.`;
 }
 
 interface SearchSectionProps extends SectionProps {
@@ -106,7 +116,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
   const savedSearch = data.values?.search || {};
   const providers = data.search?.providers || [...SETTINGS_SEARCH_PROVIDERS];
   const provider = form.search.provider;
-  const entry = searchProvider(provider);
+  const entry = searchProviderEntry(provider);
   // Keyed providers share the SEARCH_API_KEY slot; the controller probes the
   // right endpoint based on the provider sent along with a key test.
   const keyed = entry && entry.key !== 'none' ? entry : undefined;
@@ -119,7 +129,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         && ((form.search.baseUrl ?? '') !== (savedSearch.baseUrl || '')
             || (form.search.searxngEngines ?? '') !== (savedSearch.searxngEngines || '')));
   const apiKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
-  const foreignKey = firecrawlKeyIsForeign(provider, apiKeySet, data.search?.firecrawlKeySource);
+  const foreignKey = searchKeyIsForeign(provider, apiKeySet, data.search?.keyRefusedBy);
 
   const testApiKey = async () => {
     const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
@@ -131,7 +141,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `provider` tells the controller which endpoint to probe — the same
-        // SEARCH_API_KEY slot holds a Tavily, Brave, Keenable or Firecrawl key.
+        // SEARCH_API_KEY slot holds a Tavily, Brave, Keenable, Firecrawl or Outcrawl key.
         body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim(), provider }),
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
@@ -151,7 +161,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         sub={<>
           The segment director can air a single line of recent artist context between
           tracks, when the active backend returns something worth saying. DuckDuckGo
-          is free and keyless; Tavily, Brave and Firecrawl are keyed but return full web results;
+          is free and keyless; Tavily, Brave, Firecrawl and Outcrawl are keyed but return full web results;
           SearXNG is keyless if you self-host it; Keenable returns web results with no
           key. Switching here reroutes the next call, no restart.
         </>}
@@ -239,13 +249,14 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 </div>
               </div>
               {/* A keyless provider isn't "missing" anything, so skip the red banner.
-                  A key on file may be another provider's, which Firecrawl refuses, so
-                  "ready to use" would overclaim and the banner names the wrong key. */}
+                  A key on file may be another provider's, which the picked provider
+                  refuses, so "ready to use" would overclaim and the banner names the
+                  wrong key. */}
               {keyed.key !== 'optional' && (
                 <KeyStatus
                   envVar="SEARCH_API_KEY"
                   present={apiKeySet && !foreignKey}
-                  detail={foreignKey ? <>The key on file is not a Firecrawl key, so searches won&apos;t run. Firecrawl keys start with <code>fc-</code>: paste one in the field above and save.</> : undefined}
+                  detail={foreignKey ? foreignSearchKeyDetail(keyed.keyName || provider) : undefined}
                 />
               )}
               {/* The controller knows whether the key Keenable would send is a keen_

@@ -19,6 +19,15 @@
 // for an existing dir (analyze.ts allocateStems) and rewrite it, and with the
 // stem cache off the vocal facet still separates unless the lyrics decide it.
 //
+// A returning id is not proof of returning audio. Navidrome derives the id from
+// the path, so a different recording put back at the same path comes back
+// under the same id, and the new row has no stored size for the replaced-file
+// check to compare (#2224). If that row is analysed while the cache is at its
+// budget, it gets no stems of its own, its slot stays free, and a release would
+// hand it the old recording's stems: a blend renders its seam from those files,
+// so the old audio airs, and the stems_at stamp keeps the backfill away for
+// good. So a release also needs sameAudio below, and fails closed.
+//
 // Deletions are additionally gated on `confirm`: an unconfirmed pass plans,
 // counts and reports — the dry run an operator reads before the first real
 // pass. The same flag releases quarantines, deletes aged quarantines and, in a
@@ -77,6 +86,33 @@ export function exceedsAutoCeiling(quarantine: number, kept: number): boolean {
 }
 export const QUARANTINE_GRACE_MS = 7 * 24 * 3600_000;
 
+/** The stems' own record of the audio they were cut from (write_tail_meta). */
+export const TAIL_META = 'tail-meta.json';
+
+/**
+ * How far apart two readings of one file's duration can be. The stems carry
+ * the DECODED duration (tail-meta.json's `duration_sec`), the library row the
+ * Subsonic one, an integer that the analyzer measured disagreeing by up to ~1 s
+ * (analyze_worker.py write_tail_meta).
+ */
+export const SAME_AUDIO_TOLERANCE_SEC = 2;
+
+const positiveSeconds = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+
+/**
+ * Pure: are a quarantined stem set and the row that came back for its id the
+ * same audio? Judged on duration, the one fact both sides hold: the stems'
+ * tail-meta.json against the row's duration_sec, within the tolerance above.
+ * Fails closed. A side with no duration proves nothing: a head-only set has no
+ * tail-meta.json (a capped download never proves a tail), and a server can
+ * omit the duration. Withholding a release costs a separation; a wrong one
+ * airs another recording's stems.
+ */
+export function sameAudio(stemsDurationSec: unknown, rowDurationSec: unknown): boolean {
+  if (!positiveSeconds(stemsDurationSec) || !positiveSeconds(rowDurationSec)) return false;
+  return Math.abs(stemsDurationSec - rowDurationSec) <= SAME_AUDIO_TOLERANCE_SEC;
+}
+
 export interface CacheEntry {
   /** Directory name at the cache root (a sanitised track id). */
   name: string;
@@ -109,6 +145,12 @@ export interface QuarantineEntry {
    * the quarantine must be deleted, never moved over it.
    */
   liveSlotFree: boolean;
+  /**
+   * Whether the stems are proven to be the audio of the row that came back
+   * (sameAudio). Read only for a known entry whose live slot is free, and
+   * false for every other entry, where nothing asks.
+   */
+  sameAudio: boolean;
 }
 
 export interface QuarantinePlan {
@@ -123,6 +165,9 @@ export interface QuarantinePlan {
   aging: Array<{ name: string; remainingMs: number }>;
   /** Ids that came back in the library while the live slot is taken: the quarantine is stale either way. */
   superseded: string[];
+  /** Ids that came back with the live slot free, but whose stems are not proven
+   *  to be the returning audio (sameAudio): never released, they age out. */
+  mismatched: string[];
   deletedCount: number;
 }
 
@@ -153,16 +198,20 @@ export function planQuarantinePurge(
   const deleted: Array<{ name: string }> = [];
   const aging: Array<{ name: string; remainingMs: number }> = [];
   const superseded: string[] = [];
+  const mismatched: string[] = [];
   for (const e of entries) {
     if (e.known) {
-      // The track is back. Give the quarantine copy back when the live slot
-      // is free; when a fresh analysis already filled it, the quarantine is
-      // the stale copy and ages out like any other.
-      if (e.liveSlotFree) {
+      // The id is back. Give the quarantine copy back when the live slot is
+      // free and the copy is proven to be the returning audio. When a fresh
+      // analysis already filled the slot, the quarantine is the stale copy;
+      // when the audio is not proven the same, it may be another recording's.
+      // Either way it ages out like any other.
+      if (e.liveSlotFree && e.sameAudio) {
         released.push(e.name);
         continue;
       }
-      superseded.push(e.name);
+      if (e.liveSlotFree) mismatched.push(e.name);
+      else superseded.push(e.name);
     }
     if (e.ageMs >= graceMs) deleted.push({ name: e.name });
     else aging.push({ name: e.name, remainingMs: graceMs - e.ageMs });
@@ -175,6 +224,7 @@ export function planQuarantinePurge(
     deleted,
     aging,
     superseded,
+    mismatched,
     deletedCount: deleted.length,
   };
 }

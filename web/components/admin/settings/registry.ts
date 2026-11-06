@@ -48,7 +48,8 @@ export const LLM_PROVIDER_FORM_KEYS = [
 // stem cache under transitions; it saves to `audio.*`). One list, read by the
 // section's dirty check and its SaveBar's error scope.
 export const STEM_FORM_KEYS = [
-  'transitions.pairDrain', 'transitions.stemBlends', 'transitions.stemCache', 'transitions.stemCacheGb',
+  'transitions.pairDrain', 'transitions.stemBlends', 'transitions.pickTimeStems',
+  'transitions.stemCache', 'transitions.stemCacheGb',
 ] as const;
 
 // `satisfies`, never a `readonly SectionSpec[]` annotation: the annotation
@@ -323,11 +324,12 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Audio fusion weight', section: 'library', card: 'Propagation', keywords: 'clap audio text fusion analyzer' },
   { label: 'Active-learning rounds', section: 'library', card: 'Propagation', keywords: 'rounds least confident passes' },
   { label: 'Last.fm tags', section: 'library', card: 'Enrichment', keywords: 'crowd tags embed text' },
+  { label: 'Last.fm track tags', section: 'library', card: 'Enrichment', keywords: 'lastfm per song crowd tags backfill' },
   { label: 'Lyrics', section: 'library', card: 'Enrichment', keywords: 'lyrics embed text' },
 
   // ── web search ─────────────────────────────────────────────────────────────
-  { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng keenable firecrawl live facts' },
-  { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave keenable firecrawl token search_api_key' },
+  { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng keenable firecrawl outcrawl live facts' },
+  { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave keenable firecrawl outcrawl token search_api_key' },
   { label: 'SearXNG URL', section: 'search', card: 'Provider', keywords: 'self hosted meta search json' },
   { label: 'Engines', section: 'search', card: 'Provider', keywords: 'searxng engines pin restrict google duckduckgo wikipedia' },
 

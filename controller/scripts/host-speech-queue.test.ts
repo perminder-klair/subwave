@@ -418,6 +418,32 @@ test('a timed-out render transferred to current is reused and accepted once', as
   assert.equal(accepted, 1);
 });
 
+test('operator-requested track introductions air with automatic speech off', async () => {
+  const previous = settings.get().tts.enabled;
+  const wav = join(root, 'operator-intro.wav');
+  writeFileSync(wav, 'wav');
+  let accepted = 0;
+  (queue as any)._airVoice = async (_file: string, _wav: string, _text: string, _gain: number, opts: any) => {
+    accepted += 1;
+    opts?.onQueued?.({ voiceId: 'operator-intro', clipMs: 1000, estimatedAirInMs: 0 });
+    return { voiceId: 'operator-intro', clipMs: 1000, aired: Promise.resolve(null) };
+  };
+  try {
+    await settings.update({ tts: { enabled: false } } as never);
+    const manual = { ...item(), introByOperator: true, introWav: wav, linkPrev: null, linkClockAt: null };
+    queue.current = manual;
+    await queue.airIntro(manual);
+    assert.equal(accepted, 1, 'the explicit operator request reaches the voice chain');
+
+    const automatic = { ...item(), introWav: wav, linkPrev: null, linkClockAt: null };
+    queue.current = automatic;
+    await queue.airIntro(automatic);
+    assert.equal(accepted, 1, 'automatic introductions remain silent');
+  } finally {
+    await settings.update({ tts: { enabled: previous } } as never);
+  }
+});
+
 test('standalone host speech is refused after stale TTS, but remains accepted once it enters the voice chain', async () => {
   const staleStamp = session.captureHostSpeech();
   const firstRender = deferred<string>();

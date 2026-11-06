@@ -66,6 +66,7 @@ cooldown: 6h              # hard min gap between autonomous firings — "90m" | 
 cron: 0 * * * *           # OPTIONAL: fire on a fixed schedule instead of/alongside the cooldown gate (see below)
 cronOnly: true            # OPTIONAL: with a cron: set, withhold this skill from random autonomous picks entirely
 cohosts: true             # OPTIONAL: host + every active guest each speak in their own voice (see below)
+voiceEngine: remote       # OPTIONAL: this skill's own TTS voice, with voiceId and voiceProvider (see below)
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
@@ -232,6 +233,61 @@ Find one well-sourced historical case and have the hosts discuss the outcome and
 investigation. Give every host a distinct perspective; do not write name labels.
 ```
 
+### `voiceEngine:` / `voiceId:` / `voiceProvider:` — the skill's own voice
+
+Absent everything, a skill airs in the on-air DJ's voice. Set `voiceEngine`
+(with `voiceId`, and `voiceProvider` for cloud) and it always speaks in its
+own, through the same engine and voice picker personas use (`/admin/skills →
+Edit → Voice`, with a sample button to audition before saving). Only the voice
+changes: the segment is still the speaker's, at the speaker's own loudness and
+pace.
+
+```yaml
+---
+name: early-bulletin
+label: Early bulletin
+cooldown: 3h
+voiceEngine: remote
+voiceId: newsreader
+---
+```
+
+`voiceId` follows the same rules as a persona's voice, per engine:
+
+| `voiceEngine` | `voiceId` | Empty means |
+| --- | --- | --- |
+| `piper` | an `.onnx` filename in the voice folder | the built-in voice |
+| `kokoro` | a Kokoro id such as `bf_isabella` | not allowed |
+| `chatterbox` | a `.wav` clone reference in the voice folder | the built-in voice |
+| `pocket-tts` | a built-in id such as `alba`, or a `.wav` clone reference | `alba` |
+| `gemini` | a Google voice name | the station's Gemini voice |
+| `remote` | whatever id your remote server understands | its default |
+| `cloud` | the provider's voice id | not allowed, except on `openai-compatible`, where the server picks |
+
+`voiceProvider` is read only for `cloud`: `openai` (the default), `elevenlabs`,
+`fish-audio` or `openai-compatible`.
+
+The admin form refuses a voice that breaks these rules. A hand-edited
+`SKILL.md` is read leniently instead, so the skill still loads:
+
+- An unknown `voiceEngine` reads as no override, and the skill speaks in the
+  DJ's voice.
+- A blank `voiceId` for ElevenLabs or Fish Audio also reads as no override,
+  because neither has a default voice to fall back on. A blank OpenAI voice is
+  `alloy`.
+- Any other voice the engine can't use is reset the way a persona's would be:
+  a bad Kokoro id becomes `bf_isabella`, a bad PocketTTS voice becomes `alba`,
+  and a bad Piper or Chatterbox file, a path among them, becomes the built-in
+  voice.
+
+If the chosen engine is unavailable when the skill airs, the line is read by
+the station's fallback or default voice instead.
+
+A co-hosted skill ignores its voice: every contribution speaks in its roster
+persona's own voice. A voice does not travel through the community catalog,
+because clone references and server-specific ids are station-local, but a zip
+export carries it, arriving disabled for review like everything else.
+
 ### `context:` — what the segment is allowed to mention
 
 `context:` is a comma-separated allow-list of the "right now" fields the DJ may
@@ -242,7 +298,7 @@ weave into this segment. Valid fields:
 | `date` | day of week, date, season |
 | `clock` | local clock time, plus weekend / late-night / commute tags |
 | `time` | the daypart and its vibe (e.g. "morning, productive") |
-| `weather` | current condition, temperature, and the on-air location unless the DJ prompt template drops `{location}` |
+| `weather` | current conditions in the forecast's own words ("mainly clear", "light rain showers"), temperature, and the on-air location unless the DJ prompt template drops `{location}` |
 | `festival` | the named festival, if today is one |
 | `show` | the scheduled show on air, if any |
 | `listeners` | how many people are tuned in |
@@ -468,7 +524,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 
 | call | what it does |
 |---|---|
-| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG / Keenable / Firecrawl) |
+| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG / Keenable / Firecrawl / Outcrawl) |
 | `services.searchReady()` | `true` when a search provider is usable |
 | `services.nowPlaying()` | the track on air — `{ artist, title, album, year, id }` or `null` |
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
@@ -477,6 +533,8 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 | `services.fetchHeadlines({ feedUrl?, maxItems?, maxAgeDays?, deadlineMs?, requireFeed? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) into `{ title, description, published? }` items. `published` is an ISO time, or a bare `YYYY-MM-DD` when the feed gives a day and no clock. `deadlineMs` replaces the 15 s default with a limit that covers the body too, and `requireFeed` throws on a 200 that isn't a feed instead of returning no items |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
+| `services.weatherOutlook()` | the next six hours of the station's forecast — `{ nextHours, notes, kinds }`: one row per hour (`inHours`, where 0 is within the hour, `conditions`, `temp`, `rainChancePct`), plain-English notes such as "rain likely in about 3 hours (70% chance)" or "light drizzle possible in about 5 hours", and `kinds`, what each note is about without its timing (`rain-likely`, `clearing`, `cooler`, …), for telling a new note from a standing one. Empty, with `kinds: null`, when no forecast is known or the last one is over an hour and a half old (an Open-Meteo outage). No extra fetch: it reads the forecast `ctx.weather` came from, aged to the moment you call it |
+| `services.weatherNews({ condition, kinds }, state)` | whether that reading is news against the skill's `state`: `{ skyChanged, outlookChanged, withdrawn }`. The sky is the condition. The outlook is news only when it says something the last weather segment didn't: a note whose timing moved is not news, nor a temperature note, nor rain going from possible to likely, nor a note that has gone, except rain (or snow, or thunderstorms) the last segment promised that is no longer coming, for which `withdrawn` holds a note to add to your outlook ("rain no longer expected in the next 6 hours"). It is the same check the station's segment gates make, so a weather tool that reports through it can't call news what the station would not air |
 
 Every skill's `tool.mjs` is **timeout-guarded (8 s)** and any throw degrades
 cleanly to "no data" — a slow or broken skill can never hang the between-track

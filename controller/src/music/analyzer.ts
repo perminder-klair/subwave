@@ -12,6 +12,7 @@ import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
+import { parseWholeLoudnessCurve, type WholeLoudnessCurve } from './whole-loudness-curve.js';
 
 // A structural span over the track, in ms. Contiguous over the analysed
 // window; the first is the intro/leading section.
@@ -77,6 +78,23 @@ export interface AnalysisResult {
   // never reconstructs it as (tagged duration - gap); tag and decoded file
   // disagree often enough to move the cut. null whenever tailSilenceMs is.
   tailStartMs: number | null;
+  // Whole-file facets (absent on window answers and on older backends).
+  // `loudness`: which measurement loudnessLufs/peakDb are (2 = the whole file
+  // at its native rate, peakDb a true peak), with the same pass's sample peak
+  // and loudness range. `edges`: silence at each end against the absolute
+  // floor, and the decoded length.
+  loudnessVersion?: number | null;
+  samplePeakDb?: number | null;
+  loudnessRangeLu?: number | null;
+  // The same pass's short-term loudness curve (whole-loudness-curve.ts).
+  wholeLoudnessCurve?: WholeLoudnessCurve | null;
+  // Why a whole-file answer has no curve, when the analyzer ran and had none
+  // to give: its own reason, or 'rejected' for one this controller's parser
+  // refuses. null for an analyzer that predates the curve (it says nothing).
+  loudnessCurveUnavailable?: string | null;
+  edgeLeadMs?: number | null;
+  edgeTailMs?: number | null;
+  decodedDurationMs?: number | null;
 }
 
 // The outgoing track's measured ending. Timestamps are absolute ms.
@@ -231,6 +249,20 @@ interface WorkerMessage {
   // Facet protocol (version signal): {"facets": [...]} requests. Absent on
   // workers that predate it.
   facets_capable?: boolean;
+  // Whole-file facets (loudness v2, edges): the worker has ffmpeg. Absent on
+  // workers that predate them.
+  whole_file_capable?: boolean;
+  // Whole-file loudness answers carry `loudness_curve`. Absent on workers
+  // that predate it.
+  loudness_curve_capable?: boolean;
+  loudness_curve?: unknown;
+  loudness_curve_unavailable?: unknown;
+  loudness_version?: unknown;
+  sample_peak_db?: unknown;
+  lra_lu?: unknown;
+  edge_lead_ms?: unknown;
+  edge_tail_ms?: unknown;
+  decoded_duration_ms?: unknown;
   // Facet-shape answer.
   facets?: Record<string, { status?: string; reason?: string; data?: WorkerMessage }>;
   source?: Record<string, unknown>;
@@ -280,6 +312,8 @@ let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
 let _localTailVocalCapable: boolean | null = null;
 let _localFacetsCapable: boolean | null = null;
+let _localWholeFileCapable: boolean | null = null;
+let _localLoudnessCurveCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
 // Local twins of _sidecarAudioError / _sidecarVocalError — see there.
 let _localAudioError: string | null = null;
@@ -340,6 +374,8 @@ function startWorker(): Promise<void> {
           if (typeof msg.tail_vocal_capable === 'boolean' && _localVocalError === null) _localTailVocalCapable = msg.tail_vocal_capable;
           if (typeof msg.text_embedding_capable === 'boolean' && _localAudioError === null) _localTextCapable = msg.text_embedding_capable;
           _localFacetsCapable = msg.facets_capable === true;
+          _localWholeFileCapable = typeof msg.whole_file_capable === 'boolean' ? msg.whole_file_capable : null;
+          _localLoudnessCurveCapable = typeof msg.loudness_curve_capable === 'boolean' ? msg.loudness_curve_capable : null;
         }
         // After the ready assignments, so a reported loss always wins.
         noteLocalCapabilityLoss(msg);
@@ -397,6 +433,7 @@ export interface AnalyzeRequestOpts {
 // The flat field names (worker message, sidecar body, facet `data`) mapped to
 // an AnalysisResult; absent fields read null.
 function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
+  const curve = msg.loudness_curve == null ? null : parseWholeLoudnessCurve(msg.loudness_curve);
   return {
           bpm: msg.bpm ?? null,
           musicalKey: msg.key ?? null,
@@ -416,6 +453,16 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
           tailStartMs: parseSilenceMs(msg.tail_start_ms),
           stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
+          loudnessVersion: parseFinite(msg.loudness_version),
+          samplePeakDb: parseFinite(msg.sample_peak_db),
+          loudnessRangeLu: parseFinite(msg.lra_lu),
+          wholeLoudnessCurve: curve,
+          loudnessCurveUnavailable: curve ? null
+            : msg.loudness_curve != null ? 'rejected'
+            : typeof msg.loudness_curve_unavailable === 'string' ? msg.loudness_curve_unavailable : null,
+          edgeLeadMs: parseSilenceMs(msg.edge_lead_ms),
+          edgeTailMs: parseSilenceMs(msg.edge_tail_ms),
+          decodedDurationMs: parseSilenceMs(msg.decoded_duration_ms),
   };
 }
 
@@ -425,13 +472,13 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
 }
 
 // The worker's raw answer (flat or facet shape), for the facet protocol.
-function localRequestRaw(req: object): Promise<WorkerMessage> {
+function localRequestRaw(req: object, timeoutMs = config.analyzer.requestTimeoutMs): Promise<WorkerMessage> {
   const id = `a${++reqSeq}`;
   return new Promise<WorkerMessage>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error('analyze request timed out'));
-    }, config.analyzer.requestTimeoutMs);
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     proc?.stdin.write(JSON.stringify({ id, ...req }) + '\n');
   });
@@ -496,6 +543,9 @@ let _sidecarVocalCapable: boolean | null = null;
 let _sidecarTailVocalCapable: boolean | null = null;
 // Facet protocol (version signal; null on old sidecars).
 let _sidecarFacetsCapable: boolean | null = null;
+let _sidecarWholeFileCapable: boolean | null = null;
+let _sidecarLoudnessCurveCapable: boolean | null = null;
+let _sidecarWholeFileConcurrency: number | null = null;
 // The CLAP TEXT tower (embed-text).
 let _sidecarTextCapable: boolean | null = null;
 // Why a capability is false, when the cause is a failed model load rather than
@@ -519,6 +569,9 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_tail_vocal_capable?: boolean | null;
       analyze_text_capable?: boolean | null;
       analyze_facets_capable?: boolean | null;
+      analyze_whole_file_capable?: boolean | null;
+      analyze_loudness_curve_capable?: boolean | null;
+      analyze_whole_file_concurrency?: number | null;
       analyze_audio_error?: string | null;
       analyze_vocal_error?: string | null;
     };
@@ -529,6 +582,10 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
       _sidecarTailVocalCapable = typeof body.analyze_tail_vocal_capable === 'boolean' ? body.analyze_tail_vocal_capable : null;
       _sidecarFacetsCapable = typeof body.analyze_facets_capable === 'boolean' ? body.analyze_facets_capable : null;
+      _sidecarWholeFileCapable = typeof body.analyze_whole_file_capable === 'boolean' ? body.analyze_whole_file_capable : null;
+      _sidecarLoudnessCurveCapable = typeof body.analyze_loudness_curve_capable === 'boolean' ? body.analyze_loudness_curve_capable : null;
+      _sidecarWholeFileConcurrency = Number.isInteger(body.analyze_whole_file_concurrency) && (body.analyze_whole_file_concurrency as number) > 0
+        ? (body.analyze_whole_file_concurrency as number) : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
       _sidecarAudioError = typeof body.analyze_audio_error === 'string' ? body.analyze_audio_error : null;
       _sidecarVocalError = typeof body.analyze_vocal_error === 'string' ? body.analyze_vocal_error : null;
@@ -683,6 +740,29 @@ export function vocalActivityError(): string | null {
 
 // Backends predating the feature never report it, so consumers must treat only
 // `=== true` as capable.
+// The whole-file facets (loudness v2, edges): the backend's worker has
+// ffmpeg. null = unknown (not probed, or a backend that predates them).
+export function wholeFileAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarWholeFileCapable;
+  if (_backend === 'local') return _localWholeFileCapable;
+  return null;
+}
+
+// Whole-file loudness answers carry the short-term curve. A v2 figure stored
+// without one is re-planned only on `=== true`: an analyzer that predates the
+// curve would answer without it again, every run.
+export function loudnessCurveAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarLoudnessCurveCapable;
+  if (_backend === 'local') return _localLoudnessCurveCapable;
+  return null;
+}
+
+// How many whole-file requests the sidecar runs at once in its own lane.
+// null = not advertised (local backend, or an older sidecar).
+export function wholeFileConcurrency(): number | null {
+  return _backend === 'sidecar' ? _sidecarWholeFileConcurrency : null;
+}
+
 export function tailVocalAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarTailVocalCapable;
   if (_backend === 'local') return _localTailVocalCapable;
@@ -751,7 +831,7 @@ function localEmbedTexts(texts: string[], timeoutMs: number, signal?: AbortSigna
 
 // A deadline that expired mid-request, as opposed to a refused connection or a
 // capability 404/500.
-function isTimeoutError(err: unknown): boolean {
+export function isTimeoutError(err: unknown): boolean {
   const name = (err as { name?: unknown } | null)?.name;
   const message = (err as { message?: unknown } | null)?.message;
   return name === 'AbortError' || (typeof message === 'string' && message.includes('timed out'));
@@ -1051,7 +1131,12 @@ export async function analyzePathWithUrlFallback(
 // the backend advertises it; callers fall back to the flat request otherwise.
 // ---------------------------------------------------------------------------
 
-export type FacetName = 'head' | 'loudness' | 'tail' | 'clap' | 'vocal' | 'stems';
+export type FacetName = 'head' | 'loudness' | 'tail' | 'clap' | 'vocal' | 'stems' | 'edges';
+// Read off one decode of the WHOLE file (the stream URL, or a staged copy
+// known to be complete), not the analysis windows.
+export const WHOLE_FILE_FACET_NAMES: readonly FacetName[] = ['loudness', 'edges'];
+const readsWholeFile = (body: Record<string, unknown>) =>
+  Array.isArray(body.facets) && body.facets.some(f => (WHOLE_FILE_FACET_NAMES as readonly unknown[]).includes(f));
 export type FacetAnswerStatus = 'ok' | 'unmeasurable' | 'unavailable' | 'failed';
 
 export interface FacetAnswer {
@@ -1080,6 +1165,9 @@ export interface FacetRequestOpts {
   tailVocals?: boolean;
   stems_dir?: string;
   complete?: boolean;
+  // The request's deadline. Omitted, the pass's ANALYZE_REQUEST_TIMEOUT_MS. A
+  // pick-time separation passes its own longer one (pick-stems-policy.ts).
+  timeoutMs?: number;
 }
 
 // null = unknown (not probed / old backend). Callers use the facet protocol
@@ -1123,23 +1211,33 @@ export function parseFacetAnswer(msg: WorkerMessage): FacetAnalysis {
   };
 }
 
-async function facetRequest(body: Record<string, unknown>): Promise<FacetAnalysis> {
+async function facetRequest(
+  body: Record<string, unknown>,
+  deadlineMs?: number,
+): Promise<FacetAnalysis> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
+  // A request that reads the whole file gets the whole-file deadline, which
+  // a caller's own deadline can only lengthen. Any other request keeps the
+  // caller's deadline as given, shorter than the pass's included (a pick-time
+  // separation's own budget, and the tests that shorten it), else the pass's.
+  const timeoutMs = readsWholeFile(body)
+    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs, deadlineMs ?? 0)
+    : deadlineMs ?? config.analyzer.requestTimeoutMs;
   let msg: WorkerMessage;
   if (backend === 'sidecar') {
     const res = await fetchWithTimeout(`${_sidecarBase}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      timeoutMs: config.analyzer.requestTimeoutMs,
+      timeoutMs,
       bodyDeadline: true,
     });
     if (!res.ok) return sidecarFailure(res);
     msg = (await res.json()) as WorkerMessage;
   } else {
     if (!ready) await startWorker();
-    msg = await localRequestRaw(body);
+    msg = await localRequestRaw(body, timeoutMs);
   }
   if (!msg.ok) throw new Error(msg.error || 'analysis failed');
   return parseFacetAnswer(msg);
@@ -1159,19 +1257,23 @@ export async function analyzeFacets(
   if (opts.tailVocals) body.tail_vocals = true;
   const stems = opts.stems_dir ? { stems_dir: opts.stems_dir, stems_require_marker: true } : {};
   const url = subsonic.getRawStreamUrl(songId);
-  if (!localPath) return facetRequest({ url, ...body, ...stems });
+  const timeoutMs = opts.timeoutMs; // undefined: facetRequest's default
+  if (!localPath) return facetRequest({ url, ...body, ...stems }, timeoutMs);
   try {
     return await facetRequest({
       path: localPath,
       ...body,
       ...(opts.complete !== undefined ? { complete: opts.complete } : {}),
+      // The whole-file facets read the stream URL unless the staged copy is
+      // known to be complete; the worker decides, never the sidecar.
+      ...(readsWholeFile(body) ? { stream_url: url } : {}),
       ...stems,
-    });
+    }, timeoutMs);
   } catch (err) {
     if (!(err instanceof AnalyzerPathUnavailableError)) throw err;
     // Same degrade as analyzePathWithUrlFallback: no stems without shared state.
     const facets = opts.facets.filter(f => f !== 'stems');
-    return facets.length ? facetRequest({ url, ...body, facets })
+    return facets.length ? facetRequest({ url, ...body, facets }, timeoutMs)
       : { facets: {}, source: { kind: 'unknown', durationS: null, complete: null } };
   }
 }

@@ -11,9 +11,10 @@ import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { deriveVocalFromLyrics, clipRangesToTail, type LyricVocalResult } from './lyric-vocal.js';
 import { runAudioMoodPass } from './audio-moods.js';
+import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
-import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
+import { quietGateDecision, quietOnlyEnabled, type QuietState } from './analyze-quiet-pure.js';
 import { dispatchAnalysis, type DispatchOutcome } from './analyze-dispatch.js';
 import {
   analysisModeForTrack,
@@ -23,7 +24,8 @@ import {
   tailVocalBackfillAvailable,
 } from './analyze-capability.js';
 import { probeListenerCount } from '../broadcast/listeners.js';
-import type { AcousticsPlan, WorkRequest } from './acoustics-plan.js';
+import { sweepKeepLastFromDisk } from '../broadcast/pick-stems.js';
+import { planAcoustics, type AcousticsPlan, type WorkRequest } from './acoustics-plan.js';
 import type { Facet } from './library-db/facets.js';
 
 // Status events for the panel, mirrored to the `[analyze] …` console line.
@@ -88,9 +90,6 @@ interface QuietConfig {
 }
 
 async function readQuietConfig(): Promise<QuietConfig> {
-  const v = (process.env.ANALYZE_QUIET_ONLY || '').toLowerCase();
-  const envOn = v === '1' || v === 'true' || v === 'yes';
-  let enabled = envOn;
   let minutes = 10;
   let audio: any = null;
   try {
@@ -102,7 +101,7 @@ async function readQuietConfig(): Promise<QuietConfig> {
       audio = null;
     }
   }
-  if (!enabled) enabled = audio?.analyzeQuietOnly === true;
+  const enabled = quietOnlyEnabled(process.env.ANALYZE_QUIET_ONLY, audio);
   const m = audio?.analyzeQuietMinutes;
   if (Number.isFinite(m) && m >= 1 && m <= 120) minutes = Math.floor(m);
   return { enabled, minutes };
@@ -168,17 +167,26 @@ export interface AnalyzeStats {
   audioEmbedded: number;
   // Includes instrumentals (stored as []). 0 when off or demucs is absent.
   vocalAnalyzed: number;
+  // The opt-in whole-file backfill that followed the pass (absent when it
+  // did not run).
+  wholeFile?: { analyzed: number; failed: number; scope: number };
 }
 
 // Provenance label stamped into audio_embedding_meta; the worker owns the model.
 const AUDIO_MODEL_LABEL = process.env.CLAP_MODEL || 'laion-clap';
 
-// Best-effort: a mood failure must never fail the pass; the next one retries.
+// Best-effort: a mood or descriptor failure must never fail the pass; the next
+// one retries.
 async function scoreAudioMoods(): Promise<void> {
   try {
     await runAudioMoodPass();
   } catch (err: any) {
     console.error(`[audio-moods] pass failed (non-fatal): ${err?.message || err}`);
+  }
+  try {
+    await runAudioDescriptorPass();
+  } catch (err: any) {
+    console.error(`[audio-descriptors] pass failed (non-fatal): ${err?.message || err}`);
   }
   // Must run AFTER the mood pass, which writes the cosines it calibrates
   // against. Separately wrapped so a failure here doesn't cost the mood labels.
@@ -204,7 +212,61 @@ function lyricTailRanges(id: string, outro: Pick<analyzer.OutroInfo, 'startMs'>,
   return clipRangesToTail(lyricVocal.vocalRanges, windowStartMs, durMs > 0 ? durMs : null);
 }
 
+// The opt-in whole-file backfill (ANALYZE_WHOLE_FILE): a facet plan for
+// loudness v2 + edges over every track that needs either, exactly what
+// `--facets loudness,edges` would plan. null when the switch is off; an
+// analyzer known to lack the facets gets nothing planned (skipped, counted).
+export async function wholeFileBackfillPlan(limit?: number): Promise<AcousticsPlan | null> {
+  if (!config.analyzer.wholeFile) return null;
+  const facets = [...db.WHOLE_FILE_FACETS];
+  const available = await analyzer.isAvailable().catch(() => false);
+  // An unknown answer can be a probe that reached the sidecar while its pool
+  // was still starting (remembered until restart): ask once more first.
+  if (available && analyzer.wholeFileAvailable() == null) await analyzer.refreshCapabilities().catch(() => {});
+  // An automatic widening needs POSITIVE support, like the tail-vocal one: an
+  // analyzer that predates the facets never says so, and sending them anyway
+  // fails every request. An explicit `--facets` run still plans on unknown.
+  const capable = available && analyzer.wholeFileAvailable() === true;
+  return planAcoustics({
+    ids: db.allTrackIdsOrdered(),
+    facets,
+    where: { kind: 'needs' },
+    state: db.loadFacetState(facets),
+    capabilities: { clap: null, demucs: null, tailVocal: null, wholeFile: capable, loudnessCurve: analyzer.loudnessCurveAvailable() },
+    limit,
+  });
+}
+
+// Why the opt-in backfill planned nothing for tracks that need it. Only an
+// analyzer that SAYS it cannot run the facets is known to lack them; one that
+// has not said is either an image that predates them or one whose workers had
+// not started when it was asked, and is asked again next run.
+export function wholeFileSkipNotice(capability: boolean | null): string {
+  return capability === false
+    ? 'Whole-file analysis is on, but the analyzer reports it cannot run it (no ffmpeg in its image) — rebuild the analyzer'
+    : 'Whole-file analysis is on, but the analyzer has not said whether it can run it — an image that predates it ' +
+      '(rebuild the analyzer), or one whose workers were still starting; skipped this run, asked again next run';
+}
+
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
+  const stats = await runAnalysisPassOnce(opts);
+  // The whole-file facets ride a regular run only when the operator opted in,
+  // as one more facet plan after it (same quiet gate, same failure rules).
+  if (opts.plan || !stats.available) return stats;
+  const plan = await wholeFileBackfillPlan(opts.limit);
+  if (!plan) return stats;
+  const skipped = plan.byFacet.reduce((n, c) => n + (c.skipped['no-whole-file'] ?? 0), 0);
+  if (skipped > 0 && plan.items.length === 0) {
+    logEvent('warning', wholeFileSkipNotice(analyzer.wholeFileAvailable()));
+    return stats;
+  }
+  if (plan.items.length === 0) return stats;
+  logEvent('info', `Whole-file loudness + edges: ${plan.items.length.toLocaleString('en-GB')} tracks to measure`);
+  const whole = await runAnalysisPassOnce({ plan });
+  return { ...stats, wholeFile: { analyzed: whole.analyzed, failed: whole.failed, scope: whole.scope } };
+}
+
+async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
   if (!(await analyzer.isAvailable())) {
     // The only two things resolveBackend() consults, named by their env vars.
     console.log('[analyze] no analysis backend (ANALYZE_URL sidecar / ANALYZE_PYTHON venv) — skipping');
@@ -445,7 +507,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   if (ids.length === 0) {
     console.log('[analyze] nothing to analyse — all tracks current');
-    // Mood scoring can still have work (older vectors, changed vocabulary).
+    // Zero-shot scoring can still have work (older vectors, changed vocabulary).
     await scoreAudioMoods();
     return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
@@ -493,9 +555,18 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   // Concurrent sidecar jobs stage only AFTER admission, so a quiet-time pause
   // never keeps downloading work that has not started.
-  type Prefetch = Promise<{ path: string; complete: boolean } | { err: any }>;
+  type Prefetch = Promise<{ path: string; complete: boolean } | { err: any } | { unstaged: true }>;
+  // A track planned for the whole-file facets alone is never staged: the
+  // analyzer streams the whole file itself, and the capped copy (up to
+  // ANALYZE_MAX_BYTES) would be read for nothing.
+  const wholeFileOnly = (songId: string) => {
+    const f = useFacets ? plannedFacets.get(songId) : undefined;
+    return !!f && f.length > 0 && f.every((x) => db.WHOLE_FILE_FACETS.includes(x));
+  };
   const prefetch = (songId: string): Prefetch =>
-    analyzer.downloadCapped(songId).then((r) => r, (err) => ({ err }));
+    wholeFileOnly(songId)
+      ? Promise.resolve({ unstaged: true as const })
+      : analyzer.downloadCapped(songId).then((r) => r, (err) => ({ err }));
 
   type TrackWorkResult = { kind: 'skipped' } | {
     kind: 'analyzed';
@@ -554,6 +625,8 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     ) : null;
     const source: db.FacetSource =
       res?.source.kind === 'capped-download' ? (res.source.complete === false ? 'capped' : 'url')
+        // Whole-file facets alone: the analyzer streamed the URL itself.
+        : res?.source.kind === 'whole-file' ? 'url'
         : localComplete === true ? 'full' : localComplete === false ? 'capped' : 'unknown';
 
     const w: db.FacetWrite = { source };
@@ -576,7 +649,25 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           leadSilenceMs: r.leadSilenceMs,
         };
       } else if (f === 'loudness') {
-        w.loudness = { loudnessLufs: r.loudnessLufs, peakDb: r.peakDb };
+        // A whole-file answer is one measurement: integrated loudness, true
+        // peak, sample peak and LRA are stored together or not at all.
+        if (db.isWholeFileLoudnessVersion(r.loudnessVersion) &&
+          [r.loudnessLufs, r.peakDb, r.samplePeakDb, r.loudnessRangeLu].some((v) => v == null)) {
+          failures.push(db.facetFailure(f, 'incomplete whole-file loudness answer'));
+          continue;
+        }
+        w.loudness = {
+          loudnessLufs: r.loudnessLufs, peakDb: r.peakDb,
+          samplePeakDb: r.samplePeakDb ?? null, loudnessRangeLu: r.loudnessRangeLu ?? null,
+          version: r.loudnessVersion ?? null, curve: r.wholeLoudnessCurve ?? null,
+          curveUnavailable: r.loudnessCurveUnavailable ?? null,
+        };
+      } else if (f === 'edges') {
+        if (r.edgeLeadMs == null || r.edgeTailMs == null || r.decodedDurationMs == null) {
+          failures.push(db.facetFailure(f, 'incomplete edges answer'));
+          continue;
+        }
+        w.edges = { leadMs: r.edgeLeadMs, tailMs: r.edgeTailMs, durationMs: r.decodedDurationMs };
       } else if (f === 'tail') {
         w.tail = { outro: r.outro, tailSilenceMs: r.tailSilenceMs, tailStartMs: r.tailStartMs };
       } else if (f === 'clap' && r.audioEmbedding?.length === db.AUDIO_EMBEDDING_DIM) {
@@ -637,7 +728,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         if (err instanceof analyzer.NonAudioResponseError) throw err;
         // Otherwise a transient fetch failure — fall back to the url path.
         console.error(`[analyze] ${id} prefetch failed (${err?.message || err}); using url path`);
-      } else {
+      } else if ('path' in settled) {
         localPath = settled.path;
         localComplete = settled.complete;
       }
@@ -784,7 +875,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     }
   };
 
-  const requestedConcurrency = config.analyzer.concurrency;
+  // A plan of whole-file facets alone runs in the sidecar's own lane (no
+  // model, one CPU thread per file), so it may go wider than the analyze pool.
+  const wholeFileLane = !!plan && useFacets && plan.items.length > 0 && plan.items.every(i => wholeFileOnly(i.id));
+  const requestedConcurrency = wholeFileLane
+    ? Math.min(config.analyzer.wholeFileConcurrency, analyzer.wholeFileConcurrency() ?? config.analyzer.wholeFileConcurrency)
+    : config.analyzer.concurrency;
   const effectiveConcurrency = backend === 'sidecar' ? requestedConcurrency : 1;
   if (backend === 'local' && requestedConcurrency > 1) {
     logEvent(
@@ -844,9 +940,16 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     const settled = await stemCacheStore.settlePassWrites(newStemIds, undefined, {
       rewroteExisting: rewroteExistingStems,
     }).catch(() => null);
+    // With pick-time stems on, the dirs of tracks still in the queue go last,
+    // as in the hourly sweep. This process has no live queue, so the set comes
+    // from the queue's snapshot (pick-stems.ts sweepKeepLastFromDisk); off, it
+    // is undefined and the order is the ranking alone.
     const swept = settled?.withinBudget
       ? null
-      : await stemCacheStore.sweep(undefined, { force: true }).catch(() => null);
+      : await stemCacheStore.sweep(undefined, {
+        force: true,
+        keepLast: await sweepKeepLastFromDisk().catch(() => undefined),
+      }).catch(() => null);
     if (swept && swept.removed > 0) {
       console.log(`[analyze] stem cache sweep: evicted ${swept.removed} track dirs (${Math.round(swept.freedBytes / 1024 ** 2)} MB)`);
     }
@@ -860,8 +963,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     }
   }
 
-  // Zero-shot audio moods over the vectors this and past passes wrote; no-op
-  // when there is nothing new or the backend has no text tower.
+  // Zero-shot audio moods and sound descriptors over the vectors this and past
+  // passes wrote; no-op when there is nothing new or the backend has no text
+  // tower.
   await scoreAudioMoods();
 
   // The worker degrades silently when Demucs fails to load: every track reads

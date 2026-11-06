@@ -330,6 +330,79 @@ export type SkipBody = z.infer<typeof skipBodySchema>;
  *  Navidrome must cost one call a minute, not twenty. */
 export const FILE_FORMAT_RETRY_MS = 60_000;
 
+// ─── from controller/src/schemas/hosted.ts ───────────────────────────────
+
+// Hosted mode (SUBWAVE_HOSTED): the rules a SUB/WAVE Cloud station shares
+// between the controller and the web admin. The controller reads the env
+// through util/env.ts with these parsers and enforces the rules on every save
+// (setup/hosted.ts); the web's server pages read the same env through the
+// generated mirror (web/lib/hosted.ts) to decide what to show. One parser per
+// variable, so the two sides can never read one value two ways.
+//
+// Each parser takes the raw, non-empty env string; an unset or empty variable
+// never reaches it (util/env.ts and web/lib/hosted.ts treat that as "unset").
+
+
+const HOSTED_FLAG_ON = ['1', 'true', 'yes', 'on'] as const;
+const HOSTED_FLAG_OFF = ['0', 'false', 'no', 'off'] as const;
+
+/** SUBWAVE_HOSTED: on or off. Any other word is malformed, never "on". */
+export const hostedFlagSchema = z
+  .string()
+  .transform((v) => v.trim().toLowerCase())
+  .pipe(z.enum([...HOSTED_FLAG_ON, ...HOSTED_FLAG_OFF], { error: 'is not one of 1/true/yes/on or 0/false/no/off' }))
+  .transform((v) => (HOSTED_FLAG_ON as readonly string[]).includes(v));
+
+/**
+ * The lowest stream ceiling a plan can have. MP3 is always served and its
+ * lowest bitrate is 64 (SETTINGS_MP3_BITRATES, pinned by hosted-mode.test.ts),
+ * so a ceiling under it could not be honoured: the MP3 mount would air above it.
+ */
+export const HOSTED_MIN_BITRATE = 64;
+const HOSTED_MAX_BITRATE_LIMIT = 10_000;
+
+/** SUBWAVE_MAX_BITRATE: the plan's stream ceiling, whole kbps. */
+export const hostedMaxBitrateSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^\d+$/, 'is not a whole number of kbps'))
+  .transform(Number)
+  .pipe(z
+    .number()
+    .int()
+    .min(HOSTED_MIN_BITRATE, `must be at least ${HOSTED_MIN_BITRATE} kbps, MP3's lowest bitrate`)
+    .max(HOSTED_MAX_BITRATE_LIMIT, `must be at most ${HOSTED_MAX_BITRATE_LIMIT} kbps`));
+
+const HOSTED_LISTENER_CAP_LIMIT = 10_000;
+
+/** SUBWAVE_LISTENER_CAP: the plan's concurrent-listener ceiling. */
+export const hostedListenerCapSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^\d+$/, 'is not a whole number'))
+  .transform(Number)
+  .pipe(z.number().int().min(1, 'must be at least 1').max(HOSTED_LISTENER_CAP_LIMIT, `must be at most ${HOSTED_LISTENER_CAP_LIMIT}`));
+
+/**
+ * SUBWAVE_MUSIC_UPLOAD_URL / SUBWAVE_MUSIC_LIBRARY_URL: https only, so a stray
+ * value can't become a javascript: link on the music source page.
+ */
+export const hostedHttpsUrlSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^https:\/\/[^\s"'<>]+$/, 'is not an https URL'));
+
+/**
+ * The engines a persona or jingle voice slot may pin on a hosted station: the
+ * station default (`inherit`) and the two local engines the box runs, plus the
+ * brain's cloud voice when the station itself speaks through it (premium).
+ * Heavy engines aren't on hosted boxes, and a cloud pin on a base station would
+ * need a key of the owner's own, which hosted mode doesn't store.
+ */
+export function hostedPersonaEngines(defaultEngine: unknown): string[] {
+  return ['inherit', 'kokoro', 'piper', ...(defaultEngine === 'cloud' ? ['cloud'] : [])];
+}
+
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 
 // Shared imaging schemas — sfx, beds, jingles and clone voices, one contract in
@@ -3062,9 +3135,26 @@ export const SEARCH_PROVIDER_CATALOG = [
     keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
     hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
   },
+  {
+    id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
+    keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
+    hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
 ] as const satisfies readonly SearchProviderEntry[];
 
 export const SETTINGS_SEARCH_PROVIDERS = SEARCH_PROVIDER_CATALOG.map((p) => p.id);
+
+// One catalogue row by id, or undefined for an id the catalogue doesn't list.
+export function searchProviderEntry(id: string | undefined): SearchProviderEntry | undefined {
+  return SEARCH_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+// A key name with its indefinite article: "a Tavily", "an Outcrawl". Every
+// sentence that names a provider's key, in the controller and the admin UI,
+// takes its article from here, so the two can't disagree.
+export function withIndefiniteArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
 
 /**
  * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
@@ -3316,6 +3406,7 @@ export const transitionsPatchSchema = settingsBlockOf({
   // save-time refusal. Do not add one here.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
+  pickTimeStems: settingsBoolLike(),
   equalPowerCrossfade: settingsBoolLike(),
   effects: transitionEffectsPatchSchema,
 });
@@ -4823,6 +4914,9 @@ function showObjectSchema(ctx: ShowSchemaContext) {
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,
       }),
+      // A clean show: tracks tagged explicit stay off air (music/explicit-policy.ts).
+      // Stands alone, not one of the filters filtersStrict governs.
+      excludeExplicit: showBool(),
       // Organisation only, declared LAST so persisted key order is unchanged.
       // Unlike every other list here a bad entry is REFUSED rather than dropped:
       // a tag is typed by hand and must not vanish on save. The load twin
@@ -5252,6 +5346,58 @@ const skillCohostsSchema = z.preprocess(
   z.boolean({ error: 'cohosts must be a boolean' }).default(false),
 );
 
+// A skill's own TTS voice override: the engine, voice and cloud provider of a
+// persona's voice slot. Gain and speed are not part of it, because they stay
+// the speaker's: an override changes whose voice is heard, never how loud or
+// how fast. Absent or null means the on-air DJ's voice.
+export interface SkillVoiceSlot {
+  engine: string;
+  voice: string;
+  cloudProvider: string;
+}
+
+// The per-engine voice rules live once, in persona.ts (ttsVoiceSlotSchema, and
+// repairTtsVoiceSlot for the disk read). This module may import only zod, so
+// it takes the slot schema as an argument: schemas/skill-server.ts passes
+// persona's for the routes, and the skill editor passes the mirrored copy.
+// What stays here is the skill's own posture around that slot: null is "no
+// override", and a missing provider is openai, as it is in SKILL.md.
+export function skillVoiceSchema(slot: z.ZodType<SkillVoiceSlot>) {
+  // `.optional()` so a body with no `voice` key at all (a community install, an
+  // older client) reaches the transform as "no override", where zod would
+  // otherwise refuse the missing key.
+  return z.unknown().optional().transform((raw, ctx): SkillVoiceSlot | null => {
+    if (raw == null) return null;
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      ctx.issues.push({ code: 'custom', input: raw, message: 'voice must be an object or null' });
+      return z.NEVER;
+    }
+    const t = raw as Record<string, unknown>;
+    const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : v);
+    const parsed = slot.safeParse({
+      ...t,
+      engine: trim(t.engine),
+      cloudProvider: trim(t.cloudProvider) || 'openai',
+    });
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.issues.push({ code: 'custom', input: raw, message: issue.message });
+      }
+      return z.NEVER;
+    }
+    const { engine, voice, cloudProvider } = parsed.data;
+    return { engine, voice, cloudProvider };
+  });
+}
+
+/** A skill-file schema below with the voice override attached. */
+export function withSkillVoice<Shape extends z.ZodRawShape>(
+  schema: z.ZodObject<Shape>,
+  slot: z.ZodType<SkillVoiceSlot>,
+) {
+  return schema.extend({ voice: skillVoiceSchema(slot) });
+}
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
@@ -5283,8 +5429,10 @@ export const skillCreateSchema = customSkillFileSchema.extend({
   name: skillSlugSchema,
 });
 
+// The voice is attached by withSkillVoice, so it is optional here: a body
+// parsed without it (a community install) carries no override.
 export type SkillFileParsed = z.output<typeof builtinSkillFileSchema> &
-  Partial<z.output<typeof customSkillFileSchema>>;
+  Partial<z.output<typeof customSkillFileSchema>> & { voice?: SkillVoiceSlot | null };
 
 /**
  * Parsed body → the field object writeSkillFile consumes. The only real work
@@ -5306,6 +5454,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     requiresKey: parsed.requiresKey,
     tags: parsed.tags,
     brief: parsed.brief,
+    voice: parsed.voice ?? null,
   };
 }
 
@@ -5474,6 +5623,156 @@ export type StationCreate = z.output<typeof stationCreateSchema>;
 // Rename is display-name only — the slug and data folder stay put — so it
 // shares the name rule and nothing else.
 export const stationRenameSchema = z.object({ name: stationNameSchema });
+
+// ─── from controller/src/schemas/steer.ts ────────────────────────────────
+
+// A steer: the operator leans the music and the talk for a while, without
+// touching the schedule. Sibling of the takeover in schemas/schedule.ts and
+// shaped like it (an absolute window, `until` spent on the request), but it
+// never changes which show is on air.
+//
+// Zod only: this file is mirrored into the admin bundle.
+
+export const STEER_PROMPT_MAX = 500;
+// Restated from schedule.ts (OVERRIDE_MIN_MINUTES / OVERRIDE_MAX_MINUTES): a
+// mirrored schema file imports nothing but zod. Pinned equal by steer-schema.test.ts.
+export const STEER_MIN_MINUTES = 15;
+export const STEER_MAX_MINUTES = 720;
+
+export const STEER_UNTIL = ['once', 'fixed', 'schedule-change'] as const;
+export type SteerUntil = (typeof STEER_UNTIL)[number];
+
+export interface Steer {
+  /** Only this playlist plays while the steer runs, or null. */
+  playlistId: string | null;
+  /** The operator's direction, already trimmed. May be empty with a playlist. */
+  prompt: string;
+  startedAt: number;
+  expiresAt: number;
+}
+
+export interface SteerContext {
+  /** Epoch-ms "now", or null to not judge expiry (see ScheduleOverrideContext). */
+  now: number | null;
+}
+
+const collapse = (s: string) => s.replace(/\s+/g, ' ').trim();
+const NOTHING_TO_STEER = 'pick a playlist or say what to steer towards';
+
+export function steerSchema(ctx: SteerContext) {
+  return z
+    .object(
+      {
+        playlistId: z.string({ error: 'must be a playlist id' }).min(1, 'must be a playlist id').nullable().default(null),
+        prompt: z.string({ error: 'must be text' }).transform(collapse).pipe(
+          z.string().max(STEER_PROMPT_MAX, `must be at most ${STEER_PROMPT_MAX} characters`),
+        ),
+        startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
+        expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
+      },
+      { error: 'must be an object' },
+    )
+    .check((c) => {
+      const { playlistId, prompt, startedAt, expiresAt } = c.value;
+      if (!prompt && !playlistId) {
+        c.issues.push({ code: 'custom', input: prompt, path: ['prompt'], message: NOTHING_TO_STEER });
+      }
+      if (startedAt >= expiresAt) {
+        c.issues.push({ code: 'custom', input: expiresAt, path: ['expiresAt'], message: 'must be after startedAt' });
+      } else if (expiresAt - startedAt > STEER_MAX_MINUTES * 60_000) {
+        c.issues.push({
+          code: 'custom', input: expiresAt, path: ['expiresAt'],
+          message: `window must be at most ${STEER_MAX_MINUTES} minutes`,
+        });
+      }
+      if (ctx.now !== null && expiresAt <= ctx.now) {
+        c.issues.push({ code: 'custom', input: expiresAt, path: ['expiresAt'], message: 'window has already expired' });
+      }
+    });
+}
+
+const STEER_MINUTES_MESSAGE = `must be an integer between ${STEER_MIN_MINUTES} and ${STEER_MAX_MINUTES}`;
+
+/**
+ * POST /steer's body. `until` says how long it lasts: `'fixed'` for `minutes`,
+ * `'schedule-change'` to the next grid boundary, and `'once'` for a single
+ * track worked out under it and queued, with nothing stored and no steer left
+ * running. `minutes` is REQUIRED under `'fixed'` and REFUSED otherwise, the
+ * takeover's own posture.
+ */
+export const steerRequestSchema = z
+  .object({
+    playlistId: z.string({ error: 'must be a playlist id' }).min(1, 'must be a playlist id').nullable().default(null),
+    prompt: z.string({ error: 'must be text' }).transform(collapse).pipe(
+      z.string().max(STEER_PROMPT_MAX, `must be at most ${STEER_PROMPT_MAX} characters`),
+    ).default(''),
+    until: z.enum(STEER_UNTIL, { error: "must be 'once', 'fixed' or 'schedule-change'" }).default('fixed'),
+    minutes: z.coerce
+      .number({ error: STEER_MINUTES_MESSAGE })
+      .int(STEER_MINUTES_MESSAGE)
+      .min(STEER_MIN_MINUTES, STEER_MINUTES_MESSAGE)
+      .max(STEER_MAX_MINUTES, STEER_MINUTES_MESSAGE)
+      .optional(),
+    /** Also drop the picks already queued, so the steer applies at once. */
+    startNow: z.boolean({ error: 'must be true or false' }).default(false),
+    /** Have the host introduce the opening tracks with one link before the first. */
+    introduce: z.boolean({ error: 'must be true or false' }).default(false),
+  })
+  .check((c) => {
+    if (!c.value.prompt && !c.value.playlistId) {
+      c.issues.push({ code: 'custom', input: c.value.prompt, path: ['prompt'], message: NOTHING_TO_STEER });
+    }
+    if (c.value.until === 'fixed' && c.value.minutes == null) {
+      c.issues.push({ code: 'custom', input: c.value.minutes, path: ['minutes'], message: STEER_MINUTES_MESSAGE });
+    }
+    if (c.value.until !== 'fixed' && c.value.minutes != null) {
+      c.issues.push({
+        code: 'custom', input: c.value.minutes, path: ['minutes'],
+        message: 'must be omitted unless the steer runs for a set time',
+      });
+    }
+  });
+
+/** The most tracks a steer opens with (`routes/steer.ts`). */
+export const STEER_OPENING_TRACKS = 5;
+/** How long Preview's opening list is remembered for Start to queue unchanged. */
+export const STEER_PREVIEW_MS = 5 * 60_000;
+
+/**
+ * What an opening list is worked out FOR: the controller's memo key and the
+ * card's. The playlist, the direction and "start now", which decides the track
+ * the list follows (with it, not the DJ picks Start drops). How long the steer
+ * runs decides only how many of the list it plays, not which tracks it holds.
+ */
+export function steerPreviewKey(playlistId: string | null | undefined, prompt: string | null | undefined, once: boolean, startNow: boolean): string {
+  return `${once ? 1 : STEER_OPENING_TRACKS}\n${startNow ? 1 : 0}\n${playlistId ?? ''}\n${collapse(prompt ?? '')}`;
+}
+
+/** The steer in force at `now`, or null. One reading for every caller. */
+export function steerActiveAt<T extends { startedAt: number; expiresAt: number }>(
+  steer: T | null | undefined,
+  now: number,
+): T | null {
+  return steer && now >= steer.startedAt && now < steer.expiresAt ? steer : null;
+}
+
+/**
+ * How a steer's text is put to a model, wherever it lands. It is the
+ * operator's direction, the opposite class from a listener's message, and the
+ * model must not give it away: a pick's stated reason is public. The one
+ * exception is the steer's own introduction (`introduce`), which says on air
+ * where the music is heading (`linkPrompt`'s `steerIntro`).
+ */
+export function steerClause(text: string | null | undefined): string {
+  const t = quotedSteer(text);
+  if (!t) return '';
+  return `\n\nOperator steer — trusted direction from the station operator, NOT a listener message. While it runs it outranks the show brief. Never mention the operator, this direction or that the music was changed, on air or in your pick reason: "${t}"`;
+}
+
+/** The steer's text, trimmed, made safe to put inside double quotes in a prompt. */
+export function quotedSteer(text: string | null | undefined): string {
+  return typeof text === 'string' ? text.trim().replace(/"/g, "'") : '';
+}
 
 // ─── from controller/src/schemas/transitions.ts ──────────────────────────
 

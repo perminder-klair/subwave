@@ -3,6 +3,8 @@
 
 import { z } from 'zod';
 import * as settings from '../settings.js';
+import { episodeUnderSteer, withSteer } from '../music/steer.js';
+import { steerClause } from '../schemas/steer.js';
 import * as session from './session.js';
 import * as picker from '../music/picker.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
@@ -16,6 +18,7 @@ import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary, type CandidateLike } from '../music/recency.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
+import { excludesExplicit } from '../music/explicit-policy.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
@@ -121,6 +124,7 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
   const why = reason
     ?? `You explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`;
   try {
+    const repickSteer = steerClause(settings.activeSteer((showAt ?? new Date()).getTime())?.prompt);
     // djObject records this nested object by reference. Fill it after the
     // structured reply is known so Debug can show the controller-resolved
     // selection beside the raw model response (which may name another track).
@@ -145,15 +149,16 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
       // Both routes see the recent transition ledger (present only while
       // effects are active), so a corrective re-pick chooses a fresh transition
       // for its new track instead of settling into one effect.
+      // A salvage pick is still under the operator's steer, like the call it repairs.
       prompt: shortlistRepick
-        ? shortlistPickPrompt([...seen.values()], selectionContext, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }) + `\n\n${why}`
+        ? shortlistPickPrompt([...seen.values()], selectionContext, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }) + `\n\n${why}${repickSteer}`
         : JSON.stringify({
           ...(Array.isArray(selectionContext.recentTransitions) ? { context: { recentTransitions: selectionContext.recentTransitions } } : {}),
           ...(predecessor ? { predecessor } : {}),
           candidates: [...seen.values()],
         }, null, 2)
           + (predecessor ? `\n\n${SEED_NOT_A_PICK_CLAUSE}` : '')
-          + `\n\n${why}${transitionChoiceNudge(selectionContext.recentTransitions)}`,
+          + `\n\n${why}${transitionChoiceNudge(selectionContext.recentTransitions)}${repickSteer}`,
       schema,
       temperature: 0.5,
       kind: telemetryKind,
@@ -276,7 +281,11 @@ async function steerAwayCandidates<T>(
 // as the DJ rather than a convenient-but-different approximation.
 export async function livePickerScope(queue: any, { audioWaypoint = null, showAt = null, context = null }: { audioWaypoint?: number[] | null; showAt?: Date | null; context?: any } = {}) {
   const preparedContext = context ? await prepareEpisodeContext(context) : null;
-  const episodeSource = preparedContext ? showPreparation.read({ context: preparedContext }).music : null;
+  // A steered playlist sets the prepared episode aside, with its brief.
+  const { episodeSource, context: pickContext } = preparedContext
+    ? episodeUnderSteer(preparedContext, settings.activeSteer((showAt ?? new Date()).getTime()),
+      (c) => showPreparation.read({ context: c }).music)
+    : { episodeSource: null, context: null };
   await library.load();
   // Narrow, long-cached counts (#1723): the dashboard's stats() cost every
   // pick ~4.6 s of blocked thread on a 76k-track library.
@@ -304,7 +313,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
   // pick's look-ahead moment (showAt) so the anchored playlist is the show's
   // that will be on air when the pick plays — same clock as pickSystem's brief
   // and buildTools' locks.
-  const activeShow = settings.resolveActiveShow(showAt ?? undefined);
+  const activeShow = settings.resolvePickShow(showAt ?? new Date());
   const playlistPool = activeShow ? await timePhase('pick.playlistPool', () => resolveShowPlaylistPool(activeShow)) : null;
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
   const playlistTracks = playlistPool?.tracks ?? null;
@@ -428,6 +437,8 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
     // paths cannot disagree about how short is too short.
     minTrackSec,
     maxTrackSec,
+    // A clean show. Like the floor, not gated on `strict`.
+    excludeExplicit: excludesExplicit(activeShow),
     playlistLock,
     playlistTracks,
     // A strict playlist or a prepared episode already names its own source.
@@ -438,7 +449,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
     listenerFavourites: favourites.length ? favourites : null,
   });
 
-  return { scope, playlistTracks, activeShow, episodeSource, context: preparedContext };
+  return { scope, playlistTracks, activeShow, episodeSource, context: pickContext };
 }
 
 // All controller choices use their already-guarded, fit-ordered subset. Every
@@ -687,7 +698,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     if (avoidClause && ask?.role === 'user') ask.content += avoidClause;
     const run = await pickerAgent.run({
       editorial: ctx?.episodeEditorial ?? '',
-      messages,
+      // The operator's steer joins the ask too, not the system prompt, whose
+      // cached prefix free text would break. Judged at the pick's look-ahead
+      // instant, like the show it follows.
+      messages: withSteer(messages, settings.activeSteer((showAt ?? new Date()).getTime())?.prompt),
       scope,
       showAt,
       telemetry: { agentPickResolution },
@@ -1452,7 +1466,7 @@ async function enqueueSelected(
 // Resolved at `showAt`, the pick's look-ahead clock, like both other paths: a
 // pick made inside the incoming show's window walks the INCOMING show.
 async function pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt = null, eventText }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null; eventText: string }): Promise<boolean> {
-  const show = settings.resolveActiveShow(showAt ?? undefined);
+  const show = settings.resolvePickShow(showAt ?? new Date());
   if (!isInOrderShow(show)) return false;
   ctx = await prepareEpisodeContext(ctx);
   if (showPreparation.read({ context: ctx }).music) {
@@ -1657,7 +1671,9 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // carrier of concrete candidates. Skipped mid-run/journey (they own the
     // direction) and on strict-playlist shows (deep cuts are almost surely
     // off-playlist, so the call would be spent on an emptyResult).
-    const explore = shouldExplore({ inRun, audioWaypoint, strictPlaylist: ctx?.activeShow?.playlistStrict });
+    const explore = shouldExplore({
+      inRun, audioWaypoint, strictPlaylist: settings.resolvePickShow(showAt ?? new Date())?.playlistStrict,
+    });
     const exploreClause = explore
       ? ' Exploration nudge: include deepCuts in your discovery round this pick — surface something the station has never aired (or hasn\'t in weeks) and give it real consideration when it can fit the moment.'
       : '';
@@ -1797,10 +1813,11 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
 
     // A request runs with recency only — no show locks. An explicit listener
     // ask wins over the show's strict filters, which is why the scope stops
-    // here rather than being built from the active show. requestText lets
-    // searchLibrary find what the listener named however the model words its
-    // query (#2195).
-    const scope = pickerScope({ recentIds, requestText: text });
+    // here rather than being built from the active show. A clean show is the
+    // one exception: the model never sees what the route would refuse.
+    // requestText lets searchLibrary find what the listener named however the
+    // model words its query (#2195).
+    const scope = pickerScope({ recentIds, requestText: text, excludeExplicit: excludesExplicit(settings.resolvePickShow()) });
     const run = await requestAgent.run({
       messages,
       scope,

@@ -20,11 +20,13 @@ import * as likes from './likes.js';
 import { onCacheChange } from '../settings/store.js';
 import { applyKnownTrackCeiling } from '../music/track-duration.js';
 import * as settings from '../settings.js';
+import { serialSteer } from '../music/steer.js';
 import { jinglePlacement, jingleRotateOwner, rotateJingleDue } from './jingle-rotate.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type VocalMode } from '../music/show-filter.js';
 import { freshnessBiasedOrder } from '../music/airing.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
+import { explicitGate } from '../music/explicit-policy.js';
 import { allowsMoodPlaylistDiscovery } from '../music/discovery-policy.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -57,14 +59,15 @@ import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog, runCapability, runAutomaticSleeveNotesSegment } from '../skills/_agent.js';
 import { loadedCapabilities } from '../skills/loader.js';
 import { skillEligible } from '../skills/eligibility.js';
-import { getStationTimezone, onStationTimezoneChange } from '../time.js';
+import { getStationTimezone, isStationHourStart, onStationTimezoneChange, stationHourKey } from '../time.js';
 import { withTrace, pruneOldEvents } from '../observability/events.js';
 import * as archives from './archives.js';
 import * as stemCacheStore from '../music/stem-cache.js';
+import * as pickStems from './pick-stems.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 import * as backup from '../backup/scheduled.js';
-import { autoEnableRealPath } from '../music/navidrome-players.js';
+import { autoEnableRealPath, realPathOptedIn } from '../music/navidrome-players.js';
 import { onLibraryMountLost, proveLibraryMount } from '../music/library-mount.js';
 
 // take() hard-stops at the target, so TARGET_POOL must exceed the sum of the
@@ -236,6 +239,9 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   const showMoods: string[] = show?.moods ?? [];
   const showVocals = (show?.vocals ?? '') as VocalMode;
   const strict = !!(show?.filtersStrict && (showGenres.length || showMoods.length || showEnergies.length || showVocals || hasEraBound(eras)));
+  // A clean show, applied where each source enters, so every never-starve step
+  // below runs inside what may air. Not gated on `strict`.
+  const clean = explicitGate<any>(show);
 
   // Show playlist anchor, resolved once. Strict → the pool is hard-filtered to
   // it at the end and the off-playlist random top-up is skipped; soft → it just
@@ -267,7 +273,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // per-source never-starve instead, since an untagged library would otherwise
   // drop everything. No-op in soft mode.
   const enforce = (items: any[]) => {
-    let out = items;
+    let out = clean.pass(items);
     if (strictGenreNorms.length) out = out.filter((t: any) => genreMatches(t, strictGenreNorms));
     if (strict && hasEraBound(eras)) out = inYearRange(out, eras);
     if (strict && showMoods.length) out = preferMood(out, showMoods);
@@ -317,7 +323,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   const pool = builder.pool;
   const fromSource = builder.fromSource;
   const take: typeof builder.take = (label, items, cap, opts) =>
-    builder.take(label, applyKnownTrackCeiling(items, selectionMaxSec), cap, opts);
+    builder.take(label, clean.pass(applyKnownTrackCeiling(items, selectionMaxSec)), cap, opts);
   // Replace the pool in place, aliasing-safe: a never-starve filter that hands
   // its input back would otherwise be cleared by `pool.length = 0`, emptying
   // the coast.
@@ -349,16 +355,16 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
       const targets: (string | undefined)[] = genreNames.length ? genreNames : [undefined];
       const perGenre = await mapPool(targets, SHOW_GENRE_FETCH_CONCURRENCY, async (genreName) => {
         const got: any[] = [];
-        got.push(...await subsonic.getRandomSongs({
+        got.push(...clean.pass(await subsonic.getRandomSongs({
           size: Math.ceil(randomSize / Math.max(1, genreNames.length)),
           genre: genreName,
           fromYear: span.fromYear ?? undefined,
           toYear: span.toYear ?? undefined,
-        }));
+        })));
         if (genreName) {
           // Sampled: a random page of the genre, not the same server-ordered
           // head every refresh.
-          const g = await subsonic.getSongsByGenreSampled(genreName, { count: Math.ceil(genreSetSize / genreNames.length) });
+          const g = clean.pass(await subsonic.getSongsByGenreSampled(genreName, { count: Math.ceil(genreSetSize / genreNames.length) }));
           const ranged = inYearRange(g, eras);
           got.push(...(ranged.length ? ranged : g));
         }
@@ -400,7 +406,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
         moodPool.push(t);
       }
     }
-    take('mood', enforce(shuffle(preferEnergy(moodPool, showEnergies))), nz(MOOD_WEIGHT));
+    take('mood', enforce(shuffle(preferEnergy(clean.pass(moodPool), showEnergies))), nz(MOOD_WEIGHT));
   }
 
   // 2. Navidrome playlists whose name matches the mood. Skipped when the show
@@ -513,6 +519,50 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // back empty (see 5).
   if (!pool.length && listenerStarred.length) take('starred', enforce(listenerStarred), TARGET_POOL);
 
+  // Rested fallback (a small library): when every track has aired inside the
+  // recency window, every source above comes back empty and the mixer airs the
+  // emergency loop until someone queues a track by hand. Air the longest-rested
+  // tracks instead, by when each last went to air (queue.rotationAirTimes: the
+  // durable plays index under this process's own, with the on-air track and
+  // everything queued stamped as just spent). A small library is a closed
+  // catalogue, like a full rotation, so it takes the rotation's coast rule
+  // (music/show-recency.ts rotationCoast): the longest-waiting half, never what
+  // is on air or queued, topped up to an hour of audio from the next longest.
+  // Liquidsoap randomizes the file, so the set is what counts, and the most
+  // recent plays stay out of it. Recency is ignored; the clean show, length
+  // ceiling, dedup and artist cap still apply. A strict playlist keeps its own
+  // floor below.
+  if (!pool.length && !strictPlaylist) {
+    try {
+      // Filtered as take() filters, before choosing, so what is chosen can air.
+      const eligible = clean.pass(applyKnownTrackCeiling(await subsonic.getRandomSongs({ size: TARGET_POOL * 2 }), selectionMaxSec));
+      const rested = rotationCoast(shuffle(eligible), queue.rotationAirTimes(), { cap: TARGET_POOL });
+      take('rested', rested, TARGET_POOL, { ignoreRecency: true });
+      if (pool.length) {
+        queue.log('scheduler', `Auto-playlist: every track aired inside the recency window — repeating the ${pool.length} longest-rested (the most recent plays and the on-air track held back) instead of the emergency loop`);
+      }
+    } catch (err) {
+      queue.log('error', `Rested fallback failed: ${err.message}`);
+    }
+  }
+
+  }
+
+  // A clean show with nothing to air, on every branch above: an episode has no
+  // other source to fall back on. Everything else gives way first: one
+  // library-wide draw that ignores the show's filters and recency, which a
+  // strict playlist has not had. Only then does the filter itself: this coast
+  // is the last dead-air guard, so the station keeps making sound, and says so.
+  if (!pool.length && clean.held().length) {
+    try {
+      take('random', shuffle(await subsonic.getRandomSongs({ size: TARGET_POOL })), TARGET_POOL, { neverStarve: true });
+    } catch (err) {
+      queue.log('error', `Clean-show random fetch failed: ${err.message}`);
+    }
+    if (!pool.length) {
+      builder.take('explicit-last-resort', shuffle(clean.held()), TARGET_POOL, { neverStarve: true, maxPerArtist: Infinity });
+      queue.log('scheduler', `Auto-playlist: clean show "${show?.name}" has nothing else to air — keeping ${pool.length} track(s) tagged explicit so the station stays on air`);
+    }
   }
 
   // Strict playlist: drop every off-playlist track, but never-starve to the
@@ -630,7 +680,8 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
       (showGenres.length ? ` genre=${(genreNames.length ? genreNames : showGenres).join(',')}` : '') +
       (eraTag ? ` year=${eraTag}` : '') +
       (showEnergies.length ? ` energy=${showEnergies.join(',')}` : '') +
-      (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? 'strict' : 'soft'})` : '')
+      (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? 'strict' : 'soft'})` : '') +
+      (clean.on ? ` clean=${clean.held().length} held back` : '')
     : '';
   queue.log('scheduler',
     `Auto-playlist refreshed: ${pool.length} tracks (` +
@@ -961,12 +1012,11 @@ const talkLogged: Partial<Record<TalkKind, string | null>> = {};
 
 // The :00 session roll's outcome. The hourly row's window runs to :09, so a
 // postponed check resolves on a tick where no roll happened but still needs the
-// roll's result as a gate (#310). Keyed by hour so it can't gate the next one.
+// roll's result as a gate (#310). Keyed by STATION hour, like the roll itself
+// (#2234), so it can't gate the next one; time.ts says why the row's process
+// minutes still find it.
 type SessionRoll = Awaited<ReturnType<typeof rollSessionNow>>;
 let lastRoll: { hourKey: string; roll: SessionRoll } | null = null;
-
-const hourKey = (now: Date) =>
-  `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}-${now.getHours()}`;
 
 // Whether a row due this minute may fire. The live gates, still owned by their
 // own modules; resolved lazily by the planner for open, unfired rows only.
@@ -1110,16 +1160,17 @@ async function talkTick() {
   // outside the table — not a talk action, so a muted, empty or over-budget
   // station must still roll (#1500 finding 3). It is NOT the boundary for the
   // AIR: airHandoff false leaves the mic-pass for the next track boundary.
-  if (now.getMinutes() === 0) {
+  // The STATION's :00, where the grid changes, not the process's (#2234).
+  if (isStationHourStart(now)) {
     // rollSessionNow traps each step, but a rejection here must not take the
     // minute every scheduled segment shares — or the process — with it.
     const roll = await rollSessionNow({ airHandoff: false, reason: 'scheduled boundary' }).catch(err => {
       queue.log('error', `Session roll failed: ${err.message}`);
       return null;
     });
-    lastRoll = roll ? { hourKey: hourKey(now), roll } : null;
+    lastRoll = roll ? { hourKey: stationHourKey(now), roll } : null;
   }
-  const rolled = lastRoll?.hourKey === hourKey(now) ? lastRoll.roll : null;
+  const rolled = lastRoll?.hourKey === stationHourKey(now) ? lastRoll.roll : null;
 
   // runTalkSlot traps the segments themselves; this covers the planning.
   let plans: TalkPlan[] = [];
@@ -1195,31 +1246,7 @@ async function cleanup() {
   } catch (err) {
     queue.log('error', `Archive retention failed: ${err.message}`);
   }
-  // Stem cache sweep — keep the per-track Demucs stem windows inside the
-  // operator's byte budget (feature: stem-blend transitions), evicting by the
-  // music/stem-priority.ts ranking rather than by age. The analysis pass
-  // settles after itself too. Most hours this reads the usage snapshot and
-  // walks nothing (stem-cache.ts); a full walk runs at least once a day, which
-  // is what catches dirs added or removed by hand.
-  try {
-    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep();
-    if (offline) queue.log('error', offline);
-    if (removed) {
-      queue.log('scheduler',
-        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
-    }
-    // A sweep that couldn't reach the budget is an operator problem, not a
-    // no-op (#1257) — say so every hour it persists. Usual cause: the
-    // controller can't delete what the analyzer wrote (state/stems ownership).
-    if (overBudgetBytes > 0) {
-      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
-      queue.log('error',
-        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
-        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
-    }
-  } catch (err) {
-    queue.log('error', `Stem cache sweep failed: ${err.message}`);
-  }
+  await stemCacheSweepTick();
   // Rendered transition clips are single-use, so anything over an hour old is
   // an orphan — except clips still queued for a seam that hasn't aired, which
   // can legitimately out-age the window.
@@ -1238,6 +1265,38 @@ async function nightlyDoctor() {
     await withTrace({ kind: 'doctor' }, () => doctor.runDoctor());
   } catch (err) {
     queue.log('error', `Nightly health check failed: ${err.message}`);
+  }
+}
+
+// Stem cache sweep — keep the per-track Demucs stem windows inside the
+// operator's byte budget (feature: stem-blend transitions), evicting by the
+// music/stem-priority.ts ranking rather than by age. The analysis pass
+// settles after itself too. Most hours this reads the usage snapshot and
+// walks nothing (stem-cache.ts); a full walk runs at least once a day, which
+// is what catches dirs added or removed by hand. With pick-time stems on, the
+// dirs of tracks still in the queue go last (pick-stems-policy.ts
+// sweepKeepLast); off, there is no set and the order is the ranking alone.
+// Run by the hourly cleanup; exported for scripts/pick-stems.test.ts.
+export async function stemCacheSweepTick() {
+  try {
+    const keepLast = pickStems.sweepKeepLast(queue.upcoming.map(item => item?.track?.id));
+    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep(undefined, { keepLast });
+    if (offline) queue.log('error', offline);
+    if (removed) {
+      queue.log('scheduler',
+        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
+    }
+    // A sweep that couldn't reach the budget is an operator problem, not a
+    // no-op (#1257) — say so every hour it persists. Usual cause: the
+    // controller can't delete what the analyzer wrote (state/stems ownership).
+    if (overBudgetBytes > 0) {
+      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
+      queue.log('error',
+        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
+        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
+    }
+  } catch (err) {
+    queue.log('error', `Stem cache sweep failed: ${err.message}`);
   }
 }
 
@@ -1407,7 +1466,7 @@ onLibraryMountLost(() => {
 // the operator opted in (musicSource.reportRealPath). On a timer, not once: a
 // new client or user agent gets a fresh row with the flag off. Never throws.
 export async function realPathTick() {
-  if (settings.get().musicSource?.reportRealPath !== true) return;
+  if (!realPathOptedIn()) return;
   try {
     await autoEnableRealPath(line => queue.log('scheduler', line));
   } catch (err) {
@@ -1426,6 +1485,25 @@ async function overrideJanitor() {
     await rollSessionNow({ reason: 'takeover expired' });
   } catch (err) {
     queue.log('error', `Takeover janitor failed: ${err.message}`);
+  }
+}
+
+// The same hygiene for a steer that has run out: activeSteer() already ignores it.
+export async function steerJanitor() {
+  try {
+    // In turn with Start and Clear, so it never clears a steer saved meanwhile.
+    await serialSteer(async () => {
+      const steer = settings.get()?.steer;
+      const live = settings.activeSteer();
+      // Opening tracks still waiting go with their steer, including one that ran
+      // out while the controller was down (the load path drops it, not its tracks).
+      await queue.removeOrphanSteerQueued(live ? String(live.startedAt) : null);
+      if (!steer || live) return;
+      await settings.update({ steer: null });
+      queue.log('scheduler', '[steer] ended');
+    });
+  } catch (err) {
+    queue.log('error', `Steer janitor failed: ${err.message}`);
   }
 }
 
@@ -1448,6 +1526,7 @@ export function startScheduler() {
   cron.schedule('* * * * *', talkTick);
 
   cron.schedule('*/5 * * * *', overrideJanitor);
+  cron.schedule('*/5 * * * *', steerJanitor);
   cron.schedule('2 * * * *', cleanup, { noOverlap: true });
   cron.schedule('17 4 * * *', nightlyDoctor);
 

@@ -64,7 +64,8 @@ function requestedEngine(personaTts: any): string {
 
 // Primary and rescue slots share availability checks. Cloud keys belong to the
 // requested provider; Piper is the local fallback and always available.
-function engineUsable(engine: string, cloudProvider?: string | null): boolean {
+// Exported for tts-bench, which waits on the same answer the dispatcher acts on.
+export function engineUsable(engine: string, cloudProvider?: string | null): boolean {
   if (!ENGINES.includes(engine)) return false;
   if (engine === 'cloud') return cloud.isConfigured(cloudProvider ?? null);
   if (engine === 'chatterbox') return chatterbox.isAvailable();

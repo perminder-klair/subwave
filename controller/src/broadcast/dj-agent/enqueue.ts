@@ -172,12 +172,14 @@ export async function enqueuePick(
   link: string | null = null,
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
-  { linkClockAt = null, introPersona = null, hostSpeech = null, sleeveClaimUseId = null, showAt = null }: {
+  { linkClockAt = null, introPersona = null, hostSpeech = null, sleeveClaimUseId = null, showAt = null, steerKey = null, introByOperator = false }: {
     linkClockAt?: Date | null;
     introPersona?: Persona | null;
     hostSpeech?: HostSpeechStamp | null;
     sleeveClaimUseId?: string | null;
     showAt?: Date | null;
+    steerKey?: string | null;
+    introByOperator?: boolean;
   } = {},
 ): Promise<number> {
   // Single chokepoint for the intro budget: every pick path funnels its link
@@ -218,6 +220,10 @@ export async function enqueuePick(
     linkPrev,
     linkClockAt,
     selectionShowAt: showAt,
+    // Marks one of a steer's opening tracks (queue/types.ts); private.
+    steer: steerKey,
+    // The operator asked for this line by hand (a steer's introduction).
+    introByOperator: !!introLink && introByOperator,
   });
   if (pos === -2) {
     if (sleeveClaimUseId) {

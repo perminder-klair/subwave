@@ -28,6 +28,15 @@ test('the natural introduction is the task and the single researched claim stays
   assert.match(prompt, /supported detail and track identification cannot both fit naturally, pass on the Spark/);
 });
 
+test('an operator steer introduction retains optional source-backed Spark instructions', () => {
+  const prompt=linkPrompt({current:{title:'Song',artist:'Band'},extendedSleeveNote:note,structuredSpark:true,
+    steerIntro:{direction:'a calmer hour',run:[{title:'Next Song',artist:'Next Band'}]}});
+  assert.match(prompt,/Supported fact: The band recorded in a converted barn\./);
+  assert.match(prompt,/Keep the private Spark decision and its reason separate/);
+  assert.match(prompt,/a calmer hour/);assert.match(prompt,/Next Song by Next Band/);
+  assert.match(prompt,/where the music is heading/);
+});
+
 test('a dated historical Spark retains its time framing in the link instructions', () => {
   const wording='Suede were honoured with the Inspiration Award at the 2010 Q Awards.';
   const prompt=linkPrompt({current:{artist:'Suede',title:'Lazy'},extendedSleeveNote:{...note,wording,fullWording:wording}});

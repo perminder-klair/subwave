@@ -92,6 +92,8 @@ export function get(songId: string): any {
     // this projection for Subsonic-sourced rows.
     lastfmTags: t.lastfmTags,
     energy: t.energy,
+    // music/explicit-policy's fallback for a candidate that carries no tag field.
+    explicitStatus: t.explicitStatus,
     source: t.source,
     confidence: t.confidence,
     taggerVersion: t.taggerVersion,
@@ -123,6 +125,11 @@ export function get(songId: string): any {
     leadSilenceMs: t.leadSilenceMs,
     tailSilenceMs: t.tailSilenceMs,
     tailStartMs: t.tailStartMs,
+    // The whole-file edges facet, which the resolver prefers over the three
+    // window figures above. Same rule: a missing field disables it silently.
+    edgeLeadMs: t.edgeLeadMs,
+    edgeTailMs: t.edgeTailMs,
+    decodedDurationMs: t.decodedDurationMs,
   };
 }
 
@@ -325,6 +332,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     // separate from the editorial `moods`.
     audioMoods: r.audioMoods,
     energy: r.energy,
+    // Inline, so a clean show's check needs no per-track DB lookup.
+    explicitStatus: r.explicitStatus,
     // Seconds, for the max-track-length cap (#447). null = unknown.
     durationSec: r.durationSec,
     // Acoustic analysis — null on un-analysed tracks, read as "no signal".

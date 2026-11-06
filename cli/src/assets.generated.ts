@@ -374,6 +374,9 @@ services:
       - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
@@ -729,6 +732,9 @@ services:
       - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -1022,6 +1028,9 @@ services:
       - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -1283,11 +1292,18 @@ SITE_URL=
 # and Liquidsoap, in broadcast, opens it. No compose file mounts it for you, so
 # add the volume to both services. Until the mixer has proved it can read the
 # mount every track streams, and the Doctor says so under "library mount".
-# Note Navidrome's Subsonic \`path\` is built from tags, not read off disk, unless
-# "Report Real Path" is on, so it often disagrees with your real folder names
-# (e.g. the API says "Chunga's Revenge" where the folder is "Chunga's Revenge
-# (1970)"). Every mismatch falls back to streaming, so it is safe to leave on —
-# it just does nothing for the tracks whose paths don't line up.
+# Note Navidrome's Subsonic \`path\` is built from tags, not read off disk, so it
+# often disagrees with your real folder names (e.g. the API says "Chunga's
+# Revenge" where the folder is "Chunga's Revenge (1970)"). Turn on Settings ->
+# Music source -> "Keep Report Real Path on" and it sends the real path instead.
+# If Navidrome mounts the library at this same path, that path is used as it is.
+# If not, SUB/WAVE looks for it under this folder, and plays a file only when its
+# size matches the track and its tags give it the title Navidrome reports for the
+# track, subtitle included. Anything it can't find or can't prove falls back to
+# streaming, so those tracks play as they would without this. A different
+# recording at the same folder and file name, with the same size and the same
+# title, would still play. With "Keep Report Real Path on" set, the Doctor samples a few tracks
+# under "real file paths" to show whether they line up.
 # MUSIC_LIBRARY_PATH=
 # TTS_SPEED=0.85
 # Routine fallback refresh uses hourly minute-step cadence, rotated off :00/:02:
@@ -1316,7 +1332,8 @@ SITE_URL=
 # FISH_API_KEY=
 # SEARCH_API_KEY=tvly-...           # Tavily or Brave Search key (optional, paid/metered),
 #                                   # or a keen_... Keenable key (optional, raises its free limit),
-#                                   # or an fc-... Firecrawl key
+#                                   # or an fc-... Firecrawl key,
+#                                   # or an ock_... Outcrawl key
 # SearXNG: no env var. Configure base URL in admin UI → Settings → Search.
 # Embedding key — only when embeddings use a different provider/key than chat
 # (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the
@@ -1379,6 +1396,28 @@ SITE_URL=
 #                        # both station and GPU hosts. Each worker can load its
 #                        # own models, increasing CPU/RAM/VRAM plus network and
 #                        # source-server demand; tune to the smaller host limit.
+# ANALYZE_WHOLE_FILE=1   # opt-in: every analysis run also measures the
+#                        # whole-file facets for tracks that need them —
+#                        # loudness v2 (integrated loudness + true peak over the
+#                        # WHOLE file at its own rate) and edges (silence at both
+#                        # ends + the decoded length, used by silence trim). One
+#                        # ffmpeg decode per track, streamed from the music
+#                        # server; the first library pass reads every file once.
+#                        # Unset = off. On demand instead:
+#                        #   npm run analyze -- --facets loudness,edges
+# ANALYZE_WHOLE_FILE_CONCURRENCY=4  # whole-file facet jobs in flight (1-32).
+#                        # The analyzer runs them in their own lane (one ffmpeg
+#                        # process each, no model), outside ANALYZE_CONCURRENCY's
+#                        # pool; set the SAME value on station and analyzer
+#                        # hosts. The bound is mostly reading files from the
+#                        # music server.
+# ANALYZE_WHOLE_FILE_TIMEOUT_S=900  # analyzer host: wall-clock limit for ONE
+#                        # whole-file run, in seconds (30-7200). Raise it for
+#                        # DJ sets of several hours streamed from a slow server.
+# ANALYZE_WHOLE_FILE_TIMEOUT_MS=960000  # station host: how long the controller
+#                        # waits for that answer (90000-7260000). Keep it 60 s
+#                        # above the analyzer's limit, so the analyzer reports
+#                        # its own timeout first.
 # ANALYZE_PROBE_MS=60000  # how long "no analyzer at all" is cached before the
 #                         # /health probe runs again. A backend that ANSWERED is
 #                         # remembered until restart; only the miss is timed, so
@@ -1511,6 +1550,15 @@ SITE_URL=
 # POST /speak (a GPU box, a Tailscale peer, a bridge in front of a vendor API
 # like Gemini TTS). It's a station setting, not env: admin → Settings → Voices →
 # Remote. Contract + a 20-line reference server: docs/custom-tts.md
+#
+# A shared Kokoro server for the built-in *Kokoro* engine. Set it and the
+# controller renders Kokoro there instead of loading the model itself (about
+# 880 MiB resident), so several stations on one box hold one model between
+# them. Voices, language and speed work as before. The server answers
+# POST /v1/speak { text, voice, lang, speed } with WAV bytes and
+# GET /v1/health with { "ok": true }; while it's unreachable, Kokoro speech
+# falls back to Piper. Unset (the default) runs Kokoro in the controller.
+# KOKORO_URL=http://kokoro:8880
 #
 # Memory ceilings for the model-loading sidecars (OOM containment — keeps a
 # runaway model load from taking down the host's other services). Defaults are

@@ -32,7 +32,7 @@ app.use(router);
 const { server, url: base } = await listenHttp(app);
 server.unref();
 
-type Outbound = { url: string; method: string; headers: Headers };
+type Outbound = { url: string; method: string; headers: Headers; body: string };
 
 // Stubs every provider call with `status`; the test's own calls pass through.
 function stubProvider(t: TestContext, status: number, body: unknown = {}) {
@@ -41,7 +41,7 @@ function stubProvider(t: TestContext, status: number, body: unknown = {}) {
   t.mock.method(globalThis, 'fetch', (async (url: string | URL | Request, init?: RequestInit) => {
     const target = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
     if (target.startsWith(base)) return realFetch(url, init);
-    outbound.push({ url: target, method: init?.method || 'GET', headers: new Headers(init?.headers) });
+    outbound.push({ url: target, method: init?.method || 'GET', headers: new Headers(init?.headers), body: String(init?.body ?? '') });
     return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch);
   return outbound;
@@ -108,6 +108,7 @@ test('a key with a control character is refused before any probe, without echoin
     { key: 'SEARCH_API_KEY', provider: 'brave' },
     { key: 'SEARCH_API_KEY', provider: 'keenable' },
     { key: 'SEARCH_API_KEY', provider: 'firecrawl' },
+    { key: 'SEARCH_API_KEY', provider: 'outcrawl' },
     { key: 'ELEVENLABS_API_KEY' },
     { key: 'LISTENBRAINZ_USER_TOKEN' },
     { key: 'EMBEDDING_API_KEY' },
@@ -188,6 +189,59 @@ test("Firecrawl: another provider's key is refused without a request", async (t)
   assert.equal(outbound.length, 0);
 });
 
+// Tavily and Brave searches refuse a key with another provider's prefix (#2223),
+// so the probe refuses it too: a key typed under the wrong provider never
+// reaches that provider. Their own formats aren't confirmed, so anything else is
+// still probed.
+test("Tavily and Brave: another provider's key is refused without a request", async (t) => {
+  const cases: Array<[string, string, string]> = [
+    ['tavily', 'fc-left-over', 'A Firecrawl key, not a Tavily key'],
+    ['tavily', 'keen_left-over', 'A Keenable key, not a Tavily key'],
+    ['brave', 'fc-left-over', 'A Firecrawl key, not a Brave Search key'],
+    ['brave', 'tvly-left-over', 'A Tavily key, not a Brave Search key'],
+    ['brave', 'keen_left-over', 'A Keenable key, not a Brave Search key'],
+    ['tavily', 'ock_left.over', 'An Outcrawl key, not a Tavily key'],
+    ['brave', 'ock_left.over', 'An Outcrawl key, not a Brave Search key'],
+  ];
+  for (const [provider, value, message] of cases) {
+    const outbound = stubProvider(t, 200);
+    const r = await testKey({ key: 'SEARCH_API_KEY', value, provider });
+    assert.equal(r.ok, false, `${provider} ${value}`);
+    assert.equal(r.message, message);
+    assert.equal(outbound.length, 0, `${provider} ${value} reached a provider`);
+    t.mock.restoreAll();
+  }
+});
+
+test("Tavily and Brave: an env key from another provider is refused too", async (t) => {
+  const outbound = stubProvider(t, 200);
+  process.env.SEARCH_API_KEY = 'fc-from-env';
+  t.after(() => { delete process.env.SEARCH_API_KEY; });
+  for (const provider of ['tavily', 'brave']) {
+    const r = await testKey({ key: 'SEARCH_API_KEY', provider });
+    assert.equal(r.ok, false, provider);
+    assert.match(r.message, /^A Firecrawl key, not a /);
+  }
+  assert.equal(outbound.length, 0);
+});
+
+test('Tavily and Brave: their own keys, and keys of any other format, are still probed', async (t) => {
+  const cases: Array<[string, string, string]> = [
+    ['tavily', 'tvly-good', 'https://api.tavily.com/search'],
+    ['tavily', 'an-unprefixed-key', 'https://api.tavily.com/search'],
+    ['brave', 'BSAgood', 'https://api.search.brave.com/res/v1/web/search'],
+    ['brave', 'an-unprefixed-key', 'https://api.search.brave.com/res/v1/web/search'],
+  ];
+  for (const [provider, value, endpoint] of cases) {
+    const outbound = stubProvider(t, 200, { results: [] });
+    const r = await testKey({ key: 'SEARCH_API_KEY', value, provider });
+    assert.equal(r.ok, true, `${provider} ${value}: ${r.message}`);
+    assert.equal(outbound.length, 1);
+    assert.equal(outbound[0].url.split('?')[0], endpoint);
+    t.mock.restoreAll();
+  }
+});
+
 test('Firecrawl: a drained key does not read as valid', async (t) => {
   stubProvider(t, 200, { success: true, data: { remainingCredits: 0, planCredits: 500 } });
   const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-drained', provider: 'firecrawl' });
@@ -208,4 +262,58 @@ test('Firecrawl: one credit reads in the singular, and a body with no count stay
     assert.equal(r.message, '✓ Firecrawl key valid');
     t.mock.restoreAll();
   }
+});
+
+test('Outcrawl: a key is probed with a one-result search; 401 reads as rejected, 402 as drained', async (t) => {
+  const outbound = stubProvider(t, 200, { hits: [], usage: { credits: '0' } });
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_good.secret', provider: 'outcrawl' });
+  assert.equal(r.ok, true);
+  assert.equal(r.message, '✓ Outcrawl key valid');
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].url, 'https://api.outcrawl.ai/v1/search');
+  assert.equal(outbound[0].method, 'POST');
+  assert.equal(outbound[0].headers.get('authorization'), 'Bearer ock_good.secret');
+  assert.deepEqual(JSON.parse(outbound[0].body), { query: 'test', limit: 1 });
+  t.mock.restoreAll();
+
+  stubProvider(t, 401, { error: 'invalid api key' });
+  const rejected = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_bad.secret', provider: 'outcrawl' });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.message, 'Key rejected — check it\'s correct and active');
+  t.mock.restoreAll();
+
+  stubProvider(t, 402, { error: 'out of credits' });
+  const drained = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_drained.secret', provider: 'outcrawl' });
+  assert.equal(drained.ok, false);
+  assert.equal(drained.message, 'Outcrawl key valid, but it has no credits left');
+});
+
+// Outcrawl's error body is { code, message, details } and its docs map no HTTP
+// status to a code, so a documented code decides before the status does.
+test('Outcrawl: a documented error code decides the message, whatever the status', async (t) => {
+  const cases: Array<[number, unknown, string]> = [
+    [429, { code: 'quota_exceeded', message: 'over plan', details: {} },
+      'Outcrawl key valid, but the account is over its plan limit (monthly credits or requests per minute)'],
+    [402, { code: 'quota_exceeded', message: 'over plan', details: {} },
+      'Outcrawl key valid, but the account is over its plan limit (monthly credits or requests per minute)'],
+    [400, { code: 'unauthorized', message: 'bad key', details: {} }, 'Key rejected — check it\'s correct and active'],
+    [403, {}, 'Key rejected — check it\'s correct and active'],
+    [429, { code: 'something_else' }, 'Request failed (429)'],
+    [500, 'not an envelope', 'Request failed (500)'],
+  ];
+  for (const [status, body, message] of cases) {
+    stubProvider(t, status, body);
+    const r = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_any.secret', provider: 'outcrawl' });
+    assert.equal(r.ok, false, `${status}`);
+    assert.equal(r.message, message, `${status} ${JSON.stringify(body)}`);
+    t.mock.restoreAll();
+  }
+});
+
+test("Outcrawl: another provider's key is refused without a request", async (t) => {
+  const outbound = stubProvider(t, 200);
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-left-over', provider: 'outcrawl' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, 'Not an Outcrawl key (they start with ock_)');
+  assert.equal(outbound.length, 0);
 });

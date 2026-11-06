@@ -33,10 +33,11 @@ import {
 } from '@/lib/schemas.generated';
 import { AlertTriangle } from 'lucide-react';
 import {
-  SectionHeader, SaveBar, SettingsFieldError,
+  SectionHeader, SaveBar, SettingsFieldError, NowBanner,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
   type LoudnessSource, type TransitionEffect,
 } from './settings/shared';
+import { useHosted } from './HostedContext';
 import {
   SECTIONS, SECTION_GROUPS, RESTART_PATHS, STEM_FORM_KEYS, sectionById, type SectionId,
 } from './settings/registry';
@@ -59,7 +60,7 @@ import {
   useSettingsQuery,
   useStemUsageQuery,
 } from './settings/queries';
-import { fmtGb, fmtMeasured, stemBudgetImpact, usageCaveat } from './settings/stem-budget';
+import { fmtGb, fmtMeasured, pickTimeOvershoot, stemBudgetImpact, usageCaveat } from './settings/stem-budget';
 import {
   cloudSaveSnapshot, cloudSaveReadReady, rebaselineSavedPatch, reconcileSavedCloud,
   adoptServerPaths, committedReadReady, LLM_SWAP_FORM_KEYS,
@@ -118,10 +119,18 @@ const AAC_BITRATES = SETTINGS_AAC_BITRATES;
  */
 const JUMP_MAX_FRAMES = 60;
 
-export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabled?: boolean }) {
+export default function SettingsPanel({ djBrainEnabled = false, hosted = false }: { djBrainEnabled?: boolean; hosted?: boolean }) {
+  // Hosted: the plan's listener ceiling, shown instead of the editable field,
+  // and its bitrate ceiling: the stream pickers offer only what the plan
+  // allows (the controller drops anything higher on save) and FLAC is off.
+  const { listenerCap, maxBitrate } = useHosted();
+  const underCeiling = (values: readonly number[]) => (maxBitrate ? values.filter(br => br <= maxBitrate) : values);
+  const ceilingHint = maxBitrate ? <> Up to {maxBitrate} kbps on this station&apos;s plan · Managed by SUB/WAVE Cloud.</> : null;
+  // Hosted (SUB/WAVE Cloud): the LLM provider page is the agent's, so it goes;
+  // the voice page stays for what the operator still owns (see TtsSection).
   const sections = useMemo(
-    () => SECTIONS.filter(s => s.id !== 'brain' || djBrainEnabled),
-    [djBrainEnabled],
+    () => SECTIONS.filter(s => (s.id !== 'brain' || djBrainEnabled) && (s.id !== 'llm' || !hosted)),
+    [djBrainEnabled, hosted],
   );
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const settingsQuery = useSettingsQuery<SettingsData>({
@@ -133,7 +142,8 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
   // The stem cache's stored size, for the budget field's "cache used"
   // line and the lowered-budget warning. The snapshot, never a walk.
-  const stemUsage = useStemUsageQuery({ adminFetch, enabled: hydrated && !needsAuth }).data?.usage ?? null;
+  const stemUsageResponse = useStemUsageQuery({ adminFetch, enabled: hydrated && !needsAuth }).data;
+  const stemUsage = stemUsageResponse?.usage ?? null;
   const [confirmStemBudget, setConfirmStemBudget] = useState(false);
   const [commandBusy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
@@ -566,6 +576,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               <TtsSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+                hosted={hosted}
               />
             )}
             {activeSection === 'behaviour' && (
@@ -586,7 +597,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
               />
             )}
-            {activeSection === 'llm' && data.llm && (
+            {!hosted && activeSection === 'llm' && data.llm && (
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
@@ -840,6 +851,9 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                         );
                       }
                       const impact = stemBudgetImpact(stemUsage, Number(form.transitions.stemCacheGb));
+                      // Pick-time stems runs the cache over its budget between
+                      // sweeps by design: not a fault while it stays inside that.
+                      const pickTimeOver = pickTimeOvershoot(stemUsageResponse, Number(form.transitions.stemCacheGb));
                       const at = fmtMeasured(stemUsage.measuredAt);
                       return (
                         <>
@@ -848,7 +862,14 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                             {' '}&middot; {stemUsage.dirs.toLocaleString('en-GB')} tracks
                             {at ? ` (measured ${at}${usageCaveat(stemUsage)})` : ''}
                           </div>
-                          {impact && (
+                          {pickTimeOver !== null ? (
+                            <div className="field-hint" role="status">
+                              Pick-time stems has taken the cache{' '}
+                              <span className="mono-num">{fmtGb(pickTimeOver)}</span> over this budget,
+                              as it may; the next hourly sweep trims it back, lowest stem priority
+                              first.
+                            </div>
+                          ) : impact && (
                             <div className="field-hint text-destructive" role="status">
                               This budget is below what the cache holds: the next hourly sweep
                               deletes about <strong>{fmtGb(impact.deleteBytes)}</strong>, the stems
@@ -891,6 +912,43 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       any miss. Needs pair-aware transitions + the stem cache; the Doctor flags a
                       config that can&rsquo;t deliver.
                     </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Separate stems when a track is picked</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.pickTimeStems ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, pickTimeStems: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      While a picked track waits behind the one about to air, separate whatever stems
+                      it is missing, so the cache turns over to what the station actually plays. A
+                      full cache may run a little over its budget for this (about an hour of picks, or
+                      5% of a small budget, plus the track being separated) until the hourly cleanup
+                      trims it back, lowest stem priority first, leaving tracks still waiting to air
+                      until last. Its tail is usually ready for the seam out of it; the seam into it
+                      renders before this starts, so its head pays off the next time it is picked.
+                      This runs Demucs on air, one track at a time, on the same analyzer the blends
+                      use, and keeps the model loaded, so on a GPU its memory stays in use. Not
+                      recommended below about 4 CPU cores: watch the stream for dropouts before
+                      leaving it on. Needs stem-blend seams and the stem cache, and only separates
+                      tracks the analysis pass has already measured.
+                    </div>
+                    {form.transitions.pickTimeStems && data?.values?.audio?.analyzeQuietOnly === true && (
+                      <div className="field-hint text-destructive" role="status">
+                        Quiet-only analysis is on (Library), so nothing is separated at pick time.
+                      </div>
+                    )}
                   </div>
                 </div>
               </Card>
@@ -1449,7 +1507,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {OPUS_BITRATES.map(br => (
+                          {underCeiling(OPUS_BITRATES).map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
@@ -1458,6 +1516,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       </Select>
                     </div>
                     <SettingsFieldError path="stream.opusBitrate" errors={fieldErrors} />
+                    {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                     <div className="field-hint">
                       96 kbps is transparent for most music; 256/320 suits hifi listeners
                       (current: {data?.values?.stream?.opusBitrate ?? '—'} kbps). Raising it
@@ -1469,7 +1528,16 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               </Card>
             )}
 
-            {form && (
+            {form && maxBitrate && (
+              <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
+                <NowBanner label={<>FLAC stream · Managed by SUB/WAVE Cloud</>}>
+                  The lossless mount runs near 1 Mbps a listener, so it isn&apos;t part of this
+                  station&apos;s plan (streams go up to {maxBitrate} kbps). MP3, Opus and AAC serve
+                  everyone.
+                </NowBanner>
+              </Card>
+            )}
+            {form && !maxBitrate && (
               <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
                 <div className="field">
                   <div className="flex items-center gap-2">
@@ -1604,7 +1672,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {AAC_BITRATES.map(br => (
+                          {underCeiling(AAC_BITRATES).map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
@@ -1613,6 +1681,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       </Select>
                     </div>
                     <SettingsFieldError path="stream.aacBitrate" errors={fieldErrors} />
+                    {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                     <div className="field-hint">
                       AAC-LC is transparent around 256 kbps (current:{' '}
                       {data?.values?.stream?.aacBitrate ?? '—'} kbps).
@@ -1640,7 +1709,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {MP3_BITRATES.map(br => (
+                        {underCeiling(MP3_BITRATES).map(br => (
                           <SelectItem key={br} value={String(br)}>
                             {br} kbps
                           </SelectItem>
@@ -1649,6 +1718,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                     </Select>
                   </div>
                   <SettingsFieldError path="stream.bitrate" errors={fieldErrors} />
+                  {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                   <div className="field-hint">
                     Higher bitrate = better quality, more listener bandwidth
                     (current: {data?.values?.stream?.bitrate ?? '—'} kbps). 192 kbps is the
@@ -1698,7 +1768,16 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               </Card>
             )}
 
-            {form && (
+            {form && hosted && (
+              <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
+                <NowBanner label={<>Max listeners · Managed by SUB/WAVE Cloud</>}>
+                  {listenerCap
+                    ? <>Up to <strong>{listenerCap}</strong> people can listen at once on this station&apos;s plan.</>
+                    : <>Your plan sets how many people can listen at once.</>}
+                </NowBanner>
+              </Card>
+            )}
+            {form && !hosted && (
               <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
                 <div className="field">
                   <div className="flex items-center gap-2">

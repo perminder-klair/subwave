@@ -1,7 +1,7 @@
 // Station-zone date math. settings.timezone picks an IANA zone; empty = the
 // container's own TZ. Everything with local-time SEMANTICS (moods, schedule
-// slots, festival dates, the hourly check) goes through zonedParts(); timestamps
-// and durations keep using Date.
+// slots, festival dates, the hourly check, the top-of-hour session roll) goes
+// through zonedParts(); timestamps and durations keep using Date.
 //
 // Imports nothing from the rest of the app so settings.ts can import it without
 // a cycle — settings pushes the zone in via setStationTimezone().
@@ -99,6 +99,32 @@ export function zonedParts(date = new Date()): ZonedParts {
 export function zonedISODate(date = new Date()) {
   const { year, month, day } = zonedParts(date);
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+// The talk tick's top-of-hour session roll runs on the STATION clock (#2234).
+// The show grid changes at station :00, and a station zone a fractional number
+// of hours from the process's (IST or Nepal on a London or UTC host, or the
+// reverse) puts that minute at process :30, :15 or :45, so a roll on process
+// :00 left the previous show's session and coast playlist on air for up to 45
+// minutes. Pinned by scripts/station-hour-roll.test.ts.
+
+// The minute the grid's hour can change: where the tick rolls the session.
+export function isStationHourStart(date = new Date()) {
+  return zonedParts(date).minute === 0;
+}
+
+// Which station hour a moment falls in: the tick pairs the hourly row with
+// the roll by this. Zone offsets are whole quarter hours, so process :00 lands
+// on station :00, :15, :30 or :45, and the hourly row's ten-minute window,
+// still on process minutes, closes by station :54, inside the station hour
+// whose :00 rolled. A whole-hour DST fall-back repeats its key, and its second
+// roll replaces the first. The exception is a zone whose DST shift is 30 or
+// 45 minutes (Lord Howe, Chatham). There a transition hour can have no station
+// :00 at all, so it gets no roll, and its hourly row pairs with the previous
+// hour's roll.
+export function stationHourKey(date = new Date()) {
+  const { year, month, day, hour } = zonedParts(date);
+  return `${year}-${month}-${day}-${hour}`;
 }
 
 // Clock display + spoken forms (pure, pinned by scripts/clock-phrase.test.ts).

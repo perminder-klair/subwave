@@ -138,6 +138,7 @@ import {
   normalizeSchedule,
   normalizeScheduleOverride,
   normalizeShows,
+  normalizeSteer,
   normalizeWebhooks,
 } from './settings/normalize.js';
 import {
@@ -147,6 +148,7 @@ import {
   validateScheduleOverrideStrict,
   validateScheduleStrict,
   validateShowsStrict,
+  validateSteerStrict,
   validateTtsBlock,
   validateWebhooksStrict,
 } from './settings/validate.js';
@@ -159,6 +161,7 @@ import {
   LIQ_OPUS_ENABLED_PATH,
   LIQ_STREAM_BITRATE_PATH,
   LIQ_STREAM_BUFFER_SECONDS_PATH,
+  reconcileStreamMountFiles,
   writeLiquidsoapSettings,
 } from './settings/liquidsoap.js';
 
@@ -258,6 +261,7 @@ export {
   getActivePersona,
   getEffectivePersona,
   getOnAirRoster,
+  activeSteer,
   getScheduleOverride,
   guestEditorialNudge,
   guestEditorialNudgeFromGuests,
@@ -267,6 +271,7 @@ export {
   pickOnAirSpeaker,
   renderDjPrompt,
   resolveActiveShow,
+  resolvePickShow,
   resolveOnAirLocation,
   resolvePersonaById,
   resolveShowById,
@@ -834,6 +839,7 @@ export async function load() {
     shows,
     schedule,
     scheduleOverride,
+    steer: normalizeSteer(stored.steer),
     tts: {
       voiceLevelling: ttsVoiceLevellingSchema.catch(DEFAULTS.tts.voiceLevelling).parse(stored.tts?.voiceLevelling),
       // Station-wide voice switch. Coerce missing/non-boolean (every settings.json
@@ -1233,6 +1239,10 @@ export async function load() {
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
             ? stored.embedding.enrichment.lastfmTags
             : DEFAULTS.embedding.enrichment.lastfmTags,
+        lastfmTrackTags:
+          typeof stored.embedding?.enrichment?.lastfmTrackTags === 'boolean'
+            ? stored.embedding.enrichment.lastfmTrackTags
+            : DEFAULTS.embedding.enrichment.lastfmTrackTags,
         lyrics:
           typeof stored.embedding?.enrichment?.lyrics === 'boolean'
             ? stored.embedding.enrichment.lyrics
@@ -1274,6 +1284,7 @@ export async function load() {
     transitions: {
       pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
+      pickTimeStems: typeof stored.transitions?.pickTimeStems === 'boolean' ? stored.transitions.pickTimeStems : DEFAULTS.transitions.pickTimeStems,
       equalPowerCrossfade: typeof stored.transitions?.equalPowerCrossfade === 'boolean' ? stored.transitions.equalPowerCrossfade : DEFAULTS.transitions.equalPowerCrossfade,
       // Per-effect kill switches (#1565) — same absent-means-default repair as
       // every sibling, and the default is `true`, so a stored block missing a
@@ -1846,6 +1857,9 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   }
   if ('scheduleOverride' in patch) {
     next.scheduleOverride = validateScheduleOverrideStrict(patch.scheduleOverride, next.shows);
+  }
+  if ('steer' in patch) {
+    next.steer = validateSteerStrict(patch.steer);
   }
   // In-use removal guard: run once the vocabulary AND any same-patch shows are
   // validated, so a mood dropped from the vocab is rejected only if something
@@ -2455,8 +2469,14 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     }
     if (e.enrichment !== undefined) {
       const en = e.enrichment || {};
+      // Tri-state, like the default: null is auto (on when a Last.fm key is set)
+      // and stays null. Coercing it with !! stored false, so a save that kept
+      // auto switched enrichment off (#2233).
       if (en.lastfmTags !== undefined) {
-        next.embedding.enrichment.lastfmTags = !!en.lastfmTags;
+        next.embedding.enrichment.lastfmTags = en.lastfmTags === null ? null : !!en.lastfmTags;
+      }
+      if (en.lastfmTrackTags !== undefined) {
+        next.embedding.enrichment.lastfmTrackTags = !!en.lastfmTrackTags;
       }
       if (en.lyrics !== undefined) {
         next.embedding.enrichment.lyrics = !!en.lyrics;
@@ -2522,7 +2542,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   }
   if ('transitions' in patch) {
     const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
-    for (const k of ['pairDrain', 'stemBlends'] as const) {
+    for (const k of ['pairDrain', 'stemBlends', 'pickTimeStems'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
     }
     // Read once by the mixer at startup (liquidsoap_equal_power_crossfade.txt),
@@ -2823,8 +2843,13 @@ export async function update(patch) {
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
-// them on its next start. Idempotent.
-export async function ensureLiquidsoapSettingsFile() {
+// them on its next start. Idempotent. A missing file writes them all; files
+// already there keep what they say (the jingle ratio's reason is in
+// broadcast/jingle-rotate.ts), except the six listener-mount files, which are
+// reconciled with the saved stream settings under a hosted plan's ceiling
+// (settings/liquidsoap.ts reconcileStreamMountFiles). Returns the mount files
+// that boot rewrote, so the caller can say the mixer needs a restart.
+export async function ensureLiquidsoapSettingsFile(): Promise<{ rewroteMountFiles: string[] }> {
   const s = await load();
   if (
     !existsSync(LIQ_JINGLE_RATIO_PATH) ||
@@ -2837,5 +2862,7 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(ICECAST_LISTENER_AUTH_PATH)
   ) {
     await writeLiquidsoapSettings(s);
+    return { rewroteMountFiles: [] };
   }
+  return { rewroteMountFiles: await reconcileStreamMountFiles(s) };
 }

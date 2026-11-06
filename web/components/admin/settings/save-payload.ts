@@ -86,6 +86,7 @@ export function stemsSavePayload(form: FormState) {
     transitions: {
       pairDrain: form.transitions.pairDrain,
       stemBlends: form.transitions.stemBlends,
+      pickTimeStems: form.transitions.pickTimeStems,
     },
     audio: {
       stemCache: form.transitions.stemCache,

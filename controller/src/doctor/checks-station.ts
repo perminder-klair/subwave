@@ -13,6 +13,7 @@ import * as stemCache from '../music/stem-cache.js';
 import type { Finding, StationSettings } from './types.js';
 import { fmtTokens, isSchemaFailure } from './util.js';
 import { settingsAgentRoutes } from '../schemas/settings.js';
+import { advertisedMounts } from '../setup/hosted.js';
 import {
   AGENT_DEADLINE_WARN_RATIO, AGENT_NUM_CTX_FLOOR, agentDeadlineRatio, contextWindowTooSmall, latencyP90,
 } from './agent-fit.js';
@@ -21,7 +22,7 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
   const out: Finding[] = [];
 
   // Web search — backs the DJ's artist-news segments. DuckDuckGo and Keenable
-  // are keyless; Tavily, Brave and Firecrawl need a key; SearXNG needs its server URL.
+  // are keyless; Tavily, Brave, Firecrawl and Outcrawl need a key; SearXNG needs its server URL.
   // Report config readiness, then do a short live probe so "is it actually
   // working?" is answered, not just "is it configured?".
   const provider = s?.search?.provider || 'duckduckgo';
@@ -29,14 +30,15 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
   try { ready = searchReady(); } catch { ready = true; }
 
   if (!ready) {
-    const wrongKey = !!searchKeyProblem();
+    // "The key on file is …", lowercased to follow "selected but".
+    const wrongKey = searchKeyProblem();
     out.push({
       label: 'web search',
       status: 'warn',
       detail: wrongKey
-        ? 'firecrawl selected but the key on file is not a Firecrawl key (they start with fc-)'
+        ? `${provider} selected but ${wrongKey.charAt(0).toLowerCase()}${wrongKey.slice(1)}`
         : `${provider} selected but no ${provider === 'searxng' ? 'server URL' : 'API key'}`,
-      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily, Brave and Firecrawl need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
+      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily, Brave, Firecrawl and Outcrawl need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
     });
     return out;
   }
@@ -362,10 +364,13 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // Flag it only when several are on AND the host is already under pressure.
   try {
     const st: NonNullable<StationSettings['stream']> = s?.stream || {};
+    // The encoders the mixer runs: through a hosted plan's ceiling, which can
+    // switch FLAC and AAC off whatever was saved.
+    const running = advertisedMounts(st);
     const extra: string[] = [];
-    if (st.opusEnabled) extra.push('opus');
-    if (st.flacEnabled) extra.push('flac');
-    if (st.aacEnabled) extra.push('aac');
+    if (running.opusEnabled) extra.push('opus');
+    if (running.flacEnabled) extra.push('flac');
+    if (running.aacEnabled) extra.push('aac');
     if (s?.archive?.enabled) extra.push('hourly archive');
     const encoderCount = 1 + extra.length; // /stream.mp3 always
     const sys = await system.summary();

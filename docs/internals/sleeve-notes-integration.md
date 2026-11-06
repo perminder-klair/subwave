@@ -311,3 +311,29 @@ real queue and database. All 738 targeted controller checks pass: stand-in speec
 web tests pass. Controller/web lint and types and generated schema parity pass;
 controller lint has 1,833 warnings and zero errors. This reconciliation includes
 no production build, station deployment or live database operation.
+
+## Steer, weather and hosted restore reconciliation — 6 November
+
+Merge develop through `ecfd5df6`. Keep the dashboard Steer fields alongside
+Sleeve Notes fact reservations throughout pick insertion and the queue. An
+operator-requested introduction can air while automatic station speech is off;
+automatic introductions still stand down and release their reservations. Story
+Spark grounding and structured decisions remain available in a Steer introduction.
+
+The optional segment director retains its single-flight guard and can run a
+native Sleeve Notes segment without installed skill capabilities. Weather news
+uses upstream's condition-and-outlook policy when taking priority over an
+optional story, including a changed forecast under the same current sky. Skill
+voice overrides and weather tool-result bookkeeping stay intact. Hosted backup
+restores report managed settings while still restoring the notes database under
+the research lock and clearing connection caches afterwards.
+
+New regressions exercise actual queue publication with automatic speech off,
+Steer introductions carrying a source-backed Spark, and hosted-setting reports
+alongside a Sleeve Notes database restore. All 853 focused controller checks
+pass: settings patch schemas, Sleeve Notes, host speech, Steer, weather, skill
+voices, hosted settings, backup routes/guards, handoffs and speech budgets.
+All 711 web tests pass. Controller/web lint and TypeScript checks, generated
+schema parity and the admin-query audit pass. Controller lint reports 1,950
+warnings and no errors. This reconciliation includes no production build,
+station deployment or live database operation.

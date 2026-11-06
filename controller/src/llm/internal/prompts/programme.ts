@@ -147,7 +147,9 @@ export async function generateProgrammePlan({
   previousAngle = null, skillKinds = [], pinnedKind = null,
 }: any) {
   const featureCount = Math.max(1, Math.min(MAX_FEATURES, spanHours));
-  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
+  // Never the operator's steer: the plan outlives it for the whole episode,
+  // and its angle rides the public context (GET /now-playing, context.ts).
+  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS, steer: false });
   const cast = [
     `Host: ${host?.name || 'the DJ'}`,
     ...(guests || []).map((g: any) => `Guest co-host: ${g.name}`),
@@ -261,7 +263,7 @@ export function featureTask({ show, topic, plan = null, speaker = null }: any): 
 
 export async function generateProgrammeFeature({ show, topic, plan = null, persona = null, context = null, recap = null, recentOpeners = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
-  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
+  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS, steer: true });
   if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
   ctxLines.push(featureTask({ show, topic, plan, speaker }));
   return djText({

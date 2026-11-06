@@ -10,7 +10,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as subsonicLog from '../music/subsonic-log.js';
 import { proveLibraryMount } from '../music/library-mount.js';
 import { libraryMountFinding } from '../music/library-mount-policy.js';
-import { realPathStatus } from '../music/navidrome-players.js';
+import { passiveRealPathStatus, sampleLocalPaths } from '../music/navidrome-players.js';
 import { realPathFinding } from '../music/navidrome-players-policy.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
@@ -259,14 +259,15 @@ export async function checkNavidrome(): Promise<Finding[]> {
   } catch { /* tracker is best-effort */ }
 
   // Navidrome's "Report Real Path" on SUB/WAVE's own players — read only; the
-  // switch is the opt-in setting or the Music source page's button.
+  // switch is the opt-in setting or the Music source page's button. The Doctor
+  // runs unattended every night, so with the opt-in off it stays out of
+  // Navidrome's own API and skips.
   if (p.ok) {
     try {
-      const st = await realPathStatus();
-      out.push({
-        label: 'real file paths',
-        ...realPathFinding(st, { localMount: !!process.env.MUSIC_LIBRARY_PATH }),
-      });
+      const st = await passiveRealPathStatus();
+      const localMount = !!process.env.MUSIC_LIBRARY_PATH;
+      const sample = st.state === 'on' && localMount ? await sampleLocalPaths() : null;
+      out.push({ label: 'real file paths', ...realPathFinding(st, { localMount, sample }) });
     } catch { /* never throws; belt and braces */ }
   }
 

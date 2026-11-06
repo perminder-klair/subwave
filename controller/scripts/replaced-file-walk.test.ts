@@ -5,7 +5,8 @@
 // clears a held mass; --accept-replaced clears nothing and the same files are
 // not found again, those within the mark's margin included; a single-facet
 // write or a failed attempt does not hide a held candidate; a partial read is
-// acted on without moving the mark. The policy and the DB writes on their own
+// acted on without moving the mark; a failed ping keeps the size check and sends
+// no password. The policy and the DB writes on their own
 // are in replaced-file.test.ts and file-changes.test.ts.
 //
 // Run: npm test -- replaced-file-walk
@@ -44,6 +45,8 @@ let songs: Song[] = [];
 let padding: Song[] = [];
 let failDeepPage = false;
 let refuseLogin = false;
+let pingDown = false;
+let logins = 0;
 const by = (id: string) => songs.find(s => s.id === id) as Song;
 // The events a run flagged as a hold, for the panel to keep once it stops.
 const holdsIn = (out: string) => out.split('\n')
@@ -55,7 +58,13 @@ function subsonic(req: IncomingMessage, res: ServerResponse, url: URL) {
   const endpoint = (url.pathname.split('/').at(-1) ?? '').replace(/\.view$/, '');
   const sub: Record<string, unknown> = { status: 'ok', version: '1.16.1', type: 'navidrome', serverVersion: '0.58.0', openSubsonic: true };
   switch (endpoint) {
-    case 'ping': break;
+    case 'ping':
+      if (pingDown) {
+        res.statusCode = 503;
+        res.end('{}');
+        return;
+      }
+      break;
     case 'getScanStatus': sub.scanStatus = { scanning: false }; break;
     case 'getAlbumList2': sub.albumList2 = { album: [{ id: 'a', name: 'Album', artist: 'Artist' }] }; break;
     case 'getAlbum':
@@ -82,6 +91,7 @@ const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   res.setHeader('content-type', 'application/json');
   if (url.pathname === '/auth/login') {
+    logins += 1;
     if (refuseLogin) res.statusCode = 401;
     res.end(JSON.stringify(refuseLogin ? { error: 'no' } : { token: 'tok' }));
     return;
@@ -134,6 +144,8 @@ test.beforeEach(() => {
   padding = [];
   failDeepPage = false;
   refuseLogin = false;
+  pingDown = false;
+  logins = 0;
   for (const s of songs) {
     db.upsertTrackMeta(s.id, { title: s.id, artist: 'Artist', duration: 200, fileSize: s.size });
     db.upsertTrackAnalysis(s.id, { bpm: 100, musicalKey: 'C', loudnessLufs: -9, peakDb: -1, source: 'full' });
@@ -353,4 +365,20 @@ test('a refused login reads as size only, without blaming the server for having 
   assert.equal(stored('s0').bpm, null, 'the size check stands alone');
   assert.equal(stored('s1').bpm, 100);
   assert.equal(mark(), MARK);
+});
+
+test('a failed ping is a size-only walk: no login, a changed size still clears, and the mark stays', async () => {
+  by('s0').size += 5;
+  by('s1').updatedAt = CHANGED;
+  pingDown = true;
+
+  const { check } = await reconcile();
+
+  assert.match(check, /size only/);
+  assert.match(check, /did not answer/);
+  assert.equal(logins, 0, 'the password goes only to a server that has just answered');
+  assert.equal(stored('s0').bpm, null, 'the size check stands alone');
+  assert.equal(stored('s0').file_size, by('s0').size);
+  assert.equal(stored('s1').bpm, 100, 'a change time nobody read clears nothing');
+  assert.equal(mark(), MARK, 'the next walk reads what this one could not');
 });

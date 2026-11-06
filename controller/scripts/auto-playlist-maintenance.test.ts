@@ -100,7 +100,8 @@ test('only the periodic cron uses scheduled admission; startup and the exported 
 
 test('maintenance leaves talk, session and programme sequencing on their existing clock', () => {
   assert.match(scheduler, /cron\.schedule\('\* \* \* \* \*', talkTick\);/);
-  assert.match(scheduler, /if \(now\.getMinutes\(\) === 0\) \{[\s\S]*?await rollSessionNow\(\{ airHandoff: false, reason: 'scheduled boundary' \}\)/);
+  // The roll's :00 is the station clock's since #2234 (station-hour-roll.test.ts).
+  assert.match(scheduler, /if \(isStationHourStart\(now\)\) \{[\s\S]*?await rollSessionNow\(\{ airHandoff: false, reason: 'scheduled boundary' \}\)/);
   assert.ok(scheduler.indexOf('await programme.ensurePlan(ctx);') < scheduler.indexOf('await djAgent.runPersonaHandoff(queue, ctx);'));
   assert.match(scheduler, /cron\.schedule\('23 \* \* \* \*', scheduledBackupTick\);/);
   assert.match(scheduler, /cron\.schedule\('17 4 \* \* \*', nightlyDoctor\);/);

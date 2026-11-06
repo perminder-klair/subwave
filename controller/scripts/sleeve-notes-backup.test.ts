@@ -16,7 +16,7 @@ const {listen}=await import('./test-utils/http.js');
 const app=express();app.use(router);const {server,url}=await listen(app);server.unref();
 const restore=async(zip:AdmZip)=>{
  const response=await fetch(url+'/backup/import',{method:'POST',body:new Uint8Array(zip.toBuffer())});
- return {status:response.status,body:await response.json() as {restored:string[]}};
+ return {status:response.status,body:await response.json() as {restored:string[];managed?:string[]}};
 };
 const archive=()=>{const zip=new AdmZip();zip.addFile('manifest.json',Buffer.from(JSON.stringify({format:BACKUP_FORMAT,version:BACKUP_VERSION})));return zip;};
 
@@ -86,6 +86,22 @@ test('restored running jobs return to the queue instead of remaining stranded',a
  const result=await restore(await buildBackupZip());assert.equal(result.status,200);
  assert.deepEqual(notes.open().prepare("SELECT state,lease_token FROM sleeve_airing_reviews WHERE id='review'").get(),{state:'queued',lease_token:null});
  assert.equal((notes.open().prepare("SELECT state FROM sleeve_research_jobs WHERE id='job'").get() as {state:string}).state,'queued');
+});
+
+test('hosted restores retain managed-setting reports alongside the Sleeve Notes database', async()=>{
+ const previous=process.env.SUBWAVE_HOSTED;
+ process.env.SUBWAVE_HOSTED='1';
+ try {
+  const zip=await buildBackupZip();
+  zip.addFile('settings.json',Buffer.from(JSON.stringify({stream:{maxListeners:999}})));
+  const result=await restore(zip);
+  assert.equal(result.status,200);
+  assert.ok(result.body.managed?.includes('stream.maxListeners'));
+  assert.ok(result.body.restored.includes('sleeve-notes.db'));
+  assert.equal((notes.open().prepare('SELECT wording FROM sleeve_claims').get() as {wording:string}).wording,'Operator correction');
+ } finally {
+  if(previous===undefined)delete process.env.SUBWAVE_HOSTED;else process.env.SUBWAVE_HOSTED=previous;
+ }
 });
 
 test('exporting an older disabled cache never migrates the source database',async()=>{

@@ -114,8 +114,25 @@ test('a Firecrawl key clears it', async (t) => {
   }
 });
 
-test('another keyed provider never refuses the key on file', async (t) => {
+// Tavily and Brave refuse only a key carrying another provider's prefix (#2223),
+// so a key in a format nobody claims still clears them.
+test("Tavily and Brave name another provider's key too, and pass any other", async (t) => {
   await setSearch(t, { provider: 'tavily', apiKey: 'fc-left-over' });
+  assert.equal(searchKeyProblem(), 'The key on file is a Firecrawl key, not a Tavily key');
+  assert.equal(row('web-search').ready, false);
+  assert.equal(row('web-search').keyProblem, 'The key on file is a Firecrawl key, not a Tavily key');
+
+  await settings.update({ search: { provider: 'brave', apiKey: 'tvly-left-over' } });
+  assert.equal(row('web-search').keyProblem, 'The key on file is a Tavily key, not a Brave Search key');
+
+  await settings.update({ search: { provider: 'brave', apiKey: 'BSA-a-real-one' } });
+  assert.equal(searchKeyProblem(), null);
+  assert.equal(row('web-search').ready, true);
+  assert.equal(row('web-search').keyProblem, null);
+});
+
+test('Keenable never has a key problem: a foreign key just runs it keyless', async (t) => {
+  await setSearch(t, { provider: 'keenable', apiKey: 'fc-left-over' });
   assert.equal(searchKeyProblem(), null);
   assert.equal(row('web-search').keyProblem, null);
 });
@@ -144,4 +161,49 @@ test('watching ready() leaves the shared services object alone', async (t) => {
   await setSearch(t, { provider: 'firecrawl', apiKey: 'tvly-left-over' });
   skillCatalog();
   assert.equal(buildStationServices().searchReady, searchReady);
+});
+
+test('Outcrawl names a refused key the same way, and an ock_ key clears it', async (t) => {
+  await setSearch(t, { provider: 'outcrawl', apiKey: 'fc-left-over' });
+  for (const name of SEARCH_GATED) {
+    const skill = row(name);
+    assert.equal(skill.ready, false, name);
+    assert.match(skill.keyProblem, /not an Outcrawl key/, name);
+  }
+  await assert.rejects(runCapability('web-search', {}), /not an Outcrawl key.*Settings → Web search/);
+
+  await settings.update({ search: { provider: 'outcrawl', apiKey: 'ock_a-real.one' } });
+  assert.equal(searchKeyProblem(), null);
+  assert.equal(row('web-search').ready, true);
+  assert.equal(row('web-search').keyUrl, 'https://outcrawl.ai/console');
+});
+
+test('Run now asks for an Outcrawl key when none is set', async (t) => {
+  await setSearch(t, { provider: 'outcrawl', apiKey: '' });
+  await assert.rejects(runCapability('web-search', {}), /set SEARCH_API_KEY or paste an Outcrawl key/);
+  assert.equal(row('web-search').requiresKey, 'SEARCH_API_KEY');
+});
+
+// Run now's hint and the catalog's key link come from the search catalogue
+// (keyName, keyUrl, one article rule). These are the strings the per-provider
+// chains wrote before, so moving onto the catalogue changed none of them.
+test('a missing key names each keyed provider and links its key page, from the catalogue', async (t) => {
+  const cases: Array<[provider: string, hint: string, keyUrl: string]> = [
+    ['tavily', 'set SEARCH_API_KEY or paste a Tavily key into the admin UI', 'https://app.tavily.com/home'],
+    ['brave', 'set SEARCH_API_KEY or paste a Brave Search key into the admin UI', 'https://api-dashboard.search.brave.com/app/keys'],
+    ['firecrawl', 'set SEARCH_API_KEY or paste a Firecrawl key into the admin UI', 'https://www.firecrawl.dev/app/api-keys'],
+    ['outcrawl', 'set SEARCH_API_KEY or paste an Outcrawl key into the admin UI', 'https://outcrawl.ai/console'],
+  ];
+  await setSearch(t, { provider: 'duckduckgo', apiKey: '' });
+  for (const [provider, hint, keyUrl] of cases) {
+    await settings.update({ search: { provider, apiKey: '' } });
+    await assert.rejects(runCapability('web-search', {}), { message: `skill "web-search" is not ready — ${hint}` });
+    assert.equal(row('web-search').requiresKey, 'SEARCH_API_KEY', provider);
+    assert.equal(row('web-search').keyUrl, keyUrl, provider);
+  }
+  for (const provider of ['duckduckgo', 'keenable', 'searxng']) {
+    await settings.update({ search: { provider, apiKey: '' } });
+    assert.equal(row('web-search').requiresKey, null, provider);
+    assert.equal(row('web-search').keyUrl, null, provider);
+  }
 });

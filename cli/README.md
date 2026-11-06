@@ -35,7 +35,7 @@ update`, in that order ([why](../docs/updating.md#update)).
 | Command | What it does |
 | --- | --- |
 | `subwave` | interactive menu (Esc goes back, Ctrl-C exits) |
-| `init` | scaffold a fresh install: compose files, `.env`, recorded home |
+| `init` | scaffold a fresh install: compose files, `.env`, recorded home (re-running keeps existing `.env` settings) |
 | `setup` | configuration wizard — Navidrome, LLM, timezone, jingles |
 | `start [dev\|prod\|prod-byo]` | `docker compose up -d`; dev also starts the web dev server |
 | `stop` | `docker compose down`; dev also kills the web dev server |
@@ -43,7 +43,7 @@ update`, in that order ([why](../docs/updating.md#update)).
 | `logs [svc\|all]` | tail compose logs |
 | `status` | glance-able stack + now-playing snapshot |
 | `doctor` | full diagnostic sweep — host, compose, controller, Icecast, state, logs |
-| `update` | pull new images and recreate what changed |
+| `update` | pull new images and recreate what changed; exits non-zero if any step fails |
 | `sync` | refresh compose files that have fallen behind this binary (`--check` to dry-run) |
 | `listen` / `admin` | open the player or admin console in a browser |
 | `self-update` | replace this binary with the latest release |
@@ -140,10 +140,14 @@ exactly the `curl … | sh` path. A prompt renders and then hangs un-killably.
 
 Three things guard against it, and they work together:
 
-- `src/tty.ts` opens `/dev/tty` directly and hands it to Clack as the prompt's
-  `input`, sidestepping `process.stdin`.
+- On macOS, `src/tty.ts` opens `/dev/tty` directly and hands it to Clack as the
+  prompt's `input`, sidestepping `process.stdin`. Linux doesn't have the bug and
+  keeps `process.stdin`: Bun's `/dev/tty` stream reads with `pread`, which a Linux
+  tty rejects with `ESPIPE: invalid seek` ([#2262](https://github.com/perminder-klair/subwave/issues/2262)).
+  `scripts/smoke-tty-prompt.sh` checks a Linux binary's prompts under a pty.
 - `scripts/patch-clack.mjs` runs at build time, because `@clack/prompts`'
-  high-level wrappers don't forward that `input` option.
+  high-level wrappers don't forward that `input` option. Every build path must
+  run it; `scripts/check-clack-patch.mjs` checks the compiled binary.
 - `src/ui.ts` arms a watchdog on the first prompt, but only when launched from a
   piped parent, turning any remaining hang into a fast, actionable exit.
 
@@ -168,8 +172,13 @@ npm run build:all           # linux + darwin, x64 + arm64 → dist/
 npm run build:linux-x64     # or just one
 ```
 
-`prebuild` runs `embed-assets` and `patch-clack` first, so a build always
-carries current assets.
+`npm run build:*` runs `prebuild` (`embed-assets` + `patch-clack`) first, so a
+local build carries current assets and the Clack patch, then runs
+`check-clack-patch` on the binary it wrote. CI doesn't use these scripts:
+`publish-cli.yml` and `cli-smoke.yml` run `patch-clack` themselves after
+`bun install`, then run `scripts/check-clack-patch.mjs` on every compiled
+binary. The check fails the build if a binary doesn't forward `input` at the
+prompt sites (#2202). Any new build path must do both.
 
 ### Layout
 

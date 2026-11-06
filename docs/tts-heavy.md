@@ -240,9 +240,10 @@ a warning and falls back to CPU rather than failing the pass. `ANALYZER_HEAVY`
 is irrelevant while the overlay is applied — the image is overridden outright.
 
 Running the **all-in-one** container instead? It has no `analyzer` service to
-swap, so there's no overlay: pull the `subwave-aio-cuda` tag (the heavy AIO built
-on the same cu128 wheels) and hand the container the GPU directly. Steps for
-Unraid, including the driver plugin and the extra parameters, are in
+swap, so there's no overlay: pull `subwave-aio-cuda` at the tag named for your
+card's architecture ([the tag table](internals/infrastructure.md#aio-cuda-tags);
+`:latest` needs Turing or newer) and hand the container the GPU directly. Steps
+for Unraid, including the driver plugin and extra parameters, are in
 [unraid.md](unraid.md#acoustic-analysis-default-on--expressive-voices-opt-in);
 anywhere else it's `--gpus all` on your `docker run`. Everything below about
 device selection and VRAM applies there unchanged.
@@ -311,9 +312,15 @@ The default is `1`, preserving the existing single-flight pass. Values `2`–`4`
 are sensible starting points for a remote GPU, with a supported maximum of `8`.
 Each sidecar worker is an independent Python process and may load its own CLAP
 and Demucs models, so raising the value increases CPU, RAM and VRAM use as well
-as network and Navidrome/source-server demand. A mismatch is safe but effective
-parallelism is limited by the smaller usable side. This is an operator tuning
-trade-off, not a guaranteed speedup.
+as network and Navidrome/source-server demand. For the analysis pass a mismatch
+is safe, and effective parallelism is limited by the smaller usable side. With
+pick-time stems on (Settings → Stems), the controller's value also decides
+whether a stem-blend render may run while a separation holds a worker: at 2 or
+more it goes ahead, expecting a free member. A controller set higher than its
+sidecar therefore costs one render per separation that waits out its budget
+(up to 60 s, holding the track sender) and falls back to the plain crossfade,
+so keep the two equal. This is an operator tuning trade-off, not a guaranteed
+speedup.
 
 A same-path state mount is therefore **recommended for throughput, but required
 only for stem caching**. Stem rendering writes into `state/stems/`; a remote

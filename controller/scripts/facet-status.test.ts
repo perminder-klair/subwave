@@ -87,7 +87,8 @@ await test('the table is created outside the user_version chain', () => {
 
 await test('a fully analysed track seeds ok on every facet', () => {
   const r = db.requireDb().prepare('SELECT facet, status, source FROM track_facet_status WHERE track_id = ?').all('full') as Row[];
-  assert.equal(r.length, 6);
+  // Every facet a head analysis produces; the whole-file edges are their own pass.
+  assert.equal(r.length, db.FACETS.length - 1);
   assert.ok(r.every((x) => x.status === 'ok' && x.source === 'seed'), JSON.stringify(r));
 });
 
@@ -117,7 +118,7 @@ await test('an older analysis_version and an un-analysed track have no head row'
 await test('a failed track carries its attempts on every facet', () => {
   const r = db.requireDb().prepare(
     'SELECT facet, status, attempts, reason FROM track_facet_status WHERE track_id = ?').all('failed') as Row[];
-  assert.equal(r.length, 6);
+  assert.equal(r.length, db.FACETS.length);
   assert.ok(r.every((x) => x.status === 'failed' && x.attempts === 2 && x.reason === 'decode failed'));
 });
 
