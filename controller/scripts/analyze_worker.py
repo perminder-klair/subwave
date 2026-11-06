@@ -2303,7 +2303,7 @@ def facet_loudness(y_src, sr):
 
 # Version stamp the controller stores with whole-file loudness figures; a
 # window measurement carries none. Kept in step with the controller's
-# FACET_VERSIONS.loudness.
+# WHOLE_FILE_LOUDNESS_VERSION (library-db/facets.ts).
 WHOLE_FILE_LOUDNESS_VERSION = 2
 WHOLE_FILE_FACETS = ("loudness", "edges")
 # Below the BS.1770 absolute gate nothing counts: ffmpeg prints -70 LUFS for

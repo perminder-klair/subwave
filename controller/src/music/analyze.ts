@@ -651,7 +651,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
       } else if (f === 'loudness') {
         // A whole-file answer is one measurement: integrated loudness, true
         // peak, sample peak and LRA are stored together or not at all.
-        if ((r.loudnessVersion ?? 1) >= 2 &&
+        if (db.isWholeFileLoudnessVersion(r.loudnessVersion) &&
           [r.loudnessLufs, r.peakDb, r.samplePeakDb, r.loudnessRangeLu].some((v) => v == null)) {
           failures.push(db.facetFailure(f, 'incomplete whole-file loudness answer'));
           continue;

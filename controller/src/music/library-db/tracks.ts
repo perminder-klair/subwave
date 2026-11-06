@@ -2,7 +2,10 @@
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
-import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, restampFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
+import {
+  FACETS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows, deleteFacetRows,
+  isWholeFileLoudnessVersion, restampFacetRows, syncTrackFacets, type Facet, type FacetSource,
+} from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
@@ -314,8 +317,7 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
     if (size != null) d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?').run(size, id);
     d.prepare(
       `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL, analysis_confidence = NULL,
-         analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL, loudness_version = NULL,
-         loudness_range_lu = NULL, sample_peak_db = NULL, loudness_curve_json = NULL,
+         analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL, ${CLEAR_WHOLE_FILE_EXTRAS},
          structure_json = NULL, vocal_ranges_json = NULL, pace_json = NULL, beats_json = NULL,
          bars_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
          audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
@@ -693,10 +695,12 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         musical_key         = ?,
         intro_ms            = ?,
         analysis_confidence = ?,
-        -- A whole-file loudness figure (loudness_version >= 2) outranks the
-        -- analysis window's: a head analysis never overwrites it.
-        loudness_lufs       = CASE WHEN COALESCE(loudness_version, 1) >= 2 THEN loudness_lufs ELSE ? END,
-        peak_db             = CASE WHEN COALESCE(loudness_version, 1) >= 2 THEN peak_db ELSE ? END,
+        -- A whole-file loudness figure outranks the analysis window's: a head
+        -- analysis never overwrites it, and a window figure written in its
+        -- place carries none of its extras.
+        loudness_lufs       = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN loudness_lufs ELSE ? END,
+        peak_db             = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN peak_db ELSE ? END,
+        ${KEEP_WHOLE_FILE_EXTRAS},
         structure_json      = ?,
         pace_json           = ?,
         beats_json          = ?,
@@ -766,15 +770,19 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
 }
 
 // Whether this track's loudness figures come from the whole file (loudness
-// v2), which nothing measuring less may overwrite.
+// v2), which nothing measuring less may overwrite (facets.ts, the one rule).
 function hasWholeFileLoudness(id: string): boolean {
   const row = requireDb()
-    .prepare<[string], { v: number | null }>(
-      'SELECT CASE WHEN loudness_lufs IS NOT NULL THEN loudness_version END AS v FROM tracks WHERE id = ?',
-    )
+    .prepare<[string], { v: number }>(`SELECT ${SQL_WHOLE_FILE_LOUDNESS} AS v FROM tracks WHERE id = ?`)
     .get(id);
-  return (row?.v ?? 1) >= 2;
+  return row?.v === 1;
 }
+
+// SET clauses for the columns only a whole-file figure carries: kept where the
+// row's figure is the whole-file one, else NULL; or NULL outright.
+const KEEP_WHOLE_FILE_EXTRAS = WHOLE_FILE_LOUDNESS_EXTRAS
+  .map((c) => `${c} = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN ${c} END`).join(', ');
+const CLEAR_WHOLE_FILE_EXTRAS = WHOLE_FILE_LOUDNESS_EXTRAS.map((c) => `${c} = NULL`).join(', ');
 
 // One facet-protocol answer, already mapped to column values. A key is
 // present for each facet the backend measured (ok) or proved unmeasurable;
@@ -855,8 +863,8 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
       if (!('unmeasurable' in w.loudness)) {
         const l = w.loudness;
         const version = finite(l.version);
-        if (version != null && version >= 2) {
-          // Loudness and true peak are one measurement: written together.
+        if (isWholeFileLoudnessVersion(version)) {
+          // One measurement: the four figures (and the curve) written together.
           d.prepare(
             `UPDATE tracks SET loudness_lufs = ?, peak_db = ?, sample_peak_db = ?, loudness_range_lu = ?,
                loudness_version = ?, loudness_curve_json = ? WHERE id = ?`,
@@ -865,7 +873,7 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
             l.curve ? JSON.stringify(l.curve) : l.curveUnavailable ? unavailableCurveJson(l.curveUnavailable) : null, id);
           fresh.push('loudness');
         } else if (!hasWholeFileLoudness(id)) {
-          d.prepare('UPDATE tracks SET loudness_lufs = ?, peak_db = ?, loudness_version = NULL, loudness_curve_json = NULL WHERE id = ?')
+          d.prepare(`UPDATE tracks SET loudness_lufs = ?, peak_db = ?, ${CLEAR_WHOLE_FILE_EXTRAS} WHERE id = ?`)
             .run(finite(l.loudnessLufs), finite(l.peakDb), id);
           fresh.push('loudness');
         }
@@ -1063,9 +1071,10 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL,
       -- Whole-file loudness (v2) is not the analysis being redone: kept, like
-      -- the edges columns, which no clear touches.
-      loudness_lufs = CASE WHEN COALESCE(loudness_version, 1) >= 2 THEN loudness_lufs END,
-      peak_db = CASE WHEN COALESCE(loudness_version, 1) >= 2 THEN peak_db END,
+      -- the edges columns, which this clear does not touch.
+      loudness_lufs = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN loudness_lufs END,
+      peak_db = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN peak_db END,
+      ${KEEP_WHOLE_FILE_EXTRAS},
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
       key_ranges_json = NULL, outro_json = NULL,
       lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,

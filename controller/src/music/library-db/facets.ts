@@ -61,6 +61,22 @@ export const FACET_VERSIONS: Readonly<Record<Facet, number>> = {
 // The facets read off one whole-file decode rather than the analysis windows.
 export const WHOLE_FILE_FACETS: readonly Facet[] = ['loudness', 'edges'];
 
+// THE rule for "are this track's loudness figures the whole-file measurement",
+// which nothing measuring less may overwrite. From this loudness_version up,
+// loudness_lufs/peak_db are integrated loudness and true peak over the whole
+// file, stored with the extras below; NULL or 1 is the analysis window's
+// figure. SQL_WHOLE_FILE_LOUDNESS asks a stored row (a figure must be there),
+// isWholeFileLoudnessVersion an answer's or a row's version.
+export const WHOLE_FILE_LOUDNESS_VERSION = 2;
+export const SQL_WHOLE_FILE_LOUDNESS =
+  `(loudness_lufs IS NOT NULL AND COALESCE(loudness_version, 1) >= ${WHOLE_FILE_LOUDNESS_VERSION})`;
+export function isWholeFileLoudnessVersion(version: number | null | undefined): boolean {
+  return (version ?? 1) >= WHOLE_FILE_LOUDNESS_VERSION;
+}
+// Written only with a whole-file figure, and dropped with it: a window figure
+// (or none) in its place leaves all four NULL.
+export const WHOLE_FILE_LOUDNESS_EXTRAS = ['loudness_version', 'sample_peak_db', 'loudness_range_lu', 'loudness_curve_json'] as const;
+
 export const FACET_MAX_ATTEMPTS = MAX_ANALYSIS_FAILURES;
 
 // Where the analysed audio came from, as far as the controller knows.
@@ -144,7 +160,7 @@ export function deriveFacetRows(
     // and had no curve to give stored the unavailable marker instead, which
     // counts as the curve column set: settled, never re-read for nothing.
     const v = row.loudness_version || 1;
-    if (v >= 2 && !row.has_loudness_curve) ok('loudness', 'no-curve', v - 1);
+    if (isWholeFileLoudnessVersion(v) && !row.has_loudness_curve) ok('loudness', 'no-curve', v - 1);
     else ok('loudness', null, v);
     out[out.length - 1]!.measuredVersion = true;
   }
@@ -481,7 +497,7 @@ export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean
   d.prepare(
     `DELETE FROM track_facet_status
       WHERE facet = 'loudness' AND track_id NOT IN
-        (SELECT id FROM tracks WHERE loudness_lufs IS NOT NULL AND loudness_version >= 2)`,
+        (SELECT id FROM tracks WHERE ${SQL_WHOLE_FILE_LOUDNESS})`,
   ).run();
   clearFacetFailures();
   // A kept vocal row was "head-only" because the outro lacked tail vocals; the
