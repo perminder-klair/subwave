@@ -426,24 +426,34 @@ def t_real_ffmpeg_decodes_once_and_measures_both():
     assert loud["sample_peak_db"] <= loud["true_peak_db"] + 0.05, loud
 
 
-def t_real_ffmpeg_judges_a_mono_files_edges_at_its_own_level():
-    # `-ac 2` upmixes mono at 0.707 a side: a tone 1.5 dB over the floor read
-    # 1.5 dB under it, and the file as silent. One channel, as the window
-    # path's silence_edges_ms reads it.
+def t_real_ffmpeg_judges_a_mono_files_edges_as_it_airs():
+    # Liquidsoap 2.4.6 airs a mono file at 0.707 a side (a mono FLAC, MP3 or
+    # WAV peaking at -24.1 dBFS airs at -27.1 on each side), and `-ac 2`
+    # upmixes it the same way: the edges are judged on what a listener hears.
     if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
         print("      (skipped: no ffmpeg/ffprobe on PATH)")
         return
     sr = 44100
     t = np.arange(2 * sr, dtype=np.float64) / sr
-    tone = amp_db(aw.SILENCE_DBFS + 1.5) * np.sin(2 * np.pi * 441.0 * t)
-    mono = np.concatenate([np.zeros(sr), tone, np.zeros(sr)]).astype(np.float32)
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "mono.wav")
-        write_wav(path, mono, sr, channels=1)
-        got = aw.measure_whole_file(path, loudness=True, edges_wanted=True, timeout_s=60)
-    lead, tail, dur = got["edges"]
-    assert dur == 4000, got["edges"]
-    assert lead is not None and 1000 <= lead <= 1002 and 999 <= tail <= 1001, got["edges"]
+
+    def edges(level_db, channels):
+        tone = amp_db(level_db) * np.sin(2 * np.pi * 441.0 * t)
+        mono = np.concatenate([np.zeros(sr), tone, np.zeros(sr)]).astype(np.float32)
+        buf = mono if channels == 1 else np.stack([mono, mono], axis=1).reshape(-1) * (10 ** (-3.0103 / 20))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "x.wav")
+            write_wav(path, buf, sr, channels=channels)
+            return aw.measure_whole_file(path, loudness=False, edges_wanted=True, timeout_s=60)["edges"]
+
+    # 1.5 dB over the floor in the file airs 1.5 dB under it: silent on air.
+    assert edges(aw.SILENCE_DBFS + 1.5, 1) == (None, None, 4000), edges(aw.SILENCE_DBFS + 1.5, 1)
+    # 4.5 dB over airs 1.5 dB over: heard, from 1 s to 3 s.
+    lead, tail, dur = edges(aw.SILENCE_DBFS + 4.5, 1)
+    assert dur == 4000 and 1000 <= lead <= 1002 and 999 <= tail <= 1001, (lead, tail, dur)
+    # The same as the stereo file Liquidsoap makes of it (16-bit rounding apart).
+    assert edges(aw.SILENCE_DBFS + 1.5, 2) == (None, None, 4000)
+    upmixed = edges(aw.SILENCE_DBFS + 4.5, 2)
+    assert upmixed[2] == 4000 and abs(upmixed[0] - lead) <= 1 and abs(upmixed[1] - tail) <= 1, (upmixed, lead, tail)
 
 
 # ── the loudness curve (ebur128 per-frame short-term) ──────────────────────

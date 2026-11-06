@@ -2782,8 +2782,9 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
            "-i", src, "-map", "0:a:0", "-vn"]
     # Measured as it airs: stereo, at 48 kHz at most. Both come from a probe
     # of the header first, and a file already stereo (or mono) at 48 kHz or
-    # below runs exactly the command it always did; a failed probe measures
-    # the file as it is, as before.
+    # below runs exactly the command it always did (a mono file's edges are
+    # judged on the upmix it airs as, below); a failed probe measures the file
+    # as it is, as before.
     # - More than two channels (a 5.1 FLAC): ebur128 weights all six, while
     #   the station airs Liquidsoap's stereo downmix, so the figure read about
     #   4 dB louder than the air. The downmix runs in float (sample_fmts=dbl):
@@ -2816,13 +2817,14 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
         filters.append("ebur128=peak=sample+true:framelog=verbose")
     if filters:
         cmd += ["-af", ",".join(filters)]
-    # The PCM the edges are judged on, float at the measured rate. A mono file
-    # stays one channel: `-ac 2` upmixes it at 0.707 a side, which judged its
-    # edges 3 dB under the absolute floor silence_edges_ms reads the file at.
-    # Anything else is stereo (a surround file is already downmixed above).
-    pcm_channels = 1 if channels == 1 else 2
+    # The PCM the edges are judged on: float at the measured rate, stereo as it
+    # airs. A surround file is already downmixed above. A mono file is upmixed
+    # by `-ac 2` at 0.707 a side (-3.01 dB), which is what Liquidsoap airs it
+    # as: on 2.4.6 a mono FLAC, MP3 or WAV peaking at -24.1 dBFS airs at -27.1
+    # on each side. So a mono file's edges are judged 3 dB under its own
+    # samples, at the level a listener hears.
     if edges_wanted:
-        cmd += ["-ac", str(pcm_channels), "-f", "f32le", "pipe:1"]
+        cmd += ["-ac", "2", "-f", "f32le", "pipe:1"]
     else:
         cmd += ["-f", "null", "-"]
 
@@ -2849,7 +2851,7 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
             pass
     timer = threading.Timer(limit, kill)
     timer.start()
-    scanner = EdgeScanner(channels=pcm_channels) if edges_wanted else None
+    scanner = EdgeScanner(channels=2) if edges_wanted else None
     try:
         if scanner is not None:
             pending = b""

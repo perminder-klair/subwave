@@ -630,7 +630,12 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
    1 + centre and surrounds 0.707, no LFE, unnormalised, which is what
    ffmpeg's float downmix gives, while ebur128 over six channels read about
    4 dB above the air and an integer downmix (normalised) 7.6 dB below it.
-   Mono is left alone: ebur128 reads it as Liquidsoap's upmix airs it.
+   Mono's loudness is left alone: ebur128 reads it as Liquidsoap's upmix airs
+   it. Its edges are judged on the `-ac 2` upmix, 0.707 a side, which is what
+   Liquidsoap airs: on 2.4.6 a mono FLAC, MP3 or WAV peaking at -24.1 dBFS
+   airs at -27.1 on each side. That is 3 dB under the file's own samples,
+   where the window path's `silence_edges_ms` reads them, so on a mono file
+   the two paths' edges differ by those 3 dB, and the whole-file one is right.
    `ebur128` also takes any rate, so a DSD file
    decoded at 352.8 kHz had its ultrasonic noise (the DSD noise shaping)
    K-weighted into the reading: a fade levelled off near -27 LUFS, and the
@@ -638,8 +643,9 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
    `MEASURE_MAX_RATE` gets `aresample=48000` ahead of both. Rate and channels
    come from an `ffprobe` of the header first (`probe_audio_format`), because ffmpeg 5.1 cannot negotiate a
    LIST of rates (`aformat` with several `sample_rates` fails on a 96 kHz
-   input). A stereo or mono 44.1/48 kHz file runs the command it always did,
-   and a failed probe measures the file as it is, as before.
+   input). A stereo or mono 44.1/48 kHz file runs the command it always did
+   (a mono one upmixed for its edges, as above), and a failed probe measures
+   the file as it is, as before.
 
 The window path (the default, without `ANALYZE_WHOLE_FILE`) follows the same
 rule: `measure_loudness` measures a decode of more than two channels as its
