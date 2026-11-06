@@ -298,7 +298,7 @@ weave into this segment. Valid fields:
 | `date` | day of week, date, season |
 | `clock` | local clock time, plus weekend / late-night / commute tags |
 | `time` | the daypart and its vibe (e.g. "morning, productive") |
-| `weather` | current condition, temperature, and the on-air location unless the DJ prompt template drops `{location}` |
+| `weather` | current conditions in the forecast's own words ("mainly clear", "light rain showers"), temperature, and the on-air location unless the DJ prompt template drops `{location}` |
 | `festival` | the named festival, if today is one |
 | `show` | the scheduled show on air, if any |
 | `listeners` | how many people are tuned in |
@@ -533,6 +533,8 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 | `services.fetchHeadlines({ feedUrl?, maxItems?, maxAgeDays?, deadlineMs?, requireFeed? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) into `{ title, description, published? }` items. `published` is an ISO time, or a bare `YYYY-MM-DD` when the feed gives a day and no clock. `deadlineMs` replaces the 15 s default with a limit that covers the body too, and `requireFeed` throws on a 200 that isn't a feed instead of returning no items |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
+| `services.weatherOutlook()` | the next six hours of the station's forecast — `{ nextHours, notes, kinds }`: one row per hour (`inHours`, where 0 is within the hour, `conditions`, `temp`, `rainChancePct`), plain-English notes such as "rain likely in about 3 hours (70% chance)" or "light drizzle possible in about 5 hours", and `kinds`, what each note is about without its timing (`rain-likely`, `clearing`, `cooler`, …), for telling a new note from a standing one. Empty, with `kinds: null`, when no forecast is known or the last one is over an hour and a half old (an Open-Meteo outage). No extra fetch: it reads the forecast `ctx.weather` came from, aged to the moment you call it |
+| `services.weatherNews({ condition, kinds }, state)` | whether that reading is news against the skill's `state`: `{ skyChanged, outlookChanged, withdrawn }`. The sky is the condition. The outlook is news only when it says something the last weather segment didn't: a note whose timing moved is not news, nor a temperature note, nor rain going from possible to likely, nor a note that has gone, except rain (or snow, or thunderstorms) the last segment promised that is no longer coming, for which `withdrawn` holds a note to add to your outlook ("rain no longer expected in the next 6 hours"). It is the same check the station's segment gates make, so a weather tool that reports through it can't call news what the station would not air |
 
 Every skill's `tool.mjs` is **timeout-guarded (8 s)** and any throw degrades
 cleanly to "no data" — a slow or broken skill can never hang the between-track

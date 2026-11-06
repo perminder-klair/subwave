@@ -32,6 +32,9 @@ import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
 import * as sfx from '../broadcast/sfx.js';
+import { getWeatherOutlook } from '../context.js';
+import { isWeatherNews, recordWeatherAired, weatherMention, type WeatherMention } from './weather-policy.js';
+import type { WeatherCondition } from '../weather-codes.js';
 
 // dataBlock lives in llm/segment-tools.js so the co-hosted pool path can share
 // it without an import cycle; re-exported here for llm-bench's existing path.
@@ -175,7 +178,10 @@ interface SegmentState {
   // Burn-on-read memory for the generic feed tool (skills/feed.ts), keyed by
   // kind so two feed skills can't suppress each other's items.
   feedSeen: Map<string, Set<string>>;
-  lastWeatherCondition: string | null;
+  lastWeatherCondition: WeatherCondition | null;
+  // The outlook key (weather-policy.ts outlookKey) the last aired weather
+  // segment's tool returned; null until one returned an outlook.
+  lastWeatherOutlook: string | null;
   lastSearchedArtist: string | null;
   lastAnySegment: number;
 }
@@ -184,9 +190,34 @@ const segmentState: SegmentState = {
   seenHeadlines: new Set<string>(),
   feedSeen: new Map<string, Set<string>>(),
   lastWeatherCondition: null,
+  lastWeatherOutlook: null,
   lastSearchedArtist: null,
   lastAnySegment: 0,
 };
+
+// Whether the weather is news this tick: the sky or its outlook changed since
+// the last aired weather segment. Both gates below ask this, and the weather
+// tool asks the same helper through services.weatherNews (weather-policy.ts).
+function weatherIsNews(ctx) {
+  return isWeatherNews({ condition: ctx?.weather?.condition, kinds: getWeatherOutlook().kinds }, segmentState);
+}
+
+// One run's view of the weather tool. `onData` sees every tool result the run
+// gets (the agent's tool loop, or the direct fetch), and `aired` records what
+// the weather tool actually returned, rather than re-reading a forecast that the
+// model call and TTS may have given time to move on. One per run, since an
+// operator press can overlap a tick.
+function weatherRun() {
+  let mention: WeatherMention | null = null;
+  return {
+    onData: (kind: string, data: unknown) => {
+      if (kind !== 'weather') return;
+      const seen = weatherMention(data);
+      if (seen) mention = seen;
+    },
+    aired: (ctx) => recordWeatherAired(segmentState, ctx?.weather?.condition, mention),
+  };
+}
 
 // Minimum gap between ANY two segments, by station frequency. Infinity for
 // silent: the auto tick never airs (forced runs bypass this).
@@ -319,10 +350,10 @@ export const directorAgent = defineAgent({
   timeoutMs: segmentDeadline,
   buildSystem: ({ persona, caps, freq, sfxCatalog }) =>
     directorSystem(persona, caps, freq, sfxCatalog),
-  buildTools: ({ ctx, segmentState, caps }) => ({
+  buildTools: ({ ctx, segmentState, caps, onData }) => ({
     // Co-hosted skills run their own cast-shaped tool loop after selection.
     // Their data tools must not be called in this generic selection pass.
-    tools: buildSegmentTools(ctx, segmentState, caps.filter((cap) => !cap.cohosts)),
+    tools: buildSegmentTools(ctx, segmentState, caps.filter((cap) => !cap.cohosts), { onResult: onData }),
   }),
 });
 
@@ -372,16 +403,15 @@ function buildCohostedSituation(ctx, cap, { forced = false, brief = null }: { fo
 // model still gets to choose silence. Everything downstream is shared with
 // agenticTick.
 
-// Which capability the simple path airs. Weather wins when the condition
-// actually changed (the one segment with a hard freshness signal) and is dropped
-// entirely when it hasn't; otherwise the least-recently-aired capability, random
-// among ties so the rotation spreads across the catalogue.
+// Which capability the simple path airs. Weather wins when it is news (the sky
+// or its outlook changed: the one segment with a hard freshness signal) and is
+// dropped entirely when it isn't; otherwise the least-recently-aired
+// capability, random among ties so the rotation spreads across the catalogue.
 export function chooseCapability(caps, ctx) {
-  const condition = ctx.weather?.condition || null;
-  const weatherChanged = !!condition && condition !== segmentState.lastWeatherCondition;
-  const pool = caps.filter(c => c.kind !== 'weather' || weatherChanged);
+  const weatherNew = weatherIsNews(ctx);
+  const pool = caps.filter(c => c.kind !== 'weather' || weatherNew);
   if (!pool.length) return null;
-  if (weatherChanged) {
+  if (weatherNew) {
     const weather = pool.find(c => c.kind === 'weather');
     if (weather) return weather;
   }
@@ -437,7 +467,7 @@ async function deadlinedSegmentObject(args: Record<string, unknown>) {
 // usable or the skill permits free generation — one djObject call. Returns the
 // same shape agenticTick consumes from the agent, seg null for silence. Unusable
 // data is silence with no model call at all.
-async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
+async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog, onData }) {
   const cap = chooseCapability(caps, ctx);
   if (!cap) return { seg: null, exchange: null, reason: 'nothing fresh to say' };
   if (cap.cohosts) {
@@ -446,7 +476,7 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     const result = await runCohostedCapability({
       capability: cap, host, guests, context: ctx,
       situation: buildCohostedSituation(ctx, cap),
-      segmentState, forced: false,
+      segmentState, forced: false, onData,
     });
     if (result.aired) lastUnavailable.delete(cap.kind);
     else lastUnavailable.set(cap.kind, Date.now());
@@ -458,6 +488,7 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     };
   }
   const data = await fetchSegmentData(cap, ctx, segmentState);
+  onData(cap.kind, data);
   const blocked = standDownReason(cap, data);
   if (blocked || data?.error) {
     lastUnavailable.set(cap.kind, Date.now());
@@ -511,12 +542,11 @@ export async function agenticTick(ctx) {
   const caps = availableCapabilities(ctx, now);
   if (caps.length === 0) return;
 
-  // Weather alone and unchanged is provably nothing to say; skip the LLM call.
-  if (caps.length === 1 && caps[0].kind === 'weather'
-      && ctx.weather?.condition && ctx.weather.condition === segmentState.lastWeatherCondition) {
-    return;
-  }
+  // Weather alone and not news (neither the sky nor its outlook changed, or no
+  // reading at all) is provably nothing to say; skip the LLM call.
+  if (caps.length === 1 && caps[0].kind === 'weather' && !weatherIsNews(ctx)) return;
 
+  const weather = weatherRun();
   tickBusy = true;
   try {
     // Empty catalogue when SFX are disabled — the agent is never offered effects.
@@ -527,7 +557,7 @@ export async function agenticTick(ctx) {
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
     if (settings.get().llm?.segmentRuntime === 'direct') {
-      ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
+      ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog, onData: weather.onData }));
     } else {
       // Brief the agent with aired curiosity so a pool-exhausted fallback
       // doesn't repeat itself (#577).
@@ -535,7 +565,7 @@ export async function agenticTick(ctx) {
       const { object } = await directorAgent.run({
         messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps), recentCuriosity }) }],
         persona: speaker, caps, freq, sfxCatalog,
-        ctx, segmentState,
+        ctx, segmentState, onData: weather.onData,
       });
       // `air: false` is the explicit silence signal; a missing segment despite
       // air=true degrades to silence rather than erroring.
@@ -552,7 +582,7 @@ export async function agenticTick(ctx) {
           const result = await runCohostedCapability({
             capability: selected, host, guests, context: ctx,
             situation: buildCohostedSituation(ctx, selected),
-            segmentState, forced: false,
+            segmentState, forced: false, onData: weather.onData,
           });
           exchange = result.aired ? { kind: selected.kind, lines: result.lines || [], castNames: [host, ...guests].map(p => p.name) } : null;
           if (result.aired) lastUnavailable.delete(selected.kind);
@@ -568,7 +598,7 @@ export async function agenticTick(ctx) {
       if (!aired) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
       lastFired.set(exchange.kind, Date.now());
       segmentState.lastAnySegment = Date.now();
-      if (exchange.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
+      if (exchange.kind === 'weather') weather.aired(ctx);
       if (exchange.kind === 'curiosity') recordCuriosity(exchange.lines.map((line) => line.text).join(' '), { aired: true });
       return;
     }
@@ -618,9 +648,7 @@ export async function agenticTick(ctx) {
     // generated twice. Durable "aired" facts wait for the voice lifecycle.
     lastFired.set(seg.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
-    if (seg.kind === 'weather' && ctx.weather?.condition) {
-      segmentState.lastWeatherCondition = ctx.weather.condition;
-    }
+    if (seg.kind === 'weather') weather.aired(ctx);
 
     // Record what aired so the durable ledger keeps both the tool and the
     // fallback path from repeating it after a restart (#577).
@@ -748,6 +776,7 @@ export async function runCapability(
     return { aired: false, queued: false, deferred: false, text: null, reason: 'reserved for episode preparation' };
   }
   ctx = await prepareEpisodeContext(ctx);
+  const weather = weatherRun();
   if (cap.ready && !cap.ready()) {
     // Hint at the missing key when the capability is keyed.
     let hint = '';
@@ -779,6 +808,7 @@ export async function runCapability(
     const situation = buildCohostedSituation(ctx, cap, { forced: true, brief });
     const result = await runCohostedCapability({
       capability: cap, host, guests, context: ctx, situation, segmentState, forced: true,
+      onData: weather.onData,
     });
     if (!result.aired || !result.lines) {
       // The same backoff as a solo forced run that wrote a stand-in, below.
@@ -791,7 +821,7 @@ export async function runCapability(
     if (!aired) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
     lastFired.set(cap.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
-    if (cap.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
+    if (cap.kind === 'weather') weather.aired(ctx);
     if (cap.kind === 'curiosity') recordCuriosity(result.lines.map((line) => line.text).join(' '), { aired: true });
     const text = result.lines.map((line) => `${line.persona.name || 'DJ'}: ${line.text}`).join('\n');
     return { aired: true, queued: true, deferred: false, text, reason: result.reason };
@@ -825,6 +855,7 @@ export async function runCapability(
     // and the moment alone); a GROUNDED skill does not, since its whole segment
     // was to be about what the fetch didn't return, so there is no model call.
     const data = await fetchSegmentData(cap, ctx, segmentState);
+    weather.onData(cap.kind, data);
     const blocked = standDownReason(cap, data);
     if (blocked) return standDown(blocked);
     object = await deadlinedSegmentObject({
@@ -848,7 +879,8 @@ export async function runCapability(
       messages: [{ role: 'user', content: situation }],
       persona: speaker, cap, sfxCatalog,
       ctx, segmentState,
-      onData: (_kind: string, data: unknown) => {
+      onData: (kind: string, data: unknown) => {
+        weather.onData(kind, data);
         const why = standDownReason(cap, data as never);
         if (why) blocked = why; else usableSeen = true;
       },
@@ -917,9 +949,7 @@ export async function runCapability(
   // waits for actual post-air completion.
   lastFired.set(cap.kind, Date.now());
   segmentState.lastAnySegment = Date.now();
-  if (cap.kind === 'weather' && ctx.weather?.condition) {
-    segmentState.lastWeatherCondition = ctx.weather.condition;
-  }
+  if (cap.kind === 'weather') weather.aired(ctx);
 
   // Record an operator-fired curiosity line in the ledger too (#577).
   if (cap.kind === 'curiosity') {
