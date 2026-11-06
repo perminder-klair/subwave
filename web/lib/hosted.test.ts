@@ -63,3 +63,15 @@ test('the persona engine picker takes the controller\'s rule from the mirror, no
   assert.match(src, /import \{ hostedPersonaEngines \} from '[./]+\/lib\/schemas\.generated'/);
   assert.doesNotMatch(src, /\['inherit', 'kokoro', 'piper'/);
 });
+
+// SUB/WAVE Cloud sells listening hours; the listener and bitrate ceilings are
+// unpublished guards for the box's shared port. The settings panel still
+// enforces the bitrate ceiling but never shows the listener number, and no
+// copy frames either one as the plan's limit.
+test('the settings panel presents neither ceiling as a plan limit', () => {
+  const src = readFileSync(new URL('../components/admin/SettingsPanel.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /listenerCap/);
+  assert.doesNotMatch(src, /(station&apos;s|station's|your|this) plan\b/i);
+  assert.match(src, /const \{ maxBitrate \} = useHosted\(\)/);
+  assert.match(src, /underCeiling\((OPUS|AAC|MP3)_BITRATES\)/);
+});
