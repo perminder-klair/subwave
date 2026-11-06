@@ -5503,17 +5503,6 @@ export type StationCreate = z.output<typeof stationCreateSchema>;
 // shares the name rule and nothing else.
 export const stationRenameSchema = z.object({ name: stationNameSchema });
 
-// ─── from controller/src/schemas/sub-flow.ts ─────────────────────────────
-
-export const subFlowNameSchema = z.object({
-  name: z.string().trim().min(1).max(200),
-});
-
-export const subFlowInputSchema = subFlowNameSchema.extend({
-  enabled: z.boolean(),
-  trackIds: z.array(z.string().min(1).max(128)).min(2).max(3),
-  revision: z.number().int().positive().optional(),
-}).strict().refine(value => new Set(value.trackIds).size === value.trackIds.length, 'Tracks must be different');
 // ─── from controller/src/schemas/steer.ts ────────────────────────────────
 
 // A steer: the operator leans the music and the talk for a while, without
@@ -5663,6 +5652,18 @@ export function steerClause(text: string | null | undefined): string {
 export function quotedSteer(text: string | null | undefined): string {
   return typeof text === 'string' ? text.trim().replace(/"/g, "'") : '';
 }
+
+// ─── from controller/src/schemas/sub-flow.ts ─────────────────────────────
+
+export const subFlowNameSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+});
+
+export const subFlowInputSchema = subFlowNameSchema.extend({
+  enabled: z.boolean(),
+  trackIds: z.array(z.string().min(1).max(128)).min(2).max(3),
+  revision: z.number().int().positive().optional(),
+}).strict().refine(value => new Set(value.trackIds).size === value.trackIds.length, 'Tracks must be different');
 
 // ─── from controller/src/schemas/transitions.ts ──────────────────────────
 
