@@ -617,7 +617,7 @@ export interface SettingsData {
     // Where the key a Firecrawl search sends comes from; null when the slot holds
     // none, or holds another provider's, which searches refuse.
     firecrawlKeySource?: 'settings' | 'env' | null;
-    // The keyed providers (Tavily, Brave, Firecrawl) whose searches would refuse
+    // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl) whose searches would refuse
     // the key on file, because it is another provider's. Empty with no key.
     keyRefusedBy?: string[];
   };

@@ -149,6 +149,7 @@ Failed or deferred state migration keeps automatic recovery retryable.
 - **A strict-filter show is its own catalogue** (both paths): the count-based hard no-repeat window (`llm.noRepeatWindow`) is clamped by `music/show-recency.ts` `showNoRepeatGuard` to the universe a pick may draw from. A strict PLAYLIST was always clamped to its own size; a strict-FILTER show now is too, via `strictShowLibraryPool` — the library's lock projection (`library.candidateFilterTracks()`) through the same `airableAnchorTracks` rule (never-starve locks, length ceiling and floor, excluded playlists). Sized from the whole library instead, a 290-play window against a 49-track show withheld every eligible track within hours and every discovery source came back empty. When that pool is at most `SMALL_SHOW_POOL_MAX` (150) the Agentic route also gets **`showPoolTracks`**, which hands the pool over (20 per call, through the ordinary `collect()` locks and recency) instead of leaving the model to probe searches that return nothing; a strict playlist or a prepared episode already names its own source and does not get it. Pinned by `scripts/show-pool.test.ts`.
 - **Show filters answer from the row they are given** (#2235): every library-row mapper (`rowToTrack`, the mood and energy pools, `candidateFilterTracks`, `library.get` and `slimTrack`, the blocklist's `ruleMatchRows`) carries `genre`/`genres`, all but `ruleMatchRows` carry `energy`, and all but it and the mood pool carry both vocal windows, an unknown value as an explicit `null` (or `[]`). `trackEnergy`, `trackGenres` and `trackInstrumental` answer from such a row. Only a shape without the key looks the track up with `library.get`, which reads and parses the whole row: `{ id }`, a raw Subsonic child (whose `genres: []` alone is not the library's answer, since scene aliases rewrite it and an empty re-walk keeps the old tags), and the mood pool's missing vocal fields. Reading `null` as "go and look" re-read every unmeasured row of a strict show's per-pick pool (`strictShowLibraryPool`) for the same answer: 2.3–3.5 s per pick on a 50k lean library, against 0.1–0.2 s now. So a mapper must never emit one of these keys for a column its query did not select, or the filters trust a made-up `null`. Pinned by `scripts/show-filter-row-trust.test.ts`; `npm run bench:lookups` times the pool.
 - **Full playlist rotation** (both paths, #1612): a per-show `playlistExhaust` — while this show is on, every track in its anchor playlist airs once before any of them repeats. **Default off, and off is byte-identical**: the station-wide `llm.noRepeatWindow` and every other show are untouched. It is a **no-op without `playlistStrict`**, decided that way rather than refused, because a soft anchor may leave the playlist and "every track once" then has no set to be true of — refusing the combination would mean a show that cannot be saved halfway through being configured. The editor only offers the switch behind the strict one, so the dependency is visible there and merely inert in the schema, which is what a hand-edited `settings.json` needs. **The decision lives only in `music/show-recency.ts`** (`showNoRepeatGuard`, which already existed to stop the agent path and the pool picker disagreeing about how wide the hard window is) and reaches the air through `resolveShowShape`'s allowlist — a field missing there is a switch that saves, renders and does nothing (#779). **The window is counted over the rotation's OWN airings, never the station's** (#1919). Both paths take their hard set from `show-recency.hardRecentFor`, which hands every other show to `queue.recentlyPlayedByCount(n)` as before and a full rotation to `rotationHardSet`: its `n+1` most recently aired identities, read through `queue.rotationAirTimes()`. That reader is the durable plays index (`library.lastAiredInfo`, so a weekly show's rotation outlives the 96h sidecar) under the sidecar's own end stamps, with the on-air track and everything queued stamped `Infinity` — committed to air, so spent. Measured station-wide, the window was the bug: on the reported station a 5-hour show the night before filled a 107-play window with its own tracks, so the playlist's tracks heard just before the break came round again with 8 and often 20+ still waiting, and the pick among that wide eligible set was random. A play of a rotation track on ANOTHER show still counts — the listener heard it, and the plays carry no show on the sidecar — while an off-playlist play never does. **The window is the rotation's size less TWO, and both slots are load-bearing**: the `+1` above is the slot `recentlyPlayedByCount` always spent on the ON-AIR track, and one identity has to survive, because the count-based guard is checked OUTSIDE the starvation cascade and a window withholding the whole rotation is an empty pool, which is the LLM pick skipped. So `S-2` withholds `S-1` and leaves exactly the track that has waited longest (or every one never aired), which makes the hard set itself the longest-waiting-first rule, and the repeat lands on pick `S+1`. Equal stamps must compare as equal in that sort: `Infinity - Infinity` is `NaN`. `exhaustiveNoRepeatWindow` deliberately skips `effectiveNoRepeatWindow`'s 37.5% library ceiling and its 15-track floor — both tame a number the operator TYPED against a catalogue it was never measured on, and clamping a window derived from its own universe to 37.5% of that same universe only ever means "don't do the thing you were asked to do". **The counted universe is what can AIR**: post-strict-lock, post-exclusion, identity-deduped (two rips of one song consume one slot in the real rotation), and post-`minTrackSec` — the #1573 floor is HARD in the agent's tools, so counting a playlist's 40-second interludes would size the window against a rotation bigger than the one really turning, which under an exhaustive window is the difference between one eligible track and none. The blocklist needs no handling: `subsonic.getPlaylist` already runs `rejectBlocked`, so the anchor arrives clean. **Never-starve**: a rotation too small to leave the headroom yields 0 — the guard switches off and the relaxable cascade takes the show — and it must NOT fall back to the configured `N` instead, which would reintroduce the guard the headroom just refused. Recomputed per pick, so a playlist grown in Navidrome widens the rotation on the next one rather than silently stopping being right. **The auto.m3u coast follows the rotation too** (#1919), so the field IS part of `autoPlaylistShowKey`. With `llm.pauseWhenEmpty` the DJ stops picking whenever nobody listens and the station coasts on this file until the next rebuild, which the refresh cron (`AUTO_QUEUE_REFRESH_MINUTES`) runs at most an hour apart — on the reported station 22% of the show's plays. The boundary where the DJ stops also rebuilds it when it holds what the queue just aired, which a rotation's always does, since both pickers take the head of this file (#1975, `broadcast/coast-handover.ts`; see broadcast.md). (A stream idle pause, `stream.idleWhenEmpty`, is not that: it freezes the music chain, so nothing coasts while it holds.) The coast used to hard-filter the strict playlist through the station-wide `trackHours` window, and `take()`'s never-starve only fires on ZERO, so a show airing most of the day kept 2–5 tracks and Liquidsoap looped them (one track six times in an hour and forty minutes). Now the scheduler asks the same `showNoRepeatGuard` for `rotation` and, when there is one, the coast IS `rotationCoast`: the longest-waiting half of the rotation at most, capped at the strict-playlist share (`SHOW_PLAYLIST_STRICT_WEIGHT`), taken with `ignoreRecency` (the order is its recency) and replacing the sampled sources, which could only add in-playlist tracks out of turn. It is a SET, not an order, because Liquidsoap plays the file `mode="randomize"` — reordering the mixer was rejected for in-order playback below for the same reason — so the half keeps any shuffle of it inside the rotation's next stretch and away from what the listener just heard. **Every strict playlist, rotating or not, then gets a floor** (`coastFloor`, `COAST_MIN_SEC` = an hour of audio): under it the coast is topped up from the playlist's longest-waiting tracks through `airableAnchorTracks` (the same "can this anchor track air" rule), after the end filters and before the length ceiling. An unknown length counts as nothing, so the miss is a longer file, never a shorter loop; the on-air and queued tracks are the last resort; and like every never-starve here it returns a fresh array. A prepared episode keeps its own coast. A strict playlist whose whole airable set is under an hour still loops, and says so. **One thing it forced open**: the pool picker's show-playlist source sliced to `CAP_SHOW_PLAYLIST_STRICT` (24) BEFORE the hard set was applied, so an un-pruned random sample of a 40-track anchor missed the one eligible track ~40% of the time and the strict show fell out to its never-starve with nothing in the log to explain it — `sampleShowSource` now prunes hard-blocked tracks before the cap, gated on the guard's own `exhaustive` flag so every other show samples exactly as before, and never-starving twice over (a wholly-blocked list falls back whole, and so does a wholly-recent one). The agent path needed nothing: `collect()` filters before it caps and orders by freshness. Pinned by `scripts/playlist-exhaust.test.ts`, including rotation simulations through the real `hardRecentFor` with a random pick among the eligible tracks — the only way to show that "40 distinct before a repeat" is what the number actually produces on air — and a 109-track rotation interleaved with another show's 75-track stretches, with the station-wide window as its counterfactual; the coast by `scripts/playlist-rotation-coast.test.ts`.
+- **Operator steer** (every pick route: Agentic, Track Shortlist and the pool): `settings.steer` is a playlist and/or a line of direction with an expiry, started from the dashboard and never written into the schedule. It does NOT change which show is on air — every identity reader keeps `resolveActiveShow` — and reaches the pick paths through `settings.resolvePickShow(date)`, which lays `music/steer.ts`'s `steeredShow` over the active show at the pick's look-ahead instant. A playlist steer makes that show a strict, fully rotated anchor on the playlist (the machinery above, unchanged) and sets the show's own filters, playlists and artist episode aside (its tracks and its editorial brief both); a prompt-only steer changes no field and travels as text (`steerClause`: the last user turn of the agent picker's own call via `withSteer`, the Track Shortlist picker's prompt, both corrective re-picks, the pool picker's one-shot system prompt, the song-link prompt, and the context lines of the talk a steer leans: song intros, the segment director, banter and programme features, each opting in with `buildContextLines`' `steer: true`), never a cached system prompt. Nothing else the host says gets it (idents, time checks, sign-offs, greetings, ad-libs, programme intros and outros), and the programme plan never does (`steer: false`): it is kept for the whole episode and its angle rides the public context, so a direction written into it would outlive the steer and reach listeners. Its wording keeps every line quiet about the direction, except the steer's own introduction (`introduce`), the link into its first opening track: that one says in its first sentence where the music is heading, in the host's own words, from the request's own text (a `once` steer is never stored), and names a coming artist; a playlist-only steer names the coming artists instead, and a single track (`once`) says what that one track brings rather than where the music is heading. A line that reads out six or more of the operator's own words in a row is dropped and the tracks play without it (`music/steer.ts` `echoesSteer`). It still never mentions the operator or that anything was changed (`linkPrompt`'s `steerIntro`, pinned in `scripts/steer-preview.test.ts` and `scripts/steer-talk.test.ts`). The Shortlist route still plans its searches from the show (`prepareShortlistSearches`), like the pool's candidate sample, so a prompt-only steer can only choose among what those return; the Agentic route searches with it. The text is read from settings where a prompt is built and is stored nowhere else: not on the context object, which `GET /now-playing` returns to listeners, and not on a session turn, which the request agent reads beside a listener's own words. A prompt built around a listener's request leaves it out (a request intro never opts in). "Nothing repeats until the list is exhausted" is the station-wide play history, so tracks of that playlist aired recently are withheld on the first lap, and a playlist of two tracks or fewer loops freely. Every steer OPENS WITH A FIXED LIST: one pool-picker call (`pickViaPool`'s `preview` option, `routes/steer.ts`) works out its first tracks, Preview shows and remembers them for five minutes (`STEER_PREVIEW_MS`, keyed by playlist, direction and "start now", which decides the track the list follows: with it, the tail left once the DJ's picks are dropped, `queue.tailTrack`; `steerPreviewKey`), and Start queues exactly those, as many as START before the steer ends (`openingTracksThatFit`, timed from `queue.secondsUntilQueuedTail`, which leaves out what "start now" drops; an unmeasured length stops it trimming), through `enqueuePick` as ordinary picks carrying a private `QueueItem.steer` marker that `snapshot()` does not project — so a listener cannot tell them from the DJ's own, and Clear, expiry or a takeover removes the un-aired ones. One call choosing the whole list is the point of choice for every track in it, so the list keeps the station's artist spacing among its own tracks (`music/steer.ts` `spaceOpeningList`, the live guard's act matching): no artist again within `llm.artistVarietyWindow` places, and never back to back even with the window at 0, as the pick-anchor guard holds for a live pick. A repeat is held back, not replaced, while the pool offered a track by another act; when it offered none (a one-artist playlist, a prompt that narrows to one act) the window narrows to back to back and then lets the repeat through, as a live pick's spacing relaxes, and Preview and Start say so in their warnings. The tracks the list follows on air are the pool's neighbour window, and an artist episode is left unspaced, as a live pick leaves it. The preview prompt states the same rule. A steer none of whose opening tracks could start before it ends is refused before a model call is spent. A start that fails part-way takes back its own tracks and puts back the steer and takeover that were in force, but not a replaced steer's un-aired opening tracks, which were taken back before the new ones were queued. While a takeover is live the list is worked out for the moment as the grid has it (`getFullContext`'s `ignoreTakeover`) with no prepared episode, because Start ends that takeover and the show preparation only knows the outgoing one's. A steer starts and ends only through `/steer`; generic `POST /settings` refuses the key. A steer and a takeover do not run together: starting a steer ends a takeover, and a takeover saved through `/schedule/override` or the generic `POST /settings` ends a steer (`broadcast/takeover-steer.ts`). Start, Clear, a takeover's save and the five-minute janitor take turns through `serialSteer`. `until: 'once'` stores nothing: one track is worked out and queued under the `STEER_ONCE_KEY` marker, which no clean-up of a stored steer touches, and a running steer or takeover is left alone; with "start now" it still drops the DJ's own queued picks, so the track plays next. Preview, Start and Once are manual operator triggers, so neither the daily token cap nor the station voice switch stops them: at the hard cap the opening tracks still play and the picks after them stand down as every pick does there, and an introduction asked for airs with the voice off (`QueueItem.introByOperator`, read by `voice-policy.ts` `trackLineVoiceAllowed` at every queue backstop). The `auto.m3u` coast does not consult a steer. On a play-in-order show (`playlistInOrder`) a prompt-only steer leans only its opening list and the talk: the walk makes no selection call for a direction to reach, so the picks after the opening list keep walking the show's playlist. A playlist steer stops the walk for its duration (`steeredShow` clears `playlistInOrder`). Pinned by `scripts/steer-*.test.ts`.
 - **Play in order** (`playlistInOrder`): a per-show switch that airs the anchor playlist top to bottom instead of shuffling it — several pinned playlists back to back in `playlistIds` order, each in its Navidrome order, exactly as `mergePlaylistTracks` already concatenates them (that order is the feature now: never sort or shuffle it there). **Default off, and off is byte-identical.** Like full rotation it is a **no-op without `playlistStrict`**, decided the same way and for the same reason, and the one place that rule lives is `playlist-order.isInOrderShow`; when on it supersedes full rotation, which is a weaker form of the same promise. **It is a third pick path, not a filter on the other two**: `runTrackEvent` calls `pickInOrder` after the budget gate and BEFORE `advanceRun`, so no agent run, no pool, no DJ-mode mini-run and no LLM selection call; the chosen track then goes through `enqueueSelected` — the link + enqueue half extracted from `pickViaPool`, so the link, the clock rules, the soft-budget/voice-off silence and the session turn are the pool path's own. The walk stands aside (logged once per cause) and today's paths run untouched whenever it cannot answer: an unresolved anchor, an artist episode steering the airing, or nothing eligible — the station keeps making sound. **The operator's order wins over variety**: artist spacing, the album cooldown, both no-repeat windows, the freshness shuffle and the Leanings review are deliberately NOT applied, the same posture a queued album takes. What still skips a track is what the operator set as a HARD rule: the blocklist (already out of `getPlaylist`, and `push()` re-checks), and the show's own filters through **`show-recency.airableAnchorTracks`** — extracted from `showNoRepeatGuard` so the walk and the full-rotation count read one definition of "can this anchor track air" (strict locks never-starve, length ceiling, the floor HARD, exclusions). Tracks already queued or on air are stepped over before the link is written, because `push()`'s #619 dedup would refuse them after the model call. **The position is durable and per show** (`state/playlist-cursors.json`, `music/playlist-cursors.ts`, outside `library.db` so a library reset keeps it). It names the LAST PICKED track — slot, id and title|artist — never the next one, so an edit between airings resolves against what went out: the walk finds that track by slot, then id, then key (the key is what survives a Navidrome id rotation, so no remap hook is needed) and steps past it; a track since removed resumes at its old slot, which its successor slid into; a change to WHICH playlists anchor the show (or their order, `anchorSignature`) restarts at the top. **It advances at ENQUEUE, not at air**: a pushed track Liquidsoap fails to resolve is already behind the walk, so `onPushResolveFailed`'s re-pick moves on instead of retrying a broken file forever — the accepted cost is that an upcoming item the operator deletes, or one dropped as stale on recovery, counts as played. A push refused past the pre-check is committed past too, and auto.m3u covers that one slot. It loops at the end, resolves the show at `showAt` like both other paths (a pick inside the incoming show's window walks the INCOMING show), and the hard token cap still stops it before any pick. **The auto.m3u coast stays random** — Liquidsoap plays it `mode="randomize"`, ordering it would mean a mixer change for every show on a path reached only on failure or the budget cap — so the field is NOT part of `autoPlaylistShowKey`. Duplicates within or across the pinned playlists still collapse to their first position, and a reorder made in Navidrome reaches the walk when the 30-minute playlist memo expires. The editor shows the next pick through `GET /shows/:id/playlist-position` (the same `resolveInOrderNext` the pick calls) and `DELETE` on the same route restarts from the top. Pinned by `scripts/playlist-order.test.ts`, including a two-airing simulation through the real store.
 - **Maximum track length modes** (#1739): `maxTrackLengthMode` is station-wide, `cut` by default (also for absent/malformed storage); strict saves reject anything except `cut`/`exclude`. `settings.effectiveTrackLengthLimits` preserves show `null` inherit, positive override and zero unlimited, exposing only a playback maximum in `cut` and only a selection maximum in `exclude`. The pure `track-ceiling` policy shares `trackLengthSeconds`; `track-duration` adapts slim aliases and available library metadata without network/media probes. Known lengths above the ceiling are HARD-excluded before discovery caps, pool relaxation and backup intake; equality and unknowns pass. No maximum cue or cap-derived washout is added in exclude; independent trim/boundary/blend cues still work. Requests and studio choices retain their `requestedBy` exemption. Unsent items are checked before speech/bed/silence work and again at music commitment; current/sent music and already committed bed/break handoffs are not cancelled. Rendered blend cues remain provisional until the outgoing URI is published: rejecting either item beforehand deletes the unused clip and restores the surviving track's head. Once published, the blend commits its successor because the clip already contains that track's audio. Empty eligible backup pools replace stale playlists with an empty M3U, relying on existing dead-air safety rather than restoring prohibited music. Cache publication observes save/restore/load and requests a fallback rebuild; a policy epoch and show key prevent stale asynchronous builds from publishing. Small IPC files commit synchronously by atomic rename after the final live-policy check. Prefetched mixer entries may briefly retain prior annotations; changes do not restart the mixer. Source caps and per-album samples count duration-eligible tracks only; album-pool memo keys include the ceiling so live edits cannot reuse a pool sampled under another limit. The picker passes its padded `showAt` forecast through `enqueuePick` to the persisted `selectionShowAt` on the queue item, independently of spoken-clock permission. Queue selection checks re-resolve that date against live settings, falling back to the current show once the date has passed; legacy playback cuts keep their existing clock. Rejecting an unpublished incoming blend also restores its unsent predecessor. New snapshots retain the original exit stamps; older snapshots without them discard the clip timing and let the drain recompute it. URI cue points are read at publication so cancellation during a serialized handoff cannot leave a stale cut.
 
@@ -504,6 +505,173 @@ confirmed `tailVocalAvailable()` support through the shared capability policy;
 unknown support still allows missing head vocals but never widens tail backfill.
 Targeted runs that disable vocals preserve stored tail vocal ranges, including
 an instrumental `[]`, without marking the carried measurement fresh.
+
+**The whole-file facets: `loudness` v2 and `edges`.** Both read the WHOLE file
+at its native rate in ONE ffmpeg run per track (`analyze_worker.py`
+`measure_whole_file`): the `ebur128` filter's summary on stderr gives integrated
+loudness, true peak, sample peak and LRA, and the same decoded audio leaves on
+stdout as float PCM, which `EdgeScanner` reads for the first and last sample
+frame at or above the absolute `SILENCE_DBFS` floor and for the decoded length.
+A request for both pays one decode. ffmpeg's log is parsed a line at a time on
+the drain thread and dropped (`FfmpegLog`), so memory does not grow with the
+file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
+
+1. **The loudness version is the measurement's own.** Every head analysis still
+   writes the analysis window's figure (first `ANALYZE_SECONDS` at
+   `ANALYZE_SR`, sample peak); `deriveFacetRows` reads `loudness_version` (NULL
+   = 1) for the row's version, so a window figure is v1 and stays due, and a
+   whole-file one is v2. Never stamp a facet row at `FACET_VERSIONS.loudness`
+   just because a loudness column is set.
+2. **Nothing measuring less overwrites a v2 figure**: not a flat head analysis
+   (`upsertTrackAnalysis` keeps it), not a window answer from an older analyzer
+   (`writeFacetResults` drops it), not a `--re-analyze` clear (kept, with its
+   facet row). Loudness, true peak, sample peak and LRA are written together or
+   not at all; a silent file is `unmeasurable: silent`, never a half row.
+3. **Edges are their own columns and their own facet** (`edge_lead_ms`,
+   `edge_tail_ms`, `decoded_duration_ms`), untouched by every head/tail write
+   and by the `--re-analyze` clear (`clearAnalysis`). A replaced file is the
+   exception: `clearTrackAudio` drops them with every other measurement of the
+   old audio, the whole-file loudness and its curve included, or
+   `syncTrackFacets()` would mark both facets measured again for a file never
+   read. `music/silence-trim.ts` takes them as ONE set (lead, tail, decoded
+   end) over the window figures, whether on the track object or the stored row,
+   and the playable span ends on the decoded length. A track object that
+   carries the `decodedDurationMs` key (null included, as every library-row
+   mapper writes it) answers for its own edges; one without it has the stored
+   row read, at most once per resolve. Other users of the tagged
+   duration are unchanged. A file with nothing above the floor is
+   `unmeasurable: silent-file`, which settles at the current version.
+4. **The source is the stream URL unless the staged copy is complete.** The
+   window facets decode a byte-capped download; the whole-file ones must not.
+   A path request carries `stream_url` (`analyzer.analyzeFacets`), and the
+   worker reads the path only when `complete: true`. A track planned for the
+   whole-file facets alone is never staged at all: no capped download, one URL
+   request. Errors pass through `redact_urls`, because ffmpeg echoes its input
+   and a Subsonic URL carries a replayable token. **An input that ends early
+   fails both facets, never stores**: ffmpeg exits 0 on a dropped connection
+   with what it decoded, and stored, half a track would be a whole-file figure
+   and a decoded length that ends the track early on air, which nothing
+   measuring less may replace. Two nets. The first is ffmpeg's own "Stream
+   ends prematurely" or I/O error line (`FfmpegLog.input_error`), read only
+   from ffmpeg's own messages: a `[component @ 0x…]` prefix, or the input's
+   name (how 5.1 reports a read error). Never from the header dump, whose
+   Metadata blocks print the file's tags verbatim: a title "Connection Reset
+   By Peer" is the file's text, not news about the read. The second is a
+   decode more than max(5 s, 2 %) short of the length an `ffprobe` of the
+   header gives (`decoded_short_of`; a length ffprobe only estimated from the
+   bitrate judges nothing), and only on a read of unknown length: a server
+   that sends no Content-Length makes even a complete read end on "should be
+   18446744073709551615" and an I/O error (`FfmpegLog.length_unknown`), so
+   those two lines say nothing there and only the length check judges it. A
+   cut in such a stream is caught only for a format whose header carries the
+   length (FLAC, an MP3 with a Xing frame, MP4; not WAV or Ogg), and a file
+   short of its own header fails there too, since nothing tells the two apart.
+   Anywhere else the length check stays out: a read with a Content-Length logs
+   its own cut, and a local copy is whole, so a decode short of the header is
+   the file itself (truncated on disk, a stale Xing frame). That is what
+   airs, so it is measured, rather than failed every run until the shared
+   failure count drops the track out of every analysis scope.
+5. **ffmpeg 5.1 is the floor.** `ebur128=...:framelog=verbose`, never `quiet`
+   (ffmpeg 6+ only; 5.1 rejects the whole filter and every pass fails with
+   "Conversion failed!"). The PCM is `-ac 2 -f f32le` at the file's own rate;
+   the rate is read from the OUTPUT stream line. The summary is read from
+   ebur128's own `[Parsed_ebur128_N @ 0x…] Summary:` line on, never from a
+   tag that says "Summary:", which used the capture up before the real block
+   and stored a loud track as `unmeasurable: silent`.
+6. **Capability is a version signal**: `whole_file_capable` on the worker's
+   ready line, `analyze_whole_file_capable` on the sidecar's `/health`. A
+   backend known to lack it gets the facets skipped as `no-whole-file`, never
+   planned into a pass that can only write a window figure.
+7. **They run when asked**, through the planner (`npm run analyze -- --facets
+   loudness,edges`, `--where`, `--ids`), plus an opt-in backfill:
+   `ANALYZE_WHOLE_FILE=1` makes every regular analysis run end with the same
+   plan over the tracks that need either facet (`wholeFileBackfillPlan`), under
+   the same quiet gate and failure rules; it widens only on an analyzer that
+   positively reports the capability. Off by default, so an upgrade is
+   byte-identical: a first library pass reads every file once. Requests carrying
+   them get `ANALYZE_WHOLE_FILE_TIMEOUT_MS` (960 s, 90-7260 s), 60 s above the
+   analyzer's own `ANALYZE_WHOLE_FILE_TIMEOUT_S` (900 s, 30-7200 s) so the
+   analyzer reports the timeout. A caller's own deadline can lengthen that,
+   never shorten it. Every other request keeps a caller's deadline as given.
+8. **Whole-file requests alone take their own lane.** The sidecar runs a request
+   whose facets are all whole-file in a one-shot `analyze_worker.py
+   --whole-file` process under its own semaphore
+   (`ANALYZE_WHOLE_FILE_CONCURRENCY`, default 4, advertised on `/health`),
+   never on a pool worker that holds CLAP/Demucs, and a pass that plans only
+   whole-file facets sends that many at once instead of `ANALYZE_CONCURRENCY`.
+   A request mixing them with a window facet stays in the pool: one decode of
+   the capped copy for the window, one whole-file decode.
+9. **The loudness answer carries its short-term curve, stored raw.** The same
+   `ebur128` filter prints a short-term loudness S (EBU R128: K-weighted, 3 s
+   window, stamped at the window's end) every 100 ms at the verbose log level,
+   so the run logs at it and `loudness_curve_from_frames` keeps three series,
+   in tenths of a dB with silence at -100 LUFS: `whole` (one point a second over
+   the whole track), `head` (from 3 s to 30 s after the music starts) and
+   `tail` (from 30 s before the music stops to 5 s after it), both every 0.5 s.
+   "Starts"/"stops" are the first and last points above the BS.1770 absolute
+   gate (-70 LUFS), so a long silent tail never leaves the fine window on
+   silence. Stored as `loudness_curve_json` with every v2 figure
+   (`music/whole-loudness-curve.ts` is the one parser); nothing reads it yet:
+   level features (fade or cold ending, outro start, an energy envelope) become
+   computations on it, with no re-decode. A v2 figure stored WITHOUT a curve (an
+   analyzer that predates it) is derived one version below with reason
+   `no-curve`, and re-planned only on an analyzer that reports
+   `loudness_curve_capable` / `analyze_loudness_curve_capable` (skip `no-curve`):
+   an older one would answer without it again, every run. A file shorter than
+   one window stores an empty `whole` series and settles. A pass that ran and
+   had no curve to give settles too, never re-read in full every run. Either
+   its answer says why (`loudness_curve_unavailable`: ffmpeg printed no
+   per-frame line), or the controller's parser refuses the curve it sent (past
+   a day, malformed: `rejected`). Either way it stores
+   `{"unavailable": reason}` in the curve's column (`unavailableCurveJson`),
+   which reads as no curve.
+10. **Measured as it airs: stereo, at 48 kHz at most.** A file with more than
+   two channels (a 5.1 FLAC) is downmixed first, in float
+   (`aformat=sample_fmts=dbl:channel_layouts=stereo`): Liquidsoap airs fronts
+   1 + centre and surrounds 0.707, no LFE, unnormalised, which is what
+   ffmpeg's float downmix gives, while ebur128 over six channels read about
+   4 dB above the air and an integer downmix (normalised) 7.6 dB below it.
+   Mono's loudness is left alone: ebur128 reads it as Liquidsoap's upmix airs
+   it. Its edges are judged on the `-ac 2` upmix, 0.707 a side, which is what
+   Liquidsoap airs: on 2.4.6 a mono FLAC, MP3 or WAV peaking at -24.1 dBFS
+   airs at -27.1 on each side. That is 3 dB under the file's own samples,
+   where the window path's `silence_edges_ms` reads them, so on a mono file
+   the two paths' edges differ by those 3 dB, and the whole-file one is right.
+   `ebur128` also takes any rate, so a DSD file
+   decoded at 352.8 kHz had its ultrasonic noise (the DSD noise shaping)
+   K-weighted into the reading: a fade levelled off near -27 LUFS, and the
+   edges scan found no silence at either end of any `.dsf`. A source above
+   `MEASURE_MAX_RATE` gets `aresample=48000` ahead of both. Rate and channels
+   come from an `ffprobe` of the header first (`probe_audio_format`), because ffmpeg 5.1 cannot negotiate a
+   LIST of rates (`aformat` with several `sample_rates` fails on a 96 kHz
+   input). A stereo or mono 44.1/48 kHz file runs the command it always did
+   (a mono one upmixed for its edges, as above), and a failed probe measures
+   the file as it is, as before.
+
+The window path (the default, without `ANALYZE_WHOLE_FILE`) follows the same
+rule: `measure_loudness` measures a decode of more than two channels as its
+stereo downmix (`stereo_downmix`, the same matrix over the WAV/FLAC default
+channel orders for 3 to 8 channels). Before it, pyloudnorm refused anything
+over five channels ("Audio must have five channels or less"), so every 5.1
+track had no loudness at all and aired without gain normalisation. It also
+measured 3 to 5 channels with BS.1770's own surround weights rather than as
+they air, so those figures move as well, and the tail facet's outro loudness
+of every such file with them, when next analysed. The matrix is chosen by
+channel COUNT: librosa and soundfile return no layout, so a file whose order
+is not its count's default reads the wrong rows. FLAC fixes its order by
+count, so FLAC is always right; the exposure is a WAV with an unusual
+channel mask, or a 2.1, 3.1 or 4.0 decode. The whole-file lane has no such
+gap, because ffmpeg downmixes by the real layout, and its v2 figure outranks
+the window's.
+
+Pinned by `scripts/analyzer_whole_file_test.py` (parsers, chunk-independent edge
+scan, the absolute floor, one decode for both, the source rule, a real ffmpeg
+run when one is on PATH, the window path's downmix against ffmpeg's for 5.1 and 7.1), `scripts/whole-file-facets.test.ts` (versions, no
+overwrite, clear, step 37 on a database that already has the columns),
+`scripts/whole-file-pass.test.ts` (capability skip, no staging, `stream_url`,
+the opt-in backfill), the curve cases in both (parsing the per-frame lines,
+the three series, the `no-curve` rule and its capability skip) and `scripts/silence-trim-library.test.ts` (edges outrank
+the window figures).
 
 ## Prepared artist episodes
 

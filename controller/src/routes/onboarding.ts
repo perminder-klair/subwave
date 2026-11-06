@@ -28,6 +28,7 @@ import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
 import { saveSecrets, SECRET_ENV_KEYS, secretValueIssue } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
+import { stripManagedSecrets, stripManagedSettings } from '../setup/hosted.js';
 import { pingWith } from '../music/subsonic.js';
 
 export const router = express.Router();
@@ -167,13 +168,19 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
       }
     }
 
+    // What hosted mode dropped from this save (setup/hosted.ts), so the reply
+    // can say so, as POST /settings does.
+    const managed: string[] = [];
+
     // state/secrets.env (0600), also set on process.env for immediate use.
     if (b.apiKeys && typeof b.apiKeys === 'object') {
       const patch: Record<string, string> = {};
       for (const k of SECRET_ENV_KEYS) {
         if (typeof b.apiKeys[k] === 'string') patch[k] = b.apiKeys[k];
       }
-      if (Object.keys(patch).length) await saveSecrets(patch);
+      const { patch: allowed, dropped } = stripManagedSecrets(patch);
+      managed.push(...dropped.map(k => `apiKeys.${k}`));
+      if (Object.keys(allowed).length) await saveSecrets(allowed);
     }
 
     const settingsPatch: any = {};
@@ -184,7 +191,12 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     if (b.weather && typeof b.weather === 'object') settingsPatch.weather = b.weather;
     if (typeof b.station === 'string') settingsPatch.station = b.station;
     if (typeof b.timezone === 'string') settingsPatch.timezone = b.timezone;
-    if (Object.keys(settingsPatch).length) await settings.update(settingsPatch);
+    // A hosted station's LLM route and voice engine belong to its box agent.
+    const { patch: allowedPatch, dropped } = stripManagedSettings(settingsPatch, {
+      defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
+    });
+    managed.push(...dropped);
+    if (Object.keys(allowedPatch).length) await settings.update(allowedPatch);
 
     // Mark setup complete so the wizard exits even if Navidrome was skipped.
     await saveSetupConfig({ setupCompletedAt: new Date().toISOString() });
@@ -196,7 +208,7 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
       queue.log('error', `Post-onboarding playlist refresh failed: ${err.message}`),
     );
 
-    res.json({ ok: true, status: await getSetupStatus() });
+    res.json({ ok: true, status: await getSetupStatus(), ...(managed.length ? { managed } : {}) });
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message || 'save failed' });
   }

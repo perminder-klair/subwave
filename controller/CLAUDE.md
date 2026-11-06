@@ -17,7 +17,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 ## Env and secrets
 
-- Read env through `util/env.ts` (`envInt`, `envFloat`, `envUrl`, `envEnum`, `envStr`), never `parseInt(process.env.X || …)`, whose NaN travels. A malformed value warns and falls back, never throws, and the warnings reach the booth log. A few legacy `parseInt` reads remain; don't add more.
+- Read env through `util/env.ts` (`envInt`, `envFloat`, `envUrl`, `envEnum`, `envStr`, `envBool`), never `parseInt(process.env.X || …)`, whose NaN travels. A malformed value warns and falls back, never throws, and the warnings reach the booth log. A few legacy `parseInt` reads remain; don't add more.
 - `state/secrets.env` has one parse (`setup/secrets.ts` `readSecretsFile`), shared by boot and `saveSecrets`' read-then-rewrite merge, and `envEscape` is its designed writer. A second parse that misreads a value destroys that secret on the next save.
 
 ## LLM layer (`llm/`)
@@ -36,6 +36,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 - `broadcast/dj-agent.ts` picks through `llm.trackSelection` (`agentic` or `shortlist`). Both routes run inside `pickViaSelectionRoute`, sharing the guards, the breaker and pool recovery, and `music/picker.ts` is the stateless pool fallback. `trackSelection` is the only route switch (`pickerAgent` is derived for old clients). The Musical Leanings review is one pass for both routes (`dj-agent/leanings-pass.ts`). See `docs/internals/music.md` → Track Shortlist discovery parity, and → Direct listener requests.
 - Listener-request safety is `util/request-guard.ts`, and whether an ack or intro names the queued track is `util/request-claim.ts`. Both serve `routes/request.ts` and the agent's request path; inline neither.
+- An operator steer (`settings.steer`, `routes/steer.ts`, `music/steer.ts`) leans picks and talk without changing the show on air. Pick paths read the show through `settings.resolvePickShow()`, pinned by `scripts/steer-show.test.ts`; a new pick path that calls `resolveActiveShow` directly silently ignores a steer. The text reaches models only through `steerClause`, or `quotedSteer` in the steer's own introduction, and talk prompts opt in (`buildContextLines`' `steer: true`). See `docs/internals/music.md`.
 - A per-client limiter map is a `util/bounded-key-map.ts`, never a hand-rolled `Map` with its own cleanup.
 
 ## Broadcast
@@ -58,6 +59,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 - `writeSkillFile` rewrites SKILL.md from typed fields. It must carry through every key it doesn't own (`preservedFrontmatter`) and quote only what would not round-trip, because operators hand-edit these files.
 - A forced run that gets `{ available: false }` stands down (`skills/abstain-policy.ts`). "Empty" is the tool's knowledge: a drained feed returns `{ available: false, reason }`, never `{ headlines: [] }`. Don't teach `unusableDataReason` one tool's output shape.
 - Code that arrives by zip import or backup restore lands as `tool.mjs.pending`. It goes live only through `POST /dj/skills/:slug/tool/trust` with the SHA-256 of the source the operator was shown, because the loader imports every `tool.mjs` on every scan, enabled or not.
+- A skill may pin its own voice (`voiceEngine`/`voiceId`/`voiceProvider`). `skillVoiceFor` (`_agent.ts`) swaps only the speaker's voice at the two solo announce sites; co-hosted lines keep their roster voices. Its form schema and disk read run persona's voice-slot rules (`schemas/skill-server.ts`), so a new engine needs no skill edit.
 
 ## Backup and personas
 

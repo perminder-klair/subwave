@@ -47,7 +47,7 @@ const version = () => db.requireDb().pragma('user_version', { simple: true }) as
 // Every step's version, as a fresh open stamps it.
 await open();
 const LATEST = version();
-assert.ok(LATEST >= 36);
+assert.ok(LATEST >= 37);
 const columnsOf = (d: Database.Database, table: string) =>
   (d.pragma(`table_info(${table})`) as Array<{ name: string }>).map((c) => c.name);
 const hasExplicitStatus = () => columnsOf(db.requireDb(), 'tracks').includes('explicit_status');
@@ -137,6 +137,7 @@ const STEPS: Array<{ step: number; table: string; column: string }> = [
   { step: 34, table: 'tracks', column: 'lastfm_track_tags_at' },
   { step: 35, table: 'tracks', column: 'audio_descriptors' },
   { step: 36, table: 'tracks', column: 'text_vector_sound' },
+  { step: 37, table: 'tracks', column: 'loudness_version' },
 ];
 
 for (const { step, table, column } of STEPS) {

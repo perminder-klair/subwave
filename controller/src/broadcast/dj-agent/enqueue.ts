@@ -136,7 +136,7 @@ export async function enqueuePick(
   link: string | null = null,
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
-  { linkClockAt = null, introPersona = null, hostSpeech = null, showAt = null }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null; showAt?: Date | null } = {},
+  { linkClockAt = null, introPersona = null, hostSpeech = null, showAt = null, steerKey = null, introByOperator = false }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null; showAt?: Date | null; steerKey?: string | null; introByOperator?: boolean } = {},
 ): Promise<number> {
   // Single chokepoint for the intro budget: every pick path funnels its link
   // through here, so a new caller can't skip it. Near-idempotent for callers
@@ -181,14 +181,23 @@ export async function enqueuePick(
     try {
       await flowPlaybackStatus();
       prepared = await subFlows.preparePlayback(song.subFlow.id, song.subFlow.revision);
-      pos = await queue.queueFlow(prepared, { ...queueOptions, automatic: true });
+      pos = await queue.queueFlow(prepared, {
+        ...queueOptions, automatic: true, steer: steerKey,
+        introByOperator: !!introLink && introByOperator,
+      });
     } catch (error) {
       if (prepared) await discardFlow(prepared);
       queue.log('picker', `Flow “${song.subFlow.name}” refused: ${error instanceof Error ? error.message : String(error)}`);
       return -1;
     }
   } else {
-    pos = await queue.push(queueOptions);
+    pos = await queue.push({
+      ...queueOptions,
+      // Marks one of a steer's opening tracks (queue/types.ts); private.
+      steer: steerKey,
+      // The operator asked for this line by hand (a steer's introduction).
+      introByOperator: !!introLink && introByOperator,
+    });
   }
   if (pos === -2) {
     // Never-play blocklist refused the pick (library-db candidates can slip

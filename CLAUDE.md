@@ -33,7 +33,7 @@ The compose files sit at the repo root: `docker-compose.yml` (prod, with Caddy a
 
 ## Lint and tests
 
-- **Lint is the merge gate.** `npm run lint` in `controller/`, `web/`, `app/` and `mcp-subwave/` runs in `.github/workflows/lint.yml`, alongside the theme-token, schema-mirror and zod-parity checks. Only the controller and web lint jobs are required to merge.
+- **Lint is the merge gate.** `npm run lint` in `controller/`, `web/`, `app/` and `mcp-subwave/` runs in `.github/workflows/lint.yml`, alongside the theme-token, schema-mirror, zod-parity and publish-matrix checks. Only the controller and web lint jobs are required to merge.
 - **CI does not run the test suites** (apart from two ffmpeg tests in `audio-tests.yml`). Run `npm test` yourself in `controller/`, `web/` or `app/` before pushing changes there.
 - **Always run tests through `npm test`** (`npm test -- <substring>` filters). The controller runner gives each file its own temp `STATE_DIR`; `node --test` or `tsx <file>` can write into the repo's `state/`, the dev station's own. Files run one at a time by default (`--jobs N` in the controller). Dropping in `controller/scripts/*.test.ts`, or a web test under a root listed in `web/scripts/run-tests.mjs`, is the whole registration. The `controller/scripts/run-tests.ts` header covers the rest (`node:test`, reserved ports, `createTempDir`). A test removes its temp dir with `await removeTempDir(dir)` (`scripts/test-utils/temp-dir.ts`), never a bare `rmSync`, which races in-flight writes into `ENOTEMPTY`.
 - **Run heavy commands one at a time, never in parallel.** Lint, `tsc`, a test suite, `npm ci` and a build each get the machine to themselves: no two in one message, no second one while a background one runs, and one package's suite at a time. Together they have OOM-killed a 16 GB dev box.
@@ -84,6 +84,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - **A validated shape is defined once**, in `controller/src/schemas/<feature>.ts`, and mirrored to `web/lib/schemas.generated.ts` by `npm run gen:schemas` (CI diffs it; never hand-edit it). Those files import only `zod`; impure rules go in a `*-server.ts` sibling.
 - **A behaviour-preserving refactor preserves behaviour, accidental leniency included.** Tightening it is a separate PR, stated as a behaviour change (`schemas.md`, on the patch registry).
 - **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and six tests drive both copies), so fix one, fix both.
+- **An AIO CUDA architecture tag names a GPU, not a wheel.** Each `subwave-aio-cuda` architecture tag (`:pascal`, `:blackwell`, …) points at the newest build that still supports its GPU: never at a build that dropped it, and never one tag for several GPUs. Only the `primary` build takes `:latest` (`infrastructure.md`, the AIO CUDA tag table).
 - **State bootstrap is never fatal.** Guard each step and warn; Icecast and the dead-air guard must still come up.
 - **The admin lockout counts distinct guesses, never requests**, and `ADMIN_LOCKOUT=off` (env only) is the operator's final say (`infrastructure.md`). The web console sends `X-Subwave-Console` so it is never answered with a Basic challenge.
 - **The edge drops Icecast's Basic challenge only for a client that can't answer it** (`?auth=`, or `Sec-Fetch-Dest: audio|video` from the same origin), in both Caddyfiles and every `docs/reverse-proxy.md` recipe. Unconditional either way is the bug: stripped, ffmpeg and mpv can't log in; kept, the browser's "Sign in" dialog covers the player (`infrastructure.md`).
@@ -108,6 +109,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Every transition effect runs on Liquidsoap's single streaming thread, so its cost is its shape: the dissolve sums its combs and subtracts the dry once, never per tap.
 - Both sides of a rendered seam are gained by `music/loudness.ts` `resolveGainDb`, never from the analyzer's LUFS.
 - The Opus encoder is hard CBR (`vbr="none"`): `<burst-size>` is bytes, and VBR idle silence stretched a new listener's burst back past the pause (#2138).
+- Loudness and peak are one whole-file measurement (`loudness` v2, stamped `loudness_version`); nothing that measures less may overwrite it. The `edges` facet outranks the window figures in silence trim.
 
 **Library, picker, LLM, TTS** (`music.md`, `broadcast.md`)
 - Write `genres`, never `genre` (a generated column); `subsonic.songGenres()` is the one ingest normaliser. Genre matching is one-directional.

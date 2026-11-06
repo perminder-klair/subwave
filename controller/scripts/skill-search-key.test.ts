@@ -162,3 +162,48 @@ test('watching ready() leaves the shared services object alone', async (t) => {
   skillCatalog();
   assert.equal(buildStationServices().searchReady, searchReady);
 });
+
+test('Outcrawl names a refused key the same way, and an ock_ key clears it', async (t) => {
+  await setSearch(t, { provider: 'outcrawl', apiKey: 'fc-left-over' });
+  for (const name of SEARCH_GATED) {
+    const skill = row(name);
+    assert.equal(skill.ready, false, name);
+    assert.match(skill.keyProblem, /not an Outcrawl key/, name);
+  }
+  await assert.rejects(runCapability('web-search', {}), /not an Outcrawl key.*Settings → Web search/);
+
+  await settings.update({ search: { provider: 'outcrawl', apiKey: 'ock_a-real.one' } });
+  assert.equal(searchKeyProblem(), null);
+  assert.equal(row('web-search').ready, true);
+  assert.equal(row('web-search').keyUrl, 'https://outcrawl.ai/console');
+});
+
+test('Run now asks for an Outcrawl key when none is set', async (t) => {
+  await setSearch(t, { provider: 'outcrawl', apiKey: '' });
+  await assert.rejects(runCapability('web-search', {}), /set SEARCH_API_KEY or paste an Outcrawl key/);
+  assert.equal(row('web-search').requiresKey, 'SEARCH_API_KEY');
+});
+
+// Run now's hint and the catalog's key link come from the search catalogue
+// (keyName, keyUrl, one article rule). These are the strings the per-provider
+// chains wrote before, so moving onto the catalogue changed none of them.
+test('a missing key names each keyed provider and links its key page, from the catalogue', async (t) => {
+  const cases: Array<[provider: string, hint: string, keyUrl: string]> = [
+    ['tavily', 'set SEARCH_API_KEY or paste a Tavily key into the admin UI', 'https://app.tavily.com/home'],
+    ['brave', 'set SEARCH_API_KEY or paste a Brave Search key into the admin UI', 'https://api-dashboard.search.brave.com/app/keys'],
+    ['firecrawl', 'set SEARCH_API_KEY or paste a Firecrawl key into the admin UI', 'https://www.firecrawl.dev/app/api-keys'],
+    ['outcrawl', 'set SEARCH_API_KEY or paste an Outcrawl key into the admin UI', 'https://outcrawl.ai/console'],
+  ];
+  await setSearch(t, { provider: 'duckduckgo', apiKey: '' });
+  for (const [provider, hint, keyUrl] of cases) {
+    await settings.update({ search: { provider, apiKey: '' } });
+    await assert.rejects(runCapability('web-search', {}), { message: `skill "web-search" is not ready — ${hint}` });
+    assert.equal(row('web-search').requiresKey, 'SEARCH_API_KEY', provider);
+    assert.equal(row('web-search').keyUrl, keyUrl, provider);
+  }
+  for (const provider of ['duckduckgo', 'keenable', 'searxng']) {
+    await settings.update({ search: { provider, apiKey: '' } });
+    assert.equal(row('web-search').requiresKey, null, provider);
+    assert.equal(row('web-search').keyUrl, null, provider);
+  }
+});

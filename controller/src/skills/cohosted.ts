@@ -52,7 +52,7 @@ async function deadlinedObject(runObject: ObjectRunner, args: Record<string, unk
 }
 
 export async function runCohostedCapability({
-  capability, host, guests, context, situation, segmentState, forced = false,
+  capability, host, guests, context, situation, segmentState, forced = false, onData,
   runAgent = djAgent as unknown as AgentRunner,
   runObject = djObject as unknown as ObjectRunner,
 }: {
@@ -63,6 +63,9 @@ export async function runCohostedCapability({
   situation: string;
   segmentState: any;
   forced?: boolean;
+  // Sees every result the skill's tool returns, on both paths (the weather
+  // segment records what its tool handed over). Never fatal.
+  onData?: (kind: string, data: unknown) => void;
   runAgent?: AgentRunner;
   runObject?: ObjectRunner;
 }): Promise<CohostedResult> {
@@ -82,6 +85,7 @@ export async function runCohostedCapability({
     // so there is no model call at all. Same rule, same wording, as the solo
     // pool path in runCapability.
     const data = await fetchSegmentData(capability, context, segmentState);
+    try { onData?.(capability.kind, data); } catch { /* observation is never fatal */ }
     const blocked = standDownReason(capability, data);
     if (blocked) return { aired: false, lines: null, reason: blocked };
     out = await deadlinedObject(runObject, {
@@ -99,7 +103,8 @@ export async function runCohostedCapability({
     let usableSeen = false;
     let blocked: string | null = null;
     const tools = buildSegmentTools(context, segmentState, [capability], {
-      onResult: (_kind, data) => {
+      onResult: (kind, data) => {
+        try { onData?.(kind, data); } catch { /* observation is never fatal */ }
         const why = standDownReason(capability, data);
         if (why) blocked = why;
         else usableSeen = true;

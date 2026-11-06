@@ -9,6 +9,8 @@ import { STATE_DIR, config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
 import { SEEDED_KINDS, PENDING_TOOL_FILE, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
 import { preservedFrontmatter } from './config-fields.js';
+import type { SkillVoiceSlot } from '../schemas/skill.js';
+import { SKILL_VOICE_KEYS } from '../schemas/skill-server.js';
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 
@@ -68,6 +70,9 @@ interface SkillFileFields {
   configKeys?: string[];
   tags?: string[];      // freeform organisation tags
   brief?: string;
+  // This skill's own TTS voice override, or null/absent for the on-air DJ's
+  // voice. Written as flat frontmatter lines (SKILL_VOICE_KEYS).
+  voice?: SkillVoiceSlot | null;
 }
 
 // Render + write a skill's SKILL.md from form fields. Used by the admin routes:
@@ -106,6 +111,16 @@ export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
   // restrictive `commute` value is worth writing.
   if (fields.window === 'commute') lines.push('window: commute');
   if (fields.requiresKey) lines.push(line('requiresKey', fields.requiresKey));
+  // The skill's own voice override. Absent lines read as "no override", so
+  // clearing the form removes all three. The provider means something only to
+  // the cloud engine, so it is written only there.
+  if (fields.voice?.engine) {
+    lines.push(line(SKILL_VOICE_KEYS.engine, fields.voice.engine));
+    if (fields.voice.voice) lines.push(line(SKILL_VOICE_KEYS.voice, fields.voice.voice));
+    if (fields.voice.engine === 'cloud' && fields.voice.cloudProvider) {
+      lines.push(line(SKILL_VOICE_KEYS.cloudProvider, fields.voice.cloudProvider));
+    }
+  }
   // Skill-declared knobs (news' feed / feedMaxItems, and anything a custom
   // tool.mjs declares). Insertion order follows the declaration.
   for (const [key, value] of Object.entries(fields.config || {})) {

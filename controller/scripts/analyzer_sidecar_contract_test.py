@@ -369,6 +369,43 @@ async def test_facet_contract():
     assert worker_calls == [{"id": "1", "path": audio.name, "complete": False, "facets": ["tail"]}], worker_calls
     assert result == {"ok": True, "facets": facet_answer["facets"], "source": facet_answer["source"]}, result
 
+    # The whole-file facets stream the music server's URL: a path request
+    # carries it as stream_url, and a URL-only request needs no path check.
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(
+            path=audio.name, complete=False, facets=["head", "edges"], stream_url="http://navi/stream",
+        ))
+    assert worker_calls == [{
+        "id": "1", "path": audio.name, "complete": False, "facets": ["head", "edges"],
+        "stream_url": "http://navi/stream",
+    }], worker_calls
+    # Whole-file facets alone take their own lane: a one-shot worker process
+    # under its own semaphore, never a pool worker holding CLAP/Demucs.
+    worker_calls.clear()
+    once_calls = []
+
+    async def once(payload):
+        once_calls.append(payload)
+        return {"ok": True, "facets": {"edges": {"status": "ok", "data": {}}}, "source": {"kind": "whole-file"}}
+
+    saved_once = server.run_whole_file_once
+    server.run_whole_file_once = once
+    try:
+        result = await server.analyze(server.AnalyzeRequest(url="http://navi/stream", facets=["loudness", "edges"]))
+    finally:
+        server.run_whole_file_once = saved_once
+    assert worker_calls == [], worker_calls
+    assert once_calls == [{"id": "1", "url": "http://navi/stream", "facets": ["loudness", "edges"]}], once_calls
+    assert result == {"ok": True, "facets": {"edges": {"status": "ok", "data": {}}}, "source": {"kind": "whole-file"}}, result
+    assert server.WHOLE_FILE_CONCURRENCY >= 1
+    # The URL is a facet-request field only: a flat request never forwards it.
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(path=audio.name, stream_url="http://navi/stream"))
+    assert "stream_url" not in worker_calls[0], worker_calls
+    assert not server.StdioWorker._wants_models({"facets": ["loudness", "edges"]})
+
     # Model bookkeeping follows the facets named, not the env defaults.
     assert server.StdioWorker._wants_models({"facets": ["head", "tail"]}) is False
     assert server.StdioWorker._wants_models({"facets": ["clap"]}) is True
@@ -396,8 +433,35 @@ def test_concurrency_env_validation():
             os.environ["SUBWAVE_TEST_CONCURRENCY"] = old
 
 
+def test_whole_file_timeout_env_matches_the_worker():
+    # ANALYZE_WHOLE_FILE_TIMEOUT_S is read by the sidecar (which hands its
+    # reading to each one-shot worker) and by the worker itself on the local
+    # backend: one bound, one fall-back, never a clamp, on both sides.
+    sys.path.insert(0, str(Path(__file__).parent))
+    import analyze_worker as worker
+
+    name = "SUBWAVE_TEST_WHOLE_FILE_TIMEOUT"
+    old = os.environ.get(name)
+    try:
+        for raw, expected in ((None, 900.0), ("", 900.0), ("1800", 1800.0), ("45.5", 45.5), ("0", 900.0),
+                              ("-5", 900.0), ("29", 900.0), ("7201", 900.0), ("nan", 900.0), ("inf", 900.0),
+                              ("soon", 900.0)):
+            if raw is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = raw
+            assert server._bounded_float_env(name, 900.0, 30.0, 7200.0) == expected, (raw, "sidecar")
+            assert worker._env_float(name, 900.0, minimum=30.0, maximum=7200.0) == expected, (raw, "worker")
+    finally:
+        if old is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = old
+
+
 async def main():
     test_concurrency_env_validation()
+    test_whole_file_timeout_env_matches_the_worker()
     await test_pool_concurrency()
     await test_waiter_uses_worker_that_becomes_ready()
     await test_unavailable_selection_retries_another_ready_worker()

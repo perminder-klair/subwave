@@ -113,7 +113,10 @@ const TONE_DIAL_PHRASES: Record<string, { low: string; high: string }> = {
   },
   localColour: {
     low: 'Keep it universal; skip local references and place-specific colour.',
-    high: 'Lean on the local setting (the town, the weather, the hour) as texture.',
+    // No weather here: links, idents and handoffs are given none (#471), so a
+    // dial that invited it had the DJ invent it ("the sun is blazing" under
+    // full cloud). The weather skill brings its own.
+    high: 'Lean on the local setting (the town, the hour) as texture.',
   },
   warmth: {
     low: 'Keep a cool, dry distance; let the music carry the warmth.',
@@ -577,7 +580,7 @@ export const TTS_CLOUD_PROVIDERS: readonly string[] = TTS_CLOUD_PROVIDER_VALUES;
 // entity/definition queries); `tavily` and `brave` read SEARCH_API_KEY;
 // `searxng` is keyless self-hosted meta-search via settings.search.baseUrl;
 // `keenable` is keyless, and a Keenable key in SEARCH_API_KEY raises its limit;
-// `firecrawl` reads SEARCH_API_KEY.
+// `firecrawl` and `outcrawl` read SEARCH_API_KEY.
 export const SEARCH_PROVIDERS = SETTINGS_SEARCH_PROVIDERS;
 
 // SEED mood vocabulary + each mood's CLAP sound-prompt. The operator edits the

@@ -32,6 +32,7 @@ import {
   type SkillMember,
 } from '../skills/install.js';
 import { isSafeZipEntry, readZipEntryCapped } from '../util/zip-entry.js';
+import { stripManagedSettings } from '../setup/hosted.js';
 
 export const router = express.Router();
 
@@ -96,6 +97,8 @@ type RestoreOutcome =
     ok: true; status: 200; restored: string[]; requiresRestart: boolean;
     // Members left out by a guard, and skills whose code waits for review.
     skipped: string[]; skillsAwaitingReview: string[];
+    // Hosted: settings paths the box agent owns, left as they were (setup/hosted.ts).
+    managed: string[];
   }
   | { ok: false; status: number; error: string };
 
@@ -127,6 +130,7 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
 
   const settingsRead = readJsonMember(zip, 'settings.json');
   let settingsPatch: Record<string, unknown> | null = null;
+  let managed: string[] = [];
   if (settingsRead) {
     if ('error' in settingsRead) return { ok: false, status: 400, error: `${settingsRead.error} in backup` };
     const parsed = settingsRead.data;
@@ -137,6 +141,12 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     if (Array.isArray(settingsPatch.personas)) {
       settingsPatch.personas = settingsPatch.personas.map(migrateImportedPersona);
     }
+    // Hosted: a backup from a self-hosted station carries its own LLM route,
+    // voice engine, embedding route, persona engine pins and listener ceiling.
+    // Those are the box agent's, so they stay as they are, as on any other save.
+    ({ patch: settingsPatch, dropped: managed } = stripManagedSettings(settingsPatch, {
+      defaultEngine: settings.get()?.tts?.defaultEngine,
+    }));
     const themes = new Map<string, string>();
     for (const entry of zip.getEntries()) {
       const name = entry.entryName.replace(/\\/g, '/');
@@ -249,7 +259,7 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       restored.push('library.db');
     }
 
-    return { ok: true, status: 200, restored, requiresRestart, skipped, skillsAwaitingReview };
+    return { ok: true, status: 200, restored, requiresRestart, skipped, skillsAwaitingReview, managed };
   } finally {
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -272,6 +282,7 @@ router.post(
         requiresRestart: outcome.requiresRestart,
         skipped: outcome.skipped,
         skillsAwaitingReview: outcome.skillsAwaitingReview,
+        ...(outcome.managed.length ? { managed: outcome.managed } : {}),
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -356,6 +367,7 @@ router.post('/backup/import-file', requireAdmin, async (req, res) => {
       requiresRestart: outcome.requiresRestart,
       skipped: outcome.skipped,
       skillsAwaitingReview: outcome.skillsAwaitingReview,
+      ...(outcome.managed.length ? { managed: outcome.managed } : {}),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
