@@ -1,6 +1,7 @@
 // Brave response fixtures (#623), SearXNG response fixtures and URL pins
 // (#1353). Recorded JSON keeps parser coverage tied to real provider shapes.
-// The dispatcher memo must separate recency windows for segment and picker tools.
+// The dispatcher memo must separate recency windows for segment and picker tools,
+// and the dispatcher keeps provider selection deterministic.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -11,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { createTempDir } from './test-utils/temp-dir.js';
 
 process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-web-search-'));
-const { parseBraveResponse, buildSearxngUrl, parseSearxngResponse, searchWeb } =
+const { parseBraveResponse, buildSearxngUrl, parseSearxngResponse, searchWeb, isWebSearchProviderError } =
   await import('../src/skills/web-search.js');
 const settings = await import('../src/settings.js');
 const here = dirname(fileURLToPath(import.meta.url));
@@ -209,4 +210,101 @@ test('dispatcher cache separates recency windows and reuses each answer', async 
   assert.deepEqual(await searchWeb('RECENCY-CACHE-REGRESSION'), all);
   assert.deepEqual(await searchWeb('RECENCY-CACHE-REGRESSION', { recency: 'week' }), week);
   assert.equal(windows.length, 2, 'repeats of both windows use their cached answers');
+});
+
+test('rate limits become typed provider failures and are never cached', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://rate-limit.test', searxngEngines: '' } });
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return new Response('slow down', { status: 429 });
+  });
+  const query = `rate-limit-${Date.now()}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(searchWeb(query), error => {
+      assert.ok(isWebSearchProviderError(error));
+      assert.equal(error.provider, 'searxng');
+      assert.equal(error.reason, 'rate-limit');
+      return true;
+    });
+  }
+  assert.equal(calls, 2);
+});
+
+test('malformed provider data becomes a typed failure and is never cached', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://malformed.test', searxngEngines: '' } });
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return new Response('{not-json', { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  const query = `malformed-${Date.now()}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(searchWeb(query), error => {
+      assert.ok(isWebSearchProviderError(error));
+      assert.equal(error.provider, 'searxng');
+      assert.equal(error.reason, 'malformed');
+      return true;
+    });
+  }
+  assert.equal(calls, 2);
+});
+
+test("Brave's recorded answer with no results is an empty result through searchWeb", async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'brave', apiKey: 'fixture-key' } });
+  t.mock.method(globalThis, 'fetch', async () => Response.json(fixture('brave-empty.json')));
+  assert.deepEqual(await searchWeb(`brave-empty-${Date.now()}`), { answer: '', results: [] });
+});
+
+test('a Brave field in the wrong shape is still a malformed reply', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'brave', apiKey: 'fixture-key' } });
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ web: { results: 'nope' } }));
+  await assert.rejects(searchWeb(`brave-shape-${Date.now()}`), error => {
+    assert.ok(isWebSearchProviderError(error));
+    assert.equal(error.provider, 'brave');
+    assert.equal(error.reason, 'malformed');
+    return true;
+  });
+});
+
+test('dispatcher honors every configured search provider without cross-provider fallback', async t => {
+  await settings.load();
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    calls.push(`${url.origin}${url.pathname}`);
+    if (url.origin === 'https://api.tavily.com') {
+      return Response.json({ answer: 'Tavily answer', results: [{ title: 'Tavily', content: 'evidence' }] });
+    }
+    if (url.origin === 'https://api.search.brave.com') {
+      return Response.json({ web: { results: [{ title: 'Brave', description: 'evidence' }] } });
+    }
+    if (url.origin === 'https://api.duckduckgo.com') {
+      return Response.json({ AbstractText: 'DDG answer', RelatedTopics: [{ Text: 'evidence', FirstURL: 'https://example.test' }] });
+    }
+    // The real endpoints are intentionally replaced by the fixture response;
+    // the request shape still proves the selected dispatcher branch.
+    if (init?.method === 'POST') return Response.json({ answer: 'Tavily answer', results: [] });
+    return Response.json({ web: { results: [{ title: 'Brave', description: 'evidence' }] } });
+  });
+
+  await settings.update({ search: { provider: 'tavily', apiKey: 'fixture-key' } });
+  const tavily = await searchWeb(`provider-tavily-${Date.now()}`);
+  await settings.update({ search: { provider: 'brave', apiKey: 'fixture-key' } });
+  const brave = await searchWeb(`provider-brave-${Date.now()}`);
+  await settings.update({ search: { provider: 'duckduckgo' } });
+  const duck = await searchWeb(`provider-duck-${Date.now()}`);
+
+  assert.equal(tavily.answer, 'Tavily answer');
+  assert.equal(brave.results[0]?.title, 'Brave');
+  assert.equal(duck.answer, 'DDG answer');
+  assert.deepEqual(calls, [
+    'https://api.tavily.com/search',
+    'https://api.search.brave.com/res/v1/web/search',
+    'https://api.duckduckgo.com/',
+  ]);
 });
