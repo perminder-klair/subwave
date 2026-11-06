@@ -188,8 +188,12 @@ also sets the metadata-action flavor `latest=false`. The action adds `:latest`
 by itself for any enabled stable semver rule, whatever that rule's suffix, so
 without it the cu124 build's `:<version>-cu124` rule raced the primary for
 `:latest` on every release. The build and architecture tags move on a stable
-release or a dispatch from the default branch, never on a prerelease or a
-dispatch from another branch.
+release tag (`refs/tags/v*` with no `-`), pushed or dispatched, and on a
+dispatch from the default branch; never on a prerelease tag or a dispatch from
+another branch. `tagplan` decides this from the ref, not the event, because
+the action's semver rules (`:latest` among them) key on the ref too. Deciding
+on the event let a dispatch on a release tag move `:latest` but leave `:pascal`
+and the other shortcuts on the previous build.
 
 **Analyzer concurrency (`ANALYZE_CONCURRENCY`, #1538).** One env var, read on BOTH sides and bounded `1-8` with a fall-back-to-1 (not a clamp) on anything empty, non-integer or out of range — `envInt` in `controller/src/config.ts`, `_bounded_int_env` in `docker/analyzer/server.py`. **The default of 1 is the pre-change station, byte for byte**, which is the whole reason the two code paths are kept side by side rather than unified: `music/analyze.ts` keeps its original one-ahead `prefetch()` loop verbatim at 1 and only takes `music/analyze-dispatch.ts` above it. Above 1 the pass admits jobs in **source order** through `dispatchAnalysis`, bounded by live count, and commits every outcome back **in source order too** — the systemic-failure guard (`failureCountsAgainstTrack`, the buffered `pendingFailureStamps`) reads a run of consecutive failures, so out-of-order commits would condemn tracks over a bad *pass*. The quiet gate is evaluated **before every admission and before that job's download** (`beforeStart`), so a paused pass never keeps pulling audio for work it isn't going to compute; its fail-open direction is untouched, and it still resolves through the one `analyze-quiet-pure.ts` decision. The win is specifically the **share-less remote topology**, where the path probe 422s and the analyzer fetches each track itself; a local shared-mount setup already overlapped via the prefetch, and **local `ANALYZE_PYTHON` stays single-flight regardless** (`backend === 'sidecar' ? requested : 1`) because one line-protocol stdio worker cannot multiplex.
 

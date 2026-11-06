@@ -233,17 +233,19 @@ jobs:
       #   sha_prefix  a non-primary build's commit tag carries its family, so
       #               two builds can't overwrite one sha- tag.
       #   floating    the build and GPU-architecture shortcuts (:cu124, :pascal,
-      #               …) as tag rules. They move on a stable release or a
-      #               dispatch from the default branch, never on a prerelease
-      #               (a tag with a `-`) or another branch.
+      #               …) as tag rules. They move on a stable release tag
+      #               (refs/tags/v* with no `-`), pushed or dispatched, and on a
+      #               dispatch from the default branch; never on a prerelease
+      #               tag or another branch. This is decided from the ref, not
+      #               the event, because metadata-action's semver rules
+      #               (:latest among them) also key on the ref: a dispatch on a
+      #               release tag moves the same tags the push did.
       - id: tagplan
         env:
           CUDA_FAMILY: ${{ matrix.cuda_family }}
           PRIMARY: ${{ matrix.primary }}
           ARCH_TAGS: ${{ matrix.arch_tags }}
-          EVENT_NAME: ${{ github.event_name }}
           REF: ${{ github.ref }}
-          REF_NAME: ${{ github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -eu
@@ -259,11 +261,11 @@ jobs:
           sha_prefix=sha-
           if [ "$primary" = false ]; then sha_prefix="sha-$CUDA_FAMILY-"; fi
           moves=false
-          case "$EVENT_NAME:$REF_NAME" in
-            push:*-*) ;;
-            push:*) moves=true ;;
+          case "$REF" in
+            refs/tags/v*-*) ;;
+            refs/tags/v*) moves=true ;;
+            "refs/heads/$DEFAULT_BRANCH") moves=true ;;
           esac
-          if [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ]; then moves=true; fi
           floating=
           if [ -n "$CUDA_FAMILY" ] && [ "$moves" = true ]; then
             floating=$(for tag in "$CUDA_FAMILY" $ARCH_TAGS; do printf 'type=raw,value=%s\n' "$tag"; done)
