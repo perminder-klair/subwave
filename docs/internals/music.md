@@ -632,7 +632,16 @@ rule: `measure_loudness` measures a decode of more than two channels as its
 stereo downmix (`stereo_downmix`, the same matrix over the WAV/FLAC default
 channel orders for 3 to 8 channels). Before it, pyloudnorm refused anything
 over five channels ("Audio must have five channels or less"), so every 5.1
-track had no loudness at all and aired without gain normalisation.
+track had no loudness at all and aired without gain normalisation. It also
+measured 3 to 5 channels with BS.1770's own surround weights rather than as
+they air, so those figures move as well, and the tail facet's outro loudness
+of every such file with them, when next analysed. The matrix is chosen by
+channel COUNT: librosa and soundfile return no layout, so a file whose order
+is not its count's default reads the wrong rows. FLAC fixes its order by
+count, so FLAC is always right; the exposure is a WAV with an unusual
+channel mask, or a 2.1, 3.1 or 4.0 decode. The whole-file lane has no such
+gap, because ffmpeg downmixes by the real layout, and its v2 figure outranks
+the window's.
 
 Pinned by `scripts/analyzer_whole_file_test.py` (parsers, chunk-independent edge
 scan, the absolute floor, one decode for both, the source rule, a real ffmpeg
