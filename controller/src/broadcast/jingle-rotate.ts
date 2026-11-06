@@ -99,7 +99,8 @@ export function pickRotateJingle(
 // one thing an operator asking "why am I hearing two stingers" needs to see.
 //
 // They can genuinely differ, because `ensureLiquidsoapSettingsFile()` only
-// writes when a file is MISSING. Hand-edit `jingleRotate: 'controller'` into
+// writes the ratio when a file is MISSING (it reconciles the six stream-mount
+// files at every boot, never this one). Hand-edit `jingleRotate: 'controller'` into
 // settings.json and restart the controller and nothing rewrites the file: the
 // mixer boots on the operator's old ratio, both sides count, and the station
 // hears double jingles indefinitely. `mixerRatioMatches: false` is that state,

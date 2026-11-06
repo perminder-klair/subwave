@@ -1519,6 +1519,15 @@ SITE_URL=
 # like Gemini TTS). It's a station setting, not env: admin → Settings → Voices →
 # Remote. Contract + a 20-line reference server: docs/custom-tts.md
 #
+# A shared Kokoro server for the built-in *Kokoro* engine. Set it and the
+# controller renders Kokoro there instead of loading the model itself (about
+# 880 MiB resident), so several stations on one box hold one model between
+# them. Voices, language and speed work as before. The server answers
+# POST /v1/speak { text, voice, lang, speed } with WAV bytes and
+# GET /v1/health with { "ok": true }; while it's unreachable, Kokoro speech
+# falls back to Piper. Unset (the default) runs Kokoro in the controller.
+# KOKORO_URL=http://kokoro:8880
+#
 # Memory ceilings for the model-loading sidecars (OOM containment — keeps a
 # runaway model load from taking down the host's other services). Defaults are
 # generous; raise for the heavy analyzer on large libraries, lower on a
