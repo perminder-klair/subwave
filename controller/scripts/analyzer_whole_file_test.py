@@ -485,7 +485,7 @@ def t_real_ffmpeg_caps_the_rate_so_ultrasonic_noise_reads_as_silence():
 
 
 def t_probe_failure_measures_the_file_as_it_is():
-    assert aw.probe_audio_format("/nonexistent/file.flac") == (None, None)
+    assert aw.probe_audio_format("/nonexistent/file.flac") == (None, None, None)
 
 
 def t_real_ffmpeg_measures_a_surround_file_as_its_stereo_downmix():
@@ -510,7 +510,7 @@ def t_real_ffmpeg_measures_a_surround_file_as_its_stereo_downmix():
         left = chans[0] + k * chans[2] + k * chans[4]
         right = chans[1] + k * chans[2] + k * chans[5]
         sf.write(stereo_ref, np.stack([left, right], axis=1).astype(np.float32), sr, subtype="FLOAT")
-        assert aw.probe_audio_format(src) == (sr, 6)
+        assert aw.probe_audio_format(src)[:2] == (sr, 6)
         got = aw.measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=60)
         ref = aw.measure_whole_file(stereo_ref, loudness=True, edges_wanted=True, timeout_s=60)
     assert abs(got["loudness"]["loudness_lufs"] - ref["loudness"]["loudness_lufs"]) < 0.15, (got["loudness"], ref["loudness"])
@@ -550,6 +550,114 @@ def t_window_loudness_measures_a_surround_decode_as_its_stereo_downmix():
     # Mono and stereo decodes are untouched.
     stereo = np.stack([np.sin(2 * np.pi * 440.0 * t), np.sin(2 * np.pi * 550.0 * t)]) * 0.2
     assert aw.stereo_downmix(stereo) is stereo
+
+
+# ── an input that ends early ────────────────────────────────────────────────
+
+def t_probe_reads_the_streams_length_and_distrusts_an_estimate():
+    out = '{"streams": [{"sample_rate": "44100", "channels": 2, "duration": "60.000000"}], "format": {"duration": "61.5"}}'
+    assert aw.parse_probe(out) == (44100, 2, 60000)
+    no_stream_len = '{"streams": [{"sample_rate": "48000", "channels": 1}], "format": {"duration": "61.5"}}'
+    assert aw.parse_probe(no_stream_len) == (48000, 1, 61500), "the container's length stands in"
+    guessed = "[mp3 @ 0x1] Estimating duration from bitrate, this may be inaccurate\n"
+    assert aw.parse_probe(out, guessed) == (44100, 2, None), "a length guessed from the bitrate judges nothing"
+    assert aw.parse_probe("not json") == (None, None, None)
+    assert aw.parse_probe('{"streams": [{"duration": "N/A"}]}') == (None, None, None)
+
+
+def t_a_decode_well_short_of_the_header_is_cut_off():
+    assert aw.decoded_short_of(240_000, 120_000)
+    assert aw.decoded_short_of(60_000, 54_000), "6 s short of a minute"
+    assert not aw.decoded_short_of(60_000, 59_950), "encoder padding is milliseconds"
+    assert not aw.decoded_short_of(60_000, 56_000), "under the 5 s floor"
+    assert aw.decoded_short_of(25_200_000, 24_500_000), "12 min short of a 7 h set"
+    assert not aw.decoded_short_of(25_200_000, 24_800_000), "under 2 % of a 7 h set"
+    assert not aw.decoded_short_of(None, 1000) and not aw.decoded_short_of(60_000, None)
+    assert not aw.decoded_short_of(102_900, 133_600), "a decode LONGER than the tag is the file playing on"
+
+
+def t_log_flags_an_input_that_ended_early():
+    log = feed_log(STDERR_HEAD + "[http @ 0x5] Stream ends prematurely at 469387, should be 938774\n"
+                   "http://navi:4533/rest/stream?u=dj&t=secret: Input/output error\n" + SUMMARY)
+    assert log.input_error == "[http @ 0x5] Stream ends prematurely at 469387, should be 938774", log.input_error
+    io = feed_log("http://navi:4533/rest/stream?u=dj&t=secret: Input/output error\n")
+    assert io.input_error == "http://navi:4533/… Input/output error", io.input_error
+    assert feed_log(STDERR_HEAD + SUMMARY).input_error is None
+    # A server that sent no Content-Length: even a complete read ends this way
+    # (ffmpeg 5.1 expects 2^64 - 1 bytes), so the length check judges it.
+    unknown = feed_log("[http @ 0x5] Stream ends prematurely at 938774, should be 18446744073709551615\n"
+                       "http://navi:4533/rest/stream?t=secret: Input/output error\n" + SUMMARY)
+    assert unknown.input_error is None, unknown.input_error
+    reset = feed_log("[http @ 0x5] Stream ends prematurely at 1, should be 18446744073709551615\n"
+                     "[tcp @ 0x6] Connection reset by peer\n")
+    assert reset.input_error == "[tcp @ 0x6] Connection reset by peer", reset.input_error
+
+
+class _Server:
+    """A local music server for one file: /full serves it whole, /cut sends a
+    Content-Length for all of it and drops the connection halfway; /nolen and
+    /nolen-cut send all of it or half, with no length, and close (the two
+    read the same to ffmpeg's log)."""
+
+    def __init__(self, path):
+        import http.server
+        import threading
+        data = open(path, "rb").read()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 — http.server's name
+                mode = self.path.split("?")[0].strip("/")
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/wav")
+                if not mode.startswith("nolen"):
+                    self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data if mode in ("full", "nolen") else data[: len(data) // 2])
+                self.close_connection = True
+
+            def log_message(self, *_a):
+                pass
+
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def t_real_ffmpeg_fails_a_cut_off_stream_instead_of_measuring_it():
+    # ffmpeg exits 0 on a dropped connection with what it decoded. Stored, half
+    # a track became a whole-file loudness and a decoded length that ended the
+    # track early on air, protected from every later measurement.
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        print("      (skipped: no ffmpeg/ffprobe on PATH)")
+        return
+    sr = 22050
+    with tempfile.TemporaryDirectory() as d:
+        wav = os.path.join(d, "x.wav")
+        write_wav(wav, stereo(0.5, 11.0, 0.5, sr, amp=amp_db(-6.0)), sr)
+        # FLAC: its header carries the length even over a stream with no
+        # Content-Length (a WAV's does not, so ffprobe gives it none there).
+        path = os.path.join(d, "x.flac")
+        import subprocess
+        subprocess.run(["ffmpeg", "-v", "error", "-i", wav, path], check=True)
+        server = _Server(path)
+        try:
+            for mode in ("full", "nolen"):
+                whole = aw.whole_file_facets(f"{server.base}/{mode}?u=dj&t=secret", ["loudness", "edges"])
+                assert whole["edges"]["status"] == "ok" and whole["loudness"]["status"] == "ok", (mode, whole)
+                assert abs(whole["edges"]["data"]["decoded_duration_ms"] - 12000) <= 25, (mode, whole)
+            for mode, says in (("cut", "prematurely"), ("nolen-cut", "decoded")):
+                got = aw.whole_file_facets(f"{server.base}/{mode}?u=dj&t=secret", ["loudness", "edges"])
+                for facet in ("loudness", "edges"):
+                    assert got[facet]["status"] == "failed", (mode, got)
+                    reason = got[facet]["reason"]
+                    assert "ended early" in reason and says in reason, (mode, reason)
+                    assert "secret" not in reason, (mode, reason)
+        finally:
+            server.close()
 
 
 def t_real_ffmpeg_failure_raises_with_the_reason():

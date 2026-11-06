@@ -539,7 +539,19 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
    worker reads the path only when `complete: true`. A track planned for the
    whole-file facets alone is never staged at all: no capped download, one URL
    request. Errors pass through `redact_urls`, because ffmpeg echoes its input
-   and a Subsonic URL carries a replayable token.
+   and a Subsonic URL carries a replayable token. **An input that ends early
+   fails both facets, never stores**: ffmpeg exits 0 on a dropped connection
+   with what it decoded, and stored, half a track would be a whole-file figure
+   and a decoded length that ends the track early on air, which nothing
+   measuring less may replace. Two nets: ffmpeg's own "Stream ends
+   prematurely" or I/O error line (`FfmpegLog.input_error`), and a decode
+   more than max(5 s, 2 %) short of the length an `ffprobe` of the header
+   gives (`decoded_short_of`; a length ffprobe only estimated from the bitrate
+   judges nothing). A server that sends no Content-Length makes even a
+   complete read end on "should be 18446744073709551615" and an I/O error, so
+   those two lines say nothing there and only the length check judges it: a
+   cut in such a stream is caught only for a format whose header carries the
+   length (FLAC, an MP3 with a Xing frame, MP4; not WAV or Ogg).
 5. **ffmpeg 5.1 is the floor.** `ebur128=...:framelog=verbose`, never `quiet`
    (ffmpeg 6+ only; 5.1 rejects the whole filter and every pass fails with
    "Conversion failed!"). The PCM is `-ac 2 -f f32le` at the file's own rate;

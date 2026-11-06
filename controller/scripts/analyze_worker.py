@@ -2359,31 +2359,81 @@ MEASURE_MAX_RATE = 48000
 _PROBE_TIMEOUT_S = 30
 
 
+# What an ffprobe of the header says about the first audio stream. Each field
+# is None when unknown.
+AudioProbe = collections.namedtuple("AudioProbe", "rate channels duration_ms")
+_NO_PROBE = AudioProbe(None, None, None)
+# ffprobe's warning when it has no length in the header and guesses one from
+# the bitrate (a VBR MP3 without a Xing frame): too loose to judge a decode by.
+_ESTIMATED_DURATION = "Estimating duration from bitrate"
+
+
+def parse_probe(stdout, stderr=""):
+    """AudioProbe out of `ffprobe -of json` output. The duration is the
+    stream's, else the container's, and None when ffprobe only estimated it.
+    Pure."""
+    try:
+        info = json.loads(stdout or "{}")
+    except ValueError:
+        return _NO_PROBE
+    streams = info.get("streams") if isinstance(info, dict) else None
+    stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+    container = info.get("format") if isinstance(info, dict) and isinstance(info.get("format"), dict) else {}
+
+    def whole(v):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    def millis(v):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return int(round(f * 1000.0)) if math.isfinite(f) and f > 0 else None
+
+    duration_ms = None
+    if _ESTIMATED_DURATION not in (stderr or ""):
+        duration_ms = millis(stream.get("duration"))
+        if duration_ms is None:
+            duration_ms = millis(container.get("duration"))
+    return AudioProbe(whole(stream.get("sample_rate")), whole(stream.get("channels")), duration_ms)
+
+
 def probe_audio_format(src, limit=None):
-    """(sample_rate, channels) of the first audio stream (ffprobe, the header
-    only); either is None on any failure, and the caller then measures the
-    file as it is, as it did before. Never logs ffprobe's output (a URL
-    carries credentials)."""
+    """AudioProbe of the first audio stream (ffprobe, the header only). Every
+    field is None on any failure, and the caller then measures the file as it
+    is, as it did before. Never logs ffprobe's output (a URL carries
+    credentials)."""
     if not shutil.which("ffprobe"):
-        return None, None
+        return _NO_PROBE
     try:
         r = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=sample_rate,channels",
-             "-of", "default=noprint_wrappers=1", src],
-            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            ["ffprobe", "-v", "warning", "-select_streams", "a:0",
+             "-show_entries", "stream=sample_rate,channels,duration:format=duration", "-of", "json", src],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
             timeout=min(_PROBE_TIMEOUT_S, limit or _PROBE_TIMEOUT_S))
     except (OSError, subprocess.SubprocessError):
-        return None, None
+        return _NO_PROBE
     if r.returncode != 0:
-        return None, None
-    fields = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
+        return _NO_PROBE
+    return parse_probe(r.stdout, r.stderr)
 
-    def num(k):
-        try:
-            return int(fields.get(k, ""))
-        except ValueError:
-            return None
-    return num("sample_rate"), num("channels")
+
+# A decode that ends this far short of the length in the header was cut off
+# (a dropped connection, a truncated file): encoder delay, padding and edit
+# lists account for tens of milliseconds, never seconds.
+_SHORTFALL_MIN_MS = 5000
+_SHORTFALL_SHARE = 0.02
+
+
+def decoded_short_of(probed_ms, decoded_ms):
+    """True when a decode of `decoded_ms` fell well short of the header's
+    `probed_ms`. Unknown either way is not short. Pure."""
+    if not probed_ms or decoded_ms is None:
+        return False
+    return probed_ms - decoded_ms > max(_SHORTFALL_MIN_MS, _SHORTFALL_SHARE * probed_ms)
 
 
 WHOLE_CURVE_STEP_MS = 1000
@@ -2540,15 +2590,28 @@ class FfmpegLog:
     the log itself is never kept: only what the pass reads from it. The frames
     (FrameLog), the summary block, the output header and its PCM stream line
     (the rate; a long tag such as lyrics can put many metadata lines between
-    them), and what ffmpeg_failure_reason needs: the first line naming an
-    error, and a short tail."""
+    them), the first line saying the input ended early (`input_error`), and
+    what ffmpeg_failure_reason needs: the first line naming an error, and a
+    short tail."""
 
     _TAIL_LINES = 40
     _SUMMARY_LINES = 40
     _PCM_STREAM_RE = re.compile(r"Audio: pcm_f32le\b")
+    # A read that ended before the input did. ffmpeg logs it and still exits
+    # 0 with what it decoded (no -xerror), so the exit code alone would store
+    # a cut-off stream as a whole-file measurement.
+    _PREMATURE_RE = re.compile(r"stream ends prematurely at \d+, should be (\d+)", re.IGNORECASE)
+    _INPUT_ERRORS = ("input/output error", "connection reset by peer", "connection timed out")
+    # ...except a server that sent no Content-Length: ffmpeg expects 2^64 - 1
+    # bytes, so even a COMPLETE read ends with "Stream ends prematurely ...,
+    # should be 18446744073709551615" and the "Input/output error" that
+    # follows it. Those say nothing; decoded_short_of judges that read.
+    _UNKNOWN_LENGTH = str(2 ** 64 - 1)
 
     def __init__(self):
         self.frames = FrameLog()
+        self.input_error = None
+        self._length_unknown = False
         self._summary = []
         self._output = []
         self._in_output = False
@@ -2561,6 +2624,13 @@ class FfmpegLog:
         if frame is not None:
             self.frames[frame[0]] = frame[1]
             return
+        premature = self._PREMATURE_RE.search(line)
+        if premature and premature.group(1) == self._UNKNOWN_LENGTH:
+            self._length_unknown = True
+        elif self.input_error is None and (premature or (
+                any(h in line.lower() for h in self._INPUT_ERRORS) and
+                not (self._length_unknown and "input/output error" in line.lower()))):
+            self.input_error = redact_urls(line.strip())[:300]
         if self._summary or "Summary:" in line:
             if len(self._summary) < self._SUMMARY_LINES:
                 self._summary.append(line)
@@ -2640,8 +2710,10 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
     native rate, as it airs: stereo, capped at MEASURE_MAX_RATE (48 kHz). Returns {"loudness": {loudness_lufs, lra_lu, sample_peak_db,
     true_peak_db} | None, "edges": (lead_ms, tail_ms, duration_ms) | None,
     "seconds"}. Loudness and true peak are both set or both None (digital
-    silence), never one without the other. Raises on any ffmpeg failure, so the
-    caller records an attempt instead of a measurement."""
+    silence), never one without the other. Raises on any ffmpeg failure, and on
+    an input that ended early (ffmpeg logged a premature end or an I/O error,
+    or the decode fell well short of the header's length: decoded_short_of),
+    so the caller records an attempt instead of a measurement."""
     import numpy as np
 
     if not shutil.which("ffmpeg"):
@@ -2668,7 +2740,8 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
     #   sample_rates fails with "Error reinitializing filters" on a 96 kHz
     #   input), hence the probe and one fixed target.
     filters = []
-    rate, channels = probe_audio_format(src, limit)
+    probe = probe_audio_format(src, limit)
+    rate, channels = probe.rate, probe.channels
     if channels is not None and channels > 2:
         filters.append("aformat=sample_fmts=dbl:channel_layouts=stereo")
     if rate is not None and rate > MEASURE_MAX_RATE:
@@ -2741,6 +2814,12 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
         raise RuntimeError("ffmpeg's log was still being read after it exited")
     if code != 0:
         raise RuntimeError(f"ffmpeg exited {code}: {ffmpeg_failure_reason(log.failure_text())}")
+    # A cut-off input still exits 0 with what it decoded. Stored, it would be
+    # a whole-file figure for part of the file (and a decoded length that
+    # ends the track early), which nothing that measures less may replace:
+    # fail instead, so the next run reads it again.
+    if log.input_error is not None:
+        raise RuntimeError(f"the input ended early: {log.input_error}")
 
     out = {"loudness": None, "edges": None, "seconds": round(time.monotonic() - t0, 2)}
     if loudness:
@@ -2760,6 +2839,17 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
         if not sr:
             raise RuntimeError("ffmpeg did not report the output sample rate")
         out["edges"] = scanner.result(sr)
+    # The second net, for a cut that logged nothing (a server that closed
+    # without a Content-Length): the decode against the header's length. The
+    # edges count the decoded samples; without them the last 100 ms frame does.
+    if out["edges"] is not None:
+        decoded_ms = out["edges"][2]
+    else:
+        decoded_ms = max(log.frames) * 100 if len(log.frames) else None
+    if decoded_short_of(probe.duration_ms, decoded_ms):
+        raise RuntimeError(
+            f"the input ended early: decoded {decoded_ms / 1000:.1f} s of the {probe.duration_ms / 1000:.1f} s "
+            "its header gives")
     return out
 
 
