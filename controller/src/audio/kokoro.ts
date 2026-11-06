@@ -232,6 +232,13 @@ export function start(): void {
   if (config.kokoro.url) remote.start();
 }
 
+// Probe the shared server now rather than on the next 30 s tick, as
+// remoteTts.refresh() does for the Remote engine. Resolves to whether it is
+// up; false, without a request, when KOKORO_URL is unset.
+export async function refresh(): Promise<boolean> {
+  return config.kokoro.url ? remote.refresh() : false;
+}
+
 async function speakRemote(text: string, outPath: string, payload: { voice: string; lang: string; speed: number }): Promise<string> {
   const res = await fetchWithTimeout(`${config.kokoro.url}/v1/speak`, {
     method: 'POST',
