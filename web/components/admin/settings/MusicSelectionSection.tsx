@@ -64,6 +64,7 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
       // config rather than LLM config. Blank or junk input saves as 0 (off),
       // as it did before this card moved here.
       picker: {
+        flowAllowAboveMax: form.picker.flowAllowAboveMax,
         albumHours: Math.max(0, parseFloat(form.picker.albumHours) || 0),
         minTrackLengthSeconds: Math.max(0, parseInt(form.picker.minTrackLengthSeconds, 10) || 0),
       },
@@ -350,6 +351,22 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
               <strong>0 = off</strong> (the default). A non-zero value must be at least{' '}
               {data?.values?.minTrackSeconds ?? 30}s, the crossfade-derived minimum.
             </div>
+          </div>
+        </Card>
+
+        <Card title="Sub/Flow track length" sub="keep linked album tracks together">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Allow Flow tracks above the maximum track length</div>
+              <div className="field-hint mt-1 max-w-[440px]">
+                Off: every member must meet the track limit. On: linked tracks may exceed it.
+                The complete Flow must still fit before a firm show finish. Shows can override this setting.
+              </div>
+            </div>
+            <Seg aria-label="Allow Flow tracks above the maximum track length" accent value={form.picker.flowAllowAboveMax ? 'on' : 'off'}
+              options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+              onChange={v => setForm(f => ({ ...f, picker: { ...f.picker, flowAllowAboveMax: v === 'on' } }))}
+            />
           </div>
         </Card>
 

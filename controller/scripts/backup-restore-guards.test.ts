@@ -41,6 +41,7 @@ const AdmZip = (await import('adm-zip')).default;
 const express = (await import('express')).default;
 const { router } = await import('../src/routes/backup.js');
 const { BACKUP_FORMAT, BACKUP_VERSION } = await import('../src/backup/zip.js');
+const subFlows = await import('../src/music/sub-flow.js');
 const { readTemplate, discoverSeededKinds } = await import('../src/skills/loader.js');
 await discoverSeededKinds();
 
@@ -59,6 +60,21 @@ async function restore(body: Buffer) {
   const res = await fetch(`${base}/backup/import`, { method: 'POST', body: new Uint8Array(body) });
   return { status: res.status, body: await res.json() as any };
 }
+
+test('Flow backups are validated and restored as needing re-verification', async () => {
+  const flow = { id: '550e8400-e29b-41d4-a716-446655440000', name: 'Pair', enabled: true, revision: 1,
+    verification: 'verified', verificationError: null, createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    tracks: ['one', 'two'].map(id => ({ id, title: id, artist: null, album: null, duration: 2,
+      fingerprint: { sha256: 'a'.repeat(64), decodedSeconds: 2, bytes: 5000 } })) };
+  const ok = await restore(backupOf([['sub-flows.json', JSON.stringify([flow])]]));
+  assert.equal(ok.status, 200);
+  assert.equal(subFlows.list()[0]?.verification, 'failed');
+  assert.equal(subFlows.list()[0]?.orderVerified, false);
+  assert.equal(subFlows.list()[0]?.tracks[0]?.fingerprint, null);
+  const bad = await restore(backupOf([['sub-flows.json', JSON.stringify([flow, flow])]]));
+  assert.equal(bad.status, 400);
+  assert.equal(subFlows.list().length, 1);
+});
 
 const weatherTpl = await readTemplate('weather');
 assert.ok(weatherTpl?.toolPath, 'the weather built-in ships a tool.mjs');
