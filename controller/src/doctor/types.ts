@@ -83,6 +83,9 @@ export interface StationSettings {
     noRepeatWindow?: number;
   };
   tts?: { defaultEngine?: string; byKind?: Record<string, string | undefined> };
+  // Only what the co-host rescue-voice check reads (#2029).
+  personas?: Array<{ id?: string; name?: string; fallbackVoice?: unknown }>;
+  shows?: Array<{ name?: string; personaId?: string; guestPersonaIds?: string[] }>;
   search?: { provider?: string };
   audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
   transitions?: { pairDrain?: boolean; stemBlends?: boolean };

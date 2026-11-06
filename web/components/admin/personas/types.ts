@@ -13,6 +13,16 @@ export interface PersonaTts {
   speed: number;
 }
 
+// The persona's own rescue voice (#2029): what its lines take when its own
+// engine fails, tried before the station Fallback voice. Engine + voice only —
+// no level trims, credentials stay station-wide. Mirrors the controller's
+// PersonaFallbackVoice (schemas/persona.ts).
+export interface PersonaFallbackVoice {
+  engine: string;
+  cloudProvider: string;
+  voice: string;
+}
+
 export interface Persona {
   id: string;
   name: string;
@@ -38,6 +48,8 @@ export interface Persona {
   // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;
   tts: PersonaTts;
+  // null = no rescue voice of its own; the station Fallback voice applies.
+  fallbackVoice: PersonaFallbackVoice | null;
   skills: string[];
   /** Operator organisation tags: they filter and group the roster and nothing
    *  else. */

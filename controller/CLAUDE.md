@@ -49,6 +49,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 ## TTS (`audio/`)
 
 - `audio/tts.ts` dispatches every voice, and callers use `tts.speak(text, {kind})`. A persona slot may name `inherit` (`PERSONA_TTS_INHERIT`, deliberately not in `TTS_ENGINES`): resolve it once where the slot is read (`resolvePersonaVoiceSlot`). The lenient load path repairs a bad engine to `piper`, never to `inherit`. The per-engine voice rules live once, in `schemas/persona.ts`.
+- The rescue chain after a failed render is: the persona's own `fallbackVoice` (#2029) → `settings.tts.fallback` → `defaultEngine` → piper → kokoro (`audio/tts-fallback.ts`). The persona rescue is gated on `GLOBAL_VOICE_KINDS` and passed to every `resolveEngine()` caller. It carries voice identity only: never forward the persona's own `tts` to a rescue (#1793); credentials stay station-wide.
 - Chatterbox and PocketTTS run in the `tts-heavy` sidecar (`--profile tts-heavy`) when `TTS_HEAVY_URL` is set, else as local Python workers; both paths must keep working.
 - The clone-reference folder (`audio/voice-library.ts`) has no JSON sidecar on purpose: operators drop files into it by hand, and a sidecar would hold no entry for those. Bracket cues (`[laugh]`) are offered to the model only for an engine that renders them, judged on the resolved slot.
 
