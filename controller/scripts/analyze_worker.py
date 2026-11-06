@@ -211,6 +211,51 @@ def _env_int(name, default, minimum=1):
 ANALYZE_MAX_BYTES = _env_int("ANALYZE_MAX_BYTES", 12 * 1024 * 1024)
 
 
+# --- Downbeat tracker (optional, opt-in) -----------------------------------
+# Off unless ANALYZE_DOWNBEATS=beat-this. librosa's beat_track finds beats but
+# no downbeat, so today's bar grid is every 4th beat from the first one: a 4/4
+# guess whose phase is arbitrary, and render_transition cues the incoming
+# track on that grid. With the flag on, the beat and bar grid of BOTH windows
+# (head and tail) comes from Beat This! (CPJKU, ISMIR 2024) instead: a small
+# ONNX export run by onnxruntime on a numpy front end, no torch involved
+# (tools/beat-this/ has the export and the evaluation). Only the heavy images
+# ship onnxruntime and the model: the grid's only consumers are stem blends
+# and the stem cache, which need Demucs stems, so a lean image falls back to
+# today's grid and says why. BPM and key stay librosa's either way. Unset,
+# empty and unrecognised values all mean today's grid, byte for byte; an
+# unrecognised one also says so once here.
+DOWNBEAT_TRACKERS = ("beat-this",)
+_DOWNBEATS_OFF = ("off", "librosa", "0", "false", "no", "none")
+
+
+def downbeats_mode():
+    """The configured downbeat tracker, or None for today's librosa grid."""
+    raw = os.environ.get("ANALYZE_DOWNBEATS", "").strip().lower()
+    if not raw or raw in _DOWNBEATS_OFF:
+        return None
+    if raw in DOWNBEAT_TRACKERS:
+        return raw
+    # Runs at module load, before log() is defined — write stderr directly.
+    sys.stderr.write(
+        f"[analyze-worker] ANALYZE_DOWNBEATS={raw!r} not recognised "
+        f"(known: {', '.join(DOWNBEAT_TRACKERS)}); using librosa's bar grid\n"
+    )
+    return None
+
+
+DOWNBEATS = downbeats_mode()
+# Baked into the heavy (WITH_DEMUCS=1) builds of docker/Dockerfile.analyzer
+# and docker/Dockerfile.aio. A local offline venv points this at its own copy.
+BEAT_THIS_MODEL = (
+    os.environ.get("BEAT_THIS_MODEL", "").strip() or "/opt/analyzer/models/beat_this-small0.onnx"
+)
+# onnxruntime's intra-op threads per worker. 2 keeps a 40 s window near 2 s on
+# a modest CPU (tools/beat-this/README.md has the measurements) without
+# letting one analysis take every core of a small host away from the mixer.
+# Each ANALYZE_CONCURRENCY worker holds its own session, so N workers use 2N.
+DOWNBEAT_THREADS = _env_int("ANALYZE_DOWNBEAT_THREADS", 2)
+
+
 # Vocal-stem gate thresholds (issue #1125). The stem is thresholded against BOTH
 # its own loud level (self-relative, catches quiet-but-present vocals) AND a
 # fraction of the FULL-MIX loud level (an absolute-ish floor). Demucs never
@@ -1209,7 +1254,8 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
     lufs, _peak = measure_loudness(y_src, sr)
 
     # Tail tempo + grid (absolute ms) — the truer anchor for bar-aligning the
-    # exit than the leading window's tempo (outros drift/ritard).
+    # exit than the leading window's tempo (outros drift/ritard). The grid's
+    # source is bar_grid's call, the same one the head window makes.
     bpm_t = None
     beats_ms = []
     bars_ms = []
@@ -1217,9 +1263,7 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
         tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
         t = float(np.atleast_1d(tempo)[0])
         bpm_t = round(t, 1) if 30 <= t <= 300 else None
-        bt = librosa.frames_to_time(beat_frames, sr=sr)
-        beats_ms = [int(round((offset + float(x)) * 1000.0)) for x in bt]
-        bars_ms = beats_ms[::4]
+        beats_ms, bars_ms = bar_grid(y, sr, librosa, beat_frames, offset_s=offset)
     except Exception as e:  # noqa: BLE001 — the grid is garnish, never a gate
         log(f"outro beat grid failed: {e}")
 
@@ -1496,6 +1540,290 @@ def get_vocal_detector(force=False):
     # Fresh load AND cache hit — see get_embedder (#1204).
     _touch_heavy()
     return _vocal_detector
+
+
+# ---------------------------------------------------------------------------
+# Downbeat tracker — Beat This! without torch (ANALYZE_DOWNBEATS=beat-this).
+# Mirrors beat_this v1.1.0's own inference path (tools/beat-this/ pins it):
+# preprocessing.LogMelSpect, inference.split_piece / aggregate_prediction and
+# model/postprocessor.Postprocessor("minimal"). tools/beat-this/parity.py
+# proves this reproduces upstream's File2Beats(dbn=False) times on real audio,
+# so a change here is a change against that proof: rerun it.
+# Same degrade-never-crash contract as the CLAP embedder: a missing
+# onnxruntime, a missing model or a failed inference is today's grid.
+# ---------------------------------------------------------------------------
+BT_SR = 22050
+BT_N_FFT = 1024
+BT_HOP = 441        # 50 frames per second
+BT_FPS = 50
+BT_CHUNK = 1500     # frames per model call: upstream's training excerpt, 30 s
+BT_BORDER = 6       # frames dropped from each chunk edge, overlapped instead
+
+
+def bt_chunk_starts(n):
+    """Chunk start frames for an n-frame spectrogram (split_piece with
+    avoid_short_end): consecutive chunks overlap by the border, and the last
+    one is pulled back to end at the piece's end."""
+    import numpy as np
+
+    starts = np.arange(-BT_BORDER, n - BT_BORDER, BT_CHUNK - 2 * BT_BORDER)
+    if n > BT_CHUNK - 2 * BT_BORDER:
+        starts[-1] = n - (BT_CHUNK - BT_BORDER)
+    return [int(s) for s in starts]
+
+
+def bt_chunk(spect, start):
+    """The chunk at `start`, zero-padded as split_piece pads it: a start before
+    zero pads the left, and the right edge gets at most one border."""
+    import numpy as np
+
+    n = len(spect)
+    chunk = spect[max(start, 0):min(start + BT_CHUNK, n)]
+    left = max(0, -start)
+    right = max(0, min(BT_BORDER, start + BT_CHUNK - n))
+    if left or right:
+        chunk = np.pad(chunk, ((left, right), (0, 0)))
+    return chunk
+
+
+def bt_frame_logits(spect, run_chunk):
+    """Framewise (beat, downbeat) logits for the whole spectrogram.
+    `run_chunk(chunk)` maps one (T, 128) chunk to two (T,) logit arrays. Where
+    chunks overlap the earlier one wins (upstream's keep_first)."""
+    import numpy as np
+
+    n = len(spect)
+    beat = np.full(n, -1000.0, np.float32)
+    down = np.full(n, -1000.0, np.float32)
+    preds = [(s, *run_chunk(bt_chunk(spect, s))) for s in bt_chunk_starts(n)]
+    for start, b, d in reversed(preds):
+        lo = start + BT_BORDER
+        hi = min(start + BT_CHUNK - BT_BORDER, n)
+        beat[lo:hi] = b[BT_BORDER:-BT_BORDER][: hi - lo]
+        down[lo:hi] = d[BT_BORDER:-BT_BORDER][: hi - lo]
+    return beat, down
+
+
+def bt_peak_frames(logits):
+    """Frames whose logit is positive and the maximum within ±3 frames (70 ms),
+    with each run of adjacent peaks collapsed to its running mean exactly as
+    upstream's deduplicate_peaks does it (the mean, not the first frame)."""
+    import numpy as np
+
+    padded = np.pad(logits, 3, constant_values=-np.inf)
+    window_max = np.lib.stride_tricks.sliding_window_view(padded, 7).max(axis=1)
+    peaks = np.flatnonzero((logits == window_max) & (logits > 0))
+    out = []
+    p = None
+    count = 0
+    for p2 in (int(x) for x in peaks):
+        if p is not None and p2 - p <= 1:
+            count += 1
+            p += (p2 - p) / count
+        else:
+            if p is not None:
+                out.append(p)
+            p = p2
+            count = 1
+    if p is not None:
+        out.append(p)
+    return np.asarray(out, dtype=np.float64)
+
+
+def bt_beats_downbeats(beat_logits, down_logits):
+    """(beats_s, downbeats_s): upstream's minimal postprocessing. Every
+    downbeat is moved onto its nearest beat, so the bars are a subset of the
+    beats, then duplicates are dropped."""
+    import numpy as np
+
+    beats = bt_peak_frames(beat_logits) / BT_FPS
+    downs = bt_peak_frames(down_logits) / BT_FPS
+    if len(beats) > 0:
+        downs = np.asarray([beats[int(np.argmin(np.abs(beats - d)))] for d in downs])
+    return beats, np.unique(downs)
+
+
+class DownbeatTracker:
+    def __init__(self, model_path, threads):
+        self.model_path = model_path
+        self.threads = threads
+        self.session = None
+        self.input_name = None
+        self._fb = None
+
+    def load(self):
+        import onnxruntime as ort
+
+        if not os.path.isfile(self.model_path):
+            raise FileNotFoundError(f"no Beat This model at {self.model_path}")
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = self.threads
+        so.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(
+            self.model_path, so, providers=["CPUExecutionProvider"]
+        )
+        self.input_name = self.session.get_inputs()[0].name
+
+    def logmel(self, y, librosa):
+        """Upstream's LogMelSpect in numpy: |STFT| / sqrt(n_fft) through a
+        128-band slaney-scale mel bank WITHOUT area normalisation (torchaudio's
+        norm=None), then log1p(1000·x). Frames × bands."""
+        import numpy as np
+
+        if self._fb is None:
+            self._fb = librosa.filters.mel(
+                sr=BT_SR, n_fft=BT_N_FFT, n_mels=128, fmin=30.0, fmax=11000.0,
+                htk=False, norm=None, dtype=np.float32,
+            ).T.copy()
+        mag = np.abs(librosa.stft(
+            np.asarray(y, dtype=np.float32), n_fft=BT_N_FFT, hop_length=BT_HOP,
+            window="hann", center=True, pad_mode="reflect",
+        )) / np.float32(math.sqrt(BT_N_FFT))
+        return np.log1p(np.float32(1000.0) * (mag.T @ self._fb)).astype(np.float32)
+
+    def _run_chunk(self, chunk):
+        import numpy as np
+
+        beat, down = self.session.run(
+            ["beat", "downbeat"], {self.input_name: np.ascontiguousarray(chunk[None], dtype=np.float32)}
+        )
+        return beat[0], down[0]
+
+    def track(self, y, sr, librosa):
+        """(beats_s, downbeats_s) for a mono window, times relative to its start."""
+        if sr != BT_SR:
+            y = librosa.resample(y, orig_sr=sr, target_sr=BT_SR)
+        spect = self.logmel(y, librosa)
+        if len(spect) == 0:
+            raise ValueError("empty window")
+        return bt_beats_downbeats(*bt_frame_logits(spect, self._run_chunk))
+
+
+# Lazily loaded, at most once — None means today's grid. A load failure is
+# logged once and never retried (one missing model must not cost every track
+# a load attempt). Its own clock, NOT the heavy one: this runs on every
+# analysis, and stamping _heavy_last_used would keep CLAP/Demucs resident on
+# any station with steady analysis traffic, the exact #1204 failure.
+_downbeat_tracker = None
+_downbeat_failed = False
+_downbeat_infer_logged = False
+_downbeat_last_used = time.time()
+_downbeat_release_started = False
+
+
+def get_downbeat_tracker():
+    global _downbeat_tracker, _downbeat_failed, _downbeat_last_used
+    if DOWNBEATS is None or _downbeat_failed:
+        return None
+    if _downbeat_tracker is None:
+        try:
+            tracker = DownbeatTracker(BEAT_THIS_MODEL, DOWNBEAT_THREADS)
+            tracker.load()
+            _downbeat_tracker = tracker
+            log(
+                f"Beat This downbeat model loaded: {BEAT_THIS_MODEL} "
+                f"({DOWNBEAT_THREADS} threads)"
+            )
+            _maybe_start_downbeat_release()
+        except (ImportError, FileNotFoundError) as ex:
+            # The lean images ship neither onnxruntime nor the model.
+            log(
+                f"ANALYZE_DOWNBEATS=beat-this needs the heavy analyzer image "
+                f"(ANALYZER_HEAVY=1, or subwave-aio-heavy), which ships onnxruntime "
+                f"and the Beat This model ({ex}); using librosa's bar grid for this run"
+            )
+            _downbeat_failed = True
+            return None
+        except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
+            log(f"Beat This load failed ({ex}); using librosa's bar grid for this run")
+            _downbeat_failed = True
+            return None
+    _downbeat_last_used = time.time()
+    return _downbeat_tracker
+
+
+def _downbeat_idle_seconds():
+    """The tracker is CPU-only (onnxruntime's CPU provider), so it takes the
+    CPU window. Deliberately not _idle_unload_seconds(): that resolves the
+    torch device, and importing torch to time out a torch-free model would add
+    hundreds of MB to a worker that otherwise never loads it."""
+    if _IDLE_UNLOAD_ENV:
+        try:
+            return float(_IDLE_UNLOAD_ENV)
+        except ValueError:
+            pass  # _idle_unload_seconds() names the bad value if a heavy model loads
+    return IDLE_UNLOAD_CPU_S
+
+
+def _release_downbeat_tracker(idle_s):
+    global _downbeat_tracker
+    if _downbeat_tracker is None:
+        return
+    _downbeat_tracker = None
+    import gc
+
+    gc.collect()
+    try:
+        ctypes.CDLL(None).malloc_trim(0)
+    except Exception:  # noqa: BLE001 — best-effort, absent on musl/macOS
+        pass
+    # Worded apart from _release_models' line on purpose: the sidecar reads
+    # "released … reloads on next use" as CLAP/Demucs leaving memory
+    # (docker/analyzer/server.py _pump_stderr), and they may still be loaded.
+    log(f"idle {int(idle_s)}s — unloaded the Beat This downbeat model (loads again when next needed)")
+
+
+def _downbeat_release_loop(idle_s):
+    while True:
+        time.sleep(30)
+        if _downbeat_tracker is None or time.time() - _downbeat_last_used < idle_s:
+            continue
+        with _model_lock:
+            if time.time() - _downbeat_last_used >= idle_s:
+                _release_downbeat_tracker(idle_s)
+
+
+def _maybe_start_downbeat_release():
+    global _downbeat_release_started
+    if _downbeat_release_started:
+        return
+    idle_s = _downbeat_idle_seconds()
+    if idle_s <= 0:
+        return
+    _downbeat_release_started = True
+    threading.Thread(
+        target=_downbeat_release_loop, args=(idle_s,), daemon=True, name="downbeat-release"
+    ).start()
+
+
+def bar_grid(y, sr, librosa, beat_frames, offset_s=0.0):
+    """The ONE place the beat and bar grid is chosen, for the head window and
+    the tail window alike: `(beats_ms, bars_ms)`, absolute ms (`offset_s` is
+    the window's start in the file).
+
+    With ANALYZE_DOWNBEATS=beat-this and the tracker loaded, both lists come
+    from Beat This, so the bars are real downbeats and a subset of the beats.
+    Its own beats are used rather than librosa's because its downbeats are
+    snapped to them: a librosa beat list beside Beat This bars would carry bars
+    that are not beats. Anything else is today's grid exactly: librosa's beat
+    frames (`beat_frames`, already tracked for the bpm) and every 4th of them,
+    a 4/4 guess with arbitrary phase. A failed inference falls back the same
+    way for that window and is logged once per process."""
+    global _downbeat_infer_logged
+    tracker = get_downbeat_tracker()
+    if tracker is not None:
+        try:
+            beats_s, downs_s = tracker.track(y, sr, librosa)
+            beats_ms = [int(round((offset_s + float(t)) * 1000.0)) for t in beats_s]
+            bars_ms = [int(round((offset_s + float(t)) * 1000.0)) for t in downs_s]
+            return beats_ms, bars_ms
+        except Exception as e:  # noqa: BLE001 — the grid is garnish, never a gate
+            if not _downbeat_infer_logged:
+                _downbeat_infer_logged = True
+                log(f"Beat This inference failed ({e}); using librosa's bar grid (logged once)")
+    bt = librosa.frames_to_time(beat_frames, sr=sr)
+    beats_ms = [int(round((offset_s + float(t)) * 1000.0)) for t in bt]
+    return beats_ms, beats_ms[::4]
 
 
 # Marker file at the stem cache root (controller music/stem-cache.ts). A stems
@@ -2166,16 +2494,15 @@ def facet_head(y, sr, librosa):
     except Exception as e:  # noqa: BLE001 — tempo/grid are garnish, never a gate
         log(f"main beat tracking failed: {e}")
 
-    # Per-beat timestamps (ms) — already computed by beat_track, previously
-    # discarded. Downbeats are a 4/4 heuristic (every 4th beat from the first):
-    # librosa gives no true downbeat, but a bar grid is enough to bar-align a
-    # crossfade. Best-effort: an empty/odd grid simply yields fewer/no bars.
+    # Per-beat and per-bar timestamps (ms). bar_grid decides where they come
+    # from: by default librosa's beats above and every 4th one as a bar (a 4/4
+    # guess with arbitrary phase: librosa finds no downbeat), or Beat This's
+    # real downbeats with ANALYZE_DOWNBEATS=beat-this. Best-effort: an
+    # empty/odd grid simply yields fewer/no bars.
     beats_ms = []
     bars_ms = []
     try:
-        bt = librosa.frames_to_time(beat_frames, sr=sr)
-        beats_ms = [int(round(float(t) * 1000.0)) for t in bt]
-        bars_ms = beats_ms[::4]
+        beats_ms, bars_ms = bar_grid(y, sr, librosa, beat_frames)
     except Exception as e:  # noqa: BLE001 — beat grid is best-effort
         log(f"beat grid failed: {e}")
         beats_ms = []
@@ -2738,6 +3065,12 @@ def main():
     if VOCAL_ENABLED:
         log("ANALYZE_VOCAL_ACTIVITY on — loading Demucs model...")
         get_vocal_detector()
+    # Loaded at boot so a missing model or onnxruntime is in the log before
+    # the first track rather than in the middle of a pass. Fractions of a
+    # second; a failure here just means librosa's grid (get_downbeat_tracker).
+    if DOWNBEATS:
+        log(f"ANALYZE_DOWNBEATS={DOWNBEATS} — loading the downbeat model...")
+        get_downbeat_tracker()
 
     # Tell the controller whether this worker can actually emit "sounds-like"
     # audio embeddings, so the admin UI can warn *before* a fruitless run rather
@@ -2760,8 +3093,7 @@ def main():
         importlib.util.find_spec(m) is not None for m in ("torch", "transformers")
     )
 
-    log("ready")
-    emit({
+    ready = {
         "id": None,
         "ready": True,
         "audio_embedding_capable": audio_capable,
@@ -2774,7 +3106,14 @@ def main():
         "text_embedding_capable": text_capable,
         # Version signal: this worker understands {"facets": [...]} requests.
         "facets_capable": True,
-    })
+    }
+    # Which tracker draws the bar grid, present only when one is configured
+    # AND loaded, so a default worker's ready line is byte-identical. Nothing
+    # reads it yet; it is the signal an automatic re-grid would key on.
+    if _downbeat_tracker is not None:
+        ready["downbeats"] = DOWNBEATS
+    log("ready")
+    emit(ready)
 
     for line in sys.stdin:
         line = line.strip()

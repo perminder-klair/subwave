@@ -606,6 +606,38 @@ see basic BPM/key working but vocal or "sounds-like" data missing, you're on the
 lean analyzer — enable the heavy tier with `ANALYZER_HEAVY=1`
 ([above](#enabling-sounds-like--vocals-the-heavy-tier)), not by pulling `tts-heavy`.
 
+### Real downbeats (opt-in, heavy tier)
+
+librosa finds beats but not downbeats, so the bar grid that stem-blend
+transitions cue on is every 4th beat from the first, a guess that lands the
+incoming track's drop mid-bar more often than not. `ANALYZE_DOWNBEATS=beat-this`
+in the root `.env` takes the grid from [Beat This!](https://github.com/CPJKU/beat_this)
+instead. It needs the heavy analyzer image (`ANALYZER_HEAVY=1`, or the AIO's
+`-heavy` and `-cuda` images), the only ones that ship its small model, and it
+changes nothing you can hear unless stem blends are on: they are the grid's
+only consumer, and they need the heavy tier's Demucs stems anyway. On a lean
+image the flag logs one line saying so and keeps the old grid. On GTZAN's
+human labels it put both blend cues on a real
+downbeat for 69% of clips, against 12% for the old grid
+(`tools/beat-this/README.md` has the evaluation). It costs about 3 s per track
+(head and tail windows) on two cores and up to ~225 MB more analyzer memory
+while loaded
+(`ANALYZE_DOWNBEAT_THREADS` sets the cores). BPM and key don't change.
+
+Tracks analysed before you turned it on keep their old grid until they are
+analysed again. To redo just the grids (head and tail windows, no CLAP or
+Demucs):
+
+```bash
+docker compose exec controller npx tsx src/music/analyze-library.ts --facets head,tail --where all
+```
+
+A local-venv backend needs `onnxruntime==1.27.0` installed and
+`BEAT_THIS_MODEL` pointing at the model file, the one the heavy images bake:
+[`beat_this-small0.onnx`](https://github.com/perminder-klair/subwave/releases/download/beat-this-small0-v1/beat_this-small0.onnx)
+(sha256 `5cff50fb031bc4a4…`; `tools/beat-this/README.md` has the full hash and
+how to rebuild it).
+
 ### Running analysis without a sidecar (dev / offline)
 
 The analyzer has a third backend: a **local Python venv** with `librosa`

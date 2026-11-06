@@ -51,8 +51,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SNAPSHOT = os.path.join(HERE, "fixtures", "analyzer-characterisation", "snapshot.json")
 
 # Keep the run lean and deterministic regardless of the caller's environment.
+# ANALYZE_DOWNBEATS too: the snapshot pins today's librosa bar grid, so it must
+# hold inside an image whose operator turned the Beat This grid on.
 for k in ("ANALYZE_AUDIO_EMBEDDING", "ANALYZE_VOCAL_ACTIVITY", "ANALYZE_SECONDS",
-          "ANALYZE_OUTRO_SECONDS", "ANALYZE_SILENCE_DBFS", "ANALYZE_SR", "ANALYZE_MAX_BYTES"):
+          "ANALYZE_OUTRO_SECONDS", "ANALYZE_SILENCE_DBFS", "ANALYZE_SR", "ANALYZE_MAX_BYTES",
+          "ANALYZE_DOWNBEATS"):
     os.environ.pop(k, None)
 
 try:
