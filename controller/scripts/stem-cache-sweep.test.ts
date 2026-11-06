@@ -118,6 +118,29 @@ async function main() {
     assert.deepEqual([...(await stemCache.cachedTrackIdSet())].sort(), ['mid', 'new']);
   });
 
+  await test('no keep-last set, or an empty one, evicts exactly as before', async () => {
+    // What a station with pick-time stems off gets (pick-stems-policy.ts
+    // sweepKeepLast returns no set): the same dirs in the same order.
+    const evicted = async (opts?: { keepLast?: ReadonlySet<string> }) => {
+      resetCache();
+      for (let i = 0; i < 6; i++) makeDir(`k${i}`, 10 * MB, 6000 - i * 1000);
+      await stemCache.sweep(25 * MB, { force: true, ...opts });
+      const left = await stemCache.cachedTrackIdSet();
+      return ['k0', 'k1', 'k2', 'k3', 'k4', 'k5'].filter(id => !left.has(id));
+    };
+    const plain = await evicted();
+    assert.deepEqual(plain, ['k0', 'k1', 'k2', 'k3'], 'oldest first');
+    assert.deepEqual(await evicted({ keepLast: undefined }), plain);
+    assert.deepEqual(await evicted({ keepLast: new Set() }), plain);
+    // And a queued track's dir goes after the rest, still down to the budget.
+    assert.deepEqual(await evicted({ keepLast: new Set(['k0']) }), ['k1', 'k2', 'k3', 'k4']);
+    resetCache();
+    makeDir('old', 10 * MB, 3000);
+    makeDir('mid', 10 * MB, 2000);
+    makeDir('new', 10 * MB, 1000);
+    await stemCache.sweep(25 * MB, { force: true });
+  });
+
   await test('a cache inside its budget is a no-op', async () => {
     const res = await stemCache.sweep(25 * MB);
     // The previous sweep's walk left a usage snapshot inside this budget, so

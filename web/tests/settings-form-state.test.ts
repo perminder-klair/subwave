@@ -210,7 +210,7 @@ test('the Stems save and the Broadcast save post disjoint fields, so neither com
   const form = settingsForm({});
   const stems = stemsSavePayload(form).patch;
   const danger = dangerSavePayload(form).patch;
-  assert.deepEqual(Object.keys(stems.transitions).sort(), ['pairDrain', 'stemBlends']);
+  assert.deepEqual(Object.keys(stems.transitions).sort(), ['pairDrain', 'pickTimeStems', 'stemBlends']);
   assert.deepEqual(Object.keys(stems.audio).sort(), ['stemCache', 'stemCacheGb']);
   assert.deepEqual(Object.keys(danger.transitions).sort(), ['effects', 'equalPowerCrossfade']);
   assert.equal('audio' in danger, false);
@@ -229,4 +229,26 @@ test('the Stems save bar owns its fields through one list, alias paths included'
   };
   assert.deepEqual(ownedFieldErrors(errors, STEM_FORM_KEYS).map(([path]) => path).sort(),
     ['audio.stemCacheGb', 'transitions.pairDrain']);
+});
+
+test('pick-time stems (#2197) hydrates off unless saved true, and saves from the Stems page', async () => {
+  // Absent, or anything but true, is the pre-existing behaviour: off.
+  assert.equal(settingsForm({}).transitions.pickTimeStems, false);
+  assert.equal(settingsForm({ transitions: { pickTimeStems: 'yes' as unknown as boolean } }).transitions.pickTimeStems, false);
+  const on = settingsForm({ transitions: { pickTimeStems: true } });
+  assert.equal(on.transitions.pickTimeStems, true);
+  assert.equal(stemsSavePayload(on).patch.transitions.pickTimeStems, true);
+  assert.equal('pickTimeStems' in dangerSavePayload(on).patch.transitions, false);
+  // Its dirty state and its errors belong to the Stems page.
+  const stems = sectionById('stems')!.formKeys;
+  const broadcast = sectionById('broadcast')!.formKeys;
+  const baseline = settingsForm({});
+  const flipped = structuredClone(baseline);
+  flipped.transitions.pickTimeStems = true;
+  assert.deepEqual(dirtyPaths(flipped, baseline, stems), ['transitions.pickTimeStems']);
+  assert.deepEqual(dirtyPaths(flipped, baseline, broadcast), []);
+  const { ownedFieldErrors } = await import('../components/admin/settings/shared');
+  const { STEM_FORM_KEYS } = await import('../components/admin/settings/registry');
+  assert.deepEqual(ownedFieldErrors({ 'transitions.pickTimeStems': 'bad' }, STEM_FORM_KEYS).map(([path]) => path),
+    ['transitions.pickTimeStems']);
 });

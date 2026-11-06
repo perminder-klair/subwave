@@ -107,6 +107,12 @@ export const config = {
     voice: envStr('KOKORO_VOICE', 'bf_isabella'),   // British female, BBC-ish
     lang: envStr('KOKORO_LANG', ''),
     speed: envFloat('KOKORO_SPEED', TTS_SPEED, { min: 0.1 }),
+    // A shared Kokoro server to render on instead of the local worker (hosted
+    // boxes run one per box). Set => this engine never spawns its Python child
+    // or loads the model; voices, language and speed are unchanged. Empty =>
+    // local worker, as before. See audio/kokoro.ts. A trailing slash is
+    // dropped, since the routes are appended as `${url}/v1/...`.
+    url: envUrl('KOKORO_URL', '').replace(/\/+$/, ''),
   },
   // Chatterbox is opt-in (`--build-arg WITH_CHATTERBOX=1`). isAvailable() does an
   // existsSync on `python`, so an image built without it falls back to Piper.

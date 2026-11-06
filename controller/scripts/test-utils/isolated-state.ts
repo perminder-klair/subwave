@@ -1,5 +1,5 @@
-// Disposable state for the operator tools that call a model from a clone
-// (`npm run llm-bench`, `npm run leanings:replay`).
+// Disposable state for the operator tools that load src/ from a clone
+// (`npm run llm-bench`, `npm run leanings:replay`, `npm run tts-bench`).
 //
 // config.ts resolves STATE_DIR once, at import, and with none set that is the
 // repo-local state/: on a host running the station, the live state root.

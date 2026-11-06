@@ -160,6 +160,7 @@ import {
   LIQ_OPUS_ENABLED_PATH,
   LIQ_STREAM_BITRATE_PATH,
   LIQ_STREAM_BUFFER_SECONDS_PATH,
+  reconcileStreamMountFiles,
   writeLiquidsoapSettings,
 } from './settings/liquidsoap.js';
 
@@ -1255,6 +1256,7 @@ export async function load() {
     transitions: {
       pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
+      pickTimeStems: typeof stored.transitions?.pickTimeStems === 'boolean' ? stored.transitions.pickTimeStems : DEFAULTS.transitions.pickTimeStems,
       equalPowerCrossfade: typeof stored.transitions?.equalPowerCrossfade === 'boolean' ? stored.transitions.equalPowerCrossfade : DEFAULTS.transitions.equalPowerCrossfade,
       // Per-effect kill switches (#1565) — same absent-means-default repair as
       // every sibling, and the default is `true`, so a stored block missing a
@@ -2485,7 +2487,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   }
   if ('transitions' in patch) {
     const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
-    for (const k of ['pairDrain', 'stemBlends'] as const) {
+    for (const k of ['pairDrain', 'stemBlends', 'pickTimeStems'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
     }
     // Read once by the mixer at startup (liquidsoap_equal_power_crossfade.txt),
@@ -2786,8 +2788,13 @@ export async function update(patch) {
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
-// them on its next start. Idempotent.
-export async function ensureLiquidsoapSettingsFile() {
+// them on its next start. Idempotent. A missing file writes them all; files
+// already there keep what they say (the jingle ratio's reason is in
+// broadcast/jingle-rotate.ts), except the six listener-mount files, which are
+// reconciled with the saved stream settings under a hosted plan's ceiling
+// (settings/liquidsoap.ts reconcileStreamMountFiles). Returns the mount files
+// that boot rewrote, so the caller can say the mixer needs a restart.
+export async function ensureLiquidsoapSettingsFile(): Promise<{ rewroteMountFiles: string[] }> {
   const s = await load();
   if (
     !existsSync(LIQ_JINGLE_RATIO_PATH) ||
@@ -2800,5 +2807,7 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(ICECAST_LISTENER_AUTH_PATH)
   ) {
     await writeLiquidsoapSettings(s);
+    return { rewroteMountFiles: [] };
   }
+  return { rewroteMountFiles: await reconcileStreamMountFiles(s) };
 }

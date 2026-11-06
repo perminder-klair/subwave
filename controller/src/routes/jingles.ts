@@ -9,6 +9,8 @@ import { validateBody } from '../middleware/validate.js';
 import { jingleImportSchema } from '../schemas/imaging.js';
 import { jingleCreateBodySchema } from '../schemas/imaging-server.js';
 import type { TtsVoiceSlot } from '../schemas/persona.js';
+import { hostedVoiceSlot } from '../setup/hosted.js';
+import * as settings from '../settings.js';
 import { sendAudioFile } from '../util/audio-response.js';
 import { tagger, startTagger, stopTagger } from '../broadcast/tagger.js';
 
@@ -23,11 +25,14 @@ router.get('/jingles', requireAdmin, async (req, res) => {
 });
 
 router.post('/jingles', requireAdmin, validateBody(jingleCreateBodySchema), async (req, res) => {
-  const { text, tts } = req.body as { text: string; tts?: TtsVoiceSlot };
+  const { text, tts: requested } = req.body as { text: string; tts?: TtsVoiceSlot };
+  // Hosted: the persona engine rule (setup/hosted.ts), so a jingle can't pin
+  // an engine the box doesn't run; that slot follows the station default.
+  const { slot: tts, changed } = hostedVoiceSlot(requested, settings.get()?.tts?.defaultEngine);
   try {
     const created = await jingles.create(text, { tts });
     queue.log('scheduler', `New jingle created: "${text.slice(0, 60)}…"`);
-    res.json(created);
+    res.json(changed ? { ...created, managed: ['tts.engine'] } : created);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

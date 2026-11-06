@@ -60,10 +60,11 @@ import { getStationTimezone, isStationHourStart, onStationTimezoneChange, statio
 import { withTrace, pruneOldEvents } from '../observability/events.js';
 import * as archives from './archives.js';
 import * as stemCacheStore from '../music/stem-cache.js';
+import * as pickStems from './pick-stems.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 import * as backup from '../backup/scheduled.js';
-import { autoEnableRealPath } from '../music/navidrome-players.js';
+import { autoEnableRealPath, realPathOptedIn } from '../music/navidrome-players.js';
 import { onLibraryMountLost, proveLibraryMount } from '../music/library-mount.js';
 
 // take() hard-stops at the target, so TARGET_POOL must exceed the sum of the
@@ -514,6 +515,33 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Listener-only stars as the last filler, only when every source above came
   // back empty (see 5).
   if (!pool.length && listenerStarred.length) take('starred', enforce(listenerStarred), TARGET_POOL);
+
+  // Rested fallback (a small library): when every track has aired inside the
+  // recency window, every source above comes back empty and the mixer airs the
+  // emergency loop until someone queues a track by hand. Air the longest-rested
+  // tracks instead, by when each last went to air (queue.rotationAirTimes: the
+  // durable plays index under this process's own, with the on-air track and
+  // everything queued stamped as just spent). A small library is a closed
+  // catalogue, like a full rotation, so it takes the rotation's coast rule
+  // (music/show-recency.ts rotationCoast): the longest-waiting half, never what
+  // is on air or queued, topped up to an hour of audio from the next longest.
+  // Liquidsoap randomizes the file, so the set is what counts, and the most
+  // recent plays stay out of it. Recency is ignored; the clean show, length
+  // ceiling, dedup and artist cap still apply. A strict playlist keeps its own
+  // floor below.
+  if (!pool.length && !strictPlaylist) {
+    try {
+      // Filtered as take() filters, before choosing, so what is chosen can air.
+      const eligible = clean.pass(applyKnownTrackCeiling(await subsonic.getRandomSongs({ size: TARGET_POOL * 2 }), selectionMaxSec));
+      const rested = rotationCoast(shuffle(eligible), queue.rotationAirTimes(), { cap: TARGET_POOL });
+      take('rested', rested, TARGET_POOL, { ignoreRecency: true });
+      if (pool.length) {
+        queue.log('scheduler', `Auto-playlist: every track aired inside the recency window — repeating the ${pool.length} longest-rested (the most recent plays and the on-air track held back) instead of the emergency loop`);
+      }
+    } catch (err) {
+      queue.log('error', `Rested fallback failed: ${err.message}`);
+    }
+  }
 
   }
 
@@ -1182,31 +1210,7 @@ async function cleanup() {
   } catch (err) {
     queue.log('error', `Archive retention failed: ${err.message}`);
   }
-  // Stem cache sweep — keep the per-track Demucs stem windows inside the
-  // operator's byte budget (feature: stem-blend transitions), evicting by the
-  // music/stem-priority.ts ranking rather than by age. The analysis pass
-  // settles after itself too. Most hours this reads the usage snapshot and
-  // walks nothing (stem-cache.ts); a full walk runs at least once a day, which
-  // is what catches dirs added or removed by hand.
-  try {
-    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep();
-    if (offline) queue.log('error', offline);
-    if (removed) {
-      queue.log('scheduler',
-        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
-    }
-    // A sweep that couldn't reach the budget is an operator problem, not a
-    // no-op (#1257) — say so every hour it persists. Usual cause: the
-    // controller can't delete what the analyzer wrote (state/stems ownership).
-    if (overBudgetBytes > 0) {
-      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
-      queue.log('error',
-        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
-        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
-    }
-  } catch (err) {
-    queue.log('error', `Stem cache sweep failed: ${err.message}`);
-  }
+  await stemCacheSweepTick();
   // Rendered transition clips are single-use, so anything over an hour old is
   // an orphan — except clips still queued for a seam that hasn't aired, which
   // can legitimately out-age the window.
@@ -1225,6 +1229,38 @@ async function nightlyDoctor() {
     await withTrace({ kind: 'doctor' }, () => doctor.runDoctor());
   } catch (err) {
     queue.log('error', `Nightly health check failed: ${err.message}`);
+  }
+}
+
+// Stem cache sweep — keep the per-track Demucs stem windows inside the
+// operator's byte budget (feature: stem-blend transitions), evicting by the
+// music/stem-priority.ts ranking rather than by age. The analysis pass
+// settles after itself too. Most hours this reads the usage snapshot and
+// walks nothing (stem-cache.ts); a full walk runs at least once a day, which
+// is what catches dirs added or removed by hand. With pick-time stems on, the
+// dirs of tracks still in the queue go last (pick-stems-policy.ts
+// sweepKeepLast); off, there is no set and the order is the ranking alone.
+// Run by the hourly cleanup; exported for scripts/pick-stems.test.ts.
+export async function stemCacheSweepTick() {
+  try {
+    const keepLast = pickStems.sweepKeepLast(queue.upcoming.map(item => item?.track?.id));
+    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep(undefined, { keepLast });
+    if (offline) queue.log('error', offline);
+    if (removed) {
+      queue.log('scheduler',
+        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
+    }
+    // A sweep that couldn't reach the budget is an operator problem, not a
+    // no-op (#1257) — say so every hour it persists. Usual cause: the
+    // controller can't delete what the analyzer wrote (state/stems ownership).
+    if (overBudgetBytes > 0) {
+      const budgetGb = settings.get()?.audio?.stemCacheGb ?? 15;
+      queue.log('error',
+        `Stem cache: still ${(overBudgetBytes / 1024 ** 3).toFixed(1)} GB over its ${budgetGb} GB budget after the sweep` +
+        (failedDirs ? ` — ${failedDirs} dir delete(s) failed; check ownership/permissions on state/stems` : ''));
+    }
+  } catch (err) {
+    queue.log('error', `Stem cache sweep failed: ${err.message}`);
   }
 }
 
@@ -1394,7 +1430,7 @@ onLibraryMountLost(() => {
 // the operator opted in (musicSource.reportRealPath). On a timer, not once: a
 // new client or user agent gets a fresh row with the flag off. Never throws.
 export async function realPathTick() {
-  if (settings.get().musicSource?.reportRealPath !== true) return;
+  if (!realPathOptedIn()) return;
   try {
     await autoEnableRealPath(line => queue.log('scheduler', line));
   } catch (err) {

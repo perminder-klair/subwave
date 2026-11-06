@@ -13,6 +13,7 @@ import * as stemCache from '../music/stem-cache.js';
 import type { Finding, StationSettings } from './types.js';
 import { fmtTokens, isSchemaFailure } from './util.js';
 import { settingsAgentRoutes } from '../schemas/settings.js';
+import { advertisedMounts } from '../setup/hosted.js';
 import {
   AGENT_DEADLINE_WARN_RATIO, AGENT_NUM_CTX_FLOOR, agentDeadlineRatio, contextWindowTooSmall, latencyP90,
 } from './agent-fit.js';
@@ -363,10 +364,13 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // Flag it only when several are on AND the host is already under pressure.
   try {
     const st: NonNullable<StationSettings['stream']> = s?.stream || {};
+    // The encoders the mixer runs: through a hosted plan's ceiling, which can
+    // switch FLAC and AAC off whatever was saved.
+    const running = advertisedMounts(st);
     const extra: string[] = [];
-    if (st.opusEnabled) extra.push('opus');
-    if (st.flacEnabled) extra.push('flac');
-    if (st.aacEnabled) extra.push('aac');
+    if (running.opusEnabled) extra.push('opus');
+    if (running.flacEnabled) extra.push('flac');
+    if (running.aacEnabled) extra.push('aac');
     if (s?.archive?.enabled) extra.push('hourly archive');
     const encoderCount = 1 + extra.length; // /stream.mp3 always
     const sys = await system.summary();

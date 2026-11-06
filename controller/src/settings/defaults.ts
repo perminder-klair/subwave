@@ -695,6 +695,12 @@ export const DEFAULTS = {
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
+    // Separate a picked track's missing stem windows while it is held behind
+    // the on-air one (broadcast/pick-stems.ts, #2197), so the cache fills with
+    // what the station plays instead of waiting for the bulk backfill. Off
+    // until its load on the mixer has been measured: it runs Demucs during
+    // the broadcast, on the same worker as the blend render.
+    pickTimeStems: false,
     // Fade curve for PLAIN song-to-song crossfades: false = linear (two
     // different songs dip ~3 dB mid-fade), true = equal-power (cos out, sin^1.5
     // in, level held within 0.7 dB). Effects, stem-blend clip seams, jingles

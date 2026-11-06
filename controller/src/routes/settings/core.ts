@@ -2,10 +2,11 @@
 // Navidrome) that land outside settings.json.
 
 import express from 'express';
+import { isHosted, stripManagedSecrets, stripManagedSettings } from '../../setup/hosted.js';
 import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
-import { realPathStatus } from '../../music/navidrome-players.js';
+import { passiveRealPathStatus, realPathOptedIn, realPathStatus } from '../../music/navidrome-players.js';
 import type { RealPathStatus } from '../../music/navidrome-players-policy.js';
 import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
@@ -249,9 +250,13 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     return res.status(400).json({ error: 'start or clear a steer with POST or DELETE /steer' });
   }
   try {
+    // A hosted station's LLM route and voice engine belong to its box agent
+    // (setup/hosted.ts): those keys are dropped, the rest of the save applies.
+    const { patch: body, dropped } = stripManagedSettings(req.body || {}, {
+      defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
+    });
     // A takeover saved here ends a running steer, as one pinned through
     // /schedule/override does (broadcast/takeover-steer.ts).
-    const body = req.body || {};
     const result = 'scheduleOverride' in body
       ? (await updateEndingSteer(body)).result
       : await settings.update(body);
@@ -268,12 +273,12 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     }
     // Re-detect a changed LLM connection in the background: the save must not
     // wait on a probe of a server that may be down.
-    if (req.body?.llm !== undefined) void logCompatDetection();
+    if (body?.llm !== undefined) void logCompatDetection();
     // Re-probe now so the admin badge doesn't wait out the 30s probe tick.
-    if (req.body?.tts?.remote?.url !== undefined) {
+    if (body?.tts?.remote?.url !== undefined) {
       await remoteTts.refresh();
     }
-    res.json(result);
+    res.json(dropped.length ? { ...result, managed: dropped } : result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -328,6 +333,7 @@ router.get('/settings/llm/swap/fit', requireAdmin, async (_req, res) => {
 // admin UI only ever sees a leg's headers redacted. Answers only the receipt —
 // never update()'s raw `saved`, which carries unredacted keys and header values.
 router.post('/settings/llm/swap', requireAdmin, async (_req, res) => {
+  if (isHosted()) return res.status(403).json({ error: 'The LLM is managed by SUB/WAVE Cloud on this station.' });
   try {
     await settings.load();
     const plan = planSwap();
@@ -365,11 +371,15 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       if (trimmed.length > 4096) continue;
       patch[key] = trimmed;
     }
-    if (Object.keys(patch).length === 0) {
-      return res.json({ saved: [] });
+    // Hosted: the LLM, voice and embedding keys are the box agent's
+    // (setup/hosted.ts); the reply names the ones it dropped, as POST /settings does.
+    const { patch: allowed, dropped } = stripManagedSecrets(patch);
+    const managed = dropped.length ? { managed: dropped } : {};
+    if (Object.keys(allowed).length === 0) {
+      return res.json({ saved: [], ...managed });
     }
-    await saveSecrets(patch);
-    res.json({ saved: Object.keys(patch) });
+    await saveSecrets(allowed);
+    res.json({ saved: Object.keys(allowed), ...managed });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
@@ -432,16 +442,18 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
   }
 });
 
-// "Report Real Path" on SUB/WAVE's own Navidrome player rows: GET reads them,
-// POST switches every one still off (the operator's button, so it runs whatever
-// the opt-in `musicSource.reportRealPath` says). Row ids stay server-side.
+// "Report Real Path" on SUB/WAVE's own Navidrome player rows. GET is what the
+// card paints when it opens, so it reads them only with the opt-in
+// `musicSource.reportRealPath` on. The two POSTs are the operator's buttons and
+// run whatever it says: check reads the rows, real-path switches every one still
+// off. Row ids stay server-side.
 function realPathView(st: RealPathStatus) {
   return {
     state: st.state,
     reason: st.reason ?? null,
     server: st.server ?? null,
     switched: st.switched.length,
-    autoEnable: settings.get().musicSource?.reportRealPath === true,
+    autoEnable: realPathOptedIn(),
     players: st.players.map(p => ({
       client: p.client,
       userAgent: p.userAgent,
@@ -452,6 +464,10 @@ function realPathView(st: RealPathStatus) {
 }
 
 router.get('/settings/navidrome/players', requireAdmin, async (_req, res) => {
+  res.json(realPathView(await passiveRealPathStatus()));
+});
+
+router.post('/settings/navidrome/players/check', requireAdmin, async (_req, res) => {
   res.json(realPathView(await realPathStatus()));
 });
 

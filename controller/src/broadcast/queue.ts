@@ -106,6 +106,7 @@ import {
 } from './skip-policy.js';
 import type { SkipRefusalReason } from '../schemas/dj.js';
 import * as stemBlend from './stem-blend.js';
+import * as pickStems from './pick-stems.js';
 import type {
   DjLogEntry,
   NowPlaying,
@@ -445,6 +446,7 @@ class Queue {
   _handoffGenerationTimer: NodeJS.Timeout | null = null;
   _lengthDropped = new WeakSet<QueueItem>();
   _renderBlend = stemBlend.maybeRenderBlend;
+  _pickStems = pickStems.maybeSeparateAtPick;
   _preparedBlends = new WeakMap<QueueItem, { successor: QueueItem; track: NonNullable<QueueItem['stemBlend']>['originalExit'] }>();
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
   private _introPublications = new WeakMap<QueueItem, Promise<void>>();
@@ -2472,6 +2474,30 @@ class Queue {
         // evaporated. Fire-and-forget — it sleeps between reads and must not
         // hold the sender mutex.
         void this.verifyPushResolved(item);
+
+        // Pick-time stems (#2197, broadcast/pick-stems.ts): the seam into the
+        // successor is rendered (or not) and committed above, so the analyzer
+        // worker is free, and the successor now waits behind this whole track
+        // — time enough for its tail stems to land before the seam out of it
+        // renders. Only a successor the drain will now hold qualifies, asked
+        // of the same policy the next turn of this loop will ask: one with its
+        // own successor is sent at once, and one already past the deadline
+        // drains without a pair. Fire-and-forget: the drain never waits on a
+        // separation.
+        if (successor && this.upcoming.includes(successor) && !successor.sent) {
+          const held = !force
+            && this.upcoming[this.upcoming.length - 1] === successor
+            && drainAction({
+              pairDrain: this.pairDrainActive(),
+              hasSuccessor: false,
+              remainingSec: this.remainingUntilItemAirs(successor),
+            }) === 'hold';
+          void this._pickStems(successor.track, {
+            pairDrainActive: this.pairDrainActive(),
+            held,
+            log: (kind, message) => this.log(kind, message),
+          });
+        }
 
         // writeHandoff already waited for Liquidsoap's poll to consume the
         // file before returning, so no extra sleep needed here.
