@@ -473,9 +473,26 @@ export const SEARCH_PROVIDER_CATALOG = [
     keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
     hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
   },
+  {
+    id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
+    keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
+    hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
 ] as const satisfies readonly SearchProviderEntry[];
 
 export const SETTINGS_SEARCH_PROVIDERS = SEARCH_PROVIDER_CATALOG.map((p) => p.id);
+
+// One catalogue row by id, or undefined for an id the catalogue doesn't list.
+export function searchProviderEntry(id: string | undefined): SearchProviderEntry | undefined {
+  return SEARCH_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+// A key name with its indefinite article: "a Tavily", "an Outcrawl". Every
+// sentence that names a provider's key, in the controller and the admin UI,
+// takes its article from here, so the two can't disagree.
+export function withIndefiniteArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
 
 /**
  * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value

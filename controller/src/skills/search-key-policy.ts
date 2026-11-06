@@ -6,30 +6,30 @@
 // searchReady(), searchKeyProblem(), the doctor, the admin "Test key" probe and
 // the Settings → Web search warning.
 //
-// Firecrawl and Keenable publish a prefix and take only a key that carries it:
-// Firecrawl refuses anything else, Keenable runs keyless instead. Tavily's and
+// Firecrawl, Keenable and Outcrawl publish a prefix and take only a key that carries it:
+// Firecrawl and Outcrawl refuse anything else, Keenable runs keyless instead. Tavily's and
 // Brave's key formats aren't confirmed, so an allowlist could lock out a working
 // key. They refuse only a key carrying another provider's known prefix, and any
 // other key still goes through.
 //
 // Pure: no settings, no env. The slot itself is web-search.ts searchKeySlot().
 
-import { SEARCH_PROVIDER_CATALOG } from '../schemas/settings.js';
+import { SEARCH_PROVIDER_CATALOG, searchProviderEntry, withIndefiniteArticle } from '../schemas/settings.js';
 
 // Each provider's own key prefix, where one is known. Tavily's is listed so
 // Brave and Firecrawl can refuse a Tavily key; Tavily itself doesn't require it.
 const KEY_PREFIX: Readonly<Record<string, string>> = {
   firecrawl: 'fc-',
   keenable: 'keen_',
+  outcrawl: 'ock_',
   tavily: 'tvly-',
 };
 
 // Providers that take only a key carrying their own prefix.
-const PREFIX_REQUIRED: ReadonlySet<string> = new Set(['firecrawl', 'keenable']);
+const PREFIX_REQUIRED: ReadonlySet<string> = new Set(['firecrawl', 'keenable', 'outcrawl']);
 
 function keyName(provider: string): string {
-  const entry = SEARCH_PROVIDER_CATALOG.find((p) => p.id === provider);
-  return (entry && 'keyName' in entry && entry.keyName) || provider;
+  return searchProviderEntry(provider)?.keyName || provider;
 }
 
 // The provider whose known prefix this key carries, or null.
@@ -56,9 +56,9 @@ export function searchKeyMismatch(provider: string, key: string): string | null 
   const k = key.trim();
   if (!k || searchKeyFits(provider, k)) return null;
   if (PREFIX_REQUIRED.has(provider)) {
-    return `not a ${keyName(provider)} key (they start with ${KEY_PREFIX[provider]})`;
+    return `not ${withIndefiniteArticle(keyName(provider))} key (they start with ${KEY_PREFIX[provider]})`;
   }
-  return `a ${keyName(prefixOwner(k) ?? '')} key, not a ${keyName(provider)} key`;
+  return `${withIndefiniteArticle(keyName(prefixOwner(k) ?? ''))} key, not ${withIndefiniteArticle(keyName(provider))} key`;
 }
 
 // True when the provider can't search without a key (the catalogue's

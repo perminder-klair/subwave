@@ -2,6 +2,7 @@
 // Navidrome) that land outside settings.json.
 
 import express from 'express';
+import { isHosted, stripManagedSecrets, stripManagedSettings } from '../../setup/hosted.js';
 import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
@@ -199,7 +200,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // The same answer for Firecrawl; null with a key on file means that key
         // is another provider's, and searches refuse it.
         firecrawlKeySource: firecrawlKeySource(),
-        // The keyed providers (Tavily, Brave, Firecrawl) that would refuse the
+        // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl) that would refuse the
         // key on file, so the page can warn for whichever one is picked.
         keyRefusedBy: searchKeyRefusedBy(),
       },
@@ -242,7 +243,12 @@ export async function logCompatDetection(): Promise<void> {
 // a key from a newer version must cost one setting, not the whole restore.
 router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) => {
   try {
-    const result = await settings.update(req.body || {});
+    // A hosted station's LLM route and voice engine belong to its box agent
+    // (setup/hosted.ts): those keys are dropped, the rest of the save applies.
+    const { patch: body, dropped } = stripManagedSettings(req.body || {}, {
+      defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
+    });
+    const result = await settings.update(body);
     // context.ts reads the live settings cache, so the update already applies;
     // the route only owns the operator-facing log.
     if ('weather' in (req.body || {})) {
@@ -256,12 +262,12 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     }
     // Re-detect a changed LLM connection in the background: the save must not
     // wait on a probe of a server that may be down.
-    if (req.body?.llm !== undefined) void logCompatDetection();
+    if (body?.llm !== undefined) void logCompatDetection();
     // Re-probe now so the admin badge doesn't wait out the 30s probe tick.
-    if (req.body?.tts?.remote?.url !== undefined) {
+    if (body?.tts?.remote?.url !== undefined) {
       await remoteTts.refresh();
     }
-    res.json(result);
+    res.json(dropped.length ? { ...result, managed: dropped } : result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -316,6 +322,7 @@ router.get('/settings/llm/swap/fit', requireAdmin, async (_req, res) => {
 // admin UI only ever sees a leg's headers redacted. Answers only the receipt —
 // never update()'s raw `saved`, which carries unredacted keys and header values.
 router.post('/settings/llm/swap', requireAdmin, async (_req, res) => {
+  if (isHosted()) return res.status(403).json({ error: 'The LLM is managed by SUB/WAVE Cloud on this station.' });
   try {
     await settings.load();
     const plan = planSwap();
@@ -353,11 +360,15 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       if (trimmed.length > 4096) continue;
       patch[key] = trimmed;
     }
-    if (Object.keys(patch).length === 0) {
-      return res.json({ saved: [] });
+    // Hosted: the LLM, voice and embedding keys are the box agent's
+    // (setup/hosted.ts); the reply names the ones it dropped, as POST /settings does.
+    const { patch: allowed, dropped } = stripManagedSecrets(patch);
+    const managed = dropped.length ? { managed: dropped } : {};
+    if (Object.keys(allowed).length === 0) {
+      return res.json({ saved: [], ...managed });
     }
-    await saveSecrets(patch);
-    res.json({ saved: Object.keys(patch) });
+    await saveSecrets(allowed);
+    res.json({ saved: Object.keys(allowed), ...managed });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });

@@ -330,6 +330,79 @@ export type SkipBody = z.infer<typeof skipBodySchema>;
  *  Navidrome must cost one call a minute, not twenty. */
 export const FILE_FORMAT_RETRY_MS = 60_000;
 
+// ─── from controller/src/schemas/hosted.ts ───────────────────────────────
+
+// Hosted mode (SUBWAVE_HOSTED): the rules a SUB/WAVE Cloud station shares
+// between the controller and the web admin. The controller reads the env
+// through util/env.ts with these parsers and enforces the rules on every save
+// (setup/hosted.ts); the web's server pages read the same env through the
+// generated mirror (web/lib/hosted.ts) to decide what to show. One parser per
+// variable, so the two sides can never read one value two ways.
+//
+// Each parser takes the raw, non-empty env string; an unset or empty variable
+// never reaches it (util/env.ts and web/lib/hosted.ts treat that as "unset").
+
+
+const HOSTED_FLAG_ON = ['1', 'true', 'yes', 'on'] as const;
+const HOSTED_FLAG_OFF = ['0', 'false', 'no', 'off'] as const;
+
+/** SUBWAVE_HOSTED: on or off. Any other word is malformed, never "on". */
+export const hostedFlagSchema = z
+  .string()
+  .transform((v) => v.trim().toLowerCase())
+  .pipe(z.enum([...HOSTED_FLAG_ON, ...HOSTED_FLAG_OFF], { error: 'is not one of 1/true/yes/on or 0/false/no/off' }))
+  .transform((v) => (HOSTED_FLAG_ON as readonly string[]).includes(v));
+
+/**
+ * The lowest stream ceiling a plan can have. MP3 is always served and its
+ * lowest bitrate is 64 (SETTINGS_MP3_BITRATES, pinned by hosted-mode.test.ts),
+ * so a ceiling under it could not be honoured: the MP3 mount would air above it.
+ */
+export const HOSTED_MIN_BITRATE = 64;
+const HOSTED_MAX_BITRATE_LIMIT = 10_000;
+
+/** SUBWAVE_MAX_BITRATE: the plan's stream ceiling, whole kbps. */
+export const hostedMaxBitrateSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^\d+$/, 'is not a whole number of kbps'))
+  .transform(Number)
+  .pipe(z
+    .number()
+    .int()
+    .min(HOSTED_MIN_BITRATE, `must be at least ${HOSTED_MIN_BITRATE} kbps, MP3's lowest bitrate`)
+    .max(HOSTED_MAX_BITRATE_LIMIT, `must be at most ${HOSTED_MAX_BITRATE_LIMIT} kbps`));
+
+const HOSTED_LISTENER_CAP_LIMIT = 10_000;
+
+/** SUBWAVE_LISTENER_CAP: the plan's concurrent-listener ceiling. */
+export const hostedListenerCapSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^\d+$/, 'is not a whole number'))
+  .transform(Number)
+  .pipe(z.number().int().min(1, 'must be at least 1').max(HOSTED_LISTENER_CAP_LIMIT, `must be at most ${HOSTED_LISTENER_CAP_LIMIT}`));
+
+/**
+ * SUBWAVE_MUSIC_UPLOAD_URL / SUBWAVE_MUSIC_LIBRARY_URL: https only, so a stray
+ * value can't become a javascript: link on the music source page.
+ */
+export const hostedHttpsUrlSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^https:\/\/[^\s"'<>]+$/, 'is not an https URL'));
+
+/**
+ * The engines a persona or jingle voice slot may pin on a hosted station: the
+ * station default (`inherit`) and the two local engines the box runs, plus the
+ * brain's cloud voice when the station itself speaks through it (premium).
+ * Heavy engines aren't on hosted boxes, and a cloud pin on a base station would
+ * need a key of the owner's own, which hosted mode doesn't store.
+ */
+export function hostedPersonaEngines(defaultEngine: unknown): string[] {
+  return ['inherit', 'kokoro', 'piper', ...(defaultEngine === 'cloud' ? ['cloud'] : [])];
+}
+
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 
 // Shared imaging schemas — sfx, beds, jingles and clone voices, one contract in
@@ -3062,9 +3135,26 @@ export const SEARCH_PROVIDER_CATALOG = [
     keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
     hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
   },
+  {
+    id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
+    keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
+    hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
 ] as const satisfies readonly SearchProviderEntry[];
 
 export const SETTINGS_SEARCH_PROVIDERS = SEARCH_PROVIDER_CATALOG.map((p) => p.id);
+
+// One catalogue row by id, or undefined for an id the catalogue doesn't list.
+export function searchProviderEntry(id: string | undefined): SearchProviderEntry | undefined {
+  return SEARCH_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+// A key name with its indefinite article: "a Tavily", "an Outcrawl". Every
+// sentence that names a provider's key, in the controller and the admin UI,
+// takes its article from here, so the two can't disagree.
+export function withIndefiniteArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
 
 /**
  * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
@@ -5209,6 +5299,58 @@ const skillCohostsSchema = z.preprocess(
   z.boolean({ error: 'cohosts must be a boolean' }).default(false),
 );
 
+// A skill's own TTS voice override: the engine, voice and cloud provider of a
+// persona's voice slot. Gain and speed are not part of it, because they stay
+// the speaker's: an override changes whose voice is heard, never how loud or
+// how fast. Absent or null means the on-air DJ's voice.
+export interface SkillVoiceSlot {
+  engine: string;
+  voice: string;
+  cloudProvider: string;
+}
+
+// The per-engine voice rules live once, in persona.ts (ttsVoiceSlotSchema, and
+// repairTtsVoiceSlot for the disk read). This module may import only zod, so
+// it takes the slot schema as an argument: schemas/skill-server.ts passes
+// persona's for the routes, and the skill editor passes the mirrored copy.
+// What stays here is the skill's own posture around that slot: null is "no
+// override", and a missing provider is openai, as it is in SKILL.md.
+export function skillVoiceSchema(slot: z.ZodType<SkillVoiceSlot>) {
+  // `.optional()` so a body with no `voice` key at all (a community install, an
+  // older client) reaches the transform as "no override", where zod would
+  // otherwise refuse the missing key.
+  return z.unknown().optional().transform((raw, ctx): SkillVoiceSlot | null => {
+    if (raw == null) return null;
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      ctx.issues.push({ code: 'custom', input: raw, message: 'voice must be an object or null' });
+      return z.NEVER;
+    }
+    const t = raw as Record<string, unknown>;
+    const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : v);
+    const parsed = slot.safeParse({
+      ...t,
+      engine: trim(t.engine),
+      cloudProvider: trim(t.cloudProvider) || 'openai',
+    });
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.issues.push({ code: 'custom', input: raw, message: issue.message });
+      }
+      return z.NEVER;
+    }
+    const { engine, voice, cloudProvider } = parsed.data;
+    return { engine, voice, cloudProvider };
+  });
+}
+
+/** A skill-file schema below with the voice override attached. */
+export function withSkillVoice<Shape extends z.ZodRawShape>(
+  schema: z.ZodObject<Shape>,
+  slot: z.ZodType<SkillVoiceSlot>,
+) {
+  return schema.extend({ voice: skillVoiceSchema(slot) });
+}
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
@@ -5240,8 +5382,10 @@ export const skillCreateSchema = customSkillFileSchema.extend({
   name: skillSlugSchema,
 });
 
+// The voice is attached by withSkillVoice, so it is optional here: a body
+// parsed without it (a community install) carries no override.
 export type SkillFileParsed = z.output<typeof builtinSkillFileSchema> &
-  Partial<z.output<typeof customSkillFileSchema>>;
+  Partial<z.output<typeof customSkillFileSchema>> & { voice?: SkillVoiceSlot | null };
 
 /**
  * Parsed body → the field object writeSkillFile consumes. The only real work
@@ -5263,6 +5407,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     requiresKey: parsed.requiresKey,
     tags: parsed.tags,
     brief: parsed.brief,
+    voice: parsed.voice ?? null,
   };
 }
 

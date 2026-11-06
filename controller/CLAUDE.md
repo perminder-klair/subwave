@@ -58,6 +58,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 - `writeSkillFile` rewrites SKILL.md from typed fields. It must carry through every key it doesn't own (`preservedFrontmatter`) and quote only what would not round-trip, because operators hand-edit these files.
 - A forced run that gets `{ available: false }` stands down (`skills/abstain-policy.ts`). "Empty" is the tool's knowledge: a drained feed returns `{ available: false, reason }`, never `{ headlines: [] }`. Don't teach `unusableDataReason` one tool's output shape.
 - Code that arrives by zip import or backup restore lands as `tool.mjs.pending`. It goes live only through `POST /dj/skills/:slug/tool/trust` with the SHA-256 of the source the operator was shown, because the loader imports every `tool.mjs` on every scan, enabled or not.
+- A skill may pin its own voice (`voiceEngine`/`voiceId`/`voiceProvider`). `skillVoiceFor` (`_agent.ts`) swaps only the speaker's voice at the two solo announce sites; co-hosted lines keep their roster voices. Its form schema and disk read run persona's voice-slot rules (`schemas/skill-server.ts`), so a new engine needs no skill edit.
 
 ## Backup and personas
 

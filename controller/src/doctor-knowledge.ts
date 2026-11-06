@@ -112,10 +112,11 @@ and 'brave' give richer results but need a key (SEARCH_API_KEY — Brave is mete
 with $5/mo free credits and requires a card on file); 'searxng' is keyless but needs
 a self-hosted instance URL; 'keenable' is keyless web search, and a Keenable key in
 SEARCH_API_KEY only raises its rate limit; 'firecrawl' is keyed web search
-(SEARCH_API_KEY) and takes only an fc- key. The key slot is shared, so a key left
-there by another provider counts as no key: Firecrawl refuses anything but fc-,
-and Tavily and Brave refuse a key with another provider's prefix (fc-, keen_,
-tvly-). If a keyed provider is selected without a
+(SEARCH_API_KEY) and takes only an fc- key; 'outcrawl' is keyed too and takes only an
+ock_ key. The key slot is shared, so a key left there by another provider counts as
+no key: Firecrawl and Outcrawl refuse anything but their own prefix, and Tavily and
+Brave refuse a key with another provider's prefix (fc-, keen_, ock_, tvly-). If a
+keyed provider is selected without a
 key, news segments can't fetch — tell them to add the key or switch to
 DuckDuckGo or Keenable (both keyless), or to a self-hosted SearXNG.
 

@@ -1332,7 +1332,8 @@ SITE_URL=
 # FISH_API_KEY=
 # SEARCH_API_KEY=tvly-...           # Tavily or Brave Search key (optional, paid/metered),
 #                                   # or a keen_... Keenable key (optional, raises its free limit),
-#                                   # or an fc-... Firecrawl key
+#                                   # or an fc-... Firecrawl key,
+#                                   # or an ock_... Outcrawl key
 # SearXNG: no env var. Configure base URL in admin UI → Settings → Search.
 # Embedding key — only when embeddings use a different provider/key than chat
 # (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the
@@ -1549,6 +1550,15 @@ SITE_URL=
 # POST /speak (a GPU box, a Tailscale peer, a bridge in front of a vendor API
 # like Gemini TTS). It's a station setting, not env: admin → Settings → Voices →
 # Remote. Contract + a 20-line reference server: docs/custom-tts.md
+#
+# A shared Kokoro server for the built-in *Kokoro* engine. Set it and the
+# controller renders Kokoro there instead of loading the model itself (about
+# 880 MiB resident), so several stations on one box hold one model between
+# them. Voices, language and speed work as before. The server answers
+# POST /v1/speak { text, voice, lang, speed } with WAV bytes and
+# GET /v1/health with { "ok": true }; while it's unreachable, Kokoro speech
+# falls back to Piper. Unset (the default) runs Kokoro in the controller.
+# KOKORO_URL=http://kokoro:8880
 #
 # Memory ceilings for the model-loading sidecars (OOM containment — keeps a
 # runaway model load from taking down the host's other services). Defaults are

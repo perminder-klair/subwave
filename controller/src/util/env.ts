@@ -11,6 +11,9 @@ export interface EnvIssue {
 }
 
 const issues: EnvIssue[] = [];
+// name + value already reported: a var read on every request (envParsed) warns
+// once per distinct value, not once per read.
+const reported = new Set<string>();
 
 /** Every malformed env var seen while building config, in read order. */
 export function envIssues(): readonly EnvIssue[] {
@@ -18,17 +21,22 @@ export function envIssues(): readonly EnvIssue[] {
 }
 
 function note(name: string, value: string, problem: string, usedInstead: unknown): void {
+  const key = `${name}\0${value}`;
+  if (reported.has(key)) return;
+  reported.add(key);
   issues.push({ name, value, problem, usedInstead: String(usedInstead) });
   console.warn(`[env] ${name}="${value}" ${problem} — using ${String(usedInstead)} instead`);
 }
 
 // Absent/empty means unset; malformed nonempty values warn and fall back.
-function read<T>(name: string, schema: z.ZodType<T>, fallback: T, reportIssue = true): T {
+// `usedInstead` names the fallback in the warning when its value alone would
+// not say what happens (an `undefined` that means "no ceiling").
+function read<T>(name: string, schema: z.ZodType<T>, fallback: T, reportIssue = true, usedInstead: unknown = fallback): T {
   const raw = process.env[name];
   if (raw == null || raw.trim() === '') return fallback;
   const parsed = schema.safeParse(raw.trim());
   if (parsed.success) return parsed.data;
-  if (reportIssue) note(name, raw, parsed.error.issues[0]?.message || 'is not valid', fallback);
+  if (reportIssue) note(name, raw, parsed.error.issues[0]?.message || 'is not valid', usedInstead);
   return fallback;
 }
 
@@ -100,4 +108,19 @@ export function envBool(name: string, fallback: boolean): boolean {
 export function envEnum<T extends string>(name: string, values: readonly T[], fallback: T): T {
   const schema = z.enum(values as unknown as [T, ...T[]]);
   return read<T>(name, schema, fallback);
+}
+
+/**
+ * A var parsed by a shared schema, for a var with more than one reader: the
+ * web reads the same SUBWAVE_* vars through the generated mirror of the same
+ * schema (schemas/hosted.ts), so both sides parse one value one way. Read on
+ * every call, never cached; a malformed value warns once (see `note`).
+ */
+export function envParsed<T>(
+  name: string,
+  schema: z.ZodType<T, string>,
+  fallback: T,
+  { fallbackLabel }: { fallbackLabel?: string } = {},
+): T {
+  return read<T>(name, schema, fallback, true, fallbackLabel ?? fallback);
 }

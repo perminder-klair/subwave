@@ -6,15 +6,15 @@ import Link from 'next/link';
 import AdminQueryProvider from '@/components/admin/AdminQueryProvider';
 import SignInForm from '@/components/admin/SignInForm';
 import { Button } from '@/components/ui/button';
-import { useWizard, STEP_ORDER, STEP_LABELS } from './useWizard';
+import { useWizard, STEP_LABELS } from './useWizard';
 import { DjStep, LlmStep, NavidromeStep, ReviewStep, TtsStep } from './steps';
 
 // Outer chrome for the first-run wizard: sign-in gate (admin creds from .env),
 // step indicator, body, back/next. The Review step calls `onDone`, which
 // redirects to /admin.
-export default function WizardShell() {
+export default function WizardShell({ hosted = false }: { hosted?: boolean }) {
   const router = useRouter();
-  const w = useWizard();
+  const w = useWizard(hosted);
   const [done, setDone] = useState(false);
 
   if (!w.auth.hydrated) {
@@ -25,8 +25,14 @@ export default function WizardShell() {
       <div className="mx-auto max-w-2xl px-4 py-10">
         <h1 className="font-display text-2xl font-bold text-ink">Finish setting up SUB/WAVE</h1>
         <p className="mt-2 mb-6 text-sm text-muted">
-          Sign in with the <code>ADMIN_USER</code> + <code>ADMIN_PASS</code> you set in your
-          <code> .env</code>.
+          {hosted ? (
+            <>Sign in with the station&apos;s admin username and password from your SUB/WAVE account.</>
+          ) : (
+            <>
+              Sign in with the <code>ADMIN_USER</code> + <code>ADMIN_PASS</code> you set in your
+              <code> .env</code>.
+            </>
+          )}
         </p>
         <SignInForm onSubmit={w.auth.signIn} lockedUntil={w.auth.lockedUntil} />
       </div>
@@ -69,12 +75,12 @@ export default function WizardShell() {
             SUB/WAVE — first-run setup
           </p>
           <h1 className="mt-1 font-display text-2xl font-bold text-ink">
-            Step {w.stepIdx + 1} of {STEP_ORDER.length}
+            Step {w.stepIdx + 1} of {w.steps.length}
           </h1>
         </div>
 
         <ol className="mb-8 flex flex-wrap gap-2">
-          {STEP_ORDER.map((id, i) => (
+          {w.steps.map((id, i) => (
             <li
               key={id}
               className={

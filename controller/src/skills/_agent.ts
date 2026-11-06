@@ -26,6 +26,8 @@ import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-t
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
 import { searchKeyProblem } from './web-search.js';
+import { searchKeyRequired } from './search-key-policy.js';
+import { searchProviderEntry, withIndefiniteArticle } from '../schemas/settings.js';
 import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
@@ -194,6 +196,36 @@ function frequencyFloorMs(freq: string) {
   if (freq === 'chatty') return 8 * 60 * 1000;
   if (freq === 'aggressive') return 0;
   return 15 * 60 * 1000; // moderate
+}
+
+// A skill's own TTS voice override (SKILL.md voiceEngine/voiceId/voiceProvider).
+// Returns the speaker with only its tts engine, voice and provider replaced, for
+// this clip: id, name, gain and speed stay the speaker's. With no override,
+// `overridden` is false and the speaker comes back as the same object. Both
+// solo sites always have a speaker (a Run now that names none speaks as the
+// on-air persona); the `|| {}` only keeps a missing one from throwing.
+// `cap.voice` is the loader's normalizeSkillVoice output, so all three of its
+// fields are set. Co-hosted skills never reach here: each line speaks in its
+// own roster persona's voice. Exported for scripts/skill-voice.test.ts.
+export function skillVoiceFor(cap, speaker) {
+  const v = cap?.voice;
+  if (!v?.engine) return { persona: speaker, overridden: false };
+  const base = speaker || {};
+  const baseTts = (base.tts && typeof base.tts === 'object' ? base.tts : {});
+  return {
+    persona: {
+      ...base,
+      tts: {
+        ...baseTts,
+        engine: v.engine,
+        voice: v.voice,
+        cloudProvider: v.cloudProvider,
+        gainDb: typeof baseTts.gainDb === 'number' ? baseTts.gainDb : 0,
+        speed: typeof baseTts.speed === 'number' ? baseTts.speed : 1,
+      },
+    },
+    overridden: true,
+  };
 }
 
 // Capabilities on offer this tick: enabled, owned by the on-air persona,
@@ -564,9 +596,11 @@ export async function agenticTick(ctx) {
     }
 
     // The speaker's id rides in meta so session.windowMessages names a guest's
-    // turn as theirs rather than the host's own words.
+    // turn as theirs rather than the host's own words. A skill voice override
+    // changes only the voice (skillVoiceFor).
+    const voiced = skillVoiceFor(cap, speaker);
     const delivery = await queue.announce(seg.text.trim(), seg.kind, {
-      persona: speaker,
+      persona: voiced.persona,
       meta: { personaId: speaker?.id, personaName: speaker?.name },
       pauseTalkEligible: true,
       sfx: selectedSfx,
@@ -717,13 +751,13 @@ export async function runCapability(
   if (cap.ready && !cap.ready()) {
     // Hint at the missing key when the capability is keyed.
     let hint = '';
-    const searchProvider = settings.get().search?.provider;
+    const searchProvider = settings.get().search?.provider || 'duckduckgo';
     const keyProblem = refusedKeyProblem(cap);
     if (keyProblem) {
       hint = ` — ${keyProblem}. Paste one into Settings → Web search`;
-    } else if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave' || searchProvider === 'firecrawl')) {
-      const name = searchProvider === 'brave' ? 'Brave Search' : searchProvider === 'firecrawl' ? 'Firecrawl' : 'Tavily';
-      hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
+    } else if (cap.kind === 'web-search' && searchKeyRequired(searchProvider)) {
+      const name = searchProviderEntry(searchProvider)?.keyName || searchProvider;
+      hint = ` — set SEARCH_API_KEY or paste ${withIndefiniteArticle(name)} key into the admin UI`;
     } else if (cap.toolPending && !cap.toolFn) {
       hint = ' — its tool.mjs is awaiting your review in /admin/skills';
     } else if (cap.requiresKey) {
@@ -843,16 +877,28 @@ export async function runCapability(
   }
 
   // A rotated speaker rides through announce so voice and session attribution
-  // agree (windowMessages names foreign speakers by meta id).
-  const delivery = await queue.announce(text, cap.kind, (persona || automaticHostSpeech)
+  // agree (windowMessages names foreign speakers by meta id). A Run now names
+  // no persona: `speaker` is then the on-air persona announce() resolves for
+  // itself, so it is not passed and the turn carries no speaker meta. A skill
+  // voice override changes only the voice. Its slot has to ride on a persona,
+  // so a Run now with one passes the on-air persona carrying it, still with no
+  // meta; the queued and spoken events, which name a passed persona, then name
+  // the persona that was speaking anyway.
+  const voiced = skillVoiceFor(cap, speaker);
+  const pinsSpeaker = Boolean(persona) || Boolean(automaticHostSpeech);
+  const delivery = await queue.announce(text, cap.kind, pinsSpeaker
     ? {
-        persona: speaker,
+        persona: voiced.persona,
         meta: { personaId: speaker?.id, personaName: speaker?.name },
         pauseTalkEligible,
         sfx: selectedSfx,
         hostSpeech: speechOwner.hostSpeech,
       }
-    : { pauseTalkEligible, sfx: selectedSfx });
+    : {
+        ...(voiced.overridden ? { persona: voiced.persona } : {}),
+        pauseTalkEligible,
+        sfx: selectedSfx,
+      });
   if (!delivery.accepted) {
     if (delivery.reason === 'stand-in') {
       // Nothing was rendered: the model wrote a stand-in, not speech. Other
@@ -896,21 +942,16 @@ export function skillCatalog() {
   const enabledMap = s.skills?.enabled || {};
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
-    // web-search's key requirement depends on the active provider:
-    // Tavily/Brave/Firecrawl need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
+    // web-search's key requirement depends on the active provider: a keyed one
+    // (the catalogue's key: 'required') needs SEARCH_API_KEY and links to its
+    // catalogue keyUrl; DuckDuckGo, SearXNG and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
     if (c.kind === 'web-search') {
-      if (searchProvider === 'tavily') {
+      if (searchKeyRequired(searchProvider)) {
         requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://app.tavily.com/home';
-      } else if (searchProvider === 'brave') {
-        requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
-      } else if (searchProvider === 'firecrawl') {
-        requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://www.firecrawl.dev/app/api-keys';
+        keyUrl = searchProviderEntry(searchProvider)?.keyUrl || null;
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;
