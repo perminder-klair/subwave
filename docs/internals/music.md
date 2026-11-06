@@ -528,9 +528,16 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
    not at all; a silent file is `unmeasurable: silent`, never a half row.
 3. **Edges are their own columns and their own facet** (`edge_lead_ms`,
    `edge_tail_ms`, `decoded_duration_ms`), untouched by every head/tail write
-   and clear. `music/silence-trim.ts` takes them as ONE set (lead, tail, decoded
+   and by the `--re-analyze` clear (`clearAnalysis`). A replaced file is the
+   exception: `clearTrackAudio` drops them with every other measurement of the
+   old audio, the whole-file loudness and its curve included, or
+   `syncTrackFacets()` would mark both facets measured again for a file never
+   read. `music/silence-trim.ts` takes them as ONE set (lead, tail, decoded
    end) over the window figures, whether on the track object or the stored row,
-   and the playable span ends on the decoded length. Other users of the tagged
+   and the playable span ends on the decoded length. A track object that
+   carries the `decodedDurationMs` key (null included, as every library-row
+   mapper writes it) answers for its own edges; one without it has the stored
+   row read, at most once per resolve. Other users of the tagged
    duration are unchanged. A file with nothing above the floor is
    `unmeasurable: silent-file`, which settles at the current version.
 4. **The source is the stream URL unless the staged copy is complete.** The

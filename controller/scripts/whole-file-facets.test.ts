@@ -11,7 +11,8 @@
 //   - nothing that measures less may overwrite a whole-file figure: a flat
 //     analysis, a facet answer from an older analyzer, or a --re-analyze clear;
 //   - edges have their own columns and their own facet row, untouched by every
-//     head/tail write and clear;
+//     head/tail write and by --re-analyze (a replaced file clears them:
+//     replaced-file.test.ts);
 //   - a silent file settles as unmeasurable instead of staying due forever;
 //   - the short-term loudness curve is stored with every v2 figure; a v2
 //     figure without one (an analyzer that predates it) stays one version
