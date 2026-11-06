@@ -2566,13 +2566,42 @@ _FFMPEG_ERROR_HINTS = ("error", "invalid", "unable", "no such", "not found", "fa
 
 # A stream URL carries the music server's credentials in its query string
 # (Subsonic u/t/s: a token+salt pair is replayable until the password
-# changes). ffmpeg echoes its input URL in errors, and these messages reach
-# run logs and the admin UI, so every URL is cut to scheme + host first.
-_URL_RE = re.compile(r"(https?://)([^/\s?#]+)[^\s]*", re.IGNORECASE)
+# changes), or in its userinfo (user:pass@). ffmpeg echoes its input URL in
+# errors, and these messages reach run logs and the admin UI, so every URL is
+# cut to scheme + host first. The one redaction rule: the sidecar quotes only
+# what the worker has already passed through it (RedactingStream).
+_URL_RE = re.compile(r"(https?://)(?:[^@/\s?#]*@)?([^/\s?#]+)[^\s]*", re.IGNORECASE)
 
 
 def redact_urls(text):
     return _URL_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}/…", text or "")
+
+
+class RedactingStream:
+    """A text stream whose every line leaves through redact_urls. The
+    one-shot lane's stderr: the sidecar quotes its tail when the worker gives
+    no answer, so a traceback that names a stream URL must not carry its
+    credentials. Line-buffered, so a URL split across writes is still cut."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._pending = ""
+
+    def write(self, text):
+        self._pending += text
+        *lines, self._pending = self._pending.split("\n")
+        for line in lines:
+            self._stream.write(redact_urls(line) + "\n")
+        return len(text)
+
+    def flush(self):
+        if self._pending:
+            self._stream.write(redact_urls(self._pending))
+            self._pending = ""
+        self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
 
 
 def ffmpeg_failure_reason(stderr):
@@ -3427,6 +3456,7 @@ def whole_file_once(stream_in, stream_out):
 
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "--whole-file":
+        sys.stderr = RedactingStream(sys.stderr)
         whole_file_once(sys.stdin, sys.stdout)
         return
 

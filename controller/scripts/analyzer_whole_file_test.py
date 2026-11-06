@@ -200,6 +200,38 @@ def t_failure_reason_redacts_stream_credentials():
     assert got.startswith("http://navi:4533/… Invalid data found"), got
 
 
+def t_redaction_drops_userinfo_too():
+    got = aw.redact_urls("open http://dj:hunter2@navi:4533/rest/stream?t=secret failed")
+    assert got == "open http://navi:4533/… failed", got
+
+
+def t_one_shot_stderr_leaves_redacted_even_split_across_writes():
+    import io
+    sink = io.StringIO()
+    out = aw.RedactingStream(sink)
+    out.write("Traceback: RuntimeError: http://navi:4533/rest/str")
+    out.write("eam?u=dj&t=secret&s=salt went away\nnext line\n")
+    out.write("tail http://dj:pw@navi/x?t=secret")
+    out.flush()
+    got = sink.getvalue()
+    assert "secret" not in got and "salt" not in got and "pw@" not in got, got
+    assert got == "Traceback: RuntimeError: http://navi:4533/… went away\nnext line\ntail http://navi/…", got
+
+
+def t_one_shot_mode_puts_its_stderr_through_the_redaction():
+    import io
+    saved = sys.argv, sys.stdin, sys.stdout, sys.stderr
+    try:
+        sys.argv = ["analyze_worker.py", "--whole-file"]
+        sys.stdin = io.StringIO('{"facets": ["loudness", "head"], "url": "http://navi/stream"}\n')
+        sys.stdout = io.StringIO()
+        aw.main()
+        installed = isinstance(sys.stderr, aw.RedactingStream)
+    finally:
+        sys.argv, sys.stdin, sys.stdout, sys.stderr = saved
+    assert installed
+
+
 # ── edge scanner ────────────────────────────────────────────────────────────
 
 def scan(buf, sr, chunk):

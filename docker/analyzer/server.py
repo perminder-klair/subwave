@@ -21,7 +21,6 @@ import json
 import logging
 import math
 import os
-import re
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable
@@ -680,9 +679,10 @@ async def run_whole_file_once(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         return json.loads((out or b"").decode("utf-8", "replace").strip().splitlines()[-1])
     except Exception:  # noqa: BLE001 — a worker that printed nothing usable
-        # A stream URL carries the music server's credentials, so it never
-        # reaches a response or a log.
-        tail = re.sub(r"(https?://[^/\s?#]+)[^\s]*", r"\1/…", (err or b"").decode("utf-8", "replace")).strip()[-300:]
+        # A stream URL carries the music server's credentials. The one-shot
+        # worker writes its stderr through its own redact_urls (analyze_worker
+        # RedactingStream), the one redaction rule, so its tail can be quoted.
+        tail = (err or b"").decode("utf-8", "replace").strip()[-300:]
         return {"ok": False, "error": f"whole-file worker gave no result: {tail or 'no output'}"}
 
 
