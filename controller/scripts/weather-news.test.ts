@@ -16,8 +16,9 @@ import {
   weatherNews,
   type WeatherMemory,
 } from '../src/skills/weather-policy.js';
+import type { WeatherCondition } from '../src/weather-codes.js';
 
-const memory = (lastWeatherCondition: string | null, lastWeatherOutlook: string | null): WeatherMemory =>
+const memory = (lastWeatherCondition: WeatherCondition | null, lastWeatherOutlook: string | null): WeatherMemory =>
   ({ lastWeatherCondition, lastWeatherOutlook });
 
 describe('weatherNews', () => {
@@ -54,7 +55,7 @@ describe('weatherNews', () => {
     const last = memory('clear', 'rain-likely');
     assert.equal(weatherNews({ condition: 'clear', kinds: null }, last).outlookChanged, false);
     assert.equal(weatherNews({ condition: 'clear' }, last).outlookChanged, false);
-    for (const condition of [undefined, null, '', 'unknown']) {
+    for (const condition of [undefined, null, '', 'unknown', 'windy']) {
       assert.deepEqual(weatherNews({ condition, kinds: ['rain-likely'] }, memory(null, null)), { skyChanged: false, outlookChanged: false }, String(condition));
     }
     assert.equal(isWeatherNews(null, memory(null, null)), false);

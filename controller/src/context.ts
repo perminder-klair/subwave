@@ -4,7 +4,7 @@
 import { config } from './config.js';
 import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
-import { buildOutlook, conditionForCode, describeCode, outlookEvents, type HourlyForecast, type OutlookHour, type OutlookNoteKind } from './weather-codes.js';
+import { buildOutlook, conditionForCode, describeCode, outlookEvents, OUTLOOK_HOURS, type HourlyForecast, type OutlookHour, type OutlookNoteKind } from './weather-codes.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrases, spokenDaypartPhrase } from './time.js';
@@ -70,8 +70,6 @@ let weatherCache: { data: any; fetchedAt: number; configKey: string; hourly: Hou
   readingTime: '',
 };
 const WEATHER_TTL_MS = 30 * 60 * 1000;
-// How far ahead the weather skill may look.
-const OUTLOOK_HOURS = 6;
 // After a failed fetch, wait this long before asking Open-Meteo again. The
 // public /now-playing poll reaches getWeather() through getFullContext() every
 // few seconds per listener, so an uncached failure turned a down or

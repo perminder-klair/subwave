@@ -32,6 +32,7 @@ import { runCohostedCapability } from './cohosted.js';
 import * as sfx from '../broadcast/sfx.js';
 import { getWeatherOutlook } from '../context.js';
 import { isWeatherNews, recordWeatherAired, weatherMention, type WeatherMention } from './weather-policy.js';
+import type { WeatherCondition } from '../weather-codes.js';
 
 // dataBlock lives in llm/segment-tools.js so the co-hosted pool path can share
 // it without an import cycle; re-exported here for llm-bench's existing path.
@@ -175,7 +176,7 @@ interface SegmentState {
   // Burn-on-read memory for the generic feed tool (skills/feed.ts), keyed by
   // kind so two feed skills can't suppress each other's items.
   feedSeen: Map<string, Set<string>>;
-  lastWeatherCondition: string | null;
+  lastWeatherCondition: WeatherCondition | null;
   // The outlook key (weather-policy.ts outlookKey) the last aired weather
   // segment's tool returned; null until one returned an outlook.
   lastWeatherOutlook: string | null;

@@ -11,9 +11,28 @@ import {
   buildOutlook,
   outlookEvents,
   outlookNotes,
+  isWeatherCondition,
+  OUTLOOK_HOURS,
+  WEATHER_CONDITIONS,
   type HourlyForecast,
   type OutlookHour,
 } from '../src/weather-codes.js';
+
+describe('the outlook window and the six conditions', () => {
+  it('buildOutlook defaults to OUTLOOK_HOURS, the one six-hour window', () => {
+    assert.equal(OUTLOOK_HOURS, 6);
+    const hourly: HourlyForecast = {
+      time: Array.from({ length: 12 }, (_, i) => `2026-11-01T${String(10 + i).padStart(2, '0')}:00`),
+      weather_code: Array(12).fill(3),
+    };
+    assert.equal(Math.max(...buildOutlook(hourly, '2026-11-01T10:00').map(r => r.inHours)), OUTLOOK_HOURS);
+  });
+
+  it('isWeatherCondition accepts the six conditions and nothing else', () => {
+    for (const c of WEATHER_CONDITIONS) assert.equal(isWeatherCondition(c), true, c);
+    for (const v of ['unknown', 'windy', '', null, undefined, 3]) assert.equal(isWeatherCondition(v), false, String(v));
+  });
+});
 
 describe('conditionForCode', () => {
   it('maps known WMO codes', () => {

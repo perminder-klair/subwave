@@ -5,7 +5,16 @@
 // stays the six-word vocabulary settings.weatherMoods keys on; `describeCode`
 // gives the forecast's own wording for what is spoken.
 
-export type WeatherCondition = 'clear' | 'cloudy' | 'foggy' | 'rainy' | 'snowy' | 'stormy';
+export const WEATHER_CONDITIONS = ['clear', 'cloudy', 'foggy', 'rainy', 'snowy', 'stormy'] as const;
+export type WeatherCondition = typeof WEATHER_CONDITIONS[number];
+
+export function isWeatherCondition(v: unknown): v is WeatherCondition {
+  return typeof v === 'string' && (WEATHER_CONDITIONS as readonly string[]).includes(v);
+}
+
+// How far ahead the weather skill looks: the one number the fetch's row count
+// (context.ts) and buildOutlook's window share.
+export const OUTLOOK_HOURS = 6;
 
 const DESCRIPTIONS: Record<number, string> = {
   0: 'clear sky', 1: 'mainly clear', 2: 'partly cloudy', 3: 'overcast',
@@ -82,7 +91,7 @@ const HOUR_MS = 3_600_000;
 export function buildOutlook(
   hourly: HourlyForecast | null | undefined,
   currentTime: string,
-  hours = 6,
+  hours = OUTLOOK_HOURS,
   elapsedMs = 0,
 ): OutlookHour[] {
   if (!hourly || !Array.isArray(hourly.time)) return [];
