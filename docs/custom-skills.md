@@ -478,6 +478,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
 | `services.weatherOutlook()` | the next six hours of the station's forecast — `{ nextHours, notes, kinds }`: one row per hour (`inHours`, where 0 is within the hour, `conditions`, `temp`, `rainChancePct`), plain-English notes such as "rain likely in about 3 hours (70% chance)" or "light drizzle possible in about 5 hours", and `kinds`, what each note is about without its timing (`rain-likely`, `clearing`, `cooler`, …), for telling a new note from a standing one. Empty when no forecast is known. No extra fetch: it reads the forecast `ctx.weather` came from, aged to the moment you call it |
+| `services.weatherNews({ condition, kinds }, state)` | whether that reading is news against the skill's `state`: `{ skyChanged, outlookChanged }`. The sky is the condition; the outlook is compared by its `kinds`, so a note whose timing moved is not news. It is the same check the station's segment gates make, so a weather tool that reports through it can't call news what the station would not air |
 
 Every skill's `tool.mjs` is **timeout-guarded (8 s)** and any throw degrades
 cleanly to "no data" — a slow or broken skill can never hang the between-track

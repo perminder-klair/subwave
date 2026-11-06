@@ -22,6 +22,7 @@ import { fetchOnThisDay, curiositySeen, recordCuriosity } from '../../../skills/
 import { fetchHeadlines, hashHeadline } from '../../../skills/feed.js';
 import { getArtist, getAlbum, searchArtists } from '../../../music/subsonic.js';
 import { getWeatherOutlook } from '../../../context.js';
+import { weatherNews } from '../../../skills/weather-policy.js';
 
 export interface StationServices {
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /
@@ -49,6 +50,10 @@ export interface StationServices {
   // fetch as ctx.weather): one row per hour plus plain-English notes such as
   // "rain likely in about 3 hours". Empty when no forecast is known.
   weatherOutlook: typeof getWeatherOutlook;
+  // Whether a reading ({ condition, kinds }) is news against the skill's state:
+  // { skyChanged, outlookChanged }. The same helper the segment gates use
+  // (skills/weather-policy.ts), so the tool and the gates cannot disagree.
+  weatherNews: typeof weatherNews;
 }
 
 let cached: StationServices | null = null;
@@ -70,6 +75,7 @@ export function buildStationServices(): StationServices {
     recall: { seen: (key: string) => curiositySeen(key), remember: (key: string) => recordCuriosity(key) },
     log: (msg: string) => queue.log('scheduler', `[skill] ${msg}`),
     weatherOutlook: getWeatherOutlook,
+    weatherNews,
   };
   return cached;
 }

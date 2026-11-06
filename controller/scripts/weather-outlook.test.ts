@@ -28,6 +28,7 @@ const { buildContextLines } = await import('../src/llm/dj.js');
 const { fetchSegmentData } = await import('../src/llm/segment-tools.js');
 const weatherTool = await import('../src/skills/builtins/weather/tool.mjs');
 const { personaToneDirectives } = await import('../src/settings/vocab.js');
+const { weatherNews } = await import('../src/skills/weather-policy.js');
 
 await settings.load();
 after(async () => { await removeTempDir(stateRoot); });
@@ -96,14 +97,19 @@ test('a standing outlook is not news to the tool; a new one is', async (t) => {
   invalidateWeatherCache();
   stubForecast(t);
   const weather = await getWeather();
-  const services = { weatherOutlook: getWeatherOutlook };
+  // The two services the tool reads, as buildStationServices wires them.
+  const services = { weatherOutlook: getWeatherOutlook, weatherNews };
   const first = await weatherTool.default({ weather }, { lastWeatherCondition: null, lastWeatherOutlook: null }, services);
   assert.equal(first.outlookChangedSinceLastMention, true);
+  assert.deepEqual(first.outlookKinds, ['rain-likely', 'cooler'], 'the tool names the outlook it handed over');
   const standing = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: 'rain-likely,cooler' }, services);
   assert.equal(standing.changedSinceLastMention, false);
   assert.equal(standing.outlookChangedSinceLastMention, false);
   const moved = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: 'cooler' }, services);
   assert.equal(moved.outlookChangedSinceLastMention, true);
+  // After a weather segment from a tool that gave no outlook, the sky alone decides.
+  const oldTool = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: null }, services);
+  assert.equal(oldTool.outlookChangedSinceLastMention, false);
 });
 
 test('the weather tool returns the conditions and the outlook; without services it still answers', async (t) => {
@@ -119,10 +125,15 @@ test('the weather tool returns the conditions and the outlook; without services 
   assert.deepEqual(data.outlook, ['rain likely in about 3 hours (70% chance)', 'down to 14 degrees Celsius in about 6 hours']);
   assert.equal(data.nextHours.length, 6);
 
+  assert.deepEqual(data.outlookKinds, ['rain-likely', 'cooler']);
+
   const bare = await weatherTool.default({ weather }, {});
   assert.equal(bare.available, true);
   assert.deepEqual(bare.outlook, []);
   assert.deepEqual(bare.nextHours, []);
+  assert.equal(bare.outlookKinds, null, 'no outlook was handed over, so none is named');
+  assert.equal(bare.changedSinceLastMention, true);
+  assert.equal(bare.outlookChangedSinceLastMention, false);
 });
 
 test('the spoken context line uses the forecast wording, and falls back to the condition', () => {
