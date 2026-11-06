@@ -1,5 +1,5 @@
-// The operator tools that call a model from a clone (llm-bench,
-// leanings:replay) run on a disposable copy of the station's keys, never on
+// The operator tools that load src/ from a clone (llm-bench, leanings:replay,
+// tts-bench) run on a disposable copy of the station's keys, never on
 // the station's own state root. Importing src/ against that root was enough to
 // write into it: logs/ and voice/ created, an oversized picks.log renamed over
 // the station's picks.log.old, and every model call appended to its events log.
@@ -158,6 +158,7 @@ test('an abandoned dir another user owns is never swept', { skip: process.getuid
 for (const [tool, args, prefix] of [
   ['llm-bench', ['scripts/llm-bench/cli.ts'], 'subwave-llm-bench-'],
   ['leanings:replay', ['scripts/agentic-leanings-replay.ts', 'unused-fixture.json', '0'], 'subwave-agentic-leanings-replay-'],
+  ['tts-bench', ['scripts/tts-bench/cli.ts'], 'subwave-tts-bench-'],
 ] as const) {
   test(`${tool} leaves the station's state root untouched and removes its own`, { timeout: 90_000 }, async () => {
     const root = stationRoot();
