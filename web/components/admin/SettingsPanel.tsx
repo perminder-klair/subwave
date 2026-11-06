@@ -585,6 +585,12 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
                 saveSettings={saveSettings} fieldErrors={fieldErrors}
               />
             )}
+            {activeSection === 'selection' && (
+              <MusicSelectionSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} fieldErrors={fieldErrors}
+              />
+            )}
             {djBrainEnabled && activeSection === 'brain' && (
               <BrainSection
                 data={data} form={form} setForm={updateForm} busy={busy}

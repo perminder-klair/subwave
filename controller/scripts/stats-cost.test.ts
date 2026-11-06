@@ -27,10 +27,13 @@ test('a gateway serving an unknown model stays unpriced, whatever the gateway is
 
 test('the TTS summary names its slowest render', () => {
   const s = summarizeTts([
-    { ok: true, ms: 4_000, kind: 'link' },
+    { ok: true, ms: 4_000, kind: 'link', words: 12, audioMs: 6000, engine: 'piper', persona: 'Host' },
     { ok: true, ms: 13_400, kind: 'handoff' },
     { ok: false, kind: 'weather' },
   ]);
   assert.deepEqual(s.slowest, { ms: 13_400, kind: 'handoff' });
+  assert.equal(s.recentPace.generationWordsPerSecond, 3);
+  assert.equal(s.recentPace.spokenWordsPerSecond, 2);
+  assert.equal(s.paceByVoice[0].persona, 'Host');
   assert.equal(summarizeTts([]).slowest, null);
 });

@@ -32,8 +32,11 @@ export async function djObject({
   // selection code learns the verified queued track only after djObject
   // returns, before withFailover records the successful call.
   telemetry = {},
-  // Includes the tighter simple-segment caller budget; never reset for failover.
+  // Optional caller-supplied abort signal; it is also used by the tighter
+  // simple-segment caller budget and is carried unchanged through failover.
   signal = undefined,
+  // Optional diagnostics callback; the return value remains the decoded object.
+  onUsage = undefined,
 }: any): Promise<any> {
   return withFailover(
     kind,
@@ -96,22 +99,34 @@ export async function djObject({
               // failover/retry classifiers read messages — a reply mentioning
               // "Forbidden" or a "quota" must not read as a provider rejection.
               // Raw output rides along for diagnosis, as before.
-              const err: any = new Error('object recovery reply was not valid JSON for the schema', { cause: parseErr });
-              err.text = result.text || '';
-              err.finishReason = result.finishReason;
+              const message = parseErr instanceof SyntaxError
+                ? 'object recovery reply was not valid JSON'
+                : 'object recovery reply was valid JSON but did not match the required schema';
+              const err = Object.assign(new Error(message, { cause: parseErr }), {
+                text: result.text || '', finishReason: result.finishReason,
+              });
               throw err;
             }
             perf = perfOf(result);
             warnings = warningsOf(result);
           }
+          const usage = meter.usage();
+          try {
+            // Recovery attempts share billing, but the adaptive context target
+            // must use one prompt's peak size rather than their summed input.
+            onUsage?.({ input: meter.contextPeakInput() || usage.input, output: usage.output });
+          } catch { /* Diagnostics must not fail a generation. */ }
           return {
             value: object,
             via: lastVia,
             sampling: samplingWithLocalKnobs(l.cfg, { temperature }),
-            usage: meter.usage(),
+            usage,
             perf,
             warnings,
-            // Keep /debug output complete; durable events still apply cap().
+            // Full, untruncated — the /debug surface shows the whole call, and
+            // the ring buffer holds only 120 entries so size isn't a concern.
+            // (A .slice(0, 500) here used to cut pick reasons mid-sentence in
+            // /admin/debug; the durable events.jsonl still caps via cap().)
             extra: { system, user: prompt, response: JSON.stringify(object), ...telemetry },
           };
         } catch (err) {
