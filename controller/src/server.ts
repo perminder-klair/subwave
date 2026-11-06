@@ -209,10 +209,10 @@ app.listen(config.server.port, async (err?: Error) => {
     await settings.load();
     const s = settings.get();
     const { rewroteMountFiles } = await settings.ensureLiquidsoapSettingsFile();
-    // A plan change (or a hand edit) reached the mount files at boot; the
+    // A ceiling change (or a hand edit) reached the mount files at boot; the
     // running mixer still has the old ones until it restarts.
     if (rewroteMountFiles.length) {
-      const line = `[settings] stream mounts updated to match the saved settings${hostedMaxBitrate() ? ` and this plan's ${hostedMaxBitrate()} kbps ceiling` : ''} (${rewroteMountFiles.join(', ')}); they take effect when the mixer next restarts`;
+      const line = `[settings] stream mounts updated to match the saved settings${hostedMaxBitrate() ? ` and this station's ${hostedMaxBitrate()} kbps ceiling` : ''} (${rewroteMountFiles.join(', ')}); they take effect when the mixer next restarts`;
       console.log(line);
       queue.log('scheduler', line);
     }
