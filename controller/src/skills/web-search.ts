@@ -17,8 +17,45 @@ const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const KEENABLE_ENDPOINT = 'https://api.keenable.ai/v1/search';
 const FIRECRAWL_ENDPOINT = 'https://api.firecrawl.dev/v2/search';
 
-type SearchResult = { title: string; content: string };
-type SearchResponse = { answer: string; results: SearchResult[] };
+export type SearchResult = { title: string; content: string; url?: string };
+export type SearchResponse = { answer: string; results: SearchResult[] };
+
+export type WebSearchFailureReason = 'timeout' | 'rate-limit' | 'captcha' | 'malformed' | 'unavailable';
+
+export class WebSearchProviderError extends Error {
+  readonly providerFailure = true;
+
+  constructor(
+    readonly provider: string,
+    readonly reason: WebSearchFailureReason,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'WebSearchProviderError';
+  }
+}
+
+export function isWebSearchProviderError(error: unknown): error is WebSearchProviderError {
+  return error instanceof WebSearchProviderError || (error as { providerFailure?: unknown })?.providerFailure === true;
+}
+
+function typedProviderError(provider: string, error: unknown): WebSearchProviderError {
+  if (isWebSearchProviderError(error)) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  const reason: WebSearchFailureReason = (error as { name?: string })?.name === 'AbortError' || /tim(?:ed? out|eout)|aborted/i.test(message)
+    ? 'timeout'
+    : /\b429\b|rate.?limit|too many requests/i.test(message)
+      ? 'rate-limit'
+      : /captcha|challenge|verify you are human/i.test(message)
+        ? 'captcha'
+        : error instanceof SyntaxError || /invalid json|malformed/i.test(message)
+          ? 'malformed'
+          : 'unavailable';
+  // The provider rides on the error, so the message stays the searcher's own: a
+  // key refused before anything is sent reads the same through searchWeb (#2231).
+  return new WebSearchProviderError(provider, reason, message, { cause: error });
+}
 
 // 30-min TTL cache keyed by `${provider}:${query}`. BOUNDED: the request path's
 // identifyRequestedTrack searches on a listener's free-text description, so the
@@ -30,7 +67,6 @@ const cache = new BoundedKeyMap<{ val: SearchResponse; at: number }>({
   maxKeys: CACHE_MAX_KEYS,
   isLive: (rec, now) => now - rec.at < CACHE_TTL_MS,
 });
-
 // Test seam.
 export function searchCacheSize(): number {
   return cache.size;
@@ -66,8 +102,9 @@ function keyOnFileRefusal(provider: string, key: string): string | null {
 
 // The slot may hold another provider's key, which is refused here before
 // anything is sent (#2223).
-export async function tavilySearch(query: string): Promise<SearchResponse> {
+export async function tavilySearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
+  if (!apiKey) throw new Error('Tavily API key not configured');
   const refusal = keyOnFileRefusal('tavily', apiKey);
   if (refusal) throw new Error(refusal);
   const res = await fetchWithTimeout(TAVILY_ENDPOINT, {
@@ -83,16 +120,23 @@ export async function tavilySearch(query: string): Promise<SearchResponse> {
       include_answer: true,
       max_results: 5,
     }),
+    signal,
     timeoutMs: 30_000,
+    bodyDeadline: true,
   });
   if (!res.ok) throw new Error(`Tavily HTTP ${res.status}`);
   const data: any = await res.json();
+  if (!data || typeof data !== 'object' || Array.isArray(data)
+    || (!Array.isArray(data.results) && typeof data.answer !== 'string')) {
+    throw new Error('Tavily returned malformed JSON');
+  }
   return {
     answer: String(data.answer || '').trim(),
     results: Array.isArray(data.results)
       ? data.results.map((r: any) => ({
           title: String(r.title || ''),
           content: String(r.content || ''),
+          ...(r.url ? { url: String(r.url) } : {}),
         }))
       : [],
   };
@@ -111,10 +155,8 @@ export async function tavilySearch(query: string): Promise<SearchResponse> {
 // The deadline matters more here than on the other backends: this is the
 // DEFAULT provider (see searchWeb below), and DDG is known to accept a
 // connection and then hold it, which without a timeout parks the request on
-// undici's ~300s default. memo() only caches AFTER the call resolves, so
-// concurrent duplicate queries each open their own socket rather than sharing
-// one.
-export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
+// undici's ~300s default.
+export async function duckduckgoSearch(query: string, signal?: AbortSignal): Promise<SearchResponse> {
   const url = new URL(DDG_ENDPOINT);
   url.searchParams.set('q', query);
   url.searchParams.set('format', 'json');
@@ -125,10 +167,15 @@ export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
     headers: {
       'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
     },
+    signal,
     timeoutMs: 30_000,
+    bodyDeadline: true,
   });
   if (!res.ok) throw new Error(`DuckDuckGo HTTP ${res.status}`);
   const data: any = await res.json();
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('DuckDuckGo returned malformed JSON');
+  }
   const answer = String(data.AbstractText || data.Abstract || '').trim();
   const topics = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
   const results: SearchResult[] = [];
@@ -141,6 +188,7 @@ export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
           results.push({
             title: String(sub.Name || data.Heading || ''),
             content: sub.Text.trim(),
+            ...(sub.FirstURL ? { url: String(sub.FirstURL) } : {}),
           });
         }
         if (results.length >= 5) break;
@@ -149,6 +197,7 @@ export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
       results.push({
         title: String(t.Name || data.Heading || ''),
         content: t.Text.trim(),
+        ...(t.FirstURL ? { url: String(t.FirstURL) } : {}),
       });
     }
     if (results.length >= 5) break;
@@ -163,6 +212,7 @@ export async function duckduckgoSearch(query: string): Promise<SearchResponse> {
 export async function searxngSearch(
   query: string,
   recency?: 'day' | 'week' | 'month',
+  signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const baseUrl = (settings.get().search?.baseUrl || '').trim();
   if (!baseUrl) throw new Error('SearXNG baseUrl not configured');
@@ -178,10 +228,19 @@ export async function searxngSearch(
     headers: {
       'User-Agent': 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)',
     },
+    signal,
     timeoutMs: 30_000,
+    bodyDeadline: true,
   });
   if (!res.ok) throw new Error(`SearXNG HTTP ${res.status}`);
   const data = await res.json();
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('SearXNG returned malformed JSON');
+  }
+  const shape = data as Record<string, unknown>;
+  if (!('results' in shape) && !('answers' in shape) && !('infoboxes' in shape)) {
+    throw new Error('SearXNG returned malformed JSON');
+  }
   return parseSearxngResponse(data);
 }
 
@@ -233,7 +292,8 @@ export function parseSearxngResponse(data: unknown): SearchResponse {
     const title = typeof rec.title === 'string' ? rec.title.trim() : '';
     const content = typeof rec.content === 'string' ? rec.content.trim().slice(0, 300) : '';
     if (!title || !content) continue;
-    results.push({ title, content });
+    const url = typeof rec.url === 'string' ? rec.url.trim() : '';
+    results.push({ title, content, ...(url ? { url } : {}) });
     if (results.length >= 10) break;
   }
 
@@ -249,6 +309,7 @@ export function parseSearxngResponse(data: unknown): SearchResponse {
 export async function braveSearch(
   query: string,
   recency?: 'day' | 'week' | 'month',
+  signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('Brave Search API key not configured');
@@ -268,11 +329,33 @@ export async function braveSearch(
       Accept: 'application/json',
       'X-Subscription-Token': apiKey,
     },
+    signal,
     timeoutMs: 30_000,
+    bodyDeadline: true,
   });
   if (!res.ok) throw new Error(`Brave Search HTTP ${res.status}`);
   const data = await res.json();
+  if (!braveShapeFits(data)) throw new Error('Brave Search returned malformed JSON');
   return parseBraveResponse(data);
+}
+
+// Brave answers a search with no results as an object with none of web, news
+// or infobox (scripts/fixtures/brave-empty.json), and that is an empty result.
+// Only a body that isn't an object, or one of those fields present in another
+// shape, is malformed.
+function braveShapeFits(data: unknown): boolean {
+  const object = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!object(data)) return false;
+  return (['web', 'news', 'infobox'] as const).every(key => {
+    const field = data[key];
+    if (field === undefined || field === null) return true;
+    if (!object(field)) return false;
+    const results = field.results;
+    if (results === undefined || results === null) return true;
+    // The infobox's results arrive as an object or a one-element array.
+    return key === 'infobox' ? typeof results === 'object' : Array.isArray(results);
+  });
 }
 
 // Strips residual markup from a search snippet. Brave and Firecrawl both pass
@@ -323,7 +406,8 @@ export function parseBraveResponse(data: unknown): SearchResponse {
     const title = cleanSnippet(rec.title);
     const content = cleanSnippet(rec.description).slice(0, 300);
     if (!title || !content) return;
-    results.push({ title, content });
+    const url = typeof rec.url === 'string' ? rec.url.trim() : '';
+    results.push({ title, content, ...(url ? { url } : {}) });
   };
   const newsResults = sub(d.news, 'results');
   const webResults = sub(d.web, 'results');
@@ -342,10 +426,11 @@ export function parseBraveResponse(data: unknown): SearchResponse {
 export async function keenableSearch(
   query: string,
   recency?: 'day' | 'week' | 'month',
+  signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
   const { url, init } = buildKeenableRequest({ query, apiKey, recency });
-  const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
+  const res = await fetchWithTimeout(url, { ...init, signal, timeoutMs: 30_000, bodyDeadline: true });
   if (!res.ok) throw new Error(`Keenable HTTP ${res.status}`);
   const data = await res.json();
   return parseKeenableResponse(data);
@@ -435,15 +520,18 @@ export function parseKeenableResponse(data: unknown): SearchResponse {
 export async function firecrawlSearch(
   query: string,
   recency?: 'day' | 'week' | 'month',
+  signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('Firecrawl API key not configured');
   const refusal = keyOnFileRefusal('firecrawl', apiKey);
   if (refusal) throw new Error(refusal);
   const { url, init } = buildFirecrawlRequest({ query, apiKey, recency });
-  const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
+  const res = await fetchWithTimeout(url, { ...init, signal, timeoutMs: 30_000, bodyDeadline: true });
   if (!res.ok) throw new Error(`Firecrawl HTTP ${res.status}`);
-  const data = await res.json();
+  const data: any = await res.json();
+  // A 200 can carry {success:false,error}, which is a failed search, not an empty one.
+  if (!Array.isArray(data?.data?.web)) throw new Error('Firecrawl returned malformed JSON');
   return parseFirecrawlResponse(data);
 }
 
@@ -516,7 +604,8 @@ export function parseFirecrawlResponse(data: unknown): SearchResponse {
     const title = text(rec.title);
     const content = text(rec.description).slice(0, 300);
     if (!title || !content) continue;
-    results.push({ title, content });
+    const url = typeof rec.url === 'string' ? rec.url.trim() : '';
+    results.push({ title, content, ...(url ? { url } : {}) });
     if (results.length >= 5) break;
   }
 
@@ -525,23 +614,28 @@ export function parseFirecrawlResponse(data: unknown): SearchResponse {
 
 // Provider dispatcher — reads the active provider from live settings on every
 // call so admin-UI changes take effect immediately. Wraps the backend in a
-// 30-min memo. Cache key includes recency so two callsites with different
-// recency hints don't share results.
+// 30-min memo. Cache key includes the provider and recency so two callsites
+// with different backends or hints don't share results.
 export async function searchWeb(
   query: string,
-  opts?: { recency?: 'day' | 'week' | 'month' },
+  opts?: { recency?: 'day' | 'week' | 'month'; signal?: AbortSignal },
 ): Promise<SearchResponse> {
   const provider = settings.get().search?.provider || 'duckduckgo';
   const recency = opts?.recency;
   const key = `${provider}:${recency || ''}:${query.toLowerCase()}`;
-  return memo(key, CACHE_TTL_MS, () => {
-    if (provider === 'searxng') return searxngSearch(query, recency);
-    if (provider === 'tavily') return tavilySearch(query);
-    if (provider === 'brave') return braveSearch(query, recency);
-    if (provider === 'keenable') return keenableSearch(query, recency);
-    if (provider === 'firecrawl') return firecrawlSearch(query, recency);
-    return duckduckgoSearch(query);
-  });
+  try {
+    return await memo(key, CACHE_TTL_MS, () => {
+      if (provider === 'searxng') return searxngSearch(query, recency, opts?.signal);
+      if (provider === 'tavily') return tavilySearch(query, opts?.signal);
+      if (provider === 'brave') return braveSearch(query, recency, opts?.signal);
+      if (provider === 'keenable') return keenableSearch(query, recency, opts?.signal);
+      if (provider === 'firecrawl') return firecrawlSearch(query, recency, opts?.signal);
+      return duckduckgoSearch(query, opts?.signal);
+    });
+  } catch (error) {
+    if (opts?.signal?.aborted) throw error;
+    throw typedProviderError(provider, error);
+  }
 }
 
 // True when the active search provider is usable right now.

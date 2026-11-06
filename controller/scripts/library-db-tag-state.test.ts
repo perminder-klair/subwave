@@ -78,6 +78,44 @@ test('tagged browse and picker scopes exclude uncertain rows', () => {
   );
 });
 
+test('language coverage is independent from mood coverage and MBID changes invalidate automatic answers', () => {
+  db.upsertTrackMeta('language-only', {
+    title: 'Language Only',
+    artist: 'Test Artist',
+    album: 'Test Album',
+    musicBrainzId: 'mb-old',
+    genres: ['Pending Genre'],
+  });
+  db.upsertTrackLanguage('language-only', {
+    primaryLanguage: 'eng',
+    languages: ['eng'],
+    mode: 'single',
+    source: 'musicbrainz',
+    confidence: 'high',
+    contractVersion: 1,
+  });
+
+  assert.deepEqual(db.filter({ language: 'eng' }).rows.map(row => row.id), ['language-only']);
+  assert.equal(db.stats().byLanguage.eng, 1);
+
+  db.upsertTrackMeta('language-only', { musicBrainzId: 'mb-new' });
+  assert.equal(db.getTrack('language-only')?.language, null, 'automatic evidence follows recording identity');
+
+  db.upsertTrackLanguage('language-only', {
+    primaryLanguage: 'eng',
+    languages: ['eng'],
+    mode: 'single',
+    source: 'manual',
+    confidence: 'high',
+    contractVersion: 1,
+  });
+  db.upsertTrackMeta('language-only', { musicBrainzId: 'mb-newer' });
+  assert.equal(db.getTrack('language-only')?.language?.source, 'manual', 'manual evidence survives identity refresh');
+
+  db.getDb()!.prepare('DELETE FROM tracks WHERE id = ?').run('language-only');
+  db.invalidateStats();
+});
+
 test('tagged statistics exclude uncertain rows', () => {
   const stats = db.stats();
   assert.equal(stats.total, 1);
@@ -108,6 +146,8 @@ test('aggregate statistics retain null, blank and multi-tag counting semantics',
     byMood: { calm: 6, focused: 3 },
     byEnergy: { medium: 2, high: 2, low: 1 },
     byGenre: { 'Tagged Genre': 1, Rock: 1, Jazz: 2 },
+    byLanguage: {}, languageUnknown: 0, languageMixed: 0,
+    languageInstrumental: 0,
     bySource: { llm: 1, manual: 2, '': 1, constructor: 1 },
     withEmbedding: 0, withAudioEmbedding: 0, updatedAt: '2026-04-01',
   });

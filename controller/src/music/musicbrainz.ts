@@ -12,6 +12,7 @@
 // stamped so it isn't re-queried every pass.
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { canonicalLanguage } from './request-normalize.js';
 
 const MB_API = 'https://musicbrainz.org/ws/2';
 // MB asks for app + contact in the UA; version stays coarse so it can't drift
@@ -21,6 +22,12 @@ const TIMEOUT_MS = 8000;
 const MIN_GAP_MS = 1100; // 1 req/s with a safety margin
 const MIN_SCORE = 90;    // Lucene match score floor for search candidates
 const MIN_YEAR = 1900;   // sanity window for a "real" recording year
+
+const languageCache = new Map<string, string[] | null>();
+
+export function clearLanguageCache(): void {
+  languageCache.clear();
+}
 
 // Serialise every MB request on one promise chain, spacing request STARTS by
 // MIN_GAP_MS, so a concurrent enrichment pool still emits <=1 req/s.
@@ -133,6 +140,52 @@ async function searchRecordings(query: string): Promise<MbRecording[]> {
   if (!res.ok) return [];
   const body = (await res.json()) as { recordings?: MbRecording[] };
   return Array.isArray(body.recordings) ? body.recordings : [];
+}
+
+// Exact recording → work language evidence. MusicBrainz does not expose a
+// language on every recording, so the lookup follows the recording's work
+// relationship and accepts only the exact MBID supplied by Navidrome.
+export async function lookupLanguagesByRecordingMbid(mbid: string): Promise<string[]> {
+  const id = mbid.trim();
+  if (!id) return [];
+  if (languageCache.has(id)) return languageCache.get(id) ?? [];
+  try {
+    const recordingUrl = `${MB_API}/recording/${encodeURIComponent(id)}?inc=work-rels&fmt=json`;
+    const response = await throttled(() => fetchWithTimeout(recordingUrl, {
+      timeoutMs: TIMEOUT_MS,
+      headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    }));
+    // HTTP failures are transient. Do not turn an outage into a cached
+    // permanent miss; a re-language run must be able to try again.
+    if (!response.ok) return [];
+    const recording = await response.json() as any;
+    const workIds = (recording?.relations ?? [])
+      .filter((r: any) => r?.type === 'performance' || r?.type === 'work')
+      .map((r: any) => r?.work?.id)
+      .filter((x: unknown): x is string => typeof x === 'string' && x.length > 0);
+    const codes = new Set<string>();
+    let complete = true;
+    for (const workId of [...new Set<string>(workIds)].slice(0, 3)) {
+      const workUrl = `${MB_API}/work/${encodeURIComponent(workId)}?fmt=json`;
+      const workResponse = await throttled(() => fetchWithTimeout(workUrl, {
+        timeoutMs: TIMEOUT_MS,
+        headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+      }));
+      if (!workResponse.ok) {
+        complete = false;
+        continue;
+      }
+      const work = await workResponse.json() as any;
+      const raw = [work?.language, ...(Array.isArray(work?.languages) ? work.languages : [])];
+      for (const value of raw) {
+        const code = canonicalLanguage(value);
+        if (code && code !== 'und' && code !== 'xxx') codes.add(code);
+      }
+    }
+    const result = [...codes].sort();
+    if (complete) languageCache.set(id, result.length ? result : null);
+    return result;
+  } catch { return []; }
 }
 
 // Escape a value for use inside a quoted Lucene phrase.

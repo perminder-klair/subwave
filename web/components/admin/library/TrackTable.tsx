@@ -2,7 +2,7 @@
 
 
 import { Fragment, useRef, useState } from 'react';
-import { RotateCcw, Sparkles, ListPlus, X, Pencil, Ban, Tags, MoreVertical, Undo2, Heart, HeartOff } from 'lucide-react';
+import { RotateCcw, Sparkles, ListPlus, X, Pencil, Ban, Tags, Languages, MoreVertical, Undo2, Heart, HeartOff } from 'lucide-react';
 import { Btn } from '../ui';
 import { cn } from '../../../lib/cn';
  
@@ -22,6 +22,7 @@ import {
 } from './bits';
 import { BlockMenu, HeartButton, QueueMenu, likeStateFor } from './row-actions';
 import { ManualTagEditor } from './ManualTagEditor';
+import { languageLabel } from './language-labels';
 
 interface TrackTableProps {
   tab: TableVariant;
@@ -39,9 +40,11 @@ interface TrackTableProps {
   vocab: string[];
   editingId: string | null;
   manualBusy: string | null;
+  languageBusy: string | null;
   eraBusy: string | null;
   onEdit: (t: Track) => void;
   onSaveManual: (t: Track, moods: string[], energy: string | null, applyToAlbum: boolean) => void;
+  onSaveLanguage: (t: Track, language: string | null, applyToAlbum: boolean) => void;
   onSaveEraYear: (t: Track, originalYear: number | null, applyToAlbum: boolean) => void;
   onCancelEdit: () => void;
   selected: Set<string>;
@@ -53,6 +56,27 @@ interface TrackTableProps {
   liking: string | null;
   onToggleLike: (t: Track, liked: boolean) => void;
   onClearLikes: (t: Track) => void;
+}
+
+function LanguageBadges({ language }: { language: Track['language'] }) {
+  if (!language) return null;
+  if (language.mode === 'single' && language.primaryLanguage) {
+    return <span className="lib-mtag lib-atag" title={`language · ${language.source || 'detected'}`}>{languageLabel(language.primaryLanguage)}</span>;
+  }
+  if (language.mode === 'mixed' && language.languages.length > 1) {
+    return (
+      <span className="lib-mtag lib-atag" title="mixed language lyrics">
+        {language.languages.slice(0, 2).map(languageLabel).join(' + ')}{language.languages.length > 2 ? ` +${language.languages.length - 2}` : ''}
+      </span>
+    );
+  }
+  if (language.mode === 'instrumental') {
+    return <span className="lib-mtag lib-atag" title="no linguistic vocal content">Instrumental</span>;
+  }
+  if (language.mode === 'unknown') {
+    return <span className="lib-mtag lib-atag" title="language evidence was unavailable">Language unavailable</span>;
+  }
+  return null;
 }
 
 export function TrackTable(p: TrackTableProps) {
@@ -69,7 +93,10 @@ export function TrackTable(p: TrackTableProps) {
           <EmptyState compact title="Search your library" description="Find a track to queue on demand." />
         )}
         {p.tab === 'untagged' && (
-          <EmptyState compact title="Everything's tagged" description="Nice — the whole library has moods." />
+          <EmptyState compact title="Everything's tagged" description="Nice — the whole library has moods and language results." />
+        )}
+        {p.tab === 'language' && (
+          <EmptyState compact title="Every track has a language result" description="Language tagging has no unresolved tracks." />
         )}
         {p.tab === 'liked' && (
           <EmptyState
@@ -101,7 +128,7 @@ export function TrackTable(p: TrackTableProps) {
         </span>
         <span className="hidden sm:block" />
         <span className="flex-1">title</span>
-        <span className="h-tags">mood · energy</span>
+        <span className="h-tags">language · mood · energy</span>
         <span className="hidden sm:block" />
       </div>
       {p.rows.map(t => {
@@ -143,6 +170,12 @@ export function TrackTable(p: TrackTableProps) {
               {t.album && <div className="lib-album">{t.album}</div>}
             </div>
             <div className="lib-tags">
+              <LanguageBadges language={t.language} />
+              {!t.language && (
+                <span className="lib-needs" title="needs a language tag" aria-label="needs a language tag">
+                  <Languages size={12} />
+                </span>
+              )}
               {tagged ? (
                 <>
                   {t.moods!.slice(0, 2).map(m => <span key={m} className="lib-mtag">{m}</span>)}
@@ -201,7 +234,7 @@ export function TrackTable(p: TrackTableProps) {
                 tone={editing ? 'accent' : undefined}
                 onClick={() => p.onEdit(t)}
                 disabled={!!p.manualBusy}
-                title="Edit moods manually"
+                title={p.tab === 'language' ? 'Edit language' : 'Edit moods manually'}
               >
                 {editing ? <X size={12} /> : <Pencil size={12} />}
               </Btn>
@@ -244,8 +277,10 @@ export function TrackTable(p: TrackTableProps) {
               track={t}
               vocab={p.vocab}
               busy={p.manualBusy === t.id}
+              languageBusy={p.languageBusy === t.id}
               eraBusy={p.eraBusy === t.id}
               onSave={(moods, energy, applyToAlbum) => p.onSaveManual(t, moods, energy, applyToAlbum)}
+              onSaveLanguage={(language, applyToAlbum) => p.onSaveLanguage(t, language, applyToAlbum)}
               onSaveEraYear={(originalYear, applyToAlbum) => p.onSaveEraYear(t, originalYear, applyToAlbum)}
               onCancel={p.onCancelEdit}
             />
@@ -379,4 +414,3 @@ export function RowActionsMenu({
 
 // The blocklist governs AIRING only — blocked tracks still list here in browse/search,
 // they just never make it to the queue.
-

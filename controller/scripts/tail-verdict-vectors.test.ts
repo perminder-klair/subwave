@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
+import { dropLanguageStatsIndex } from './test-utils/legacy-schema.js';
 
 const root = createTempDir(join(tmpdir(), 'subwave-tail-vectors-'));
 const DIM = 8;
@@ -72,7 +73,7 @@ beforeEach(() => {
 
 const version = () => db.requireDb().pragma('user_version', { simple: true });
 // Every migration after 32 runs on the same open, so a full open ends at the newest one.
-const LATEST = 36;
+const LATEST = 37;
 const sung = (ms: number) => [{ startMs: 200_000, endMs: 200_000 + ms }];
 const outro = (vocalRanges?: unknown) => JSON.stringify({
   startMs: 180_000, ending: 'fade', ...(vocalRanges === undefined ? {} : { vocalRanges }),
@@ -195,6 +196,30 @@ test('it runs once, and a wound-back user_version only marks the same rows again
   await upgrade(27);
   assert.equal(version(), LATEST);
   assert.deepEqual(db.textVectorDirtyIds(), ['reported'], 'no wider than the first time');
+});
+
+// The earlier request branch also used version 32, for the language columns,
+// so a database that ran it never had develop's 32 marks. The columns tell it
+// apart from develop's own 32, which is left exactly as develop leaves it.
+test('a version-32 language-schema database still runs tail-vocal invalidation', async () => {
+  seed('legacy-language-v32', '[]', outro(sung(15_000)));
+
+  await upgrade(32);
+
+  assert.equal(version(), LATEST);
+  assert.deepEqual(db.textVectorDirtyIds(), ['legacy-language-v32']);
+});
+
+test('a version-32 database from develop gets no second tail-vocal pass', async () => {
+  seed('develop-v32', '[]', outro(sung(15_000)));
+  dropLanguageStatsIndex(db.requireDb());
+  db.requireDb().exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
+
+  await upgrade(32);
+
+  assert.equal(version(), LATEST);
+  assert.deepEqual(db.textVectorDirtyIds(), []);
+  assert.ok(db.requireDb().prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_tracks_language_stats'").get());
 });
 
 test('a failure warns, the station still opens, and the later steps still run', async () => {

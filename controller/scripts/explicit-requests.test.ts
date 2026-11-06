@@ -31,6 +31,7 @@ const { requestAgent } = await import('../src/broadcast/dj-agent/agents.js');
 const { runRequest } = await import('../src/broadcast/dj-agent.js');
 const { buildPickerTools } = await import('../src/llm/internal/tools/picker/index.js');
 const { pickerScope } = await import('../src/llm/internal/tools/picker/scope.js');
+const { addDailyUsage } = await import('../src/llm/internal/telemetry/budget.js');
 
 await settings.load();
 
@@ -58,7 +59,7 @@ const subsonicOk = (body: Record<string, unknown>) =>
   Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', ...body } });
 
 let modelCalls = 0;
-function stubNetwork(t: TestContext, { search = [TAGGED], matcher = NAMED as Record<string, unknown>, albums = {} as Record<string, unknown[]>, similar = [] as unknown[] } = {}) {
+function stubNetwork(t: TestContext, { search = [TAGGED], matcher = NAMED as Record<string, unknown>, albums = {} as Record<string, unknown[]>, similar = [] as unknown[], genreSongs = [] as unknown[], starred = [] as unknown[], web = [] as unknown[] } = {}) {
   modelCalls = 0;
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -84,7 +85,12 @@ function stubNetwork(t: TestContext, { search = [TAGGED], matcher = NAMED as Rec
       return subsonicOk({ album: { id, name: id, song: albums[id] ?? [] } });
     }
     if (url.includes('/rest/getSimilarSongs')) return subsonicOk({ similarSongs: { song: similar }, similarSongs2: { song: similar } });
+    // One genre list for the whole file: getGenres caches what it first hears.
+    if (url.includes('/rest/getGenres')) return subsonicOk({ genres: { genre: [{ value: 'Punjabi Pop', songCount: 2, albumCount: 1 }] } });
+    if (url.includes('/rest/getSongsByGenre')) return subsonicOk({ songsByGenre: { song: genreSongs } });
+    if (url.includes('/rest/getStarred2')) return subsonicOk({ starred2: { song: starred } });
     if (url.includes('/rest/')) return subsonicOk({});
+    if (url.startsWith('http://search.fixture/')) return Response.json({ results: web });
     throw new Error('offline');
   });
 }
@@ -283,6 +289,102 @@ test('the request agent hears a tagged ask as not found, never as played recentl
   assert.deepEqual(held.tracks, []);
   const off = await search(false).execute({ query: 'Tagged Song' }, options);
   assert.deepEqual(off.map?.((s: any) => s.id) ?? off.tracks?.map((s: any) => s.id), ['tagged'], 'off: as it always was');
+});
+
+// The paths a request takes past develop's single resolver call: the exact
+// step with no model, the reading behind a listener's pair, the language-genre
+// rung, the dropped-genre second chance, the fuzzy title steps and the
+// evidence lane. Each draws around a tagged track the way develop's draws do,
+// so a clean stand-in airs where the tagged one would have been refused.
+async function noModel(t: TestContext) {
+  await settings.update({ llm: { dailyTokenCap: 1000, exemptRequests: false } } as never);
+  addDailyUsage(5000);
+  t.after(() => settings.update({ llm: { dailyTokenCap: 0, exemptRequests: true } } as never));
+}
+
+test('with no model, the exact step draws a clean recording of the word', async (t) => {
+  const ROCK_TAGGED = { ...TAGGED, id: 'rock-tagged', title: 'Rock', artist: 'Loud Act' };
+  const ROCK_CLEAN = { ...OTHER, id: 'rock-clean', title: 'Rock', artist: 'Quiet Act' };
+  stubNetwork(t, { search: [ROCK_TAGGED, ROCK_CLEAN] });
+  await noModel(t);
+  await onAir({ excludeExplicit: true });
+  assert.deepEqual(await everyDraw('play rock'), ['rock-clean']);
+  assert.equal(modelCalls, 0);
+  assert.equal(requestLog.snapshot(1)[0].outcome, 'matched');
+});
+
+test('the reading behind a listener\'s pair draws a clean recording', async (t) => {
+  stubNetwork(t, { search: [TAGGED, CLEAN_CUT] });
+  await onAir({ excludeExplicit: true });
+  assert.deepEqual(await everyDraw('Tagged Song by Wrong Act'), ['clean-cut']);
+  assert.equal(requestLog.snapshot(1)[0].outcome, 'matched');
+});
+
+test('the language-genre rung draws a clean track in the language', async (t) => {
+  const PB_TAGGED = { ...TAGGED, id: 'pb-tagged', title: 'Loud Punjabi', genre: 'Punjabi Pop', language: 'pan' };
+  const PB_CLEAN = { ...OTHER, id: 'pb-clean', title: 'Soft Punjabi', genre: 'Punjabi Pop', language: 'pan' };
+  stubNetwork(t, {
+    search: [], genreSongs: [PB_TAGGED, PB_CLEAN],
+    matcher: { ...NAMED, title: null, artist: null, search_terms: [], language: 'Punjabi', intent: 'Wants Punjabi music.' },
+  });
+  await onAir({ excludeExplicit: true });
+  assert.deepEqual(await everyDraw('play something in Punjabi'), ['pb-clean']);
+  assert.match(requestLog.snapshot(1)[0].pickSource, /^language-genre:Punjabi Pop$/);
+});
+
+test('a genre dropped with no model draws a clean stand-in', async (t) => {
+  stubNetwork(t, { search: [], starred: [TAGGED, OTHER] });
+  await noModel(t);
+  await onAir({ excludeExplicit: true });
+  assert.deepEqual(await everyDraw('play jazz'), ['other']);
+  assert.equal(requestLog.snapshot(1)[0].outcome, 'substituted');
+});
+
+test('a fuzzy title is never a tagged track, so the next rung answers', async (t) => {
+  stubNetwork(t, { search: [TAGGED, OTHER] });
+  await noModel(t);
+  await onAir({ excludeExplicit: true });
+  const { outcome, record } = await request('play Tagged Sonng');
+  assert.equal(outcome.status, 'resolved', outcome.message ?? '');
+  assert.equal(queue.upcoming.at(-1)?.track?.id, 'other');
+  assert.doesNotMatch(record.pickSource, /fuzzy|explicit/);
+});
+
+test('a typo in the album a title comes from is never a tagged track', async (t) => {
+  // No "song" in the title: a kind-of-music word there reads the whole wording as a title.
+  const HYMN = { ...TAGGED, id: 'tagged-hymn', title: 'Tagged Hymn', album: 'Clean Edit' };
+  stubNetwork(t, { search: [HYMN, OTHER] });
+  await noModel(t);
+  await onAir({ excludeExplicit: true });
+  const { outcome, record } = await request('play Tagged Hymn from Clen Edit');
+  assert.equal(outcome.status, 'resolved', outcome.message ?? '');
+  assert.equal(queue.upcoming.at(-1)?.track?.id, 'other');
+  assert.doesNotMatch(record.pickSource, /release-context|explicit/);
+});
+
+test('the evidence lane hands the request agent no tagged track on a clean show', async (t) => {
+  stubNetwork(t, {
+    search: [TAGGED],
+    matcher: { title: 'Tagged Song', artist: 'Tagged Act', keyword: 'Tagged' },
+    web: [{
+      title: 'Tagged Song Lyrics - Tagged Act', url: 'https://lyrics.example/tagged-song',
+      content: 'the night is loud and the lights are low. Tagged Song by Tagged Act, lyrics.',
+    }],
+  });
+  const original = structuredClone(settings.get().search);
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'http://search.fixture' }, embedding: { enabled: false } } as never);
+  t.after(() => settings.update({ search: original } as never));
+  const identify = async (excludeExplicit: boolean) => {
+    const built = buildPickerTools(pickerScope({
+      recentIds: new Set<string>(), excludeExplicit, resolveReferences: true,
+      requestText: 'the song that goes the night is loud and the lights are low',
+    }));
+    const result = await (built.tools.identifyRequestedTrack as any)
+      .execute({ reference: 'the night is loud and the lights are low' }, { toolCallId: 'x', messages: [] });
+    return { ids: (result.candidates ?? []).map((s: any) => s.id), seen: [...built.seen.keys()] };
+  };
+  assert.deepEqual(await identify(true), { ids: [], seen: [] });
+  assert.deepEqual((await identify(false)).ids, ['tagged'], 'off: as it always was');
 });
 
 const admin = (path: string, body: unknown) => realFetch(`${base}${path}`, {
