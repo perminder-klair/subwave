@@ -635,6 +635,13 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
           leadSilenceMs: r.leadSilenceMs,
         };
       } else if (f === 'loudness') {
+        // A whole-file answer is one measurement: integrated loudness, true
+        // peak, sample peak and LRA are stored together or not at all.
+        if ((r.loudnessVersion ?? 1) >= 2 &&
+          [r.loudnessLufs, r.peakDb, r.samplePeakDb, r.loudnessRangeLu].some((v) => v == null)) {
+          failures.push(db.facetFailure(f, 'incomplete whole-file loudness answer'));
+          continue;
+        }
         w.loudness = {
           loudnessLufs: r.loudnessLufs, peakDb: r.peakDb,
           samplePeakDb: r.samplePeakDb ?? null, loudnessRangeLu: r.loudnessRangeLu ?? null,

@@ -2709,8 +2709,8 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
     """One ffmpeg pass over the whole of `src` (a URL or a local path) at its
     native rate, as it airs: stereo, capped at MEASURE_MAX_RATE (48 kHz). Returns {"loudness": {loudness_lufs, lra_lu, sample_peak_db,
     true_peak_db} | None, "edges": (lead_ms, tail_ms, duration_ms) | None,
-    "seconds"}. Loudness and true peak are both set or both None (digital
-    silence), never one without the other. Raises on any ffmpeg failure, and on
+    "seconds"}. The four loudness figures are all set or all None (digital
+    silence), never some without the others. Raises on any ffmpeg failure, and on
     an input that ended early (ffmpeg logged a premature end or an I/O error,
     or the decode fell well short of the header's length: decoded_short_of),
     so the caller records an attempt instead of a measurement."""
@@ -2830,11 +2830,15 @@ def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
         if "Summary:" not in summary:
             raise RuntimeError("ffmpeg printed no ebur128 summary")
         fig = parse_ebur128_summary(summary)
+        # One measurement: integrated loudness, true peak, sample peak and LRA
+        # go together or not at all (a loudness without its peak would let a
+        # boost through with no ceiling). Digital silence has neither loudness
+        # nor peak, so all four are None; a summary short of a figure for real
+        # audio is a failed run, not a silent file.
         if fig["loudness_lufs"] is None or fig["true_peak_db"] is None:
-            # One measurement: a loudness without its peak would let a boost
-            # through with no ceiling, so both go together or neither does.
-            fig["loudness_lufs"] = None
-            fig["true_peak_db"] = None
+            fig = dict.fromkeys(fig)
+        elif fig["sample_peak_db"] is None or fig["lra_lu"] is None:
+            raise RuntimeError("ffmpeg's ebur128 summary is missing a figure")
         fig["loudness_curve"] = loudness_curve_from_frames(log.frames)
         out["loudness"] = fig
     if scanner is not None:
@@ -2879,13 +2883,13 @@ def whole_file_facets(src, wanted):
     out = {}
     if "loudness" in names:
         fig = m.get("loudness") or {}
-        if fig.get("loudness_lufs") is None:
+        if any(fig.get(k) is None for k in ("loudness_lufs", "true_peak_db", "sample_peak_db", "lra_lu")):
             out["loudness"] = _unmeasurable("silent")
         else:
-            data = {"loudness_lufs": fig["loudness_lufs"], "peak_db": fig["true_peak_db"]}
-            for k in ("sample_peak_db", "lra_lu", "loudness_curve"):
-                if fig.get(k) is not None:
-                    data[k] = fig[k]
+            data = {"loudness_lufs": fig["loudness_lufs"], "peak_db": fig["true_peak_db"],
+                    "sample_peak_db": fig["sample_peak_db"], "lra_lu": fig["lra_lu"]}
+            if fig.get("loudness_curve") is not None:
+                data["loudness_curve"] = fig["loudness_curve"]
             data["loudness_version"] = WHOLE_FILE_LOUDNESS_VERSION
             out["loudness"] = _ok(data)
     if "edges" in names:

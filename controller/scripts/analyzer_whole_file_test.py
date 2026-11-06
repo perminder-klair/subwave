@@ -128,6 +128,18 @@ def t_summary_reads_silence_as_no_loudness():
     assert got["loudness_lufs"] is None and got["true_peak_db"] is None, got
 
 
+def t_whole_file_loudness_is_four_figures_or_none():
+    # Silence: every figure goes, not just the two the gain reads.
+    silent = SUMMARY.replace("-12.3 LUFS", "-70.0 LUFS").replace("0.3 dBFS", "-inf dBFS")
+    with Patched(measure_whole_file=fake_measure([], loud={**aw.parse_ebur128_summary(silent), "sample_peak_db": -40.0})):
+        out = aw.whole_file_facets("/x.flac", ["loudness"])
+    assert out["loudness"] == {"status": "unmeasurable", "reason": "silent"}, out
+    # An answer always carries all four.
+    with Patched(measure_whole_file=fake_measure([])):
+        data = aw.whole_file_facets("/x.flac", ["loudness"])["loudness"]["data"]
+    assert {"loudness_lufs", "peak_db", "sample_peak_db", "lra_lu"} <= set(data), data
+
+
 def t_output_rate_is_the_output_streams_not_the_inputs():
     assert aw.parse_output_rate(STDERR_HEAD) == 96000
     resampled = STDERR_HEAD.replace("pcm_f32le, 96000 Hz", "pcm_f32le, 48000 Hz")

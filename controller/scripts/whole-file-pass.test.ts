@@ -30,6 +30,8 @@ let streamReads = 0;
 let inflight = 0;
 let maxInflight = 0;
 let wholeFileCapable: boolean | null = true;
+// Drop the sample peak from whole-file loudness answers (an incomplete set).
+let partialLoudness = false;
 
 function handler(req: IncomingMessage, res: ServerResponse) {
   if (req.url?.startsWith('/health')) {
@@ -57,6 +59,7 @@ function handler(req: IncomingMessage, res: ServerResponse) {
         },
         edges: { edge_lead_ms: 800, edge_tail_ms: 3100, decoded_duration_ms: 213_407 },
       };
+      if (partialLoudness) delete (ok.loudness as Record<string, unknown>).sample_peak_db;
       const facets: Record<string, unknown> = {};
       for (const f of r.facets) facets[f] = { status: 'ok', data: ok[f] };
       res.setHeader('Content-Type', 'application/json');
@@ -207,4 +210,26 @@ test('the backfill is off unless ANALYZE_WHOLE_FILE is set', async () => {
     wholeFileCapable = true;
     await analyzer.refreshCapabilities();
   }
+});
+
+test('a whole-file loudness answer missing a figure is a failure, never a partial row', async () => {
+  partialLoudness = true;
+  try {
+    await runAnalysisPass({ plan: plan('loudness', ['c']) });
+  } finally {
+    partialLoudness = false;
+  }
+  const t = db.getTrack('c')!;
+  assert.equal(t.loudnessLufs, -9, 'the window figure stays');
+  const row = db.requireDb()
+    .prepare(`SELECT loudness_version AS v, sample_peak_db AS sp FROM tracks WHERE id = 'c'`)
+    .get() as { v: number | null; sp: number | null };
+  assert.deepEqual(row, { v: null, sp: null });
+  // The row still describes the kept window figure (v1, due), with the
+  // failed attempt counted and named.
+  const cell = db.loadFacetState(['loudness']).get('c')!.get('loudness')!;
+  assert.deepEqual([cell.status, cell.version, cell.attempts], ['ok', 1, 1]);
+  const err = db.requireDb().prepare(`SELECT analyze_error AS e FROM tracks WHERE id = 'c'`).get() as { e: string };
+  assert.match(err.e, /loudness: incomplete whole-file loudness answer/);
+  assert.ok(db.facetNeedsIds('loudness').includes('c'), 'still due: the next run asks again');
 });
