@@ -160,8 +160,8 @@ def t_log_read_a_line_at_a_time_gives_what_the_whole_text_did():
     log = feed_log(text)
     assert aw.parse_ebur128_summary(log.summary_text()) == aw.parse_ebur128_summary(text)
     assert aw.parse_output_rate(log.output_text()) == 96000
-    assert dict((i, log.frames[i]) for i in log.frames) == aw.parse_ebur128_frames(text)
-    assert aw.loudness_curve_from_frames(log.frames) == aw.loudness_curve_from_frames(aw.parse_ebur128_frames(text))
+    assert dict((i, log.frames[i]) for i in log.frames) == frames_of(text)
+    assert aw.loudness_curve_from_frames(log.frames) == aw.loudness_curve_from_frames(frames_of(text))
     # The frame lines themselves are not kept: only the short tail of the rest.
     assert "TARGET" not in log.failure_text(), log.failure_text()
 
@@ -468,18 +468,29 @@ def frames_text(series):
     return "\n".join(frame_line(t - 0.0000227, s) for t, s in series)
 
 
+def frames_of(text):
+    """{index: tenths} of every per-frame line in `text`, through the worker's
+    one parser of a frame line (FfmpegLog applies it a line at a time)."""
+    frames = {}
+    for line in (text or "").splitlines():
+        frame = aw.parse_ebur128_frame(line)
+        if frame is not None:
+            frames[frame[0]] = frame[1]
+    return frames
+
+
 def t_curve_frames_parse_t_and_short_term_and_floor_silence():
     text = frames_text([(0.1, -120.7), (2.9, -120.7), (3.0, -21.8), (3.1, -21.84)])
     text += "\n[Parsed_ebur128_0 @ 0x1] t: 3.2  TARGET:-23 LUFS    M:   nan S:  -inf     I: -21.9 LUFS"
     text += "\n" + SUMMARY  # the summary block is never read as a frame
-    got = aw.parse_ebur128_frames(text)
+    got = frames_of(text)
     assert got == {1: -1000, 29: -1000, 30: -218, 31: -218, 32: -1000}, got
 
 
 def t_curve_whole_head_and_tail_series():
     # 2 s of silence, music to 120 s, then 60 s of silence (a long silent tail).
     series = [(i / 10.0, -120.7 if i < 50 or i > 1200 else -14.0 - (i % 7) / 10.0) for i in range(1, 1801)]
-    curve = aw.loudness_curve_from_frames(aw.parse_ebur128_frames(frames_text(series)))
+    curve = aw.loudness_curve_from_frames(frames_of(frames_text(series)))
     whole, head, tail = curve["whole"], curve["head"], curve["tail"]
     assert (whole["startMs"], whole["stepMs"], len(whole["lufs"])) == (3000, 1000, 178), whole
     assert whole["lufs"][0] == -1000 and whole["lufs"][3] in range(-146, -139), whole["lufs"][:5]

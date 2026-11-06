@@ -2467,16 +2467,6 @@ def parse_ebur128_frame(line):
     return idx, CURVE_FLOOR_TENTHS if v is None else max(CURVE_FLOOR_TENTHS, int(round(v * 10.0)))
 
 
-def parse_ebur128_frames(text):
-    """{index: tenths} of every per-frame line in `text`. Pure."""
-    frames = {}
-    for line in (text or "").splitlines():
-        frame = parse_ebur128_frame(line)
-        if frame is not None:
-            frames[frame[0]] = frame[1]
-    return frames
-
-
 class FrameLog:
     """The per-frame short-term loudness of one run, two bytes a frame (a
     6 h set is ~430 KB, where a dict of Python ints ran to tens of MB). Reads
