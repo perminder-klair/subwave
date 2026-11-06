@@ -1,9 +1,10 @@
 // All providers return { answer, results: [{ title, content }] } behind a 30-minute memo.
 // DDG instant answers may be empty; Tavily/Brave need keys; SearXNG needs a base URL;
 // Keenable is keyless, with an optional key that raises its rate limit; Firecrawl and
-// Outcrawl need a key.
+// Outcrawl need a key. Parallel uses anonymous MCP search.
 // Brave supports artist-name queries (#623); searxngEngines pins only these calls (#1353).
 
+import { parallelSearch } from './parallel-search.js';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
@@ -600,6 +601,7 @@ export async function searchWeb(
     if (provider === 'tavily') return tavilySearch(query);
     if (provider === 'brave') return braveSearch(query, recency);
     if (provider === 'keenable') return keenableSearch(query, recency);
+    if (provider === 'parallel') return parallelSearch(query, recency);
     if (provider === 'firecrawl') return firecrawlSearch(query, recency);
     if (provider === 'outcrawl') return outcrawlSearch(query);
     return duckduckgoSearch(query);
@@ -608,6 +610,7 @@ export async function searchWeb(
 
 // True when the active search provider is usable right now.
 //   duckduckgo:   always ready (no key, no URL)
+//   parallel:     always ready (anonymous MCP; no shared key is sent)
 //   keenable:     always ready (keyless; a key only raises the rate limit)
 //   tavily/brave: needs settings.search.apiKey, or SEARCH_API_KEY env, that
 //                 isn't another provider's (search-key-policy.ts)
@@ -617,7 +620,7 @@ export async function searchWeb(
 export function searchReady(): boolean {
   const s = settings.get().search;
   const provider = s?.provider || 'duckduckgo';
-  if (provider === 'duckduckgo' || provider === 'keenable') return true;
+  if (provider === 'duckduckgo' || provider === 'keenable' || provider === 'parallel') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
   // tavily / brave / firecrawl / outcrawl (and any future keyed provider)
   return searchKeyFits(provider, searchKeySlot().key);
