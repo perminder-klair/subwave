@@ -4,7 +4,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { envEnum, envFloat, envInt, envIssues, envStr, envUrl } from '../src/util/env.js';
+import { z } from 'zod';
+import { envEnum, envFloat, envInt, envIssues, envParsed, envStr, envUrl } from '../src/util/env.js';
 
 // Each case sets its own var name so the shared `envIssues` ledger stays
 // readable and cases can't interfere with each other.
@@ -101,4 +102,23 @@ test('config.ts builds on real defaults with a hostile environment', async () =>
   assert.equal(config.navidrome.url, 'http://navidrome:4533');
   assert.equal(config.analyzer.concurrency, 1);
   assert.ok(Number.isFinite(config.tts.cloudSpeed), 'no NaN reaches the TTS layer');
+});
+
+test('envParsed reads through a shared schema, warns once per bad value, and names its fallback', () => {
+  const kbps = z.string().regex(/^\d+$/, 'is not a whole number').transform(Number);
+  assert.equal(envParsed(withEnv(' 192 '), kbps, undefined), 192);
+  assert.equal(envParsed(withEnv(undefined), kbps, undefined), undefined);
+
+  // Read on every request (hosted mode's vars are), so one bad value is one
+  // warning, not one per read; a different bad value is a new one.
+  const name = withEnv('fast');
+  const before = envIssues().length;
+  assert.equal(envParsed(name, kbps, undefined, { fallbackLabel: 'no ceiling' }), undefined);
+  assert.equal(envParsed(name, kbps, undefined, { fallbackLabel: 'no ceiling' }), undefined);
+  assert.equal(envIssues().length, before + 1);
+  assert.deepEqual(envIssues().at(-1), { name, value: 'fast', problem: 'is not a whole number', usedInstead: 'no ceiling' });
+  process.env[name] = 'faster';
+  envParsed(name, kbps, undefined);
+  assert.equal(envIssues().length, before + 2);
+  assert.equal(envIssues().at(-1)!.usedInstead, 'undefined');
 });

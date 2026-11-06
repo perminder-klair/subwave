@@ -19,13 +19,16 @@
 // once nothing can still refuse. Asking twice is not redundant — this is the
 // answer that counts, the import's is a dry run.
 import * as settings from '../settings.js';
-import { stripManagedSettings } from '../setup/hosted.js';
+import { hostedVoiceSlot } from '../setup/hosted.js';
 
 export type PersonaInstallFailure = { ok: false; status: number; error: string };
 export type PersonaInstallSuccess = {
   ok: true;
   personas: any[];
   persona: any | null;
+  // Hosted: what the engine rule changed on the way in (`tts.engine`), so the
+  // route can say so. Absent when nothing was.
+  managed?: string[];
 };
 export type PersonaInstallResult = PersonaInstallSuccess | PersonaInstallFailure;
 
@@ -76,10 +79,10 @@ export async function installPersona(persona: Record<string, unknown>): Promise<
   if (slotError) return slotError;
 
   // Hosted: an imported persona gets the same engine rule as an edited one
-  // (setup/hosted.ts): a heavy or keyed engine the box doesn't run becomes
-  // inherit. A no-op on a self-hosted station.
-  const { patch } = stripManagedSettings({ personas: [persona] }, { defaultEngine: (settings.get() as any)?.tts?.defaultEngine });
-  persona = (patch.personas as Record<string, unknown>[])[0];
+  // (setup/hosted.ts hostedVoiceSlot): a heavy or keyed engine the box doesn't
+  // run becomes inherit. A no-op on a self-hosted station.
+  const { slot, changed } = hostedVoiceSlot(persona.tts, settings.get()?.tts?.defaultEngine);
+  if (changed) persona = { ...persona, tts: slot };
 
   try {
     await settings.update({ personas: [...personas, persona] });
@@ -90,5 +93,5 @@ export async function installPersona(persona: Record<string, unknown>): Promise<
   const next = settings.get().personas || [];
   const wanted = personaNameKey(persona.name);
   const installed = next.find((p: any) => personaNameKey(p.name) === wanted) || null;
-  return { ok: true, personas: next, persona: installed };
+  return { ok: true, personas: next, persona: installed, ...(changed ? { managed: ['tts.engine'] } : {}) };
 }

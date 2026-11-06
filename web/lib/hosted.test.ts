@@ -14,7 +14,7 @@ import { hostedFromEnv } from './hosted';
 test('lib/hosted.ts is not a client module, and the pages import hostedFromEnv from it', () => {
   const src = readFileSync(new URL('./hosted.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /^\s*['"]use client['"]/m);
-  for (const page of ['../app/admin/settings/page.tsx', '../app/admin/personas/page.tsx']) {
+  for (const page of ['../app/admin/settings/page.tsx', '../app/admin/personas/page.tsx', '../app/admin/imaging/page.tsx']) {
     const p = readFileSync(new URL(page, import.meta.url), 'utf8');
     assert.match(p, /import \{ hostedFromEnv \} from '[./]+\/lib\/hosted'/, page);
     assert.doesNotMatch(p, /hostedFromEnv[^;]*components\/admin\/HostedContext/, page);
@@ -45,7 +45,21 @@ test('listener cap: a whole number from SUBWAVE_LISTENER_CAP, only when hosted',
 test('bitrate ceiling: whole kbps from SUBWAVE_MAX_BITRATE, only when hosted', () => {
   assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_MAX_BITRATE: '192' }).maxBitrate, 192);
   assert.equal(hostedFromEnv({ SUBWAVE_MAX_BITRATE: '192' }).maxBitrate, undefined);
-  for (const bad of ['', '16', '19.5', 'lots']) {
+  // 48: under MP3's lowest bitrate (64), which the MP3 mount could never honour.
+  for (const bad of ['', '16', '48', '19.5', 'lots']) {
     assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_MAX_BITRATE: bad }).maxBitrate, undefined, bad);
   }
+});
+
+test('a malformed SUBWAVE_HOSTED is not hosted, as the controller reads it', () => {
+  for (const word of ['ture', 'enabled', '2']) {
+    assert.deepEqual(hostedFromEnv({ SUBWAVE_HOSTED: word }), { hosted: false }, word);
+  }
+  assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: 'on' }).hosted, true);
+});
+
+test('the persona engine picker takes the controller\'s rule from the mirror, not a copy', () => {
+  const src = readFileSync(new URL('../components/admin/tts/EngineVoiceFields.tsx', import.meta.url), 'utf8');
+  assert.match(src, /import \{ hostedPersonaEngines \} from '[./]+\/lib\/schemas\.generated'/);
+  assert.doesNotMatch(src, /\['inherit', 'kokoro', 'piper'/);
 });

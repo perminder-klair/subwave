@@ -360,12 +360,15 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       if (trimmed.length > 4096) continue;
       patch[key] = trimmed;
     }
-    const allowed = stripManagedSecrets(patch);
+    // Hosted: the LLM, voice and embedding keys are the box agent's
+    // (setup/hosted.ts); the reply names the ones it dropped, as POST /settings does.
+    const { patch: allowed, dropped } = stripManagedSecrets(patch);
+    const managed = dropped.length ? { managed: dropped } : {};
     if (Object.keys(allowed).length === 0) {
-      return res.json({ saved: [] });
+      return res.json({ saved: [], ...managed });
     }
     await saveSecrets(allowed);
-    res.json({ saved: Object.keys(allowed) });
+    res.json({ saved: Object.keys(allowed), ...managed });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
