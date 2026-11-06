@@ -22,7 +22,10 @@ export function DjContext({ ctx }: { ctx?: DebugContext | null }) {
 
   const weatherLine = weather
     ? [
-        titleize(weather.condition),
+        // The spoken wording, with the mood-map word beside it when they differ.
+        weather.detail && weather.detail !== weather.condition
+          ? `${titleize(weather.detail)} (${weather.condition})`
+          : titleize(weather.condition),
         weather.temp != null ? `${weather.temp}°${weather.tempUnit || ''}` : null,
         weather.location,
       ].filter(Boolean).join(' · ')

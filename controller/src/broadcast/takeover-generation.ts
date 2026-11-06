@@ -1,3 +1,4 @@
+import { updateEndingSteer } from './takeover-steer.js';
 // A prepared takeover is an expiring draft, never a live schedule override.
 // Only activation publishes its accepted plan and switches programming.
 import { randomUUID } from 'node:crypto';
@@ -121,7 +122,7 @@ async function activate(draft: Draft): Promise<Activated> {
     if (existing && existing.generation?.mode !== 'generated') throw new Error('The takeover template id is already used by a regular show.');
     const found = !!existing;
     if (!found && shows.length >= settings.SHOWS_LIMIT) throw new Error('The show list is full. Remove a show before starting this takeover.');
-    await settings.update({
+    await updateEndingSteer({
       shows: found ? shows.map(show => show.id === draft.show.id ? draft.show : show) : [...shows, draft.show],
       scheduleOverride: override,
     });

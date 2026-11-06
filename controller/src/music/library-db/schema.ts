@@ -537,6 +537,26 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     addColumnsOnce(d, 36, { tracks: { text_vector_sound: 'TEXT' } });
   }
 
+  if (userVersion < 37) {
+    // Whole-file facets. `loudness_version` says WHICH measurement
+    // loudness_lufs/peak_db hold: NULL = the analysis window's (first
+    // ANALYZE_SECONDS at ANALYZE_SR, sample peak), 2 = integrated loudness and
+    // TRUE peak over the whole file at its native rate, written with the
+    // whole-file LRA and sample peak. `edge_*` are the silence edges against
+    // the absolute floor and `decoded_duration_ms` the decoded length, all
+    // three from the same whole-file decode (facet `edges`).
+    // `loudness_curve_json` is that pass's short-term loudness curve
+    // (whole-loudness-curve.ts), stored with every v2 figure. Only the missing
+    // columns are added, as in 28: a database whose user_version was wound back
+    // below this step still has them.
+    addColumnsOnce(d, 37, {
+      tracks: {
+        loudness_version: 'INTEGER', loudness_range_lu: 'REAL', sample_peak_db: 'REAL', loudness_curve_json: 'TEXT',
+        edge_lead_ms: 'INTEGER', edge_tail_ms: 'INTEGER', decoded_duration_ms: 'INTEGER',
+      },
+    });
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
@@ -656,7 +676,7 @@ export function clearEchoedAlbumTagYears(d: Database.Database): number {
   return r.changes;
 }
 
-// The column-adding steps (28, 29, 33 to 36): add each of `columns` ({table:
+// The column-adding steps (28, 29, 33 to 37): add each of `columns` ({table:
 // {column: type}}, in order) that is still missing, and stamp user_version, in
 // one write transaction. Several processes open this DB, and two can both find a
 // column missing on the first open after an upgrade: unlocked, the second ALTER

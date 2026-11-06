@@ -221,7 +221,11 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
      Driver*) and reboot if it asks. Note your GPU's UUID from
      **Settings → Nvidia Driver**.
   2. **Docker** tab → **subwave** → **Edit** (*Advanced View* on).
-  3. **Repository** → `ghcr.io/perminder-klair/subwave-aio-cuda:latest`.
+  3. **Repository** → `ghcr.io/perminder-klair/subwave-aio-cuda:<arch>`, with
+     the tag named for your card's GPU architecture: `:pascal` for a GTX
+     10-series, `:ampere` for an RTX 30-series, and so on
+     ([every tag](internals/infrastructure.md#aio-cuda-tags)). `:latest` works
+     only on Turing (RTX 20-series) and newer.
   4. **Extra Parameters** → append `--runtime=nvidia` (keep the existing
      `--add-host` value; the field takes both).
   5. Set the two variables the template already ships (both blank by default):

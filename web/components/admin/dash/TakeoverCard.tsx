@@ -35,6 +35,7 @@ import {
   useActivateTakeoverMutation,
   type TakeoverPreview,
   type TakeoverPreviewRequest,
+  writeSteer,
   writeTakeoverOverride,
   type TakeoverData,
   type TakeoverWindow,
@@ -166,7 +167,12 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
     },
     onDone: async (data, _values, client) => {
       writeTakeoverOverride(client, data.override ?? null);
-      await client.invalidateQueries({ queryKey: dashKeys.takeover() });
+      // Pinning a takeover ends a running steer on the controller.
+      writeSteer(client, null);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: dashKeys.takeover() }),
+        client.invalidateQueries({ queryKey: dashKeys.steer() }),
+      ]);
     },
   });
   const cancelMutation = useAdminMutation<void, void>({

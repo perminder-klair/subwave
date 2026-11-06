@@ -72,3 +72,20 @@ test('a longer facet deadline reaches the local worker; omitted, the pass\'s app
   // Let the worker finish the abandoned request before shutdown.
   await new Promise(r => setTimeout(r, WORK_MS));
 });
+
+test('a window request keeps a caller\'s SHORTER deadline; only a whole-file one is floored', async () => {
+  // Shorter than the pass's 200 ms: honoured as given.
+  const t0 = Date.now();
+  await assert.rejects(
+    analyzer.analyzeFacets('short', { facets: ['stems'], timeoutMs: 50 }),
+    (err: unknown) => analyzer.isTimeoutError(err),
+  );
+  assert.ok(Date.now() - t0 < 180, `rejected after ${Date.now() - t0} ms, before the pass's 200 ms`);
+  await new Promise(r => setTimeout(r, WORK_MS));
+  // A whole-file request reads the whole file: the same short deadline
+  // cannot cut it under ANALYZE_WHOLE_FILE_TIMEOUT_MS, so it is answered.
+  const t1 = Date.now();
+  const res = await analyzer.analyzeFacets('whole', { facets: ['edges'], timeoutMs: 50 });
+  assert.equal(res.facets.stems?.status, 'ok', 'the stand-in answers every request alike');
+  assert.ok(Date.now() - t1 >= WORK_MS - 50, `answered after ${Date.now() - t1} ms`);
+});

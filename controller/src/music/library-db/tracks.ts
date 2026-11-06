@@ -2,7 +2,10 @@
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
-import { FACETS, clearFacetFailures, clearFacetRows, deleteFacetRows, restampFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
+import {
+  FACETS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows, deleteFacetRows,
+  isWholeFileLoudnessVersion, restampFacetRows, syncTrackFacets, type Facet, type FacetSource,
+} from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
@@ -13,6 +16,7 @@ import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capa
 import { acceptedAt, fileReplaced } from '../replaced-file-policy.js';
 import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
 import { soundWords, type SoundPart, type SoundWords } from '../sound-line.js';
+import { unavailableCurveJson, type WholeLoudnessCurve } from '../whole-loudness-curve.js';
 
 export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
@@ -292,10 +296,12 @@ export function earliestMeasuredAt(): string | null {
 }
 
 // Everything the analyzer measured from a track's audio, for one track: the
-// head analysis and its loudness, the tail, vocal ranges, the stems stamp, CLAP
-// and the audio moods and descriptors derived from it, the map position derived
-// from CLAP, and the failure history that described the old file. Unlike clearAnalysis()
-// nothing is kept: every figure was measured on a file that is gone. Metadata,
+// head analysis and its loudness, the whole-file loudness (its curve too) and
+// edges, the tail, vocal ranges, the stems stamp, CLAP and the audio moods and
+// descriptors derived from it, the map position derived from CLAP, and the
+// failure history that described the old file. Unlike clearAnalysis() nothing
+// is kept: every figure was measured on a file that is gone, and a whole-file
+// column left set would have syncTrackFacets() mark its facet measured again. Metadata,
 // tags, years, lyrics and plays are not audio measurements and stay. The stem
 // files themselves are the caller's (stem-cache.forgetStems), since this runs
 // inside the walk's sync write. `fileSize`, from the walk's size signal, is
@@ -311,11 +317,12 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
     if (size != null) d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?').run(size, id);
     d.prepare(
       `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL, analysis_confidence = NULL,
-         analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL,
+         analysis_version = NULL, loudness_lufs = NULL, peak_db = NULL, ${CLEAR_WHOLE_FILE_EXTRAS},
          structure_json = NULL, vocal_ranges_json = NULL, pace_json = NULL, beats_json = NULL,
          bars_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
          audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
          outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, lead_silence_ms = NULL,
+         edge_lead_ms = NULL, edge_tail_ms = NULL, decoded_duration_ms = NULL,
          stems_at = NULL, map_x = NULL, map_y = NULL,
          analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL
        WHERE id = ?`,
@@ -673,6 +680,7 @@ function preserveTailVocal(id: string, outro: TrackOutro): TrackOutro {
 export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
   const d = requireDb();
   d.transaction(() => {
+  const wholeFileLoudness = hasWholeFileLoudness(id);
   let outro = a.outro;
   let carriedTailVocal = false;
   if (a.preserveTailVocal && outro) {
@@ -687,8 +695,12 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         musical_key         = ?,
         intro_ms            = ?,
         analysis_confidence = ?,
-        loudness_lufs       = ?,
-        peak_db             = ?,
+        -- A whole-file loudness figure outranks the analysis window's: a head
+        -- analysis never overwrites it, and a window figure written in its
+        -- place carries none of its extras.
+        loudness_lufs       = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN loudness_lufs ELSE ? END,
+        peak_db             = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN peak_db ELSE ? END,
+        ${KEEP_WHOLE_FILE_EXTRAS},
         structure_json      = ?,
         pace_json           = ?,
         beats_json          = ?,
@@ -741,7 +753,9 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
   // version it was measured at. Every analysis pass decodes for the tail, so a
   // tail it could not measure is still an answer at the current version
   // (`tried`), while a tail kept from an earlier pass is not re-promoted.
-  const fresh: Facet[] = ['head', 'loudness'];
+  const fresh: Facet[] = ['head'];
+  // The window loudness only counts as measured where it was written.
+  if (!wholeFileLoudness) fresh.push('loudness');
   if (a.outro != null || Number.isFinite(a.tailSilenceMs as number)) fresh.push('tail');
   if (a.vocalRanges != null && !carriedTailVocal) fresh.push('vocal');
   if (a.stemsAttempted) fresh.push('stems');
@@ -754,6 +768,21 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
   markTextVectorDirtyIfSoundChanged(id, ['measured']);
   })();
 }
+
+// Whether this track's loudness figures come from the whole file (loudness
+// v2), which nothing measuring less may overwrite (facets.ts, the one rule).
+function hasWholeFileLoudness(id: string): boolean {
+  const row = requireDb()
+    .prepare<[string], { v: number }>(`SELECT ${SQL_WHOLE_FILE_LOUDNESS} AS v FROM tracks WHERE id = ?`)
+    .get(id);
+  return row?.v === 1;
+}
+
+// SET clauses for the columns only a whole-file figure carries: kept where the
+// row's figure is the whole-file one, else NULL; or NULL outright.
+const KEEP_WHOLE_FILE_EXTRAS = WHOLE_FILE_LOUDNESS_EXTRAS
+  .map((c) => `${c} = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN ${c} END`).join(', ');
+const CLEAR_WHOLE_FILE_EXTRAS = WHOLE_FILE_LOUDNESS_EXTRAS.map((c) => `${c} = NULL`).join(', ');
 
 // One facet-protocol answer, already mapped to column values. A key is
 // present for each facet the backend measured (ok) or proved unmeasurable;
@@ -771,11 +800,27 @@ export interface FacetWrite {
     keyRanges: TrackKeyRange[] | null;
     leadSilenceMs: number | null;
   };
-  loudness?: { loudnessLufs: number | null; peakDb: number | null } | { unmeasurable: string };
+  // `version` 2 = measured over the whole file (with sample peak + LRA); absent
+  // = an older analyzer's window figure, which never replaces a v2 one.
+  loudness?: {
+    loudnessLufs: number | null;
+    peakDb: number | null;
+    samplePeakDb?: number | null;
+    loudnessRangeLu?: number | null;
+    version?: number | null;
+    // The same pass's short-term curve (whole-loudness-curve.ts); a v2 figure
+    // stored without one stays one version below (facets.ts, `no-curve`)...
+    curve?: WholeLoudnessCurve | null;
+    // ...unless the analyzer ran and had none to give: stored as the
+    // unavailable marker, which settles it (unavailableCurveJson).
+    curveUnavailable?: string | null;
+  } | { unmeasurable: string };
   tail?: { outro: TrackOutro | null; tailSilenceMs: number | null; tailStartMs: number | null } | { unmeasurable: string };
   clap?: number[];
   vocal?: { vocalRanges: TrackSection[]; tailVocalRanges: TrackSection[] | null };
   stems?: { attempted: true };
+  // Silence at both ends (absolute floor) and the decoded length, ms.
+  edges?: { leadMs: number; tailMs: number; durationMs: number };
   unmeasurable?: Partial<Record<Facet, string>>;
   // Set when any requested facet failed: counts one failed attempt for the
   // track, exactly like a failed flat analysis. Absent = every facet answered,
@@ -816,9 +861,22 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
     }
     if (w.loudness) {
       if (!('unmeasurable' in w.loudness)) {
-        d.prepare('UPDATE tracks SET loudness_lufs = ?, peak_db = ? WHERE id = ?')
-          .run(finite(w.loudness.loudnessLufs), finite(w.loudness.peakDb), id);
-        fresh.push('loudness');
+        const l = w.loudness;
+        const version = finite(l.version);
+        if (isWholeFileLoudnessVersion(version)) {
+          // One measurement: the four figures (and the curve) written together.
+          d.prepare(
+            `UPDATE tracks SET loudness_lufs = ?, peak_db = ?, sample_peak_db = ?, loudness_range_lu = ?,
+               loudness_version = ?, loudness_curve_json = ? WHERE id = ?`,
+          ).run(finite(l.loudnessLufs), finite(l.peakDb), finite(l.samplePeakDb), finite(l.loudnessRangeLu),
+            Math.round(version),
+            l.curve ? JSON.stringify(l.curve) : l.curveUnavailable ? unavailableCurveJson(l.curveUnavailable) : null, id);
+          fresh.push('loudness');
+        } else if (!hasWholeFileLoudness(id)) {
+          d.prepare(`UPDATE tracks SET loudness_lufs = ?, peak_db = ?, ${CLEAR_WHOLE_FILE_EXTRAS} WHERE id = ?`)
+            .run(finite(l.loudnessLufs), finite(l.peakDb), id);
+          fresh.push('loudness');
+        }
       } else {
         tried.push('loudness');
         unmeasurable.loudness = w.loudness.unmeasurable;
@@ -868,6 +926,12 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
     if (w.stems) {
       d.prepare('UPDATE tracks SET stems_at = ? WHERE id = ?').run(new Date().toISOString(), id);
       fresh.push('stems');
+    }
+    if (w.edges) {
+      const ms = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.round(v)) : null);
+      d.prepare('UPDATE tracks SET edge_lead_ms = ?, edge_tail_ms = ?, decoded_duration_ms = ? WHERE id = ?')
+        .run(ms(w.edges.leadMs), ms(w.edges.tailMs), ms(w.edges.durationMs), id);
+      fresh.push('edges');
     }
     if (w.failed) {
       d.prepare(
@@ -1005,7 +1069,12 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   d.transaction(() => {
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
-      analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
+      analysis_confidence = NULL,
+      -- Whole-file loudness (v2) is not the analysis being redone: kept, like
+      -- the edges columns, which this clear does not touch.
+      loudness_lufs = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN loudness_lufs END,
+      peak_db = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN peak_db END,
+      ${KEEP_WHOLE_FILE_EXTRAS},
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
       key_ranges_json = NULL, outro_json = NULL,
       lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,

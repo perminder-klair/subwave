@@ -127,6 +127,12 @@ Run them in that order:
 CLI's own release, then pulls and recreates. It only moves a **concrete**
 version pin — an install deliberately following `latest` stays on `latest`.
 
+`subwave update` exits non-zero when any step fails: the stack isn't running,
+`git pull` (clone installs), the image pull, the build, or `up`. A script or
+cron job can check `$?` to tell that an update didn't land. A failed image pull
+still recreates what it can, but ends with a warning that images may be stale
+instead of "update complete". Re-run once the registry is reachable.
+
 If `update` warns that your compose files are behind the CLI, `sync` was
 skipped: run it, then run `subwave update` again.
 

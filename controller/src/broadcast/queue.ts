@@ -57,7 +57,7 @@ import type { MixDropReason } from '../schemas/transitions.js';
 import { logEvent } from '../observability/events.js';
 import { recordPlaybackFailure } from '../observability/playback-failures.js';
 import { djCallsAllowed, presentListeners } from './listeners.js';
-import { autoVoiceAllowed } from './voice-policy.js';
+import { trackLineVoiceAllowed } from './voice-policy.js';
 import { speakClockAllowed, stationIdDaypartDrifted, stationIdDaypartStamp } from './clock-policy.js';
 import { standInToken } from './stand-in-policy.js';
 import {
@@ -117,6 +117,7 @@ import type {
   RecentPlay,
   Track,
 } from './queue/types.js';
+import { STEER_ONCE_KEY } from './queue/types.js';
 import {
   BACKFILL_DEDUP_MAX_GAP_MS,
   EMPTY_DJ_QUEUE_CLEAR_THRESHOLD,
@@ -408,6 +409,12 @@ const PENDING_JINGLE_TTL_MS = 30 * 60 * 1000;
 const HANDOFF_BOUNDARY_WAIT_MS = 2 * 60_000;
 
 const STEM_BLEND_EXIT_KEYS = ['washout', 'washoutAuto', 'washoutDelay', 'loop', 'loopBar', 'crossSec'] as const;
+
+// What "start now" on a steer clears: the DJ's own queued picks. Listener
+// requests, operator queueing and a steer's own tracks stay.
+const startNowDrops = (i: QueueItem) => !!i.aiPicked && !i.requestedBy && !i.steer;
+// What is still ahead once it has: one the mixer has already taken plays out.
+const startNowKeeps = (i: QueueItem) => i.sent || !startNowDrops(i);
 
 // transitions far more often — a working DJ talks across most of them.
 class Queue {
@@ -977,11 +984,13 @@ class Queue {
   // `onStandInDropped` fires when the intro is a stand-in and the track will
   // play without it. The gate lives here, so this is how a caller that records
   // its own copy of the line learns it was never said.
-  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null, selectionShowAt = null, onStandInDropped }: {
+  async push({ track, requestedBy = null, operator = false, block = null, steer = null, introByOperator = false, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null, selectionShowAt = null, onStandInDropped }: {
     track: Track;
     requestedBy?: string | null;
     operator?: boolean;
     block?: QueueItem['block'] | null;
+    steer?: string | null;
+    introByOperator?: boolean;
     intent?: string | null;
     introScript?: string | null;
     introLabelChecked?: boolean;
@@ -1070,6 +1079,8 @@ class Queue {
       selectionShowAt: Number.isFinite(selectionAt) ? selectionAt : null,
       showKey: showKeyAt(typeof selectionAt === 'number' && Number.isFinite(selectionAt) ? selectionAt : Date.now()),
       block: block ?? undefined,
+      steer: steer ?? undefined,
+      introByOperator: (introByOperator && introScript) ? true : undefined,
       // Only stamp a back-announce target when there's actually an intro/link to
       // air against it; a bare track carries no claim about what preceded it.
       linkPrev: (introScript && linkPrev)
@@ -2139,7 +2150,7 @@ class Queue {
         // over the song's intro under the light duck (pre-bed behaviour). That
         // is the accepted price of the trade: a naked link is a garnish lost,
         // a missed seam is the wrong track on air.
-        if (item.introScript && !item.introWav && autoVoiceAllowed()) {
+        if (item.introScript && !item.introWav && trackLineVoiceAllowed(item)) {
           const budgetSec = introRenderBudgetSec(this.remainingUntilItemAirs(item));
           if (budgetSec === 0) {
             this.log('mix', `Intro render deferred to air time — "${item.track.title}" airs too soon to render ahead`);
@@ -3281,7 +3292,7 @@ class Queue {
     // synchronous, keeping the decision ahead of this function's first await.
     const incoming = this.upcoming[this.matchUpcomingIndex(np)] || null;
     if (boundaryCarriesTrackVoice(incoming, this.current?.track || null, {
-      voiceAllowed: autoVoiceAllowed(),
+      voiceAllowed: trackLineVoiceAllowed(incoming),
       wavExists: path => existsSync(path),
       nowMs: Date.now(),
     })) {
@@ -3433,8 +3444,9 @@ class Queue {
     // Station voice off (settings.tts.enabled). The generation sites already
     // skip writing intros, so this only catches an item queued BEFORE the
     // switch was flipped — it must not air its script now. Backstop, not the
-    // policy: nothing here spends tokens, so a plain drop is the whole job.
-    if (!autoVoiceAllowed()) return;
+    // policy: nothing here spends tokens, so a plain drop is the whole job. A
+    // line the operator asked for by hand airs anyway (a manual trigger).
+    if (!trackLineVoiceAllowed(item)) return;
     if (!item || item.introAired) return;
     if (!item.introWav && !item.introScript) return;
     const liveSessionKey = session.getSession()?.key ?? null;
@@ -4684,6 +4696,79 @@ class Queue {
     this.log('scheduler', `${reason} removed from queue: ${item.track.title} — ${item.track.artist}`);
     this.persist();
     return { ok: true };
+  }
+
+  // Drop the picks the DJ has queued so a change the operator just made applies
+  // now, not after them ("start now" on a steer). Listener requests and operator
+  // queueing stay. A pick Liquidsoap has already taken plays out, as with a
+  // block cancel, and a pick still running lands after this returns: the caller
+  // is told so. Then the same empty-slot gate onTrackStarted asks, since the
+  // queue may now be empty: closed, the coast takes over (#1975).
+  async dropQueuedPicks(reason = 'operator'): Promise<{ dropped: number; kept: number; pickInFlight: boolean }> {
+    let dropped = 0;
+    let kept = 0;
+    for (const item of this.upcoming.filter(startNowDrops)) {
+      const result = await this.removeUpcomingItem(item, reason);
+      if (result.ok) dropped++;
+      else kept++;
+    }
+    const pickInFlight = this.pickerBusy;
+    if (this.upcoming.length === 0 && !this.pickerBusy) {
+      const closed = this.pickGateClosed();
+      if (closed) this.handOverToCoast(closed);
+      else this.runPickCycle({ isAutonomous: true });
+    }
+    return { dropped, kept, pickInFlight };
+  }
+
+  // The track a steer's first opening track will follow: the queued tail, less
+  // what "start now" is about to drop, else the track on air. A pick the mixer
+  // has already taken cannot be dropped and plays first.
+  tailTrack(startNow: boolean) {
+    const kept = startNow ? this.upcoming.filter(startNowKeeps) : this.upcoming;
+    return kept.at(-1)?.track ?? this.current?.track ?? null;
+  }
+
+  // Seconds until a track queued now would start: behind the track on air and
+  // everything queued, less what "start now" is about to drop. Null when a
+  // length ahead of it is unknown; 0 with nothing on air or queued.
+  secondsUntilQueuedTail(startNow: boolean): number | null {
+    let sec = this.current ? this.remainingSecOnAir() : 0;
+    if (sec == null) return null;
+    for (const item of startNow ? this.upcoming.filter(startNowKeeps) : this.upcoming) {
+      const playable = this.playableSecOf(item);
+      if (playable == null) return null;
+      sec += playable + this.ownHiddenDelaySec(item);
+    }
+    return sec;
+  }
+
+  // A steer's opening tracks that have not aired, for the dashboard.
+  steerQueued(key: string): QueueItem[] {
+    return this.upcoming.filter(i => i.steer === key);
+  }
+
+  // Opening tracks whose steer is no longer the one in force: a steer that ran
+  // out across a restart, or one replaced while its tracks were being queued.
+  async removeOrphanSteerQueued(activeKey: string | null): Promise<number> {
+    let removed = 0;
+    for (const item of this.upcoming.filter(i => i.steer && i.steer !== STEER_ONCE_KEY && i.steer !== activeKey)) {
+      if ((await this.removeUpcomingItem(item, 'steer ended —')).ok) removed++;
+    }
+    return removed;
+  }
+
+  // Take a steer's un-aired opening tracks with it when it is cleared, runs out
+  // or is replaced. One already handed to the mixer plays out, as with a block.
+  async removeSteerQueued(key: string): Promise<{ removed: number; kept: number }> {
+    let removed = 0;
+    let kept = 0;
+    for (const item of this.steerQueued(key)) {
+      const result = await this.removeUpcomingItem(item, 'steer ended —');
+      if (result.ok) removed++;
+      else kept++;
+    }
+    return { removed, kept };
   }
 
   // Cancel what remains of an operator block (#1622 FR 4) — the inverse of the
