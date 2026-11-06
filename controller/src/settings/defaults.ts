@@ -290,6 +290,9 @@ export const DEFAULTS = {
   // Timed takeover (#930): an epoch-ms window that outranks the weekly grid in
   // resolveActiveShow while live. Persisted in schedule.json.
   scheduleOverride: null,
+  // Operator steer: a bounded lean on the music and the talk that leaves the
+  // schedule alone (schemas/steer.ts). Read through persona.ts:activeSteer().
+  steer: null,
   tts: {
     // Station-wide voice switch. false = music only: no links, idents, hourly
     // checks, segments, banter, mic-passes, programme beats or request intros —

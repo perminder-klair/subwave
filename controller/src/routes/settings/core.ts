@@ -22,6 +22,7 @@ import * as chatterbox from '../../audio/chatterbox.js';
 import * as piper from '../../audio/piper.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
+import { updateEndingSteer } from '../../broadcast/takeover-steer.js';
 import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
@@ -242,13 +243,23 @@ export async function logCompatDetection(): Promise<void> {
 // settings.update(): backup restore hands update() a whole settings.json, and
 // a key from a newer version must cost one setting, not the whole restore.
 router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) => {
+  // A steer starts and ends through /steer, which serialises the write, works
+  // out its opening tracks, clears a takeover and refuses a window that has
+  // already run out. Through here it would do none of that.
+  if (req.body && typeof req.body === 'object' && 'steer' in req.body) {
+    return res.status(400).json({ error: 'start or clear a steer with POST or DELETE /steer' });
+  }
   try {
     // A hosted station's LLM route and voice engine belong to its box agent
     // (setup/hosted.ts): those keys are dropped, the rest of the save applies.
     const { patch: body, dropped } = stripManagedSettings(req.body || {}, {
       defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
     });
-    const result = await settings.update(body);
+    // A takeover saved here ends a running steer, as one pinned through
+    // /schedule/override does (broadcast/takeover-steer.ts).
+    const result = 'scheduleOverride' in body
+      ? (await updateEndingSteer(body)).result
+      : await settings.update(body);
     // context.ts reads the live settings cache, so the update already applies;
     // the route only owns the operator-facing log.
     if ('weather' in (req.body || {})) {

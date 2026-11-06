@@ -14,6 +14,7 @@ import { resolveShowIds } from '../schemas/show-server.js';
 import { djPromptsSchema, personasSchema, ttsVoiceSlotSchema } from '../schemas/persona.js';
 import { resolveDjPromptIds, resolvePersonaIds } from '../schemas/persona-server.js';
 import { scheduleSchema, scheduleOverrideSchema } from '../schemas/schedule.js';
+import { steerSchema, type Steer } from '../schemas/steer.js';
 import { firstMessage } from '../util/zod-error.js';
 
 /**
@@ -118,6 +119,14 @@ export function validateScheduleOverrideStrict(raw, shows): ScheduleOverride | n
   const ctx = { showIds: shows.map(s => s.id), now: null };
   const r = scheduleOverrideSchema(ctx).safeParse(raw);
   if (!r.success) throw new Error(firstMessage(r.error, 'scheduleOverride'));
+  return r.data;
+}
+
+// The steer's strict twin. `now: null` for the takeover's reason above.
+export function validateSteerStrict(raw): Steer | null {
+  if (raw === null || raw === undefined) return null;
+  const r = steerSchema({ now: null }).safeParse(raw);
+  if (!r.success) throw new Error(firstMessage(r.error, 'steer'));
   return r.data;
 }
 
