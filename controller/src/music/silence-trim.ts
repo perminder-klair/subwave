@@ -89,7 +89,7 @@ function measure(track: SilenceTrimTrack): Measured {
   let stored: SilenceTrimTrack | null | undefined;
   const rec = (): SilenceTrimTrack | null => {
     if (stored === undefined) stored = track.id ? (library.get(track.id) ?? null) : null;
-    return stored;
+    return stored ?? null;
   };
   let durSec = Number(track.duration ?? track.durationSec) || 0;
   // Edges on the track itself, else the stored ones: they outrank any window

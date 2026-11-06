@@ -70,7 +70,7 @@ export const WHOLE_FILE_FACETS: readonly Facet[] = ['loudness', 'edges'];
 export const WHOLE_FILE_LOUDNESS_VERSION = 2;
 export const SQL_WHOLE_FILE_LOUDNESS =
   `(loudness_lufs IS NOT NULL AND COALESCE(loudness_version, 1) >= ${WHOLE_FILE_LOUDNESS_VERSION})`;
-export function isWholeFileLoudnessVersion(version: number | null | undefined): boolean {
+export function isWholeFileLoudnessVersion(version: number | null | undefined): version is number {
   return (version ?? 1) >= WHOLE_FILE_LOUDNESS_VERSION;
 }
 // Written only with a whole-file figure, and dropped with it: a window figure
