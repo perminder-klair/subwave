@@ -977,6 +977,17 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           </>
         )}
 
+        {/* Hosted: the engine's own panel is the box agent's, but its level and
+            pace stay the operator's (tts.gainDb / tts.speed aren't managed).
+            Kokoro's panel below carries them already. */}
+        {hosted && form.tts.defaultEngine !== 'kokoro'
+          && (TTS_GAIN_ENGINES as readonly string[]).includes(form.tts.defaultEngine) && (
+          <>
+            <TtsGainField engineId={form.tts.defaultEngine} form={form} setForm={setForm} />
+            <TtsSpeedField engineId={form.tts.defaultEngine} form={form} setForm={setForm} />
+          </>
+        )}
+
         {form.tts.defaultEngine === 'kokoro' && (() => {
           const voices = data.tts?.kokoroVoices || [];
           const languages = data.tts?.kokoroVoiceLanguages || {};
