@@ -498,6 +498,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 31');
   }
 
+  const columnsAtOpen = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
   if (userVersion < 32) markTailSungVectorsOnce(d);
 
   if (userVersion < 33) {
@@ -535,6 +536,51 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     // marks: every vector written before this step, so the upgrade re-embeds
     // nothing. Added only if missing, for a database wound back below it (see 28).
     addColumnsOnce(d, 36, { tracks: { text_vector_sound: 'TEXT' } });
+  }
+
+  const hasLanguageColumns = ['language_primary', 'languages'].every(column => columnsAtOpen.has(column));
+  // The earlier request branch also used version 32, for the language columns
+  // below, so a database that ran it sits at 32 without develop's tail marks.
+  // Develop's own 32 never adds those columns, so they tell the two apart.
+  if (userVersion === 32 && hasLanguageColumns) markTailSungVectorsForLanguageV32(d);
+
+  if (userVersion < 37) {
+    // Serialize the schema check, DDL and version write. A second process can
+    // have read the old user_version before waiting on this connection's lock.
+    d.transaction(() => {
+      if ((d.pragma('user_version', { simple: true }) as number) >= 37) return;
+
+      // Language tags are optional metadata, but request queries need their
+      // nullable storage columns on every fresh and upgraded library. #2080
+      // supplies the tagging writes; this migration only creates the columns.
+      // Older language builds used version 30 and may lack later lyric tables.
+      // Numbered after develop's own steps, whose numbers stay as develop has them.
+      runDdl(d, `
+        CREATE TABLE IF NOT EXISTS lyric_offsets (
+          track_id   TEXT PRIMARY KEY,
+          offset_ms  INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+      // An earlier build of this branch numbered develop's steps 33 to 36 for
+      // itself, so a database it left at 35 never got #2214's columns, one it
+      // left at 32 may lack 33 and 34's, and one it left at 36 lacks #2240's.
+      // Each column develop's steps add is added here when missing; on
+      // develop's own lineage they all exist.
+      const columnsOf = (table: string) =>
+        new Set((d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name));
+      const tracks = columnsOf('tracks');
+      const add = [
+        'language_primary', 'languages',
+        'explicit_status', 'lastfm_track_tags_at', 'audio_descriptors', 'audio_descriptor_scores_json',
+        'text_vector_sound',
+      ].filter(column => !tracks.has(column)).map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`);
+      if (!columnsOf('audio_embedding_meta').has('descriptor_vocab_hash')) {
+        add.push('ALTER TABLE audio_embedding_meta ADD COLUMN descriptor_vocab_hash TEXT;');
+      }
+      if (add.length) runDdl(d, add.join('\n'));
+      d.pragma('user_version = 37');
+    }).immediate();
   }
 
   // Before the vector reconcile below, which bumps it when it drops vectors.
@@ -737,6 +783,23 @@ function markTailSungVectorsOnce(d: Database.Database): void {
       `[library-db] tail vocal re-embed marks not set (${(err as Error).message}); ` +
         'similarity keeps working on the old text',
     );
+  }
+}
+
+// Develop's 32 marks for a database the earlier request branch left at 32 (see
+// migrate). The same rows and the same failure direction as markTailSungVectorsOnce,
+// but no version write: the steps after it move user_version on as they always do.
+function markTailSungVectorsForLanguageV32(d: Database.Database): void {
+  try {
+    d.transaction(() => {
+      const hasTextVectors = d
+        .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='track_vectors'`)
+        .get();
+      const marked = hasTextVectors ? d.prepare(TAIL_SUNG_VECTORS_SQL).run().changes : 0;
+      if (marked > 0) console.log(`[library-db] ${marked} tracks marked to re-embed: tail vocals changed their Sound line`);
+    }).immediate();
+  } catch (err) {
+    console.warn(`[library-db] tail vocal re-embed marks not set (${(err as Error).message}); similarity keeps working on the old text`);
   }
 }
 

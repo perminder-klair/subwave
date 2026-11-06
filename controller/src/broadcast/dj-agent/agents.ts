@@ -27,11 +27,18 @@ export interface RequestRunArgs {
   // Captured before the asynchronous request run so its prompt cannot switch
   // hosts halfway through and then relabel the resulting intro.
   persona: Persona | null;
+  // Evidence requests may use only the web-backed local-identity tool. This
+  // prevents a film/lyric miss from falling through to a random or mood
+  // stand-in before the deterministic cascade gets a chance to refuse it.
+  evidenceOnly?: boolean;
 }
 
 // What buildTools hands back for the caller to resolve the chosen id against.
 export interface PickerExtras {
   seen: Map<string, any>;
+  // Optional keeps test and third-party agent adapters source-compatible;
+  // production picker tools always provide the collection.
+  failures?: unknown[];
 }
 
 export const pickerAgent = defineAgent<PickerRunArgs, PickerExtras>({
@@ -54,8 +61,8 @@ export const pickerAgent = defineAgent<PickerRunArgs, PickerExtras>({
     + (scope.episodeSource ? '\nLead with episodeArtistTracks; choose only the prepared artist catalogue.' : '')
     + (editorial ?? ''),
   buildTools: ({ scope }) => {
-    const { tools, seen } = buildPickerTools(scope);
-    return { tools, extras: { seen } };
+    const { tools, seen, failures } = buildPickerTools(scope);
+    return { tools, extras: { seen, failures } };
   },
   // Native-path acceptance: the picked id must be one a discovery tool
   // surfaced this run. A fabricated id falls through to the done-tool harness
@@ -71,16 +78,19 @@ export const requestAgent = defineAgent<RequestRunArgs, PickerExtras>({
   maxSteps: 2,
   providerDiscoveryBudget: true,
   timeoutMs: agentDeadline,
-  buildSystem: ({ persona }) => requestSystem(persona),
+  buildSystem: ({ persona, evidenceOnly }) => requestSystem(persona)
+    + (evidenceOnly
+      ? '\nThis is an evidence-only identification request. Use identifyRequestedTrack as the only discovery source. If it returns no candidates, do not choose a stand-in; return no track so the controller can report an honest no-match.'
+      : ''),
   // resolveReferences adds the web-backed reference resolver (request path only;
   // no-op without a search provider) behind settings.llm.requestWebResolve.
   // Set here rather than at the call site: it is a property of THIS agent.
-  buildTools: ({ scope }) => {
-    const { tools, seen } = buildPickerTools({
+  buildTools: ({ scope, evidenceOnly }) => {
+    const { tools, seen, failures } = buildPickerTools({
       ...scope,
       resolveReferences: settings.get().llm?.requestWebResolve ?? false,
-    });
-    return { tools, extras: { seen } };
+    }, evidenceOnly ? { only: ['identifyRequestedTrack'] } : undefined);
+    return { tools, extras: { seen, failures } };
   },
   // Same native-path acceptance as pickerAgent.
   validateObject: (object, extras) => !!(object?.id && extras?.seen?.has(object.id)),
