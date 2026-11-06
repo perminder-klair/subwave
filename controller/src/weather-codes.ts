@@ -208,10 +208,12 @@ export function outlookEvents(current: OutlookCurrent, outlook: OutlookHour[]): 
   const notes: OutlookNote[] = [];
   const unit: 'C' | 'F' = current.tempUnit === 'F' ? 'F' : 'C';
 
-  // 1. Precipitation coming (current not wet). A row qualifies when its code is
-  //    wet, or its chance clears LIKELY_PCT.
+  // 1. Precipitation coming (current not wet). The first row whose chance
+  //    clears LIKELY_PCT, whatever its code, so a 10% drizzle row in an hour
+  //    cannot hide a 90% downpour in three; failing that, the first row that is
+  //    wet by its code, as a possibility.
   if (!isWet(current.condition)) {
-    const row = outlook.find(r => isWet(r.condition) || isLikely(r));
+    const row = outlook.find(isLikely) ?? outlook.find(r => isWet(r.condition));
     if (row) {
       const likely = isLikely(row);
       const chance = likely ? ` (${row.rainChancePct}% chance)` : '';

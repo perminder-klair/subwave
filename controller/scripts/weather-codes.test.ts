@@ -215,6 +215,30 @@ describe('outlookNotes', () => {
     assert.deepEqual(outlookNotes({ condition: 'cloudy', temp: 12 }, at(50)), ['rain likely in about 2 hours (50% chance)']);
   });
 
+  // A low-chance drizzle row first must not hide a likely downpour behind it:
+  // the note names the first likely row, and falls back to the first wet one.
+  it('names the first likely row before the first merely wet one', () => {
+    const rows: OutlookHour[] = [
+      { inHours: 1, condition: 'rainy', conditions: 'light drizzle', temp: 12, rainChancePct: 10 },
+      { inHours: 2, condition: 'cloudy', conditions: 'overcast', temp: 12, rainChancePct: 30 },
+      { inHours: 3, condition: 'rainy', conditions: 'heavy rain', temp: 12, rainChancePct: 90 },
+    ];
+    assert.deepEqual(outlookEvents({ condition: 'cloudy', temp: 12 }, rows), [
+      { kind: 'rain-likely', text: 'rain likely in about 3 hours (90% chance)' },
+    ]);
+    // A likely thunderstorm behind a possible shower is the thunderstorm.
+    assert.deepEqual(outlookNotes({ condition: 'clear', temp: 20 }, [
+      { inHours: 1, condition: 'rainy', conditions: 'light rain showers', temp: 20, rainChancePct: 20 },
+      { inHours: 4, condition: 'stormy', conditions: 'thunderstorm', temp: 20, rainChancePct: 70 },
+    ]), ['thunderstorms likely in about 4 hours (70% chance)']);
+    // Nothing likely anywhere: the first wet row, as a possibility.
+    assert.deepEqual(outlookNotes({ condition: 'cloudy', temp: 12 }, [
+      { inHours: 1, condition: 'cloudy', conditions: 'overcast', temp: 12, rainChancePct: 40 },
+      { inHours: 2, condition: 'rainy', conditions: 'light drizzle', temp: 12, rainChancePct: 10 },
+      { inHours: 5, condition: 'rainy', conditions: 'rain', temp: 12, rainChancePct: 45 },
+    ]), ['light drizzle possible in about 2 hours']);
+  });
+
   it('names a likely snow row snow, and is silent about snow while it snows', () => {
     const rows: OutlookHour[] = [
       { inHours: 2, condition: 'snowy', conditions: 'light snow', temp: -1, rainChancePct: 80 },
