@@ -97,7 +97,7 @@ process.env.ANALYZE_WHOLE_FILE_CONCURRENCY = '3';
 
 const db = await import('../src/music/library-db.js');
 const P = await import('../src/music/acoustics-plan.js');
-const { runAnalysisPass, wholeFileBackfillPlan } = await import('../src/music/analyze.js');
+const { runAnalysisPass, wholeFileBackfillPlan, wholeFileSkipNotice } = await import('../src/music/analyze.js');
 const analyzer = await import('../src/music/analyzer.js');
 const { config } = await import('../src/config.js');
 const setWholeFile = (on: boolean) => { (config.analyzer as { wholeFile: boolean }).wholeFile = on; };
@@ -232,4 +232,23 @@ test('a whole-file loudness answer missing a figure is a failure, never a partia
   const err = db.requireDb().prepare(`SELECT analyze_error AS e FROM tracks WHERE id = 'c'`).get() as { e: string };
   assert.match(err.e, /loudness: incomplete whole-file loudness answer/);
   assert.ok(db.facetNeedsIds('loudness').includes('c'), 'still due: the next run asks again');
+});
+
+test('the backfill says whether the analyzer lacks the facets or has not said', async () => {
+  // Known to lack them: rebuild. Not said: an old image, or not ready yet.
+  assert.match(wholeFileSkipNotice(false), /reports it cannot run it .*rebuild the analyzer/);
+  assert.match(wholeFileSkipNotice(null), /has not said whether it can run it/);
+  assert.doesNotMatch(wholeFileSkipNotice(null), /reports it cannot/);
+  // A capability that turned up after the first probe is read before planning.
+  setWholeFile(true);
+  wholeFileCapable = null;
+  await analyzer.refreshCapabilities();
+  assert.equal(analyzer.wholeFileAvailable(), null);
+  wholeFileCapable = true; // the pool came up since: the backfill asks again
+  try {
+    assert.ok(((await wholeFileBackfillPlan())?.items.length ?? 0) > 0);
+    assert.equal(analyzer.wholeFileAvailable(), true);
+  } finally {
+    setWholeFile(false);
+  }
 });
