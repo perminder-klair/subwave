@@ -35,7 +35,8 @@ import { skillSubmitUrl } from '../../../lib/repo';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, TextareaField } from '@/lib/form-fields';
 import { Switch } from '@/components/ui/switch';
-import { EngineVoiceFields, type EngineVoiceData } from '../tts/EngineVoiceFields';
+import { EngineVoiceFields, ENGINE_UNAVAILABLE, type EngineVoiceData } from '../tts/EngineVoiceFields';
+import { useSettingsQuery } from '../settings/queries';
 import PendingToolReview from './PendingToolReview';
 import {
   skillKeys,
@@ -178,18 +179,11 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [busy, setBusy] = useState(false);          // saving / creating
   const [acting, setActing] = useState(false);      // toggle / run in flight
   const [flash, setFlash] = useState<string | null>(null);
-  // Voice lists for the skill-voice picker (EngineVoiceFields): the same
-  // station TTS snapshot the persona editor reads. Fetched once per mount;
-  // a failure leaves the engine picker usable with empty lists.
-  const [voiceData, setVoiceData] = useState<EngineVoiceData | null>(null);
-  useEffect(() => {
-    let live = true;
-    // admin-query-imperative: skill-voice-data
-    adminJson(adminFetch, '/settings')
-      .then(j => { if (live) setVoiceData(j as EngineVoiceData); })
-      .catch(() => { /* lists stay empty */ });
-    return () => { live = false; };
-  }, [adminFetch]);
+  // Voice lists for the skill-voice picker (EngineVoiceFields), from the one
+  // redacted /settings read the skills page already holds. A failure leaves
+  // the engine picker usable with empty lists.
+  const settingsQuery = useSettingsQuery<EngineVoiceData>({ adminFetch, enabled: true });
+  const voiceData = settingsQuery.data ?? null;
   const [confirmDelete, setConfirmDelete] = useState(false);  // delete confirm dialog
   const [defaults, setDefaults] = useState<SkillDefaults | null>(null); // built-in shipped defaults
 
@@ -872,8 +866,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                             onChange={patch => field.onChange({ ...slot, ...patch })}
                             data={voiceData}
                             adminFetch={adminFetch}
-                            unavailableNote={() => (
-                              <>This engine isn&apos;t available right now, so the skill falls back to the station voice until it&apos;s up.</>
+                            unavailableNote={engine => (
+                              <>{ENGINE_UNAVAILABLE[engine]} This skill would be read by the station&apos;s
+                                fallback or default engine until it&apos;s up.</>
                             )}
                             previewHint={<>
                               Plays a short sample in this skill&apos;s voice. Pick from
