@@ -177,9 +177,11 @@ async function fetchWeather(weather: ReturnType<typeof weatherConfig>, configKey
   try {
     const unitParam = imperial ? '&temperature_unit=fahrenheit' : '';
     // The next hours ride the same call, in the location's own time zone so the
-    // hourly rows and the current reading share one clock (buildOutlook). One
-    // row past the window, so a reading 15 minutes before the hour, aged by the
-    // cache's 30 minutes, still reaches six hours ahead.
+    // hourly rows and the current reading share one clock (buildOutlook). The
+    // rows start at the current hour, which has already begun, so a reading at
+    // :45 aged by the cache's 30 minutes needs OUTLOOK_HOURS + 2 rows to still
+    // reach six hours ahead. The third extra row keeps the full window for an
+    // hour more of a reading getWeather serves stale through a failure backoff.
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${weather.lat}&longitude=${weather.lng}&current=temperature_2m,weather_code,is_day`
       + `&hourly=temperature_2m,weather_code,precipitation_probability&forecast_hours=${OUTLOOK_HOURS + 3}&timezone=auto${unitParam}`;
     const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
