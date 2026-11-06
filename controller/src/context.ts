@@ -4,7 +4,7 @@
 import { config } from './config.js';
 import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
-import { buildOutlook, conditionForCode, describeCode, outlookNotes, type OutlookHour } from './weather-codes.js';
+import { buildOutlook, conditionForCode, describeCode, outlookEvents, type HourlyForecast, type OutlookHour, type OutlookNoteKind } from './weather-codes.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrases, spokenDaypartPhrase } from './time.js';
@@ -59,11 +59,15 @@ export function getFestivalContext(date = new Date()) {
 }
 
 // Weather via Open-Meteo (no API key required)
-let weatherCache: { data: any; fetchedAt: number; configKey: string; outlook: OutlookHour[] } = {
+// `hourly` and `readingTime` are the raw forecast rows and the reading's own
+// clock, kept so the outlook is built at read time, aged by how long ago the
+// fetch was (buildOutlook's elapsedMs).
+let weatherCache: { data: any; fetchedAt: number; configKey: string; hourly: HourlyForecast | null; readingTime: string } = {
   data: null,
   fetchedAt: 0,
   configKey: '',
-  outlook: [],
+  hourly: null,
+  readingTime: '',
 };
 const WEATHER_TTL_MS = 30 * 60 * 1000;
 // How far ahead the weather skill may look.
@@ -100,7 +104,7 @@ function weatherConfigKey(weather: ReturnType<typeof weatherConfig>) {
 // Force the next getWeather() call to re-fetch — used when the user changes
 // their location in /settings.
 export function invalidateWeatherCache() {
-  weatherCache = { data: null, fetchedAt: 0, configKey: '', outlook: [] };
+  weatherCache = { data: null, fetchedAt: 0, configKey: '', hourly: null, readingTime: '' };
   weatherFailure = null;
 }
 
@@ -148,14 +152,18 @@ export async function getWeather() {
 // public /now-playing context, and every prompt's weather line. Reads the cache
 // the last getWeather() filled (the skill's ctx.weather came from it moments
 // earlier) and never fetches, so a cold cache or a moved location is simply no
-// outlook, at once.
-export function getWeatherOutlook(): { nextHours: OutlookHour[]; notes: string[] } {
+// outlook, at once. The rows are aged to now, so a note read 25 minutes after
+// the fetch still says how far away the rain is from now. `kinds` names what
+// the notes are about, without their timing, so the skill can tell a standing
+// note from a new one.
+export function getWeatherOutlook(now = Date.now()): { nextHours: OutlookHour[]; notes: string[]; kinds: OutlookNoteKind[] } {
   const current = weatherCache.data;
   if (!current || current.condition === 'unknown' || weatherCache.configKey !== weatherConfigKey(weatherConfig())) {
-    return { nextHours: [], notes: [] };
+    return { nextHours: [], notes: [], kinds: [] };
   }
-  const nextHours = weatherCache.outlook;
-  return { nextHours, notes: outlookNotes({ condition: current.condition, temp: current.temp ?? null }, nextHours) };
+  const nextHours = buildOutlook(weatherCache.hourly, weatherCache.readingTime, OUTLOOK_HOURS, now - weatherCache.fetchedAt);
+  const events = outlookEvents({ condition: current.condition, temp: current.temp ?? null, tempUnit: current.tempUnit }, nextHours);
+  return { nextHours, notes: events.map(e => e.text), kinds: events.map(e => e.kind) };
 }
 
 function unknownWeather(weather: ReturnType<typeof weatherConfig>) {
@@ -169,9 +177,11 @@ async function fetchWeather(weather: ReturnType<typeof weatherConfig>, configKey
   try {
     const unitParam = imperial ? '&temperature_unit=fahrenheit' : '';
     // The next hours ride the same call, in the location's own time zone so the
-    // hourly rows and the current reading share one clock (buildOutlook).
+    // hourly rows and the current reading share one clock (buildOutlook). One
+    // row past the window, so a reading 15 minutes before the hour, aged by the
+    // cache's 30 minutes, still reaches six hours ahead.
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${weather.lat}&longitude=${weather.lng}&current=temperature_2m,weather_code,is_day`
-      + `&hourly=temperature_2m,weather_code,precipitation_probability&forecast_hours=${OUTLOOK_HOURS + 2}&timezone=auto${unitParam}`;
+      + `&hourly=temperature_2m,weather_code,precipitation_probability&forecast_hours=${OUTLOOK_HOURS + 3}&timezone=auto${unitParam}`;
     const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
     if (!res.ok) throw new Error(`weather upstream ${res.status}`);
     const data = await res.json() as any;
@@ -188,8 +198,9 @@ async function fetchWeather(weather: ReturnType<typeof weatherConfig>, configKey
       isDay: data.current.is_day === 1,
       location: attributedLocation(weather),
     };
-    const outlook = buildOutlook(data.hourly, data.current.time, OUTLOOK_HOURS);
-    weatherCache = { data: result, fetchedAt: Date.now(), configKey, outlook };
+    const hourly = data.hourly && Array.isArray(data.hourly.time) ? data.hourly as HourlyForecast : null;
+    const readingTime = typeof data.current.time === 'string' ? data.current.time : '';
+    weatherCache = { data: result, fetchedAt: Date.now(), configKey, hourly, readingTime };
     weatherFailure = null;
     return result;
   } catch {

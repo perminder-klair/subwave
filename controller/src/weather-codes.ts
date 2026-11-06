@@ -44,6 +44,7 @@ export function describeCode(code: unknown): string | null {
 }
 
 export interface OutlookHour {
+  // Whole hours from now, rounded; 0 is a row less than half an hour away.
   inHours: number;
   condition: WeatherCondition;
   conditions: string | null;
@@ -58,6 +59,9 @@ export interface HourlyForecast {
   precipitation_probability?: Array<number | null>;
 }
 
+// Open-Meteo's local times (timezone=auto) carry no offset. Both the current
+// reading and the hourly rows are on that one clock, so reading each as UTC
+// keeps their differences right; the absolute instant is never used.
 function parseTime(s: string): number | null {
   if (typeof s !== 'string') return null;
   let ms: number;
@@ -67,20 +71,32 @@ function parseTime(s: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+const HOUR_MS = 3_600_000;
+
+// The rows whose rounded distance from now is 0..`hours`. Open-Meteo's
+// `current.time` moves in 15-minute steps, so a count of rows would cover only
+// ~5¼ hours on a fetch at :45 (its first row is 15 minutes out); bounding by
+// distance covers the whole window at any minute. `elapsedMs` ages a cached
+// forecast: now is that much past the reading, so rows move closer and the
+// ones that have passed drop out.
 export function buildOutlook(
   hourly: HourlyForecast | null | undefined,
   currentTime: string,
   hours = 6,
+  elapsedMs = 0,
 ): OutlookHour[] {
   if (!hourly || !Array.isArray(hourly.time)) return [];
-  const currentMs = parseTime(currentTime);
-  if (currentMs === null) return [];
+  const readingMs = parseTime(currentTime);
+  if (readingMs === null) return [];
+  const nowMs = readingMs + Math.max(0, Number.isFinite(elapsedMs) ? elapsedMs : 0);
 
   const result: OutlookHour[] = [];
-  for (let i = 0; i < hourly.time.length && result.length < hours; i++) {
+  for (let i = 0; i < hourly.time.length; i++) {
     const rowMs = parseTime(hourly.time[i]);
     if (rowMs === null) continue;
-    if (rowMs <= currentMs) continue;
+    if (rowMs <= nowMs) continue;
+    const inHours = Math.round((rowMs - nowMs) / HOUR_MS);
+    if (inHours > hours) continue;
 
     const code = hourly.weather_code?.[i];
     const tempRaw = hourly.temperature_2m?.[i];
@@ -94,7 +110,7 @@ export function buildOutlook(
       : null;
 
     result.push({
-      inHours: Math.max(1, Math.round((rowMs - currentMs) / 3600000)),
+      inHours,
       condition: conditionForCode(code),
       conditions: describeCode(code),
       temp,
@@ -108,32 +124,78 @@ function isWet(cond: string): boolean {
   return cond === 'rainy' || cond === 'stormy';
 }
 
-function hoursLabel(n: number): string {
-  return n === 1 ? '1 hour' : `${n} hours`;
+// At or above this chance of precipitation a row is "likely", and only then is
+// the chance quoted: "likely (5% chance)" contradicts itself on air.
+const LIKELY_PCT = 50;
+
+function isLikely(r: OutlookHour): boolean {
+  return r.rainChancePct !== null && r.rainChancePct >= LIKELY_PCT;
 }
 
-export function outlookNotes(
-  current: { condition: string; temp: number | null },
-  outlook: OutlookHour[],
-): string[] {
+function when(n: number): string {
+  if (n <= 0) return 'within the hour';
+  return n === 1 ? 'in about 1 hour' : `in about ${n} hours`;
+}
+
+// A temperature swing worth a note: 3 °C, or its Fahrenheit equivalent (5 °F).
+function swingThreshold(unit: 'C' | 'F'): number {
+  return unit === 'F' ? 5 : 3;
+}
+
+export type OutlookNoteKind =
+  | 'rain-likely' | 'rain-possible'
+  | 'snow-likely'
+  | 'storm-likely' | 'storm-possible'
+  | 'drying' | 'clearing' | 'clouding' | 'warmer' | 'cooler';
+
+export interface OutlookNote {
+  // What the note is about, without its timing: an unchanged list of kinds is
+  // nothing new to say, however many hours away the rain has moved.
+  kind: OutlookNoteKind;
+  text: string;
+}
+
+export interface OutlookCurrent {
+  condition: string;
+  temp: number | null;
+  tempUnit?: string | null;
+}
+
+export function outlookEvents(current: OutlookCurrent, outlook: OutlookHour[]): OutlookNote[] {
   if (outlook.length === 0) return [];
 
-  const notes: string[] = [];
+  const notes: OutlookNote[] = [];
+  const unit: 'C' | 'F' = current.tempUnit === 'F' ? 'F' : 'C';
 
-  // 1. Rain coming (current not wet)
+  // 1. Precipitation coming (current not wet). A row qualifies when its code is
+  //    wet, or its chance clears LIKELY_PCT (Open-Meteo's chance covers snow too,
+  //    so such a row is named by its own condition, never called rain). Snow
+  //    while it is already snowing is not news.
   if (!isWet(current.condition)) {
-    const wetRow = outlook.find(
-      r => isWet(r.condition) || (r.rainChancePct !== null && r.rainChancePct >= 50),
-    );
-    if (wetRow) {
-      const base = wetRow.condition === 'stormy'
-        ? `thunderstorms possible in about ${hoursLabel(wetRow.inHours)}`
-        : `rain likely in about ${hoursLabel(wetRow.inHours)}`;
-      notes.push(
-        wetRow.rainChancePct !== null
-          ? `${base} (${wetRow.rainChancePct}% chance)`
-          : base,
-      );
+    const row = outlook.find(r => (isWet(r.condition) || isLikely(r))
+      && !(r.condition === 'snowy' && current.condition === 'snowy'));
+    if (row) {
+      const likely = isLikely(row);
+      const chance = likely ? ` (${row.rainChancePct}% chance)` : '';
+      if (row.condition === 'stormy') {
+        notes.push({
+          kind: likely ? 'storm-likely' : 'storm-possible',
+          text: `thunderstorms ${likely ? 'likely' : 'possible'} ${when(row.inHours)}${chance}`,
+        });
+      } else if (likely) {
+        const snow = row.condition === 'snowy';
+        notes.push({
+          kind: snow ? 'snow-likely' : 'rain-likely',
+          text: `${snow ? 'snow' : 'rain'} likely ${when(row.inHours)}${chance}`,
+        });
+      } else {
+        // Wet by code with a low or unknown chance: the forecast's own wording,
+        // as a possibility, with no percentage.
+        notes.push({
+          kind: 'rain-possible',
+          text: `${row.conditions ?? 'rain'} possible ${when(row.inHours)}`,
+        });
+      }
     }
   }
 
@@ -142,34 +204,40 @@ export function outlookNotes(
     const dryRow = outlook.find(
       r => !isWet(r.condition) && (r.rainChancePct === null || r.rainChancePct < 30),
     );
-    if (dryRow) {
-      notes.push(`drying out in about ${hoursLabel(dryRow.inHours)}`);
-    }
+    if (dryRow) notes.push({ kind: 'drying', text: `drying out ${when(dryRow.inHours)}` });
   }
 
-  // 3. Sky change (current not wet AND no rain note produced)
-  const rainNoteProduced = notes.length > 0;
-  if (!isWet(current.condition) && !rainNoteProduced) {
+  // 3. Sky change (current not wet AND no precipitation note produced)
+  const precipNoteProduced = notes.length > 0;
+  if (!isWet(current.condition) && !precipNoteProduced) {
     if ((current.condition === 'cloudy' || current.condition === 'foggy')) {
       const clearRow = outlook.find(r => r.condition === 'clear');
-      if (clearRow) notes.push(`clearing in about ${hoursLabel(clearRow.inHours)}`);
+      if (clearRow) notes.push({ kind: 'clearing', text: `clearing ${when(clearRow.inHours)}` });
     } else if (current.condition === 'clear') {
       const cloudRow = outlook.find(r => r.condition === 'cloudy');
-      if (cloudRow) notes.push(`clouding over in about ${hoursLabel(cloudRow.inHours)}`);
+      if (cloudRow) notes.push({ kind: 'clouding', text: `clouding over ${when(cloudRow.inHours)}` });
     }
   }
 
-  // 4. Temperature
+  // 4. Temperature, in the reading's own unit
   if (current.temp !== null) {
     const last = outlook[outlook.length - 1];
     if (last.temp !== null) {
       const diff = last.temp - current.temp;
-      if (Math.abs(diff) >= 3) {
+      if (Math.abs(diff) >= swingThreshold(unit)) {
         const dir = diff < 0 ? 'down to' : 'up to';
-        notes.push(`${dir} ${last.temp} degrees in about ${hoursLabel(last.inHours)}`);
+        const unitWord = unit === 'F' ? 'Fahrenheit' : 'Celsius';
+        notes.push({
+          kind: diff < 0 ? 'cooler' : 'warmer',
+          text: `${dir} ${last.temp} degrees ${unitWord} ${when(last.inHours)}`,
+        });
       }
     }
   }
 
   return notes;
+}
+
+export function outlookNotes(current: OutlookCurrent, outlook: OutlookHour[]): string[] {
+  return outlookEvents(current, outlook).map(n => n.text);
 }

@@ -30,6 +30,7 @@ import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
 import * as sfx from '../broadcast/sfx.js';
+import { getWeatherOutlook } from '../context.js';
 
 // dataBlock lives in llm/segment-tools.js so the co-hosted pool path can share
 // it without an import cycle; re-exported here for llm-bench's existing path.
@@ -174,6 +175,9 @@ interface SegmentState {
   // kind so two feed skills can't suppress each other's items.
   feedSeen: Map<string, Set<string>>;
   lastWeatherCondition: string | null;
+  // The outlook's note kinds at the last weather segment, comma-joined (the
+  // weather tool's outlookChangedSinceLastMention).
+  lastWeatherOutlook: string | null;
   lastSearchedArtist: string | null;
   lastAnySegment: number;
 }
@@ -182,9 +186,18 @@ const segmentState: SegmentState = {
   seenHeadlines: new Set<string>(),
   feedSeen: new Map<string, Set<string>>(),
   lastWeatherCondition: null,
+  lastWeatherOutlook: null,
   lastSearchedArtist: null,
   lastAnySegment: 0,
 };
+
+// A weather segment found an air path: what it was given is now said. One
+// place for the four air paths below.
+function rememberWeatherAired(ctx) {
+  if (!ctx.weather?.condition) return;
+  segmentState.lastWeatherCondition = ctx.weather.condition;
+  segmentState.lastWeatherOutlook = getWeatherOutlook().kinds.join(',');
+}
 
 // Minimum gap between ANY two segments, by station frequency. Infinity for
 // silent: the auto tick never airs (forced runs bypass this).
@@ -536,7 +549,7 @@ export async function agenticTick(ctx) {
       if (!aired) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
       lastFired.set(exchange.kind, Date.now());
       segmentState.lastAnySegment = Date.now();
-      if (exchange.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
+      if (exchange.kind === 'weather') rememberWeatherAired(ctx);
       if (exchange.kind === 'curiosity') recordCuriosity(exchange.lines.map((line) => line.text).join(' '), { aired: true });
       return;
     }
@@ -584,9 +597,7 @@ export async function agenticTick(ctx) {
     // generated twice. Durable "aired" facts wait for the voice lifecycle.
     lastFired.set(seg.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
-    if (seg.kind === 'weather' && ctx.weather?.condition) {
-      segmentState.lastWeatherCondition = ctx.weather.condition;
-    }
+    if (seg.kind === 'weather') rememberWeatherAired(ctx);
 
     // Record what aired so the durable ledger keeps both the tool and the
     // fallback path from repeating it after a restart (#577).
@@ -757,7 +768,7 @@ export async function runCapability(
     if (!aired) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
     lastFired.set(cap.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
-    if (cap.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
+    if (cap.kind === 'weather') rememberWeatherAired(ctx);
     if (cap.kind === 'curiosity') recordCuriosity(result.lines.map((line) => line.text).join(' '), { aired: true });
     const text = result.lines.map((line) => `${line.persona.name || 'DJ'}: ${line.text}`).join('\n');
     return { aired: true, queued: true, deferred: false, text, reason: result.reason };
@@ -871,9 +882,7 @@ export async function runCapability(
   // waits for actual post-air completion.
   lastFired.set(cap.kind, Date.now());
   segmentState.lastAnySegment = Date.now();
-  if (cap.kind === 'weather' && ctx.weather?.condition) {
-    segmentState.lastWeatherCondition = ctx.weather.condition;
-  }
+  if (cap.kind === 'weather') rememberWeatherAired(ctx);
 
   // Record an operator-fired curiosity line in the ledger too (#577).
   if (cap.kind === 'curiosity') {

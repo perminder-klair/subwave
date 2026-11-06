@@ -9,6 +9,7 @@ import {
   conditionForCode,
   describeCode,
   buildOutlook,
+  outlookEvents,
   outlookNotes,
   type HourlyForecast,
   type OutlookHour,
@@ -101,6 +102,23 @@ describe('buildOutlook', () => {
     assert.equal(rows[1].inHours, 2);
   });
 
+  // current.time moves in 15-minute steps: at :45 the first row is 15 minutes
+  // out. Six rows by count covered only ~5¼ hours; by distance it is 0..6.
+  it('covers six hours from a reading at :45, the first row within the hour', () => {
+    const rows = buildOutlook(hourly, '2026-10-30T23:45');
+    assert.deepEqual(rows.map(r => r.inHours), [0, 1, 2, 3, 4, 5, 6]);
+  });
+
+  it('ages a cached forecast: rows move closer and passed ones drop out', () => {
+    const fresh = buildOutlook(hourly, '2026-10-31T00:15');
+    const aged = buildOutlook(hourly, '2026-10-31T00:15', 6, 50 * 60_000);
+    assert.equal(fresh[0].conditions, 'partly cloudy');
+    assert.deepEqual(fresh.map(r => r.inHours), [1, 2, 3, 4, 5, 6]);
+    // 01:05 now: 01:00 has passed, 02:00 is an hour away.
+    assert.equal(aged[0].conditions, 'overcast');
+    assert.deepEqual(aged.map(r => r.inHours), [1, 2, 3, 4, 5, 6]);
+  });
+
   it('returns [] for null hourly', () => {
     assert.deepEqual(buildOutlook(null, '2026-10-31T00:15'), []);
   });
@@ -138,7 +156,71 @@ describe('outlookNotes', () => {
     const notes = outlookNotes({ condition: 'clear', temp: 17 }, rows);
     assert.deepEqual(notes, [
       'rain likely in about 3 hours (70% chance)',
-      'down to 14 degrees in about 6 hours',
+      'down to 14 degrees Celsius in about 6 hours',
+    ]);
+  });
+
+  // Today's Open-Meteo reply for London at review time: overcast now, light
+  // drizzle in the last rows at a 5-8% chance. "rain likely (5% chance)"
+  // contradicted itself on air.
+  it('calls a wet row with a low chance possible, in its own wording, with no percentage', () => {
+    const london: HourlyForecast = {
+      time: ['2026-11-05T10:00', '2026-11-05T11:00', '2026-11-05T12:00', '2026-11-05T13:00',
+        '2026-11-05T14:00', '2026-11-05T15:00', '2026-11-05T16:00', '2026-11-05T17:00'],
+      temperature_2m: [11, 11, 11, 11, 11, 11, 11, 11],
+      weather_code: [3, 3, 3, 3, 3, 3, 51, 51],
+      precipitation_probability: [0, 0, 0, 0, 1, 2, 5, 8],
+    };
+    const rows = buildOutlook(london, '2026-11-05T10:45');
+    assert.deepEqual(outlookNotes({ condition: 'cloudy', temp: 11 }, rows), [
+      'light drizzle possible in about 5 hours',
+    ]);
+    assert.deepEqual(outlookEvents({ condition: 'cloudy', temp: 11 }, rows).map(e => e.kind), ['rain-possible']);
+  });
+
+  it('says likely, with the chance, only at 50% or more', () => {
+    const at = (pct: number | null): OutlookHour[] => [
+      { inHours: 2, condition: 'rainy', conditions: 'light rain', temp: 12, rainChancePct: pct },
+    ];
+    assert.deepEqual(outlookNotes({ condition: 'cloudy', temp: 12 }, at(49)), ['light rain possible in about 2 hours']);
+    assert.deepEqual(outlookNotes({ condition: 'cloudy', temp: 12 }, at(null)), ['light rain possible in about 2 hours']);
+    assert.deepEqual(outlookNotes({ condition: 'cloudy', temp: 12 }, at(50)), ['rain likely in about 2 hours (50% chance)']);
+  });
+
+  it('names a likely snow row snow, and is silent about snow while it snows', () => {
+    const rows: OutlookHour[] = [
+      { inHours: 2, condition: 'snowy', conditions: 'light snow', temp: -1, rainChancePct: 80 },
+    ];
+    assert.deepEqual(outlookNotes({ condition: 'cloudy', temp: -1 }, rows), ['snow likely in about 2 hours (80% chance)']);
+    assert.deepEqual(outlookNotes({ condition: 'snowy', temp: -1 }, rows), []);
+  });
+
+  it('says likely thunderstorms only with a high chance', () => {
+    const rows: OutlookHour[] = [
+      { inHours: 4, condition: 'stormy', conditions: 'thunderstorm', temp: 22, rainChancePct: 75 },
+    ];
+    assert.deepEqual(outlookNotes({ condition: 'clear', temp: 22 }, rows), [
+      'thunderstorms likely in about 4 hours (75% chance)',
+    ]);
+  });
+
+  it('says within the hour for a row less than half an hour away', () => {
+    const rows: OutlookHour[] = [
+      { inHours: 0, condition: 'rainy', conditions: 'rain', temp: 12, rainChancePct: 90 },
+    ];
+    assert.deepEqual(outlookNotes({ condition: 'cloudy', temp: 12 }, rows), ['rain likely within the hour (90% chance)']);
+  });
+
+  it('names the unit, and needs a 5-degree swing in Fahrenheit', () => {
+    const rows = (t: number): OutlookHour[] => [
+      { inHours: 6, condition: 'clear', conditions: 'clear sky', temp: t, rainChancePct: 0 },
+    ];
+    assert.deepEqual(outlookNotes({ condition: 'clear', temp: 60, tempUnit: 'F' }, rows(56)), []);
+    assert.deepEqual(outlookNotes({ condition: 'clear', temp: 60, tempUnit: 'F' }, rows(55)), [
+      'down to 55 degrees Fahrenheit in about 6 hours',
+    ]);
+    assert.deepEqual(outlookNotes({ condition: 'clear', temp: 10, tempUnit: 'C' }, rows(13)), [
+      'up to 13 degrees Celsius in about 6 hours',
     ]);
   });
 

@@ -9,6 +9,8 @@
 //    call without services (an older custom copy) still answers.
 // 4. A high local-colour dial no longer invites weather the prompt doesn't
 //    carry (links, idents and handoffs get none, #471).
+// 5. The outlook is aged to the moment it is read, and the tool tells a
+//    standing note from a new one (outlookChangedSinceLastMention).
 //
 // Run: npm test -- weather-outlook
 import assert from 'node:assert/strict';
@@ -69,13 +71,39 @@ test('code 1 is clear, its wording rides along, and the public reading carries n
 test('the outlook comes from the same fetch, and never fetches on its own', async (t) => {
   invalidateWeatherCache();
   const urls = stubForecast(t);
-  assert.deepEqual(getWeatherOutlook(), { nextHours: [], notes: [] }, 'a cold cache is no outlook');
+  assert.deepEqual(getWeatherOutlook(), { nextHours: [], notes: [], kinds: [] }, 'a cold cache is no outlook');
   assert.equal(urls.length, 0, 'no fetch from the outlook');
   await getWeather();
   const o = getWeatherOutlook();
   assert.equal(urls.length, 1);
   assert.equal(o.nextHours.length, 6);
-  assert.deepEqual(o.notes, ['rain likely in about 3 hours (70% chance)', 'down to 14 degrees in about 6 hours']);
+  assert.deepEqual(o.notes, ['rain likely in about 3 hours (70% chance)', 'down to 14 degrees Celsius in about 6 hours']);
+});
+
+test('the outlook is aged to when it is read, and names its kinds', async (t) => {
+  invalidateWeatherCache();
+  stubForecast(t);
+  await getWeather();
+  const fresh = getWeatherOutlook();
+  assert.deepEqual(fresh.kinds, ['rain-likely', 'cooler']);
+  // 50 minutes after the fetch: the showers are two hours off, not three.
+  const later = getWeatherOutlook(Date.now() + 50 * 60_000);
+  assert.deepEqual(later.notes, ['rain likely in about 2 hours (70% chance)', 'down to 14 degrees Celsius in about 6 hours']);
+  assert.deepEqual(later.kinds, fresh.kinds);
+});
+
+test('a standing outlook is not news to the tool; a new one is', async (t) => {
+  invalidateWeatherCache();
+  stubForecast(t);
+  const weather = await getWeather();
+  const services = { weatherOutlook: getWeatherOutlook };
+  const first = await weatherTool.default({ weather }, { lastWeatherCondition: null, lastWeatherOutlook: null }, services);
+  assert.equal(first.outlookChangedSinceLastMention, true);
+  const standing = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: 'rain-likely,cooler' }, services);
+  assert.equal(standing.changedSinceLastMention, false);
+  assert.equal(standing.outlookChangedSinceLastMention, false);
+  const moved = await weatherTool.default({ weather }, { lastWeatherCondition: 'clear', lastWeatherOutlook: 'cooler' }, services);
+  assert.equal(moved.outlookChangedSinceLastMention, true);
 });
 
 test('the weather tool returns the conditions and the outlook; without services it still answers', async (t) => {
@@ -88,7 +116,7 @@ test('the weather tool returns the conditions and the outlook; without services 
   assert.equal(data.condition, 'clear');
   assert.equal(data.conditions, 'mainly clear');
   assert.equal(data.temp, 17);
-  assert.deepEqual(data.outlook, ['rain likely in about 3 hours (70% chance)', 'down to 14 degrees in about 6 hours']);
+  assert.deepEqual(data.outlook, ['rain likely in about 3 hours (70% chance)', 'down to 14 degrees Celsius in about 6 hours']);
   assert.equal(data.nextHours.length, 6);
 
   const bare = await weatherTool.default({ weather }, {});
