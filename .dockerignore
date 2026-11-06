@@ -17,3 +17,9 @@ state
 **/.env
 **/.env.*
 !**/.env.example
+
+# tts-bench writes a WAV per render under its reports/ by default (~30 MB a
+# run), and the dev stack bind-mounts controller/scripts, so a run there lands
+# in this build context and `COPY controller/scripts` would carry it into the
+# image. .gitignore keeps it out of git only.
+controller/scripts/tts-bench/reports

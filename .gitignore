@@ -47,6 +47,8 @@ scripts/.fx-render/
 
 # llm-bench reports (local benchmark artifacts)
 controller/scripts/llm-bench/reports/
+# tts-bench reports: report.json plus a WAV per render
+controller/scripts/tts-bench/reports/
 
 # design-sync (machine state — the durable set in .design-sync/ IS committed)
 .ds-sync/
