@@ -8,6 +8,7 @@
 // duration: the steer outranks them.
 import { steerClause, type Steer } from '../schemas/steer.js';
 import { echoesRequest } from '../util/request-guard.js';
+import { creditedActKeys, creditInRoots, type CandidateLike } from './recency.js';
 
 // The shape a pick path reads when a playlist is steered with no show on air.
 const NO_SHOW = {
@@ -75,6 +76,65 @@ export function openingTracksThatFit(
     startsInSec += sec;
   }
   return lengthsSec.length;
+}
+
+// How many places apart an opening list keeps one artist: the station's
+// `llm.artistVarietyWindow`, and never less than one, because a live pick never
+// follows its own artist while another fits (the pick-anchor guard holds with
+// the window at 0), and nor does an opening track.
+export function openingArtistSpan(window: number | null | undefined): number {
+  const n = Math.floor(Number(window));
+  return Number.isFinite(n) && n > 1 ? n : 1;
+}
+
+// Artist spacing among a steer's opening tracks, at the point of choice. One
+// model call lays out the whole list, so no per-pick guard ever sees one
+// opening track follow another: this walks the list in the model's order and
+// holds back a track whose act was heard within `span` places before it, among
+// the tracks already kept. Acts match as the live guard matches them
+// (recency.creditedActKeys), and an untagged track is never held. The tracks
+// the list follows on air are the pool's business (its neighbour window).
+//
+// Never-starve, said out loud: a track is held only while `pool` (what the
+// model was offered) still holds one the spacing allows. When nothing in it is
+// by another act, the window narrows to back to back, and then lets the repeat
+// through, as a live pick's spacing relaxes when no candidate survives it;
+// `relaxed` says so, for the operator. The first track always stays.
+export function spaceOpeningList<T extends CandidateLike>(
+  picks: readonly T[],
+  pool: readonly T[],
+  span: number,
+): { picks: T[]; held: T[]; relaxed: boolean } {
+  const kept: T[] = [];
+  const held: T[] = [];
+  let relaxed = false;
+  const same = (a: T, b: T) => a === b || (a.id != null && a.id === b.id);
+  const rootsBefore = (n: number) => new Set(kept.slice(-n).flatMap(song => creditedActKeys(song)));
+  const keepsSpacing = (song: T, roots: Set<string>) => !creditInRoots(song, roots);
+  for (const song of picks) {
+    let decided: 'keep' | 'hold' | null = null;
+    for (const n of span > 1 ? [span, 1] : [1]) {
+      const roots = rootsBefore(n);
+      if (keepsSpacing(song, roots)) {
+        if (n < span) relaxed = true;
+        decided = 'keep';
+        break;
+      }
+      // The model's choice, not the library's limit: something else it was
+      // offered would have kept this spacing.
+      if (pool.some(other => !same(other, song) && !kept.some(k => same(k, other)) && keepsSpacing(other, roots))) {
+        decided = 'hold';
+        break;
+      }
+    }
+    if (decided === 'hold') {
+      held.push(song);
+    } else {
+      if (decided === null) relaxed = true;
+      kept.push(song);
+    }
+  }
+  return { picks: kept, held, relaxed };
 }
 
 // The steer's introduction may say where the music is heading in the host's

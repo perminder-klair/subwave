@@ -134,10 +134,12 @@ ${instruction('pool-picker', 'source-tags')}
 ${instruction('pool-picker', 'recent-plays')}`;
 }
 
-export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [], steer = null, count = 1 }: {
+export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [], steer = null, count = 1, artistSpan = 1 }: {
   candidates: any[];
   /** More than one asks for an ordered opening list (`ids`) instead of one pick. */
   count?: number;
+  /** An opening list's artist spacing in places (music/steer.ts openingArtistSpan). */
+  artistSpan?: number;
   /** The operator's steer text in force for this pick, or null. */
   steer?: string | null;
   recentPlays: any;
@@ -200,7 +202,7 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   // (those tracks are queued as plain picks).
   if (count > 1) {
     return djObject({
-      system: `${pickerSystem(show, steer)}\n\n${instruction('pool-picker', 'preview', { count })}`,
+      system: `${pickerSystem(show, steer)}\n\n${instruction('pool-picker', 'preview', { count, span: artistSpan })}`,
       prompt: user,
       schema: z.object({
         // No `.max(count)`: a model that lists one too many should be trimmed

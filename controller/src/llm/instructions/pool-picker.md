@@ -51,4 +51,5 @@ Current show brief — follow this for every pick:
 This time you are laying out the opening of a set, not one pick. List up to
 {count} candidates in the order they should play, the first of them following
 the expected predecessor and each one following the one before it. Use each
-candidate once.
+candidate once, and never repeat an artist within {span} places of its last
+appearance unless no candidate by another artist fits.

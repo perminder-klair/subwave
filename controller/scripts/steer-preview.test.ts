@@ -583,3 +583,59 @@ test('during a takeover the opening list is worked out for the grid, which Start
     await settings.update({ scheduleOverride: null, shows: [] } as never);
   }
 });
+
+// Artist spacing among the list's own tracks (music/steer.ts spaceOpeningList).
+const artistOf = (id: string) => songs.find(s => s.id === id)?.artist;
+async function withArtists(names: Record<number, string>, run: () => Promise<void>) {
+  const saved = songs.map(s => s.artist);
+  for (const [i, name] of Object.entries(names)) songs[Number(i)].artist = name;
+  try {
+    await run();
+  } finally {
+    songs.forEach((s, i) => { s.artist = saved[i]; });
+  }
+}
+
+test('the opening list never repeats an artist inside the window while the pool offers another, and Start queues it so', async () => {
+  const good = answer;
+  // The model lists one act's tracks first, back to back.
+  answer = (ids, wantsList) => (wantsList
+    ? { ids: [...ids].sort((a, b) => Number(artistOf(b) === 'Same Act') - Number(artistOf(a) === 'Same Act')), reason: 'a set' }
+    : good(ids, wantsList));
+  try {
+    await withArtists({ 0: 'Same Act', 1: 'Same Act', 2: 'Same Act' }, async () => {
+      const preview = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 60 });
+      assert.equal(preview.status, 200);
+      const offered = lastPayload.candidates.map((c: any) => artistOf(c.id));
+      assert.ok(offered.filter((a: string) => a === 'Same Act').length >= 2 && offered.some((a: string) => a !== 'Same Act'),
+        `fixture pool cannot show spacing: ${offered.join(', ')}`);
+      assert.match(lastSystem, /never repeat an artist within 5 places/, 'the rule is stated where the list is chosen');
+      const artists = preview.body.picks.map((p: any) => p.artist);
+      assert.equal(artists[0], 'Same Act', 'the model\'s first choice stands');
+      assert.equal(artists.filter((a: string) => a === 'Same Act').length, 1, 'its repeats are held for the rest of the window');
+      assert.deepEqual(preview.body.warnings, [], 'nothing gave way, so nothing to say');
+
+      const start = await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 60 });
+      assert.equal(start.status, 200);
+      assert.equal(modelCalls, 1);
+      assert.deepEqual(start.body.tracks, preview.body.picks);
+      const queued = queue.upcoming.map(i => i.track.artist);
+      queued.forEach((a, i) => assert.ok(i === 0 || a !== queued[i - 1], `back to back: ${queued.join(', ')}`));
+    });
+  } finally {
+    answer = good;
+  }
+});
+
+test('when every eligible track is by one artist the list keeps them back to back, and the operator is told', async () => {
+  await withArtists(Object.fromEntries(songs.map((_, i) => [i, 'Only Act'])), async () => {
+    const preview = await call('POST', '/steer/preview', { prompt: 'more upbeat pop', minutes: 60 });
+    assert.equal(preview.status, 200);
+    assert.ok(preview.body.picks.length >= 2, 'never shortened to nothing: the music has to come from somewhere');
+    assert.ok(preview.body.picks.every((p: any) => p.artist === 'Only Act'));
+    assert.equal(preview.body.warnings.length, 1);
+    assert.match(preview.body.warnings[0], /too few artists are eligible under this steer/);
+    const start = await call('POST', '/steer', { prompt: 'more upbeat pop', minutes: 60 });
+    assert.match(start.body.warnings.join('\n'), /too few artists are eligible under this steer/);
+  });
+});

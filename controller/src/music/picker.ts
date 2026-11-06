@@ -24,7 +24,7 @@ import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, prefe
 import { explicitGate } from './explicit-policy.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import { allowsMoodPlaylistDiscovery } from './discovery-policy.js';
-import { episodeUnderSteer, steeredShow } from './steer.js';
+import { episodeUnderSteer, openingArtistSpan, spaceOpeningList, steeredShow } from './steer.js';
 import type { Steer } from '../schemas/steer.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
@@ -802,6 +802,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     // Same show-brief plumbing as the agent picker, whose fallback this is.
     pickRaw = await dj.pickNextTrack({
       count: preview?.count ?? 1,
+      artistSpan: openingArtistSpan(varietyWindow),
       steer: steer?.prompt || null,
       show: activeShow
         ? {
@@ -893,7 +894,14 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const inPlaylist = steer?.playlistId && playlistPool ? picks.filter(song => playlistPool.ids.has(song.id)) : picks;
     if (picks.length && !inPlaylist.length) throw new Error('nothing in the playlist is eligible right now');
     if (!inPlaylist.length) throw new Error('the model named no track from the pool');
-    return { picks: inPlaylist, pool: candidates.length };
+    // One call chose the whole list, so its own tracks are spaced here, against
+    // what the same pool offered (music/steer.ts). An artist episode is one
+    // artist by design, and a live pick spaces nothing inside it either.
+    const offered = steer?.playlistId && playlistPool ? candidates.filter(song => !!song.id && playlistPool.ids.has(song.id)) : candidates;
+    const spaced = episodeSource
+      ? { picks: inPlaylist, held: [], relaxed: false }
+      : spaceOpeningList(inPlaylist, offered, openingArtistSpan(varietyWindow));
+    return { picks: spaced.picks, pool: candidates.length, held: spaced.held.length, spacingRelaxed: spaced.relaxed };
   }
 
   let chosen = candidates.find(c => c.id === pickRaw?.id);

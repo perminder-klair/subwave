@@ -51,22 +51,24 @@ class SteerRefused extends Error {
 // The last opening list worked out, by what it was worked out FOR. Preview
 // fills it; Start uses it and then drops it. The pool is a fresh sample on
 // every call, so an entry a few minutes old is no worse a plan than a new one.
-let memo: { key: string; at: number; picks: any[]; pool: number } | null = null;
+let memo: { key: string; at: number; picks: any[]; pool: number; held: number; spacingRelaxed: boolean } | null = null;
 
 /** Test seam: forget the remembered opening list. */
 export function forgetOpeningList(): void {
   memo = null;
 }
 
+type OpeningList = { picks: any[]; pool: number; held: number; spacingRelaxed: boolean; cached: boolean; at: number };
+
 // The opening tracks for a steer: remembered ones when they were worked out
 // for the same request, else one pool-picker call.
-async function openingList(steer: Steer, once: boolean): Promise<{ picks: any[]; pool: number; cached: boolean; at: number }> {
+async function openingList(steer: Steer, once: boolean): Promise<OpeningList> {
   const count = once ? 1 : STEER_OPENING_TRACKS;
   const key = steerPreviewKey(steer.playlistId, steer.prompt, once);
   if (memo && memo.key === key && Date.now() - memo.at < STEER_PREVIEW_MS) {
-    return { picks: memo.picks, pool: memo.pool, cached: true, at: memo.at };
+    return { picks: memo.picks, pool: memo.pool, held: memo.held, spacingRelaxed: memo.spacingRelaxed, cached: true, at: memo.at };
   }
-  let result: { picks: any[]; pool: number } | null;
+  let result: { picks: any[]; pool: number; held?: number; spacingRelaxed?: boolean } | null;
   try {
     // Starting a steer ends a takeover, so its tracks are chosen for the moment
     // as the grid has it: the grid's show and mood, and none of the outgoing
@@ -78,9 +80,17 @@ async function openingList(steer: Steer, once: boolean): Promise<{ picks: any[];
     throw new SteerRefused(502, `could not work out the opening tracks: ${err?.message || err}`);
   }
   if (!result?.picks?.length) throw new SteerRefused(409, 'nothing in the library is eligible under this steer right now');
-  memo = { key, at: Date.now(), picks: result.picks, pool: result.pool };
-  return { picks: result.picks, pool: result.pool, cached: false, at: memo.at };
+  memo = { key, at: Date.now(), picks: result.picks, pool: result.pool, held: result.held ?? 0, spacingRelaxed: !!result.spacingRelaxed };
+  return { ...memo, cached: false };
 }
+
+// The opening list keeps the station's artist spacing among its own tracks,
+// and gives way only when nothing it could play is by another artist
+// (music/steer.ts spaceOpeningList). The operator is told when it gave way.
+const SPACING_RELAXED = 'too few artists are eligible under this steer to keep them apart, so its opening tracks repeat an artist sooner than the station usually would';
+const openingWarnings = (opening: OpeningList): string[] => (opening.spacingRelaxed ? [SPACING_RELAXED] : []);
+const spacingNote = (opening: OpeningList): string =>
+  opening.spacingRelaxed ? ' (artist spacing relaxed: too few artists eligible)' : opening.held ? ` (${opening.held} held back for artist spacing)` : '';
 
 const brief = (song: any) => ({ id: song.id, title: song.title, artist: song.artist });
 
@@ -227,7 +237,7 @@ router.post('/steer/preview', requireAdmin, validateBody(steerRequestSchema), as
     if (timing) refuseWithoutRoom(timing, body.startNow);
     const opening = await openingList(steer, once);
     const fit = timing ? openingTracksThatFit(opening.picks.map(lengthOf), timing.leadSec, timing.windowSec) : opening.picks.length;
-    res.json({ picks: opening.picks.map(brief), fit, pool: opening.pool, cached: opening.cached, at: opening.at, warnings });
+    res.json({ picks: opening.picks.map(brief), fit, pool: opening.pool, cached: opening.cached, at: opening.at, warnings: [...warnings, ...openingWarnings(opening)] });
   } catch (err: any) {
     refuse(res, err, 'POST /steer/preview');
   }
@@ -279,8 +289,8 @@ router.post('/steer', requireAdmin, validateBody(steerRequestSchema), (req, res)
     memo = null;
 
     const { tracks, skipped, unfit, drop } = queued;
-    queue.log('scheduler', `[steer] started for ${windowMinutes} min${untilSchedule ? ' (until the schedule changes)' : ''} via admin UI — ${tracks.length} opening track${tracks.length === 1 ? '' : 's'} queued${unfit ? `, ${unfit} more would start after it ends` : ''}`);
-    res.json({ steer, tracks, queued: tracks.length, skipped, unfit, cached: opening.cached, warnings, ...drop });
+    queue.log('scheduler', `[steer] started for ${windowMinutes} min${untilSchedule ? ' (until the schedule changes)' : ''} via admin UI — ${tracks.length} opening track${tracks.length === 1 ? '' : 's'} queued${unfit ? `, ${unfit} more would start after it ends` : ''}${spacingNote(opening)}`);
+    res.json({ steer, tracks, queued: tracks.length, skipped, unfit, cached: opening.cached, warnings: [...warnings, ...openingWarnings(opening)], ...drop });
   } catch (err: any) {
     refuse(res, err, 'POST /steer');
   }
