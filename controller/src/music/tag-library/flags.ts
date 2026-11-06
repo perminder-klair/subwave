@@ -6,6 +6,7 @@ import * as subsonic from '../subsonic.js';
 import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
 import { adoptAndPrune } from '../id-rotation.js';
+import { applyWalkForcedYear, eraWalkFields, libraryOwnerContext, loadEraOverrides, type EraOverride } from '../era-review.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
 import { loadNavidromeConfig } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
@@ -134,7 +135,17 @@ export async function walkNavidrome(
   // cleared together after the walk behind a mass hold. id -> the walked size
   // (the size signal) or null (the change-time signal).
   const candidates = new Map<string, number | null>();
+  // Operator era records, read ONCE before the loop: a decision replaces
+  // the walk's stored verdict for its album, a kind replaces the title's
+  // suggestion, and a one-year decision reaches tracks added since.
+  const rawDb = db.getDb();
+  const eraOverrides: Map<string, EraOverride> = rawDb ? loadEraOverrides(rawDb) : new Map();
+  // The library as it stood before this walk (its artist credits, its sorting
+  // folders), so a DJ's own compilation is never taken for a label's
+  // (album-kind.labelOwner).
+  const ownerCtx = rawDb ? libraryOwnerContext(rawDb, { fresh: true }) : undefined;
   for await (const song of subsonic.iterateAllSongs({ requireComplete: true })) {
+    const eraFields = eraWalkFields(song, eraOverrides, ownerCtx);
     const fileInfo = walkFileInfo(song);
     const fileReplaced = db.upsertTrackMeta(song.id, {
       title: song.title,
@@ -155,7 +166,12 @@ export async function walkNavidrome(
       //    trusted album — and keeps the track eligible for a lookup.
       originalYear: informativeAlbumYear(song),
       isCompilation: song.albumIsCompilation ?? null,
-      eraUntrusted: song.albumEraUntrusted ?? null,
+      eraUntrusted: eraFields.eraUntrusted,
+      // Why the walk flagged it (audit truth — never rewritten by an
+      // override), and the album artist the override key folds on.
+      eraReason: eraFields.eraReason,
+      albumKind: eraFields.albumKind,
+      albumArtist: eraFields.albumArtist,
       genres: subsonic.songGenres(song),
       duration: song.duration,
       // Always a value: null is how a walk clears a tag that has gone, so a
@@ -164,6 +180,10 @@ export async function walkNavidrome(
       ...fileInfo,
     });
     if (fileReplaced) candidates.set(song.id, fileInfo.fileSize);
+    // A one-year decision (Library → Era) on this album: a track that arrived
+    // after it, or lost its year, gets it as its manual year. A track that
+    // already holds a manual year keeps it (the operator set that one).
+    applyWalkForcedYear(song.id, eraFields.forcedYear);
     liveIds.add(song.id);
     if (song.albumEraUntrusted && song.albumEraReason) {
       eraReasons.set(song.albumEraReason, (eraReasons.get(song.albumEraReason) ?? 0) + 1);

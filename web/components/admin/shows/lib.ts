@@ -45,6 +45,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     playlistInOrder: m.playlistInOrder ?? false,
     excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
     excludeExplicit: m.excludeExplicit ?? false,
+    excludedAlbumKinds: Array.isArray(m.excludedAlbumKinds) ? m.excludedAlbumKinds : [],
     programme: m.programme ?? false,
     segmentSkill: m.segmentSkill ?? '',
     preparationSkill: m.preparationSkill ?? '',
@@ -125,6 +126,7 @@ export function showPayload(s: Show) {
     excludedPlaylistIds: s.excludedPlaylistIds || [],
     // No conditional: unlike Strict it needs no other filter to act on.
     excludeExplicit: s.excludeExplicit === true,
+    excludedAlbumKinds: s.excludedAlbumKinds || [],
     programme: s.programme ?? false,
     // A skill pin only means something in programme mode.
     segmentSkill: s.programme ? (s.segmentSkill || '') : '',
@@ -160,6 +162,8 @@ export function showFacets(s: Show): ShowFacet[] {
   const nEx = s.excludedPlaylistIds?.length ?? 0;
   if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
   if (s.excludeExplicit) facets.push({ key: 'clean', label: 'clean', accent: true });
+  const nKinds = s.excludedAlbumKinds?.length ?? 0;
+  if (nKinds) facets.push({ key: 'excluded-kinds', label: nKinds === 1 && s.excludedAlbumKinds[0] === 'dj-mix' ? 'no DJ mixes' : `${nKinds} album kind${nKinds > 1 ? 's' : ''} left out` });
   if (s.maxTrackSeconds != null) {
     facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
   }

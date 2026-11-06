@@ -12,6 +12,7 @@ import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
 import { keepStoredTags } from '../lastfm-tag-policy.js';
+import { eraSuspectSql, storedYearUntrusted } from '../era-suspect.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 import { acceptedAt, fileReplaced } from '../replaced-file-policy.js';
 import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
@@ -73,9 +74,7 @@ export function getTrackLite(id: string): TrackLite | null {
     originalYear: row.original_year ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
     // Same composition as rowToTrack; era consumers read this, not the raw flag.
-    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
-      ? true
-      : (row.is_compilation == null && row.era_untrusted == null ? null : false),
+    yearUntrusted: storedYearUntrusted(row.is_compilation, row.era_untrusted),
     durationSec: row.duration_sec ?? null,
     // Edge dead air: an auto-playlist play has no queue item carrying the
     // stamped cue points, so /now-playing resolves the trim from the row.
@@ -97,10 +96,8 @@ export function getAlbumFacts(id: string): { isCompilation: boolean | null; year
   if (!row) return null;
   return {
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
-    // Same composition as rowToTrack/getTrackLite: OR, not COALESCE.
-    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
-      ? true
-      : (row.is_compilation == null && row.era_untrusted == null ? null : false),
+    // Same composition as rowToTrack/getTrackLite.
+    yearUntrusted: storedYearUntrusted(row.is_compilation, row.era_untrusted),
   };
 }
 
@@ -141,7 +138,7 @@ function storedEra(id: string): StoredEra | null {
 }
 
 function resolvedStoredEra(row: StoredEra): number | null {
-  const untrusted = row.is_compilation === 1 || row.era_untrusted === 1;
+  const untrusted = storedYearUntrusted(row.is_compilation, row.era_untrusted) === true;
   return resolveEraYear(row.year, row.original_year, untrusted);
 }
 
@@ -371,9 +368,9 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec,
+      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, era_reason, album_kind, album_artist, genres, duration_sec,
                           file_path, file_suffix, file_size, bit_rate, explicit_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -406,6 +403,19 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
         END,
         is_compilation = COALESCE(excluded.is_compilation, tracks.is_compilation),
         era_untrusted  = COALESCE(excluded.era_untrusted, tracks.era_untrusted),
+        -- Era review: the reason travels WITH the verdict. A writer that
+        -- passes a verdict (the walk) writes its reason too, NULL included, so
+        -- an album the detector no longer flags drops its old reason; a writer
+        -- without a verdict keeps both. NULL reason on a walked row = the walk
+        -- found nothing, which is what a Reset restores (era-review.ts).
+        era_reason     = CASE WHEN excluded.era_untrusted IS NULL THEN tracks.era_reason
+                              ELSE excluded.era_reason END,
+        -- The album's effective kind (era-review.eraWalkFields) rides the
+        -- verdict the same way, so an album that stops being flagged and has
+        -- no operator kind drops out of every show's excludedAlbumKinds.
+        album_kind     = CASE WHEN excluded.era_untrusted IS NULL THEN tracks.album_kind
+                              ELSE excluded.album_kind END,
+        album_artist   = COALESCE(excluded.album_artist, tracks.album_artist),
         genres       = COALESCE(excluded.genres, tracks.genres),
         duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
         -- File facts: only the library walks pass them; any other writer passes NULL.
@@ -430,6 +440,9 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
       normaliseYear(meta.originalYear) != null ? 'album-tag' : null,
       meta.isCompilation == null ? null : meta.isCompilation ? 1 : 0,
       meta.eraUntrusted == null ? null : meta.eraUntrusted ? 1 : 0,
+      meta.eraReason ?? null,
+      meta.albumKind ?? null,
+      meta.albumArtist ?? null,
       meta.genres?.length ? JSON.stringify(meta.genres) : null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
       file.filePath,
@@ -455,7 +468,7 @@ export function idsNeedingOriginalYear(retryMisses = false): string[] {
         // Era-suspect, not just flagged. SQL twin of
         // musicbrainz.needsOriginalYearLookup; the two must stay in agreement.
         `SELECT id FROM tracks
-          WHERE (is_compilation = 1 OR era_untrusted = 1)
+          WHERE ${eraSuspectSql()}
             AND original_year IS NULL ${extra}`,
       )
       .all() as Array<{ id: string }>
@@ -484,6 +497,17 @@ export function setOriginalYear(id: string, year: number | null): void {
 // sources. `year: null` REMOVES the override rather than pinning "unknown": the
 // track re-enters the automatic pipeline. The old embedding stays in the KNN
 // index marked dirty, so the next tag pass replaces its stale `Era:` line.
+/** Ids of every track whose album has one of these kinds (Library → Era), for
+ *  a show's excludedAlbumKinds. A plain scan: the set is small and it runs once
+ *  per pick, beside the excluded-playlist fetch it joins. */
+export function albumKindTrackIds(kinds: readonly string[]): Set<string> {
+  if (!kinds.length) return new Set();
+  const rows = requireDb()
+    .prepare(`SELECT id FROM tracks WHERE album_kind IN (${kinds.map(() => '?').join(',')})`)
+    .all(...kinds) as Array<{ id: string }>;
+  return new Set(rows.map(r => r.id));
+}
+
 export function setManualOriginalYear(id: string, year: number | null): void {
   const eraBefore = storedEra(id);
   if (year != null) {
@@ -1126,7 +1150,7 @@ export function upsertTrackVector(
           SET text_vector_dirty = CASE
             WHEN (CASE
               WHEN original_year > 0 THEN original_year
-              WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL
+              WHEN ${eraSuspectSql()} THEN NULL
               WHEN year > 0 THEN year
               ELSE NULL
             END) IS ? THEN 0 ELSE 1 END,

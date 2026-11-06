@@ -359,7 +359,7 @@ test('an id rotation carries labels and scores as one group', () => {
 
 test('a v34 database gains the columns, and a wound-back one survives', async () => {
   const raw = requireDb();
-  assert.equal(raw.pragma('user_version', { simple: true }), 37);
+  assert.equal(raw.pragma('user_version', { simple: true }), 38);
   raw.exec(`
     ALTER TABLE tracks DROP COLUMN audio_descriptors;
     ALTER TABLE tracks DROP COLUMN audio_descriptor_scores_json;
@@ -368,7 +368,7 @@ test('a v34 database gains the columns, and a wound-back one survives', async ()
   raw.pragma('user_version = 34');
   db.close();
   await db.open({ embeddingDim: db.getEmbeddingDim() ?? 8, adoptStoredDim: true });
-  assert.equal(requireDb().pragma('user_version', { simple: true }), 37);
+  assert.equal(requireDb().pragma('user_version', { simple: true }), 38);
   assert.equal(db.getAudioDescriptorVocabHash(), null);
   assert.equal(labelRow(idOf(0)).l, null);
   assert.deepEqual(db.getTrack(idOf(0))?.audioDescriptors, [], 'an unscored row reads as none');
@@ -376,7 +376,7 @@ test('a v34 database gains the columns, and a wound-back one survives', async ()
   requireDb().pragma('user_version = 34');
   db.close();
   await db.open({ embeddingDim: db.getEmbeddingDim() ?? 8, adoptStoredDim: true });
-  assert.equal(requireDb().pragma('user_version', { simple: true }), 37);
+  assert.equal(requireDb().pragma('user_version', { simple: true }), 38);
 
   await runAudioDescriptorPass();
   assert.equal(db.getAudioDescriptorVocabHash(), CURRENT);
