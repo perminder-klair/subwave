@@ -18,6 +18,7 @@ import { idleWindow, isIdle } from '../broadcast/stream-idle.js';
 import { currentStarve } from '../broadcast/music-starve.js';
 import { advertisedBufferSeconds } from '../broadcast/stream-mounts.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
+import { capStreamBitrates } from '../setup/hosted.js';
 import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
 import { composeBoothFeed } from '../broadcast/booth-carry.js';
 import { publicQueueState, publicSessionTurn } from '../util/public-feed.js';
@@ -280,9 +281,10 @@ router.get('/now-playing', async (req, res) => {
         // Operator surfaces (admin, MCP) intentionally keep live edge. The burst
         // the running mounts were rendered with, not a setting saved since (#2142).
         bufferSeconds: advertisedBufferSeconds(),
-        opusEnabled: stationSettings.stream?.opusEnabled === true,
-        flacEnabled: stationSettings.stream?.flacEnabled === true,
-        aacEnabled: stationSettings.stream?.aacEnabled === true,
+        // The mounts the mixer runs: under a hosted plan's bitrate ceiling
+        // FLAC (and AAC below its floor) is off whatever was saved, so a
+        // client is never offered a mount that isn't there.
+        ...advertisedMounts(stationSettings.stream),
       },
       // Aggregate only; the model/cost breakdown stays on admin-gated /stats.
       llmTokens: lifetimeTokenCount(),
@@ -296,20 +298,30 @@ router.get('/now-playing', async (req, res) => {
   }
 });
 
+// Which optional mounts the mixer runs, as /now-playing and the tune-in files
+// advertise them: the saved flags through the same hosted bitrate ceiling
+// settings/liquidsoap.ts applies (setup/hosted.ts capStreamBitrates), so a
+// mount the ceiling switched off is never offered. No ceiling: the saved flags.
+function advertisedMounts(stream: any): { opusEnabled: boolean; flacEnabled: boolean; aacEnabled: boolean } {
+  const m = stream && typeof stream === 'object' ? capStreamBitrates(stream) : {} as any;
+  return { opusEnabled: m.opusEnabled === true, flacEnabled: m.flacEnabled === true, aacEnabled: m.aacEnabled === true };
+}
+
 // One-paste tune-in files. The always-served MP3 floor comes first; optional
 // Opus / FLAC / AAC mounts are appended only when enabled.
 function listenMounts(req: express.Request) {
   const origin = publicOrigin(req);
   const s = settings.get();
   const station = s.station || 'SUB/WAVE';
+  const mounts = advertisedMounts(s.stream);
   const entries = [{ url: `${origin}/stream.mp3`, title: station }];
-  if (s.stream?.opusEnabled === true) {
+  if (mounts.opusEnabled) {
     entries.push({ url: `${origin}/stream.opus`, title: `${station} (Opus)` });
   }
-  if (s.stream?.flacEnabled === true) {
+  if (mounts.flacEnabled) {
     entries.push({ url: `${origin}/stream.flac`, title: `${station} (FLAC)` });
   }
-  if (s.stream?.aacEnabled === true) {
+  if (mounts.aacEnabled) {
     entries.push({ url: `${origin}/stream.aac`, title: `${station} (AAC)` });
   }
   return { station, entries };

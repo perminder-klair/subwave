@@ -10,6 +10,8 @@ import { STATE_DIR } from '../config.js';
 import { DEFAULTS } from './defaults.js';
 // Pure policy module — no settings import of its own, so this stays acyclic.
 import { mixerJingleRatioFile } from '../broadcast/jingle-rotate.js';
+// Hosted stations: the plan's bitrate ceiling (SUBWAVE_MAX_BITRATE).
+import { capStreamBitrates } from '../setup/hosted.js';
 
 export const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
 export const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
@@ -54,13 +56,16 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_EQUAL_POWER_CROSSFADE_PATH, String(s.transitions?.equalPowerCrossfade === true));
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
-  await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');
-  await writeFile(LIQ_OPUS_BITRATE_PATH, String(s.stream.opusBitrate));
-  await writeFile(LIQ_FLAC_ENABLED_PATH, s.stream.flacEnabled ? 'true' : 'false');
+  // The listener-facing mounts, under a hosted plan's bitrate ceiling. The
+  // archive is a local recording, not served to listeners, so it isn't capped.
+  const stream = capStreamBitrates(s.stream);
+  await writeFile(LIQ_OPUS_ENABLED_PATH, stream.opusEnabled ? 'true' : 'false');
+  await writeFile(LIQ_OPUS_BITRATE_PATH, String(stream.opusBitrate));
+  await writeFile(LIQ_FLAC_ENABLED_PATH, stream.flacEnabled ? 'true' : 'false');
   await writeFile(LIQ_OGG_ICY_METADATA_PATH, s.stream.oggIcyMetadata ? 'true' : 'false');
-  await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
-  await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
-  await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
+  await writeFile(LIQ_AAC_ENABLED_PATH, stream.aacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_AAC_BITRATE_PATH, String(stream.aacBitrate));
+  await writeFile(LIQ_STREAM_BITRATE_PATH, String(stream.bitrate));
   await writeFile(LIQ_STREAM_BUFFER_SECONDS_PATH, String(s.stream.bufferSeconds));
   await writeFile(LIQ_ICECAST_MAX_CLIENTS_PATH, String(s.stream.maxListeners));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);

@@ -36,7 +36,7 @@ const express = (await import('express')).default;
 const { router: onboarding } = await import('../src/routes/onboarding.js');
 const { router: settingsCore } = await import('../src/routes/settings/core.js');
 const settings = await import('../src/settings.js');
-const { hostedPersonaEngines, stripManagedSecrets, stripManagedSettings } = await import('../src/setup/hosted.js');
+const { capStreamBitrates, hostedMaxBitrate, hostedPersonaEngines, stripManagedSecrets, stripManagedSettings } = await import('../src/setup/hosted.js');
 const { installPersona } = await import('../src/personas/install.js');
 
 const app = express();
@@ -171,4 +171,33 @@ test('the listener ceiling is the plan\'s: a hosted save drops stream.maxListene
   const st = stored().stream;
   assert.equal(st.maxListeners, before);
   assert.equal(st.idleWhenEmpty, true);
+});
+
+test('the plan\'s bitrate ceiling caps every listener mount and switches FLAC off', () => {
+  const stream = { bitrate: 320, aacEnabled: true, aacBitrate: 256, opusEnabled: true, opusBitrate: 320, flacEnabled: true };
+  assert.deepEqual(capStreamBitrates(stream, 192),
+    { bitrate: 192, aacEnabled: true, aacBitrate: 192, opusEnabled: true, opusBitrate: 192, flacEnabled: false });
+  // 256: MP3 has no 256, so it lands on 192; AAC and Opus keep 256.
+  assert.deepEqual(capStreamBitrates(stream, 256),
+    { bitrate: 192, aacEnabled: true, aacBitrate: 256, opusEnabled: true, opusBitrate: 256, flacEnabled: false });
+  // Under AAC's lowest (128): AAC goes off rather than over the ceiling.
+  assert.equal(capStreamBitrates(stream, 96).aacEnabled, false);
+  assert.equal(capStreamBitrates(stream, 96).bitrate, 96);
+  // No ceiling: untouched.
+  assert.deepEqual(capStreamBitrates(stream, undefined), stream);
+});
+
+test('SUBWAVE_MAX_BITRATE is read only on a hosted station, and over-ceiling saves are dropped', async () => {
+  assert.equal(hostedMaxBitrate({ SUBWAVE_MAX_BITRATE: '192' }), undefined);
+  assert.equal(hostedMaxBitrate({ SUBWAVE_HOSTED: '1', SUBWAVE_MAX_BITRATE: '192' }), 192);
+  assert.equal(hostedMaxBitrate({ SUBWAVE_HOSTED: '1', SUBWAVE_MAX_BITRATE: 'fast' }), undefined);
+
+  process.env.SUBWAVE_MAX_BITRATE = '192';
+  try {
+    const { patch, dropped } = stripManagedSettings({ stream: { bitrate: 320, opusBitrate: 128, flacEnabled: true } });
+    assert.deepEqual(patch, { stream: { opusBitrate: 128 } });
+    assert.deepEqual(dropped.sort(), ['stream.bitrate', 'stream.flacEnabled']);
+  } finally {
+    delete process.env.SUBWAVE_MAX_BITRATE;
+  }
 });

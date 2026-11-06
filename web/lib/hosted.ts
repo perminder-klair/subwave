@@ -16,6 +16,9 @@ export interface HostedInfo {
   // The plan's concurrent-listener ceiling (SUBWAVE_LISTENER_CAP, set by the box
   // agent to the ICECAST_MAX_CLIENTS it gives the broadcast container).
   listenerCap?: number;
+  // The plan's stream bitrate ceiling in kbps (SUBWAVE_MAX_BITRATE). Bitrate
+  // pickers offer only values at or under it, and FLAC is unavailable.
+  maxBitrate?: number;
 }
 
 // The hosted info from this process's env. Only https URLs are passed
@@ -27,10 +30,15 @@ export function hostedFromEnv(env: Record<string, string | undefined>): HostedIn
     const n = Number((v || '').trim());
     return Number.isInteger(n) && n >= 1 && n <= 10000 ? n : undefined;
   };
+  const bitrate = (v?: string) => {
+    const n = cap(v);
+    return n !== undefined && n >= 32 ? n : undefined;
+  };
   return {
     hosted,
     ...(hosted && url(env.SUBWAVE_MUSIC_UPLOAD_URL) ? { musicUploadUrl: url(env.SUBWAVE_MUSIC_UPLOAD_URL) } : {}),
     ...(hosted && url(env.SUBWAVE_MUSIC_LIBRARY_URL) ? { musicLibraryUrl: url(env.SUBWAVE_MUSIC_LIBRARY_URL) } : {}),
     ...(hosted && cap(env.SUBWAVE_LISTENER_CAP) ? { listenerCap: cap(env.SUBWAVE_LISTENER_CAP) } : {}),
+    ...(hosted && bitrate(env.SUBWAVE_MAX_BITRATE) ? { maxBitrate: bitrate(env.SUBWAVE_MAX_BITRATE) } : {}),
   };
 }

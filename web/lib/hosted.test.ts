@@ -41,3 +41,11 @@ test('listener cap: a whole number from SUBWAVE_LISTENER_CAP, only when hosted',
     assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_LISTENER_CAP: bad }).listenerCap, undefined, bad);
   }
 });
+
+test('bitrate ceiling: whole kbps from SUBWAVE_MAX_BITRATE, only when hosted', () => {
+  assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_MAX_BITRATE: '192' }).maxBitrate, 192);
+  assert.equal(hostedFromEnv({ SUBWAVE_MAX_BITRATE: '192' }).maxBitrate, undefined);
+  for (const bad of ['', '16', '19.5', 'lots']) {
+    assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_MAX_BITRATE: bad }).maxBitrate, undefined, bad);
+  }
+});

@@ -120,8 +120,12 @@ const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 const JUMP_MAX_FRAMES = 60;
 
 export default function SettingsPanel({ djBrainEnabled = false, hosted = false }: { djBrainEnabled?: boolean; hosted?: boolean }) {
-  // Hosted: the plan's listener ceiling, shown instead of the editable field.
-  const { listenerCap } = useHosted();
+  // Hosted: the plan's listener ceiling, shown instead of the editable field,
+  // and its bitrate ceiling: the stream pickers offer only what the plan
+  // allows (the controller drops anything higher on save) and FLAC is off.
+  const { listenerCap, maxBitrate } = useHosted();
+  const underCeiling = (values: readonly number[]) => (maxBitrate ? values.filter(br => br <= maxBitrate) : values);
+  const ceilingHint = maxBitrate ? <> Up to {maxBitrate} kbps on this station&apos;s plan · Managed by SUB/WAVE Cloud.</> : null;
   // Hosted (SUB/WAVE Cloud): the LLM provider page is the agent's, so it goes;
   // the voice page stays for what the operator still owns (see TtsSection).
   const sections = useMemo(
@@ -1497,7 +1501,7 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {OPUS_BITRATES.map(br => (
+                          {underCeiling(OPUS_BITRATES).map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
@@ -1506,6 +1510,7 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
                       </Select>
                     </div>
                     <SettingsFieldError path="stream.opusBitrate" errors={fieldErrors} />
+                    {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                     <div className="field-hint">
                       96 kbps is transparent for most music; 256/320 suits hifi listeners
                       (current: {data?.values?.stream?.opusBitrate ?? '—'} kbps). Raising it
@@ -1517,7 +1522,16 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
               </Card>
             )}
 
-            {form && (
+            {form && maxBitrate && (
+              <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
+                <NowBanner label={<>FLAC stream · Managed by SUB/WAVE Cloud</>}>
+                  The lossless mount runs near 1 Mbps a listener, so it isn&apos;t part of this
+                  station&apos;s plan (streams go up to {maxBitrate} kbps). MP3, Opus and AAC serve
+                  everyone.
+                </NowBanner>
+              </Card>
+            )}
+            {form && !maxBitrate && (
               <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
                 <div className="field">
                   <div className="flex items-center gap-2">
@@ -1652,7 +1666,7 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {AAC_BITRATES.map(br => (
+                          {underCeiling(AAC_BITRATES).map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
@@ -1661,6 +1675,7 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
                       </Select>
                     </div>
                     <SettingsFieldError path="stream.aacBitrate" errors={fieldErrors} />
+                    {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                     <div className="field-hint">
                       AAC-LC is transparent around 256 kbps (current:{' '}
                       {data?.values?.stream?.aacBitrate ?? '—'} kbps).
@@ -1688,7 +1703,7 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {MP3_BITRATES.map(br => (
+                        {underCeiling(MP3_BITRATES).map(br => (
                           <SelectItem key={br} value={String(br)}>
                             {br} kbps
                           </SelectItem>
@@ -1697,6 +1712,7 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
                     </Select>
                   </div>
                   <SettingsFieldError path="stream.bitrate" errors={fieldErrors} />
+                  {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                   <div className="field-hint">
                     Higher bitrate = better quality, more listener bandwidth
                     (current: {data?.values?.stream?.bitrate ?? '—'} kbps). 192 kbps is the

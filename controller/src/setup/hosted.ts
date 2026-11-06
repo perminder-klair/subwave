@@ -18,6 +18,7 @@
 // one in use); other keys (web search, scrobbling) still save.
 
 import { LLM_KEY_ENV_VARS } from '../schemas/providers.js';
+import { AAC_BITRATES, MP3_BITRATES, OPUS_BITRATES } from '../settings/vocab.js';
 
 export function isHosted(): boolean {
   return ['1', 'true', 'yes'].includes((process.env.SUBWAVE_HOSTED || '').trim().toLowerCase());
@@ -41,6 +42,50 @@ export const HOSTED_TTS_KEYS = ['defaultEngine', 'cloud', 'remote', 'gemini', 'c
 // embedding.* keys that pick where embeddings come from. The rest of the block
 // (enabled, seedCount, propagation, enrichment) is the operator's tuning.
 export const HOSTED_EMBEDDING_KEYS = ['provider', 'model', 'providerBaseUrls', 'baseUrl', 'ollamaUrl', 'apiKey', 'headers'] as const;
+
+// The plan's stream bitrate ceiling in kbps (SUBWAVE_MAX_BITRATE, set by the
+// box agent from the station's SUB/WAVE Cloud plan). Undefined when not
+// hosted or not set: no ceiling.
+export function hostedMaxBitrate(env: Record<string, string | undefined> = process.env): number | undefined {
+  if (!['1', 'true', 'yes'].includes((env.SUBWAVE_HOSTED || '').trim().toLowerCase())) return undefined;
+  const n = Number((env.SUBWAVE_MAX_BITRATE || '').trim());
+  return Number.isInteger(n) && n >= 32 && n <= 10000 ? n : undefined;
+}
+
+// The highest value of a codec's vocabulary at or under the ceiling, or
+// undefined when even its lowest is over it.
+function highestUnder(values: readonly number[], max: number): number | undefined {
+  return [...values].filter((v) => v <= max).sort((a, b) => b - a)[0];
+}
+
+type StreamBitrates = {
+  bitrate: number; aacEnabled: boolean; aacBitrate: number;
+  opusEnabled: boolean; opusBitrate: number; flacEnabled: boolean;
+};
+
+// The stream settings the encoders actually get under the plan's ceiling:
+// each lossy codec above it drops to its highest allowed bitrate (switched off
+// if none fits — MP3 always fits, it goes down to 64), and FLAC is off, since
+// a lossless mount runs near 1 Mbps a listener. Applied where the settings
+// reach Liquidsoap (settings/liquidsoap.ts), so a value saved before the plan
+// changed can't exceed it either. No ceiling → returned untouched.
+export function capStreamBitrates<T extends StreamBitrates>(stream: T, max = hostedMaxBitrate()): T {
+  if (max === undefined) return stream;
+  const out = { ...stream };
+  if (out.bitrate > max) out.bitrate = highestUnder(MP3_BITRATES, max) ?? Math.min(...MP3_BITRATES);
+  if (out.aacBitrate > max) {
+    const aac = highestUnder(AAC_BITRATES, max);
+    if (aac === undefined) out.aacEnabled = false;
+    else out.aacBitrate = aac;
+  }
+  if (out.opusBitrate > max) {
+    const opus = highestUnder(OPUS_BITRATES, max);
+    if (opus === undefined) out.opusEnabled = false;
+    else out.opusBitrate = opus;
+  }
+  out.flacEnabled = false;
+  return out;
+}
 
 // LLM, voice and embedding provider keys; LLM ones come from the provider table.
 const HOSTED_SECRET_KEYS = new Set<string>([...LLM_KEY_ENV_VARS, 'ELEVENLABS_API_KEY', 'FISH_API_KEY', 'EMBEDDING_API_KEY']);
@@ -94,6 +139,21 @@ export function stripManagedSettings(
       if (k in stream) {
         delete stream[k];
         dropped.push(`stream.${k}`);
+      }
+    }
+    // Over the plan's bitrate ceiling: drop the value (the stored one stays)
+    // rather than save one the encoders would never use.
+    const max = hostedMaxBitrate();
+    if (max !== undefined) {
+      for (const k of ['bitrate', 'aacBitrate', 'opusBitrate'] as const) {
+        if (typeof stream[k] === 'number' && stream[k] > max) {
+          delete stream[k];
+          dropped.push(`stream.${k}`);
+        }
+      }
+      if (stream.flacEnabled === true) {
+        delete stream.flacEnabled;
+        dropped.push('stream.flacEnabled');
       }
     }
     if (Object.keys(stream).length) out.stream = stream;
