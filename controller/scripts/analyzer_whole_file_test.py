@@ -528,6 +528,11 @@ def t_real_ffmpeg_measures_a_surround_file_as_its_stereo_downmix():
     if not shutil.which("ffmpeg"):
         print("      (skipped: no ffmpeg on PATH)")
         return
+    try:
+        import soundfile as sf  # the analyzer image has it; npm test's shim installs only numpy
+    except ImportError:
+        print("      (skipped: no soundfile)")
+        return
     sr = 96000
     t = np.arange(4 * sr, dtype=np.float64) / sr
     amp = amp_db(-12.0)
@@ -536,7 +541,6 @@ def t_real_ffmpeg_measures_a_surround_file_as_its_stereo_downmix():
         stereo_ref = os.path.join(d, "ref.wav")
         chans = [amp * np.sin(2 * np.pi * f * t) for f in (300.0, 500.0, 700.0, 60.0, 900.0, 1100.0)]
         six = np.stack(chans, axis=1).astype(np.float32)
-        import soundfile as sf  # the analyzer image has it (the worker's tail path reads with it)
         sf.write(src, six, sr, subtype="FLOAT")
         # The air: L = FL + 0.707 FC + 0.707 BL, R = FR + 0.707 FC + 0.707 BR.
         k = 0.7071067811865476
