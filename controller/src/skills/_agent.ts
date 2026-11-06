@@ -986,6 +986,10 @@ export function skillCatalog() {
         requiresKey = null;
         keyUrl = null;
         hint = 'SearXNG self-hosted meta-search. Configure base URL in admin → Settings → Search.';
+      } else if (searchProvider === 'parallel') {
+        requiresKey = null;
+        keyUrl = null;
+        hint = 'Parallel web search, keyless via MCP. Free-tier rate limits apply.';
       } else if (searchProvider === 'keenable') {
         requiresKey = null;
         keyUrl = null;

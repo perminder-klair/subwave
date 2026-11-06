@@ -313,6 +313,10 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 ## Notable details
 
+For keyless web results in DJ skills and request resolution, choose **Parallel**
+in **Settings → Web search → Provider** and save. It uses anonymous MCP search
+with free-tier rate limits; DuckDuckGo remains the default.
+
 - **Controller code needs a rebuild, not a restart**, because its source is
   `COPY`d at image build time. `radio.liq` is bind-mounted, so a Liquidsoap
   restart is enough after editing it.
