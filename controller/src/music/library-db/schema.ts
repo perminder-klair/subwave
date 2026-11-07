@@ -557,6 +557,16 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     });
   }
 
+  if (userVersion < 38) {
+    // Whether the LLM saw measurements of the track's audio when it decided the
+    // row's tags (#2281, tagger-core.ts taggedWithMeasurements): 1 = measured,
+    // 0 = blind. NULL = not an LLM decision under this stamp: propagated or
+    // manual tags, and every row tagged before this step, whose prompt carried no
+    // measurements at all. Re-decide's blind scope reads it (blindTaggedIds).
+    // Only added if missing, as in 28.
+    addColumnsOnce(d, 38, { tracks: { tagged_measured: 'INTEGER' } });
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above

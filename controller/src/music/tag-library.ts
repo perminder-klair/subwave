@@ -23,6 +23,9 @@
 //                         (never source='manual'). promptHash keys off
 //                         TAGGER_CONTRACT_VERSION + the mood vocabulary, not
 //                         the prompt text (#1548).
+//   --blind               with --upgrade: re-tag only rows the LLM tagged
+//                         without audio measurements that have been measured
+//                         since (#2281), whatever their stamp
 //   --rescan              fire ONLY the selected re-* passes, each scoped to
 //                         already-done tracks; never forward-process the
 //                         untagged remainder
@@ -520,16 +523,22 @@ async function main() {
 
   // Re-scan RE-DECIDE: re-LLM-tag tagged rows whose prompt or model went stale
   // (never manual). Scoped to the tagged set, never the untagged remainder.
+  // --blind swaps the scope for the rows tagged without measurements that have
+  // been measured since (#2281); it never adds the stale ones.
   if (plan.reDecide) {
-    const stale = db.staleTaggedIds(
-      promptHash,
-      modelLabel,
-      flags.limit === Infinity ? undefined : flags.limit,
-    );
+    const reDecideLimit = flags.limit === Infinity ? undefined : flags.limit;
+    const stale = flags.blind
+      ? db.blindTaggedIds(reDecideLimit)
+      : db.staleTaggedIds(promptHash, modelLabel, reDecideLimit);
+    const scope = flags.blind ? 'blind' : 'stale';
     if (stale.length === 0) {
-      console.log('[tag] re-decide: no tagged rows are stale (prompt/model unchanged) — nothing to redo');
+      console.log(
+        flags.blind
+          ? '[tag] re-decide: no blind rows have been measured since they were tagged — nothing to redo'
+          : '[tag] re-decide: no tagged rows are stale (prompt/model unchanged) — nothing to redo',
+      );
     } else {
-      console.log(`[tag] re-decide: re-tagging ${stale.length} stale row(s)`);
+      console.log(`[tag] re-decide: re-tagging ${stale.length} ${scope} row(s)`);
       const tagged = await llmTagInBatches(
         stale, tagBatchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
       );

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { moodVocab } from '../settings.js';
 import { djObject } from '../llm/sdk.js';
 import { songGenres } from './subsonic.js';
+import { taggerSoundWords, type TaggerAcoustics } from './sound-line.js';
 
 export const TagSchema = z.object({
   moods: z.array(z.string()).default([]),
@@ -21,7 +22,15 @@ export const BatchTagSchema = z.object({
 // stamp keys off this number plus the live vocabulary, never the prompt text
 // (#1548): a semantic change is invisible without a bump, a reword costs a full
 // library re-tag with one.
-export const TAGGER_CONTRACT_VERSION = 1;
+//   1  title/artist/album/year/genre only
+//   2  + the Sound:/Last.fm: evidence line, which outranks album reputation (#2281)
+export const TAGGER_CONTRACT_VERSION = 2;
+
+// How the prompts read the evidence line (formatEvidence). Shared so the two
+// prompts can't drift on what outranks what.
+function evidenceGuidance(): string {
+  return `Some tracks carry an evidence line. "Sound:" was measured from that track's own audio: its tempo (a tempo marked "or half-time" may have been read at twice the pulse you hear), its key mode, and whether it is sung or instrumental. "Last.fm:" is what listeners tag the song or its artist with. This is evidence about the track, and it outranks what you know of the album or artist: a slow minor-key song is not "high" energy because the album around it is loud.`;
+}
 
 // Functions, not consts: the mood list is operator-editable and read live.
 // Both prompts describe the RESULT and never the output channel — djObject picks
@@ -40,7 +49,9 @@ A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural
 A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
-If you genuinely cannot tell from the title/artist/album, the result is {"moods":[],"energy":"medium"}. Do not invent.`;
+${evidenceGuidance()}
+
+If there is no evidence line and you genuinely cannot tell from the title/artist/album, the result is {"moods":[],"energy":"medium"}. Do not invent.`;
 }
 
 export function taggerBatchSystem(): string {
@@ -65,7 +76,9 @@ A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural
 A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
-If you genuinely cannot tell from the title/artist/album for a track, use {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
+${evidenceGuidance()}
+
+If a track has no evidence line and you genuinely cannot tell from the title/artist/album, use {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
 }
 
 export interface TaggableSong {
@@ -76,6 +89,47 @@ export interface TaggableSong {
   // OpenSubsonic multi-value genres alongside the legacy scalar.
   genres?: Array<string | { name?: string }> | null;
   genre?: string | null;
+  // The measured evidence (#2281): the row's acoustics through taggerAcoustics,
+  // which carries tempo, key and vocal evidence and nothing else, and its stored
+  // Last.fm tags. Absent or empty adds no line: the track is tagged from its
+  // metadata alone, blind.
+  acoustics?: TaggerAcoustics | null;
+  lastfmTags?: string[] | null;
+}
+
+// Enough to say what scene a track sits in; the merged track list can be longer.
+const LASTFM_TAGS_SHOWN = 10;
+
+// Whitespace collapsed, so a tag can never break the numbered list into a line
+// that reads as another track.
+function cleanLastfmTags(tags: unknown): string[] {
+  if (!Array.isArray(tags)) return [];
+  const out: string[] = [];
+  for (const t of tags) {
+    const tag = typeof t === 'string' ? t.replace(/\s+/g, ' ').trim() : '';
+    if (tag) out.push(tag);
+    if (out.length >= LASTFM_TAGS_SHOWN) break;
+  }
+  return out;
+}
+
+// The evidence line's parts, each omitted when it has no signal, never printed
+// empty (formatTrackText's rule): null when the track has neither.
+function formatEvidence(song: TaggableSong): { sound: string | null; lastfm: string | null } {
+  const sound = taggerSoundWords(song.acoustics);
+  const lastfm = cleanLastfmTags(song.lastfmTags);
+  return {
+    sound: sound.length ? `Sound: ${sound.join(', ')}` : null,
+    lastfm: lastfm.length ? `Last.fm: ${lastfm.join(', ')}` : null,
+  };
+}
+
+// Whether the prompt carried measurements of the track's audio, stamped on the
+// row as tracks.tagged_measured. Last.fm tags alone don't count: they exist from
+// the first enrich, before any analysis, so a track tagged with only them is still
+// owed a look once it has been measured (Re-decide → blind rows only).
+export function taggedWithMeasurements(song: TaggableSong): boolean {
+  return taggerSoundWords(song.acoustics).length > 0;
 }
 
 export interface TagResult {
@@ -96,14 +150,18 @@ function sanitizeTag(parsed: { moods?: unknown; energy?: unknown }): TagResult {
   return { moods, energy };
 }
 
+// One numbered entry: the metadata line, then the evidence line indented under
+// it when there is one.
 function formatSong(song: TaggableSong): string {
-  return (
+  const head =
     `Title: ${song.title || '?'} | ` +
     `Artist: ${song.artist || '?'} | ` +
     `Album: ${song.album || '?'} | ` +
     `Year: ${song.year || '?'} | ` +
-    `Genre: ${songGenres(song).join(', ') || '?'}`
-  );
+    `Genre: ${songGenres(song).join(', ') || '?'}`;
+  const { sound, lastfm } = formatEvidence(song);
+  const evidence = [sound, lastfm].filter(Boolean).join(' | ');
+  return evidence ? `${head}\n   ${evidence}` : head;
 }
 
 // `leg` pins the call to one LLM leg with no cross-leg failover: the dual-LLM
@@ -120,10 +178,12 @@ export async function tagOne(song: TaggableSong, opts: TagOpts = {}): Promise<Ta
     `Album: ${song.album || '?'}\n` +
     `Year: ${song.year || '?'}\n` +
     `Genre: ${songGenres(song).join(', ') || '?'}`;
+  const { sound, lastfm } = formatEvidence(song);
+  const evidence = [sound, lastfm].filter(Boolean).join('\n');
 
   const parsed = await djObject({
     system: taggerSystem(),
-    prompt: userPrompt,
+    prompt: evidence ? `${userPrompt}\n${evidence}` : userPrompt,
     schema: TagSchema,
     temperature: 0.2,
     kind: 'tag-library',

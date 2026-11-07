@@ -179,6 +179,7 @@ export function set(songId: string, data: any) {
       confidence: data.confidence ?? null,
       promptHash: data.promptHash ?? null,
       model: data.model ?? null,
+      measured: data.measured ?? null,
     });
   }
 }

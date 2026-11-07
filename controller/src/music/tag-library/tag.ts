@@ -3,7 +3,8 @@
 import * as db from '../library-db.js';
 import { primaryLeg, fallbackLeg, probeLegReachable } from '../../llm/provider.js';
 import { isUnreachable, isQuotaOrAuthError, errReason } from '../../llm/sdk.js';
-import { tagBatch, tagOne, type TagResult } from '../tagger-core.js';
+import { tagBatch, tagOne, taggedWithMeasurements, type TagResult } from '../tagger-core.js';
+import { taggerAcoustics } from '../sound-line.js';
 import { reportProgress } from '../tagger-progress.js';
 import { logEvent } from './log.js';
 
@@ -49,6 +50,8 @@ async function processBatch(
     album: t.album ?? undefined,
     year: t.year ?? undefined,
     genres: t.genres,
+    acoustics: taggerAcoustics(t),
+    lastfmTags: t.lastfmTags,
   }));
   const opts = consumer.pin ? { leg: consumer.pin } : {};
 
@@ -105,6 +108,7 @@ async function processBatch(
       confidence: null,
       promptHash,
       model: consumer.label,
+      measured: taggedWithMeasurements(input[j]),
     });
     tagged += 1;
   }
