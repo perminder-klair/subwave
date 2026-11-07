@@ -6,6 +6,7 @@ import { isUnreachable, isQuotaOrAuthError, errReason } from '../../llm/sdk.js';
 import { tagBatch, tagOne, type TagResult } from '../tagger-core.js';
 import { reportProgress } from '../tagger-progress.js';
 import { logEvent } from './log.js';
+import { tagInputFor, untaggableKey } from './tag-input.js';
 
 // One LLM worker the batch loop pulls through. `pin` selects the leg (undefined
 // = normal primary/fallback failover, single-LLM mode); `label` is stamped on
@@ -21,6 +22,9 @@ interface TagState {
   processed: number;
   // Tracks that came back null from the LLM; surfaced in the progress channel.
   errors: number;
+  // Answered with no usable mood (#2283): left untagged and marked, never counted
+  // as tagged. `offVocab` = every mood it named was outside the vocabulary.
+  untaggable: Array<{ id: string; offVocab: boolean }>;
   byLeg: Record<string, number>;
 }
 
@@ -43,13 +47,7 @@ async function processBatch(
 ): Promise<number> {
   const songs = batch.map(id => db.getTrack(id)).filter((t): t is db.TrackRecord => !!t);
   if (songs.length === 0) return 0;
-  const input = songs.map(t => ({
-    title: t.title ?? undefined,
-    artist: t.artist ?? undefined,
-    album: t.album ?? undefined,
-    year: t.year ?? undefined,
-    genres: t.genres,
-  }));
+  const input = songs.map(tagInputFor);
   const opts = consumer.pin ? { leg: consumer.pin } : {};
 
   let results: Array<TagResult | null>;
@@ -98,6 +96,11 @@ async function processBatch(
       continue;
     }
     const { moods, energy } = result;
+    if (moods.length === 0) {
+      db.markTrackUntaggable(songs[j].id, untaggableKey(input[j], promptHash, consumer.label));
+      state.untaggable.push({ id: songs[j].id, offVocab: !!result.offVocab });
+      continue;
+    }
     db.upsertTrackTags(songs[j].id, {
       moods,
       energy,
@@ -169,11 +172,11 @@ export async function llmTagInBatches(
   source: db.TagSource,
   consumers: TagConsumer[],
   phaseInfo: TagPhaseInfo,
-): Promise<{ tagged: number; callCount: number; byLeg: Record<string, number> }> {
+): Promise<{ tagged: number; untaggable: string[]; callCount: number; byLeg: Record<string, number> }> {
   const batches: string[][] = [];
   for (let i = 0; i < ids.length; i += batchSize) batches.push(ids.slice(i, i + batchSize));
 
-  const state: TagState = { tagged: 0, callCount: 0, processed: 0, errors: 0, byLeg: {} };
+  const state: TagState = { tagged: 0, callCount: 0, processed: 0, errors: 0, untaggable: [], byLeg: {} };
   reportProgress({
     phase: phaseInfo.phase,
     label: 'Tagging with LLM',
@@ -204,7 +207,27 @@ export async function llmTagInBatches(
       logEvent('warning', `All LLM legs dropped — ${abandoned} tracks left for next run${hint}`);
     }
   }
-  return { tagged: state.tagged, callCount: state.callCount, byLeg: state.byLeg };
+  logUntaggable(state.untaggable);
+  return {
+    tagged: state.tagged,
+    untaggable: state.untaggable.map(u => u.id),
+    callCount: state.callCount,
+    byLeg: state.byLeg,
+  };
+}
+
+// One line per kind, so "the model couldn't tell" reads apart from "it answered
+// outside the vocabulary", which is a vocabulary or model problem.
+function logUntaggable(untaggable: TagState['untaggable']): void {
+  const list = (ids: string[]) => ids.slice(0, 20).join(', ') + (ids.length > 20 ? `, … ${ids.length - 20} more` : '');
+  const cantTell = untaggable.filter(u => !u.offVocab).map(u => u.id);
+  const offVocab = untaggable.filter(u => u.offVocab).map(u => u.id);
+  if (cantTell.length > 0) {
+    logEvent('info', `${cantTell.length} untaggable (the model couldn't tell; not re-asked until they change): ${list(cantTell)}`);
+  }
+  if (offVocab.length > 0) {
+    logEvent('warning', `${offVocab.length} untaggable (every mood was outside the vocabulary): ${list(offVocab)}`);
+  }
 }
 
 // Dual-LLM mode activates when a fallback is configured, distinct from the

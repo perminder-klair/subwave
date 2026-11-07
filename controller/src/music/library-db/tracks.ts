@@ -599,7 +599,8 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
         tagger_version = ?,
         prompt_hash    = ?,
         model          = ?,
-        tagged_at      = ?
+        tagged_at      = ?,
+        untaggable_key = NULL
       WHERE id = ?`,
     )
     .run(
@@ -616,8 +617,16 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
 }
 
 // Back to the untagged pool. NULL every tag column rather than writing
-// moods='[]', so source/tagged_at don't go stale on an untagged row.
+// moods='[]', so source/tagged_at don't go stale on an untagged row. The
+// untaggable marker goes too: an operator's clear asks for a fresh answer.
 export function clearTrackTags(id: string): void {
+  markTrackUntaggable(id, null);
+}
+
+// The LLM had no mood for this track (#2283). The row stays untagged, like
+// clearTrackTags, and `key` records what was asked (music/tag-library/tag-input.ts)
+// so the next run does not ask the same thing again. null clears it.
+export function markTrackUntaggable(id: string, key: string | null): void {
   requireDb()
     .prepare(
       `UPDATE tracks SET
@@ -628,10 +637,11 @@ export function clearTrackTags(id: string): void {
         tagger_version = NULL,
         prompt_hash    = NULL,
         model          = NULL,
-        tagged_at      = NULL
+        tagged_at      = NULL,
+        untaggable_key = ?
       WHERE id = ?`,
     )
-    .run(id);
+    .run(key, id);
 }
 
 interface TrackAnalysisWrite {
