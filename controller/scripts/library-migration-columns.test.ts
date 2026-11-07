@@ -138,6 +138,7 @@ const STEPS: Array<{ step: number; table: string; column: string }> = [
   { step: 35, table: 'tracks', column: 'audio_descriptors' },
   { step: 36, table: 'tracks', column: 'text_vector_sound' },
   { step: 37, table: 'tracks', column: 'loudness_version' },
+  { step: 38, table: 'tracks', column: 'tagged_measured' },
 ];
 
 for (const { step, table, column } of STEPS) {

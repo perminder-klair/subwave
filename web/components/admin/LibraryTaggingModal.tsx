@@ -67,6 +67,9 @@ export default function LibraryTaggingModal(p: Props) {
   // Does a Re-analyse-acoustics pass also redo the slow Demucs pass? Unticking
   // keeps existing vocal ranges.
   const [reAnalyzeVocal, setReAnalyzeVocal] = useState(true);
+  // Narrows Re-decide to the rows the model tagged before the track was
+  // measured, and only those measured since. Off: the stale prompt/model scope.
+  const [redecideBlind, setRedecideBlind] = useState(false);
   const [confirmRescan, setConfirmRescan] = useState(false);
   // Offered only when Re-embed is the ONLY selected pass — combining the
   // continuation with other re-* passes isn't well-defined.
@@ -138,6 +141,7 @@ export default function LibraryTaggingModal(p: Props) {
   const rescanPayload = (): RescanOpts => ({
     ...passes,
     vocal: passes.reAnalyze && p.vocalWanted ? reAnalyzeVocal : undefined,
+    upgradeBlind: passes.upgrade && redecideBlind ? true : undefined,
     // Only carry the continuation when reseed is the sole pass and it's ticked.
     thenTag: reseedOnly && thenTag ? true : undefined,
   });
@@ -278,8 +282,17 @@ export default function LibraryTaggingModal(p: Props) {
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
                 hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
               {passes.upgrade && (
+                <div className="pl-6">
+                  <Pass on={redecideBlind} onClick={() => setRedecideBlind(v => !v)}
+                    name="Only tracks tagged before they were measured" tag="AI · billed"
+                    hint="Instead of the stale rows, re-tag just the tracks the model tagged without their tempo, key or vocal reading, and only those that have been measured since — so the model now hears them. Never your manual tags." />
+                </div>
+              )}
+              {passes.upgrade && (
                 <p className="-mt-1 pl-[26px] text-[11px] leading-[1.5] text-muted">
-                  Model calls only for rows with a stale prompt or model — often zero if nothing has changed.
+                  {redecideBlind
+                    ? 'Model calls only for tracks that were tagged blind and have audio measurements now.'
+                    : 'Model calls only for rows with a stale prompt or model — often zero if nothing has changed.'}
                 </p>
               )}
               <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} disabled={p.analysisOff} name="Re-analyse acoustics" tag="slow"

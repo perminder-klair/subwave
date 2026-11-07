@@ -11,6 +11,7 @@
 // identical re-analyze. Each writer compares only its own part.
 
 import { isInstrumental, type VocalEvidence } from './lyric-vocal.js';
+import { OCTAVE_FOLD_BPM } from './mix.js';
 import type { TrackRecord } from './library-db/types.js';
 
 // Measured acoustics from the analyzer pass (#1246). Never the tagger's own
@@ -92,4 +93,50 @@ export function trackAcoustics(t: AcousticsFields): TrackAcoustics {
     tailVocalRanges: t.tailVocalRanges,
     tailVocalRangesInvalid: t.tailVocalRangesInvalid,
   };
+}
+
+// What the LLM tagger is shown of a track's audio (#2281). Narrower than the
+// Sound: line on purpose: tempo, key mode and the vocal verdict only. Never the
+// CLAP moods (retrieval already blends those with the tags, so a tagger that
+// echoed them would count the same evidence twice), never loudness (a mastering
+// figure, which follows era and genre more than energy), descriptors, lyrics or
+// the tagger's own moods/energy. The type carries no other field, so a caller
+// cannot hand the prompt one by passing a whole row.
+export type TaggerAcoustics = Pick<TrackAcoustics, 'bpm' | 'musicalKey'> & VocalEvidence;
+
+export type TaggerAcousticsFields = Pick<TrackRecord,
+  'bpm' | 'musicalKey' | 'vocalRanges' | 'vocalRangesInvalid' |
+  'tailVocalRanges' | 'tailVocalRangesInvalid'>;
+
+// A stored row's tagger acoustics, picked field by field so the runtime object
+// is as narrow as the type.
+export function taggerAcoustics(t: TaggerAcousticsFields): TaggerAcoustics {
+  return {
+    bpm: t.bpm, musicalKey: t.musicalKey,
+    vocalRanges: t.vocalRanges,
+    vocalRangesInvalid: t.vocalRangesInvalid,
+    tailVocalRanges: t.tailVocalRanges,
+    tailVocalRangesInvalid: t.tailVocalRangesInvalid,
+  };
+}
+
+// The tagger's measured words, in a stable order; [] when nothing was measured,
+// which is what makes a tag "blind" (tags.measured). Tempo is octave-safe (#1417):
+// the analyser doubles slow material and never halves, so a reading below the
+// fold line is trusted as read, and one at or above it may be twice the felt
+// pulse, which the word says rather than guessing an octave. The vocal verdict is
+// isInstrumental's alone: true is "instrumental", false is "vocals", unknown says
+// nothing.
+export function taggerSoundWords(acoustics?: TaggerAcoustics | null): string[] {
+  const words: string[] = [];
+  if (!acoustics) return words;
+  const bpm = acoustics.bpm != null ? Number(acoustics.bpm) : NaN;
+  const tempo = tempoWord(bpm);
+  if (tempo) words.push(bpm >= OCTAVE_FOLD_BPM ? `${tempo} or half-time` : tempo);
+  const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
+  if (mode) words.push(mode);
+  const instrumental = isInstrumental(acoustics);
+  if (instrumental === true) words.push('instrumental');
+  else if (instrumental === false) words.push('vocals');
+  return words;
 }

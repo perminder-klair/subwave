@@ -11,7 +11,8 @@ import * as musicbrainz from '../../music/musicbrainz.js';
 import * as settings from '../../settings.js';
 import * as embeddings from '../../music/embeddings.js';
 import { resolveEraYear } from '../../music/show-filter.js';
-import { tagBatch, TAGGER_CONTRACT_VERSION } from '../../music/tagger-core.js';
+import { tagBatch, taggedWithMeasurements, TAGGER_CONTRACT_VERSION } from '../../music/tagger-core.js';
+import { taggerAcoustics } from '../../music/sound-line.js';
 import { promptVocabHash } from '../../music/embeddings.js';
 import { activeModelLabel } from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
@@ -364,7 +365,15 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       }
     }
 
-    const [{ moods, energy }] = await tagBatch([song]);
+    // The same evidence the bulk pass gives (#2281): the stored row's measured
+    // acoustics, and the Last.fm tags just fetched, else the ones it already had.
+    const stored = db.getTrack(id);
+    const taggable = {
+      ...song,
+      acoustics: stored ? taggerAcoustics(stored) : null,
+      lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : stored?.lastfmTags ?? null,
+    };
+    const [{ moods, energy }] = await tagBatch([taggable]);
     library.set(id, {
       title: song.title,
       artist: song.artist,
@@ -376,6 +385,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       source: 'llm',
       promptHash: promptVocabHash(TAGGER_CONTRACT_VERSION),
       model: activeModelLabel(),
+      measured: taggedWithMeasurements(taggable),
     });
     const tagged = library.get(id);
     res.json({ id, moods, energy, taggedAt: tagged?.taggedAt });

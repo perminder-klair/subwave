@@ -599,7 +599,8 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
         tagger_version = ?,
         prompt_hash    = ?,
         model          = ?,
-        tagged_at      = ?
+        tagged_at      = ?,
+        tagged_measured = ?
       WHERE id = ?`,
     )
     .run(
@@ -611,6 +612,7 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
       tags.promptHash ?? null,
       tags.model ?? null,
       new Date().toISOString(),
+      tags.measured == null ? null : Number(tags.measured),
       id,
     );
 }
@@ -628,7 +630,8 @@ export function clearTrackTags(id: string): void {
         tagger_version = NULL,
         prompt_hash    = NULL,
         model          = NULL,
-        tagged_at      = NULL
+        tagged_at      = NULL,
+        tagged_measured = NULL
       WHERE id = ?`,
     )
     .run(id);

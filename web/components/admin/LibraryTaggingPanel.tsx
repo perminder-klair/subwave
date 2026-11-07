@@ -154,6 +154,8 @@ export type RescanOpts = {
   reEnrich?: boolean;
   reAnalyze?: boolean;
   upgrade?: boolean;
+  // With upgrade: re-decide only rows tagged before they were measured (--blind).
+  upgradeBlind?: boolean;
   // false → --no-vocal (redo bpm/key + sounds-like, keep existing vocal ranges).
   vocal?: boolean;
   // After rebuilding vectors, forward-tag the untagged remainder in the same run. Only honoured when reseed is the sole pass.
