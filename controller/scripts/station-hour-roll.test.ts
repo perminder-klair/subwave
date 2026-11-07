@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { setStationTimezone, stationHourKey, stationHourStartProcessMinute, stationUtcOffsetMinutes, zonedParts } from '../src/time.js';
 import { sessionRollDue, stationPosition, type StationPosition } from '../src/broadcast/session-roll-policy.js';
 import { resolveActiveShow } from '../src/settings/persona.js';
-import { openMinuteFor, talkSlot } from '../src/broadcast/talk-scheduler.js';
+import { openMinuteFor, talkMinute, talkSlot } from '../src/broadcast/talk-scheduler.js';
 
 const MIN = 60_000;
 const utc = (y: number, mo: number, d: number, h: number, mi = 0, s = 0) => new Date(Date.UTC(y, mo - 1, d, h, mi, s));
@@ -297,7 +297,7 @@ test('a takeover running out rolls on the tick it ends, a schedule-free hour inc
 
 // talkTick's pairing: roll when the position moved and remember it by station
 // hour, then hand the hourly row the roll made in this station hour. The row's
-// ten-minute window is still on process minutes (#1500); what it must see is
+// ten-minute window is on station minutes too (#2254); what it must see is
 // the roll that opened its station hour, since that roll's `showStarted` is
 // what earns the hourly welcome and its `introAired` is what stands the check
 // down.
@@ -316,7 +316,7 @@ function hourlyRowSees(from: Date, minutes: number) {
     const rolled = lastRoll?.hourKey === stationHourKey(now) ? lastRoll : null;
     // A walk that starts mid-hour has booted into it, and a boot has no roll
     // to pair with (talkEligible asks suppressHourly for that reason).
-    if (lastRoll && openMinuteFor(hourly, now.getMinutes()) != null) {
+    if (lastRoll && openMinuteFor(hourly, talkMinute(now)) != null) {
       seen.push({ tick: at(now), rolled: rolled ? at(rolled.at) : null });
     }
   }

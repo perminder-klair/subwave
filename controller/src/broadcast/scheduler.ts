@@ -898,10 +898,10 @@ async function runSegmentTick() {
   });
 }
 
-// Programme beats. Placement is a STATION-clock fact and station zones sit at
-// :30/:45 offsets, so the talk tick samples the row every 5 minutes and
-// dispatches on programme.dueBeat(); beat flags make repeat ticks no-ops. The
-// intro rides the session-settled hook. Gating lives in programme.ts.
+// Programme beats. Placement is a STATION-clock fact: the talk tick samples
+// the row every fifth station minute and dispatches on programme.dueBeat();
+// beat flags make repeat ticks no-ops. The intro rides the session-settled
+// hook. Gating lives in programme.ts.
 //
 // Gate-free manual runners (/dj/segment). Intro/outro re-mark their beat so the
 // autonomous path doesn't re-open or re-close the show, but only once it aired:
@@ -982,9 +982,10 @@ const talkLogged: Partial<Record<TalkKind, string | null>> = {};
 // The station-hour session roll's outcome. The hourly row's window runs to
 // :09, so a postponed check resolves on a tick where no roll happened but
 // still needs the roll's result as a gate (#310). Keyed by STATION hour, like
-// the roll itself (#2234), so it can't gate the next one; time.ts says why the
-// row's process minutes still find it. A mid-hour roll (a schedule edit, a
-// takeover expiring) replaces the hour's entry.
+// the roll itself (#2234), so it can't gate the next one; the row's window is
+// on station minutes too (#2254), so it opens on the roll's own :00. A
+// mid-hour roll (a schedule edit, a takeover expiring) replaces the hour's
+// entry.
 type SessionRoll = Awaited<ReturnType<typeof rollSessionNow>>;
 let lastRoll: { hourKey: string; roll: SessionRoll } | null = null;
 

@@ -116,14 +116,13 @@ export function zonedISODate(date = new Date()) {
 // 03:45 and its fall-back repeats 02:45-02:59), or a tick that ran late. A
 // fall-back repeats its key, so the tick also compares the zone's UTC offset
 // (stationUtcOffsetMinutes): the repeated hour rolls again, a no-op roll that
-// replaces the first one, so its hourly row cannot re-air the first pass's
-// show welcome.
+// replaces the first one. The hourly row's slot key repeats with the hour
+// (talk-scheduler.ts talkSlotKey), so the repeated hour airs no second check.
 //
-// The key is also how the hourly row finds the roll that opened its hour. Zone
-// offsets are whole quarter hours, so process :00 lands on station :00, :15,
-// :30 or :45, and the row's ten-minute window, still on process minutes,
-// closes by station :54, inside the station hour that rolled. Pinned by
-// scripts/station-hour-roll.test.ts.
+// The key is also how the hourly row finds the roll that opened its hour. The
+// row's ten-minute window is on station minutes too (talk-scheduler.ts, #2254),
+// so it opens on the roll's own :00 and closes by :09, inside the station hour
+// that rolled. Pinned by scripts/station-hour-roll.test.ts.
 export function stationHourKey(date = new Date()) {
   const { year, month, day, hour } = zonedParts(date);
   return `${year}-${month}-${day}-${hour}`;
