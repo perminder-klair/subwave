@@ -13,7 +13,7 @@
 // later instead of becoming a permanent miss.
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
-import { yearErrorReason, type OriginalYearOutcome } from './original-year-policy.js';
+import { retryWaitMs, yearErrorReason, type OriginalYearOutcome } from './original-year-policy.js';
 
 const MB_API = 'https://musicbrainz.org/ws/2';
 // MB asks for app + contact in the UA; version stays coarse so it can't drift
@@ -128,10 +128,18 @@ async function searchRecordings(query: string): Promise<MbRecording[]> {
   // a heavily re-released track's original often falls outside the top 25 and
   // the earliest-year fold wants the widest set one request can carry.
   const url = `${MB_API}/recording?query=${encodeURIComponent(query)}&fmt=json&limit=100`;
-  const res = await fetchWithTimeout(url, {
+  const get = () => fetchWithTimeout(url, {
     timeoutMs: TIMEOUT_MS,
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
   });
+  let res = await get();
+  // A busy MusicBrainz answers 503: asked once more after its Retry-After.
+  // Still inside the caller's throttle slot, so the 1 req/s spacing holds.
+  const wait = retryWaitMs(res.status, res.headers.get('retry-after'));
+  if (wait != null) {
+    await new Promise((r) => setTimeout(r, wait));
+    res = await get();
+  }
   // Any non-2xx is a question MusicBrainz did not answer (a 503 is its rate
   // limit), never an empty result: thrown, so the lookup reports an error.
   if (!res.ok) throw new Error(`MusicBrainz HTTP ${res.status}`);

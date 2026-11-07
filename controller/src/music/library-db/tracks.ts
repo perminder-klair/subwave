@@ -8,7 +8,7 @@ import {
 } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
-import type { OriginalYearOutcome } from '../original-year-policy.js';
+import type { OriginalYearOutcome, YearSource } from '../original-year-policy.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
@@ -478,34 +478,44 @@ export function idsNeedingOriginalYear(retryMisses = false): string[] {
 
 // Record a per-track original-year lookup. `checked_at` is stamped on hit AND
 // miss, so a resumed pass skips what it already asked MusicBrainz about.
-export function setOriginalYear(id: string, year: number | null): void {
+export function setOriginalYear(id: string, year: number | null, source: YearSource = 'musicbrainz'): void {
   const eraBefore = storedEra(id);
   requireDb()
     .prepare(
       `UPDATE tracks SET
          original_year            = COALESCE(?, original_year),
-         original_year_source     = CASE WHEN ? IS NOT NULL THEN 'musicbrainz' ELSE original_year_source END,
+         original_year_source     = CASE WHEN ? IS NOT NULL THEN ? ELSE original_year_source END,
          original_year_checked_at = ?
        -- Never touch a manual override, not even its checked_at stamp; the
        -- guard sits at the write so a new caller can't route around it.
        WHERE id = ? AND (original_year_source IS NULL OR original_year_source <> 'manual')`,
     )
-    .run(year, year, new Date().toISOString(), id);
+    .run(year, year, source, new Date().toISOString(), id);
   markTextVectorDirtyIfEraChanged(id, eraBefore);
-  syncTrackFacets(id, { fresh: ['year'], source: 'musicbrainz' });
+  syncTrackFacets(id, { fresh: ['year'], source });
 }
 
-// The one writer of a MusicBrainz lookup's outcome (original-year-policy.ts).
-// A found / not-found answer is stamped on the track; an error is not (nothing
-// was learnt), and only adds a failed attempt to the year facet row, which
-// spaces the next automatic retry.
+// The one writer of a year lookup's outcome (original-year-policy.ts). A found /
+// not-found answer is stamped on the track. An error adds a failed attempt to
+// the year facet row, which spaces the next automatic retry; when it was a
+// not-found being asked again, that old answer is withdrawn too (its stamp
+// cleared), so the track is retried on the schedule instead of falling back
+// into a "not found" the failed question never confirmed. A resolved or manual
+// year is never touched (a manual override always carries its year).
 export function recordOriginalYearOutcome(id: string, outcome: OriginalYearOutcome): void {
   requireDb().transaction(() => {
     if (outcome.kind === 'error') {
+      requireDb()
+        .prepare(
+          `UPDATE tracks SET original_year_checked_at = NULL
+            WHERE id = ? AND original_year IS NULL`,
+        )
+        .run(id);
       syncTrackFacets(id, { yearFailed: outcome.reason, source: 'musicbrainz' });
       return;
     }
-    setOriginalYear(id, outcome.kind === 'found' ? outcome.year : null);
+    if (outcome.kind === 'found') setOriginalYear(id, outcome.year, outcome.source ?? 'musicbrainz');
+    else setOriginalYear(id, null);
   })();
 }
 

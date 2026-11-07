@@ -4,8 +4,9 @@
 // recordOriginalYearOutcome, and the row is derived in library-db/facets.ts.
 //
 // Three answers, kept apart because they mean different things:
-//   found      MusicBrainz gave a confident original year → stored, facet ok
-//   not-found  MusicBrainz answered and had no confident match → the track is
+//   found      a source (MusicBrainz, then Discogs when a token is set) gave
+//              a confident original year → stored with its source, facet ok
+//   not-found  every source answered and none had a confident match → the track is
 //              checked (original_year_checked_at) and the facet is
 //              'unmeasurable / not-found', terminal at this version
 //   error      the question was never answered (timeout, network, HTTP 5xx or
@@ -15,8 +16,12 @@
 // Folding an error into "not found" (the old behaviour) made a network blip a
 // permanent miss: the checked stamp kept every later pass off the track.
 
+// Where a found year came from (tracks.original_year_source). MusicBrainz is
+// asked first; Discogs only when MusicBrainz has no year and a token is set.
+export type YearSource = 'musicbrainz' | 'discogs';
+
 export type OriginalYearOutcome =
-  | { kind: 'found'; year: number }
+  | { kind: 'found'; year: number; source?: YearSource }
   | { kind: 'not-found' }
   | { kind: 'error'; reason: string };
 
@@ -40,6 +45,18 @@ export function yearRetryDue(attempts: number, lastAt: string | null | undefined
   const last = lastAt ? Date.parse(lastAt) : NaN;
   if (!Number.isFinite(last)) return true;
   return now - last >= YEAR_RETRY_DELAYS_MS[attempts - 1];
+}
+
+// How long to wait before asking a rate-limited request once more, or null
+// when the answer is not worth a retry. Only a rate-limit answer (429, or the
+// 503 MusicBrainz sends when it is busy) is retried, once, after Retry-After
+// (in seconds), capped so one busy server never parks the whole pass.
+const RETRY_DEFAULT_MS = 2000;
+const RETRY_MAX_MS = 10_000;
+export function retryWaitMs(status: number, retryAfter: string | null | undefined): number | null {
+  if (status !== 429 && status !== 503) return null;
+  const s = retryAfter != null && /^\s*\d+\s*$/.test(retryAfter) ? Number(retryAfter) * 1000 : RETRY_DEFAULT_MS;
+  return Math.min(s, RETRY_MAX_MS);
 }
 
 // Short, single-line reason for a failed lookup, safe to store and log.

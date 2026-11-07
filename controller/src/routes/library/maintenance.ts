@@ -8,6 +8,7 @@ import * as coverage from '../../music/library-coverage.js';
 import * as subsonic from '../../music/subsonic.js';
 import * as lastfm from '../../music/lastfm.js';
 import * as musicbrainz from '../../music/musicbrainz.js';
+import { lookupOriginalYearAnySource } from '../../music/original-year.js';
 import * as settings from '../../settings.js';
 import * as embeddings from '../../music/embeddings.js';
 import { resolveEraYear } from '../../music/show-filter.js';
@@ -317,7 +318,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       try {
         const t = db.getTrack(id);
         if (t && musicbrainz.needsOriginalYearLookup(t, true)) {
-          const outcome = await musicbrainz.lookupOriginalYear({
+          const outcome = await lookupOriginalYearAnySource({
             title: song.title,
             artist: song.artist,
             mbid: song.musicBrainzId || null,

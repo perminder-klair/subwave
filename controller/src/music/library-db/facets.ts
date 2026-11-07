@@ -99,7 +99,7 @@ export const WHOLE_FILE_LOUDNESS_EXTRAS = ['loudness_version', 'sample_peak_db',
 export const FACET_MAX_ATTEMPTS = MAX_ANALYSIS_FAILURES;
 
 // Where the analysed audio came from, as far as the controller knows.
-export type FacetSource = 'seed' | 'full' | 'capped' | 'unknown' | 'url' | 'analyzer' | 'musicbrainz';
+export type FacetSource = 'seed' | 'full' | 'capped' | 'unknown' | 'url' | 'analyzer' | 'musicbrainz' | 'discogs';
 
 // What a facet status is derived from: the `tracks` columns, reduced to flags
 // in SQL (FACET_SOURCE_SELECT) so the seed never loads the JSON payloads.

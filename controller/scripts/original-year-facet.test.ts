@@ -135,14 +135,6 @@ test('an answer after failures ends the failure history', () => {
   consistent();
 });
 
-test('an error re-asking a not-found leaves the not-found in place', () => {
-  suspect('reasked');
-  db.recordOriginalYearOutcome('reasked', { kind: 'not-found' });
-  db.recordOriginalYearOutcome('reasked', { kind: 'error', reason: 'timeout' });
-  assert.equal(brief('reasked'), 'unmeasurable:not-found');
-  consistent();
-});
-
 test('a manual year is never overwritten by a lookup', () => {
   suspect('pinned');
   db.recordOriginalYearOutcome('pinned', { kind: 'found', year: 1972 });
