@@ -1372,6 +1372,59 @@ def extract_tail_window(src, offset_s, length_s, input_seek=False):
         raise
 
 
+def extract_window_by_count(src, offset_s, length_s):
+    """Decode the whole of `src` from its start and keep the samples that
+    fall in [offset, offset+length), counted as decoded (the edges scan's
+    clock), into a temp WAV; returns its path. For a corrupt file whose
+    timestamps stop short of where its samples run, where every seek misses.
+    A window past the end of what decodes comes back short, not as an error."""
+    import wave
+
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+    frame = 4  # stereo s16le
+    first = int(round(offset_s * DEMUCS_SR)) * frame
+    stop = first + int(round(length_s * DEMUCS_SR)) * frame
+    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-threads", "1",
+           "-i", src, "-map", "0:a:0", "-vn", "-ac", "2", "-ar", str(DEMUCS_SR), "-f", "s16le", "pipe:1"]
+    fd, dest = tempfile.mkstemp(prefix="subwave-tail-", suffix=".wav")
+    os.close(fd)
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    timer = threading.Timer(WHOLE_FILE_TIMEOUT_S, proc.kill)
+    timer.start()
+    try:
+        pos, kept = 0, []
+        while pos < stop:
+            data = proc.stdout.read(_WHOLE_FILE_CHUNK)
+            if not data:
+                break
+            lo, hi = max(first - pos, 0), min(stop - pos, len(data))
+            if hi > lo:
+                kept.append(data[lo:hi])
+            pos += len(data)
+        # The window is in hand: the rest of the file is not needed.
+        proc.kill()
+        proc.wait()
+        with wave.open(dest, "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(DEMUCS_SR)
+            w.writeframes(b"".join(kept))
+        return dest
+    except BaseException:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
+    finally:
+        timer.cancel()
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
 # Lazily loaded, at most once. None means "no embeddings this run" — either
 # disabled or a load failure (which we log once and then never retry, so one bad
 # model can't make every track fail).
@@ -3378,20 +3431,27 @@ class FileSource:
             return y is None or np.shape(y)[-1] < ANALYZE_SR * length * 0.6
 
         y_src, sr = self.load_tail(librosa, sr=ANALYZE_SR, mono=False, offset=offset, duration=length)
-        if short(y_src) and in_place:
-            # A damaged file (bad frame headers mid-way) can lose the in-place
-            # time seek and read short; ffmpeg resyncs past the damage, as the
-            # edges scan that placed this window did. Same local copy.
+        # A damaged file can read short where the edges scan, which placed
+        # this window, read it whole. Two ffmpeg fallbacks, from the same
+        # copy: a seek (resyncs past bad frame headers), then counting decoded
+        # samples (for timestamps that stop short of where the samples run,
+        # where every seek misses).
+        src = self.src_path if in_place else self.stream_url
+        fallbacks = ([lambda: extract_tail_window(src, offset, length, input_seek=input_seek_is_exact(src))]
+                     if in_place else [])
+        fallbacks.append(lambda: extract_window_by_count(src, offset, length))
+        for fallback in fallbacks:
+            if not short(y_src):
+                break
+            self.close_window()
             try:
-                self.window_tmp = extract_tail_window(self.src_path, offset, length,
-                                                      input_seek=input_seek_is_exact(self.src_path))
+                self.window_tmp = fallback()
                 self.window_base_s = offset
-                log("placed tail read short in place; decoded the window with ffmpeg")
                 y_src, sr = self.load_tail(librosa, sr=ANALYZE_SR, mono=False, offset=offset, duration=length)
             except Exception as e:  # noqa: BLE001 — answered as not reached
                 self.close_window()
                 log(f"placed tail: ffmpeg window failed: {e}")
-                return "tail-not-reached"
+                y_src = None
         if short(y_src):
             return "tail-not-reached"
         return y_src, sr, offset

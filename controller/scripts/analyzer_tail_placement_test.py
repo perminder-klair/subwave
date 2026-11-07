@@ -348,15 +348,18 @@ def t_a_window_that_decodes_short_is_not_reached():
     src = aw.FileSource("/staged/x.flac", complete=True)
     src.duration_s = 200.0
     with Patched(load_audio=lambda _l, _p, **kw: (tone(3.0), kw["sr"]), extract_tail_window=fake_extract,
-                 log=lambda *_a: None):
+                 extract_window_by_count=fake_extract, log=lambda *_a: None):
         assert src.tail(FakeLibrosa, {"end_ms": 180_000, "duration_ms": 200_000}) == "tail-not-reached"
     src.close()
     # ffmpeg itself failing on the file is the same answer, not a crash.
-    src = aw.FileSource("/staged/x.flac", complete=True)
-    src.duration_s = 200.0
-    with Patched(load_audio=lambda _l, _p, **kw: (tone(3.0), kw["sr"]), log=lambda *_a: None,
-                 extract_tail_window=lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("ffmpeg: bad"))):
-        assert src.tail(FakeLibrosa, {"end_ms": 180_000, "duration_ms": 200_000}) == "tail-not-reached"
+    boom = lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("ffmpeg: bad"))  # noqa: E731
+    for copy in (dict(complete=True), dict(complete=False, stream_url="http://nd/rest/stream?id=1")):
+        src = aw.FileSource("/staged/x.flac", **copy)
+        src.duration_s = 200.0
+        with Patched(load_audio=lambda _l, _p, **kw: (tone(3.0), kw["sr"]), log=lambda *_a: None,
+                     extract_tail_window=boom if copy["complete"] else fake_extract, extract_window_by_count=boom):
+            assert src.tail(FakeLibrosa, {"end_ms": 180_000, "duration_ms": 200_000}) == "tail-not-reached", copy
+        src.close()
 
 
 def t_a_damaged_file_that_seeks_short_is_read_by_ffmpeg():
@@ -393,6 +396,49 @@ def t_a_damaged_file_that_seeks_short_is_read_by_ffmpeg():
     tmp = loads[1][0]
     src.close()
     assert not os.path.exists(tmp), "the extracted window outlived its source"
+
+
+def _count_case(copy, expect_src):
+    # Every timestamp-based read comes back short (a corrupt file whose
+    # timestamps stop short of where its samples run); counting decoded
+    # samples, as the edges scan did, finds the window.
+    good = np.stack([tone(20.0), tone(20.0)])
+    seek_calls, count_calls = [], []
+
+    def fake_load(_librosa, path, **kw):
+        return (good if path.endswith("-count.wav") else np.zeros((2, 0), dtype=np.float32)), kw["sr"]
+
+    def mk(suffix, log_, src, offset_s, length_s, **_k):
+        log_.append((src, offset_s, length_s))
+        fd, p = tempfile.mkstemp(suffix=suffix)
+        os.close(fd)
+        return p
+
+    s = aw.FileSource("/staged/x.flac", **copy)
+    s.duration_s = 200.0
+    with Patched(load_audio=fake_load, log=lambda *_a: None, input_seek_is_exact=lambda _p: True,
+                 extract_tail_window=lambda *a, **k: mk("-seek.wav", seek_calls, *a, **k),
+                 extract_window_by_count=lambda *a, **k: mk("-count.wav", count_calls, *a, **k)):
+        window = s.tail(FakeLibrosa, {"end_ms": 180_000, "duration_ms": 200_000})
+    assert not isinstance(window, str), window
+    start = 180.0 - aw.OUTRO_SECONDS
+    assert window[2] == start
+    assert count_calls == [(expect_src, start, aw.OUTRO_SECONDS)], count_calls
+    tmp = s.window_tmp
+    assert tmp and tmp.endswith("-count.wav")
+    s.close()
+    assert not os.path.exists(tmp), "the counted window outlived its source"
+    return seek_calls
+
+
+def t_a_capped_copy_whose_stream_seeks_short_counts_samples():
+    seeks = _count_case(dict(complete=False, stream_url="http://nd/rest/stream?id=1"), "http://nd/rest/stream?id=1")
+    assert [c[0] for c in seeks] == ["http://nd/rest/stream?id=1"], seeks
+
+
+def t_a_complete_copy_whose_seeks_read_short_counts_samples():
+    seeks = _count_case(dict(complete=True, stream_url="http://nd/rest/stream?id=1"), "/staged/x.flac")
+    assert [c[0] for c in seeks] == ["/staged/x.flac"], seeks
 
 
 def t_a_placed_window_that_reads_silent_is_unmeasurable():
@@ -438,6 +484,20 @@ def t_real_ffmpeg_window_lands_on_the_sample():
             os.remove(out)
         assert abs(length - 4.0) < 0.05, (ext, length)
         assert onset is not None and abs(onset - 2.0) < 0.03, (ext, onset)
+        # Counting decoded samples lands on the same sample.
+        out = aw.extract_window_by_count(p, 8.0, 4.0)
+        try:
+            onset, length = _onset_s(out)
+        finally:
+            os.remove(out)
+        assert abs(length - 4.0) < 0.01, ("count", ext, length)
+        assert onset is not None and abs(onset - 2.0) < 0.03, ("count", ext, onset)
+    # A window past the end of what decodes is short, not an error.
+    out = aw.extract_window_by_count(src["flac"], 28.0, 4.0)
+    try:
+        assert abs(_onset_s(out)[1] - 2.0) < 0.01, _onset_s(out)
+    finally:
+        os.remove(out)
 
 
 def t_the_flat_analysis_places_the_tail_too():
@@ -530,6 +590,8 @@ test("a capped copy's window is decoded from the stream, and cleaned up",
 test("a capped copy with no stream URL is still capped-download", t_file_source_without_a_stream_still_says_why)
 test("a window that decodes short is tail-not-reached", t_a_window_that_decodes_short_is_not_reached)
 test("a damaged file that seeks short is read by ffmpeg", t_a_damaged_file_that_seeks_short_is_read_by_ffmpeg)
+test("a capped copy whose stream seeks short counts decoded samples", t_a_capped_copy_whose_stream_seeks_short_counts_samples)
+test("a complete copy whose seeks read short counts decoded samples", t_a_complete_copy_whose_seeks_read_short_counts_samples)
 test("a placed window that reads silent is unmeasurable", t_a_placed_window_that_reads_silent_is_unmeasurable)
 test("real ffmpeg: the window lands on the sample (FLAC input seek, MP3 output seek)",
      t_real_ffmpeg_window_lands_on_the_sample)
