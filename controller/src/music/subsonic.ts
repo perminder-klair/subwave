@@ -586,6 +586,23 @@ export async function getScanStatus(): Promise<boolean | null> {
   }
 }
 
+// The same call, read for its song count as well (Navidrome answers `count`,
+// the tracks in its library). One cheap request where counting otherwise means
+// walking every album. Each field is null when unknown.
+export async function getScanSummary(): Promise<{ scanning: boolean | null; count: number | null }> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    const s = r.scanStatus;
+    const count = Number(s?.count);
+    return {
+      scanning: typeof s?.scanning === 'boolean' ? s.scanning : null,
+      count: s?.count != null && Number.isSafeInteger(count) && count >= 0 ? count : null,
+    };
+  } catch {
+    return { scanning: null, count: null };
+  }
+}
+
 export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
   const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];

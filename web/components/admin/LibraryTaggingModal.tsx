@@ -9,6 +9,7 @@ import { Btn } from './ui';
 import { cn } from '../../lib/cn';
 import type { Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 import { num } from './LibraryTaggingPanel';
+import ScheduledTaggingCard from './library/ScheduledTaggingCard';
 
 type Tab = 'run' | 'rescan' | 'reset';
 
@@ -241,6 +242,8 @@ export default function LibraryTaggingModal(p: Props) {
                 </Btn>
               </div>
             </div>
+            {/* Scheduled tagging (#2282): the same steps and limit, once a day. */}
+            <ScheduledTaggingCard />
           </>
         )}
 
