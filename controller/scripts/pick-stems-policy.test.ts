@@ -156,6 +156,28 @@ test('budget: many picks between two sweeps never pass budget + allowance + one 
   }
 });
 
+test('budget: folders the sweep cannot delete are judged out, as the sweep judges them (#2253)', () => {
+  const budget = 1 * GiB;
+  // Dirs over 5% of the budget: the allowance is one dir, a whole number of
+  // bytes, so the boundary below is exact.
+  const est = 60 * MB;
+  const allowance = policy.overshootAllowanceBytes(budget, est);
+  assert.equal(allowance, est);
+  const at = (usedBytes: number, unevictableBytes?: number) =>
+    policy.budgetVeto({ usedBytes, budgetBytes: budget, estTrackBytes: est, unevictableBytes });
+  // The verifier's probe: half the cache stuck, the sweep satisfied at the budget.
+  assert.equal(at(2 * GiB), 'budget-full', 'counted, the stuck GB keeps it full for good');
+  assert.equal(at(2 * GiB, 1 * GiB), null, 'the evictable GB is at the budget: a pick is admitted');
+  assert.equal(at(2 * GiB + allowance - 1, 1 * GiB), null);
+  assert.equal(at(2 * GiB + allowance, 1 * GiB), 'budget-full', 'the allowance still binds, on top of the stuck bytes');
+  // Unknown (a walk does not probe) or malformed is the old rule.
+  assert.equal(at(2 * GiB, 0), 'budget-full');
+  assert.equal(at(2 * GiB, Number.NaN), 'budget-full');
+  assert.equal(at(2 * GiB, -1 * GiB), 'budget-full');
+  // More stuck than used (a figure from before a purge) judges nothing evictable.
+  assert.equal(at(1 * GiB, 3 * GiB), null);
+});
+
 // ---- the sweep ------------------------------------------------------------
 
 test('sweep: queued tracks are kept last only while pick-time stems is on', () => {

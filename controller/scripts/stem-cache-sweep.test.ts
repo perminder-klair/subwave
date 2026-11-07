@@ -18,7 +18,7 @@
 import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chmodSync, existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -234,6 +234,126 @@ async function main() {
         [...(await stemCache.cachedTrackIdSet())].sort(),
         ['fresh-a', 'fresh-b', 'stuck-a', 'stuck-b'],
       );
+    } finally {
+      unstick();
+    }
+  });
+
+  await test('pick-time stems: stuck folders no longer keep the cache full for good (#2253)', async (t) => {
+    // The verifier's probe on #2250: 32 of 64 dirs undeletable, sweeps that
+    // remove nothing, and budgetVeto turning every pick away for good, because
+    // it counted bytes the sweep had already left out of its own check. Sparse
+    // files give the 1 GB budget floor its real scale without writing a GB.
+    if (skipAsRoot()) return;
+    t.mock.method(console, 'warn', () => {});
+    const policy = await import('../src/broadcast/pick-stems-policy.js');
+    const GB = 1024 ** 3;
+    const budget = 1 * GB;
+    const dirBytes = 32 * MB;
+    const snapshotFile = join(stateDir, 'stem-cache-usage.json');
+    const readSnap = () => JSON.parse(readFileSync(snapshotFile, 'utf8'));
+    const sparseDir = (id: string, ageSec: number) => {
+      const dir = stemCache.dirFor(id);
+      mkdirSync(dir, { recursive: true });
+      const f = join(dir, 'head-drums.flac');
+      writeFileSync(f, '');
+      truncateSync(f, dirBytes);
+      const ts = (Date.now() - ageSec * 1000) / 1000;
+      utimesSync(f, ts, ts);
+      return dir;
+    };
+    const veto = async () => {
+      const u = await stemCache.usage();
+      return policy.budgetVeto({
+        usedBytes: u.bytes, budgetBytes: budget, estTrackBytes: u.estTrackBytes, unevictableBytes: u.unevictableBytes,
+      });
+    };
+    // One pick-time separation, settled the way pick-stems.ts settles it.
+    const pickTimeWrite = async (id: string) => {
+      const before = await stemCache.trackDirBytes(id);
+      sparseDir(id, 0);
+      await stemCache.settleTrackWrite(id, before);
+    };
+
+    resetCache();
+    const stuck: string[] = [];
+    for (let i = 0; i < 64; i++) {
+      const dir = sparseDir(`t${i}`, (i + 1) * 3600);
+      if (i % 2 === 0) stuck.push(dir);
+    }
+    forgetSnapshot();
+    const unstick = stuckDirs(stuck);
+    try {
+      for (let s = 0; s < 2; s++) {
+        const res = await stemCache.sweep(budget);
+        assert.deepEqual(
+          { removed: res.removed, failedDirs: res.failedDirs, overBudgetBytes: res.overBudgetBytes },
+          { removed: 0, failedDirs: 32, overBudgetBytes: 1 * GB },
+          'what can go already fits; the stuck GB is reported, never chased',
+        );
+      }
+      assert.equal(readSnap().unevictableBytes, 32 * dirBytes, 'the sweep records what it cannot delete');
+      const u = await stemCache.usage();
+      assert.equal(u.bytes, 2 * GB, 'the total still counts the stuck folders (overage, headroom)');
+      assert.equal(u.unevictableBytes, 1 * GB);
+      assert.equal(
+        policy.budgetVeto({ usedBytes: u.bytes, budgetBytes: budget, estTrackBytes: u.estTrackBytes }),
+        'budget-full',
+        'the old rule: every pick turned away until someone opens the folders',
+      );
+      assert.equal(await veto(), null, 'judged on the evictable part, a pick is admitted');
+
+      // Picks run the cache past the allowance, then the sweep makes room, as
+      // the booth-log notice promises.
+      let admitted = 0;
+      for (let pick = 0; pick < 10 && (await veto()) === null; pick++) {
+        await pickTimeWrite(`pick-${pick}`);
+        admitted += 1;
+      }
+      assert.ok(admitted >= 1 && admitted < 10, `${admitted} picks, then the allowance binds`);
+      assert.equal(await veto(), 'budget-full');
+      assert.equal(readSnap().unevictableBytes, 1 * GB, 'a pick-time settle keeps the figure');
+      const res = await stemCache.sweep(budget);
+      assert.equal(res.removed, admitted, 'the sweep evicts back down to the budget');
+      assert.equal(res.failedDirs, 32);
+      assert.equal(await veto(), null, 'and pick-time stems runs again');
+    } finally {
+      unstick();
+    }
+  });
+
+  await test('the stuck figure rides every writer that keeps the totals, and a walk drops it', async (t) => {
+    if (skipAsRoot()) return;
+    t.mock.method(console, 'warn', () => {});
+    resetCache();
+    const snapshotFile = join(stateDir, 'stem-cache-usage.json');
+    const readSnap = () => JSON.parse(readFileSync(snapshotFile, 'utf8'));
+    const unstick = stuckDirs([makeDir('stuck-a', 10 * MB, 9000), makeDir('stuck-b', 10 * MB, 8000)]);
+    makeDir('fresh-a', 1 * MB, 100);
+    try {
+      await stemCache.sweep(15 * MB);
+      assert.equal(readSnap().unevictableBytes, 20 * MB);
+      // An analysis pass: pending, then settled with a new dir.
+      assert.equal(await stemCache.markPassPending(), true);
+      assert.equal(readSnap().unevictableBytes, 20 * MB, 'markPassPending');
+      // Written as the pass writes it: makeDir would drop the snapshot.
+      mkdirSync(stemCache.dirFor('pass-new'), { recursive: true });
+      writeFileSync(join(stemCache.dirFor('pass-new'), 'head-drums.flac'), Buffer.alloc(1 * MB));
+      const settled = await stemCache.settlePassWrites(['pass-new'], 15 * MB);
+      assert.ok(settled, 'the pass settles additively');
+      assert.equal(readSnap().unevictableBytes, 20 * MB, 'settlePassWrites');
+      assert.equal((await stemCache.usage()).unevictableBytes, 20 * MB, 'served from the snapshot');
+      // forgetStems, the orphan purge: stale, figure kept beside the totals.
+      await stemCache.markUsageStale();
+      assert.equal(readSnap().stale, true);
+      assert.equal(readSnap().unevictableBytes, 20 * MB, 'markUsageStale');
+      // The next read walks, and a walk does not probe: unknown, the old rule.
+      const walked = await stemCache.usage();
+      assert.equal(walked.unevictableBytes, 0);
+      assert.equal(readSnap().unevictableBytes, undefined, 'a walk drops it');
+      // Under budget, the sweep records none.
+      await stemCache.sweep(1000 * MB, { force: true });
+      assert.equal(readSnap().unevictableBytes, undefined);
     } finally {
       unstick();
     }
