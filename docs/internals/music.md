@@ -504,7 +504,15 @@ survive unrelated writes and resynchronization. Head-only vocal work requires
 confirmed `tailVocalAvailable()` support through the shared capability policy;
 unknown support still allows missing head vocals but never widens tail backfill.
 Targeted runs that disable vocals preserve stored tail vocal ranges, including
-an instrumental `[]`, without marking the carried measurement fresh.
+an instrumental `[]`, without marking the carried measurement fresh. So does a
+plain `--re-analyze` with vocals off (#2255): `clearAnalysis({ keepVocal })`
+keeps the tail measurement (`outro_json`, `tail_silence_ms`, `tail_start_ms`)
+and its measured facet row alongside the head's vocal ranges, because the
+outro holds the tail half of the instrumental verdict, and the pass's fresh
+outro carries the stored ranges forward. Clearing it read every instrumental-head,
+sung-tail row as instrumental from the clear until a vocal-on pass measured it
+again, and marked its vector both ways. A row the pass has not reached yet keeps
+its old outro, and a head-only vocal row stays head-only, so it stays due.
 
 **The whole-file facets: `loudness` v2 and `edges`.** Both read the WHOLE file
 at its native rate in ONE ffmpeg run per track (`analyze_worker.py`
