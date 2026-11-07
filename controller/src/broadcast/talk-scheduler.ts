@@ -190,7 +190,17 @@ export function windowEndMinute(row: TalkSlot, openMinute: number): number {
 
 // Stable identity for "this hour's :20 window", so one-fire-per-slot survives a
 // per-minute tick with no timer. Station time, like the minutes the windows
-// are read in. A DST fall-back re-opens a slot once; harmless.
+// are read in.
+//
+// A DST fall-back repeats the station hour and so every key in it, and a row
+// skips a slot whose key is the one it fired last (`fired` holds one per row).
+// A row with several slots an hour has moved on by the repeat and airs each
+// slot again; a row with ONE (the hourly check, the quiet rung's :45 ident,
+// the moderate rung's :20 banter) does not air in the repeated hour. A station
+// in its host's zone always behaved this way, since the process clock repeats
+// too; a station whose zone falls back when its host's does not (London on a
+// UTC host) used to air the hourly check in both 01:00 hours, and now airs it
+// once (#2254). Pinned by scripts/talk-scheduler.test.ts.
 export function talkSlotKey(kind: TalkKind, now: Date, slot: string): string {
   const { year, month, day, hour } = zonedParts(now);
   return `${kind}-${year}-${month}-${day}-${hour}-${slot}`;
@@ -320,12 +330,13 @@ function waitPlan(row: TalkSlot, slot: string, slotKey: string, reason: TalkWait
 // can't be why the row never speaks (#1539). Equality favours the scheduled row;
 // queue still owns the stale drop. Only asked of a row that can retry, so
 // `Number(slot)` is a real opening minute.
-function pendingOutlivesWindow(row: TalkSlot, slot: string, pending: PendingTalk, nowMs: number): boolean {
+function pendingOutlivesWindow(row: TalkSlot, slot: string, pending: PendingTalk, now: Date): boolean {
   // The window closes at the top of the minute after its last one, counted in
   // station minutes from the start of this one. Zone offsets are whole
   // minutes, so the minute boundary is the same instant on every clock.
+  const nowMs = now.getTime();
   const minuteStartMs = nowMs - (nowMs % 60_000);
-  const windowCloseMs = minuteStartMs + (windowEndMinute(row, Number(slot)) + 1 - talkMinute(new Date(nowMs))) * 60_000;
+  const windowCloseMs = minuteStartMs + (windowEndMinute(row, Number(slot)) + 1 - talkMinute(now)) * 60_000;
   const windowRemainingMs = Math.max(0, windowCloseMs - nowMs);
   return pendingVoiceValidForMs(pending.queuedAt, nowMs) > windowRemainingMs;
 }
@@ -343,7 +354,7 @@ function pendingHolds(
   // airs. Finite-window retry bounds would never hold these rows. #1539, #1619.
   if (row.opens === 'any') return pendingVoiceValidForMs(pending.queuedAt, p.now.getTime()) > 0;
   return canRetry(row, slot, minute)
-    && pendingOutlivesWindow(row, slot, pending, p.now.getTime());
+    && pendingOutlivesWindow(row, slot, pending, p.now);
 }
 
 // One row's decision, or null for nothing to do (outside the window, already

@@ -20,7 +20,7 @@ process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const {
-  TALK_SLOTS, talkSlot, talkTickPlan, talkSlotPlan, talkGap, talkSlotKey,
+  TALK_SLOTS, talkSlot, talkTickPlan, talkSlotPlan, talkGap, talkSlotKey, talkMinute,
   openMinuteFor, windowEndMinute, canRetry, standDownLine, missedLine,
 } = await import('../src/broadcast/talk-scheduler.js');
 const { BANTER_SLOTS, BANTER_WINDOW_MINUTES, BANTER_MIN_GAP_MS } = await import('../src/broadcast/banter-policy.js');
@@ -44,7 +44,9 @@ const clockAt = (minute: number, second = 0, hour = HOUR) =>
   new Date(2026, 7, 19, hour, minute, second).getTime();
 
 // Drives the planner exactly as scheduler.talkTick does. `feedback` closes the
-// loop: a segment that airs sets the quiet gap for every row after it.
+// loop: a segment that airs sets the quiet gap for every row after it. Minutes
+// are recorded on the station clock, which is the process's unless a test sets
+// a timezone.
 function makeReplay(opts: {
   lastTalkBreakAt?: number;
   feedback?: boolean;
@@ -57,7 +59,7 @@ function makeReplay(opts: {
 } = {}) {
   const fired: Partial<Record<TalkKind, string | null>> = {};
   const logged: Partial<Record<TalkKind, string | null>> = {};
-  const rang: { minute: number; kind: TalkKind; slot: string; air: string }[] = [];
+  const rang: { minute: number; at: Date; kind: TalkKind; slot: string; air: string }[] = [];
   const logs: string[] = [];
   let lastTalkBreakAt = opts.lastTalkBreakAt ?? 0;
   const tick = (now: Date) => {
@@ -86,13 +88,21 @@ function makeReplay(opts: {
         continue;
       }
       fired[plan.kind] = plan.slotKey;
-      rang.push({ minute: now.getMinutes(), kind: plan.kind, slot: plan.slot, air: plan.air });
+      rang.push({ minute: talkMinute(now), at: now, kind: plan.kind, slot: plan.slot, air: plan.air });
       if (opts.feedback) lastTalkBreakAt = now.getTime();
     }
     return plans;
   };
   const hour = (hourOf = HOUR) => { for (let m = 0; m < 60; m++) tick(at(m, hourOf)); };
-  return { tick, hour, rang, logs, minutesOf: (k: TalkKind) => rang.filter(r => r.kind === k).map(r => r.minute) };
+  // One tick a minute from `from`, whatever the host's minute hand reads.
+  const walk = (from: Date, minutes = 60) => {
+    for (let i = 0; i < minutes; i++) tick(new Date(from.getTime() + i * 60_000));
+  };
+  return {
+    tick, hour, walk, rang, logs,
+    minutesOf: (k: TalkKind) => rang.filter(r => r.kind === k).map(r => r.minute),
+    labels: () => rang.map(r => `${r.kind}@${r.minute}`),
+  };
 }
 
 test('a quiet hour is unchanged — every row still fires on the minute its cron did', async () => {
@@ -943,11 +953,10 @@ test('one talker per minute survives the switch — the loser waits, it does not
 
 // A station a fractional number of hours from its host (#2254). The rows used
 // to open on process minutes, so an IST station on a UTC host heard its "top of
-// the hour" check at station :30 and an ident on its own :00. `run` walks one
-// station hour on a UTC host, recording STATION minutes.
-async function onFractionalStation(fn: () => void | Promise<void>, zone = 'Asia/Kolkata') {
+// the hour" check at station :30 and an ident on its own :00.
+async function onStationClock(fn: () => void | Promise<void>, zone = 'Asia/Kolkata', host = 'UTC') {
   const prevTz = process.env.TZ;
-  process.env.TZ = 'UTC';
+  process.env.TZ = host;
   await settings.update({ timezone: zone });
   try {
     await fn();
@@ -961,49 +970,46 @@ async function onFractionalStation(fn: () => void | Promise<void>, zone = 'Asia/
 const utcAt = (h: number, m: number, s = 0) => new Date(Date.UTC(2026, 7, 19, h, m, s));
 const MINUTE = 60_000;
 
-function stationHour(from: Date, eligible: (kind: TalkKind, now: Date) => boolean) {
-  const fired: Partial<Record<TalkKind, string | null>> = {};
-  const logged: Partial<Record<TalkKind, string | null>> = {};
-  const rang: string[] = [];
-  for (let i = 0; i < 60; i++) {
-    const now = new Date(from.getTime() + i * MINUTE);
-    for (const plan of talkTickPlan({
-      now, lastTalkBreakAt: 0, pendingTalk: null, betweenTracksOnly: false,
-      eligible: kind => eligible(kind, now), externalSlot: () => null, fired, logged,
-    })) {
-      if (plan.act !== 'fire') continue;
-      fired[plan.kind] = plan.slotKey;
-      rang.push(`${plan.kind}@${zonedParts(now).minute}`);
-    }
+// The instant the station's clock reads 10:00 on 2026-08-19.
+function stationTen(): Date {
+  for (let t = utcAt(0, 0).getTime(); t < utcAt(0, 0).getTime() + 24 * 60 * MINUTE; t += MINUTE) {
+    const { day, hour, minute } = zonedParts(new Date(t));
+    if (day === 19 && hour === 10 && minute === 0) return new Date(t);
   }
-  return rang;
+  throw new Error('no station 10:00 on 2026-08-19');
 }
 
 const GATED: Partial<Record<TalkKind, string>> = { hourly: 'hourly', 'station-id': 'stationId', banter: 'banter' };
+const gated = (kind: TalkKind, now: Date) => !!GATED[kind] && shouldFire(GATED[kind], now);
 
 test('a fractional-offset station opens the hourly check, idents and banter on its own clock', async () => {
-  for (const zone of ['Asia/Kolkata', 'Asia/Kathmandu']) {
-    await onFractionalStation(async () => {
+  const cases = [
+    { zone: 'Asia/Kolkata', host: 'UTC', hostMinute: 30 },
+    { zone: 'Asia/Kathmandu', host: 'UTC', hostMinute: 15 },
+    { zone: 'America/St_Johns', host: 'UTC', hostMinute: 30 },     // -2:30 in August
+    { zone: 'Europe/London', host: 'Asia/Kolkata', hostMinute: 30 }, // the reverse
+  ];
+  for (const { zone, host, hostMinute } of cases) {
+    await onStationClock(async () => {
       await station('chatty');
-      // Station 10:00, wherever the host's minute hand is.
-      const ten = zone === 'Asia/Kolkata' ? utcAt(4, 30) : utcAt(4, 15);
-      assert.equal(zonedParts(ten).hour, 10);
-      assert.equal(zonedParts(ten).minute, 0);
-      const rang = stationHour(ten, (kind, now) => !!GATED[kind] && shouldFire(GATED[kind], now));
+      const ten = stationTen();
+      assert.equal(ten.getMinutes(), hostMinute, `${zone} on ${host}: the host's minute hand at station 10:00`);
+      const r = makeReplay({ eligible: gated });
+      r.walk(ten);
       assert.deepEqual(
-        rang,
+        r.labels(),
         ['hourly@0', 'station-id@15', 'banter@20', 'station-id@30', 'station-id@45', 'banter@50'],
-        `${zone}: the table's minutes are the station's`,
+        `${zone} on ${host}: the table's minutes are the station's`,
       );
       // One fire per STATION hour: the key names the station's 10 o'clock.
       assert.equal(talkSlotKey('hourly', ten, '0'), 'hourly-2026-8-19-10-0');
       assert.equal(talkSlotKey('hourly', new Date(ten.getTime() + 59 * MINUTE), '0'), 'hourly-2026-8-19-10-0');
-    }, zone);
+    }, zone, host);
   }
 });
 
 test("a fractional-offset station's frequency ladder asks per station slot", async () => {
-  await onFractionalStation(async () => {
+  await onStationClock(async () => {
     await station('moderate');
     // IST 10:15 is UTC 04:45; IST 10:30 is UTC 05:00.
     assert.equal(shouldFire('stationId', utcAt(4, 45)), true, 'the :15 ident is a moderate chance');
@@ -1015,15 +1021,57 @@ test("a fractional-offset station's frequency ladder asks per station slot", asy
 });
 
 test("the segment director's five-minute stride lands on the same ticks on either clock", async () => {
-  await onFractionalStation(async () => {
-    const ten = utcAt(4, 15);  // Kathmandu 10:00
-    const rang = stationHour(ten, kind => kind === 'segment');
-    assert.deepEqual(rang, Array.from({ length: 12 }, (_, i) => `segment@${i * 5}`));
+  await onStationClock(async () => {
+    const r = makeReplay({ eligible: kind => kind === 'segment' });
+    r.walk(utcAt(4, 15));  // Kathmandu 10:00
+    assert.deepEqual(r.labels(), Array.from({ length: 12 }, (_, i) => `segment@${i * 5}`));
   }, 'Asia/Kathmandu');
 });
 
+// A DST fall-back repeats the station hour and every slot key in it, and a row
+// skips the slot it fired last. So a row with one slot an hour airs once across
+// both passes, and a row with several slots airs each of them again. London on
+// a UTC host used to hear the hourly check in both 01:00 hours, on the host's
+// unrepeated keys; it now hears it once, like London on a London host always
+// did (#2254).
+test('a DST fall-back airs a one-slot-an-hour row once across both passes', async () => {
+  // 2026-10-25: London 02:00 BST falls back to 01:00 GMT at UTC 01:00, so
+  // UTC 00:00-01:59 is London's 01:00 hour twice.
+  const firstPass = new Date(Date.UTC(2026, 9, 25, 0, 0));
+  const expected: Record<string, string[]> = {
+    chatty: [
+      'hourly@00:00', 'station-id@00:15', 'banter@00:20', 'station-id@00:30', 'station-id@00:45', 'banter@00:50',
+      'station-id@01:15', 'banter@01:20', 'station-id@01:30', 'station-id@01:45', 'banter@01:50',
+    ],
+    // Banter's one moderate slot, :20, airs once; the :15/:45 idents twice.
+    moderate: [
+      'hourly@00:00', 'station-id@00:15', 'banter@00:20', 'station-id@00:45',
+      'station-id@01:15', 'station-id@01:45',
+    ],
+    // The quiet rung's one ident, at :45, airs once (its hourly check runs
+    // every other station hour, so it is left out here).
+    quiet: ['station-id@00:45'],
+  };
+  for (const host of ['UTC', 'Europe/London']) {
+    await onStationClock(async () => {
+      assert.equal(zonedParts(firstPass).hour, 1);
+      assert.equal(zonedParts(new Date(firstPass.getTime() + 60 * MINUTE)).hour, 1, 'the hour repeats');
+      for (const [frequency, want] of Object.entries(expected)) {
+        await station(frequency);
+        const r = makeReplay({ eligible: (kind, now) => (frequency !== 'quiet' || kind !== 'hourly') && gated(kind, now) });
+        r.walk(firstPass, 120);
+        assert.deepEqual(
+          r.rang.map(x => `${x.kind}@${x.at.toISOString().slice(11, 16)}`),
+          want,
+          `${frequency} London station on a ${host} host`,
+        );
+      }
+    }, 'Europe/London', host);
+  }
+});
+
 test("the pending-clip hold measures the window's close on the station clock", async () => {
-  await onFractionalStation(async () => {
+  await onStationClock(async () => {
     // IST 10:20 is UTC 04:50: the :15 ident window has five station minutes
     // left (it closes at 10:25). On the host's clock :50 is past :24, which
     // read as no time left and held the row for any live clip.

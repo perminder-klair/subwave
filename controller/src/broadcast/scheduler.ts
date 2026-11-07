@@ -898,10 +898,10 @@ async function runSegmentTick() {
   });
 }
 
-// Programme beats. Placement is a STATION-clock fact and station zones sit at
-// :30/:45 offsets, so the talk tick samples the row every 5 minutes and
-// dispatches on programme.dueBeat(); beat flags make repeat ticks no-ops. The
-// intro rides the session-settled hook. Gating lives in programme.ts.
+// Programme beats. Placement is a STATION-clock fact: the talk tick samples
+// the row every fifth station minute and dispatches on programme.dueBeat();
+// beat flags make repeat ticks no-ops. The intro rides the session-settled
+// hook. Gating lives in programme.ts.
 //
 // Gate-free manual runners (/dj/segment). Intro/outro re-mark their beat so the
 // autonomous path doesn't re-open or re-close the show, but only once it aired:
