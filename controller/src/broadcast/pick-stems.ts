@@ -228,7 +228,13 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
     try {
       res = await analyzer.analyzeFacets(
         id,
-        { facets: ['stems'], stems_dir: dir, complete: staged.complete, timeoutMs: requestDeadlineMs() },
+        {
+          facets: ['stems'],
+          stems_dir: dir,
+          stems_windows: policy.stemsWindowsFor(need),
+          complete: staged.complete,
+          timeoutMs: requestDeadlineMs(),
+        },
         staged.path,
       );
     } catch (err) {
