@@ -37,6 +37,13 @@ import {
   clampBackupKeep,
   type BackupCadence,
   type ScheduledBackupSettings,
+  SETTINGS_TAGGER_AUTO_MODES,
+  TAGGER_AUTO_LIMIT_BOUNDS,
+  TAGGER_AUTO_STEP_KEYS,
+  TAGGER_AUTO_TIME_RE,
+  type TaggerAutoMode,
+  type TaggerAutoSettings,
+  type TaggerAutoSteps,
 } from '../schemas/settings.js';
 // The persona + prompt-library rules themselves, so this lenient path and
 // update()'s strict one cannot restate them differently.
@@ -89,6 +96,27 @@ export function normalizeBackups(backups: any): ScheduledBackupSettings {
     ? backups.cadence
     : DEFAULTS.backups.cadence;
   return { cadence, keep: clampBackupKeep(backups?.keep) };
+}
+
+// Scheduled tagging (#2282). Each field is repaired on its own, so one bad
+// value never disarms the others, and an unreadable mode reads as `off`: a run
+// the operator did not clearly ask for spends LLM calls and CPU. A bad time or
+// limit falls back to the default rather than switching a schedule off.
+export function normalizeTaggerAuto(auto: any): TaggerAutoSettings {
+  const d = DEFAULTS.tagger.auto;
+  const mode: TaggerAutoMode = (SETTINGS_TAGGER_AUTO_MODES as readonly unknown[]).includes(auto?.mode)
+    ? auto.mode
+    : d.mode;
+  const time = typeof auto?.time === 'string' && TAGGER_AUTO_TIME_RE.test(auto.time) ? auto.time : d.time;
+  const n = Number(auto?.limit);
+  const limit = auto?.limit != null && auto?.limit !== '' && Number.isFinite(n)
+    ? Math.min(TAGGER_AUTO_LIMIT_BOUNDS.max, Math.max(TAGGER_AUTO_LIMIT_BOUNDS.min, Math.floor(n)))
+    : d.limit;
+  const steps = {} as TaggerAutoSteps;
+  for (const k of TAGGER_AUTO_STEP_KEYS) {
+    steps[k] = typeof auto?.steps?.[k] === 'boolean' ? auto.steps[k] : d.steps[k];
+  }
+  return { mode, time, limit, steps };
 }
 
 // A stored `smooth_add` duck depth, repaired rather than refused — load()'s

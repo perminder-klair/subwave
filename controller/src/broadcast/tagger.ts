@@ -153,6 +153,12 @@ async function applyRotationNow(): Promise<boolean> {
   }
 }
 
+// How a run ended, for a caller that started it and wants to know (the
+// scheduled run, broadcast/tag-schedule.ts). Called once, after the slot is
+// free; `holds` is what the run held back for the operator, in its words.
+export type TaggerRunEnd = TaggerLastRun & { holds: string[]; runLogId: string | null };
+type OnExit = (end: TaggerRunEnd) => void;
+
 // The operator's answer to a replaced-file hold (music/replaced-file-policy.ts),
 // for the two runs that walk. The admin UI sends neither: both are API-only.
 type ReplacedAnswer = { confirmReplaced?: boolean; acceptReplaced?: boolean };
@@ -187,6 +193,7 @@ export function startTagger(
     analyze?: boolean;
     // Per-run Demucs override; undefined defers to the setting.
     vocal?: boolean;
+    onExit?: OnExit;
   } & ReplacedAnswer = {},
 ) {
   const { limit, reseed, reEnrich, reAnalyze, upgrade, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
@@ -232,7 +239,7 @@ export function startTagger(
   ]
     .filter(Boolean)
     .join(', ');
-  spawnChild('tag', args, detail);
+  spawnChild('tag', args, detail, { onExit: opts.onExit });
 }
 
 // Standalone analysis pass (bpm/key/intro + CLAP audio embeddings). `audio` and
@@ -257,7 +264,7 @@ export function startAnalyzer(opts: { limit?: number; audio?: boolean; vocal?: b
 // Walk Navidrome and prune library rows it no longer contains. No embeddings, no
 // LLM. The walk stamps era verdicts (#1418) and chains the incremental MusicBrainz
 // original-year backfill. Same single-flight slot; caller rejects when running.
-export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence } & ReplacedAnswer = {}) {
+export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence; onExit?: OnExit } & ReplacedAnswer = {}) {
   const replaced = replacedFlags(opts);
   spawnChild(
     'reconcile',
@@ -271,7 +278,7 @@ function spawnChild(
   mode: TaggerMode,
   args: string[],
   detail: string,
-  opts: { automaticIdRotation?: RotatedIdEvidence } = {},
+  opts: { automaticIdRotation?: RotatedIdEvidence; onExit?: OnExit } = {},
 ) {
   const label = mode === 'tag' ? 'tagger' : mode === 'analyze' ? 'analyzer' : 'reconcile';
   // detached:true makes the child a process-GROUP leader so stopTagger can signal the
@@ -300,6 +307,19 @@ function spawnChild(
   runLog = openRunLog(RUN_LOG_DIR, new Date(startedAt), mode, runLog?.runId ?? null);
   tagger.runLogId = runLog.runId;
   const thisRunLog = runLog;
+
+  // One call per run: 'error' after a successful spawn leaves the bookkeeping
+  // to 'exit', and the guard keeps a late second event from reporting twice.
+  let reported = false;
+  const reportExit = (last: TaggerLastRun) => {
+    if (reported || !opts.onExit) return;
+    reported = true;
+    try {
+      opts.onExit({ ...last, holds: [...tagger.holds], runLogId: thisRunLog.runId });
+    } catch (err: any) {
+      queue.log('error', `${label} exit callback failed: ${err?.message || err}`);
+    }
+  };
 
   let catalogueReady = false;
   let earlyRefresh: Promise<boolean> | null = null;
@@ -410,6 +430,7 @@ function spawnChild(
       finishedAt: new Date().toISOString(),
     };
     queue.log('error', `${label} could not start: ${err.message}`);
+    reportExit(tagger.lastRun);
   });
   // The run log closes on 'close', not 'exit': 'exit' can fire while the
   // child's last output is still in the pipes, and the file must hold it.
@@ -475,6 +496,7 @@ function spawnChild(
         if (opts.automaticIdRotation && outcome === 'ok') idRotationRecovery.automaticReconcileFailed();
       });
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
+    reportExit(tagger.lastRun);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);
 }
