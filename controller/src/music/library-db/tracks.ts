@@ -661,6 +661,10 @@ interface TrackAnalysisWrite {
   leadSilenceMs?: number | null;
   tailSilenceMs?: number | null;
   tailStartMs?: number | null;
+  // 2 = the analyzer placed the tail window from the stored edges; it then
+  // replaces whatever tail is stored. Absent = the end-of-file window, which
+  // never replaces a placed tail.
+  tailVersion?: number | null;
   // true stamps stems_at so the backfill scope drops the track. Pass true for a
   // MISS too: the stamp records the attempt, not disk presence (migration 17).
   stemsAttempted?: boolean;
@@ -681,6 +685,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
   const d = requireDb();
   d.transaction(() => {
   const wholeFileLoudness = hasWholeFileLoudness(id);
+  const placed = finite(a.tailVersion) != null && (a.tailVersion as number) >= 2 ? 1 : 0;
   let outro = a.outro;
   let carriedTailVocal = false;
   if (a.preserveTailVocal && outro) {
@@ -712,10 +717,13 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         vocal_ranges_json   = COALESCE(?, vocal_ranges_json),
         -- Outro: only computable off a COMPLETE file, so a capped-download pass
         -- passes null and keeps what's there. The two tail columns ride the
-        -- outro decode and share the rule.
-        outro_json          = COALESCE(?, outro_json),
-        tail_silence_ms     = COALESCE(?, tail_silence_ms),
-        tail_start_ms       = COALESCE(?, tail_start_ms),
+        -- outro decode and share the rule. A tail placed from the edges
+        -- (tail_version >= 2) outranks an end-of-file window: kept, unless
+        -- this answer was placed too (then it replaces it).
+        outro_json          = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN outro_json ELSE COALESCE(?, outro_json) END,
+        tail_silence_ms     = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN tail_silence_ms ELSE COALESCE(?, tail_silence_ms) END,
+        tail_start_ms       = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN tail_start_ms ELSE COALESCE(?, tail_start_ms) END,
+        tail_version        = CASE WHEN ? = 1 THEN 2 ELSE tail_version END,
         -- A pass with the stem cache off passes null and must not clear an
         -- earlier stem pass's stamp.
         stems_at            = COALESCE(?, stems_at),
@@ -741,9 +749,10 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
       Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
-      outro != null ? JSON.stringify(outro) : null,
-      Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
-      Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
+      placed, outro != null ? JSON.stringify(outro) : null,
+      placed, Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
+      placed, Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
+      placed,
       a.stemsAttempted ? new Date().toISOString() : null,
       ANALYSIS_VERSION,
       id,
@@ -764,6 +773,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
     tried: ['tail'],
     source: a.source ?? 'unknown',
     tailReason: a.source === 'capped' ? 'capped-download' : undefined,
+    tailUnplaced: !placed,
   });
   markTextVectorDirtyIfSoundChanged(id, ['measured']);
   })();
@@ -815,7 +825,10 @@ export interface FacetWrite {
     // unavailable marker, which settles it (unavailableCurveJson).
     curveUnavailable?: string | null;
   } | { unmeasurable: string };
-  tail?: { outro: TrackOutro | null; tailSilenceMs: number | null; tailStartMs: number | null } | { unmeasurable: string };
+  // `version` 2 = the analyzer placed the window from the stored edges; absent
+  // = the end-of-file window (an older analyzer, or no edges to place it).
+  tail?: { outro: TrackOutro | null; tailSilenceMs: number | null; tailStartMs: number | null; version?: number | null }
+    | { unmeasurable: string };
   clap?: number[];
   vocal?: { vocalRanges: TrackSection[]; tailVocalRanges: TrackSection[] | null };
   stems?: { attempted: true };
@@ -827,6 +840,9 @@ export interface FacetWrite {
   // which clears the failure history like a flat success.
   failed?: string;
   source: FacetSource;
+  // The tail was asked for without a placement (no edges stored): an
+  // unmeasurable answer then stays due (deriveFacetRows).
+  tailUnplaced?: boolean;
 }
 
 const finite = (v: unknown): number | null => (Number.isFinite(v as number) ? (v as number) : null);
@@ -888,16 +904,25 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
         tried.push('tail');
       } else {
         let outro = w.tail.outro;
-        if (outro && w.vocal?.tailVocalRanges == null) {
+        const tailVersion = finite(w.tail.version);
+        // Tail vocal ranges describe one window: carried over only when the
+        // new tail sits on the same one (both placed, or both end-of-file).
+        // A tail newly placed from the edges leaves them to be measured again
+        // (the vocal facet turns head-only, so the vocal backfill takes it).
+        const priorPlaced = ((d.prepare('SELECT tail_version AS v FROM tracks WHERE id = ?').get(id) as
+          { v: number | null } | undefined)?.v ?? 1) >= 2;
+        const samewindow = priorPlaced === (tailVersion != null && tailVersion >= 2);
+        if (outro && w.vocal?.tailVocalRanges == null && samewindow) {
           const kept = preserveTailVocal(id, outro);
           carriedTailVocal = kept !== outro;
           outro = kept;
         }
         // A fresh measurement off a proven end: overwrite, never COALESCE.
-        d.prepare('UPDATE tracks SET outro_json = ?, tail_silence_ms = ?, tail_start_ms = ? WHERE id = ?').run(
+        d.prepare('UPDATE tracks SET outro_json = ?, tail_silence_ms = ?, tail_start_ms = ?, tail_version = ? WHERE id = ?').run(
           outro ? JSON.stringify(outro) : null,
           finite(w.tail.tailSilenceMs) != null ? Math.max(0, Math.round(w.tail.tailSilenceMs as number)) : null,
           finite(w.tail.tailStartMs) != null ? Math.max(0, Math.round(w.tail.tailStartMs as number)) : null,
+          tailVersion != null && tailVersion >= 2 ? Math.round(tailVersion) : null,
           id,
         );
         fresh.push('tail');
@@ -943,7 +968,7 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
         'UPDATE tracks SET analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL WHERE id = ?',
       ).run(id);
     }
-    syncTrackFacets(id, { fresh, tried, source: w.source, unmeasurable });
+    syncTrackFacets(id, { fresh, tried, source: w.source, unmeasurable, tailUnplaced: w.tailUnplaced });
     if (w.clap) upsertTrackAudioVector(id, w.clap);
     // Only the facets that write a measured word's columns: a stems-only or
     // loudness-only answer moved none, so it never marks.
@@ -1076,8 +1101,14 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
       peak_db = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN peak_db END,
       ${KEEP_WHOLE_FILE_EXTRAS},
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL, outro_json = NULL,
-      lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
+      key_ranges_json = NULL,
+      -- A tail placed from the edges (tail_version >= 2) is kept like
+      -- whole-file loudness: a flat analysis can only re-measure the
+      -- end-of-file window.
+      outro_json = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN outro_json END,
+      tail_silence_ms = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN tail_silence_ms END,
+      tail_start_ms = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN tail_start_ms END,
+      lead_silence_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
       audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
       -- The failure history goes with the analysis it describes, or the tracks
