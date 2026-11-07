@@ -126,7 +126,7 @@ test('budget: the allowance is an hour of picks, capped at 5% of the budget, nev
 });
 
 test('budget: a full cache still takes a pick, up to the allowance', () => {
-  const at = (usedBytes: number) => policy.budgetVeto({ usedBytes, budgetBytes: 15 * GiB, estTrackBytes: 15 * MB });
+  const at = (usedBytes: number) => policy.budgetVeto({ usedBytes, budgetBytes: 15 * GiB, estTrackBytes: 15 * MB, unevictableBytes: 0 });
   const allowance = policy.overshootAllowanceBytes(15 * GiB, 15 * MB);
   assert.equal(at(0), null);
   assert.equal(at(15 * GiB), null, 'exactly full: the steady state after a backfill');
@@ -145,7 +145,7 @@ test('budget: many picks between two sweeps never pass budget + allowance + one 
     let used = budget; // the backfill filled it
     let admitted = 0;
     for (let pick = 0; pick < 500; pick++) {
-      if (policy.budgetVeto({ usedBytes: used, budgetBytes: budget, estTrackBytes: est })) continue;
+      if (policy.budgetVeto({ usedBytes: used, budgetBytes: budget, estTrackBytes: est, unevictableBytes: 0 })) continue;
       used += dir; // at most one dir a separation, settled before the next
       admitted += 1;
     }
@@ -163,19 +163,16 @@ test('budget: folders the sweep cannot delete are judged out, as the sweep judge
   const est = 60 * MB;
   const allowance = policy.overshootAllowanceBytes(budget, est);
   assert.equal(allowance, est);
-  const at = (usedBytes: number, unevictableBytes?: number) =>
+  const at = (usedBytes: number, unevictableBytes = 0) =>
     policy.budgetVeto({ usedBytes, budgetBytes: budget, estTrackBytes: est, unevictableBytes });
   // The verifier's probe: half the cache stuck, the sweep satisfied at the budget.
   assert.equal(at(2 * GiB), 'budget-full', 'counted, the stuck GB keeps it full for good');
   assert.equal(at(2 * GiB, 1 * GiB), null, 'the evictable GB is at the budget: a pick is admitted');
   assert.equal(at(2 * GiB + allowance - 1, 1 * GiB), null);
   assert.equal(at(2 * GiB + allowance, 1 * GiB), 'budget-full', 'the allowance still binds, on top of the stuck bytes');
-  // Unknown (a walk does not probe) or malformed is the old rule.
+  // None known (a walk does not probe) is the old rule. usage() cleans the
+  // figure (stem-cache-snapshot.test.ts), so the rule takes it as given.
   assert.equal(at(2 * GiB, 0), 'budget-full');
-  assert.equal(at(2 * GiB, Number.NaN), 'budget-full');
-  assert.equal(at(2 * GiB, -1 * GiB), 'budget-full');
-  // More stuck than used (a figure from before a purge) judges nothing evictable.
-  assert.equal(at(1 * GiB, 3 * GiB), null);
 });
 
 // ---- the sweep ------------------------------------------------------------

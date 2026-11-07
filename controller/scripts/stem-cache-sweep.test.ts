@@ -297,7 +297,7 @@ async function main() {
       assert.equal(u.bytes, 2 * GB, 'the total still counts the stuck folders (overage, headroom)');
       assert.equal(u.unevictableBytes, 1 * GB);
       assert.equal(
-        policy.budgetVeto({ usedBytes: u.bytes, budgetBytes: budget, estTrackBytes: u.estTrackBytes }),
+        policy.budgetVeto({ usedBytes: u.bytes, budgetBytes: budget, estTrackBytes: u.estTrackBytes, unevictableBytes: 0 }),
         'budget-full',
         'the old rule: every pick turned away until someone opens the folders',
       );
