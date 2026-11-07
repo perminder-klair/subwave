@@ -4,7 +4,7 @@
 
 import * as subsonic from '../subsonic.js';
 import * as lastfm from '../lastfm.js';
-import * as musicbrainz from '../musicbrainz.js';
+import { runYearLookups } from '../original-year.js';
 import * as db from '../library-db.js';
 import * as settings from '../../settings.js';
 import { createLastfmPacer, type LastfmPacer } from '../lastfm-pacer.js';
@@ -27,7 +27,7 @@ export async function phaseEnrich(
   const lyricsEnabled = enrichCfg.lyrics !== false;
   // Scoped in SQL, not by the tagger's untagged/enriched id set: gating on the
   // enrich scope would never backfill an already-tagged library.
-  const yearIds = pendingOriginalYearIds(reEnrich);
+  const yearIds = pendingOriginalYearIds(reEnrich, ids);
   const trackTagIds = trackTagsOn
     ? selectTrackTagIds({ reEnrich, limit, ids, owed: db.idsNeedingLastfmTrackTags() })
     : [];
@@ -164,46 +164,35 @@ export async function backfillLastfmTrackTags(
   return listed;
 }
 
-// Ids still owed a MusicBrainz original-year lookup (#842). Keyless, so default-on;
+// Ids owed a MusicBrainz original-year lookup (#842). Keyless, so default-on;
 // [] when settings.embedding.enrichment.originalYear is false.
-export function pendingOriginalYearIds(retryMisses: boolean): string[] {
+//
+// Always the year facet's due set: tracks never asked, and failed lookups past
+// their retry delay (original-year-policy.ts), library-wide. An answered "not
+// found" is settled and is re-asked only by `--facets year --where
+// unmeasurable` — or, with `retryMisses` (--re-enrich), for the misses inside
+// `scope`, the run's own tracks. Never every miss in the library.
+export function pendingOriginalYearIds(retryMisses: boolean, scope: readonly string[] = []): string[] {
   const enrichCfg = (settings.get() as any).embedding?.enrichment ?? {};
   if (enrichCfg.originalYear === false) return [];
-  return db.idsNeedingOriginalYear(retryMisses);
+  const due = db.yearLookupDueIds(Date.now());
+  if (!retryMisses) return due;
+  const inScope = new Set(scope);
+  const seen = new Set(due);
+  const misses = db.idsNeedingOriginalYear(true).filter(id => inScope.has(id) && !seen.has(id));
+  return [...due, ...misses];
 }
 
 // Original-year backfill (#842) for era-suspect tracks whose `year` is the
-// reissue's release date. Effectively serial whatever the pool width (MusicBrainz
-// throttles to 1 req/s), so every track gets a checked_at stamp on hit OR miss to
-// keep later passes cheap. Also run by --reconcile-only: that walk stamps
-// era_untrusted and clears stale album-tag years, so it must re-answer them
-// (#1418). Returns the number of years resolved.
+// reissue's release date. Also run by --reconcile-only: that walk stamps
+// era_untrusted and clears stale album-tag years, so it must answer the tracks
+// it has just made suspect (#1418). `retryMisses` lets the run's own misses be
+// asked again (see pendingOriginalYearIds). Returns the number resolved.
 export async function backfillOriginalYears(
   yearIds: string[],
   retryMisses: boolean,
   concurrency: number,
 ): Promise<number> {
-  if (!yearIds.length) return 0;
-  let resolvedYears = 0;
-  console.log(`[tag] original years: ${yearIds.length} era-suspect tracks to resolve via MusicBrainz (~1/s)`);
-  reportProgress({ phase: 'enrich', label: 'Resolving original years', done: 0, total: yearIds.length });
-  let checkedYears = 0;
-  await mapPool(yearIds, Math.min(concurrency, 4), async (id) => {
-    const t = db.getTrack(id);
-    if (!t || !musicbrainz.needsOriginalYearLookup(t, retryMisses)) return;
-    let mbid: string | null = null;
-    try {
-      mbid = (await subsonic.getSong(id))?.musicBrainzId || null;
-    } catch { /* MBID is optional — the search path covers it */ }
-    const year = await musicbrainz.lookupOriginalYear({ title: t.title, artist: t.artist, mbid, year: t.year });
-    db.setOriginalYear(id, year);
-    if (year != null) resolvedYears += 1;
-    checkedYears += 1;
-    if (checkedYears % 25 === 0) {
-      console.log(`[tag] original years ${checkedYears}/${yearIds.length} (${resolvedYears} resolved)`);
-      reportProgress({ phase: 'enrich', label: 'Resolving original years', done: checkedYears, total: yearIds.length });
-    }
-  });
-  return resolvedYears;
+  const stats = await runYearLookups(yearIds, { force: retryMisses, concurrency });
+  return stats.found;
 }
-
