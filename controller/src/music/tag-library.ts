@@ -300,16 +300,18 @@ async function main() {
         `(not forward-processing ${allUntagged.length} untagged)`,
     );
   } else {
+    // The remembered untaggables are in scope but not "to tag": count them apart.
+    const held = targetUntagged.filter(id => noLlm.has(id)).length;
     logEvent(
       'info',
-      `${targetUntagged.length.toLocaleString('en-GB')} new tracks to tag ` +
+      `${(targetUntagged.length - held).toLocaleString('en-GB')} new tracks to tag ` +
         `(${allUntagged.length.toLocaleString('en-GB')} still untagged)`,
     );
-    if (noLlm.size > 0) {
+    if (held > 0) {
       logEvent(
         'info',
-        `${noLlm.size.toLocaleString('en-GB')} of them came back untaggable before with the same ` +
-          `details, prompt and model, so they won't go to the LLM again`,
+        `${held.toLocaleString('en-GB')} more held back from the LLM: they came back untaggable before ` +
+          `with the same details, prompt and model (they can still take a neighbour vote)`,
       );
     }
   }

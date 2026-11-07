@@ -6,7 +6,7 @@ import { isUnreachable, isQuotaOrAuthError, errReason } from '../../llm/sdk.js';
 import { tagBatch, tagOne, type TagResult } from '../tagger-core.js';
 import { reportProgress } from '../tagger-progress.js';
 import { logEvent } from './log.js';
-import { tagInputFor, untaggableKey } from './tag-input.js';
+import { tagInputFor, recordTagAnswer } from './tag-input.js';
 
 // One LLM worker the batch loop pulls through. `pin` selects the leg (undefined
 // = normal primary/fallback failover, single-LLM mode); `label` is stamped on
@@ -95,20 +95,11 @@ async function processBatch(
       state.errors += 1;
       continue;
     }
-    const { moods, energy } = result;
-    if (moods.length === 0) {
-      db.markTrackUntaggable(songs[j].id, untaggableKey(input[j], promptHash, consumer.label));
+    const outcome = recordTagAnswer(songs[j].id, input[j], result, { source, promptHash, model: consumer.label });
+    if (outcome === 'untaggable') {
       state.untaggable.push({ id: songs[j].id, offVocab: !!result.offVocab });
       continue;
     }
-    db.upsertTrackTags(songs[j].id, {
-      moods,
-      energy,
-      source,
-      confidence: null,
-      promptHash,
-      model: consumer.label,
-    });
     tagged += 1;
   }
   return tagged;
@@ -223,10 +214,18 @@ function logUntaggable(untaggable: TagState['untaggable']): void {
   const cantTell = untaggable.filter(u => !u.offVocab).map(u => u.id);
   const offVocab = untaggable.filter(u => u.offVocab).map(u => u.id);
   if (cantTell.length > 0) {
-    logEvent('info', `${cantTell.length} untaggable (the model couldn't tell; not re-asked until they change): ${list(cantTell)}`);
+    logEvent(
+      'info',
+      `${cantTell.length} untaggable (the model couldn't tell; not re-asked until ` +
+        `the vocabulary, the model or their metadata changes): ${list(cantTell)}`,
+    );
   }
   if (offVocab.length > 0) {
-    logEvent('warning', `${offVocab.length} untaggable (every mood was outside the vocabulary): ${list(offVocab)}`);
+    logEvent(
+      'warning',
+      `${offVocab.length} untaggable (every mood was outside the vocabulary; not re-asked until ` +
+        `the vocabulary, the model or their metadata changes): ${list(offVocab)}`,
+    );
   }
 }
 
