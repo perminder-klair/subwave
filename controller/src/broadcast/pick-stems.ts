@@ -200,6 +200,7 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
     usedBytes: used.bytes,
     budgetBytes: stemCache.budgetBytes(),
     estTrackBytes: used.estTrackBytes,
+    unevictableBytes: used.unevictableBytes,
   });
   if (overBudget) return veto(overBudget);
 
