@@ -812,7 +812,9 @@ class AnalyzeRequest(BaseModel):
     # Facet requests only: which windows the `stems` facet separates ("head",
     # "tail"). Absent = both. Pick-time stems asks for the tail alone when the
     # head is cached (#2253); a worker that predates the field separates both.
-    stems_windows: list[str] | None = None
+    # Untyped here: the worker's parse_stems_windows judges it, and a malformed
+    # value separates both windows there rather than a 422 refusing the request.
+    stems_windows: Any = None
 
 
 @app.post("/analyze")

@@ -438,11 +438,17 @@ async def test_stems_windows_and_pool_size_contract():
             await server.analyze(server.AnalyzeRequest(path=audio.name, facets=["stems"], stems_dir="/s/x"))
             # A flat request has no stems facet to scope: never forwarded.
             await server.analyze(server.AnalyzeRequest(path=audio.name, stems_dir="/s/x", stems_windows=["tail"]))
+            # A malformed value is the worker's to judge (it separates both),
+            # never a 422 here.
+            await server.analyze(server.AnalyzeRequest(
+                path=audio.name, facets=["stems"], stems_dir="/s/x", stems_windows="tail",
+            ))
     finally:
         server.analyzer_pool.request = saved_request
     assert worker_calls[0]["stems_windows"] == ["tail"], worker_calls
     assert "stems_windows" not in worker_calls[1], worker_calls
     assert "stems_windows" not in worker_calls[2], worker_calls
+    assert worker_calls[3]["stems_windows"] == "tail", worker_calls
 
     saved_pool = server.analyzer_pool
     # Members still booting: /health answers without reading their clocks,
