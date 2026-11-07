@@ -201,6 +201,25 @@ test('render: stands down for a separation only when no pool member is spare', (
   assert.equal(at(true, 'none', 2), true);
 });
 
+test('render: the pool is the smaller of the controller\'s figure and the sidecar\'s (#2253)', () => {
+  const at = (concurrency: number, sidecarConcurrency: number | null | undefined) =>
+    policy.renderStandsDown({ separating: true, backend: 'sidecar', concurrency, sidecarConcurrency });
+  assert.equal(at(2, 1), true, 'a controller set higher than its sidecar: no spare member');
+  assert.equal(at(4, 2), false);
+  assert.equal(at(1, 4), true, 'the controller\'s own setting still caps it');
+  assert.equal(at(2, null), false, 'an older sidecar reports none: the controller\'s figure, as before');
+  assert.equal(at(2, undefined), false);
+  for (const bad of [0, -1, 1.5, Number.NaN]) assert.equal(policy.renderPoolSize({ concurrency: 2, sidecarConcurrency: bad }), 2);
+  assert.equal(policy.renderStandsDown({ separating: false, backend: 'sidecar', concurrency: 2, sidecarConcurrency: 1 }), false);
+});
+
+test('request: the tail alone when only the tail is missing (#2253)', () => {
+  assert.deepEqual(policy.stemsWindowsFor({ head: false, tail: true }), ['tail']);
+  assert.equal(policy.stemsWindowsFor({ head: true, tail: true }), undefined, 'both: the field is not sent');
+  assert.equal(policy.stemsWindowsFor({ head: true, tail: false }), undefined,
+    'a head to fill: both, so an older worker and a newer one do the same');
+});
+
 // ---- notices --------------------------------------------------------------
 
 test('notices: one line when a station-level reason first applies, none per pick', () => {

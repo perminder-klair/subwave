@@ -745,6 +745,11 @@ async def health():
         "analyze_loudness_curve_capable": analyzer_pool.capability("loudness_curve_capable", "whole_file"),
         # How many whole-file requests this host runs at once (its own lane).
         "analyze_whole_file_concurrency": WHOLE_FILE_CONCURRENCY,
+        # How many analysis workers this pool holds (ANALYZE_CONCURRENCY). The
+        # controller's blend render reads it to tell whether a spare member can
+        # serve it while a pick-time separation holds one (#2253), and uses the
+        # smaller of this and its own setting.
+        "analyze_concurrency": ANALYZE_CONCURRENCY,
         # Best-effort residency (#1204): whether CLAP/Demucs are believed
         # loaded right now — lets an operator confirm the idle release
         # without grepping logs. None while the worker is down.
@@ -804,6 +809,10 @@ class AnalyzeRequest(BaseModel):
     # (loudness v2, edges) read when `path` is a capped copy. Never fetched
     # here; the worker's ffmpeg streams it.
     stream_url: str | None = None
+    # Facet requests only: which windows the `stems` facet separates ("head",
+    # "tail"). Absent = both. Pick-time stems asks for the tail alone when the
+    # head is cached (#2253); a worker that predates the field separates both.
+    stems_windows: list[str] | None = None
 
 
 @app.post("/analyze")
@@ -845,6 +854,8 @@ async def analyze(req: AnalyzeRequest):
             payload["tail_vocals"] = True
         if req.stream_url and "url" not in payload:
             payload["stream_url"] = req.stream_url
+        if req.stems_windows is not None:
+            payload["stems_windows"] = req.stems_windows
     if facets and all(f in WHOLE_FILE_FACETS for f in facets):
         msg = await run_whole_file_once(payload)
     else:

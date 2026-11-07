@@ -546,6 +546,9 @@ let _sidecarFacetsCapable: boolean | null = null;
 let _sidecarWholeFileCapable: boolean | null = null;
 let _sidecarLoudnessCurveCapable: boolean | null = null;
 let _sidecarWholeFileConcurrency: number | null = null;
+// The sidecar's analysis pool size (ANALYZE_CONCURRENCY); null on a sidecar
+// that predates the field.
+let _sidecarConcurrency: number | null = null;
 // The CLAP TEXT tower (embed-text).
 let _sidecarTextCapable: boolean | null = null;
 // Why a capability is false, when the cause is a failed model load rather than
@@ -572,6 +575,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_whole_file_capable?: boolean | null;
       analyze_loudness_curve_capable?: boolean | null;
       analyze_whole_file_concurrency?: number | null;
+      analyze_concurrency?: number | null;
       analyze_audio_error?: string | null;
       analyze_vocal_error?: string | null;
     };
@@ -586,6 +590,8 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarLoudnessCurveCapable = typeof body.analyze_loudness_curve_capable === 'boolean' ? body.analyze_loudness_curve_capable : null;
       _sidecarWholeFileConcurrency = Number.isInteger(body.analyze_whole_file_concurrency) && (body.analyze_whole_file_concurrency as number) > 0
         ? (body.analyze_whole_file_concurrency as number) : null;
+      _sidecarConcurrency = Number.isInteger(body.analyze_concurrency) && (body.analyze_concurrency as number) > 0
+        ? (body.analyze_concurrency as number) : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
       _sidecarAudioError = typeof body.analyze_audio_error === 'string' ? body.analyze_audio_error : null;
       _sidecarVocalError = typeof body.analyze_vocal_error === 'string' ? body.analyze_vocal_error : null;
@@ -761,6 +767,12 @@ export function loudnessCurveAvailable(): boolean | null {
 // null = not advertised (local backend, or an older sidecar).
 export function wholeFileConcurrency(): number | null {
   return _backend === 'sidecar' ? _sidecarWholeFileConcurrency : null;
+}
+
+// How many analysis workers the sidecar's pool holds (its ANALYZE_CONCURRENCY).
+// null = not advertised (local backend, or a sidecar that predates the field).
+export function sidecarConcurrency(): number | null {
+  return _backend === 'sidecar' ? _sidecarConcurrency : null;
 }
 
 export function tailVocalAvailable(): boolean | null {
@@ -1159,11 +1171,17 @@ export interface FacetAnalysis {
   source: FacetSourceInfo;
 }
 
+export type StemWindow = 'head' | 'tail';
+
 export interface FacetRequestOpts {
   facets: FacetName[];
   // Tail facet also carries the outro's vocal ranges (Demucs on the tail only).
   tailVocals?: boolean;
   stems_dir?: string;
+  // Which windows the stems facet separates; omitted = both. Only sent with a
+  // stems_dir. A worker that predates it separates both (pick-stems-policy.ts
+  // stemsWindowsFor).
+  stems_windows?: StemWindow[];
   complete?: boolean;
   // The request's deadline. Omitted, the pass's ANALYZE_REQUEST_TIMEOUT_MS. A
   // pick-time separation passes its own longer one (pick-stems-policy.ts).
@@ -1255,7 +1273,13 @@ export async function analyzeFacets(
 ): Promise<FacetAnalysis> {
   const body: Record<string, unknown> = { facets: opts.facets };
   if (opts.tailVocals) body.tail_vocals = true;
-  const stems = opts.stems_dir ? { stems_dir: opts.stems_dir, stems_require_marker: true } : {};
+  const stems = opts.stems_dir
+    ? {
+        stems_dir: opts.stems_dir,
+        stems_require_marker: true,
+        ...(opts.stems_windows?.length ? { stems_windows: opts.stems_windows } : {}),
+      }
+    : {};
   const url = subsonic.getRawStreamUrl(songId);
   const timeoutMs = opts.timeoutMs; // undefined: facetRequest's default
   if (!localPath) return facetRequest({ url, ...body, ...stems }, timeoutMs);
