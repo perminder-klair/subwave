@@ -335,6 +335,12 @@ export interface UsageSnapshot {
   pending?: { pid: number; since: string };
   // The cache changed outside the pass and the sweep: these are last-known totals.
   stale?: boolean;
+  // Bytes in `bytes` the last over-budget sweep could not delete (folders this
+  // user cannot open, sweep()). Only that sweep measures them; every writer
+  // that keeps the totals keeps this with them, and a full walk, which does not
+  // probe, drops it. Absent = none known. pick-stems-policy.ts budgetVeto
+  // judges the rest, because the sweep leaves these out of its own budget check.
+  unevictableBytes?: number;
 }
 
 export type SnapshotVerdict = 'use' | 'walk' | 'pass-running';
@@ -365,6 +371,14 @@ export function snapshotVerdict(opts: {
 
 function snapshotPath(): string {
   return path.join(config.stateDir, 'stem-cache-usage.json');
+}
+
+// The snapshot's unevictable figure, or 0 when it has none a reader can use.
+// Never above `bytes`: those bytes are part of the total.
+function unevictableOf(snap: UsageSnapshot): number {
+  const u = snap.unevictableBytes;
+  if (typeof u !== 'number' || !Number.isFinite(u) || u <= 0) return 0;
+  return Math.min(u, Math.max(0, snap.bytes));
 }
 
 async function readSnapshot(): Promise<UsageSnapshot | null> {
@@ -447,10 +461,16 @@ async function walkUsage(): Promise<{ bytes: number; dirs: number }> {
 // rather than the singles below, or they pay (and can race) a walk per figure.
 // Served from the snapshot when it can be trusted (see above); a running
 // pass's snapshot is not, since dirs are being added under it.
-export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBytes: number }> {
+// `unevictableBytes` is the part of `bytes` the last over-budget sweep could
+// not delete; 0 after a walk, which does not probe. `bytes` still counts it,
+// so the pass's headroom and the reported overage are unchanged.
+export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBytes: number; unevictableBytes: number }> {
   const { snap, verdict } = await snapshotState();
-  const { bytes, dirs } = verdict === 'use' && snap ? snap : await walkUsage();
-  return { bytes, dirs, estTrackBytes: estimateTrackBytes(bytes, dirs) };
+  if (verdict === 'use' && snap) {
+    return { bytes: snap.bytes, dirs: snap.dirs, estTrackBytes: estimateTrackBytes(snap.bytes, snap.dirs), unevictableBytes: unevictableOf(snap) };
+  }
+  const { bytes, dirs } = await walkUsage();
+  return { bytes, dirs, estTrackBytes: estimateTrackBytes(bytes, dirs), unevictableBytes: 0 };
 }
 
 // The STORED cache size, for a surface that must answer at once (the stem
@@ -541,7 +561,13 @@ export async function settlePassWrites(
     bytes += b;
     dirs += 1;
   }
-  const settled: UsageSnapshot = { version: 1, root: snap.root, bytes, dirs, measuredAt: snap.measuredAt, updatedAt: new Date().toISOString() };
+  // The pass adds dirs and deletes none outside its own sweep, so the stuck
+  // bytes the last sweep found are still part of the total.
+  const stuck = unevictableOf(snap);
+  const settled: UsageSnapshot = {
+    version: 1, root: snap.root, bytes, dirs, measuredAt: snap.measuredAt, updatedAt: new Date().toISOString(),
+    ...(stuck > 0 ? { unevictableBytes: stuck } : {}),
+  };
   if (!(await writeSnapshot(settled))) return null;
   return { bytes, dirs, withinBudget: bytes <= budget };
 }
@@ -733,6 +759,9 @@ export async function sweep(
       'and are left out of the budget check. Open them as their owner (docs/deployment.md).',
     );
   }
-  await writeSnapshot(snapshotFromWalk(total, dirs.length - removed));
+  // The stuck bytes go in the snapshot beside the total, so pick-time stems
+  // (budgetVeto) can judge the part this sweep can evict, as it did above.
+  const settled = snapshotFromWalk(total, dirs.length - removed);
+  await writeSnapshot(unevictable > 0 ? { ...settled, unevictableBytes: unevictable } : settled);
   return { removed, freedBytes, failedDirs, overBudgetBytes: Math.max(0, total - budget) };
 }

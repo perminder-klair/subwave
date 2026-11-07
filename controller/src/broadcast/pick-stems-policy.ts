@@ -170,9 +170,27 @@ export function designedOvershootBytes(budgetBytes: number, estTrackBytes: numbe
 // finds its staging file gone and writes nothing, so the worst case is one dir
 // more; with a sidecar pool each member can hold one such orphan, so it is up
 // to ANALYZE_CONCURRENCY (at most 8) dirs more.
-export function budgetVeto(u: { usedBytes: number; budgetBytes: number; estTrackBytes: number }): PickStemsVeto | null {
+//
+// The rule judges the bytes the sweep can evict. Folders this user cannot
+// delete (stem-cache.ts sweep, a share's permissions) leave the sweep's own
+// budget check, so it stops evicting once the rest fits. Counted here, they
+// kept the cache "full" for good once they exceeded the allowance: one pick was
+// admitted, every later one was turned away, and the notice's "until the hourly
+// sweep makes room" never came true, because the sweep had nothing left to do
+// (#2253). `unevictableBytes` is what the last over-budget sweep found (0 when
+// unknown, as after a walk, which is the old rule). So with stuck folders the
+// cache can sit over budget by their size plus the allowance, and the sweep
+// still takes the evictable part back down to the budget.
+export function budgetVeto(u: {
+  usedBytes: number;
+  budgetBytes: number;
+  estTrackBytes: number;
+  unevictableBytes?: number;
+}): PickStemsVeto | null {
   const ceiling = u.budgetBytes + overshootAllowanceBytes(u.budgetBytes, u.estTrackBytes);
-  return u.usedBytes < ceiling ? null : 'budget-full';
+  const stuck = Number.isFinite(u.unevictableBytes) && (u.unevictableBytes as number) > 0 ? (u.unevictableBytes as number) : 0;
+  const evictable = Math.max(0, u.usedBytes - stuck);
+  return evictable < ceiling ? null : 'budget-full';
 }
 
 // ---- the sweep ------------------------------------------------------------
