@@ -25,7 +25,7 @@
 
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
@@ -42,6 +42,7 @@ interface AnalyzeBody {
   complete?: boolean;
   stems_dir?: string;
   stems_require_marker?: boolean;
+  stems_windows?: string[];
 }
 
 const seen = { analyze: [] as AnalyzeBody[], render: 0, stream: [] as string[] };
@@ -52,7 +53,9 @@ let onWorkerStart: (() => void) | null = null;
 // cost no disk: the budget reads st.size.
 let sparseStemBytes = 0;
 // What the fake reports on /health (analyzer.refreshCapabilities re-reads it).
-const health = { facets: true, vocal: true };
+// `concurrency` is the sidecar's pool size (`analyze_concurrency`); null leaves
+// the field out, as a sidecar that predates it does.
+const health = { facets: true, vocal: true, concurrency: null as number | null };
 
 async function readJson(req: IncomingMessage): Promise<AnalyzeBody> {
   const chunks: Buffer[] = [];
@@ -78,6 +81,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true, engines: ['analyze'], analyze_facets_capable: health.facets, analyze_vocal_capable: health.vocal,
+      ...(health.concurrency === null ? {} : { analyze_concurrency: health.concurrency }),
     }));
     return;
   }
@@ -100,8 +104,10 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     seen.analyze.push(body);
     onWorkerStart?.();
     if (holdWorker) await holdWorker;
+    // A worker that honours stems_windows separates only the windows named.
+    const windows = body.stems_windows ?? ['head', 'tail'];
     if (body.stems_dir) {
-      writeStems(body.stems_dir, 'head');
+      if (windows.includes('head')) writeStems(body.stems_dir, 'head');
       // 'fail-' ids die after the head, as a request that times out would
       // while the worker carries on writing.
       if (path.basename(body.stems_dir).startsWith('fail-')) {
@@ -109,12 +115,19 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         res.end(JSON.stringify({ detail: 'worker died' }));
         return;
       }
-      if (body.complete) writeStems(body.stems_dir, 'tail');
+      if (body.complete && windows.includes('tail')) writeStems(body.stems_dir, 'tail');
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       ok: true,
-      facets: { stems: { status: 'ok', data: { stems_cached: true, tail_stems: !!body.complete } } },
+      facets: {
+        stems: {
+          status: 'ok',
+          data: windows.includes('head')
+            ? { stems_cached: true, tail_stems: !!body.complete }
+            : { tail_stems: true },
+        },
+      },
       source: { kind: 'path', duration_s: 200, complete: body.complete ?? null },
     }));
     return;
@@ -217,6 +230,7 @@ test('a held pick with both grids gets head and tail stems, a stems_at stamp and
   assert.equal(req.complete, true);
   assert.equal(req.stems_require_marker, true);
   assert.equal(req.stems_dir, stemCache.dirFor('p1'));
+  assert.equal(req.stems_windows, undefined, 'both windows missing: the field is not sent, as before');
   assert.ok(req.path?.endsWith('p1.audio'), 'the capped download, not a url fetch by the worker');
   assert.equal(await stemCache.hasWindow('p1', 'head'), true);
   assert.equal(await stemCache.hasWindow('p1', 'tail'), true);
@@ -244,11 +258,32 @@ test('only the tail missing on a truncated download: no worker call, staging rem
   assert.deepEqual(existsSync(stagingDir) ? readdirSync(stagingDir) : [], []);
 });
 
+test('only the tail missing on a complete download: the worker is asked for the tail alone (#2253)', async () => {
+  addTrack('tail-only-1');
+  writeStems(stemCache.dirFor('tail-only-1'), 'head');
+  const headFile = path.join(stemCache.dirFor('tail-only-1'), 'head-drums.flac');
+  const old = (Date.now() - 3600_000) / 1000;
+  utimesSync(headFile, old, old);
+  const { lines, outcome } = run('tail-only-1');
+  const result = await outcome;
+  assert.equal(result.ran && result.ok, true);
+  const req = seen.analyze.at(-1);
+  assert.equal(path.basename(String(req?.stems_dir)), 'tail-only-1');
+  assert.deepEqual(req?.stems_windows, ['tail']);
+  assert.equal(req?.complete, true);
+  assert.equal(await stemCache.hasWindow('tail-only-1', 'tail'), true);
+  assert.ok(Math.abs(statSync(headFile).mtimeMs - old * 1000) < 1000, 'the cached head is not separated again');
+  assert.match(lines[0], /separating "Song tail-only-1" \(tail\)/);
+  assert.match(lines[1], /\(head \+ tail cached\)/);
+  assert.equal(db.needsStemsIds().includes('tail-only-1'), false, 'stamped like any attempt');
+});
+
 test('a truncated download still separates a missing head, and asks for no tail', async () => {
   addTrack('big-2');
   const result = await run('big-2').outcome;
   assert.equal(result.ran && result.ok, true);
   assert.equal(seen.analyze.at(-1)?.complete, false);
+  assert.equal(seen.analyze.at(-1)?.stems_windows, undefined, 'a head to fill asks for both, as before');
   assert.equal(await stemCache.hasWindow('big-2', 'head'), true);
   assert.equal(await stemCache.hasWindow('big-2', 'tail'), false);
 });
@@ -640,6 +675,38 @@ test('a sidecar pool with a spare member renders while it separates', async () =
     // Settled even when an assertion above failed, so no claim outlives it.
     assert.equal((await first.outcome).ran, true);
   }
+});
+
+test('a sidecar whose /health reports a smaller pool than the controller\'s: the render stands down (#2253)', async () => {
+  const concurrency = config.analyzer.concurrency;
+  (config.analyzer as { concurrency: number }).concurrency = 2;
+  health.concurrency = 1;
+  await analyzer.refreshCapabilities();
+  assert.equal(analyzer.sidecarConcurrency(), 1);
+  let release!: () => void;
+  holdWorker = new Promise<void>(r => { release = r; });
+  const started = new Promise<void>(r => { onWorkerStart = r; });
+  addTrack('p8');
+  const first = run('p8');
+  try {
+    await started;
+    const rendersBefore = seen.render;
+    assert.equal(await stemBlend.maybeRenderBlend(
+      { id: 'out-1', title: 'out', replayGain: null, gainDb: 0 },
+      { id: 'in-1', title: 'in', replayGain: null },
+      300,
+    ), null);
+    assert.equal(seen.render, rendersBefore, 'no spare member: nothing queued behind the separation');
+  } finally {
+    (config.analyzer as { concurrency: number }).concurrency = concurrency;
+    health.concurrency = null;
+    holdWorker = null;
+    onWorkerStart = null;
+    release();
+    assert.equal((await first.outcome).ran, true);
+    await analyzer.refreshCapabilities();
+  }
+  assert.equal(analyzer.sidecarConcurrency(), null, 'a sidecar without the field reads as unknown');
 });
 
 // ---- station-level notices -----------------------------------------------
