@@ -18,7 +18,7 @@ import { applyServerFieldErrors, useZodForm } from '../../../lib/form';
 import { SwitchField, TextField, ToggleGroupField } from '../../../lib/form-fields';
 import {
   SETTINGS_TAGGER_AUTO_MODES,
-  TAGGER_AUTO_DEFAULT_TIME,
+  TAGGER_AUTO_DEFAULTS,
   TAGGER_AUTO_LIMIT_BOUNDS,
   taggerAutoFormSchema,
   type TaggerAutoSettings,
@@ -39,15 +39,11 @@ const STEP_FIELDS = [
   { key: 'analyze', label: 'Analyze acoustics' },
 ] as const;
 
-// The form's values before the first read. The card renders only once the
-// controller has sent `values.tagger.auto`, whose load path fills every field,
-// so these are never shown; they only seed useZodForm until then.
-const BEFORE_READ: TaggerAutoSettings = {
-  mode: 'off',
-  time: TAGGER_AUTO_DEFAULT_TIME,
-  limit: 0,
-  steps: { reconcile: true, enrich: true, tagMoods: true, analyze: true },
-};
+// The form's values before the first read: the shipped defaults, copied out of
+// the frozen constant. The card renders only once the controller has sent
+// `values.tagger.auto`, whose load path fills every field, so these are never
+// shown; they only seed useZodForm until then.
+const BEFORE_READ: TaggerAutoSettings = { ...TAGGER_AUTO_DEFAULTS, steps: { ...TAGGER_AUTO_DEFAULTS.steps } };
 
 const formKey = (f: TaggerAutoSettings) =>
   `${f.mode}/${f.time}/${f.limit}/${STEP_FIELDS.map(s => (f.steps[s.key] ? 1 : 0)).join('')}`;

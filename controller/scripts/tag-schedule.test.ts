@@ -17,16 +17,23 @@ const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-tag-schedule-'));
 process.env.STATE_DIR = stateRoot;
 
 const {
+  baselineOnSuccess,
+  holdStep,
   lapsedHold,
   lowerBaseline,
+  newMusicBaseline,
   normalizeTagScheduleRecord,
   pendingWork,
   pendingWorkText,
+  restartRecovery,
   scheduleDue,
   scheduleGate,
   scheduleMinuteOfDay,
   scheduledRunEnded,
   scheduledRunKind,
+  skippedStep,
+  startFailedStep,
+  startingStep,
 } = await import('../src/music/tag-schedule-policy.js');
 const { createTagSchedule, scheduledTaggerOptions } = await import('../src/broadcast/tag-schedule.js');
 const { quietAfterMinutes } = await import('../src/music/analyze-quiet-pure.js');
@@ -80,42 +87,59 @@ test('scheduledRunKind mirrors the Run tab: none, reconcile only, or a tag run',
   assert.equal(scheduledRunKind(ALL_STEPS), 'tag');
 });
 
-const TAG = { tagMoods: true, walkedCount: null };
+// The stand-in a first night uses: library.db's rows (newMusicBaseline).
+const TAG = { tagMoods: true, baseline: 100 };
 
 test('pendingWork sees untagged rows, new Navidrome songs, and fails open on unknown', () => {
   assert.deepEqual(pendingWork({ dbUntagged: 3, dbRows: 100, navidromeCount: 100 }, TAG), { pending: true, reason: 'untagged', amount: 3 });
   // library.db has no row for a track until a walk finds it: Navidrome's count does.
   assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 104 }, TAG), { pending: true, reason: 'new-in-navidrome', amount: 4 });
   assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 100 }, TAG), { pending: false });
-  // A removal is not work for the tagger.
-  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 90 }, TAG), { pending: false });
   // A never-tagged station: no rows yet, songs in Navidrome.
-  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 0, navidromeCount: 50 }, TAG), { pending: true, reason: 'new-in-navidrome', amount: 50 });
+  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 0, navidromeCount: 50 }, { tagMoods: true, baseline: 0 }), { pending: true, reason: 'new-in-navidrome', amount: 50 });
   assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: null }, TAG), { pending: true, reason: 'unknown', amount: null });
   assert.deepEqual(pendingWork({ dbUntagged: null, dbRows: null, navidromeCount: 100 }, TAG), { pending: true, reason: 'unknown', amount: null });
+  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: null, navidromeCount: 100 }, { tagMoods: true, baseline: null }), { pending: true, reason: 'unknown', amount: null });
   assert.equal(pendingWorkText({ pending: true, reason: 'new-in-navidrome', amount: 4 }), '4 new in Navidrome');
 });
 
-test('pendingWork compares Navidrome with the last walk, not library.db rows', () => {
+test('pendingWork compares Navidrome with the baseline, not library.db rows', () => {
   // One blocklisted song: Navidrome counts it, the walk never writes its row.
   const counts = { dbUntagged: 0, dbRows: 99, navidromeCount: 100 };
-  // The first night has no baseline, so the rows stand in once...
-  assert.equal(pendingWork(counts, TAG).pending, true);
+  // With no saved baseline the rows stand in, so the first night runs...
+  assert.equal(pendingWork(counts, { tagMoods: true, baseline: newMusicBaseline(null, counts) }).pending, true);
   // ...and once a walk started from 100 succeeds, the gap is no longer work.
-  assert.deepEqual(pendingWork(counts, { tagMoods: true, walkedCount: 100 }), { pending: false });
+  assert.deepEqual(pendingWork(counts, { tagMoods: true, baseline: newMusicBaseline(100, counts) }), { pending: false });
   // A real addition beyond the baseline still is.
+  const more = { ...counts, navidromeCount: 103 };
   assert.deepEqual(
-    pendingWork({ ...counts, navidromeCount: 103 }, { tagMoods: true, walkedCount: 100 }),
+    pendingWork(more, { tagMoods: true, baseline: newMusicBaseline(100, more) }),
     { pending: true, reason: 'new-in-navidrome', amount: 3 },
   );
 });
 
 test('pendingWork: untagged rows are work only for a run that tags moods', () => {
   const counts = { dbUntagged: 40, dbRows: 100, navidromeCount: 100 };
-  assert.deepEqual(pendingWork(counts, { tagMoods: false, walkedCount: 100 }), { pending: false });
+  assert.deepEqual(pendingWork(counts, { tagMoods: false, baseline: 100 }), { pending: false });
   // An unreadable library.db does not matter to a run that does not tag moods.
-  assert.deepEqual(pendingWork({ ...counts, dbUntagged: null }, { tagMoods: false, walkedCount: 100 }), { pending: false });
-  assert.equal(pendingWork(counts, { tagMoods: true, walkedCount: 100 }).pending, true);
+  assert.deepEqual(pendingWork({ ...counts, dbUntagged: null }, { tagMoods: false, baseline: 100 }), { pending: false });
+  assert.equal(pendingWork(counts, { tagMoods: true, baseline: 100 }).pending, true);
+});
+
+test('newMusicBaseline: the saved baseline, else the rows, lowered either way', () => {
+  assert.equal(newMusicBaseline(100, { dbUntagged: 0, dbRows: 5, navidromeCount: 120 }), 100);
+  assert.equal(newMusicBaseline(null, { dbUntagged: 0, dbRows: 99, navidromeCount: 100 }), 99);
+  // Stale rows above Navidrome's count: the stand-in comes down to it.
+  assert.equal(newMusicBaseline(null, { dbUntagged: 0, dbRows: 10000, navidromeCount: 9500 }), 9500);
+  assert.equal(newMusicBaseline(null, { dbUntagged: 0, dbRows: null, navidromeCount: 9500 }), null);
+});
+
+test('baselineOnSuccess: the start count, or at most the baseline plus the limit', () => {
+  assert.equal(baselineOnSuccess(100, 1100, 0), 1100);
+  assert.equal(baselineOnSuccess(100, 1100, 250), 350);
+  assert.equal(baselineOnSuccess(100, 120, 250), 120);
+  assert.equal(baselineOnSuccess(null, 1100, 250), 1100);
+  assert.equal(baselineOnSuccess(100, null, 250), 100);
 });
 
 test('lowerBaseline: a removal lowers it, nothing here raises it', () => {
@@ -148,26 +172,65 @@ test('scheduleGate asks for each input only when it needs it', () => {
   assert.equal(scheduleGate({ ...base, counts, running: true, quiet: { enabled: false, minutes: 10 } }).kind, 'hold');
 });
 
-test('scheduledRunEnded: only a clean finish raises the baseline, to the start count', () => {
-  const rec = { startCount: 120, walkedCount: 100 };
+test('scheduledRunEnded: only a clean finish raises the baseline, to raiseTo', () => {
+  const rec = { raiseTo: 120, walkedCount: 100 };
   const run = { error: null, signal: null, exitCode: 0, holds: [] as string[], runLogId: 'r' };
-  assert.equal(scheduledRunEnded(rec, { ...run, outcome: 'ok' }).patch.walkedCount, 120);
-  assert.equal('walkedCount' in scheduledRunEnded(rec, { ...run, outcome: 'failed', exitCode: 1 }).patch, false);
-  assert.equal('walkedCount' in scheduledRunEnded(rec, { ...run, outcome: 'stopped', signal: 'SIGTERM' }).patch, false);
+  assert.equal(scheduledRunEnded(rec, { ...run, outcome: 'ok' }).patch!.walkedCount, 120);
+  assert.equal('walkedCount' in scheduledRunEnded(rec, { ...run, outcome: 'failed', exitCode: 1 }).patch!, false);
+  assert.equal('walkedCount' in scheduledRunEnded(rec, { ...run, outcome: 'stopped', signal: 'SIGTERM' }).patch!, false);
   // A hold outranks a clean exit, and leaves the baseline, so the run comes back.
   const held = scheduledRunEnded(rec, { ...run, outcome: 'ok', holds: ['a', 'b'] });
-  assert.equal(held.patch.outcome, 'held');
-  assert.equal(held.patch.detail, 'a (+1 more)');
-  assert.equal('walkedCount' in held.patch, false);
-  // An unknown start count keeps the old baseline.
-  assert.equal(scheduledRunEnded({ startCount: null, walkedCount: 100 }, { ...run, outcome: 'ok' }).patch.walkedCount, 100);
+  assert.equal(held.patch!.outcome, 'held');
+  assert.equal(held.patch!.detail, 'a (+1 more)');
+  assert.equal('walkedCount' in held.patch!, false);
+  // An unknown raise target keeps the old baseline.
+  assert.equal(scheduledRunEnded({ raiseTo: null, walkedCount: 100 }, { ...run, outcome: 'ok' }).patch!.walkedCount, 100);
+  const failed = scheduledRunEnded(rec, { ...run, outcome: 'failed', exitCode: 1, error: 'LLM unreachable' });
+  assert.match(failed.message!, /failed: LLM unreachable\. Not retried/);
 });
 
 test('lapsedHold: a hold from an earlier day lapses, recorded unless that day was used', () => {
+  const w = { day: '2026-11-07', reason: 'busy' as const, text: 'x' };
   assert.equal(lapsedHold(null, '2026-11-08', null), null);
-  assert.equal(lapsedHold({ day: '2026-11-08', text: 'x' }, '2026-11-08', null), null);
-  assert.deepEqual(lapsedHold({ day: '2026-11-07', text: 'x' }, '2026-11-08', null), { day: '2026-11-07', text: 'x', record: true });
-  assert.equal(lapsedHold({ day: '2026-11-07', text: 'x' }, '2026-11-08', '2026-11-07')!.record, false);
+  assert.equal(lapsedHold({ ...w, day: '2026-11-08' }, '2026-11-08', null), null);
+  const missed = lapsedHold(w, '2026-11-08', null)!;
+  assert.deepEqual(missed.patch, { lastDay: '2026-11-07', startedAt: null, outcome: 'missed', detail: 'x', runLogId: null });
+  assert.match(missed.message!, /did not run on 2026-11-07: x all day/);
+  const used = lapsedHold(w, '2026-11-08', '2026-11-07')!;
+  assert.equal(used.patch, null);
+  assert.ok(used.message);
+});
+
+test('restartRecovery: only a running record this process did not start is interrupted', () => {
+  assert.equal(restartRecovery({ outcome: 'ok' }, false), null);
+  assert.equal(restartRecovery({ outcome: 'running' }, true), null);
+  const step = restartRecovery({ outcome: 'running' }, false)!;
+  assert.equal(step.patch!.outcome, 'interrupted');
+  assert.equal('lastDay' in step.patch!, false, 'the day stays used');
+});
+
+test('holdStep logs once per reason and day', () => {
+  const g = { reason: 'busy' as const, text: 'busy text' };
+  const first = holdStep(null, g, '2026-11-07');
+  assert.match(first.message!, /waiting: busy text/);
+  assert.equal(holdStep(first.waiting, g, '2026-11-07').message, null);
+  assert.ok(holdStep(first.waiting, { reason: 'quiet', text: 'q' }, '2026-11-07').message);
+  assert.ok(holdStep(first.waiting, g, '2026-11-08').message);
+});
+
+test('skip, start and a failed start write the record the tick saves', () => {
+  const skip = skippedStep('2026-11-07', { detail: 'nothing new or untagged', walkedCount: 90 });
+  assert.deepEqual(skip.patch, {
+    lastDay: '2026-11-07', startedAt: null, outcome: 'skipped', detail: 'nothing new or untagged', runLogId: null, walkedCount: 90,
+  });
+  const start = startingStep('2026-11-07', '2026-11-07T02:31:00.000Z', { detail: '4 new', walkedCount: 100, raiseTo: 104 });
+  assert.equal(start.patch!.outcome, 'running');
+  assert.equal(start.patch!.lastDay, '2026-11-07', 'a start uses the day before the spawn');
+  assert.equal(start.patch!.raiseTo, 104);
+  assert.match(start.message!, /starting \(4 new\)/);
+  const failed = startFailedStep('spawn exploded');
+  assert.deepEqual(failed.patch, { outcome: 'failed', detail: 'could not start: spawn exploded' });
+  assert.match(failed.message!, /Not retried/);
 });
 
 test('the record reads leniently: corrupt or foreign is "never ran"', () => {
@@ -181,9 +244,9 @@ test('the record reads leniently: corrupt or foreign is "never ran"', () => {
   assert.equal(bad.lastDay, null);
   assert.equal(bad.outcome, null);
   assert.equal(bad.startedAt, null);
-  const counts = normalizeTagScheduleRecord({ walkedCount: 120, startCount: -1 });
+  const counts = normalizeTagScheduleRecord({ walkedCount: 120, raiseTo: -1 });
   assert.equal(counts.walkedCount, 120);
-  assert.equal(counts.startCount, null);
+  assert.equal(counts.raiseTo, null);
   assert.equal(normalizeTagScheduleRecord({ walkedCount: '120' }).walkedCount, null);
 });
 
@@ -200,8 +263,8 @@ test('the scheduled start never answers a replaced-file hold', () => {
   assert.deepEqual(opts, { limit: 250, reconcile: true, enrich: false, tagMoods: true, analyze: true });
   assert.equal('confirmReplaced' in opts, false);
   assert.equal('acceptReplaced' in opts, false);
-  // 0 is the Run tab's "all": no --limit at all.
-  assert.equal(scheduledTaggerOptions(daily()).limit, undefined);
+  // 0 is the Run tab's "all": startTagger sends no --limit for it.
+  assert.equal(scheduledTaggerOptions(daily()).limit, 0);
 });
 
 // ---------------------------------------------------------------------------
@@ -383,7 +446,7 @@ test('one blocklisted song: the first night runs, then the gap is never work aga
   const { h, schedule } = harness({ counts: { dbUntagged: 0, dbRows: 99, navidromeCount: 100, scanning: false } });
   await schedule.tick(T0);
   assert.equal(h.starts.length, 1);
-  assert.equal(h.writes.at(-1).startCount, 100);
+  assert.equal(h.writes.at(-1).raiseTo, 100);
   h.starts[0].onExit(end());
   assert.equal(h.writes.at(-1).walkedCount, 100);
   h.today = '2026-11-08';
@@ -509,6 +572,52 @@ test('a run the record says is going was interrupted by the restart', async () =
   await schedule.tick(T0);
   assert.equal(h.writes.at(-1).outcome, 'interrupted');
   assert.equal(h.starts.length, 0, 'an interrupted day is still a used day');
+});
+
+test('stale rows above Navidrome never hide new music: the first skip saves a real baseline', async () => {
+  // The review's sequence: 10,000 rows, Navidrome 9,500, nothing untagged.
+  const { h, schedule } = harness({ counts: { dbUntagged: 0, dbRows: 10000, navidromeCount: 9500, scanning: false } });
+  await schedule.tick(T0);
+  assert.equal(h.starts.length, 0);
+  assert.equal(h.writes.at(-1).outcome, 'skipped');
+  assert.equal(h.writes.at(-1).walkedCount, 9500, 'the stand-in is lowered and saved');
+  h.counts = { ...h.counts, navidromeCount: 9800 };
+  h.today = '2026-11-08';
+  await schedule.tick(later(24 * 60));
+  assert.equal(h.starts.length, 1, '300 new songs run the next night');
+  assert.match(h.writes.at(-1).detail, /300 new in Navidrome/);
+  h.starts[0].onExit(end());
+  assert.equal(h.writes.at(-1).walkedCount, 9800);
+  h.counts = { ...h.counts, navidromeCount: 9999 };
+  h.today = '2026-11-09';
+  await schedule.tick(later(48 * 60));
+  assert.equal(h.starts.length, 2);
+  assert.match(h.writes.at(-1).detail, /199 new in Navidrome/);
+});
+
+test('a stand-in below Navidrome runs the first night', async () => {
+  const { h, schedule } = harness({ counts: { dbUntagged: 0, dbRows: 95, navidromeCount: 100, scanning: false } });
+  await schedule.tick(T0);
+  assert.equal(h.starts.length, 1);
+  assert.match(h.writes.at(-1).detail, /5 new in Navidrome/);
+  assert.equal(h.writes.at(-1).walkedCount, 95);
+  assert.equal(h.writes.at(-1).raiseTo, 100);
+});
+
+test('with a limit, the part of a large import beyond it is still new the next night', async () => {
+  const { h, schedule } = harness({
+    auto: daily({ limit: 250, steps: { ...ALL_STEPS, tagMoods: false } }),
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 1000 },
+    counts: { dbUntagged: 0, dbRows: 1000, navidromeCount: 1600, scanning: false },
+  });
+  await schedule.tick(T0);
+  assert.equal(h.starts.length, 1);
+  h.starts[0].onExit(end());
+  assert.equal(h.writes.at(-1).walkedCount, 1250);
+  h.today = '2026-11-08';
+  await schedule.tick(later(24 * 60));
+  assert.equal(h.starts.length, 2);
+  assert.match(h.writes.at(-1).detail, /350 new in Navidrome/);
 });
 
 // ---------------------------------------------------------------------------

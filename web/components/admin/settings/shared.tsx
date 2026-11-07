@@ -661,9 +661,9 @@ export interface TaggerScheduleView {
   detail: string | null;
   at: string | null;
   runLogId: string | null;
-  /** Navidrome's song count when the last scheduled run started. */
-  startCount: number | null;
-  /** The new-music baseline: the count the last successful run walked from. */
+  /** The baseline the running run's clean finish raises to. */
+  raiseTo: number | null;
+  /** The new-music baseline the schedule compares Navidrome's count with. */
   walkedCount: number | null;
   waiting: string | null;
 }

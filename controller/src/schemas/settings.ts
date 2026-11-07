@@ -889,7 +889,6 @@ export type TaggerAutoMode = (typeof SETTINGS_TAGGER_AUTO_MODES)[number];
 
 // 24-hour `HH:MM` on the station clock.
 export const TAGGER_AUTO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-export const TAGGER_AUTO_DEFAULT_TIME = '02:30';
 
 // The run's `--limit`: 0 = every untagged track, the Run tab's "all". The
 // ceiling only stops a typo; no library reaches it.
@@ -910,6 +909,15 @@ export interface TaggerAutoSettings {
   limit: number;
   steps: TaggerAutoSteps;
 }
+
+// The shipped block: settings/defaults.ts DEFAULTS.tagger.auto, and the admin
+// card's form before its first read. Off, so an upgrade changes nothing.
+export const TAGGER_AUTO_DEFAULTS: Readonly<TaggerAutoSettings> = Object.freeze({
+  mode: 'off',
+  time: '02:30',
+  limit: 0,
+  steps: Object.freeze({ reconcile: true, enrich: true, tagMoods: true, analyze: true }),
+});
 
 export const taggerAutoTimeSchema = z
   .unknown()

@@ -11,7 +11,7 @@ import {
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BACKUP_KEEP_BOUNDS,
   BACKUP_KEEP_DEFAULT,
-  TAGGER_AUTO_DEFAULT_TIME,
+  TAGGER_AUTO_DEFAULTS,
   type TaggerAutoSettings,
   BEDS_THRESHOLD_SEC_BOUNDS,
   SHORTLIST_PASSES_DEFAULT,
@@ -88,12 +88,8 @@ export const DEFAULTS = {
   // `time` (station clock), with the Run tab's steps and `limit` (0 = all
   // untagged). Policy: music/tag-schedule-policy.ts.
   tagger: {
-    auto: {
-      mode: 'off',
-      time: TAGGER_AUTO_DEFAULT_TIME,
-      limit: 0,
-      steps: { reconcile: true, enrich: true, tagMoods: true, analyze: true },
-    } as TaggerAutoSettings,
+    // Copies: the frozen shared constant must never be the live settings object.
+    auto: { ...TAGGER_AUTO_DEFAULTS, steps: { ...TAGGER_AUTO_DEFAULTS.steps } } as TaggerAutoSettings,
   },
   stream: {
     // Secondary Ogg-Opus mount (/stream.opus). Off by default — only Blink

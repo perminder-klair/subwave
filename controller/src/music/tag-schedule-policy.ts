@@ -19,7 +19,9 @@
 // "Skip" spends the station day: the run is daily, so a library with nothing
 // new at the set time waits for tomorrow's. "Wait" does not: the run starts on
 // the first tick the hold lifts, the same station day. A hold still standing at
-// the station's midnight lapses that day (lapsedHold).
+// the station's midnight lapses that day (lapsedHold). What each answer writes
+// to the record and says in the booth log is here too (the *Step functions),
+// so broadcast/tag-schedule.ts only reads, writes and logs.
 //
 // The day may be caught up: a controller that was down at the set time starts
 // the run on its first tick after it, the same station day. The time is a
@@ -74,7 +76,9 @@ export function scheduledRunKind(steps: TaggerAutoSteps): 'tag' | 'reconcile' | 
 }
 
 export interface WorkCounts {
-  /** library.db rows with no moods yet (known to the station, not tagged). */
+  /** library.db rows with no moods that a run would ask the LLM about: the
+   *  untagged rows less those the tagger marked untaggable (#2283), which a
+   *  run holds back from the LLM while their marker holds. */
   dbUntagged: number | null;
   /** Every library.db row. */
   dbRows: number | null;
@@ -85,9 +89,9 @@ export interface WorkCounts {
 export interface WorkScope {
   /** The run tags moods: only then is an untagged row work it can close. */
   tagMoods: boolean;
-  /** Navidrome's count when the last successful scheduled run started its
-   *  walk (TagScheduleRecord.walkedCount), or null before the first one. */
-  walkedCount: number | null;
+  /** The new-music baseline to compare Navidrome's count with
+   *  (newMusicBaseline), or null when nothing can stand in for one. */
+  baseline: number | null;
 }
 
 export type PendingWork =
@@ -99,35 +103,31 @@ export type PendingWork =
  * itself closes, so a "yes" cannot stand night after night:
  *
  *   - Untagged rows count only when the run tags moods. With "Tag moods" off
- *     no run of this schedule tags them, so they never count.
- *   - New music is Navidrome's song count above `walkedCount`, the count the
- *     last successful scheduled run started its walk from. library.db alone
- *     cannot see a new track (it has no row until a walk finds it), and
- *     Navidrome's count against library.db's rows never settles: the walk
- *     drops blocklisted songs and station-archive mixdowns that Navidrome
- *     still counts, so one blocklisted song would read as "1 new" forever.
- *     Every run kind walks, so any run closes this gap; a song the walk drops
- *     is part of the count the next baseline starts from.
- *   - Before the first scheduled run there is no baseline, and library.db's
- *     row count stands in once. A station whose walk drops songs runs that
- *     first night, and the baseline it leaves stops the repeat.
+ *     no run of this schedule tags them, so they never count. Rows the tagger
+ *     marked untaggable never count either: a run does not ask the LLM about
+ *     them again until their marker goes stale, and a stale marker (a model,
+ *     vocabulary or metadata change) waits for the next run something else
+ *     starts.
+ *   - New music is Navidrome's song count above the baseline (newMusicBaseline).
+ *     library.db alone cannot see a new track (it has no row until a walk
+ *     finds it), and Navidrome's count against library.db's rows never
+ *     settles: the walk drops blocklisted songs and station-archive mixdowns
+ *     that Navidrome still counts, so one blocklisted song would read as
+ *     "1 new" forever. Every run kind walks, so any run closes this gap.
  *
- * Fewer songs than the baseline (a removal) is not work; scheduleGate lowers
- * the baseline to it so a later addition still counts. An unknown count fails
- * OPEN: the run starts and its own walk finds out. Failing closed would mean a
- * station whose Navidrome never reports `count` never tags on its own. The
- * comparison misses a night where removals and additions cancel exactly; the
- * next addition catches it.
+ * An unknown count fails OPEN: the run starts and its own walk finds out.
+ * Failing closed would mean a station whose Navidrome never reports `count`
+ * never tags on its own. The comparison misses a night where removals and
+ * additions cancel exactly; the next addition catches it.
  */
 export function pendingWork(c: WorkCounts, scope: WorkScope): PendingWork {
   if (scope.tagMoods) {
     if (c.dbUntagged == null) return { pending: true, reason: 'unknown', amount: null };
     if (c.dbUntagged > 0) return { pending: true, reason: 'untagged', amount: c.dbUntagged };
   }
-  const base = scope.walkedCount ?? c.dbRows;
-  if (c.navidromeCount == null || base == null) return { pending: true, reason: 'unknown', amount: null };
-  if (c.navidromeCount > base) {
-    return { pending: true, reason: 'new-in-navidrome', amount: c.navidromeCount - base };
+  if (c.navidromeCount == null || scope.baseline == null) return { pending: true, reason: 'unknown', amount: null };
+  if (c.navidromeCount > scope.baseline) {
+    return { pending: true, reason: 'new-in-navidrome', amount: c.navidromeCount - scope.baseline };
   }
   return { pending: false };
 }
@@ -142,9 +142,38 @@ export function pendingWorkText(p: PendingWork): string {
 
 /** The baseline after a reading: a removal lowers it, so a later addition is
  *  still seen as new. Never raised here; only a finished walk raises it. */
-export function lowerBaseline(walkedCount: number | null, navidromeCount: number | null): number | null {
-  if (walkedCount == null || navidromeCount == null) return walkedCount;
-  return Math.min(walkedCount, navidromeCount);
+export function lowerBaseline(baseline: number | null, navidromeCount: number | null): number | null {
+  if (baseline == null || navidromeCount == null) return baseline;
+  return Math.min(baseline, navidromeCount);
+}
+
+/**
+ * The baseline tonight's reading is judged against, which the tick saves on a
+ * skip or a start, so it is a real baseline from the first used day on.
+ *
+ * The record's `walkedCount` when there is one. Before the first scheduled
+ * run has left one, library.db's row count stands in, lowered like any
+ * baseline: a stand-in above Navidrome's count (stale rows a mass-prune hold
+ * kept, manual runs with Reconcile off, a station pointed at a smaller
+ * library) must not read "nothing new" every night however much is added.
+ * Below it (the walk's exclusions), the first night runs, and its clean
+ * finish raises the baseline to the count it started from.
+ */
+export function newMusicBaseline(walkedCount: number | null, c: WorkCounts): number | null {
+  return lowerBaseline(walkedCount ?? c.dbRows, c.navidromeCount);
+}
+
+/**
+ * The baseline a clean finish raises to: Navidrome's count when the run
+ * started, read before its walk, so a song added during the run is still new
+ * tomorrow. With a limit, at most the baseline plus the limit: a run that
+ * stopped at its limit has not reached the rest of a large import, which must
+ * still read as new tomorrow rather than wait for the next addition.
+ */
+export function baselineOnSuccess(baseline: number | null, startCount: number | null, limit: number): number | null {
+  if (startCount == null) return baseline;
+  if (limit > 0 && baseline != null) return Math.min(startCount, baseline + limit);
+  return startCount;
 }
 
 export type HoldReason = 'busy' | 'scanning' | 'quiet';
@@ -181,10 +210,9 @@ export type Gate =
     kind: 'start';
     run: 'tag' | 'reconcile';
     detail: string;
-    quietState: QuietState;
     walkedCount: number | null;
-    /** Navidrome's count now, before the walk: the next baseline if it succeeds. */
-    startCount: number | null;
+    /** The baseline this run's clean finish raises to (baselineOnSuccess). */
+    raiseTo: number | null;
   };
 
 const NO_QUIET: QuietState = { quietSince: null };
@@ -205,38 +233,121 @@ export function scheduleGate(i: GateInput): Gate {
   if (i.counts.scanning === true) {
     return { kind: 'hold', reason: 'scanning', text: HOLD_SCANNING_TEXT, quietState: NO_QUIET };
   }
-  const walkedCount = lowerBaseline(i.walkedCount, i.counts.navidromeCount);
-  const work = pendingWork(i.counts, { tagMoods: run === 'tag' && i.auto.steps.tagMoods, walkedCount });
+  const baseline = newMusicBaseline(i.walkedCount, i.counts);
+  const work = pendingWork(i.counts, { tagMoods: run === 'tag' && i.auto.steps.tagMoods, baseline });
   const workText = pendingWorkText(work);
-  if (!work.pending) return { kind: 'skip', detail: workText, walkedCount };
+  if (!work.pending) return { kind: 'skip', detail: workText, walkedCount: baseline };
 
-  let quietState = NO_QUIET;
+  // The quiet clock runs only while every check above passes: a busy or
+  // scanning hold resets it, so the window is quiet time with the run owed.
   if (i.quiet.enabled) {
     if (i.listeners === undefined) return { kind: 'need-listeners' };
     const d = quietGateDecision(i.quietState, {
       enabled: true, count: i.listeners, now: i.nowMs, quietAfterMs: i.quiet.minutes * 60_000,
     });
-    quietState = d.state;
     if (!d.proceed) {
       const why = i.listeners && i.listeners > 0 ? `${i.listeners} listening` : `the ${i.quiet.minutes}-minute quiet window`;
-      return { kind: 'hold', reason: 'quiet', text: `quiet times (${why})`, quietState };
+      return { kind: 'hold', reason: 'quiet', text: `quiet times (${why})`, quietState: d.state };
     }
   }
 
   const limitText = i.auto.limit > 0 ? `limit ${i.auto.limit}` : 'all untagged';
   const detail = run === 'reconcile' ? `reconcile only, ${workText}` : `${workText}, ${limitText}`;
-  return { kind: 'start', run, detail, quietState, walkedCount, startCount: i.counts.navidromeCount };
+  return {
+    kind: 'start',
+    run,
+    detail,
+    walkedCount: baseline,
+    raiseTo: baselineOnSuccess(baseline, i.counts.navidromeCount, i.auto.limit),
+  };
 }
+
+// ---------------------------------------------------------------------------
+// What each answer writes to the record and says in the booth log. The tick
+// applies a step as it is: logs `message`, saves `patch`, decides nothing.
+
+export interface ScheduleStep {
+  patch: Partial<TagScheduleRecord> | null;
+  message: string | null;
+}
+
+const NOT_RETRIED = 'Not retried; the next run is tomorrow';
+
+/** A record still `running` that this process never started: the restart
+ *  that started this process killed it (tagger recoverFromRestart). The day
+ *  stays used. */
+export function restartRecovery(rec: Pick<TagScheduleRecord, 'outcome'>, activeRun: boolean): ScheduleStep | null {
+  if (rec.outcome !== 'running' || activeRun) return null;
+  return {
+    patch: { outcome: 'interrupted', detail: 'interrupted by a controller restart' },
+    message: 'Scheduled tagging: the last scheduled run was interrupted by a controller restart',
+  };
+}
+
+export interface ScheduleWaiting { day: string; reason: HoldReason; text: string }
 
 /** A hold that stood until the station's midnight: the day it was for is
  *  recorded as missed, unless that day was used some other way. */
 export function lapsedHold(
-  waiting: { day: string; text: string } | null,
+  waiting: ScheduleWaiting | null,
   today: string,
   lastDay: string | null,
-): { day: string; text: string; record: boolean } | null {
+): ScheduleStep | null {
   if (!waiting || waiting.day === today) return null;
-  return { day: waiting.day, text: waiting.text, record: lastDay !== waiting.day };
+  return {
+    patch: lastDay === waiting.day
+      ? null
+      : { lastDay: waiting.day, startedAt: null, outcome: 'missed', detail: waiting.text, runLogId: null },
+    message: `Scheduled tagging did not run on ${waiting.day}: ${waiting.text} all day`,
+  };
+}
+
+/** A hold on a due day: logged once per reason and day, not once per tick. */
+export function holdStep(
+  prev: ScheduleWaiting | null,
+  gate: { reason: HoldReason; text: string },
+  today: string,
+): { waiting: ScheduleWaiting; message: string | null } {
+  const same = prev && prev.reason === gate.reason && prev.day === today;
+  return {
+    waiting: { day: today, reason: gate.reason, text: gate.text },
+    message: same ? null : `Scheduled tagging waiting: ${gate.text}`,
+  };
+}
+
+/** A skip uses the day, and keeps the baseline the gate read. */
+export function skippedStep(today: string, gate: { detail: string; walkedCount: number | null }): ScheduleStep {
+  return {
+    patch: {
+      lastDay: today, startedAt: null, outcome: 'skipped', detail: gate.detail, runLogId: null,
+      walkedCount: gate.walkedCount,
+    },
+    message: `Scheduled tagging skipped: ${gate.detail}`,
+  };
+}
+
+/** A start uses the day before the run is spawned, so a restart mid-run never
+ *  repeats it. */
+export function startingStep(
+  today: string,
+  startedAt: string,
+  gate: { detail: string; walkedCount: number | null; raiseTo: number | null },
+): ScheduleStep {
+  return {
+    patch: {
+      lastDay: today, startedAt, outcome: 'running', detail: gate.detail, runLogId: null,
+      walkedCount: gate.walkedCount, raiseTo: gate.raiseTo,
+    },
+    message: `Scheduled tagging starting (${gate.detail})`,
+  };
+}
+
+/** The start itself threw. The day stays used: not retried. */
+export function startFailedStep(error: string): ScheduleStep {
+  return {
+    patch: { outcome: 'failed', detail: `could not start: ${error}` },
+    message: `Scheduled tagging failed: could not start (${error}). ${NOT_RETRIED}`,
+  };
 }
 
 /** How a scheduled run ended, as broadcast/tagger.ts reports it (TaggerRunEnd). */
@@ -252,14 +363,13 @@ export interface ScheduledRunEnd {
 /**
  * What the record and the booth log say when a scheduled run ends. A hold
  * outranks the exit code: the run finished, but the operator owes it an
- * answer. Only a clean finish raises the baseline, to the count the run
- * started from: a song added during the walk is then still new tomorrow.
- * A failure is not retried; tomorrow is the retry.
+ * answer. Only a clean finish raises the baseline, to `raiseTo`
+ * (baselineOnSuccess). A failure is not retried; tomorrow is the retry.
  */
 export function scheduledRunEnded(
-  rec: Pick<TagScheduleRecord, 'startCount' | 'walkedCount'>,
+  rec: Pick<TagScheduleRecord, 'raiseTo' | 'walkedCount'>,
   end: ScheduledRunEnd,
-): { patch: Partial<TagScheduleRecord>; message: string } {
+): ScheduleStep {
   const base = { runLogId: end.runLogId };
   if (end.holds.length) {
     const more = end.holds.length > 1 ? ` (+${end.holds.length - 1} more)` : '';
@@ -271,7 +381,7 @@ export function scheduledRunEnded(
   }
   if (end.outcome === 'ok') {
     return {
-      patch: { ...base, outcome: 'ok', detail: null, walkedCount: rec.startCount ?? rec.walkedCount },
+      patch: { ...base, outcome: 'ok', detail: null, walkedCount: rec.raiseTo ?? rec.walkedCount },
       message: 'Scheduled tagging finished',
     };
   }
@@ -282,7 +392,7 @@ export function scheduledRunEnded(
   const detail = end.error ?? (end.exitCode != null ? `exit ${end.exitCode}` : 'failed');
   return {
     patch: { ...base, outcome: 'failed', detail },
-    message: `Scheduled tagging failed: ${detail}. Not retried; the next run is tomorrow`,
+    message: `Scheduled tagging failed: ${detail}. ${NOT_RETRIED}`,
   };
 }
 
@@ -308,10 +418,11 @@ export interface TagScheduleRecord {
   /** When `outcome` was last set. */
   at: string | null;
   runLogId: string | null;
-  /** Navidrome's song count when the last scheduled run started. */
-  startCount: number | null;
-  /** The new-music baseline (pendingWork): Navidrome's count when the last
-   *  successful scheduled run started its walk, lowered by any removal since. */
+  /** The baseline the last scheduled run's clean finish raises to
+   *  (baselineOnSuccess). */
+  raiseTo: number | null;
+  /** The new-music baseline (newMusicBaseline): what the last successful
+   *  scheduled run raised it to, lowered by any removal since. */
   walkedCount: number | null;
 }
 
@@ -323,7 +434,7 @@ export const EMPTY_TAG_SCHEDULE_RECORD: TagScheduleRecord = {
   detail: null,
   at: null,
   runLogId: null,
-  startCount: null,
+  raiseTo: null,
   walkedCount: null,
 };
 
@@ -351,7 +462,7 @@ export function normalizeTagScheduleRecord(raw: unknown): TagScheduleRecord {
     detail: str(r.detail),
     at: isoOrNull(r.at),
     runLogId: str(r.runLogId, 200),
-    startCount: countOrNull(r.startCount),
+    raiseTo: countOrNull(r.raiseTo),
     walkedCount: countOrNull(r.walkedCount),
   };
 }

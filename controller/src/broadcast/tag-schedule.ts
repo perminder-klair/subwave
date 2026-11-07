@@ -7,8 +7,9 @@
 // writes and logs.
 //
 // What it promises, each on purpose:
-//   - Off by default (settings.tagger.auto.mode), and an off schedule costs a
-//     settings read: no Navidrome call, no listener probe, no file read.
+//   - Off by default (settings.tagger.auto.mode). An off schedule costs a
+//     settings read per tick and one read of its own record per process: no
+//     Navidrome call, no listener probe.
 //   - At most one scheduled start per station day, kept in
 //     `state/tagger-schedule.json`, which only this module writes, so a
 //     restart neither repeats the day nor forgets what the last run did.
@@ -32,12 +33,18 @@ import { createSerialFileWriter } from '../util/atomic-file.js';
 import { quietAfterMinutes, quietOnlyEnabled, type QuietState } from '../music/analyze-quiet-pure.js';
 import {
   EMPTY_TAG_SCHEDULE_RECORD,
+  holdStep,
   lapsedHold,
   normalizeTagScheduleRecord,
+  restartRecovery,
   scheduleGate,
   scheduledRunEnded,
+  skippedStep,
+  startFailedStep,
+  startingStep,
   type GateInput,
-  type HoldReason,
+  type ScheduleStep,
+  type ScheduleWaiting,
   type TagScheduleRecord,
   type WorkCounts,
 } from '../music/tag-schedule-policy.js';
@@ -70,7 +77,7 @@ export function createTagSchedule(deps: TagScheduleDeps) {
   // A scheduled run this process started and has not heard the end of.
   let activeRun = false;
   // A hold standing on a due day; logged once per reason, lapses at midnight.
-  let waiting: { day: string; reason: HoldReason; text: string } | null = null;
+  let waiting: ScheduleWaiting | null = null;
   let quiet: QuietState = { quietSince: null };
   let ticking = false;
 
@@ -95,6 +102,13 @@ export function createTagSchedule(deps: TagScheduleDeps) {
     });
   }
 
+  // Logs and saves a step exactly as the policy wrote it.
+  function apply(step: ScheduleStep | null, now: Date): Promise<void> {
+    if (!step) return Promise.resolve();
+    if (step.message) deps.log(step.message);
+    return step.patch ? save(step.patch, now) : Promise.resolve();
+  }
+
   function clearHold() {
     waiting = null;
     quiet = { quietSince: null };
@@ -102,19 +116,12 @@ export function createTagSchedule(deps: TagScheduleDeps) {
 
   function onExit(end: TaggerRunEnd) {
     activeRun = false;
-    const { patch, message } = scheduledRunEnded(record ?? EMPTY_TAG_SCHEDULE_RECORD, end);
-    deps.log(message);
-    void save(patch, new Date());
+    void apply(scheduledRunEnded(record ?? EMPTY_TAG_SCHEDULE_RECORD, end), new Date());
   }
 
   async function tickInner(now: Date): Promise<void> {
     const rec = await load();
-    // A run the record says is going, and this process never started, was
-    // killed by the restart that started this process (recoverFromRestart).
-    if (rec.outcome === 'running' && !activeRun) {
-      deps.log('Scheduled tagging: the last scheduled run was interrupted by a controller restart');
-      await save({ outcome: 'interrupted', detail: 'interrupted by a controller restart' }, now);
-    }
+    await apply(restartRecovery(rec, activeRun), now);
 
     const auto = deps.auto();
     const { today, minuteOfDay } = deps.clock(now);
@@ -122,10 +129,7 @@ export function createTagSchedule(deps: TagScheduleDeps) {
     const lapsed = lapsedHold(waiting, today, record?.lastDay ?? null);
     if (lapsed) {
       clearHold();
-      deps.log(`Scheduled tagging did not run on ${lapsed.day}: ${lapsed.text} all day`);
-      if (lapsed.record) {
-        await save({ lastDay: lapsed.day, startedAt: null, outcome: 'missed', detail: lapsed.text, runLogId: null }, now);
-      }
+      await apply(lapsed, now);
     }
 
     const input: GateInput = {
@@ -159,37 +163,27 @@ export function createTagSchedule(deps: TagScheduleDeps) {
       case 'need-listeners':
         // Unreachable: each input is supplied once above.
         return;
-      case 'hold':
-        if (!waiting || waiting.reason !== gate.reason || waiting.day !== today) {
-          deps.log(`Scheduled tagging waiting: ${gate.text}`);
-        }
-        waiting = { day: today, reason: gate.reason, text: gate.text };
+      case 'hold': {
+        const h = holdStep(waiting, gate, today);
+        if (h.message) deps.log(h.message);
+        waiting = h.waiting;
         quiet = gate.quietState;
         return;
+      }
       case 'skip':
         clearHold();
-        deps.log(`Scheduled tagging skipped: ${gate.detail}`);
-        await save({
-          lastDay: today, startedAt: null, outcome: 'skipped', detail: gate.detail, runLogId: null,
-          walkedCount: gate.walkedCount,
-        }, now);
+        await apply(skippedStep(today, gate), now);
         return;
       case 'start': {
         clearHold();
-        const saved = save({
-          lastDay: today, startedAt: now.toISOString(), outcome: 'running', detail: gate.detail, runLogId: null,
-          startCount: gate.startCount, walkedCount: gate.walkedCount,
-        }, now);
-        deps.log(`Scheduled tagging starting (${gate.detail})`);
+        const saved = apply(startingStep(today, now.toISOString(), gate), now);
         activeRun = true;
         try {
           deps.start(gate.run, auto, onExit);
         } catch (err: any) {
           activeRun = false;
-          const msg = err?.message || String(err);
-          deps.log(`Scheduled tagging failed: could not start (${msg}). Not retried; the next run is tomorrow`);
           await saved;
-          await save({ outcome: 'failed', detail: `could not start: ${msg}` }, now);
+          await apply(startFailedStep(err?.message || String(err)), now);
           return;
         }
         await saved;
@@ -218,13 +212,14 @@ export function createTagSchedule(deps: TagScheduleDeps) {
 }
 
 /**
- * The Run tab's Start, as the schedule sends it: the saved limit (0 = all
- * untagged) and steps, vocal left to the setting, and never a replaced-file
- * answer (confirmReplaced / acceptReplaced), so an unattended run holds.
+ * The Run tab's Start, as the schedule sends it: the saved limit (startTagger
+ * reads 0 as no --limit, the Run tab's "all") and steps, vocal left to the
+ * setting, and never a replaced-file answer (confirmReplaced /
+ * acceptReplaced), so an unattended run holds.
  */
 export function scheduledTaggerOptions(auto: TaggerAutoSettings) {
   return {
-    limit: auto.limit > 0 ? auto.limit : undefined,
+    limit: auto.limit,
     reconcile: auto.steps.reconcile,
     enrich: auto.steps.enrich,
     tagMoods: auto.steps.tagMoods,
@@ -248,7 +243,9 @@ async function liveCounts(): Promise<WorkCounts & { scanning: boolean | null }> 
   try {
     await library.load();
     dbRows = db.trackCount();
-    dbUntagged = Math.max(0, dbRows - db.countTagged());
+    // Rows marked untaggable (#2283) are held back from the LLM, so a run
+    // cannot close them: they are not work (pendingWork).
+    dbUntagged = Math.max(0, dbRows - db.countTagged() - db.untaggableMarks().length);
   } catch { /* unknown: pendingWork fails open */ }
   const { scanning, count } = await subsonic.getScanSummary();
   return { dbRows, dbUntagged, navidromeCount: count, scanning };
