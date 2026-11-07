@@ -600,7 +600,8 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
         prompt_hash    = ?,
         model          = ?,
         tagged_at      = ?,
-        untaggable_key = NULL
+        untaggable_key = NULL,
+        tagged_measured = ?
       WHERE id = ?`,
     )
     .run(
@@ -612,6 +613,7 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
       tags.promptHash ?? null,
       tags.model ?? null,
       new Date().toISOString(),
+      tags.taggedMeasured == null ? null : Number(tags.taggedMeasured),
       id,
     );
 }
@@ -638,7 +640,8 @@ export function markTrackUntaggable(id: string, key: string | null): void {
         prompt_hash    = NULL,
         model          = NULL,
         tagged_at      = NULL,
-        untaggable_key = ?
+        untaggable_key = ?,
+        tagged_measured = NULL
       WHERE id = ?`,
     )
     .run(key, id);

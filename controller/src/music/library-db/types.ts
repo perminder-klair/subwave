@@ -44,6 +44,9 @@ export interface TrackRecord {
   promptHash: string | null;
   model: string | null;
   taggedAt: string | null;
+  // The LLM saw the track's measured acoustics when it decided these tags
+  // (#2281): false = blind, null = not an LLM decision under the stamp.
+  taggedMeasured: boolean | null;
   // Acoustic analysis; null means no signal and consumers fall back to their
   // unanalysed behaviour.
   bpm: number | null;
@@ -167,6 +170,7 @@ export interface TrackRow {
   prompt_hash: string | null;
   model: string | null;
   tagged_at: string | null;
+  tagged_measured: number | null;
   bpm: number | null;
   musical_key: string | null;
   intro_ms: number | null;
@@ -243,6 +247,9 @@ export interface TagWrite {
   confidence?: number | null;
   promptHash?: string | null;
   model?: string | null;
+  // tracks.tagged_measured: only an LLM decision knows this; omitted
+  // (propagated, manual) writes NULL.
+  taggedMeasured?: boolean | null;
 }
 
 export interface FilterOpts {

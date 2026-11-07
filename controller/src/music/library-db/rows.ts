@@ -40,6 +40,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     promptHash: row.prompt_hash,
     model: row.model,
     taggedAt: row.tagged_at,
+    taggedMeasured: row.tagged_measured == null ? null : !!row.tagged_measured,
     bpm: row.bpm ?? null,
     musicalKey: row.musical_key ?? null,
     introMs: row.intro_ms ?? null,

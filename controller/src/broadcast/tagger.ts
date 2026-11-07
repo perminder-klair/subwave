@@ -228,7 +228,8 @@ function replacedFlags({ confirmReplaced, acceptReplaced }: ReplacedAnswer): str
 // The re-* flags map straight to music/tag-library.ts: `reseed` drops + rebuilds
 // track_vectors and re-embeds from scratch (embedding-model-swap recovery),
 // `reEnrich` re-fetches Last.fm tags + lyrics, `reAnalyze` redoes acoustic
-// bpm/key, `upgrade` re-LLM-tags rows whose prompt/model is stale. A "full
+// bpm/key, `upgrade` re-LLM-tags rows whose prompt/model is stale (with
+// `upgradeBlind`, only the rows tagged blind and measured since, #2281). A "full
 // re-scan" from the admin UI is reseed + reEnrich + reAnalyze together.
 export function startTagger(
   opts: {
@@ -237,6 +238,8 @@ export function startTagger(
     reEnrich?: boolean;
     reAnalyze?: boolean;
     upgrade?: boolean;
+    // Narrows `upgrade` to blind rows (--upgrade-blind); ignored without it.
+    upgradeBlind?: boolean;
     // "Re-embed, then continue tagging". Only honoured when reseed is the sole re-* pass.
     thenTag?: boolean;
     // Step toggles: undefined = run the step; false emits the skip flag.
@@ -249,13 +252,14 @@ export function startTagger(
     onExit?: OnExit;
   } & ReplacedAnswer = {},
 ) {
-  const { limit, reseed, reEnrich, reAnalyze, upgrade, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
+  const { limit, reseed, reEnrich, reAnalyze, upgrade, upgradeBlind, thenTag, reconcile, enrich, tagMoods, analyze, vocal } = opts;
   const args = ['src/music/tag-library.ts'];
   if (Number.isFinite(limit) && (limit as number) > 0) args.push('--limit', String(limit));
   if (reseed) args.push('--reseed');
   if (reEnrich) args.push('--re-enrich');
   if (reAnalyze) args.push('--re-analyze');
   if (upgrade) args.push('--upgrade');
+  if (upgrade && upgradeBlind === true) args.push('--upgrade-blind');
   // Any re-* pass adds --rescan, which scopes every pass to already-done tracks and
   // suppresses forward discovery. Exception: a reseed-only "then tag" chain drops
   // --rescan so the forward pass also tags the untagged remainder. Any other re-*
@@ -282,6 +286,7 @@ export function startTagger(
     reEnrich ? 're-enrich' : null,
     reAnalyze ? 're-analyze' : null,
     upgrade ? 'upgrade' : null,
+    upgrade && upgradeBlind === true ? 'upgrade-blind' : null,
     enrich === false ? 'skip-enrich' : null,
     tagMoods === false ? 'skip-tag' : null,
     analyze === false ? 'skip-analyze' : null,
