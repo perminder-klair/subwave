@@ -1,6 +1,6 @@
 // Station-zone date math. settings.timezone picks an IANA zone; empty = the
 // container's own TZ. Everything with local-time SEMANTICS (moods, schedule
-// slots, festival dates, the hourly check, the top-of-hour session roll) goes
+// slots, festival dates, the hourly check, the station-hour session roll) goes
 // through zonedParts(); timestamps and durations keep using Date.
 //
 // Imports nothing from the rest of the app so settings.ts can import it without
@@ -54,10 +54,13 @@ export function onStationTimezoneChange(fn: TimezoneListener): void {
 
 export function setStationTimezone(tz: string) {
   const next = typeof tz === 'string' && isValidTimezone(tz.trim()) ? tz.trim() : '';
-  // Fires on a real change only: load() and every update() push the zone in
-  // whether or not it moved, and re-registering crons each save is churn.
-  if (next === stationZone) return;
+  const before = getStationTimezone();
   stationZone = next;
+  // Fires on a change of the EFFECTIVE zone only: load() and every update()
+  // push the zone in whether or not it moved, and naming the zone the process
+  // already runs in ('' to the host's own zone) moves no clock. Re-registering
+  // crons each save is churn.
+  if (getStationTimezone() === before) return;
   for (const fn of zoneListeners) {
     // One bad subscriber must not leave the zone half-applied for the others.
     try { fn(getStationTimezone()); } catch { /* subscriber's problem */ }
@@ -101,30 +104,46 @@ export function zonedISODate(date = new Date()) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-// The talk tick's top-of-hour session roll runs on the STATION clock (#2234).
-// The show grid changes at station :00, and a station zone a fractional number
-// of hours from the process's (IST or Nepal on a London or UTC host, or the
-// reverse) puts that minute at process :30, :15 or :45, so a roll on process
-// :00 left the previous show's session and coast playlist on air for up to 45
-// minutes. Pinned by scripts/station-hour-roll.test.ts.
-
-// The minute the grid's hour can change: where the tick rolls the session.
-export function isStationHourStart(date = new Date()) {
-  return zonedParts(date).minute === 0;
-}
-
-// Which station hour a moment falls in: the tick pairs the hourly row with
-// the roll by this. Zone offsets are whole quarter hours, so process :00 lands
-// on station :00, :15, :30 or :45, and the hourly row's ten-minute window,
-// still on process minutes, closes by station :54, inside the station hour
-// whose :00 rolled. A whole-hour DST fall-back repeats its key, and its second
-// roll replaces the first. The exception is a zone whose DST shift is 30 or
-// 45 minutes (Lord Howe, Chatham). There a transition hour can have no station
-// :00 at all, so it gets no roll, and its hourly row pairs with the previous
-// hour's roll.
+// The talk tick's session roll runs on the STATION clock (#2234, #2254). The
+// show grid changes when the station hour does, and a station zone a
+// fractional number of hours from the process's (IST or Nepal on a London or
+// UTC host, or the reverse) puts that moment at process :30, :15 or :45.
+//
+// The tick rolls when this key differs from the one its previous tick saw, not
+// on station minute 0. A station hour can open without a :00 ever reaching a
+// tick: a timezone saved mid-hour, a zone whose DST shift is 30 or 45 minutes
+// (Lord Howe's spring-forward opens hour 2 at 02:30, Chatham's opens hour 3 at
+// 03:45 and its fall-back repeats 02:45-02:59), or a tick that ran late. A
+// fall-back repeats its key, so the tick also compares the zone's UTC offset
+// (stationUtcOffsetMinutes): the repeated hour rolls again, a no-op roll that
+// replaces the first one, so its hourly row cannot re-air the first pass's
+// show welcome.
+//
+// The key is also how the hourly row finds the roll that opened its hour. Zone
+// offsets are whole quarter hours, so process :00 lands on station :00, :15,
+// :30 or :45, and the row's ten-minute window, still on process minutes,
+// closes by station :54, inside the station hour that rolled. Pinned by
+// scripts/station-hour-roll.test.ts.
 export function stationHourKey(date = new Date()) {
   const { year, month, day, hour } = zonedParts(date);
   return `${year}-${month}-${day}-${hour}`;
+}
+
+// The station zone's offset from UTC in minutes at `date` (+330 for IST). It
+// changes at a DST transition, which is how the tick tells a fall-back's
+// repeated hour from the hour it repeats.
+export function stationUtcOffsetMinutes(date = new Date()) {
+  const { year, month, day, hour, minute } = zonedParts(date);
+  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  return Math.round((wall - (date.getTime() - (date.getTime() % 60_000))) / 60_000);
+}
+
+// The process-clock minute the station's :00 lands on right now: 0 for a
+// whole-hour offset, else 15, 30 or 45. For crons, which fire on process
+// minutes, to keep off the roll. It moves with a zone change, and with a DST
+// change only in a zone whose shift is not a whole hour.
+export function stationHourStartProcessMinute(date = new Date()) {
+  return (date.getMinutes() - zonedParts(date).minute + 60) % 60;
 }
 
 // Clock display + spoken forms (pure, pinned by scripts/clock-phrase.test.ts).
