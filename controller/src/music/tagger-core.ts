@@ -81,19 +81,21 @@ export interface TaggableSong {
 export interface TagResult {
   moods: string[];
   energy: 'low' | 'medium' | 'high' | null;
+  // True when the model named moods and none were in the vocabulary, so an
+  // empty `moods` was a miss rather than its "can't tell" answer (#2283).
+  offVocab?: boolean;
 }
 
-function sanitizeTag(parsed: { moods?: unknown; energy?: unknown }): TagResult {
+export function sanitizeTag(parsed: { moods?: unknown; energy?: unknown }): TagResult {
   const vocab = moodVocab();
-  const moods = Array.isArray(parsed.moods)
-    ? (parsed.moods as unknown[])
-        .filter((m): m is string => typeof m === 'string' && vocab.includes(m))
-        .slice(0, 3)
+  const named = Array.isArray(parsed.moods)
+    ? (parsed.moods as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim() !== '')
     : [];
+  const moods = named.filter(m => vocab.includes(m)).slice(0, 3);
   const energy = ['low', 'medium', 'high'].includes(parsed.energy as string)
     ? (parsed.energy as 'low' | 'medium' | 'high')
     : null;
-  return { moods, energy };
+  return named.length > 0 && moods.length === 0 ? { moods, energy, offVocab: true } : { moods, energy };
 }
 
 function formatSong(song: TaggableSong): string {

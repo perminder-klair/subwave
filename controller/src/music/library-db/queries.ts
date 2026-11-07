@@ -126,6 +126,14 @@ export function untaggedIds(limit?: number): string[] {
   return rows.map(r => r.id);
 }
 
+// Untagged rows the tagger marked untaggable, with the key each was marked
+// under. Whether a marker still holds is tag-library's call (tag-input.ts).
+export function untaggableMarks(): Array<{ id: string; key: string }> {
+  return requireDb()
+    .prepare(`SELECT id, untaggable_key AS key FROM tracks WHERE ${SQL_NO_MOODS} AND untaggable_key IS NOT NULL`)
+    .all() as Array<{ id: string; key: string }>;
+}
+
 export function unembeddedIds(limit?: number): string[] {
   const q = limit
     ? `SELECT t.id FROM tracks t LEFT JOIN track_vectors v ON v.id = t.id WHERE v.id IS NULL LIMIT ?`
