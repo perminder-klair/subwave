@@ -417,10 +417,25 @@ async def test_facet_contract():
         "id": "1", "path": audio.name, "complete": False, "facets": ["tail"],
         "stream_url": "http://navi/stream", "tail_window": {"end_ms": 180000, "duration_ms": 200000},
     }], worker_calls
+    # A flat request (the regular analysis pass) carries the placement too,
+    # and its answer passes the placed marker back.
     worker_calls.clear()
+
+    async def flat_request(payload):
+        worker_calls.append(payload)
+        return {"ok": True, "bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0, "tail_window": "edges",
+                "tail_start_ms": 180000}
+
+    server.analyzer_pool.request = flat_request
     with tempfile.NamedTemporaryFile() as audio:
-        await server.analyze(server.AnalyzeRequest(path=audio.name, tail_window={"end_ms": 1, "duration_ms": 2}))
-    assert "tail_window" not in worker_calls[0], worker_calls
+        flat = await server.analyze(server.AnalyzeRequest(
+            path=audio.name, complete=False, stream_url="http://navi/stream",
+            tail_window={"end_ms": 180000, "duration_ms": 200000},
+        ))
+    server.analyzer_pool.request = worker_request
+    assert worker_calls[0].get("tail_window") == {"end_ms": 180000, "duration_ms": 200000}, worker_calls
+    assert worker_calls[0].get("stream_url") == "http://navi/stream", worker_calls
+    assert flat.get("tail_window") == "edges" and flat.get("tail_start_ms") == 180000, flat
 
     # Model bookkeeping follows the facets named, not the env defaults.
     assert server.StdioWorker._wants_models({"facets": ["head", "tail"]}) is False

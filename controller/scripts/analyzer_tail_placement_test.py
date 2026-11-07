@@ -390,6 +390,56 @@ def t_real_ffmpeg_window_lands_on_the_sample():
         assert onset is not None and abs(onset - 2.0) < 0.03, (ext, onset)
 
 
+def t_the_flat_analysis_places_the_tail_too():
+    # The regular analysis pass (vocal/stem backfills, new tracks) uses the
+    # flat request, not the facet protocol: it must place the window as well.
+    calls, written, loads = [], [], []
+
+    def fake_load(_librosa, path, **kw):
+        loads.append((path, round(kw.get("offset", 0.0), 3), kw.get("duration")))
+        return np.stack([tone(20.0), tone(20.0)]), kw["sr"]
+
+    class Lib(FakeLibrosa):
+        @staticmethod
+        def get_duration(path=None):
+            return 200.0
+
+    with Patched(load_audio=fake_load, ensure_fast_decode=lambda p, complete=None: (p, None),
+                 get_embedder=lambda force=False: None, get_vocal_detector=lambda force=False: Detector(calls),
+                 measure_loudness=fixed_loudness, log=lambda *_a: None,
+                 facet_head=lambda y, sr, librosa: {"bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0},
+                 write_stems=lambda stems, window, d: written.append(window),
+                 write_tail_meta=lambda d, off, dur: written.append(("meta", round(off, 3), round(dur, 3))),
+                 stems_dir_to_write=lambda d, req=False: d):
+        out = aw.analyze(Lib, path="/staged/x.flac", complete=True, vocal=True, stems_dir="/x",
+                         tail_window={"end_ms": 180_000, "duration_ms": 200_000},
+                         stream_url="http://nd/rest/stream?id=1")
+    start = 180.0 - aw.OUTRO_SECONDS
+    assert out.get("tail_window") == "edges", out
+    assert out["tail_start_ms"] == 180_000 and out["tail_silence_ms"] == 20_000, out
+    assert out["outro"]["ending"] == "cold", out
+    shift = int(start * 1000)
+    assert out["outro"]["vocalRanges"] == [{"startMs": shift + 1000, "endMs": shift + 3000}], out
+    assert ("/staged/x.flac", start, aw.OUTRO_SECONDS) in loads, loads
+    assert ("meta", start, 200.0) in written, written
+
+
+def t_the_flat_analysis_without_a_placement_is_unchanged():
+    class Lib(FakeLibrosa):
+        @staticmethod
+        def get_duration(path=None):
+            return 200.0
+
+    y = np.concatenate([tone(12.0), silence(8.0)])
+    with Patched(load_audio=lambda _l, _p, **kw: (y, kw["sr"]), ensure_fast_decode=lambda p, complete=None: (p, None),
+                 get_embedder=lambda force=False: None, get_vocal_detector=lambda force=False: None,
+                 measure_loudness=fixed_loudness, log=lambda *_a: None,
+                 facet_head=lambda y, sr, librosa: {"bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0}):
+        out = aw.analyze(Lib, path="/staged/x.flac", complete=True)
+    assert "tail_window" not in out, out
+    assert abs(out["tail_start_ms"] - 192_000) <= 100, out
+
+
 def t_the_request_hands_the_placement_and_the_stream_to_the_source():
     seen = {}
 
@@ -432,6 +482,8 @@ test("a window that decodes short is tail-not-reached", t_a_window_that_decodes_
 test("a placed window that reads silent is unmeasurable", t_a_placed_window_that_reads_silent_is_unmeasurable)
 test("real ffmpeg: the window lands on the sample (FLAC input seek, MP3 output seek)",
      t_real_ffmpeg_window_lands_on_the_sample)
+test("the flat analysis places the tail too (vocals, stems, meta)", t_the_flat_analysis_places_the_tail_too)
+test("the flat analysis without a placement is unchanged", t_the_flat_analysis_without_a_placement_is_unchanged)
 test("the request hands the placement and the stream URL to the source",
      t_the_request_hands_the_placement_and_the_stream_to_the_source)
 

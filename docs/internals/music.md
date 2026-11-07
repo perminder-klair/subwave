@@ -682,7 +682,10 @@ vocals and stems are then measured on nothing too, and a window that is all
 silence leaves the tail unmeasurable. So a planned tail request carries
 `tail_window: {end_ms, duration_ms}` whenever the edges are stored
 (`analyzer.tailWindowFor`: decoded length minus trailing silence), and the
-worker ends the window there. Six rules:
+worker ends the window there. The regular analysis pass (new tracks, the vocal
+and stem backfills) sends the same placement on its flat request
+(`analyzer.flatTailOpts`), so no path keeps measuring the end-of-file window
+once edges exist. Six rules:
 
 1. **Everything rides the placed window**: the ending, wind-down, tail grid and
    tail loudness (`facet_tail`, measured as if the file ended at the music),
@@ -700,8 +703,11 @@ worker ends the window there. Six rules:
    so re-measuring changes nothing), else 1. Measuring edges promotes an
    existing tail the tolerance covers at once, not only on a whole-table
    re-derive, or every track whose edges arrive later would stay planned for a
-   tail re-read. An unmeasurable tail with no edges is stored one version
-   below, so it is retried once edges can place it.
+   tail re-read. An unmeasurable tail settles only when it was the PLACED
+   window's answer: one without edges, from an unplaced attempt
+   (`tailUnplaced`), or explained as `capped-download` (a placed window is
+   read from the stream, never refused for the cap) is stored one version
+   below, so it is retried once the window can be placed.
 4. **The window is read where it is proven.** A copy known to be complete is
    read in place; any other (the byte-capped download) has just the window
    decoded from `stream_url` (`extract_tail_window`), so a large file is no
@@ -710,10 +716,10 @@ worker ends the window there. Six rules:
    demuxer seeks through a Xing TOC or the average bitrate, which is not
    guaranteed to land on the sample in a VBR file, and every absolute
    timestamp would move with it. Such a request gets the whole-file timeout.
-5. **A placed tail is not overwritten by an end-of-file one**: a flat analysis
-   and a `--re-analyze` clear keep it, with its facet row (the loudness v2
-   rule). A facet answer from the end-of-file window does replace it and drops
-   the stamp. Tail vocal ranges are carried onto a new tail only when it sits
+5. **A placed tail is not overwritten by an end-of-file one**: a flat
+   end-of-file analysis and a `--re-analyze` clear keep it, with its facet row
+   (the loudness v2 rule); a flat answer that was placed replaces it. A facet
+   answer from the end-of-file window does replace it and drops the stamp. Tail vocal ranges are carried onto a new tail only when it sits
    on the same window; a newly placed one leaves them to the vocal backfill.
 6. **Without edges the tail is today's end-of-file window, stamped v1**, so
    `npm run analyze -- --facets edges` first and then `--facets tail` re-reads

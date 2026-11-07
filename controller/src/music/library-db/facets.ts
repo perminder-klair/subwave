@@ -152,6 +152,10 @@ export interface DeriveOpts {
   tailReason?: string;
   // A facet-only attempt need not have a head-analysis stamp to explain it.
   unmeasurable?: Partial<Record<Facet, string>>;
+  // This write's tail attempt read the end-of-file window (no placement was
+  // sent, or the analyzer did not place it): an unmeasurable answer from it
+  // says nothing about the placed window, so it stays one version below.
+  tailUnplaced?: boolean;
 }
 
 // The one place a facet status is decided. Pure: same row in, same rows out —
@@ -167,12 +171,15 @@ export function deriveFacetRows(
   const fails = row.analyze_fail_count ?? 0;
   const ok = (facet: Facet, reason: string | null = null, version = FACET_VERSIONS[facet]) =>
     out.push({ facet, status: 'ok', version, reason, attempts: fails });
-  // An unmeasurable tail with no edges to place it was the end-of-file
-  // window's answer: one version below, so it is retried once edges exist.
-  const unmeasurableVersion = (facet: Facet) =>
-    facet === 'tail' && !row.has_edges ? FACET_VERSIONS.tail - 1 : FACET_VERSIONS[facet];
+  // An unmeasurable tail settles only when it was the PLACED window's answer.
+  // Without edges, from an unplaced attempt, or 'capped-download' (a placed
+  // window is read from the stream, never refused for the cap) it was the
+  // end-of-file window's: one version below, so it is retried once placed.
+  const unmeasurableVersion = (facet: Facet, reason: string) =>
+    facet === 'tail' && (!row.has_edges || opts.tailUnplaced || reason === 'capped-download')
+      ? FACET_VERSIONS.tail - 1 : FACET_VERSIONS[facet];
   const unmeasurable = (facet: Facet, reason: string) =>
-    out.push({ facet, status: 'unmeasurable', version: unmeasurableVersion(facet), reason, attempts: fails });
+    out.push({ facet, status: 'unmeasurable', version: unmeasurableVersion(facet, reason), reason, attempts: fails });
 
   // The head pass is what stamps analysis_version; an older stamp means the
   // head features predate the current shape and are due again.
@@ -221,7 +228,10 @@ export function deriveFacetRows(
     if (reason == null) continue;
     const prior = out.find(r => r.facet === facet);
     if (!prior) unmeasurable(facet, reason);
-    else if (prior.status === 'unmeasurable') prior.reason = reason;
+    else if (prior.status === 'unmeasurable') {
+      prior.reason = reason;
+      if (facet === 'tail') prior.version = unmeasurableVersion(facet, reason);
+    }
   }
 
   // A failed analysis counts against every facet it would have produced.
@@ -392,8 +402,9 @@ export function facetDerivationStamp(): string {
   // their measurement versions. Revision 2 takes a version read from the
   // measurement's own column (loudness_version) as is, so a whole-file figure
   // stored before its facet row knew about it is promoted once. Revision 3
-  // reads the tail's version off its columns (tailVersionOf).
-  return JSON.stringify({ revision: 3, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
+  // reads the tail's version off its columns (tailVersionOf). Revision 4
+  // re-opens a 'capped-download' tail an earlier derivation had settled.
+  return JSON.stringify({ revision: 4, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
 }
 
 function readFacetStamp(d: Database.Database): string | null {

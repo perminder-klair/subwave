@@ -432,6 +432,18 @@ export interface AnalyzeRequestOpts {
   stems_require_marker?: boolean;
   // Baseline analysis is already current; compute only the CLAP vector.
   embedding_only?: boolean;
+  // Where the music stops (from the stored edges): the tail window ends there.
+  // `stream_url` is what the worker decodes that window from when the staged
+  // copy cannot prove it reaches it. Both from flatTailOpts().
+  tail_window?: { end_ms: number; duration_ms: number };
+  stream_url?: string;
+}
+
+// The flat request's tail placement for a track, or nothing when its edges
+// are not stored (the end-of-file window, as before).
+export function flatTailOpts(songId: string, tw: TailWindow | null): Pick<AnalyzeRequestOpts, 'tail_window' | 'stream_url'> {
+  if (!tw) return {};
+  return { tail_window: { end_ms: tw.endMs, duration_ms: tw.durationMs }, stream_url: subsonic.getRawStreamUrl(songId) };
 }
 
 // The flat field names (worker message, sidecar body, facet `data`) mapped to
@@ -473,7 +485,10 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
 
 // Carries either `url` (worker downloads) or `path` (already-local).
 function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
-  return localRequestRaw(req).then(toAnalysisResult);
+  const timeoutMs = req.tail_window
+    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs)
+    : config.analyzer.requestTimeoutMs;
+  return localRequestRaw(req, timeoutMs).then(toAnalysisResult);
 }
 
 // The worker's raw answer (flat or facet shape), for the facet protocol.
@@ -645,7 +660,10 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    timeoutMs: config.analyzer.requestTimeoutMs,
+    // A placed tail window may be decoded from the stream URL.
+    timeoutMs: body.tail_window
+      ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs)
+      : config.analyzer.requestTimeoutMs,
     bodyDeadline: true,
   });
   if (!res.ok) return sidecarFailure(res);
@@ -670,6 +688,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
     tailStartMs: parseSilenceMs(resBody.tail_start_ms),
     stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
+    tailPlaced: resBody.tail_window === 'edges',
   };
 }
 
@@ -1122,6 +1141,8 @@ export async function analyzePathWithUrlFallback(
       );
     }
     const urlOpts = { ...opts };
+    // The url input IS the stream; the placement still applies.
+    delete urlOpts.stream_url;
     delete urlOpts.complete;
     delete urlOpts.stems_dir;
     delete urlOpts.stems_require_marker;

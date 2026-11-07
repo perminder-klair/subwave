@@ -205,17 +205,17 @@ await test('a tail version bump settles for a track whose tail is still unmeasur
   d.prepare(`UPDATE track_facet_status SET version = ? WHERE track_id = 'notail' AND facet = 'tail'`)
     .run(db.FACET_VERSIONS.tail - 1);
   assert.ok(db.facetNeedsIds('tail').includes('notail'));
-  // The retry still cannot measure the tail: that answer is the new version's.
-  db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'full' });
+  // The retry, placed from the edges, still cannot measure the tail: that
+  // answer is the new version's.
+  db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'full', tailVersion: 2 });
   const t = rows('notail').tail;
   assert.deepEqual([t.status, t.version, t.reason, t.source],
     ['unmeasurable', db.FACET_VERSIONS.tail, 'tail-not-measured', 'full']);
   assert.ok(!db.facetNeedsIds('tail').includes('notail'), 'a settled tail must leave the needs scope');
-  // Same for a capped retry: terminal, with the capped reason.
-  d.prepare(`UPDATE track_facet_status SET version = ? WHERE track_id = 'notail' AND facet = 'tail'`)
-    .run(db.FACET_VERSIONS.tail - 1);
+  // A capped retry read the end-of-file window, not the placed one: it keeps
+  // the capped reason and stays due (tail-placement.test.ts).
   db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'capped' });
-  assert.deepEqual([rows('notail').tail.version, rows('notail').tail.reason], [db.FACET_VERSIONS.tail, 'capped-download']);
+  assert.deepEqual([rows('notail').tail.version, rows('notail').tail.reason], [db.FACET_VERSIONS.tail - 1, 'capped-download']);
   assertConsistent();
 });
 
@@ -324,7 +324,9 @@ for (const facet of ['tail', 'loudness'] as const) {
 
   await test(`a first ${facet}-only unmeasurable answer survives resync and reopening`, async () => {
     const id = `terminal-${facet}`;
-    const reason = facet === 'tail' ? 'capped-download' : 'no-loudness-meter';
+    // A placed tail window is never refused for the cap, so a terminal tail
+    // answer is one the placed window gave.
+    const reason = facet === 'tail' ? 'tail-not-reached' : 'no-loudness-meter';
     db.upsertTrackMeta(id, { title: id, duration: 240 });
     // A tail answer settles only once edges can place the window.
     if (facet === 'tail') db.writeFacetResults(id, { source: 'url', edges: { leadMs: 0, tailMs: 400, durationMs: 240_000 } });

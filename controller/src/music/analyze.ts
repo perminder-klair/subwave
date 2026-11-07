@@ -616,14 +616,15 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
     const wantsVocal = facets.includes('vocal');
     const tailVocals = facets.includes('tail') && !wantsVocal && vocalBackfill;
     const lyricVocal = await lyricVocalFor(id, wantsVocal || tailVocals);
+    // The tail window ends where the music stops, when the edges are known.
+    const tailWindow = facets.includes('tail') ? analyzer.tailWindowFor(db.getTrack(id)) : null;
     const requestedFacets = facets.filter(f =>
       !(f === 'vocal' && lyricVocal) && !(f === 'stems' && !stems_dir));
     const res = requestedFacets.length ? await analyzer.analyzeFacets(
       id,
       {
         facets: requestedFacets, tailVocals: tailVocals && !lyricVocal, stems_dir, complete: localComplete,
-        // The tail window ends where the music stops, when the edges are known.
-        tailWindow: facets.includes('tail') ? analyzer.tailWindowFor(db.getTrack(id)) : null,
+        tailWindow,
       },
       localPath ?? undefined,
     ) : null;
@@ -633,7 +634,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         : res?.source.kind === 'whole-file' ? 'url'
         : localComplete === true ? 'full' : localComplete === false ? 'capped' : 'unknown';
 
-    const w: db.FacetWrite = { source };
+    const w: db.FacetWrite = { source, tailUnplaced: facets.includes('tail') && !tailWindow };
     const failures: string[] = [];
     let wroteClap = false;
     for (const f of requestedFacets) {
@@ -756,6 +757,8 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         ? (want.vocal ? (lyricVocal && !stems_dir ? false : true) : (stems_dir ? undefined : false))
         : vocalBackfill ? (lyricVocal && !stems_dir ? false : true) : undefined;
       let viaUrl = !localPath;
+      // The tail window ends where the music stops, when the edges are known.
+      const placement = embeddingOnly ? {} : analyzer.flatTailOpts(id, analyzer.tailWindowFor(db.getTrack(id)));
       const a = localPath
         ? await analyzer.analyzePathWithUrlFallback(id, localPath, {
             embed,
@@ -764,6 +767,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
             stems_dir,
             stems_require_marker: stems_dir ? true : undefined,
             embedding_only: embeddingOnly || undefined,
+            ...placement,
           }, () => { viaUrl = true; })
         : await analyzer.analyze(id, {
             embed,
@@ -771,6 +775,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
             stems_dir,
             stems_require_marker: stems_dir ? true : undefined,
             embedding_only: embeddingOnly || undefined,
+            ...(placement.tail_window ? { tail_window: placement.tail_window } : {}),
           });
       let storedVocal = false;
       if (!embeddingOnly) {
@@ -799,6 +804,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
           tailStartMs: a.tailStartMs,
+          tailVersion: a.tailPlaced ? 2 : null,
           stemsAttempted: a.stemsCached !== null,
           // Recorded on the facet rows; 'capped' explains a missing tail.
           source: viaUrl

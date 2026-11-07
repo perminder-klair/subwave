@@ -842,6 +842,12 @@ async def analyze(req: AnalyzeRequest):
         payload["stems_require_marker"] = req.stems_require_marker
     if req.embedding_only:
         payload["embedding_only"] = True
+    # A placed tail window (flat and facet requests alike) and the stream URL
+    # the worker reads it from when the staged copy cannot prove it reaches it.
+    if req.tail_window is not None:
+        payload["tail_window"] = req.tail_window
+        if req.stream_url and "url" not in payload:
+            payload["stream_url"] = req.stream_url
     facets = getattr(req, "facets", None)
     if facets is not None:
         payload["facets"] = facets
@@ -849,8 +855,6 @@ async def analyze(req: AnalyzeRequest):
             payload["tail_vocals"] = True
         if req.stream_url and "url" not in payload:
             payload["stream_url"] = req.stream_url
-        if req.tail_window is not None:
-            payload["tail_window"] = req.tail_window
     if facets and all(f in WHOLE_FILE_FACETS for f in facets):
         msg = await run_whole_file_once(payload)
     else:
@@ -871,7 +875,7 @@ async def analyze(req: AnalyzeRequest):
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
         "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
-        "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
+        "lead_silence_ms", "tail_silence_ms", "tail_start_ms", "tail_window",
     ):
         if k in msg:
             out[k] = msg[k]

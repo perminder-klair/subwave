@@ -57,6 +57,18 @@ function handler(req: IncomingMessage, res: ServerResponse) {
       const r = JSON.parse(body);
       requests.push(r);
       const tw = r.tail_window as { end_ms: number; duration_ms: number } | undefined;
+      if (!r.facets) {
+        // A regular (flat) analysis: the whole flat answer.
+        const end = tw && placedAnswer ? tw.end_ms : 214_000;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          ok: true, bpm: 120, key: 'Am', intro_ms: 0, confidence: 0.9, loudness_lufs: -10, peak_db: -1,
+          outro: { startMs: end - 5000, ending: 'cold', bpm: 120, beats: [end - 1000] },
+          ...(tw && placedAnswer ? { tail_window: 'edges', tail_silence_ms: tw.duration_ms - tw.end_ms, tail_start_ms: tw.end_ms }
+            : { tail_silence_ms: 300, tail_start_ms: 213_700 }),
+        }));
+        return;
+      }
       const facets: Record<string, unknown> = {};
       if (r.facets.includes('tail')) {
         const end = tw && placedAnswer ? tw.end_ms : 214_000;
@@ -224,6 +236,45 @@ test('an unmeasurable tail without edges stays due until edges can place it', ()
   consistent();
 });
 
+test('a capped-download tail stays due even with edges: the window was not placed', () => {
+  // The regular analysis pass reads the end-of-file window off the capped
+  // download; with edges stored it must not settle the tail as if placed.
+  track('cap-edged');
+  writeEdges('cap-edged', 500);
+  db.writeFacetResults('cap-edged', { source: 'capped', tail: { unmeasurable: 'capped-download' } });
+  assert.deepEqual([tailRow('cap-edged')?.status, tailRow('cap-edged')?.version], ['unmeasurable', 1]);
+  assert.ok(db.facetNeedsIds('tail').includes('cap-edged'));
+  // Same through the flat path, which explains a missing tail the same way.
+  track('cap-flat');
+  writeEdges('cap-flat', 500);
+  db.upsertTrackAnalysis('cap-flat', { bpm: 100, musicalKey: 'C', loudnessLufs: -9, peakDb: -1, source: 'capped' });
+  assert.deepEqual([tailRow('cap-flat')?.status, tailRow('cap-flat')?.version], ['unmeasurable', 1]);
+  // A complete copy whose end-of-file window gave nothing: unplaced, so due.
+  track('flat-none');
+  writeEdges('flat-none', 500);
+  db.upsertTrackAnalysis('flat-none', { bpm: 100, musicalKey: 'C', loudnessLufs: -9, peakDb: -1, source: 'full' });
+  assert.deepEqual([tailRow('flat-none')?.status, tailRow('flat-none')?.version], ['unmeasurable', 1]);
+  // A stored row settled that way by an earlier controller is re-opened on the
+  // next re-derive.
+  sql(`UPDATE track_facet_status SET version = 2 WHERE track_id = 'cap-edged' AND facet = 'tail'`).run();
+  db.resyncAllFacets(db.requireDb());
+  assert.equal(tailRow('cap-edged')?.version, 1);
+  consistent();
+});
+
+test('an unplaced unmeasurable answer stays due; a placed one settles', () => {
+  track('unpl');
+  writeEdges('unpl', 500);
+  db.writeFacetResults('unpl', { source: 'full', tailUnplaced: true, tail: { unmeasurable: 'silent-tail-window' } });
+  assert.deepEqual([tailRow('unpl')?.status, tailRow('unpl')?.version], ['unmeasurable', 1]);
+  db.writeFacetResults('unpl', { source: 'full', tail: { unmeasurable: 'silent-tail-window' } });
+  assert.deepEqual([tailRow('unpl')?.status, tailRow('unpl')?.version], ['unmeasurable', 2]);
+  // A later write that does not re-measure the tail keeps the settled version.
+  db.upsertTrackAudioVector('unpl', Array.from({ length: db.AUDIO_EMBEDDING_DIM }, (_, i) => (i === 0 ? 1 : 0)));
+  assert.equal(tailRow('unpl')?.version, 2);
+  consistent();
+});
+
 test('a whole-table re-derive applies the same rule to existing rows', () => {
   track('legacy');
   writeEdges('legacy', 1_000);
@@ -231,7 +282,7 @@ test('a whole-table re-derive applies the same rule to existing rows', () => {
   sql(`UPDATE track_facet_status SET version = 1 WHERE track_id = 'legacy' AND facet = 'tail'`).run();
   db.resyncAllFacets(db.requireDb());
   assert.equal(tailRow('legacy')?.version, 2);
-  assert.equal(JSON.parse(db.facetDerivationStamp()).revision, 3);
+  assert.equal(JSON.parse(db.facetDerivationStamp()).revision, 4);
   consistent();
 });
 
@@ -290,6 +341,37 @@ test('without edges, or from an analyzer that ignores the placement, the tail st
   }
   assert.equal(tailVersionCol('p3'), null);
   assert.equal(tailRow('p3')?.version, 1);
+});
+
+test('a flat analysis that placed its tail replaces the stored one and stamps v2', () => {
+  track('flatv2');
+  writeEdges('flatv2', 9_000);
+  writeTail('flatv2', 2);
+  db.upsertTrackAnalysis('flatv2', {
+    bpm: 101, musicalKey: 'D', loudnessLufs: -9, peakDb: -1, source: 'full',
+    outro: { ...OUTRO, startMs: 199_000 }, tailSilenceMs: 9_000, tailStartMs: 205_000, tailVersion: 2,
+  });
+  assert.equal(db.getTrack('flatv2')!.outro?.startMs, 199_000);
+  assert.equal(db.getTrack('flatv2')!.tailStartMs, 205_000);
+  assert.equal(tailVersionCol('flatv2'), 2);
+  assert.equal(tailRow('flatv2')?.version, 2);
+  consistent();
+});
+
+test('the regular analysis pass sends the placement too, and stores v2', async () => {
+  db.upsertTrackMeta('flat1', { title: 'flat1', artist: 'A', album: 'B', duration: 214 });
+  writeEdges('flat1', 20_000);
+  requests.length = 0;
+  await runAnalysisPass({ vocalBackfill: false, audioBackfill: false });
+  const r = requests.find((q) => !q.facets && JSON.stringify(q).includes('flat1'));
+  assert.ok(r, JSON.stringify(requests));
+  assert.deepEqual(r.tail_window, { end_ms: 194_000, duration_ms: 214_000 }, JSON.stringify(r));
+  assert.ok(typeof r.stream_url === 'string' || typeof r.url === 'string', JSON.stringify(r));
+  const t = db.getTrack('flat1')!;
+  assert.equal(t.outro?.startMs, 189_000);
+  assert.equal(t.tailStartMs, 194_000);
+  assert.equal(tailVersionCol('flat1'), 2);
+  assert.deepEqual([tailRow('flat1')?.status, tailRow('flat1')?.version], ['ok', 2]);
 });
 
 test('the planner explains where the tail window comes from', () => {
