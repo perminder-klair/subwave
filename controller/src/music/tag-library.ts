@@ -53,6 +53,7 @@ import {
   walkNavidrome,
 } from './tag-library/flags.js';
 import { llmTagInBatches, resolveTagConsumers } from './tag-library/tag.js';
+import { rememberedUntaggable } from './tag-library/tag-input.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 
 
@@ -279,7 +280,15 @@ async function main() {
   // Forward scope: the untagged tracks this run discovers and tags, capped by
   // --limit. A re-scan's forward scope is empty — each re-* pass below redoes
   // only tracks that already carry that artifact, never the remainder.
-  const allUntagged = db.untaggedIds();
+  // Tracks the LLM already found untaggable with this same input, prompt stamp
+  // and model (#2283) stay in scope for enrich, embed and propagation, but never
+  // go to the LLM again. They sort last, so a --limit spends itself on the rest.
+  const noLlm = rememberedUntaggable(promptHash, tagConsumers.map(c => c.label));
+  const untaggedAll = db.untaggedIds();
+  const allUntagged = [
+    ...untaggedAll.filter(id => !noLlm.has(id)),
+    ...untaggedAll.filter(id => noLlm.has(id)),
+  ];
   const targetUntagged = flags.rescan
     ? []
     : flags.limit === Infinity
@@ -291,11 +300,20 @@ async function main() {
         `(not forward-processing ${allUntagged.length} untagged)`,
     );
   } else {
+    // The remembered untaggables are in scope but not "to tag": count them apart.
+    const held = targetUntagged.filter(id => noLlm.has(id)).length;
     logEvent(
       'info',
-      `${targetUntagged.length.toLocaleString('en-GB')} new tracks to tag ` +
+      `${(targetUntagged.length - held).toLocaleString('en-GB')} new tracks to tag ` +
         `(${allUntagged.length.toLocaleString('en-GB')} still untagged)`,
     );
+    if (held > 0) {
+      logEvent(
+        'info',
+        `${held.toLocaleString('en-GB')} more held back from the LLM: they came back untaggable before ` +
+          `with the same details, prompt and model (they can still take a neighbour vote)`,
+      );
+    }
   }
 
   // Phase 0: ENRICH. Normal runs enrich only the in-scope untagged tracks;
@@ -352,6 +370,7 @@ async function main() {
       // --limit must reach the seed layer too, or layers 2-4 pull picks from
       // the full untagged pool. Bulk runs pass undefined.
       untaggedPool: limited ? new Set(targetUntagged) : undefined,
+      skip: noLlm,
       // k-means diversity layer. Candidates without a vector return null and
       // drop out inside the selector; the shortfall tops up randomly.
       embeddingForId: (id) => db.getVector(id),
@@ -368,7 +387,9 @@ async function main() {
       llmCalls += tagged.callCount;
       llmTagged += tagged.tagged;
       mergeByLeg(tagged.byLeg);
-      logEvent('success', `Mood tagging done — ${tagged.tagged}/${seedSelection.seeds.length}`);
+      for (const id of tagged.untaggable) noLlm.add(id);
+      const untaggableNote = tagged.untaggable.length > 0 ? ` (${tagged.untaggable.length} untaggable)` : '';
+      logEvent('success', `Mood tagging done — ${tagged.tagged}/${seedSelection.seeds.length}${untaggableNote}`);
     }
     lap('seed');
 
@@ -407,7 +428,9 @@ async function main() {
           model: modelLabel,
         });
         propagated += 1;
-      } else {
+      } else if (!noLlm.has(id)) {
+        // An untaggable track may still take its neighbours' vote above, but
+        // asking the LLM again would get the same empty answer.
         uncertain.push(id);
       }
     }
@@ -430,6 +453,7 @@ async function main() {
       llmCalls += tagged.callCount;
       llmTagged += tagged.tagged;
       mergeByLeg(tagged.byLeg);
+      for (const id of tagged.untaggable) noLlm.add(id);
 
       // Re-propagate over in-scope tracks still untagged after this LLM round.
       let extra = 0;
@@ -452,7 +476,7 @@ async function main() {
             model: modelLabel,
           });
           extra += 1;
-        } else {
+        } else if (!noLlm.has(id)) {
           stillUncertain.push(id);
         }
       }
