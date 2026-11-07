@@ -790,7 +790,10 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
           keyRanges: a.keyRanges,
           vocalRanges,
           outro,
-          preserveTailVocal: want != null && !want.vocal,
+          // A pass not measuring vocals here carries the stored tail ranges
+          // forward, planned or not, so a plain vocal-off --re-analyze keeps
+          // the tail half of the instrumental verdict (#2255).
+          preserveTailVocal: !vocalWantedHere,
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
           tailStartMs: a.tailStartMs,

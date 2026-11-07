@@ -1059,12 +1059,20 @@ export function analysisFailures(limit = 200): AnalysisFailureRow[] {
 }
 
 // Drop the acoustic analysis so a --re-analyze can recompute it. `keepVocal`
-// preserves vocal_ranges_json when the slow Demucs pass won't be rerun.
+// preserves vocal_ranges_json when the slow Demucs pass won't be rerun, and the
+// tail measurement with it: outro_json carries the tail window's vocalRanges,
+// the other half of the instrumental verdict (lyric-vocal.isInstrumental), so
+// clearing it flipped every instrumental-head, sung-tail row to instrumental
+// until a vocal-on pass measured it again (#2255). The pass overwrites the tail
+// through upsertTrackAnalysis's COALESCE, carrying these ranges forward
+// (preserveTailVocal); a row it hasn't reached keeps its old outro. The two tail
+// columns ride the outro decode and share its rule.
 // `clearStems` is the mirror: only a pass that will rewrite stems may reset the
 // stamps, or the whole library re-separates when the cache is next enabled.
 export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean } = {}): void {
   const d = requireDb();
   const vocalCol = opts.keepVocal ? '' : ' vocal_ranges_json = NULL,';
+  const tailCols = opts.keepVocal ? '' : ' outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,';
   const stemsCol = opts.clearStems ? ' stems_at = NULL,' : '';
   d.transaction(() => {
   d.prepare(
@@ -1076,8 +1084,8 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
       peak_db = CASE WHEN ${SQL_WHOLE_FILE_LOUDNESS} THEN peak_db END,
       ${KEEP_WHOLE_FILE_EXTRAS},
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL, outro_json = NULL,
-      lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
+      key_ranges_json = NULL,
+      lead_silence_ms = NULL,${tailCols}${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
       audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
       -- The failure history goes with the analysis it describes, or the tracks
