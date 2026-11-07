@@ -14,7 +14,7 @@ import { runAudioMoodPass } from './audio-moods.js';
 import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
-import { quietGateDecision, quietOnlyEnabled, type QuietState } from './analyze-quiet-pure.js';
+import { quietAfterMinutes, quietGateDecision, quietOnlyEnabled, type QuietState } from './analyze-quiet-pure.js';
 import { dispatchAnalysis, type DispatchOutcome } from './analyze-dispatch.js';
 import {
   analysisModeForTrack,
@@ -90,7 +90,6 @@ interface QuietConfig {
 }
 
 async function readQuietConfig(): Promise<QuietConfig> {
-  let minutes = 10;
   let audio: any = null;
   try {
     audio = JSON.parse(await readFile(`${config.stateDir}/settings.json`, 'utf8'))?.audio;
@@ -102,9 +101,7 @@ async function readQuietConfig(): Promise<QuietConfig> {
     }
   }
   const enabled = quietOnlyEnabled(process.env.ANALYZE_QUIET_ONLY, audio);
-  const m = audio?.analyzeQuietMinutes;
-  if (Number.isFinite(m) && m >= 1 && m <= 120) minutes = Math.floor(m);
-  return { enabled, minutes };
+  return { enabled, minutes: quietAfterMinutes(audio) };
 }
 
 // How often the paused pass re-checks Icecast (one status fetch, no history).
