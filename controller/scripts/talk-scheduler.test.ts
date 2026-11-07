@@ -169,17 +169,15 @@ test('the quiet gap is 5 minutes, and the window is deliberately twice it', () =
   for (const slot of BANTER_SLOTS) assert.ok(slot + BANTER_WINDOW_MINUTES <= 60);
 });
 
-test('per-row air mode and clock survive the merge', () => {
+test('per-row air mode survives the merge, and no row keeps its own clock', () => {
   // An ident defers to the next track boundary; everything else airs immediately.
   assert.equal(talkSlot('station-id').air, 'next-track');
   for (const kind of ['hourly', 'banter', 'programme'] as TalkKind[]) {
     assert.equal(talkSlot(kind).air, 'immediate', `${kind} must air immediately`);
   }
-  // Slot minutes are process time; programme beats are a station-zone fact.
-  assert.equal(talkSlot('programme').clock, 'station');
-  for (const kind of ['hourly', 'banter', 'station-id'] as TalkKind[]) {
-    assert.equal(talkSlot(kind).clock, 'process', `${kind} slots are process minutes`);
-  }
+  // Every row reads the station clock (#2254), so the per-row label is gone
+  // rather than left to say something nothing reads.
+  for (const row of TALK_SLOTS) assert.ok(!('clock' in row), `${row.kind} still carries a clock label`);
 });
 
 test('a disrupted hour postpones every row instead of dropping it', async () => {
@@ -941,6 +939,104 @@ test('one talker per minute survives the switch — the loser waits, it does not
   r.tick(at(20));
   assert.deepEqual(r.rang.map(x => `${x.kind}@${x.minute}`), ['banter@20']);
   assert.match(r.logs[0], /^\[station-id\] stood down at :15 — banter took the minute \(retrying until :24\)$/);
+});
+
+// A station a fractional number of hours from its host (#2254). The rows used
+// to open on process minutes, so an IST station on a UTC host heard its "top of
+// the hour" check at station :30 and an ident on its own :00. `run` walks one
+// station hour on a UTC host, recording STATION minutes.
+async function onFractionalStation(fn: () => void | Promise<void>, zone = 'Asia/Kolkata') {
+  const prevTz = process.env.TZ;
+  process.env.TZ = 'UTC';
+  await settings.update({ timezone: zone });
+  try {
+    await fn();
+  } finally {
+    await settings.update({ timezone: '' });
+    if (prevTz === undefined) delete process.env.TZ;
+    else process.env.TZ = prevTz;
+  }
+}
+
+const utcAt = (h: number, m: number, s = 0) => new Date(Date.UTC(2026, 7, 19, h, m, s));
+const MINUTE = 60_000;
+
+function stationHour(from: Date, eligible: (kind: TalkKind, now: Date) => boolean) {
+  const fired: Partial<Record<TalkKind, string | null>> = {};
+  const logged: Partial<Record<TalkKind, string | null>> = {};
+  const rang: string[] = [];
+  for (let i = 0; i < 60; i++) {
+    const now = new Date(from.getTime() + i * MINUTE);
+    for (const plan of talkTickPlan({
+      now, lastTalkBreakAt: 0, pendingTalk: null, betweenTracksOnly: false,
+      eligible: kind => eligible(kind, now), externalSlot: () => null, fired, logged,
+    })) {
+      if (plan.act !== 'fire') continue;
+      fired[plan.kind] = plan.slotKey;
+      rang.push(`${plan.kind}@${zonedParts(now).minute}`);
+    }
+  }
+  return rang;
+}
+
+const GATED: Partial<Record<TalkKind, string>> = { hourly: 'hourly', 'station-id': 'stationId', banter: 'banter' };
+
+test('a fractional-offset station opens the hourly check, idents and banter on its own clock', async () => {
+  for (const zone of ['Asia/Kolkata', 'Asia/Kathmandu']) {
+    await onFractionalStation(async () => {
+      await station('chatty');
+      // Station 10:00, wherever the host's minute hand is.
+      const ten = zone === 'Asia/Kolkata' ? utcAt(4, 30) : utcAt(4, 15);
+      assert.equal(zonedParts(ten).hour, 10);
+      assert.equal(zonedParts(ten).minute, 0);
+      const rang = stationHour(ten, (kind, now) => !!GATED[kind] && shouldFire(GATED[kind], now));
+      assert.deepEqual(
+        rang,
+        ['hourly@0', 'station-id@15', 'banter@20', 'station-id@30', 'station-id@45', 'banter@50'],
+        `${zone}: the table's minutes are the station's`,
+      );
+      // One fire per STATION hour: the key names the station's 10 o'clock.
+      assert.equal(talkSlotKey('hourly', ten, '0'), 'hourly-2026-8-19-10-0');
+      assert.equal(talkSlotKey('hourly', new Date(ten.getTime() + 59 * MINUTE), '0'), 'hourly-2026-8-19-10-0');
+    }, zone);
+  }
+});
+
+test("a fractional-offset station's frequency ladder asks per station slot", async () => {
+  await onFractionalStation(async () => {
+    await station('moderate');
+    // IST 10:15 is UTC 04:45; IST 10:30 is UTC 05:00.
+    assert.equal(shouldFire('stationId', utcAt(4, 45)), true, 'the :15 ident is a moderate chance');
+    assert.equal(shouldFire('stationId', utcAt(4, 48)), true, 'a retry at :18 still reads as the :15 chance');
+    assert.equal(shouldFire('stationId', utcAt(5, 0)), false, "the :30 ident is chatty's, though it is the host's :00");
+    assert.equal(shouldFire('banter', utcAt(4, 50)), true, 'banter at station :20');
+    assert.equal(shouldFire('banter', utcAt(5, 20)), false, 'station :50 is not a moderate banter slot');
+  });
+});
+
+test("the segment director's five-minute stride lands on the same ticks on either clock", async () => {
+  await onFractionalStation(async () => {
+    const ten = utcAt(4, 15);  // Kathmandu 10:00
+    const rang = stationHour(ten, kind => kind === 'segment');
+    assert.deepEqual(rang, Array.from({ length: 12 }, (_, i) => `segment@${i * 5}`));
+  }, 'Asia/Kathmandu');
+});
+
+test("the pending-clip hold measures the window's close on the station clock", async () => {
+  await onFractionalStation(async () => {
+    // IST 10:20 is UTC 04:50: the :15 ident window has five station minutes
+    // left (it closes at 10:25). On the host's clock :50 is past :24, which
+    // read as no time left and held the row for any live clip.
+    const now = utcAt(4, 50);
+    const row = talkSlot('station-id');
+    const plan = (validForMs: number) => talkSlotPlan(row, {
+      now, lastTalkBreakAt: 0,
+      pendingTalk: { kind: 'banter', queuedAt: now.getTime() - (PENDING_VOICE_MAX_AGE_MS - validForMs) },
+      eligible: () => true, externalSlot: () => null, fired: {}, logged: {},
+    });
+    assert.equal(plan(4 * MINUTE)?.act, 'fire', 'a clip the queue drops before the window closes does not hold it');
+    assert.equal(plan(6 * MINUTE)?.act, 'wait', 'a clip that outlives the window holds it');
+  });
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
