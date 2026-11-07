@@ -8,6 +8,7 @@ import {
 } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
+import type { OriginalYearOutcome } from '../original-year-policy.js';
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
@@ -148,6 +149,17 @@ function resolvedStoredEra(row: StoredEra): number | null {
 export function resolvedEraYearForTrack(id: string): number | null {
   const row = storedEra(id);
   return row ? resolvedStoredEra(row) : null;
+}
+
+// The year facet row reads the era columns, so a write that changes them (or
+// creates the track) re-derives it. A walk that changes nothing era-related
+// costs no facet work.
+function syncYearIfEraChanged(id: string, before: StoredEra | null): void {
+  const after = storedEra(id);
+  if (!after) return;
+  const suspect = (r: StoredEra) => r.is_compilation === 1 || r.era_untrusted === 1;
+  if (before && suspect(before) === suspect(after) && before.original_year === after.original_year) return;
+  syncTrackFacets(id);
 }
 
 function markTextVectorDirty(id: string): void {
@@ -440,13 +452,15 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
       meta.explicitStatus === undefined ? 0 : 1,
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);
+  syncYearIfEraChanged(id, eraBefore);
   return replaced;
 }
 
-// Tracks still owed an original-year lookup (#842). Not scoped to the tagger's
-// untagged/enriched sets: the column landed after most libraries were tagged,
-// so the backfill must see the whole catalogue. `retryMisses` widens to
-// already-checked misses (--re-enrich).
+// Era-suspect tracks with no year (#842): never checked, or also already-checked
+// misses with `retryMisses`. The automatic passes plan from the year facet
+// instead (facets.yearLookupDueIds, which also keeps a failed lookup off until
+// its retry delay); this is the `--re-enrich` miss scope, intersected with the
+// run's own tracks by the caller.
 export function idsNeedingOriginalYear(retryMisses = false): string[] {
   const extra = retryMisses ? '' : 'AND original_year_checked_at IS NULL';
   return (
@@ -478,6 +492,21 @@ export function setOriginalYear(id: string, year: number | null): void {
     )
     .run(year, year, new Date().toISOString(), id);
   markTextVectorDirtyIfEraChanged(id, eraBefore);
+  syncTrackFacets(id, { fresh: ['year'], source: 'musicbrainz' });
+}
+
+// The one writer of a MusicBrainz lookup's outcome (original-year-policy.ts).
+// A found / not-found answer is stamped on the track; an error is not (nothing
+// was learnt), and only adds a failed attempt to the year facet row, which
+// spaces the next automatic retry.
+export function recordOriginalYearOutcome(id: string, outcome: OriginalYearOutcome): void {
+  requireDb().transaction(() => {
+    if (outcome.kind === 'error') {
+      syncTrackFacets(id, { yearFailed: outcome.reason, source: 'musicbrainz' });
+      return;
+    }
+    setOriginalYear(id, outcome.kind === 'found' ? outcome.year : null);
+  })();
 }
 
 // The operator's own original year (#1418), highest-precedence of the three
@@ -511,6 +540,7 @@ export function setManualOriginalYear(id: string, year: number | null): void {
       .run(id);
   }
   markTextVectorDirtyIfEraChanged(id, eraBefore);
+  syncTrackFacets(id);
 }
 
 // The stamp describes the stored list, so a write that replaces the list clears

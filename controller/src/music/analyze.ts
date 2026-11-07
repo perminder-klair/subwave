@@ -26,7 +26,6 @@ import {
 import { probeListenerCount } from '../broadcast/listeners.js';
 import { sweepKeepLastFromDisk } from '../broadcast/pick-stems.js';
 import { planAcoustics, type AcousticsPlan, type WorkRequest } from './acoustics-plan.js';
-import type { Facet } from './library-db/facets.js';
 
 // Status events for the panel, mirrored to the `[analyze] …` console line.
 const logEvent = makeEventLogger('analyze');
@@ -449,11 +448,12 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
   // tracks, in the plan's order, each with its own request flags.
   const planned = new Map<string, WorkRequest>();
   let planStemsOffline = false;
-  const plannedFacets = new Map<string, Facet[]>();
+  const plannedFacets = new Map<string, db.AnalysisFacet[]>();
   if (plan) {
     for (const item of plan.items) {
       planned.set(item.id, item.request);
-      plannedFacets.set(item.id, item.facets);
+      // The year facet is not the analyzer's (analyze-library runs it apart).
+      plannedFacets.set(item.id, item.facets.filter(db.isAnalysisFacet));
     }
     ids = plan.items.map(i => i.id);
     logEvent(
