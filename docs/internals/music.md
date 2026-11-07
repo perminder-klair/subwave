@@ -710,7 +710,11 @@ once edges exist. Six rules:
    below, so it is retried once the window can be placed. A file the edges
    scan found silent (`edges` unmeasurable `silent-file`) has no music end
    to place a window at, so its tail settles on whatever the end-of-file
-   window gave.
+   window gave. A placed window the analyzer cannot read over a tail
+   already measured is a FAILURE of the track (`analyze_error` names it,
+   bounded by `MAX_ANALYSIS_FAILURES`), never a silent ok: the stored tail
+   outranks `unmeasurable`, so recording it would change nothing and the
+   track would stay planned on every pass.
 4. **The window is read where it is proven.** A copy known to be complete is
    read in place; any other (the byte-capped download) has just the window
    decoded from `stream_url` (`extract_tail_window`), so a large file is no

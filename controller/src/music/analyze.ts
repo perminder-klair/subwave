@@ -248,6 +248,12 @@ export function wholeFileSkipNotice(capability: boolean | null): string {
       '(rebuild the analyzer), or one whose workers were still starting; skipped this run, asked again next run';
 }
 
+// A tail measurement is stored (outro or trailing silence), whichever window
+// it came from.
+function hasMeasuredTail(t: { outro?: unknown; tailSilenceMs?: number | null } | null): boolean {
+  return !!t && (t.outro != null || t.tailSilenceMs != null);
+}
+
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
   const stats = await runAnalysisPassOnce(opts);
   // The whole-file facets ride a regular run only when the operator opted in,
@@ -636,12 +642,25 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
 
     const w: db.FacetWrite = { source, tailUnplaced: facets.includes('tail') && !tailWindow };
     const failures: string[] = [];
+    // Facets whose answer counts as a failure although the backend said
+    // 'unmeasurable' (see below): not "answered".
+    const missed = new Set<db.Facet>();
     let wroteClap = false;
     for (const f of requestedFacets) {
       const a = res?.facets[f];
       if (!a) continue;
       if (a.status === 'failed') { failures.push(db.facetFailure(f, a.reason)); continue; }
       if (a.status === 'unavailable') continue;
+      // A placed window the backend could not read, over a tail already
+      // measured: the stored tail outranks 'unmeasurable', so recording it
+      // would change nothing and the track would stay due, counted ok, on
+      // every pass. It is a failure of this track instead: named in
+      // analyze_error, and bounded by MAX_ANALYSIS_FAILURES.
+      if (a.status === 'unmeasurable' && f === 'tail' && tailWindow && hasMeasuredTail(db.getTrack(id))) {
+        failures.push(db.facetFailure(f, `placed window ${a.reason ?? 'not measured'}`));
+        missed.add(f);
+        continue;
+      }
       if (a.status === 'unmeasurable') {
         (w.unmeasurable ??= {})[f] = a.reason ?? 'not-measured';
         continue;
@@ -698,6 +717,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
     }
     const answered = facets.filter((f) => {
       if (f === 'vocal' && lyricVocal) return true;
+      if (missed.has(f)) return false;
       const a = res?.facets[f];
       return a && a.status !== 'failed' && a.status !== 'unavailable';
     });

@@ -40,6 +40,8 @@ import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 const requests: Array<Record<string, unknown>> = [];
 let placedAnswer = true;
+// The placed window cannot be read (a damaged file even ffmpeg gives up on).
+let placedMiss = false;
 
 function handler(req: IncomingMessage, res: ServerResponse) {
   if (req.url?.startsWith('/health')) {
@@ -70,7 +72,9 @@ function handler(req: IncomingMessage, res: ServerResponse) {
         return;
       }
       const facets: Record<string, unknown> = {};
-      if (r.facets.includes('tail')) {
+      if (r.facets.includes('tail') && tw && placedMiss) {
+        facets.tail = { status: 'unmeasurable', reason: 'tail-not-reached' };
+      } else if (r.facets.includes('tail')) {
         const end = tw && placedAnswer ? tw.end_ms : 214_000;
         facets.tail = {
           status: 'ok',
@@ -108,6 +112,7 @@ const P = await import('../src/music/acoustics-plan.js');
 const { runAnalysisPass } = await import('../src/music/analyze.js');
 const analyzer = await import('../src/music/analyzer.js');
 const { checkFacets } = await import('../src/music/facet-check.js');
+const { MAX_ANALYSIS_FAILURES } = await import('../src/music/analyze-capability.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 await analyzer.isAvailable();
 
@@ -380,6 +385,49 @@ test('without edges, or from an analyzer that ignores the placement, the tail st
   }
   assert.equal(tailVersionCol('p3'), null);
   assert.equal(tailRow('p3')?.version, 1);
+});
+
+test('a placed window that cannot be read over a measured tail is a failure, not a silent ok', async () => {
+  track('miss');
+  writeTail('miss');
+  writeEdges('miss', 9_000);
+  const before = db.getTrack('miss')!;
+  assert.equal(tailRow('miss')?.version, 1);
+  placedMiss = true;
+  try {
+    for (let i = 1; i <= MAX_ANALYSIS_FAILURES; i++) {
+      assert.ok(db.facetNeedsIds('tail').includes('miss'), `planned on attempt ${i}`);
+      const stats = await runAnalysisPass({ plan: plan(['miss']) });
+      assert.deepEqual([stats.analyzed, stats.failed], [0, 1], JSON.stringify(stats));
+      const row = sql('SELECT analyze_fail_count AS n, analyze_error AS e FROM tracks WHERE id = ?').get('miss') as
+        { n: number; e: string };
+      assert.equal(row.n, i);
+      assert.match(row.e, /tail: .*tail-not-reached/);
+    }
+  } finally {
+    placedMiss = false;
+  }
+  // The stored tail is kept as it was, and the planner stops asking.
+  const after_ = db.getTrack('miss')!;
+  assert.deepEqual([after_.outro, after_.tailSilenceMs], [before.outro, before.tailSilenceMs]);
+  assert.equal(tailRow('miss')?.status, 'ok');
+  assert.ok(!db.facetNeedsIds('tail').includes('miss'));
+  consistent();
+});
+
+test('a placed window that cannot be read with no tail stored is recorded as unmeasurable', async () => {
+  track('miss2');
+  writeEdges('miss2', 9_000);
+  placedMiss = true;
+  try {
+    const stats = await runAnalysisPass({ plan: plan(['miss2']) });
+    assert.deepEqual([stats.analyzed, stats.failed], [1, 0], JSON.stringify(stats));
+  } finally {
+    placedMiss = false;
+  }
+  assert.deepEqual([tailRow('miss2')?.status, tailRow('miss2')?.reason, tailRow('miss2')?.version],
+    ['unmeasurable', 'tail-not-reached', 2]);
+  consistent();
 });
 
 test('a flat analysis that placed its tail replaces the stored one and stamps v2', () => {
