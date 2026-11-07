@@ -275,6 +275,45 @@ test('an unplaced unmeasurable answer stays due; a placed one settles', () => {
   consistent();
 });
 
+test('a silent file settles its tail: there is no music end to place a window at', () => {
+  const silent = (id: string) =>
+    db.writeFacetResults(id, { source: 'url', unmeasurable: { edges: 'silent-file' } });
+  // Edges first, then an end-of-file tail answer (ok, unplaced).
+  track('sil-ok');
+  silent('sil-ok');
+  writeTail('sil-ok');
+  assert.deepEqual([tailRow('sil-ok')?.status, tailRow('sil-ok')?.version], ['ok', 2]);
+  // An unmeasurable answer from the unplaced window settles too.
+  track('sil-um');
+  silent('sil-um');
+  db.writeFacetResults('sil-um', { source: 'full', tailUnplaced: true, tail: { unmeasurable: 'silent-tail-window' } });
+  assert.deepEqual([tailRow('sil-um')?.status, tailRow('sil-um')?.version], ['unmeasurable', 2]);
+  // Tail stored first, then the edges scan finds the file silent: promoted.
+  track('sil-late');
+  writeTail('sil-late');
+  assert.equal(tailRow('sil-late')?.version, 1);
+  silent('sil-late');
+  assert.equal(tailRow('sil-late')?.version, 2);
+  track('sil-late-um');
+  db.writeFacetResults('sil-late-um', { source: 'full', tailUnplaced: true, tail: { unmeasurable: 'silent-tail-window' } });
+  assert.equal(tailRow('sil-late-um')?.version, 1);
+  silent('sil-late-um');
+  assert.equal(tailRow('sil-late-um')?.version, 2);
+  // None of them is planned again.
+  const due = db.facetNeedsIds('tail');
+  for (const id of ['sil-ok', 'sil-um', 'sil-late', 'sil-late-um']) assert.ok(!due.includes(id), id);
+  // Rows an earlier derivation left at v1 are settled by the next re-derive.
+  sql(`UPDATE track_facet_status SET version = 1 WHERE track_id IN ('sil-ok', 'sil-um') AND facet = 'tail'`).run();
+  db.resyncAllFacets(db.requireDb());
+  assert.deepEqual([tailRow('sil-ok')?.version, tailRow('sil-um')?.version], [2, 2]);
+  assert.equal(JSON.parse(db.facetDerivationStamp()).revision, 5);
+  consistent();
+  // A later edges scan that finds music brings the normal rule back.
+  writeEdges('sil-ok', 9_000);
+  assert.equal(tailRow('sil-ok')?.version, 1);
+  consistent();
+});
+
 test('a whole-table re-derive applies the same rule to existing rows', () => {
   track('legacy');
   writeEdges('legacy', 1_000);
@@ -282,7 +321,7 @@ test('a whole-table re-derive applies the same rule to existing rows', () => {
   sql(`UPDATE track_facet_status SET version = 1 WHERE track_id = 'legacy' AND facet = 'tail'`).run();
   db.resyncAllFacets(db.requireDb());
   assert.equal(tailRow('legacy')?.version, 2);
-  assert.equal(JSON.parse(db.facetDerivationStamp()).revision, 4);
+  assert.equal(JSON.parse(db.facetDerivationStamp()).revision, 5);
   consistent();
 });
 

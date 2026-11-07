@@ -707,7 +707,10 @@ once edges exist. Six rules:
    window's answer: one without edges, from an unplaced attempt
    (`tailUnplaced`), or explained as `capped-download` (a placed window is
    read from the stream, never refused for the cap) is stored one version
-   below, so it is retried once the window can be placed.
+   below, so it is retried once the window can be placed. A file the edges
+   scan found silent (`edges` unmeasurable `silent-file`) has no music end
+   to place a window at, so its tail settles on whatever the end-of-file
+   window gave.
 4. **The window is read where it is proven.** A copy known to be complete is
    read in place; any other (the byte-capped download) has just the window
    decoded from `stream_url` (`extract_tail_window`), so a large file is no

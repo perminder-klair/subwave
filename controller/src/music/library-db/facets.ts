@@ -175,8 +175,11 @@ export function deriveFacetRows(
   // Without edges, from an unplaced attempt, or 'capped-download' (a placed
   // window is read from the stream, never refused for the cap) it was the
   // end-of-file window's: one version below, so it is retried once placed.
+  // A file the edges scan found silent has no music end to place a window
+  // at: whatever the end-of-file window gave is final.
+  const silentFile = opts.unmeasurable?.edges === 'silent-file';
   const unmeasurableVersion = (facet: Facet, reason: string) =>
-    facet === 'tail' && (!row.has_edges || opts.tailUnplaced || reason === 'capped-download')
+    facet === 'tail' && !silentFile && (!row.has_edges || opts.tailUnplaced || reason === 'capped-download')
       ? FACET_VERSIONS.tail - 1 : FACET_VERSIONS[facet];
   const unmeasurable = (facet: Facet, reason: string) =>
     out.push({ facet, status: 'unmeasurable', version: unmeasurableVersion(facet, reason), reason, attempts: fails });
@@ -204,7 +207,7 @@ export function deriveFacetRows(
   // An outro proves the tail was decoded, even when its window held no
   // silence edge (tail_silence_ms is then NULL by design).
   if (row.has_tail_silence || row.has_outro) {
-    ok('tail', null, tailVersionOf(row));
+    ok('tail', null, silentFile ? FACET_VERSIONS.tail : tailVersionOf(row));
     out[out.length - 1]!.measuredVersion = true;
   }
   else if (analysed) unmeasurable('tail', opts.tailReason ?? 'tail-not-measured');
@@ -232,6 +235,8 @@ export function deriveFacetRows(
       prior.reason = reason;
       if (facet === 'tail') prior.version = unmeasurableVersion(facet, reason);
     }
+    // A settled-by-silence tail is re-decided by the edges, like a placed one.
+    if (facet === 'tail' && silentFile) out.find(r => r.facet === 'tail')!.measuredVersion = true;
   }
 
   // A failed analysis counts against every facet it would have produced.
@@ -367,7 +372,7 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
     // track whose edges arrive after this table was derived stays planned for
     // a tail re-read it does not need.
     const promoted = r.measuredVersion &&
-      (opts.rederive || (r.facet === 'tail' && fresh.has('edges')));
+      (opts.rederive || (r.facet === 'tail' && (fresh.has('edges') || tried.has('edges'))));
     const version =
       isFresh || promoted || !prev || (prev.status !== r.status && unmeasurable[r.facet] == null)
         ? r.version : Math.min(prev.version, r.version);
@@ -404,7 +409,8 @@ export function facetDerivationStamp(): string {
   // stored before its facet row knew about it is promoted once. Revision 3
   // reads the tail's version off its columns (tailVersionOf). Revision 4
   // re-opens a 'capped-download' tail an earlier derivation had settled.
-  return JSON.stringify({ revision: 4, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
+  // Revision 5 settles the tail of a file the edges scan found silent.
+  return JSON.stringify({ revision: 5, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
 }
 
 function readFacetStamp(d: Database.Database): string | null {
