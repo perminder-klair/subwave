@@ -127,9 +127,14 @@ facts:
 
 ### Constraints to design within
 
-- Analyzer is **CPU-only** (no CUDA build), **single-request-at-a-time**
-  (`StdioWorker` lock in `docker/analyzer/server.py`), 120s per-request budget
+- Analyzer runs on the **CPU by default**. A CUDA flavour
+  (`subwave-analyzer-cuda`, `docker-compose.analyzer-gpu.yml`, and the AIO's
+  CUDA builds; `docs/internals/infrastructure.md`) runs Demucs and CLAP on an
+  NVIDIA GPU. Each worker is **single-request-at-a-time** (`StdioWorker` lock in
+  `docker/analyzer/server.py`), and a sidecar pool holds `ANALYZE_CONCURRENCY`
+  of them (1 by default, at most 8). 120s per-request budget
   (`ANALYZE_REQUEST_TIMEOUT_MS`), 6 GB memory cap, heavy image is amd64-only.
+  *(Updated since the July 2026 notes, which predate the CUDA build.)*
 - No scheduled background analysis — passes run via `npm run tag`,
   `npm run analyze`, or admin buttons, single-flight via pidfile lock.
 - **The #749 problem** (`queue.ts`, `applyMixTransition` step 1): a *pair-sized*
