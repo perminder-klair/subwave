@@ -5,6 +5,7 @@ import * as library from '../../music/library.js';
 import * as blocklist from '../../music/blocklist.js';
 import * as db from '../../music/library-db.js';
 import * as coverage from '../../music/library-coverage.js';
+import { exportAttentionCsv } from '../../music/library-overview.js';
 import * as subsonic from '../../music/subsonic.js';
 import * as lastfm from '../../music/lastfm.js';
 import { listAfterArtistLookup } from '../../music/lastfm-tag-policy.js';
@@ -139,6 +140,19 @@ router.post('/library/coverage/refresh', requireAdmin, async (_req, res) => {
     // sensible request timeout.
     coverage.refresh();
     res.json({ ok: true, coverage: await coverage.get() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The tracks behind the "Needs you" count, as an RFC4180 attachment
+// (library-overview.exportAttentionCsv; the Era albums have their own CSV).
+router.get('/library/attention/csv', requireAdmin, (_req, res) => {
+  try {
+    const csv = exportAttentionCsv();
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="needs-you-tracks.csv"');
+    res.send(csv);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

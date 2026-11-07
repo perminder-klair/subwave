@@ -1498,6 +1498,24 @@ export function clearAnalysisFailures(id?: string): number {
   })();
 }
 
+// A file that decodes into garbage: corrupt frames (seen on MP3s) that the
+// decoder turns into bursts far above full scale. No master peaks anywhere near
+// +12 dBTP (a loud one overshoots by +2 to +4 on its inter-sample peaks), and
+// no music is louder than -3 LUFS integrated; a burst gets past either. On one
+// 72,938-track library that was 58 files, 11 of them with a burst long enough
+// to push the integrated loudness to +10 LUFS, so they aired ~12 dB too quiet.
+// Read off the stored whole-file measurement, so a replaced file (re-measured
+// on its own) leaves the list. One condition, shared by the count, the
+// Needs you CSV and the partial index that answers both (stats.ts): the
+// index is chosen only while the query repeats its WHERE word for word.
+export const DAMAGED_DECODE_SQL = 'peak_db > 12 OR loudness_lufs > -3';
+
+export function damagedDecodeCount(): number {
+  return (requireDb().prepare(
+    `SELECT COUNT(*) AS n FROM tracks WHERE ${DAMAGED_DECODE_SQL}`,
+  ).get() as { n: number }).n;
+}
+
 // How many tracks are out of scope for having failed too often (coverage badge).
 // The bare comparison, not analysisFailureExclusion()'s COALESCE, so it reads
 // idx_tracks_fail_count (#1937); same rows while MAX_ANALYSIS_FAILURES > 0,

@@ -835,7 +835,11 @@ export async function getStructuredLyrics(
 // whether an album is a reissue anthology needs the album record AND its full
 // track list together, which exists only in this loop. era-suspect.ts still
 // owns the judgement; this only feeds it.
-export async function* iterateAllSongs({ requireComplete = false } = {}) {
+// `includeBlocked` is for the music-server COUNT only (library-coverage.ts):
+// what the server holds, never-play list included, so it compares with the
+// library mirror, which keeps blocked rows. Every walk that tags, analyses or
+// airs takes the default and never sees a blocked song.
+export async function* iterateAllSongs({ requireComplete = false, includeBlocked = false } = {}) {
   let offset = 0;
   const BATCH = 500;
   while (true) {
@@ -850,7 +854,9 @@ export async function* iterateAllSongs({ requireComplete = false } = {}) {
         const isCompilation = typeof r.album?.isCompilation === 'boolean' ? r.album.isCompilation : null;
         const ord = r.album?.originalReleaseDate?.year;
         const originalYear = Number.isFinite(ord) && ord > 0 ? ord : null;
-        const songs = rejectArchive(r.album?.song || []);
+        const songs = includeBlocked
+          ? (r.album?.song || []).filter((s: any) => !isStationArchive(s))
+          : rejectArchive(r.album?.song || []);
         const suspicion = albumEraSuspect({
           isCompilation,
           albumArtist: r.album?.artist ?? album.artist ?? null,

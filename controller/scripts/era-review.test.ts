@@ -64,7 +64,10 @@ test('opening an older db adds era_reason, album_artist, album_kind and the era_
   // back. No user_version is involved, so a parallel change's migration step
   // can never skip it.
   const version = d().pragma('user_version', { simple: true }) as number;
+  // idx_tracks_era_open (a count accelerator, rebuilt at every open) names
+  // album_artist, and SQLite refuses to drop an indexed column.
   d().exec(`
+    DROP INDEX IF EXISTS idx_tracks_era_open;
     DROP TABLE era_override;
     DROP INDEX idx_tracks_album_kind;
     DROP INDEX idx_tracks_era_album_key;

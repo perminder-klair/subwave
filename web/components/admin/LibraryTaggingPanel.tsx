@@ -11,9 +11,14 @@ import LibraryTaggingModal from './LibraryTaggingModal';
 import RunHoldsBanner from './library/RunHoldsBanner';
 import SceneVocabSection from './library/SceneVocabSection';
 import { useTaggerRunLog } from './library/useTaggerRunLog';
+import { LibraryCounts, type LibraryOverview } from './library/LibraryCounts';
+import type { Tab } from './library/types';
 import { notify } from '../../lib/notify';
 
 export interface Coverage {
+  // The counts line (controller music/library-overview.ts); null until the first
+  // background count lands, absent on an older controller.
+  overview?: LibraryOverview | null;
   tagged: number;
   analysed: number;
   // Tracks with a CLAP audio (sounds-like) embedding. Gated on ANALYZE_AUDIO_EMBEDDING.
@@ -192,6 +197,10 @@ interface TaggingPanelProps {
   onReconcile: () => void;
   // Count the library — the only expensive read on this page, and the operator asks for it (#1570).
   onCountLibrary: () => void;
+  // Opens a Library tab from a counts tile (Browse, Blocked, History, Era).
+  onOpenTab?: (tab: Tab) => void;
+  // The music server's own web UI (Settings → Navidrome), for the Music server tile.
+  musicServerUrl?: string | null;
   countingLibrary: boolean;
   // Wipes ALL tagging data and starts fresh, behind a typed confirmation.
   onReset: () => void;
@@ -328,7 +337,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const logEnd = logRows.length ? logRows[logRows.length - 1]!.key : null;
   // A picked run that retention has since removed falls back to the newest.
   const pickedLogId = runLog.files.some(f => f.id === pickedLog) ? pickedLog : runLog.files[0]?.id;
-  const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
   const audioFillRef = useRef<HTMLSpanElement>(null);
   const vocalFillRef = useRef<HTMLSpanElement>(null);
@@ -341,7 +349,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const analysed = p.coverage?.analysed ?? null;
   const audioEmbedded = p.coverage?.audioEmbedded ?? null;
   const vocalAnalyzed = p.coverage?.vocalAnalyzed ?? null;
-  const pct = p.coverage?.percent ?? null;
+  // Over what can air when the counts line has landed: the old ratio set a
+  // live tagged count, blocked rows included, against the server's count,
+  // which leaves them out, and had to cap at 100.
+  const overview = p.coverage?.overview ?? null;
+  const pct = overview && overview.canAir > 0
+    ? Math.floor((overview.taggedCanAir / overview.canAir) * 100)
+    : (p.coverage?.percent ?? null);
   const apct = p.coverage?.analysedPercent ?? null;
   const audpct = p.coverage?.audioEmbeddedPercent ?? null;
   const vpct = p.coverage?.vocalAnalyzedPercent ?? null;
@@ -364,7 +378,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const vocalOn = (vocalAnalyzed ?? 0) > 0;
   // On a virgin library the per-dimension Backfill buttons stay hidden.
   const anyWorkDone = (tagged ?? 0) > 0 || (analysed ?? 0) > 0 || audioOn || vocalOn;
-  const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
+  const remaining = overview
+    ? Math.max(0, overview.canAir - overview.taggedCanAir)
+    : total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
   const scanning = !!p.coverage?.scanning;
   // A first count still in flight: `total` is null but a number is coming.
@@ -540,7 +556,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const failModeLabel =
     lastRun?.mode === 'analyze' ? 'analysis' : lastRun?.mode === 'reconcile' ? 'reconcile' : 'tagging';
 
-  useDynamicStyle(moodFillRef, { width: pct != null ? `${Math.min(100, pct)}%` : '0%' });
   useDynamicStyle(acousticFillRef, {
     width: !analysisOff && apct != null ? `${Math.min(100, apct)}%` : '0%',
   });
@@ -585,40 +600,36 @@ export default function TaggingPanel(p: TaggingPanelProps) {
 
       <div className="border-b border-ink">
         <div className="p-4 sm:p-6">
-          <div className="flex flex-wrap items-baseline justify-between gap-3">
-            <span className="flex items-center gap-2 text-[11px] font-bold tracking-[0.16em] text-ink uppercase">
-              <Sparkles size={14} /> Mood &amp; energy tagged
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="flex items-center gap-3 text-[11px] font-bold tracking-[0.16em] text-ink uppercase">
+              <span className="flex items-center gap-2"><Sparkles size={14} /> Your library</span>
+              <Btn
+                sm
+                onClick={p.onCountLibrary}
+                // Also gated on `running`: a tag run already walks the music server.
+                disabled={scanning || p.countingLibrary || running}
+                title={running
+                  ? 'A tagging run is already walking the music server — it refreshes the count when it finishes.'
+                  : 'Counts every track on your music server — one request per album, so it takes a while on a big library. Refreshes the Music server tile and the check line.'}
+              >
+                <RefreshCw size={11} className={scanning ? 'animate-spin' : undefined} />{' '}
+                {countLabel}
+              </Btn>
             </span>
-            <span className="mono-num text-[13px] font-bold">{pct != null ? `${pct}%` : '—'}</span>
-          </div>
-          <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
-            <span className="lib-cov-big mono-num">{num(tagged)}</span>
-            <span className="text-[13px] text-muted">
-              / {total != null ? num(total) : scanning ? 'counting…' : '—'} tracks
+            <span className="mono-num text-[12px] font-bold text-[var(--accent)]">
+              {overview && overview.canAir > 0
+                ? `DJ-ready: ${Math.floor((overview.djReady / overview.canAir) * 100)}% of what can air`
+                : pct != null ? `${pct}% tagged` : '—'}
             </span>
-            <Btn
-              sm
-              onClick={p.onCountLibrary}
-              // Also gated on `running`: a tag run already walks Navidrome.
-              disabled={scanning || p.countingLibrary || running}
-              title={running
-                ? 'A tagging run is already walking Navidrome — it refreshes the total when it finishes.'
-                : 'Counts every track in Navidrome — one request per album, so it takes a while on a big library. Nothing else on this page needs it.'}
-            >
-              <RefreshCw size={11} className={scanning ? 'animate-spin' : undefined} />{' '}
-              {countLabel}
-            </Btn>
           </div>
-          <div
-            className="lib-bar mt-3"
-            role="progressbar"
-            aria-label="Mood and energy tagging coverage"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            {...(pct != null ? { 'aria-valuenow': Math.min(100, pct) } : {})}
-          >
-            <span ref={moodFillRef} />
-          </div>
+          <LibraryCounts
+            overview={overview}
+            serverTotal={total}
+            countedAt={countedAt}
+            scanning={scanning}
+            onOpenTab={p.onOpenTab}
+            musicServerUrl={p.musicServerUrl}
+          />
           <div className="mt-2.5 text-[11px] text-muted">
             {remaining != null && remaining > 0 ? (
               <>
