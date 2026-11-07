@@ -444,7 +444,7 @@ export interface SettingsData {
     backups?: { cadence?: string; keep?: number };
     /** Scheduled tagging (#2282), edited on the Library Tagger's Run tab and
      *  posted as `{ tagger: { auto } }`. Absent on an older controller. */
-    tagger?: { auto?: Partial<TaggerAutoSettings> };
+    tagger?: { auto?: TaggerAutoSettings };
     transitions?: {
       pairDrain?: boolean;
       stemBlends?: boolean;
@@ -661,6 +661,10 @@ export interface TaggerScheduleView {
   detail: string | null;
   at: string | null;
   runLogId: string | null;
+  /** Navidrome's song count when the last scheduled run started. */
+  startCount: number | null;
+  /** The new-music baseline: the count the last successful run walked from. */
+  walkedCount: number | null;
   waiting: string | null;
 }
 

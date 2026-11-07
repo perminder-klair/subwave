@@ -5,13 +5,15 @@
 // decision (broadcast/tag-schedule.ts); this card edits the setting and shows
 // the scheduled job's own record (GET /settings `taggerSchedule`).
 //
-// Hydrates from the settings read and re-seeds only while the form is clean,
-// so the 30 s poll never clobbers an edit in progress.
+// Hydrates from the settings read and re-seeds when the stored value changes
+// (a save, or a refetch on focus) only while the form is clean, so a refetch
+// never clobbers an edit in progress.
 
 import { useEffect, useState } from 'react';
 import { useWatch } from 'react-hook-form';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { AdminResponseError } from '../../../lib/admin-query';
+import { errorMessage } from '../../../lib/notify';
 import { applyServerFieldErrors, useZodForm } from '../../../lib/form';
 import { SwitchField, TextField, ToggleGroupField } from '../../../lib/form-fields';
 import {
@@ -37,22 +39,15 @@ const STEP_FIELDS = [
   { key: 'analyze', label: 'Analyze acoustics' },
 ] as const;
 
-// A stored block from an older or hand-edited settings.json may lack fields;
-// the controller's load path fills the same defaults.
-function asForm(stored: Partial<TaggerAutoSettings> | undefined): TaggerAutoSettings {
-  const steps = stored?.steps;
-  return {
-    mode: stored?.mode === 'daily' ? 'daily' : 'off',
-    time: typeof stored?.time === 'string' ? stored.time : TAGGER_AUTO_DEFAULT_TIME,
-    limit: typeof stored?.limit === 'number' ? stored.limit : 0,
-    steps: {
-      reconcile: steps?.reconcile !== false,
-      enrich: steps?.enrich !== false,
-      tagMoods: steps?.tagMoods !== false,
-      analyze: steps?.analyze !== false,
-    },
-  };
-}
+// The form's values before the first read. The card renders only once the
+// controller has sent `values.tagger.auto`, whose load path fills every field,
+// so these are never shown; they only seed useZodForm until then.
+const BEFORE_READ: TaggerAutoSettings = {
+  mode: 'off',
+  time: TAGGER_AUTO_DEFAULT_TIME,
+  limit: 0,
+  steps: { reconcile: true, enrich: true, tagMoods: true, analyze: true },
+};
 
 const formKey = (f: TaggerAutoSettings) =>
   `${f.mode}/${f.time}/${f.limit}/${STEP_FIELDS.map(s => (f.steps[s.key] ? 1 : 0)).join('')}`;
@@ -102,8 +97,8 @@ export default function ScheduledTaggingCard() {
   const [saved, setSaved] = useState(false);
 
   const data = settingsQuery.data;
-  const supported = !!data?.values?.tagger;
-  const stored = asForm(data?.values?.tagger?.auto);
+  const supported = !!data?.values?.tagger?.auto;
+  const stored = data?.values?.tagger?.auto ?? BEFORE_READ;
   const storedKey = formKey(stored);
 
   const form = useZodForm(taggerAutoFormSchema, stored);
@@ -138,7 +133,23 @@ export default function ScheduledTaggingCard() {
     }
   });
 
-  if (!data) return null;
+  if (!data) {
+    if (!settingsQuery.isError) return null;
+    return (
+      <section className="grid gap-2 border border-separator-strong p-3" role="alert">
+        <span className="text-[12px] font-bold text-ink">Schedule</span>
+        <p className="text-[12px] leading-[1.55] text-[var(--danger)]">
+          Could not read the schedule settings. {errorMessage(settingsQuery.error)}
+        </p>
+        <div>
+          <Btn onClick={() => { void settingsQuery.refetch(); }} disabled={settingsQuery.isFetching}>
+            {settingsQuery.isFetching ? 'Retrying…' : 'Retry'}
+          </Btn>
+        </div>
+      </section>
+    );
+  }
+  // An older controller has no `tagger` block: it has no schedule to edit.
   if (!supported) return null;
 
   const tz = data.values?.timezone || data.serverTimezone || 'the station clock';
@@ -156,8 +167,17 @@ export default function ScheduledTaggingCard() {
         Tag new music once a day without pressing Start. The run starts within five minutes
         of the set time ({tz}), or as soon after it as the station is up that day. It is
         skipped when nothing is new or untagged, never starts over another run, and waits
-        for Quiet times when they are on. A failed or held run is not retried until the
-        next day, and an unattended run never confirms replaced files.
+        for a Navidrome scan and for Quiet times when they are on. A failed run is not
+        retried until the next day. An unattended run never confirms replaced files: a
+        held run says so here and in the booth log each night until you answer it with a
+        manual run.
+      </p>
+      <p className="text-[12px] leading-[1.55] text-muted">
+        Two defaults differ from Start above. The schedule tags every untagged track unless
+        you set a number here, where Start&apos;s Limit begins at the next 500. And it has no
+        vocal step of its own: the Demucs vocal pass follows the Vocal activity setting, so
+        with that on the scheduled run separates vocals too (very slow), where Start leaves
+        it unticked.
       </p>
       <form className="grid gap-3" onSubmit={(e) => { void onSubmit(e); }}>
         <ToggleGroupField

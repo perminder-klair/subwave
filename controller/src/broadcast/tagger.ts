@@ -159,6 +159,59 @@ async function applyRotationNow(): Promise<boolean> {
 export type TaggerRunEnd = TaggerLastRun & { holds: string[]; runLogId: string | null };
 type OnExit = (end: TaggerRunEnd) => void;
 
+// How long a run's end waits for 'close' after 'exit' before it is reported
+// with the output it has. 'close' comes once every pipe has drained, which is
+// normally milliseconds; a grandchild still holding a pipe open must not keep
+// the caller waiting for ever.
+export const RUN_END_CLOSE_GRACE_MS = 60_000;
+
+/**
+ * One run's end, reported once to `onExit`. A hold is read from the child's
+ * stdout, and 'exit' can fire while its last lines are still in the pipe, so
+ * an exit is reported on 'close', when every line is in; a spawn that failed
+ * has no output coming and is reported at once. The holds are this run's own,
+ * not `tagger.holds`, which the next run resets as soon as 'exit' frees the
+ * slot.
+ */
+export function createRunEndReporter(
+  onExit: OnExit | undefined,
+  runLogId: string | null,
+  logError: (message: string) => void,
+  closeGraceMs = RUN_END_CLOSE_GRACE_MS,
+) {
+  const holds: string[] = [];
+  let exited: TaggerLastRun | null = null;
+  let reported = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const report = (last: TaggerLastRun) => {
+    if (reported) return;
+    reported = true;
+    if (timer) clearTimeout(timer);
+    if (!onExit) return;
+    try {
+      onExit({ ...last, holds: [...holds], runLogId });
+    } catch (err: any) {
+      logError(`exit callback failed: ${err?.message || err}`);
+    }
+  };
+  return {
+    hold(text: string) { holds.push(text); },
+    /** The spawn failed ('error' with no process): nothing more is coming. */
+    failed(last: TaggerLastRun) { report(last); },
+    /** 'exit': the slot is free, but output may still be in the pipes. */
+    exited(last: TaggerLastRun) {
+      if (reported || exited) return;
+      exited = last;
+      if (onExit) {
+        timer = setTimeout(() => report(last), closeGraceMs);
+        timer.unref?.();
+      }
+    },
+    /** 'close': every line of output is in. */
+    closed() { if (exited) report(exited); },
+  };
+}
+
 // The operator's answer to a replaced-file hold (music/replaced-file-policy.ts),
 // for the two runs that walk. The admin UI sends neither: both are API-only.
 type ReplacedAnswer = { confirmReplaced?: boolean; acceptReplaced?: boolean };
@@ -308,18 +361,12 @@ function spawnChild(
   tagger.runLogId = runLog.runId;
   const thisRunLog = runLog;
 
-  // One call per run: 'error' after a successful spawn leaves the bookkeeping
-  // to 'exit', and the guard keeps a late second event from reporting twice.
-  let reported = false;
-  const reportExit = (last: TaggerLastRun) => {
-    if (reported || !opts.onExit) return;
-    reported = true;
-    try {
-      opts.onExit({ ...last, holds: [...tagger.holds], runLogId: thisRunLog.runId });
-    } catch (err: any) {
-      queue.log('error', `${label} exit callback failed: ${err?.message || err}`);
-    }
-  };
+  // One report per run, on 'close' (createRunEndReporter says why).
+  const runEnd = createRunEndReporter(
+    opts.onExit,
+    thisRunLog.runId,
+    (message) => queue.log('error', `${label} ${message}`),
+  );
 
   let catalogueReady = false;
   let earlyRefresh: Promise<boolean> | null = null;
@@ -395,7 +442,10 @@ function spawnChild(
             const last = tagger.lastLog[tagger.lastLog.length - 1];
             if (typeof last === 'string' && stripLogPrefix(last) === ev.text) tagger.lastLog.pop();
             tagger.lastLog.push({ kind: ev.kind, text: ev.text, at: ev.at });
-            if (ev.hold) tagger.holds.push(ev.text);
+            if (ev.hold) {
+              tagger.holds.push(ev.text);
+              runEnd.hold(ev.text);
+            }
             thisRunLog.event(ev, (raw) => stripLogPrefix(raw) === ev.text);
           } catch { /* malformed sentinel — drop */ }
           continue;
@@ -430,13 +480,14 @@ function spawnChild(
       finishedAt: new Date().toISOString(),
     };
     queue.log('error', `${label} could not start: ${err.message}`);
-    reportExit(tagger.lastRun);
+    runEnd.failed(tagger.lastRun);
   });
   // The run log closes on 'close', not 'exit': 'exit' can fire while the
   // child's last output is still in the pipes, and the file must hold it.
   child.on('close', (code, signal) => {
     thisRunLog.raw(`[exit ${signal || code}]`);
     thisRunLog.close();
+    runEnd.closed();
   });
   child.on('exit', (code, signal) => {
     tagger.running = false;
@@ -496,7 +547,7 @@ function spawnChild(
         if (opts.automaticIdRotation && outcome === 'ok') idRotationRecovery.automaticReconcileFailed();
       });
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
-    reportExit(tagger.lastRun);
+    runEnd.exited(tagger.lastRun);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);
 }

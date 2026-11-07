@@ -1,7 +1,10 @@
 // Scheduled tagging (#2282): the impure half. One tick, registered in
-// broadcast/scheduler.ts every five minutes, asks music/tag-schedule-policy.ts
-// whether the day's run is owed and, when it is, starts it through the same
-// startTagger/startReconcile the Run tab's Start reaches.
+// broadcast/scheduler.ts every five minutes, gathers what
+// music/tag-schedule-policy.ts `scheduleGate` asks for and acts on its answer,
+// starting the run through the same startTagger/startReconcile the Run tab's
+// Start reaches. Every decision (the order of the checks, the holds, the
+// outcomes, the new-music baseline) is the policy module's; this file reads,
+// writes and logs.
 //
 // What it promises, each on purpose:
 //   - Off by default (settings.tagger.auto.mode), and an off schedule costs a
@@ -10,7 +13,10 @@
 //     `state/tagger-schedule.json`, which only this module writes, so a
 //     restart neither repeats the day nor forgets what the last run did.
 //   - It never starts over a run already going (the one single-flight slot,
-//     tagger.running), re-checked after its own awaits.
+//     tagger.running). The gate is asked again after every await with a fresh
+//     `running`, and the start follows the last answer with no await between,
+//     so a manual Start cannot slip in: spawnChild sets tagger.running
+//     synchronously, and the routes refuse a Start while it is set.
 //   - Quiet times hold the START: with quiet-only analysis on, the run waits
 //     for the existing quiet gate (quietGateDecision over probeListenerCount).
 //     Once running, only the analysis step pauses per track, as for any run.
@@ -23,15 +29,15 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
 import { createSerialFileWriter } from '../util/atomic-file.js';
-import { quietGateDecision, type QuietState } from '../music/analyze-quiet-pure.js';
+import { quietAfterMinutes, quietOnlyEnabled, type QuietState } from '../music/analyze-quiet-pure.js';
 import {
   EMPTY_TAG_SCHEDULE_RECORD,
+  lapsedHold,
   normalizeTagScheduleRecord,
-  pendingWork,
-  pendingWorkText,
-  scheduleDue,
-  scheduledRunKind,
-  type TagScheduleOutcome,
+  scheduleGate,
+  scheduledRunEnded,
+  type GateInput,
+  type HoldReason,
   type TagScheduleRecord,
   type WorkCounts,
 } from '../music/tag-schedule-policy.js';
@@ -59,8 +65,6 @@ export interface TagScheduleView extends TagScheduleRecord {
   waiting: string | null;
 }
 
-type HoldReason = 'busy' | 'scanning' | 'quiet';
-
 export function createTagSchedule(deps: TagScheduleDeps) {
   let record: TagScheduleRecord | null = null;
   // A scheduled run this process started and has not heard the end of.
@@ -78,16 +82,17 @@ export function createTagSchedule(deps: TagScheduleDeps) {
     return record;
   }
 
-  async function save(patch: Partial<TagScheduleRecord>, now: Date): Promise<void> {
+  // The in-memory record changes synchronously, before the write is awaited,
+  // so a caller that does not await still orders its change before anything
+  // that follows it (the start below, and the run's own end).
+  function save(patch: Partial<TagScheduleRecord>, now: Date): Promise<void> {
     const base = record ?? { ...EMPTY_TAG_SCHEDULE_RECORD };
     record = { ...base, ...patch, version: 1, at: now.toISOString() };
-    try {
-      await deps.writeRecord(record);
-    } catch (err: any) {
+    return deps.writeRecord(record).catch((err: any) => {
       // The in-memory record still holds the day for this process; only a
       // restart before the next good write could repeat it.
       deps.log(`Scheduled tagging: could not save ${TAG_SCHEDULE_FILE}: ${err?.message || err}`);
-    }
+    });
   }
 
   function clearHold() {
@@ -95,45 +100,11 @@ export function createTagSchedule(deps: TagScheduleDeps) {
     quiet = { quietSince: null };
   }
 
-  function hold(day: string, reason: HoldReason, text: string) {
-    if (!waiting || waiting.reason !== reason || waiting.day !== day) {
-      deps.log(`Scheduled tagging waiting: ${text}`);
-    }
-    // A hold that is no longer about quiet starts the quiet clock afresh.
-    if (reason !== 'quiet') quiet = { quietSince: null };
-    waiting = { day, reason, text };
-  }
-
-  async function skip(day: string, detail: string, now: Date) {
-    clearHold();
-    deps.log(`Scheduled tagging skipped: ${detail}`);
-    await save({ lastDay: day, startedAt: null, outcome: 'skipped', detail, runLogId: null }, now);
-  }
-
   function onExit(end: TaggerRunEnd) {
     activeRun = false;
-    const now = new Date();
-    let outcome: TagScheduleOutcome;
-    let detail: string | null;
-    if (end.holds.length) {
-      outcome = 'held';
-      const more = end.holds.length > 1 ? ` (+${end.holds.length - 1} more)` : '';
-      detail = `${end.holds[0]}${more}`;
-      deps.log(`Scheduled tagging held for the operator: ${detail}. An unattended run never confirms; answer it with a manual run`);
-    } else if (end.outcome === 'ok') {
-      outcome = 'ok';
-      detail = null;
-      deps.log('Scheduled tagging finished');
-    } else if (end.outcome === 'stopped') {
-      outcome = 'stopped';
-      detail = end.error ?? (end.signal ? `stopped (${end.signal})` : 'stopped');
-      deps.log(`Scheduled tagging stopped: ${detail}`);
-    } else {
-      outcome = 'failed';
-      detail = end.error ?? (end.exitCode != null ? `exit ${end.exitCode}` : 'failed');
-      deps.log(`Scheduled tagging failed: ${detail}. Not retried; the next run is tomorrow`);
-    }
-    void save({ outcome, detail, runLogId: end.runLogId }, now);
+    const { patch, message } = scheduledRunEnded(record ?? EMPTY_TAG_SCHEDULE_RECORD, end);
+    deps.log(message);
+    void save(patch, new Date());
   }
 
   async function tickInner(now: Date): Promise<void> {
@@ -148,61 +119,81 @@ export function createTagSchedule(deps: TagScheduleDeps) {
     const auto = deps.auto();
     const { today, minuteOfDay } = deps.clock(now);
 
-    if (waiting && waiting.day !== today) {
-      const lapsed = waiting;
+    const lapsed = lapsedHold(waiting, today, record?.lastDay ?? null);
+    if (lapsed) {
       clearHold();
       deps.log(`Scheduled tagging did not run on ${lapsed.day}: ${lapsed.text} all day`);
-      if (record?.lastDay !== lapsed.day) {
+      if (lapsed.record) {
         await save({ lastDay: lapsed.day, startedAt: null, outcome: 'missed', detail: lapsed.text, runLogId: null }, now);
       }
     }
 
-    const due = scheduleDue({ auto, today, minuteOfDay, lastDay: record?.lastDay ?? null });
-    if (due !== 'due') {
-      clearHold();
-      return;
+    const input: GateInput = {
+      auto,
+      today,
+      minuteOfDay,
+      lastDay: record?.lastDay ?? null,
+      walkedCount: record?.walkedCount ?? null,
+      running: deps.running(),
+      quiet: deps.quiet(),
+      quietState: quiet,
+      nowMs: now.getTime(),
+    };
+    // Each await below is followed by a fresh `running` and a fresh answer;
+    // the start acts on the last answer with no await in between.
+    let gate = scheduleGate(input);
+    if (gate.kind === 'need-counts') {
+      input.counts = await deps.counts();
+      gate = scheduleGate({ ...input, running: deps.running() });
     }
-    if (deps.running()) return hold(today, 'busy', 'another tagger, analysis or reconcile run is going');
+    if (gate.kind === 'need-listeners') {
+      input.listeners = await deps.probeListeners();
+      gate = scheduleGate({ ...input, running: deps.running() });
+    }
 
-    const kind = scheduledRunKind(auto.steps);
-    if (!kind) return skip(today, 'no steps are switched on', now);
-
-    const counts = await deps.counts();
-    const work = pendingWork(counts);
-    const workText = pendingWorkText(counts, work);
-    if (!work.pending) return skip(today, workText, now);
-    if (counts.scanning === true) return hold(today, 'scanning', 'Navidrome is scanning its library');
-
-    const q = deps.quiet();
-    if (q.enabled) {
-      const count = await deps.probeListeners();
-      const d = quietGateDecision(quiet, {
-        enabled: true, count, now: now.getTime(), quietAfterMs: q.minutes * 60_000,
-      });
-      quiet = d.state;
-      if (!d.proceed) {
-        const why = count && count > 0 ? `${count} listening` : `the ${q.minutes}-minute quiet window`;
-        return hold(today, 'quiet', `quiet times (${why})`);
+    switch (gate.kind) {
+      case 'idle':
+        clearHold();
+        return;
+      case 'need-counts':
+      case 'need-listeners':
+        // Unreachable: each input is supplied once above.
+        return;
+      case 'hold':
+        if (!waiting || waiting.reason !== gate.reason || waiting.day !== today) {
+          deps.log(`Scheduled tagging waiting: ${gate.text}`);
+        }
+        waiting = { day: today, reason: gate.reason, text: gate.text };
+        quiet = gate.quietState;
+        return;
+      case 'skip':
+        clearHold();
+        deps.log(`Scheduled tagging skipped: ${gate.detail}`);
+        await save({
+          lastDay: today, startedAt: null, outcome: 'skipped', detail: gate.detail, runLogId: null,
+          walkedCount: gate.walkedCount,
+        }, now);
+        return;
+      case 'start': {
+        clearHold();
+        const saved = save({
+          lastDay: today, startedAt: now.toISOString(), outcome: 'running', detail: gate.detail, runLogId: null,
+          startCount: gate.startCount, walkedCount: gate.walkedCount,
+        }, now);
+        deps.log(`Scheduled tagging starting (${gate.detail})`);
+        activeRun = true;
+        try {
+          deps.start(gate.run, auto, onExit);
+        } catch (err: any) {
+          activeRun = false;
+          const msg = err?.message || String(err);
+          deps.log(`Scheduled tagging failed: could not start (${msg}). Not retried; the next run is tomorrow`);
+          await saved;
+          await save({ outcome: 'failed', detail: `could not start: ${msg}` }, now);
+          return;
+        }
+        await saved;
       }
-    }
-
-    // Re-check at the mutation boundary: the awaits above give a manual Start
-    // time to take the slot.
-    if (deps.running()) return hold(today, 'busy', 'another tagger, analysis or reconcile run is going');
-
-    clearHold();
-    const limitText = auto.limit > 0 ? `limit ${auto.limit}` : 'all untagged';
-    const detail = kind === 'reconcile' ? `reconcile only, ${workText}` : `${workText}, ${limitText}`;
-    await save({ lastDay: today, startedAt: now.toISOString(), outcome: 'running', detail, runLogId: null }, now);
-    deps.log(`Scheduled tagging starting (${detail})`);
-    activeRun = true;
-    try {
-      deps.start(kind, auto, onExit);
-    } catch (err: any) {
-      activeRun = false;
-      const msg = err?.message || String(err);
-      deps.log(`Scheduled tagging failed: could not start (${msg}). Not retried; the next run is tomorrow`);
-      await save({ outcome: 'failed', detail: `could not start: ${msg}` }, now);
     }
   }
 
@@ -271,7 +262,6 @@ async function liveSchedule() {
   const time = await import('../time.js');
   const { tagger, startTagger, startReconcile } = await import('./tagger.js');
   const { probeListenerCount } = await import('./listeners.js');
-  const { quietOnlyEnabled, quietAfterMinutes } = await import('../music/analyze-quiet-pure.js');
   const { queue } = await import('./queue.js');
   live = createTagSchedule({
     auto: () => settings.get().tagger.auto,

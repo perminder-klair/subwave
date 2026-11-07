@@ -17,11 +17,15 @@ const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-tag-schedule-'));
 process.env.STATE_DIR = stateRoot;
 
 const {
+  lapsedHold,
+  lowerBaseline,
   normalizeTagScheduleRecord,
   pendingWork,
   pendingWorkText,
   scheduleDue,
+  scheduleGate,
   scheduleMinuteOfDay,
+  scheduledRunEnded,
   scheduledRunKind,
 } = await import('../src/music/tag-schedule-policy.js');
 const { createTagSchedule, scheduledTaggerOptions } = await import('../src/broadcast/tag-schedule.js');
@@ -76,18 +80,94 @@ test('scheduledRunKind mirrors the Run tab: none, reconcile only, or a tag run',
   assert.equal(scheduledRunKind(ALL_STEPS), 'tag');
 });
 
+const TAG = { tagMoods: true, walkedCount: null };
+
 test('pendingWork sees untagged rows, new Navidrome songs, and fails open on unknown', () => {
-  assert.deepEqual(pendingWork({ dbUntagged: 3, dbRows: 100, navidromeCount: 100 }), { pending: true, reason: 'untagged' });
+  assert.deepEqual(pendingWork({ dbUntagged: 3, dbRows: 100, navidromeCount: 100 }, TAG), { pending: true, reason: 'untagged', amount: 3 });
   // library.db has no row for a track until a walk finds it: Navidrome's count does.
-  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 104 }), { pending: true, reason: 'new-in-navidrome' });
-  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 100 }), { pending: false });
+  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 104 }, TAG), { pending: true, reason: 'new-in-navidrome', amount: 4 });
+  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 100 }, TAG), { pending: false });
   // A removal is not work for the tagger.
-  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 90 }), { pending: false });
+  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: 90 }, TAG), { pending: false });
   // A never-tagged station: no rows yet, songs in Navidrome.
-  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 0, navidromeCount: 50 }), { pending: true, reason: 'new-in-navidrome' });
-  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: null }), { pending: true, reason: 'unknown' });
-  assert.deepEqual(pendingWork({ dbUntagged: null, dbRows: null, navidromeCount: 100 }), { pending: true, reason: 'unknown' });
-  assert.equal(pendingWorkText({ dbUntagged: 0, dbRows: 100, navidromeCount: 104 }, { pending: true, reason: 'new-in-navidrome' }), '4 new in Navidrome');
+  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 0, navidromeCount: 50 }, TAG), { pending: true, reason: 'new-in-navidrome', amount: 50 });
+  assert.deepEqual(pendingWork({ dbUntagged: 0, dbRows: 100, navidromeCount: null }, TAG), { pending: true, reason: 'unknown', amount: null });
+  assert.deepEqual(pendingWork({ dbUntagged: null, dbRows: null, navidromeCount: 100 }, TAG), { pending: true, reason: 'unknown', amount: null });
+  assert.equal(pendingWorkText({ pending: true, reason: 'new-in-navidrome', amount: 4 }), '4 new in Navidrome');
+});
+
+test('pendingWork compares Navidrome with the last walk, not library.db rows', () => {
+  // One blocklisted song: Navidrome counts it, the walk never writes its row.
+  const counts = { dbUntagged: 0, dbRows: 99, navidromeCount: 100 };
+  // The first night has no baseline, so the rows stand in once...
+  assert.equal(pendingWork(counts, TAG).pending, true);
+  // ...and once a walk started from 100 succeeds, the gap is no longer work.
+  assert.deepEqual(pendingWork(counts, { tagMoods: true, walkedCount: 100 }), { pending: false });
+  // A real addition beyond the baseline still is.
+  assert.deepEqual(
+    pendingWork({ ...counts, navidromeCount: 103 }, { tagMoods: true, walkedCount: 100 }),
+    { pending: true, reason: 'new-in-navidrome', amount: 3 },
+  );
+});
+
+test('pendingWork: untagged rows are work only for a run that tags moods', () => {
+  const counts = { dbUntagged: 40, dbRows: 100, navidromeCount: 100 };
+  assert.deepEqual(pendingWork(counts, { tagMoods: false, walkedCount: 100 }), { pending: false });
+  // An unreadable library.db does not matter to a run that does not tag moods.
+  assert.deepEqual(pendingWork({ ...counts, dbUntagged: null }, { tagMoods: false, walkedCount: 100 }), { pending: false });
+  assert.equal(pendingWork(counts, { tagMoods: true, walkedCount: 100 }).pending, true);
+});
+
+test('lowerBaseline: a removal lowers it, nothing here raises it', () => {
+  assert.equal(lowerBaseline(100, 90), 90);
+  assert.equal(lowerBaseline(100, 120), 100);
+  assert.equal(lowerBaseline(null, 90), null);
+  assert.equal(lowerBaseline(100, null), 100);
+});
+
+test('scheduleGate checks a scan before judging the work', () => {
+  const g = scheduleGate({
+    auto: daily(), today: '2026-11-07', minuteOfDay: 151, lastDay: null, walkedCount: 100,
+    running: false, quiet: { enabled: false, minutes: 10 }, quietState: { quietSince: null }, nowMs: 0,
+    // Mid-scan, nothing new is visible yet: that must hold, not spend the day.
+    counts: { dbUntagged: 0, dbRows: 100, navidromeCount: 100, scanning: true },
+  });
+  assert.equal(g.kind, 'hold');
+  assert.equal(g.kind === 'hold' && g.reason, 'scanning');
+});
+
+test('scheduleGate asks for each input only when it needs it', () => {
+  const base = {
+    auto: daily(), today: '2026-11-07', minuteOfDay: 151, lastDay: null, walkedCount: null,
+    running: false, quietState: { quietSince: null }, nowMs: 0,
+  };
+  assert.equal(scheduleGate({ ...base, quiet: { enabled: false, minutes: 10 } }).kind, 'need-counts');
+  const counts = { dbUntagged: 1, dbRows: 100, navidromeCount: 100, scanning: false };
+  assert.equal(scheduleGate({ ...base, counts, quiet: { enabled: true, minutes: 10 } }).kind, 'need-listeners');
+  assert.equal(scheduleGate({ ...base, counts, quiet: { enabled: false, minutes: 10 } }).kind, 'start');
+  assert.equal(scheduleGate({ ...base, counts, running: true, quiet: { enabled: false, minutes: 10 } }).kind, 'hold');
+});
+
+test('scheduledRunEnded: only a clean finish raises the baseline, to the start count', () => {
+  const rec = { startCount: 120, walkedCount: 100 };
+  const run = { error: null, signal: null, exitCode: 0, holds: [] as string[], runLogId: 'r' };
+  assert.equal(scheduledRunEnded(rec, { ...run, outcome: 'ok' }).patch.walkedCount, 120);
+  assert.equal('walkedCount' in scheduledRunEnded(rec, { ...run, outcome: 'failed', exitCode: 1 }).patch, false);
+  assert.equal('walkedCount' in scheduledRunEnded(rec, { ...run, outcome: 'stopped', signal: 'SIGTERM' }).patch, false);
+  // A hold outranks a clean exit, and leaves the baseline, so the run comes back.
+  const held = scheduledRunEnded(rec, { ...run, outcome: 'ok', holds: ['a', 'b'] });
+  assert.equal(held.patch.outcome, 'held');
+  assert.equal(held.patch.detail, 'a (+1 more)');
+  assert.equal('walkedCount' in held.patch, false);
+  // An unknown start count keeps the old baseline.
+  assert.equal(scheduledRunEnded({ startCount: null, walkedCount: 100 }, { ...run, outcome: 'ok' }).patch.walkedCount, 100);
+});
+
+test('lapsedHold: a hold from an earlier day lapses, recorded unless that day was used', () => {
+  assert.equal(lapsedHold(null, '2026-11-08', null), null);
+  assert.equal(lapsedHold({ day: '2026-11-08', text: 'x' }, '2026-11-08', null), null);
+  assert.deepEqual(lapsedHold({ day: '2026-11-07', text: 'x' }, '2026-11-08', null), { day: '2026-11-07', text: 'x', record: true });
+  assert.equal(lapsedHold({ day: '2026-11-07', text: 'x' }, '2026-11-08', '2026-11-07')!.record, false);
 });
 
 test('the record reads leniently: corrupt or foreign is "never ran"', () => {
@@ -101,6 +181,10 @@ test('the record reads leniently: corrupt or foreign is "never ran"', () => {
   assert.equal(bad.lastDay, null);
   assert.equal(bad.outcome, null);
   assert.equal(bad.startedAt, null);
+  const counts = normalizeTagScheduleRecord({ walkedCount: 120, startCount: -1 });
+  assert.equal(counts.walkedCount, 120);
+  assert.equal(counts.startCount, null);
+  assert.equal(normalizeTagScheduleRecord({ walkedCount: '120' }).walkedCount, null);
 });
 
 test('quietAfterMinutes is the analysis pass rule: 1..120, else 10', () => {
@@ -145,14 +229,16 @@ function harness(over: {
     starts: [] as Array<{ kind: string; onExit: (end: any) => void }>,
     writes: [] as any[],
     logs: [] as string[],
+    onCounts: undefined as undefined | (() => void),
+    onProbe: undefined as undefined | (() => void),
   };
   const schedule = createTagSchedule({
     auto: () => h.auto,
     clock: () => ({ today: h.today, minuteOfDay: h.minuteOfDay }),
     running: () => h.running,
-    counts: async () => { h.countCalls++; return h.counts; },
+    counts: async () => { h.countCalls++; h.onCounts?.(); return h.counts; },
     quiet: () => h.quiet,
-    probeListeners: async () => { h.probeCalls++; return h.listeners; },
+    probeListeners: async () => { h.probeCalls++; h.onProbe?.(); return h.listeners; },
     start: (kind, _auto, onExit) => {
       if (over.startThrows) throw new Error('spawn exploded');
       h.starts.push({ kind, onExit });
@@ -227,11 +313,18 @@ test('no steps on skips the day without counting', async () => {
   assert.equal(h.writes.at(-1).outcome, 'skipped');
 });
 
-test('reconcile only starts the reconcile run', async () => {
+test('reconcile only starts the reconcile run, for new music only', async () => {
   const off = { reconcile: false, enrich: false, tagMoods: false, analyze: false };
+  // Untagged rows are not work for a run that does not tag moods.
   const { h, schedule } = harness({ auto: daily({ steps: { ...off, reconcile: true } }) });
   await schedule.tick(T0);
+  assert.equal(h.starts.length, 0);
+  assert.equal(h.writes.at(-1).outcome, 'skipped');
+  h.today = '2026-11-08';
+  h.counts = { dbUntagged: 5, dbRows: 100, navidromeCount: 104, scanning: false };
+  await schedule.tick(later(24 * 60));
   assert.equal(h.starts[0].kind, 'reconcile');
+  assert.match(h.writes.at(-1).detail, /reconcile only, 4 new in Navidrome/);
 });
 
 test('a run already going holds the start without using the day', async () => {
@@ -255,6 +348,80 @@ test('a Navidrome scan in progress holds the start', async () => {
   h.counts = { ...h.counts, scanning: false };
   await schedule.tick(later(5));
   assert.equal(h.starts.length, 1);
+});
+
+test('a scan holds even when nothing looks new yet, and does not spend the day', async () => {
+  const { h, schedule } = harness({ counts: { dbUntagged: 0, dbRows: 100, navidromeCount: 100, scanning: true } });
+  await schedule.tick(T0);
+  assert.equal(h.writes.length, 0, 'a hold is not a used day');
+  assert.match((await schedule.view()).waiting ?? '', /scanning/);
+  // The scan finishes having found new music: the same day runs.
+  h.counts = { dbUntagged: 0, dbRows: 100, navidromeCount: 130, scanning: false };
+  await schedule.tick(later(5));
+  assert.equal(h.starts.length, 1);
+});
+
+test('a manual Start during the count read wins; the schedule does not start a second run', async () => {
+  const { h, schedule } = harness();
+  h.onCounts = () => { h.running = true; };
+  await schedule.tick(T0);
+  assert.equal(h.starts.length, 0);
+  assert.equal(h.writes.length, 0, 'the day is not used');
+  assert.match((await schedule.view()).waiting ?? '', /another tagger/);
+});
+
+test('a manual Start during the listener probe wins too', async () => {
+  const { h, schedule } = harness({ quiet: { enabled: true, minutes: 10 }, listeners: null });
+  h.onProbe = () => { h.running = true; };
+  await schedule.tick(T0);
+  assert.equal(h.probeCalls, 1);
+  assert.equal(h.starts.length, 0);
+});
+
+test('one blocklisted song: the first night runs, then the gap is never work again', async () => {
+  // Navidrome counts 100; the walk drops one blocklisted song, so 99 rows.
+  const { h, schedule } = harness({ counts: { dbUntagged: 0, dbRows: 99, navidromeCount: 100, scanning: false } });
+  await schedule.tick(T0);
+  assert.equal(h.starts.length, 1);
+  assert.equal(h.writes.at(-1).startCount, 100);
+  h.starts[0].onExit(end());
+  assert.equal(h.writes.at(-1).walkedCount, 100);
+  h.today = '2026-11-08';
+  await schedule.tick(later(24 * 60));
+  assert.equal(h.starts.length, 1, 'the same gap the next night is nothing new');
+  assert.equal(h.writes.at(-1).outcome, 'skipped');
+  assert.match(h.writes.at(-1).detail, /nothing new/);
+  // Three songs land: that is new music.
+  h.counts = { ...h.counts, navidromeCount: 103 };
+  h.today = '2026-11-09';
+  await schedule.tick(later(48 * 60));
+  assert.equal(h.starts.length, 2);
+  assert.match(h.writes.at(-1).detail, /3 new in Navidrome/);
+});
+
+test('a removal lowers the baseline, so a later addition still counts', async () => {
+  const { h, schedule } = harness({
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 100 },
+    counts: { dbUntagged: 0, dbRows: 90, navidromeCount: 90, scanning: false },
+  });
+  await schedule.tick(T0);
+  assert.equal(h.starts.length, 0);
+  assert.equal(h.writes.at(-1).walkedCount, 90);
+  h.counts = { ...h.counts, navidromeCount: 92 };
+  h.today = '2026-11-08';
+  await schedule.tick(later(24 * 60));
+  assert.equal(h.starts.length, 1);
+});
+
+test('with Tag moods off, untagged rows never start a run', async () => {
+  const { h, schedule } = harness({
+    auto: daily({ steps: { ...ALL_STEPS, tagMoods: false } }),
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 100 },
+    counts: { dbUntagged: 40, dbRows: 100, navidromeCount: 100, scanning: false },
+  });
+  await schedule.tick(T0);
+  assert.equal(h.starts.length, 0);
+  assert.equal(h.writes.at(-1).outcome, 'skipped');
 });
 
 test('quiet times hold the start until the quiet gate passes', async () => {
@@ -437,6 +604,34 @@ test('the key is in the patch inventory, so POST /settings accepts it', async ()
 
 // ---------------------------------------------------------------------------
 // The tagger's exit callback
+
+test('a run end waits for close: a hold printed after exit is still reported', async () => {
+  const { createRunEndReporter } = await import('../src/broadcast/tagger.js');
+  const ends: any[] = [];
+  const r = createRunEndReporter((e) => ends.push(e), 'run-1', () => {});
+  const last = { mode: 'tag' as const, outcome: 'ok' as const, exitCode: 0, signal: null, error: null, startedAt: 'a', finishedAt: 'b' };
+  r.exited(last);
+  assert.equal(ends.length, 0, "'exit' alone does not report");
+  r.hold('12 files look replaced');
+  r.closed();
+  r.closed();
+  assert.equal(ends.length, 1);
+  assert.deepEqual(ends[0].holds, ['12 files look replaced']);
+  assert.equal(ends[0].runLogId, 'run-1');
+});
+
+test('a run end that never sees close is reported after the grace', async () => {
+  const { createRunEndReporter } = await import('../src/broadcast/tagger.js');
+  const ends: any[] = [];
+  const r = createRunEndReporter((e) => ends.push(e), null, () => {}, 20);
+  r.hold('held');
+  r.exited({ mode: 'tag', outcome: 'ok', exitCode: 0, signal: null, error: null, startedAt: 'a', finishedAt: 'b' });
+  await new Promise((res) => setTimeout(res, 60));
+  assert.equal(ends.length, 1);
+  assert.deepEqual(ends[0].holds, ['held']);
+  r.closed();
+  assert.equal(ends.length, 1, 'once');
+});
 
 test('startTagger reports a failed spawn to its onExit, once', async () => {
   const tagger = await import('../src/broadcast/tagger.js');

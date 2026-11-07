@@ -35,6 +35,7 @@ import {
   HANDOVER_OFFSET_STEP_MINUTES,
   SETTINGS_BACKUP_CADENCES,
   clampBackupKeep,
+  clampSettingsIntOr,
   type BackupCadence,
   type ScheduledBackupSettings,
   SETTINGS_TAGGER_AUTO_MODES,
@@ -108,10 +109,7 @@ export function normalizeTaggerAuto(auto: any): TaggerAutoSettings {
     ? auto.mode
     : d.mode;
   const time = typeof auto?.time === 'string' && TAGGER_AUTO_TIME_RE.test(auto.time) ? auto.time : d.time;
-  const n = Number(auto?.limit);
-  const limit = auto?.limit != null && auto?.limit !== '' && Number.isFinite(n)
-    ? Math.min(TAGGER_AUTO_LIMIT_BOUNDS.max, Math.max(TAGGER_AUTO_LIMIT_BOUNDS.min, Math.floor(n)))
-    : d.limit;
+  const limit = clampSettingsIntOr(auto?.limit, TAGGER_AUTO_LIMIT_BOUNDS, d.limit);
   const steps = {} as TaggerAutoSteps;
   for (const k of TAGGER_AUTO_STEP_KEYS) {
     steps[k] = typeof auto?.steps?.[k] === 'boolean' ? auto.steps[k] : d.steps[k];
