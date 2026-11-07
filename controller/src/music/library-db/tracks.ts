@@ -3,7 +3,7 @@
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import {
-  FACETS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows, deleteFacetRows,
+  FACETS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows,
   isWholeFileLoudnessVersion, restampFacetRows, syncTrackFacets, type Facet, type FacetSource,
 } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
@@ -290,10 +290,10 @@ export function cleanFileInfo(raw: { [K in keyof FileInfo]?: unknown }): FileInf
 // that facet alone, and would pass the rest off as measured after a replacement.
 // Caveat: the seed dates every row of a track from when the facet table was
 // created, so a file replaced before that reads as measured after its change
-// and is left to the size signal.
+// and is left to the size signal. The year row is not a measurement.
 export function lastMeasuredAt(id: string): string | null {
   const r = requireDb()
-    .prepare('SELECT MIN(at) AS at FROM track_facet_status WHERE track_id = ?')
+    .prepare(`SELECT MIN(at) AS at FROM track_facet_status WHERE track_id = ? AND facet <> 'year'`)
     .get(id) as { at: string | null } | undefined;
   return r?.at ?? null;
 }
@@ -302,7 +302,7 @@ export function lastMeasuredAt(id: string): string | null {
 // it cannot be stale for any track (file-changes.changedFiles' first floor).
 export function earliestMeasuredAt(): string | null {
   const r = requireDb()
-    .prepare('SELECT MIN(at) AS at FROM track_facet_status')
+    .prepare(`SELECT MIN(at) AS at FROM track_facet_status WHERE facet <> 'year'`)
     .get() as { at: string | null } | undefined;
   return r?.at ?? null;
 }
@@ -341,8 +341,9 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
     ).run(id);
     d.prepare('DELETE FROM track_audio_vectors WHERE id = ?').run(id);
     // The analysis rows (and the unmeasurable answers they carry) described the
-    // old file.
-    deleteFacetRows(id);
+    // old file; the year row is not an audio measurement (a failed lookup's
+    // attempt count lives only there).
+    d.prepare(`DELETE FROM track_facet_status WHERE track_id = ? AND facet <> 'year'`).run(id);
     syncTrackFacets(id);
   })();
 }
