@@ -213,10 +213,11 @@ function lyricTailRanges(id: string, outro: Pick<analyzer.OutroInfo, 'startMs'>,
 }
 
 // The opt-in whole-file backfill (ANALYZE_WHOLE_FILE): a facet plan for
-// loudness v2 + edges over every track that needs either, exactly what
-// `--facets loudness,edges` would plan. null when the switch is off; an
-// analyzer known to lack the facets gets nothing planned (skipped, counted).
-export async function wholeFileBackfillPlan(limit?: number): Promise<AcousticsPlan | null> {
+// loudness v2 + edges over every track that needs either (or over `ids`),
+// exactly what `--facets loudness,edges` would plan. null when the switch is
+// off; an analyzer known to lack the facets gets nothing planned (skipped,
+// counted).
+export async function wholeFileBackfillPlan(limit?: number, ids?: readonly string[]): Promise<AcousticsPlan | null> {
   if (!config.analyzer.wholeFile) return null;
   const facets = [...db.WHOLE_FILE_FACETS];
   const available = await analyzer.isAvailable().catch(() => false);
@@ -228,7 +229,7 @@ export async function wholeFileBackfillPlan(limit?: number): Promise<AcousticsPl
   // fails every request. An explicit `--facets` run still plans on unknown.
   const capable = available && analyzer.wholeFileAvailable() === true;
   return planAcoustics({
-    ids: db.allTrackIdsOrdered(),
+    ids: ids ? [...ids] : db.allTrackIdsOrdered(),
     facets,
     where: { kind: 'needs' },
     state: db.loadFacetState(facets),
@@ -255,21 +256,56 @@ function hasMeasuredTail(t: { outro?: unknown; tailSilenceMs?: number | null } |
 }
 
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
-  const stats = await runAnalysisPassOnce(opts);
+  if (opts.plan) return runAnalysisPassOnce(opts);
   // The whole-file facets ride a regular run only when the operator opted in,
-  // as one more facet plan after it (same quiet gate, same failure rules).
-  if (opts.plan || !stats.available) return stats;
-  const plan = await wholeFileBackfillPlan(opts.limit);
-  if (!plan) return stats;
-  const skipped = plan.byFacet.reduce((n, c) => n + (c.skipped['no-whole-file'] ?? 0), 0);
-  if (skipped > 0 && plan.items.length === 0) {
-    logEvent('warning', wholeFileSkipNotice(analyzer.wholeFileAvailable()));
-    return stats;
+  // as facet plans (same quiet gate, same failure rules). The regular pass
+  // places each track's tail window from its stored edges
+  // (analyzer.tailWindowFor), so the tracks it is about to analyse get theirs
+  // FIRST: measured after it, a new track's edges arrive too late, its tail is
+  // read off the end of the file, stored one version below, and nothing in the
+  // run goes back to it. Only those tracks go first: the rest of the backfill
+  // (library-wide when the lane is first switched on, or after a loudness
+  // version bump) still runs after the regular pass, so it never holds a new
+  // track's bpm/key back for hours. A failing slice costs its own figures,
+  // never the regular pass.
+  const lead = await runWholeFileBackfill(opts.limit, db.needsAnalysisIds(opts.limit), 'for the tracks about to be analysed', false);
+  const stats = await runAnalysisPassOnce(opts);
+  const rest = stats.available ? await runWholeFileBackfill(opts.limit, undefined, '', true) : null;
+  if (!lead && !rest) return stats;
+  const wholeFile = {
+    analyzed: (lead?.analyzed ?? 0) + (rest?.analyzed ?? 0),
+    failed: (lead?.failed ?? 0) + (rest?.failed ?? 0),
+    scope: (lead?.scope ?? 0) + (rest?.scope ?? 0),
+  };
+  return { ...stats, wholeFile };
+}
+
+async function runWholeFileBackfill(
+  limit: number | undefined,
+  ids: readonly string[] | undefined,
+  what: string,
+  noticeSkip: boolean,
+): Promise<AnalyzeStats['wholeFile'] | null> {
+  if (!config.analyzer.wholeFile) return null;
+  if (ids && ids.length === 0) return null;
+  try {
+    if (!(await analyzer.isAvailable().catch(() => false))) return null;
+    const plan = await wholeFileBackfillPlan(limit, ids);
+    if (!plan) return null;
+    const skipped = plan.byFacet.reduce((n, c) => n + (c.skipped['no-whole-file'] ?? 0), 0);
+    if (skipped > 0 && plan.items.length === 0) {
+      // Said once per run, by the slice after the regular pass.
+      if (noticeSkip) logEvent('warning', wholeFileSkipNotice(analyzer.wholeFileAvailable()));
+      return null;
+    }
+    if (plan.items.length === 0) return null;
+    logEvent('info', `Whole-file loudness + edges${what ? ` ${what}` : ''}: ${plan.items.length.toLocaleString('en-GB')} tracks to measure`);
+    const whole = await runAnalysisPassOnce({ plan });
+    return { analyzed: whole.analyzed, failed: whole.failed, scope: whole.scope };
+  } catch (err) {
+    logEvent('warning', `Whole-file loudness + edges failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    return null;
   }
-  if (plan.items.length === 0) return stats;
-  logEvent('info', `Whole-file loudness + edges: ${plan.items.length.toLocaleString('en-GB')} tracks to measure`);
-  const whole = await runAnalysisPassOnce({ plan });
-  return { ...stats, wholeFile: { analyzed: whole.analyzed, failed: whole.failed, scope: whole.scope } };
 }
 
 async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {

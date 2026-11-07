@@ -584,10 +584,15 @@ file beyond the curve's frames, two bytes per 100 ms (`FrameLog`). Ten rules:
    planned into a pass that can only write a window figure.
 7. **They run when asked**, through the planner (`npm run analyze -- --facets
    loudness,edges`, `--where`, `--ids`), plus an opt-in backfill:
-   `ANALYZE_WHOLE_FILE=1` makes every regular analysis run end with the same
-   plan over the tracks that need either facet (`wholeFileBackfillPlan`), under
-   the same quiet gate and failure rules; it widens only on an analyzer that
-   positively reports the capability. Off by default, so an upgrade is
+   `ANALYZE_WHOLE_FILE=1` makes every regular analysis run carry the same plan
+   over the tracks that need either facet (`wholeFileBackfillPlan`), under the
+   same quiet gate and failure rules; it widens only on an analyzer that
+   positively reports the capability. It runs in two slices: first for the
+   tracks the regular pass is about to analyse, so each new track's tail is
+   placed from fresh edges on its one read (the tail facet, below), then, after
+   the regular pass, for the rest of the library, so a library-wide backfill
+   never holds a new track's bpm and key back. A slice that throws is logged
+   and skipped, never fatal to the regular pass. Off by default, so an upgrade is
    byte-identical: a first library pass reads every file once. Requests carrying
    them get `ANALYZE_WHOLE_FILE_TIMEOUT_MS` (960 s, 90-7260 s), 60 s above the
    analyzer's own `ANALYZE_WHOLE_FILE_TIMEOUT_S` (900 s, 30-7200 s) so the

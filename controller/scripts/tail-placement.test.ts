@@ -77,6 +77,9 @@ function handler(req: IncomingMessage, res: ServerResponse) {
       if (r.facets.includes('vocal')) {
         facets.vocal = { status: 'ok', data: { vocal_ranges: [], ...(tw ? { tail_vocal_ranges: [{ startMs: tw.end_ms - 8000, endMs: tw.end_ms - 6000 }] } : {}) } };
       }
+      // The whole-file lane (a regular run's backfill): edges place the tail.
+      if (r.facets.includes('edges')) facets.edges = { status: 'ok', data: { edge_lead_ms: 0, edge_tail_ms: 20_000, decoded_duration_ms: 214_000 } };
+      if (r.facets.includes('loudness')) facets.loudness = { status: 'ok', data: { loudness_lufs: -12, peak_db: -1, sample_peak_db: -1.2, lra_lu: 6, loudness_version: 2 } };
       if (r.facets.includes('tail') && tw && placedMiss) {
         facets.tail = { status: 'unmeasurable', reason: 'tail-not-reached' };
       } else if (r.facets.includes('tail')) {
@@ -115,6 +118,7 @@ delete process.env.ANALYZE_WHOLE_FILE;
 const db = await import('../src/music/library-db.js');
 const P = await import('../src/music/acoustics-plan.js');
 const { runAnalysisPass } = await import('../src/music/analyze.js');
+const { config } = await import('../src/config.js');
 const analyzer = await import('../src/music/analyzer.js');
 const { checkFacets } = await import('../src/music/facet-check.js');
 const { MAX_ANALYSIS_FAILURES } = await import('../src/music/analyze-capability.js');
@@ -495,5 +499,35 @@ test('a vocal-only request sends the tail window too, so the tail vocals come ba
   assert.deepEqual(requests[0].tail_window, { end_ms: 194_000, duration_ms: 214_000 }, JSON.stringify(requests[0]));
   assert.deepEqual(db.getTrack('voc1')!.outro?.vocalRanges, [{ startMs: 186_000, endMs: 188_000 }]);
   assert.deepEqual([vocalRow().status, vocalRow().version, vocalRow().reason], ['ok', db.FACET_VERSIONS.vocal, null]);
+  consistent();
+});
+
+test('a regular run measures the edges first, so a NEW track\'s tail is placed on its one read', async () => {
+  // A track the walk just added: no analysis, no edges. With the whole-file
+  // backfill on, the run must measure its edges BEFORE the regular pass reads
+  // its tail; the other way round the tail is read off the end of the file,
+  // stored one version below, and nothing in the run goes back to it.
+  db.upsertTrackMeta('fresh1', { title: 'fresh1', artist: 'A', album: 'B', duration: 214 });
+  assert.equal(db.getTrack('fresh1')?.decodedDurationMs ?? null, null);
+  // An already-analysed track that only lacks the whole-file facets: the rest
+  // of the backfill, which must not hold the new track's analysis back.
+  track('old1');
+  (config.analyzer as { wholeFile: boolean }).wholeFile = true;
+  try {
+    requests.length = 0;
+    await runAnalysisPass({ vocalBackfill: false, audioBackfill: false });
+  } finally {
+    (config.analyzer as { wholeFile: boolean }).wholeFile = false;
+  }
+  const mine = (q: Record<string, unknown>) => JSON.stringify(q).includes('fresh1');
+  const edgesAt = requests.findIndex((q) => mine(q) && Array.isArray(q.facets) && (q.facets as string[]).includes('edges'));
+  const flatAt = requests.findIndex((q) => mine(q) && !q.facets);
+  assert.ok(edgesAt >= 0 && flatAt >= 0, JSON.stringify(requests));
+  assert.ok(edgesAt < flatAt, `edges asked at ${edgesAt}, the tail read at ${flatAt}`);
+  const oldEdgesAt = requests.findIndex((q) => JSON.stringify(q).includes('old1') && Array.isArray(q.facets) && (q.facets as string[]).includes('edges'));
+  assert.ok(oldEdgesAt > flatAt, `the library backfill (old1 at ${oldEdgesAt}) runs after the regular pass (${flatAt})`);
+  assert.deepEqual(requests[flatAt].tail_window, { end_ms: 194_000, duration_ms: 214_000 });
+  assert.equal(tailVersionCol('fresh1'), 2);
+  assert.deepEqual([tailRow('fresh1')?.status, tailRow('fresh1')?.version], ['ok', 2]);
   consistent();
 });
