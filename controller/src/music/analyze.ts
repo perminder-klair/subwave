@@ -622,8 +622,9 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
     const wantsVocal = facets.includes('vocal');
     const tailVocals = facets.includes('tail') && !wantsVocal && vocalBackfill;
     const lyricVocal = await lyricVocalFor(id, wantsVocal || tailVocals);
-    // The tail window ends where the music stops, when the edges are known.
-    const tailWindow = facets.includes('tail') ? analyzer.tailWindowFor(db.getTrack(id)) : null;
+    // The tail window ends where the music stops, when the edges are known
+    // (also for the Demucs tail pass behind vocal and stems: TAIL_WINDOW_FACETS).
+    const tailWindow = analyzer.usesTailWindow(facets) ? analyzer.tailWindowFor(db.getTrack(id)) : null;
     const requestedFacets = facets.filter(f =>
       !(f === 'vocal' && lyricVocal) && !(f === 'stems' && !stems_dir));
     const res = requestedFacets.length ? await analyzer.analyzeFacets(

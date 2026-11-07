@@ -1195,6 +1195,16 @@ export interface TailWindow {
   durationMs: number;
 }
 
+// The facets the worker reads the tail window for: the tail itself, and the
+// Demucs tail pass behind vocal (tail vocal ranges) and stems (tail stems),
+// which separates that same window. A vocal- or stems-only request without the
+// placement had the worker find the end on its own copy: on a capped download
+// it never reached it, no tail vocals came back, and the vocal row stayed
+// head-only, re-planned on every run.
+export const TAIL_WINDOW_FACETS: readonly FacetName[] = ['tail', 'vocal', 'stems'];
+export const usesTailWindow = (facets: readonly string[]): boolean =>
+  facets.some(f => (TAIL_WINDOW_FACETS as readonly string[]).includes(f));
+
 // The placement the stored edges give, or null when they are unmeasured or
 // leave nothing to place (a wholly silent file).
 export function tailWindowFor(t: { edgeTailMs?: number | null; decodedDurationMs?: number | null } | null | undefined): TailWindow | null {
@@ -1303,7 +1313,7 @@ export async function analyzeFacets(
 ): Promise<FacetAnalysis> {
   const body: Record<string, unknown> = { facets: opts.facets };
   if (opts.tailVocals) body.tail_vocals = true;
-  if (opts.tailWindow && opts.facets.includes('tail')) {
+  if (opts.tailWindow && usesTailWindow(opts.facets)) {
     body.tail_window = { end_ms: opts.tailWindow.endMs, duration_ms: opts.tailWindow.durationMs };
   }
   const stems = opts.stems_dir ? { stems_dir: opts.stems_dir, stems_require_marker: true } : {};
