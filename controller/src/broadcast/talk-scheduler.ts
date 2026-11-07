@@ -80,7 +80,7 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     oneFirePerSlot: false,
   },
   // Top of the hour. The window runs to :09; the script is written at FIRE time,
-  // so a postponed check still reads the clock correctly. The :00 SESSION ROLL
+  // so a postponed check still reads the clock correctly. The SESSION ROLL
   // is not a row — it runs unconditionally before the planner (scheduler.talkTick),
   // because a muted or empty station must still roll.
   {
