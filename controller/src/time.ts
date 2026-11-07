@@ -114,11 +114,10 @@ export function isStationHourStart(date = new Date()) {
 }
 
 // Which station hour a moment falls in: the tick pairs the hourly row with
-// the roll by this. Zone offsets are whole quarter hours, so process :00 lands
-// on station :00, :15, :30 or :45, and the hourly row's ten-minute window,
-// still on process minutes, closes by station :54, inside the station hour
-// whose :00 rolled. A whole-hour DST fall-back repeats its key, and its second
-// roll replaces the first. The exception is a zone whose DST shift is 30 or
+// the roll by this. The hourly row's ten-minute window is on station minutes
+// too (talk-scheduler.ts, #2254), so it opens on the roll's own :00 and closes
+// by :09, inside the station hour that rolled. A whole-hour DST fall-back
+// repeats its key, and its second roll replaces the first. The exception is a zone whose DST shift is 30 or
 // 45 minutes (Lord Howe, Chatham). There a transition hour can have no station
 // :00 at all, so it gets no roll, and its hourly row pairs with the previous
 // hour's roll.

@@ -977,8 +977,8 @@ const talkLogged: Partial<Record<TalkKind, string | null>> = {};
 // The :00 session roll's outcome. The hourly row's window runs to :09, so a
 // postponed check resolves on a tick where no roll happened but still needs the
 // roll's result as a gate (#310). Keyed by STATION hour, like the roll itself
-// (#2234), so it can't gate the next one; time.ts says why the row's process
-// minutes still find it.
+// (#2234), so it can't gate the next one; the row's window is on station
+// minutes too (#2254), so it opens on the roll's own :00.
 type SessionRoll = Awaited<ReturnType<typeof rollSessionNow>>;
 let lastRoll: { hourKey: string; roll: SessionRoll } | null = null;
 

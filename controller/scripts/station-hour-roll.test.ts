@@ -13,7 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { isStationHourStart, setStationTimezone, stationHourKey, zonedParts } from '../src/time.js';
-import { openMinuteFor, talkSlot } from '../src/broadcast/talk-scheduler.js';
+import { openMinuteFor, talkMinute, talkSlot } from '../src/broadcast/talk-scheduler.js';
 
 const MIN = 60_000;
 const utc = (y: number, mo: number, d: number, h: number, mi = 0) => new Date(Date.UTC(y, mo - 1, d, h, mi));
@@ -112,7 +112,7 @@ test("London's clock changes keep one roll per station hour, on a UTC or a Kolka
 
 // talkTick's own two lines: roll at the station's :00 and remember it by
 // station hour, then hand the hourly row the roll made in this station hour.
-// The row's ten-minute window is still on process minutes (#1500); what it
+// The row's ten-minute window is on station minutes too (#2254); what it
 // must see is the roll that opened its station hour, since that roll's
 // `showStarted` is what earns the hourly welcome and its `introAired` is what
 // stands the check down.
@@ -124,7 +124,7 @@ function hourlyRowSees(from: Date, minutes: number) {
     const now = plus(from, i);
     if (isStationHourStart(now)) lastRoll = { hourKey: stationHourKey(now), at: now };
     const rolled = lastRoll?.hourKey === stationHourKey(now) ? lastRoll : null;
-    if (openMinuteFor(hourly, now.getMinutes()) != null) {
+    if (openMinuteFor(hourly, talkMinute(now)) != null) {
       seen.push({ tick: at(now), rolled: rolled ? at(rolled.at) : null });
     }
   }
