@@ -4,12 +4,16 @@
 // writer (POST /settings, onboarding, a backup restore).
 //
 // The no-change guard is the other half: load() and every update() push the
-// zone in whether or not it moved.
+// zone in whether or not it moved. It compares the EFFECTIVE zone, so naming
+// the zone the process already runs in is not a change either (#2254).
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { setStationTimezone, getStationTimezone, onStationTimezoneChange } from '../src/time.js';
+
+// Auto resolves to the process zone; pin it so "Auto" and "Asia/Kolkata" differ.
+process.env.TZ = 'UTC';
 
 const seen: string[] = [];
 onStationTimezoneChange((tz) => seen.push(tz));
@@ -53,4 +57,17 @@ test('a throwing subscriber does not block the others or the write', () => {
   setStationTimezone('America/New_York');
   assert.equal(getStationTimezone(), 'America/New_York');
   assert.deepEqual(after, ['America/New_York']);
+});
+
+test("naming the process's own zone, or going back to Auto from it, notifies nobody", () => {
+  setStationTimezone('');
+  assert.equal(getStationTimezone(), 'UTC');
+  seen.length = 0;
+  setStationTimezone('UTC');
+  assert.equal(getStationTimezone(), 'UTC');
+  setStationTimezone('');
+  assert.deepEqual(seen, [], 'Auto and the host zone are the same clock');
+
+  setStationTimezone('Europe/London');
+  assert.deepEqual(seen, ['Europe/London']);
 });
