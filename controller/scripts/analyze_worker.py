@@ -3374,8 +3374,25 @@ class FileSource:
             self.window_tmp = extract_tail_window(self.stream_url, offset, length,
                                                   input_seek=input_seek_is_exact(self.src_path))
             self.window_base_s = offset
+        def short(y):
+            return y is None or np.shape(y)[-1] < ANALYZE_SR * length * 0.6
+
         y_src, sr = self.load_tail(librosa, sr=ANALYZE_SR, mono=False, offset=offset, duration=length)
-        if y_src is None or np.shape(y_src)[-1] < ANALYZE_SR * length * 0.6:
+        if short(y_src) and in_place:
+            # A damaged file (bad frame headers mid-way) can lose the in-place
+            # time seek and read short; ffmpeg resyncs past the damage, as the
+            # edges scan that placed this window did. Same local copy.
+            try:
+                self.window_tmp = extract_tail_window(self.src_path, offset, length,
+                                                      input_seek=input_seek_is_exact(self.src_path))
+                self.window_base_s = offset
+                log("placed tail read short in place; decoded the window with ffmpeg")
+                y_src, sr = self.load_tail(librosa, sr=ANALYZE_SR, mono=False, offset=offset, duration=length)
+            except Exception as e:  # noqa: BLE001 — answered as not reached
+                self.close_window()
+                log(f"placed tail: ffmpeg window failed: {e}")
+                return "tail-not-reached"
+        if short(y_src):
             return "tail-not-reached"
         return y_src, sr, offset
 

@@ -339,10 +339,60 @@ def t_file_source_without_a_stream_still_says_why():
 
 
 def t_a_window_that_decodes_short_is_not_reached():
+    # Short in place, and short again from ffmpeg: not reached.
+    def fake_extract(path, offset_s, length_s, input_seek=False):
+        fd, p = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return p
+
     src = aw.FileSource("/staged/x.flac", complete=True)
     src.duration_s = 200.0
-    with Patched(load_audio=lambda _l, _p, **kw: (tone(3.0), kw["sr"])):
+    with Patched(load_audio=lambda _l, _p, **kw: (tone(3.0), kw["sr"]), extract_tail_window=fake_extract,
+                 log=lambda *_a: None):
         assert src.tail(FakeLibrosa, {"end_ms": 180_000, "duration_ms": 200_000}) == "tail-not-reached"
+    src.close()
+    # ffmpeg itself failing on the file is the same answer, not a crash.
+    src = aw.FileSource("/staged/x.flac", complete=True)
+    src.duration_s = 200.0
+    with Patched(load_audio=lambda _l, _p, **kw: (tone(3.0), kw["sr"]), log=lambda *_a: None,
+                 extract_tail_window=lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("ffmpeg: bad"))):
+        assert src.tail(FakeLibrosa, {"end_ms": 180_000, "duration_ms": 200_000}) == "tail-not-reached"
+
+
+def t_a_damaged_file_that_seeks_short_is_read_by_ffmpeg():
+    # A damaged MP3 (bad frame headers mid-file) loses libsndfile's/mpg123's
+    # time seek, so the in-place read comes back empty; ffmpeg resyncs past
+    # the damage, so the window is decoded from the same local copy with it.
+    loads, extracted = [], []
+
+    def fake_load(_librosa, path, **kw):
+        loads.append((path, round(kw.get("offset", 0.0), 3), kw.get("duration")))
+        if path == "/staged/x.mp3":
+            return np.zeros((2, 0), dtype=np.float32), kw["sr"]
+        return np.stack([tone(20.0), tone(20.0)]), kw["sr"]
+
+    def fake_extract(path, offset_s, length_s, input_seek=False):
+        extracted.append((path, offset_s, length_s, input_seek))
+        fd, p = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        return p
+
+    src = aw.FileSource("/staged/x.mp3", complete=True, stream_url="http://nd/rest/stream?id=1")
+    src.duration_s = 200.0
+    with Patched(load_audio=fake_load, extract_tail_window=fake_extract,
+                 input_seek_is_exact=lambda _p: False, log=lambda *_a: None):
+        window = src.tail(FakeLibrosa, {"end_ms": 180_000, "duration_ms": 200_000})
+        assert not isinstance(window, str), window
+        _y, _sr, off = window
+        src.load_tail(FakeLibrosa, sr=aw.DEMUCS_SR, mono=False, offset=off, duration=aw.OUTRO_SECONDS)
+    start = 180.0 - aw.OUTRO_SECONDS
+    assert off == start
+    # From the local copy, never the stream; reads then relative to the window.
+    assert extracted == [("/staged/x.mp3", start, aw.OUTRO_SECONDS, False)], extracted
+    assert [(l[1], l[2]) for l in loads[1:]] == [(0.0, aw.OUTRO_SECONDS), (0.0, aw.OUTRO_SECONDS)], loads
+    tmp = loads[1][0]
+    src.close()
+    assert not os.path.exists(tmp), "the extracted window outlived its source"
 
 
 def t_a_placed_window_that_reads_silent_is_unmeasurable():
@@ -479,6 +529,7 @@ test("a capped copy's window is decoded from the stream, and cleaned up",
      t_file_source_reads_a_capped_copys_window_from_the_stream)
 test("a capped copy with no stream URL is still capped-download", t_file_source_without_a_stream_still_says_why)
 test("a window that decodes short is tail-not-reached", t_a_window_that_decodes_short_is_not_reached)
+test("a damaged file that seeks short is read by ffmpeg", t_a_damaged_file_that_seeks_short_is_read_by_ffmpeg)
 test("a placed window that reads silent is unmeasurable", t_a_placed_window_that_reads_silent_is_unmeasurable)
 test("real ffmpeg: the window lands on the sample (FLAC input seek, MP3 output seek)",
      t_real_ffmpeg_window_lands_on_the_sample)
