@@ -125,6 +125,7 @@ import {
   stripSecretControlChars,
 } from './schemas/settings.js';
 import { jinglePlacement, jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
+import { scheduleArmChanged } from './music/tag-schedule-policy.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -2778,6 +2779,7 @@ export async function update(patch) {
     }
   }
 
+  const savedAt = new Date();
   setCache(next);
   // Applied-on-save, same pattern as the liquidsoap_*.txt files below —
   // minus the restart: the next zonedParts() call picks it up.
@@ -2809,6 +2811,17 @@ export async function update(patch) {
     ),
   );
   await writeLiquidsoapSettings(next);
+  // Scheduled tagging (#2282): a save that turns the schedule on or moves its
+  // time stamps the moment, so a time already past today waits for tomorrow
+  // instead of starting within minutes. The schedule keeps it in its own
+  // record; a failed stamp only loses that, never the save.
+  if (scheduleArmChanged(cur.tagger?.auto, next.tagger?.auto)) {
+    try {
+      await (await import('./broadcast/tag-schedule.js')).scheduleArmed(savedAt);
+    } catch (err) {
+      console.warn(`[settings] could not note the tagging schedule change: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   return { saved: next, requiresRestart: restart };
 }
 

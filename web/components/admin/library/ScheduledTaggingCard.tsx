@@ -161,8 +161,11 @@ export default function ScheduledTaggingCard() {
       </div>
       <p className="text-[12px] leading-[1.55] text-muted">
         Tag new music once a day without pressing Start. The run starts within five minutes
-        of the set time ({tz}), or as soon after it as the station is up that day. It is
-        skipped when nothing is new or untagged, never starts over another run, and waits
+        of the set time ({tz}), or as soon after it as the station is up that day. Turning
+        the schedule on, or moving its time, after today&apos;s time has passed starts the
+        first run tomorrow. It is skipped when Navidrome has nothing new and, with Tag moods
+        on, nothing is untagged; enrichment or analysis still owed on tracks already in the
+        library does not start it on its own. It never starts over another run, and waits
         for a Navidrome scan and for Quiet times when they are on. A failed run is not
         retried until the next day. An unattended run never confirms replaced files: a
         held run says so here and in the booth log each night until you answer it with a

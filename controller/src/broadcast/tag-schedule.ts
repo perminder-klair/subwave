@@ -10,6 +10,10 @@
 //   - Off by default (settings.tagger.auto.mode). An off schedule costs a
 //     settings read per tick and one read of its own record per process: no
 //     Navidrome call, no listener probe.
+//   - Turning it on, or moving its time, after today's time waits for the
+//     next set time: settings.update() reports such a save (scheduleArmed)
+//     and the record keeps its moment (`armedAt`). Only a run the station
+//     owed while the controller was down is caught up the same day.
 //   - At most one scheduled start per station day, kept in
 //     `state/tagger-schedule.json`, which only this module writes, so a
 //     restart neither repeats the day nor forgets what the last run did.
@@ -33,6 +37,7 @@ import { createSerialFileWriter } from '../util/atomic-file.js';
 import { quietAfterMinutes, quietOnlyEnabled, type QuietState } from '../music/analyze-quiet-pure.js';
 import {
   EMPTY_TAG_SCHEDULE_RECORD,
+  armedStep,
   holdStep,
   lapsedHold,
   normalizeTagScheduleRecord,
@@ -91,10 +96,12 @@ export function createTagSchedule(deps: TagScheduleDeps) {
 
   // The in-memory record changes synchronously, before the write is awaited,
   // so a caller that does not await still orders its change before anything
-  // that follows it (the start below, and the run's own end).
+  // that follows it (the start below, and the run's own end). `at` is when
+  // the outcome was last set, so only a patch that sets one moves it.
   function save(patch: Partial<TagScheduleRecord>, now: Date): Promise<void> {
     const base = record ?? { ...EMPTY_TAG_SCHEDULE_RECORD };
-    record = { ...base, ...patch, version: 1, at: now.toISOString() };
+    const at = 'outcome' in patch ? now.toISOString() : base.at;
+    record = { ...base, ...patch, version: 1, at };
     return deps.writeRecord(record).catch((err: any) => {
       // The in-memory record still holds the day for this process; only a
       // restart before the next good write could repeat it.
@@ -132,12 +139,14 @@ export function createTagSchedule(deps: TagScheduleDeps) {
       await apply(lapsed, now);
     }
 
+    const armedAt = record?.armedAt ? new Date(record.armedAt) : null;
     const input: GateInput = {
       auto,
       today,
       minuteOfDay,
       lastDay: record?.lastDay ?? null,
       walkedCount: record?.walkedCount ?? null,
+      armed: armedAt ? deps.clock(armedAt) : null,
       running: deps.running(),
       quiet: deps.quiet(),
       quietState: quiet,
@@ -208,6 +217,11 @@ export function createTagSchedule(deps: TagScheduleDeps) {
       const rec = await load();
       return { ...rec, waiting: waiting?.text ?? null };
     },
+    /** A settings save turned the schedule on or moved its time, at `at`. */
+    async armed(at: Date): Promise<void> {
+      await load();
+      await apply(armedStep(at), at);
+    },
   };
 }
 
@@ -234,6 +248,20 @@ export function scheduledTaggerOptions(auto: TaggerAutoSettings) {
 const RECORD_PATH = path.join(STATE_DIR, TAG_SCHEDULE_FILE);
 const writeRecordFile = createSerialFileWriter(RECORD_PATH);
 
+/**
+ * The untagged rows a run would ask the LLM about (WorkCounts.dbUntagged):
+ * every untagged row less those whose untaggable marker (#2283) still matches
+ * the input, prompt stamp and model labels a run would use. A marker gone
+ * stale (another model, a vocabulary or contract bump, a metadata edit) is
+ * asked again by the run, so it is work. The library DB must be open.
+ */
+export async function untaggedWorkCount(): Promise<number> {
+  const db = await import('../music/library-db.js');
+  const { rememberedUntaggable, tagModelLabels, tagPromptStamp } = await import('../music/tag-library/tag-input.js');
+  const held = rememberedUntaggable(tagPromptStamp(), tagModelLabels()).size;
+  return Math.max(0, db.trackCount() - db.countTagged() - held);
+}
+
 async function liveCounts(): Promise<WorkCounts & { scanning: boolean | null }> {
   const library = await import('../music/library.js');
   const db = await import('../music/library-db.js');
@@ -243,12 +271,33 @@ async function liveCounts(): Promise<WorkCounts & { scanning: boolean | null }> 
   try {
     await library.load();
     dbRows = db.trackCount();
-    // Rows marked untaggable (#2283) are held back from the LLM, so a run
-    // cannot close them: they are not work (pendingWork).
-    dbUntagged = Math.max(0, dbRows - db.countTagged() - db.untaggableMarks().length);
+    dbUntagged = await untaggedWorkCount();
   } catch { /* unknown: pendingWork fails open */ }
   const { scanning, count } = await subsonic.getScanSummary();
   return { dbRows, dbUntagged, navidromeCount: count, scanning };
+}
+
+// The modules only a tick uses (the tagger, Icecast, the booth log), imported
+// on the first tick. The view and settings.update()'s arm report build the
+// instance without them, so a settings save never loads the queue.
+interface TickRuntime {
+  tagger: typeof import('./tagger.js');
+  listeners: typeof import('./listeners.js');
+  queue: typeof import('./queue.js');
+}
+let runtime: TickRuntime | null = null;
+
+async function loadRuntime(): Promise<void> {
+  runtime ??= {
+    tagger: await import('./tagger.js'),
+    listeners: await import('./listeners.js'),
+    queue: await import('./queue.js'),
+  };
+}
+
+function tickRuntime(): TickRuntime {
+  if (!runtime) throw new Error('the tick runtime is not loaded');
+  return runtime;
 }
 
 let live: ReturnType<typeof createTagSchedule> | null = null;
@@ -257,23 +306,21 @@ async function liveSchedule() {
   if (live) return live;
   const settings = await import('../settings.js');
   const time = await import('../time.js');
-  const { tagger, startTagger, startReconcile } = await import('./tagger.js');
-  const { probeListenerCount } = await import('./listeners.js');
-  const { queue } = await import('./queue.js');
   live = createTagSchedule({
     auto: () => settings.get().tagger.auto,
     clock: (now) => {
       const p = time.zonedParts(now);
       return { today: time.zonedISODate(now), minuteOfDay: p.hour * 60 + p.minute };
     },
-    running: () => tagger.running,
+    running: () => tickRuntime().tagger.tagger.running,
     counts: liveCounts,
     quiet: () => {
       const audio = settings.get()?.audio;
       return { enabled: quietOnlyEnabled(process.env.ANALYZE_QUIET_ONLY, audio), minutes: quietAfterMinutes(audio) };
     },
-    probeListeners: probeListenerCount,
+    probeListeners: () => tickRuntime().listeners.probeListenerCount(),
     start: (kind, auto, onExit) => {
+      const { startTagger, startReconcile } = tickRuntime().tagger;
       // Never a replaced-file answer: an unattended run holds and says so.
       if (kind === 'reconcile') {
         startReconcile({ onExit });
@@ -283,17 +330,26 @@ async function liveSchedule() {
     },
     readRecord: async () => JSON.parse(await readFile(RECORD_PATH, 'utf8')),
     writeRecord: (rec) => writeRecordFile(`${JSON.stringify(rec, null, 2)}\n`),
-    log: (message) => queue.log('scheduler', message),
+    log: (message) => {
+      if (runtime) runtime.queue.queue.log('scheduler', message);
+      else console.warn(`[tag-schedule] ${message}`);
+    },
   });
   return live;
 }
 
 export async function scheduledTagTick(): Promise<void> {
   try {
+    await loadRuntime();
     await (await liveSchedule()).tick();
   } catch { /* the tick logs its own failures; wiring failures stay out of the cron */ }
 }
 
 export async function scheduledTagView(): Promise<TagScheduleView> {
   return (await liveSchedule()).view();
+}
+
+/** settings.update() saved a change that arms the schedule (scheduleArmChanged). */
+export async function scheduleArmed(at: Date): Promise<void> {
+  await (await liveSchedule()).armed(at);
 }

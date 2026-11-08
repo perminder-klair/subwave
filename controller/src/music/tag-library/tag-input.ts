@@ -24,7 +24,9 @@
 
 import { createHash } from 'node:crypto';
 import * as db from '../library-db.js';
-import type { TaggableSong, TagResult } from '../tagger-core.js';
+import { promptVocabHash } from '../embeddings.js';
+import { activeModelLabel, fallbackLeg } from '../../llm/provider.js';
+import { TAGGER_CONTRACT_VERSION, type TaggableSong, type TagResult } from '../tagger-core.js';
 
 export function tagInputFor(t: db.TrackRecord): TaggableSong {
   return {
@@ -34,6 +36,24 @@ export function tagInputFor(t: db.TrackRecord): TaggableSong {
     year: t.year ?? undefined,
     genres: t.genres,
   };
+}
+
+// The prompt stamp every LLM tag call is asked and stored with: the tagger
+// contract plus the live mood vocabulary.
+export function tagPromptStamp(): string {
+  return promptVocabHash(TAGGER_CONTRACT_VERSION);
+}
+
+// Every label a run may stamp a marker with, from settings alone: the
+// primary's, and in dual-LLM mode a configured fallback's. The run itself
+// narrows this to the legs it can reach (resolveTagConsumers); without that
+// probe, a marker from the fallback still reads as matching, so it is never
+// counted as work the run would then hold back anyway.
+export function tagModelLabels(): string[] {
+  const labels = [activeModelLabel()];
+  const fb = fallbackLeg();
+  if (fb && !labels.includes(fb.label)) labels.push(fb.label);
+  return labels;
 }
 
 export function untaggableKey(input: TaggableSong, promptHash: string, model: string): string {

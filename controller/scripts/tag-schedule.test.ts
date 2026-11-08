@@ -6,7 +6,7 @@
 // Run: `npm test -- tag-schedule`.
 
 import assert from 'node:assert/strict';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -17,6 +17,7 @@ const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-tag-schedule-'));
 process.env.STATE_DIR = stateRoot;
 
 const {
+  armedStep,
   baselineOnSuccess,
   holdStep,
   lapsedHold,
@@ -26,6 +27,7 @@ const {
   pendingWork,
   pendingWorkText,
   restartRecovery,
+  scheduleArmChanged,
   scheduleDue,
   scheduleGate,
   scheduleMinuteOfDay,
@@ -35,7 +37,7 @@ const {
   startFailedStep,
   startingStep,
 } = await import('../src/music/tag-schedule-policy.js');
-const { createTagSchedule, scheduledTaggerOptions } = await import('../src/broadcast/tag-schedule.js');
+const { createTagSchedule, scheduledTaggerOptions, scheduledTagView, untaggedWorkCount } = await import('../src/broadcast/tag-schedule.js');
 const { quietAfterMinutes } = await import('../src/music/analyze-quiet-pure.js');
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
@@ -77,6 +79,41 @@ test('scheduleDue: off, before the time, at and after it, and once a day', () =>
   );
   // An unreadable time stays quiet rather than firing at midnight.
   assert.equal(scheduleDue({ ...base, auto: daily({ time: 'soon' }), minuteOfDay: 1000 }), 'off');
+});
+
+test("scheduleDue: armed after today's time owes nothing today; armed before it still catches up", () => {
+  const base = { auto: daily(), today: '2026-11-07', lastDay: '2026-11-06' };
+  const armed = (today: string, minuteOfDay: number) => ({ today, minuteOfDay });
+  // Turned on at 14:00 with the time at 02:30: no run today...
+  assert.equal(scheduleDue({ ...base, minuteOfDay: 14 * 60 + 5, armed: armed('2026-11-07', 14 * 60) }), 'armed-after');
+  // ...and tomorrow it is due at 02:30.
+  assert.equal(scheduleDue({ ...base, today: '2026-11-08', minuteOfDay: 150, armed: armed('2026-11-07', 14 * 60) }), 'due');
+  // Armed before the time, today or any earlier day: a controller that was
+  // down across the time still catches the day up.
+  assert.equal(scheduleDue({ ...base, minuteOfDay: 14 * 60, armed: armed('2026-11-07', 60) }), 'due');
+  assert.equal(scheduleDue({ ...base, minuteOfDay: 14 * 60, armed: armed('2026-11-01', 15 * 60) }), 'due');
+  // Set to the current minute: that minute has not passed, so it is due.
+  assert.equal(scheduleDue({ ...base, minuteOfDay: 150, armed: armed('2026-11-07', 150) }), 'due');
+  // A later time today is not due yet, however it was armed.
+  assert.equal(
+    scheduleDue({ ...base, auto: daily({ time: '20:00' }), minuteOfDay: 14 * 60, armed: armed('2026-11-07', 14 * 60) }),
+    'not-due',
+  );
+});
+
+test('scheduleArmChanged: turning it on or moving its time arms; nothing else does', () => {
+  const off = { mode: 'off' as const, time: '02:30' };
+  const on = { mode: 'daily' as const, time: '02:30' };
+  assert.equal(scheduleArmChanged(off, on), true);
+  assert.equal(scheduleArmChanged(undefined, on), true);
+  assert.equal(scheduleArmChanged(on, { ...on, time: '10:00' }), true);
+  assert.equal(scheduleArmChanged(on, on), false, 'a steps or limit save does not arm');
+  assert.equal(scheduleArmChanged(on, off), false);
+  assert.equal(scheduleArmChanged(off, { ...off, time: '10:00' }), false);
+  assert.deepEqual(
+    armedStep(new Date('2026-11-07T14:00:00Z')),
+    { patch: { armedAt: '2026-11-07T14:00:00.000Z' }, message: null },
+  );
 });
 
 test('scheduledRunKind mirrors the Run tab: none, reconcile only, or a tag run', () => {
@@ -134,12 +171,10 @@ test('newMusicBaseline: the saved baseline, else the rows, lowered either way', 
   assert.equal(newMusicBaseline(null, { dbUntagged: 0, dbRows: null, navidromeCount: 9500 }), null);
 });
 
-test('baselineOnSuccess: the start count, or at most the baseline plus the limit', () => {
-  assert.equal(baselineOnSuccess(100, 1100, 0), 1100);
-  assert.equal(baselineOnSuccess(100, 1100, 250), 350);
-  assert.equal(baselineOnSuccess(100, 120, 250), 120);
-  assert.equal(baselineOnSuccess(null, 1100, 250), 1100);
-  assert.equal(baselineOnSuccess(100, null, 250), 100);
+test('baselineOnSuccess: the start count, never capped by a limit', () => {
+  assert.equal(baselineOnSuccess(100, 1100), 1100);
+  assert.equal(baselineOnSuccess(null, 1100), 1100);
+  assert.equal(baselineOnSuccess(100, null), 100);
 });
 
 test('lowerBaseline: a removal lowers it, nothing here raises it', () => {
@@ -270,6 +305,9 @@ test('the scheduled start never answers a replaced-file hold', () => {
 // ---------------------------------------------------------------------------
 // The tick, through fake deps
 
+const utcClock = (d: Date) => ({ today: d.toISOString().slice(0, 10), minuteOfDay: d.getUTCHours() * 60 + d.getUTCMinutes() });
+const at = (iso: string) => new Date(iso);
+
 function harness(over: {
   auto?: Auto;
   running?: boolean;
@@ -278,6 +316,8 @@ function harness(over: {
   listeners?: number | null;
   record?: unknown;
   startThrows?: boolean;
+  /** Read the station clock off the tick's own Date (UTC), not h.today. */
+  utcClock?: boolean;
 } = {}) {
   const h = {
     auto: over.auto ?? daily(),
@@ -297,7 +337,7 @@ function harness(over: {
   };
   const schedule = createTagSchedule({
     auto: () => h.auto,
-    clock: () => ({ today: h.today, minuteOfDay: h.minuteOfDay }),
+    clock: (now) => (over.utcClock ? utcClock(now) : { today: h.today, minuteOfDay: h.minuteOfDay }),
     running: () => h.running,
     counts: async () => { h.countCalls++; h.onCounts?.(); return h.counts; },
     quiet: () => h.quiet,
@@ -604,20 +644,131 @@ test('a stand-in below Navidrome runs the first night', async () => {
   assert.equal(h.writes.at(-1).raiseTo, 100);
 });
 
-test('with a limit, the part of a large import beyond it is still new the next night', async () => {
+test('a limit never caps the raise: a gap the walk cannot close costs one walk, then skips', async () => {
+  // 50,000 songs in Navidrome, 5,000 of them never rows (blocklisted,
+  // mixdowns), limit 250. Capping the raise at the limit would take 20 walks.
+  for (const steps of [ALL_STEPS, { reconcile: true, enrich: false, tagMoods: false, analyze: false }]) {
+    const { h, schedule } = harness({
+      auto: daily({ limit: 250, steps: { ...steps } }),
+      counts: { dbUntagged: 0, dbRows: 45000, navidromeCount: 50000, scanning: false },
+    });
+    await schedule.tick(T0);
+    assert.equal(h.starts.length, 1);
+    assert.equal(h.writes.at(-1).raiseTo, 50000);
+    h.starts[0].onExit(end());
+    assert.equal(h.writes.at(-1).walkedCount, 50000);
+    h.today = '2026-11-08';
+    await schedule.tick(later(24 * 60));
+    assert.equal(h.starts.length, 1, `the next night skips (${h.starts[0].kind})`);
+    assert.equal(h.writes.at(-1).outcome, 'skipped');
+  }
+});
+
+test('a night Navidrome reads 0 costs one extra walk when it recovers, not one per limit', async () => {
   const { h, schedule } = harness({
-    auto: daily({ limit: 250, steps: { ...ALL_STEPS, tagMoods: false } }),
-    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 1000 },
-    counts: { dbUntagged: 0, dbRows: 1000, navidromeCount: 1600, scanning: false },
+    auto: daily({ limit: 250 }),
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 50000 },
+    counts: { dbUntagged: 0, dbRows: 50000, navidromeCount: 0, scanning: false },
   });
   await schedule.tick(T0);
-  assert.equal(h.starts.length, 1);
-  h.starts[0].onExit(end());
-  assert.equal(h.writes.at(-1).walkedCount, 1250);
+  assert.equal(h.starts.length, 0);
+  assert.equal(h.writes.at(-1).walkedCount, 0, 'the reading lowers the baseline');
+  h.counts = { ...h.counts, navidromeCount: 50000 };
   h.today = '2026-11-08';
   await schedule.tick(later(24 * 60));
-  assert.equal(h.starts.length, 2);
-  assert.match(h.writes.at(-1).detail, /350 new in Navidrome/);
+  assert.equal(h.starts.length, 1, 'the recovery reads as new: one walk');
+  h.starts[0].onExit(end());
+  assert.equal(h.writes.at(-1).walkedCount, 50000);
+  h.today = '2026-11-09';
+  await schedule.tick(later(48 * 60));
+  assert.equal(h.starts.length, 1, 'and only one');
+  assert.equal(h.writes.at(-1).outcome, 'skipped');
+});
+
+test("turned on after today's time: no run today, the first run is tomorrow at the time", async () => {
+  const { h, schedule } = harness({
+    utcClock: true,
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 100 },
+  });
+  await schedule.armed(at('2026-11-07T14:00:00Z'));
+  assert.equal(h.writes.at(-1).armedAt, '2026-11-07T14:00:00.000Z');
+  assert.equal(h.writes.at(-1).at, null, 'arming is not an outcome');
+  await schedule.tick(at('2026-11-07T14:05:00Z'));
+  await schedule.tick(at('2026-11-07T23:55:00Z'));
+  assert.equal(h.countCalls, 0);
+  assert.equal(h.starts.length, 0);
+  await schedule.tick(at('2026-11-08T02:25:00Z'));
+  assert.equal(h.starts.length, 0);
+  await schedule.tick(at('2026-11-08T02:30:00Z'));
+  assert.equal(h.starts.length, 1);
+});
+
+test('the time moved to one already past today: no run today', async () => {
+  const { h, schedule } = harness({
+    utcClock: true,
+    auto: daily({ time: '20:00' }),
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 100 },
+  });
+  await schedule.tick(at('2026-11-07T14:00:00Z'));
+  h.auto = daily({ time: '10:00' });
+  await schedule.armed(at('2026-11-07T14:02:00Z'));
+  await schedule.tick(at('2026-11-07T14:05:00Z'));
+  assert.equal(h.starts.length, 0);
+  await schedule.tick(at('2026-11-08T10:00:00Z'));
+  assert.equal(h.starts.length, 1);
+});
+
+test('a controller down across the set time catches the day up when it is back', async () => {
+  // Armed at 01:00 for 02:30, then down from 02:00 to 14:00: a fresh process.
+  const { h, schedule } = harness({
+    utcClock: true,
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 100, armedAt: '2026-11-07T01:00:00.000Z' },
+  });
+  await schedule.tick(at('2026-11-07T14:00:00Z'));
+  assert.equal(h.starts.length, 1);
+  h.starts[0].onExit(end());
+  await schedule.tick(at('2026-11-07T14:05:00Z'));
+  assert.equal(h.starts.length, 1);
+});
+
+test('a controller down across midnight runs the new day once and never the old one again', async () => {
+  // Ran on the 7th, down from 23:00 to 03:00 on the 8th.
+  const ran = harness({
+    utcClock: true,
+    record: { version: 1, lastDay: '2026-11-07', outcome: 'ok', walkedCount: 100, armedAt: '2026-11-01T12:00:00.000Z' },
+  });
+  await ran.schedule.tick(at('2026-11-08T03:00:00Z'));
+  ran.h.starts[0]?.onExit(end());
+  await ran.schedule.tick(at('2026-11-08T03:05:00Z'));
+  assert.equal(ran.h.starts.length, 1);
+  assert.equal(ran.h.writes.at(-1).lastDay, '2026-11-08');
+  // Down from 02:00 on the 7th, before its run, to 03:00 on the 8th: the 7th
+  // is not run late, and the 8th runs once.
+  const missed = harness({
+    utcClock: true,
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 100, armedAt: '2026-11-01T12:00:00.000Z' },
+  });
+  await missed.schedule.tick(at('2026-11-08T03:00:00Z'));
+  missed.h.starts[0]?.onExit(end());
+  await missed.schedule.tick(at('2026-11-08T03:05:00Z'));
+  assert.equal(missed.h.starts.length, 1);
+  assert.equal(missed.h.writes.at(-1).lastDay, '2026-11-08');
+});
+
+test('untaggable markers are work only once they stop matching what a run would ask', async () => {
+  const db = await import('../src/music/library-db.js');
+  const { tagInputFor, untaggableKey, tagPromptStamp, tagModelLabels } = await import('../src/music/tag-library/tag-input.js');
+  await coldLoadSettings({});
+  await db.open({ embeddingDim: 4 });
+  db.upsertTrackMeta('silent', { title: '[silence]', artist: '[no artist]', album: 'Hidden', genres: [] });
+  db.upsertTrackMeta('song', { title: 'Song', artist: 'Band', album: 'Album', genres: ['Rock'] });
+  const [label] = tagModelLabels();
+  db.markTrackUntaggable('silent', untaggableKey(tagInputFor(db.getTrack('silent')!), tagPromptStamp(), label));
+  assert.equal(await untaggedWorkCount(), 1, 'a matching marker is held back, so not work');
+  // Another model: the run asks the marked row again, so it is work.
+  await coldLoadSettings({ llm: { model: 'another-model:7b' } });
+  assert.notEqual(tagModelLabels()[0], label);
+  assert.equal(await untaggedWorkCount(), 2);
 });
 
 // ---------------------------------------------------------------------------
@@ -695,6 +846,22 @@ test('the admin form runs the same field rules on the whole block', () => {
   assert.match(bad.error!.issues[0].message, /^tagger\.auto\.time must be HH:MM/);
   // The form posts the whole block, which the patch accepts as it stands.
   assert.equal(taggerPatchSchema.safeParse({ auto: DEFAULTS.tagger.auto }).success, true);
+});
+
+test('a save that turns the schedule on or moves its time stamps armedAt; other saves do not', async () => {
+  await coldLoadSettings({});
+  const before = Date.now();
+  await settings.update({ tagger: { auto: { mode: 'daily', time: '05:00' } } });
+  const first = (await scheduledTagView()).armedAt;
+  assert.ok(first && Date.parse(first) >= before, String(first));
+  await settings.update({ tagger: { auto: { limit: 30, steps: { analyze: false } } } });
+  assert.equal((await scheduledTagView()).armedAt, first, 'a limit or steps save does not arm');
+  await new Promise((r) => setTimeout(r, 5));
+  await settings.update({ tagger: { auto: { time: '06:00' } } });
+  const moved = (await scheduledTagView()).armedAt;
+  assert.ok(moved && moved > first!, 'moving the time arms again');
+  const disk = JSON.parse(readFileSync(path.join(stateRoot, 'tagger-schedule.json'), 'utf8'));
+  assert.equal(disk.armedAt, moved, 'kept in the record, so a restart keeps it');
 });
 
 test('update() refuses a bad patch and leaves the stored schedule alone', async () => {

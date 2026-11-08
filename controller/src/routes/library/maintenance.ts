@@ -11,9 +11,8 @@ import * as musicbrainz from '../../music/musicbrainz.js';
 import * as settings from '../../settings.js';
 import * as embeddings from '../../music/embeddings.js';
 import { resolveEraYear } from '../../music/show-filter.js';
-import { tagBatch, TAGGER_CONTRACT_VERSION } from '../../music/tagger-core.js';
-import { tagInputFor, recordTagAnswer } from '../../music/tag-library/tag-input.js';
-import { promptVocabHash } from '../../music/embeddings.js';
+import { tagBatch } from '../../music/tagger-core.js';
+import { tagInputFor, recordTagAnswer, tagPromptStamp } from '../../music/tag-library/tag-input.js';
 import { activeModelLabel } from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
 import {
@@ -376,7 +375,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     const [result] = await tagBatch([input]);
     const outcome = recordTagAnswer(id, input, result, {
       source: 'llm',
-      promptHash: promptVocabHash(TAGGER_CONTRACT_VERSION),
+      promptHash: tagPromptStamp(),
       model: activeModelLabel(),
     });
     if (outcome === 'untaggable') {

@@ -10,6 +10,7 @@
 // once it has that input:
 //
 //   1. scheduleDue      setting + station clock + the last station day used
+//                       + when the schedule was armed
 //   2. a run is going   wait: retried on the next tick, the day not used
 //   3. no steps on      skip: the day is used, nothing would run
 //   4. Navidrome scans  wait: its count is still moving, so it says nothing yet
@@ -23,9 +24,11 @@
 // to the record and says in the booth log is here too (the *Step functions),
 // so broadcast/tag-schedule.ts only reads, writes and logs.
 //
-// The day may be caught up: a controller that was down at the set time starts
-// the run on its first tick after it, the same station day. The time is a
-// floor, not a window.
+// The day may be caught up, but only for a run the station owed: a controller
+// that was down at the set time starts the run on its first tick after it, the
+// same station day. Turning the schedule on, or moving its time, after today's
+// time had passed owes nothing today (scheduleArmChanged, `armedAt`): the
+// first run is at the next set time, not within minutes of the save.
 import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
 import {
   TAGGER_AUTO_STEP_KEYS,
@@ -41,7 +44,10 @@ export function scheduleMinuteOfDay(time: string): number | null {
   return h * 60 + m;
 }
 
-export type ScheduleDue = 'off' | 'not-due' | 'done-today' | 'due';
+export type ScheduleDue = 'off' | 'not-due' | 'armed-after' | 'done-today' | 'due';
+
+/** A station-clock moment: the date (`YYYY-MM-DD`) and the minute of that day. */
+export interface StationMoment { today: string; minuteOfDay: number }
 
 /**
  * Whether today's scheduled run is owed. `today` is the station-clock date
@@ -49,21 +55,44 @@ export type ScheduleDue = 'off' | 'not-due' | 'done-today' | 'due';
  * case of its own: on a spring-forward night 02:30 never happens and 03:00 is
  * already past it, and on a fall-back night the second 02:30 finds the day
  * used.
+ *
+ * `armed` is when the schedule was last turned on or given a new time
+ * (`armedAt`, on the station clock). Armed today after today's time had
+ * passed, today's run was never owed ('armed-after'), so there is nothing to
+ * catch up; tomorrow's set time is the first run. Armed at or before the time,
+ * a controller that was down across it still catches the day up.
  */
 export function scheduleDue(input: {
   auto: Pick<TaggerAutoSettings, 'mode' | 'time'>;
   today: string;
   minuteOfDay: number;
   lastDay: string | null;
+  armed?: StationMoment | null;
 }): ScheduleDue {
-  const { auto, today, minuteOfDay, lastDay } = input;
+  const { auto, today, minuteOfDay, lastDay, armed } = input;
   if (auto.mode !== 'daily') return 'off';
   if (lastDay === today) return 'done-today';
   const at = scheduleMinuteOfDay(auto.time);
   // An unreadable time never reaches here (load() repairs it), but if one did
   // the schedule stays quiet rather than firing at midnight.
   if (at == null) return 'off';
-  return minuteOfDay >= at ? 'due' : 'not-due';
+  if (minuteOfDay < at) return 'not-due';
+  if (armed && armed.today === today && armed.minuteOfDay > at) return 'armed-after';
+  return 'due';
+}
+
+/**
+ * Whether a settings save arms the schedule: it turns it on, or moves the
+ * time of one that is on. The save's own moment becomes `armedAt`
+ * (armedStep). Steps and limit do not arm: they change what a run does, not
+ * when it is owed.
+ */
+export function scheduleArmChanged(
+  prev: Pick<TaggerAutoSettings, 'mode' | 'time'> | null | undefined,
+  next: Pick<TaggerAutoSettings, 'mode' | 'time'> | null | undefined,
+): boolean {
+  if (next?.mode !== 'daily') return false;
+  return prev?.mode !== 'daily' || prev.time !== next.time;
 }
 
 /** Which run the steps describe, or null when none is on. Reconcile alone is
@@ -77,8 +106,8 @@ export function scheduledRunKind(steps: TaggerAutoSteps): 'tag' | 'reconcile' | 
 
 export interface WorkCounts {
   /** library.db rows with no moods that a run would ask the LLM about: the
-   *  untagged rows less those the tagger marked untaggable (#2283), which a
-   *  run holds back from the LLM while their marker holds. */
+   *  untagged rows less those whose untaggable marker (#2283) still matches
+   *  what a run would ask (rememberedUntaggable), which it holds back. */
   dbUntagged: number | null;
   /** Every library.db row. */
   dbRows: number | null;
@@ -103,11 +132,10 @@ export type PendingWork =
  * itself closes, so a "yes" cannot stand night after night:
  *
  *   - Untagged rows count only when the run tags moods. With "Tag moods" off
- *     no run of this schedule tags them, so they never count. Rows the tagger
- *     marked untaggable never count either: a run does not ask the LLM about
- *     them again until their marker goes stale, and a stale marker (a model,
- *     vocabulary or metadata change) waits for the next run something else
- *     starts.
+ *     no run of this schedule tags them, so they never count. A row the tagger
+ *     marked untaggable counts only once its marker goes stale (a model,
+ *     vocabulary, contract or metadata change), because only then does a run
+ *     ask the LLM about it again.
  *   - New music is Navidrome's song count above the baseline (newMusicBaseline).
  *     library.db alone cannot see a new track (it has no row until a walk
  *     finds it), and Navidrome's count against library.db's rows never
@@ -166,14 +194,16 @@ export function newMusicBaseline(walkedCount: number | null, c: WorkCounts): num
 /**
  * The baseline a clean finish raises to: Navidrome's count when the run
  * started, read before its walk, so a song added during the run is still new
- * tomorrow. With a limit, at most the baseline plus the limit: a run that
- * stopped at its limit has not reached the rest of a large import, which must
- * still read as new tomorrow rather than wait for the next addition.
+ * tomorrow. Never capped by the limit: the limit caps what a run processes
+ * after its walk, and the walk always covers the whole library, so any clean
+ * run has closed the "new in Navidrome" gap. Capping it would invent work: a
+ * gap the walk can never close (blocklisted songs, mixdowns) or a night
+ * Navidrome read 0 would cost a full walk per limit's worth of songs. What a
+ * limited run leaves behind on rows it walked is the untagged count's to see
+ * when it tags moods (pendingWork), and a blind spot otherwise (music.md).
  */
-export function baselineOnSuccess(baseline: number | null, startCount: number | null, limit: number): number | null {
-  if (startCount == null) return baseline;
-  if (limit > 0 && baseline != null) return Math.min(startCount, baseline + limit);
-  return startCount;
+export function baselineOnSuccess(baseline: number | null, startCount: number | null): number | null {
+  return startCount ?? baseline;
 }
 
 export type HoldReason = 'busy' | 'scanning' | 'quiet';
@@ -187,6 +217,8 @@ export interface GateInput {
   minuteOfDay: number;
   lastDay: string | null;
   walkedCount: number | null;
+  /** When the schedule was last armed (`armedAt`), on the station clock. */
+  armed?: StationMoment | null;
   /** Read fresh for every call: the tick calls the gate again after each await. */
   running: boolean;
   /** Undefined until read; the gate asks for it ('need-counts'). */
@@ -219,7 +251,9 @@ const NO_QUIET: QuietState = { quietSince: null };
 
 /** The one decision: whether the scheduled run starts now, and if not, why. */
 export function scheduleGate(i: GateInput): Gate {
-  const due = scheduleDue({ auto: i.auto, today: i.today, minuteOfDay: i.minuteOfDay, lastDay: i.lastDay });
+  const due = scheduleDue({
+    auto: i.auto, today: i.today, minuteOfDay: i.minuteOfDay, lastDay: i.lastDay, armed: i.armed,
+  });
   if (due !== 'due') return { kind: 'idle' };
   // A hold that is no longer about quiet starts the quiet clock afresh.
   if (i.running) return { kind: 'hold', reason: 'busy', text: HOLD_BUSY_TEXT, quietState: NO_QUIET };
@@ -258,7 +292,7 @@ export function scheduleGate(i: GateInput): Gate {
     run,
     detail,
     walkedCount: baseline,
-    raiseTo: baselineOnSuccess(baseline, i.counts.navidromeCount, i.auto.limit),
+    raiseTo: baselineOnSuccess(baseline, i.counts.navidromeCount),
   };
 }
 
@@ -282,6 +316,11 @@ export function restartRecovery(rec: Pick<TagScheduleRecord, 'outcome'>, activeR
     patch: { outcome: 'interrupted', detail: 'interrupted by a controller restart' },
     message: 'Scheduled tagging: the last scheduled run was interrupted by a controller restart',
   };
+}
+
+/** A save that arms the schedule (scheduleArmChanged) stamps its moment. */
+export function armedStep(at: Date): ScheduleStep {
+  return { patch: { armedAt: at.toISOString() }, message: null };
 }
 
 export interface ScheduleWaiting { day: string; reason: HoldReason; text: string }
@@ -424,6 +463,9 @@ export interface TagScheduleRecord {
   /** The new-music baseline (newMusicBaseline): what the last successful
    *  scheduled run raised it to, lowered by any removal since. */
   walkedCount: number | null;
+  /** When a settings save last turned the schedule on or moved its time
+   *  (scheduleArmChanged). */
+  armedAt: string | null;
 }
 
 export const EMPTY_TAG_SCHEDULE_RECORD: TagScheduleRecord = {
@@ -436,6 +478,7 @@ export const EMPTY_TAG_SCHEDULE_RECORD: TagScheduleRecord = {
   runLogId: null,
   raiseTo: null,
   walkedCount: null,
+  armedAt: null,
 };
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -464,5 +507,6 @@ export function normalizeTagScheduleRecord(raw: unknown): TagScheduleRecord {
     runLogId: str(r.runLogId, 200),
     raiseTo: countOrNull(r.raiseTo),
     walkedCount: countOrNull(r.walkedCount),
+    armedAt: isoOrNull(r.armedAt),
   };
 }

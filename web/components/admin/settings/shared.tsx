@@ -665,6 +665,8 @@ export interface TaggerScheduleView {
   raiseTo: number | null;
   /** The new-music baseline the schedule compares Navidrome's count with. */
   walkedCount: number | null;
+  /** When a save last turned the schedule on or moved its time. */
+  armedAt: string | null;
   waiting: string | null;
 }
 

@@ -36,7 +36,6 @@ import { vote, fuseNeighbours } from './tag-propagator.js';
 import { summariseEval, formatEvalSummary } from './propagation-eval.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { setRawDebugStderrMirror } from '../llm/log.js';
-import { TAGGER_CONTRACT_VERSION } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { adoptAndPrune } from './id-rotation.js';
 import { reportProgress, reportCatalogueReady, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
@@ -53,7 +52,7 @@ import {
   walkNavidrome,
 } from './tag-library/flags.js';
 import { llmTagInBatches, resolveTagConsumers } from './tag-library/tag.js';
-import { rememberedUntaggable } from './tag-library/tag-input.js';
+import { rememberedUntaggable, tagPromptStamp } from './tag-library/tag-input.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 
 
@@ -237,7 +236,7 @@ async function main() {
     if (flags.rescan && reembedIds.length === 0) reembedIds = db.unembeddedIds();
   }
 
-  const promptHash = embeddings.promptVocabHash(TAGGER_CONTRACT_VERSION);
+  const promptHash = tagPromptStamp();
   const modelLabel = activeModelLabel();
 
   // Single- vs dual-LLM tagging: probed once here, not per phase, so the banner
