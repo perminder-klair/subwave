@@ -73,6 +73,9 @@ export function tagModelLabels(): string[] {
 }
 
 export function untaggableKey(input: TaggableSong, promptHash: string, model: string): string {
+  // The evidence fields are hashed as formatEvidence renders them, not raw. A
+  // new evidence field must be destructured out here and rendered through
+  // formatEvidence too, or it lands in `metadata` and is hashed raw.
   const { acoustics: _acoustics, lastfmTags: _lastfmTags, ...metadata } = input;
   const asked = { ...metadata, evidence: formatEvidence(input) };
   return createHash('sha256').update(JSON.stringify([asked, promptHash, model])).digest('hex');

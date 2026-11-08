@@ -40,6 +40,8 @@ export interface SoundWords {
 export type SoundPart = keyof SoundWords;
 
 // Tempo as a word, not a number: "128" embeds as an arbitrary token.
+// The tagging prompt prints this word too: moving a band changes the prompt and
+// needs a TAGGER_CONTRACT_VERSION bump (music/tagger-core.ts).
 function tempoWord(bpm: number): string | null {
   if (!Number.isFinite(bpm) || bpm <= 0) return null;   // 0 = unknown, never "very slow"
   if (bpm < 80) return 'slow tempo';
@@ -49,7 +51,8 @@ function tempoWord(bpm: number): string | null {
 }
 
 // Only the mode of a Camelot code is legible ('A' = minor, 'B' = major); the
-// tonic number stays out. Positions outside 1-12 yield null.
+// tonic number stays out. Positions outside 1-12 yield null. The tagging prompt
+// prints this word too: changing it needs a TAGGER_CONTRACT_VERSION bump.
 function keyModeWord(camelot: string): string | null {
   const m = /^\s*(?:[1-9]|1[0-2])\s*([AB])\s*$/i.exec(camelot);
   if (!m) return null;
@@ -126,12 +129,12 @@ export function taggerAcoustics(t: TaggerAcousticsFields): TaggerAcoustics {
 }
 
 // The tagger's measured words, in a stable order; [] when nothing was measured,
-// which is what makes a tag "blind" (tags.measured). Tempo is octave-safe (#1417):
-// the analyser doubles slow material and never halves, so a reading below the
-// fold line is trusted as read, and one at or above it may be twice the felt
-// pulse, which the word says rather than guessing an octave. The vocal verdict is
-// isInstrumental's alone: true is "instrumental", false is "vocals", unknown says
-// nothing.
+// which is what makes a tag "blind" (tracks.tagged_measured, via
+// hasTaggerSoundWords). Tempo is octave-safe (#1417): the analyser doubles slow
+// material and never halves, so a reading below the fold line is trusted as
+// read, and one at or above it may be twice the felt pulse, which the word says
+// rather than guessing an octave. The vocal verdict is isInstrumental's alone:
+// true is "instrumental", false is "vocals", unknown says nothing.
 export function taggerSoundWords(acoustics?: TaggerAcoustics | null): string[] {
   const words: string[] = [];
   if (!acoustics) return words;

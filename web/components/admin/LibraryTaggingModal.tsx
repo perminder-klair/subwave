@@ -84,7 +84,10 @@ export default function LibraryTaggingModal(p: Props) {
   const passAllSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
   const anyPass = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
   const reseedOnly = !!passes.reseed && !passes.reEnrich && !passes.reAnalyze && !passes.upgrade;
-  const clearPasses = () => setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
+  const clearPasses = () => {
+    setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
+    setUpgradeBlind(false);
+  };
 
   useEffect(() => {
     if (!p.open) return;
@@ -283,7 +286,7 @@ export default function LibraryTaggingModal(p: Props) {
                 </div>
               )}
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
-                hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
+                hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). A changed tagging prompt or model means a re-ask: after an upgrade that changes the prompt, the next run re-asks every LLM-tagged row once. Uses model calls." />
               {passes.upgrade && (
                 <div className="pl-6">
                   <Pass on={upgradeBlind} onClick={() => setUpgradeBlind(v => !v)}
@@ -294,8 +297,8 @@ export default function LibraryTaggingModal(p: Props) {
               {passes.upgrade && (
                 <p className="-mt-1 pl-[26px] text-[11px] leading-[1.5] text-muted">
                   {upgradeBlind
-                    ? 'Model calls only for tracks that were tagged blind and have audio measurements now.'
-                    : 'Model calls only for rows with a stale prompt or model — often zero if nothing has changed.'}
+                    ? 'Model calls only for tracks that were tagged blind and have audio measurements now. The first run also counts every track tagged before this check existed, so on an analysed library it re-asks most LLM-tagged rows once.'
+                    : 'Model calls for every row with a stale prompt or model: every LLM-tagged row once after an upgrade that changed the prompt, then none until the prompt or model changes again.'}
                 </p>
               )}
               <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} disabled={p.analysisOff} name="Re-analyse acoustics" tag="slow"
