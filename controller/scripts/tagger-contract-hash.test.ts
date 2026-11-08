@@ -38,21 +38,23 @@ import { moodVocab } from '../src/settings.js';
 // pass by accidentally agreeing with the live default.
 const FIXED_VOCAB = ['calm', 'energetic'];
 
-test('the shipped contract version is 1', () => {
+test('the shipped contract version is 2', () => {
   // Bumping this is a full library re-tag on the next Re-decide. Read the
   // comment above TAGGER_CONTRACT_VERSION in music/tagger-core.ts first: a
   // reword does not earn a bump, a change to what the prompt ASKS FOR does.
-  assert.equal(TAGGER_CONTRACT_VERSION, 1);
+  // 2 = the Sound:/Last.fm: evidence line, which outranks album reputation
+  // (#2281). Its Re-decide stays opt-in; the blind scope is the cheaper one.
+  assert.equal(TAGGER_CONTRACT_VERSION, 2);
 });
 
 test('the stamp for the shipped vocabulary at the shipped version is pinned', () => {
   // Changing EITHER the version above or settings/vocab.MOOD_DEFAULTS moves
   // this literal. Both are legitimate; neither should land unnoticed.
-  assert.equal(promptVocabHash(TAGGER_CONTRACT_VERSION, SHOW_MOODS), '322ce80896c5198b');
+  assert.equal(promptVocabHash(TAGGER_CONTRACT_VERSION, SHOW_MOODS), '722c13de02bfe4da');
   // ...and that IS what production stamps: the live accessor falls back to the
   // shipped vocabulary, so an unloaded controller and a default install agree.
   assert.deepEqual(moodVocab(), [...SHOW_MOODS]);
-  assert.equal(promptVocabHash(TAGGER_CONTRACT_VERSION), '322ce80896c5198b');
+  assert.equal(promptVocabHash(TAGGER_CONTRACT_VERSION), '722c13de02bfe4da');
 });
 
 test('the hash recipe is version + vocabulary, in that order, joined by |', () => {

@@ -38,3 +38,11 @@ export function quietOnlyEnabled(
   if (v === '1' || v === 'true' || v === 'yes') return true;
   return audio?.analyzeQuietOnly === true;
 }
+
+// The quiet window in minutes: settings.audio.analyzeQuietMinutes when it is a
+// number in [1, 120] (floored), else 10. The bulk pass and the scheduled tagger
+// start (broadcast/tag-schedule.ts) read it through this one rule.
+export function quietAfterMinutes(audio: { analyzeQuietMinutes?: unknown } | null | undefined): number {
+  const m = audio?.analyzeQuietMinutes;
+  return typeof m === 'number' && Number.isFinite(m) && m >= 1 && m <= 120 ? Math.floor(m) : 10;
+}

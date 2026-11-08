@@ -30,6 +30,7 @@ import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
+import { scheduledTagView } from '../../broadcast/tag-schedule.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
 import { firecrawlKeySource, keenableKeySource, searchKeyRefusedBy } from '../../skills/web-search.js';
@@ -73,6 +74,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
       jingles: await jingles.list(),
       libraryStats: library.stats(),
       tagger: taggerView(),
+      // The scheduled run's own record (#2282): last start, outcome, a hold.
+      taggerSchedule: await scheduledTagView().catch(() => null),
       // Daily-token-budget tier (normal|soft|hard); 'normal' when the cap is off.
       budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
@@ -106,6 +109,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
         archive: s.archive,
         // Edited from the Backup panel, but saved through POST /settings.
         backups: s.backups,
+        // Scheduled tagging (#2282), edited on the Library Tagger's Run tab.
+        tagger: s.tagger,
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,

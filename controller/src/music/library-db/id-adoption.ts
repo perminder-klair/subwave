@@ -38,7 +38,14 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
   // lastfm_track_tags_at describes lastfm_tags, so the two move together: a
   // stamp carried onto a new row's own artist-only list would falsely mark it done.
   { anchor: 'enriched_at', cols: ['lastfm_tags', 'lastfm_track_tags_at', 'lyric_excerpt', 'enriched_at'] },
-  { anchor: 'moods', cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at'] },
+  // untaggable_key (#2283) is the tagger's answer for an untagged row, so it
+  // moves with the tags: a rotated id keeps its metadata and is not re-asked.
+  // tagged_measured (#2281) is the stamp on the tags themselves.
+  {
+    anchor: 'moods',
+    cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at',
+      'untaggable_key', 'tagged_measured'],
+  },
   {
     anchor: 'analysis_version',
     cols: ['bpm', 'musical_key', 'intro_ms', 'analysis_confidence', 'analysis_version', 'loudness_lufs',
