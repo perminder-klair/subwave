@@ -16,6 +16,7 @@ export interface Leg {
   // while the picker runs no-think — no operator knowledge required.
   noThinkModel: any;
   label: string;  // `provider:modelId` for /debug records
+  baseLabel?: string; // un-overridden primary `provider:modelId` for sticky failover identity
 }
 
 // The `provider:modelId` label a leg's telemetry rows carry (`model` on every
@@ -30,12 +31,90 @@ export function legLabel(cfg: any): string {
   }
 }
 
+// Mapping of caller sub-calls and specific kinds to canonical parent task controls.
+// Sub-calls inherit their model override from the parent task control while
+// preserving each sub-call's telemetry `kind` for /stats, /debug, llm-bench,
+// and ContextMeasurements.
+export const TASK_OVERRIDE_PARENT: Readonly<Record<string, string>> = Object.freeze({
+  // Presenter Banter
+  generateBanter: 'generateBanter',
+
+  // Script Generation (agent, pool, co-hosted, and programme scripts)
+  djAgentSegment: 'djAgentSegment',
+  generateSegment: 'djAgentSegment',
+  generateCohostedSkill: 'djAgentSegment',
+  generateProgrammePlan: 'djAgentSegment',
+  generateProgrammeIntro: 'djAgentSegment',
+  generateProgrammeOutro: 'djAgentSegment',
+  generateProgrammeFeature: 'djAgentSegment',
+  generateProgrammeIntroExchange: 'djAgentSegment',
+  generateProgrammeOutroExchange: 'djAgentSegment',
+  generateProgrammeExchange: 'djAgentSegment',
+
+  // Track Intros & Links (intros, links, idents, handoffs, hourly time checks, ad-libs)
+  generateIntro: 'generateIntro',
+  generateLink: 'generateIntro',
+  generateAnnounceLinkFallback: 'generateIntro',
+  generateStationId: 'generateIntro',
+  generateSignoff: 'generateIntro',
+  generateHandoffGreeting: 'generateIntro',
+  generateHourlyTime: 'generateIntro',
+  generateAdLib: 'generateIntro',
+
+  // Track Selection (agentic, shortlist, pool, re-picks, and leanings review)
+  djAgentPick: 'djAgentPick',
+  pickNextTrack: 'djAgentPick',
+  djShortlistPick: 'djAgentPick',
+  djShortlistSearchPreparation: 'djAgentPick',
+  djShortlistSearchVerification: 'djAgentPick',
+  djAgentRepick: 'djAgentPick',
+  djShortlistRepick: 'djAgentPick',
+  djAgentLeaningsReview: 'djAgentPick',
+  djShortlistLeaningsReview: 'djAgentPick',
+
+  // Listener Requests (negotiation and fulfillment)
+  djAgentRequest: 'djAgentRequest',
+  djAgentRequestRepick: 'djAgentRequest',
+
+  // Request Matcher
+  matchRequest: 'matchRequest',
+
+  // Search Identifier
+  identifyRequest: 'identifyRequest',
+});
+
+// Resolves the effective model override for a given kind:
+// 1. Direct override takes precedence if present in `overrides`.
+// 2. Otherwise check if the kind maps to a parent task control via TASK_OVERRIDE_PARENT.
+// 3. Returns undefined if no override applies.
+export function resolveModelOverride(
+  kind?: string,
+  overrides?: Record<string, string>,
+): string | undefined {
+  if (!kind || !overrides) return undefined;
+  if (overrides[kind]) return overrides[kind];
+  const parent = TASK_OVERRIDE_PARENT[kind];
+  if (parent && overrides[parent]) return overrides[parent];
+  return undefined;
+}
+
 // The active primary leg. Throws on a misconfigured primary (empty model on a
 // cloud provider) exactly as languageModel() does today — that's a hard error
 // the caller surfaces, not something to silently route around.
-export function primaryLeg(): Leg {
+//
+// `kind` selects a task-specific model override (settings.llm.modelOverrides,
+// edited in Admin → LLM → Task Model Overrides): heavy tasks can ride a
+// larger model while the station default stays small and fast. Overrides
+// apply to the primary provider only, and an empty/missing entry falls back
+// to the primary model. Sub-calls inherit their parent task control via
+// TASK_OVERRIDE_PARENT while preserving individual telemetry kinds.
+export function primaryLeg(kind?: string): Leg {
   const cfg = llmCfg();
-  return { cfg, model: languageModel(cfg), noThinkModel: languageModel(cfg, { forceNoThink: true }), label: legLabel(cfg) };
+  const baseLabel = legLabel(cfg);
+  const overrides = settings.get().llm?.modelOverrides;
+  const override = resolveModelOverride(kind, overrides);
+  if (override) cfg.model = override;
+  return { cfg, model: languageModel(cfg), noThinkModel: languageModel(cfg, { forceNoThink: true }), label: legLabel(cfg), baseLabel };
 }
 
 // The optional backup leg, or null when no usable fallback is configured.

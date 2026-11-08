@@ -506,6 +506,9 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog, onData 
     prompt: buildSituation(ctx, { contextFields: effectiveContextFields(cap), recentCuriosity }) + dataBlock(data),
     schema: simpleSegmentSchema(),
     temperature: 0.9,
+    // `generateSegment` distinguishes pool mode from agentic mode in telemetry
+    // (/stats, /debug, llm-bench) while inheriting the `djAgentSegment` model
+    // override via TASK_OVERRIDE_PARENT.
     kind: 'generateSegment',
   });
   const text = out?.air ? String(out?.text || '').trim() : '';
@@ -863,6 +866,8 @@ export async function runCapability(
       prompt: situation + (data && !data.error ? dataBlock(data) : ''),
       schema: forcedSchema({ mayAbstain }),
       temperature: 0.9,
+      // `generateSegment` distinguishes pool/forced mode in telemetry while
+      // inheriting the `djAgentSegment` model override via TASK_OVERRIDE_PARENT.
       kind: 'generateSegment',
     });
   } else {
