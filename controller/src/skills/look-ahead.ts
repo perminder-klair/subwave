@@ -40,11 +40,12 @@ function todayProgramming(at = Date.now()) {
     const plan = ready && record?.kind === 'ready' ? record.plan : null;
     const host = persona(ready && record?.kind === 'ready' ? record.hostPersonaId : show.personaId);
     const guestIds = ready && record?.kind === 'ready' ? record.guestPersonaIds : show.guestPersonaIds;
+    const startTime = new Intl.DateTimeFormat('en-US', {
+      timeZone: station.timezone || undefined, hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(new Date(startsAt)).replace(':00', '').replace(/\s/g, '').toLowerCase();
     shows.push({
       occurrenceId: occurrence.id, startsAt, endsAt: occurrence.endsAt,
-      startTime: new Intl.DateTimeFormat(station.locale || 'en-GB', {
-        timeZone: station.timezone || undefined, hour: 'numeric', minute: '2-digit',
-      }).format(new Date(startsAt)),
+      startTime,
       title: plan?.name ?? show.name, brief: (plan?.topic ?? show.topic ?? '').slice(0, 2000),
       ready: ready && !!host, host,
       guests: (guestIds ?? []).map(persona).filter((p): p is NonNullable<typeof p> => !!p),
@@ -102,18 +103,22 @@ export function renderLookAheadTeases(data: {
   }
   const list = (names: string[]) => names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
   const summaries = [firstSummary, secondSummary];
+  const first = (name: string) => name.trim().split(/\s+/)[0] || name;
   const pieces = data.shows.map((show, index) => {
-    const summary = summaries[index].trim();
-    // A summary may describe the music, but cannot supply another broadcast time.
-    if (/\b(?:\d{1,2}[:.]\d{2}|\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)|today|tomorrow|tonight|this morning|this afternoon|this evening|later still)\b/i.test(summary)) {
-      throw new Error('Look Ahead summary included a time claim; no segment was queued');
-    }
+    const candidate = summaries[index].trim();
+    // Keep the controller-authored link if the model summary adds timing; drop only that summary.
+    const summary = /\b(?:\d{1,2}[:.]\d{2}|\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)|today|tomorrow|tonight|this morning|this afternoon|this evening|later still)\b/i.test(candidate)
+      ? '' : candidate;
     const ownShow = show.host.id === data.speaker.id;
-    const guests = show.guests.filter(guest => guest.id !== data.speaker.id).map(guest => guest.name);
-    const cast = ownShow ? `join me${guests.length ? ` with ${list(guests)}` : ''}`
-      : `join ${show.host.name}${guests.length || show.guests.some(guest => guest.id === data.speaker.id)
-        ? ` with ${list([...guests, ...(show.guests.some(guest => guest.id === data.speaker.id) ? ['me'] : [])])}` : ''}`;
-    return `At ${show.startTime}, ${cast} for “${show.title}”.${summary ? ` ${summary}` : ''}`;
+    const colleagues = [show.host, ...show.guests].filter(person => person.id !== data.speaker.id).map(person => first(person.name));
+    const presenters = [show.host, ...show.guests].map(person => first(person.name));
+    const lead = ownShow
+      ? `I'm back at ${show.startTime}${colleagues.length ? ` with ${list(colleagues)}` : ''} for “${show.title}”.`
+      : show.guests.some(guest => guest.id === data.speaker.id)
+        ? `I'm joining ${list(colleagues)} at ${show.startTime} for “${show.title}”.`
+        : `Catch ${list(presenters)} at ${show.startTime} for “${show.title}”.`;
+    return `${lead}${summary ? ` ${summary}` : ''}`;
   });
-  return `${data.mode === 'upcoming-host-promo' ? `Hi, ${data.speaker.name} here. ` : ''}${pieces.join(' ')}`;
+  const firstName = first(data.speaker.name);
+  return `${data.mode === 'upcoming-host-promo' ? `Hi, ${firstName} here. ` : ''}${pieces.join(' ')}`;
 }
