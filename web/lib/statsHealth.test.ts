@@ -35,6 +35,12 @@ test('LLM: idle with no calls, bad under 90% success, warn under 95%', () => {
   assert.equal(llmHealth({ count: 10, failed: 2 }).note, '2 of 10 model calls failed');
 });
 
+test('LLM: deferred research is not failed or completed work', () => {
+  assert.equal(llmHealth({count: 12, failed: 0, deferred: 12}).health, 'idle');
+  assert.equal(llmHealth({count: 12, failed: 1, deferred: 10}).note, '1 of 2 model calls failed');
+  assert.equal(llmHealth({count: 12, failed: 1, deferred: 10}).health, 'warn');
+});
+
 test('voice: a fallback is a warning, a 10% failure share is bad', () => {
   assert.equal(voiceFailureHealth({ count: 0, failed: 0 }).health, 'idle');
   assert.equal(voiceFailureHealth({ count: 50, failed: 0 }).health, 'ok');

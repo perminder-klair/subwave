@@ -1,6 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import {useSettingsQuery} from './settings/queries';
+import { NOTES_TABS } from './notes-tabs';
+import ReviewCount from './ReviewCount';
+import { adminJson, useAdminQuery } from '../../lib/admin-query';
+import type {SettingsData} from './settings/shared';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -174,6 +179,12 @@ const NAV_SECTIONS: NavSection[] = [
         ],
       },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
+      { href: '/admin/notes', id: 'notes', label: 'Notes', icon: BookOpen,
+        children: NOTES_TABS.map(({id,label,icon}) => ({
+          href: `/admin/notes?tab=${id}`, id: `notes-${id}`, label, icon,
+          tab: id, defaultTab: id === 'overview',
+        })),
+      },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
       {
         href: '/admin/imaging',
@@ -369,6 +380,9 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
 // Cmd/Ctrl+K panel jump list. A modifier combo, so it is safe to honour even
 // while a field is focused.
 function AdminCommandMenu() {
+  const {adminFetch}=useAdminAuth();
+  const settingsQuery=useSettingsQuery<SettingsData>({adminFetch,enabled:true});
+  const sleeveEnabled=settingsQuery.data?.values?.djBehaviour?.extendedSleeveNotes===true;
   const router = useRouter();
   const [open, setOpen] = useState(false);
 
@@ -392,7 +406,7 @@ function AdminCommandMenu() {
 
   const targets: { href: string; label: string; group: string }[] = [];
   for (const section of NAV_SECTIONS) {
-    for (const item of section.items) {
+    for (const item of section.items.filter(item=>item.id!=='notes'||sleeveEnabled)) {
       targets.push({ href: item.href, label: item.label, group: section.label });
       for (const child of item.children ?? []) {
         targets.push({
@@ -431,6 +445,14 @@ function AdminSidebar({
   onSignOut: () => void;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }) {
+  const settingsQuery=useSettingsQuery<SettingsData>({adminFetch,enabled:true});
+  const sleeveEnabled=settingsQuery.data?.values?.djBehaviour?.extendedSleeveNotes===true;
+  const notesStatus = useAdminQuery<{ reviewReady?: number }>({
+    key: ['sleeve-notes', 'status'], adminFetch, enabled: sleeveEnabled,
+    request: (fetcher, signal) => adminJson(fetcher, '/sleeve-notes/status', undefined, signal),
+    staleTime: 10_000, refetchInterval: 30_000,
+  });
+  const reviewReady = sleeveEnabled ? notesStatus.data?.reviewReady ?? 0 : 0;
   const { setOpenMobile, isMobile } = useSidebar();
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   // The shell lives in the persistent layout, so a client-side nav doesn't
@@ -462,11 +484,12 @@ function AdminSidebar({
           <SidebarGroup key={section.label} className="p-0">
             <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
             <SidebarMenu className="gap-1.5">
-              {section.items.map(n =>
+              {section.items.filter(item=>item.id!=='notes'||sleeveEnabled).map(n =>
                 n.children?.length ? (
                   <CollapsibleNavItem
                     key={n.id}
                     item={n}
+                    reviewReady={n.id === 'notes' ? reviewReady : 0}
                     pathname={pathname}
                     onNavigate={closeOnMobileNav}
                   />
@@ -612,8 +635,10 @@ function CollapsibleNavItem({
   item,
   pathname,
   onNavigate,
+  reviewReady = 0,
 }: {
   item: NavItem;
+  reviewReady?: number;
   pathname: string | null;
   onNavigate: () => void;
 }) {
@@ -658,6 +683,7 @@ function CollapsibleNavItem({
               aria-hidden="true"
             />
             <span className="relative z-[1] flex-1 truncate">{item.label}</span>
+            {!open && <ReviewCount count={reviewReady} className="relative z-[1] mr-5 group-data-[collapsible=icon]:hidden" />}
           </Link>
         </SidebarMenuButton>
         <CollapsibleTrigger asChild>
@@ -677,7 +703,8 @@ function CollapsibleNavItem({
                   <SidebarMenuSubButton asChild isActive={childActive(sub)}>
                     <Link href={sub.href} onClick={onNavigate}>
                       <SubIcon aria-hidden="true" />
-                      <span className="truncate">{sub.label}</span>
+                      <span className="flex-1 truncate">{sub.label}</span>
+                      {sub.tab === 'moderation' && <ReviewCount count={reviewReady} />}
                     </Link>
                   </SidebarMenuSubButton>
                 </SidebarMenuSubItem>

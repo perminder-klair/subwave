@@ -625,3 +625,100 @@ test('an eligible primary skips SDK refusal retries while other attempts retain 
     assert.equal(again.isRetryable, true, 'EAI_AGAIN keeps the SDK retries');
   });
 });
+
+const { ResearchDeferredError, recentHealthCalls } = await import('../src/llm/internal/core/deferred.js');
+const { GenerationCancelledError } = await import('../src/llm/internal/core/generation.js');
+const { summarizeLlm } = await import('../src/stats.js');
+const { dailyTokensUsed } = await import('../src/llm/internal/telemetry/budget.js');
+
+for (const pin of [undefined, 'primary', 'fallback'] as const) {
+  for (const reason of ['research-budget', 'broadcast-priority'] as const) {
+    test(`${pin || 'unpinned'} research ${reason} is deferred and retains billed usage`, async () => {
+      await configure();
+      const controller = new AbortController();
+      const before = dailyTokensUsed();
+      let attempts = 0;
+      await assert.rejects(withFailover('sleeve-research', () => ({ usage: { input: 2, output: 1, total: 3 } }), async () => {
+        attempts++;
+        controller.abort(new ResearchDeferredError(reason));
+        throw new GenerationCancelledError(controller.signal.reason);
+      }, pin, controller.signal), GenerationCancelledError);
+      assert.equal(attempts, 1);
+      assert.equal(recentCalls.length, 1);
+      assert.equal(recentCalls[0].ok, false);
+      assert.equal(recentCalls[0].outcome, 'deferred');
+      assert.equal(recentCalls[0].deferredReason, reason);
+      assert.equal(dailyTokensUsed(), before + 3);
+      const stats = summarizeLlm(recentCalls);
+      assert.equal(stats.count, 1);
+      assert.equal(stats.deferred, 1);
+      assert.equal(stats.failed, 0);
+      assert.equal(stats.ok, 0);
+      assert.equal(stats.successRate, null);
+      assert.equal(stats.latency.max, 0);
+      assert.equal(stats.byKind[0].deferred, 1);
+      assert.deepEqual(recentHealthCalls(recentCalls), []);
+    });
+  }
+}
+
+test('untagged cancellation and real errors racing a research abort remain failures', async () => {
+  for (const failure of ['ordinary-abort', 'provider-timeout', 'invalid-response', 'authentication']) {
+    await configure();
+    const controller = new AbortController();
+    const error = failure === 'provider-timeout' ? new ProviderRequestTimeoutError('test', {
+      kind: 'sleeve-research', leg: 'primary', provider: 'ollama', modelLabel: primaryLabel,
+      targetId: 'test', timeoutMs: 1,
+    }) : failure === 'ordinary-abort' ? new GenerationCancelledError('ordinary abort') : new Error(failure);
+    await assert.rejects(withFailover('sleeve-research', failExtra, async () => {
+      controller.abort(failure === 'ordinary-abort' ? new Error('cancelled') : new ResearchDeferredError('research-budget'));
+      throw error;
+    }, 'primary', controller.signal));
+    assert.equal(recentCalls[0].outcome, undefined);
+    assert.equal(summarizeLlm(recentCalls).failed, 1);
+    assert.equal(recentHealthCalls(recentCalls).length, 1);
+  }
+});
+
+test('Stats and Doctor exclude deferrals without displacing completed health history', () => {
+  const successful = { kind: 'sleeve-research', ok: true, ms: 100 };
+  const failed = { kind: 'sleeve-research', ok: false, ms: 200 };
+  const deferred = { kind: 'sleeve-research', ok: false, ms: 45000, outcome: 'deferred' };
+  const calls = [...Array(25).fill(deferred), successful, failed];
+  const summary = summarizeLlm(calls);
+  assert.equal(summary.count, 27);
+  assert.equal(summary.deferred, 25);
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.successRate, 0.5);
+  assert.equal(summary.latency.avg, 150);
+  assert.equal(summary.byKind[0].avgMs, 150);
+  assert.deepEqual(recentHealthCalls(calls), [successful, failed]);
+});
+
+
+test('a research abort through the actual structured generation path reaches telemetry as deferred', async (t) => {
+  await configure();
+  const { djObject } = await import('../src/llm/sdk.js');
+  const { primaryLeg } = await import('../src/llm/internal/provider/legs.js');
+  const { z } = await import('zod');
+  const controller = new AbortController();
+  const leg = primaryLeg();
+  let requests = 0;
+  for (const model of new Set([leg.model, leg.noThinkModel])) {
+    t.mock.method(model, 'doGenerate', async () => {
+      requests++;
+      controller.abort(new ResearchDeferredError('broadcast-priority'));
+      // Simulates a local provider that ignores cancellation.
+      return new Promise(() => {});
+    });
+  }
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('unexpected provider traffic'); });
+  await assert.rejects(djObject({
+    kind: 'sleeveNotesResearch', schema: z.object({ story: z.string() }),
+    system: 'test research', prompt: 'test source', signal: controller.signal,
+  }), GenerationCancelledError);
+  assert.equal(requests, 1);
+  assert.equal(recentCalls.length, 1);
+  assert.equal(recentCalls[0].outcome, 'deferred');
+  assert.equal(recentCalls[0].deferredReason, 'broadcast-priority');
+});

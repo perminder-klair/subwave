@@ -1,0 +1,10 @@
+/* Controls sit over a moving canvas: use the booth colours without live blur. */
+.glass {
+    border: 1px solid var(--booth-edge);
+    background: linear-gradient(180deg, var(--booth-sheen), transparent 2rem), color-mix(in oklab, var(--bg) 94%, transparent);
+    box-shadow: inset 0 1px 0 var(--booth-sheen);
+}
+:global(html.lite) .glass { background: var(--bg); }
+@media (prefers-reduced-motion: reduce) {
+    .glass { background: var(--bg); }
+}

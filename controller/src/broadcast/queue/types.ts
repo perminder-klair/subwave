@@ -127,6 +127,8 @@ export interface QueueItem {
   introByOperator?: boolean;
   intent?: string | null;
   introScript?: string | null;
+  /** Sleeve Notes use recorded for this generated link; follows it through TTS and air confirmation. */
+  sleeveClaimUseId?: string | null;
   // Persist the one-label pass so retries/recovery cannot eat a second label
   // that belongs to the spoken text. Absent on legacy queue snapshots.
   introLabelChecked?: boolean;
@@ -261,4 +263,3 @@ export interface NowPlaying {
 //   chatty     → uniform 1-5 tracks
 //   aggressive → uniform 1-3 tracks
 // A DJ-mode persona reads one rung chattier (effectiveFrequency), so it links
-

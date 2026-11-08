@@ -23,7 +23,7 @@ const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { config } = await import('../src/config.js');
-const { enqueuePick, trimLinkToIntro } = await import('../src/broadcast/dj-agent/enqueue.js');
+const { enqueuePick, trimLinkToIntro, generatePickLink } = await import('../src/broadcast/dj-agent/enqueue.js');
 const { awaitIntroRender } = await import('../src/broadcast/queue/intro-render.js');
 const { writeSilentWav } = await import('../src/audio/wav-silence.js');
 const { withTalkAir } = await import('../src/broadcast/talk-air.js');
@@ -166,6 +166,22 @@ test('a queued request strips once and keeps its author for missing-WAV fallback
   assert.deepEqual(spoken, ['Iris: a title with a colon.']);
   assert.deepEqual(speakers, [IRIS.id]);
   assert.equal(item.requestedBy, 'alice');
+});
+
+test('Spark fit checking preserves the original script for the single enqueue label pass', async () => {
+  const song = { id: 'spark-label', title: 'Song', artist: 'Artist' };
+  const raw = 'Iris: Iris: a title with a colon.';
+  const generated = await generatePickLink({ current: song }, async args => {
+    if (typeof args.onSleeveNoteUse === 'function') args.onSleeveNoteUse('spark-use');
+    return raw;
+  });
+  assert.equal(generated.link, raw);
+  let queued: Parameters<typeof queue.push>[0] | undefined;
+  const fakeQueue = { push: async (item: Parameters<typeof queue.push>[0]) => { queued = item; return 1; }, log: () => {} };
+  await enqueuePick(fakeQueue, song, 'tests', 'tests', generated.link, null, {}, generated);
+  assert.equal(queued!.introScript, 'Iris: a title with a colon.');
+  assert.equal(queued!.introLabelChecked, true);
+  assert.equal(queued!.sleeveClaimUseId, 'spark-use');
 });
 
 test('a recovered unchecked script is cleaned before the render identity is captured', async () => {

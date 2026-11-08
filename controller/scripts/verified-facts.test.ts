@@ -2,10 +2,15 @@
 // Run: npm test -- verified-facts
 
 import assert from 'node:assert/strict';
-import {
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+const root = mkdtempSync(join(tmpdir(), 'subwave-verified-facts-'));
+process.env.STATE_DIR = root;
+const {
   sleeveNotesFor, contextSleeveNotesFor, releaseYearMentionEligible, selectSleeveNotes, stationHistoryNoteFor,
-} from '../src/llm/internal/prompts/sleeve-notes.js';
-import { linkPrompt } from '../src/llm/internal/prompts/scripts.js';
+} = await import('../src/llm/internal/prompts/sleeve-notes.js');
+const { linkPrompt } = await import('../src/llm/internal/prompts/scripts.js');
 
 const track = (over: Record<string, unknown> = {}) => ({
   title: 'After Laughter (Comes Tears)', artist: 'Wendy Rene',
@@ -16,12 +21,9 @@ const track = (over: Record<string, unknown> = {}) => ({
 assert.deepEqual(sleeveNotesFor(track()), [
   'Album: After Laughter Comes Tears.', 'Release year: 1964.',
 ]);
-assert.deepEqual(contextSleeveNotesFor(track()), [
-  'Album: After Laughter Comes Tears.', 'Release year: 1964.',
-]);
-assert.deepEqual(contextSleeveNotesFor(track({ album: '', year: null, originalYear: null }),
-  'First station play.'), ['First station play.'],
-'a first play remains the only sleeve note when library metadata is sparse');
+assert.deepEqual(contextSleeveNotesFor(track()), ['Album: After Laughter Comes Tears.', 'Release year: 1964.']);
+assert.deepEqual(contextSleeveNotesFor(track({ album: '', year: null, originalYear: null }), 'First station play.'),
+  ['First station play.'], 'sparse metadata retains only the supplied station fact');
 assert.deepEqual(contextSleeveNotesFor(track(), 'First station play.').slice(0, 2), [
   'First station play.', 'Album: After Laughter Comes Tears.',
 ], 'a qualifying first play must not be displaced by routine album/year metadata');
@@ -72,8 +74,8 @@ const prompt = linkPrompt({
     activeShow: { name: 'Night Drive', moods: ['euphoric'] },
   },
 });
-assert.match(prompt, /Task: Give a brief spoken introduction to the track now playing/);
-assert.match(prompt, /Music facts are limited to the exact entries in Verified facts/);
+assert.match(prompt, /Task: Write a natural, brief DJ introduction to the track now playing/);
+assert.match(prompt, /Music facts are limited to the supplied Verified Facts, Sleeve Notes, Story Spark and episode source data/);
 assert.match(prompt, /day of week is for accuracy, not generic atmosphere/);
 assert.match(prompt, /First station play” is not a premiere or a world premiere/);
 assert.match(prompt, /Prefer a plain, accurate introduction to invented atmosphere/);
@@ -83,4 +85,19 @@ assert.match(prompt, /Current show: "Night Drive"/);
 assert.match(prompt, /Track on air:\n- After Laughter \(Comes Tears\) by Wendy Rene/);
 assert.doesNotMatch(prompt, /sustained energy|euphoric/);
 
+const extendedPrompt = linkPrompt({
+  current: track(), context: {},
+  extendedSleeveNote: {
+    wording: 'The recording features an unusual collaboration.', entityType: 'recording',
+    category: 'musical-connections', attribution: 'Wikipedia',
+  },
+});
+assert.match(extendedPrompt, /Sleeve Notes:\n- Album: After Laughter Comes Tears\./);
+assert.match(extendedPrompt, /Story Spark — optional research material for this link/);
+assert.match(extendedPrompt, /About: the recording now playing/);
+assert.match(extendedPrompt, /Supported fact: The recording features an unusual collaboration\./);
+assert.match(extendedPrompt, /Source: Wikipedia/);
+assert.match(extendedPrompt, /weave a complete supported detail into the introduction wherever it flows naturally/);
+assert.match(extendedPrompt, /If a supported detail and track identification cannot both fit naturally, pass on the Spark/);
+rmSync(root, { recursive: true, force: true });
 console.log('verified facts: all tests passed');

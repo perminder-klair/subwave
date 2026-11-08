@@ -51,6 +51,18 @@ test('deadlineHits counts failed calls that ran out the agent deadline, and noth
   assert.equal(summarizeLlm(calls, { agentTimeoutMs: 45_000 }).failed, 9, 'failed still counts every failure');
 });
 
+test('research deferrals stay out of failures and deadline hits after the upstream merge',()=>{
+ const summary=summarizeLlm([
+  {kind:'research',ok:false,outcome:'deferred',ms:50_000},
+  {kind:'pick',ok:true,ms:500},
+ ],{agentTimeoutMs:45_000});
+ assert.equal(summary.deferred,1);
+ assert.equal(summary.failed,0);
+ assert.equal(summary.deadlineHits,0);
+ assert.equal(summary.okLatency.p95,500);
+ assert.equal(summary.latency.p95,500);
+});
+
 test('GET /stats judges deadline hits against the live agent deadline', async (t) => {
   await coldLoadSettings({ llm: { agentTimeoutMs: 30_000 } });
   recentCalls.length = 0;

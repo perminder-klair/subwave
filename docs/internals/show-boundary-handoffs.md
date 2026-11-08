@@ -134,9 +134,11 @@ while that intro is pending, the old runner yields to the newer track.
   source snapshot after restart. Preparing an incoming occurrence cannot replace
   the live outgoing snapshot. A legacy record without source data omits it rather
   than reconstructing the outgoing episode from a roll timestamp.
-- Handoff suppression applies only inside the scheduled-talk scope. Manual
-  operator speech remains immediate, and listener-request intros remain governed
-  by their request/session rules rather than by the handoff lifecycle.
+- Handoff suppression applies inside the scheduled-talk scope and to native
+  Sleeve Notes conversations, including manual requests. These conversations
+  retain the commissioning show's editorial ownership through final publication.
+  Other manual operator speech remains immediate, and listener-request intros
+  remain governed by their request/session rules rather than the handoff lifecycle.
 - Treat a missing/unknown duration conservatively: never invent an exact
   boundary time or delay music waiting for one.
 

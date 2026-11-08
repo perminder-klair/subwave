@@ -256,11 +256,14 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
               )}
             >
               <summary className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] items-center gap-2 px-2.5 py-2 sm:gap-2.5">
-                <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
-                  {c.ok ? '✓' : '✗'}
+                <span className={cn('font-bold', c.outcome === 'deferred' ? 'text-muted' : c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
+                  {c.outcome === 'deferred' ? 'Ⅱ' : c.ok ? '✓' : '✗'}
                 </span>
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="truncate text-[12px] font-bold">{c.kind}</span>
+                  {c.outcome === 'deferred' && (
+                    <span className="caption text-muted" title={c.deferredReason === 'broadcast-priority' ? 'Research yielded to broadcast work' : 'Research time budget reached'}>Deferred</span>
+                  )}
                   {callUsesMusicalLeanings(c) && (
                     <span className="shrink-0 border border-vermilion/40 bg-vermilion/10 px-1 py-px text-[8px] font-bold tracking-[0.08em] text-vermilion" title={leaningsBadgeTitle(c.kind)}>
                       LEANINGS
@@ -285,7 +288,7 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                   {c.model || '—'}{c.via ? ` · ${c.via}` : ''}
                 </div>
                 {c.error && (
-                  <CallSection label="error" tone="err" preview={oneLine(c.error)}>
+                  <CallSection label={c.outcome === 'deferred' ? 'interruption' : 'error'} tone={c.outcome === 'deferred' ? undefined : 'err'} preview={oneLine(c.error)}>
                     {c.error}
                   </CallSection>
                 )}
