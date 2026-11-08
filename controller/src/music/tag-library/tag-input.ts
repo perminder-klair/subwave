@@ -46,9 +46,11 @@ export function tagPromptStamp(): string {
 
 // Every label a run may stamp a marker with, from settings alone: the
 // primary's, and in dual-LLM mode a configured fallback's. The run itself
-// narrows this to the legs it can reach (resolveTagConsumers); without that
-// probe, a marker from the fallback still reads as matching, so it is never
-// counted as work the run would then hold back anyway.
+// narrows this to the legs it can reach (resolveTagConsumers). Without that
+// probe a marker from the fallback always reads as matching, which is right
+// while the fallback is reachable: the run holds that row back too. When the
+// probe finds the fallback unreachable, the run drops its label and asks
+// those rows again through the primary, so they are work this count misses.
 export function tagModelLabels(): string[] {
   const labels = [activeModelLabel()];
   const fb = fallbackLeg();

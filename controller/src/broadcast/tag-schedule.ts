@@ -34,6 +34,7 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
 import { createSerialFileWriter } from '../util/atomic-file.js';
+import { onceAsync } from '../util/async-pool.js';
 import { quietAfterMinutes, quietOnlyEnabled, type QuietState } from '../music/analyze-quiet-pure.js';
 import {
   EMPTY_TAG_SCHEDULE_RECORD,
@@ -86,12 +87,19 @@ export function createTagSchedule(deps: TagScheduleDeps) {
   let quiet: QuietState = { quietSince: null };
   let ticking = false;
 
-  async function load(): Promise<TagScheduleRecord> {
-    if (record) return record;
+  // One read per process, shared by every first caller (a tick and a
+  // GET/POST /settings arriving together in a new process), so a later read
+  // can never land over a record a caller has already changed.
+  // It resolves to nothing: save() replaces `record` with a new object, so
+  // load() hands back the current one, never the object the read produced.
+  const readOnce = onceAsync(async (): Promise<void> => {
     let raw: unknown = null;
     try { raw = await deps.readRecord(); } catch { raw = null; }
-    record = normalizeTagScheduleRecord(raw);
-    return record;
+    record ??= normalizeTagScheduleRecord(raw);
+  });
+  async function load(): Promise<TagScheduleRecord> {
+    await readOnce();
+    return record ?? { ...EMPTY_TAG_SCHEDULE_RECORD };
   }
 
   // The in-memory record changes synchronously, before the write is awaited,
@@ -287,26 +295,27 @@ interface TickRuntime {
 }
 let runtime: TickRuntime | null = null;
 
-async function loadRuntime(): Promise<void> {
-  runtime ??= {
+const loadRuntime = onceAsync(async (): Promise<void> => {
+  runtime = {
     tagger: await import('./tagger.js'),
     listeners: await import('./listeners.js'),
     queue: await import('./queue.js'),
   };
-}
+});
 
 function tickRuntime(): TickRuntime {
   if (!runtime) throw new Error('the tick runtime is not loaded');
   return runtime;
 }
 
-let live: ReturnType<typeof createTagSchedule> | null = null;
-
-async function liveSchedule() {
-  if (live) return live;
+// The station's one instance, built once even when a tick and a settings
+// request make the first call together: two instances would each hold their
+// own record, and the stale one could write over the file or mark a live run
+// interrupted.
+const liveSchedule = onceAsync(async () => {
   const settings = await import('../settings.js');
   const time = await import('../time.js');
-  live = createTagSchedule({
+  return createTagSchedule({
     auto: () => settings.get().tagger.auto,
     clock: (now) => {
       const p = time.zonedParts(now);
@@ -335,8 +344,7 @@ async function liveSchedule() {
       else console.warn(`[tag-schedule] ${message}`);
     },
   });
-  return live;
-}
+});
 
 export async function scheduledTagTick(): Promise<void> {
   try {

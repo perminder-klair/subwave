@@ -318,6 +318,8 @@ function harness(over: {
   startThrows?: boolean;
   /** Read the station clock off the tick's own Date (UTC), not h.today. */
   utcClock?: boolean;
+  /** Holds the record read open until it resolves. */
+  readGate?: Promise<void>;
 } = {}) {
   const h = {
     auto: over.auto ?? daily(),
@@ -329,6 +331,7 @@ function harness(over: {
     minuteOfDay: 151,
     countCalls: 0,
     probeCalls: 0,
+    reads: 0,
     starts: [] as Array<{ kind: string; onExit: (end: any) => void }>,
     writes: [] as any[],
     logs: [] as string[],
@@ -346,7 +349,11 @@ function harness(over: {
       if (over.startThrows) throw new Error('spawn exploded');
       h.starts.push({ kind, onExit });
     },
-    readRecord: async () => over.record ?? null,
+    readRecord: async () => {
+      h.reads++;
+      if (over.readGate) await over.readGate;
+      return over.record ?? null;
+    },
     writeRecord: async (rec) => { h.writes.push(rec); },
     log: (m) => { h.logs.push(m); },
   });
@@ -753,6 +760,57 @@ test('a controller down across midnight runs the new day once and never the old 
   await missed.schedule.tick(at('2026-11-08T03:05:00Z'));
   assert.equal(missed.h.starts.length, 1);
   assert.equal(missed.h.writes.at(-1).lastDay, '2026-11-08');
+});
+
+test('onceAsync: concurrent first calls share one call; a failure lets the next call retry', async () => {
+  const { onceAsync } = await import('../src/util/async-pool.js');
+  let calls = 0;
+  const shared = onceAsync(async () => { calls++; await new Promise((r) => setTimeout(r, 10)); return { n: calls }; });
+  const [a, b] = await Promise.all([shared(), shared()]);
+  assert.equal(calls, 1);
+  assert.equal(a, b, 'the same instance');
+  assert.equal(await shared(), a);
+  let tries = 0;
+  const flaky = onceAsync(async () => { tries++; if (tries === 1) throw new Error('first read failed'); return tries; });
+  await assert.rejects(flaky(), /first read failed/);
+  assert.equal(await flaky(), 2, 'retried after the failure');
+  assert.equal(await flaky(), 2);
+});
+
+test('two first calls in a new process share one record read', async () => {
+  let open!: () => void;
+  const readGate = new Promise<void>((r) => { open = r; });
+  const { h, schedule } = harness({
+    readGate,
+    record: { version: 1, lastDay: '2026-11-07', outcome: 'ok', walkedCount: 100 },
+  });
+  const tick = schedule.tick(T0);
+  const view = schedule.view();
+  open();
+  await tick;
+  assert.equal((await view).outcome, 'ok');
+  assert.equal(h.reads, 1);
+});
+
+test('an armed() racing the first tick keeps armedAt', async () => {
+  let open!: () => void;
+  const readGate = new Promise<void>((r) => { open = r; });
+  const { h, schedule } = harness({
+    utcClock: true,
+    readGate,
+    record: { version: 1, lastDay: '2026-11-06', outcome: 'ok', walkedCount: 100 },
+  });
+  const tick = schedule.tick(at('2026-11-07T14:05:00Z'));
+  const armed = schedule.armed(at('2026-11-07T14:00:00Z'));
+  open();
+  await Promise.all([tick, armed]);
+  assert.equal(h.reads, 1);
+  assert.equal((await schedule.view()).armedAt, '2026-11-07T14:00:00.000Z');
+  assert.equal(h.writes.at(-1).armedAt, '2026-11-07T14:00:00.000Z');
+  // A later tick still reads it: armed after 02:30 today, so no run today.
+  await schedule.tick(at('2026-11-07T14:10:00Z'));
+  assert.equal(h.starts.length, 0);
+  assert.equal(h.writes.at(-1).armedAt, '2026-11-07T14:00:00.000Z');
 });
 
 test('untaggable markers are work only once they stop matching what a run would ask', async () => {
