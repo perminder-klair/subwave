@@ -63,6 +63,7 @@ import type { Persona } from './queue/types.js';
 import { recordShortlistPick } from '../stats.js';
 import { predecessorContext, predecessorPrompt } from './dj-agent/pick-context.js';
 import { groundPickNote, pickNoteReferences, stationClaimNames } from './dj-agent/pick-note.js';
+import { onRepeatCooldown, pushListenerRequest } from './listener-request.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -2035,8 +2036,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // the caller nothing was queued: it returns a track (the one it declined,
     // so the ack and the operator log can name it), and without the flag the
     // route reported a queue position for a play that will never happen.
-    const cdMin = Number((settings.get() as any)?.requests?.repeatCooldownMin ?? 120);
-    if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(song.id)) {
+    if (onRepeatCooldown(song.id)) {
       const cdAck = queue.cooldownAck(song.id, song.title);
       session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: song.id, requester, toolCalls } });
       return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: [claimGuard, spacingGuard].filter(Boolean).join('+') || null, refused: 'cooldown' };
@@ -2083,8 +2083,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // in the intro, after misnaming the track) — join rather than let one
     // verdict hide another.
     const guardVerdict = [claimGuard, spacingGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
-    let introDropped = false;
-    const pos = await queue.push({
+    const pushed = await pushListenerRequest({
       track: trackFields(song),
       requestedBy: requester,
       intent: 'listener request',
@@ -2093,17 +2092,16 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       // Voice the intro as whoever wrote it (see the pool-pick push above).
       introPersona: currentSpeech.persona,
       introHostSpeech: currentSpeech.hostSpeech,
-      onStandInDropped: () => { introDropped = true; },
     });
     // Never-play blocklist refused the pick — throw so the route's stateless
     // fallback cascade runs; its own resolution is blocklist-filtered, so the
     // listener gets the standard not-found decline rather than a silent drop.
-    if (pos === -2) throw new Error('pick refused by never-play blocklist');
+    if (pushed.status === 'blocked') throw new Error('pick refused by never-play blocklist');
     // A concurrent request already queued this exact track — push() deduped it
     // (#619). Acknowledge honestly (no second back-to-back play, no false
     // "coming up", no intro to air) and still append the line as the session
     // reply so the request event isn't left without one.
-    if (pos === -1) {
+    if (pushed.status === 'already-queued') {
       const dupAck = queue.dedupAck(song.id);
       session.appendTurn({
         role: 'dj', kind: 'request',
@@ -2115,7 +2113,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       // for the same reason as the cooldown branch: nothing was queued here.
       return { ack: dupAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: guardVerdict, refused: 'already-queued' };
     }
-    const airedIntro = introDropped ? null : intro || null;
+    const airedIntro = pushed.introDropped ? null : intro || null;
     session.appendTurn({
       role: 'dj', kind: 'request',
       // `ack` is guaranteed non-empty (screenAck substitutes), so it always
