@@ -829,6 +829,42 @@ test('untaggable markers are work only once they stop matching what a run would 
   assert.equal(await untaggedWorkCount(), 2);
 });
 
+// #2281 puts the measured line and the Last.fm tags in the tagger's input, so
+// in the untaggable key. The schedule asks the tagger's own rememberedUntaggable,
+// which builds that input from the same row (getTrack, tagInputFor), so the two
+// can't disagree: new evidence is work to both, an unchanged question to neither.
+test('an untaggable marker with evidence in its key is work once that evidence changes', async () => {
+  const db = await import('../src/music/library-db.js');
+  const { tagInputFor, recordTagAnswer, tagPromptStamp, tagModelLabels } = await import('../src/music/tag-library/tag-input.js');
+  await coldLoadSettings({});
+  await db.open({ embeddingDim: 4 });
+  const seed = (id: string) => {
+    db.upsertTrackMeta(id, { title: id, artist: 'Act', album: 'LP', genres: ['rock'] });
+    db.upsertTrackEnrichment(id, { lastfmTags: ['ambient'], lyricExcerpt: null });
+    db.upsertTrackAnalysis(id, { bpm: 74, musicalKey: '8A', vocalRanges: null, loudnessLufs: -17 });
+  };
+  const ids = ['ev-measured', 'ev-lastfm', 'ev-banded'];
+  ids.forEach(seed);
+  const before = await untaggedWorkCount();
+  // Marked the way a run marks one: an empty answer through recordTagAnswer.
+  const stamp = { source: 'llm' as const, promptHash: tagPromptStamp(), model: tagModelLabels()[0] };
+  for (const id of ids) {
+    const input = tagInputFor(db.getTrack(id)!);
+    assert.ok(input.acoustics && input.lastfmTags?.length, 'the key carries evidence');
+    assert.equal(recordTagAnswer(id, input, { moods: [], energy: 'medium' }, stamp), 'untaggable');
+  }
+  assert.equal(await untaggedWorkCount(), before - 3, 'matching markers are not work');
+
+  // A BPM move inside its band, and a LUFS change, ask the same question.
+  db.upsertTrackAnalysis('ev-banded', { bpm: 76, musicalKey: '8A', vocalRanges: null, loudnessLufs: -9 });
+  assert.equal(await untaggedWorkCount(), before - 3);
+  // A new tempo word, and new Last.fm tags, are a new question: work.
+  db.upsertTrackAnalysis('ev-measured', { bpm: 128, musicalKey: '8A', vocalRanges: null, loudnessLufs: -17 });
+  assert.equal(await untaggedWorkCount(), before - 2);
+  db.upsertTrackEnrichment('ev-lastfm', { lastfmTags: ['ambient', 'drone'], lyricExcerpt: null });
+  assert.equal(await untaggedWorkCount(), before - 1);
+});
+
 // ---------------------------------------------------------------------------
 // Settings plumbing
 
