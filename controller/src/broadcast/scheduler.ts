@@ -65,6 +65,7 @@ import * as pickStems from './pick-stems.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 import * as backup from '../backup/scheduled.js';
+import { scheduledTagTick } from './tag-schedule.js';
 import { autoEnableRealPath, realPathOptedIn } from '../music/navidrome-players.js';
 import { onLibraryMountLost, proveLibraryMount } from '../music/library-mount.js';
 
@@ -1567,6 +1568,12 @@ export function startScheduler() {
   // Off by default; a daily pass because orphans accrue with library churn,
   // and one hour of quarantine skew costs nothing at this cadence.
   cron.schedule('47 4 * * *', stemOrphanPurgeTick, { noOverlap: true });
+
+  // Scheduled tagging (#2282), off by default. Every five minutes at :04, :09 …
+  // :59, clear of the */5 janitors, the :02 cleanup, :23 backup, :41 real-path
+  // tick and the 04:17 / 04:47 nightly jobs; the policy starts the day's run on
+  // the first tick at or after the set time (broadcast/tag-schedule.ts).
+  cron.schedule('4-59/5 * * * *', scheduledTagTick, { noOverlap: true });
 
   syncSkillCrons();
   // Each task bakes the zone in at registration, so a live timezone change has

@@ -119,16 +119,19 @@ import {
   normalizeGeminiLibraryLanguage,
   ttsVoiceLevellingSchema,
   type ScheduledBackupSettings,
+  type TaggerAutoSettings,
   type JingleRotateOwner,
   type TtsPatch,
   stripSecretControlChars,
 } from './schemas/settings.js';
 import { jinglePlacement, jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
+import { scheduleArmChanged } from './music/tag-schedule-policy.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
   normalizeArchiveRetentionDays,
   normalizeBackups,
+  normalizeTaggerAuto,
   normalizeDjPrompts,
   normalizeDuckDepth,
   normalizeHandoverOffsetMinutes,
@@ -517,6 +520,10 @@ export async function load() {
     // THREE edits), which for a cadence means backups silently stopping.
     // Pinned by a cold-load round trip in scripts/backup-schedule.test.ts.
     backups: normalizeBackups(stored.backups),
+    // Scheduled tagging (#2282): absent reads as `{ mode: 'off' }`, the
+    // pre-existing station. Composed explicitly like every block here; pinned
+    // by the cold-load round trip in scripts/tag-schedule.test.ts.
+    tagger: { auto: normalizeTaggerAuto(stored.tagger?.auto) },
     stream: {
       opusEnabled:
         typeof stored.stream?.opusEnabled === 'boolean'
@@ -1530,6 +1537,25 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     // tick rather than needing one.
     if (b.cadence !== undefined) next.backups.cadence = b.cadence;
     if (b.keep !== undefined) next.backups.keep = b.keep;
+  }
+  if ('tagger' in patch) {
+    const t = parseSettingsPatchKey<{
+      auto?: Partial<Omit<TaggerAutoSettings, 'steps'>> & { steps?: Partial<TaggerAutoSettings['steps']> };
+    }>('tagger', patch.tagger);
+    // Read live by the scheduler's tick: no Liquidsoap file, no restart.
+    const a = t.auto;
+    if (a) {
+      const auto = { ...next.tagger.auto, steps: { ...next.tagger.auto.steps } };
+      if (a.mode !== undefined) auto.mode = a.mode;
+      if (a.time !== undefined) auto.time = a.time;
+      if (a.limit !== undefined) auto.limit = a.limit;
+      if (a.steps) {
+        for (const [k, v] of Object.entries(a.steps)) {
+          if (v !== undefined) auto.steps[k as keyof TaggerAutoSettings['steps']] = v;
+        }
+      }
+      next.tagger = { ...next.tagger, auto };
+    }
   }
   if ('stream' in patch) {
     const st = parseSettingsPatchKey<Record<string, number | boolean | undefined>>(
@@ -2753,6 +2779,7 @@ export async function update(patch) {
     }
   }
 
+  const savedAt = new Date();
   setCache(next);
   // Applied-on-save, same pattern as the liquidsoap_*.txt files below —
   // minus the restart: the next zonedParts() call picks it up.
@@ -2784,6 +2811,17 @@ export async function update(patch) {
     ),
   );
   await writeLiquidsoapSettings(next);
+  // Scheduled tagging (#2282): a save that turns the schedule on or moves its
+  // time stamps the moment, so a time already past today waits for tomorrow
+  // instead of starting within minutes. The schedule keeps it in its own
+  // record; a failed stamp only loses that, never the save.
+  if (scheduleArmChanged(cur.tagger?.auto, next.tagger?.auto)) {
+    try {
+      await (await import('./broadcast/tag-schedule.js')).scheduleArmed(savedAt);
+    } catch (err) {
+      console.warn(`[settings] could not note the tagging schedule change: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   return { saved: next, requiresRestart: restart };
 }
 
