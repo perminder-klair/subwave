@@ -13,6 +13,12 @@
 //
 // One builder serves the call and the check. Anything added to the LLM's input
 // belongs in `tagInputFor`, so it joins the key and a change to it re-asks.
+// Since #2281 that includes the measured evidence (tempo, key mode, the vocal
+// verdict, through taggerAcoustics) and the stored Last.fm tags. The key hashes
+// that evidence as the prompt renders it (formatEvidence), not the raw
+// measurements: new evidence is a new question, but a re-analysis that moves a
+// BPM within its tempo band, or a vocal span by a few ms, asks the model exactly
+// what it was asked before, so it is not asked again.
 // One writer, `recordTagAnswer`, stores every LLM answer, from the bulk batch
 // loop and the admin Retag route alike, so neither can save an empty answer as
 // a tag.
@@ -21,12 +27,18 @@
 // leg's own, otherwise the primary's, even when the unpinned call failed over and
 // the fallback answered. The LLM layer does not report which leg answered, and
 // the same label is the `model` stamp on a tagged row.
+//
+// `recordTagAnswer` also writes the measured stamp (tracks.tagged_measured,
+// #2281) from the same input, so it says what this answer heard. An untaggable
+// answer writes no tag, so it writes no stamp either.
 
 import { createHash } from 'node:crypto';
 import * as db from '../library-db.js';
 import { promptVocabHash } from '../embeddings.js';
 import { activeModelLabel, fallbackLeg } from '../../llm/provider.js';
 import { TAGGER_CONTRACT_VERSION, type TaggableSong, type TagResult } from '../tagger-core.js';
+import { formatEvidence } from '../tagger-evidence.js';
+import { hasTaggerSoundWords, taggerAcoustics } from '../sound-line.js';
 
 export function tagInputFor(t: db.TrackRecord): TaggableSong {
   return {
@@ -35,6 +47,8 @@ export function tagInputFor(t: db.TrackRecord): TaggableSong {
     album: t.album ?? undefined,
     year: t.year ?? undefined,
     genres: t.genres,
+    acoustics: taggerAcoustics(t),
+    lastfmTags: t.lastfmTags,
   };
 }
 
@@ -59,7 +73,12 @@ export function tagModelLabels(): string[] {
 }
 
 export function untaggableKey(input: TaggableSong, promptHash: string, model: string): string {
-  return createHash('sha256').update(JSON.stringify([input, promptHash, model])).digest('hex');
+  // The evidence fields are hashed as formatEvidence renders them, not raw. A
+  // new evidence field must be destructured out here and rendered through
+  // formatEvidence too, or it lands in `metadata` and is hashed raw.
+  const { acoustics: _acoustics, lastfmTags: _lastfmTags, ...metadata } = input;
+  const asked = { ...metadata, evidence: formatEvidence(input) };
+  return createHash('sha256').update(JSON.stringify([asked, promptHash, model])).digest('hex');
 }
 
 export interface TagStamp {
@@ -85,6 +104,7 @@ export function recordTagAnswer(
     confidence: null,
     promptHash: stamp.promptHash,
     model: stamp.model,
+    taggedMeasured: hasTaggerSoundWords(input.acoustics),
   });
   return 'tagged';
 }

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
+import { hasTaggerSoundWords } from '../sound-line.js';
 import { preparationTrackSchema } from '../../schemas/show-preparation.js';
 import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
@@ -105,6 +106,51 @@ export function staleTaggedIds(promptHash: string, model: string, limit?: number
        ORDER BY id` + (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
   const rows = requireDb().prepare(sql).all(promptHash, model) as Array<{ id: string }>;
   return rows.map(r => r.id);
+}
+
+// "Re-decide moods → blind rows only" scope (#2281): rows the LLM decided
+// without measurements of their audio that have been measured since, so a
+// re-decide now gives the model a Sound: line. A blind row that is still
+// unmeasured stays out: re-tagging it would be blind again. Blind is
+// tagged_measured = 0, or a NULL stamp on a model-decided row, which is every row
+// tagged before the stamp existed (no earlier prompt carried measurements).
+// Never manual or propagated: neither was decided by the LLM. "Measured since" is
+// the stamp's own rule (hasTaggerSoundWords) run over the row, never a SQL copy
+// of it; the WHERE only narrows to rows carrying one of its inputs.
+export function blindTaggedIds(limit?: number): string[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, bpm, musical_key, vocal_ranges_json,
+              ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges
+         FROM tracks
+        WHERE ${SQL_HAS_MOODS}
+          AND (source IS NULL OR source NOT IN ('manual', 'propagated'))
+          AND (tagged_measured IS NULL OR tagged_measured = 0)
+          AND (bpm IS NOT NULL OR musical_key IS NOT NULL
+               OR vocal_ranges_json IS NOT NULL OR outro_json IS NOT NULL)
+        ORDER BY id`,
+    )
+    .iterate() as IterableIterator<{
+      id: string;
+      bpm: number | null;
+      musical_key: string | null;
+      vocal_ranges_json: string | null;
+      tail_vocal_ranges: string | null;
+    }>;
+  const cap = limit && limit > 0 ? Math.floor(limit) : Infinity;
+  const ids: string[] = [];
+  for (const r of rows) {
+    const measured = hasTaggerSoundWords({
+      bpm: r.bpm,
+      musicalKey: r.musical_key,
+      ...parseVocalRangesJson(r.vocal_ranges_json),
+      ...parseTailVocalRangesJson(r.tail_vocal_ranges),
+    });
+    if (measured) ids.push(r.id);
+    // Leaving the loop closes the statement's iterator.
+    if (ids.length >= cap) break;
+  }
+  return ids;
 }
 
 // "Re-enrich" scope: only what was already enriched. Distinct from --re-enrich,

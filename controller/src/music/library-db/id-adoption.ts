@@ -40,10 +40,11 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
   { anchor: 'enriched_at', cols: ['lastfm_tags', 'lastfm_track_tags_at', 'lyric_excerpt', 'enriched_at'] },
   // untaggable_key (#2283) is the tagger's answer for an untagged row, so it
   // moves with the tags: a rotated id keeps its metadata and is not re-asked.
+  // tagged_measured (#2281) is the stamp on the tags themselves.
   {
     anchor: 'moods',
     cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at',
-      'untaggable_key'],
+      'untaggable_key', 'tagged_measured'],
   },
   {
     anchor: 'analysis_version',
