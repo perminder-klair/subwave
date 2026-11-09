@@ -285,20 +285,27 @@ export async function airVoiceExchange(
     precedingMs += p.clipMs;
   }
   const handoffs: (VoiceHandoff | null)[] = prepared.map(() => null);
+  // Only lines that reached the mixer hold the voice chain. A boundary that
+  // stops the conversation must not make the next segment — the handoff that
+  // claimed it — wait out speech that never existed.
+  let landedMs = 0;
   const turn = _voiceChain
     .catch(() => undefined)
     .then(async () => {
       await waitForJingleClear();
       for (const [index, p] of prepared.entries()) {
-        if (!beforeWrite()) break;
         let written: boolean;
         try {
-          written = await writeHandoff(path, p.uri);
+          // The gate rides writeHandoff so it is asked again after the wait for
+          // Liquidsoap to consume the previous line, where the boundary can be
+          // claimed. Checking it out here would leave that window open.
+          written = await writeHandoff(path, p.uri, { beforeWrite });
         } catch (err) {
           onWriteError?.(err, index);
           break;
         }
         if (!written) break;
+        landedMs += p.holdMs;
         // Registered before this line can air: the mixer plays queued lines in
         // order, so the last one may wait a whole conversation. A marker that
         // still arrives early is buffered briefly by the reader.
@@ -310,9 +317,9 @@ export async function airVoiceExchange(
       }
       return handoffs.some(Boolean);
     });
-  // Same hold shape as airVoice, over the whole conversation: the shared lock
-  // stays until the last line's speech and its duck tail are done.
-  _voiceChain = turn.then(anyWritten => anyWritten ? sleep(totalHoldMs) : undefined)
+  // Same hold shape as airVoice, over the conversation that actually landed: the
+  // shared lock stays until the last written line's speech and duck tail are done.
+  _voiceChain = turn.then(anyWritten => anyWritten ? sleep(landedMs) : undefined)
     .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
   await turn;
   return handoffs;

@@ -127,12 +127,16 @@ test('a boundary claimed mid-exchange drops the lines that have not landed', asy
   await flush();
 
   const handoffs = await exchange;
-  assert.equal(checks, 2, 'the gate is asked again before the second line');
+  assert.equal(checks, 2, 'the gate is asked again after the handoff wait');
   assert.ok(handoffs[0], 'the line that already landed airs');
   assert.equal(handoffs[1], null);
   assert.equal(handoffs[2], null);
   assert.equal(existsSync(config.liquidsoap.sayFile), false, 'nothing further reaches the mixer');
 
-  t.mock.timers.tick(10_000);
+  // The one landed line holds for its clip (1 s) + lead-in (0.8 s) + tail
+  // (0.7 s). Counting the two cancelled lines would hold until 5.9 s and stall
+  // the very handoff that claimed the boundary.
+  t.mock.timers.tick(3_000);
   await flush();
+  assert.equal(voiceBusy(), false, 'the cancelled lines do not hold the voice channel');
 });
