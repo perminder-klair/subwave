@@ -223,6 +223,9 @@ export interface StationState {
   ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
   /** Whether the operator has the Lyrics panel on. Absent on an older controller. */
   lyrics?: { enabled?: boolean };
+  /** The Hotline line (docs/plans/hotline.md): the player shows its call button
+   *  while it is open or busy. Absent on a controller that predates it. */
+  hotline?: { state?: 'closed' | 'open' | 'busy' };
   /** Private-station flags (#478) — booleans only, never credentials.
    *  `privatePlayer` swaps the player pages for a "private station" screen;
    *  `listenerAuth` means the mounts demand the shared listener password

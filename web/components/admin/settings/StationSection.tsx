@@ -15,6 +15,7 @@ import {
   SectionHeader, SaveBar, SettingsFieldError,
   type SectionProps,
 } from './shared';
+import { HotlineCard, hotlineSavePayload } from './HotlineSection';
 
 // Intl.supportedValuesOf exists in every runtime this UI supports; the guard keeps
 // an exotic browser from crashing the whole settings page.
@@ -75,6 +76,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
       repeatCooldownMin: parseInt(form.requests.repeatCooldownMin, 10),
       onePendingPerIp: form.requests.onePendingPerIp,
     },
+    hotline: hotlineSavePayload(form.hotline),
   });
 
   // Re-render every 30s so the station-clock preview keeps walking.
@@ -379,6 +381,8 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
         </div>
       </Card>
 
+      <HotlineCard form={form} setForm={setForm} />
+
       <Advanced note="request rate limits and the public-API switch">
       <Card title="Listener requests" sub="Rate limits and the pause switch for POST /request">
         <div className="grid gap-3">
@@ -540,12 +544,12 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
       </Advanced>
 
       <SaveBar
-        note="Station name, location, timezone, locale, the private player, listener-request limits, and the public-API toggle apply live. Turning the stream password on or off needs a mixer restart."
+        note="Station name, location, timezone, locale, the private player, listener-request limits, the Hotline, and the public-API toggle apply live. Turning the stream password on or off needs a mixer restart."
         busy={busy}
         onSave={save}
         saveLabel="Save station settings"
         errors={fieldErrors}
-        ownedKeys={['station', 'stationDescription', 'timezone', 'locale', 'weather', 'privacy', 'requests']}
+        ownedKeys={['station', 'stationDescription', 'timezone', 'locale', 'weather', 'privacy', 'requests', 'hotline']}
       />
     </>
   );

@@ -105,6 +105,14 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       repeatCooldownMin: String(v.requests?.repeatCooldownMin ?? 120),
       onePendingPerIp: v.requests?.onePendingPerIp !== false,
     },
+    hotline: {
+      model: v.hotline?.model ?? 'gpt-realtime',
+      voice: v.hotline?.voice ?? '',
+      maxCallSec: String(v.hotline?.maxCallSec ?? 180),
+      wrapUpSec: String(v.hotline?.wrapUpSec ?? 150),
+      dailyMinutes: String(v.hotline?.dailyMinutes ?? 60),
+      callsPerDevicePerShow: String(v.hotline?.callsPerDevicePerShow ?? 1),
+    },
     kokoroLang: v.tts?.kokoro?.lang ?? '',
     // Absent (a settings.json predating the key) reads as OFF, matching the
     // controller's own coercion in settings.load().

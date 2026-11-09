@@ -61,7 +61,7 @@ export const SECTIONS = [
   {
     id: 'station', group: 'the station', label: 'Station',
     hint: 'name · location · privacy', icon: Radio,
-    formKeys: ['station', 'stationDescription', 'timezone', 'locale', 'weather', 'privacy', 'requests'],
+    formKeys: ['station', 'stationDescription', 'timezone', 'locale', 'weather', 'privacy', 'requests', 'hotline'],
   },
   {
     id: 'music', group: 'the station', label: 'Music source',
@@ -240,6 +240,10 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Stream password', section: 'station', card: 'Privacy', keywords: 'listener auth icecast lock restart' },
   { label: 'Station password', section: 'station', card: 'Privacy', keywords: 'secret shared passphrase' },
   { label: 'Accept requests', section: 'station', card: 'Listener requests', keywords: 'request line open closed' },
+  { label: 'Hotline', section: 'station', card: 'Hotline', keywords: 'call phone voice dj realtime openai caller dedication' },
+  { label: 'Hotline call length', section: 'station', card: 'Hotline', keywords: 'call minutes limit cap wrap up' },
+  { label: 'Hotline minutes per day', section: 'station', card: 'Hotline', keywords: 'daily budget cost cap' },
+  { label: 'Hotline voice', section: 'station', card: 'Hotline', keywords: 'realtime voice marin cedar' },
   { label: 'Max queued requests', section: 'station', card: 'Listener requests', keywords: 'pending queue limit' },
   { label: 'Seconds between requests', section: 'station', card: 'Listener requests', keywords: 'cooldown rate limit' },
   { label: 'Per-listener hourly cap', section: 'station', card: 'Listener requests', keywords: 'ip rate limit hour' },

@@ -26,6 +26,7 @@ import { SkinSelectionProvider, type SkinSelection } from '@/components/skins/Sk
 import type { SkinComponent } from '@/components/skins/types';
 import { PlayerCoreProvider, usePlayerAudio, usePlayerFeed } from './PlayerCore';
 import { StationPasswordGate, useStationAuth } from './StationGate';
+import { HotlineButton } from './HotlineButton';
 
 export interface PlayerShellProps {
   /** Explicit skin — bypasses registry resolution (previews, tests). */
@@ -206,6 +207,9 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
               </Suspense>
             </div>
             <StationPasswordGate phase={auth.phase} unlock={auth.unlock} savedRejected={auth.savedRejected} solid={false} />
+            {/* The Hotline: shown over every skin while the show on air opens the line. Never in a
+                showcase embed, and never under the station gate. */}
+            {!contained && !locked && <HotlineButton />}
           </>
         )}
       </div>
