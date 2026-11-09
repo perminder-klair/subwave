@@ -7,6 +7,7 @@ import * as db from '../../music/library-db.js';
 import * as coverage from '../../music/library-coverage.js';
 import * as subsonic from '../../music/subsonic.js';
 import * as lastfm from '../../music/lastfm.js';
+import { listAfterArtistLookup } from '../../music/lastfm-tag-policy.js';
 import * as musicbrainz from '../../music/musicbrainz.js';
 import * as settings from '../../settings.js';
 import * as embeddings from '../../music/embeddings.js';
@@ -283,8 +284,9 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     });
 
     // Seed from the row: a retag that fetches nothing, or is answered with
-    // nothing, must leave the stored list alone. Only a genuine answer replaces
-    // it, as on the bulk pass (#2295).
+    // nothing, leaves the stored list alone. Only tags replace it, by the bulk
+    // pass's rules: recordLastfmTrackTags with track tags on, listAfterArtistLookup
+    // with them off (#2295).
     let lastfmTags: string[] | null = db.getTrack(id)?.lastfmTags ?? null;
     let lyricExcerpt: string | null = null;
     if (lastfmEnabled && song.artist) {
@@ -296,8 +298,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         if (trackTagsOn) {
           lastfmTags = db.recordLastfmTrackTags(id, await lastfm.getMergedTags(song.artist, song.title, { count: 10 }));
         } else {
-          const tags = await lastfm.getArtistTags(song.artist, { count: 10 });
-          if (tags.length) lastfmTags = tags;
+          lastfmTags = listAfterArtistLookup(lastfmTags, await lastfm.getArtistTags(song.artist, { count: 10 }));
         }
       } catch (err) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);

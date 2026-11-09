@@ -645,6 +645,42 @@ test('turning it off and re-enriching puts artist tags back, and the row is owed
   assert.deepEqual(row('a').lastfmTags, ['shoegaze', 'rock', 'indie']);
 });
 
+// The artist-only lookup answers [] for an outage and for an act with no tags
+// alike, so with track tags off only tags replace the list (#2295).
+test('--re-enrich with track tags off during an artist outage keeps the list and its stamp (#2295)', async () => {
+  seed('a', 'Act', 'Song', { tags: ['shoegaze', 'rock'] });
+  db.recordLastfmTrackTags('a', { tags: ['shoegaze', 'rock'], answered: true });
+  const stamp = row('a').lastfmTrackTagsAt;
+  assert.ok(stamp);
+  await setTrackTags(false);
+  artistReplies.set('Act', { status: 503, raw: 'down' });
+  await phaseEnrich(['a'], true);
+  assert.deepEqual(artistAsks(), ['Act']);
+  assert.deepEqual(row('a').lastfmTags, ['shoegaze', 'rock']);
+  assert.equal(row('a').lastfmTrackTagsAt, stamp);
+});
+
+test('--re-enrich with track tags off keeps the list through an answer with no tags (#2295)', async () => {
+  seed('a', 'Act', 'Song', { tags: ['rock', 'indie'] });
+  await setTrackTags(false);
+  artistReplies.set('Act', tagReply());
+  await phaseEnrich(['a'], true);
+  assert.deepEqual(artistAsks(), ['Act']);
+  assert.deepEqual(row('a').lastfmTags, ['rock', 'indie']);
+});
+
+test('--re-enrich with Last.fm tags off keeps the stored list (#2295)', async () => {
+  await settings.update({ embedding: { enrichment: { lastfmTags: false, lyrics: true } } });
+  try {
+    seed('a', 'Act', 'Song', { tags: ['rock', 'indie'] });
+    await phaseEnrich(['a'], true);
+    assert.equal(asked.length, 0);
+    assert.deepEqual(row('a').lastfmTags, ['rock', 'indie']);
+  } finally {
+    await coldLoadSettings({});
+  }
+});
+
 test('rewriting the same list keeps the stamp', () => {
   seed('a', 'Act', 'Song', { tags: ['rock'] });
   db.recordLastfmTrackTags('a', { tags: ['rock'], answered: true });

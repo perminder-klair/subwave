@@ -9,6 +9,7 @@ import * as db from '../library-db.js';
 import * as settings from '../../settings.js';
 import { createLastfmPacer, type LastfmPacer } from '../lastfm-pacer.js';
 import { selectTrackTagIds } from '../enrich-scope.js';
+import { listAfterArtistLookup } from '../lastfm-tag-policy.js';
 import { reportProgress } from '../tagger-progress.js';
 import { mapPool, memoizeByKey } from '../../util/async-pool.js';
 import { logEvent } from './log.js';
@@ -75,10 +76,15 @@ export async function phaseEnrich(
     // list still gets the artist's, as it would with track tags off. The pass can
     // end short of it, this write marks it enriched so no later run fills it, and
     // a never-play rule on the act would miss it. The pass adds to what it finds.
-    let lastfmTags: string[] | null = trackTagsOn ? t.lastfmTags : null;
-    if (lastfmEnabled && t.artist && !lastfmTags?.length) {
+    // With track tags off the artist is asked every time, and only tags replace
+    // the list (listAfterArtistLookup, Retag's rule too): an outage, an empty
+    // answer or Last.fm tags off leave it as it was (#2295).
+    let lastfmTags: string[] | null = t.lastfmTags;
+    let fetchedTags = false;
+    if (lastfmEnabled && t.artist && (!trackTagsOn || !lastfmTags?.length)) {
       const tags = await artistTags(t.artist);
-      if (tags.length) lastfmTags = tags;
+      fetchedTags = tags.length > 0;
+      lastfmTags = listAfterArtistLookup(lastfmTags, tags);
     }
 
     let lyricExcerpt: string | null = null;
@@ -93,7 +99,7 @@ export async function phaseEnrich(
 
     db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
     enrichedTracks += 1;
-    if (!trackTagsOn && lastfmTags && lastfmTags.length) enrichedTags += 1;
+    if (!trackTagsOn && fetchedTags) enrichedTags += 1;
     if (lyricExcerpt) enrichedLyrics += 1;
     if (enrichedTracks % 100 === 0) {
       console.log(
