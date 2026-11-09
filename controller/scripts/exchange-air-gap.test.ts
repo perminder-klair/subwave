@@ -3,7 +3,8 @@
 // non-empty, so writing each line only after the previous one's playback hold
 // let the queue drain between speakers: the music ramped up and back down, an
 // audible pump through every exchange. Preloading the next handoff keeps the
-// queue busy — the gap between speakers is then just the silent lead-in.
+// queue busy, and continuation lines carry subwave_no_leadin so the mixer skips
+// their silent pre-roll — the gap between speakers is just the clips' padding.
 //
 // Run: npm test -- exchange-air-gap
 
@@ -72,11 +73,12 @@ test('the next line is handed over before the current one finishes', async t => 
   assert.ok(existsSync(config.liquidsoap.sayFile), 'the first line reaches say.txt');
   const firstUri = readFileSync(config.liquidsoap.sayFile, 'utf8');
   assert.match(firstUri, /first\.wav/);
+  assert.doesNotMatch(firstUri, /subwave_no_leadin/, 'the opening line keeps its lead-in: the duck starts up');
   assert.equal(queued.length, 2, 'every line is announced before any of it airs');
   assert.equal(
     queued[1].estimatedAirInMs - queued[0].estimatedAirInMs,
-    1000 + 800,
-    'the second forecast follows the first clip plus its lead-in',
+    1000,
+    'the second forecast follows the first clip alone — no lead-in between them',
   );
 
   // poll_voice consumes the file. The next line must land straight away: the
@@ -89,6 +91,7 @@ test('the next line is handed over before the current one finishes', async t => 
   const secondUri = readFileSync(config.liquidsoap.sayFile, 'utf8');
   assert.match(secondUri, /second\.wav/);
   assert.match(secondUri, /liq_amplify="-10 dB"/, 'the second speaker keeps their gain');
+  assert.match(secondUri, /subwave_no_leadin="true"/, 'a continuation line tells the mixer to skip the dead-air lead-in');
   assert.notEqual(secondUri, firstUri, 'each line carries its own voice id');
 
   const handoffs = await exchange;

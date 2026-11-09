@@ -241,20 +241,22 @@ interface AirExchangeOptions {
 // mixer's request queue therefore never empties, so smooth_add holds the music
 // ducked for the whole conversation; written any later it drains between every
 // line and the music ramps up and back down — the audible pump this exists to
-// remove. The gap between two speakers is then just the silent lead-in every
-// clip already gets (VOICE_LEADIN_MS), not a duck-out, poll and duck-in.
+// remove. Continuation lines also skip the silent lead-in (subwave_no_leadin):
+// it exists only to complete the duck ramp before the FIRST word, and theirs is
+// already down, so the gap between two speakers is just the clips' own padding.
 export async function airVoiceExchange(
   path: string,
   clips: readonly ExchangeClip[],
   { beforeWrite = () => true, onFirstWritten, onWriteError }: AirExchangeOptions = {},
 ): Promise<(VoiceHandoff | null)[]> {
-  const prepared = clips.map(clip => {
+  const prepared = clips.map((clip, index) => {
     const clipMs = clipDurationMs(clip.wavPath, clip.text);
-    const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + VOICE_LEADIN_MS + VOICE_TAIL_MS);
+    const leadinMs = index === 0 ? VOICE_LEADIN_MS : 0;
+    const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + leadinMs + VOICE_TAIL_MS);
     const voiceId = mintVoiceId();
     // Add this take's trim only while the operator has levelling enabled.
     const gain = voiceLevellingEnabled() ? levelledGainDb(clip.wavPath, clip.gainDb) : clip.gainDb;
-    return { clip, clipMs, holdMs, voiceId, uri: voiceUri(clip.wavPath, gain, voiceId) };
+    return { clip, clipMs, holdMs, voiceId, uri: voiceUri(clip.wavPath, gain, voiceId, null, false, undefined, index > 0) };
   });
   const totalHoldMs = prepared.reduce((sum, p) => sum + p.holdMs, 0);
   const now = Date.now();
@@ -268,8 +270,8 @@ export async function airVoiceExchange(
   _chainFreeAt = now + waitMs + totalHoldMs;
   _voiceHolders++;
   // Every line is announced up front on its own forecast. Preceding lines are
-  // queued rather than airing, and each one ends a lead-in before the next
-  // starts — no duck tail between them, because the queue never drains.
+  // queued rather than airing, and only the first carries a lead-in — the rest
+  // start the moment the previous clip ends, because the queue never drains.
   let precedingMs = 0;
   for (const p of prepared) {
     if (p.clip.onQueued) {
@@ -280,7 +282,7 @@ export async function airVoiceExchange(
         });
       } catch { /* ignore */ }
     }
-    precedingMs += p.clipMs + VOICE_LEADIN_MS;
+    precedingMs += p.clipMs;
   }
   const handoffs: (VoiceHandoff | null)[] = prepared.map(() => null);
   const turn = _voiceChain
@@ -448,7 +450,8 @@ async function waitForJingleClear() {
 
 // Annotate every voice clip with liq_amplify for gain and subwave_voice for marker matching.
 // Leave the separate silent lead-in unannotated so it cannot produce the clip's air marker.
-// #1382.
+// subwave_no_leadin tells the mixer to skip that lead-in: the clip queues behind another
+// whose duck is already down, so the pre-roll would be dead air. #1382.
 export function voiceUri(
   wavPath: string,
   gainDb: number,
@@ -456,8 +459,10 @@ export function voiceUri(
   pauseDeliveryId: string | null = null,
   jingleOverlay = false,
   jingleOverlayTrackAt?: number,
+  noLeadin = false,
 ): string {
   const meta = [`subwave_voice="${voiceId}"`];
+  if (noLeadin) meta.push('subwave_no_leadin="true"');
   if (jingleOverlay) meta.push('subwave_jingle_overlay="true"');
   if (jingleOverlayTrackAt != null) meta.push(`subwave_overlay_track_at="${Math.floor(jingleOverlayTrackAt / 1000)}"`);
   if (pauseDeliveryId) meta.push(`subwave_pause_delivery="${pauseDeliveryId}"`);
