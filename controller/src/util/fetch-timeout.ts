@@ -21,6 +21,13 @@
 // would run it twice. subsonic.ts's boundedFetch uses the same window
 // constant but its own rule (any fast transport failure, retried once after a
 // backoff); the two loops are deliberately separate for now.
+//
+// A resend is logged, at most once per STALE_SOCKET_WARN_EVERY_MS with a count
+// of the ones held back, naming the origin (never the path or query, which can
+// carry a token) and the socket error, so a recurring socket problem shows in
+// the log instead of hiding behind a request that eventually answers.
+
+import { warnLimiter } from './warn-limiter.js';
 
 export interface FetchTimeoutInit extends RequestInit {
   timeoutMs: number;
@@ -36,6 +43,22 @@ export const STALE_SOCKET_ATTEMPTS = 3;
 export const STALE_SOCKET_RETRY_MS = 2_000;
 
 const STALE_SOCKET_CODES = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE']);
+
+export const STALE_SOCKET_WARN_EVERY_MS = 60_000;
+const staleSocketWarnings = warnLimiter(STALE_SOCKET_WARN_EVERY_MS);
+
+/** Test hook: forget the last resend warning. */
+export function _resetStaleSocketWarningsForTests(): void {
+  staleSocketWarnings.reset();
+}
+
+function originOf(input: string | URL | Request): string {
+  try {
+    return new URL(input instanceof Request ? input.url : String(input)).origin;
+  } catch {
+    return 'the server';
+  }
+}
 
 /** A fetch() that failed on a connection the other side closed, before a response. */
 export function isStaleSocketError(err: unknown): boolean {
@@ -77,6 +100,9 @@ export async function fetchWithTimeout(
           || !isStaleSocketError(err)
           || Date.now() - started >= STALE_SOCKET_RETRY_MS
         ) throw err;
+        staleSocketWarnings.warn(
+          `[fetch] resending a request to ${originOf(input)} that died on a stale keep-alive socket: ${describeFetchError(err)}`,
+        );
       }
     }
   } catch (err) {

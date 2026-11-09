@@ -12,6 +12,7 @@ import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
 import { describeFetchError, fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
+import { warnLimiter } from '../util/warn-limiter.js';
 
 // A structural span over the track, in ms. Contiguous over the analysed
 // window; the first is the intro/leading section.
@@ -762,25 +763,15 @@ export function isTimeoutError(err: unknown): boolean {
 // name the cause at most once per EMBED_WARN_EVERY_MS, then say how many more
 // failed in between, so the log shows the outage without one line per track.
 export const EMBED_WARN_EVERY_MS = 60_000;
-let embedWarnAt = -Infinity;
-let embedWarnSuppressed = 0;
+const embedWarnings = warnLimiter(EMBED_WARN_EVERY_MS);
 
 export function warnEmbedFailure(cause: string, now: number = Date.now()): boolean {
-  if (now - embedWarnAt < EMBED_WARN_EVERY_MS) {
-    embedWarnSuppressed++;
-    return false;
-  }
-  const more = embedWarnSuppressed ? ` (${embedWarnSuppressed} more since the last warning)` : '';
-  console.warn(`[analyzer] text embedding failed: ${cause}${more}`);
-  embedWarnAt = now;
-  embedWarnSuppressed = 0;
-  return true;
+  return embedWarnings.warn(`[analyzer] text embedding failed: ${cause}`, now);
 }
 
 /** Test hook: forget the last warning. */
 export function _resetEmbedWarningsForTests(): void {
-  embedWarnAt = -Infinity;
-  embedWarnSuppressed = 0;
+  embedWarnings.reset();
 }
 
 // Embed texts through the CLAP text tower — 512-d L2-normalised vectors in the
