@@ -49,7 +49,8 @@ import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
 import { scheduledTalkAir, talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
-import { talkTickPlan, type TalkKind, type TalkPlan } from './talk-scheduler.js';
+import { mayReplacePendingTalk, type PendingTalk } from './queue/kinds.js';
+import { talkTickPlan, type TalkAir, type TalkKind, type TalkPlan } from './talk-scheduler.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
@@ -1178,7 +1179,11 @@ async function talkTick() {
     plans = talkTickPlan({
       now,
       lastTalkBreakAt: queue.getLastTalkBreakAt(),
-      pendingTalk: queue.pendingVoiceTalk(),
+      // A cron fire generating for the boundary has no row and so no
+      // _pendingVoice yet; count it as pending speech, or this tick's rows fire
+      // into a boundary the cron is about to take and the queue declines them.
+      pendingTalk: queue.pendingVoiceTalk()
+        ?? (skillCronTalkInFlight ? { kind: skillCronTalkInFlight, queuedAt: Date.now() } : null),
       eligible: kind => talkEligible(kind, now, rolled),
       externalSlot: kind => (kind === 'programme' ? programme.dueBeat(now) : null),
       // Read once per tick, not per row: the pending-clip hold is only coherent
@@ -1358,6 +1363,14 @@ async function scheduledBackupTick() {
 // Rebuilt on every syncSkillCrons() call.
 const skillCronTasks = new Map<string, ScheduledTask>();
 
+// One cron fire at a time once fires are placed between tracks, and the skill
+// that owns it. A cron timer has no row in the slot table, so nothing in the
+// planner makes two of them take turns for the one boundary; this does. A fire
+// checks and sets it in one synchronous step before generation, and talkTick
+// lifts it into the same hold a rendered clip gets, so a row is not fired into
+// a boundary the cron is about to take.
+let skillCronTalkInFlight: string | null = null;
+
 // Gates injected rather than read live so the rule can be pinned
 // (scripts/skill-cron-gates.test.ts).
 export interface SkillCronGates {
@@ -1380,6 +1393,27 @@ export function skillCronStandDownReason(gates: SkillCronGates): string | null {
 
 export function skillCronAllowed(gates: SkillCronGates): boolean {
   return skillCronStandDownReason(gates) === null;
+}
+
+// Why a cron fire must stand down BEFORE generating once its speech is placed
+// between tracks, or null when it may take the boundary. A cron timer has no
+// row in the slot table, so the planner's pending-clip hold does not cover it:
+// without this, a fire that finishes while a rendered segment waits drops that
+// segment in holdForNextTrack (#2259). State is injected rather than read live
+// so the rule can be pinned here, the same split as the gates above.
+export function skillCronTalkStandDownReason(
+  kind: string,
+  air: TalkAir,
+  generating: string | null,
+  pending: PendingTalk | null,
+  nowMs: number,
+): string | null {
+  if (air !== 'next-track') return null;
+  if (generating) return `skill "${generating}" is generating for the boundary`;
+  if (pending && !mayReplacePendingTalk(kind, pending, nowMs)) {
+    return `${pending.kind} is already waiting for the next track boundary`;
+  }
+  return null;
 }
 
 export function skillCronEligibility(cap: any, enabled: Record<string, boolean | undefined>, host: any, guests: any[], preparationSkill: string | null = null) {
@@ -1408,37 +1442,58 @@ export function syncSkillCrons() {
     }
     const tz = getStationTimezone();
     const task = cron.schedule(expr, async () => {
-      const gated = skillCronStandDownReason({
-        voiceAllowed: autoVoiceAllowed(),      // station voice is off — music only
-        programmeOnAir: programme.onAir(),      // a programme episode owns its talk moments
-        djCallsAllowed: djCallsAllowed(),        // nobody listening
-        optionalSegmentsAllowed: optionalSegmentsAllowed(), // over the daily token budget
-      });
-      if (gated) {
-        queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${gated}`);
-        return;
-      }
-      // Same enabled + persona-allowlist rules the autonomous director applies,
-      // logged rather than silent — a stood-down cron leaves no other trace.
-      const now = new Date();
-      const { host, guests } = settings.getOnAirRoster(now);
-      const eligible = skillCronEligibility(
-        cap,
-        settings.get().skills?.enabled || {},
-        host,
-        guests,
-        preparationSkillAt(await getFullContext()),
-      );
-      if (!eligible.allowed) {
-        queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
-        return;
-      }
+      // Placement is read once, at the fire: the scope announce() will see and
+      // the boundary claim below must agree.
+      const air = scheduledTalkAir();
+      let claimedBoundary = false;
       try {
+        const gated = skillCronStandDownReason({
+          voiceAllowed: autoVoiceAllowed(),      // station voice is off — music only
+          programmeOnAir: programme.onAir(),      // a programme episode owns its talk moments
+          djCallsAllowed: djCallsAllowed(),        // nobody listening
+          optionalSegmentsAllowed: optionalSegmentsAllowed(), // over the daily token budget
+        });
+        if (gated) {
+          queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${gated}`);
+          return;
+        }
+        // Same enabled + persona-allowlist rules the autonomous director applies,
+        // logged rather than silent — a stood-down cron leaves no other trace.
+        const now = new Date();
+        const { host, guests } = settings.getOnAirRoster(now);
+        const eligible = skillCronEligibility(
+          cap,
+          settings.get().skills?.enabled || {},
+          host,
+          guests,
+          preparationSkillAt(await getFullContext()),
+        );
+        if (!eligible.allowed) {
+          queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
+          return;
+        }
+        // Between-tracks placement puts this fire in competition with the slot
+        // table for the one boundary, and a cron timer has no row to be held
+        // by. Claim it — synchronously, immediately before generation — so a
+        // second fire stands down instead of rendering a clip the queue would
+        // decline, and so talkTick can hold its rows while this one generates.
+        // Off, cron keeps its old immediate path and its old concurrency.
+        if (air === 'next-track') {
+          const refusal = skillCronTalkStandDownReason(
+            cap.kind, air, skillCronTalkInFlight, queue.pendingVoiceTalk(), Date.now(),
+          );
+          if (refusal) {
+            queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${refusal}`);
+            return;
+          }
+          skillCronTalkInFlight = cap.kind;
+          claimedBoundary = true;
+        }
         // A cron timer fires outside the slot table, so it must enter the
         // placement scope itself: announce()/announceExchange() read it, and
         // without it a cron skill airs immediately even with
         // djTalkOnlyBetweenTracks on (#2259).
-        await withTalkAir(scheduledTalkAir(), () =>
+        await withTalkAir(air, () =>
           withTrace({ kind: 'segment' }, async () => {
             const ctx = await prepareEpisodeContext(await getFullContext());
             await runCapability(cap.kind, ctx, { automaticHostSpeech: true });
@@ -1446,6 +1501,8 @@ export function syncSkillCrons() {
         );
       } catch (err: any) {
         queue.log('error', `[skills] cron "${expr}" skill "${cap.kind}" failed: ${err.message}`);
+      } finally {
+        if (claimedBoundary) skillCronTalkInFlight = null;
       }
     }, { timezone: tz });
     skillCronTasks.set(cap.kind, task);

@@ -24,6 +24,16 @@ export function pendingVoiceStale(queuedAt: number, nowMs: number): boolean {
 export function pendingVoiceValidForMs(queuedAt: number, nowMs: number): number {
   return Math.max(0, PENDING_VOICE_MAX_AGE_MS - Math.max(0, nowMs - queuedAt));
 }
+// With djTalkOnlyBetweenTracks on, one rendered segment owns the boundary and
+// the slot planner holds every row while it waits. A cron fire has no row, so
+// it arrives without that hold. This is what stops it dropping a clip already
+// paid for in tokens and TTS: only a handoff takes the boundary from a waiting
+// segment (it names the show, and a sign-off or greeting in front of an ident
+// is the exchange the mic-pass exists for), and a clip past its age limit is
+// dead anyway.
+export function mayReplacePendingTalk(incomingKind: string, pending: PendingTalk, nowMs: number): boolean {
+  return incomingKind === 'handoff' || pendingVoiceStale(pending.queuedAt, nowMs);
+}
 // Kinds whose recap entries are de-duped. Skills are added at load time too.
 // 'handoff' is deliberately NOT deduped — its two lines (sign-off + greeting)
 // are distinct utterances by different voices.
