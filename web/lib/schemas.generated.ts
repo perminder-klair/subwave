@@ -403,6 +403,42 @@ export function hostedPersonaEngines(defaultEngine: unknown): string[] {
   return ['inherit', 'kokoro', 'piper', ...(defaultEngine === 'cloud' ? ['cloud'] : [])];
 }
 
+// ─── from controller/src/schemas/hotline.ts ──────────────────────────────
+
+// Hotline request bodies (docs/plans/hotline.md). Pure zod: mirrored to
+// web/lib/schemas.generated.ts by `npm run gen:schemas`.
+
+// A device's own random id, minted and kept by the client. It can be cleared or
+// forged, so it is paired with the client IP wherever it gates (bans, the
+// per-device limit), and a ban is best-effort.
+export const HOTLINE_DEVICE_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
+
+// The two short fields a Dedication is captured as. The on-air line is written
+// by the normal request-intro path from these, never read out as typed.
+export const HOTLINE_DEDICATION_TO_MAX = 40;
+export const HOTLINE_DEDICATION_NOTE_MAX = 120;
+
+export const hotlineCallStartSchema = z.object({
+  deviceId: z.string().regex(HOTLINE_DEVICE_ID_PATTERN, 'deviceId must be 8-64 letters, digits, - or _'),
+  // The name the listener already uses for typed requests. Optional: with none,
+  // the DJ asks who's calling.
+  // Bounded like a typed request's name (REQUEST_NAME_MAX, 40); the route
+  // cleans it with cleanRequesterName.
+  name: z.string().max(40).optional().default(''),
+});
+
+// One relayed tool call. `arguments` is whatever the provider handed the client:
+// a JSON string (OpenAI Realtime) or an object.
+export const hotlineToolCallSchema = z.object({
+  name: z.string().min(1).max(64),
+  arguments: z.union([z.string().max(4000), z.record(z.string(), z.unknown())]).optional(),
+});
+
+// An operator's Hotline ban, made from a recent Call's row.
+export const hotlineBanSchema = z.object({
+  callId: z.string().min(1).max(64),
+});
+
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 
 // Shared imaging schemas — sfx, beds, jingles and clone voices, one contract in
@@ -4055,6 +4091,38 @@ export const requestsPatchSchema = settingsBlockOf({
   perIpHourlyCap: settingsRequestsInt({ min: 1, max: 100 }),
 });
 
+/**
+ * `hotline` — the station-wide Hotline settings (docs/plans/hotline.md): which
+ * realtime provider answers, its model and voice, and the limits on Calls. A
+ * show opens the Hotline with its own `hotline` toggle; these only say how it
+ * behaves once open. Same "usable or absent" posture as `requests`: an
+ * unusable field is dropped and update() keeps the stored value.
+ */
+export const HOTLINE_PROVIDERS = ['openai'] as const;
+export const HOTLINE_MODEL_MAX = 80;
+export const HOTLINE_VOICE_MAX = 40;
+
+function settingsHotlineString(max: number) {
+  return z.unknown().transform((raw) => {
+    if (typeof raw !== 'string') return undefined;
+    const v = raw.trim();
+    return v.length <= max && !/[\s]/.test(v) ? v : undefined;
+  });
+}
+
+export const hotlinePatchSchema = settingsBlockOf({
+  provider: z.unknown().transform((raw) =>
+    (HOTLINE_PROVIDERS as readonly string[]).includes(raw as string) ? (raw as (typeof HOTLINE_PROVIDERS)[number]) : undefined),
+  model: settingsHotlineString(HOTLINE_MODEL_MAX),
+  // '' = match the on-air persona's voice where the provider has it, else the
+  // provider's default.
+  voice: settingsHotlineString(HOTLINE_VOICE_MAX),
+  maxCallSec: settingsRequestsInt({ min: 60, max: 900 }),
+  wrapUpSec: settingsRequestsInt({ min: 30, max: 870 }),
+  dailyMinutes: settingsRequestsInt({ min: 1, max: 1440 }),
+  callsPerDevicePerShow: settingsRequestsInt({ min: 1, max: 10 }),
+});
+
 // --- the mood family -------------------------------------------------------
 
 export const SETTINGS_MOODS_LIMIT = 40;
@@ -4822,6 +4890,10 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // Long skill segments may take a genuine music-free break. This is a
       // show-level opt-in: unscheduled/autonomous programming keeps ducking.
       pauseTalk: showBool(),
+      // Opens the Hotline (a listener's private voice line to the DJ) while this
+      // show is on air. Off by default; the station-wide `settings.hotline`
+      // holds the provider and limits (docs/plans/hotline.md).
+      hotline: showBool(),
       programme: showBool(),
       // Free text, resolved against the live skill catalog at air time.
       segmentSkill: z.preprocess(

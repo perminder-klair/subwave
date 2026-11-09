@@ -262,6 +262,10 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // Long skill segments may take a genuine music-free break. This is a
       // show-level opt-in: unscheduled/autonomous programming keeps ducking.
       pauseTalk: showBool(),
+      // Opens the Hotline (a listener's private voice line to the DJ) while this
+      // show is on air. Off by default; the station-wide `settings.hotline`
+      // holds the provider and limits (docs/plans/hotline.md).
+      hotline: showBool(),
       programme: showBool(),
       // Free text, resolved against the live skill catalog at air time.
       segmentSkill: z.preprocess(

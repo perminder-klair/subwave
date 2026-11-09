@@ -7,7 +7,7 @@ export function cors(req, res, next) {
   // (middleware/station-auth.ts); unlisted, a cross-origin player holding the
   // password had every such read blocked by its own browser. X-Subwave-Console
   // is the same story for the admin console (middleware/auth.ts).
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Station-Auth, X-Subwave-Console');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Station-Auth, X-Subwave-Console, X-Hotline-Token');
   // Readable cross-origin so a client can wait as long as a 429/503 asked.
   res.setHeader('Access-Control-Expose-Headers', 'Retry-After');
   if (req.method === 'OPTIONS') return res.sendStatus(200);

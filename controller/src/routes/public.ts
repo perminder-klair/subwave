@@ -1,5 +1,6 @@
 // Public, unauthenticated endpoints: liveness, now-playing, station/DJ info,
 // queue state, the cover-art and avatar proxies, and the weekly schedule.
+import { status as hotlineStatus } from '../hotline/line.js';
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { stat, readFile } from 'node:fs/promises';
@@ -482,6 +483,9 @@ router.get('/state', (req, res) => {
       skin: s?.ui?.skin || 'classic',
       tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
     },
+    // The Hotline's line: closed | open | busy, and nothing else (no provider,
+    // limits or Caller). The player shows its call button from this.
+    hotline: { state: hotlineStatus().state },
     // Whether a skin offers the Lyrics panel; GET /lyrics/current refuses when off.
     lyrics: { enabled: s?.lyrics?.enabled === true },
     // For rendering timestamps in station-local time (#418).
