@@ -16,8 +16,14 @@
 //
 // Admission returns a reason code, never copy: the typed route answers a
 // listener with its own lines, and a Call tells the DJ, who says it in persona.
+//
+// Every function takes the queue as a parameter and this module imports it as
+// a type only, like the agent's request path: dj-agent.ts imports this, and a
+// static import of queue.js here would load the queue whenever dj-agent loads,
+// ahead of the module mocks scripts/handoff-release-wiring.test.ts installs.
+type Queue = typeof QueueSingleton;
 
-import { queue } from './queue.js';
+import type { queue as QueueSingleton } from './queue.js';
 import * as settings from '../settings.js';
 import { heldBackFromShow } from '../music/explicit-policy.js';
 import { stillInFlight } from '../util/request-guard.js';
@@ -60,6 +66,18 @@ export function noteRequestFrom(ip: string, entry: any): void {
   lastByIp.set(ip, entry);
 }
 
+// Names a listener may not sign a request with: the booth's own roles, the
+// station and every persona on the roster (cleanRequesterName matches them on a
+// skeleton, so lookalikes are caught too).
+export function reservedRequesterNames(): string[] {
+  const s = settings.get() as any;
+  return [
+    'dj', 'admin', 'host', 'mod', 'moderator',
+    s?.station || '',
+    ...(Array.isArray(s?.personas) ? s.personas.map((p: any) => p?.name || '') : []),
+  ];
+}
+
 export type AdmissionRefusal = 'cooldown' | 'global-cap' | 'one-pending' | 'queue-full';
 export type Admission = { ok: true } | { ok: false; reason: AdmissionRefusal; retryAfter: number };
 
@@ -69,7 +87,7 @@ export type Admission = { ok: true } | { ok: false; reason: AdmissionRefusal; re
 // the station-wide cap to zero on rejections alone. The per-IP cooldown is
 // spent by checkRateLimit on every attempt, which is the backpressure on
 // rejected retries.
-export function admitListenerRequest(ip: string): Admission {
+export function admitListenerRequest(queue: Queue, ip: string): Admission {
   const cfg = (settings.get() as any)?.requests || {};
   // Janitor runs BEFORE the gates: the one-pending hold refuses without
   // reaching the rest, so pruning later held an IP past the TTL.
@@ -103,7 +121,7 @@ export function admitListenerRequest(ip: string): Admission {
 // the show on air now; an operator's own push does not come through here. Logs
 // the refusal so the booth log says why; the caller declines with copy that
 // does not leak the reason to a typed request.
-export function heldBackForShow(track: any): boolean {
+export function heldBackForShow(queue: Queue, track: any): boolean {
   const show = settings.resolveActiveShow();
   if (!heldBackFromShow(track, show)) return false;
   queue.log('blocked', `${track?.title} — ${track?.artist} (request held back: tagged explicit, clean show "${show?.name}")`);
@@ -113,7 +131,7 @@ export function heldBackForShow(track: any): boolean {
 // Repeat cooldown (B6): a track played within `requests.repeatCooldownMin` is
 // refused, so a listener can't put the song still ringing in everyone's ears
 // straight back on.
-export function onRepeatCooldown(trackId: string | null | undefined): boolean {
+export function onRepeatCooldown(queue: Queue, trackId: string | null | undefined): boolean {
   const cdMin = Number((settings.get() as any)?.requests?.repeatCooldownMin ?? 120);
   return !!trackId && cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(trackId);
 }
@@ -128,7 +146,7 @@ export type ListenerPush = {
 // Push a listener's track. `queue.push()` carries the never-play blocklist
 // (-2) and the dedup of a track a concurrent request already queued (-1, #619);
 // this names those outcomes once for every caller.
-export async function pushListenerRequest(args: Parameters<typeof queue.push>[0]): Promise<ListenerPush> {
+export async function pushListenerRequest(queue: Queue, args: Parameters<Queue['push']>[0]): Promise<ListenerPush> {
   let introDropped = false;
   const pos = await queue.push({
     ...args,

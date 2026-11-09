@@ -2036,7 +2036,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // the caller nothing was queued: it returns a track (the one it declined,
     // so the ack and the operator log can name it), and without the flag the
     // route reported a queue position for a play that will never happen.
-    if (onRepeatCooldown(song.id)) {
+    if (onRepeatCooldown(queue, song.id)) {
       const cdAck = queue.cooldownAck(song.id, song.title);
       session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: song.id, requester, toolCalls } });
       return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: [claimGuard, spacingGuard].filter(Boolean).join('+') || null, refused: 'cooldown' };
@@ -2083,7 +2083,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // in the intro, after misnaming the track) — join rather than let one
     // verdict hide another.
     const guardVerdict = [claimGuard, spacingGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
-    const pushed = await pushListenerRequest({
+    const pushed = await pushListenerRequest(queue, {
       track: trackFields(song),
       requestedBy: requester,
       intent: 'listener request',

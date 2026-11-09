@@ -23,7 +23,7 @@ import {
 } from '../util/request-guard.js';
 import { clientIp, REQUESTS_DISABLED } from '../middleware/ratelimit.js';
 import {
-  requests, admitListenerRequest, noteRequestFrom, heldBackForShow, pushListenerRequest,
+  requests, admitListenerRequest, noteRequestFrom, heldBackForShow, pushListenerRequest, reservedRequesterNames,
 } from '../broadcast/listener-request.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
@@ -266,7 +266,7 @@ async function resolveRequest(entry) {
     if (!pick) {
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
-    if (heldBackForShow(pick)) {
+    if (heldBackForShow(queue, pick)) {
       entry.pick = pick;
       entry.pickSource = `${entry.pickSource}:explicit`;
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
@@ -293,7 +293,7 @@ async function resolveRequest(entry) {
       queue.log('request-guard', `more-like-this intro echoed request text — ${generatedIntro.guard}`);
     }
     const introScript = generatedIntro.introScript;
-    const pushed = await pushListenerRequest({
+    const pushed = await pushListenerRequest(queue, {
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
       // Voice it as whoever wrote it: render and air happen later and would
@@ -522,7 +522,7 @@ async function resolveRequest(entry) {
     session.appendTurn({ role: 'dj', kind: 'request', text: ack, meta: { trackId: pick.id, requester } });
     return resolved({ ack, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
-  if (heldBackForShow(pick)) {
+  if (heldBackForShow(queue, pick)) {
     entry.pick = pick;
     entry.outcome = 'no-match';
     entry.pickSource = `${pickSource}:explicit`;
@@ -563,7 +563,7 @@ async function resolveRequest(entry) {
   const introScript = generatedIntro.introScript;
 
   // 4. Enqueue. push() dedups a track a concurrent request already queued (#619).
-  const pushed = await pushListenerRequest({
+  const pushed = await pushListenerRequest(queue, {
     track: pick,
     requestedBy: requester,
     intent: matched.intent,
@@ -648,16 +648,10 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
         : 'Empty request',
     });
   }
-  const s = settings.get() as any;
-  const reservedNames = [
-    'dj', 'admin', 'host', 'mod', 'moderator',
-    s?.station || '',
-    ...(Array.isArray(s?.personas) ? s.personas.map((p: any) => p?.name || '') : []),
-  ];
-  const requester = cleanRequesterName(rawName, reservedNames);
+  const requester = cleanRequesterName(rawName, reservedRequesterNames());
 
   const ip = clientIp(req);
-  const admission = admitListenerRequest(ip);
+  const admission = admitListenerRequest(queue, ip);
   if (!admission.ok) {
     res.setHeader('Retry-After', String(admission.retryAfter));
     return res.status(429).json({
