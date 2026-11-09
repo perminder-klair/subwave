@@ -4,10 +4,10 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { EMBED_WARN_EVERY_MS, resetEmbedWarnings, warnEmbedFailure } from '../src/music/analyzer.js';
+import { EMBED_WARN_EVERY_MS, _resetEmbedWarningsForTests, warnEmbedFailure } from '../src/music/analyzer.js';
 
 test('an outage logs one warning per window, then counts the ones it held back', (t) => {
-  resetEmbedWarnings();
+  _resetEmbedWarningsForTests();
   const lines: string[] = [];
   t.mock.method(console, 'warn', (msg: string) => { lines.push(msg); });
   const t0 = 1_000_000;
@@ -18,15 +18,15 @@ test('an outage logs one warning per window, then counts the ones it held back',
   assert.equal(lines.length, 2);
   assert.match(lines[0], /UND_ERR_SOCKET/);
   assert.match(lines[1], /ECONNREFUSED\) \(40 more since the last warning\)$/);
-  resetEmbedWarnings();
+  _resetEmbedWarningsForTests();
 });
 
 test('a single failure after a quiet spell has no count', (t) => {
-  resetEmbedWarnings();
+  _resetEmbedWarningsForTests();
   const lines: string[] = [];
   t.mock.method(console, 'warn', (msg: string) => { lines.push(msg); });
   warnEmbedFailure('fetch failed', 0);
   warnEmbedFailure('fetch failed', EMBED_WARN_EVERY_MS * 5);
   assert.deepEqual(lines, ['[analyzer] text embedding failed: fetch failed', '[analyzer] text embedding failed: fetch failed']);
-  resetEmbedWarnings();
+  _resetEmbedWarningsForTests();
 });

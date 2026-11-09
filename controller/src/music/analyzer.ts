@@ -778,7 +778,7 @@ export function warnEmbedFailure(cause: string, now: number = Date.now()): boole
 }
 
 /** Test hook: forget the last warning. */
-export function resetEmbedWarnings(): void {
+export function _resetEmbedWarningsForTests(): void {
   embedWarnAt = -Infinity;
   embedWarnSuppressed = 0;
 }
@@ -1174,7 +1174,7 @@ async function facetRequest(
       body: JSON.stringify(body),
       timeoutMs,
       bodyDeadline: true,
-    retryStaleSocket: true,
+      retryStaleSocket: true,
     });
     if (!res.ok) return sidecarFailure(res);
     msg = (await res.json()) as WorkerMessage;
