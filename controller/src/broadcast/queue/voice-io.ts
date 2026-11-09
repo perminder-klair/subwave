@@ -9,7 +9,7 @@ import { config } from '../../config.js';
 import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
 import { sleep, type Interposed } from './pure.js';
-import { awaitVoiceAir } from './voice-marker.js';
+import { awaitVoiceAir, VOICE_AIR_TIMEOUT_MS } from './voice-marker.js';
 import { mpegLayer3Frame, mp3FrameOffset } from '../../audio/mp3-frames.js';
 import { levelledGainDb, voiceLevellingEnabled } from '../../audio/clip-level.js';
 
@@ -210,6 +210,110 @@ export async function airVoice(
     .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
   if (!await turn) return null;
   return { voiceId, clipMs, aired };
+}
+
+// One line of a prepared exchange: its own clip, gain and early warning, so
+// batching cannot merge two speakers into one indistinguishable segment.
+export interface ExchangeClip {
+  wavPath: string;
+  text: string;
+  gainDb: number;
+  onQueued?: (q: QueuedVoice) => void;
+}
+
+interface AirExchangeOptions {
+  // Consulted before each line, exactly as airVoice's is: a claimed show
+  // boundary stops the rest of the conversation.
+  beforeWrite?: () => boolean;
+  // Called once, when the opening line's handoff lands (not when the whole
+  // conversation is written) — the deferred path starts its stinger here.
+  onFirstWritten?: () => void;
+  // A write that throws stops the exchange at that line; the caller still gets
+  // the handoffs that did land, so it can log what aired.
+  onWriteError?: (err: unknown, index: number) => void;
+}
+
+// Air a prepared multi-voice exchange back-to-back on one voice channel.
+//
+// Every line keeps its own clip, gain, id and air marker. The one difference
+// from N airVoice calls is WHEN each handoff is written: as soon as Liquidsoap
+// consumes the previous one, not when the previous clip finishes playing. The
+// mixer's request queue therefore never empties, so smooth_add holds the music
+// ducked for the whole conversation; written any later it drains between every
+// line and the music ramps up and back down — the audible pump this exists to
+// remove. The gap between two speakers is then just the silent lead-in every
+// clip already gets (VOICE_LEADIN_MS), not a duck-out, poll and duck-in.
+export async function airVoiceExchange(
+  path: string,
+  clips: readonly ExchangeClip[],
+  { beforeWrite = () => true, onFirstWritten, onWriteError }: AirExchangeOptions = {},
+): Promise<(VoiceHandoff | null)[]> {
+  const prepared = clips.map(clip => {
+    const clipMs = clipDurationMs(clip.wavPath, clip.text);
+    const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + VOICE_LEADIN_MS + VOICE_TAIL_MS);
+    const voiceId = mintVoiceId();
+    // Add this take's trim only while the operator has levelling enabled.
+    const gain = voiceLevellingEnabled() ? levelledGainDb(clip.wavPath, clip.gainDb) : clip.gainDb;
+    return { clip, clipMs, holdMs, voiceId, uri: voiceUri(clip.wavPath, gain, voiceId) };
+  });
+  const totalHoldMs = prepared.reduce((sum, p) => sum + p.holdMs, 0);
+  const now = Date.now();
+  const jingle = jingleWindow();
+  const { waitMs, estimatedAirInMs } = airInEstimate({
+    now, chainFreeAt: _chainFreeAt,
+    jingleClearAt: jingle.clearAtMs, jingleWindowMs: jingle.windowMs,
+  });
+  // One reservation for the whole conversation: the next caller waits for all
+  // of it, not for the first line's handoff.
+  _chainFreeAt = now + waitMs + totalHoldMs;
+  _voiceHolders++;
+  // Every line is announced up front on its own forecast. Preceding lines are
+  // queued rather than airing, and each one ends a lead-in before the next
+  // starts — no duck tail between them, because the queue never drains.
+  let precedingMs = 0;
+  for (const p of prepared) {
+    if (p.clip.onQueued) {
+      // A misbehaving consumer must not take the air path down with it.
+      try {
+        p.clip.onQueued({
+          voiceId: p.voiceId, clipMs: p.clipMs, estimatedAirInMs: estimatedAirInMs + precedingMs,
+        });
+      } catch { /* ignore */ }
+    }
+    precedingMs += p.clipMs + VOICE_LEADIN_MS;
+  }
+  const handoffs: (VoiceHandoff | null)[] = prepared.map(() => null);
+  const turn = _voiceChain
+    .catch(() => undefined)
+    .then(async () => {
+      await waitForJingleClear();
+      for (const [index, p] of prepared.entries()) {
+        if (!beforeWrite()) break;
+        let written: boolean;
+        try {
+          written = await writeHandoff(path, p.uri);
+        } catch (err) {
+          onWriteError?.(err, index);
+          break;
+        }
+        if (!written) break;
+        // Registered before this line can air: the mixer plays queued lines in
+        // order, so the last one may wait a whole conversation. A marker that
+        // still arrives early is buffered briefly by the reader.
+        const aired = awaitVoiceAir(p.voiceId, VOICE_AIR_TIMEOUT_MS + totalHoldMs);
+        handoffs[index] = { voiceId: p.voiceId, clipMs: p.clipMs, aired };
+        if (index === 0) {
+          try { onFirstWritten?.(); } catch { /* ignore */ }
+        }
+      }
+      return handoffs.some(Boolean);
+    });
+  // Same hold shape as airVoice, over the whole conversation: the shared lock
+  // stays until the last line's speech and its duck tail are done.
+  _voiceChain = turn.then(anyWritten => anyWritten ? sleep(totalHoldMs) : undefined)
+    .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
+  await turn;
+  return handoffs;
 }
 
 // Short, URI-safe, and unique per clip — the whole job is telling one segment's

@@ -160,6 +160,7 @@ import {
   HANDOFF_TO_AIR_MS,
   VOICE_HOLD_MAX_MS,
   airVoice,
+  airVoiceExchange,
   voiceBusy,
   measuredClipDurationMs,
   clipDurationMs,
@@ -470,6 +471,9 @@ class Queue {
   _writeHandoff = writeHandoff;
   _speak = speak;
   _airVoice = airVoice;
+  // An exchange airs as one batch so the mixer's voice queue never drains
+  // between speakers — see airVoiceExchange.
+  _airExchange = airVoiceExchange;
   _considerIdRotationRecovery = async (track: Track) => {
     // Dynamic import keeps queue <-> tagger ownership acyclic at module init.
     const { considerIdRotationRecovery } = await import('./tagger.js');
@@ -2809,12 +2813,15 @@ class Queue {
 
   // Air a short multi-voice exchange (guest-show banter): every line renders
   // to a WAV FIRST — all-or-nothing, so a TTS failure can't strand half a
-  // conversation on air — then the clips go to the serialized say.txt voice
-  // chain back-to-back (airVoice holds the shared lock for each clip's
-  // playback, so line N+1 lands as line N finishes; the same mechanism that
-  // makes the two-voice persona handoff play cleanly). Each line is booth-
-  // logged speaker-prefixed and appended to the session tagged with its
-  // speaker, so windowMessages names a guest's words as theirs.
+  // conversation on air — then the clips go out as ONE batch on the
+  // serialized say.txt voice chain. Each line keeps its own gain, speaker and
+  // air marker; what the batch changes is that line N+1's handoff is written
+  // as soon as line N is consumed, not when line N finishes playing. The
+  // mixer's voice queue therefore never empties, so its duck stays down for
+  // the whole conversation and the gap between two speakers is just the
+  // silent lead-in every clip gets. Written per line after the playback hold
+  // (the old shape), the queue drained between speakers: the music ramped
+  // up and back down, an audible pump through every exchange.
   async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter', { castNames = [] }: { castNames?: readonly string[] } = {}) {
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} exchange — the show handoff has already claimed this boundary`);
@@ -2853,24 +2860,50 @@ class Queue {
         { exchange: true, notBefore: kind === 'handoff' ? session.handoffBoundaryAt() : null },
       );
     }
-    for (const [index, l] of rendered.entries()) {
-      if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
-        this.log('scheduler', `Dropped ${kind} exchange — the show handoff completed while it rendered`);
-        return false;
-      }
-      try {
-        const seg: SegmentDesc = {
-          ...exchangeSegment(l, kind),
-          settlesHandoff: kind === 'handoff' ? index === rendered.length - 1 : undefined,
-        };
-        const handoff = await this._airVoice(config.liquidsoap.sayFile, l.wavPath, l.text, voiceGainDb(kind, l.persona), {
-          onQueued: q => this.onQueued(q, seg),
-        });
-        this.onSpoken(handoff, seg);
-      } catch (err) {
-        this.log('error', `Exchange line failed to air: ${(err as Error).message}`);
-      }
+    // The handoff can claim the boundary while the exchange is being rendered;
+    // this is the same check the per-line loop used to make before its first
+    // handoff. It runs again inside the batch for the lines that follow.
+    if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
+      this.log('scheduler', `Dropped ${kind} exchange — the show handoff completed while it rendered`);
+      return false;
     }
+    const segs: SegmentDesc[] = rendered.map((l, index) => ({
+      ...exchangeSegment(l, kind),
+      settlesHandoff: kind === 'handoff' ? index === rendered.length - 1 : undefined,
+    }));
+    let droppedForHandoff = false;
+    let handoffs: (VoiceHandoff | null)[];
+    try {
+      handoffs = await this._airExchange(
+        config.liquidsoap.sayFile,
+        rendered.map((l, index) => ({
+          wavPath: l.wavPath,
+          text: l.text,
+          gainDb: voiceGainDb(kind, l.persona),
+          onQueued: q => this.onQueued(q, segs[index]),
+        })),
+        {
+          // The handoff can claim the boundary while the exchange is being
+          // written out; the lines that already landed still air and log.
+          beforeWrite: () => {
+            if (!suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) return true;
+            if (!droppedForHandoff) {
+              droppedForHandoff = true;
+              this.log('scheduler', `Dropped ${kind} exchange — the show handoff completed while it rendered`);
+            }
+            return false;
+          },
+          onWriteError: err => this.log('error', `Exchange line failed to air: ${(err as Error).message}`),
+        },
+      );
+    } catch (err) {
+      this.log('error', `Exchange failed to air: ${(err as Error).message}`);
+      return false;
+    }
+    for (const [index, handoff] of handoffs.entries()) {
+      if (handoff) this.onSpoken(handoff, segs[index]);
+    }
+    if (droppedForHandoff) return false;
     // One webhook for the whole exchange — per-line events would read as five
     // separate segments to a Discord pipe.
     webhooks.notify('dj.say', {
@@ -3297,31 +3330,63 @@ class Queue {
     }
     const completions: Promise<boolean>[] = [];
     let sfxHanded = false;
-    for (const clip of clips) {
+    const airSfxOnce = () => {
+      if (sfxHanded || !p.sfx) return;
+      sfxHanded = true;
+      return this.playSfx(p.sfx, { underVoice: true });
+    };
+    // Deferred segments ride the INTRO file (light duck at a track boundary),
+    // whatever their kind — see announceAtNextTrack. An exchange line still
+    // carries its SPEAKER's attribution (exchangeSegment), which is what
+    // session.windowMessages() and prompt-memory key off; only the channel
+    // changes, because the channel is a fact about the boundary and not about
+    // the line.
+    type PendingClip = PendingVoice['clips'][number];
+    const segFor = (clip: PendingClip): SegmentDesc => p.exchange
+      ? {
+          ...exchangeSegment(clip, p.kind),
+          channel: 'intro',
+          settlesHandoff: clip.settlesHandoff,
+        }
+      : { kind: p.kind, channel: 'intro', text: clip.text, meta: clip.meta, persona: clip.persona };
+    const segs = clips.map(segFor);
+    if (p.exchange) {
+      // One batch for the conversation, so the intro queue never drains between
+      // speakers and the light duck stays down for the whole exchange. A
+      // per-line handoff after the playback hold let the music ramp up and back
+      // down through every line.
       try {
-        // Deferred segments ride the INTRO file (light duck at a track
-        // boundary), whatever their kind — see announceAtNextTrack. An exchange
-        // line still carries its SPEAKER's attribution (exchangeSegment), which
-        // is what session.windowMessages() and prompt-memory key off; only the
-        // channel changes, because the channel is a fact about the boundary and
-        // not about the line.
-        const seg: SegmentDesc = p.exchange
-          ? {
-              ...exchangeSegment(clip, p.kind),
-              channel: 'intro',
-              settlesHandoff: clip.settlesHandoff,
-            }
-          : { kind: p.kind, channel: 'intro', text: clip.text, meta: clip.meta, persona: clip.persona };
-        const handoff = await this._airVoice(config.liquidsoap.introFile, clip.wavPath, clip.text, voiceGainDb(p.kind, clip.persona), {
-          onQueued: q => this.onQueued(q, seg),
-        });
-        completions.push(this.onSpoken(handoff, seg));
-        if (!sfxHanded && p.sfx) {
-          sfxHanded = true;
-          await this.playSfx(p.sfx, { underVoice: true });
+        const handoffs = await this._airExchange(
+          config.liquidsoap.introFile,
+          clips.map((clip, index) => ({
+            wavPath: clip.wavPath,
+            text: clip.text,
+            gainDb: voiceGainDb(p.kind, clip.persona),
+            onQueued: q => this.onQueued(q, segs[index]),
+          })),
+          {
+            onFirstWritten: airSfxOnce,
+            onWriteError: err => this.log('error', `Air pending voice failed: ${(err as Error).message}`),
+          },
+        );
+        for (const [index, handoff] of handoffs.entries()) {
+          if (handoff) completions.push(this.onSpoken(handoff, segs[index]));
         }
       } catch (err) {
         this.log('error', `Air pending voice failed: ${(err as Error).message}`);
+      }
+    } else {
+      for (const clip of clips) {
+        try {
+          const seg = segFor(clip);
+          const handoff = await this._airVoice(config.liquidsoap.introFile, clip.wavPath, clip.text, voiceGainDb(p.kind, clip.persona), {
+            onQueued: q => this.onQueued(q, seg),
+          });
+          completions.push(this.onSpoken(handoff, seg));
+          await airSfxOnce();
+        } catch (err) {
+          this.log('error', `Air pending voice failed: ${(err as Error).message}`);
+        }
       }
     }
     void Promise.all(completions).then(results => p.onCompleted?.(results.some(Boolean)));

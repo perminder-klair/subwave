@@ -91,13 +91,18 @@ interface SpokenPersona {
   name?: string;
   tts: { engine: string; voice: string; cloudProvider?: string; gainDb?: number; speed?: number };
 }
-// The two queue internals stubbed below: the render and the handoff to air.
+// The three queue internals stubbed below: the render, the single handoff and
+// the batched one an exchange uses.
 interface VoicePath {
   _speak: (text: string, opts?: { persona?: SpokenPersona | null }) => Promise<string>;
   _airVoice: (
     file: string, wav: string, text: string, gain: number,
     opts?: { onQueued?: (q: { voiceId: string; clipMs: number; estimatedAirInMs: number }) => void },
   ) => Promise<unknown>;
+  _airExchange: (
+    file: string,
+    clips: { wavPath: string; text: string; gainDb: number; onQueued?: (q: { voiceId: string; clipMs: number; estimatedAirInMs: number }) => void }[],
+  ) => Promise<({ voiceId: string; clipMs: number; aired: Promise<null> } | null)[]>;
 }
 const voicePath = queue as unknown as VoicePath;
 
@@ -109,6 +114,7 @@ let renders = 0;
 
 const realSpeak = voicePath._speak;
 const realAirVoice = voicePath._airVoice;
+const realAirExchange = voicePath._airExchange;
 const realDirectorRun = directorAgent.run;
 const realForcedRun = forcedDirectorAgent.run;
 
@@ -123,6 +129,11 @@ function stubVoicePath() {
     opts?.onQueued?.({ voiceId: id, clipMs: 1_000, estimatedAirInMs: 0 });
     return { voiceId: id, clipMs: 1_000, aired: Promise.resolve(null) };
   };
+  voicePath._airExchange = async (_file, clips) => clips.map((clip, index) => {
+    const id = `voice-${renders}-${index}`;
+    clip.onQueued?.({ voiceId: id, clipMs: 1_000, estimatedAirInMs: 0 });
+    return { voiceId: id, clipMs: 1_000, aired: Promise.resolve(null) };
+  });
 }
 
 // The session turn a skill's aired line left. Post-air bookkeeping runs once
@@ -184,6 +195,7 @@ after(async () => {
   forcedDirectorAgent.run = realForcedRun;
   voicePath._speak = realSpeak;
   voicePath._airVoice = realAirVoice;
+  voicePath._airExchange = realAirExchange;
   queue.senderBusy = false;
   await removeTempDir(root);
 });

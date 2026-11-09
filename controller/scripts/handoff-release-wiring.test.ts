@@ -94,6 +94,10 @@ async function scenario() {
     writes.push(text);
     return { voiceId: 'stub', clipMs: 1, aired: Promise.resolve(null) };
   };
+  queue._airExchange = async (_target, clips) => {
+    for (const clip of clips) writes.push(clip.text);
+    return clips.map(() => ({ voiceId: 'stub', clipMs: 1, aired: Promise.resolve(null) }));
+  };
   queue.autoLink = false;
   // Fixed iteration bounds work even if a fixture later freezes Date.now.
   async function waitFor(check: () => boolean) {
