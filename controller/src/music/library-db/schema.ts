@@ -557,30 +557,6 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     });
   }
 
-  if (userVersion < 38) {
-    // Era review. The walk stores WHY it distrusts an album (`era_reason`, the
-    // era-suspect.ts marker), the album artist the judgement keyed on
-    // (`album_artist`, not the per-track artist) and the album's effective kind
-    // (`album_kind`: the operator's, else the title's suggestion, which a show's
-    // excludedAlbumKinds reads). `era_override` holds the operator's record per
-    // album, keyed the way music/era-review.albumEraKey folds (album artist,
-    // album): an optional decision (`verdict`: 'trusted' = the album year is
-    // right, 'year' = one year for every track in `forced_year`, 'suspect' =
-    // per-track years) and/or the operator's `kind` (music/album-kind.ts).
-    // The table first, IF NOT EXISTS, then only the missing columns, as in 28.
-    runDdl(d, `
-      CREATE TABLE IF NOT EXISTS era_override (
-        album_key   TEXT PRIMARY KEY,
-        verdict     TEXT CHECK (verdict IS NULL OR verdict IN ('trusted','suspect','year')),
-        forced_year INTEGER,
-        kind        TEXT,
-        set_at      TEXT NOT NULL
-      );
-    `);
-    addColumnsOnce(d, 38, { tracks: { era_reason: 'TEXT', album_artist: 'TEXT', album_kind: 'TEXT' } });
-  }
-
-
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
@@ -822,6 +798,16 @@ function vecCount(d: Database.Database): number {
 //     under this stamp: propagated or manual tags, and every row tagged before
 //     the column existed, whose prompt carried no measurements at all.
 //     Re-decide's blind scope reads it (blindTaggedIds).
+//   - Era review (music/era-review.ts): the walk stores WHY it distrusts an
+//     album (`era_reason`, the era-suspect.ts marker), the album artist the
+//     judgement keyed on (`album_artist`, not the per-track artist) and the
+//     album's effective kind (`album_kind`: the operator's, else the title's
+//     suggestion, which a show's excludedAlbumKinds reads). Its table,
+//     `era_override`, is created here too (ensureEraOverrideTable): one operator
+//     record per album, keyed the way era-review.albumEraKey folds (album
+//     artist, album), an optional decision (`verdict`: 'trusted' = the album
+//     year is right, 'year' = one year for every track in `forced_year`,
+//     'suspect' = per-track years) and/or the operator's `kind`.
 //
 // Several processes open this DB, and two can both find a column missing on the
 // first open after an upgrade, so the ALTERs re-read under the write lock. The
@@ -833,13 +819,30 @@ function ensureNamedColumns(d: Database.Database): void {
   const wanted: Array<[string, string]> = [
     ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
     ['untaggable_key', 'TEXT'], ['tagged_measured', 'INTEGER'],
+    ['era_reason', 'TEXT'], ['album_artist', 'TEXT'], ['album_kind', 'TEXT'],
   ];
   const missing = () => {
     const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));
     return wanted.filter(([name]) => !have.has(name));
   };
+  ensureEraOverrideTable(d);
   if (missing().length === 0) return;
   d.transaction(() => {
     for (const [name, type] of missing()) runDdl(d, `ALTER TABLE tracks ADD COLUMN ${name} ${type}`);
   }).immediate();
+}
+
+// The era review's per-album record (see ensureNamedColumns). By name, like
+// the columns, for the same reason: no user_version to collide over.
+function ensureEraOverrideTable(d: Database.Database): void {
+  if (d.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='era_override'`).get()) return;
+  runDdl(d, `
+    CREATE TABLE IF NOT EXISTS era_override (
+      album_key   TEXT PRIMARY KEY,
+      verdict     TEXT CHECK (verdict IS NULL OR verdict IN ('trusted','suspect','year')),
+      forced_year INTEGER,
+      kind        TEXT,
+      set_at      TEXT NOT NULL
+    );
+  `);
 }

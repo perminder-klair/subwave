@@ -3,7 +3,7 @@
 // listing the Library → Era tab reads, the per-album override that takes
 // effect immediately (and again on every walk), and the CSV export.
 // The judgement itself is music/era-suspect.ts; the storage is
-// music/era-review.ts and library-db step 32.
+// music/era-review.ts and library-db/schema.ts ensureNamedColumns (the era columns and era_override).
 import express from 'express';
 import { requireAdmin } from '../../middleware/auth.js';
 import * as db from '../../music/library-db.js';
@@ -12,7 +12,11 @@ import {
   setEraKind, setEraOverride, type EraVerdict,
 } from '../../music/era-review.js';
 import { ALBUM_KINDS, isAlbumKind, type AlbumKind } from '../../music/album-kind.js';
-import { ORIGINAL_YEAR_MIN } from '../../schemas/library.js';
+import type { z } from 'zod';
+import { eraOverrideSchema } from '../../schemas/library.js';
+import { validateBodyAsync } from '../../middleware/validate.js';
+
+type EraOverrideBody = z.output<ReturnType<typeof eraOverrideSchema>>;
 
 export const router = express.Router();
 
@@ -63,28 +67,27 @@ function albumKeyOf(res: express.Response, d: NonNullable<ReturnType<typeof db.g
 // Body: { album, albumArtist?, verdict: 'trusted' | 'year' | 'suspect' | null,
 // year? }. 'year' needs `year` (applied to every track as its manual original
 // year); `verdict: null` removes the decision and restores the walk's own.
-router.post('/library/era/override', requireAdmin, (req, res) => {
+router.post(
+  '/library/era/override',
+  requireAdmin,
+  // The decision and its year (schemas/library.ts eraOverrideSchema): the one
+  // year window, per request so it moves with the calendar.
+  validateBodyAsync(() => eraOverrideSchema(), { messages: 'verbatim' }),
+  (req, res) => {
   const d = handle(res);
   if (!d) return;
-  const body = (req.body ?? {}) as Record<string, unknown>;
+  const body = req.body as EraOverrideBody;
   const { verdict, year } = body;
-  if (verdict !== null && verdict !== 'trusted' && verdict !== 'suspect' && verdict !== 'year') {
-    return res.status(400).json({ error: "verdict must be 'trusted', 'year', 'suspect' or null" });
-  }
-  // The same window as a per-track year (schemas/library.ts originalYearSchema).
-  const maxYear = new Date().getUTCFullYear() + 1;
-  if (verdict === 'year' && !(Number.isInteger(year) && (year as number) >= ORIGINAL_YEAR_MIN && (year as number) <= maxYear)) {
-    return res.status(400).json({ error: `year must be a whole year between ${ORIGINAL_YEAR_MIN} and ${maxYear}` });
-  }
   const key = albumKeyOf(res, d, body);
   if (!key) return;
   try {
-    const affected = setEraOverride(d, key, verdict as EraVerdict | null, { year: verdict === 'year' ? (year as number) : null });
+    const affected = setEraOverride(d, key, verdict as EraVerdict | null, { year });
     res.json({ ok: true, affected });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-});
+  },
+);
 
 // Body: { album, albumArtist?, kind: <ALBUM_KINDS id> | null }. null goes back
 // to the title's suggestion.

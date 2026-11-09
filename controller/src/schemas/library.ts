@@ -73,10 +73,23 @@ export function manualTagSchema(ctx: ManualTagContext) {
 /** Floor for a plausible recording year. Mirrors musicbrainz.ts MIN_YEAR. */
 export const ORIGINAL_YEAR_MIN = 1900;
 
+/** The latest plausible recording year: next year (a pre-release), in UTC.
+ *  Read per call, not at module load, so it moves with the calendar. One window
+ *  for every year an operator types: the per-track override below, the Era
+ *  tab's one-year decision (eraOverrideSchema) and its web inputs. */
+export function originalYearMax(now: Date = new Date()): number {
+  return now.getUTCFullYear() + 1;
+}
+
+/** A whole year inside [ORIGINAL_YEAR_MIN, originalYearMax()]. */
+export function isValidOriginalYear(n: unknown, now: Date = new Date()): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= ORIGINAL_YEAR_MIN && n <= originalYearMax(now);
+}
+
 export function originalYearSchema() {
   // Per request, not at module load: a schema frozen at boot starts refusing
   // next January.
-  const max = new Date().getUTCFullYear() + 1;
+  const max = originalYearMax();
   return z.object({
     // Same wording and blank-string refusal as manualTagSchema: one editor
     // posts to both routes.
@@ -187,4 +200,35 @@ export interface SceneReference {
   /** The REST of this filter's own list. Empty means the orphaned values were
    *  all it had — NOT a claim that the filter now matches no tracks. */
   remaining: string[];
+}
+
+// POST /library/era/override: the Era tab's decision for one album. The album
+// is named as { album, albumArtist? } and checked by the route (which keys it
+// and refuses an unscanned album); this owns the decision and its year.
+export const ERA_VERDICTS = ['trusted', 'year', 'suspect'] as const;
+
+export function eraOverrideSchema() {
+  return z.object({
+    album: z.unknown(),
+    albumArtist: z.unknown().optional(),
+    verdict: z.unknown().transform((raw, c) => {
+      if (raw === null || (typeof raw === 'string' && (ERA_VERDICTS as readonly string[]).includes(raw))) {
+        return raw as (typeof ERA_VERDICTS)[number] | null;
+      }
+      c.addIssue({ code: 'custom', message: "verdict must be 'trusted', 'year', 'suspect' or null" });
+      return z.NEVER;
+    }),
+    year: z.unknown().optional(),
+  }).transform((b, c) => {
+    if (b.verdict !== 'year') return { ...b, year: null };
+    if (!isValidOriginalYear(b.year)) {
+      c.addIssue({
+        code: 'custom',
+        path: ['year'],
+        message: `year must be a whole year between ${ORIGINAL_YEAR_MIN} and ${originalYearMax()}`,
+      });
+      return z.NEVER;
+    }
+    return { ...b, year: b.year };
+  });
 }

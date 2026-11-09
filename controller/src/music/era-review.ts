@@ -27,6 +27,7 @@
 
 import type Database from 'better-sqlite3';
 import { getTrack, setManualOriginalYear } from './library-db/tracks.js';
+import { ORIGINAL_YEAR_MIN, isValidOriginalYear, originalYearMax } from '../schemas/library.js';
 import { isAlbumKind, labelOwner, ownerFolderOf, suggestAlbumKind, suggestedDecision, type AlbumKind, type EraDecision, type OwnerContext, type OwnerInput } from './album-kind.js';
 import { artistParticipantKeys } from './recency.js';
 import { fileNameOf, folderOf, groupCopies, mainFolderOf, type CopyInput } from './era-copies.js';
@@ -79,6 +80,31 @@ export function loadEraOverrides(d: Database): Map<string, EraOverride> {
     forcedYear: r.verdict === 'year' ? r.forced_year ?? null : null,
     kind: isAlbumKind(r.kind) ? r.kind : null,
   }]));
+}
+
+/** Where a walk reads an album's record: a Map snapshot (tests, the listing)
+ *  or liveEraOverrides, which reads each album as the walk reaches it. */
+export interface EraOverrideLookup {
+  get(albumKey: string): EraOverride | null | undefined;
+}
+
+/**
+ * The walk's view of the era records: each album's record read from the table
+ * when the walk reaches it, never a snapshot taken before the run. A run walks
+ * for a long time, and with tagging on a schedule an operator's click can land
+ * mid-run: from a snapshot, a one-year decision removed after the run began
+ * would still be applied (applyWalkForcedYear), written back as a manual year
+ * that no later run takes away. One indexed read per song.
+ */
+export function liveEraOverrides(d: Database): EraOverrideLookup {
+  const stmt = d.prepare(`SELECT verdict, forced_year, kind FROM era_override WHERE album_key = ?`);
+  return {
+    get(albumKey: string) {
+      const r = stmt.get(albumKey) as { verdict: EraVerdict | null; forced_year: number | null; kind: string | null } | undefined;
+      if (!r) return null;
+      return { verdict: r.verdict ?? null, forcedYear: r.verdict === 'year' ? r.forced_year ?? null : null, kind: isAlbumKind(r.kind) ? r.kind : null };
+    },
+  };
 }
 
 function loadOverrideRow(d: Database, albumKey: string): EraOverride | null {
@@ -150,7 +176,7 @@ function verdictFor(o: EraOverride | null | undefined, walk: boolean | null): bo
  */
 export function eraWalkFields(
   song: EraWalkSong,
-  overrides: ReadonlyMap<string, EraOverride>,
+  overrides: EraOverrideLookup,
   ownerCtx?: OwnerContext,
 ): EraWalkFields {
   const albumArtist = song.albumArtist ?? null;
@@ -206,12 +232,12 @@ export function libraryOwnerContext(d: Database, { fresh = false } = {}): OwnerC
   return ctx;
 }
 
-/** A row the walk has judged since step 32: it stored the album artist, or a
+/** A row the walk has judged since the era columns were added: it stored the album artist, or a
  *  reason. Only such a row's key is the one the walk will look up, and only its
  *  era_reason says what the walk decided. */
 const SCANNED_SQL = `(album_artist IS NOT NULL OR era_reason IS NOT NULL)`;
 
-/** Has the walk judged any track of this album since step 32? An override set
+/** Has the walk judged any track of this album since the era columns were added? An override set
  *  before that would key on a NULL album artist the next walk then fills in,
  *  orphaning it, so the route refuses until a library scan has run. */
 export function albumScanned(d: Database, albumKey: string): boolean {
@@ -252,8 +278,8 @@ export function setEraOverride(
   verdict: EraVerdict | null,
   opts: { year?: number | null } = {},
 ): number {
-  if (verdict === 'year' && !(Number.isInteger(opts.year) && (opts.year as number) > 0)) {
-    throw new Error('a year decision needs a year');
+  if (verdict === 'year' && !isValidOriginalYear(opts.year)) {
+    throw new Error(`a year decision needs a year between ${ORIGINAL_YEAR_MIN} and ${originalYearMax()}`);
   }
   return d.transaction(() => {
     const before = loadOverrideRow(d, albumKey);
@@ -524,7 +550,11 @@ export function countEraSummary(d: Database): EraSummary {
 
 function csvField(v: unknown): string {
   if (v == null) return '';
-  const s = String(v);
+  let s = String(v);
+  // A spreadsheet opens a cell that starts with = + - @ (or a tab or CR before
+  // one) as a formula. Titles and paths are anyone's text, so such a cell is
+  // prefixed with ' (OWASP's CSV injection advice), which shows it as typed.
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   // Quote only where RFC4180 demands it; keep plain fields bare for the eye.
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }

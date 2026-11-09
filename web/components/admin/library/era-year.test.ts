@@ -8,8 +8,8 @@ import { test } from 'node:test';
 import { ERA_YEAR_MIN, eraYearInputProps, eraYearInvalid, eraYearMax, parseEraYear } from './era-year';
 import { buildSearchUrl, isSearchEngine, searchTermsOf } from './era-search';
 
-test('a year is four digits between 1900 and this year, and nothing else', () => {
-  const now = new Date().getFullYear();
+test('a year is four digits between 1900 and next year (the controller\'s window), and nothing else', () => {
+  const now = new Date().getUTCFullYear() + 1;
   assert.equal(ERA_YEAR_MIN, 1900);
   assert.equal(eraYearMax(), now);
   assert.equal(parseEraYear('1971'), 1971);
@@ -26,7 +26,7 @@ test('the field carries the range, and an empty field nudged by the arrows start
   let set = '';
   const p = eraYearInputProps('', 1994, v => { set = v; });
   assert.equal(p.min, 1900);
-  assert.equal(p.max, new Date().getFullYear());
+  assert.equal(p.max, new Date().getUTCFullYear() + 1);
   assert.equal(p.placeholder, '1994');
   let prevented = false;
   p.onKeyDown({ key: 'ArrowUp', preventDefault: () => { prevented = true; } } as never);

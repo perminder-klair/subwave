@@ -396,17 +396,17 @@ test('a vector from before the upgrade is never marked, and the upgrade re-embed
 
   // The upgrade itself, from a database at 35 and from one wound back below it.
   const raw = db.requireDb();
-  assert.equal(raw.pragma('user_version', { simple: true }), 38);
+  assert.equal(raw.pragma('user_version', { simple: true }), 37);
   raw.exec('ALTER TABLE tracks DROP COLUMN text_vector_sound');
   raw.pragma('user_version = 35');
   db.close();
   await open();
-  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 38);
+  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 37);
   assert.equal(builtFrom('new-a'), null, 'every existing vector reads as unknown');
   db.requireDb().pragma('user_version = 35');
   db.close();
   await open();
-  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 38);
+  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 37);
 
   // Old vectors keep their old Sound: line until a manual Re-embed.
   heads.set('new-c', { bpm: 70, key: '8B' });

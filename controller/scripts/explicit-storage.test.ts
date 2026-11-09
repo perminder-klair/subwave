@@ -98,7 +98,7 @@ test('the column arrives by migration on an existing library, unset until a walk
   d.exec('ALTER TABLE tracks DROP COLUMN explicit_status; PRAGMA user_version = 31;');
   library.shutdown();
   await library.load();
-  assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 38);
+  assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 37);
   assert.equal(stored('old'), null);
   assert.equal(db.getTrack('old')?.title, 'old');
 });
@@ -107,7 +107,7 @@ test('a wound-back user_version does not trip over the column it still has', asy
   db.getDb()!.exec('PRAGMA user_version = 31;');
   library.shutdown();
   await library.load();
-  assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 38);
+  assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 37);
 });
 
 test('the walk owns it, so an id rotation leaves the new row its own answer', () => {

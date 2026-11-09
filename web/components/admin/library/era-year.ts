@@ -1,13 +1,14 @@
-// The year fields of the Era tab: a recording year between 1900 (the
-// controller's ORIGINAL_YEAR_MIN) and this year, four digits, nothing else.
+// The year fields of the Era tab: a recording year in the controller's one
+// window (schemas/library.ts: ORIGINAL_YEAR_MIN to originalYearMax(), next
+// year in UTC), four digits, nothing else.
 // An empty field's spinner or arrow keys start from the album's own year
 // rather than from 0 or 1900.
 import type { ChangeEvent, KeyboardEvent } from 'react';
-import { ORIGINAL_YEAR_MIN } from '../../../lib/schemas.generated';
+import { ORIGINAL_YEAR_MIN, originalYearMax } from '../../../lib/schemas.generated';
 
 export const ERA_YEAR_MIN = ORIGINAL_YEAR_MIN;
 /** Read per call, so a tab left open over New Year moves with the calendar. */
-export const eraYearMax = () => new Date().getFullYear();
+export const eraYearMax = () => originalYearMax();
 
 /** The year typed in, or null when it is not a whole year in range. */
 export function parseEraYear(raw: string | null | undefined): number | null {

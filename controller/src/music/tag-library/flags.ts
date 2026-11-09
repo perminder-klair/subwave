@@ -6,7 +6,7 @@ import * as subsonic from '../subsonic.js';
 import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
 import { adoptAndPrune } from '../id-rotation.js';
-import { applyWalkForcedYear, eraWalkFields, libraryOwnerContext, loadEraOverrides, type EraOverride } from '../era-review.js';
+import { applyWalkForcedYear, eraWalkFields, libraryOwnerContext, liveEraOverrides, type EraOverride, type EraOverrideLookup } from '../era-review.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
 import { loadNavidromeConfig } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
@@ -139,11 +139,13 @@ export async function walkNavidrome(
   // cleared together after the walk behind a mass hold. id -> the walked size
   // (the size signal) or null (the change-time signal).
   const candidates = new Map<string, number | null>();
-  // Operator era records, read ONCE before the loop: a decision replaces
-  // the walk's stored verdict for its album, a kind replaces the title's
-  // suggestion, and a one-year decision reaches tracks added since.
+  // Operator era records, each album's read as the walk reaches it
+  // (era-review.liveEraOverrides): a decision replaces the walk's stored
+  // verdict for its album, a kind replaces the title's suggestion, and a
+  // one-year decision reaches tracks added since. Never a snapshot from before
+  // the run: a decision removed mid-run must not be written back.
   const rawDb = db.getDb();
-  const eraOverrides: Map<string, EraOverride> = rawDb ? loadEraOverrides(rawDb) : new Map();
+  const eraOverrides: EraOverrideLookup = rawDb ? liveEraOverrides(rawDb) : new Map<string, EraOverride>();
   // The library as it stood before this walk (its artist credits, its sorting
   // folders), so a DJ's own compilation is never taken for a label's
   // (album-kind.labelOwner).
