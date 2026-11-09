@@ -48,7 +48,7 @@ import { cleanupPauseTalkSilence } from '../audio/wav-silence.js';
 import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
-import { talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
+import { scheduledTalkAir, talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
 import { talkTickPlan, type TalkKind, type TalkPlan } from './talk-scheduler.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
@@ -1434,10 +1434,16 @@ export function syncSkillCrons() {
         return;
       }
       try {
-        await withTrace({ kind: 'segment' }, async () => {
-          const ctx = await prepareEpisodeContext(await getFullContext());
-          await runCapability(cap.kind, ctx, { automaticHostSpeech: true });
-        });
+        // A cron timer fires outside the slot table, so it must enter the
+        // placement scope itself: announce()/announceExchange() read it, and
+        // without it a cron skill airs immediately even with
+        // djTalkOnlyBetweenTracks on (#2259).
+        await withTalkAir(scheduledTalkAir(), () =>
+          withTrace({ kind: 'segment' }, async () => {
+            const ctx = await prepareEpisodeContext(await getFullContext());
+            await runCapability(cap.kind, ctx, { automaticHostSpeech: true });
+          }),
+        );
       } catch (err: any) {
         queue.log('error', `[skills] cron "${expr}" skill "${cap.kind}" failed: ${err.message}`);
       }

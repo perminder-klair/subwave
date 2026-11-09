@@ -28,7 +28,7 @@ process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const {
-  currentTalkAir, inTalkAirScope, suppressScheduledSpeechDuringHandoff,
+  currentTalkAir, inTalkAirScope, scheduledTalkAir, suppressScheduledSpeechDuringHandoff,
   talkAirStatus, talkOnlyBetweenTracks, withTalkAir,
 } =
   await import('../src/broadcast/talk-air.js');
@@ -58,6 +58,31 @@ test('only a boolean is accepted, and a refused write leaves the switch alone', 
     /djTalkOnlyBetweenTracks must be a boolean/,
   );
   assert.equal(talkOnlyBetweenTracks(), true, 'the rejected write changed nothing');
+});
+
+test('a cron fire takes the switch as its placement and enters the scope', async () => {
+  // Per-skill `cron:` timers have no row in the slot table, so this is their
+  // equivalent of plan.air (#2259). The scope must be entered either way: it is
+  // also what marks the fire as scheduled rather than a manual trigger.
+  await settings.update({ djTalkOnlyBetweenTracks: false } as never);
+  assert.equal(scheduledTalkAir(), 'immediate');
+  assert.deepEqual(
+    await withTalkAir(scheduledTalkAir(), async () => ({
+      air: currentTalkAir(), scoped: inTalkAirScope(),
+    })),
+    { air: 'immediate', scoped: true },
+  );
+
+  await settings.update({ djTalkOnlyBetweenTracks: true } as never);
+  assert.equal(scheduledTalkAir(), 'next-track');
+  assert.deepEqual(
+    await withTalkAir(scheduledTalkAir(), async () => ({
+      air: currentTalkAir(), scoped: inTalkAirScope(),
+    })),
+    { air: 'next-track', scoped: true },
+  );
+
+  await settings.update({ djTalkOnlyBetweenTracks: false } as never);
 });
 
 test('a settings.json without the key, or with junk in it, reads as OFF', async () => {
