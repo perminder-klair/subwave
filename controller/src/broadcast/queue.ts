@@ -2813,15 +2813,20 @@ class Queue {
 
   // Air a short multi-voice exchange (guest-show banter): every line renders
   // to a WAV FIRST — all-or-nothing, so a TTS failure can't strand half a
-  // conversation on air — then the clips go out as ONE batch on the
-  // serialized say.txt voice chain. Each line keeps its own gain, speaker and
-  // air marker; what the batch changes is that line N+1's handoff is written
-  // as soon as line N is consumed, not when line N finishes playing. The
-  // mixer's voice queue therefore never empties, so its duck stays down for
-  // the whole conversation and the gap between two speakers is just the
-  // silent lead-in every clip gets. Written per line after the playback hold
-  // (the old shape), the queue drained between speakers: the music ramped
-  // up and back down, an audible pump through every exchange.
+  // conversation on air. `djBehaviour.holdDuckBetweenSpeakers` then picks how
+  // the clips are delivered, and the two shapes are the point of the setting.
+  //
+  // On: ONE batch on the serialized say.txt voice chain. Each line keeps its
+  // own gain, speaker and air marker; what the batch changes is that line
+  // N+1's handoff is written as soon as line N is consumed, not when line N
+  // finishes playing. The mixer's voice queue therefore never empties, so its
+  // duck stays down for the whole conversation and the gap between two
+  // speakers is just the silent lead-in every clip gets.
+  //
+  // Off (the default): one handoff per line, each waiting for the previous
+  // line's playback hold. The queue drains between speakers, the music ramps
+  // up and back down, and every exchange carries that pump — the established
+  // delivery, and what a station hears on an upgrade.
   async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter', { castNames = [] }: { castNames?: readonly string[] } = {}) {
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} exchange — the show handoff has already claimed this boundary`);
@@ -2860,17 +2865,38 @@ class Queue {
         { exchange: true, notBefore: kind === 'handoff' ? session.handoffBoundaryAt() : null },
       );
     }
-    // The handoff can claim the boundary while the exchange is being rendered;
-    // this is the same check the per-line loop used to make before its first
-    // handoff. It runs again inside the batch for the lines that follow.
-    if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
-      this.log('scheduler', `Dropped ${kind} exchange — the show handoff completed while it rendered`);
-      return false;
-    }
     const segs: SegmentDesc[] = rendered.map((l, index) => ({
       ...exchangeSegment(l, kind),
       settlesHandoff: kind === 'handoff' ? index === rendered.length - 1 : undefined,
     }));
+    if (!settings.get().djBehaviour.holdDuckBetweenSpeakers) {
+      for (const [index, l] of rendered.entries()) {
+        if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
+          this.log('scheduler', `Dropped ${kind} exchange — the show handoff completed while it rendered`);
+          return false;
+        }
+        try {
+          const handoff = await this._airVoice(config.liquidsoap.sayFile, l.wavPath, l.text, voiceGainDb(kind, l.persona), {
+            onQueued: q => this.onQueued(q, segs[index]),
+          });
+          this.onSpoken(handoff, segs[index]);
+        } catch (err) {
+          this.log('error', `Exchange line failed to air: ${(err as Error).message}`);
+        }
+      }
+      webhooks.notify('dj.say', {
+        text: rendered.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n'),
+        kind,
+      });
+      return true;
+    }
+    // The handoff can claim the boundary while the exchange is being rendered;
+    // this is the check the per-line loop made before its first handoff. It
+    // runs again inside the batch for the lines that follow.
+    if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
+      this.log('scheduler', `Dropped ${kind} exchange — the show handoff completed while it rendered`);
+      return false;
+    }
     let droppedForHandoff = false;
     let handoffs: (VoiceHandoff | null)[];
     try {
@@ -3350,11 +3376,11 @@ class Queue {
         }
       : { kind: p.kind, channel: 'intro', text: clip.text, meta: clip.meta, persona: clip.persona };
     const segs = clips.map(segFor);
-    if (p.exchange) {
+    if (p.exchange && settings.get().djBehaviour.holdDuckBetweenSpeakers) {
       // One batch for the conversation, so the intro queue never drains between
       // speakers and the light duck stays down for the whole exchange. A
       // per-line handoff after the playback hold let the music ramp up and back
-      // down through every line.
+      // down through every line — the shape the off setting keeps.
       try {
         const handoffs = await this._airExchange(
           config.liquidsoap.introFile,

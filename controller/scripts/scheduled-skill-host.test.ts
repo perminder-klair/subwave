@@ -76,6 +76,7 @@ beforeEach(async () => {
     skills: { enabled: { 'host-race': true } },
     llm: { pickerAgent: true },
     sfx: { enabled: false },
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   session.start(ctx());
   await loadSkills();

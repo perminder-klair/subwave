@@ -149,6 +149,7 @@ beforeEach(async () => {
     tts: { enabled: true },
     skills: { enabled: { 'forced-words': true } },
     sfx: { enabled: false },
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   session.start({
     at: new Date().toISOString(),

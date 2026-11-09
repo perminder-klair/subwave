@@ -185,6 +185,7 @@ beforeEach(async () => {
     skills: { enabled: { 'voiced-solo': true, 'plain-solo': true, 'voiced-duo': true } },
     llm: { pickerAgent: true },
     sfx: { enabled: false },
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   session.start(ctx());
   await loadSkills();

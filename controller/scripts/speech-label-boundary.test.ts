@@ -78,6 +78,7 @@ beforeEach(async () => {
     personas: [IRIS], activePersonaId: IRIS.id,
     shows: [{ id: SHOW, name: 'Label Show', topic: 'tests', personaId: IRIS.id, energies: ['medium'] }],
     schedule: week(), scheduleOverride: null,
+    djBehaviour: { holdDuckBetweenSpeakers: true },
     tts: { enabled: true },
   } as never);
   session.start(ctx());

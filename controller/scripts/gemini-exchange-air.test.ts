@@ -33,6 +33,7 @@ after(async () => {
 
 async function setup() {
   await settings.update({ personas: [outgoing, incoming], activePersonaId: outgoing.id,
+    djBehaviour: { holdDuckBetweenSpeakers: true },
     tts: { defaultEngine: 'gemini', speed: { gemini: 1 }, gainDb: { gemini: 0 } } });
   session.start({ at: new Date().toISOString(), time: { period: 'day', vibe: 'day', mood: 'calm' },
     weather: null, festival: null, dominantMood: 'calm', activeShow: null } as any);

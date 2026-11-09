@@ -37,6 +37,7 @@ async function scenario() {
     shows: [outShow, inShow],
     schedule: overdue ? Object.fromEntries(Array.from({ length: 7 }, (_, day) => [day, Array(24).fill(outShow.id)])) : schedule,
     djTalkOnlyBetweenTracks: betweenTracks,
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   function getContext(at = new Date()) {
     return {
