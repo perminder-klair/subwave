@@ -1,13 +1,11 @@
 
 @keyframes platter-spin { to { transform: rotate(360deg); } }
 @keyframes platter-sheen { from { transform: rotate(-5deg); } to { transform: rotate(5deg); } }
-@keyframes platter-rim { to { transform: rotate(360deg); } }
 @keyframes platter-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.28; } }
 
 /* Each turns only while .playing. The pause rides in the shorthand itself: a
    separate animation-play-state rule ahead of these was reset by them, so the
    record went on spinning after STOP. */
-/* Keep .rim and .record durations equal so the mat and record rotate together. */
 .record { animation: platter-spin 5.9s linear infinite paused; }
 /* Pure white laid over anything at some alpha: screen-blended, white over a
    colour is white, so plain alpha paints the same, without making WebKit
@@ -27,14 +25,12 @@
     rgba(255, 255, 255, 0) 344deg
   );
 }
-.rim { animation: platter-rim 5.9s linear infinite paused; }
 .pulse { animation: platter-pulse 2.4s ease-in-out infinite paused; }
 .playing { animation-play-state: running; }
 
 @media (prefers-reduced-motion: reduce) {
   .record,
   .sheen,
-  .rim,
   .pulse {
     animation: none;
   }
@@ -62,6 +58,18 @@
 }
 .armRest { transform: rotate(-24deg); }
 .armLive { transform: rotate(calc(-14deg + var(--pf, 0) * 22deg)); }
+
+/* The arm's shadow, in the ink so it darkens a pale deck and a dark one. */
+.armShade { fill: var(--ink); stroke: var(--ink); opacity: 0.18; }
+
+/* Progress round the record (ProgressRing): lit ticks where the song has been. */
+.tick { fill: none; stroke: color-mix(in oklab, var(--ink) 26%, transparent); stroke-width: 0.3; stroke-linecap: round; }
+.tickLit { fill: none; stroke: var(--accent); stroke-width: 0.55; stroke-linecap: round; }
+
+/* The sleeve's wash gathers round the record and is gone by the table's
+   corners. The gradient's 100% is the corner, and the record's edge sits near
+   half of that, so the wash is held in full to just past the tick ring. */
+.wash { mask-image: radial-gradient(circle at 50% 50%, #000 62%, transparent 96%); }
 
 .progFill { width: calc(var(--pf, 0) * 100%); }
 .progHead { left: calc(var(--pf, 0) * 100%); }
