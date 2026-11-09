@@ -1,6 +1,6 @@
 
 @keyframes platter-spin { to { transform: rotate(360deg); } }
-@keyframes platter-sheen { to { transform: rotate(360deg); } }
+@keyframes platter-sheen { from { transform: rotate(-5deg); } to { transform: rotate(5deg); } }
 @keyframes platter-rim { to { transform: rotate(360deg); } }
 @keyframes platter-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.28; } }
 
@@ -11,9 +11,12 @@
 .record { animation: platter-spin 5.9s linear infinite paused; }
 /* Pure white laid over anything at some alpha: screen-blended, white over a
    colour is white, so plain alpha paints the same, without making WebKit
-   blend one turning layer into another. */
+   blend one turning layer into another.
+   The light is the room's, so it stays where it is while the record turns
+   under it: it only sways, once a turn each way, as a record that isn't quite
+   flat throws it. Turning with the record, it read as paint on the vinyl. */
 .sheen {
-  animation: platter-sheen 11.8s linear infinite paused;
+  animation: platter-sheen 5.9s ease-in-out infinite alternate paused;
   background: conic-gradient(
     from 210deg,
     rgba(255, 255, 255, 0) 0deg,
@@ -234,3 +237,41 @@
   .stageIn { animation: none; }
   .armSwing .isoArm { transition: none; }
 }
+
+/* ── Focus mode: the lyrics wheel (PlatterLyrics) ──────────────────────── */
+
+/* Every line is a spoke about one hub, a spoke's length off to the right
+   where the deck is, so a notch of 6° spreads the lines' left ends about a
+   fifth of the wheel's width apart and their right ends half that. The sung
+   line lies level; clockwise lifts a sung line up and away, anticlockwise
+   holds a coming one below. The outermost notch either way is invisible: a
+   line enters and leaves through it, so nothing ever mounts into view. */
+.spoke {
+  transform-origin: 200% 50%;
+  color: var(--ink);
+}
+.wheelTurns .spoke {
+  transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.7s ease-out;
+}
+.spokeM3 { transform: translateY(-50%) rotate(18deg); opacity: 0; }
+.spokeM2 { transform: translateY(-50%) rotate(12deg); opacity: 0.14; }
+.spokeM1 { transform: translateY(-50%) rotate(6deg); opacity: 0.36; }
+/* The anchor between songs' lines (a break): level, but as faint as sung. */
+.spoke0 { transform: translateY(-50%) rotate(0deg); opacity: 0.36; }
+.spokeP1 { transform: translateY(-50%) rotate(-6deg); opacity: 0.4; }
+.spokeP2 { transform: translateY(-50%) rotate(-12deg); opacity: 0.16; }
+.spokeP3 { transform: translateY(-50%) rotate(-18deg); opacity: 0; }
+.spokeSung { opacity: 1; }
+
+/* Words ink in as they are sung. */
+.word { opacity: 0.38; }
+.wordLit { opacity: 1; }
+.wheelTurns .word { transition: opacity 0.5s ease-out; }
+
+/* Untimed lines dissolve at the column's top and bottom rather than cut. */
+.plainLyrics {
+  padding-block: 1.4em;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent, #000 1.4em, #000 calc(100% - 1.4em), transparent);
+}
+.plainLyrics::-webkit-scrollbar { display: none; }

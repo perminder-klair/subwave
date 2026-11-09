@@ -3,14 +3,16 @@
 // Platter — the flagship vinyl face: a reference turntable beside the column
 // of facts. Focus mode (desktop, F) folds the column away and lifts the deck
 // into 30° isometric (IsoDeck), handing the column's facts to the things on
-// and round it.
+// and round it, and turns the song's lyrics as a wheel in the corner the
+// drawing leaves empty (PlatterLyrics).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
-import { ArrowUpRight, Heart, PanelRightClose, PanelRightOpen, Play, Square } from 'lucide-react';
+import { ArrowUpRight, Captions, CaptionsOff, Heart, PanelRightClose, PanelRightOpen, Play, Square } from 'lucide-react';
 import { useMediaQuery } from 'usehooks-ts';
 import styles from './Platter.module.css';
 import IsoDeck from './IsoDeck';
+import PlatterLyrics from './PlatterLyrics';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -37,6 +39,8 @@ import {
   turnClock,
 } from '../shared';
 import { CAP_CENTRE, CAP_CENTRE_16 } from '../capCentre';
+import { useLyricsPreference, useTrackLyrics } from '../lyrics';
+import LyricsSettings, { usePopoverDismiss } from '../LyricsSettings';
 import { useDjOnAir, useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
@@ -252,6 +256,20 @@ export default function PlatterSkin(_props: SkinProps) {
   const onMic = useDjOnAir();
   const talk = playing && onMic && !!voice;
 
+  // Lyrics live in focus mode alone, where the folded column leaves them a
+  // corner, so the station is asked only there. One answer for the wheel and
+  // its settings. L shows or hides them; the header's button opens the
+  // settings.
+  const lyricsOn = state.lyrics?.enabled === true && focusOn;
+  const lyricsPref = useLyricsPreference();
+  const showLyrics = lyricsOn && lyricsPref.shown && !offline;
+  const lyricsTrack = useTrackLyrics(showLyrics ? nowPlaying?.subsonic_id : null);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const lyricsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lyricsPopoverRef = useRef<HTMLDivElement | null>(null);
+  const closeLyrics = useCallback(() => setLyricsOpen(false), []);
+  usePopoverDismiss(lyricsOpen, closeLyrics, lyricsPopoverRef, lyricsButtonRef);
+
   useKeyboardShortcuts({
     space: handleTune,
     k: handleTune,
@@ -266,6 +284,7 @@ export default function PlatterSkin(_props: SkinProps) {
       else reqInputRef.current?.focus();
     },
     f: () => { if (desktop) toggleFocus(); },
+    ...(lyricsOn ? { l: () => void lyricsPref.toggle() } : {}),
     // Only while focus is on, so Escape still reaches menus otherwise.
     escape: focusOn ? toggleFocus : undefined,
   });
@@ -320,6 +339,26 @@ export default function PlatterSkin(_props: SkinProps) {
               {contextLine(context) || (offline ? 'off air' : 'on air')}
             </span>
           </div>
+          {lyricsOn && (
+            <button
+              ref={lyricsButtonRef}
+              type="button"
+              onClick={() => setLyricsOpen(open => !open)}
+              aria-expanded={lyricsOpen}
+              aria-haspopup="dialog"
+              aria-label="Lyrics settings"
+              title="Lyrics (L shows or hides them)"
+              className={cn(
+                'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none hover:text-ink',
+                CAP_CENTRE_16,
+                lyricsPref.shown || lyricsOpen ? 'text-ink' : 'text-muted',
+              )}
+            >
+              {lyricsPref.shown
+                ? <Captions className="size-4" aria-hidden="true" />
+                : <CaptionsOff className="size-4" aria-hidden="true" />}
+            </button>
+          )}
           <button
             type="button"
             onClick={toggleFocus}
@@ -357,6 +396,15 @@ export default function PlatterSkin(_props: SkinProps) {
           ) : (
             <div className="flex w-full items-center justify-center pt-8 lg:contents">
               <Deck playing={playing} ratio={ratio} stationName={stationName} title={title} artist={artist} />
+            </div>
+          )}
+
+          {/* The song's lines share the caption's corner, and give the DJ
+              the floor: mounted throughout, so a talk break never refetches
+              them, and hidden while the caption is up. */}
+          {showLyrics && (
+            <div className={cn('contents', talk && 'invisible')}>
+              <PlatterLyrics track={lyricsTrack} trackStartedAt={trackStartedAt} />
             </div>
           )}
 
@@ -669,6 +717,17 @@ export default function PlatterSkin(_props: SkinProps) {
         )}
         <span className="ml-auto hidden text-muted sm:inline">stereo · 96 kHz</span>
       </div>
+
+      {lyricsOn && lyricsOpen && !showOverlay && (
+        <div
+          ref={lyricsPopoverRef}
+          role="dialog"
+          aria-label="Lyrics settings"
+          className={cn('absolute top-14 right-6 z-30 w-[min(340px,calc(100vw-2rem))] border border-ink bg-bg p-4', styles.slab)}
+        >
+          <LyricsSettings shown={lyricsPref.shown} onToggle={lyricsPref.toggle} track={lyricsTrack} />
+        </div>
+      )}
 
       {/* The tap is the browser's audio-unblock gesture. */}
       {showOverlay && !offline && (
