@@ -60,28 +60,15 @@ test('only a boolean is accepted, and a refused write leaves the switch alone', 
   assert.equal(talkOnlyBetweenTracks(), true, 'the rejected write changed nothing');
 });
 
-test('a cron fire takes the switch as its placement and enters the scope', async () => {
+test('a cron fire takes the switch as its placement', async () => {
   // Per-skill `cron:` timers have no row in the slot table, so this is their
-  // equivalent of plan.air (#2259). The scope must be entered either way: it is
-  // also what marks the fire as scheduled rather than a manual trigger.
+  // equivalent of plan.air (#2259). Whether the fire then enters a scope is
+  // scheduler.speakSkillCron's, pinned in scripts/skill-cron-placement.test.ts:
+  // only 'next-track' does, so the switch-off path stays as it always was.
   await settings.update({ djTalkOnlyBetweenTracks: false } as never);
   assert.equal(scheduledTalkAir(), 'immediate');
-  assert.deepEqual(
-    await withTalkAir(scheduledTalkAir(), async () => ({
-      air: currentTalkAir(), scoped: inTalkAirScope(),
-    })),
-    { air: 'immediate', scoped: true },
-  );
-
   await settings.update({ djTalkOnlyBetweenTracks: true } as never);
   assert.equal(scheduledTalkAir(), 'next-track');
-  assert.deepEqual(
-    await withTalkAir(scheduledTalkAir(), async () => ({
-      air: currentTalkAir(), scoped: inTalkAirScope(),
-    })),
-    { air: 'next-track', scoped: true },
-  );
-
   await settings.update({ djTalkOnlyBetweenTracks: false } as never);
 });
 

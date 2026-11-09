@@ -1416,6 +1416,40 @@ export function skillCronTalkStandDownReason(
   return null;
 }
 
+// The part of a cron fire after its gates: claim the boundary, then speak at
+// the placement the fire read. Exported so the placement can be pinned
+// (scripts/skill-cron-placement.test.ts); syncSkillCrons is its only caller.
+//
+// With the switch ON, between-tracks placement puts the fire in competition
+// with the slot table for the one boundary, and a cron timer has no row to be
+// held by. It claims the boundary synchronously, immediately before generation,
+// so a second fire stands down instead of rendering a clip the queue would
+// decline, and so talkTick can hold its rows while this one generates. It then
+// enters the 'next-track' scope itself, because announce()/announceExchange()
+// read the scope and without it a cron skill airs immediately (#2259).
+//
+// With the switch OFF none of that runs: no claim and NO SCOPE. A scope is also
+// what suppressScheduledSpeechDuringHandoff and the queue's one-boundary rule
+// key on, so entering one for 'immediate' would change a default station's cron
+// speech (dropped during a show handoff) under a switch it never turned on.
+export async function speakSkillCron(kind: string, air: TalkAir, speak: () => Promise<void>): Promise<void> {
+  if (air !== 'next-track') {
+    await speak();
+    return;
+  }
+  const refusal = skillCronTalkStandDownReason(kind, air, skillCronTalkInFlight, queue.pendingVoiceTalk(), Date.now());
+  if (refusal) {
+    queue.log('scheduler', `[skills] cron "${kind}" stood down — ${refusal}`);
+    return;
+  }
+  skillCronTalkInFlight = kind;
+  try {
+    await withTalkAir(air, speak);
+  } finally {
+    skillCronTalkInFlight = null;
+  }
+}
+
 export function skillCronEligibility(cap: any, enabled: Record<string, boolean | undefined>, host: any, guests: any[], preparationSkill: string | null = null) {
   return skillEligible({
     preparationSkill,
@@ -1442,10 +1476,9 @@ export function syncSkillCrons() {
     }
     const tz = getStationTimezone();
     const task = cron.schedule(expr, async () => {
-      // Placement is read once, at the fire: the scope announce() will see and
-      // the boundary claim below must agree.
+      // Placement is read once, at the fire: speakSkillCron's boundary claim
+      // and the scope announce() will see must agree.
       const air = scheduledTalkAir();
-      let claimedBoundary = false;
       try {
         const gated = skillCronStandDownReason({
           voiceAllowed: autoVoiceAllowed(),      // station voice is off — music only
@@ -1472,28 +1505,7 @@ export function syncSkillCrons() {
           queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
           return;
         }
-        // Between-tracks placement puts this fire in competition with the slot
-        // table for the one boundary, and a cron timer has no row to be held
-        // by. Claim it — synchronously, immediately before generation — so a
-        // second fire stands down instead of rendering a clip the queue would
-        // decline, and so talkTick can hold its rows while this one generates.
-        // Off, cron keeps its old immediate path and its old concurrency.
-        if (air === 'next-track') {
-          const refusal = skillCronTalkStandDownReason(
-            cap.kind, air, skillCronTalkInFlight, queue.pendingVoiceTalk(), Date.now(),
-          );
-          if (refusal) {
-            queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${refusal}`);
-            return;
-          }
-          skillCronTalkInFlight = cap.kind;
-          claimedBoundary = true;
-        }
-        // A cron timer fires outside the slot table, so it must enter the
-        // placement scope itself: announce()/announceExchange() read it, and
-        // without it a cron skill airs immediately even with
-        // djTalkOnlyBetweenTracks on (#2259).
-        await withTalkAir(air, () =>
+        await speakSkillCron(cap.kind, air, () =>
           withTrace({ kind: 'segment' }, async () => {
             const ctx = await prepareEpisodeContext(await getFullContext());
             await runCapability(cap.kind, ctx, { automaticHostSpeech: true });
@@ -1501,8 +1513,6 @@ export function syncSkillCrons() {
         );
       } catch (err: any) {
         queue.log('error', `[skills] cron "${expr}" skill "${cap.kind}" failed: ${err.message}`);
-      } finally {
-        if (claimedBoundary) skillCronTalkInFlight = null;
       }
     }, { timezone: tz });
     skillCronTasks.set(cap.kind, task);
