@@ -133,11 +133,13 @@ async function searchRecordings(query: string): Promise<MbRecording[]> {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
   });
   let res = await get();
-  // A busy MusicBrainz answers 503: asked once more after its Retry-After.
-  // Still inside the caller's throttle slot, so the 1 req/s spacing holds.
+  // A busy MusicBrainz answers 503: asked once more after its Retry-After,
+  // still inside the caller's throttle slot. The retry is a request too, so
+  // the throttle's clock moves to it and the next request keeps the 1 req/s gap.
   const wait = retryWaitMs(res.status, res.headers.get('retry-after'));
   if (wait != null) {
     await new Promise((r) => setTimeout(r, wait));
+    lastStart = Date.now();
     res = await get();
   }
   // Any non-2xx is a question MusicBrainz did not answer (a 503 is its rate

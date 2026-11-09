@@ -18,7 +18,7 @@ const db = await import('../src/music/library-db.js');
 const settings = await import('../src/settings.js');
 const policy = await import('../src/music/original-year-policy.js');
 const { lookupOriginalYear } = await import('../src/music/musicbrainz.js');
-const { lookupDiscogsYear } = await import('../src/music/discogs.js');
+const { lookupDiscogsYear, resetDiscogsRefusalLog } = await import('../src/music/discogs.js');
 const { lookupOriginalYearAnySource } = await import('../src/music/original-year.js');
 const { SECRET_ENV_KEYS } = await import('../src/setup/secrets.js');
 await settings.load();
@@ -124,14 +124,33 @@ test('Discogs: another artist\'s release never answers', async () => {
   assert.deepEqual(await lookupDiscogsYear(track), { kind: 'not-found' }, 'a year after the file\'s own never answers');
 });
 
-test('Discogs: a rejected token is an error; a 429 is asked once more', async () => {
+test('Discogs: a refused token takes no part (not-found, logged once); a 429 is asked once more', async (tc) => {
+  const warnings: string[] = [];
+  tc.mock.method(console, 'warn', (msg: string) => { warnings.push(msg); });
+  resetDiscogsRefusalLog();
   process.env.DISCOGS_TOKEN = 'bad';
-  reply(DG, { status: 401, body: { message: 'You must authenticate to access this resource.' } });
-  assert.deepEqual(await lookupDiscogsYear(track), { kind: 'error', reason: 'Discogs HTTP 401' });
+  for (const status of [401, 401, 403]) {
+    reply(DG, { status, body: { message: 'You must authenticate to access this resource.' } });
+    assert.deepEqual(await lookupDiscogsYear(track), { kind: 'not-found' }, String(status));
+  }
+  assert.equal(warnings.length, 2, 'once per status, not once per track');
+  assert.match(warnings[0], /refused \(HTTP 401\)/);
   reply(DG, { status: 429, ...now }, dgHits({ type: 'master', title: 'Wendy Rene - After Laughter', year: '1964' }));
   assert.deepEqual(await lookupDiscogsYear(track), { kind: 'found', year: 1964, source: 'discogs' });
   reply(DG, new Error('socket hang up'));
   assert.deepEqual(await lookupDiscogsYear(track), { kind: 'error', reason: 'socket hang up' });
+});
+
+test('a rate-limit retry counts as the latest request: the next one keeps the 1 req/s gap', async () => {
+  const at: number[] = [];
+  const fake = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => { at.push(Date.now()); return fake(input, init); }) as typeof fetch;
+  reply(MB, { status: 503, headers: { 'Retry-After': '1' } }, mbHit('1964'));
+  assert.equal((await lookupOriginalYear(track)).kind, 'found');
+  reply(MB, mbHit('1964'));
+  assert.equal((await lookupOriginalYear(track)).kind, 'found');
+  assert.equal(at.length, 3);
+  assert.ok(at[2] - at[1] >= 1000, `the request after a retry waited ${at[2] - at[1]} ms`);
 });
 
 // ── the two together ──────────────────────────────────────────────────────
@@ -172,6 +191,17 @@ test('an unanswered source is never a miss: the result is an error unless the ot
   assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'found', year: 1964, source: 'discogs' });
 });
 
+test('a refused Discogs token keeps MusicBrainz\'s answer: a miss stays a miss, an error stays an error', async () => {
+  resetDiscogsRefusalLog();
+  process.env.DISCOGS_TOKEN = 'typo';
+  reply(MB, mbNone, mbNone);
+  reply(DG, { status: 401 });
+  assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'not-found' }, 'a settled miss is not turned into a failure');
+  reply(MB, { status: 503, ...now }, { status: 503, ...now });
+  reply(DG, { status: 403 });
+  assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'error', reason: 'MusicBrainz HTTP 503' });
+});
+
 // ── what is stored ────────────────────────────────────────────────────────
 
 const yearRow = (id: string) => db.requireDb()
@@ -187,6 +217,19 @@ test('a Discogs year is stored with its source', () => {
   assert.equal(t.originalYear, 1964);
   assert.equal(t.originalYearSource, 'discogs');
   assert.deepEqual({ ...yearRow('dg') }, { status: 'ok', reason: 'discogs', attempts: 0 });
+});
+
+test('the walk and an id adoption keep a Discogs year, as they keep a MusicBrainz or manual one', () => {
+  assert.deepEqual([...policy.KEPT_YEAR_SOURCES].sort(), ['discogs', 'manual', 'musicbrainz']);
+  assert.equal(policy.yearSourceKept('album-tag'), false);
+  assert.equal(policy.yearSourceKept(null), false);
+  suspect('dg-walked');
+  db.recordOriginalYearOutcome('dg-walked', { kind: 'found', year: 1964, source: 'discogs' });
+  // The next walk brings the album tag's year: it must not replace the lookup's.
+  db.upsertTrackMeta('dg-walked', { title: 'Song dg-walked', artist: 'Wendy Rene', album: 'Anthology', year: 2012, originalYear: 1999, eraUntrusted: true });
+  const t = db.getTrack('dg-walked')!;
+  assert.equal(t.originalYear, 1964);
+  assert.equal(t.originalYearSource, 'discogs');
 });
 
 test('an error re-asking a not-found turns it into a failed lookup, retried on the schedule', () => {

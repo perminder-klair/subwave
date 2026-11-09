@@ -74,7 +74,15 @@ export function earliestDiscogsYear(results: DiscogsResult[], artist: string, ma
 }
 
 // found / not-found / error, like musicbrainz.lookupOriginalYear. Without a
-// token nothing is asked and the answer is not-found. Never throws.
+// token nothing is asked and the answer is not-found. A token Discogs refuses
+// (401 or 403: mistyped, revoked) also answers not-found, i.e. "Discogs took
+// no part": it is the operator's setting, not a question left unanswered, so
+// it must not turn MusicBrainz's settled misses into failures that use up
+// their retries. It is named in the log, once per process and status, so the
+// operator can see the token is the problem. Never throws.
+const REFUSED = new Set([401, 403]);
+const refusalLogged = new Set<number>();
+export function resetDiscogsRefusalLog(): void { refusalLogged.clear(); }
 export async function lookupDiscogsYear(track: {
   title?: string | null;
   artist?: string | null;
@@ -98,11 +106,21 @@ export async function lookupDiscogsYear(track: {
       const wait = retryWaitMs(res.status, res.headers.get('retry-after'));
       if (wait != null) {
         await new Promise((r) => setTimeout(r, wait));
+        // The retry is a request too: the next one keeps a full gap from it.
+        lastStart = Date.now();
         res = await get();
       }
+      if (REFUSED.has(res.status)) return { refused: res.status };
       if (!res.ok) throw new Error(`Discogs HTTP ${res.status}`);
       return (await res.json()) as { results?: DiscogsResult[] };
     });
+    if ('refused' in body) {
+      if (!refusalLogged.has(body.refused)) {
+        refusalLogged.add(body.refused);
+        console.warn(`[discogs] the token was refused (HTTP ${body.refused}): Discogs is skipped until it is fixed (Settings → Library → Enrichment)`);
+      }
+      return { kind: 'not-found' };
+    }
     const y = earliestDiscogsYear(Array.isArray(body.results) ? body.results : [], artist, track.year ?? null);
     return y != null ? { kind: 'found', year: y, source: 'discogs' } : { kind: 'not-found' };
   } catch (err) {

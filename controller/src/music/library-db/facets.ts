@@ -544,8 +544,10 @@ export function deleteFacetRows(id: string): void {
 
 // The measurements stand for the file as it is now (tracks.acceptReplacedFiles):
 // they date from `at`, or the next walk would find the same file stale again.
+// The year row is no measurement of the file: its `at` is the last lookup,
+// which the retry schedule counts from, so a restamp leaves it alone.
 export function restampFacetRows(id: string, at: string): void {
-  requireDb().prepare('UPDATE track_facet_status SET at = ? WHERE track_id = ?').run(at, id);
+  requireDb().prepare(`UPDATE track_facet_status SET at = ? WHERE track_id = ? AND facet <> 'year'`).run(at, id);
 }
 
 // Mirror of clearAnalysis(): drop what it clears, plus every failure. The

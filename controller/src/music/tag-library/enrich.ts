@@ -171,7 +171,8 @@ export async function backfillLastfmTrackTags(
 // their retry delay (original-year-policy.ts), library-wide. An answered "not
 // found" is settled and is re-asked only by `--facets year --where
 // unmeasurable` — or, with `retryMisses` (--re-enrich), for the misses inside
-// `scope`, the run's own tracks. Never every miss in the library.
+// `scope`, the run's own tracks. With --limit that is a bounded set; without
+// it the run's scope is the whole library, and so are its misses.
 export function pendingOriginalYearIds(retryMisses: boolean, scope: readonly string[] = []): string[] {
   const enrichCfg = (settings.get() as any).embedding?.enrichment ?? {};
   if (enrichCfg.originalYear === false) return [];

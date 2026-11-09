@@ -50,16 +50,18 @@ const age = (id: string, ms: number) => db.requireDb()
   .prepare(`UPDATE track_facet_status SET at = ? WHERE track_id = ? AND facet = 'year'`)
   .run(new Date(Date.now() - ms).toISOString(), id);
 
-test('the retry delays are 1 h, 1 day, 7 days, then only an explicit run', () => {
+test('the retry delays are 1 h, 1 day, 7 days, then only an explicit run: the week-long retry runs', () => {
   const now = Date.parse('2026-10-22T12:00:00Z');
   const at = (ms: number) => new Date(now - ms).toISOString();
-  assert.equal(policy.YEAR_MAX_ATTEMPTS, 3);
+  assert.equal(policy.YEAR_MAX_ATTEMPTS, 4, 'the first failure plus one per delay');
   assert.equal(policy.yearRetryDue(0, null, now), true);
   assert.equal(policy.yearRetryDue(1, at(HOUR - 1000), now), false);
   assert.equal(policy.yearRetryDue(1, at(HOUR), now), true);
   assert.equal(policy.yearRetryDue(2, at(DAY - 1000), now), false);
   assert.equal(policy.yearRetryDue(2, at(DAY), now), true);
-  assert.equal(policy.yearRetryDue(3, at(365 * DAY), now), false, 'exhausted: never automatic');
+  assert.equal(policy.yearRetryDue(3, at(7 * DAY - 1000), now), false);
+  assert.equal(policy.yearRetryDue(3, at(7 * DAY), now), true, 'the third retry, a week on');
+  assert.equal(policy.yearRetryDue(4, at(365 * DAY), now), false, 'exhausted: never automatic');
   assert.equal(policy.yearRetryDue(1, 'not a date', now), true, 'an unreadable stamp never parks a track forever');
 });
 
@@ -104,8 +106,15 @@ test('an error stamps nothing on the track and is retried on the widening schedu
 
   db.recordOriginalYearOutcome('flaky', { kind: 'error', reason: 'timeout' });
   assert.equal(brief('flaky'), 'failed:timeout×3');
+  age('flaky', 7 * DAY - HOUR);
+  assert.ok(!db.yearLookupDueIds(Date.now()).includes('flaky'), 'the third retry waits a week');
+  age('flaky', 7 * DAY);
+  assert.ok(db.yearLookupDueIds(Date.now()).includes('flaky'));
+
+  db.recordOriginalYearOutcome('flaky', { kind: 'error', reason: 'timeout' });
+  assert.equal(brief('flaky'), 'failed:timeout×4');
   age('flaky', 30 * DAY);
-  assert.ok(!db.yearLookupDueIds(Date.now()).includes('flaky'), 'three failures: off the automatic passes');
+  assert.ok(!db.yearLookupDueIds(Date.now()).includes('flaky'), 'four failures: off the automatic passes');
   consistent();
 });
 
@@ -214,7 +223,7 @@ test('the planner: needs takes the never-asked and the retries that are due', ()
   assert.ok(ids.includes('p-new') && ids.includes('p-ready'));
   assert.ok(!ids.includes('p-wait'), 'inside its retry delay');
   assert.ok(!ids.includes('missed'), 'a not-found is settled');
-  assert.ok(!ids.includes('flaky'), 'three failures wait for --where failed');
+  assert.ok(!ids.includes('flaky'), 'four failures wait for --where failed');
   assert.deepEqual(new Set(ids), new Set(db.yearLookupDueIds(Date.now())), 'the planner and the automatic passes agree');
 });
 

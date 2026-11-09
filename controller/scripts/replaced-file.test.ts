@@ -129,6 +129,10 @@ test('a failed year lookup outlives a replaced file: its attempt count is not an
   assert.equal(db.lastMeasuredAt('lookup'), null);
   db.clearTrackAudio('lookup', 2_000);
   assert.deepEqual([year()?.status, year()?.attempts], ['failed', 1], 'the retry schedule is kept');
+  // Accepting the file restamps its measurements, never the lookup's clock,
+  // which the retry delays count from.
+  db.acceptReplacedFiles(new Map<string, number | null>([['lookup', 2_000]]));
+  assert.equal(year()?.at, '2026-09-01T00:00:00Z');
   consistent();
 });
 
