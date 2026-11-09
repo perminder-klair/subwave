@@ -32,6 +32,8 @@ const artistReplies = new Map<string, Reply>();
 const failOnce = new Set<string>();
 const asked: Array<{ url: string; query: URLSearchParams; at: number }> = [];
 const embedded: string[] = [];
+// The tagger's user prompts, as the fixture LLM received them (#2281).
+const tagPrompts: string[] = [];
 let textDim = 768;
 
 const app = express();
@@ -45,6 +47,10 @@ const server = createServer(async (req, res) => {
   const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
   res.setHeader('content-type', 'application/json');
   if (url.pathname === '/v1/chat/completions') {
+    tagPrompts.push((body.messages ?? [])
+      .filter((m: { role?: string }) => m.role === 'user')
+      .map((m: { content?: unknown }) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .join('\n'));
     return res.end(JSON.stringify(chatCompletion({
       message: { role: 'assistant', content: null, tool_calls: [{ id: 'tag', type: 'function', function: {
         name: body.tool_choice?.function?.name ?? body.tools?.[0]?.function?.name ?? 'emit',
@@ -134,6 +140,7 @@ beforeEach(async () => {
   failOnce.clear();
   asked.length = 0;
   embedded.length = 0;
+  tagPrompts.length = 0;
   process.env.LASTFM_API_KEY = 'fixture-key';
   await setTrackTags(true);
 });
@@ -795,4 +802,29 @@ test('retag with the setting off is one artist call and no stamp, as it always w
   assert.deepEqual(methods(), ['artist.getTopTags']);
   assert.deepEqual(row('a').lastfmTags, ['rock', 'indie']);
   assert.equal(row('a').lastfmTrackTagsAt, null);
+});
+
+// ---- the retag route's evidence line (#2281) ----
+
+test('retag hands the model the stored measurements and the tags it just fetched, and stamps it measured', async () => {
+  await retagReady();
+  trackReplies.set('Act|Song', tagReply('shoegaze'));
+  seed('a', 'Act', 'Song');
+  db.upsertTrackAnalysis('a', { bpm: 74, musicalKey: '8A', loudnessLufs: -17, vocalRanges: [{ startMs: 0, endMs: 60_000 }] });
+  await retag('a', 'Act', 'Song');
+  const prompt = tagPrompts.at(-1)!;
+  assert.match(prompt, /\n {3}Sound: slow tempo, minor key, vocals \| Last\.fm: shoegaze, rock, indie$/m);
+  assert.doesNotMatch(prompt, /74|-17|LUFS/, 'no raw BPM and no loudness');
+  assert.equal(row('a').taggedMeasured, true);
+});
+
+test('retag of an unmeasured track still gives its tags, and stamps it blind', async () => {
+  await retagReady();
+  await setTrackTags(false);
+  seed('a', 'Act', 'Song');
+  await retag('a', 'Act', 'Song');
+  const prompt = tagPrompts.at(-1)!;
+  assert.doesNotMatch(prompt, /Sound:/);
+  assert.match(prompt, /\n {3}Last\.fm: rock, indie$/m);
+  assert.equal(row('a').taggedMeasured, false);
 });

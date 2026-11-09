@@ -417,6 +417,51 @@ async def test_facet_contract():
     assert server.StdioWorker._used_models({"facets": {"stems": {"status": "unavailable"}}}) is False
 
 
+async def test_stems_windows_and_pool_size_contract():
+    """#2253: a facet request's stems_windows reaches the worker verbatim (an
+    absent field is never invented), and /health reports the pool size the
+    controller's blend render takes the smaller of."""
+    worker_calls = []
+
+    async def worker_request(payload):
+        worker_calls.append(payload)
+        return {"ok": True, "facets": {"stems": {"status": "ok", "data": {"tail_stems": True}}}, "source": {}}
+
+    saved_request = server.analyzer_pool.request
+    server.analyzer_pool.request = worker_request
+    try:
+        with tempfile.NamedTemporaryFile() as audio:
+            await server.analyze(server.AnalyzeRequest(
+                path=audio.name, complete=True, facets=["stems"], stems_dir="/s/x",
+                stems_require_marker=True, stems_windows=["tail"],
+            ))
+            await server.analyze(server.AnalyzeRequest(path=audio.name, facets=["stems"], stems_dir="/s/x"))
+            # A flat request has no stems facet to scope: never forwarded.
+            await server.analyze(server.AnalyzeRequest(path=audio.name, stems_dir="/s/x", stems_windows=["tail"]))
+            # A malformed value is the worker's to judge (it separates both),
+            # never a 422 here.
+            await server.analyze(server.AnalyzeRequest(
+                path=audio.name, facets=["stems"], stems_dir="/s/x", stems_windows="tail",
+            ))
+    finally:
+        server.analyzer_pool.request = saved_request
+    assert worker_calls[0]["stems_windows"] == ["tail"], worker_calls
+    assert "stems_windows" not in worker_calls[1], worker_calls
+    assert "stems_windows" not in worker_calls[2], worker_calls
+    assert worker_calls[3]["stems_windows"] == "tail", worker_calls
+
+    saved_pool = server.analyzer_pool
+    # Members still booting: /health answers without reading their clocks,
+    # and the pool size is the setting, not how many are up right now.
+    server.analyzer_pool = server.AnalyzerWorkerPool([FakeWorker("a", ready=False), FakeWorker("b", ready=False)])
+    try:
+        body = await server.health()
+    finally:
+        server.analyzer_pool = saved_pool
+    assert body["analyze_concurrency"] == server.ANALYZE_CONCURRENCY, body
+    assert isinstance(body["analyze_concurrency"], int) and body["analyze_concurrency"] >= 1, body
+
+
 def test_concurrency_env_validation():
     old = os.environ.get("SUBWAVE_TEST_CONCURRENCY")
     try:
@@ -473,6 +518,7 @@ async def main():
     await test_latched_capability_error_does_not_fan_out()
     await test_path_contract()
     await test_facet_contract()
+    await test_stems_windows_and_pool_size_contract()
 
 
 asyncio.run(main())

@@ -15,7 +15,7 @@ import { useSectionChrome, useReportDirty } from './section-chrome';
 import { ownsErrorPath } from './form-diff';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
-import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety } from '../../../lib/schemas.generated';
+import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety, TaggerAutoSettings } from '../../../lib/schemas.generated';
 import { LLM_PROVIDER_CATALOG } from '../../../lib/schemas.generated';
 export type { TransitionEffect } from '../../../lib/schemas.generated';
 
@@ -442,6 +442,9 @@ export interface SettingsData {
      *  the schedule is edited from the Backup panel, beside Export/Restore, and
      *  posts `{ backups }` through the same POST /settings chokepoint. */
     backups?: { cadence?: string; keep?: number };
+    /** Scheduled tagging (#2282), edited on the Library Tagger's Run tab and
+     *  posted as `{ tagger: { auto } }`. Absent on an older controller. */
+    tagger?: { auto?: TaggerAutoSettings };
     transitions?: {
       pairDrain?: boolean;
       stemBlends?: boolean;
@@ -632,6 +635,8 @@ export interface SettingsData {
     embeddingMeta?: { model: string; dim: number } | null;
   };
   tagger?: { running?: boolean };
+  /** The scheduled run's own record (#2282); null when it could not be read. */
+  taggerSchedule?: TaggerScheduleView | null;
   env?: Record<string, unknown>;
   // passSet only — the password value never reaches the browser. Env flags are
   // per-field: url can be env-managed while user/pass come from the wizard.
@@ -644,6 +649,25 @@ export interface SettingsData {
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.
   serverTimezone?: string;
+}
+
+/** GET /settings `taggerSchedule`: controller/src/broadcast/tag-schedule.ts
+ *  TagScheduleView. `waiting` is a hold standing today (quiet times, a run
+ *  already going, a Navidrome scan). */
+export interface TaggerScheduleView {
+  lastDay: string | null;
+  startedAt: string | null;
+  outcome: 'running' | 'ok' | 'failed' | 'stopped' | 'held' | 'skipped' | 'missed' | 'interrupted' | null;
+  detail: string | null;
+  at: string | null;
+  runLogId: string | null;
+  /** The baseline the running run's clean finish raises to. */
+  raiseTo: number | null;
+  /** The new-music baseline the schedule compares Navidrome's count with. */
+  walkedCount: number | null;
+  /** When a save last turned the schedule on or moved its time. */
+  armedAt: string | null;
+  waiting: string | null;
 }
 
 export type Patch = Record<string, unknown>;

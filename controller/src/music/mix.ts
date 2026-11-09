@@ -153,12 +153,14 @@ export const CROSS_MIN_SECONDS = 6;
 export const CROSS_MAX_SECONDS = 14;
 
 // Octave-safe timing pulse (#1417): librosa doubles slow material, so halve any
-// reading at or above 110 BPM. Never multiply a low reading — that could turn a
-// genuine slow bar into a half-bar. The stored BPM is untouched.
+// reading at or above OCTAVE_FOLD_BPM. Never multiply a low reading — that could
+// turn a genuine slow bar into a half-bar. The stored BPM is untouched. The
+// tagger's tempo word reads the same line (sound-line.ts taggerSoundWords).
+export const OCTAVE_FOLD_BPM = 110;
 function timingBpm(bpm: number | null): number | null {
   if (typeof bpm !== 'number' || !Number.isFinite(bpm) || bpm <= 0) return null;
   let folded = bpm;
-  while (folded >= 110) folded /= 2;
+  while (folded >= OCTAVE_FOLD_BPM) folded /= 2;
   return folded;
 }
 
