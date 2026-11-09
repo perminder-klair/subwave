@@ -12,6 +12,43 @@
   independent. Operators who already reconfigured profiles under #1777 must
   mark those profiles before upgrading. See [upgrade and recovery steps](docs/multi-station.md#upgrading-existing-profiles).
 
+## [1.31.0](https://github.com/perminder-klair/subwave/compare/v1.30.0...v1.31.0) (2026-11-09)
+
+
+### Features
+
+* **analysis:** whole-file loudness v2, edges and a loudness curve from one decode, measured as it airs ([#2041](https://github.com/perminder-klair/subwave/issues/2041)) ([acb0db0](https://github.com/perminder-klair/subwave/commit/acb0db0afdf01319ee711366f560fb46814f15bf))
+* **docker:** publish a cu124 AIO CUDA image ([#2265](https://github.com/perminder-klair/subwave/issues/2265)) ([740936c](https://github.com/perminder-klair/subwave/commit/740936c248f24accb6e78a3aaa6595e479e228bd))
+* hosted mode for SUB/WAVE Cloud stations, shared Kokoro, and a small-library coast fallback ([#2260](https://github.com/perminder-klair/subwave/issues/2260)) ([6fda31e](https://github.com/perminder-klair/subwave/commit/6fda31ee7cbcca8c5e5b370b9f779c1f784db7a0))
+* **library:** tag new tracks automatically on a daily schedule ([#2292](https://github.com/perminder-klair/subwave/issues/2292)) ([5b936f3](https://github.com/perminder-klair/subwave/commit/5b936f345b627af3df2b64a76ecbba1964e99cc4))
+* **search:** Outcrawl as a web-search backend ([#2239](https://github.com/perminder-klair/subwave/issues/2239)) ([8805abf](https://github.com/perminder-klair/subwave/commit/8805abfe0998eb5905e8c74ca5692ce4b4c34474))
+* **skills:** per-skill TTS voice override ([#1778](https://github.com/perminder-klair/subwave/issues/1778)) ([db3dc96](https://github.com/perminder-klair/subwave/commit/db3dc96242ab0263fa8db50f00c045f4959bcba1))
+* **steer:** steer the music and the talk from the dashboard for a while ([#1924](https://github.com/perminder-klair/subwave/issues/1924)) ([eb366a4](https://github.com/perminder-klair/subwave/commit/eb366a460768a4940132a3c744f4b272c62bd057))
+* **tagger:** give the tagging LLM the measured track, and stamp blind tags ([#2286](https://github.com/perminder-klair/subwave/issues/2286)) ([9cda77f](https://github.com/perminder-klair/subwave/commit/9cda77f63d9b012a5cf06b6fdfcc516aee7c38e3))
+* **tts:** add tts-bench, a harness that measures each engine's renders ([#2111](https://github.com/perminder-klair/subwave/issues/2111)) ([9a6ecb5](https://github.com/perminder-klair/subwave/commit/9a6ecb5c4663bac1d6aa5d0726d1e7f4e8ad3d1a))
+
+
+### Bug Fixes
+
+* **admin:** align the speech-correction fields on one line ([#2267](https://github.com/perminder-klair/subwave/issues/2267)) ([d77875a](https://github.com/perminder-klair/subwave/commit/d77875a702a437949a57e729f3904649a188dbcf))
+* **analysis:** keep tail vocal evidence through a vocal-off re-analyze ([#2290](https://github.com/perminder-klair/subwave/issues/2290)) ([673d272](https://github.com/perminder-klair/subwave/commit/673d272cdb6112f365c2583f7d7994c883461661)), closes [#2255](https://github.com/perminder-klair/subwave/issues/2255)
+* **analyzer:** report the pool size on /health, and separate only the missing tail ([#2289](https://github.com/perminder-klair/subwave/issues/2289)) ([c7b3959](https://github.com/perminder-klair/subwave/commit/c7b39597fe72c5f5d02110437c310519d3268147)), closes [#2253](https://github.com/perminder-klair/subwave/issues/2253)
+* **analyzer:** ship librosa's numba kernels pre-compiled in the image ([#2219](https://github.com/perminder-klair/subwave/issues/2219)) ([ad4a278](https://github.com/perminder-klair/subwave/commit/ad4a278bdb1add78a93b535f2ac49518dcb7c87b))
+* **cli:** exit non-zero when subwave update fails ([#2206](https://github.com/perminder-klair/subwave/issues/2206)) ([f241ff1](https://github.com/perminder-klair/subwave/commit/f241ff1ce8ddfa14ecc1f9eaae6b167d2805f5e9)), closes [#2205](https://github.com/perminder-klair/subwave/issues/2205)
+* **cli:** keep Linux prompts on stdin, not a /dev/tty stream Bun can't read ([#2262](https://github.com/perminder-klair/subwave/issues/2262)) ([#2263](https://github.com/perminder-klair/subwave/issues/2263)) ([a9d1f07](https://github.com/perminder-klair/subwave/commit/a9d1f0781d591a4bd84b9b9fc7eca22e1d7ea594))
+* **cli:** say init keeps the existing .env instead of claiming to overwrite it ([#2204](https://github.com/perminder-klair/subwave/issues/2204)) ([#2208](https://github.com/perminder-klair/subwave/issues/2208)) ([5ed918f](https://github.com/perminder-klair/subwave/commit/5ed918fab7f0493cc86fbf47602671798d6c5866))
+* **scheduler:** roll the session when the station hour or show moves, not on minute 0 ([#2291](https://github.com/perminder-klair/subwave/issues/2291)) ([154c9b6](https://github.com/perminder-klair/subwave/commit/154c9b6c9b563e1119de695b4fb608b7cef242da)), closes [#2254](https://github.com/perminder-klair/subwave/issues/2254)
+* **stems:** undeletable stem dirs no longer stop pick-time stems for good ([#2287](https://github.com/perminder-klair/subwave/issues/2287)) ([5821341](https://github.com/perminder-klair/subwave/commit/582134170432857d77b2ef7978a75a5912f4d037)), closes [#2253](https://github.com/perminder-klair/subwave/issues/2253)
+* **tagger:** stop counting untaggable tracks as tagged and re-asking the LLM every run ([#2285](https://github.com/perminder-klair/subwave/issues/2285)) ([1598464](https://github.com/perminder-klair/subwave/commit/15984645847ab455a24fb28458e0544d218e7394))
+* **talk:** open the hourly check, idents, banter and segments on the station clock ([#2293](https://github.com/perminder-klair/subwave/issues/2293)) ([1a962d8](https://github.com/perminder-klair/subwave/commit/1a962d86bed4d7fda150c1acac78d2f6c37c3300))
+* **unraid:** break the CA overview into paragraphs, document the blank-icon outage ([#2261](https://github.com/perminder-klair/subwave/issues/2261)) ([de6d324](https://github.com/perminder-klair/subwave/commit/de6d3247dd61adf2e73c1edbd6f73b5747abf640))
+* **weather:** say what the forecast says, and give the weather skill the next hours ([#2211](https://github.com/perminder-klair/subwave/issues/2211)) ([ecfd5df](https://github.com/perminder-klair/subwave/commit/ecfd5df6d4b89c471b180e66cd2f42ff9985f62f))
+
+
+### Documentation
+
+* use hello@getsubwave.com as the public contact address ([#2264](https://github.com/perminder-klair/subwave/issues/2264)) ([5dbe2ca](https://github.com/perminder-klair/subwave/commit/5dbe2ca2a717ab86872041327ef686f5baff39e9))
+
 ## [1.30.0](https://github.com/perminder-klair/subwave/compare/v1.29.0...v1.30.0) (2026-11-03)
 
 
