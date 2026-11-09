@@ -129,7 +129,7 @@ after(async () => {
 });
 
 const setTrackTags = (on: boolean) => settings.update({
-  embedding: { enrichment: { lastfmTags: true, lastfmTrackTags: on, lyrics: false, originalYear: false } },
+  embedding: { enrichment: { lastfmTrackTags: on, lyrics: false, originalYear: false } },
 });
 
 // Each test owns the library and the fixture.
@@ -840,25 +840,47 @@ test('retag with the setting off is one artist call and no stamp, as it always w
   assert.equal(row('a').lastfmTrackTagsAt, null);
 });
 
-test('retag with track tags off keeps the stored list when the artist lookup answers nothing (#2295)', async () => {
+test('retag with track tags off keeps the stored list and its stamp when the artist lookup answers nothing (#2295)', async () => {
   await retagReady();
+  seed('a', 'Act', 'Song', { tags: ['shoegaze', 'rock'] });
+  db.recordLastfmTrackTags('a', { tags: ['shoegaze', 'rock'], answered: true });
+  const stamp = row('a').lastfmTrackTagsAt;
+  assert.ok(stamp);
   await setTrackTags(false);
-  seed('a', 'Act', 'Song', { tags: ['rock', 'indie'] });
   artistReplies.set('Act', { status: 503, raw: 'down' });
   await retag('a', 'Act', 'Song');
   assert.deepEqual(methods(), ['artist.getTopTags']);
+  assert.deepEqual(row('a').lastfmTags, ['shoegaze', 'rock']);
+  assert.equal(row('a').lastfmTrackTagsAt, stamp, 'a failure stamps nothing and clears nothing');
+  assert.match(embedded.at(-1)!, /Last\.fm: shoegaze, rock/);
+  assert.match(tagPrompts.at(-1)!, /Last\.fm: shoegaze, rock$/m, 'the tagger hears the kept tags');
+});
+
+test('retag with track tags on keeps the list through an answer with no tags, and stamps it (#2295)', async () => {
+  await retagReady();
+  seed('a', 'Act', 'Song', { tags: ['rock', 'indie'] });
+  trackReplies.set('Act|Song', tagReply());
+  artistReplies.set('Act', tagReply());
+  await retag('a', 'Act', 'Song');
+  assert.deepEqual(methods().sort(), ['artist.getTopTags', 'track.getTopTags']);
   assert.deepEqual(row('a').lastfmTags, ['rock', 'indie']);
-  assert.match(embedded.at(-1)!, /Last\.fm: rock, indie/);
+  assert.ok(row('a').lastfmTrackTagsAt, 'a genuine answer stamps, even one with nothing on it');
+  assert.match(tagPrompts.at(-1)!, /Last\.fm: rock, indie$/m);
 });
 
 test('retag with Last.fm enrichment off keeps the stored list (#2295)', async () => {
   await retagReady();
   await settings.update({ embedding: { enrichment: { lastfmTags: false, lyrics: true, originalYear: false } } });
-  seed('a', 'Act', 'Song', { tags: ['rock', 'indie'] });
-  await retag('a', 'Act', 'Song');
-  assert.deepEqual(methods(), [], 'no Last.fm call is made');
-  assert.deepEqual(row('a').lastfmTags, ['rock', 'indie']);
-  assert.match(embedded.at(-1)!, /Last\.fm: rock, indie/);
+  try {
+    seed('a', 'Act', 'Song', { tags: ['rock', 'indie'] });
+    await retag('a', 'Act', 'Song');
+    assert.deepEqual(methods(), [], 'no Last.fm call is made');
+    assert.deepEqual(row('a').lastfmTags, ['rock', 'indie']);
+    assert.match(embedded.at(-1)!, /Last\.fm: rock, indie/);
+    assert.match(tagPrompts.at(-1)!, /Last\.fm: rock, indie$/m, 'Off stops the fetching, not what was fetched');
+  } finally {
+    await coldLoadSettings({});
+  }
 });
 
 // ---- the retag route's evidence line (#2281) ----
