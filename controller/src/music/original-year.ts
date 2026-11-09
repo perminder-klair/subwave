@@ -13,9 +13,12 @@ import * as db from './library-db.js';
 import { reportProgress } from './tagger-progress.js';
 import { mapPool } from '../util/async-pool.js';
 
-// MusicBrainz first; Discogs when MusicBrainz has no year and a token is set.
-// An unanswered source is never read as a miss: the result is an error (retried
-// on the facet's schedule) unless the other source finds the year.
+// MusicBrainz first; Discogs only when MusicBrainz answered that it has no year
+// and a token is set. A MusicBrainz error is the outcome as it stands: Discogs
+// is not asked, because its year would be kept for good (KEPT_YEAR_SOURCES) and
+// one MusicBrainz blip would then lock in the rougher answer where the retry
+// schedule would have reached MusicBrainz again. An unanswered Discogs is never
+// read as a miss either: after a MusicBrainz miss it makes the result an error.
 export async function lookupOriginalYearAnySource(track: {
   title?: string | null;
   artist?: string | null;
@@ -24,9 +27,8 @@ export async function lookupOriginalYearAnySource(track: {
 }): Promise<OriginalYearOutcome> {
   const mb = await musicbrainz.lookupOriginalYear(track);
   if (mb.kind === 'found') return { ...mb, source: 'musicbrainz' };
-  const dg = await discogs.lookupDiscogsYear(track);
-  if (dg.kind === 'found') return dg;
-  return mb.kind === 'error' ? mb : dg;
+  if (mb.kind === 'error') return mb;
+  return discogs.lookupDiscogsYear(track);
 }
 
 export interface YearPassStats {

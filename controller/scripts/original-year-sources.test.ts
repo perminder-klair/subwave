@@ -178,17 +178,20 @@ test('a MusicBrainz miss falls back to Discogs', async () => {
   assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'not-found' }, 'both answered, neither knows');
 });
 
-test('an unanswered source is never a miss: the result is an error unless the other one finds it', async () => {
+test('an unanswered Discogs after a MusicBrainz miss is an error, never a miss', async () => {
   process.env.DISCOGS_TOKEN = 'tok-123';
   reply(MB, mbNone, mbNone);
   reply(DG, { status: 500 });
   assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'error', reason: 'Discogs HTTP 500' });
-  reply(MB, { status: 503, ...now }, { status: 503, ...now });
-  reply(DG, dgHits());
-  assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'error', reason: 'MusicBrainz HTTP 503' });
+});
+
+test('a MusicBrainz error is the answer: Discogs is not asked, even when it would know', async () => {
+  process.env.DISCOGS_TOKEN = 'tok-123';
   reply(MB, { status: 503, ...now }, { status: 503, ...now });
   reply(DG, dgHits({ type: 'master', title: 'Wendy Rene - After Laughter', year: '1964' }));
-  assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'found', year: 1964, source: 'discogs' });
+  assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'error', reason: 'MusicBrainz HTTP 503' },
+    'a Discogs year is kept for good, so it must not stand in for a MusicBrainz blip');
+  assert.equal(calls(DG).length, 0, 'Discogs is asked only after a real MusicBrainz miss');
 });
 
 test('a refused Discogs token keeps MusicBrainz\'s answer: a miss stays a miss, an error stays an error', async () => {
@@ -198,7 +201,6 @@ test('a refused Discogs token keeps MusicBrainz\'s answer: a miss stays a miss, 
   reply(DG, { status: 401 });
   assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'not-found' }, 'a settled miss is not turned into a failure');
   reply(MB, { status: 503, ...now }, { status: 503, ...now });
-  reply(DG, { status: 403 });
   assert.deepEqual(await lookupOriginalYearAnySource(track), { kind: 'error', reason: 'MusicBrainz HTTP 503' });
 });
 
