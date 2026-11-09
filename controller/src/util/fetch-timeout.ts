@@ -18,7 +18,9 @@
 // of the attempt's start. That is the stale socket's shape (it fails before a
 // byte is answered). A connection that drops halfway through a long request is
 // not resent, because the server may already be computing it, and a resend
-// would run it twice. subsonic.ts's boundedFetch applies the same window.
+// would run it twice. subsonic.ts's boundedFetch uses the same window
+// constant but its own rule (any fast transport failure, retried once after a
+// backoff); the two loops are deliberately separate for now.
 
 export interface FetchTimeoutInit extends RequestInit {
   timeoutMs: number;
