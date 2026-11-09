@@ -24,8 +24,19 @@ import {
   reportKeyFailure,
   reportKeySuccess,
 } from '../../../util/google-key-pool.js';
+export {
+  currentKey,
+  currentKeyOrHead,
+  allKeysHeld,
+  reportKeySuccess,
+} from '../../../util/google-key-pool.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel } from './capabilities.js';
+import {
+  capabilitiesFor,
+  appliedRepeatPenalty,
+  appliedNumCtx,
+  thinkingMandatoryModel,
+} from './capabilities.js';
 import { openaiCompatibleGateway } from '../../../schemas/providers.js';
 import { resolveCompatibleMode } from './compat-detect.js';
 
@@ -149,12 +160,27 @@ export function googleApiKeyForSdk(cfg: any): string | undefined {
   return cfg.apiKey || currentKey() || currentKeyOrHead() || process.env[GOOGLE_KEY_ENV] || undefined;
 }
 
+// Per-key response-header timeout for the pooled Google transport.
+// Non-streaming generateContent returns headers only after generation finishes,
+// so a hung key is indistinguishable from a legitimately slow call until this
+// deadline. Default ~10s: slow-but-valid calls between 10s and the 60s
+// generation guard are aborted and retried on the next key — the documented
+// trade-off for failing forward through a stalled pool instead of sitting on
+// one dead key for a full minute. Configurable via GOOGLE_POOL_PER_KEY_TIMEOUT_MS.
+export function perKeyTimeoutMs(): number {
+  return Number(process.env.GOOGLE_POOL_PER_KEY_TIMEOUT_MS) || 10_000;
+}
+
 export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
   // Explicit pool configuration is what arms rotation. A legacy single-key
   // station is NOT a one-key pool: it keeps the plain transport, so an
   // unhinted 429 parks nothing and every call retries as it always did.
   if (!poolConfigured()) return debugFetch(url, init);
-  return rotateGoogle(url, init, new Set());
+  // Extract the model from the request URL (Google's endpoint embeds it):
+  // https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
+  // Per-model holds let a key daily-exhausted on one model still serve another.
+  const model = typeof url === 'string' ? (url.match(/\/models\/([^/:]+):/) as RegExpMatchArray)?.[1] : undefined;
+  return rotateGoogle(url, init, new Set(), model);
 }
 
 /**
@@ -168,29 +194,98 @@ export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
  * lifetime has nothing to do with this call, so they cannot bound this call.
  * The bound is also capped at the pool size, so a pool mutated mid-call (an
  * operator adding a key) cannot extend the recursion past a sane depth either.
+ *
+ * Each key attempt carries a per-key timeout (`PER_KEY_TIMEOUT_MS`). A stalled
+ * key is aborted, held briefly, and the next key in order is tried — keys are
+ * NEVER reordered by health, only skipped while held. When every key has failed
+ * or stalled, the last real failure is thrown (not returned as a Response) so
+ * `withPermanentNotRetryable` marks it non-retryable and `withFailover`
+ * escalates to the backup leg exactly once — one failed attempt, not one per
+ * key, and not the SDK's default two retries on top of the pool.
  */
-async function rotateGoogle(url: any, init: any, attempted: Set<string>): Promise<Response> {
-  const key = currentKey(attempted);
+async function rotateGoogle(url: any, init: any, attempted: Set<string>, model?: string): Promise<Response> {
+  const key = currentKey(attempted, model);
   if (!key) {
-    // Every key has been tried on THIS call. Answer from the last real failure
-    // instead of spending another request on a credential we have just been
-    // told is dead — while carrying enough of that failure for
-    // withTransientRetry / withFailover to classify it and escalate to the
-    // backup leg.
+    // Every key has been tried on THIS call. Throw the last real failure so
+    // withPermanentNotRetryable marks it non-retryable (it is a quota/auth
+    // verdict) and withFailover escalates to the backup leg. Returning a
+    // Response would let the SDK retry the whole pool on top of itself.
     const prior = getLastFailure();
-    console.log('[google] every pooled key is exhausted for this call — replaying the last quota failure without a request');
-    const headers = new Headers(prior?.headers || {});
-    if (!headers.has('retry-after')) headers.set('retry-after', '60');
-    return new Response(
+    console.log('[google] every pooled key is exhausted for this call — failing over to the backup leg');
+    const err: any = new Error(
       prior?.body ?? '{"error":{"code":"quota_exceeded","message":"every pooled key is exhausted"}}',
-      { status: prior?.status ?? 429, statusText: prior?.statusText ?? 'Too Many Requests', headers },
     );
+    err.status = prior?.status ?? 429;
+    err.statusText = prior?.statusText ?? 'Too Many Requests';
+    err.body = prior?.body ?? '';
+    err.headers = prior?.headers || {};
+    err.name = 'ProviderRequestTimeoutError';
+    err.code = 'PROVIDER_REQUEST_TIMEOUT';
+    throw err;
   }
   attempted.add(key);
 
+  // Per-key timeout: race the fetch against a deadline. Whichever loses is
+  // abandoned — the fetch continues in the background (its rejection is
+  // swallowed), but we stop waiting for it. The caller's own signal
+  // (init.signal, deadline / cancellation) is passed through unchanged so the
+  // outer deadline still works; the per-key timeout only stops US from waiting.
+  const timeoutMs = perKeyTimeoutMs();
+  let timer: NodeJS.Timeout | undefined;
+  const perKeyTimeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const err: any = new Error(`Pool request timed out after ${timeoutMs}ms`);
+      err.status = 429;
+      err.statusText = 'Too Many Requests';
+      err.body = '{"error":{"code":"quota_exceeded","message":"pool request timed out"}}';
+      err.headers = {};
+      err.name = 'ProviderRequestTimeoutError';
+      err.code = 'PROVIDER_REQUEST_TIMEOUT';
+      reject(err);
+    }, timeoutMs);
+    timer.unref?.();
+  });
+
   const headers = new Headers(init?.headers || {});
   headers.set('x-goog-api-key', key);
-  const res = await debugFetch(url, { ...init, headers });
+  let res: Response;
+  const fetchPromise = debugFetch(url, { ...init, headers });
+  // Swallow late rejections on an abandoned request if the timeout won the race.
+  fetchPromise.catch(() => {});
+  try {
+    res = await Promise.race([
+      fetchPromise,
+      perKeyTimeoutPromise,
+    ]);
+  } catch (err: any) {
+    if (err?.code === 'PROVIDER_REQUEST_TIMEOUT') {
+      // A stall is not a credential problem: a short hold (the burst no-hint
+      // interval) keeps this key out of rotation while the call tries the next,
+      // without parking it for hours like a 429 would.
+      reportKeyFailure(key, model, JSON.stringify({
+        error: { code: 'rate_limit_exceeded', message: 'pool request timed out' },
+      }));
+      const next = currentKey(attempted, model);
+      if (!next) {
+        const prior = getLastFailure();
+        const err: any = new Error(
+          prior?.body ?? '{"error":{"code":"quota_exceeded","message":"every pooled key stalled"}}',
+        );
+        err.status = prior?.status ?? 429;
+        err.statusText = prior?.statusText ?? 'Too Many Requests';
+        err.body = prior?.body ?? '';
+        err.headers = prior?.headers || {};
+        err.name = 'ProviderRequestTimeoutError';
+        err.code = 'PROVIDER_REQUEST_TIMEOUT';
+        throw err;
+      }
+      console.log(`[google] key ${fingerprint(key)} stalled after ${timeoutMs}ms — retrying with ${fingerprint(next)}`);
+      return rotateGoogle(url, init, attempted, model);
+    }
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   // Only a 2xx ends this call, and only a 2xx clears the key's history.
   //
@@ -214,7 +309,7 @@ async function rotateGoogle(url: any, init: any, attempted: Set<string>): Promis
   // untouched, which is right — they are not key problems and another key would
   // refuse the same input.
   if (res.status >= 200 && res.status < 300) {
-    reportKeySuccess(key);
+    reportKeySuccess(key, model);
     return res;
   }
   if (res.status !== 429 && res.status !== 401) {
@@ -230,14 +325,21 @@ async function rotateGoogle(url: any, init: any, attempted: Set<string>): Promis
   // first attempt and the replay, which could prevent the backup leg from ever
   // being selected.
   recordLastFailure(res.status, res.statusText, body, res.headers);
-  const heldMs = reportKeyFailure(key, body);
-  const next = currentKey(attempted);
+  const heldMs = reportKeyFailure(key, model, body);
+  const next = currentKey(attempted, model);
   if (!next) {
-    console.log(`[google] every pooled key failed on this call — returning the ${res.status} upstream`);
-    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+    console.log(`[google] every pooled key failed on this call — failing over to the backup leg`);
+    const err: any = new Error(body);
+    err.status = res.status;
+    err.statusText = res.statusText;
+    err.body = body;
+    err.headers = res.headers;
+    err.name = 'ProviderRequestTimeoutError';
+    err.code = 'PROVIDER_REQUEST_TIMEOUT';
+    throw err;
   }
   console.log(`[google] key ${fingerprint(key)} held for ${Math.round(heldMs / 1000)}s — retrying with ${fingerprint(next)}`);
-  return rotateGoogle(url, init, attempted);
+  return rotateGoogle(url, init, attempted, model);
 }
 
 // llama.cpp / vLLM / LM Studio honour chat_template_kwargs.enable_thinking=false;

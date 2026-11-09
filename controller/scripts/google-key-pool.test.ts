@@ -21,6 +21,8 @@ import { join } from 'node:path';
 
 process.env.STATE_DIR ??= mkdtempSync(join(tmpdir(), 'google-pool-'));
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import { googleKeyFetch } from '../src/llm/internal/provider/registry.js';
 import {
   __expireHoldsForTest,
   __resetHoldsForTest,
@@ -28,8 +30,8 @@ import {
   currentKey,
   fingerprint,
   getLastFailure,
-  holdRemainingMs,
   GOOGLE_KEY_MAX,
+  holdRemainingMs,
   poolKeyProblem,
   invalidatePool,
   parsePool,
@@ -47,11 +49,12 @@ import {
   reportKeySuccess,
 } from '../src/util/google-key-pool.js';
 import {
-  GEMINI_NO_HINT_MAX_MS,
   GEMINI_AUTH_PARK_MS,
+  GEMINI_NO_HINT_MAX_MS,
   GEMINI_NO_HINT_MIN_MS,
   classifyGeminiFailure,
   hasDailyQuotaViolation,
+  msUntilMidnightPacific,
   noHintCooldownMs,
   parseDurationMs,
   parseGeminiRetryDelayMs,
@@ -154,8 +157,9 @@ test('daily exhaustion parks for hours, ignoring any short RetryInfo', () => {
   });
   assert.equal(hasDailyQuotaViolation(body), true);
   const ms = resolveGeminiCooldownMs(body);
-  assert.ok(ms >= GEMINI_NO_HINT_MIN_MS && ms <= GEMINI_NO_HINT_MAX_MS,
-    `expected an hours-scale park, got ${ms}ms`);
+  const untilReset = msUntilMidnightPacific();
+  assert.ok(ms >= untilReset - 1_000 && ms <= untilReset + 1_000,
+    `expected hold until midnight Pacific (~${untilReset}ms from now), got ${ms}ms`);
 });
 
 test('a plain per-minute 429 takes Google at its word', () => {
@@ -277,39 +281,39 @@ test('an unconfigured pool is inert: currentKey is empty, not a crash', () => {
 test('selection is primary-first, not round-robin', () => {
   setPool(K1, K2, K3);
   assert.equal(currentKey(), K1);
-  reportKeyFailure(K1, JSON.stringify({ error: { message: 'Please retry in 30s.' } }));
+  reportKeyFailure(K1, undefined, JSON.stringify({ error: { message: 'Please retry in 30s.' } }));
   assert.equal(currentKey(), K2, 'must move down the list');
-  reportKeyFailure(K2, JSON.stringify({ error: { message: 'Please retry in 30s.' } }));
+  reportKeyFailure(K2, undefined, JSON.stringify({ error: { message: 'Please retry in 30s.' } }));
   assert.equal(currentKey(), K3);
 });
 
 test('a successful key clears its hold so it is retried later', () => {
   setPool(K1, K2);
-  reportKeyFailure(K1, 'Please retry in 5s.');
-  assert.ok(holdRemainingMs(K1) > 0);
-  reportKeySuccess(K1);
-  assert.equal(holdRemainingMs(K1), 0);
+  reportKeyFailure(K1, undefined, 'Please retry in 5s.');
+  assert.ok(holdRemainingMs(K1, undefined) > 0);
+  reportKeySuccess(K1, undefined);
+  assert.equal(holdRemainingMs(K1, undefined), 0);
   assert.equal(currentKey(), K1, 'key 1 must come back once it works again');
 });
 
 test('an expired hold is reaped, not remembered forever', async () => {
   setPool(K1, K2);
-  reportKeyFailure(K1, JSON.stringify({
+  reportKeyFailure(K1, undefined, JSON.stringify({
     error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '5ms' }] },
   }));
   assert.equal(currentKey(), K2, 'a live hold is skipped');
   // Wait past the window rather than racing it.
   await new Promise(r => setTimeout(r, 25));
-  assert.equal(holdRemainingMs(K1), 0, 'the hold must lapse, not stick');
+  assert.equal(holdRemainingMs(K1, undefined), 0, 'the hold must lapse, not stick');
   assert.equal(currentKey(), K1, 'key 1 must be retried once its window passes');
   assert.equal(poolStatus()[0].held, false);
 });
 
 test('the rotation path gets nothing from an exhausted pool, but one-shot callers still do', () => {
   setPool(K1, K2);
-  reportKeyFailure(K1, 'Please retry in 5s.');
-  reportKeyFailure(K2, 'Please retry in 5s.');
-  assert.equal(allKeysHeld(), true);
+  reportKeyFailure(K1, undefined, 'Please retry in 5s.');
+  reportKeyFailure(K2, undefined, 'Please retry in 5s.');
+  assert.equal(allKeysHeld(undefined), true);
   // The two answers are deliberately different, and conflating them was a bug.
   // currentKey() is what rotation calls: it must return '' rather than the head,
   // or the transport spends a guaranteed extra request on a key it has just been
@@ -328,7 +332,7 @@ test('currentKey never returns a key the caller excluded, even once its hold lap
   // Excluding is request-local state, so it holds regardless of timer timing.
   setPool(K1, K2);
   const attempted = new Set([K1]);
-  reportKeyFailure(K1, JSON.stringify({
+  reportKeyFailure(K1, undefined, JSON.stringify({
     error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '0.01s' }] },
   }));
   assert.equal(currentKey(attempted), K2);
@@ -345,7 +349,7 @@ test('currentKey never returns a key the caller excluded, even once its hold lap
 
 test('pool status exposes fingerprints and timers, never key material', () => {
   setPool(K1, K2);
-  reportKeyFailure(K1, 'Please retry in 30s.');
+  reportKeyFailure(K1, undefined, 'Please retry in 30s.');
   const status = poolStatus();
   assert.equal(status.length, 2);
   const serialised = JSON.stringify(status);
@@ -385,14 +389,14 @@ test('googleKeyFetch re-stamps the header with the next live key', async () => {
     assert.deepEqual(sent, [K1, K2], 'second attempt must carry the next key');
     // The exhausted key is parked for the hinted window, not for hours: this
     // body is a per-minute 429, not a PerDay violation.
-    const held = holdRemainingMs(K1);
+    const held = holdRemainingMs(K1, 'x');
     assert.ok(held > 0 && held <= 25_000, `expected the hinted ~20s park, got ${held}ms`);
   } finally {
     globalThis.fetch = realFetch;
   }
 });
 
-test('an exhausted pool surfaces the 429 instead of looping', async () => {
+test('an exhausted pool throws 429 instead of looping', async () => {
   setPool(K1);
   const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
   const realFetch = globalThis.fetch;
@@ -402,12 +406,12 @@ test('an exhausted pool surfaces the 429 instead of looping', async () => {
     return new Response(JSON.stringify({ error: { message: 'Please retry in 20s.' } }), { status: 429 });
   }) as typeof fetch;
   try {
-    const res = await googleKeyFetch('https://example.test/v1/x', {});
-    assert.equal(res.status, 429, 'the 429 must reach the caller so failover can escalate');
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 429 && err.message.includes('retry in 20s'),
+      'the 429 must be thrown so failover can escalate',
+    );
     assert.equal(calls, 1, 'must not re-issue against the same spent key');
-    // The body survives the read, which is what lets withFailover classify it.
-    const body = (await res.json()) as any;
-    assert.match(body.error.message, /retry in 20s/);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -521,7 +525,7 @@ test('the add endpoint appends from entries and refuses a duplicate', async () =
   assert.match(body, /entries\.length >= GOOGLE_POOL_MAX/);
 });
 
-test('an exhausted pool costs exactly ONE attempt per key, never a second pass', async () => {
+test('an exhausted pool throws 429 after one attempt per key, never a second pass', async () => {
   // Found by the live rotation probe: the old check compared `next === key`,
   // and currentKey() falls back to the head once everything is held — so the
   // last real key always looked like a change and the head was tried a second
@@ -535,8 +539,11 @@ test('an exhausted pool costs exactly ONE attempt per key, never a second pass',
     return new Response(JSON.stringify({ error: { message: 'Please retry in 20s.' } }), { status: 429 });
   }) as typeof fetch;
   try {
-    const res = await googleKeyFetch('https://example.test/v1/x', {});
-    assert.equal(res.status, 429);
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 429 && err.message.includes('retry in 20s'),
+      'the 429 must be thrown so failover can escalate',
+    );
     assert.equal(seen.length, 3, `one attempt per key, got ${seen.length} for a 3-key pool`);
     assert.deepEqual(seen, [K1, K2, K3], 'each key tried exactly once, in order');
   } finally {
@@ -573,8 +580,11 @@ test('a hold SHORTER than the request still costs one attempt per key', async ()
     return new Response(JSON.stringify({ error: { message: 'Please retry in 0.01s.' } }), { status: 429 });
   }) as typeof fetch;
   try {
-    const res = await googleKeyFetch('https://example.test/v1/x', {});
-    assert.equal(res.status, 429);
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 429 && err.message.includes('retry in 0.01s'),
+      'the 429 must be thrown so failover can escalate',
+    );
     assert.equal(seen.length, 2, `one attempt per key, got ${seen.length} for a 2-key pool`);
     assert.deepEqual(seen, [K1, K2], 'an expired hold must not hand the failed key back');
   } finally {
@@ -726,14 +736,14 @@ test('escalation NEVER overrides an explicit RetryInfo', () => {
 test('a key that succeeds has its escalation history forgotten', () => {
   setPool(K1, K2);
   const burst = code('rate_limit_exceeded');
-  reportKeyFailure(K1, burst);
-  reportKeyFailure(K1, burst);
-  reportKeyFailure(K1, burst);
+  reportKeyFailure(K1, undefined, burst);
+  reportKeyFailure(K1, undefined, burst);
+  reportKeyFailure(K1, undefined, burst);
   assert.equal(poolStatus()[0].strikes, 3);
-  reportKeySuccess(K1);
+  reportKeySuccess(K1, undefined);
   assert.equal(poolStatus()[0].strikes, 0, 'a recovered key starts fresh');
   // And its next failure is back to the short interval, not the escalated one.
-  const after = reportKeyFailure(K1, burst);
+  const after = reportKeyFailure(K1, undefined, burst);
   assert.ok(after <= 60_000, `expected the short interval again, got ${after}ms`);
 });
 
@@ -769,7 +779,7 @@ test('a ZERO RetryInfo is treated as no hint, never as a zero-length hold', () =
   assert.ok(resolveGeminiCooldownMs(zero) > 0, 'a zero hint must still park for a real interval');
 });
 
-test('an exhausted pool short-circuits WITHOUT a request, and replays the real body', async () => {
+test('an exhausted pool throws 429 without a request, and replays the real body', async () => {
   // Checking after the fact meant every generation spent a request on a
   // credential already known dead, got the same 429 back, and only then
   // noticed — a guaranteed extra round-trip per call that also kept hammering
@@ -787,19 +797,31 @@ test('an exhausted pool short-circuits WITHOUT a request, and replays the real b
     }), { status: 429, statusText: 'Too Many Requests' });
   }) as typeof fetch;
   try {
-    const first = await googleKeyFetch('https://example.test/v1/x', {});
-    assert.equal(first.status, 429);
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 429 && err.message.includes('quota_exceeded'),
+      'first call throws 429 so failover can escalate',
+    );
     const learned = call;
-    // Pool is now spent. These must cost nothing at all.
+    // Pool is now spent. These must cost nothing at all — thrown synchronously,
+    // no network I/O.
     for (let i = 0; i < 5; i++) {
-      const res = await googleKeyFetch('https://example.test/v1/x', {});
-      assert.equal(res.status, 429, 'still a real 429 for failover to classify');
+      await assert.rejects(
+        googleKeyFetch('https://example.test/v1/x', {}),
+        (err: any) => err.status === 429,
+        'still a real 429 for failover to classify',
+      );
     }
     assert.equal(call, learned, 'no further network I/O once the pool is spent');
     assert.deepEqual(seen, [K1, K2], 'only one attempt per key, ever');
     // And the replayed body is the provider's own, so the reason survives.
-    const body = (await (await googleKeyFetch('https://example.test/v1/x', {})).json()) as any;
-    assert.equal(body.error.code, 'quota_exceeded');
+    let lastErr: any;
+    try {
+      await googleKeyFetch('https://example.test/v1/x', {});
+    } catch (err) {
+      lastErr = err;
+    }
+    assert.equal(lastErr.message.includes('quota_exceeded'), true, 'replayed body is the provider\'s own');
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -815,11 +837,14 @@ test('a successful call clears the recorded failure it would otherwise replay', 
     return call === 1 ? new Response(code('quota_exceeded'), { status: 429 }) : new Response('{}', { status: 200 });
   }) as typeof fetch;
   try {
+    // K1 429s → held → try K2 → 200. Rotation produces success on the same call.
     assert.equal((await googleKeyFetch('https://example.test/v1/x', {})).status, 200);
     // K1's hold is still set from the first call, so the replay path is not
     // reachable — but the failure record must not outlive a working key either.
     assert.equal(getLastFailure()?.status ?? 429, 429);
+    // Hold expired between calls; K2 answers 200 again.
     assert.equal((await googleKeyFetch('https://example.test/v1/x', {})).status, 200);
+    assert.equal(getLastFailure(), null, 'a 200 must drop the recorded failure');
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -840,8 +865,11 @@ test('the transport itself forgets a recovered pool — no helper called by hand
     globalThis.fetch = (async () => new Response(
       code('quota_exceeded'), { status: 429, headers: { 'retry-after': '3600' } },
     )) as unknown as typeof fetch;
-    const exhausted = await googleKeyFetch('https://example.test/v1/x', {});
-    assert.equal(exhausted.status, 429);
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 429 && err.code === 'PROVIDER_REQUEST_TIMEOUT',
+      'single-key pool throws 429 so failover can escalate',
+    );
     assert.ok(getLastFailure(), 'the failure must be recorded for the replay to carry');
 
     // 2. The hold expires and the SAME key answers 200. The transport's success
@@ -857,7 +885,11 @@ test('the transport itself forgets a recovered pool — no helper called by hand
     //    unexercised: a fresh pool that DOES fail still records truthfully.
     setPool(K2);
     globalThis.fetch = (async () => new Response(code('quota_exceeded'), { status: 429 })) as unknown as typeof fetch;
-    await googleKeyFetch('https://example.test/v1/x', {});
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 429 && err.code === 'PROVIDER_REQUEST_TIMEOUT',
+      'fresh pool failure still records truthfully',
+    );
     assert.equal(getLastFailure()?.status, 429,
       'clearing on success must not clear on the next failure');
   } finally {
@@ -1268,19 +1300,29 @@ test('a replayed exhausted-pool response keeps the Retry-After header', async ()
   )) as unknown as typeof fetch;
   try {
     // First call makes the request and is 429; that parks the only key.
-    await googleKeyFetch('https://example.test/v1/x', {});
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 429 && err.headers.get('retry-after') === '3600',
+      'first call throws 429 with Retry-After',
+    );
     // Second call must short-circuit — but keep enough for the retry layer to
     // classify it the same way. Losing `Retry-After` changed the timing
     // classification between the original and its replay, which could stop the
     // backup leg from ever being selected.
-    const replay = await googleKeyFetch('https://example.test/v1/x', {});
-    assert.equal(replay.status, 429);
-    // The UPSTREAM value, not merely a hint: the caller sets a 60s default when
-    // the record carries none, so asserting only that SOME retry-after exists
-    // passed even with the recorded headers thrown away — which is the defect
-    // this test exists for. A 3600s hold replayed as 60s mis-times the retry
-    // layer and can prevent the backup leg from ever being selected.
-    assert.equal(replay.headers.get('retry-after'), '3600',
+    let err: any;
+    try {
+      await googleKeyFetch('https://example.test/v1/x', {});
+      assert.fail('expected 429 to be thrown');
+    } catch (e) {
+      err = e;
+    }
+    // The replayed response carries the upstream Retry-After header so the
+    // retry/failover layers classify it identically to the original response.
+    // Losing it changed the timing classification and could prevent the
+    // backup leg from ever being selected — which is the defect this test
+    // exists for. A 3600s hold replayed as 60s mis-times the retry layer.
+    const headers = err?.headers || {};
+    assert.equal(headers['retry-after'], '3600',
       'the replay must carry the upstream retry hint, not the fallback default');
   } finally {
     globalThis.fetch = realFetch;
@@ -1361,7 +1403,7 @@ test('a client can be built while every key is held, and works once the hold lap
     // K1 429s and is parked for 30s.
     status = 429;
     await generateText({ model: languageModel(cfg as any), prompt: 'hi', maxOutputTokens: 8 }).catch(() => {});
-    assert.equal(allKeysHeld(), true, 'precondition: the only key is parked');
+    assert.equal(allKeysHeld('gemini-3.5-flash-lite'), true, 'precondition: the only key is parked');
 
     // Clear the cache HERE, not at the top. The call above already built and
     // cached a client — while K1 was still live, so its construction key was
@@ -1419,7 +1461,11 @@ async function lapsedButTainted(fetchImpl: () => Promise<Response>): Promise<num
     { status: 429, headers: { 'content-type': 'application/json' } },
   )) as unknown as typeof fetch;
   const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
-  await googleKeyFetch('https://example.test/v1/x', {});
+  await assert.rejects(
+    googleKeyFetch('https://example.test/v1/x', {}),
+    (err: any) => err.status === 429 && err.code === 'PROVIDER_REQUEST_TIMEOUT',
+    'single-key pool throws 429 so failover can escalate',
+  );
   const strikes = poolStatus()[0].strikes;
   assert.ok(strikes >= 1, 'precondition: the key carries a failure');
   assert.ok(getLastFailure(), 'precondition: a quota failure is on record');
@@ -1480,8 +1526,12 @@ test('a 429 then a 200 on the same key does clear it — the fix is not over-bro
   )) as unknown as typeof fetch;
   try {
     setPool(K1);
-    await googleKeyFetch('https://example.test/v1/x', {});
-    assert.equal(allKeysHeld(), true, 'precondition: the only key is parked');
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 429 && err.code === 'PROVIDER_REQUEST_TIMEOUT',
+      'single-key pool throws 429',
+    );
+    assert.equal(allKeysHeld(undefined), true, 'precondition: the only key is parked');
     assert.ok(getLastFailure(), 'precondition: a failure is on record');
 
     __expireHoldsForTest();
@@ -1534,4 +1584,126 @@ test('a comma in one pasted key never becomes two credentials', () => {
   assert.equal(poolSize(), 2, 'this is the bug being pinned — one paste, two slots');
   // And the fix at the boundary means that shape can no longer be WRITTEN.
   assert.ok(poolKeyProblem(`${K1},${K2}`), 'so the entry point refuses it');
+});
+
+// ─── per-key timeout ─────────────────────────────────────────────────────────
+// A hung key must not block the station. The per-key timeout aborts it, holds
+// it briefly, and moves to the next key in order. Keys are never reordered by
+// health — a stalled key is skipped by a short hold, not moved.
+
+test('a hung key is aborted at the per-key limit and the next key answers', async () => {
+  // A short timeout keeps the test fast; the default is ~10s.
+  const origTimeoutMs = process.env.GOOGLE_POOL_PER_KEY_TIMEOUT_MS;
+  process.env.GOOGLE_POOL_PER_KEY_TIMEOUT_MS = '50';
+  invalidatePool();
+  __resetHoldsForTest();
+
+  setPool(K1, K2, K3);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const seen: string[] = [];
+  // K1 is slow (200ms), will be timed out at 50ms. K2 answers immediately.
+  globalThis.fetch = (async (_url: any, init: any) => {
+    seen.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    const key = new Headers(init?.headers || {}).get('x-goog-api-key');
+    if (key === K1) {
+      return new Promise((resolve) => setTimeout(() => resolve(new Response('{}', { status: 200 })), 200));
+    }
+    return new Response('{}', { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const res = await googleKeyFetch(
+      'https://example.test/v1/models/x:generateContent',
+      { method: 'POST' },
+    );
+    assert.equal(res.status, 200, 'the next key must answer');
+    assert.deepEqual(seen, [K1, K2], 'K1 tried then aborted at timeout, K2 answers');
+    // K1 is parked briefly for the stall (burst no-hint default is 60s),
+    // not for hours like a 429 daily quota.
+    const held = holdRemainingMs(K1, 'x');
+    assert.ok(held > 0, 'a stalled key is held');
+    assert.ok(held <= 60_000, 'the stall hold is short, not hours');
+  } finally {
+    globalThis.fetch = realFetch;
+    if (origTimeoutMs === undefined) {
+      delete process.env.GOOGLE_POOL_PER_KEY_TIMEOUT_MS;
+    } else {
+      process.env.GOOGLE_POOL_PER_KEY_TIMEOUT_MS = origTimeoutMs;
+    }
+    invalidatePool();
+    setPool();
+  }
+});
+
+test('a key 429 on one model is still usable on another', async () => {
+  // Quotas are per project AND per model. A key daily-exhausted on
+  // gemini-3.8-flash can still serve gemini-flash-lite. The hold is keyed by
+  // key + model, so model A's exhaustion does not park the key for model B.
+  setPool(K1);
+  const { googleKeyFetch, currentKey, allKeysHeld } =
+    await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  try {
+    // K1 429s on model A with a daily quota.
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ error: { code: 429, message: 'quota', details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'generate_requests_per_model_per_day' }] }] } }),
+      { status: 429 },
+    )) as typeof fetch;
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/models/a:generateContent', { method: 'POST' }),
+      (err: any) => err.status === 429,
+      'model A is exhausted on the only key',
+    );
+    // K1 is held for model A but NOT for model B.
+    assert.equal(currentKey(undefined, 'b'), K1, 'model B can still use key 1');
+    assert.equal(allKeysHeld('a'), true, 'all keys held for model A');
+    assert.equal(allKeysHeld('b'), false, 'not all keys held for model B');
+  } finally {
+    globalThis.fetch = realFetch;
+    invalidatePool();
+    setPool();
+  }
+});
+
+test('key order is unchanged after stalls and failures', async () => {
+  // The order is the feature — free keys first, paid key last. Stalls and
+  // failures must not reorder the pool.
+  setPool(K1, K2, K3);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  try {
+    let call = 0;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      call++;
+      const key = new Headers(init?.headers || {}).get('x-goog-api-key');
+      if (key === K1) {
+        // K1 is slow (200ms), will be timed out at 50ms. Then K2 429s, then K3 answers.
+        if (call === 1) {
+          return new Promise((resolve) => setTimeout(() => resolve(new Response('{}', { status: 200 })), 200));
+        }
+        if (call === 2) {
+          return new Response(JSON.stringify({ error: { code: 429, message: 'quota' } }), { status: 429 });
+        }
+      }
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+
+    try {
+      const res = await googleKeyFetch(
+        'https://example.test/v1/models/x:generateContent',
+        { method: 'POST' },
+      );
+      assert.equal(res.status, 200, 'K3 answers after K1 stalls and K2 429s');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+
+    // The pool order must be unchanged: [K1, K2, K3].
+    const order = poolEntries().map(e => e.key);
+    assert.deepEqual(order, [K1, K2, K3], 'key order is preserved after stalls and failures');
+  } finally {
+    invalidatePool();
+    setPool();
+  }
 });

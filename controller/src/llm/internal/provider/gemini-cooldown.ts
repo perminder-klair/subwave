@@ -198,6 +198,37 @@ export function noHintCooldownMs(random: () => number = Math.random): number {
   return GEMINI_NO_HINT_MIN_MS + Math.floor(random() * spread);
 }
 
+/** Milliseconds until midnight Pacific time, when Google's free-tier daily
+ *  quota resets. A daily-exhausted key is held until this moment so it is never
+ *  re-probed and re-parked before the quota can possibly have cleared.
+ *
+ *  Computed by comparing UTC and Pacific wall-clock to derive the current
+ *  Pacific offset (7h PDT / 8h PST), then aiming at the next midnight in the
+ *  America/Los_Angeles timezone. Off by at most an hour across a DST transition
+ *  — acceptable for a hold that is re-checked on every 429 anyway. */
+export function msUntilMidnightPacific(): number {
+  const now = new Date();
+  // Derive the Pacific offset (7h PDT / 8h PST) from UTC vs Pacific wall-clock.
+  const hourPacific = Number(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles', hour: '2-digit', hour12: false,
+  }).format(now));
+  const hourUTC = now.getUTCHours();
+  const offsetHours = (hourUTC - hourPacific + 24) % 24;
+  // Pacific date components.
+  const dateParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const year = Number(dateParts.find(p => p.type === 'year')!.value);
+  const month = Number(dateParts.find(p => p.type === 'month')!.value);
+  const day = Number(dateParts.find(p => p.type === 'day')!.value);
+  // Midnight Pacific tonight = this date at offsetHours UTC.
+  const tonight = Date.UTC(year, month - 1, day, offsetHours, 0, 0);
+  // If it has already passed, aim at tomorrow night instead.
+  const target = now.getTime() < tonight ? tonight : tonight + 24 * 60 * 60 * 1000;
+  return target - now.getTime();
+}
+
 /** The whole policy in one decision, driven by the classified failure rather
  *  than by sniffing the body twice:
  *
@@ -216,7 +247,9 @@ export function resolveGeminiCooldownMs(
   const kind = classifyGeminiFailure(raw);
   switch (kind) {
     case 'daily':
-      return noHintCooldownMs(random);
+      // Hold until the daily quota resets at midnight Pacific, so the key is
+      // never re-probed and re-parked while the allowance is still exhausted.
+      return msUntilMidnightPacific();
     case 'burst': {
       // An explicit RetryInfo is taken AT ITS WORD, even against the escalation
       // below. Google said twenty seconds; holding the key a minute because it

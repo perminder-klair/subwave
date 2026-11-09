@@ -13,6 +13,11 @@ across several Google accounts. Google can lower a project's quota, change how i
 is enforced, or restrict it without notice, and free-tier limits have changed
 before.
 
+Quotas are **per project and per model** — a daily-exhausted key on
+`gemini-3.8-flash` can still serve `gemini-3.6-flash`. The pool tracks holds by
+key *and* model, so a key that is parked on one model remains available for
+another.
+
 The key pool solves that: give the station **several keys, cheapest first**, and
 it fails forward through them instead of stopping.
 
@@ -131,15 +136,21 @@ A `429` doesn't always mean the same thing, and treating them the same either
 wastes a key or wastes time:
 
 - **Daily exhaustion** — the response names a `…PerDay…` quota. Nothing clears
-  until the quota resets, so the key is parked for **1–3 hours**, randomised.
-  This matters because Google attaches a short `RetryInfo` to these responses
-  too; honouring it means sleeping a few seconds, waking, and immediately
-  hitting another `429`.
+  until the quota resets at midnight Pacific time, so the key is parked until
+  then. Google attaches a short `RetryInfo` to these responses too; honouring
+  it means sleeping a few seconds, waking, and immediately hitting another
+  `429`.
 - **A per-minute rate limit** — Google says how long in seconds. That number is
   taken at its word and the key comes back that quickly. The admin list rounds
   this up to whole minutes, so `held ~1m` can be a few seconds.
 - **No usable hint** — parked for 1–3 hours, randomised, so a pool of keys
   sharing one quota policy doesn't all wake on the same second.
+
+**A stalled key is aborted.** The pool waits only a few seconds (default 10s,
+configurable via `GOOGLE_POOL_PER_KEY_TIMEOUT_MS`) for a key to answer before
+giving up on it — a hung key never blocks the station for a full minute. The
+stalled key is parked briefly and the next key in order is tried. Keys are **never
+reordered by health**; a stalled key is skipped by a short hold, not moved.
 
 **Two statuses park a key**, and the second is worth stating separately:
 
@@ -171,10 +182,10 @@ the request itself rather than read from the hold timers: a short retry hint can
 expire while the request that follows it is still in flight, and a bound derived
 from the timers would let the key that just failed come back as eligible and be
 retried — with two keys and a 10-second hint that repeats indefinitely. When
-every key has been tried, the station replays the last real quota failure (with
-its `Retry-After`, so the retry and failover layers still classify it correctly)
-without spending another request, and the caller's existing backup leg takes
-over.
+every key has been tried or stalled, the station replays the last real quota
+failure (with its `Retry-After`, so the retry and failover layers still classify
+it correctly) without spending another request, and the caller's existing backup
+leg takes over.
 
 ## What the pool covers today
 

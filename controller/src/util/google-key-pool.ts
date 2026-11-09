@@ -39,6 +39,11 @@ interface Hold {
   until: number;
   /** Mirrors GeminiFailure, minus 'billing'/'other' which never park. */
   reason: 'daily' | 'burst' | 'auth' | 'unknown';
+  /** The model this hold applies to. Quotas are per project AND per model, so a
+   *  key daily-exhausted on gemini-3.8-flash may still serve gemini-flash-lite.
+   *  Absent (undefined) means "all models" — the legacy behaviour before per-model
+   *  holds existed, kept so a hold set before this field existed still applies. */
+  model?: string;
 }
 
 export interface PoolEntry {
@@ -49,8 +54,10 @@ export interface PoolEntry {
 
 let holds = new Map<string, Hold>();
 
-// Consecutive failures without an intervening success, per key. This is the
-// circuit-breaker state, and it matters most for `burst`.
+// Consecutive failures without an intervening success, per key + model. This is
+// the circuit-breaker state, and it matters most for `burst`. Quotas are per
+// project AND per model, so a key daily-exhausted on gemini-3.8-flash can still
+// serve gemini-flash-lite — each model tracks its own strikes.
 //
 // A per-minute limit really does clear in a minute, but a key whose DAILY
 // quota is gone can also arrive labelled as a rate limit — and a flat
@@ -62,6 +69,40 @@ let holds = new Map<string, Hold>();
 //
 // Reset on success, so a key that recovers is trusted again immediately.
 const strikes = new Map<string, number>();
+
+// Composite key for the per-model hold/strike maps. A hold set before per-model
+// holds existed (model === undefined) is stored under the '__all__' suffix and
+// applies to every model.
+function holdMapKey(key: string, model?: string): string {
+  return key + '\0' + (model || '__all__');
+}
+
+// The hold for a key + model, falling back to a model-less hold. Called without
+// a model, it returns any hold on the key (model-less first, then the first
+// model-specific hold) — used by poolStatus and by legacy callers that don't
+// know the model.
+function holdFor(key: string, model?: string): Hold | undefined {
+  if (model) {
+    return holds.get(holdMapKey(key, model)) ?? holds.get(holdMapKey(key));
+  }
+  const modelLess = holds.get(holdMapKey(key));
+  if (modelLess) return modelLess;
+  const keyPrefix = key + '\0';
+  for (const [k, v] of holds) {
+    if (k.startsWith(keyPrefix) && k !== key + '\0__all__') return v;
+  }
+  return undefined;
+}
+
+// The highest strike count across all models for this key — what the UI shows
+// as "failing N× in a row" for the key regardless of which model last failed.
+function strikesFor(key: string): number {
+  let max = 0;
+  for (const [k, n] of strikes) {
+    if (k.startsWith(key + '\0')) max = Math.max(max, n);
+  }
+  return max;
+}
 let poolCache: { entries: PoolEntry[]; at: number } | null = null;
 
 // Parsed on every access in principle; cached briefly so a hot loop (the DJ
@@ -244,7 +285,7 @@ export function poolSize(): number {
 
 /**
  * The key to send right now: the first in configured order that is neither
- * held nor already tried on this call.
+ * held for this model nor already tried on this call.
  *
  * `exclude` is REQUEST-LOCAL state and is the whole reason traversal terminates.
  * Holds alone are not a bound: a short RetryInfo (or any hint shorter than the
@@ -254,19 +295,26 @@ export function poolSize(): number {
  * A,B,A,B,A,B… indefinitely. At most one attempt per key per call is a property
  * of the CALL, so it is tracked per call.
  *
+ * `model` scopes the hold check: a key daily-exhausted on gemini-3.8-flash may
+ * still serve gemini-flash-lite, so the hold is only consulted for the model
+ * this call is actually making.
+ *
  * Returns '' only when nothing is configured. Note the exhausted-pool case
  * deliberately does NOT fall back to the head: a caller asking for a key must
  * not be handed one it has already been told is dead. Callers that want a real
  * attempt anyway (a one-shot preview, the Test button) ask for it explicitly.
  */
-export function currentKey(exclude?: ReadonlySet<string>): string {
+export function currentKey(exclude?: ReadonlySet<string>, model?: string): string {
   const now = Date.now();
   const keys = poolKeys();
   for (const key of keys) {
     if (exclude?.has(key)) continue;
-    const hold = holds.get(key);
+    // Model-specific hold first, then fall back to model-less ("all models").
+    const mapKey = model ? holdMapKey(key, model) : holdMapKey(key);
+    let hold = holds.get(mapKey);
+    if (!hold && model) hold = holds.get(holdMapKey(key));
     if (!hold || hold.until <= now) {
-      if (hold) holds.delete(key);
+      if (hold) holds.delete(mapKey);
       return key;
     }
   }
@@ -278,56 +326,77 @@ export function currentKey(exclude?: ReadonlySet<string>): string {
  * head anyway, so a preview or a Test-key button still gets a real answer from
  * a real request instead of failing on a transient state.
  *
+ * `model` scopes the hold check the same way as `currentKey()`.
+ *
  * Deliberately NOT what the rotation path uses. There, handing back a held key
  * is what produced a guaranteed extra 429 per call against a credential the
  * operator already knows is dead.
  */
-export function currentKeyOrHead(exclude?: ReadonlySet<string>): string {
-  return currentKey(exclude) || currentKey() || poolKeys()[0] || '';
+export function currentKeyOrHead(exclude?: ReadonlySet<string>, model?: string): string {
+  return currentKey(exclude, model) || currentKey(undefined, model) || poolKeys()[0] || '';
 }
 
-/** True when every configured key is currently parked. The failover layer asks
- *  this to decide whether an exhausted pool should escalate to the backup leg
- *  immediately rather than after burning another call. */
-export function allKeysHeld(): boolean {
+/** True when every configured key is currently parked FOR THIS MODEL. The
+ *  failover layer asks this to decide whether an exhausted pool should escalate
+ *  to the backup leg immediately rather than after burning another call. */
+export function allKeysHeld(model?: string): boolean {
   const keys = poolKeys();
   if (!keys.length) return false;
   const now = Date.now();
   return keys.every((k) => {
-    const h = holds.get(k);
-    if (!h) return false;
-    if (h.until <= now) { holds.delete(k); return false; }
+    const mapKey = model ? holdMapKey(k, model) : holdMapKey(k);
+    const h = holds.get(mapKey);
+    if (!h) {
+      // No model-specific hold; check model-less ("all models") hold.
+      if (!model) return false;
+      const h2 = holds.get(holdMapKey(k));
+      if (!h2) return false;
+      if (h2.until <= now) { holds.delete(holdMapKey(k)); return false; }
+      return true;
+    }
+    if (h.until <= now) { holds.delete(mapKey); return false; }
     return true;
   });
 }
 
-export function holdRemainingMs(key: string): number {
-  const h = holds.get(key);
-  if (!h) return 0;
+export function holdRemainingMs(key: string, model?: string): number {
+  const mapKey = model ? holdMapKey(key, model) : holdMapKey(key);
+  const h = holds.get(mapKey);
+  if (!h) {
+    if (!model) return 0;
+    // No model-specific hold; fall back to model-less.
+    const h2 = holds.get(holdMapKey(key));
+    if (!h2) return 0;
+    const left = h2.until - Date.now();
+    if (left <= 0) { holds.delete(holdMapKey(key)); return 0; }
+    return left;
+  }
   const left = h.until - Date.now();
-  if (left <= 0) { holds.delete(key); return 0; }
+  if (left <= 0) { holds.delete(mapKey); return 0; }
   return left;
 }
 
-export function isHeld(key: string): boolean {
-  return holdRemainingMs(key) > 0;
+export function isHeld(key: string, model?: string): boolean {
+  return holdRemainingMs(key, model) > 0;
 }
 
-/** Park a key. `bodyText` is the raw error body — it carries the machine-readable
- *  `error.code`, the retry hint and the daily-vs-per-minute distinction.
- *  Returns the hold length so a caller can log it. */
-export function reportKeyFailure(key: string, bodyText?: unknown): number {
+/** Park a key for a model. `bodyText` is the raw error body — it carries the
+ *  machine-readable `error.code`, the retry hint and the daily-vs-per-minute
+ *  distinction. `model` scopes the hold: a key daily-exhausted on one model may
+ *  still serve another. Returns the hold length so a caller can log it. */
+export function reportKeyFailure(key: string, model?: string, bodyText?: unknown): number {
   if (!key) return 0;
   const kind = classifyGeminiFailure(bodyText);
-  const n = (strikes.get(key) ?? 0);
-  strikes.set(key, n + 1);
+  const mapKey = holdMapKey(key, model);
+  const n = (strikes.get(mapKey) ?? 0);
+  strikes.set(mapKey, n + 1);
   // The cooldown module owns the escalation ladder and, critically, applies it
   // ONLY when Google gave no hint — an explicit RetryInfo is never overridden.
   const ms = resolveGeminiCooldownMs(bodyText, Math.random, n + 1);
   const reason: Hold['reason'] = kind === 'daily' || kind === 'burst' || kind === 'auth'
     ? kind
     : 'unknown';
-  holds.set(key, { until: Date.now() + ms, reason });
+  holds.set(mapKey, { until: Date.now() + ms, reason, model });
   return ms;
 }
 
@@ -381,11 +450,15 @@ export function getLastFailure(): { status: number; statusText: string; body: st
 
 /** Clear a hold — a key that just succeeded was demonstrably not exhausted, so
  *  its escalation history resets too and the next failure starts from the
- *  short interval again. */
-export function reportKeySuccess(key: string): void {
+ *  short interval again. `model` scopes which hold is cleared; a key that
+  // recovered on gemini-flash-lite is not automatically trusted on
+  // gemini-3.8-flash. */
+export function reportKeySuccess(key: string, model?: string): void {
   if (!key) return;
-  holds.delete(key);
-  strikes.delete(key);
+  holds.delete(holdMapKey(key, model));
+  holds.delete(holdMapKey(key)); // also clear any model-less ("all models") hold
+  strikes.delete(holdMapKey(key, model));
+  strikes.delete(holdMapKey(key));
   // The RECORDED failure is about the pool, not about one key, so a key that
   // just answered invalidates it. Left in place, an exhausted-pool replay kept
   // answering with a quota error for a pool whose keys had all since recovered
@@ -424,10 +497,14 @@ export interface PoolStatus {
   name: string;
   held: boolean;
   holdRemainingMs: number;
+  /** Which model this hold parks the key for, or null when the hold applies to
+   *  every model (model-less hold set before per-model holds existed). */
+  model: string | null;
   reason: Hold['reason'] | null;
   /** Consecutive failures with no success in between; 0 when the key is
    *  behaving. Surfaced so the UI can say a key is *persistently* failing
-   *  rather than just briefly held. */
+   *  rather than just briefly held. Shows the highest strike count across
+   *  all models for this key. */
   strikes: number;
   current: boolean;
 }
@@ -436,10 +513,10 @@ export function poolStatus(): PoolStatus[] {
   const now = Date.now();
   const current = currentKey();
   return poolEntries().map(({ key, name }, index) => {
-    const hold = holds.get(key);
+    const hold = holdFor(key);
     const remaining = hold ? hold.until - now : 0;
     const live = remaining > 0;
-    if (hold && !live) holds.delete(key);
+    if (hold && !live) holds.delete(holdMapKey(key));
     return {
       id: entryId(key),
       index,
@@ -447,8 +524,9 @@ export function poolStatus(): PoolStatus[] {
       name,
       held: live,
       holdRemainingMs: live ? remaining : 0,
+      model: hold?.model ?? null,
       reason: live ? hold!.reason : null,
-      strikes: strikes.get(key) ?? 0,
+      strikes: strikesFor(key),
       current: key === current,
     };
   });

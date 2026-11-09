@@ -141,6 +141,10 @@ export function isDeadlineHit(c, agentTimeoutMs: number): boolean {
 // `agentTimeoutMs` is the live agent deadline; without it `deadlineHits` is null.
 export function summarizeLlm(calls, { agentTimeoutMs }: { agentTimeoutMs?: number } = {}) {
   const ok = calls.filter(c => c.ok);
+  // A rescued call (primary failed, backup answered) is not a station failure:
+  // the DJ got an answer, just from the backup leg. Keep it out of `failed` and
+  // `deadlineHits` but expose it separately.
+  const rescued = calls.filter(c => c.ok && c.rescued === true);
   const tokens = { input: 0, output: 0, total: 0 };
   let cost = 0;
   let allPriced = true;
@@ -163,14 +167,15 @@ export function summarizeLlm(calls, { agentTimeoutMs }: { agentTimeoutMs?: numbe
   for (const c of calls) {
     const k = c.kind || 'unknown';
     let g = kinds.get(k);
-    if (!g) { g = { kind: k, count: 0, ok: 0, ms: [], tokens: 0 }; kinds.set(k, g); }
+    if (!g) { g = { kind: k, count: 0, ok: 0, rescued: 0, ms: [], tokens: 0 }; kinds.set(k, g); }
     g.count++;
     if (c.ok) g.ok++;
+    if (c.rescued === true) g.rescued++;
     if (typeof c.ms === 'number') g.ms.push(c.ms);
     if (c.usage?.total) g.tokens += c.usage.total;
   }
   const byKind = [...kinds.values()]
-    .map(g => ({ kind: g.kind, count: g.count, ok: g.ok, avgMs: Math.round(avg(g.ms)), tokens: g.tokens }))
+    .map(g => ({ kind: g.kind, count: g.count, ok: g.ok, rescued: g.rescued, avgMs: Math.round(avg(g.ms)), tokens: g.tokens }))
     .sort((a, b) => b.count - a.count);
 
   const models = new Map();
@@ -201,7 +206,10 @@ export function summarizeLlm(calls, { agentTimeoutMs }: { agentTimeoutMs?: numbe
     window: 120,
     count: calls.length,
     ok: ok.length,
-    failed: calls.length - ok.length,
+    rescued: rescued.length,
+    // `failed` excludes rescued calls: the primary failed but the backup
+    // answered, so the station did not fail. `count - ok - rescued`.
+    failed: calls.length - ok.length - rescued.length,
     successRate: calls.length ? ok.length / calls.length : null,
     latency: latencyStats(calls.map(c => c.ms).filter(n => typeof n === 'number')),
     // Successful calls only, for the Dash DJ Latency needle: a failed call's
@@ -212,9 +220,10 @@ export function summarizeLlm(calls, { agentTimeoutMs }: { agentTimeoutMs?: numbe
     okLatency: latencyStats(ok.map(c => c.ms).filter(n => typeof n === 'number')),
     // The needle above can no longer reach the deadline on the agent path (a
     // successful agent run finishes under it by construction), so the Dash
-    // redlines on this count instead.
+    // redlines on this count instead. Rescued calls are not deadline hits —
+    // the backup answered within the deadline.
     deadlineHits: typeof agentTimeoutMs === 'number' && agentTimeoutMs > 0
-      ? calls.filter(c => isDeadlineHit(c, agentTimeoutMs)).length
+      ? calls.filter(c => isDeadlineHit(c, agentTimeoutMs) && c.rescued !== true).length
       : null,
     tokens: anyTokens ? tokens : null,
     cost: anyTokens ? { usd: cost, complete: allPriced } : null,
