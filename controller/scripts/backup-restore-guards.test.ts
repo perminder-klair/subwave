@@ -123,6 +123,22 @@ test('the never-play list restores into the live list, through the boot parser',
   assert.deepEqual(onDisk.entries.map((e: any) => e.id), ['alb-restored']);
 });
 
+test('a restored never-play list purges the queue and rebuilds the coast playlist, as an edit does', async (t) => {
+  const { queue } = await import('../src/broadcast/queue.js');
+  const { blocklistEffects } = await import('../src/broadcast/blocklist-effects.js');
+  const purge = t.mock.method(queue, 'purgeBlocked', () => 0);
+  const rebuild = t.mock.method(blocklistEffects, 'refreshAutoPlaylist', async () => undefined);
+  const list = JSON.stringify({
+    entries: [{ type: 'album', id: 'alb-restored', name: 'Restored Album', artist: 'Band', album: null, addedAt: '2026-01-01T00:00:00Z' }],
+    rules: [],
+  });
+  assert.equal((await restore(backupOf([['blocklist.json', list]]))).status, 200);
+  assert.equal(purge.mock.callCount(), 1, 'queued tracks the list blocks are dropped');
+  assert.equal(rebuild.mock.callCount(), 1, 'auto.m3u is rebuilt');
+  assert.equal((await restore(backupOf([['sfx/other.mp3', 'x']]))).status, 200);
+  assert.equal(purge.mock.callCount(), 1, 'a backup without the list touches neither');
+});
+
 test('a backup carries the never-play list', async () => {
   const zip = await buildBackupZip();
   const member = zip.getEntry('blocklist.json');

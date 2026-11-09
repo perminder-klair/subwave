@@ -25,7 +25,7 @@ const { planHeartMoves, DURATION_TOLERANCE_SEC } = await import('../src/music/he
 const row = (id: string, title: string, artist: string, album: string | null, durationSec: number | null = 240) =>
   ({ id, title, artist, album, durationSec });
 const heart = (songId: string, title: string, artist: string, album: string | null = 'LP', duration: number | null = 240) =>
-  ({ songId, title, artist, album, duration });
+  ({ songId, title, artist, album, durationSec: duration });
 
 test('one track left with the same title and artist takes the heart', () => {
   const moves = planHeartMoves([heart('old', 'Jewelry', 'Blood Orange')], [
@@ -89,6 +89,7 @@ writeFileSync(join(stateDir, 'likes.json'), JSON.stringify({
 const db = await import('../src/music/library-db.js');
 const likes = await import('../src/broadcast/likes.js');
 const { followMovedHearts } = await import('../src/music/heart-follow.js');
+const { recordWalk } = await import('../src/music/library-walk.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 // No Navidrome here: the star write-back is fire-and-forget, so keep it off.
 const settings = await import('../src/settings.js');
@@ -102,6 +103,16 @@ after(async () => {
 test('an empty library moves nothing: a first boot is not every song leaving', async () => {
   assert.deepEqual(await followMovedHearts(), { stale: 0, moved: 0 });
   assert.equal(likes.likedSongs().filter((s) => s.songId === 'gone-1').length, 1);
+});
+
+test('a part-walked library moves nothing: no walk on record, a run still going, or one stopped', async () => {
+  db.upsertTrackMeta('live-1', { title: 'Jewelry', artist: 'Blood Orange', album: 'Negro Swan', duration: 201 });
+  for (const state of [null, 'running', 'stopped', 'failed'] as const) {
+    if (state) recordWalk('tag', state);
+    assert.deepEqual(await followMovedHearts(), { stale: 0, moved: 0, skipped: 'walk-unsettled' }, String(state));
+  }
+  assert.equal(likes.likedSongs().filter((s) => s.songId === 'gone-1').length, 1, 'the heart stayed');
+  recordWalk('tag', 'ok');
 });
 
 test('a heart on a pruned id moves to the same song, once, and stays on disk', async () => {

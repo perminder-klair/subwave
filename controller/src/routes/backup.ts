@@ -25,6 +25,7 @@ import { requireAdmin } from '../middleware/auth.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as sfx from '../broadcast/sfx.js';
 import * as blocklist from '../music/blocklist.js';
+import { applyBlocklistChange } from '../broadcast/blocklist-effects.js';
 import {
   SKILL_BUNDLE_MAX_BYTES,
   restoreSkillMembers,
@@ -226,6 +227,9 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       const { dropped } = await blocklist.restore(blocklistDoc);
       if (dropped) skipped.push(`blocklist.json: ${dropped} unusable record(s)`);
       restored.push('blocklist.json');
+      // As after any list edit: the queue and the coast playlist drop what the
+      // restored list blocks.
+      applyBlocklistChange();
     }
 
     // 1c) Skills through the import's guards: any tool.mjs not already live

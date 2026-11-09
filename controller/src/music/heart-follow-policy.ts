@@ -32,7 +32,7 @@ export interface HeartSnapshot {
   title?: string | null;
   artist?: string | null;
   album?: string | null;
-  duration?: number | null;
+  durationSec?: number | null;
 }
 
 export interface LibraryNameRow {
@@ -84,7 +84,7 @@ export function planHeartMoves(stale: readonly HeartSnapshot[], library: Iterabl
 
 function pick(h: HeartSnapshot, rows: readonly LibraryNameRow[]): string | null {
   const sameLength = rows.filter((r) =>
-    !known(h.duration) || !known(r.durationSec) || Math.abs(r.durationSec - h.duration) <= DURATION_TOLERANCE_SEC);
+    !known(h.durationSec) || !known(r.durationSec) || Math.abs(r.durationSec - h.durationSec) <= DURATION_TOLERANCE_SEC);
   if (sameLength.length === 1) return sameLength[0].id;
   if (sameLength.length === 0) return null;
   const album = nameKey(h.album);
