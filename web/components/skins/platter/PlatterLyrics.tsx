@@ -1,27 +1,30 @@
 'use client';
 
-// Platter's lyrics, in focus mode only: the corner the drawing leaves empty
+// Platter's lyrics, in focus mode only: while a track has them the deck moves
+// over (PlatterSkin, told through onPresenceChange) and the stage's left third
 // holds the song's lines as spokes of one wheel, turning about a point off to
-// the right, where the deck is. The line being sung lies level; the ones just
-// sung fan up and away above it, the ones coming wait below, each fainter the
-// further round it is. A new line turns the whole wheel one notch.
+// the right, where the record is. The line being sung lies level, beside the
+// record; the ones just sung fan up and away above it, the ones coming wait
+// below, each fainter the further round it is. A new line turns the whole
+// wheel one notch.
 //
 // Every line keeps its own element from the notch it enters at (invisible) to
 // the one it leaves at, so a change is only ever a transition of transform and
 // opacity: nothing mounts into view, and there is no filter (depth is opacity
 // alone, where a blur per line cost iPad Safari a repaint each). Under lite
 // mode or reduced motion the wheel steps and a whole line lights at once.
-// Untimed lyrics take the same corner as a column to scroll by hand: with no
+// Untimed lyrics take the same third as a column to scroll by hand: with no
 // timing there is nothing to turn. The lines carry no controls; the header's
 // lyrics button opens their settings (LyricsSettings).
 
-import { memo } from 'react';
+import { memo, useEffect } from 'react';
 import { cn } from '@/lib/cn';
 import {
   activeLyricLineIndex,
   lyricMoment,
   plainLyricsReady,
   syncedLyricsReady,
+  useLingeringPresence,
   useLyricClock,
   type TrackLyrics,
 } from '../lyrics';
@@ -37,13 +40,9 @@ const NOTCH = [
   styles.spokeM3, styles.spokeM2, styles.spokeM1, styles.spoke0, styles.spokeP1, styles.spokeP2, styles.spokeP3,
 ];
 
-/** The corner the caption also uses, so the two never show together
- *  (PlatterSkin gives the DJ the floor). The wheel's lower spokes tilt along
- *  the plinth's edge and so can run wider than the untimed column, a plain
- *  box that has to stop short of the plinth's corner. */
-const CORNER = 'absolute top-14 left-8';
-const WHEEL = 'w-[min(34%,440px)] aspect-[11/10]';
-const COLUMN = 'w-[min(26%,340px)] aspect-square';
+/** The stage's left third, which the deck gives up while lyrics are present
+ *  (PlatterSkin starts the deck's stage at the same 33%). */
+const THIRD = 'absolute left-8 w-[calc(33%-3.5rem)]';
 
 function Words({ text, lit }: { text: string; lit: number }) {
   const parts: Array<{ part: string; index: number }> = [];
@@ -64,23 +63,36 @@ export interface PlatterLyricsProps {
   /** The skin's one answer for this track (useTrackLyrics). */
   track: TrackLyrics;
   trackStartedAt: number | null;
+  /** Whether lyrics are showing, so the stage can move the deck over. */
+  onPresenceChange: (shown: boolean) => void;
 }
 
-export default memo(function PlatterLyrics({ track, trackStartedAt }: PlatterLyricsProps) {
+export default memo(function PlatterLyrics({ track, trackStartedAt, onPresenceChange }: PlatterLyricsProps) {
   const calm = useSkinCalm();
   const positionMs = useLyricClock(track, trackStartedAt, TICK_MS);
   const { lyrics } = track;
+
+  // Held a moment past the last line, so two tracks that both have lyrics
+  // don't slide the deck out and back while the new lines load.
+  const synced = syncedLyricsReady(track);
+  const plain = plainLyricsReady(track);
+  const present = useLingeringPresence(synced || plain);
+  useEffect(() => {
+    onPresenceChange(present);
+  }, [present, onPresenceChange]);
+  useEffect(() => () => onPresenceChange(false), [onPresenceChange]);
+
   if (!lyrics) return null;
 
-  if (plainLyricsReady(track)) {
+  if (plain) {
     return (
-      <section aria-label="Lyrics" className={cn(CORNER, COLUMN)}>
+      <section aria-label="Lyrics" className={cn(THIRD, 'top-20 bottom-36')}>
         {/* Keyed by track, so a new song starts at its top. */}
         <div
           key={lyrics.songId}
           tabIndex={0}
           className={cn(
-            'v3-focus h-full overflow-y-auto overscroll-contain font-display text-[clamp(15px,1.4vw,19px)] leading-[1.5] italic',
+            'v3-focus h-full overflow-y-auto overscroll-contain font-display text-[clamp(16px,1.6vw,22px)] leading-[1.5] italic',
             styles.plainLyrics,
           )}
         >
@@ -93,7 +105,7 @@ export default memo(function PlatterLyrics({ track, trackStartedAt }: PlatterLyr
       </section>
     );
   }
-  if (!syncedLyricsReady(track)) return null;
+  if (!synced) return null;
 
   // The wheel is anchored on the last line to have started, sung or not, so
   // it holds still through a break instead of emptying; only a line the
@@ -111,7 +123,9 @@ export default memo(function PlatterLyrics({ track, trackStartedAt }: PlatterLyr
   return (
     <section
       aria-label="Lyrics"
-      className={cn(CORNER, WHEEL, 'pointer-events-none font-display text-[clamp(18px,1.9vw,27px)] italic', !calm && styles.wheelTurns)}
+      // A hub line, not a box: the spokes hang off its middle, level with the
+      // record.
+      className={cn(THIRD, 'pointer-events-none top-[47%] h-0 font-display text-[clamp(21px,2.4vw,38px)] italic', !calm && styles.wheelTurns)}
     >
       {spokes.map(({ index, text, notch }) => {
         const sung = index === moment.current;
@@ -125,7 +139,7 @@ export default memo(function PlatterLyrics({ track, trackStartedAt }: PlatterLyr
               'absolute inset-x-0 top-1/2 m-0 leading-[1.14] font-extrabold',
               styles.spoke,
               NOTCH[notch + REACH],
-              sung ? cn('line-clamp-2 text-balance', styles.spokeSung) : 'truncate',
+              sung ? cn('line-clamp-3 text-balance', styles.spokeSung) : 'truncate',
             )}
           >
             {sung

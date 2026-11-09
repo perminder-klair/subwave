@@ -150,6 +150,8 @@
 
 /* The column folds away; in its place the deck spreads across the stage. */
 .stageIn { animation: platter-stage-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* The deck gives the lyrics the stage's left third and takes it back. */
+.stageSlides { transition: left 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
 @keyframes platter-stage-in {
   from { opacity: 0; transform: translateY(14px) scale(0.96); }
   to { opacity: 1; transform: none; }
@@ -235,32 +237,35 @@
 @media (prefers-reduced-motion: reduce) {
   .isoSpin,
   .stageIn { animation: none; }
+  .stageSlides { transition: none; }
   .armSwing .isoArm { transition: none; }
 }
 
 /* ── Focus mode: the lyrics wheel (PlatterLyrics) ──────────────────────── */
 
-/* Every line is a spoke about one hub, a spoke's length off to the right
-   where the deck is, so a notch of 6° spreads the lines' left ends about a
-   fifth of the wheel's width apart and their right ends half that. The sung
+/* Every line is a spoke about one hub, two spokes' length off to the right
+   where the record is, so a notch of 5° spreads the lines' left ends about a
+   quarter of the wheel's width apart and their right ends two thirds of
+   that: far enough round to read as a wheel, near enough to parallel that a
+   three-line sung line clears its neighbours. The sung
    line lies level; clockwise lifts a sung line up and away, anticlockwise
    holds a coming one below. The outermost notch either way is invisible: a
    line enters and leaves through it, so nothing ever mounts into view. */
 .spoke {
-  transform-origin: 200% 50%;
+  transform-origin: 300% 50%;
   color: var(--ink);
 }
 .wheelTurns .spoke {
   transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.7s ease-out;
 }
-.spokeM3 { transform: translateY(-50%) rotate(18deg); opacity: 0; }
-.spokeM2 { transform: translateY(-50%) rotate(12deg); opacity: 0.14; }
-.spokeM1 { transform: translateY(-50%) rotate(6deg); opacity: 0.36; }
+.spokeM3 { transform: translateY(-50%) rotate(15deg); opacity: 0; }
+.spokeM2 { transform: translateY(-50%) rotate(10deg); opacity: 0.14; }
+.spokeM1 { transform: translateY(-50%) rotate(5deg); opacity: 0.36; }
 /* The anchor between songs' lines (a break): level, but as faint as sung. */
 .spoke0 { transform: translateY(-50%) rotate(0deg); opacity: 0.36; }
-.spokeP1 { transform: translateY(-50%) rotate(-6deg); opacity: 0.4; }
-.spokeP2 { transform: translateY(-50%) rotate(-12deg); opacity: 0.16; }
-.spokeP3 { transform: translateY(-50%) rotate(-18deg); opacity: 0; }
+.spokeP1 { transform: translateY(-50%) rotate(-5deg); opacity: 0.4; }
+.spokeP2 { transform: translateY(-50%) rotate(-10deg); opacity: 0.16; }
+.spokeP3 { transform: translateY(-50%) rotate(-15deg); opacity: 0; }
 .spokeSung { opacity: 1; }
 
 /* Words ink in as they are sung. */

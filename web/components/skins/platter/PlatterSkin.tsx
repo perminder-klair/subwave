@@ -3,8 +3,8 @@
 // Platter — the flagship vinyl face: a reference turntable beside the column
 // of facts. Focus mode (desktop, F) folds the column away and lifts the deck
 // into 30° isometric (IsoDeck), handing the column's facts to the things on
-// and round it, and turns the song's lyrics as a wheel in the corner the
-// drawing leaves empty (PlatterLyrics).
+// and round it, and while a song has lyrics moves the deck over to turn them
+// as a wheel in the stage's left third (PlatterLyrics).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
@@ -256,14 +256,17 @@ export default function PlatterSkin(_props: SkinProps) {
   const onMic = useDjOnAir();
   const talk = playing && onMic && !!voice;
 
-  // Lyrics live in focus mode alone, where the folded column leaves them a
-  // corner, so the station is asked only there. One answer for the wheel and
+  // Lyrics live in focus mode alone, where the folded column leaves them
+  // room, so the station is asked only there. One answer for the wheel and
   // its settings. L shows or hides them; the header's button opens the
   // settings.
   const lyricsOn = state.lyrics?.enabled === true && focusOn;
   const lyricsPref = useLyricsPreference();
   const showLyrics = lyricsOn && lyricsPref.shown && !offline;
   const lyricsTrack = useTrackLyrics(showLyrics ? nowPlaying?.subsonic_id : null);
+  // While this track has lyrics the deck gives them the stage's left third.
+  const [lyricsPresent, setLyricsPresent] = useState(false);
+  const deckAside = showLyrics && lyricsPresent;
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const lyricsButtonRef = useRef<HTMLButtonElement | null>(null);
   const lyricsPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -392,19 +395,27 @@ export default function PlatterSkin(_props: SkinProps) {
           </span>
 
           {focusOn ? (
-            <div className={cn('absolute inset-x-6 top-12 bottom-6', stageMoves && styles.stageIn)}>{isoDeck}</div>
+            <div
+              className={cn(
+                'absolute top-12 right-6 bottom-6',
+                deckAside ? 'left-[33%]' : 'left-6',
+                stageMoves && cn(styles.stageIn, styles.stageSlides),
+              )}
+            >
+              {isoDeck}
+            </div>
           ) : (
             <div className="flex w-full items-center justify-center pt-8 lg:contents">
               <Deck playing={playing} ratio={ratio} stationName={stationName} title={title} artist={artist} />
             </div>
           )}
 
-          {/* The song's lines share the caption's corner, and give the DJ
-              the floor: mounted throughout, so a talk break never refetches
-              them, and hidden while the caption is up. */}
+          {/* The song's lines give the DJ the floor: mounted throughout, so
+              a talk break never refetches them or moves the deck back, and
+              hidden while the caption is up in their third. */}
           {showLyrics && (
             <div className={cn('contents', talk && 'invisible')}>
-              <PlatterLyrics track={lyricsTrack} trackStartedAt={trackStartedAt} />
+              <PlatterLyrics track={lyricsTrack} trackStartedAt={trackStartedAt} onPresenceChange={setLyricsPresent} />
             </div>
           )}
 
