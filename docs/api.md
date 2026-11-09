@@ -95,6 +95,23 @@ Failed attempts on a station-gated read are rate-limited per IP (20 per 15
 minutes) in their **own** counter — spending them cannot lock a listener out of
 the player's password box, which has a separate one.
 
+## Hotline
+
+Listeners ring the DJ from the player while the show on air opens the Hotline
+(see [the Hotline internals](internals/broadcast.md#the-hotline)). The listener
+routes are **station**-gated; the call routes take the Call's own token instead.
+
+| Route | Auth | What it does |
+| --- | --- | --- |
+| `GET /hotline` | station | `{ state: "closed" \| "open" \| "busy", provider }`. `GET /state` carries `hotline.state` too. |
+| `POST /hotline/calls` | station | `{ deviceId, name? }`. Admits a Call and mints a short-lived provider session: `{ callId, callToken, clientSecret, sdpUrl, capSec, wrapUpAtSec, wrapUpCue, dj }`. Refusals: `503` closed, `409` busy, `403` banned, `429` already called this show, `502` the provider refused. |
+| `POST /hotline/calls/:id/tool` | `x-hotline-token` | `{ name, arguments }`: one tool call the model made, relayed. Answers `{ output }`, or `410` once the Call has ended. |
+| `POST /hotline/calls/:id/end` | `x-hotline-token` | Hang up. Idempotent. |
+| `GET /hotline/admin` | admin | The line, the Call on it, today's minutes, bans and recent Call outcomes. |
+| `POST /hotline/admin/end` | admin | End the Call on the line. |
+| `POST /hotline/admin/bans` | admin | `{ callId }`: ban the device and address of a recent Call. |
+| `DELETE /hotline/admin/bans/:id` | admin | Lift a ban. |
+
 ## Lyrics
 
 `GET /lyrics/current` serves lyrics to listener-facing players and custom
