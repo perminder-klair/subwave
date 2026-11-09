@@ -1,0 +1,11 @@
+language: en
+intents:
+  RequestSubwave:
+    data:
+      - sentences:
+          - "subwave play {query}"
+          - "play {query} on [the] (subwave|sub wave|radio)"
+          - "request {query} on [the] (subwave|sub wave|radio)"
+lists:
+  query:
+    wildcard: true

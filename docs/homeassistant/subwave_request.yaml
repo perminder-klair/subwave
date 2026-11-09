@@ -1,0 +1,81 @@
+# Song requests from Home Assistant. Usage: docs/homeassistant/README.md
+# On-air name: first word of the Person linked to the logged-in user.
+# No match → "home", plus a persistent notification.
+
+input_text:
+  subwave_request:
+    name: SUB/WAVE request
+    icon: mdi:music
+    max: 255
+
+rest_command:
+  subwave_request_song:
+    url: !secret subwave_request_url
+    method: POST
+    content_type: application/json
+    timeout: 10
+    payload: "{{ {'text': text, 'name': name | default('home')} | tojson }}"
+
+script:
+  subwave_send_request:
+    alias: Send SUB/WAVE request
+    icon: mdi:send
+    mode: single
+    sequence:
+      - variables:
+          text: "{{ states('input_text.subwave_request') | trim }}"
+          who: >
+            {% set uid = context.user_id %}
+            {% set matches = [] if not uid else states.person | selectattr('attributes.user_id', 'equalto', uid) | map(attribute='name') | list %}
+            {{ matches[0].split()[0] if matches else 'home' }}
+      - condition: template
+        value_template: "{{ text | length > 0 }}"
+      - if:
+          - condition: template
+            value_template: "{{ who == 'home' }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: subwave_request_name
+              title: SUB/WAVE credited this request as home
+              message: >
+                No Person is linked to the user who sent this, or the session had no user.
+                Settings → People → your person → Allow login.
+      - action: rest_command.subwave_request_song
+        response_variable: resp
+        data:
+          text: "{{ text }}"
+          name: "{{ who }}"
+      - condition: template
+        value_template: "{{ resp.status == 202 }}"
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.subwave_request
+        data:
+          value: ""
+
+intent_script:
+  RequestSubwave:
+    action:
+      - variables:
+          who: >
+            {% set uid = context.user_id %}
+            {% set matches = [] if not uid else states.person | selectattr('attributes.user_id', 'equalto', uid) | map(attribute='name') | list %}
+            {{ matches[0].split()[0] if matches else 'home' }}
+      - if:
+          - condition: template
+            value_template: "{{ who == 'home' }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: subwave_request_name
+              title: SUB/WAVE credited this request as home
+              message: >
+                No Person is linked to the user who sent this, or the session had no user.
+                Settings → People → your person → Allow login.
+      - action: rest_command.subwave_request_song
+        data:
+          text: "{{ query }}"
+          name: "{{ who }}"
+    speech:
+      text: "Asked SUB/WAVE for {{ query }}."
