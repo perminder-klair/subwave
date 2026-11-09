@@ -16,6 +16,7 @@ import type { AddressInfo } from 'node:net';
 import test, { after, before } from 'node:test';
 import {
   STALE_SOCKET_ATTEMPTS,
+  STALE_SOCKET_RETRY_MS,
   describeFetchError,
   fetchWithTimeout,
   isStaleSocketError,
@@ -33,6 +34,12 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
   req.on('end', () => {
     if (path.startsWith('/slow')) {
       setTimeout(() => { if (!res.destroyed) res.end('late'); }, 1_000);
+      return;
+    }
+    if (path.startsWith('/late-drop')) {
+      // The server took the request and was working on it when the connection
+      // went: a resend would run it a second time.
+      setTimeout(() => req.socket.destroy(), STALE_SOCKET_RETRY_MS + 200);
       return;
     }
     if (path.startsWith('/error')) {
@@ -122,6 +129,11 @@ test('a refused connection is a different failure, never resent', async () => {
     globalThis.fetch = realFetch;
   }
   assert.equal(calls, 1);
+});
+
+test('a connection that drops after the stale-socket window is never resent', async () => {
+  await assert.rejects(post('/late-drop', { retryStaleSocket: true }), (err: unknown) => isStaleSocketError(err));
+  assert.equal(seen.get('/late-drop'), 1);
 });
 
 test('a timeout is never resent', async () => {

@@ -13,6 +13,12 @@
 // sockets. Opt-in, and only for a request that is safe to send twice (the
 // analyzer's compute endpoints) with a string body: the server may have read
 // the request before the connection dropped.
+//
+// Only a FAST failure is resent: one that comes within STALE_SOCKET_RETRY_MS
+// of the attempt's start. That is the stale socket's shape (it fails before a
+// byte is answered). A connection that drops halfway through a long request is
+// not resent, because the server may already be computing it, and a resend
+// would run it twice. subsonic.ts's boundedFetch applies the same window.
 
 export interface FetchTimeoutInit extends RequestInit {
   timeoutMs: number;
@@ -23,6 +29,9 @@ export interface FetchTimeoutInit extends RequestInit {
 }
 
 export const STALE_SOCKET_ATTEMPTS = 3;
+
+/** A socket failure later than this after the attempt started is not a stale socket. */
+export const STALE_SOCKET_RETRY_MS = 2_000;
 
 const STALE_SOCKET_CODES = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE']);
 
@@ -53,13 +62,19 @@ export async function fetchWithTimeout(
   const attempts = retryStaleSocket ? STALE_SOCKET_ATTEMPTS : 1;
   try {
     for (let attempt = 1; ; attempt++) {
+      const started = Date.now();
       try {
         const res = await fetch(input, { ...init, signal: combined });
         if (bodyDeadline) return res; // timer stays armed; no-op once the body is consumed
         clearTimeout(timer);
         return res;
       } catch (err) {
-        if (attempt >= attempts || combined.aborted || !isStaleSocketError(err)) throw err;
+        if (
+          attempt >= attempts
+          || combined.aborted
+          || !isStaleSocketError(err)
+          || Date.now() - started >= STALE_SOCKET_RETRY_MS
+        ) throw err;
       }
     }
   } catch (err) {

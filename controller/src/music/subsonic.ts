@@ -13,6 +13,7 @@ import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 import { libraryMountProven } from './library-mount.js';
+import { STALE_SOCKET_RETRY_MS } from '../util/fetch-timeout.js';
 import { fileTitle, MAX_REPORTED_TITLE_BYTES, normalizeTitle, titleVerdict } from './tag-title.js';
 
 function buildAuth() {
@@ -90,8 +91,8 @@ function extractCount(sub, songs) {
 // the same mechanism at the one chokepoint every call goes through, so a walk of
 // thousands of albums no longer dies on the first idle socket. A FAST failure is
 // characteristic of the stale-socket case, but cannot prove a request did not
-// reach Navidrome. Only explicitly safe operations may spend the retry.
-const STALE_SOCKET_RETRY_MS = 2_000;
+// reach Navidrome. Only explicitly safe operations may spend the retry. The
+// window (STALE_SOCKET_RETRY_MS) is shared with fetchWithTimeout's retryStaleSocket.
 const STALE_SOCKET_BACKOFF_MS = 250;
 
 type CallOptions = {

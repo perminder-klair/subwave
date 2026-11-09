@@ -758,6 +758,31 @@ export function isTimeoutError(err: unknown): boolean {
   return name === 'AbortError' || (typeof message === 'string' && message.includes('timed out'));
 }
 
+// An analyzer outage fails every embed call, and a tagger run makes hundreds:
+// name the cause at most once per EMBED_WARN_EVERY_MS, then say how many more
+// failed in between, so the log shows the outage without one line per track.
+export const EMBED_WARN_EVERY_MS = 60_000;
+let embedWarnAt = -Infinity;
+let embedWarnSuppressed = 0;
+
+export function warnEmbedFailure(cause: string, now: number = Date.now()): boolean {
+  if (now - embedWarnAt < EMBED_WARN_EVERY_MS) {
+    embedWarnSuppressed++;
+    return false;
+  }
+  const more = embedWarnSuppressed ? ` (${embedWarnSuppressed} more since the last warning)` : '';
+  console.warn(`[analyzer] text embedding failed: ${cause}${more}`);
+  embedWarnAt = now;
+  embedWarnSuppressed = 0;
+  return true;
+}
+
+/** Test hook: forget the last warning. */
+export function resetEmbedWarnings(): void {
+  embedWarnAt = -Infinity;
+  embedWarnSuppressed = 0;
+}
+
 // Embed texts through the CLAP text tower — 512-d L2-normalised vectors in the
 // same space as stored track audio vectors, so cosine against them is
 // meaningful. Returns null whenever the capability is absent; callers degrade,
@@ -801,7 +826,7 @@ export async function embedTexts(
   // A failure still degrades to null, but names its cause once: a caller's
   // "text embedding failed" warning cannot see it.
   const failed = (err: unknown): null => {
-    if (!signal?.aborted) console.warn(`[analyzer] text embedding failed: ${describeFetchError(err)}`);
+    if (!signal?.aborted) warnEmbedFailure(describeFetchError(err));
     return null;
   };
   try {
