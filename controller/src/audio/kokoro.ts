@@ -2,10 +2,22 @@
 // kokoro_worker.py loads the ONNX model once (2-5s) and stays resident, one
 // JSON request per line. Lifecycle here: lazy spawn on first speak(),
 // auto-restart on crash, request map keyed by monotonic id.
+//
+// Or, with KOKORO_URL set, render on a shared Kokoro server instead
+// (tts-light): same engine, same voices/language/speed, but no local child and
+// no resident model, so a box running many stations holds one model, not one
+// each. Versioned contract, so one server serves every controller version in a
+// rollout: POST {url}/v1/speak { text, voice, lang, speed } -> WAV bytes;
+// GET {url}/v1/health -> { ok: true }. It deliberately stays the `kokoro` engine (not `remote`):
+// persona voice ids, the admin voice picker and onboarding all keep working,
+// and an unreachable server rescues to Piper instead of loading the model.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { config } from '../config.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { cachedHealthProbe } from '../util/health-probe.js';
 import { resolveTtsOutPath } from './tts-out.js';
 
 const READY_TIMEOUT_MS = 60_000;        // first call may include model load
@@ -193,11 +205,72 @@ export function stop(): void {
   w?.reap();
 }
 
+// --- shared server (KOKORO_URL) ---------------------------------------------
+
+const REMOTE_PROBE_MS = 30_000;
+
+async function probeRemote(): Promise<boolean> {
+  try {
+    const res = await fetchWithTimeout(`${config.kokoro.url}/v1/health`, { timeoutMs: 5_000, bodyDeadline: true });
+    if (!res.ok) return false;
+    return !!((await res.json()) as { ok?: boolean }).ok;
+  } catch {
+    return false;
+  }
+}
+
+const remote = cachedHealthProbe<boolean>({
+  probe: probeRemote,
+  intervalMs: REMOTE_PROBE_MS,
+  initial: false,
+  onChange: (up) => console.log(`[kokoro] shared server ${up ? 'available' : 'unavailable'} (${config.kokoro.url})`),
+});
+
+// Start the shared server's /health probe (idempotent; no-op without
+// KOKORO_URL). Called at boot; isAvailable() also starts it lazily.
+export function start(): void {
+  if (config.kokoro.url) remote.start();
+}
+
+// Probe the shared server now rather than on the next 30 s tick, as
+// remoteTts.refresh() does for the Remote engine. Resolves to whether it is
+// up; false, without a request, when KOKORO_URL is unset.
+export async function refresh(): Promise<boolean> {
+  return config.kokoro.url ? remote.refresh() : false;
+}
+
+async function speakRemote(text: string, outPath: string, payload: { voice: string; lang: string; speed: number }): Promise<string> {
+  const res = await fetchWithTimeout(`${config.kokoro.url}/v1/speak`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: text.trim(), ...payload }),
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`kokoro server ${res.status}: ${body || res.statusText}`);
+  }
+  // Same rule as the Remote engine: an empty body is a failure, so the
+  // dispatcher rescues instead of handing Liquidsoap a zero-byte file.
+  const audio = Buffer.from(await res.arrayBuffer());
+  if (audio.length === 0) throw new Error('kokoro server returned an empty response body');
+  await writeFile(outPath, audio);
+  return outPath;
+}
+
 export async function speak(
   text: string,
   { outPath: customPath, voice, lang, speedScale }: { outPath?: string; voice?: string; lang?: string; speedScale?: number } = {},
 ): Promise<string> {
   const { id, outPath } = await resolveTtsOutPath(text, customPath);
+
+  if (config.kokoro.url) {
+    return speakRemote(text, outPath, {
+      voice: voice || config.kokoro.voice,
+      lang: lang || config.kokoro.lang,
+      speed: config.kokoro.speed * (speedScale != null ? speedScale : 1),
+    });
+  }
 
   const w = await ensureWorker();
   const msg = await w.send(id, {
@@ -217,6 +290,12 @@ export async function speak(
 // failed download would otherwise report `kokoro: true` while every segment
 // silently fell back to Piper.
 export function isAvailable() {
+  // A shared server: available while its /health says so. Never falls back to
+  // the local model, which is exactly what KOKORO_URL exists to avoid.
+  if (config.kokoro.url) {
+    start();
+    return remote.get();
+  }
   return existsSync(config.kokoro.python)
     && existsSync(config.kokoro.workerScript)
     && existsSync(config.kokoro.model)

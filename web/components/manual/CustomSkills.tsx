@@ -81,6 +81,9 @@ cooldown: 6h              # min gap between auto firings — "90m" | "6h" | "2d"
 cron: 0 8 * * *           # OPTIONAL: also fire on a fixed schedule, station time
 cronOnly: true            # OPTIONAL: with a cron, never fire at random too
 cohosts: true             # OPTIONAL: active host + guests, each in their own voice
+voiceEngine: remote       # OPTIONAL: speak in this engine, not the DJ's (see below)
+voiceId: newsreader       # OPTIONAL: the voice on that engine; empty = its default
+voiceProvider: openai     # OPTIONAL: for voiceEngine: cloud only (default openai)
 window: any               # "any" (default) | "commute" — commute hours only
 context: time, festival   # OPTIONAL: "right now" fields it may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; unset → stays inert
@@ -223,6 +226,35 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
       </section>
 
       <section className="bs-section">
+        <p className="bs-eyebrow">A VOICE OF ITS OWN</p>
+        <h2>The DJ&apos;s segment, in another voice.</h2>
+        <p>
+          A skill normally airs in the on-air DJ&apos;s voice. Turn on <strong>Voice</strong>{' '}
+          in the skill editor, or set <code className="bs-code-inline">voiceEngine</code>{' '}
+          with <code className="bs-code-inline">voiceId</code> (and{' '}
+          <code className="bs-code-inline">voiceProvider</code> for cloud), and it always
+          speaks in its own. The picker is the one personas use, with a sample button to
+          audition before saving. Only the voice changes: the line is still the
+          speaker&apos;s, at their own loudness and pace.
+        </p>
+        <p>
+          The voice follows a persona&apos;s rules for its engine: a Kokoro id, a{' '}
+          <code className="bs-code-inline">.wav</code> clone reference, a cloud voice id, or
+          whatever your remote server understands. The editor refuses one that breaks
+          them. A hand-edited file is read leniently: an unknown engine, or a blank
+          ElevenLabs or Fish Audio voice, means no override, and any other voice the engine
+          can&apos;t use is reset to that engine&apos;s default, as it would be for a persona.
+        </p>
+        <p className="text-muted">
+          A co-hosted skill ignores its voice, since every contribution already speaks in
+          its roster persona&apos;s own. If the engine is unavailable when the skill airs,
+          the station&apos;s fallback or default voice reads it instead. A voice is not sent
+          to the community catalog (clone references and server ids are station-local),
+          but a zip export carries it.
+        </p>
+      </section>
+
+      <section className="bs-section">
         <p className="bs-eyebrow">EDITING THE BUILT-INS</p>
         <h2>The shipped skills are files too.</h2>
         <p>
@@ -283,7 +315,8 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
           is the station facade (<code className="bs-code-inline">searchWeb</code>,{' '}
           <code className="bs-code-inline">library</code>, <code className="bs-code-inline">nowPlaying</code>,{' '}
           <code className="bs-code-inline">recentPlays</code>, <code className="bs-code-inline">onThisDay</code>,{' '}
-          <code className="bs-code-inline">fetchHeadlines</code>, durable{' '}
+          <code className="bs-code-inline">fetchHeadlines</code>,{' '}
+          <code className="bs-code-inline">weatherOutlook</code>, <code className="bs-code-inline">weatherNews</code>, durable{' '}
           <code className="bs-code-inline">recall</code>), so a custom skill can reach as far as a built-in.
         </p>
         <CodeBlock>{`export default async function (ctx, state, services, config, input) {

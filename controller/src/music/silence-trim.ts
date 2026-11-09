@@ -1,5 +1,6 @@
 // Use absolute-floor silence measurements for cues, never relative intro/outro estimates that
-// can mistake quiet music for silence. Bound trims with the minimum gap, edge margins, and
+// can mistake quiet music for silence. The whole-file `edges` facet (both ends of the WHOLE
+// decoded file, and its decoded length) outranks the head/tail window figures when measured. Bound trims with the minimum gap, edge margins, and
 // per-edge ceilings (MAX_LEAD_TRIM_SEC, MAX_TAIL_TRIM_SEC); unknown measurements preserve the
 // whole track.
 
@@ -33,6 +34,14 @@ export interface SilenceTrimTrack {
   leadSilenceMs?: number | null;
   tailSilenceMs?: number | null;
   tailStartMs?: number | null;
+  // Whole-file facet `edges`. When measured (decodedDurationMs set) they
+  // replace the three window figures above as one set. A shape that carries
+  // the `decodedDurationMs` key, null included, answers for the edges itself
+  // (a library-row mapper writes it even when unmeasured); one without it
+  // has the stored row looked up.
+  edgeLeadMs?: number | null;
+  edgeTailMs?: number | null;
+  decodedDurationMs?: number | null;
 }
 
 export interface SilenceTrimResult {
@@ -54,7 +63,8 @@ function usableTrimSec(gapMs: number | null | undefined, minGapMs: number, maxSe
   return Math.min(maxSec, kept / 1000);
 }
 
-// Resolved in one library read. Track object first, else the library record,
+// Resolved in at most one library read, and none for a track object that
+// answers every field itself. Track object first, else the library record,
 // the same precedence queue.mixAnalysisFor uses.
 interface Measured {
   leadMs: number | null | undefined;
@@ -63,17 +73,43 @@ interface Measured {
   durSec: number;
 }
 
+const msOrNull = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+
+// The edges facet as one set, or null: lead, tail and the decoded length are
+// one measurement, never mixed with a window figure.
+function edgesOf(t: SilenceTrimTrack | null | undefined): { lead: number; tail: number; dur: number } | null {
+  const dur = msOrNull(t?.decodedDurationMs);
+  const lead = msOrNull(t?.edgeLeadMs);
+  const tail = msOrNull(t?.edgeTailMs);
+  return dur != null && dur > 0 && lead != null && tail != null ? { lead, tail, dur } : null;
+}
+
 function measure(track: SilenceTrimTrack): Measured {
+  let stored: SilenceTrimTrack | null | undefined;
+  const rec = (): SilenceTrimTrack | null => {
+    if (stored === undefined) stored = track.id ? (library.get(track.id) ?? null) : null;
+    return stored ?? null;
+  };
+  let durSec = Number(track.duration ?? track.durationSec) || 0;
+  // Edges on the track itself, else the stored ones: they outrank any window
+  // figure, which only ever saw the first ANALYZE_SECONDS and the last
+  // ANALYZE_OUTRO_SECONDS against a tagged duration. A shape carrying the key
+  // (null included) has already said whether there are any.
+  const edges = edgesOf(track) ?? (track.decodedDurationMs !== undefined ? null : edgesOf(rec()));
+  if (edges) {
+    if (durSec <= 0) durSec = Number(rec()?.durationSec) || 0;
+    return { leadMs: edges.lead, tailMs: edges.tail, tailStartMs: edges.dur - edges.tail, durSec };
+  }
   let leadMs = track.leadSilenceMs;
   let tailMs = track.tailSilenceMs;
   let tailStartMs = track.tailStartMs;
-  let durSec = Number(track.duration ?? track.durationSec) || 0;
-  if ((leadMs == null || tailMs == null || tailStartMs == null || durSec <= 0) && track.id) {
-    const rec = library.get(track.id);
-    if (leadMs == null) leadMs = rec?.leadSilenceMs ?? null;
-    if (tailMs == null) tailMs = rec?.tailSilenceMs ?? null;
-    if (tailStartMs == null) tailStartMs = rec?.tailStartMs ?? null;
-    if (durSec <= 0) durSec = rec?.durationSec ?? 0;
+  if (leadMs == null || tailMs == null || tailStartMs == null || durSec <= 0) {
+    const r = rec();
+    if (leadMs == null) leadMs = r?.leadSilenceMs ?? null;
+    if (tailMs == null) tailMs = r?.tailSilenceMs ?? null;
+    if (tailStartMs == null) tailStartMs = r?.tailStartMs ?? null;
+    if (durSec <= 0) durSec = Number(r?.durationSec) || 0;
   }
   return { leadMs, tailMs, tailStartMs, durSec };
 }

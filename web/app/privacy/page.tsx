@@ -110,7 +110,7 @@ export default function PrivacyPage() {
 
         <h2>Contact</h2>
         <p>
-          Questions about privacy: <a href="mailto:p.klair25@gmail.com">p.klair25@gmail.com</a>
+          Questions about privacy: <a href="mailto:hello@getsubwave.com">hello@getsubwave.com</a>
         </p>
       </div>
     </article>

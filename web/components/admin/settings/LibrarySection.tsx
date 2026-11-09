@@ -22,10 +22,11 @@ import { effectiveCompatMode } from './compat-mode';
 import { scrobbleReadiness } from './ScrobbleSection';
 import { lastfmTagsChoice, lastfmTagsEnabled, lastfmTagsFromChoice, lastfmTrackTagsBlocker } from './lastfm-track-tags';
 import {
-  SectionHeader, SaveBar, KeyStatus,
+  SectionHeader, SaveBar, KeyStatus, NowBanner,
   headerMap,
   type SectionProps,
 } from './shared';
+import { useHosted } from '../HostedContext';
 
 const LLM_BATCH_SIZES = [5, 10, 25] as const;
 
@@ -35,6 +36,9 @@ interface LibrarySectionProps extends SectionProps {
 }
 
 export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LibrarySectionProps) {
+  // Hosted (SUB/WAVE Cloud): the embedding route is the box agent's; the
+  // controller drops changes to it on save (setup/hosted.ts).
+  const { hosted } = useHosted();
   const e = form.embedding;
   const lfKeySet = scrobbleReadiness(form, data).lfApiKeySet;
   const trackTagsBlocker = lastfmTrackTagsBlocker(lfKeySet, e.enrichment.lastfmTags);
@@ -316,6 +320,15 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         </div>
       </Card>
 
+      {hosted ? (
+      <Card title="Embedding server" sub="where embeddings come from">
+        <NowBanner label={<>Embeddings · Managed by SUB/WAVE Cloud</>}>
+          Your library’s embeddings come through SUB/WAVE Cloud, so the provider,
+          model and endpoint are set for you and can’t be changed here. Turn the
+          tagger on or off and tune it below.
+        </NowBanner>
+      </Card>
+      ) : (
       <Card title="Embedding server" sub="where embeddings come from">
         <div className="grid gap-[18px]">
           {canEmbed && effectiveModel && (
@@ -607,6 +620,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           </div>
         </div>
       </Card>
+      )}
 
 
       <Advanced note="seed count, propagation thresholds and enrichment">

@@ -330,6 +330,60 @@ def t_vocal_and_stems_share_one_separation_and_shift_tail_ranges():
     assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True}}, out
 
 
+def t_stems_windows_tail_alone_skips_the_head_separation():
+    """#2253: pick-time stems with the head cached asks for the tail alone.
+    One Demucs pass, over the tail window, and only tail stems written."""
+    calls = []
+
+    class Detector:
+        def separate(self, y):
+            calls.append("separate")
+            return {"vocals": y}
+
+        def detect(self, y, sr, librosa, min_loud=None, stems=None):
+            return [{"startMs": 1000, "endMs": 3000}]
+
+    written = []
+    y = np.concatenate([tone(12.0), silence(8.0)])
+    src = FakeSource(tail=(y, SR, 180.0))
+    with Patched(get_vocal_detector=lambda force=False: Detector(),
+                 write_stems=lambda stems, window, d: written.append(window),
+                 write_tail_meta=lambda d, off, dur: written.append("meta"), log=lambda *_a: None):
+        out = aw.analyze_facets(FakeLibrosa, src, ["stems"], stems_dir="/x", stems_windows=["tail"])
+    assert calls == ["separate"], calls
+    assert written == ["tail", "meta"], written
+    assert [d for (_sr, off, d) in src.loads] == [aw.OUTRO_SECONDS], src.loads  # the tail window only
+    assert out == {"stems": {"status": "ok", "data": {"tail_stems": True}}}, out
+
+    # The vocal facet still needs the head: separated, but its stems not written.
+    calls.clear()
+    written.clear()
+    with Patched(get_vocal_detector=lambda force=False: Detector(),
+                 write_stems=lambda stems, window, d: written.append(window),
+                 write_tail_meta=lambda d, off, dur: written.append("meta"), log=lambda *_a: None):
+        out = aw.analyze_facets(FakeLibrosa, FakeSource(tail=(y, SR, 180.0)), ["vocal", "stems"],
+                                stems_dir="/x", stems_windows=["tail"])
+    assert calls == ["separate", "separate"], calls
+    assert written == ["tail", "meta"], written
+    assert out["vocal"]["status"] == "ok" and out["stems"]["status"] == "ok", out
+
+    # No outro to align to: nothing to separate, and not reported ok.
+    calls.clear()
+    with Patched(get_vocal_detector=lambda force=False: Detector(), log=lambda *_a: None):
+        out = aw.analyze_facets(FakeLibrosa, FakeSource(tail="capped-download"), ["stems"],
+                                stems_dir="/x", stems_windows=["tail"])
+    assert calls == [], calls
+    assert out["stems"] == {"status": "unmeasurable", "reason": "capped-download"}, out
+
+
+def t_parse_stems_windows_is_lenient():
+    assert aw.parse_stems_windows(["tail"]) == ["tail"]
+    assert aw.parse_stems_windows(["tail", "head"]) == ["head", "tail"]
+    # Anything else separates both, as an older controller's request does.
+    for raw in (None, [], "tail", ["bogus"], ["tail", 3], {"tail": True}):
+        assert aw.parse_stems_windows(raw) is None, raw
+
+
 def t_tail_only_request_can_carry_tail_vocals():
     calls = []
 
@@ -570,6 +624,8 @@ test("successful stem publication keeps the cache outcome", t_stem_publication_s
 test("flat stem publication errors keep best-effort outcomes", t_flat_publication_errors_keep_best_effort_outcomes)
 test("vocal + stems share one separation; tail ranges are absolute", t_vocal_and_stems_share_one_separation_and_shift_tail_ranges)
 test("stems facet, marked root: stems written", t_stems_facet_marked_root_writes)
+test("stems_windows: the tail alone skips the head separation (#2253)", t_stems_windows_tail_alone_skips_the_head_separation)
+test("stems_windows: a malformed value separates both", t_parse_stems_windows_is_lenient)
 test("stems facet, unmarked root: unavailable, nothing written, vocal still ok",
      t_stems_facet_unmarked_root_is_unavailable_and_writes_nothing)
 test("stems facet, share lost mid-pass: unavailable, no further writes", t_stems_facet_mount_lost_mid_pass_is_unavailable)

@@ -15,7 +15,7 @@ import {
 import { useAdminQuery } from '@/lib/admin-query';
 import { errorMessage } from '@/lib/notify';
 import { resetGeminiLibraryDefaults } from '../tts/geminiLibraryQueries';
-import type { StemUsageResponse } from './stem-budget';
+import { patchMovesStemUsage, type StemUsageResponse } from './stem-budget';
 
 export const settingsKeys = {
   all: ['settings'] as const,
@@ -168,6 +168,12 @@ export function useSettingsMutation<TSettings>({
         }
       });
       receiptRef.current = { ...receiptRef.current, ...read };
+      // The budget field's note reads the usage route, whose answer follows the
+      // saved budget and pick-time setting: without this it lagged a save
+      // until its own refetch.
+      if (patchMovesStemUsage(patch)) {
+        void client.invalidateQueries({ queryKey: settingsKeys.stemUsage() });
+      }
     },
   });
   const runMutation = mutation.mutateAsync;

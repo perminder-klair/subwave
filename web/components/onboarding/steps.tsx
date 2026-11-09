@@ -663,15 +663,21 @@ export function ReviewStep({
   };
   const rows: Array<[string, string]> = [
     ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
-    ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`],
-    ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')],
+    ...(w.hosted
+      ? [['DJ & voice', 'Managed by SUB/WAVE Cloud'] as [string, string]]
+      : [
+        ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`] as [string, string],
+        ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')] as [string, string],
+      ]),
     ['Station', `${w.data.dj.stationName} — ${w.data.dj.locationName}`],
   ];
   return (
     <div>
       <StepHeader
         title="All set?"
-        blurb="Review and save. Settings land in state/settings.json + state/setup-config.json; API keys land in state/secrets.env (mode 0600)."
+        blurb={w.hosted
+          ? 'Review and save. You can change all of this later in the admin panel.'
+          : 'Review and save. Settings land in state/settings.json + state/setup-config.json; API keys land in state/secrets.env (mode 0600).'}
       />
       <dl className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-2 text-sm">
         {rows.map(([k, v]) => (
