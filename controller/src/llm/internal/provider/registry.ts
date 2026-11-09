@@ -305,15 +305,16 @@ async function rotateGoogle(url: any, init: any, attempted: Set<string>, model?:
   // pool must survive anything that is not an answer.
   //
   // 429 and 401 are the two statuses that mean something about the CREDENTIAL, so
-  // they park and rotate below; 402 and the generation-blocked codes return
-  // untouched, which is right — they are not key problems and another key would
-  // refuse the same input.
+  // they park and rotate below; 503 rotates too, but as a model-wide overload
+  // held on a short fixed timer rather than a verdict on the key. 402 and the
+  // generation-blocked codes return untouched, which is right — they are not key
+  // problems and another key would refuse the same input.
   if (res.status >= 200 && res.status < 300) {
     reportKeySuccess(key, model);
     return res;
   }
-  if (res.status !== 429 && res.status !== 401) {
-    // Not a success, and not a credential verdict. Hand the response back with
+  if (res.status !== 429 && res.status !== 401 && res.status !== 503) {
+    // Not a success, and not a rotatable failure. Hand the response back with
     // the key's history exactly as it was.
     return res;
   }
@@ -325,7 +326,7 @@ async function rotateGoogle(url: any, init: any, attempted: Set<string>, model?:
   // first attempt and the replay, which could prevent the backup leg from ever
   // being selected.
   recordLastFailure(res.status, res.statusText, body, res.headers);
-  const heldMs = reportKeyFailure(key, model, body);
+  const heldMs = reportKeyFailure(key, model, body, res.status);
   const next = currentKey(attempted, model);
   if (!next) {
     console.log(`[google] every pooled key failed on this call — failing over to the backup leg`);

@@ -137,6 +137,12 @@ export const GEMINI_NO_HINT_MAX_MS = 3 * 60 * 60 * 1000;
  *  the worse one. */
 export const GEMINI_BURST_NO_HINT_MS = 60_000;
 
+/** A 503 is the model overloaded for everyone, not this key failing. Hold it
+ *  just long enough for the call to move to the next key, then re-probe. Fixed
+ *  on purpose: the burst ladder would ratchet every key to hours during one
+ *  long spike, and the pool would stay parked after Google recovered. */
+export const GEMINI_UNAVAILABLE_HOLD_MS = 60_000;
+
 /** An invalid/expired credential will not fix itself between two DJ calls, so
  *  it is parked for a day — long enough to stop hammering it, short enough
  *  that replacing the key in the admin UI is picked up the next morning rather
@@ -168,14 +174,19 @@ export type GeminiFailure = 'daily' | 'burst' | 'auth' | 'billing' | 'other';
 const DAILY_CODES = new Set(['quota_exceeded']);
 const BURST_CODES = new Set(['rate_limit_exceeded', 'too_many_requests']);
 
-export function classifyGeminiFailure(raw: unknown): GeminiFailure {
+export function classifyGeminiFailure(raw: unknown, httpStatus?: number): GeminiFailure {
+  // The HTTP status is authoritative when the body can't say: an intermediary's
+  // 503 may carry no Google JSON at all, and a body that names nothing must not
+  // fall through to the 1–3h 'other' park.
+  if (httpStatus === 503) return 'burst';
   const text = bodyText(raw);
   if (!text) return 'other';
   try {
     const parsed = JSON.parse(text);
     const code = String(parsed?.error?.code || '').toLowerCase();
+    const status = String(parsed?.error?.status || '').toUpperCase();
     if (DAILY_CODES.has(code)) return 'daily';
-    if (BURST_CODES.has(code)) return 'burst';
+    if (BURST_CODES.has(code) || status === 'UNAVAILABLE') return 'burst';
     if (code === 'authentication') return 'auth';
     if (code === 'payment_required') return 'billing';
   } catch {
@@ -234,6 +245,7 @@ export function msUntilMidnightPacific(): number {
  *
  *   daily   → hours, randomised (nothing clears at the RetryInfo's scale)
  *   burst   → exactly what Google asked for, or hours if it said nothing
+ *   503     → a short fixed hold; the model is overloaded, not the key
  *   auth    → a day; the credential itself is rejected
  *   billing → deliberately NOT parked; surfacing beats a quiet station
  *   other   → a bare 429 with no hint at all is still treated as exhausted
@@ -243,7 +255,12 @@ export function resolveGeminiCooldownMs(
   raw: unknown,
   random: () => number = Math.random,
   consecutiveFailures = 0,
+  httpStatus?: number,
 ): number {
+  // A model-wide overload is not the key's failure: hold it briefly and let the
+  // call move on. Deliberately outside the burst ladder, which is the key's own
+  // escalation history.
+  if (httpStatus === 503) return GEMINI_UNAVAILABLE_HOLD_MS;
   const kind = classifyGeminiFailure(raw);
   switch (kind) {
     case 'daily':
@@ -267,8 +284,9 @@ export function resolveGeminiCooldownMs(
     case 'auth':
       return GEMINI_AUTH_PARK_MS;
     default:
-      // 'other' only ever reaches here from a 429 (the caller gates on status),
-      // where silence is the dangerous reading — hours is safe, seconds is not.
+      // 'other' only ever reaches here from a 429 (503 is handled above, and
+      // the caller gates on status), where silence is the dangerous reading —
+      // hours is safe, seconds is not.
       return parseGeminiRetryDelayMs(raw) ?? noHintCooldownMs(random);
   }
 }

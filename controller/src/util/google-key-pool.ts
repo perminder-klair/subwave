@@ -382,17 +382,22 @@ export function isHeld(key: string, model?: string): boolean {
 
 /** Park a key for a model. `bodyText` is the raw error body — it carries the
  *  machine-readable `error.code`, the retry hint and the daily-vs-per-minute
- *  distinction. `model` scopes the hold: a key daily-exhausted on one model may
- *  still serve another. Returns the hold length so a caller can log it. */
-export function reportKeyFailure(key: string, model?: string, bodyText?: unknown): number {
+ *  distinction. `httpStatus` is the response's status, which is authoritative
+ *  where the body is not (a proxy 503 may carry no Google JSON at all). `model`
+ *  scopes the hold: a key daily-exhausted on one model may still serve another.
+ *  Returns the hold length so a caller can log it. */
+export function reportKeyFailure(key: string, model?: string, bodyText?: unknown, httpStatus?: number): number {
   if (!key) return 0;
-  const kind = classifyGeminiFailure(bodyText);
+  const kind = classifyGeminiFailure(bodyText, httpStatus);
   const mapKey = holdMapKey(key, model);
   const n = (strikes.get(mapKey) ?? 0);
-  strikes.set(mapKey, n + 1);
+  // A 503 is the model overloaded, not this key failing: hold it briefly but
+  // leave the ladder alone, or one long spike would ratchet every key to hours
+  // and keep the pool parked after Google recovered.
+  if (httpStatus !== 503) strikes.set(mapKey, n + 1);
   // The cooldown module owns the escalation ladder and, critically, applies it
   // ONLY when Google gave no hint — an explicit RetryInfo is never overridden.
-  const ms = resolveGeminiCooldownMs(bodyText, Math.random, n + 1);
+  const ms = resolveGeminiCooldownMs(bodyText, Math.random, n + 1, httpStatus);
   const reason: Hold['reason'] = kind === 'daily' || kind === 'burst' || kind === 'auth'
     ? kind
     : 'unknown';

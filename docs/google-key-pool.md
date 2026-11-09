@@ -152,25 +152,31 @@ giving up on it — a hung key never blocks the station for a full minute. The
 stalled key is parked briefly and the next key in order is tried. Keys are **never
 reordered by health**; a stalled key is skipped by a short hold, not moved.
 
-**Two statuses park a key**, and the second is worth stating separately:
+**Three statuses park a key**, and the last two are worth stating separately:
 
 - **`429`** — quota or rate limit. This is the whole point of the pool.
 - **`401`** — Google rejected the credential: invalid, revoked, or from a
   project that has been disabled. Another key cannot fix it, but *staying* on it
   would cost every call until somebody noticed, so it is set aside and the pool
   continues.
+- **`503`** — the model is overloaded (Google's `UNAVAILABLE`, "experiencing
+  high demand"). The key is held for a short fixed minute and the call moves to
+  the next key; if every key is overloaded, the call reaches the backup leg. The
+  HTTP status decides this even when the body carries no Google JSON.
 
-Everything else is deliberately **not** rotated: a `403` (permissions), a `402`
-(billing) or a `503` (transient load) is a project-level or momentary condition
-that a sibling key usually shares, so rotating would burn through the whole pool
-and then fail identically while hiding the real cause. `403` is reported to the
-operator rather than hidden behind a working key.
+Everything else is deliberately **not** rotated: a `403` (permissions) or `402`
+(billing) is a project-level condition that a sibling key usually shares, so
+rotating would burn through the whole pool and then fail identically while
+hiding the real cause. `403` is reported to the operator rather than hidden
+behind a working key.
 
-Repeated failures on one key **escalate** the hold, so a key that is not
+Repeated `429` failures on one key **escalate** the hold, so a key that is not
 actually clearing is probed a handful of times an hour rather than every minute.
-Any **success clears** that key's hold and its failure count — a key that just
-answered is demonstrably not exhausted, so the next failure starts from the
-short interval again.
+A `503` does not charge that ladder — the overload is model-wide, not the key's
+failure, and escalating it would leave every key parked for hours after Google
+recovered. Any **success clears** that key's hold and its failure count — a key
+that just answered is demonstrably not exhausted, so the next failure starts
+from the short interval again.
 
 Holds live in memory. A controller restart re-probes keys that are still
 exhausted and re-parks them from the same response within one call, so nothing

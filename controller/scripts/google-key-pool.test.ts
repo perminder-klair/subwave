@@ -52,6 +52,7 @@ import {
   GEMINI_AUTH_PARK_MS,
   GEMINI_NO_HINT_MAX_MS,
   GEMINI_NO_HINT_MIN_MS,
+  GEMINI_UNAVAILABLE_HOLD_MS,
   classifyGeminiFailure,
   hasDailyQuotaViolation,
   msUntilMidnightPacific,
@@ -680,7 +681,7 @@ test('an auth failure rotates the pool — the one non-429 that must', async () 
 });
 
 test('billing and content blocks do NOT rotate — they would fail identically', async () => {
-  for (const [status, c] of [[402, 'payment_required'], [403, 'permission_denied'], [503, 'service_unavailable']] as const) {
+  for (const [status, c] of [[402, 'payment_required'], [403, 'permission_denied']] as const) {
     setPool(K1, K2);
     const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
     const realFetch = globalThis.fetch;
@@ -696,6 +697,128 @@ test('billing and content blocks do NOT rotate — they would fail identically',
     } finally {
       globalThis.fetch = realFetch;
     }
+  }
+});
+
+test('googleKeyFetch rotates on 503 Service Unavailable / high demand', async () => {
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const sent: string[] = [];
+  let call = 0;
+  globalThis.fetch = (async (_u: any, _init: any) => {
+    sent.push(new Headers(_init?.headers || {}).get('x-goog-api-key') || '');
+    call += 1;
+    if (call === 1) {
+      return new Response(
+        JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE', message: 'This model is currently experiencing high demand.' } }),
+        { status: 503, statusText: 'Service Unavailable' },
+      );
+    }
+    return new Response('{}', { status: 200 });
+  }) as typeof fetch;
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 200, 'rotation to K2 must produce a success');
+    assert.deepEqual(sent, [K1, K2], 'K1 must be rotated off after 503, K2 answers');
+    assert.equal(poolStatus()[0].strikes, 0, 'a model-wide 503 must not charge the strike ladder');
+    const held = holdRemainingMs(K1, undefined);
+    assert.ok(held > GEMINI_UNAVAILABLE_HOLD_MS - 1_000 && held <= GEMINI_UNAVAILABLE_HOLD_MS,
+      `K1 must take the fixed ${GEMINI_UNAVAILABLE_HOLD_MS}ms overload hold, got ${held}ms`);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('googleKeyFetch throws terminal 503 when all keys return 503', async () => {
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const sent: string[] = [];
+  globalThis.fetch = (async (_u: any, init: any) => {
+    sent.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    return new Response(
+      JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE', message: 'This model is currently experiencing high demand.' } }),
+      { status: 503, statusText: 'Service Unavailable' },
+    );
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 503 && err.code === 'PROVIDER_REQUEST_TIMEOUT',
+      'all keys 503 must throw terminal PROVIDER_REQUEST_TIMEOUT so failover engages',
+    );
+    assert.deepEqual(sent, [K1, K2], 'every key must be tried exactly once');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('an opaque 503 body still takes the short overload hold, not the hours fallback', async () => {
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('<html>503 Service Unavailable</html>', {
+    status: 503,
+    statusText: 'Service Unavailable',
+  })) as typeof fetch;
+  try {
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 503 && err.code === 'PROVIDER_REQUEST_TIMEOUT',
+    );
+    const held = holdRemainingMs(K1, undefined);
+    assert.ok(held > GEMINI_UNAVAILABLE_HOLD_MS - 1_000 && held <= GEMINI_UNAVAILABLE_HOLD_MS,
+      `the status must decide, whatever the body: expected ${GEMINI_UNAVAILABLE_HOLD_MS}ms, got ${held}ms`);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('the HTTP status classifies a 503 even when the body says nothing', () => {
+  assert.equal(classifyGeminiFailure('', 503), 'burst');
+  assert.equal(classifyGeminiFailure('<html>503</html>', 503), 'burst');
+  assert.equal(resolveGeminiCooldownMs('', () => 0.5, 99, 503), GEMINI_UNAVAILABLE_HOLD_MS,
+    'a long failure count must not escalate a model-wide overload');
+});
+
+test('repeated 503s hold briefly without escalating the ladder', () => {
+  setPool(K1);
+  const body = JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE', message: 'high demand' } });
+  for (let i = 0; i < 5; i++) reportKeyFailure(K1, undefined, body, 503);
+  assert.equal(poolStatus()[0].strikes, 0, 'a model-wide 503 is not the key\'s failure');
+  const held = holdRemainingMs(K1, undefined);
+  assert.ok(held > GEMINI_UNAVAILABLE_HOLD_MS - 1_000 && held <= GEMINI_UNAVAILABLE_HOLD_MS,
+    `five 503s must not outlast the fixed hold, got ${held}ms`);
+});
+
+test('a 503 leaves a key\'s quota history alone instead of charging it', async () => {
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  // Pre-strike K1 with a short hint that lapses, leaving strikes intact.
+  reportKeyFailure(K1, undefined, JSON.stringify({
+    error: { code: 429, message: 'quota', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '1ms' }] },
+  }));
+  assert.equal(poolStatus()[0].strikes, 1, 'precondition: K1 already has a strike');
+  assert.ok(holdRemainingMs(K1, undefined) > 0, 'precondition: K1 is held');
+  await new Promise(r => setTimeout(r, 15)); // hold lapses; strikes remain
+  assert.equal(holdRemainingMs(K1, undefined), 0, 'hold must have lapsed');
+  assert.equal(poolStatus()[0].strikes, 1, 'strikes persist after hold lapses');
+  globalThis.fetch = (async (_u: any, _init: any) => {
+    return new Response(
+      JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE', message: 'high demand' } }),
+      { status: 503, statusText: 'Service Unavailable' },
+    );
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 503 && err.code === 'PROVIDER_REQUEST_TIMEOUT',
+    );
+    assert.equal(poolStatus()[0].strikes, 1, 'a 503 must leave the strike count untouched');
+  } finally {
+    globalThis.fetch = realFetch;
   }
 });
 
@@ -1482,9 +1605,12 @@ test('a 503 does not reset a key\'s quota history', async () => {
     { status: 503, headers: { 'content-type': 'application/json' } },
   ));
   try {
-    const res = await googleKeyFetch('https://example.test/v1/x', {});
-    assert.equal(res.status, 503, 'a 503 must be handed back untouched');
-    assert.equal(poolStatus()[0].strikes, strikesBefore, 'a 503 must not reset the escalation ladder');
+    await assert.rejects(
+      googleKeyFetch('https://example.test/v1/x', {}),
+      (err: any) => err.status === 503 && err.code === 'PROVIDER_REQUEST_TIMEOUT',
+      'a 503 must throw PROVIDER_REQUEST_TIMEOUT so failover engages',
+    );
+    assert.equal(poolStatus()[0].strikes, strikesBefore, 'a 503 must leave the strike count untouched');
     assert.ok(getLastFailure(), 'a 503 must not drop the recorded quota failure');
   } finally {
     globalThis.fetch = realFetch;
