@@ -1832,7 +1832,9 @@ sfx_queue = request.queue(id="sfx_queue")
 
 # Silent lead-in clip, pushed immediately before each speech file: smooth_add
 # ducks over the silence so the dip completes BEFORE the DJ's first word.
-# request.queue plays the two pushes gaplessly.
+# request.queue plays the two pushes gaplessly. A clip annotated
+# subwave_no_leadin="true" queues behind one already playing (an exchange
+# continuation line): the duck is down, so its lead-in would be dead air.
 leadin_path = "/sounds/leadin.wav"
 has_leadin = file.exists(leadin_path)
 if has_leadin then
@@ -1847,7 +1849,7 @@ def poll_voice() =
     file.remove("#{state_dir}/say.txt")
     if contents != "" then
       log("DJ says: #{contents}")
-      if has_leadin then
+      if has_leadin and not string.contains(substring='subwave_no_leadin="true"', contents) then
         ignore(voice_queue.push(request.create(leadin_path)))
       end
       ignore(voice_queue.push(request.create(contents)))
@@ -1889,7 +1891,7 @@ def poll_intro() =
         string.replace(pattern="^annotate:", fun(_) -> "annotate:subwave_overlay_epoch=\"#{epoch}\",", contents)
       else contents end
       log("DJ talk-over: #{contents}")
-      if has_leadin then
+      if has_leadin and not string.contains(substring='subwave_no_leadin="true"', contents) then
         leadin = if overlay then "annotate:subwave_jingle_overlay=\"true\",subwave_overlay_epoch=\"#{epoch}\",subwave_overlay_track_at=\"#{song_stamp}\":#{leadin_path}" else leadin_path end
         ignore(intro_queue.push(request.create(leadin)))
       end

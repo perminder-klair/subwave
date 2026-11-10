@@ -200,7 +200,7 @@ export const RESTART_PATHS: readonly string[] = [
 export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   station: ['listener-requests', 'public-api'],
   selection: ['agent-deadline', 'repeat-variety', 'minimum-track-length', 'guest-musical-leanings'],
-  behaviour: ['pause-and-talk', 'prompt-memory', 'extended-sleeve-notes'],
+  behaviour: ['pause-and-talk', 'prompt-memory', 'banter', 'extended-sleeve-notes'],
   llm: ['fallback', 'reasoning', 'idle-behaviour', 'daily-token-budget'],
   tts: ['fallback-voice'],
   library: ['seed-phase', 'propagation', 'enrichment'],
@@ -307,6 +307,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Lookback window', section: 'behaviour', card: 'Prompt memory', keywords: 'minutes recap repeat anti-repeat context history' },
   { label: 'Characters per line', section: 'behaviour', card: 'Prompt memory', keywords: 'chars length recap tokens context' },
   { label: 'Show changes', section: 'behaviour', card: 'Show changes', keywords: 'handoff presenter same host acknowledgement shift transition programme' },
+  { label: 'Hold the music between presenters', section: 'behaviour', card: 'Banter', keywords: 'air gap duck music between speakers banter exchange fade multi-voice' },
   { label: 'Extended Sleeve Notes', section: 'behaviour', card: 'Extended Sleeve Notes', keywords: 'source backed editorial provenance provider credits artist context coming soon' },
   { label: 'Link style', section: 'behaviour', card: 'Link style', keywords: 'release year regular occasional rare metadata sleeve notes' },
 

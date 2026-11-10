@@ -357,6 +357,9 @@ export interface DjBehaviourForm {
   showWelcome: boolean;
   previewNextShow: boolean;
   sameHostAcknowledgement: boolean;
+  /** Keep the music ducked for the whole multi-voice exchange instead of
+   *  letting it lift between speakers. */
+  holdDuckBetweenSpeakers: boolean;
   extendedSleeveNotes: boolean;
   releaseYearMentions: 'regular' | 'occasional' | 'rare';
   recapLimit: string;
@@ -370,6 +373,7 @@ export interface DjBehaviourValues {
   showWelcome?: boolean;
   previewNextShow?: boolean;
   sameHostAcknowledgement?: boolean;
+  holdDuckBetweenSpeakers?: boolean;
   extendedSleeveNotes?: boolean;
   releaseYearMentions?: 'regular' | 'occasional' | 'rare';
   recapLimit?: number;
