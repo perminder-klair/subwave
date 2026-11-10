@@ -459,8 +459,10 @@ function spawnChild(
         }
         // The walk may have pruned a hearted song's old id: move the heart to
         // the same song under its new one (music/heart-follow.ts), which stands
-        // down unless the last walk finished cleanly.
-        await followMovedHearts().catch((err: unknown) =>
+        // down unless the last walk finished cleanly. Not awaited, as at boot:
+        // its Navidrome lookups must not hold the fallback refresh and the
+        // playlist sync below behind a timeout. It runs one pass at a time.
+        void followMovedHearts().catch((err: unknown) =>
           queue.log('error', `following moved hearts failed (will retry): ${err instanceof Error ? err.message : String(err)}`));
         const fallbackRestored = await runTaggerFollowups({
           mode,
