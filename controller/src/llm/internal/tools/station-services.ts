@@ -26,8 +26,8 @@ import { weatherNews } from '../../../skills/weather-policy.js';
 
 export interface StationServices {
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /
-  // Brave / SearXNG / Keenable / Firecrawl / Outcrawl). `searchReady()` is false
-  // when no provider is usable.
+  // Brave / SearXNG / Keenable / Firecrawl / Outcrawl / SpecStream). `searchReady()`
+  // is false when no provider is usable.
   searchWeb: typeof searchWeb;
   searchReady: typeof searchReady;
   // The track currently on air (artist/title/album/year/id), or null.

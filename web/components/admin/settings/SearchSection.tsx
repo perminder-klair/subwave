@@ -141,7 +141,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `provider` tells the controller which endpoint to probe — the same
-        // SEARCH_API_KEY slot holds a Tavily, Brave, Keenable, Firecrawl or Outcrawl key.
+        // SEARCH_API_KEY slot holds a Tavily, Brave, Keenable, Firecrawl, Outcrawl or SpecStream key.
         body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim(), provider }),
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
@@ -161,7 +161,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         sub={<>
           The segment director can air a single line of recent artist context between
           tracks, when the active backend returns something worth saying. DuckDuckGo
-          is free and keyless; Tavily, Brave, Firecrawl and Outcrawl are keyed but return full web results;
+          is free and keyless; Tavily, Brave, Firecrawl, Outcrawl and SpecStream are keyed but return full web results;
           SearXNG is keyless if you self-host it; Keenable returns web results with no
           key. Switching here reroutes the next call, no restart.
         </>}

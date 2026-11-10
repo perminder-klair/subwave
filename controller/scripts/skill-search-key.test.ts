@@ -184,6 +184,21 @@ test('Run now asks for an Outcrawl key when none is set', async (t) => {
   assert.equal(row('web-search').requiresKey, 'SEARCH_API_KEY');
 });
 
+test('SpecStream names a refused key the same way, and an ss_ key clears it', async (t) => {
+  await setSearch(t, { provider: 'specstream', apiKey: 'ock_left.over' });
+  for (const name of SEARCH_GATED) {
+    const skill = row(name);
+    assert.equal(skill.ready, false, name);
+    assert.match(skill.keyProblem, /not a SpecStream key/, name);
+  }
+  await assert.rejects(runCapability('web-search', {}), /not a SpecStream key.*Settings → Web search/);
+
+  await settings.update({ search: { provider: 'specstream', apiKey: 'ss_live_real' } });
+  assert.equal(searchKeyProblem(), null);
+  assert.equal(row('web-search').ready, true);
+  assert.equal(row('web-search').keyUrl, 'https://specstream.ai/workspace');
+});
+
 // Run now's hint and the catalog's key link come from the search catalogue
 // (keyName, keyUrl, one article rule). These are the strings the per-provider
 // chains wrote before, so moving onto the catalogue changed none of them.
@@ -193,6 +208,7 @@ test('a missing key names each keyed provider and links its key page, from the c
     ['brave', 'set SEARCH_API_KEY or paste a Brave Search key into the admin UI', 'https://api-dashboard.search.brave.com/app/keys'],
     ['firecrawl', 'set SEARCH_API_KEY or paste a Firecrawl key into the admin UI', 'https://www.firecrawl.dev/app/api-keys'],
     ['outcrawl', 'set SEARCH_API_KEY or paste an Outcrawl key into the admin UI', 'https://outcrawl.ai/console'],
+    ['specstream', 'set SEARCH_API_KEY or paste a SpecStream key into the admin UI', 'https://specstream.ai/workspace'],
   ];
   await setSearch(t, { provider: 'duckduckgo', apiKey: '' });
   for (const [provider, hint, keyUrl] of cases) {
