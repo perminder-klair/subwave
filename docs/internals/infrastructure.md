@@ -126,16 +126,16 @@ the function are driven from one table by `scripts/max-listeners.test.ts`.
 
 **The off switch is `ANALYZER_REPLICAS=0` (#1570)**, rendered as `deploy.replicas: ${ANALYZER_REPLICAS:-1}` on the service — the next `up -d` stops AND removes the container, and it stays gone across restarts, which `docker compose stop analyzer` (the old advice) did not: `up` restarts a hand-stopped service. **A profile could not express this** and the reason is measured, not stylistic: profiles are opt-in only, so gating the analyzer behind one forces every existing install to add `COMPOSE_PROFILES=analyzer` to keep what it has, and the inverted trick — `profiles: ["${ANALYZER_DISABLED:+off}"]`, empty by default — drops the service for anyone who sets `COMPOSE_PROFILES` **at all**, because a non-empty `COMPOSE_PROFILES` switches compose from the default set to the named set and an empty-string profile is in neither. `docs/tts-heavy.md` tells every Unraid/Portainer operator to set `COMPOSE_PROFILES=tts-heavy`, so that population would silently lose analysis on upgrade. `deploy.replicas` has neither failure: unset and empty both render `1`, so a default-on install is byte-identical, and the `deploy` map merges key-wise with `docker-compose.analyzer-gpu.yml`'s `deploy.resources` reservation rather than replacing it. Three consequences worth knowing. **Only `0` and `1` are valid**: the service pins `container_name: sub-wave-analyzer`, and compose refuses a fixed container name for more than one replica, so `ANALYZER_REPLICAS=2` fails *every* compose command (`can't set container_name and analyzer as container name must be unique`) rather than scaling — a non-integer (`false`) is likewise a hard interpolation error rather than a silent fallback, which is why the var is named for a count and not a boolean. `docker compose config` still LISTS the service at `replicas: 0` (unlike a profile, which omits it), so verify with the rendered `replicas:` line or `docker compose ps`, never `config --services`. And the variable is **inert on the AIO**, which runs the analyzer in-process (`ANALYZE_PYTHON`) rather than as a service — so `docker/aio/supervisor.sh` `warn_if_analyzer_replicas_ignored` warns at boot when it is set to `0` there, for the same reason `warn_if_analyzer_heavy_ignored` exists (#1300 bug 9: a compose-only var that an operator sets, watches do nothing, and concludes the feature is broken). This one fails worse than `ANALYZER_HEAVY` did — an operator setting `0` to reclaim RAM keeps paying for analysis it believes it switched off — so the warning names the AIO's real off switch, an **empty `ANALYZE_PYTHON`** (`config.ts` reads an empty path as no local backend). `scripts/aio-analyzer-heavy.test.ts` pins the warning, and `scripts/analyzer-replicas-compose.test.ts` drives all three composes from one table so the `deploy.replicas` line cannot drift between them.
 
-**Analyzer torch and maintenance commands (#1340, #1738).** Heavy CPU builds,
-the split-stack `subwave-analyzer-cuda` and the AIO's primary CUDA build share
-torch/torchaudio **2.7.1**, the CUDA ones from the **cu128** index (Turing
-sm_75 through Blackwell sm_120). The AIO has a second CUDA build,
-`TORCH_CUDA=cu124`, which pins torch **2.6.0** because that cu124 wheel still
-ships Maxwell (sm_50), Pascal (sm_60) and Volta (sm_70) SASS. cu128 dropped
-those three, and CUDA 13 cannot emit them. The standalone analyzer has no
-cu124 build. The cu128 index publishes cp313 wheels for the AIO's system
-Python 3.13 and cp311 for the standalone image; the AIO-only cu124 build uses
-cp313. Keep the shared pins in lockstep (Demucs 4.0.1, diffq 0.2.4,
+**Analyzer torch and maintenance commands (#1340, #1738).** Heavy CPU builds
+and the primary CUDA build of both `subwave-analyzer-cuda` and
+`subwave-aio-cuda` share torch/torchaudio **2.7.1**, the CUDA ones from the
+**cu128** index (Turing sm_75 through Blackwell sm_120). Each CUDA image has a
+second build, `TORCH_CUDA=cu124`, which pins torch **2.6.0** because that
+cu124 wheel still ships Maxwell (sm_50), Pascal (sm_60) and Volta (sm_70)
+SASS. cu128 dropped those three, and CUDA 13 cannot emit them. The split
+stack's cu124 build came after the AIO's (#2280). Both indexes publish cp313
+wheels for the AIO's system Python 3.13 and cp311 for the standalone image.
+The two Dockerfiles share one `TORCH_CUDA` case. Keep the shared pins in lockstep (Demucs 4.0.1, diffq 0.2.4,
 transformers 5.13.0, CPU onnxruntime 1.27.0); the cu124 torch pin is the one
 exception. Chatterbox runs in a separate venv with its
 own upstream torch pin and Blackwell override, described in `docs/gpu-tts.md`.
@@ -146,11 +146,18 @@ puts the analyzer venv first so pip targets it instead of the server venv,
 and starts FastAPI with `/opt/server/venv/bin/uvicorn` to preserve that isolation.
 
 <a id="aio-cuda-tags"></a>
-**AIO CUDA tags: an architecture tag names a GPU, not a wheel (#2265).**
-`subwave-aio-cuda` is published once per torch wheel, and operators pick it by
-their card's architecture. This table is the one place that maps a tag to a
-build; the README, `docs/unraid.md`, `docs/tts-heavy.md` and the in-app guides
-link here or name a tag by its card rather than restate it.
+**CUDA tags: an architecture tag names a GPU, not a wheel (#2265, #2280).**
+`subwave-aio-cuda` and `subwave-analyzer-cuda` are each published once per
+torch wheel, and operators pick one by their card's architecture: the AIO by
+its container tag, the split stack by `ANALYZER_CUDA_TAG`, which
+`docker-compose.analyzer-gpu.yml` reads ahead of `SUBWAVE_VERSION`, so an
+install that leaves it unset pulls exactly the image it did before. Both
+images carry the same tags with the same builds behind them. This table is the
+one place that maps a tag to a build; the README, `docs/unraid.md`,
+`docs/tts-heavy.md` and the in-app guides link here or name a tag by its card
+rather than restate it. The analyze worker names a card's tag too, when its
+CUDA self-test fails and it falls back to cpu (`cuda_arch_tag` in
+`analyze_worker.py`).
 
 | Tag | GPU (compute capability) | For example | Build today |
 | --- | --- | --- | --- |
@@ -166,8 +173,10 @@ link here or name a tag by its card rather than restate it.
 The build tags `:cu124` and `:cu128`, and the release pins
 `:<version>-cu124` and `:<version>-cu128`, name a wheel instead. `:latest` and
 the plain `:<version>` tags follow the **primary** build, today cu128, so they
-work only on Turing and newer. An architecture tag points at the newest build
-that still supports its GPU, which is why each GPU has its own: a later wheel
+work only on Turing and newer. An architecture tag floats with each stable
+release, so `subwave update` needs nothing more; a `:<version>-cu124` pin in
+`ANALYZER_CUDA_TAG` stays where it is until the operator moves it. An
+architecture tag points at the newest build that still supports its GPU, which is why each GPU has its own: a later wheel
 can move one without the others (a cu130 that only adds Blackwell moves
 `:blackwell` and leaves `:hopper` on cu128), whereas a tag shared by several
 GPUs, or `:latest`, would strand the older cards the day a newer wheel drops
@@ -175,10 +184,12 @@ them. Never point an architecture tag at a build that dropped its GPU, and
 never fold several GPUs into one tag.
 
 `publish-images.yml` encodes this per matrix entry. Each `subwave-aio-cuda`
-entry sets `cuda_family`, `primary` and `arch_tags`, so moving a GPU to
-another build moves one word between two `arch_tags` lines. `cuda_family` is
-also the wheel: the build step passes it to `Dockerfile.aio` as `TORCH_CUDA`,
-whose `case` fails on a family it has no index for, so a build's tags and its
+and `subwave-analyzer-cuda` entry sets `cuda_family`, `primary` and
+`arch_tags`, so moving a GPU to another build moves one word between two
+`arch_tags` lines (do it on both images together, or the AIO and the split
+stack disagree about a card). `cuda_family` is also the wheel: the build step
+passes it to `Dockerfile.aio` or `Dockerfile.analyzer` as `TORCH_CUDA`, whose
+`case` fails on a family it has no index for, so a build's tags and its
 wheel can't disagree. Each job sees only its own entry, so the `tagplan` step
 checks only that entry's shape (a `cuda_family` build says `primary: true` or
 `false`, and `arch_tags` needs a `cuda_family`). The rules across entries run

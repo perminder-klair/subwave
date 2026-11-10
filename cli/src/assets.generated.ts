@@ -1114,10 +1114,19 @@ export const COMPOSE_ANALYZER_GPU_YML = `# GPU opt-in overlay for the analyzer �
 # co-resident TTS/LLM gets the card back (ANALYZE_IDLE_UNLOAD_S tunes it;
 # 0 keeps them resident). A few hundred MB of CUDA context remain until the
 # container stops.
+#
+# The image is built once per torch wheel (#2280). Unset, ANALYZER_CUDA_TAG
+# follows SUBWAVE_VERSION like every other image: the cu128 build, for Turing
+# (RTX 20-series, GTX 16-series) and newer. An older card needs the cu124
+# build: set ANALYZER_CUDA_TAG in .env to its architecture tag (maxwell,
+# pascal or volta), or to <version>-cu124 to pin a release. The tag table is in
+# docs/internals/infrastructure.md (#aio-cuda-tags).
 services:
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:\${SUBWAVE_VERSION:-latest}
-    # Local build with this overlay applied mirrors the published cuda image.
+    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:\${ANALYZER_CUDA_TAG:-\${SUBWAVE_VERSION:-latest}}
+    # Local build with this overlay applied mirrors the published cu128 image,
+    # whatever ANALYZER_CUDA_TAG says; for the cu124 one, build with
+    # --build-arg TORCH_CUDA=cu124.
     build:
       args:
         WITH_CLAP: 1
@@ -1195,6 +1204,14 @@ SITE_URL=
 # release) and moves it forward on \`subwave update\`. Published tags are bare
 # semver (e.g. 0.35.0 or 0.35), plus \`latest\`.
 # SUBWAVE_VERSION=latest
+
+# The CUDA analyzer's tag, read only by docker-compose.analyzer-gpu.yml. Unset
+# follows SUBWAVE_VERSION: the cu128 build, for Turing (RTX 20-series, GTX
+# 16-series) and newer. A Maxwell, Pascal (GTX 10-series) or Volta card needs
+# the cu124 build: set its architecture tag, which moves with each release, or
+# <version>-cu124 to pin one (\`subwave update\` does not move that pin). Tags:
+# docs/internals/infrastructure.md#aio-cuda-tags.
+# ANALYZER_CUDA_TAG=pascal
 
 # ───────── Ports (byo-proxy compose only) ─────────
 # CADDY_PORT=7700

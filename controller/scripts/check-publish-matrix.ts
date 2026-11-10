@@ -1,7 +1,7 @@
 // Whole-matrix check for .github/workflows/publish-images.yml (#2265).
 //
-// An image built by more than one matrix entry (today only subwave-aio-cuda,
-// one entry per torch wheel) carries two rules that no single job can check,
+// An image built by more than one matrix entry (today subwave-aio-cuda and
+// subwave-analyzer-cuda, one entry per torch wheel) carries two rules that no single job can check,
 // because each job sees only its own entry:
 //   1. Exactly one entry is primary. The primary alone takes :latest, the plain
 //      version tags and the plain sha- tag, so two primaries race for :latest
@@ -10,7 +10,7 @@
 //   2. Each floating tag, a build's `cuda_family` and every name in its
 //      `arch_tags`, sits on exactly one entry. Two entries owning :pascal race
 //      for it the same way. An architecture tag points at the newest build that
-//      still supports its GPU (the AIO CUDA tag table in
+//      still supports its GPU (the CUDA tag table in
 //      docs/internals/infrastructure.md).
 // The workflow's tagplan step checks only what one entry can show (a
 // cuda_family build says primary: true or false; arch_tags needs a

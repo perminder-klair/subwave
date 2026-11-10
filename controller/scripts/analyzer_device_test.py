@@ -127,7 +127,7 @@ def main():
         assert calls["kernel"] == 1, "the self-test should have run one op"
         warn = next((l for l in lines if "self-test failed" in l), None)
         assert warn, f"no fallback warning in {lines}"
-        for needle in ("GTX 1060", "sm_61", "sm_75", "sm_120", ":pascal", "no kernel image", "Demucs on cpu is slow"):
+        for needle in ("GTX 1060", "sm_61", "sm_75", "sm_120", ":pascal", "ANALYZER_CUDA_TAG=pascal", "no kernel image", "Demucs on cpu is slow"):
             assert needle in warn, f"warning lacks {needle!r}: {warn}"
         assert lines[-1] == "analysis device: cpu", lines
 

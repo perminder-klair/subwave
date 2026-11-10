@@ -231,7 +231,17 @@ GPU overlay must not be enabled by default on CPU-only hosts.
 
 That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
 torch/torchaudio 2.7.1 cu128 wheels, including RTX 50-series Blackwell support)
-and hands it the GPU. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
+and hands it the GPU. Those wheels start at Turing (RTX 20-series, GTX
+16-series). For an older card, a GTX 10-series for example, add the tag named
+for its architecture to `.env`, which picks the cu124 build (torch 2.6.0):
+
+```dotenv
+ANALYZER_CUDA_TAG=pascal
+```
+
+[The tag table](internals/infrastructure.md#aio-cuda-tags) lists every card's
+tag. Leave it unset on a newer card: the overlay then follows
+`SUBWAVE_VERSION` like every other image. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
 Requirements: the NVIDIA driver +
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 — nothing else; the CUDA runtime rides inside the image. The worker picks the

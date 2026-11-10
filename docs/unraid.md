@@ -195,7 +195,10 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
   features, GPU-fast: add `docker-compose.analyzer-gpu.yml` from the repo as a
   second compose file in the stack (it swaps the analyzer to
   `subwave-analyzer-cuda` and reserves the GPU; `ANALYZER_HEAVY` is then
-  irrelevant). Needs the Unraid **Nvidia Driver** plugin; if the GPU isn't
+  irrelevant). On a card older than Turing (a GTX 10-series, say) also add
+  `ANALYZER_CUDA_TAG=pascal`, or the tag named for your card
+  ([every tag](internals/infrastructure.md#aio-cuda-tags)), to the **.env**.
+  Needs the Unraid **Nvidia Driver** plugin; if the GPU isn't
   visible, or can't run the image's kernels, the analyzer logs a warning and
   falls back to CPU.
 - **All-in-one (one-click from Community Applications).** The heavy/lean split

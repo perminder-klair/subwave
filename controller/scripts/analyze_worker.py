@@ -557,7 +557,8 @@ def _cuda_fallback_warning(torch, error):
         tag = cuda_arch_tag(cap)
         advice = (
             f"this image has no kernels for {sm}: use the CUDA image's :{tag} tag "
-            "(docs/internals/infrastructure.md#aio-cuda-tags)"
+            f"(ANALYZER_CUDA_TAG={tag} in .env on the split stack; "
+            "docs/internals/infrastructure.md#aio-cuda-tags)"
             if tag
             else f"no published CUDA build supports {sm}"
         )
