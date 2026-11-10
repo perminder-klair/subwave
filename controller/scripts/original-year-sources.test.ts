@@ -13,12 +13,15 @@ import { removeTempDir } from './test-utils/temp-dir.js';
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-year-sources-'));
 process.env.STATE_DIR = stateDir;
 delete process.env.DISCOGS_TOKEN;
+// requireAdmin is a no-op without these, so the settings route mounts bare.
+delete process.env.ADMIN_USER;
+delete process.env.ADMIN_PASS;
 
 const db = await import('../src/music/library-db.js');
 const settings = await import('../src/settings.js');
 const policy = await import('../src/music/original-year-policy.js');
 const { lookupOriginalYear } = await import('../src/music/musicbrainz.js');
-const { lookupDiscogsYear, resetDiscogsRefusalLog } = await import('../src/music/discogs.js');
+const { lookupDiscogsYear, forgetDiscogsRefusal, discogsRefused } = await import('../src/music/discogs.js');
 const { lookupOriginalYearAnySource } = await import('../src/music/original-year.js');
 const { SECRET_ENV_KEYS } = await import('../src/setup/secrets.js');
 await settings.load();
@@ -124,17 +127,42 @@ test('Discogs: another artist\'s release never answers', async () => {
   assert.deepEqual(await lookupDiscogsYear(track), { kind: 'not-found' }, 'a year after the file\'s own never answers');
 });
 
-test('Discogs: a refused token takes no part (not-found, logged once); a 429 is asked once more', async (tc) => {
+test('Discogs: a refused token takes no part, and is skipped from then on without a request', async (tc) => {
   const warnings: string[] = [];
   tc.mock.method(console, 'warn', (msg: string) => { warnings.push(msg); });
-  resetDiscogsRefusalLog();
+  forgetDiscogsRefusal();
   process.env.DISCOGS_TOKEN = 'bad';
-  for (const status of [401, 401, 403]) {
-    reply(DG, { status, body: { message: 'You must authenticate to access this resource.' } });
-    assert.deepEqual(await lookupDiscogsYear(track), { kind: 'not-found' }, String(status));
-  }
-  assert.equal(warnings.length, 2, 'once per status, not once per track');
-  assert.match(warnings[0], /refused \(HTTP 401\)/);
+  reply(DG, { status: 401, body: { message: 'You must authenticate to access this resource.' } });
+  assert.deepEqual(await lookupDiscogsYear(track), { kind: 'not-found' }, 'refused: Discogs took no part');
+  assert.equal(calls(DG).length, 1);
+  assert.equal(discogsRefused(), true);
+  const t0 = Date.now();
+  for (let i = 0; i < 3; i++) assert.deepEqual(await lookupDiscogsYear(track), { kind: 'not-found' });
+  assert.equal(calls(DG).length, 1, 'the refused token is never sent again');
+  assert.ok(Date.now() - t0 < 500, `skipped lookups wait no throttle gap (${Date.now() - t0} ms)`);
+  assert.equal(warnings.length, 1, 'logged once, not once per track');
+  assert.match(warnings[0], /refused \(HTTP 401\): Discogs is skipped from now on/);
+  // A different token is asked again; the refused one stays skipped.
+  process.env.DISCOGS_TOKEN = 'good';
+  assert.equal(discogsRefused(), false);
+  reply(DG, dgHits({ type: 'master', title: 'Wendy Rene - After Laughter', year: '1964' }));
+  assert.deepEqual(await lookupDiscogsYear(track), { kind: 'found', year: 1964, source: 'discogs' });
+  process.env.DISCOGS_TOKEN = 'bad';
+  assert.deepEqual(await lookupDiscogsYear(track), { kind: 'not-found' });
+  assert.equal(calls(DG).length, 2, 'switching back to the refused token sends nothing');
+  // Forgetting the refusal (a save) asks again; a 403 is a refusal too.
+  forgetDiscogsRefusal();
+  reply(DG, { status: 403 });
+  assert.deepEqual(await lookupDiscogsYear(track), { kind: 'not-found' });
+  assert.equal(calls(DG).length, 3);
+  assert.equal(discogsRefused(), true);
+  assert.match(warnings[1], /HTTP 403/);
+  forgetDiscogsRefusal();
+});
+
+test('Discogs: a 429 is asked once more; a network error is an error', async () => {
+  forgetDiscogsRefusal();
+  process.env.DISCOGS_TOKEN = 'tok-123';
   reply(DG, { status: 429, ...now }, dgHits({ type: 'master', title: 'Wendy Rene - After Laughter', year: '1964' }));
   assert.deepEqual(await lookupDiscogsYear(track), { kind: 'found', year: 1964, source: 'discogs' });
   reply(DG, new Error('socket hang up'));
@@ -195,7 +223,7 @@ test('a MusicBrainz error is the answer: Discogs is not asked, even when it woul
 });
 
 test('a refused Discogs token keeps MusicBrainz\'s answer: a miss stays a miss, an error stays an error', async () => {
-  resetDiscogsRefusalLog();
+  forgetDiscogsRefusal();
   process.env.DISCOGS_TOKEN = 'typo';
   reply(MB, mbNone, mbNone);
   reply(DG, { status: 401 });
@@ -260,4 +288,38 @@ test('an error never touches a resolved or manual year', () => {
 
 test('the Discogs token is a stored secret', () => {
   assert.ok((SECRET_ENV_KEYS as readonly string[]).includes('DISCOGS_TOKEN'));
+});
+
+test('saving a Discogs token from the settings asks Discogs again, even a token it refused', async () => {
+  const express = (await import('express')).default;
+  const { listen } = await import('./test-utils/http.js');
+  const { router } = await import('../src/routes/settings/core.js');
+  const app = express();
+  app.use(express.json());
+  app.use(router);
+  const { server, url } = await listen(app);
+  try {
+    forgetDiscogsRefusal();
+    process.env.DISCOGS_TOKEN = 'bad';
+    reply(DG, { status: 401 });
+    await lookupDiscogsYear(track);
+    assert.equal(discogsRefused(), true);
+    const realFetchForRoute = globalThis.fetch;
+    globalThis.fetch = realFetch;
+    try {
+      const res = await fetch(`${url}/settings/secrets`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ DISCOGS_TOKEN: 'bad' }),
+      });
+      assert.deepEqual(((await res.json()) as { saved: string[] }).saved, ['DISCOGS_TOKEN']);
+    } finally {
+      globalThis.fetch = realFetchForRoute;
+    }
+    assert.equal(discogsRefused(), false, 'the save cleared the refusal');
+    reply(DG, dgHits({ type: 'master', title: 'Wendy Rene - After Laughter', year: '1964' }));
+    assert.deepEqual(await lookupDiscogsYear(track), { kind: 'found', year: 1964, source: 'discogs' });
+  } finally {
+    server.close();
+  }
 });

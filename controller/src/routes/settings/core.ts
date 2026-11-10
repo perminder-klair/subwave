@@ -28,6 +28,7 @@ import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { forgetDiscogsRefusal } from '../../music/discogs.js';
 import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
@@ -379,6 +380,8 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       return res.json({ saved: [], ...managed });
     }
     await saveSecrets(allowed);
+    // A saved Discogs token is asked again, even one Discogs refused before.
+    if ('DISCOGS_TOKEN' in allowed) forgetDiscogsRefusal();
     res.json({ saved: Object.keys(allowed), ...managed });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);

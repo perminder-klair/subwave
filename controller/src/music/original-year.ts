@@ -51,7 +51,7 @@ export async function runYearLookups(
   const stats: YearPassStats = { asked: 0, found: 0, discogs: 0, notFound: 0, errors: 0 };
   if (!ids.length) return stats;
   const label = opts.label ?? '[tag]';
-  const sources = discogs.discogsToken() ? 'MusicBrainz, then Discogs' : 'MusicBrainz';
+  const sources = discogs.discogsToken() && !discogs.discogsRefused() ? 'MusicBrainz, then Discogs' : 'MusicBrainz';
   console.log(`${label} original years: ${ids.length} era-suspect tracks to resolve via ${sources} (~1/s)`);
   reportProgress({ phase: 'enrich', label: 'Resolving original years', done: 0, total: ids.length });
   await mapPool([...ids], Math.max(1, Math.min(opts.concurrency ?? 4, 4)), async (id) => {
