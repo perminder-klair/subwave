@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // Types only, erased at build time, so nothing loads before STATE_DIR is set.
 import type { TalkKind, TalkPlan } from '../src/broadcast/talk-scheduler.js';
+import type { PendingTalk } from '../src/broadcast/queue/kinds.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-talk-'));
 process.env.STATE_DIR = root;
@@ -51,8 +52,8 @@ function makeReplay(opts: {
   lastTalkBreakAt?: number;
   feedback?: boolean;
   // A function when the clip's presence has to change mid-hour.
-  pendingTalk?: { kind: string; queuedAt: number } | null
-    | ((now: Date) => { kind: string; queuedAt: number } | null);
+  pendingTalk?: PendingTalk | null
+    | ((now: Date) => PendingTalk | null);
   betweenTracksOnly?: boolean;
   eligible?: (kind: TalkKind, now: Date) => boolean;
   externalSlot?: (kind: TalkKind, now: Date) => string | null;
