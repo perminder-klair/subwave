@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  configuredSlot, fallbackTextFor, orderedFallbacks, sameTtsTarget, type RescueSlot,
+  configuredSlot, fallbackTextFor, orderedFallbacks, personaRescueSlot, sameTtsTarget, type RescueSlot,
 } from '../src/audio/tts-fallback.js';
 
 const allUsable = () => true;
@@ -302,6 +302,83 @@ assert.deepEqual(
   seen,
   [['cloud', 'elevenlabs'], ['kokoro', null]],
   'configured rung probed with its own provider; hardcoded rungs with null',
+);
+
+// ---- A persona's own rescue voice (#2029) ---------------------------------
+// speak() passes [personaRescue, stationFallback]; the persona's slot leads so
+// two co-hosts rescued at once keep their own voices.
+
+assert.equal(personaRescueSlot(undefined, ENGINES), null, 'absent → no slot');
+assert.equal(personaRescueSlot(null, ENGINES), null, 'null → no slot');
+assert.equal(
+  personaRescueSlot({ engine: 'inherit', voice: '' }, ENGINES),
+  null,
+  'inherit is not an engine a rescue can speak on',
+);
+assert.equal(
+  personaRescueSlot({ engine: 'bogus', voice: 'x' }, ENGINES),
+  null,
+  'unknown engine → no slot',
+);
+const emmaRescue = personaRescueSlot({ engine: 'kokoro', voice: 'af_bella', cloudProvider: 'openai' }, ENGINES);
+assert.deepEqual(
+  emmaRescue,
+  { engine: 'kokoro', personaTts: { engine: 'kokoro', voice: 'af_bella', cloudProvider: 'openai' } },
+  'a rescue voice is engine + voice + provider, with no station-default marker',
+);
+
+assert.deepEqual(
+  orderedFallbacks('remote', [emmaRescue, null], 'cloud', allUsable).map((s) => [s.engine, s.personaTts?.voice ?? null]),
+  [['kokoro', 'af_bella'], ['cloud', null], ['piper', null]],
+  'the persona rescue leads, ahead of the default engine',
+);
+assert.deepEqual(
+  orderedFallbacks('remote', [null, kokoroSlot], 'cloud', allUsable),
+  orderedFallbacks('remote', kokoroSlot, 'cloud', allUsable),
+  'no persona rescue: exactly the station chain',
+);
+assert.deepEqual(
+  orderedFallbacks('remote', [emmaRescue, kokoroSlot], 'cloud', allUsable).map((s) => [s.engine, s.personaTts?.voice ?? null]),
+  [['kokoro', 'af_bella'], ['cloud', null], ['piper', null]],
+  'persona kokoro + station kokoro → one kokoro rung, in the persona voice',
+);
+const geminiRescue = personaRescueSlot({ engine: 'gemini', voice: 'Kore' }, [...ENGINES, 'gemini']);
+assert.deepEqual(
+  orderedFallbacks('remote', [geminiRescue, kokoroSlot], 'cloud', allUsable).map((s) => s.engine),
+  ['gemini', 'kokoro', 'cloud', 'piper'],
+  'persona rescue first, then the station fallback, then the hardcoded rungs',
+);
+assert.deepEqual(
+  orderedFallbacks('remote', [geminiRescue, kokoroSlot], 'cloud', (e) => e !== 'gemini').map((s) => s.engine),
+  ['kokoro', 'cloud', 'piper'],
+  'an unusable persona rescue is skipped, never fatal',
+);
+
+// Cloud persona rescue: probed with its own provider; excluded when it is the
+// very target that just failed (#1793), kept for a different provider.
+const elevenRescue = personaRescueSlot({ engine: 'cloud', voice: 'Rachel', cloudProvider: 'elevenlabs' }, ENGINES);
+const probed: Array<[string, string | null | undefined]> = [];
+orderedFallbacks('remote', [elevenRescue, null], null, (e, p) => { probed.push([e, p]); return true; });
+assert.deepEqual(
+  probed,
+  [['cloud', 'elevenlabs'], ['piper', null], ['kokoro', null]],
+  'the persona rescue is probed with its own provider',
+);
+assert.deepEqual(
+  orderedFallbacks({ engine: 'cloud', cloudProvider: 'elevenlabs' }, [elevenRescue, null], null, allUsable).map((s) => s.engine),
+  ['piper', 'kokoro'],
+  'a persona rescue on the provider that just failed is not retried',
+);
+assert.deepEqual(
+  orderedFallbacks({ engine: 'cloud', cloudProvider: 'openai' }, [elevenRescue, null], null, allUsable).map((s) => [s.engine, s.personaTts?.cloudProvider ?? null]),
+  [['cloud', 'elevenlabs'], ['piper', null], ['kokoro', null]],
+  'a different provider is a different target and may rescue',
+);
+// Engine-keyed dedup: a persona cloud rescue displaces the default cloud rung.
+assert.deepEqual(
+  orderedFallbacks('remote', [elevenRescue, null], 'cloud', allUsable).map((s) => [s.engine, s.personaTts?.voice ?? null]),
+  [['cloud', 'Rachel'], ['piper', null], ['kokoro', null]],
+  'one cloud attempt per rescue: the persona voice, not the station cloud voice',
 );
 
 console.log('tts-fallback.test.ts: all assertions passed');
