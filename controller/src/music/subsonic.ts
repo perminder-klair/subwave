@@ -586,6 +586,11 @@ export async function getScanStatus(): Promise<boolean | null> {
   }
 }
 
+export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
+  return r.albumList2?.album || [];
+}
+
 /** getScanStatus with Navidrome's `lastScan`, the time its last scan ended. */
 export interface ScanState {
   scanning: boolean;
@@ -608,11 +613,6 @@ export async function getScanState(): Promise<ScanState | null> {
   } catch {
     return null;
   }
-}
-
-export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
-  const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
-  return r.albumList2?.album || [];
 }
 
 // Albums by play count. `offset` rotates the window — the top-N list barely
