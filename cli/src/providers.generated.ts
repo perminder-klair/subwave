@@ -121,6 +121,35 @@ export const LLM_PROVIDER_CATALOG = [
     }
   },
   {
+    "id": "orcarouter",
+    "label": "OrcaRouter",
+    "longLabel": "OrcaRouter (multi-vendor aggregator)",
+    "blurb": "Multi-vendor aggregator",
+    "group": "gateway",
+    "kind": "cloud",
+    "envVar": "ORCAROUTER_API_KEY",
+    "keyPlaceholder": "OrcaRouter API key",
+    "exampleModel": "orcarouter/free",
+    "cliLabel": "OrcaRouter — multi-vendor",
+    "openaiCompatible": {
+      "baseUrl": "https://api.orcarouter.ai/v1",
+      "reasoning": "familyFloor"
+    },
+    "embedding": {
+      "defaultModel": "openai/text-embedding-3-small",
+      "suggestions": [
+        {
+          "id": "openai/text-embedding-3-small",
+          "dim": 1536
+        },
+        {
+          "id": "openai/text-embedding-3-large",
+          "dim": 3072
+        }
+      ]
+    }
+  },
+  {
     "id": "anthropic",
     "label": "Anthropic",
     "longLabel": "Anthropic (Claude)",

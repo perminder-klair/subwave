@@ -22,7 +22,7 @@ test('the LLM list splits into network, vendors and gateways, each in server ord
   assert.deepEqual(shape(LLM_PROVIDER_IDS), [
     ['network', ['ollama', 'openai-compatible', 'locca']],
     ['vendor', ['anthropic', 'openai', 'google', 'deepseek']],
-    ['gateway', ['openrouter', 'requesty', 'gateway']],
+    ['gateway', ['openrouter', 'requesty', 'orcarouter', 'gateway']],
   ]);
 });
 
@@ -30,7 +30,7 @@ test('the embedding list keeps only the groups it has members in', () => {
   assert.deepEqual(shape(EMBEDDING_PROVIDER_IDS), [
     ['network', ['ollama', 'openai-compatible', 'locca']],
     ['vendor', ['openai', 'google']],
-    ['gateway', ['openrouter', 'requesty']],
+    ['gateway', ['openrouter', 'requesty', 'orcarouter']],
   ]);
   assert.deepEqual(shape(['requesty', 'openrouter']), [['gateway', ['requesty', 'openrouter']]]);
 });

@@ -84,6 +84,48 @@ test('Requesty: a 401 or 403 reads as a rejected key, anything else as the statu
   assert.equal(failed.message, 'Request failed (502)');
 });
 
+// OrcaRouter's GET /models answers a bad, blank or whitespace bearer with 401
+// "Invalid API key" (checked live 2026-11-10), so the generic probe holds for it.
+test('OrcaRouter: its model list with the key as a Bearer; its 401 reads as a rejected key', async (t) => {
+  const outbound = stubProvider(t, 200, { data: [{ id: 'orcarouter/free' }] });
+  const r = await testKey({ key: 'ORCAROUTER_API_KEY', value: 'orca-good' });
+  assert.equal(r.ok, true);
+  assert.equal(r.message, '✓ OrcaRouter key valid');
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].url, 'https://api.orcarouter.ai/v1/models');
+  assert.equal(outbound[0].headers.get('authorization'), 'Bearer orca-good');
+  t.mock.restoreAll();
+  stubProvider(t, 401, { error: { message: 'Invalid API key', type: 'orcarouter_api_error' } });
+  const rejected = await testKey({ key: 'ORCAROUTER_API_KEY', value: 'orca-bad' });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.message, 'Key rejected — check it\'s correct and active');
+});
+
+// OrcaRouter's list is public to a request with NO Authorization header, so a
+// probe that went out without a key would pass. Neither the Test key nor the
+// model list may reach the gateway with a blank one.
+test('a gateway key probe or model list never goes out without a key', async (t) => {
+  delete process.env.ORCAROUTER_API_KEY;
+  const outbound = stubProvider(t, 200, { data: [{ id: 'orcarouter/free' }] });
+  for (const value of ['', '   ']) {
+    const res = await fetch(`${base}/settings/secrets/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'ORCAROUTER_API_KEY', value }),
+    });
+    assert.equal(res.status, 400, JSON.stringify(value));
+    assert.equal((await res.json() as { ok: boolean }).ok, false);
+  }
+  process.env.ORCAROUTER_API_KEY = '   ';
+  try {
+    const list = await (await fetch(`${base}/settings/llm/models?provider=orcarouter`)).json() as { ok: boolean; error?: string };
+    assert.equal(list.ok, false);
+    assert.match(String(list.error), /ORCAROUTER_API_KEY not set/);
+  } finally {
+    delete process.env.ORCAROUTER_API_KEY;
+  }
+  assert.equal(outbound.length, 0);
+});
+
 // keenableSearch sends only a keen_ value, so a Tavily or Brave key left in the
 // shared SEARCH_API_KEY slot is unused, not wrong: it must never reach Keenable
 // or come back as "Key rejected".

@@ -815,7 +815,7 @@ async function main() {
     }
   });
   await test('native-strategy providers get room to seed, refine, cross-check', () => {
-    for (const provider of ['openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'gateway']) {
+    for (const provider of ['openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'orcarouter', 'gateway']) {
       assert.equal(discoveryStepsFor({ provider }), 3, provider);
       assert.equal(gatedMaxStepsFor({ provider }), 4, provider);
     }
@@ -840,7 +840,7 @@ async function main() {
     // A zero/negative budget would force `done` at step 0 with an empty `seen`
     // map — the model could only fabricate an id. Every real descriptor sits
     // inside the band, so the clamp is the backstop, not the mechanism.
-    for (const provider of Object.keys({ ollama: 0, openai: 0, anthropic: 0, google: 0, deepseek: 0, openrouter: 0, requesty: 0, gateway: 0, locca: 0, 'openai-compatible': 0 })) {
+    for (const provider of Object.keys({ ollama: 0, openai: 0, anthropic: 0, google: 0, deepseek: 0, openrouter: 0, requesty: 0, orcarouter: 0, gateway: 0, locca: 0, 'openai-compatible': 0 })) {
       const n = discoveryStepsFor({ provider });
       assert.ok(n >= DISCOVERY_STEPS_MIN && n <= DISCOVERY_STEPS_MAX, `${provider} budget ${n} out of band`);
       assert.equal(Number.isInteger(n), true, `${provider} budget must be a whole step count`);

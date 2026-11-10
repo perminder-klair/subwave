@@ -2122,7 +2122,7 @@ export const PROVIDER_GROUPS = ['network', 'vendor', 'gateway'] as const;
 export type ProviderGroup = (typeof PROVIDER_GROUPS)[number];
 
 // The reasoning rules in capabilities.ts a fixed-endpoint gateway can pick.
-export type GatewayReasoningRule = 'openaiModels' | 'minimalWhenOff' | 'vendorRouted';
+export type GatewayReasoningRule = 'openaiModels' | 'minimalWhenOff' | 'vendorRouted' | 'familyFloor';
 
 export interface LlmProviderEntry {
   id: string;
@@ -2209,6 +2209,15 @@ export const LLM_PROVIDER_CATALOG: readonly LlmProviderEntry[] = [
     group: 'gateway', kind: 'cloud', envVar: 'REQUESTY_API_KEY', keyPlaceholder: 'Requesty API key',
     exampleModel: 'openai/gpt-4o-mini', cliLabel: 'Requesty — multi-vendor',
     openaiCompatible: { baseUrl: 'https://router.requesty.ai/v1', reasoning: 'minimalWhenOff' },
+    embedding: { defaultModel: 'openai/text-embedding-3-small', suggestions: VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS },
+  },
+  {
+    // orcarouter/free is a built-in router on the public model list;
+    // orcarouter/auto is created per account, so a fresh key may not have it.
+    id: 'orcarouter', label: 'OrcaRouter', longLabel: 'OrcaRouter (multi-vendor aggregator)', blurb: 'Multi-vendor aggregator',
+    group: 'gateway', kind: 'cloud', envVar: 'ORCAROUTER_API_KEY', keyPlaceholder: 'OrcaRouter API key',
+    exampleModel: 'orcarouter/free', cliLabel: 'OrcaRouter — multi-vendor',
+    openaiCompatible: { baseUrl: 'https://api.orcarouter.ai/v1', reasoning: 'familyFloor' },
     embedding: { defaultModel: 'openai/text-embedding-3-small', suggestions: VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS },
   },
   {
