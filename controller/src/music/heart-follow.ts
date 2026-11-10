@@ -25,7 +25,11 @@
 // listed on its album). A song still listed, an error or a timeout leaves the
 // heart where it is, because a wrong move hearts a song nobody liked. At most two
 // lookups per planned move, one move at a time, and the first failure stops the
-// rest: those hearts, and the bookmark, wait for the next pass.
+// rest: those hearts, and the bookmark, wait for the next pass. The lookups are
+// bracketed by getScanStatus, before and after: unless Navidrome said "not
+// scanning" both times, every planned move is held and nothing is bookmarked,
+// since a scan mid-move briefly drops live songs from their album
+// (heart-follow-policy.ts scanSettled).
 //
 // The move goes through likes.remapTrackIds, the path an id rotation already
 // takes, so the Liked view, topLiked, the stem ranking, the favourites export and
@@ -42,7 +46,7 @@ import { writeFileAtomicSync } from '../util/atomic-file.js';
 import * as db from './library-db.js';
 import * as library from './library.js';
 import * as subsonic from './subsonic.js';
-import { oldIdVerdict, planHeartMoves } from './heart-follow-policy.js';
+import { oldIdVerdict, planHeartMoves, scanSettled } from './heart-follow-policy.js';
 import { rotationPending } from './id-rotation.js';
 import { lastWalk, walkSettled } from './library-walk.js';
 
@@ -121,7 +125,7 @@ async function pass(): Promise<HeartFollowResult> {
 
   const moves = new Map<string, string>();
   let held = 0;
-  let settledAll = true;
+  let settledAll = planned.size === 0 || scanSettled(await subsonic.getScanStatus());
   for (const [oldId, newId] of planned) {
     if (!settledAll) { held++; continue; }
     const verdict = await oldIdVerdict(oldId, NAVIDROME);
@@ -130,6 +134,13 @@ async function pass(): Promise<HeartFollowResult> {
     // A failed lookup says nothing about the rest: keep them, and the walk, for
     // the next pass rather than ask a server that is not answering again.
     if (verdict === 'unknown') settledAll = false;
+  }
+  // A scan that started during the lookups may have answered any of them: the
+  // moves they confirmed, and the bookmark, stand only if it is still settled.
+  if (planned.size && (moves.size || settledAll) && !scanSettled(await subsonic.getScanStatus())) {
+    held += moves.size;
+    moves.clear();
+    settledAll = false;
   }
 
   if (moves.size) {
@@ -145,7 +156,7 @@ async function pass(): Promise<HeartFollowResult> {
   console.log(
     `[likes] ${stale.length} liked song(s) no longer in the library: ` +
       `${moves.size} followed to the same song under its new id, ${stale.length - moves.size} left as they were` +
-      (held ? ` (${held} held: Navidrome did not confirm the old id is gone)` : ''),
+      (held ? ` (${held} held: Navidrome did not confirm the old id is gone, or was scanning)` : ''),
   );
   return held ? { stale: stale.length, moved: moves.size, held } : { stale: stale.length, moved: moves.size };
 }

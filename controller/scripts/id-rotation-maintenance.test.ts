@@ -83,6 +83,7 @@ async function scenario(mode: string): Promise<void> {
         sub.playlist = { entry: [song()] };
         break;
       case 'getStarred2': sub.starred2 = { song: [] }; break;
+      case 'getScanStatus': sub.scanStatus = { scanning: false, count: 0 }; break;
       case 'getRandomSongs': sub.randomSongs = { song: [] }; break;
       default: sub.albumList2 = { album: [] }; break;
     }

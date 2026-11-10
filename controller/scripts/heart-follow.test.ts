@@ -35,10 +35,13 @@ process.env.NAVIDROME_PASS = 'test';
 // getSong still answers ok, with its albumId and no missing flag; getAlbum
 // leaves missing rows out, and leaves `song` out once every track of the album
 // is missing; a purged id, or an album that is not there, is error 70.
-// Ids not in `songs` are purged. `broken` answers a 502.
+// Ids not in `songs` are purged. `broken` answers a 502. getScanStatus takes
+// its answers from `scanAnswers` in turn, then "not scanning".
 const songs = new Map<string, { albumId: string; missing?: boolean } | 'broken'>();
 const brokenAlbums = new Set<string>();
 const asked: string[] = [];
+const scanAnswers: Array<boolean | 'broken'> = [];
+let scanAsked = 0;
 const subsonicOk = (body: object) => Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', ...body } });
 const notFound = (what: string) =>
   Response.json({ 'subsonic-response': { status: 'failed', version: '1.16.1', error: { code: 70, message: `${what} not found` } } });
@@ -61,10 +64,16 @@ mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: Re
     const listed = tracks.filter((t) => !t.missing).map((t) => ({ id: t.songId, title: 'a title', albumId: id }));
     return subsonicOk({ album: { id, name: 'an album', songCount: tracks.length, ...(listed.length ? { song: listed } : {}) } });
   }
+  if (url.pathname === '/rest/getScanStatus') {
+    scanAsked++;
+    const scanning = scanAnswers.shift() ?? false;
+    if (scanning === 'broken') return new Response('upstream down', { status: 502 });
+    return subsonicOk({ scanStatus: { scanning, count: 0 } });
+  }
   return subsonicOk({});
 });
 
-const { planHeartMoves, oldIdVerdict, DURATION_TOLERANCE_SEC } = await import('../src/music/heart-follow-policy.js');
+const { planHeartMoves, oldIdVerdict, scanSettled, DURATION_TOLERANCE_SEC } = await import('../src/music/heart-follow-policy.js');
 
 const row = (id: string, title: string, artist: string, album: string | null, durationSec: number | null = 240) =>
   ({ id, title, artist, album, durationSec });
@@ -137,6 +146,12 @@ test('the old id has left only when Navidrome says so: not found, or no longer o
   assert.equal(await verdict(() => song, () => null), 'unknown', 'no album in the answer');
   assert.equal(await verdict(() => song, () => ({ id: 'another', song: [] })), 'unknown', 'not the album asked for');
   assert.equal(await verdict(() => song, () => ({ id: 'alb', song: 'old' })), 'unknown', 'a song list that is not a list');
+});
+
+test('only a definite "not scanning" lets the moves stand', () => {
+  assert.equal(scanSettled(false), true);
+  assert.equal(scanSettled(true), false, 'mid-scan, getAlbum briefly leaves live songs out');
+  assert.equal(scanSettled(null), false, 'a status that could not be read holds too');
 });
 
 test('a blocked song still on its album is present: the album is read with no blocklist filter', async () => {
@@ -257,10 +272,45 @@ test('an album lookup that fails holds every planned move too, and bookmarks not
   assert.equal(existsSync(join(stateDir, 'heart-follow.json')), false, 'an inconclusive pass bookmarks nothing');
 });
 
+test('a scan running before the lookups holds every planned move, and bookmarks nothing', async () => {
+  scanAnswers.splice(0, Infinity, true);
+  asked.length = 0;
+  scanAsked = 0;
+  assert.deepEqual(await followMovedHearts(), { stale: 3, moved: 0, held: 2 });
+  assert.deepEqual(asked, [], 'no lookups while Navidrome scans');
+  assert.equal(scanAsked, 1);
+  assert.equal(likes.likedSongs().filter((s) => s.songId === 'gone-1').length, 1, 'the heart stayed');
+  assert.equal(existsSync(join(stateDir, 'heart-follow.json')), false);
+});
+
+test('a scan that starts during the lookups discards the moves they confirmed', async () => {
+  scanAnswers.splice(0, Infinity, false, true);
+  asked.length = 0;
+  scanAsked = 0;
+  assert.deepEqual(await followMovedHearts(), { stale: 3, moved: 0, held: 2 });
+  assert.equal(asked.length, 4, 'the lookups ran');
+  assert.equal(scanAsked, 2, 'asked before and after');
+  assert.equal(likes.likedSongs().filter((s) => s.songId === 'gone-1').length, 1, 'the confirmed move was discarded');
+  assert.equal(existsSync(join(stateDir, 'heart-follow.json')), false);
+});
+
+test('a scan status Navidrome does not answer holds the pass, before or after the lookups', async () => {
+  for (const answers of [['broken'], [false, 'broken']] as const) {
+    scanAnswers.splice(0, Infinity, ...answers);
+    assert.deepEqual(await followMovedHearts(), { stale: 3, moved: 0, held: 2 }, JSON.stringify(answers));
+    assert.equal(likes.likedSongs().filter((s) => s.songId === 'gone-1').length, 1, 'the heart stayed');
+    assert.equal(existsSync(join(stateDir, 'heart-follow.json')), false);
+  }
+  assert.equal(scanAnswers.length, 0);
+});
+
 test('a re-imported song\'s heart moves though Navidrome still answers its old id; one on a song still listed stays (the deluxe edition)', async () => {
   // Same walk as the held passes above: nothing was bookmarked, so it runs again.
+  // Navidrome says "not scanning" before and after the lookups.
   asked.length = 0;
+  scanAsked = 0;
   assert.deepEqual(await followMovedHearts(), { stale: 3, moved: 1, held: 1 });
+  assert.equal(scanAsked, 2);
   assert.deepEqual(asked.sort(), ['getAlbum:alb-blonde-deluxe', 'getAlbum:alb-negro-swan', 'getSong:deluxe-3', 'getSong:gone-1'],
     'two lookups per planned move, none for a heart with no match');
   const songs = new Map(likes.likedSongs().map((s) => [s.songId, s]));

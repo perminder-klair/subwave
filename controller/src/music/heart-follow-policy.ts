@@ -39,6 +39,15 @@
 //     holds the move, and the rest of its pass, for the next one.
 // Fail closed throughout: a wrong move hearts a song nobody liked, a missed one
 // only waits. At most two calls per planned move.
+//
+// Only a settled catalogue answers that truly: while Navidrome scans a folder
+// move, getSong answers a live song ok while getAlbum briefly leaves it out, so
+// it would read `gone` (seen on stock 0.64.2, a few hundred ms mid-scan). So the
+// pass asks getScanStatus before its lookups and again after them, and its
+// moves stand only when `scanSettled` holds both times: a definite "not
+// scanning". Scanning, or a status it could not read (null), holds every
+// planned move for the next pass. prune-policy.ts holds prunes on the same
+// signal.
 
 import { nameKey } from './recency.js';
 import { isMissingSongError } from './id-rotation-recovery.js';
@@ -111,6 +120,11 @@ function pick(h: HeartSnapshot, rows: readonly LibraryNameRow[]): string | null 
   if (!album) return null;
   const sameAlbum = sameLength.filter((r) => nameKey(r.album) === album);
   return sameAlbum.length === 1 ? sameAlbum[0].id : null;
+}
+
+/** Whether a getScanStatus answer lets the pass's moves stand: only a definite "not scanning" does. */
+export function scanSettled(scanning: boolean | null): boolean {
+  return scanning === false;
 }
 
 export type OldIdVerdict = 'gone' | 'present' | 'unknown';
