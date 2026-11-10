@@ -586,6 +586,30 @@ export async function getScanStatus(): Promise<boolean | null> {
   }
 }
 
+/** getScanStatus with Navidrome's `lastScan`, the time its last scan ended. */
+export interface ScanState {
+  scanning: boolean;
+  /** null when the server does not report one (Gonic, plain Subsonic). */
+  lastScan: string | null;
+}
+
+// The same call as getScanStatus, keeping `lastScan` too: two reads with the
+// same `lastScan` prove no scan ended between them, which `scanning` alone
+// cannot (a watcher scan of a small folder is true for under 100 ms). For
+// heart-follow-policy.ts scanSettled. Navidrome (0.49 to 0.64 at least) moves
+// it on every scan, a no-op one included, and answers Go's zero time
+// ("0001-01-01T00:00:00Z") before its first. null = unknown, as getScanStatus.
+export async function getScanState(): Promise<ScanState | null> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    const s = r.scanStatus;
+    if (typeof s?.scanning !== 'boolean') return null;
+    return { scanning: s.scanning, lastScan: typeof s.lastScan === 'string' && s.lastScan ? s.lastScan : null };
+  } catch {
+    return null;
+  }
+}
+
 export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
   const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];

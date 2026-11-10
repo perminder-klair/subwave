@@ -26,10 +26,10 @@
 // heart where it is, because a wrong move hearts a song nobody liked. At most two
 // lookups per planned move, one move at a time, and the first failure stops the
 // rest: those hearts, and the bookmark, wait for the next pass. The lookups are
-// bracketed by getScanStatus, before and after: unless Navidrome said "not
-// scanning" both times, every planned move is held and nothing is bookmarked,
-// since a scan mid-move briefly drops live songs from their album
-// (heart-follow-policy.ts scanSettled).
+// bracketed by two scan-state reads: unless both say "not scanning" with the
+// same `lastScan` (no scan ran in between), every planned move is held and
+// nothing is bookmarked, since a scan mid-move briefly drops live songs from
+// their album (heart-follow-policy.ts scanSettled).
 //
 // The move goes through likes.remapTrackIds, the path an id rotation already
 // takes, so the Liked view, topLiked, the stem ranking, the favourites export and
@@ -125,7 +125,8 @@ async function pass(): Promise<HeartFollowResult> {
 
   const moves = new Map<string, string>();
   let held = 0;
-  let settledAll = planned.size === 0 || scanSettled(await subsonic.getScanStatus());
+  const scanBefore = planned.size ? await subsonic.getScanState() : null;
+  let settledAll = planned.size === 0 || scanSettled(scanBefore);
   for (const [oldId, newId] of planned) {
     if (!settledAll) { held++; continue; }
     const verdict = await oldIdVerdict(oldId, NAVIDROME);
@@ -135,9 +136,9 @@ async function pass(): Promise<HeartFollowResult> {
     // the next pass rather than ask a server that is not answering again.
     if (verdict === 'unknown') settledAll = false;
   }
-  // A scan that started during the lookups may have answered any of them: the
-  // moves they confirmed, and the bookmark, stand only if it is still settled.
-  if (planned.size && (moves.size || settledAll) && !scanSettled(await subsonic.getScanStatus())) {
+  // A scan that ran during the lookups may have answered any of them: the moves
+  // they confirmed, and the bookmark, stand only if none did.
+  if (planned.size && (moves.size || settledAll) && !scanSettled(scanBefore, await subsonic.getScanState())) {
     held += moves.size;
     moves.clear();
     settledAll = false;

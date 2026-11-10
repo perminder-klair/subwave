@@ -43,11 +43,16 @@
 // Only a settled catalogue answers that truly: while Navidrome scans a folder
 // move, getSong answers a live song ok while getAlbum briefly leaves it out, so
 // it would read `gone` (seen on stock 0.64.2, a few hundred ms mid-scan). So the
-// pass asks getScanStatus before its lookups and again after them, and its
-// moves stand only when `scanSettled` holds both times: a definite "not
-// scanning". Scanning, or a status it could not read (null), holds every
-// planned move for the next pass. prune-policy.ts holds prunes on the same
-// signal.
+// pass reads the scan state (subsonic.getScanState) before its lookups and again
+// after them, and its moves stand only when `scanSettled` says so of both reads:
+// each says "not scanning", AND both carry the same `lastScan`, the time
+// Navidrome's last scan ended. "Not scanning" twice is not enough: a watcher
+// scan of a small moved folder is true for under 100 ms and can start and end
+// between the two reads, and only a moved `lastScan` shows it ran. Anything else
+// holds every planned move for the next pass: scanning, a read that failed, a
+// server that reports no `lastScan` (Gonic, plain Subsonic: there hearts never
+// follow), or a `lastScan` that moved. prune-policy.ts holds prunes only on a
+// definite scan, through the boolean getScanStatus.
 
 import { nameKey } from './recency.js';
 import { isMissingSongError } from './id-rotation-recovery.js';
@@ -122,9 +127,18 @@ function pick(h: HeartSnapshot, rows: readonly LibraryNameRow[]): string | null 
   return sameAlbum.length === 1 ? sameAlbum[0].id : null;
 }
 
-/** Whether a getScanStatus answer lets the pass's moves stand: only a definite "not scanning" does. */
-export function scanSettled(scanning: boolean | null): boolean {
-  return scanning === false;
+/** One scan-state read (subsonic.getScanState); null when it failed. */
+export type ScanRead = { scanning: boolean; lastScan: string | null } | null;
+
+/**
+ * Whether the pass's moves may stand: both reads say "not scanning" and carry
+ * the same, known `lastScan`. With one read (`after` omitted), whether that read
+ * could settle a pass at all, so the pass need not look up anything.
+ */
+export function scanSettled(before: ScanRead, after: ScanRead = before): boolean {
+  if (!before || !after) return false;
+  if (before.scanning !== false || after.scanning !== false) return false;
+  return before.lastScan !== null && before.lastScan === after.lastScan;
 }
 
 export type OldIdVerdict = 'gone' | 'present' | 'unknown';
