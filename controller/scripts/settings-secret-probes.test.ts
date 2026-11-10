@@ -317,3 +317,29 @@ test("Outcrawl: another provider's key is refused without a request", async (t) 
   assert.equal(r.message, 'Not an Outcrawl key (they start with ock_)');
   assert.equal(outbound.length, 0);
 });
+
+test('Discogs: the identity call with the token in the header names the user', async (t) => {
+  const outbound = stubProvider(t, 200, { username: 'crate-digger' });
+  const r = await testKey({ key: 'DISCOGS_TOKEN', value: 'dg-good' });
+  assert.equal(r.ok, true);
+  assert.equal(r.message, '✓ Discogs token valid · user: crate-digger');
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0].url, 'https://api.discogs.com/oauth/identity');
+  assert.equal(outbound[0].headers.get('authorization'), 'Discogs token=dg-good');
+});
+
+// The year lookup reads a 401 or a 403 as the token refused (music/discogs.ts),
+// so the button must say the same for both.
+test('Discogs: a 401 or 403 reads as a rejected token, anything else as the status', async (t) => {
+  for (const status of [401, 403]) {
+    stubProvider(t, status, { message: 'You must authenticate to access this resource.' });
+    const r = await testKey({ key: 'DISCOGS_TOKEN', value: 'dg-bad' });
+    assert.equal(r.ok, false, `status ${status}`);
+    assert.equal(r.message, 'Token rejected — check your Discogs personal access token', `status ${status}`);
+    t.mock.restoreAll();
+  }
+  stubProvider(t, 502);
+  const r = await testKey({ key: 'DISCOGS_TOKEN', value: 'dg-any' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, 'Request failed (502)');
+});

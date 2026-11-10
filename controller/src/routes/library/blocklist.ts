@@ -4,7 +4,7 @@ import * as blocklist from '../../music/blocklist.js';
 import * as db from '../../music/library-db.js';
 import * as subsonic from '../../music/subsonic.js';
 import { queue } from '../../broadcast/queue.js';
-import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
+import { applyBlocklistChange } from '../../broadcast/blocklist-effects.js';
 import { validateBody } from '../../middleware/validate.js';
 import { blockEntrySchema, blockRuleSchema } from '../../schemas/blocklist.js';
 
@@ -38,8 +38,7 @@ router.post(
     queue.log('blocked', `rule "${rule.label}" (${rule.field}: ${rule.values.join(', ')}) added to the never-play blocklist`);
     // Same side-effects as adding an id entry: drop now-blocked upcoming tracks,
     // rebuild auto.m3u so the LLM-free coast stops carrying them.
-    const purged = queue.purgeBlocked();
-    refreshAutoPlaylist().catch((err: any) => queue.log('error', `blocklist auto-playlist refresh failed: ${err.message}`));
+    const purged = applyBlocklistChange();
     res.status(201).json({ rule, purged });
   } catch (err) {
     // Validation errors are the operator's typo, not a server fault.
@@ -57,8 +56,7 @@ router.put(
     const rule = await blocklist.updateRule(String(req.params.id), req.body);
     if (!rule) return res.status(404).json({ error: 'no such rule' });
     queue.log('blocked', `rule "${rule.label}" updated on the never-play blocklist`);
-    const purged = queue.purgeBlocked();
-    refreshAutoPlaylist().catch((err: any) => queue.log('error', `blocklist auto-playlist refresh failed: ${err.message}`));
+    const purged = applyBlocklistChange();
     res.json({ rule, purged });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -122,8 +120,7 @@ router.post(
     queue.log('blocked', `${entry.type} "${entry.name ?? entry.id}"${entry.artist && entry.type !== 'artist' ? ` — ${entry.artist}` : ''} added to the never-play blocklist`);
     // Rebuild auto.m3u too, or a blocked track still airs from it for up to
     // autoQueueRefreshMinutes.
-    const purged = queue.purgeBlocked();
-    refreshAutoPlaylist().catch((err: any) => queue.log('error', `blocklist auto-playlist refresh failed: ${err.message}`));
+    const purged = applyBlocklistChange();
 
     res.status(201).json({ entry, purged });
   } catch (err) {

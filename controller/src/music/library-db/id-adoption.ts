@@ -7,6 +7,7 @@ import { WHOLE_FILE_LOUDNESS_EXTRAS, moveFacetRows, syncTrackFacets } from './fa
 import { touchGenreInputs } from './genre-inputs.js';
 import { canonicalId } from '../id-canonical.js';
 import { SEARCH_KEY_DDL } from './search-keys.js';
+import { yearSourceKept } from '../original-year-policy.js';
 
 // Carry physical track columns by default, excluding ID/generated columns and walk-owned
 // metadata. columnPlan and the drift test require every column to be classified.
@@ -149,11 +150,12 @@ function mergeRow(plan: ColumnPlan, oldRow: Row, newRow: Row, movedTextVector: b
   }
   for (const c of plan.coalesced) merged[c] = newRow[c] ?? oldRow[c];
 
-  // Mirror upsertTrackMeta's precedence: a per-track 'musicbrainz' or 'manual'
-  // resolution on the old row outranks the walk-time album-tag year the new
-  // row just got. 'manual' is the operator reading the sleeve (#1418) and
-  // outranks both, so it must not be dropped here either.
-  const resolved = oldRow.original_year_source === 'musicbrainz' || oldRow.original_year_source === 'manual';
+  // Mirror upsertTrackMeta's precedence: a per-track looked-up ('musicbrainz',
+  // 'discogs') or 'manual' resolution on the old row outranks the walk-time
+  // album-tag year the new row just got. 'manual' is the operator reading the
+  // sleeve (#1418), so it must not be dropped here either. One list for both
+  // (original-year-policy.KEPT_YEAR_SOURCES).
+  const resolved = yearSourceKept(oldRow.original_year_source as string | null);
   const oldWins = resolved || newRow.original_year == null;
   merged.original_year = oldWins ? oldRow.original_year : newRow.original_year;
   merged.original_year_source = oldWins ? oldRow.original_year_source : newRow.original_year_source;

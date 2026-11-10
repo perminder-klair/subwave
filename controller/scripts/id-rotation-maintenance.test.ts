@@ -12,6 +12,9 @@ const OLD = 'KhehcqGKwAIL6Ux3Ah0yDC';
 const NEW = '6owyzFEyktb6jxHvAYbn6w';
 const OLD_B = 'e3b7fc2ae9447bbec37a13bf916e3cf6';
 const PLAYLIST = '0000000000000000000001'; // canonical fixed point
+const RECIPE_PLAYLIST = '0000000000000000000002';
+// A hearted id the walk no longer holds, the same song as NEW by name.
+const HEARTED_GONE = '3sLc8kQqk2uR6m3s1rWQe2';
 const self = fileURLToPath(import.meta.url);
 const controller = fileURLToPath(new URL('../', import.meta.url));
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -31,6 +34,8 @@ async function scenario(mode: string): Promise<void> {
   let playlistReads = 0;
   const heldPlaylists: Array<{ response: ServerResponse; entry: ReturnType<typeof song>[] }> = [];
   const heldYears: ServerResponse[] = [];
+  const heldHeartLookups: ServerResponse[] = [];
+  let recipeSyncReads = 0;
   let yearsReleased = false;
   const releaseYears = () => {
     yearsReleased = true;
@@ -49,6 +54,11 @@ async function scenario(mode: string): Promise<void> {
     let sub: Record<string, unknown> = { status: 'ok' };
     switch (url.pathname.split('/').at(-1)) {
       case 'getSong':
+        if (url.searchParams.get('id') === HEARTED_GONE) {
+          // The heart pass's lookup: held, as from a Navidrome that stopped answering.
+          heldHeartLookups.push(res);
+          return;
+        }
         sub = url.searchParams.get('id') === OLD
           ? { status: 'failed', error: { code: 70, message: 'Song not found' } }
           : { status: 'ok', song: { ...song(), id: NEW } };
@@ -64,7 +74,8 @@ async function scenario(mode: string): Promise<void> {
         break;
       case 'getPlaylists': sub.playlists = { playlist: [{ id: PLAYLIST, name: 'Pinned' }] }; break;
       case 'getPlaylist':
-        playlistReads++;
+        if (url.searchParams.get('id') === RECIPE_PLAYLIST) recipeSyncReads++;
+        else playlistReads++;
         if (mode === 'inflight' && playlistReads === 1) {
           heldPlaylists.push({ response: res, entry: [song()] });
           return;
@@ -72,6 +83,7 @@ async function scenario(mode: string): Promise<void> {
         sub.playlist = { entry: [song()] };
         break;
       case 'getStarred2': sub.starred2 = { song: [] }; break;
+      case 'getScanStatus': sub.scanStatus = { scanning: false, count: 0, lastScan: '2026-11-10T04:15:51.119Z' }; break;
       case 'getRandomSongs': sub.randomSongs = { song: [] }; break;
       default: sub.albumList2 = { album: [] }; break;
     }
@@ -118,6 +130,14 @@ globalThis.fetch = (input, init) => {
     db.upsertTrackTags(id, { moods: ['warm'], energy: 'medium', source: 'manual', confidence: 1 });
     db.upsertTrackVector(id, [1, 2, 3, 4, 5, 6, 7, 8], db.resolvedEraYearForTrack(id));
   }
+  if (mode === 'hearts') {
+    writeFileSync(join(state, 'likes.json'), JSON.stringify({ secret: 'test-secret', likes: [{
+      songId: HEARTED_GONE, track: { id: HEARTED_GONE, title: 'Memory Bank', artist: 'Jethro Tull' },
+      airingKey: `${HEARTED_GONE}|operator`, listenerKey: 'operator', likedAt: new Date().toISOString(), via: 'operator',
+    }] }));
+    const recipes = await import('../src/music/playlist-recipes.js');
+    recipes.upsert({ playlistId: RECIPE_PLAYLIST, name: 'Synced', recipe: { knobs: {}, sources: {} } as never });
+  }
   const playlist = await import('../src/music/show-playlist.js');
   if (mode === 'inflight') {
     try {
@@ -160,6 +180,15 @@ globalThis.fetch = (input, init) => {
       assert.equal(db.pendingIdRotations().size, 0, 'journal must settle before fallback recovery');
       releaseYears();
     }
+    if (mode === 'hearts') {
+      await until(() => heldHeartLookups.length > 0, 'the heart pass never asked Navidrome about the old id');
+      await until(() => recipeSyncReads > 0, 'the playlist sync waited on the heart pass');
+      heldHeartLookups.shift()!.end(JSON.stringify({ 'subsonic-response': {
+        status: 'failed', error: { code: 70, message: 'Song not found' } } }));
+      await until(() => (JSON.parse(readFileSync(join(state, 'likes.json'), 'utf8')) as { likes: Array<{ songId: string }> })
+        .likes.some((like) => like.songId === NEW),
+        'released, the heart still follows its song');
+    }
     await until(() => !maintenance.tagger.running && maintenance.tagger.lastRun !== null,
       'maintenance did not finish');
     if (incomplete) {
@@ -173,6 +202,8 @@ globalThis.fetch = (input, init) => {
       assert.equal(db.getTrack(NEW), null);
       await until(async () => await maintenance.considerIdRotationRecovery({ id: OLD }) === 'started',
         'empty/no-op automatic walk stays retryable after completion follow-ups');
+    } else if (mode === 'hearts') {
+      assert.equal(maintenance.tagger.lastRun!.outcome, 'ok');
     } else {
       await until(() => readFileSync(join(state, 'auto.m3u'), 'utf8').includes(NEW), 'fallback still holds rotated IDs');
       const m3u = readFileSync(join(state, 'auto.m3u'), 'utf8');
@@ -184,6 +215,7 @@ globalThis.fetch = (input, init) => {
     await until(() => !maintenance.tagger.running, 'retry did not finish');
   } finally {
     releaseYears();
+    for (const response of heldHeartLookups) response.end(JSON.stringify({ 'subsonic-response': { status: 'ok' } }));
     if (maintenance.tagger.running) maintenance.stopTagger();
     await until(() => !maintenance.tagger.running, 'test worker failed to stop');
     db.close();
@@ -203,6 +235,7 @@ if (process.argv[2]) {
     ['cached', 'reconcile rebuilds a strict fallback with fresh members of an unchanged playlist ID'],
     ['enrichment', 'settled adoption recovers the fallback before unrelated MusicBrainz enrichment completes'],
     ['inflight', 'a pre-migration playlist fetch cannot repopulate an invalidated cache'],
+    ['hearts', 'the tagger exit does not hold its playlist sync behind the heart pass\'s Navidrome lookups'],
   ]) {
     test(name, { timeout: 30_000 }, () => {
       const state = mkdtempSync(join(tmpdir(), 'rotation-maintenance-'));
