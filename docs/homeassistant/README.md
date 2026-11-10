@@ -7,7 +7,7 @@ Public endpoint, no token. The station shows its own URL on **Admin → Connect 
 | Install | URL |
 |---|---|
 | Standard (`docker-compose.yml`, Caddy on port 7700) | `http://HOST:7700/api/request` |
-| Your own reverse proxy (`docker-compose.byo.yml`) | `https://YOUR-HOST/api/request` through the proxy, or `http://HOST:7701/request` straight to the controller |
+| Your own reverse proxy (`docker-compose.byo.yml`) | `https://YOUR-HOST/api/request` through the proxy, or `http://HOST:7701/request` straight to the controller. The direct URL works from another machine only while `BIND_ADDRESS` is left at its default `0.0.0.0`; with `127.0.0.1`, use the proxy URL. |
 
 ## Install
 
@@ -29,7 +29,7 @@ Public endpoint, no token. The station shows its own URL on **Admin → Connect 
 
 3. Copy `custom_sentences/en/subwave_request.yaml` to `<config>/custom_sentences/en/`. Create those two folders if they are missing. Home Assistant only loads sentences from that path. It is not an `!include`, and it does not belong beside `scripts.yaml` or inside `input_text/`.
 
-4. Check the configuration, then restart Home Assistant. The first install needs a restart, not a reload: the package brings in `rest_command` and `intent_script`, and **Developer tools → YAML → Reload YAML configuration** only reloads integrations that are already running. After that first restart, an edit to either file needs only that YAML reload. Linking a Person to a user needs no reload.
+4. Check the configuration, then restart Home Assistant. The first install needs a restart, not a reload: the package brings in `rest_command` and `intent_script`, and **Developer tools → YAML → All YAML configuration** (or **Settings → System → Restart → Quick reload**) only reloads integrations that are already running. After that first restart, an edit to either file needs only that reload. Linking a Person to a user needs no reload.
 
 `input_text` cannot be longer than 255 characters. The station accepts 280. The dashboard box uses 255. A voice request has no box, but the station still refuses one over 280 characters.
 
@@ -91,8 +91,8 @@ They are set in **Admin → Settings → Station → Listener requests** (under 
 | Package did not load, or `packages` failed validation | The include was a list item (`- subwave_request:`). Drop the dash. |
 | After the first install, the button does nothing and the log says `Action rest_command.subwave_request_song not found`, or Assist says `Unknown intent RequestSubwave` | Home Assistant was reloaded, not restarted. Restart it once. |
 | Assist does not understand the phrase | `custom_sentences/en/subwave_request.yaml` is missing or in the wrong folder, or the YAML configuration was not reloaded after editing it. |
-| Assist says "An unexpected error occurred" | The station did not answer within 10 seconds: a wrong URL in `secrets.yaml`, the station is down, or Home Assistant cannot reach it. The Home Assistant log has the `rest_command` error. |
-| The button leaves the text in the box, or Assist says it asked and the queue has nothing new | The station refused the request, or took it and then queued nothing. The station keeps no record of a refusal, but Home Assistant logs it: **Settings → System → Logs** shows a `rest_command` warning, `Error. Url: … Status code 429` (one of the limits above), `400` (the text was empty, over 280 characters, or had nothing left once the station cleaned it) or `503` (requests are closed, the station is starting up, or it is paused while nobody is listening). A request the station took is in **Admin → Dash → Requests** with its outcome: no track matched, the match played too recently (a 120-minute repeat cooldown by default), it is blocked, the show is clean and the match is explicit, or it was already queued. |
+| Assist says "An unexpected error occurred" | Home Assistant could not reach the station: a wrong host or port in `secrets.yaml`, the station is down, or the network refused the connection (this fails at once), or the station did not answer within 10 seconds. The Home Assistant log has the `rest_command` error. |
+| The button leaves the text in the box, or Assist says it asked and the queue has nothing new | The station refused the request, or took it and then queued nothing. The station keeps no record of a refusal, but Home Assistant logs it: **Settings → System → Logs** shows a `rest_command` warning, `Error. Url: … Status code 429` (one of the limits above), `400` (the text was empty, over 280 characters, or had nothing left once the station cleaned it) `503` (requests are closed, the station is starting up, or it is paused while nobody is listening), or `404`/`405` (the URL is missing `/api` on a standard install, so it reached the web app instead of the station). A request the station took is in **Admin → Dash → Requests** with its outcome: the request was not something the station can play, no track matched, the match played too recently (a 120-minute repeat cooldown by default), it is blocked, the show is clean and the match is explicit, or it was already queued. |
 | Credit is `home` | No Person is linked to that login, the session had no user, or the request came from a voice satellite. See the section above. The persistent notification is the same miss. |
 | Credit is `anon` | The station replaced the name. See the section above. |
 | Template editor: `'context' is undefined` | Expected. The editor has no logged-in user. |
