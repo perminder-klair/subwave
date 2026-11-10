@@ -162,3 +162,26 @@ test('POST /backup/import-file refuses a name it must not read', async () => {
     assert.equal(res.status, 400, `${JSON.stringify(file)} must be refused`);
   }
 });
+
+test('restore keeps show allowlists', async () => {
+  const settings = await import('../src/settings.js');
+  await settings.load();
+  const personaId = settings.get().personas[0].id;
+  const lunch = { id: 's_lunch', name: 'The lunch show', personaId, allowedJingles: ['jingle_a.wav'], allowedBeds: ['bed-x'] };
+  await settings.update({ shows: [lunch] } as never);
+  const zip = Buffer.from(await (await fetch(`${base}/backup/export`)).arrayBuffer());
+  const name = 'subwave-backup-allowlists.zip';
+  writeFileSync(path.join(stateRoot, name), zip);
+
+  // Clear the lists, then restore the snapshot that still has them.
+  await settings.update({ shows: [{ ...lunch, allowedJingles: [], allowedBeds: [] }] } as never);
+  const res = await fetch(`${base}/backup/import-file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file: name }),
+  });
+  assert.equal(res.status, 200, await res.clone().text());
+  const restored = settings.get().shows.find((s: any) => s.id === 's_lunch') as any;
+  assert.deepEqual(restored.allowedJingles, ['jingle_a.wav']);
+  assert.deepEqual(restored.allowedBeds, ['bed-x']);
+});

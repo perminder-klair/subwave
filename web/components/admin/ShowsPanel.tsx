@@ -34,7 +34,7 @@ import { useRosterView, useRosterSort } from '../../lib/adminView';
 import { showSubmitUrl } from '../../lib/repo';
 import { ShowDefRow } from './shows/ShowDefRow';
 import { ShowEditor } from './shows/ShowEditor';
-import { clientMintId, emptyWeek, hydrateShow, showContext, showPayload, showRow } from './shows/lib';
+import { clientMintId, emptyWeek, hydrateShow, jingleListIgnored, showContext, showPayload, showRow } from './shows/lib';
 import type {
   CommunityShow,
   Persona,
@@ -58,6 +58,7 @@ import {
   type ShowSort,
 } from './shows/roster-order';
 import { useSettingsQuery } from './settings/queries';
+import { useBedsQuery } from './imaging/queries';
 import {
   patchShowSettings,
   showKeys,
@@ -122,6 +123,26 @@ export default function ShowsPanel() {
     : playlistsQuery.isError
       ? 'error'
       : 'ready';
+  // The Imaging allowlists pick from the station's jingle and bed library.
+  // Jingles already ride GET /settings, which refetches in the background; a
+  // list that has loaded once stays 'ready' through a failed refetch so the
+  // picker never collapses into the error text mid-edit. The bed library is
+  // read once, only while a show is open in the editor.
+  const indexStatus = (q: { data: unknown; isPending: boolean }): PlaylistIndexStatus =>
+    q.data !== undefined ? 'ready' : q.isPending ? 'loading' : 'error';
+  const bedsQuery = useBedsQuery(adminFetch, queryEnabled && focusIdx != null, false);
+  const jingleOpts = useMemo(
+    () => (data?.jingles ?? []).map(j => ({
+      id: j.filename,
+      name: j.text ? `${j.text} · ${j.filename}` : j.filename,
+      songCount: null,
+    })),
+    [data?.jingles],
+  );
+  const bedOpts = useMemo(
+    () => (bedsQuery.data?.beds ?? []).map(b => ({ id: b.name, name: b.name, songCount: null })),
+    [bedsQuery.data?.beds],
+  );
   // Best-effort: a failed community catalog is an empty but usable modal.
   const community: CommunityShow[] | null = communityQuery.data
     ?? (communityQuery.isError ? [] : null);
@@ -282,6 +303,7 @@ export default function ShowsPanel() {
       playlistIds: [], playlistStrict: false, playlistExhaust: false, playlistInOrder: false, excludedPlaylistIds: [],
       excludeExplicit: false,
       programme: false, segmentSkill: '', preparationSkill: '', tags: [],
+      allowedJingles: [], allowedBeds: [],
     });
     // errors populate only once a field is touched, so without this the new
     // row's "incomplete" badge stays silent about why.
@@ -566,6 +588,11 @@ export default function ShowsPanel() {
           genres={genres}
           playlists={playlists}
           playlistsStatus={playlistsStatus}
+          jingles={jingleOpts}
+          jinglesStatus={indexStatus(settingsQuery)}
+          beds={bedOpts}
+          bedsStatus={indexStatus(bedsQuery)}
+          jingleListIgnored={jingleListIgnored(data?.values ?? {})}
           apiBase={apiBase}
           adminFetch={adminFetch}
           minTrackSeconds={data?.values?.minTrackSeconds}

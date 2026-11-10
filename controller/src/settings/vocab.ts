@@ -915,6 +915,10 @@ export interface NormalizedShow {
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */
   tags: string[];
+  /** Jingle filenames / bed names the automatic draws may use on air. Empty =
+   *  every one. See broadcast/show-allowlist.ts. */
+  allowedJingles: string[];
+  allowedBeds: string[];
 }
 
 // Dedup + cap over one already-plural list. The legacy singular fold lives ONLY
