@@ -25,7 +25,6 @@ import { requireAdmin } from '../middleware/auth.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as sfx from '../broadcast/sfx.js';
 import * as blocklist from '../music/blocklist.js';
-import { applyBlocklistChange } from '../broadcast/blocklist-effects.js';
 import { clearWalk } from '../music/library-walk.js';
 import {
   SKILL_BUNDLE_MAX_BYTES,
@@ -271,7 +270,11 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     // restored list blocks. Last, so the coast rebuilds with the restored
     // settings and library.db, and in `finally`, so a later step that throws
     // cannot leave a restored list live with its blocked tracks still queued.
-    if (blocklistRestored) applyBlocklistChange();
+    // Loaded here, not at the top: blocklist-effects reaches the queue and the
+    // scheduler, whose settings watcher rebuilds the coast on every policy
+    // change, and a process that only loads this route must not start it
+    // (scripts/backup-route-imports.test.ts). Boot loads both anyway.
+    if (blocklistRestored) (await import('../broadcast/blocklist-effects.js')).applyBlocklistChange();
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
