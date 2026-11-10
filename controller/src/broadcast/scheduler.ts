@@ -1,4 +1,4 @@
-import { prepareEpisodeContext, showPreparation, onPreparationChange, preparationIdentity, preparationSkillAt } from './show-preparation.js';
+import { prepareEpisodeContext, prepareUpcomingGeneratedShows, showPreparation, onPreparationChange, preparationIdentity, preparationSkillAt } from './show-preparation.js';
 import { autoPlaylistShowKey } from './auto-playlist-show.js';
 // Scheduler: the auto-playlist refresh, the per-minute talk tick over
 // talk-scheduler.ts's slot table (every spoken segment the station produces on
@@ -1357,6 +1357,7 @@ async function scheduledBackupTick() {
 // eligibility rules. Both are re-read at FIRE time, not at registration.
 // Rebuilt on every syncSkillCrons() call.
 const skillCronTasks = new Map<string, ScheduledTask>();
+let generatedShowPreparationTask: ScheduledTask | null = null;
 
 // Gates injected rather than read live so the rule can be pinned
 // (scripts/skill-cron-gates.test.ts).
@@ -1382,16 +1383,30 @@ export function skillCronAllowed(gates: SkillCronGates): boolean {
   return skillCronStandDownReason(gates) === null;
 }
 
-export function skillCronEligibility(cap: any, enabled: Record<string, boolean | undefined>, host: any, guests: any[], preparationSkill: string | null = null) {
+export function skillCronEligibility(cap: any, enabled: Record<string, boolean | undefined>, host: any, guests: any[], preparationSkill: string | null = null, eligibleSkillNames: readonly string[] | null = null) {
   return skillEligible({
+    eligibleSkillNames,
     preparationSkill,
     seeded: cap.seeded,
     skill: cap.skill,
     enabled,
     personaSkills: host?.skills,
-    requiresCohosts: !!cap.cohosts,
+    requiresCohosts: !!cap.cohosts && !cap.toolCast && !cap.specialGuestNames?.length,
     hasCohosts: !!host && guests.length > 0,
   });
+}
+
+function syncGeneratedShowPreparationTask() {
+  generatedShowPreparationTask?.destroy();
+  generatedShowPreparationTask = cron.schedule('0 5 * * *', async () => {
+    try {
+      const count = await prepareUpcomingGeneratedShows();
+      queue.log('scheduler', `[shows] daily preparation checked ${count} upcoming generated occurrence(s)`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      queue.log('error', `[shows] daily generated-show preparation failed: ${reason}`);
+    }
+  }, { timezone: getStationTimezone(), noOverlap: true });
 }
 
 export function syncSkillCrons() {
@@ -1418,16 +1433,17 @@ export function syncSkillCrons() {
         queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${gated}`);
         return;
       }
-      // Same enabled + persona-allowlist rules the autonomous director applies,
+      // Same enabled, persona and Sub/Shows rules the autonomous director applies,
       // logged rather than silent — a stood-down cron leaves no other trace.
       const now = new Date();
-      const { host, guests } = settings.getOnAirRoster(now);
+      const { host, guests, show } = settings.getOnAirRoster(now);
       const eligible = skillCronEligibility(
         cap,
         settings.get().skills?.enabled || {},
         host,
         guests,
         preparationSkillAt(await getFullContext()),
+        settings.subShowSkillAllowlist(show?.id),
       );
       if (!eligible.allowed) {
         queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
@@ -1529,6 +1545,12 @@ function scheduleAutoPlaylistRefresh(): string {
 export function startScheduler() {
   refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Initial playlist failed: ${err.message}`));
 
+  // Catch up on shows already booked before the controller started. The same
+  // occurrence lock coalesces this with a schedule save or a live preparation.
+  void prepareUpcomingGeneratedShows().then(count => {
+    queue.log('scheduler', `[shows] startup preparation checked ${count} upcoming generated occurrence(s)`);
+  }).catch(err => queue.log('error', `[shows] startup generated-show preparation failed: ${err.message}`));
+
   // The tick's baseline: the hour and show the station booted into. Seeded
   // here, not by the first tick, so a boot just before :00 still rolls at it
   // and a boot mid-hour does not roll for the hour it found.
@@ -1576,12 +1598,14 @@ export function startScheduler() {
   cron.schedule('4-59/5 * * * *', scheduledTagTick, { noOverlap: true });
 
   syncSkillCrons();
+  syncGeneratedShowPreparationTask();
   // Each task bakes the zone in at registration, so a live timezone change has
   // to re-register them. Subscribing at the source covers every writer.
   onStationTimezoneChange(() => {
-    queue.log('scheduler', '[skills] station timezone changed — re-registering skill crons');
+    queue.log('scheduler', '[scheduler] station timezone changed — re-registering local-time tasks');
     syncSkillCrons();
+    syncGeneratedShowPreparationTask();
   });
 
-  queue.log('scheduler', `Scheduler started · auto-playlist: ${refreshCron} · cleanup: 2 * * * * · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
+  queue.log('scheduler', `Scheduler started · auto-playlist: ${refreshCron} · generated shows: 0 5 * * * (${getStationTimezone()}) · cleanup: 2 * * * * · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
 }

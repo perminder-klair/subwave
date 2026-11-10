@@ -37,6 +37,7 @@ import { firecrawlKeySource, keenableKeySource, searchKeyRefusedBy } from '../..
 import { planLlmSwap, LlmSwapError } from '../../settings/llm-swap.js';
 import { llmSwapFit } from '../../settings/llm-swap-fit.js';
 import { recentCalls } from '../../llm/log.js';
+import { prepareUpcomingGeneratedShows } from '../../broadcast/show-preparation.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -133,6 +134,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         activeDjPromptId: s.activeDjPromptId,
         djHouseRules: s.djHouseRules,
         personas: s.personas,
+        subShows: s.subShows,
         activePersonaId: s.activePersonaId,
         shows: s.shows,
         schedule: s.schedule,
@@ -255,6 +257,7 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     return res.status(400).json({ error: 'start or clear a steer with POST or DELETE /steer' });
   }
   try {
+    const artistSpacing = settings.get().llm.artistVarietyWindow;
     // A hosted station's LLM route and voice engine belong to its box agent
     // (setup/hosted.ts): those keys are dropped, the rest of the save applies.
     const { patch: body, dropped } = stripManagedSettings(req.body || {}, {
@@ -265,6 +268,13 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     const result = 'scheduleOverride' in body
       ? (await updateEndingSteer(body)).result
       : await settings.update(body);
+    if (artistSpacing !== settings.get().llm.artistVarietyWindow || (body?.subShows && (
+      'eligibleHostPersonaIds' in body.subShows
+      || 'eligibleGuestPersonaIds' in body.subShows
+    ))) {
+      void prepareUpcomingGeneratedShows()
+        .catch(err => queue.log('error', `[shows] generated show preparation failed after Sub/Shows settings change: ${err.message}`));
+    }
     // context.ts reads the live settings cache, so the update already applies;
     // the route only owns the operator-facing log.
     if ('weather' in (req.body || {})) {

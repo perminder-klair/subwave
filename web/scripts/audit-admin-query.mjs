@@ -54,7 +54,7 @@ const defaultOwnershipRegistry = [
   },
   {
     file: 'dash/queries.ts', function: 'fetchTakeover',
-    reads: [{ callee: 'adminJson', method: 'GET', path: '/schedule', signal: 'signal' }],
+    reads: [{ callee: 'adminJson', method: 'GET', path: '/shows/takeover', signal: 'signal' }],
     consumers: [{ file: 'dash/TakeoverCard.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
   },
   {

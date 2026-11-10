@@ -1,5 +1,5 @@
 // Share autonomous skill eligibility between the director and skill crons.
-// Both enforce enablement/persona rules; explicit Run now bypasses this policy.
+// Both enforce enablement, persona and Sub/Shows rules; Run now bypasses them.
 // Imported skills remain disabled pending review. See scripts/skill-eligibility.test.ts.
 
 export interface SkillEligibilityInput {
@@ -10,6 +10,7 @@ export interface SkillEligibilityInput {
   enabled: Record<string, boolean | undefined>;
   // Absent/null allows all skills; an empty array allows none.
   personaSkills?: string[] | null;
+  eligibleSkillNames?: readonly string[] | null;
   // Co-hosted skills need at least one resolved guest.
   requiresCohosts?: boolean;
   hasCohosts?: boolean;
@@ -25,10 +26,15 @@ export function personaRunsSkill({ skill, personaSkills }: SkillEligibilityInput
   return !personaSkills || personaSkills.includes(skill);
 }
 
+export function skillAllowedForShow({ skill, eligibleSkillNames }: Pick<SkillEligibilityInput, 'skill' | 'eligibleSkillNames'>): boolean {
+  return eligibleSkillNames == null || eligibleSkillNames.includes(skill);
+}
+
 // Return a booth-log reason so silent cron skips remain diagnosable.
 export function skillEligible(input: SkillEligibilityInput): { allowed: boolean; reason?: string } {
   if (!skillEnabled(input)) return { allowed: false, reason: 'skill is disabled' };
   if (!personaRunsSkill(input)) return { allowed: false, reason: 'the on-air persona does not run this skill' };
+  if (input.use !== 'preparation' && !skillAllowedForShow(input)) return { allowed: false, reason: 'not eligible for Sub/Shows' };
   if (input.use !== 'preparation' && input.preparationSkill === input.skill) return { allowed: false, reason: 'reserved for show preparation' };
   if (input.use !== 'preparation' && input.requiresCohosts && !input.hasCohosts) return { allowed: false, reason: 'requires a co-hosted show' };
   return { allowed: true };
