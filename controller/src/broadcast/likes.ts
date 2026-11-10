@@ -124,9 +124,11 @@ export async function load({ readOnly = false }: { readOnly?: boolean } = {}): P
   return loadPromise;
 }
 
-// Rewrite record ids after a Navidrome ID rotation (music/id-rotation.ts),
-// via the adoption-confirmed old→new map only. The airingKey keeps its
-// `${songId}|${startedAt}` shape (split at the FIRST `|` — startedAt is an ISO
+// Rewrite record ids through an old→new map, from its two callers: an id
+// rotation (music/id-rotation.ts), with the walk's adoption-confirmed map, and a
+// heart following its file (music/heart-follow.ts), with the moves its policy
+// planned and Navidrome confirmed. Nothing else picks the ids. The airingKey
+// keeps its `${songId}|${startedAt}` shape (split at the FIRST `|` — startedAt is an ISO
 // timestamp and never contains one before the offset marker — which also keeps
 // the operator heart's synthetic `${songId}|operator` key intact). Flushes
 // through flushStrict: the caller deletes the rotation manifest right after, so

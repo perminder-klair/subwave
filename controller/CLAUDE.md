@@ -61,7 +61,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 ## Backup and personas
 
-- `backup/zip.ts` is the one archive assembly. Retention may only name the anchored `subwave-auto-backup-…` grammar (`backup/pure.ts`), because `GET /backup/restorable` lists every `*.zip` in the state dir. Restore routes sidecars through their owners (`jingles.restoreMeta`, `sfx.restoreMeta`, `skills/install.ts`).
+- `backup/zip.ts` is the one archive assembly. Retention may only name the anchored `subwave-auto-backup-…` grammar (`backup/pure.ts`), because `GET /backup/restorable` lists every `*.zip` in the state dir. Restore routes sidecars through their owners (`jingles.restoreMeta`, `sfx.restoreMeta`, `blocklist.restore`, `skills/install.ts`).
 - `personas/install.ts` is the one path for a community install and a bundle import (the admin roster still adds through `settings.update()`). A bundle import reserves its filenames and dry-runs validation before writing a byte. A clashing audio filename is suffixed and the persona re-pointed at it, never overwritten.
 
 ## HTTP
