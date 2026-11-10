@@ -76,7 +76,7 @@ export async function phaseEnrich(
     // list still gets the artist's, as it would with track tags off. The pass can
     // end short of it, this write marks it enriched so no later run fills it, and
     // a never-play rule on the act would miss it. The pass adds to what it finds.
-    // With track tags off the artist is asked every time, and only tags replace
+    // With track tags off the artist is asked every time the row is visited, and only tags replace
     // the list (listAfterArtistLookup, Retag's rule too): an outage, an empty
     // answer or Last.fm tags off leave it as it was (#2295).
     let lastfmTags: string[] | null = t.lastfmTags;
