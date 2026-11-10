@@ -35,9 +35,10 @@ export function isHosted(): boolean {
   return envParsed('SUBWAVE_HOSTED', hostedFlagSchema, false);
 }
 
-// The plan's stream bitrate ceiling in kbps (SUBWAVE_MAX_BITRATE, set by the
-// box agent from the station's SUB/WAVE Cloud plan). Undefined when not
-// hosted, not set, or malformed (which warns): no ceiling.
+// This station's stream bitrate ceiling in kbps (SUBWAVE_MAX_BITRATE, set by
+// the box agent): an unpublished hosting ceiling that guards the box's shared
+// port, not a plan limit. Undefined when not hosted, not set, or malformed
+// (which warns): no ceiling.
 export function hostedMaxBitrate(): number | undefined {
   if (!isHosted()) return undefined;
   return envParsed<number | undefined>('SUBWAVE_MAX_BITRATE', hostedMaxBitrateSchema, undefined, {
@@ -60,9 +61,10 @@ export const HOSTED_LLM_KEYS: readonly string[] = [
   'baseUrl', 'apiKey', 'keys', 'fallback',
 ];
 
-// stream.* keys the agent owns: the listener ceiling is the plan's (the agent
-// sets ICECAST_MAX_CLIENTS on the broadcast container, which wins over this
-// setting anyway), so saving another number would only mislead the owner.
+// stream.* keys the agent owns: the listener ceiling is the box's unpublished
+// hosting ceiling (the agent sets ICECAST_MAX_CLIENTS on the broadcast
+// container, which wins over this setting anyway), so saving another number
+// would only mislead the owner.
 export const HOSTED_STREAM_KEYS = ['maxListeners'] as const;
 
 // tts.* keys the agent owns on a hosted station.
@@ -83,12 +85,12 @@ type StreamBitrates = {
   opusEnabled: boolean; opusBitrate: number; flacEnabled: boolean;
 };
 
-// The stream settings the encoders actually get under the plan's ceiling:
+// The stream settings the encoders actually get under the station's ceiling:
 // each lossy codec above it drops to its highest allowed bitrate (switched off
 // if none fits — MP3 always fits, since a ceiling is never under its lowest,
 // 64), and FLAC is off, since a lossless mount runs near 1 Mbps a listener.
 // Applied where the settings reach Liquidsoap (settings/liquidsoap.ts, on save
-// and at boot), so a value saved before the plan changed can't exceed it
+// and at boot), so a value saved before the ceiling changed can't exceed it
 // either. No ceiling → returned untouched.
 export function capStreamBitrates<T extends StreamBitrates>(stream: T, max = hostedMaxBitrate()): T {
   if (max === undefined) return stream;
@@ -166,7 +168,7 @@ export function stripManagedSettings(
   }
   stripBlock(out, 'llm', HOSTED_LLM_KEYS, dropped);
   stripBlock(out, 'tts', HOSTED_TTS_KEYS, dropped);
-  // Over the plan's bitrate ceiling: drop the value (the stored one stays)
+  // Over the station's bitrate ceiling: drop the value (the stored one stays)
   // rather than save one the encoders would never use.
   const max = hostedMaxBitrate();
   const overCeiling = max === undefined || !out.stream || typeof out.stream !== 'object'
