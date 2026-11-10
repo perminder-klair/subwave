@@ -46,7 +46,11 @@ export interface LlmProviderEntry {
   // generic path through the registry, the embedding builder, the model
   // lister, the onboarding test and the admin key probe, and its key is read at
   // construction (capabilities apiKeyEnv), so envVar is required.
-  openaiCompatible?: { baseUrl: string; reasoning: GatewayReasoningRule };
+  // keyCheckPath is where the admin Test key and the CLI probe send the key
+  // (GET {baseUrl}{keyCheckPath}). It must cost nothing and refuse a bad bearer
+  // every time, including while a CDN holds a cached public answer for that
+  // path: OrcaRouter's /models is such a list, so it checks elsewhere.
+  openaiCompatible?: { baseUrl: string; reasoning: GatewayReasoningRule; keyCheckPath: string };
   // Present when the provider serves text embeddings. defaultModel is what an
   // empty model field resolves to; suggestions fill the admin model picker.
   embedding?: { defaultModel: string; suggestions?: readonly { id: string; dim: number }[] };
@@ -103,16 +107,20 @@ export const LLM_PROVIDER_CATALOG: readonly LlmProviderEntry[] = [
     id: 'requesty', label: 'Requesty', longLabel: 'Requesty (multi-vendor aggregator)', blurb: 'Multi-vendor aggregator',
     group: 'gateway', kind: 'cloud', envVar: 'REQUESTY_API_KEY', keyPlaceholder: 'Requesty API key',
     exampleModel: 'openai/gpt-4o-mini', cliLabel: 'Requesty — multi-vendor',
-    openaiCompatible: { baseUrl: 'https://router.requesty.ai/v1', reasoning: 'minimalWhenOff' },
+    openaiCompatible: { baseUrl: 'https://router.requesty.ai/v1', reasoning: 'minimalWhenOff', keyCheckPath: '/models' },
     embedding: { defaultModel: 'openai/text-embedding-3-small', suggestions: VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS },
   },
   {
-    // orcarouter/free is a built-in router on the public model list;
-    // orcarouter/auto is created per account, so a fresh key may not have it.
+    // orcarouter/free is the built-in free-tier router. The key check is the
+    // billing summary: /models is a public list its Cloudflare cache sometimes
+    // serves to a bad bearer as a 200, while this route answers 401 to a
+    // missing or bad key every time.
     id: 'orcarouter', label: 'OrcaRouter', longLabel: 'OrcaRouter (multi-vendor aggregator)', blurb: 'Multi-vendor aggregator',
-    group: 'gateway', kind: 'cloud', envVar: 'ORCAROUTER_API_KEY', keyPlaceholder: 'OrcaRouter API key',
+    group: 'gateway', kind: 'cloud', envVar: 'ORCAROUTER_API_KEY', keyPlaceholder: 'sk-orca-...',
     exampleModel: 'orcarouter/free', cliLabel: 'OrcaRouter — multi-vendor',
-    openaiCompatible: { baseUrl: 'https://api.orcarouter.ai/v1', reasoning: 'familyFloor' },
+    openaiCompatible: {
+      baseUrl: 'https://api.orcarouter.ai/v1', reasoning: 'familyFloor', keyCheckPath: '/dashboard/billing/subscription',
+    },
     embedding: { defaultModel: 'openai/text-embedding-3-small', suggestions: VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS },
   },
   {

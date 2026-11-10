@@ -150,6 +150,40 @@ test('each gateway reasoning level reaches the wire as reasoning_effort', async 
   }
 });
 
+// Where the admin Test key and the CLI probe send each gateway's key. A public
+// model list can be answered from a CDN cache whatever the bearer: OrcaRouter's
+// /models sometimes gave a bad key the cached list as a 200, so it checks its
+// billing summary instead (#1427). A new gateway adds its row here.
+const KEY_CHECK_URL: Record<string, string> = {
+  requesty: 'https://router.requesty.ai/v1/models',
+  orcarouter: 'https://api.orcarouter.ai/v1/dashboard/billing/subscription',
+};
+
+test('each gateway key check URL is pinned, and the CLI probe sends the key there', async (t) => {
+  assert.deepEqual(Object.keys(KEY_CHECK_URL).sort(), OPENAI_COMPATIBLE_GATEWAYS.map(g => g.id).sort());
+  for (const gw of OPENAI_COMPATIBLE_GATEWAYS) {
+    assert.equal(`${gw.openaiCompatible.baseUrl}${gw.openaiCompatible.keyCheckPath}`, KEY_CHECK_URL[gw.id], gw.id);
+  }
+  // The CLI is its own package with no test runner, so its probe and its copy
+  // of the catalogue are loaded here. Computed specifiers keep the controller's
+  // tsc from type-checking the CLI's sources under this package's config.
+  const cliProbes = await import(String(new URL('../../cli/src/probes.ts', import.meta.url)));
+  const cliCatalog = (await import(String(new URL('../../cli/src/providers.generated.ts', import.meta.url)))).LLM_PROVIDER_CATALOG;
+  const seen: { url: string; auth: string }[] = [];
+  t.mock.method(globalThis, 'fetch', (async (url: unknown, init?: RequestInit) => {
+    seen.push({ url: String(url), auth: new Headers(init?.headers).get('authorization') || '' });
+    return Response.json({ object: 'billing_subscription' });
+  }) as typeof fetch);
+  const cliGateways = (cliCatalog as { id: string; openaiCompatible?: unknown }[]).filter(p => p.openaiCompatible);
+  assert.deepEqual(cliGateways.map(g => g.id).sort(), Object.keys(KEY_CHECK_URL).sort());
+  for (const gw of cliGateways) {
+    seen.length = 0;
+    const r = await cliProbes.probeGatewayKey({ apiKey: 'cli-key', gateway: gw.openaiCompatible });
+    assert.deepEqual(r, { ok: true, detail: 'key accepted' }, gw.id);
+    assert.deepEqual(seen, [{ url: KEY_CHECK_URL[gw.id], auth: 'Bearer cli-key' }], gw.id);
+  }
+});
+
 test('every search provider says how it takes a key', () => {
   for (const p of SEARCH_PROVIDER_CATALOG) {
     assert.ok(p.label && p.hint, `${p.id}: label and hint are required`);

@@ -84,15 +84,20 @@ test('Requesty: a 401 or 403 reads as a rejected key, anything else as the statu
   assert.equal(failed.message, 'Request failed (502)');
 });
 
-// OrcaRouter's GET /models answers a bad, blank or whitespace bearer with 401
-// "Invalid API key" (checked live 2026-11-10), so the generic probe holds for it.
-test('OrcaRouter: its model list with the key as a Bearer; its 401 reads as a rejected key', async (t) => {
-  const outbound = stubProvider(t, 200, { data: [{ id: 'orcarouter/free' }] });
+// OrcaRouter's GET /models is a public list behind Cloudflare: a bad bearer
+// usually gets 401, but sometimes the cached public list as a 200
+// (cf-cache-status EXPIRED), which would pass any key. Its billing summary
+// answers 401 to a missing or bad key every time (checked live, 2026-11-10),
+// so that is its catalogue keyCheckPath. Requesty's test above pins that the
+// other gateways still check /models.
+test('OrcaRouter: the key goes to its billing summary, not the cached model list; a 401 reads as rejected', async (t) => {
+  const outbound = stubProvider(t, 200, { object: 'billing_subscription', hard_limit_usd: 10 });
   const r = await testKey({ key: 'ORCAROUTER_API_KEY', value: 'orca-good' });
   assert.equal(r.ok, true);
   assert.equal(r.message, '✓ OrcaRouter key valid');
   assert.equal(outbound.length, 1);
-  assert.equal(outbound[0].url, 'https://api.orcarouter.ai/v1/models');
+  assert.equal(outbound[0].url, 'https://api.orcarouter.ai/v1/dashboard/billing/subscription');
+  assert.equal(outbound[0].method, 'GET');
   assert.equal(outbound[0].headers.get('authorization'), 'Bearer orca-good');
   t.mock.restoreAll();
   stubProvider(t, 401, { error: { message: 'Invalid API key', type: 'orcarouter_api_error' } });
@@ -101,9 +106,9 @@ test('OrcaRouter: its model list with the key as a Bearer; its 401 reads as a re
   assert.equal(rejected.message, 'Key rejected — check it\'s correct and active');
 });
 
-// OrcaRouter's list is public to a request with NO Authorization header, so a
-// probe that went out without a key would pass. Neither the Test key nor the
-// model list may reach the gateway with a blank one.
+// OrcaRouter's model list is public to a request with NO Authorization header,
+// so a check that went out without a key could read as working. Neither the
+// Test key nor the model list may reach the gateway with a blank one.
 test('a gateway key probe or model list never goes out without a key', async (t) => {
   delete process.env.ORCAROUTER_API_KEY;
   const outbound = stubProvider(t, 200, { data: [{ id: 'orcarouter/free' }] });

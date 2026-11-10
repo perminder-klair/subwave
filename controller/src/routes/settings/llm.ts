@@ -291,13 +291,14 @@ async function probeKey(
       return { ok: true, message: `✓ Discogs token valid${j.username ? ` · user: ${j.username}` : ''}` };
     }
     default: {
-      // A fixed-endpoint gateway's model list, with the key as a Bearer; no
-      // model is called, as in the CLI's probeGatewayModels. Requesty's list is
-      // public, but a bearer it can't verify is a 403 ("Invalid authorization
-      // token"), so 401 and 403 both read as a rejected key.
+      // A fixed-endpoint gateway's key-check route (catalogue keyCheckPath),
+      // with the key as a Bearer; no model is called, as in the CLI's
+      // probeGatewayKey. Requesty's model list is public, but a bearer it can't
+      // verify is a 403 ("Invalid authorization token"), so 401 and 403 both
+      // read as a rejected key.
       const gw = OPENAI_COMPATIBLE_GATEWAYS.find(g => g.envVar === key);
       if (!gw) return { ok: false, message: `No probe defined for ${key}` };
-      const r = await fetch(`${gw.openaiCompatible.baseUrl}/models`, {
+      const r = await fetch(`${gw.openaiCompatible.baseUrl}${gw.openaiCompatible.keyCheckPath}`, {
         headers: { Authorization: `Bearer ${value}` },
         signal: AbortSignal.timeout(10000),
       });
