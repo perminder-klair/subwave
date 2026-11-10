@@ -20,8 +20,16 @@
 //     wrong move hearts a song nobody liked, while a missed one only leaves the
 //     heart where it already was.
 // A snapshot without a title or an artist never matches.
+//
+// A planned move is only a plan: library.db is as new as its last walk, so a
+// heart on a song added since reads as gone from the table while it is still on
+// the server. `oldIdVerdict` says what Navidrome's answer for the old id allows:
+// only its definite "not found" (Subsonic error 70, the check id-rotation
+// recovery already reads) lets the heart move. A song that comes back, an empty
+// answer, an error or a timeout is not proof, and the heart stays.
 
 import { nameKey } from './recency.js';
+import { isMissingSongError } from './id-rotation-recovery.js';
 
 // Seconds. A re-encode of the same master stays within a second or two; an
 // edit or an extended mix of the same title is minutes away.
@@ -91,4 +99,12 @@ function pick(h: HeartSnapshot, rows: readonly LibraryNameRow[]): string | null 
   if (!album) return null;
   const sameAlbum = sameLength.filter((r) => nameKey(r.album) === album);
   return sameAlbum.length === 1 ? sameAlbum[0].id : null;
+}
+
+export type OldIdVerdict = 'gone' | 'present' | 'unknown';
+
+/** What Navidrome's getSong answer for a heart's old id allows: only `gone` lets it move. */
+export function oldIdVerdict(answer: { song?: unknown; error?: unknown }): OldIdVerdict {
+  if ('error' in answer) return isMissingSongError(answer.error) ? 'gone' : 'unknown';
+  return answer.song ? 'present' : 'unknown';
 }

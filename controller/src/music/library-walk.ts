@@ -11,8 +11,11 @@
 //
 // state/library-walk.json: { mode, state: 'running' | 'ok' | 'failed' | 'stopped', at }.
 // No file (a station that has not walked since this landed) reads as unsettled.
+// A table that changes without a walk is no longer the walk the stamp describes,
+// so a library reset and a restored library.db clear it (`clearWalk`): the table
+// reads as unsettled until the next clean tag or reconcile run.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from '../config.js';
 import { writeFileAtomicSync } from '../util/atomic-file.js';
@@ -34,6 +37,15 @@ export function recordWalk(mode: string, state: WalkState, now: Date = new Date(
     writeFileAtomicSync(file(), JSON.stringify({ mode, state, at: now.toISOString() }));
   } catch (err) {
     console.warn(`[library-walk] could not record the ${mode} run as ${state}: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** Forget the last walk (a reset or a restored library.db). Never throws: a stamp left behind is warned about. */
+export function clearWalk(): void {
+  try {
+    rmSync(file(), { force: true });
+  } catch (err) {
+    console.warn(`[library-walk] could not clear the walk stamp: ${err instanceof Error ? err.message : err}`);
   }
 }
 

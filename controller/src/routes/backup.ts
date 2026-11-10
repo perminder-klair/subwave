@@ -26,6 +26,7 @@ import * as jingles from '../broadcast/jingles.js';
 import * as sfx from '../broadcast/sfx.js';
 import * as blocklist from '../music/blocklist.js';
 import { applyBlocklistChange } from '../broadcast/blocklist-effects.js';
+import { clearWalk } from '../music/library-walk.js';
 import {
   SKILL_BUNDLE_MAX_BYTES,
   restoreSkillMembers,
@@ -256,6 +257,10 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       tmpDir = await mkdtemp(join(tmpdir(), 'subwave-restore-'));
       const dbTmp = join(tmpDir, 'library.db');
       zip.extractEntryTo(dbEntry, tmpDir, false, true);
+      // The restored table is not the walk the stamp describes: hearts wait for
+      // the next clean walk (music/library-walk.ts). Cleared before the swap, so
+      // a swap that fails half-way still reads as unsettled.
+      clearWalk();
       await libraryDb.restoreFromFile(dbTmp);
       await library.reload();
       restored.push('library.db');

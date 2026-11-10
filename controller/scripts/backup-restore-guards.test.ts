@@ -139,6 +139,14 @@ test('a restored never-play list purges the queue and rebuilds the coast playlis
   assert.equal(purge.mock.callCount(), 1, 'a backup without the list touches neither');
 });
 
+test('a restored library.db forgets the walk: hearts wait for the next clean one', async () => {
+  const { recordWalk, lastWalk } = await import('../src/music/library-walk.js');
+  recordWalk('tag', 'ok');
+  assert.equal(lastWalk()?.state, 'ok');
+  assert.equal((await restore(backupOf([['library.db', Buffer.alloc(0)]]))).status, 200);
+  assert.equal(lastWalk(), null);
+});
+
 test('a backup carries the never-play list', async () => {
   const zip = await buildBackupZip();
   const member = zip.getEntry('blocklist.json');
