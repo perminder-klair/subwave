@@ -279,6 +279,17 @@ test('a line written over an unconsumed handoff keeps its lead-in', async t => {
   assert.doesNotMatch(uri, /subwave_no_leadin/, 'it reaches an empty queue, so it keeps the lead-in that ducks the music first');
   await exchange;
   unlinkSync(config.liquidsoap.sayFile);
+  // The restored lead-in is air time too, so the voice chain holds for it. The
+  // hold starts at the last write: 2.5 s for the opener (1 s clip + 0.8 s
+  // lead-in + 0.7 s tail), 1.7 s for the continuation as planned (no lead-in),
+  // and the 0.8 s given back to it. Without that share the next speech could
+  // start over the end of this line.
+  t.mock.timers.tick(4_500);
+  await flush();
+  assert.equal(voiceBusy(), true, 'past the planned 4.2 s hold the chain is still held for the restored lead-in');
+  t.mock.timers.tick(600);
+  await flush();
+  assert.equal(voiceBusy(), false, 'released once the 5 s hold, lead-in included, has passed');
   t.mock.timers.tick(30_000);
   await flush();
 });
