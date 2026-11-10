@@ -245,12 +245,14 @@ app.listen(config.server.port, async (err?: Error) => {
 
   // Hearts whose file came back under a new id (a re-import) follow it. Never
   // fatal: a miss leaves the heart where it was, for the next boot or tag run.
-  try {
-    const { followMovedHearts } = await import('./music/heart-follow.js');
-    await followMovedHearts();
-  } catch (err) {
-    console.error('[likes] following moved hearts failed (will retry):', err instanceof Error ? err.message : err);
-  }
+  // Not awaited: a planned move asks Navidrome first (music/heart-follow.ts), and
+  // a server still starting must not hold the boot behind its timeout. Nothing
+  // else in the boot depends on where a heart sits.
+  void import('./music/heart-follow.js')
+    .then(({ followMovedHearts }) => followMovedHearts())
+    .catch((err: unknown) => {
+      console.error('[likes] following moved hearts failed (will retry):', err instanceof Error ? err.message : err);
+    });
 
   // Start the remote-TTS /health probe loop now that settings are loaded — its
   // URL lives in settings (not env), so it can't self-start at import time the
