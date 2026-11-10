@@ -282,7 +282,7 @@ export default function ModelsAndTokens() {
             <em>through OpenRouter</em>. Those aren&rsquo;t the same: pick the <strong>OpenRouter</strong>{' '}
             provider with a DeepSeek chat model and your DJ speaks via DeepSeek while embeddings
             go through OpenRouter&rsquo;s own embeddings endpoint — by default{' '}
-            <code>openai/text-embedding-3-small</code>. OpenRouter, Requesty and the like carry
+            <code>openai/text-embedding-3-small</code>. OpenRouter, Requesty, OrcaRouter and the like carry
             everything (chat and embeddings); the bare provider named after a chat-only company
             does not.
           </li>
