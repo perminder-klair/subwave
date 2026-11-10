@@ -807,13 +807,13 @@ function vecCount(d: Database.Database): number {
 // the error there.
 function ensureNamedColumns(d: Database.Database): void {
   const wanted: Array<[string, string]> = [
-    ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
-    ['untaggable_key', 'TEXT'], ['tagged_measured', 'INTEGER'],
     // Which window outro_json/tail_silence_ms/tail_start_ms were measured on:
     // NULL = the file's last ANALYZE_OUTRO_SECONDS, 2 = a window ending where
     // the music stops, placed from the stored edges and confirmed by the
     // analyzer (library-db/facets.ts tailVersionOf).
     ['tail_version', 'INTEGER'],
+    ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
+    ['untaggable_key', 'TEXT'], ['tagged_measured', 'INTEGER'],
   ];
   const missing = () => {
     const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));
