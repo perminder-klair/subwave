@@ -18,6 +18,8 @@ test('a gateway is priced as the family its model id names', () => {
   assert.deepEqual(estimateCost('openrouter:openai/gpt-4o-mini', usage), { usd: 0.21, priced: true });
   assert.deepEqual(estimateCost('openrouter:google/gemini-2.5-flash', usage), { usd: 0.105, priced: true });
   assert.equal(estimateCost('requesty:openai/o3-mini', usage).priced, true);
+  assert.deepEqual(estimateCost('orcarouter:anthropic/claude-sonnet-4.6', usage), { usd: 4.5, priced: true });
+  assert.deepEqual(estimateCost('orcarouter:openai/gpt-4o-mini', usage), { usd: 0.21, priced: true });
 });
 
 test('a gateway serving an unknown model stays unpriced, whatever the gateway is called', () => {
