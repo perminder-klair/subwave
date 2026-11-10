@@ -2817,12 +2817,14 @@ class Queue {
   // conversation on air. `djBehaviour.holdDuckBetweenSpeakers` then picks how
   // the clips are delivered, and the two shapes are the point of the setting.
   //
-  // On: ONE batch on the serialized say.txt voice chain. Each line keeps its
-  // own gain, speaker and air marker; what the batch changes is that line
-  // N+1's handoff is written as soon as line N is consumed, not when line N
-  // finishes playing. The mixer's voice queue therefore never empties, so its
-  // duck stays down for the whole conversation and the gap between two
-  // speakers is just the silent lead-in every clip gets.
+  // On (and once the mixer writes voice markers, see batchExchangeDelivery):
+  // ONE batch on the serialized say.txt voice chain. Each line keeps its own
+  // gain, speaker and air marker; what the batch changes is that line N+1's
+  // handoff is written as soon as line N is consumed, not when line N finishes
+  // playing. The mixer's voice queue therefore never empties, so its duck stays
+  // down for the whole conversation, and a continuation line skips the silent
+  // lead-in (airVoiceExchange says when it keeps it): what is left between two
+  // speakers is the clips' own padding.
   //
   // Off (the default): one handoff per line, each waiting for the previous
   // line's playback hold. The queue drains between speakers, the music ramps

@@ -67,7 +67,9 @@ let _voiceChain: Promise<void> = Promise.resolve();
 let _voiceHolders = 0;
 export function voiceBusy(): boolean { return _voiceHolders > 0; }
 
-export const VOICE_LEADIN_MS = 800;   // /sounds/leadin.wav pushed before each spoken clip
+// /sounds/leadin.wav, pushed before every spoken clip except a batched exchange's
+// continuation line (subwave_no_leadin, see airVoiceExchange).
+export const VOICE_LEADIN_MS = 800;
 const VOICE_TAIL_MS = 700;     // duck ramp-back + poll/scheduling slack
 // Forecast-only delay covers mixer polling and the silent lead-in. Actual air time comes
 // from the marker. #1382.
@@ -549,8 +551,10 @@ export function measuredClipDurationMs(path: string): number | null {
   return wavDurationMs(path) ?? mp3DurationMs(path);
 }
 
-// The clip plus the lead-in and duck-tail padding: what the voice chain holds
-// its lock for, and what the drain budgets a segment at.
+// The clip plus the lead-in and duck-tail padding: what airVoice holds the voice
+// chain for, and what the drain budgets a segment at. A batched exchange's
+// continuation line skips its lead-in, so budgeting every line at this figure
+// over-estimates such an exchange, the safe direction.
 export function speechDurationMs(wavPath: string, text: string): number {
   return clipDurationMs(wavPath, text) + VOICE_LEADIN_MS + VOICE_TAIL_MS;
 }
