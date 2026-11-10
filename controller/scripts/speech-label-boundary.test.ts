@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { chatCompletionResponse } from './test-utils/llm.js';
 import { after, beforeEach, test, type TestContext } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -81,6 +81,9 @@ beforeEach(async () => {
     djBehaviour: { holdDuckBetweenSpeakers: true },
     tts: { enabled: true },
   } as never);
+  // A mixer that has spoken since it started: the held duck batches an
+  // exchange only once voice markers exist (batchExchangeDelivery).
+  writeFileSync(config.liquidsoap.voicePlayingFile, JSON.stringify({ voiceId: 'earlier', startedAt: Date.now() / 1000 }));
   session.start(ctx());
 });
 
