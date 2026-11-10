@@ -322,6 +322,13 @@ function recoveredPendingHandoff(raw: unknown): PendingVoice | null {
   };
 }
 
+export interface ExchangeOutcome {
+  accepted: boolean;
+  /** Why it was not accepted, when the caller acts on the cause: see
+   *  Queue.deliverExchange. Absent for a render failure. */
+  reason?: 'boundary-taken';
+}
+
 export interface AnnounceOutcome {
   accepted: boolean;
   deferred: boolean;
@@ -2817,10 +2824,19 @@ class Queue {
   // makes the two-voice persona handoff play cleanly). Each line is booth-
   // logged speaker-prefixed and appended to the session tagged with its
   // speaker, so windowMessages names a guest's words as theirs.
-  async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter', { castNames = [] }: { castNames?: readonly string[] } = {}) {
+  async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter', opts: { castNames?: readonly string[] } = {}): Promise<boolean> {
+    return (await this.deliverExchange(lines, kind, opts)).accepted;
+  }
+
+  // announceExchange with the cause of a refusal, for the callers that word it
+  // (skills/_agent.ts). 'boundary-taken' = the exchange lost the boundary it
+  // was placed at: the show handoff claimed it, or another segment is already
+  // waiting there (holdForNextTrack). That is a stand-down, not a failure to
+  // render, and a caller must not report it as one.
+  async deliverExchange(lines: { persona: Persona; text: string }[], kind = 'banter', { castNames = [] }: { castNames?: readonly string[] } = {}): Promise<ExchangeOutcome> {
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} exchange — the show handoff has already claimed this boundary`);
-      return false;
+      return { accepted: false, reason: 'boundary-taken' };
     }
     const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
     // The whole cast, not just the line's own speaker: a model that prefixes a
@@ -2837,13 +2853,13 @@ class Queue {
       }
     } catch (err) {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);
-      return false;
+      return { accepted: false };
     }
-    if (!rendered.length) return false;
+    if (!rendered.length) return { accepted: false };
     // Deferred as one segment, not as N: the exchange keeps its order and its
     // all-or-nothing rendering, and the boundary hears the whole conversation.
     if (currentTalkAir() === 'next-track') {
-      return this.holdForNextTrack(
+      const held = this.holdForNextTrack(
         kind,
         rendered.map((l, index) => ({
           text: l.text,
@@ -2854,11 +2870,14 @@ class Queue {
         })),
         { exchange: true, notBefore: kind === 'handoff' ? session.handoffBoundaryAt() : null },
       );
+      // rendered is non-empty, so a refusal here is the boundary: a clip
+      // already waiting, or a committed pause-and-talk break.
+      return held ? { accepted: true } : { accepted: false, reason: 'boundary-taken' };
     }
     for (const [index, l] of rendered.entries()) {
       if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
         this.log('scheduler', `Dropped ${kind} exchange — the show handoff completed while it rendered`);
-        return false;
+        return { accepted: false, reason: 'boundary-taken' };
       }
       try {
         const seg: SegmentDesc = {
@@ -2879,7 +2898,7 @@ class Queue {
       text: rendered.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n'),
       kind,
     });
-    return true;
+    return { accepted: true };
   }
 
   // Defer a spoken segment to the NEXT track boundary. Used for station idents:
