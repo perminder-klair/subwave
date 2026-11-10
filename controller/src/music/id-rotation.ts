@@ -93,6 +93,11 @@ export interface RotationApplyResult {
   complete: boolean;
 }
 
+/** A rotation map is still waiting to be applied or acknowledged (the legacy manifest, or the journal). */
+export function rotationPending(): boolean {
+  return existsSync(manifestPath()) || db.pendingIdRotations().size > 0;
+}
+
 // Serialize boot, sentinel and exit callers through one owner. A rejection
 // must not poison subsequent retries.
 let applying: Promise<RotationApplyResult> = Promise.resolve({ applied: false, complete: true });
