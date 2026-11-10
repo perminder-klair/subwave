@@ -187,7 +187,9 @@ regular cadence — it's cheap insurance.
     \`ANALYZER_HEAVY\` is irrelevant while it's applied), or on non-compose installs
     point the container at \`ghcr.io/perminder-klair/subwave-analyzer-cuda\` with GPU
     passthrough (\`--gpus all\`). Needs the NVIDIA driver + Container Toolkit; without
-    a visible GPU the worker logs a warning and runs on CPU.
+    a visible GPU, or on a card the image has no kernels for (a "CUDA self-test
+    failed" log line naming the card and its image tag), the worker logs a warning
+    and runs on CPU.
   - **All-in-one image** (\`analyzer local\` — the AIO bundles the analyzer
     in-process): switch the single container's image to
     \`ghcr.io/perminder-klair/subwave-aio-heavy\`, or on an NVIDIA host

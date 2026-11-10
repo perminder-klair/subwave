@@ -196,7 +196,8 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
   second compose file in the stack (it swaps the analyzer to
   `subwave-analyzer-cuda` and reserves the GPU; `ANALYZER_HEAVY` is then
   irrelevant). Needs the Unraid **Nvidia Driver** plugin; if the GPU isn't
-  visible the analyzer just falls back to CPU.
+  visible, or can't run the image's kernels, the analyzer logs a warning and
+  falls back to CPU.
 - **All-in-one (one-click from Community Applications).** The heavy/lean split
   is baked into the image, so you switch by pointing the container at the heavy
   tag — **`ANALYZER_HEAVY` does nothing here** (it's the split-stack toggle):
@@ -235,10 +236,12 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
 
   Nothing else changes — no separate analyzer container, no compose overlay
   (that's the split stack's route). The analyze worker picks the device itself:
-  it uses the GPU when it can see one and otherwise logs a warning and carries
-  on with the CPU, so a half-finished setup degrades rather than breaking the
+  it uses the GPU when it can see one and a test op runs on it, and otherwise
+  logs a warning and carries on with the CPU, so a half-finished setup, or a
+  tag built without kernels for your card, degrades rather than breaking the
   station. Pin it explicitly with the `ANALYZE_DEVICE` variable (`auto`, the
-  default, `cuda`, or `cpu`) if you'd rather be sure. Between passes the models
+  default, `cuda`, or `cpu`) if you'd rather be sure; `cuda` still falls back
+  when the test op fails. Between passes the models
   drop out of VRAM after ~5 idle minutes, so a co-resident Ollama gets the card
   back (`ANALYZE_IDLE_UNLOAD_S` tunes that; `0` keeps them resident). The same
   release runs on CPU-only boxes, with a longer default window (30 minutes):

@@ -1105,9 +1105,10 @@ export const COMPOSE_ANALYZER_GPU_YML = `# GPU opt-in overlay for the analyzer �
 #
 # Requirements: NVIDIA driver + Container Toolkit only (cu128 wheels vendor the
 # CUDA runtime). The worker picks the device itself (ANALYZE_DEVICE=auto: cuda
-# when torch sees a GPU, else cpu with a warning — a misconfigured host
-# degrades, not fails). ANALYZE_DEVICE=cpu in .env forces CPU without dropping
-# the overlay.
+# when torch sees a GPU and a test op runs on it, else cpu with a warning — a
+# misconfigured host, or a card this build has no kernels for, degrades, not
+# fails). An explicit ANALYZE_DEVICE=cuda falls back the same way, and
+# ANALYZE_DEVICE=cpu in .env forces CPU without dropping the overlay.
 #
 # After ~5 idle minutes the worker drops its models out of VRAM so a
 # co-resident TTS/LLM gets the card back (ANALYZE_IDLE_UNLOAD_S tunes it;
@@ -1433,7 +1434,9 @@ SITE_URL=
 #                         # still found within this window. Lower it if you start
 #                         # analyzers by hand and want them picked up sooner.
 # ANALYZE_DEVICE=    # auto (default) / cpu / cuda — torch device for CLAP/Demucs;
-#                    # only meaningful on the cuda analyzer flavour
+#                    # only meaningful on the cuda analyzer flavour. auto and
+#                    # cuda both fall back to cpu, with a warning, when the card
+#                    # fails a one-op self-test (no GPU, or no kernels for it)
 # ANALYZE_IDLE_UNLOAD_S=  # seconds of no CLAP/Demucs use before the models are
 #                         # dropped (0 = keep resident). Defaults per device:
 #                         # 300 on cuda (frees the GPU for co-resident TTS/LLM
