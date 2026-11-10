@@ -44,7 +44,8 @@ export type OriginalYearOutcome =
 // attempt: the first retry an hour later (a blip), then a day (an outage),
 // then a week (a long one). YEAR_MAX_ATTEMPTS counts the first failure plus
 // one per delay, so the week-long retry does run; after that many failures the
-// track waits for an explicit `--facets year --where failed` run.
+// automatic passes stop asking and the track waits for an explicit run
+// (`--facets year --where failed`, `--where all`, or `--re-enrich` over it).
 export const YEAR_RETRY_DELAYS_MS: readonly number[] = [
   60 * 60_000,
   24 * 60 * 60_000,
