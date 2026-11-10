@@ -27,7 +27,7 @@ process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const { queue } = await import('../src/broadcast/queue.js');
-const { speakSkillCron } = await import('../src/broadcast/scheduler.js');
+const { skillCronTalkClaim, speakSkillCron } = await import('../src/broadcast/scheduler.js');
 const { currentTalkAir, inTalkAirScope, scheduledTalkAir, suppressScheduledSpeechDuringHandoff } =
   await import('../src/broadcast/talk-air.js');
 
@@ -74,6 +74,31 @@ test('with the switch on a cron fire stands down before generating while a clip 
   assert.equal(await fire(), null, 'the skill never ran');
   assert.equal(queue.pendingVoiceTalk()?.kind, 'station-id', 'and the ident keeps the boundary');
   queue._pendingVoice = null;
+});
+
+test('a claim carries the moment it was taken, so the 20-minute pending bound applies', async t => {
+  // talkTick hands the claim to the planner as pending speech. Stamped with
+  // each tick's own now, a fire stuck generating would hold every row forever;
+  // stamped with the claim time it ages out like any waiting clip.
+  await settings.update({ djTalkOnlyBetweenTracks: true } as never);
+  queue._pendingVoice = null;
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  const seen: unknown[] = [];
+  await speakSkillCron('news', 'next-track', async () => {
+    seen.push(skillCronTalkClaim());
+    t.mock.timers.tick(25 * 60_000);
+    seen.push(skillCronTalkClaim());
+  });
+  const claim = { kind: 'news', queuedAt: 1_000_000, generating: true };
+  assert.deepEqual(seen, [claim, claim], 'the claim does not refresh while the fire generates');
+  assert.equal(skillCronTalkClaim(), null, 'and it is released with the fire');
+});
+
+test('with the switch off a cron fire takes no claim', async () => {
+  await settings.update({ djTalkOnlyBetweenTracks: false } as never);
+  let claim: unknown = 'unset';
+  await speakSkillCron('news', 'immediate', async () => { claim = skillCronTalkClaim(); });
+  assert.equal(claim, null);
 });
 
 test.after(async () => {

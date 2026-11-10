@@ -13,7 +13,10 @@ export const PENDING_VOICE_MAX_AGE_MS = 20 * 60_000;
 // age limit rather than at either end, because Queue produces it and
 // broadcast/talk-scheduler.ts consumes it, and a second spelling of the shape
 // would drift from the constant that gives `queuedAt` its meaning.
-export type PendingTalk = { kind: string; queuedAt: number };
+// `generating` marks a boundary CLAIMED by a cron fire that has not rendered
+// yet (scheduler.skillCronTalkClaim): it holds rows like a waiting clip, from
+// the moment of the claim, and is only worded differently.
+export type PendingTalk = { kind: string; queuedAt: number; generating?: boolean };
 // Queue expiry is strictly past the limit; scheduler holds use the remaining lifetime. Keep
 // these boundaries distinct. #1539.
 export function pendingVoiceStale(queuedAt: number, nowMs: number): boolean {

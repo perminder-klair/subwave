@@ -394,6 +394,19 @@ test('a segment waiting for a track boundary holds every gap-gated row', () => {
   assert.deepEqual(after.minutesOf('banter'), [21]);
 });
 
+test('a cron claim that has not rendered yet holds the row, and says it is being written', () => {
+  // A cron fire claims the boundary before it generates (#2259); talkTick passes
+  // the claim as pending speech marked `generating`. Same hold, honest wording.
+  const r = makeReplay({
+    pendingTalk: { kind: 'news', queuedAt: clockAt(15), generating: true },
+    eligible: kind => kind === 'banter',
+  });
+  r.tick(at(20));
+  assert.deepEqual(r.minutesOf('banter'), [], 'a claimed boundary is still taken');
+  assert.equal(r.logs.length, 1);
+  assert.match(r.logs[0], /^\[banter\] stood down at :20 — a news is being written for the next track boundary \(retrying until :29\)$/);
+});
+
 test('a pending segment fresh enough to outlast a window holds it — and says so', () => {
   // A freshly rendered ident can still validly air across this window, so the hold
   // stands for every minute of it except the last.

@@ -1182,8 +1182,7 @@ async function talkTick() {
       // A cron fire generating for the boundary has no row and so no
       // _pendingVoice yet; count it as pending speech, or this tick's rows fire
       // into a boundary the cron is about to take and the queue declines them.
-      pendingTalk: queue.pendingVoiceTalk()
-        ?? (skillCronTalkInFlight ? { kind: skillCronTalkInFlight, queuedAt: Date.now() } : null),
+      pendingTalk: queue.pendingVoiceTalk() ?? skillCronTalkClaim(),
       eligible: kind => talkEligible(kind, now, rolled),
       externalSlot: kind => (kind === 'programme' ? programme.dueBeat(now) : null),
       // Read once per tick, not per row: the pending-clip hold is only coherent
@@ -1363,13 +1362,25 @@ async function scheduledBackupTick() {
 // Rebuilt on every syncSkillCrons() call.
 const skillCronTasks = new Map<string, ScheduledTask>();
 
-// One cron fire at a time once fires are placed between tracks, and the skill
-// that owns it. A cron timer has no row in the slot table, so nothing in the
-// planner makes two of them take turns for the one boundary; this does. A fire
-// checks and sets it in one synchronous step before generation, and talkTick
-// lifts it into the same hold a rendered clip gets, so a row is not fired into
-// a boundary the cron is about to take.
-let skillCronTalkInFlight: string | null = null;
+// One cron fire at a time once fires are placed between tracks: the skill that
+// owns the boundary and when it claimed it. A cron timer has no row in the slot
+// table, so nothing in the planner makes two of them take turns for the one
+// boundary; this does. A fire checks and sets it in one synchronous step before
+// generation, and talkTick lifts it into the same hold a rendered clip gets
+// (skillCronTalkClaim), so a row is not fired into a boundary the cron is about
+// to take.
+let skillCronTalkInFlight: { kind: string; at: number } | null = null;
+
+// The claim as the planner's pending speech, or null. `queuedAt` is when the
+// claim was TAKEN, not this tick, so the 20-minute pending bound
+// (PENDING_VOICE_MAX_AGE_MS) applies to a claim exactly as it does to a
+// rendered clip: a fire stuck generating stops holding rows once it is older
+// than any clip would be allowed to wait.
+export function skillCronTalkClaim(): PendingTalk | null {
+  return skillCronTalkInFlight
+    ? { kind: skillCronTalkInFlight.kind, queuedAt: skillCronTalkInFlight.at, generating: true }
+    : null;
+}
 
 // Gates injected rather than read live so the rule can be pinned
 // (scripts/skill-cron-gates.test.ts).
@@ -1437,12 +1448,14 @@ export async function speakSkillCron(kind: string, air: TalkAir, speak: () => Pr
     await speak();
     return;
   }
-  const refusal = skillCronTalkStandDownReason(kind, air, skillCronTalkInFlight, queue.pendingVoiceTalk(), Date.now());
+  const refusal = skillCronTalkStandDownReason(
+    kind, air, skillCronTalkInFlight?.kind ?? null, queue.pendingVoiceTalk(), Date.now(),
+  );
   if (refusal) {
     queue.log('scheduler', `[skills] cron "${kind}" stood down — ${refusal}`);
     return;
   }
-  skillCronTalkInFlight = kind;
+  skillCronTalkInFlight = { kind, at: Date.now() };
   try {
     await withTalkAir(air, speak);
   } finally {
