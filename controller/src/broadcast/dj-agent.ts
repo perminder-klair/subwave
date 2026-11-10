@@ -2219,7 +2219,12 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
     session.markHandoffAired();
     return;
   }
-  const showIn = (isBoundaryHandoff ? pending.incomingShowName : null) || cur?.show?.name || null;
+  // A boundary handoff runs BEFORE the roll, so `cur` is still the outgoing
+  // session: falling back to its show would announce the show that is ending.
+  // A null incomingShowName is meaningful (show → autonomous), so trust it.
+  const showIn = isBoundaryHandoff
+    ? (pending.incomingShowName ?? null)
+    : (cur?.show?.name || null);
   const showOut = pending.showName || null;
   // The armed record keeps a future contextAt for incoming show identity, but
   // speech facts belong to the scheduled boundary. Unknown legacy/malformed

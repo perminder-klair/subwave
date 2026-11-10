@@ -324,6 +324,27 @@ test('a final-track handoff uses the incoming identity captured at arm time', as
   await settings.update({ shows: priorShows, schedule: priorSchedule } as never);
 });
 
+test('a show-to-autonomous final-track handoff does not reopen the outgoing show', async (t) => {
+  queue.djLog = [];
+  restorePromptSettingsAfter(t);
+  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
+  const t0 = Date.now();
+  session.start(context({ id: 's_outgoing', name: 'Instrumentarium' }, t0));
+  await settings.update({ activePersonaId: GIGI.id } as never);
+  // No show on the incoming side: the station falls back to autonomous play.
+  const incoming = { ...context({ id: 'unused', name: 'unused' }, t0 + 60_000), activeShow: null };
+  assert.equal(session.armBoundaryHandoff(incoming), true);
+
+  const { seen, deps } = generators();
+  t.mock.method(queue, 'announceExchange', async () => true);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
+
+  assert.equal(seen.signoff.showOut, 'Instrumentarium');
+  assert.equal(seen.signoff.showIn, null, 'the sign-off must not hand over to the show that is ending');
+  assert.equal(seen.greeting.showIn, null, 'the greeting must not kick off the show that is ending');
+  assert.doesNotMatch(seen.greeting.prompt, /Instrumentarium/);
+});
+
 test('a final-track handoff grounds both rendered prompts at the stored boundary clock', async (t) => {
   restorePromptSettingsAfter(t);
   const generatedAt = Date.parse('2026-09-18T13:57:00.000Z'); // 14:57 Europe/London
