@@ -160,9 +160,8 @@ export async function airVoice(
   const clipMs = clipDurationMs(wavPath, text);
   const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + VOICE_LEADIN_MS + VOICE_TAIL_MS);
   const voiceId = stableVoiceId || mintVoiceId();
-  // Add this take's trim only while the operator has levelling enabled.
-  const gain = voiceLevellingEnabled() ? levelledGainDb(wavPath, gainDb) : gainDb;
-  const uri = voiceUri(wavPath, gain, voiceId, pauseDeliveryId, jingleOverlay, jingleOverlayTrackAt);
+  const gain = annotatedGainDb(wavPath, gainDb);
+  const uri = voiceUri(wavPath, gain, voiceId, pauseDeliveryId, { jingleOverlay, jingleOverlayTrackAt });
   const now = Date.now();
   const jingle = jingleWindow();
   const { waitMs, estimatedAirInMs } = airInEstimate({
@@ -285,11 +284,10 @@ export async function airVoiceExchange(
     const leadinMs = continuation ? 0 : VOICE_LEADIN_MS;
     const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + leadinMs + VOICE_TAIL_MS);
     const voiceId = mintVoiceId();
-    // Add this take's trim only while the operator has levelling enabled.
-    const gain = voiceLevellingEnabled() ? levelledGainDb(clip.wavPath, clip.gainDb) : clip.gainDb;
+    const gain = annotatedGainDb(clip.wavPath, clip.gainDb);
     return {
       clip, clipMs, leadinMs, holdMs, voiceId,
-      uri: voiceUri(clip.wavPath, gain, voiceId, null, false, undefined, continuation),
+      uri: voiceUri(clip.wavPath, gain, voiceId, null, { noLeadin: continuation }),
       leadinUri: voiceUri(clip.wavPath, gain, voiceId),
     };
   });
@@ -504,6 +502,20 @@ async function waitForJingleClear() {
   if (waitMs > 0) await sleep(waitMs);
 }
 
+// The gain a voice clip's liq_amplify carries: the caller's, plus this take's
+// levelling trim only while the operator has levelling enabled. Every voice
+// handoff (airVoice, airVoiceExchange) takes its gain from here, so the
+// levelling decision is made once.
+function annotatedGainDb(wavPath: string, gainDb: number): number {
+  return voiceLevellingEnabled() ? levelledGainDb(wavPath, gainDb) : gainDb;
+}
+
+interface VoiceUriFlags {
+  jingleOverlay?: boolean;
+  jingleOverlayTrackAt?: number;
+  noLeadin?: boolean;
+}
+
 // Annotate every voice clip with liq_amplify for gain and subwave_voice for marker matching.
 // Leave the separate silent lead-in unannotated so it cannot produce the clip's air marker.
 // subwave_no_leadin tells the mixer to skip that lead-in: the clip queues behind another
@@ -513,9 +525,7 @@ export function voiceUri(
   gainDb: number,
   voiceId: string,
   pauseDeliveryId: string | null = null,
-  jingleOverlay = false,
-  jingleOverlayTrackAt?: number,
-  noLeadin = false,
+  { jingleOverlay = false, jingleOverlayTrackAt, noLeadin = false }: VoiceUriFlags = {},
 ): string {
   const meta = [`subwave_voice="${voiceId}"`];
   if (noLeadin) meta.push('subwave_no_leadin="true"');
