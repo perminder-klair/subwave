@@ -1462,13 +1462,15 @@ SITE_URL=
 # Building from source instead of pulling? \`docker compose build analyzer\` with
 # ANALYZER_HEAVY=1 bakes the stack (or pass WITH_CLAP=1 / WITH_DEMUCS=1 directly).
 #
-# Vocal-gate tuning (#1125). The Demucs vocal stem is thresholded against BOTH
-# its own loud level AND a fraction of the FULL-MIX loud level — the mix floor
-# stops separation bleed on instrumentals from reading as vocals. Raise the
-# floor if instrumentals still slip through (over-compressed masters leak more);
+# Vocal-gate tuning (#1125, #2237). The Demucs vocal stem is thresholded against
+# BOTH its own loud level AND a fraction of the FULL-MIX loud level — the mix
+# floor stops separation bleed on instrumentals from reading as vocals. Each
+# window has its own floor: the opening's was raised on real audio (#2237), the
+# ending's is unchanged. Raise a floor if instrumentals still slip through;
 # lower it if quiet vocals get dropped. Defaults shown.
-# VOCAL_MIX_FLOOR=0.06     # vocal stem must reach >=6% of the full-mix loud level
-# VOCAL_STEM_REL=0.15      # ...OR >=15% of the vocal stem's own loud level
+# VOCAL_HEAD_MIX_FLOOR=0.15  # opening: stem must reach >=15% of the mix's loud level
+# VOCAL_MIX_FLOOR=0.06       # ending: >=6%. Set alone, it sets the opening too
+# VOCAL_STEM_REL=0.15        # ...OR >=15% of the vocal stem's own loud level
 #
 # Optional model overrides (sensible defaults shown):
 # CLAP_MODEL=laion-clap
