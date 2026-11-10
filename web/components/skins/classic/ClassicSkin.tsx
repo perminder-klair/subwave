@@ -15,6 +15,7 @@ import TransportBar from './TransportBar';
 import TuneInOverlay from './TuneInOverlay';
 import DotRail from './DotRail';
 import CoverAmbient from './CoverAmbient';
+import CoverZoom from './CoverZoom';
 import AmbientLyrics from './AmbientLyrics';
 import CommandPalette, { type PlayerDrawer } from './CommandPalette';
 import ShortcutsDialog from './ShortcutsDialog';
@@ -74,6 +75,15 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   const [requesterName, setRequesterName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [drawer, setDrawer] = useState<PlayerDrawer | null>(null);
+  // The enlarged cover (CoverZoom): the thumbnail it grows out of while open.
+  const [zoomFrom, setZoomFrom] = useState<HTMLElement | null>(null);
+  const openCover = useCallback((thumbnail: HTMLElement) => setZoomFrom(thumbnail), []);
+  const closeCover = useCallback(() => setZoomFrom(null), []);
+  // Nothing left to show (off air, no art) or a drawer opening over it: it
+  // simply goes.
+  useEffect(() => {
+    if (!coverSrc || offline || drawer != null) setZoomFrom(null);
+  }, [coverSrc, offline, drawer]);
 
   // Stable handlers + counts for the memoized layout components, so a feed
   // update that doesn't touch them costs no re-render.
@@ -216,6 +226,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         lyrics={stageLyrics}
         onOpenBooth={openBooth}
         onOpenTimeline={openTimeline}
+        onOpenCover={openCover}
       />
 
       {showLyrics && (
@@ -274,6 +285,17 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         )}
         {drawer === 'schedule' && <ScheduleDrawer activeShow={activeShow} context={context} />}
       </Sheet>
+
+      {zoomFrom && coverSrc && !offline && (
+        <CoverZoom
+          src={coverSrc}
+          title={nowPlaying?.title}
+          artist={nowPlaying?.artist}
+          album={nowPlaying?.album}
+          origin={zoomFrom}
+          onClosed={closeCover}
+        />
+      )}
 
       <AnimatePresence>
         {showOverlay && !offline && (

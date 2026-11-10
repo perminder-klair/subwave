@@ -16,6 +16,7 @@ import { useStationClient } from '@/lib/stationClient';
 import type { TrackLyrics } from '@/components/skins/lyrics';
 import LyricsSettings, { usePopoverDismiss } from '@/components/skins/LyricsSettings';
 import type { NowPlayingTrack, QueueEntry, SessionTurn } from '@/lib/types';
+import { coverPressAction } from './coverZoom';
 
 /** Seconds before the end of the track that the "up next" tease fades in. The
  *  queue head is known long before this; the window is pacing, not data. */
@@ -133,9 +134,12 @@ export interface CenterStageProps {
   lyrics?: StageLyrics | null;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
+  /** Enlarge the cover (ClassicSkin's CoverZoom); handed the thumbnail it
+   *  grows out of. Only called while there is a cover to show. */
+  onOpenCover?: (thumbnail: HTMLElement) => void;
 }
 
-export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, lyricsShown = false, lyrics = null, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, lyricsShown = false, lyrics = null, onOpenBooth, onOpenTimeline, onOpenCover }: CenterStageProps) {
   const client = useStationClient();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
@@ -259,16 +263,23 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
         <button
           ref={coverRef}
           type="button"
-          onClick={onOpenTimeline}
-          aria-label="Open the timeline"
+          onClick={() => {
+            // With art, the cover enlarges; without (none yet, off air) the
+            // press opens the timeline as it always did.
+            if (onOpenCover && coverPressAction(showArt) === 'zoom' && coverRef.current) onOpenCover(coverRef.current);
+            else onOpenTimeline();
+          }}
+          aria-label={onOpenCover && showArt ? 'Enlarge the cover' : 'Open the timeline'}
+          aria-haspopup={onOpenCover && showArt ? 'dialog' : undefined}
           className={cn(
             // Sized to width but capped by viewport height (20vh) so a
             // short/wide window doesn't spend a third of its height on the
             // cover. The 96px floor is what phones get: 14vw is only ~55px on a
-            // 390px screen, too small a target for the tap-to-timeline.
+            // 390px screen, too small a target for the tap to enlarge it.
             'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),240px)] w-[clamp(96px,min(14vw,20vh),240px)] shrink-0 appearance-none border-0 bg-transparent p-0',
             lyricsShown && 'lg:h-[min(200px,24vh)] lg:w-[min(200px,24vh)] [@media(max-width:639px)_and_(min-height:700px)]:size-16',
             rippleActive && 'v3-cover-live',
+            showArt && onOpenCover && 'cursor-zoom-in',
           )}
         >
           <Ripple
