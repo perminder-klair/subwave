@@ -35,8 +35,10 @@ await db.open({ embeddingDim: 8, adoptStoredDim: true });
 const sql = { prepare: (q: string) => db.requireDb().prepare(q), exec: (q: string) => db.requireDb().exec(q) };
 
 type Row = { facet: string; status: string; version: number; reason: string | null; attempts: number; source: string | null };
+// The analysis facets only: the year facet (MusicBrainz) has its own suite,
+// scripts/original-year-facet.test.ts.
 const rows = (id: string): Record<string, Row> => Object.fromEntries(
-  (sql.prepare('SELECT facet, status, version, reason, attempts, source FROM track_facet_status WHERE track_id = ?')
+  (sql.prepare('SELECT facet, status, version, reason, attempts, source FROM track_facet_status WHERE track_id = ? AND facet <> \'year\'')
     .all(id) as Row[]).map((r) => [r.facet, r]),
 );
 const brief = (id: string) => Object.fromEntries(
@@ -86,15 +88,15 @@ await test('the table is created outside the user_version chain', () => {
 });
 
 await test('a fully analysed track seeds ok on every facet', () => {
-  const r = db.requireDb().prepare('SELECT facet, status, source FROM track_facet_status WHERE track_id = ?').all('full') as Row[];
-  // Every facet a head analysis produces; the whole-file edges are their own pass.
-  assert.equal(r.length, db.FACETS.length - 1);
+  const r = db.requireDb().prepare('SELECT facet, status, source FROM track_facet_status WHERE track_id = ? AND facet <> \'year\'').all('full') as Row[];
+  // Every facet a head analysis produces; the whole-file edges are their own pass, and year is no analysis.
+  assert.equal(r.length, db.FACETS.length - 2);
   assert.ok(r.every((x) => x.status === 'ok' && x.source === 'seed'), JSON.stringify(r));
 });
 
 await test('a capped track seeds its tail as unmeasurable — the rows a tail bump will re-target', () => {
   const r = Object.fromEntries((db.requireDb().prepare(
-    'SELECT facet, status, reason FROM track_facet_status WHERE track_id = ?').all('capped') as Row[])
+    'SELECT facet, status, reason FROM track_facet_status WHERE track_id = ? AND facet <> \'year\'').all('capped') as Row[])
     .map((x) => [x.facet, `${x.status}${x.reason ? ':' + x.reason : ''}`]));
   assert.deepEqual(r, { head: 'ok', loudness: 'ok', tail: 'unmeasurable:tail-not-measured' });
 });
@@ -117,8 +119,8 @@ await test('an older analysis_version and an un-analysed track have no head row'
 
 await test('a failed track carries its attempts on every facet', () => {
   const r = db.requireDb().prepare(
-    'SELECT facet, status, attempts, reason FROM track_facet_status WHERE track_id = ?').all('failed') as Row[];
-  assert.equal(r.length, db.FACETS.length);
+    'SELECT facet, status, attempts, reason FROM track_facet_status WHERE track_id = ? AND facet <> \'year\'').all('failed') as Row[];
+  assert.equal(r.length, db.FACETS.length - 1);
   assert.ok(r.every((x) => x.status === 'failed' && x.attempts === 2 && x.reason === 'decode failed'));
 });
 
@@ -366,6 +368,9 @@ await test('terminal facet answers follow id adoption and are removed by analysi
   db.writeFacetResults('terminal-old', { source: 'capped', tail: { unmeasurable: 'capped-download' } });
   db.moveFacetRows('terminal-old', 'terminal-new');
   db.syncTrackFacets('terminal-new');
+  // Adoption deletes the old track; here it stays, so it re-derives the year
+  // row every track carries.
+  db.syncTrackFacets('terminal-old');
   assert.equal(rows('terminal-new').tail.reason, 'capped-download');
   assert.equal(rows('terminal-new').head, undefined);
   db.clearAnalysis();

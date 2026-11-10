@@ -9,6 +9,7 @@ import * as subsonic from '../../music/subsonic.js';
 import * as lastfm from '../../music/lastfm.js';
 import { listAfterArtistLookup } from '../../music/lastfm-tag-policy.js';
 import * as musicbrainz from '../../music/musicbrainz.js';
+import { lookupOriginalYearAnySource } from '../../music/original-year.js';
 import * as settings from '../../settings.js';
 import * as embeddings from '../../music/embeddings.js';
 import { resolveEraYear } from '../../music/show-filter.js';
@@ -322,13 +323,14 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       try {
         const t = db.getTrack(id);
         if (t && musicbrainz.needsOriginalYearLookup(t, true)) {
-          const year = await musicbrainz.lookupOriginalYear({
+          const outcome = await lookupOriginalYearAnySource({
             title: song.title,
             artist: song.artist,
             mbid: song.musicBrainzId || null,
             year: Number(song.year) || null,
           });
-          db.setOriginalYear(id, year);
+          db.recordOriginalYearOutcome(id, outcome);
+          if (outcome.kind === 'error') queue.log('warn', `/library/retag enrich(originalYear) ${id}: ${outcome.reason}`);
         }
       } catch (err) {
         queue.log('warn', `/library/retag enrich(originalYear) ${id}: ${err.message}`);
