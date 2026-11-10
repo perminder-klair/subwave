@@ -539,7 +539,12 @@ export function restampFacetRows(id: string, at: string): void {
 
 // Mirror of clearAnalysis(): drop what it clears, plus every failure. The
 // whole-file facets survive it like their columns do: a loudness row measured
-// over the whole file (v2) and every edges row.
+// over the whole file (v2) and every edges row. Under keepVocal a measured tail
+// survives with the vocal rows, because its columns do (#2255), and a head-only
+// vocal row still describes an outro without tail vocal ranges, so it stays due.
+// An unmeasured tail's row goes: only the analysis it explained is cleared.
+// Without keepVocal a placed tail (v2) survives too, its columns kept by
+// clearAnalysis; an end-of-file one goes with its columns.
 export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean } = {}): void {
   const facets: Facet[] = ['head', 'clap'];
   if (!opts.keepVocal) facets.push('vocal');
@@ -549,25 +554,22 @@ export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean
     `DELETE FROM track_facet_status
       WHERE facet IN (${facets.map(() => '?').join(',')})`,
   ).run(...facets);
+  if (opts.keepVocal) {
+    d.prepare(`DELETE FROM track_facet_status WHERE facet = 'tail' AND status <> 'ok'`).run();
+  } else {
+    // Without keepVocal the tail columns go, except a placed tail's
+    // (tail_version >= 2), which clearAnalysis keeps like whole-file loudness.
+    d.prepare(
+      `DELETE FROM track_facet_status
+        WHERE facet = 'tail' AND track_id NOT IN (SELECT id FROM tracks WHERE tail_version >= 2)`,
+    ).run();
+  }
   d.prepare(
     `DELETE FROM track_facet_status
       WHERE facet = 'loudness' AND track_id NOT IN
         (SELECT id FROM tracks WHERE ${SQL_WHOLE_FILE_LOUDNESS})`,
   ).run();
-  // A placed tail is kept by clearAnalysis, like whole-file loudness.
-  d.prepare(
-    `DELETE FROM track_facet_status
-      WHERE facet = 'tail' AND track_id NOT IN (SELECT id FROM tracks WHERE tail_version >= 2)`,
-  ).run();
   clearFacetFailures();
-  // A kept vocal row was "head-only" because the outro lacked tail vocals; the
-  // outro is gone now, so the same rule (deriveFacetRows) no longer holds it due.
-  if (opts.keepVocal) {
-    d.prepare(
-      `UPDATE track_facet_status SET version = ?, reason = NULL
-        WHERE facet = 'vocal' AND reason = 'head-only'`,
-    ).run(FACET_VERSIONS.vocal);
-  }
 }
 
 // Mirror of clearAnalysisFailures(), called after it cleared the columns: a

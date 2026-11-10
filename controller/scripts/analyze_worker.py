@@ -3526,8 +3526,22 @@ def _failed(e):
     return {"status": "failed", "reason": str(e)[:500]}
 
 
+STEM_WINDOWS = ("head", "tail")
+
+
+def parse_stems_windows(raw):
+    """The windows a `stems` facet request asks to separate (`stems_windows`):
+    a non-empty list drawn from head and tail. Anything else, absent included,
+    is None, which separates both windows as before. Lenient on purpose: a
+    malformed value costs the old behaviour (a head separation the cache may
+    not need), never a refused request."""
+    if not isinstance(raw, list) or not raw or not all(w in STEM_WINDOWS for w in raw):
+        return None
+    return [w for w in STEM_WINDOWS if w in raw]
+
+
 def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False,
-                   whole_input=None, tail_window=None):
+                   whole_input=None, tail_window=None, stems_windows=None):
     """Compute exactly `facets` from an opened source. Each facet answers on
     its own: ok + data, unmeasurable + reason (this file can't give it at this
     version), unavailable + reason (this engine can't: no CLAP / no Demucs), or
@@ -3556,7 +3570,15 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
     edges) places the tail window, and the Demucs tail with it, so it ends at
     the music instead of the file; edges measured in this same request place
     it too. A placed tail answers `tail_window: "edges"` and takes its
-    trailing-silence fields from the edges."""
+    trailing-silence fields from the edges.
+
+    `stems_windows` (parse_stems_windows; None = both) names the windows the
+    `stems` facet separates. Pick-time stems asks for the tail alone when the
+    head is already cached (#2253), which saves a Demucs pass over the head.
+    The `vocal` facet still needs the head, so asked for with it the head is
+    separated (its stems written only when asked for). A tail-only answer is
+    ok once the tail stems are written, and carries no `stems_cached` (that
+    key is the head's)."""
     out = {}
     wanted = set(facets)
     whole_wanted = [f for f in WHOLE_FILE_FACETS if f in wanted and (f != "loudness" or whole_input)]
@@ -3621,14 +3643,20 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
             share_ok = stems_dir_to_write(stem_target, stems_require_marker) is not None
             if not share_ok:
                 stem_target = None
+            windows = STEM_WINDOWS if stems_windows is None else stems_windows
+            skip_head_stems = "head" not in windows
             cache_errors = []
-            vocal_ranges, stems_cached = demucs_head(
-                detector, load, librosa, stem_target, stems_require_marker, cache_errors=cache_errors
-            )
+            stems_cached = None
+            if "vocal" in wanted or not skip_head_stems:
+                vocal_ranges, stems_cached = demucs_head(
+                    detector, load, librosa, None if skip_head_stems else stem_target,
+                    stems_require_marker, cache_errors=cache_errors,
+                )
             tail_vocals = False
-            if outro is not None and "startMs" in outro:
+            if outro is not None and "startMs" in outro and ("tail" in windows or "vocal" in wanted):
                 tail_vocals = demucs_tail(
-                    detector, tail_load, librosa, tail_dur, outro, stem_target, stems_require_marker,
+                    detector, tail_load, librosa, tail_dur, outro,
+                    stem_target if "tail" in windows else None, stems_require_marker,
                     cache_errors=cache_errors, window=tail_span,
                 )
             if stem_target and stems_dir_to_write(stem_target, stems_require_marker) is None:
@@ -3650,6 +3678,14 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                     )
                 elif cache_errors:
                     out["stems"] = _failed(cache_errors[0])
+                elif skip_head_stems:
+                    # Tail alone: ok only once its stems are on the share.
+                    if outro is None or "startMs" not in outro:
+                        out["stems"] = _unmeasurable(tail_reason or "tail-not-measured")
+                    elif not tail_vocals:
+                        out["stems"] = _failed("tail separation failed (see analyzer log)")
+                    else:
+                        out["stems"] = _ok({"tail_stems": True})
                 elif stems_cached is None:
                     out["stems"] = _failed("separation failed (see analyzer log)")
                 else:
@@ -3741,6 +3777,7 @@ def analyze_facet_request(librosa, req):
             stems_require_marker=req.get("stems_require_marker") is True,
             whole_input=whole_input,
             tail_window=req.get("tail_window"),
+            stems_windows=parse_stems_windows(req.get("stems_windows")),
         )
         return {"facets": result, "source": source.describe()}
     finally:

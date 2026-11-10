@@ -10,7 +10,8 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
-import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { warnLimiter } from '../util/warn-limiter.js';
+import { describeFetchError, fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
 import { parseWholeLoudnessCurve, type WholeLoudnessCurve } from './whole-loudness-curve.js';
 
@@ -566,6 +567,9 @@ let _sidecarFacetsCapable: boolean | null = null;
 let _sidecarWholeFileCapable: boolean | null = null;
 let _sidecarLoudnessCurveCapable: boolean | null = null;
 let _sidecarWholeFileConcurrency: number | null = null;
+// The sidecar's analysis pool size (ANALYZE_CONCURRENCY); null on a sidecar
+// that predates the field.
+let _sidecarConcurrency: number | null = null;
 // The CLAP TEXT tower (embed-text).
 let _sidecarTextCapable: boolean | null = null;
 // Why a capability is false, when the cause is a failed model load rather than
@@ -579,7 +583,7 @@ let _sidecarBase = '';
 
 async function probeSidecar(url: string): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000 });
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000, retryStaleSocket: true });
     if (!res.ok) return false;
     const body = (await res.json()) as {
       ok?: boolean;
@@ -592,6 +596,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_whole_file_capable?: boolean | null;
       analyze_loudness_curve_capable?: boolean | null;
       analyze_whole_file_concurrency?: number | null;
+      analyze_concurrency?: number | null;
       analyze_audio_error?: string | null;
       analyze_vocal_error?: string | null;
     };
@@ -606,6 +611,8 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarLoudnessCurveCapable = typeof body.analyze_loudness_curve_capable === 'boolean' ? body.analyze_loudness_curve_capable : null;
       _sidecarWholeFileConcurrency = Number.isInteger(body.analyze_whole_file_concurrency) && (body.analyze_whole_file_concurrency as number) > 0
         ? (body.analyze_whole_file_concurrency as number) : null;
+      _sidecarConcurrency = Number.isInteger(body.analyze_concurrency) && (body.analyze_concurrency as number) > 0
+        ? (body.analyze_concurrency as number) : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
       _sidecarAudioError = typeof body.analyze_audio_error === 'string' ? body.analyze_audio_error : null;
       _sidecarVocalError = typeof body.analyze_vocal_error === 'string' ? body.analyze_vocal_error : null;
@@ -665,6 +672,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
       ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs)
       : config.analyzer.requestTimeoutMs,
     bodyDeadline: true,
+    retryStaleSocket: true,
   });
   if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
@@ -787,6 +795,12 @@ export function wholeFileConcurrency(): number | null {
   return _backend === 'sidecar' ? _sidecarWholeFileConcurrency : null;
 }
 
+// How many analysis workers the sidecar's pool holds (its ANALYZE_CONCURRENCY).
+// null = not advertised (local backend, or a sidecar that predates the field).
+export function sidecarConcurrency(): number | null {
+  return _backend === 'sidecar' ? _sidecarConcurrency : null;
+}
+
 export function tailVocalAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarTailVocalCapable;
   if (_backend === 'local') return _localTailVocalCapable;
@@ -861,6 +875,21 @@ export function isTimeoutError(err: unknown): boolean {
   return name === 'AbortError' || (typeof message === 'string' && message.includes('timed out'));
 }
 
+// An analyzer outage fails every embed call, and a tagger run makes hundreds:
+// name the cause at most once per EMBED_WARN_EVERY_MS, then say how many more
+// failed in between, so the log shows the outage without one line per track.
+export const EMBED_WARN_EVERY_MS = 60_000;
+const embedWarnings = warnLimiter(EMBED_WARN_EVERY_MS);
+
+export function warnEmbedFailure(cause: string, now: number = Date.now()): boolean {
+  return embedWarnings.warn(`[analyzer] text embedding failed: ${cause}`, now);
+}
+
+/** Test hook: forget the last warning. */
+export function _resetEmbedWarningsForTests(): void {
+  embedWarnings.reset();
+}
+
 // Embed texts through the CLAP text tower — 512-d L2-normalised vectors in the
 // same space as stored track audio vectors, so cosine against them is
 // meaningful. Returns null whenever the capability is absent; callers degrade,
@@ -888,6 +917,7 @@ export async function embedTexts(
         body: JSON.stringify({ texts }),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
         ...(signal ? { signal } : {}),
       });
       // 404 = pre-text-tower sidecar, 500 = lean build; both mean "no text
@@ -900,14 +930,20 @@ export async function embedTexts(
     if (signal?.aborted) return null;
     return await localEmbedTexts(texts, timeoutMs, signal);
   };
+  // A failure still degrades to null, but names its cause once: a caller's
+  // "text embedding failed" warning cannot see it.
+  const failed = (err: unknown): null => {
+    if (!signal?.aborted) warnEmbedFailure(describeFetchError(err));
+    return null;
+  };
   try {
     return await attempt();
   } catch (err) {
-    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return null;
+    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return failed(err);
     try {
       return await attempt();
-    } catch {
-      return null;
+    } catch (retryErr) {
+      return failed(retryErr);
     }
   }
 }
@@ -964,6 +1000,7 @@ export async function renderTransition(
         body: JSON.stringify(payload),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
       });
       if (!res.ok) return null; // 404 = pre-render sidecar — silently no blend
       const body = (await res.json()) as WorkerMessage & { ok?: boolean };
@@ -1215,6 +1252,8 @@ export function tailWindowFor(t: { edgeTailMs?: number | null; decodedDurationMs
   return endMs > 0 && endMs <= dur ? { endMs, durationMs: Math.round(dur) } : null;
 }
 
+export type StemWindow = 'head' | 'tail';
+
 export interface FacetRequestOpts {
   facets: FacetName[];
   // Tail facet: place the window from the stored edges.
@@ -1222,6 +1261,10 @@ export interface FacetRequestOpts {
   // Tail facet also carries the outro's vocal ranges (Demucs on the tail only).
   tailVocals?: boolean;
   stems_dir?: string;
+  // Which windows the stems facet separates; omitted = both. Only sent with a
+  // stems_dir. A worker that predates it separates both (pick-stems-policy.ts
+  // stemsWindowsFor).
+  stems_windows?: StemWindow[];
   complete?: boolean;
   // The request's deadline. Omitted, the pass's ANALYZE_REQUEST_TIMEOUT_MS. A
   // pick-time separation passes its own longer one (pick-stems-policy.ts).
@@ -1290,6 +1333,7 @@ async function facetRequest(
       body: JSON.stringify(body),
       timeoutMs,
       bodyDeadline: true,
+      retryStaleSocket: true,
     });
     if (!res.ok) return sidecarFailure(res);
     msg = (await res.json()) as WorkerMessage;
@@ -1316,7 +1360,13 @@ export async function analyzeFacets(
   if (opts.tailWindow && usesTailWindow(opts.facets)) {
     body.tail_window = { end_ms: opts.tailWindow.endMs, duration_ms: opts.tailWindow.durationMs };
   }
-  const stems = opts.stems_dir ? { stems_dir: opts.stems_dir, stems_require_marker: true } : {};
+  const stems = opts.stems_dir
+    ? {
+        stems_dir: opts.stems_dir,
+        stems_require_marker: true,
+        ...(opts.stems_windows?.length ? { stems_windows: opts.stems_windows } : {}),
+      }
+    : {};
   const url = subsonic.getRawStreamUrl(songId);
   const timeoutMs = opts.timeoutMs; // undefined: facetRequest's default
   if (!localPath) return facetRequest({ url, ...body, ...stems }, timeoutMs);

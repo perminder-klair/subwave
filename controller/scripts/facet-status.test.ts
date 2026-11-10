@@ -287,9 +287,15 @@ await test('clearing failures puts the track back in scope', () => {
 await test('re-analyze (clearAnalysis) mirrors exactly what it clears', () => {
   db.clearAnalysis({ keepVocal: true, clearStems: false });
   const b = brief('full');
-  assert.deepEqual(b, { vocal: 'ok', stems: 'ok' });
-  // The head-only vocal row's outro is gone, so it is no longer due.
-  assert.ok(!db.facetNeedsIds('vocal').includes('headonly'));
+  // Kept vocal keeps the tail too: outro_json holds the tail's vocal ranges (#2255).
+  assert.deepEqual(b, { tail: 'ok', vocal: 'ok', stems: 'ok' });
+  assert.deepEqual(db.getTrack('full')?.tailVocalRanges, [], 'the instrumental tail is still measured');
+  // The head-only row's outro is still there without tail vocals, so it stays due.
+  const headOnly = rows('headonly').vocal;
+  assert.equal(headOnly?.reason, 'head-only');
+  assert.equal(headOnly?.version, db.FACET_VERSIONS.vocal - 1);
+  assert.ok(db.facetNeedsIds('vocal').includes('headonly'));
+  assert.ok(db.needsVocalIds(undefined, true).includes('headonly'));
   assertConsistent();
   db.clearAnalysis();
   assert.deepEqual(brief('full'), { stems: 'ok' });

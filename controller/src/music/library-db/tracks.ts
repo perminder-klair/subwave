@@ -599,7 +599,9 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
         tagger_version = ?,
         prompt_hash    = ?,
         model          = ?,
-        tagged_at      = ?
+        tagged_at      = ?,
+        untaggable_key = NULL,
+        tagged_measured = ?
       WHERE id = ?`,
     )
     .run(
@@ -611,13 +613,22 @@ export function upsertTrackTags(id: string, tags: TagWrite): void {
       tags.promptHash ?? null,
       tags.model ?? null,
       new Date().toISOString(),
+      tags.taggedMeasured == null ? null : Number(tags.taggedMeasured),
       id,
     );
 }
 
 // Back to the untagged pool. NULL every tag column rather than writing
-// moods='[]', so source/tagged_at don't go stale on an untagged row.
+// moods='[]', so source/tagged_at don't go stale on an untagged row. The
+// untaggable marker goes too: an operator's clear asks for a fresh answer.
 export function clearTrackTags(id: string): void {
+  markTrackUntaggable(id, null);
+}
+
+// The LLM had no mood for this track (#2283). The row stays untagged, like
+// clearTrackTags, and `key` records what was asked (music/tag-library/tag-input.ts)
+// so the next run does not ask the same thing again. null clears it.
+export function markTrackUntaggable(id: string, key: string | null): void {
   requireDb()
     .prepare(
       `UPDATE tracks SET
@@ -628,10 +639,12 @@ export function clearTrackTags(id: string): void {
         tagger_version = NULL,
         prompt_hash    = NULL,
         model          = NULL,
-        tagged_at      = NULL
+        tagged_at      = NULL,
+        untaggable_key = ?,
+        tagged_measured = NULL
       WHERE id = ?`,
     )
-    .run(id);
+    .run(key, id);
 }
 
 interface TrackAnalysisWrite {
@@ -1084,12 +1097,25 @@ export function analysisFailures(limit = 200): AnalysisFailureRow[] {
 }
 
 // Drop the acoustic analysis so a --re-analyze can recompute it. `keepVocal`
-// preserves vocal_ranges_json when the slow Demucs pass won't be rerun.
+// preserves vocal_ranges_json when the slow Demucs pass won't be rerun, and the
+// tail measurement with it: outro_json carries the tail window's vocalRanges,
+// the other half of the instrumental verdict (lyric-vocal.isInstrumental), so
+// clearing it flipped every instrumental-head, sung-tail row to instrumental
+// until a vocal-on pass measured it again (#2255). The pass overwrites the tail
+// through upsertTrackAnalysis's COALESCE, carrying these ranges forward
+// (preserveTailVocal); a row it hasn't reached keeps its old outro. The two tail
+// columns ride the outro decode and share its rule.
 // `clearStems` is the mirror: only a pass that will rewrite stems may reset the
 // stamps, or the whole library re-separates when the cache is next enabled.
 export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean } = {}): void {
   const d = requireDb();
   const vocalCol = opts.keepVocal ? '' : ' vocal_ranges_json = NULL,';
+  // keepVocal keeps the tail with the vocal evidence it carries (#2255). A tail
+  // placed from the edges (tail_version >= 2) is kept either way, like
+  // whole-file loudness: a flat analysis can only re-measure the end-of-file
+  // window.
+  const keepPlacedTail = (col: string) => ` ${col} = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN ${col} END,`;
+  const tailCols = opts.keepVocal ? '' : ['outro_json', 'tail_silence_ms', 'tail_start_ms'].map(keepPlacedTail).join('');
   const stemsCol = opts.clearStems ? ' stems_at = NULL,' : '';
   d.transaction(() => {
   d.prepare(
@@ -1102,13 +1128,7 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
       ${KEEP_WHOLE_FILE_EXTRAS},
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
       key_ranges_json = NULL,
-      -- A tail placed from the edges (tail_version >= 2) is kept like
-      -- whole-file loudness: a flat analysis can only re-measure the
-      -- end-of-file window.
-      outro_json = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN outro_json END,
-      tail_silence_ms = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN tail_silence_ms END,
-      tail_start_ms = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN tail_start_ms END,
-      lead_silence_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
+      lead_silence_ms = NULL,${tailCols}${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
       audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
       -- The failure history goes with the analysis it describes, or the tracks

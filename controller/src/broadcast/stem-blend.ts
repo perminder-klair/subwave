@@ -88,6 +88,7 @@ export async function maybeRenderBlend(
     separating: separationInFlight(),
     backend: analyzer.backendLabel(),
     concurrency: config.analyzer.concurrency,
+    sidecarConcurrency: analyzer.sidecarConcurrency(),
   })) return null;
 
   // The render must lose the race to the drain's hard fallback, so it gets the

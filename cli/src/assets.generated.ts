@@ -144,8 +144,9 @@ services:
       # Enables the production-only admin gate (refuses to boot without
       # ADMIN_USER + ADMIN_PASS).
       - NODE_ENV=production
-      # Schedule slots are day-of-week + hour via date.getHours(); without TZ
-      # the container runs UTC and fires shows an hour early during BST.
+      # Schedule slots follow the station timezone (Settings, \`timezone\`);
+      # left on Auto they follow this TZ, and without it the container runs
+      # UTC and fires shows an hour early during BST.
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
@@ -1574,4 +1575,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `1.29.0`; // x-release-please-version
+export const CLI_VERSION = `1.31.0`; // x-release-please-version

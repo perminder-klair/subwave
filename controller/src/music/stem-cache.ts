@@ -335,7 +335,21 @@ export interface UsageSnapshot {
   pending?: { pid: number; since: string };
   // The cache changed outside the pass and the sweep: these are last-known totals.
   stale?: boolean;
+  // Bytes in `bytes` the last over-budget sweep could not delete (folders this
+  // user cannot open, sweep()). Only that sweep measures them; every writer
+  // that keeps the totals keeps this with them, and a full walk, which does not
+  // probe, drops it. Absent = none known. pick-stems-policy.ts budgetVeto
+  // judges the rest, because the sweep leaves these out of its own budget check.
+  // Set only through buildSnapshot, and read only through unevictableOf.
+  unevictableBytes?: number;
 }
+
+// What writeSnapshot accepts: a snapshot buildSnapshot made. The brand exists
+// only in the type, so a writer that assembles the totals field by field, or
+// spreads a snapshot it read, does not compile until it goes through
+// buildSnapshot and says what becomes of the stuck bytes (#2253).
+declare const BUILT: unique symbol;
+type BuiltSnapshot = UsageSnapshot & { readonly [BUILT]: true };
 
 export type SnapshotVerdict = 'use' | 'walk' | 'pass-running';
 
@@ -367,6 +381,32 @@ function snapshotPath(): string {
   return path.join(config.stateDir, 'stem-cache-usage.json');
 }
 
+// The one cleaning of the unevictable figure: a finite positive number, never
+// above the total those bytes are part of, else 0 (none known). The file is
+// hand-editable state, so a reader trusts nothing in it.
+function cleanUnevictable(u: unknown, bytes: number): number {
+  if (typeof u !== 'number' || !Number.isFinite(u) || u <= 0) return 0;
+  return Math.min(u, Number.isFinite(bytes) ? Math.max(0, bytes) : 0);
+}
+
+// The snapshot's unevictable figure, cleaned: 0 when it has none a reader can use.
+function unevictableOf(snap: UsageSnapshot): number {
+  return cleanUnevictable(snap.unevictableBytes, snap.bytes);
+}
+
+// The one constructor of a snapshot to write. `unevictableBytes` is required:
+// a writer that keeps the totals passes `unevictableOf(snap)` on, a walk passes
+// 0, and the sweep passes what it measured. Whatever `fields` carries for it is
+// replaced, and the figure is cleaned against the new `bytes`, so a total that
+// shrank never leaves more stuck bytes than it holds.
+function buildSnapshot(fields: UsageSnapshot, unevictableBytes: number): BuiltSnapshot {
+  const out: UsageSnapshot = { ...fields };
+  delete out.unevictableBytes;
+  const stuck = cleanUnevictable(unevictableBytes, out.bytes);
+  if (stuck > 0) out.unevictableBytes = stuck;
+  return out as BuiltSnapshot;
+}
+
 async function readSnapshot(): Promise<UsageSnapshot | null> {
   try {
     return JSON.parse(await readFile(snapshotPath(), 'utf8')) as UsageSnapshot;
@@ -375,7 +415,7 @@ async function readSnapshot(): Promise<UsageSnapshot | null> {
   }
 }
 
-async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
+async function writeSnapshot(snap: BuiltSnapshot): Promise<boolean> {
   try {
     await writeFileAtomic(snapshotPath(), JSON.stringify(snap) + '\n');
     snapshotUntrusted = false;
@@ -397,7 +437,7 @@ async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
 export async function markUsageStale(): Promise<void> {
   const snap = await readSnapshot();
   if (!snap) return;
-  const marked = await writeSnapshot({ ...snap, stale: true, updatedAt: new Date().toISOString() });
+  const marked = await writeSnapshot(buildSnapshot({ ...snap, stale: true, updatedAt: new Date().toISOString() }, unevictableOf(snap)));
   if (!marked) await rm(snapshotPath(), { force: true }).catch(() => {});
 }
 
@@ -424,9 +464,11 @@ async function snapshotState(): Promise<{ snap: UsageSnapshot | null; verdict: S
   return { snap, verdict: snapshotUntrusted && verdict === 'use' ? 'walk' : verdict };
 }
 
-function snapshotFromWalk(bytes: number, dirs: number): UsageSnapshot {
+// A walk does not probe for stuck folders, so a plain walk passes 0; only the
+// over-budget sweep, which probed, passes what it found.
+function snapshotFromWalk(bytes: number, dirs: number, unevictableBytes: number): BuiltSnapshot {
   const now = new Date().toISOString();
-  return { version: 1, root: stemsRoot(), bytes, dirs, measuredAt: now, updatedAt: now };
+  return buildSnapshot({ version: 1, root: stemsRoot(), bytes, dirs, measuredAt: now, updatedAt: now }, unevictableBytes);
 }
 
 async function walkUsage(): Promise<{ bytes: number; dirs: number }> {
@@ -438,7 +480,7 @@ async function walkUsage(): Promise<{ bytes: number; dirs: number }> {
   // into that baseline, including when the pass starts during this walk.
   if (before.verdict !== 'pass-running' && after.verdict !== 'pass-running'
     && JSON.stringify(before.snap) === JSON.stringify(after.snap)) {
-    await writeSnapshot(snapshotFromWalk(bytes, scanned.length));
+    await writeSnapshot(snapshotFromWalk(bytes, scanned.length, 0));
   }
   return { bytes, dirs: scanned.length };
 }
@@ -447,10 +489,16 @@ async function walkUsage(): Promise<{ bytes: number; dirs: number }> {
 // rather than the singles below, or they pay (and can race) a walk per figure.
 // Served from the snapshot when it can be trusted (see above); a running
 // pass's snapshot is not, since dirs are being added under it.
-export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBytes: number }> {
+// `unevictableBytes` is the part of `bytes` the last over-budget sweep could
+// not delete; 0 after a walk, which does not probe. `bytes` still counts it,
+// so the pass's headroom and the reported overage are unchanged.
+export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBytes: number; unevictableBytes: number }> {
   const { snap, verdict } = await snapshotState();
-  const { bytes, dirs } = verdict === 'use' && snap ? snap : await walkUsage();
-  return { bytes, dirs, estTrackBytes: estimateTrackBytes(bytes, dirs) };
+  if (verdict === 'use' && snap) {
+    return { bytes: snap.bytes, dirs: snap.dirs, estTrackBytes: estimateTrackBytes(snap.bytes, snap.dirs), unevictableBytes: unevictableOf(snap) };
+  }
+  const { bytes, dirs } = await walkUsage();
+  return { bytes, dirs, estTrackBytes: estimateTrackBytes(bytes, dirs), unevictableBytes: 0 };
 }
 
 // The STORED cache size, for a surface that must answer at once (the stem
@@ -499,7 +547,10 @@ export async function markPassPending(): Promise<boolean> {
     snapshotUntrusted = true;
     return false;
   }
-  return writeSnapshot({ ...snap, pending: { pid: process.pid, since: new Date().toISOString() }, updatedAt: new Date().toISOString() });
+  return writeSnapshot(buildSnapshot(
+    { ...snap, pending: { pid: process.pid, since: new Date().toISOString() }, updatedAt: new Date().toISOString() },
+    unevictableOf(snap),
+  ));
 }
 
 // Bytes on disk under one track dir (one readdir + a stat per file).
@@ -541,7 +592,12 @@ export async function settlePassWrites(
     bytes += b;
     dirs += 1;
   }
-  const settled: UsageSnapshot = { version: 1, root: snap.root, bytes, dirs, measuredAt: snap.measuredAt, updatedAt: new Date().toISOString() };
+  // The pass adds dirs and deletes none outside its own sweep, so the stuck
+  // bytes the last sweep found are still part of the total.
+  const settled = buildSnapshot(
+    { version: 1, root: snap.root, bytes, dirs, measuredAt: snap.measuredAt, updatedAt: new Date().toISOString() },
+    unevictableOf(snap),
+  );
   if (!(await writeSnapshot(settled))) return null;
   return { bytes, dirs, withinBudget: bytes <= budget };
 }
@@ -568,12 +624,12 @@ export async function settleTrackWrite(trackId: string, bytesBefore: number | nu
     await markUsageStale();
     return;
   }
-  const settled: UsageSnapshot = {
+  const settled = buildSnapshot({
     ...snap,
     bytes: Math.max(0, snap.bytes + grew),
     dirs: snap.dirs + (newDir ? 1 : 0),
     updatedAt: new Date().toISOString(),
-  };
+  }, unevictableOf(snap));
   if (!(await writeSnapshot(settled))) await rm(snapshotPath(), { force: true }).catch(() => {});
 }
 
@@ -707,7 +763,7 @@ export async function sweep(
   const dirs = await scanDirs();
   let total = dirs.reduce((n, d) => n + d.bytes, 0);
   if (total <= budget) {
-    await writeSnapshot(snapshotFromWalk(total, dirs.length));
+    await writeSnapshot(snapshotFromWalk(total, dirs.length, 0));
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 };
   }
 
@@ -733,6 +789,8 @@ export async function sweep(
       'and are left out of the budget check. Open them as their owner (docs/deployment.md).',
     );
   }
-  await writeSnapshot(snapshotFromWalk(total, dirs.length - removed));
+  // The stuck bytes go in the snapshot beside the total, so pick-time stems
+  // (budgetVeto) can judge the part this sweep can evict, as it did above.
+  await writeSnapshot(snapshotFromWalk(total, dirs.length - removed, unevictable));
   return { removed, freedBytes, failedDirs, overBudgetBytes: Math.max(0, total - budget) };
 }

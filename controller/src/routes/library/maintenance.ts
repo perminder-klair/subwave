@@ -7,12 +7,13 @@ import * as db from '../../music/library-db.js';
 import * as coverage from '../../music/library-coverage.js';
 import * as subsonic from '../../music/subsonic.js';
 import * as lastfm from '../../music/lastfm.js';
+import { listAfterArtistLookup } from '../../music/lastfm-tag-policy.js';
 import * as musicbrainz from '../../music/musicbrainz.js';
 import * as settings from '../../settings.js';
 import * as embeddings from '../../music/embeddings.js';
 import { resolveEraYear } from '../../music/show-filter.js';
-import { tagBatch, TAGGER_CONTRACT_VERSION } from '../../music/tagger-core.js';
-import { promptVocabHash } from '../../music/embeddings.js';
+import { tagBatch } from '../../music/tagger-core.js';
+import { tagInputFor, recordTagAnswer, tagPromptStamp } from '../../music/tag-library/tag-input.js';
 import { activeModelLabel } from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
 import {
@@ -249,8 +250,9 @@ router.post('/library/reset', requireAdmin, async (_req, res) => {
 });
 
 // Single-track refresh through the bulk pipeline: resolve metadata (body wins)
-// → refresh enrichment → re-embed → tagBatch([song]). Always the LLM, never
-// propagation; the enrichment/embedding steps are best-effort.
+// → refresh enrichment → re-embed → tagBatch. Always the LLM, never
+// propagation; the enrichment/embedding steps are best-effort. An answer with no
+// usable mood comes back `untaggable: true` and leaves the track untagged.
 router.post('/library/retag', requireAdmin, async (req, res) => {
   const id = req.body?.id;
   if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
@@ -281,7 +283,11 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       genres: subsonic.songGenres(song),
     });
 
-    let lastfmTags: string[] | null = null;
+    // Seed from the row: a retag that fetches nothing, or is answered with
+    // nothing, leaves the stored list alone. Only tags replace it, by the bulk
+    // pass's rules: recordLastfmTrackTags with track tags on, listAfterArtistLookup
+    // with them off (#2295).
+    let lastfmTags: string[] | null = db.getTrack(id)?.lastfmTags ?? null;
     let lyricExcerpt: string | null = null;
     if (lastfmEnabled && song.artist) {
       try {
@@ -289,9 +295,11 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         // else Navidrome's getArtistInfo2 (#532). With track tags on, the same
         // merge and the same write as its track pass: the upsert below then sees
         // an unchanged list and leaves the stamp alone.
-        lastfmTags = trackTagsOn
-          ? db.recordLastfmTrackTags(id, await lastfm.getMergedTags(song.artist, song.title, { count: 10 }))
-          : await lastfm.getArtistTags(song.artist, { count: 10 });
+        if (trackTagsOn) {
+          lastfmTags = db.recordLastfmTrackTags(id, await lastfm.getMergedTags(song.artist, song.title, { count: 10 }));
+        } else {
+          lastfmTags = listAfterArtistLookup(lastfmTags, await lastfm.getArtistTags(song.artist, { count: 10 }));
+        }
       } catch (err) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
       }
@@ -305,10 +313,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       }
     }
     if (lastfmEnabled || lyricsEnabled) {
-      db.upsertTrackEnrichment(id, {
-        lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
-        lyricExcerpt,
-      });
+      db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
     }
 
     // 2b. Refresh the original-year resolution (best-effort, #842). Retag counts as
@@ -330,12 +335,16 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       }
     }
 
+    // The stored row as the steps above left it (enrichment, original year), for
+    // the embed and the tagger alike. Retag measures nothing, so its acoustics
+    // are what the analyzer last wrote.
+    const rec = db.getTrack(id);
+
     // 3. Re-embed (best-effort).
     if (embedCfg.enabled !== false && embeddings.isAvailable()) {
       try {
         // Same acoustics + era inputs as the bulk path (#1246): this must
         // produce the SAME text phaseEmbed would, or the track drifts in KNN space.
-        const rec = db.getTrack(id);
         const eraYear = resolveEraYear(
           rec?.year ?? song.year, rec?.originalYear ?? null, rec?.yearUntrusted ?? null,
         );
@@ -364,21 +373,29 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       }
     }
 
-    const [{ moods, energy }] = await tagBatch([song]);
-    library.set(id, {
-      title: song.title,
-      artist: song.artist,
-      album: song.album,
-      year: song.year,
-      genres: subsonic.songGenres(song),
-      moods,
-      energy,
+    // 4. Tag, always through the LLM: an operator press skips the bulk run's
+    // untaggable memory. The input and the write are the bulk path's own
+    // (tagInputFor, recordTagAnswer), so the model hears the same evidence
+    // (#2281), an empty answer is left untagged and marked here too, never saved
+    // as a tag (#2283), and the measured stamp is the same one. Step 1 wrote the
+    // row this input is built from.
+    if (!rec) return res.status(404).json({ error: 'track metadata not found' });
+    const input = tagInputFor(rec);
+    const [result] = await tagBatch([input]);
+    const outcome = recordTagAnswer(id, input, result, {
       source: 'llm',
-      promptHash: promptVocabHash(TAGGER_CONTRACT_VERSION),
+      promptHash: tagPromptStamp(),
       model: activeModelLabel(),
     });
+    if (outcome === 'untaggable') {
+      queue.log(
+        'info',
+        `/library/retag ${id}: untaggable (${result.offVocab ? 'every mood was outside the vocabulary' : "the model couldn't tell"}), left untagged`,
+      );
+      return res.json({ id, moods: [], energy: null, untaggable: true });
+    }
     const tagged = library.get(id);
-    res.json({ id, moods, energy, taggedAt: tagged?.taggedAt });
+    res.json({ id, moods: result.moods, energy: result.energy, taggedAt: tagged?.taggedAt });
   } catch (err) {
     queue.log('error', `/library/retag failed: ${err.message}`);
     res.status(500).json({ error: err.message });

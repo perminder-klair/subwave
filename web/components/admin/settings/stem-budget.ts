@@ -70,9 +70,15 @@ export function usageCaveat(usage: StemUsage): string {
   return ', over a day old';
 }
 
+/** GB to one decimal, whole GB from 10, and MB under 0.1 GB, where one
+ *  decimal of GB would read "0.0 GB" (a small pick-time overshoot). */
 export function fmtGb(bytes: number): string {
   const gb = bytes / GB;
   if (gb >= 10) return `${Math.round(gb).toLocaleString('en-GB')} GB`;
+  if (gb < 0.1) {
+    const mb = Math.round(bytes / 1024 ** 2);
+    return `${bytes > 0 ? Math.max(1, mb) : 0} MB`;
+  }
   return `${gb.toFixed(1)} GB`;
 }
 
@@ -82,4 +88,14 @@ export function fmtMeasured(iso: string | undefined): string | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Whether a committed settings patch changes what GET /stem-cache/usage
+ *  answers: the budget it reports (`audio.stemCacheGb`), or whether it carries
+ *  the pick-time overshoot at all (`transitions.pickTimeStems`). The settings
+ *  save refetches it then, so the note under the budget field does not lag. */
+export function patchMovesStemUsage(patch: Record<string, unknown>): boolean {
+  const has = (section: unknown, key: string) =>
+    !!section && typeof section === 'object' && (section as Record<string, unknown>)[key] !== undefined;
+  return has(patch.audio, 'stemCacheGb') || has(patch.transitions, 'pickTimeStems');
 }
