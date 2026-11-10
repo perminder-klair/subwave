@@ -160,6 +160,19 @@ test('Discogs: a refused token takes no part, and is skipped from then on withou
   forgetDiscogsRefusal();
 });
 
+test('Discogs: lookups already queued when the refusal lands send nothing', async (tc) => {
+  tc.mock.method(console, 'warn', () => {});
+  forgetDiscogsRefusal();
+  process.env.DISCOGS_TOKEN = 'bad';
+  reply(DG, { status: 401 });
+  // The year pool runs lookups concurrently: three wait on the throttle
+  // while the first one is refused.
+  const answers = await Promise.all([1, 2, 3, 4].map(() => lookupDiscogsYear(track)));
+  assert.equal(calls(DG).length, 1, 'the queued lookups never send the refused token');
+  for (const a of answers) assert.deepEqual(a, { kind: 'not-found' });
+  forgetDiscogsRefusal();
+});
+
 test('Discogs: a 429 is asked once more; a network error is an error', async () => {
   forgetDiscogsRefusal();
   process.env.DISCOGS_TOKEN = 'tok-123';

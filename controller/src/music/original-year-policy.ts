@@ -31,10 +31,11 @@ export function yearSourceKept(source: string | null | undefined): boolean {
 }
 
 // `source` is the source that gave this answer (for not-found and error, the
-// last one asked). A Discogs that took no part (no token, a refused one)
-// answers not-found with no source, and the combined lookup keeps
-// MusicBrainz's answer. The year row records it (track_facet_status.source),
-// so a failure names the host that failed.
+// last host asked; Discogs is asked only after a MusicBrainz miss, so
+// `discogs` on a miss means both missed). A Discogs that took no part (no
+// token, a refused one) answers not-found with no source, and the combined
+// lookup keeps MusicBrainz's answer. The year row records it
+// (track_facet_status.source), so a failure names the host that failed.
 export type OriginalYearOutcome =
   | { kind: 'found'; year: number; source?: YearSource }
   | { kind: 'not-found'; source?: YearSource }

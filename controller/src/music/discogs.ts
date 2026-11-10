@@ -82,7 +82,9 @@ export function earliestDiscogsYear(results: DiscogsResult[], artist: string, ma
 //
 // A refused token is remembered for the rest of the process, so every later
 // lookup skips Discogs without a request or its 1.1 s throttle gap (a re-ask
-// of thousands of misses would otherwise spend an hour on refusals). It is
+// of thousands of misses would otherwise spend an hour on refusals). Lookups
+// already queued on the throttle when the refusal lands send nothing either,
+// but each still waits out its slot (a one-off few seconds). It is
 // keyed on the token's value: a different token is asked again, and saving
 // one from the settings clears it (forgetDiscogsRefusal, routes/settings/core).
 // The refusal is logged once per refused token.
