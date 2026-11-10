@@ -42,6 +42,7 @@ import type Database from 'better-sqlite3';
 import { ANALYSIS_VERSION, requireDb } from './handle.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 import { YEAR_MAX_ATTEMPTS, yearRetryDue } from '../original-year-policy.js';
+import { eraSuspectSql } from '../era-suspect.js';
 
 export const FACETS = ['head', 'loudness', 'tail', 'clap', 'vocal', 'stems', 'edges', 'year'] as const;
 export type Facet = (typeof FACETS)[number];
@@ -117,7 +118,7 @@ export interface FacetSourceRow {
   has_edges: number;         // decoded_duration_ms IS NOT NULL
   analyze_fail_count: number | null;
   analyze_error: string | null;
-  year_suspect: number;      // is_compilation = 1 OR era_untrusted = 1
+  year_suspect: number;      // era-suspect.eraSuspectSql
   has_original_year: number; // original_year IS NOT NULL
   original_year_source: string | null;
   year_checked: number;      // original_year_checked_at IS NOT NULL
@@ -135,7 +136,7 @@ export const FACET_SOURCE_SELECT =
    loudness_curve_json IS NOT NULL                    AS has_loudness_curve,
    decoded_duration_ms IS NOT NULL                    AS has_edges,
    analyze_fail_count, analyze_error,
-   COALESCE(is_compilation = 1 OR era_untrusted = 1, 0) AS year_suspect,
+   COALESCE(${eraSuspectSql()}, 0) AS year_suspect,
    original_year IS NOT NULL                          AS has_original_year,
    original_year_source,
    original_year_checked_at IS NOT NULL               AS year_checked`;
@@ -623,7 +624,7 @@ export function yearLookupDueIds(now: number, limit?: number): string[] {
     .prepare(
       `SELECT t.id, s.version, s.status, s.attempts, s.at FROM tracks t
          LEFT JOIN track_facet_status s ON s.track_id = t.id AND s.facet = 'year'
-        WHERE (t.is_compilation = 1 OR t.era_untrusted = 1)
+        WHERE ${eraSuspectSql('t.')}
           AND t.original_year IS NULL
           AND (s.track_id IS NULL OR s.version < ? OR s.status = 'failed')
         ORDER BY t.id`,

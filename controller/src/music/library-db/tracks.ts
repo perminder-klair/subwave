@@ -170,7 +170,7 @@ export function resolvedEraYearForTrack(id: string): number | null {
 function syncYearIfEraChanged(id: string, before: StoredEra | null): void {
   const after = storedEra(id);
   if (!after) return;
-  const suspect = (r: StoredEra) => r.is_compilation === 1 || r.era_untrusted === 1;
+  const suspect = (r: StoredEra) => storedYearUntrusted(r.is_compilation, r.era_untrusted) === true;
   if (before && suspect(before) === suspect(after) && before.original_year === after.original_year) return;
   syncTrackFacets(id);
 }

@@ -23,9 +23,12 @@
 // a hand-rolled join.
 //
 // Functions take the better-sqlite3 handle explicitly rather than reaching
-// through library-db, so the routes and tests share one code path.
+// through library-db, so the routes and tests share one code path. The one
+// exception is the year facet re-derive after an override, which goes through
+// facets.syncTrackFacets on the library's own (same) handle.
 
 import type Database from 'better-sqlite3';
+import { syncTrackFacets } from './library-db/facets.js';
 import { getTrack, setManualOriginalYear } from './library-db/tracks.js';
 import { ORIGINAL_YEAR_MIN, isValidOriginalYear, originalYearMax } from '../schemas/library.js';
 import { isAlbumKind, labelOwner, ownerFolderOf, suggestAlbumKind, suggestedDecision, type AlbumKind, type EraDecision, type OwnerContext, type OwnerInput } from './album-kind.js';
@@ -315,6 +318,9 @@ export function setEraOverride(
     );
     for (const id of ids) {
       flip.run(id);
+      // The year facet reads the verdict (a trusted album needs no lookup), so
+      // its row is re-derived like any walk that changes the era columns.
+      syncTrackFacets(id);
       changed.add(id);
     }
 

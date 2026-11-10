@@ -430,12 +430,21 @@ test('Trust on a Navidrome compilation reaches every era reader: track, resolver
   assert.equal(db.resolvedEraYearForTrack('k1'), null);
   assert.equal(inEra(), undefined, 'suspect: the reissue year never places it in the 70s');
   assert.ok(db.idsNeedingOriginalYear().includes('k1'));
+  assert.ok(db.yearLookupDueIds(Date.now()).includes('k1'));
 
   era.setEraOverride(d(), era.albumEraKey('Various Artists', 'Hits Compilation'), 'trusted');
   assert.equal(db.getTrack('k1')!.yearUntrusted, false);
   assert.equal(db.resolvedEraYearForTrack('k1'), 1975);
   assert.ok(inEra(), 'trusted: its own year counts');
   assert.equal(db.idsNeedingOriginalYear().includes('k1'), false, 'no lookup for a trusted album');
+  assert.equal(db.yearLookupDueIds(Date.now()).includes('k1'), false);
+  // The override re-derives the year facet row itself, with no walk.
+  const yr = d().prepare(`SELECT status, reason FROM track_facet_status WHERE track_id = 'k1' AND facet = 'year'`).get() as { status: string; reason: string } | undefined;
+  assert.deepEqual(yr && { ...yr }, { status: 'ok', reason: 'not-needed' }, 'the year facet row is re-derived at once');
+  // Even with no facet row (a row synced before the facet existed), the due
+  // query itself reads the stored verdict.
+  d().exec(`DELETE FROM track_facet_status WHERE track_id = 'k1' AND facet = 'year'`);
+  assert.equal(db.yearLookupDueIds(Date.now()).includes('k1'), false);
 
   // A later walk keeps it trusted, and Reset hands it back.
   db.upsertTrackMeta('k1', { title: 'Hit', isCompilation: true, ...era.eraWalkFields(
@@ -449,12 +458,14 @@ test('Trust on a Navidrome compilation reaches every era reader: track, resolver
   d().exec(`DELETE FROM tracks WHERE id = 'k1'`);
 });
 
-test('the other era readers follow the stored verdict too: lite row, album facts, decade buckets, candidates, pool rows, vector freshness', () => {
+test('the other era readers follow the stored verdict too: lite row, album facts, decade buckets, candidates, pool rows, vector freshness, the walk\'s facet re-derive', () => {
   const comp = { title: 'Comp', artist: 'A', album: 'Comp LP', albumArtist: 'Various Artists', year: 1983, isCompilation: true };
   db.upsertTrackMeta('k2', { ...comp, eraUntrusted: true, eraReason: 'compilation-flag' });
   // A walk writing a trusted verdict on a flagged compilation (what an
-  // override makes it do).
+  // override makes it do) re-derives the year facet like any era change.
   db.upsertTrackMeta('k2', { ...comp, eraUntrusted: false, eraReason: 'compilation-flag' });
+  const yr = d().prepare(`SELECT reason FROM track_facet_status WHERE track_id = 'k2' AND facet = 'year'`).get() as { reason: string };
+  assert.equal(yr.reason, 'not-needed');
   assert.equal(db.getTrackLite('k2')!.yearUntrusted, false);
   assert.equal(db.getAlbumFacts('k2')!.yearUntrusted, false);
   assert.ok([...db.trackIdsByGenreDecade().entries()].some(([k, ids]) => k.endsWith('|1980') && ids.includes('k2')));
