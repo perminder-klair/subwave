@@ -283,8 +283,9 @@ async function probeKey(
         headers: { Authorization: `Discogs token=${value}`, 'User-Agent': 'subwave/1.0 +https://github.com/perminder-klair/subwave' },
         signal: AbortSignal.timeout(8000),
       });
+      // 401 or 403 is the token refused, as the year lookup reads it (music/discogs.ts).
       if (!r.ok) {
-        return { ok: false, message: r.status === 401 ? 'Token rejected — check your Discogs personal access token' : `Request failed (${r.status})` };
+        return { ok: false, message: r.status === 401 || r.status === 403 ? 'Token rejected — check your Discogs personal access token' : `Request failed (${r.status})` };
       }
       const j = await r.json().catch(() => ({})) as { username?: string };
       return { ok: true, message: `✓ Discogs token valid${j.username ? ` · user: ${j.username}` : ''}` };

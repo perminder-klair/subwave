@@ -30,10 +30,15 @@ export function yearSourceKept(source: string | null | undefined): boolean {
   return source != null && KEPT_YEAR_SOURCES.includes(source);
 }
 
+// `source` is the source that gave this answer (for not-found and error, the
+// last one asked). A Discogs that took no part (no token, a refused one)
+// answers not-found with no source, and the combined lookup keeps
+// MusicBrainz's answer. The year row records it (track_facet_status.source),
+// so a failure names the host that failed.
 export type OriginalYearOutcome =
   | { kind: 'found'; year: number; source?: YearSource }
-  | { kind: 'not-found' }
-  | { kind: 'error'; reason: string };
+  | { kind: 'not-found'; source?: YearSource }
+  | { kind: 'error'; reason: string; source?: YearSource };
 
 // A failed lookup is retried after these delays, measured from the failed
 // attempt: the first retry an hour later (a blip), then a day (an outage),

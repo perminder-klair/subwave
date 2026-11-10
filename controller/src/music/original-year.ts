@@ -26,9 +26,10 @@ export async function lookupOriginalYearAnySource(track: {
   year?: number | null;
 }): Promise<OriginalYearOutcome> {
   const mb = await musicbrainz.lookupOriginalYear(track);
-  if (mb.kind === 'found') return { ...mb, source: 'musicbrainz' };
-  if (mb.kind === 'error') return mb;
-  return discogs.lookupDiscogsYear(track);
+  if (mb.kind !== 'not-found') return { ...mb, source: 'musicbrainz' };
+  const dg = await discogs.lookupDiscogsYear(track);
+  // A Discogs that took no part (no token, a refused one) leaves MusicBrainz's miss.
+  return dg.kind === 'not-found' && !dg.source ? { kind: 'not-found', source: 'musicbrainz' } : dg;
 }
 
 export interface YearPassStats {

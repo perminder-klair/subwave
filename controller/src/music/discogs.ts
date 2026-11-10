@@ -139,8 +139,8 @@ export async function lookupDiscogsYear(track: {
       return { kind: 'not-found' };
     }
     const y = earliestDiscogsYear(Array.isArray(body.results) ? body.results : [], artist, track.year ?? null);
-    return y != null ? { kind: 'found', year: y, source: 'discogs' } : { kind: 'not-found' };
+    return y != null ? { kind: 'found', year: y, source: 'discogs' } : { kind: 'not-found', source: 'discogs' };
   } catch (err) {
-    return { kind: 'error', reason: yearErrorReason(err) };
+    return { kind: 'error', reason: yearErrorReason(err), source: 'discogs' };
   }
 }

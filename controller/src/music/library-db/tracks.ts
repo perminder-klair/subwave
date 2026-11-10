@@ -513,11 +513,16 @@ export function recordOriginalYearOutcome(id: string, outcome: OriginalYearOutco
             WHERE id = ? AND original_year IS NULL`,
         )
         .run(id);
-      syncTrackFacets(id, { yearFailed: outcome.reason, source: 'musicbrainz' });
+      const source = outcome.source ?? 'musicbrainz';
+      syncTrackFacets(id, { yearFailed: outcome.reason, source });
+      // The failed row names the host that failed this time; a re-derive keeps
+      // a row's earlier source, so it is set here rather than through the sync.
+      requireDb()
+        .prepare(`UPDATE track_facet_status SET source = ? WHERE track_id = ? AND facet = 'year' AND status = 'failed'`)
+        .run(source, id);
       return;
     }
-    if (outcome.kind === 'found') setOriginalYear(id, outcome.year, outcome.source ?? 'musicbrainz');
-    else setOriginalYear(id, null);
+    setOriginalYear(id, outcome.kind === 'found' ? outcome.year : null, outcome.source ?? 'musicbrainz');
   })();
 }
 
