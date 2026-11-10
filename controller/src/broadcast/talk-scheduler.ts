@@ -241,7 +241,7 @@ function sinceLabel(gap: TalkGap): string {
 // track boundary, or another row taking the minute.
 export type TalkWaitReason =
   | { held: 'gap'; gap: TalkGap }
-  | { held: 'pending'; pendingKind: string }
+  | { held: 'pending'; pendingKind: string; generating?: boolean }
   | { held: 'yield'; to: TalkKind };
 
 // One function so the stand-down and missed lines can't word a cause differently.
@@ -251,7 +251,9 @@ function becauseOf(reason: TalkWaitReason): string {
       + `minimum gap ${Math.round(reason.gap.needMs / 1000)}s`;
   }
   if (reason.held === 'pending') {
-    return `a ${reason.pendingKind} is rendered and waiting for the next track boundary`;
+    return reason.generating
+      ? `a ${reason.pendingKind} is being written for the next track boundary`
+      : `a ${reason.pendingKind} is rendered and waiting for the next track boundary`;
   }
   return `${reason.to} took the minute`;
 }
@@ -374,7 +376,9 @@ export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
   // bounded twice so postpone never becomes cancel (#1539): see pendingHolds.
   const pending = p.pendingTalk;
   if (pending && pendingHolds(row, slot, minute, pending, p)) {
-    return waitPlan(row, slot, slotKey, { held: 'pending', pendingKind: pending.kind }, p);
+    return waitPlan(row, slot, slotKey, {
+      held: 'pending', pendingKind: pending.kind, ...(pending.generating ? { generating: true } : {}),
+    }, p);
   }
   const gap = talkGap({ nowMs: p.now.getTime(), lastTalkBreakAt: p.lastTalkBreakAt, needMs: row.minGapMs });
   // The switch forces EVERY row onto the boundary, the hourly check included.

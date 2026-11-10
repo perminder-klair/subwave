@@ -250,7 +250,7 @@ await test('the journal records the confirmed map for the controller to apply', 
 
 await test('facet status follows the adopted track and its merged columns', () => {
   const facets = (id: string) => Object.fromEntries(
-    (sql.prepare('SELECT facet, status, attempts FROM track_facet_status WHERE track_id = ?').all(id) as
+    (sql.prepare('SELECT facet, status, attempts FROM track_facet_status WHERE track_id = ? AND facet <> \'year\'').all(id) as
       Array<{ facet: string; status: string; attempts: number }>)
       .map((r) => [r.facet, r.status === 'failed' ? `failed×${r.attempts}` : r.status]),
   );

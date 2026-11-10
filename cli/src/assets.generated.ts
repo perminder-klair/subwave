@@ -1347,6 +1347,13 @@ SITE_URL=
 #                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
 #                                   # otherwise set base URL in admin → Settings → Scrobbling
 
+# ───────── Original years (optional — also configurable in admin UI) ─────────
+# Era-bounded shows ask MusicBrainz (keyless) for the original year of reissues
+# and compilations. With a Discogs personal access token (Discogs → Settings →
+# Developers, free), Discogs is asked when MusicBrainz has no year: one search
+# per track, sending its artist and title. Admin → Settings → Library → Enrichment.
+# DISCOGS_TOKEN=
+
 # ───────── Lyrics (optional) ─────────
 # The LRCLIB fallback (admin → Settings → Listeners → Lyrics panel, on by
 # default) asks lrclib.net for synced lyrics the music server lacks, sending each
@@ -1575,4 +1582,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `1.29.0`; // x-release-please-version
+export const CLI_VERSION = `1.31.0`; // x-release-please-version

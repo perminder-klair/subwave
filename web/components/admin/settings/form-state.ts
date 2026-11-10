@@ -114,6 +114,9 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       showWelcome: v.djBehaviour?.showWelcome === true,
       previewNextShow: v.djBehaviour?.previewNextShow !== false,
       sameHostAcknowledgement: v.djBehaviour?.sameHostAcknowledgement === true,
+      // Absent (a settings.json predating the key) reads as OFF, the
+      // established per-line delivery, matching settings.load()'s coercion.
+      holdDuckBetweenSpeakers: v.djBehaviour?.holdDuckBetweenSpeakers === true,
       extendedSleeveNotes: v.djBehaviour?.extendedSleeveNotes === true,
       releaseYearMentions: v.djBehaviour?.releaseYearMentions ?? 'regular',
       recapLimit: String(v.djBehaviour?.recapLimit ?? 10),

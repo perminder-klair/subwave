@@ -278,6 +278,18 @@ async function probeKey(
       }
       return { ok: true, message: `✓ ListenBrainz token valid${j.user_name ? ` · user: ${j.user_name}` : ''}` };
     }
+    case 'DISCOGS_TOKEN': {
+      const r = await fetch('https://api.discogs.com/oauth/identity', {
+        headers: { Authorization: `Discogs token=${value}`, 'User-Agent': 'subwave/1.0 +https://github.com/perminder-klair/subwave' },
+        signal: AbortSignal.timeout(8000),
+      });
+      // 401 or 403 is the token refused, as the year lookup reads it (music/discogs.ts).
+      if (!r.ok) {
+        return { ok: false, message: r.status === 401 || r.status === 403 ? 'Token rejected — check your Discogs personal access token' : `Request failed (${r.status})` };
+      }
+      const j = await r.json().catch(() => ({})) as { username?: string };
+      return { ok: true, message: `✓ Discogs token valid${j.username ? ` · user: ${j.username}` : ''}` };
+    }
     default: {
       // A fixed-endpoint gateway's model list, with the key as a Bearer; no
       // model is called, as in the CLI's probeGatewayModels. Requesty's list is
