@@ -10,9 +10,9 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
+import { warnLimiter } from '../util/warn-limiter.js';
 import { describeFetchError, fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
-import { warnLimiter } from '../util/warn-limiter.js';
 
 // A structural span over the track, in ms. Contiguous over the analysed
 // window; the first is the intro/leading section.
