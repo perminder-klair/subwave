@@ -28,7 +28,7 @@ process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const {
-  currentTalkAir, inTalkAirScope, suppressScheduledSpeechDuringHandoff,
+  currentTalkAir, inTalkAirScope, scheduledTalkAir, suppressScheduledSpeechDuringHandoff,
   talkAirStatus, talkOnlyBetweenTracks, withTalkAir,
 } =
   await import('../src/broadcast/talk-air.js');
@@ -58,6 +58,18 @@ test('only a boolean is accepted, and a refused write leaves the switch alone', 
     /djTalkOnlyBetweenTracks must be a boolean/,
   );
   assert.equal(talkOnlyBetweenTracks(), true, 'the rejected write changed nothing');
+});
+
+test('a cron fire takes the switch as its placement', async () => {
+  // Per-skill `cron:` timers have no row in the slot table, so this is their
+  // equivalent of plan.air (#2259). Whether the fire then enters a scope is
+  // scheduler.speakSkillCron's, pinned in scripts/skill-cron-placement.test.ts:
+  // only 'next-track' does, so the switch-off path stays as it always was.
+  await settings.update({ djTalkOnlyBetweenTracks: false } as never);
+  assert.equal(scheduledTalkAir(), 'immediate');
+  await settings.update({ djTalkOnlyBetweenTracks: true } as never);
+  assert.equal(scheduledTalkAir(), 'next-track');
+  await settings.update({ djTalkOnlyBetweenTracks: false } as never);
 });
 
 test('a settings.json without the key, or with junk in it, reads as OFF', async () => {
