@@ -9,7 +9,7 @@ import { config } from '../../config.js';
 import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
 import { sleep, type Interposed } from './pure.js';
-import { awaitVoiceAir, markerFilePresent, VOICE_AIR_TIMEOUT_MS } from './voice-marker.js';
+import { awaitVoiceAir, markerFilePresent, VOICE_AIR_TIMEOUT_MS, VOICE_MARKER_POLL_MS } from './voice-marker.js';
 import { mpegLayer3Frame, mp3FrameOffset } from '../../audio/mp3-frames.js';
 import { levelledGainDb, voiceLevellingEnabled } from '../../audio/clip-level.js';
 
@@ -260,6 +260,19 @@ export function batchExchangeDelivery(): boolean {
 // remove. Continuation lines also skip the silent lead-in (subwave_no_leadin):
 // it exists only to complete the duck ramp before the FIRST word, and theirs is
 // already down, so the gap between two speakers is just the clips' own padding.
+//
+// One exception keeps a continuation's lead-in: a line after a SHORT one. With
+// no lead-in, line N's voice marker is on voice-playing.json only while N's own
+// WAV plays (line N+1's marker replaces it the moment N ends), and the reader
+// polls that one file every VOICE_MARKER_POLL_MS. A shorter window can fall
+// between two polls, and the line then waits out its whole air timeout and
+// appends its session turn after the speakers who followed it. The lead-in
+// keeps N's marker up for another VOICE_LEADIN_MS, which no poll can miss, so a
+// line skips it only when the line before it has a MEASURED length of at least
+// CONTINUATION_MIN_PREV_MS (two polls, one spare for a busy event loop). An
+// estimated length keeps the lead-in: the safe direction is 800 ms of air.
+const CONTINUATION_MIN_PREV_MS = 2 * VOICE_MARKER_POLL_MS;
+
 export async function airVoiceExchange(
   path: string,
   clips: readonly ExchangeClip[],
@@ -267,12 +280,14 @@ export async function airVoiceExchange(
 ): Promise<(VoiceHandoff | null)[]> {
   const prepared = clips.map((clip, index) => {
     const clipMs = clipDurationMs(clip.wavPath, clip.text);
-    const leadinMs = index === 0 ? VOICE_LEADIN_MS : 0;
+    const prevMeasuredMs = index > 0 ? measuredClipDurationMs(clips[index - 1].wavPath) : null;
+    const continuation = prevMeasuredMs != null && prevMeasuredMs >= CONTINUATION_MIN_PREV_MS;
+    const leadinMs = continuation ? 0 : VOICE_LEADIN_MS;
     const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + leadinMs + VOICE_TAIL_MS);
     const voiceId = mintVoiceId();
     // Add this take's trim only while the operator has levelling enabled.
     const gain = voiceLevellingEnabled() ? levelledGainDb(clip.wavPath, clip.gainDb) : clip.gainDb;
-    return { clip, clipMs, holdMs, voiceId, uri: voiceUri(clip.wavPath, gain, voiceId, null, false, undefined, index > 0) };
+    return { clip, clipMs, leadinMs, holdMs, voiceId, uri: voiceUri(clip.wavPath, gain, voiceId, null, false, undefined, continuation) };
   });
   const totalHoldMs = prepared.reduce((sum, p) => sum + p.holdMs, 0);
   const now = Date.now();
@@ -286,10 +301,13 @@ export async function airVoiceExchange(
   _chainFreeAt = now + waitMs + totalHoldMs;
   _voiceHolders++;
   // Every line is announced up front on its own forecast. Preceding lines are
-  // queued rather than airing, and only the first carries a lead-in — the rest
-  // start the moment the previous clip ends, because the queue never drains.
+  // queued rather than airing. The first line's lead-in is already in
+  // estimatedAirInMs; a continuation starts the moment the previous clip ends,
+  // because the queue never drains, and a line after a short one waits for its
+  // own lead-in too.
   let precedingMs = 0;
-  for (const p of prepared) {
+  for (const [index, p] of prepared.entries()) {
+    if (index > 0) precedingMs += p.leadinMs;
     if (p.clip.onQueued) {
       // A misbehaving consumer must not take the air path down with it.
       try {

@@ -13,7 +13,8 @@ export interface VoiceMarker {
   filename: string | null;
 }
 
-const POLL_MS = 500;
+export const VOICE_MARKER_POLL_MS = 500;
+const POLL_MS = VOICE_MARKER_POLL_MS;
 // How long a segment waits for its own marker before giving up and reporting an
 // unknown air time. Generous: the normal lag is well under 2s, but a clip
 // handed over while the queue still holds the previous one airs later, and a

@@ -22,6 +22,7 @@ process.env.STATE_DIR = STATE;
 const { config } = await import('../src/config.js');
 const { airVoiceExchange, voiceBusy } = await import('../src/broadcast/queue/voice-io.js');
 const { resetVoiceMarkers } = await import('../src/broadcast/queue/voice-marker.js');
+const { VOICE_LEADIN_MS } = await import('../src/broadcast/queue/voice-io.js');
 
 after(async () => {
   resetVoiceMarkers();
@@ -49,6 +50,15 @@ function writeWav(path: string, dataBytes: number, byteRate: number) {
   buf.write('data', 36, 'ascii');
   buf.writeUInt32LE(dataBytes, 40);
   writeFileSync(path, buf);
+}
+
+// Advance mock time in small steps until the next handoff lands: a single
+// large tick cannot carry a chain of sleeps more than one step.
+async function untilHandoff(t: { mock: { timers: { tick: (ms: number) => void } } }) {
+  for (let i = 0; i < 40 && !existsSync(config.liquidsoap.sayFile); i++) {
+    t.mock.timers.tick(50);
+    await flush();
+  }
 }
 
 function clearHandoff() {
@@ -139,4 +149,101 @@ test('a boundary claimed mid-exchange drops the lines that have not landed', asy
   t.mock.timers.tick(3_000);
   await flush();
   assert.equal(voiceBusy(), false, 'the cancelled lines do not hold the voice channel');
+});
+
+// A stand-in for poll_voice + voice_queue + voice_marker: consumes say.txt,
+// queues the lead-in unless the clip carries subwave_no_leadin, and writes each
+// clip's marker to voice-playing.json at the moment that clip starts.
+function fakeMixer(durations: Map<string, number>) {
+  let queueEndAt = 0;
+  const pending: { at: number; voiceId: string }[] = [];
+  const starts: number[] = [];
+  return {
+    starts,
+    step(now: number) {
+      if (existsSync(config.liquidsoap.sayFile)) {
+        const uri = readFileSync(config.liquidsoap.sayFile, 'utf8');
+        unlinkSync(config.liquidsoap.sayFile);
+        const voiceId = /subwave_voice="([^"]+)"/.exec(uri)![1];
+        const wav = uri.slice(uri.lastIndexOf(':') + 1);
+        const leadin = uri.includes('subwave_no_leadin="true"') ? 0 : VOICE_LEADIN_MS;
+        const at = Math.max(now, queueEndAt) + leadin;
+        queueEndAt = at + durations.get(wav)!;
+        pending.push({ at, voiceId });
+        starts.push(at);
+      }
+      while (pending.length && pending[0].at <= now) {
+        const { at, voiceId } = pending.shift()!;
+        writeFileSync(config.liquidsoap.voicePlayingFile, JSON.stringify({ voiceId, startedAt: at / 1000 }));
+      }
+    },
+  };
+}
+
+test('a short middle line keeps its air marker: every line airs, in spoken order, with no timeout', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1_000_000 });
+  // Line 2 is shorter than the marker reader's 500 ms poll. Sweeping line 1's
+  // length moves line 2's moment on air across every phase of that poll.
+  for (const firstMs of [1000, 1100, 1200, 1300, 1400]) {
+    resetVoiceMarkers();
+    clearHandoff();
+    // A mixer that has spoken before, so every line waits for its marker.
+    writeFileSync(config.liquidsoap.voicePlayingFile, JSON.stringify({ voiceId: 'earlier', startedAt: Date.now() / 1000 }));
+    const durations = new Map<string, number>();
+    const wavs = [firstMs, 300, 1000].map((ms, i) => {
+      const wav = join(STATE, `short-${firstMs}-${i}.wav`);
+      writeWav(wav, ms * 8, 8000);
+      durations.set(wav, ms);
+      return wav;
+    });
+    const mixer = fakeMixer(durations);
+    const airedOrder: number[] = [];
+    const airedAt: (number | null)[] = [null, null, null];
+    void airVoiceExchange(config.liquidsoap.sayFile, wavs.map((wavPath, i) => ({ wavPath, text: `Line ${i}.`, gainDb: 0 })))
+      .then(handoffs => handoffs.forEach((h, i) => h?.aired.then(at => { airedOrder.push(i); airedAt[i] = at; })));
+    // Well short of the 20 s air timeout, and past the whole conversation.
+    for (let ms = 0; ms < 6_000; ms += 50) {
+      t.mock.timers.tick(50);
+      await flush();
+      mixer.step(Date.now());
+      await flush();
+    }
+    assert.deepEqual(airedOrder, [0, 1, 2], `line 1 at ${firstMs} ms: every line resolves, in the order it was spoken`);
+    assert.deepEqual(airedAt, mixer.starts, `line 1 at ${firstMs} ms: each air time is the mixer's own start`);
+    t.mock.timers.tick(10_000);
+    await flush();
+  }
+});
+
+test('only a line after a measured, long-enough line skips its lead-in', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const long = join(STATE, 'long.wav');
+  const short = join(STATE, 'short.wav');
+  writeWav(long, 8000, 8000);    // 1 s
+  writeWav(short, 2400, 8000);   // 0.3 s
+  const notAWav = join(STATE, 'missing.wav'); // unmeasurable: its length is only an estimate
+  writeFileSync(notAWav, 'not audio');
+  clearHandoff();
+  const uris: string[] = [];
+  const exchange = airVoiceExchange(config.liquidsoap.sayFile, [
+    { wavPath: long, text: 'One.', gainDb: 0 },
+    { wavPath: short, text: 'Two.', gainDb: 0 },
+    { wavPath: long, text: 'Three.', gainDb: 0 },
+    { wavPath: notAWav, text: 'Four words of text.', gainDb: 0 },
+    { wavPath: long, text: 'Five.', gainDb: 0 },
+  ]);
+  await flush();
+  for (let i = 0; i < 5; i++) {
+    await untilHandoff(t);
+    uris.push(readFileSync(config.liquidsoap.sayFile, 'utf8'));
+    unlinkSync(config.liquidsoap.sayFile);
+  }
+  await exchange;
+  assert.deepEqual(
+    uris.map(u => u.includes('subwave_no_leadin="true"')),
+    [false, true, false, true, false],
+    'the opener, the line after a short one and the line after an unmeasured one keep their lead-in',
+  );
+  t.mock.timers.tick(30_000);
+  await flush();
 });
