@@ -272,7 +272,8 @@ export default function ModelsAndTokens() {
             Vercel AI <code>gateway</code> <em>providers</em> have no embeddings endpoint at
             all. A DJ on one of those works fine, but the tagger can&rsquo;t follow it, so the
             console only lists <em>embedding-capable</em> providers in the tagger dropdown
-            (Ollama, OpenAI, Google, OpenRouter, locca, OpenAI-compatible). If you don&rsquo;t see
+            (Ollama, OpenAI, Google, OpenRouter, Requesty, Cheaper Inference, locca,
+            OpenAI-compatible). If you don&rsquo;t see
             your chat provider there, that&rsquo;s why — pick Ollama (local and free) for the
             embedding step and leave the DJ where it is.
           </li>

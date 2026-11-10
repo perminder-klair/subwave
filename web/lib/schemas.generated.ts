@@ -2212,6 +2212,17 @@ export const LLM_PROVIDER_CATALOG: readonly LlmProviderEntry[] = [
     embedding: { defaultModel: 'openai/text-embedding-3-small', suggestions: VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS },
   },
   {
+    // Bare OpenAI ids (gpt-5.4-mini), not `vendor/model`, so OpenAI's own
+    // reasoning rule, never Requesty's: dotted GPT-5s reject 'minimal' (#2097).
+    // GET /models answers a bad or missing bearer with 401 invalid_api_key.
+    id: 'cheaperinference', label: 'Cheaper Inference', longLabel: 'Cheaper Inference (multi-vendor aggregator)',
+    blurb: 'Multi-vendor aggregator',
+    group: 'gateway', kind: 'cloud', envVar: 'CHEAPER_INFERENCE_API_KEY', keyPlaceholder: 'Cheaper Inference API key',
+    exampleModel: 'gpt-5.4-mini', cliLabel: 'Cheaper Inference — multi-vendor',
+    openaiCompatible: { baseUrl: 'https://api.cheaperinference.com/v1', reasoning: 'openaiModels' },
+    embedding: { defaultModel: 'text-embedding-3-small', suggestions: OPENAI_EMBEDDING_MODELS },
+  },
+  {
     id: 'anthropic', label: 'Anthropic', longLabel: 'Anthropic (Claude)', blurb: 'Claude · cloud',
     group: 'vendor', kind: 'cloud', envVar: 'ANTHROPIC_API_KEY', keyPlaceholder: 'sk-ant-...',
     exampleModel: 'claude-sonnet-4-5', cliLabel: 'Anthropic — Claude',

@@ -20,7 +20,7 @@ import test from 'node:test';
 
 const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-credential-scope-'));
 process.env.STATE_DIR = stateRoot;
-for (const k of ['EMBEDDING_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'REQUESTY_API_KEY', 'OPENAI_BASE_URL']) {
+for (const k of ['EMBEDDING_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'REQUESTY_API_KEY', 'CHEAPER_INFERENCE_API_KEY', 'OPENAI_BASE_URL']) {
   delete process.env[k];
 }
 
@@ -29,10 +29,11 @@ const { languageModel, credentialSig, pinnedApiKey, chatBaseUrl } = await import
 const { resolveEmbeddingCfg, embeddingModel } = await import('../src/llm/internal/provider/embedding.js');
 const { embeddingSharesChatCredential } = await import('../src/llm/internal/provider/capabilities.js');
 const { generateText, embed } = await import('ai');
+const { OPENAI_COMPATIBLE_GATEWAYS } = await import('../src/schemas/providers.js');
 
 async function coldLoad(llm: Record<string, unknown>, embedding: Record<string, unknown> = {}) { await coldLoadSettings({ llm, embedding }); }
 
-interface Captured { url: string; auth: string; headers: Headers }
+interface Captured { url: string; auth: string; headers: Headers; body: string }
 
 // Swap global fetch for one call, answering whatever shape the SDK asked for.
 async function capture(run: () => Promise<unknown>): Promise<Captured> {
@@ -40,7 +41,7 @@ async function capture(run: () => Promise<unknown>): Promise<Captured> {
   let seen: Captured | null = null;
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    seen = { url: String(url), auth: headers.get('authorization') || '', headers };
+    seen = { url: String(url), auth: headers.get('authorization') || '', headers, body: String(init?.body ?? '') };
     const body = String(url).includes('/embeddings')
       ? { data: [{ object: 'embedding', index: 0, embedding: [0.1, 0.2] }], model: 'm', usage: { prompt_tokens: 1, total_tokens: 1 } }
       : chatCompletion({ model: 'm',
@@ -62,7 +63,7 @@ const embedOnce = () => capture(() => embed({ model: embeddingModel(), value: 'p
 test('the sharing rule: same provider, and for a configured server the same server', () => {
   const share = embeddingSharesChatCredential;
   // Vendor endpoints serve both legs.
-  for (const p of ['openai', 'google', 'openrouter', 'requesty']) {
+  for (const p of ['openai', 'google', 'openrouter', 'requesty', 'cheaperinference']) {
     assert.equal(share({ provider: p }, { provider: p }), true, p);
   }
   // Anthropic embeds through OpenAI; ollama takes no key; chat-only providers.
@@ -151,24 +152,56 @@ test('probe overrides are judged after they apply, not against the saved leg', a
   assert.deepEqual(resolveEmbeddingCfg({ headers: {}, baseUrl: 'http://other:8090/v1' }).headers, {});
 });
 
-test('a requesty chat key saved after the client was built takes effect', async () => {
-  await coldLoad({ provider: 'requesty', model: 'openai/gpt-x' });
-  const ask = () => capture(() => generateText({ model: languageModel(), prompt: 'hi', maxRetries: 0 }));
-  assert.equal((await ask()).auth, 'Bearer unused');
-  process.env.REQUESTY_API_KEY = 'rq-first';
-  try {
-    assert.equal((await ask()).auth, 'Bearer rq-first');
-    process.env.REQUESTY_API_KEY = 'rq-rotated';
-    assert.equal((await ask()).auth, 'Bearer rq-rotated');
-  } finally {
-    delete process.env.REQUESTY_API_KEY;
+// Each fixed-endpoint gateway with the env var and endpoints its catalogue
+// entry must resolve to, written out literally so a wrong entry fails here.
+// A new gateway adds its row; the first test below fails until it does.
+const GATEWAY_WIRE = [
+  {
+    id: 'requesty', env: 'REQUESTY_API_KEY', model: 'openai/gpt-x',
+    chat: 'https://router.requesty.ai/v1/chat/completions',
+    embed: 'https://router.requesty.ai/v1/embeddings', embedModel: 'openai/text-embedding-3-small',
+  },
+  {
+    id: 'cheaperinference', env: 'CHEAPER_INFERENCE_API_KEY', model: 'gpt-5.4-mini',
+    chat: 'https://api.cheaperinference.com/v1/chat/completions',
+    embed: 'https://api.cheaperinference.com/v1/embeddings', embedModel: 'text-embedding-3-small',
+  },
+] as const;
+
+test('every fixed-endpoint gateway has a wire row', () => {
+  assert.deepEqual(GATEWAY_WIRE.map(g => g.id).sort(), OPENAI_COMPATIBLE_GATEWAYS.map(g => g.id).sort());
+});
+
+test('a gateway chat key saved after the client was built takes effect, at its own endpoint', async () => {
+  for (const gw of GATEWAY_WIRE) {
+    await coldLoad({ provider: gw.id, model: gw.model });
+    const ask = () => capture(() => generateText({ model: languageModel(), prompt: 'hi', maxRetries: 0 }));
+    const before = await ask();
+    assert.equal(before.url, gw.chat, gw.id);
+    assert.equal(before.auth, 'Bearer unused', gw.id);
+    process.env[gw.env] = `${gw.id}-first`;
+    try {
+      assert.equal((await ask()).auth, `Bearer ${gw.id}-first`, gw.id);
+      process.env[gw.env] = `${gw.id}-rotated`;
+      assert.equal((await ask()).auth, `Bearer ${gw.id}-rotated`, gw.id);
+    } finally {
+      delete process.env[gw.env];
+    }
   }
 });
 
-test('openrouter and requesty embedding clients pick up a rotated env key', async () => {
-  for (const [provider, env] of [['openrouter', 'OPENROUTER_API_KEY'], ['requesty', 'REQUESTY_API_KEY']] as const) {
+test('openrouter and gateway embedding clients pick up a rotated env key', async () => {
+  const legs = [
+    { provider: 'openrouter', env: 'OPENROUTER_API_KEY', url: undefined, model: undefined },
+    ...GATEWAY_WIRE.map(gw => ({ provider: gw.id, env: gw.env, url: gw.embed, model: gw.embedModel })),
+  ];
+  for (const { provider, env, url, model } of legs) {
     await coldLoad({ provider: 'ollama' }, { provider });
-    assert.equal((await embedOnce()).auth, 'Bearer unused', provider);
+    const first = await embedOnce();
+    assert.equal(first.auth, 'Bearer unused', provider);
+    // An empty model field resolves to the catalogue's default, on the gateway's own endpoint.
+    if (url) assert.equal(first.url, url, provider);
+    if (model) assert.equal(JSON.parse(first.body).model, model, provider);
     process.env[env] = `${provider}-one`;
     try {
       assert.equal((await embedOnce()).auth, `Bearer ${provider}-one`, provider);
