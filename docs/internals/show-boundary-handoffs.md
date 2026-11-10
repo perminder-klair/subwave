@@ -125,6 +125,13 @@ while that intro is pending, the old runner yields to the newer track.
 - If the wall-clock session roll wins the race with the final-track marker, the
   armed record transfers to the incoming session and generic roll/drain hooks
   still leave it for the confirmed-track runner.
+- Both halves take the incoming persona and show name from the record
+  captured at arm time, never from the live session or the clock: before the
+  roll those still name the outgoing host and the show that is ending. A null
+  incoming show is a show → autonomous boundary and stays null. An incoming
+  persona deleted before the pair renders drops the pair. The greeting's prompt
+  context and show preparation still come from the context the caller passes,
+  which is the live one on a record with no confirmed final track.
 - The outgoing half reads the still-live outgoing session; the incoming half
   starts with clean prompt memory. If the incoming show is a programme, its plan
   is prepared onto the boundary record and transferred at the real roll so the
@@ -163,6 +170,10 @@ Tests should cover at least:
 - a real seam before the two-minute bound, and light-duck fallback when no seam arrives;
 - a long final track where no handoff has rendered by the deadline;
 - a controller restart that preserves the rendered pair and its original deadline;
+- a show → autonomous boundary, where neither half names an incoming show or
+  reopens the one that is ending;
+- an incoming persona deleted between arming and rendering, which drops the
+  pair instead of handing the mic back to the outgoing host;
 
 ## Resolved live finding — 8 September 2026
 
