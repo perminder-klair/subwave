@@ -20,11 +20,12 @@
 // A heart missing from library.db has not necessarily left the server: the
 // table is only as new as the last walk, and a song added since can be hearted
 // (an admin row from Navidrome search, a coast track built from Navidrome
-// albums). So a planned move goes ahead only when Navidrome itself answers that
-// the old id is not found. A found song, an error or a timeout leaves the heart
-// where it is, because a wrong move hearts a song nobody liked. One lookup per
-// planned move, one at a time, and the first failure stops the rest: those
-// hearts, and the bookmark, wait for the next pass.
+// albums). So a planned move goes ahead only when Navidrome itself says the old
+// id has left (heart-follow-policy.ts oldIdVerdict: not found, or no longer
+// listed on its album). A song still listed, an error or a timeout leaves the
+// heart where it is, because a wrong move hearts a song nobody liked. At most two
+// lookups per planned move, one move at a time, and the first failure stops the
+// rest: those hearts, and the bookmark, wait for the next pass.
 //
 // The move goes through likes.remapTrackIds, the path an id rotation already
 // takes, so the Liked view, topLiked, the stem ranking, the favourites export and
@@ -53,6 +54,8 @@ export interface HeartFollowResult {
   /** Planned moves held because Navidrome did not confirm the old id is gone. */
   held?: number;
 }
+
+const NAVIDROME = { getSong: (id: string) => subsonic.getSong(id), getAlbum: (id: string) => subsonic.getAlbumListing(id) };
 
 const bookmarkFile = () => join(config.stateDir, 'heart-follow.json');
 
@@ -121,12 +124,7 @@ async function pass(): Promise<HeartFollowResult> {
   let settledAll = true;
   for (const [oldId, newId] of planned) {
     if (!settledAll) { held++; continue; }
-    let verdict;
-    try {
-      verdict = oldIdVerdict({ song: await subsonic.getSong(oldId) });
-    } catch (err) {
-      verdict = oldIdVerdict({ error: err });
-    }
+    const verdict = await oldIdVerdict(oldId, NAVIDROME);
     if (verdict === 'gone') moves.set(oldId, newId);
     else held++;
     // A failed lookup says nothing about the rest: keep them, and the walk, for

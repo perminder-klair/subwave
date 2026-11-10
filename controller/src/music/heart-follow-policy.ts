@@ -23,10 +23,22 @@
 //
 // A planned move is only a plan: library.db is as new as its last walk, so a
 // heart on a song added since reads as gone from the table while it is still on
-// the server. `oldIdVerdict` says what Navidrome's answer for the old id allows:
-// only its definite "not found" (Subsonic error 70, the check id-rotation
-// recovery already reads) lets the heart move. A song that comes back, an empty
-// answer, an error or a timeout is not proof, and the heart stays.
+// the server. `oldIdVerdict` asks Navidrome whether the old id has left, and
+// only `gone` lets the heart move. Navidrome (0.55+) keeps a deleted or
+// re-imported file as a *missing* row until an admin purges missing files, and
+// getSong still answers that row ok, with no missing flag. So:
+//   - gone: getSong says not found (Subsonic error 70: a purged row), or it
+//     answers a song whose album, asked with getAlbum, no longer lists the old
+//     id (Navidrome drops missing rows from getAlbum, and leaves out `song`
+//     altogether once every track of the album is missing), or that album is
+//     itself not found;
+//   - present: the album still lists the old id, or getSong answers under
+//     another id (the server still holds the song: not proof it left);
+//   - unknown: any other error, a timeout, or an answer that cannot be read (no
+//     song, no albumId, an album that is not the one asked for). The caller
+//     holds the move, and the rest of its pass, for the next one.
+// Fail closed throughout: a wrong move hearts a song nobody liked, a missed one
+// only waits. At most two calls per planned move.
 
 import { nameKey } from './recency.js';
 import { isMissingSongError } from './id-rotation-recovery.js';
@@ -103,8 +115,36 @@ function pick(h: HeartSnapshot, rows: readonly LibraryNameRow[]): string | null 
 
 export type OldIdVerdict = 'gone' | 'present' | 'unknown';
 
-/** What Navidrome's getSong answer for a heart's old id allows: only `gone` lets it move. */
-export function oldIdVerdict(answer: { song?: unknown; error?: unknown }): OldIdVerdict {
-  if ('error' in answer) return isMissingSongError(answer.error) ? 'gone' : 'unknown';
-  return answer.song ? 'present' : 'unknown';
+/** The two Navidrome reads the verdict needs: getSong, and the album exactly as answered (no filters). */
+export interface OldIdLookups {
+  getSong(id: string): Promise<unknown>;
+  getAlbum(id: string): Promise<unknown>;
+}
+
+const isNotFound = (err: unknown) => Number((err as { subsonicCode?: unknown } | null)?.subsonicCode) === 70;
+
+/** Whether a heart's old id has left Navidrome: only `gone` lets it move. */
+export async function oldIdVerdict(oldId: string, lookups: OldIdLookups): Promise<OldIdVerdict> {
+  let song: { id?: unknown; albumId?: unknown } | null;
+  try {
+    song = (await lookups.getSong(oldId)) as typeof song;
+  } catch (err) {
+    return isMissingSongError(err) ? 'gone' : 'unknown';
+  }
+  if (!song || typeof song !== 'object') return 'unknown';
+  if (song.id != null && String(song.id) !== oldId) return 'present';
+  const albumId = typeof song.albumId === 'string' ? song.albumId : '';
+  if (!albumId) return 'unknown';
+
+  let album: { id?: unknown; song?: unknown } | null;
+  try {
+    album = (await lookups.getAlbum(albumId)) as typeof album;
+  } catch (err) {
+    return isNotFound(err) ? 'gone' : 'unknown';
+  }
+  if (!album || typeof album !== 'object' || String(album.id ?? '') !== albumId) return 'unknown';
+  // Every track of the album missing: Navidrome leaves `song` out.
+  const listed = album.song === undefined ? [] : album.song;
+  if (!Array.isArray(listed)) return 'unknown';
+  return listed.some((s) => String((s as { id?: unknown } | null)?.id ?? '') === oldId) ? 'present' : 'gone';
 }

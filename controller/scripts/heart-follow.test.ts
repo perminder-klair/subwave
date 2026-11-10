@@ -11,8 +11,10 @@
 //
 // library.db is only as new as its last walk, so a heart on a song added since
 // reads as gone from the table while the song is still on the server. A heart
-// moves only when Navidrome itself answers "not found" for the old id; a found
-// song, an error or a timeout leaves it where it is.
+// moves only when Navidrome itself says the old id left: not found, or no longer
+// listed on its album (stock Navidrome keeps a left file as a "missing" row that
+// getSong still answers ok). A song still listed, an error or a timeout leaves
+// it where it is.
 //
 // Run: npm test -- heart-follow
 import assert from 'node:assert/strict';
@@ -28,25 +30,38 @@ process.env.NAVIDROME_URL = 'http://navidrome.heart-follow.invalid';
 process.env.NAVIDROME_USER = 'test';
 process.env.NAVIDROME_PASS = 'test';
 
-// The Navidrome stand-in: how getSong answers for each id. Unlisted ids are
-// "not found" (Subsonic error 70), the answer for a song that left the server.
-const navidrome = new Map<string, 'present' | 'broken'>();
-const getSongAsked: string[] = [];
+// The Navidrome stand-in, answering as stock Navidrome 0.64.2 does (checked on
+// the real container): a deleted or re-imported file stays a *missing* row that
+// getSong still answers ok, with its albumId and no missing flag; getAlbum
+// leaves missing rows out, and leaves `song` out once every track of the album
+// is missing; a purged id, or an album that is not there, is error 70.
+// Ids not in `songs` are purged. `broken` answers a 502.
+const songs = new Map<string, { albumId: string; missing?: boolean } | 'broken'>();
+const brokenAlbums = new Set<string>();
+const asked: string[] = [];
+const subsonicOk = (body: object) => Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', ...body } });
+const notFound = (what: string) =>
+  Response.json({ 'subsonic-response': { status: 'failed', version: '1.16.1', error: { code: 70, message: `${what} not found` } } });
 const realFetch = globalThis.fetch;
 mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input instanceof Request ? input.url : input));
   if (!url.href.startsWith(process.env.NAVIDROME_URL!)) return realFetch(input, init);
-  if (!url.pathname.startsWith('/rest/getSong')) {
-    return Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1' } });
-  }
   const id = url.searchParams.get('id') ?? '';
-  getSongAsked.push(id);
-  const answer = navidrome.get(id);
-  if (answer === 'broken') return new Response('upstream down', { status: 502 });
-  if (answer === 'present') {
-    return Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', song: { id, title: 'still here' } } });
+  if (url.pathname === '/rest/getSong') {
+    asked.push(`getSong:${id}`);
+    const song = songs.get(id);
+    if (song === 'broken') return new Response('upstream down', { status: 502 });
+    return song ? subsonicOk({ song: { id, title: 'a title', albumId: song.albumId } }) : notFound('Song');
   }
-  return Response.json({ 'subsonic-response': { status: 'failed', version: '1.16.1', error: { code: 70, message: 'Song not found' } } });
+  if (url.pathname === '/rest/getAlbum') {
+    asked.push(`getAlbum:${id}`);
+    if (brokenAlbums.has(id)) return new Response('upstream down', { status: 502 });
+    const tracks = [...songs].flatMap(([songId, s]) => (s !== 'broken' && s.albumId === id ? [{ songId, ...s }] : []));
+    if (!tracks.length) return notFound('Album');
+    const listed = tracks.filter((t) => !t.missing).map((t) => ({ id: t.songId, title: 'a title', albumId: id }));
+    return subsonicOk({ album: { id, name: 'an album', songCount: tracks.length, ...(listed.length ? { song: listed } : {}) } });
+  }
+  return subsonicOk({});
 });
 
 const { planHeartMoves, oldIdVerdict, DURATION_TOLERANCE_SEC } = await import('../src/music/heart-follow-policy.js');
@@ -98,12 +113,46 @@ test('no match, or a snapshot without a title or an artist, stays put', () => {
   assert.equal(planHeartMoves([{ songId: 'old', title: 'Song' }], [row('n', 'Song', '', 'LP')]).size, 0);
 });
 
-test('only a definite "not found" from Navidrome lets a heart move', () => {
-  assert.equal(oldIdVerdict({ error: Object.assign(new Error('Subsonic error: Song not found'), { subsonicCode: 70 }) }), 'gone');
-  assert.equal(oldIdVerdict({ song: { id: 'x' } }), 'present');
-  assert.equal(oldIdVerdict({ song: null }), 'unknown', 'an empty answer is not proof');
-  assert.equal(oldIdVerdict({ error: new Error('Subsonic getSong timed out after 30000ms') }), 'unknown');
-  assert.equal(oldIdVerdict({ error: Object.assign(new Error('Subsonic getSong failed: 502'), { httpStatus: 502 }) }), 'unknown');
+test('the old id has left only when Navidrome says so: not found, or no longer on its album', async () => {
+  const err = (message: string, extra: object = {}) => Object.assign(new Error(message), extra);
+  const verdict = (song: () => unknown, album: () => unknown = () => { throw new Error('getAlbum must not be asked'); }) =>
+    oldIdVerdict('old', { getSong: async () => song(), getAlbum: async () => album() });
+  const song = { id: 'old', title: 'Song', albumId: 'alb' };
+
+  // gone
+  assert.equal(await verdict(() => { throw err('Subsonic error: Song not found', { subsonicCode: 70 }); }), 'gone', 'a purged id');
+  assert.equal(await verdict(() => song, () => ({ id: 'alb', song: [{ id: 'live' }] })), 'gone', 'a missing row: answered, but off its album');
+  assert.equal(await verdict(() => song, () => ({ id: 'alb', songCount: 1 })), 'gone', 'every track of the album missing: no `song` at all');
+  assert.equal(await verdict(() => song, () => { throw err('Subsonic error: Album not found', { subsonicCode: 70 }); }), 'gone', 'the album itself not found');
+  // present
+  assert.equal(await verdict(() => song, () => ({ id: 'alb', song: [{ id: 'live' }, { id: 'old' }] })), 'present', 'still listed on its album');
+  assert.equal(await verdict(() => ({ ...song, id: 'canonical' })), 'present', 'answered under another id: the server still holds it');
+  // unknown: an error, a timeout, or an answer that cannot be read
+  assert.equal(await verdict(() => { throw err('Subsonic getSong timed out after 30000ms'); }), 'unknown');
+  assert.equal(await verdict(() => { throw err('Subsonic getSong failed: 502', { httpStatus: 502 }); }), 'unknown');
+  assert.equal(await verdict(() => null), 'unknown', 'an empty answer is not proof');
+  assert.equal(await verdict(() => ({ id: 'old', title: 'Song' })), 'unknown', 'no albumId to ask about');
+  assert.equal(await verdict(() => song, () => { throw err('Subsonic getAlbum failed: 502', { httpStatus: 502 }); }), 'unknown');
+  assert.equal(await verdict(() => song, () => { throw err('Subsonic error: Album not found'); }), 'unknown', 'only the code says not found');
+  assert.equal(await verdict(() => song, () => null), 'unknown', 'no album in the answer');
+  assert.equal(await verdict(() => song, () => ({ id: 'another', song: [] })), 'unknown', 'not the album asked for');
+  assert.equal(await verdict(() => song, () => ({ id: 'alb', song: 'old' })), 'unknown', 'a song list that is not a list');
+});
+
+test('a blocked song still on its album is present: the album is read with no blocklist filter', async () => {
+  const subsonic = await import('../src/music/subsonic.js');
+  const blocklist = await import('../src/music/blocklist.js');
+  songs.set('blocked-live', { albumId: 'alb-blocked' });
+  await blocklist.add({ type: 'track', id: 'blocked-live' });
+  try {
+    assert.deepEqual(await subsonic.getAlbum('alb-blocked'), [], 'the airing read drops it');
+    assert.equal(await oldIdVerdict('blocked-live', {
+      getSong: (id) => subsonic.getSong(id), getAlbum: (id) => subsonic.getAlbumListing(id),
+    }), 'present');
+  } finally {
+    await blocklist.remove('track', 'blocked-live');
+    songs.delete('blocked-live');
+  }
 });
 
 // The real chain: likes.json, the library, followMovedHearts.
@@ -132,7 +181,11 @@ const likes = await import('../src/broadcast/likes.js');
 const { followMovedHearts } = await import('../src/music/heart-follow.js');
 const { recordWalk, lastWalk } = await import('../src/music/library-walk.js');
 const library = await import('../src/music/library.js');
-navidrome.set('deluxe-3', 'present');
+// gone-1 was re-imported: its old id is a missing row, off the album the new
+// copy is on. deluxe-3 is live on the server. gone-2 has no match and is never asked.
+songs.set('gone-1', { albumId: 'alb-negro-swan', missing: true });
+songs.set('live-1', { albumId: 'alb-negro-swan' });
+songs.set('deluxe-3', { albumId: 'alb-blonde-deluxe' });
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 // No Navidrome here: the star write-back is fire-and-forget, so keep it off.
 const settings = await import('../src/settings.js');
@@ -181,20 +234,35 @@ test('Navidrome not answering holds every planned move, and the pass tries again
   db.upsertTrackMeta('kept', { title: 'Arte', artist: 'Monolake', album: 'Hongkong', duration: 300 });
   db.upsertTrackMeta('other', { title: 'Dance', artist: 'DIM KELLY', album: 'LP', duration: 200 });
   db.upsertTrackMeta('std-3', { title: 'Ivy', artist: 'Frank Ocean', album: 'Blonde', duration: 249 });
-  navidrome.set('gone-1', 'broken');
-  getSongAsked.length = 0;
+  const missingRow = songs.get('gone-1')!;
+  songs.set('gone-1', 'broken');
+  asked.length = 0;
   assert.deepEqual(await followMovedHearts(), { stale: 3, moved: 0, held: 2 });
-  assert.deepEqual(getSongAsked, ['gone-1'], 'the first failure stops the lookups');
+  assert.deepEqual(asked, ['getSong:gone-1'], 'the first failure stops the lookups');
   assert.equal(likes.likedSongs().filter((s) => s.songId === 'gone-1').length, 1, 'the heart stayed');
   assert.equal(existsSync(join(stateDir, 'heart-follow.json')), false, 'an inconclusive pass bookmarks nothing');
-  navidrome.delete('gone-1');
+  songs.set('gone-1', missingRow);
 });
 
-test('a heart on a song still on the server stays, though one copy of it is in the table (the deluxe edition)', async () => {
-  // Same walk as the held pass above: nothing was bookmarked, so it runs again.
-  getSongAsked.length = 0;
+test('an album lookup that fails holds every planned move too, and bookmarks nothing', async () => {
+  brokenAlbums.add('alb-negro-swan');
+  asked.length = 0;
+  try {
+    assert.deepEqual(await followMovedHearts(), { stale: 3, moved: 0, held: 2 });
+  } finally {
+    brokenAlbums.clear();
+  }
+  assert.deepEqual(asked, ['getSong:gone-1', 'getAlbum:alb-negro-swan'], 'one album lookup, then the pass stops');
+  assert.equal(likes.likedSongs().filter((s) => s.songId === 'gone-1').length, 1, 'the heart stayed');
+  assert.equal(existsSync(join(stateDir, 'heart-follow.json')), false, 'an inconclusive pass bookmarks nothing');
+});
+
+test('a re-imported song\'s heart moves though Navidrome still answers its old id; one on a song still listed stays (the deluxe edition)', async () => {
+  // Same walk as the held passes above: nothing was bookmarked, so it runs again.
+  asked.length = 0;
   assert.deepEqual(await followMovedHearts(), { stale: 3, moved: 1, held: 1 });
-  assert.deepEqual(getSongAsked.sort(), ['deluxe-3', 'gone-1'], 'one lookup per planned move, none for a heart with no match');
+  assert.deepEqual(asked.sort(), ['getAlbum:alb-blonde-deluxe', 'getAlbum:alb-negro-swan', 'getSong:deluxe-3', 'getSong:gone-1'],
+    'two lookups per planned move, none for a heart with no match');
   const songs = new Map(likes.likedSongs().map((s) => [s.songId, s]));
   assert.equal(songs.has('deluxe-3'), true, 'the deluxe heart stayed on its own id');
   assert.equal(songs.has('std-3'), false, 'the standard edition was not hearted');
@@ -221,9 +289,9 @@ test('the heart that moved: one operator heart on the new id, the listener like 
 test('a pass runs once per walk: the same walk is skipped, a new one looks again', async () => {
   assert.deepEqual(await followMovedHearts(), { stale: 0, moved: 0, skipped: 'walk-seen' });
   recordWalk('tag', 'ok', new Date(Date.now() + 60_000));
-  getSongAsked.length = 0;
+  asked.length = 0;
   assert.deepEqual(await followMovedHearts(), { stale: 2, moved: 0, held: 1 }, 'gone-2 has no match; deluxe-3 is still on the server');
-  assert.deepEqual(getSongAsked, ['deluxe-3']);
+  assert.deepEqual(asked, ['getSong:deluxe-3', 'getAlbum:alb-blonde-deluxe']);
   assert.deepEqual(await followMovedHearts(), { stale: 0, moved: 0, skipped: 'walk-seen' });
 });
 

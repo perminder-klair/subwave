@@ -653,6 +653,15 @@ export async function getAlbum(id, { signal }: { signal?: AbortSignal } = {}) {
   return rejectArchive(r.album?.song || []);
 }
 
+// The album exactly as Navidrome answers it, with no archive or blocklist
+// filter, or null when the answer carries none. For heart-follow-policy.ts,
+// which asks whether an id is still listed: a blocked song is still on the
+// server. One attempt with the fast-transport retry, like getSong.
+export async function getAlbumListing(id: string): Promise<unknown> {
+  const r = await call('getAlbum', { id }, RETRY_FAST_TRANSPORT);
+  return r.album ?? null;
+}
+
 // Single song lookup. The Child carries albumId, which is how manual album
 // tagging resolves a whole album from one track id.
 export async function getSong(id) {
