@@ -46,6 +46,7 @@ function eraSourceNote(track: Track): string {
   switch (track.originalYearSource) {
     case 'manual':      return `${era} · set by hand`;
     case 'musicbrainz': return `${era} · from MusicBrainz`;
+    case 'discogs':     return `${era} · from Discogs`;
     case 'album-tag':   return `${era} · from the album tag — on a reissue this is the reissue’s date`;
     default:            return `${era} · the file’s own year`;
   }

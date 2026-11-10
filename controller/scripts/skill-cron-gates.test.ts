@@ -15,6 +15,11 @@
 // needing to fake real settings/listener/budget/programme state — the same
 // split as budgetMode({used, cap, softPct}) in dj-budget.ts.
 //
+// The same split pins the boundary claim added with #2259: with every segment
+// placed between tracks, a cron fire has no slot-table row and therefore no
+// pending-clip hold, so it must stand down before generating rather than
+// displace a segment already waiting for the boundary.
+//
 // Run: `npm test -- skill-cron-gates`.
 
 import assert from 'node:assert/strict';
@@ -26,7 +31,9 @@ import { join } from 'node:path';
 // pulls in modules (settings, queue, …) that derive paths from it at module scope.
 process.env.STATE_DIR = createTempDir(join(tmpdir(), 'skill-cron-gates-'));
 
-const { skillCronAllowed, skillCronStandDownReason, skillCronEligibility } = await import('../src/broadcast/scheduler.js');
+const { skillCronAllowed, skillCronStandDownReason, skillCronEligibility, skillCronTalkStandDownReason } =
+  await import('../src/broadcast/scheduler.js');
+const { PENDING_VOICE_MAX_AGE_MS } = await import('../src/broadcast/queue/kinds.js');
 
 const ALL_OPEN = {
   voiceAllowed: true,
@@ -70,6 +77,40 @@ assert.deepEqual(
   skillCronEligibility({ ...cohosted, cohosts: false }, {}, host, []),
   { allowed: true },
   'ordinary skill crons keep working on solo shows',
+);
+
+// Between-tracks placement (#2259 review): a cron fire has no row, so the
+// queue would otherwise drop the clip already waiting.
+const now = 1_000_000_000;
+const waiting = { kind: 'station-id', queuedAt: now - 1_000 };
+assert.equal(
+  skillCronTalkStandDownReason('news', 'immediate', null, waiting, now), null,
+  'with the switch off, cron keeps its old immediate path — the pending slot is not involved',
+);
+assert.equal(
+  skillCronTalkStandDownReason('news', 'next-track', null, null, now), null,
+  'an empty boundary belongs to the fire',
+);
+assert.match(
+  skillCronTalkStandDownReason('news', 'next-track', 'weather', null, now) ?? '',
+  /weather/,
+  'a second fire stands down while another skill generates',
+);
+assert.match(
+  skillCronTalkStandDownReason('news', 'next-track', null, waiting, now) ?? '',
+  /station-id/,
+  'a waiting ident is not displaced by a skill',
+);
+assert.equal(
+  skillCronTalkStandDownReason('handoff', 'next-track', null, waiting, now), null,
+  'a handoff still takes the boundary by design',
+);
+assert.equal(
+  skillCronTalkStandDownReason(
+    'news', 'next-track', null, { ...waiting, queuedAt: now - PENDING_VOICE_MAX_AGE_MS - 1 }, now,
+  ),
+  null,
+  'a clip past its age limit no longer holds the boundary',
 );
 
 console.log('skill-cron-gates.test.ts — all assertions passed');

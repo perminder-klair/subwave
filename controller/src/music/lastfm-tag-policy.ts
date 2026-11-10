@@ -65,6 +65,17 @@ export function keepStoredTags(answer: string[], stored: string[]): string[] {
   return oncePerFold([...answer, ...stored]);
 }
 
+// What an artist-only lookup (`lastfm.getArtistTags`) does to the list a row
+// holds, on the bulk pass and Retag alike (#2295). That call answers [] for an
+// outage and for an act with no tags, and can't say which, so only a list with
+// tags on it replaces the stored one. Anything else keeps it: a failure, a
+// keyless Navidrome that never carries tags, or no lookup at all because Last.fm
+// tags are off. A replacement is the answer whole, never a merge: with track tags
+// off a re-ask puts the artist's current list back.
+export function listAfterArtistLookup(stored: string[] | null, answer: string[] | null | undefined): string[] | null {
+  return answer && answer.length ? answer : stored;
+}
+
 function oncePerFold(tags: string[]): string[] {
   const byKey = new Map<string, string>();
   for (const tag of tags) {

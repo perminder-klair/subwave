@@ -267,6 +267,13 @@ export const DEFAULTS = {
     // it off in DJ Behaviour → Show changes.
     previewNextShow: true,
     sameHostAcknowledgement: false,
+    // Keep the music ducked for the whole multi-voice exchange instead of
+    // letting it lift between speakers. On, the lines are handed to the mixer
+    // as one batch so its voice queue never drains; off is the established
+    // per-line delivery, where the duck releases and returns between speakers.
+    // Off by default: an upgrade must sound byte-identical, and the release
+    // between lines is what every station has always heard.
+    holdDuckBetweenSpeakers: false,
     extendedSleeveNotes: false,
     releaseYearMentions: 'regular',
     // Compact anti-repeat material carried into every DJ script prompt. These

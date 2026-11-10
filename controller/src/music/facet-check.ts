@@ -51,11 +51,11 @@ export function checkFacets(sample = 10): FacetCheckReport {
   const clap = new Set(
     (d.prepare('SELECT id FROM track_audio_vectors').all() as Array<{ id: string }>).map(r => r.id),
   );
-  const stored = new Map<string, Map<db.Facet, { status: string; version: number; attempts: number; unmeasurable_reason: string | null }>>();
+  const stored = new Map<string, Map<db.Facet, { status: string; version: number; attempts: number; reason: string | null; unmeasurable_reason: string | null }>>();
   let rows = 0;
   for (const r of d
-    .prepare('SELECT track_id, facet, status, version, attempts, unmeasurable_reason FROM track_facet_status')
-    .all() as Array<{ track_id: string; facet: db.Facet; status: string; version: number; attempts: number; unmeasurable_reason: string | null }>) {
+    .prepare('SELECT track_id, facet, status, version, attempts, reason, unmeasurable_reason FROM track_facet_status')
+    .all() as Array<{ track_id: string; facet: db.Facet; status: string; version: number; attempts: number; reason: string | null; unmeasurable_reason: string | null }>) {
     rows += 1;
     let m = stored.get(r.track_id);
     if (!m) stored.set(r.track_id, (m = new Map()));
@@ -72,7 +72,9 @@ export function checkFacets(sample = 10): FacetCheckReport {
     for (const [facet, r] of have ?? []) {
       if (r.unmeasurable_reason != null) unmeasurable[facet] = r.unmeasurable_reason;
     }
-    const want = new Map(db.deriveFacetRows(t, clap.has(t.id), { unmeasurable }).map(r => [r.facet, r]));
+    // A failed year lookup is a stored fact, like an explicit unmeasurable answer.
+    const yearFailure = db.yearFailureFor(have?.get('year'));
+    const want = new Map(db.deriveFacetRows(t, clap.has(t.id), { unmeasurable, yearFailure }).map(r => [r.facet, r]));
     for (const facet of db.FACETS) {
       const a = have?.get(facet);
       const b = want.get(facet);

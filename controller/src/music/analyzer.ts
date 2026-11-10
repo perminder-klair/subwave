@@ -10,7 +10,8 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
-import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { warnLimiter } from '../util/warn-limiter.js';
+import { describeFetchError, fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
 import { parseWholeLoudnessCurve, type WholeLoudnessCurve } from './whole-loudness-curve.js';
 
@@ -562,7 +563,7 @@ let _sidecarBase = '';
 
 async function probeSidecar(url: string): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000 });
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000, retryStaleSocket: true });
     if (!res.ok) return false;
     const body = (await res.json()) as {
       ok?: boolean;
@@ -648,6 +649,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     body: JSON.stringify(body),
     timeoutMs: config.analyzer.requestTimeoutMs,
     bodyDeadline: true,
+    retryStaleSocket: true,
   });
   if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
@@ -849,6 +851,21 @@ export function isTimeoutError(err: unknown): boolean {
   return name === 'AbortError' || (typeof message === 'string' && message.includes('timed out'));
 }
 
+// An analyzer outage fails every embed call, and a tagger run makes hundreds:
+// name the cause at most once per EMBED_WARN_EVERY_MS, then say how many more
+// failed in between, so the log shows the outage without one line per track.
+export const EMBED_WARN_EVERY_MS = 60_000;
+const embedWarnings = warnLimiter(EMBED_WARN_EVERY_MS);
+
+export function warnEmbedFailure(cause: string, now: number = Date.now()): boolean {
+  return embedWarnings.warn(`[analyzer] text embedding failed: ${cause}`, now);
+}
+
+/** Test hook: forget the last warning. */
+export function _resetEmbedWarningsForTests(): void {
+  embedWarnings.reset();
+}
+
 // Embed texts through the CLAP text tower — 512-d L2-normalised vectors in the
 // same space as stored track audio vectors, so cosine against them is
 // meaningful. Returns null whenever the capability is absent; callers degrade,
@@ -876,6 +893,7 @@ export async function embedTexts(
         body: JSON.stringify({ texts }),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
         ...(signal ? { signal } : {}),
       });
       // 404 = pre-text-tower sidecar, 500 = lean build; both mean "no text
@@ -888,14 +906,20 @@ export async function embedTexts(
     if (signal?.aborted) return null;
     return await localEmbedTexts(texts, timeoutMs, signal);
   };
+  // A failure still degrades to null, but names its cause once: a caller's
+  // "text embedding failed" warning cannot see it.
+  const failed = (err: unknown): null => {
+    if (!signal?.aborted) warnEmbedFailure(describeFetchError(err));
+    return null;
+  };
   try {
     return await attempt();
   } catch (err) {
-    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return null;
+    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return failed(err);
     try {
       return await attempt();
-    } catch {
-      return null;
+    } catch (retryErr) {
+      return failed(retryErr);
     }
   }
 }
@@ -952,6 +976,7 @@ export async function renderTransition(
         body: JSON.stringify(payload),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
       });
       if (!res.ok) return null; // 404 = pre-render sidecar — silently no blend
       const body = (await res.json()) as WorkerMessage & { ok?: boolean };
@@ -1250,6 +1275,7 @@ async function facetRequest(
       body: JSON.stringify(body),
       timeoutMs,
       bodyDeadline: true,
+      retryStaleSocket: true,
     });
     if (!res.ok) return sidecarFailure(res);
     msg = (await res.json()) as WorkerMessage;
