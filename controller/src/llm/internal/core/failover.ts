@@ -440,7 +440,7 @@ export async function withFailover<T>(
     const serverExhausted = isServerExhausted(err);
     const backup = ((!isGenerationControlError(err) || isProviderRequestTimeout(err))
       && !signal?.aborted
-      && (isUnreachable(err) || quotaOrAuth || upstreamOverloaded || rateLimited || modelGone || serverExhausted))
+      && (isUnreachable(err) || quotaOrAuth || upstreamOverloaded || rateLimited || modelGone || serverExhausted || isProviderRequestTimeout(err)))
       ? fallbackLeg()
       : null;
     if (!backup) {
@@ -459,7 +459,6 @@ export async function withFailover<T>(
       : 'unreachable';
     const detail = err?.statusCode || err?.cause?.statusCode || err?.code || err?.cause?.code || err?.name || 'unknown';
     console.log(`[${kind}] primary LLM (${primary.label}) ${reason} (${detail}) — failing over to ${backup.label}`);
-    recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, extra: failExtra(err) });
     // Only a host-down verdict starts the sticky window. A retired model or a
     // spent quota keeps the host healthy and its errors are immediate — there
     // is no detection cost worth remembering, and marking a healthy box down
@@ -477,6 +476,9 @@ export async function withFailover<T>(
     const backupStarted = Date.now();
     try {
       const r = await runAttempt(backup, 'fallback');
+      // The backup answered. The primary's failure is rescued — mark it so the
+      // stats and Doctor dashboards don't count it as a station failure.
+      recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, extra: { ...failExtra(err), rescued: true } });
       noteBackupResult(routing, true);
       recordSuccess({ kind, started: backupStarted, via: r.via, model: backup.label, sampling: r.sampling, usage: r.usage, contextPeakInput: r.contextPeakInput, perf: r.perf, warnings: r.warnings, extra: r.extra });
       return r.value;
@@ -486,6 +488,8 @@ export async function withFailover<T>(
         if (down && sticky === down) clearSticky();
       }
       logFailurePreview(kind, err2);
+      // Backup also failed: the primary's failure stands on its own, no rescue.
+      recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, extra: failExtra(err) });
       recordFailure({ kind, started: backupStarted, via: err2?.__via || 'ai-sdk', model: backup.label, error: err2?.message, extra: failExtra(err2) });
       throw err2;
     }

@@ -476,7 +476,8 @@ function HeavyEngineSetupGuide({ engine, buildArg }: { engine: 'Chatterbox' | 'P
 
 interface TtsSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
-  refresh: () => Promise<void>;
+  /** The refetch outcome is returned by the caller but unused here. */
+  refresh: () => void;
   // Run by SUB/WAVE Cloud: the engine (and each engine's provider config) is the
   // box agent's, so only what the operator still owns is shown. The controller
   // drops managed keys on save regardless (setup/hosted.ts).

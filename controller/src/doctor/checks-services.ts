@@ -127,10 +127,11 @@ export async function checkLlm(
     });
   }
 
-  // Recent error rate from the in-memory ring.
+  // Recent error rate from the in-memory ring. A rescued call (primary failed,
+  // backup answered) is not a station failure — the DJ got an answer.
   const recent = recentCalls.slice(0, 20);
   if (recent.length) {
-    const fails = recent.filter((c) => c && c.ok === false).length;
+    const fails = recent.filter((c) => c && c.ok === false && c.rescued !== true).length;
     const rate = Math.round((fails / recent.length) * 100);
     out.push({
       label: 'recent calls',

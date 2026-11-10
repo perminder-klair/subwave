@@ -17,6 +17,7 @@ import { STATE_DIR } from '../config.js';
 import { LLM_KEY_ENV_VARS } from '../schemas/providers.js';
 import { SECRET_CONTROL_CHAR_RE, stripSecretControlChars } from '../schemas/settings.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
+import { withPoolLock } from '../util/google-key-pool.js';
 
 const PATH = `${STATE_DIR}/secrets.env`;
 
@@ -25,6 +26,11 @@ const PATH = `${STATE_DIR}/secrets.env`;
 // catalogue (schemas/providers.ts), in its order.
 export const SECRET_ENV_KEYS = [
   ...LLM_KEY_ENV_VARS,
+  // Comma-separated Gemini key POOL. The LLM leg reads it; TTS deliberately does
+  // not (#1778). `GOOGLE_GENERATIVE_AI_API_KEY` (singular, from the catalogue)
+  // stays valid on its own and is treated as a one-key pool — a station that
+  // only ever set one key is unaffected.
+  'GOOGLE_GENERATIVE_AI_API_KEYS',
   'ELEVENLABS_API_KEY',
   'FISH_API_KEY',
   'SEARCH_API_KEY',
@@ -117,9 +123,37 @@ export async function loadSecretsIntoEnv(): Promise<{ loaded: string[]; skipped:
   return { loaded, skipped, warnings };
 }
 
-// Persist a batch of API keys, merged over what is already there. An empty value
-// is written as `KEY=` rather than deleted, so the next boot falls back to env.
-export async function saveSecrets(rawPatch: Record<string, string>): Promise<void> {
+// Persist a batch of API keys, merged over what is already there, SERIALISED.
+//
+// The serialisation is the point, not an optimisation. Every save rewrites the
+// WHOLE file, so two concurrent saves are two read-modify-writes of one file:
+// both read the same starting state, both write, and the slower one silently
+// discards the faster one's key. Reproduced 20 times out of 20 with two
+// unrelated API keys saved at once — and because both handlers had already
+// answered 200 by then, the operator was told both keys were stored.
+//
+// It was not enough for the Google pool endpoints to take the pool lock while
+// this generic writer stayed outside it. The pool variable is a field in THIS
+// file, so a pool mutation and an unrelated key save are the same transaction
+// on the same bytes, and only a single lock over the whole file serialises them.
+// Hence the lock lives HERE, at the one writer of the file, rather than being
+// remembered by each caller: onboarding, the wizard and the pool endpoints all
+// come through this function and are all covered by construction.
+//
+// Callers already holding the lock (the pool endpoints, which read-modify-write
+// the pool's own list before persisting it) must use saveSecretsWithinLock —
+// taking the lock again here would deadlock the single chain against itself.
+export function saveSecrets(patch: Record<string, string>): Promise<void> {
+  return withPoolLock(() => saveSecretsWithinLock(patch));
+}
+
+/**
+ * The read-merge-rewrite itself, with NO lock of its own.
+ *
+ * Only for a caller that already holds `withPoolLock`. Everything else calls
+ * `saveSecrets`.
+ */
+export async function saveSecretsWithinLock(rawPatch: Record<string, string>): Promise<void> {
   // Control characters stripped as every secret's save path does
   // (schemas/settings.ts), so a key with a line break is joined, not refused.
   const patch = Object.fromEntries(
