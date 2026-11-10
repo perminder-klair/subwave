@@ -46,7 +46,8 @@ const template = settings.get().personas[0];
 const WREN = { ...template, id: 'p_wren', name: 'Wren' };
 const GIGI = { ...template, id: 'p_gigi', name: 'Gigi' };
 
-function context(show: { id: string; name: string }, atMs: number) {
+// A null show is autonomous play: no show on air at that moment.
+function context(show: { id: string; name: string } | null, atMs: number) {
   return {
     at: new Date(atMs).toISOString(),
     time: { period: 'morning', vibe: 'morning', mood: 'calm' },
@@ -56,7 +57,7 @@ function context(show: { id: string; name: string }, atMs: number) {
     date: {},
     clock: {},
     listeners: 1,
-    activeShow: { ...show, topic: '', moods: ['calm'] },
+    activeShow: show ? { ...show, topic: '', moods: ['calm'] } : null,
   } as any;
 }
 
@@ -82,19 +83,22 @@ async function scheduleIncoming() {
   });
 }
 
+// `incomingShow: null` arms a show → autonomous boundary.
 async function armIncoming({
   atMs = Date.now(), finalTrack, scheduled = false,
+  incomingShow = { id: 's_incoming', name: 'Cultural Currents' },
   patch = {},
 }: {
   atMs?: number;
   finalTrack?: Parameters<typeof session.armBoundaryHandoff>[1];
   scheduled?: boolean;
+  incomingShow?: { id: string; name: string } | null;
   patch?: Parameters<typeof settings.update>[0];
 } = {}) {
   await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id, ...patch } as never);
   session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, atMs));
   await settings.update({ activePersonaId: GIGI.id } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, atMs + 60_000);
+  const incoming = context(incomingShow, atMs + 60_000);
   if (scheduled) await scheduleIncoming();
   assert.equal(session.armBoundaryHandoff(incoming, finalTrack), true);
   return incoming;
@@ -327,13 +331,8 @@ test('a final-track handoff uses the incoming identity captured at arm time', as
 test('a show-to-autonomous final-track handoff does not reopen the outgoing show', async (t) => {
   queue.djLog = [];
   restorePromptSettingsAfter(t);
-  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
-  const t0 = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
-  await settings.update({ activePersonaId: GIGI.id } as never);
   // No show on the incoming side: the station falls back to autonomous play.
-  const incoming = { ...context({ id: 'unused', name: 'unused' }, t0 + 60_000), activeShow: null };
-  assert.equal(session.armBoundaryHandoff(incoming), true);
+  const incoming = await armIncoming({ incomingShow: null });
 
   const { seen, deps } = generators();
   t.mock.method(queue, 'announceExchange', async () => true);
@@ -343,6 +342,26 @@ test('a show-to-autonomous final-track handoff does not reopen the outgoing show
   assert.equal(seen.signoff.showIn, null, 'the sign-off must not hand over to the show that is ending');
   assert.equal(seen.greeting.showIn, null, 'the greeting must not kick off the show that is ending');
   assert.doesNotMatch(seen.greeting.prompt, /The Soft Start Procedure/);
+});
+
+test('a final-track handoff whose incoming persona was deleted never hands the mic back to the outgoing host', async (t) => {
+  queue.djLog = [];
+  restorePromptSettingsAfter(t);
+  const incoming = await armIncoming();
+  // Removed between arming and airing. Before the roll, both the live session
+  // and the clock still name the outgoing host, so neither may stand in.
+  await settings.update({ personas: [WREN], activePersonaId: WREN.id } as never);
+
+  const { seen, deps } = generators();
+  const aired: string[] = [];
+  t.mock.method(queue, 'announceExchange', async () => { aired.push('exchange'); return true; });
+  t.mock.method(queue, 'announce', async () => { aired.push('solo'); return { accepted: true }; });
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
+
+  assert.equal(seen.signoff, undefined, 'no sign-off is written to a deleted incoming DJ');
+  assert.equal(seen.greeting, undefined, 'the outgoing host does not greet their own show');
+  assert.deepEqual(aired, []);
+  assert.equal(session.pendingHandoff(), null, 'the dropped mic-pass is settled, not retried');
 });
 
 test('a final-track handoff grounds both rendered prompts at the stored boundary clock', async (t) => {
