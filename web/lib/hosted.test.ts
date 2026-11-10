@@ -34,11 +34,16 @@ test('music URLs: https only, and only when hosted', () => {
   assert.deepEqual(hostedFromEnv({ ...env, SUBWAVE_HOSTED: '1' }), { hosted: true, musicUploadUrl: 'https://up.example/x' });
 });
 
-test('listener cap: a whole number from SUBWAVE_LISTENER_CAP, only when hosted', () => {
-  assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_LISTENER_CAP: '15' }).listenerCap, 15);
-  assert.equal(hostedFromEnv({ SUBWAVE_LISTENER_CAP: '15' }).listenerCap, undefined);
-  for (const bad of ['0', '-3', '2.5', 'many', '']) {
-    assert.equal(hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_LISTENER_CAP: bad }).listenerCap, undefined, bad);
+// The pages hand hostedFromEnv's result to a client provider, so it is
+// serialised into every hosted admin page, and those are served before sign-in
+// (the auth gate is client-side). The box's listener ceiling is an unpublished
+// guard for its shared port, enforced by Icecast, so it must not be in there.
+test('the box\'s listener ceiling never reaches the admin pages', () => {
+  const info = hostedFromEnv({ SUBWAVE_HOSTED: '1', SUBWAVE_LISTENER_CAP: '4321', SUBWAVE_MAX_BITRATE: '192' });
+  assert.deepEqual(info, { hosted: true, maxBitrate: 192 });
+  assert.doesNotMatch(JSON.stringify(info), /4321/);
+  for (const page of ['../app/admin/settings/page.tsx', '../app/admin/personas/page.tsx', '../app/admin/imaging/page.tsx']) {
+    assert.doesNotMatch(readFileSync(new URL(page, import.meta.url), 'utf8'), /SUBWAVE_LISTENER_CAP/, page);
   }
 });
 
