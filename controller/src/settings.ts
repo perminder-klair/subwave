@@ -2832,7 +2832,7 @@ export async function update(patch) {
 // them on its next start. Idempotent. A missing file writes them all; files
 // already there keep what they say (the jingle ratio's reason is in
 // broadcast/jingle-rotate.ts), except the six listener-mount files, which are
-// reconciled with the saved stream settings under a hosted plan's ceiling
+// reconciled with the saved stream settings under a hosted station's ceiling
 // (settings/liquidsoap.ts reconcileStreamMountFiles). Returns the mount files
 // that boot rewrote, so the caller can say the mixer needs a restart.
 export async function ensureLiquidsoapSettingsFile(): Promise<{ rewroteMountFiles: string[] }> {

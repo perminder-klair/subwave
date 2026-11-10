@@ -20,7 +20,7 @@ export const router = express.Router();
 const VERSION = process.env.SUBWAVE_VERSION || 'latest';
 
 // The MP3 floor is always on; optional mounts follow their settings flag,
-// through a hosted plan's bitrate ceiling (setup/hosted.ts advertisedMounts),
+// through a hosted station's bitrate ceiling (setup/hosted.ts advertisedMounts),
 // so the page never lists a mount the ceiling switched off.
 function mountsWithState(): (StreamMountDoc & { enabled: boolean })[] {
   const mounts = advertisedMounts(settings.get().stream);
