@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { ListMusic, Telescope, ArrowRight } from 'lucide-react';
+import { ListMusic, Telescope, ArrowRight, AudioLines } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import TaggingPanel from './LibraryTaggingPanel';
 import { LibraryProvider, useLibrary } from './library/LibraryContext';
@@ -63,6 +63,11 @@ function LibraryBody() {
     // doorway card's un-shrinkable copy blew the column past a phone viewport.
     <div className="grid grid-cols-1 gap-5">
       <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <a href="/admin/library/sub-flow" className="group flex min-w-0 items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft">
+          <span className="grid size-9 flex-none place-items-center border border-ink bg-[var(--accent)] text-white"><AudioLines size={18} /></span>
+          <span className="min-w-0 flex-1"><span className="block text-sm font-bold text-ink">Sub/Flow</span><span className="block truncate font-mono text-[10px] text-muted">keep album tracks together · UI draft</span></span>
+          <ArrowRight className="size-4 flex-none text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-ink" />
+        </a>
         <a
           href="/admin/playlists"
           // min-w-0: a grid item's automatic minimum is min-content, which the

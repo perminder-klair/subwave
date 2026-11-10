@@ -26,7 +26,7 @@ export const BACKUP_VERSION = 1;
 
 // Top-level state files copied verbatim (settings.json + library.db are handled
 // specially; manifest.json is generated).
-export const INCLUDE_FILES = ['jingles.json', 'jingles.m3u', 'sfx.json'] as const;
+export const INCLUDE_FILES = ['jingles.json', 'jingles.m3u', 'sfx.json', 'sub-flows.json'] as const;
 // Top-level state directories copied whole.
 export const INCLUDE_DIRS = [
   'persona-avatars',

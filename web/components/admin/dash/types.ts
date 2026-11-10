@@ -47,6 +47,7 @@ export const BANTER_SEGMENT: { type: SegmentType; label: string; icon: LucideIco
   { type: 'banter', label: 'Banter', icon: MessagesSquare };
 
 export interface QueueState {
+  current?: QueueEntry | null;
   upcoming?: QueueEntry[];
   history?: QueueEntry[];
   /** Human-readable description of the imminent seam, derived by the mixer. */

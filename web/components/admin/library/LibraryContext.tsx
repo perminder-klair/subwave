@@ -366,12 +366,14 @@ export function LibraryProvider({
   const queueTrack = useCallback(async (track: Track) => {
     setQueuing(track.id);
     try {
-      const j = await adminJson<{ queuePosition?: number }>(adminFetch, '/dj/queue-track', {
+      const j = await adminJson<{ queuePosition?: number; track: { title: string }; flow?: { name: string; size: number } }>(adminFetch, '/dj/queue-track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(track),
       });
-      notify.ok(`queued “${track.title}” · position ${j.queuePosition}`);
+      notify.ok(j.flow
+        ? `Queued Flow “${j.flow.name}” · ${j.flow.size} tracks starting with “${j.track.title}” · position ${j.queuePosition}`
+        : `queued “${track.title}” · position ${j.queuePosition}`);
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {

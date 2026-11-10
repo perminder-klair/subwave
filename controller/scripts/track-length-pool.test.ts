@@ -114,7 +114,10 @@ test('the real pool pick path carries its upcoming-show forecast into enqueue', 
   const q = snapshot();
   q.senderBusy = true;
   try {
-    await runTrackEvent(q, { activeShow: null, dominantMood: null, time: { period: 'day' } }, { wantLink: false, showAt });
+    // Production look-ahead contexts carry their forecast timestamp. Without it,
+    // episode preparation correctly refreshes this incomplete fixture at "now",
+    // restoring the outgoing show's cap instead of testing the incoming show.
+    await runTrackEvent(q, { at: showAt.toISOString(), activeShow: null, dominantMood: null, time: { period: 'day' } }, { wantLink: false, showAt });
     assert.equal(q.upcoming.length, 1);
     assert.equal(q.upcoming[0].track.duration, 2700);
     assert.equal(q.upcoming[0].selectionShowAt, showAt.getTime());

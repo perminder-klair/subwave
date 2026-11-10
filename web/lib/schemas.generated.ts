@@ -3831,7 +3831,14 @@ export const audioPatchSchema = settingsBlockOf({
 // that BOTH pick paths read. A new key, so there is no hand-rolled branch to
 // reproduce: `settingsNumberLike` is chosen on merit (Number() refuses '6abc'
 // and keeps the fraction) rather than to preserve an accident.
+export const flowProtectionSchema = z.object({
+  flowProtectBeforeSec: z.number().int().min(1).max(30),
+  flowProtectAfterSec: z.number().int().min(1).max(30),
+});
+
 export const pickerPatchSchema = settingsBlockOf({
+  ...flowProtectionSchema.shape,
+  flowAllowAboveMax: z.boolean(),
   albumHours: settingsNumberLike(
     PICKER_ALBUM_HOURS_BOUNDS,
     `picker.albumHours must be between ${PICKER_ALBUM_HOURS_BOUNDS.min} and ${PICKER_ALBUM_HOURS_BOUNDS.max} (0 = off)`,
@@ -4933,6 +4940,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // Show-boundary fade (#1574). TRI-STATE like maxTrackSeconds: null =
       // inherit. A plain showBool() would read an untouched show as an explicit
       // false and opt it out of a station default just turned on.
+      flowAllowAboveMax: z.boolean().nullable().optional().transform(v => v ?? null),
       fadeAtShowEnd: z
         .union([z.null(), z.literal(''), z.boolean()])
         .optional()
@@ -5085,6 +5093,7 @@ export function repairShowForLoad(
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
     preparationSkill: typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX) : undefined,
+    flowAllowAboveMax: typeof raw.flowAllowAboveMax === 'boolean' ? raw.flowAllowAboveMax : null,
     themeId: typeof raw.themeId === 'string'
       ? raw.themeId.trim().slice(0, SHOW_THEME_ID_MAX)
       : undefined,
@@ -5737,6 +5746,18 @@ export function steerClause(text: string | null | undefined): string {
 export function quotedSteer(text: string | null | undefined): string {
   return typeof text === 'string' ? text.trim().replace(/"/g, "'") : '';
 }
+
+// ─── from controller/src/schemas/sub-flow.ts ─────────────────────────────
+
+export const subFlowNameSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+});
+
+export const subFlowInputSchema = subFlowNameSchema.extend({
+  enabled: z.boolean(),
+  trackIds: z.array(z.string().min(1).max(128)).min(2).max(3),
+  revision: z.number().int().positive().optional(),
+}).strict().refine(value => new Set(value.trackIds).size === value.trackIds.length, 'Tracks must be different');
 
 // ─── from controller/src/schemas/transitions.ts ──────────────────────────
 
