@@ -139,6 +139,34 @@ test('a restored never-play list purges the queue and rebuilds the coast playlis
   assert.equal(purge.mock.callCount(), 1, 'a backup without the list touches neither');
 });
 
+test('the restored list takes effect last, after the settings and library.db it came with', async (t) => {
+  const { queue } = await import('../src/broadcast/queue.js');
+  const { blocklistEffects } = await import('../src/broadcast/blocklist-effects.js');
+  const settings = await import('../src/settings.js');
+  const { recordWalk, lastWalk } = await import('../src/music/library-walk.js');
+  recordWalk('tag', 'ok');
+  const seen: Array<{ station: unknown; walk: unknown }> = [];
+  t.mock.method(queue, 'purgeBlocked', () => 0);
+  t.mock.method(blocklistEffects, 'refreshAutoPlaylist', async () => {
+    seen.push({ station: settings.get().station, walk: lastWalk() });
+  });
+  // The same list the earlier restore left live, so the tests after this one see it.
+  const list = JSON.stringify({
+    entries: [{ type: 'album', id: 'alb-restored', name: 'Restored Album', artist: 'Band', album: null, addedAt: '2026-01-01T00:00:00Z' }],
+    rules: [],
+  });
+  const res = await restore(backupOf([
+    ['blocklist.json', list],
+    ['settings.json', JSON.stringify({ station: 'Restored FM' })],
+    // An empty file is an empty SQLite database: the reopen builds the schema.
+    ['library.db', Buffer.alloc(0)],
+  ]));
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.ok(res.body.restored.includes('library.db'));
+  assert.deepEqual(seen, [{ station: 'Restored FM', walk: null }],
+    'the coast rebuilds with the restored settings, after the table was swapped');
+});
+
 test('a restored library.db forgets the walk: hearts wait for the next clean one', async () => {
   const { recordWalk, lastWalk } = await import('../src/music/library-walk.js');
   recordWalk('tag', 'ok');

@@ -197,6 +197,7 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
   const restored: string[] = [];
   let requiresRestart = false;
   let tmpDir: string | null = null;
+  let blocklistRestored = false;
   try {
     // 1) Media — must run BEFORE settings.update(): settings validation resolves
     //    theme.active / shows[].themeId against themes read from state/themes/,
@@ -228,9 +229,7 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       const { dropped } = await blocklist.restore(blocklistDoc);
       if (dropped) skipped.push(`blocklist.json: ${dropped} unusable record(s)`);
       restored.push('blocklist.json');
-      // As after any list edit: the queue and the coast playlist drop what the
-      // restored list blocks.
-      applyBlocklistChange();
+      blocklistRestored = true;
     }
 
     // 1c) Skills through the import's guards: any tool.mjs not already live
@@ -268,6 +267,11 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
 
     return { ok: true, status: 200, restored, requiresRestart, skipped, skillsAwaitingReview };
   } finally {
+    // As after any list edit, the queue and the coast playlist drop what the
+    // restored list blocks. Last, so the coast rebuilds with the restored
+    // settings and library.db, and in `finally`, so a later step that throws
+    // cannot leave a restored list live with its blocked tracks still queued.
+    if (blocklistRestored) applyBlocklistChange();
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
