@@ -13,6 +13,7 @@ import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 import { libraryMountProven } from './library-mount.js';
+import { STALE_SOCKET_RETRY_MS } from '../util/fetch-timeout.js';
 import { fileTitle, MAX_REPORTED_TITLE_BYTES, normalizeTitle, titleVerdict } from './tag-title.js';
 
 function buildAuth() {
@@ -90,8 +91,12 @@ function extractCount(sub, songs) {
 // the same mechanism at the one chokepoint every call goes through, so a walk of
 // thousands of albums no longer dies on the first idle socket. A FAST failure is
 // characteristic of the stale-socket case, but cannot prove a request did not
-// reach Navidrome. Only explicitly safe operations may spend the retry.
-const STALE_SOCKET_RETRY_MS = 2_000;
+// reach Navidrome. Only explicitly safe operations may spend the retry. The
+// window (STALE_SOCKET_RETRY_MS) is all it shares with fetchWithTimeout's
+// retryStaleSocket; the rule differs. This one retries any fast transport
+// failure (ECONNREFUSED included) once, after STALE_SOCKET_BACKOFF_MS; that one
+// resends only UND_ERR_SOCKET/ECONNRESET/EPIPE, straight away, in up to
+// STALE_SOCKET_ATTEMPTS attempts.
 const STALE_SOCKET_BACKOFF_MS = 250;
 
 type CallOptions = {
@@ -586,9 +591,50 @@ export async function getScanStatus(): Promise<boolean | null> {
   }
 }
 
+// The same call, read for its song count as well (Navidrome answers `count`,
+// the tracks in its library). One cheap request where counting otherwise means
+// walking every album. Each field is null when unknown.
+export async function getScanSummary(): Promise<{ scanning: boolean | null; count: number | null }> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    const s = r.scanStatus;
+    const count = Number(s?.count);
+    return {
+      scanning: typeof s?.scanning === 'boolean' ? s.scanning : null,
+      count: s?.count != null && Number.isSafeInteger(count) && count >= 0 ? count : null,
+    };
+  } catch {
+    return { scanning: null, count: null };
+  }
+}
+
 export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
   const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
+}
+
+/** getScanStatus with Navidrome's `lastScan`, the time its last scan ended. */
+export interface ScanState {
+  scanning: boolean;
+  /** null when the server does not report one (Gonic, plain Subsonic). */
+  lastScan: string | null;
+}
+
+// The same call as getScanStatus, keeping `lastScan` too: two reads with the
+// same `lastScan` prove no scan ended between them, which `scanning` alone
+// cannot (a watcher scan of a small folder is true for under 100 ms). For
+// heart-follow-policy.ts scanSettled. Navidrome (0.49 to 0.64 at least) moves
+// it on every scan, a no-op one included, and answers Go's zero time
+// ("0001-01-01T00:00:00Z") before its first. null = unknown, as getScanStatus.
+export async function getScanState(): Promise<ScanState | null> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    const s = r.scanStatus;
+    if (typeof s?.scanning !== 'boolean') return null;
+    return { scanning: s.scanning, lastScan: typeof s.lastScan === 'string' && s.lastScan ? s.lastScan : null };
+  } catch {
+    return null;
+  }
 }
 
 // Albums by play count. `offset` rotates the window — the top-N list barely
@@ -651,6 +697,15 @@ export async function getRecentSongsByArtist(
 export async function getAlbum(id, { signal }: { signal?: AbortSignal } = {}) {
   const r = await call('getAlbum', { id }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.album?.song || []);
+}
+
+// The album exactly as Navidrome answers it, with no archive or blocklist
+// filter, or null when the answer carries none. For heart-follow-policy.ts,
+// which asks whether an id is still listed: a blocked song is still on the
+// server. One attempt with the fast-transport retry, like getSong.
+export async function getAlbumListing(id: string): Promise<unknown> {
+  const r = await call('getAlbum', { id }, RETRY_FAST_TRANSPORT);
+  return r.album ?? null;
 }
 
 // Single song lookup. The Child carries albumId, which is how manual album

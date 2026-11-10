@@ -3,10 +3,11 @@
 // #5824.
 
 import { requireDb } from './handle.js';
-import { moveFacetRows, syncTrackFacets } from './facets.js';
+import { WHOLE_FILE_LOUDNESS_EXTRAS, moveFacetRows, syncTrackFacets } from './facets.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { canonicalId } from '../id-canonical.js';
 import { SEARCH_KEY_DDL } from './search-keys.js';
+import { yearSourceKept } from '../original-year-policy.js';
 
 // Carry physical track columns by default, excluding ID/generated columns and walk-owned
 // metadata. columnPlan and the drift test require every column to be classified.
@@ -38,13 +39,25 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
   // lastfm_track_tags_at describes lastfm_tags, so the two move together: a
   // stamp carried onto a new row's own artist-only list would falsely mark it done.
   { anchor: 'enriched_at', cols: ['lastfm_tags', 'lastfm_track_tags_at', 'lyric_excerpt', 'enriched_at'] },
-  { anchor: 'moods', cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at'] },
+  // untaggable_key (#2283) is the tagger's answer for an untagged row, so it
+  // moves with the tags: a rotated id keeps its metadata and is not re-asked.
+  // tagged_measured (#2281) is the stamp on the tags themselves.
+  {
+    anchor: 'moods',
+    cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at',
+      'untaggable_key', 'tagged_measured'],
+  },
   {
     anchor: 'analysis_version',
     cols: ['bpm', 'musical_key', 'intro_ms', 'analysis_confidence', 'analysis_version', 'loudness_lufs',
       'peak_db', 'structure_json', 'pace_json', 'beats_json', 'bars_json', 'key_ranges_json',
-      'lead_silence_ms', 'analyze_error', 'analyze_failed_at', 'analyze_fail_count'],
+      'lead_silence_ms', 'analyze_error', 'analyze_failed_at', 'analyze_fail_count',
+      // loudness_lufs/peak_db mean whatever loudness_version says, so the
+      // stamp and the whole-file figures measured with it travel together.
+      ...WHOLE_FILE_LOUDNESS_EXTRAS],
   },
+  // The whole-file edges facet: one measurement, carried as a set.
+  { anchor: 'decoded_duration_ms', cols: ['edge_lead_ms', 'edge_tail_ms', 'decoded_duration_ms'] },
   { anchor: 'audio_moods', cols: ['audio_moods', 'audio_mood_scores_json'] },
   { anchor: 'audio_descriptors', cols: ['audio_descriptors', 'audio_descriptor_scores_json'] },
   { anchor: 'map_x', cols: ['map_x', 'map_y'] },
@@ -134,11 +147,12 @@ function mergeRow(plan: ColumnPlan, oldRow: Row, newRow: Row, movedTextVector: b
   }
   for (const c of plan.coalesced) merged[c] = newRow[c] ?? oldRow[c];
 
-  // Mirror upsertTrackMeta's precedence: a per-track 'musicbrainz' or 'manual'
-  // resolution on the old row outranks the walk-time album-tag year the new
-  // row just got. 'manual' is the operator reading the sleeve (#1418) and
-  // outranks both, so it must not be dropped here either.
-  const resolved = oldRow.original_year_source === 'musicbrainz' || oldRow.original_year_source === 'manual';
+  // Mirror upsertTrackMeta's precedence: a per-track looked-up ('musicbrainz',
+  // 'discogs') or 'manual' resolution on the old row outranks the walk-time
+  // album-tag year the new row just got. 'manual' is the operator reading the
+  // sleeve (#1418), so it must not be dropped here either. One list for both
+  // (original-year-policy.KEPT_YEAR_SOURCES).
+  const resolved = yearSourceKept(oldRow.original_year_source as string | null);
   const oldWins = resolved || newRow.original_year == null;
   merged.original_year = oldWins ? oldRow.original_year : newRow.original_year;
   merged.original_year_source = oldWins ? oldRow.original_year_source : newRow.original_year_source;

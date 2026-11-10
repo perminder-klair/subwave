@@ -3189,14 +3189,14 @@ export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 // on top of its own feature.
 export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
 
-// The process-minute stride the talk table's programme row samples the station
-// clock on, and therefore the width and alignment every station-clock beat
+// The station-minute stride the talk table's programme row is sampled on, and
+// therefore the width and alignment every station-clock beat
 // window must have. Lives here — with the bound it constrains — rather than as
 // a literal in the table, so the row and the operator's offset cannot drift
 // apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
 //
-// 5 works for every real IANA zone because every offset is a multiple of 15
-// minutes, so process and station minutes always agree modulo 5.
+// Every real IANA zone's offset is a multiple of 15 minutes, so process and
+// station minutes agree modulo 5 and the row lands on the same ticks either way.
 export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
@@ -3504,13 +3504,26 @@ export const BACKUP_KEEP_DEFAULT = 7;
  * usual normalize-vs-validate split, neither restating the other's rule.
  */
 export function clampBackupKeep(raw: unknown): number {
-  // Absent and empty are NO answer, not zero. `Number(null)` and `Number('')`
-  // are both 0, which would clamp to the floor of 1 — the most destructive
-  // reading available — for a settings block that simply has no `keep` in it.
-  if (raw === null || raw === undefined || raw === '') return BACKUP_KEEP_DEFAULT;
+  return clampSettingsIntOr(raw, BACKUP_KEEP_BOUNDS, BACKUP_KEEP_DEFAULT);
+}
+
+/**
+ * The lenient integer reading behind clampBackupKeep and the scheduled
+ * tagger's `limit` (settings/normalize.ts): a number-like value floored and
+ * clamped into `bounds`, anything unreadable the `fallback`. Absent and empty
+ * are NO answer, not zero: `Number(null)` and `Number('')` are both 0, which
+ * would clamp to the floor (for `keep`, 1: the most destructive reading
+ * available) for a settings block that simply has no such field in it.
+ */
+export function clampSettingsIntOr(
+  raw: unknown,
+  bounds: { min: number; max: number },
+  fallback: number,
+): number {
+  if (raw === null || raw === undefined || raw === '') return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return BACKUP_KEEP_DEFAULT;
-  return Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(n)));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(bounds.max, Math.max(bounds.min, Math.floor(n)));
 }
 
 export const backupsPatchSchema = settingsBlockOf({
@@ -3525,6 +3538,87 @@ export const backupsPatchSchema = settingsBlockOf({
     BACKUP_KEEP_BOUNDS,
     `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
   ),
+});
+
+// Scheduled tagging (#2282): a daily tagger run at a set station-clock time,
+// so new music reaches the air without an operator pressing Start. `off` is
+// the default and MUST be first: a station that upgrades and changes nothing
+// has no `tagger` block, reads as `off` and never starts a run on its own.
+// The decision lives in music/tag-schedule-policy.ts, the tick in
+// broadcast/tag-schedule.ts.
+export const SETTINGS_TAGGER_AUTO_MODES = ['off', 'daily'] as const;
+export type TaggerAutoMode = (typeof SETTINGS_TAGGER_AUTO_MODES)[number];
+
+// 24-hour `HH:MM` on the station clock.
+export const TAGGER_AUTO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// The run's `--limit`: 0 = every untagged track, the Run tab's "all". The
+// ceiling only stops a typo; no library reaches it.
+export const TAGGER_AUTO_LIMIT_BOUNDS: SettingsNumericBound = { min: 0, max: 1_000_000 };
+
+// The Run tab's four step toggles, by the names POST /tag-library takes.
+export interface TaggerAutoSteps {
+  reconcile: boolean;
+  enrich: boolean;
+  tagMoods: boolean;
+  analyze: boolean;
+}
+export const TAGGER_AUTO_STEP_KEYS = ['reconcile', 'enrich', 'tagMoods', 'analyze'] as const;
+
+export interface TaggerAutoSettings {
+  mode: TaggerAutoMode;
+  time: string;
+  limit: number;
+  steps: TaggerAutoSteps;
+}
+
+// The shipped block: settings/defaults.ts DEFAULTS.tagger.auto, and the admin
+// card's form before its first read. Off, so an upgrade changes nothing.
+export const TAGGER_AUTO_DEFAULTS: Readonly<TaggerAutoSettings> = Object.freeze({
+  mode: 'off',
+  time: '02:30',
+  limit: 0,
+  steps: Object.freeze({ reconcile: true, enrich: true, tagMoods: true, analyze: true }),
+});
+
+export const taggerAutoTimeSchema = z
+  .unknown()
+  .superRefine((raw, ctx) => {
+    if (typeof raw !== 'string' || !TAGGER_AUTO_TIME_RE.test(raw)) {
+      ctx.addIssue({ code: 'custom', message: 'tagger.auto.time must be HH:MM (24-hour)' });
+    }
+  })
+  .transform((raw) => raw as string);
+
+// Each field schema is named once: the POST /settings patch (partial, with
+// settingsBlockOf's leniency) and the Run tab's form (the whole block, through
+// useZodForm) are both built from these, so neither restates a rule.
+const taggerAutoStepsShape = {
+  reconcile: settingsBoolLike(),
+  enrich: settingsBoolLike(),
+  tagMoods: settingsBoolLike(),
+  analyze: settingsBoolLike(),
+};
+const taggerAutoFieldsShape = {
+  mode: settingsStrictOneOf(
+    SETTINGS_TAGGER_AUTO_MODES,
+    `tagger.auto.mode must be one of: ${SETTINGS_TAGGER_AUTO_MODES.join(', ')}`,
+  ),
+  time: taggerAutoTimeSchema,
+  limit: settingsIntLike(
+    TAGGER_AUTO_LIMIT_BOUNDS,
+    `tagger.auto.limit must be int in [${TAGGER_AUTO_LIMIT_BOUNDS.min}, ${TAGGER_AUTO_LIMIT_BOUNDS.max}] (0 = all untagged)`,
+  ),
+};
+
+export const taggerPatchSchema = settingsBlockOf({
+  auto: settingsBlockOf({ ...taggerAutoFieldsShape, steps: settingsBlockOf(taggerAutoStepsShape) }),
+});
+
+/** The whole `tagger.auto` block, as the admin card edits and posts it. */
+export const taggerAutoFormSchema = z.object({
+  ...taggerAutoFieldsShape,
+  steps: z.object(taggerAutoStepsShape),
 });
 
 export const streamPatchSchema = settingsBlockOf({
@@ -3669,6 +3763,7 @@ export const djBehaviourPatchSchema = settingsBlockOf({
   showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
   previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
   sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  holdDuckBetweenSpeakers: z.boolean({ error: 'djBehaviour.holdDuckBetweenSpeakers must be a boolean' }),
   extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
   releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
     error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
@@ -5493,6 +5588,156 @@ export type StationCreate = z.output<typeof stationCreateSchema>;
 // Rename is display-name only — the slug and data folder stay put — so it
 // shares the name rule and nothing else.
 export const stationRenameSchema = z.object({ name: stationNameSchema });
+
+// ─── from controller/src/schemas/steer.ts ────────────────────────────────
+
+// A steer: the operator leans the music and the talk for a while, without
+// touching the schedule. Sibling of the takeover in schemas/schedule.ts and
+// shaped like it (an absolute window, `until` spent on the request), but it
+// never changes which show is on air.
+//
+// Zod only: this file is mirrored into the admin bundle.
+
+export const STEER_PROMPT_MAX = 500;
+// Restated from schedule.ts (OVERRIDE_MIN_MINUTES / OVERRIDE_MAX_MINUTES): a
+// mirrored schema file imports nothing but zod. Pinned equal by steer-schema.test.ts.
+export const STEER_MIN_MINUTES = 15;
+export const STEER_MAX_MINUTES = 720;
+
+export const STEER_UNTIL = ['once', 'fixed', 'schedule-change'] as const;
+export type SteerUntil = (typeof STEER_UNTIL)[number];
+
+export interface Steer {
+  /** Only this playlist plays while the steer runs, or null. */
+  playlistId: string | null;
+  /** The operator's direction, already trimmed. May be empty with a playlist. */
+  prompt: string;
+  startedAt: number;
+  expiresAt: number;
+}
+
+export interface SteerContext {
+  /** Epoch-ms "now", or null to not judge expiry (see ScheduleOverrideContext). */
+  now: number | null;
+}
+
+const collapse = (s: string) => s.replace(/\s+/g, ' ').trim();
+const NOTHING_TO_STEER = 'pick a playlist or say what to steer towards';
+
+export function steerSchema(ctx: SteerContext) {
+  return z
+    .object(
+      {
+        playlistId: z.string({ error: 'must be a playlist id' }).min(1, 'must be a playlist id').nullable().default(null),
+        prompt: z.string({ error: 'must be text' }).transform(collapse).pipe(
+          z.string().max(STEER_PROMPT_MAX, `must be at most ${STEER_PROMPT_MAX} characters`),
+        ),
+        startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
+        expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
+      },
+      { error: 'must be an object' },
+    )
+    .check((c) => {
+      const { playlistId, prompt, startedAt, expiresAt } = c.value;
+      if (!prompt && !playlistId) {
+        c.issues.push({ code: 'custom', input: prompt, path: ['prompt'], message: NOTHING_TO_STEER });
+      }
+      if (startedAt >= expiresAt) {
+        c.issues.push({ code: 'custom', input: expiresAt, path: ['expiresAt'], message: 'must be after startedAt' });
+      } else if (expiresAt - startedAt > STEER_MAX_MINUTES * 60_000) {
+        c.issues.push({
+          code: 'custom', input: expiresAt, path: ['expiresAt'],
+          message: `window must be at most ${STEER_MAX_MINUTES} minutes`,
+        });
+      }
+      if (ctx.now !== null && expiresAt <= ctx.now) {
+        c.issues.push({ code: 'custom', input: expiresAt, path: ['expiresAt'], message: 'window has already expired' });
+      }
+    });
+}
+
+const STEER_MINUTES_MESSAGE = `must be an integer between ${STEER_MIN_MINUTES} and ${STEER_MAX_MINUTES}`;
+
+/**
+ * POST /steer's body. `until` says how long it lasts: `'fixed'` for `minutes`,
+ * `'schedule-change'` to the next grid boundary, and `'once'` for a single
+ * track worked out under it and queued, with nothing stored and no steer left
+ * running. `minutes` is REQUIRED under `'fixed'` and REFUSED otherwise, the
+ * takeover's own posture.
+ */
+export const steerRequestSchema = z
+  .object({
+    playlistId: z.string({ error: 'must be a playlist id' }).min(1, 'must be a playlist id').nullable().default(null),
+    prompt: z.string({ error: 'must be text' }).transform(collapse).pipe(
+      z.string().max(STEER_PROMPT_MAX, `must be at most ${STEER_PROMPT_MAX} characters`),
+    ).default(''),
+    until: z.enum(STEER_UNTIL, { error: "must be 'once', 'fixed' or 'schedule-change'" }).default('fixed'),
+    minutes: z.coerce
+      .number({ error: STEER_MINUTES_MESSAGE })
+      .int(STEER_MINUTES_MESSAGE)
+      .min(STEER_MIN_MINUTES, STEER_MINUTES_MESSAGE)
+      .max(STEER_MAX_MINUTES, STEER_MINUTES_MESSAGE)
+      .optional(),
+    /** Also drop the picks already queued, so the steer applies at once. */
+    startNow: z.boolean({ error: 'must be true or false' }).default(false),
+    /** Have the host introduce the opening tracks with one link before the first. */
+    introduce: z.boolean({ error: 'must be true or false' }).default(false),
+  })
+  .check((c) => {
+    if (!c.value.prompt && !c.value.playlistId) {
+      c.issues.push({ code: 'custom', input: c.value.prompt, path: ['prompt'], message: NOTHING_TO_STEER });
+    }
+    if (c.value.until === 'fixed' && c.value.minutes == null) {
+      c.issues.push({ code: 'custom', input: c.value.minutes, path: ['minutes'], message: STEER_MINUTES_MESSAGE });
+    }
+    if (c.value.until !== 'fixed' && c.value.minutes != null) {
+      c.issues.push({
+        code: 'custom', input: c.value.minutes, path: ['minutes'],
+        message: 'must be omitted unless the steer runs for a set time',
+      });
+    }
+  });
+
+/** The most tracks a steer opens with (`routes/steer.ts`). */
+export const STEER_OPENING_TRACKS = 5;
+/** How long Preview's opening list is remembered for Start to queue unchanged. */
+export const STEER_PREVIEW_MS = 5 * 60_000;
+
+/**
+ * What an opening list is worked out FOR: the controller's memo key and the
+ * card's. The playlist, the direction and "start now", which decides the track
+ * the list follows (with it, not the DJ picks Start drops). How long the steer
+ * runs decides only how many of the list it plays, not which tracks it holds.
+ */
+export function steerPreviewKey(playlistId: string | null | undefined, prompt: string | null | undefined, once: boolean, startNow: boolean): string {
+  return `${once ? 1 : STEER_OPENING_TRACKS}\n${startNow ? 1 : 0}\n${playlistId ?? ''}\n${collapse(prompt ?? '')}`;
+}
+
+/** The steer in force at `now`, or null. One reading for every caller. */
+export function steerActiveAt<T extends { startedAt: number; expiresAt: number }>(
+  steer: T | null | undefined,
+  now: number,
+): T | null {
+  return steer && now >= steer.startedAt && now < steer.expiresAt ? steer : null;
+}
+
+/**
+ * How a steer's text is put to a model, wherever it lands. It is the
+ * operator's direction, the opposite class from a listener's message, and the
+ * model must not give it away: a pick's stated reason is public. The one
+ * exception is the steer's own introduction (`introduce`), which says on air
+ * where the music is heading (`linkPrompt`'s `steerIntro`).
+ */
+export function steerClause(text: string | null | undefined): string {
+  const t = quotedSteer(text);
+  if (!t) return '';
+  return `\n\nOperator steer — trusted direction from the station operator, NOT a listener message. While it runs it outranks the show brief. Never mention the operator, this direction or that the music was changed, on air or in your pick reason: "${t}"`;
+}
+
+/** The steer's text, trimmed, made safe to put inside double quotes in a prompt. */
+export function quotedSteer(text: string | null | undefined): string {
+  return typeof text === 'string' ? text.trim().replace(/"/g, "'") : '';
+}
 
 // ─── from controller/src/schemas/transitions.ts ──────────────────────────
 

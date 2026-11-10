@@ -3,14 +3,16 @@
 // Platter — the flagship vinyl face: a reference turntable beside the column
 // of facts. Focus mode (desktop, F) folds the column away and lifts the deck
 // into 30° isometric (IsoDeck), handing the column's facts to the things on
-// and round it.
+// and round it, and while a song has lyrics moves the deck over to turn them
+// as a wheel in the stage's left third (PlatterLyrics).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
-import { ArrowUpRight, Heart, PanelRightClose, PanelRightOpen, Play, Square } from 'lucide-react';
+import { ArrowUpRight, Captions, CaptionsOff, Heart, PanelRightClose, PanelRightOpen, Play, Square } from 'lucide-react';
 import { useMediaQuery } from 'usehooks-ts';
 import styles from './Platter.module.css';
 import IsoDeck from './IsoDeck';
+import PlatterLyrics from './PlatterLyrics';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -37,6 +39,8 @@ import {
   turnClock,
 } from '../shared';
 import { CAP_CENTRE, CAP_CENTRE_16 } from '../capCentre';
+import { useLyricsPreference, useTrackLyrics } from '../lyrics';
+import LyricsSettings, { usePopoverDismiss } from '../LyricsSettings';
 import { useDjOnAir, useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
@@ -77,6 +81,29 @@ const LABEL_CUT = {
   transition: { duration: 0 },
 };
 
+/** Ticks round the record, lit where the song has been: the flat face's twin
+ *  of the iso deck's ring (iso.ts ringTicks), from twelve o'clock clockwise.
+ *  Two paths, so a second's tick moves one segment between them and nothing
+ *  else is touched; with no length to measure against, none light. */
+const RING_TICKS = 72;
+function ProgressRing({ ratio }: { ratio: number | null }) {
+  const lit = ratio == null ? 0 : Math.round(Math.min(1, Math.max(0, ratio)) * RING_TICKS);
+  let on = '', off = '';
+  for (let i = 0; i < RING_TICKS; i++) {
+    const a = ((i * 360) / RING_TICKS - 90) * (Math.PI / 180);
+    const c = Math.cos(a), sn = Math.sin(a);
+    const r1 = i < lit ? 49.4 : 48.8;
+    const seg = `M${(50 + c * 46.6).toFixed(2)} ${(50 + sn * 46.6).toFixed(2)}L${(50 + c * r1).toFixed(2)} ${(50 + sn * r1).toFixed(2)}`;
+    if (i < lit) on += seg; else off += seg;
+  }
+  return (
+    <svg viewBox="0 0 100 100" className="pointer-events-none absolute inset-0 size-full overflow-visible" aria-hidden="true">
+      <path d={off} className={styles.tick} />
+      <path d={on} className={styles.tickLit} />
+    </svg>
+  );
+}
+
 /** Sized to fill its square container so it scales fluidly; reused (parked,
  *  not playing) inside the tune-in gate. The arm reads --pf, set on the arm
  *  itself. */
@@ -96,15 +123,8 @@ function Deck({
   const armRef = useRef<SVGSVGElement | null>(null);
   useDynamicStyle(armRef, { '--pf': ratio ?? 0 });
   return (
-    <div className="[container-type:inline-size] relative aspect-square w-[min(52vw,29vh,210px)] lg:w-[min(42vw,72vh,520px)]">
-      <div
-        className={cn(
-          'pointer-events-none absolute inset-[2%] rounded-full border-2 border-dotted border-[var(--muted)] opacity-50',
-          styles.rim,
-          playing && styles.playing,
-        )}
-        aria-hidden="true"
-      />
+    <div className="[container-type:inline-size] relative aspect-square w-[min(52vw,29vh,210px)] lg:w-[min(42vw,76vh,680px)]">
+      <ProgressRing ratio={ratio} />
 
       <div
         className={cn('absolute inset-[6%] rounded-full', styles.vinyl, styles.record, playing && styles.playing)}
@@ -138,7 +158,12 @@ function Deck({
         aria-hidden="true"
       />
 
-      {/* Match the pivot at 86% 19% to .arm transform-origin in Platter.module.css. */}
+      {/* Match the pivot at 86% 19% to .arm transform-origin in Platter.module.css.
+          The arm is drawn in its own frame: the pivot at the origin and the
+          tube running down +y, turned 18.5° to lie across the record. The
+          stylus tip sits 53.3 down that axis, which is what .armLive's sweep
+          is tuned to (outer groove to the label's edge), so a redraw keeps
+          it there. */}
       <svg
         ref={armRef}
         viewBox="0 0 100 100"
@@ -149,13 +174,41 @@ function Deck({
         )}
         aria-hidden="true"
       >
-        <line x1="86" y1="19" x2="72.8" y2="58.5" strokeWidth={2.3} strokeLinecap="round" className="stroke-ink" />
-        <line x1="86" y1="19" x2="72.8" y2="58.5" strokeWidth={1.1} strokeLinecap="round" className="stroke-[#e6e0d2]" />
-        <rect x="83.1" y="11.8" width="9" height="5" rx="1" strokeWidth={0.6} transform="rotate(108.4 87.6 14.3)" className="fill-[#22201d] stroke-ink" />
-        <circle cx="86" cy="19" r="3.6" strokeWidth={0.8} className="fill-[#d9d2c4] stroke-ink" />
-        <circle cx="86" cy="19" r="1.2" className="fill-ink" />
-        <rect x="67.3" y="60.5" width="8" height="5.4" rx="0.8" strokeWidth={0.6} transform="rotate(130.4 71.3 63.2)" className="fill-[#22201d] stroke-ink" />
-        <line x1="70" y1="67" x2="69.4" y2="69.7" strokeWidth={1.1} strokeLinecap="round" className="stroke-[var(--accent)]" />
+        {/* The arm's shadow on the record and the deck: its silhouette, set
+            down and to the right, where the plinth's own shadow falls. */}
+        <g transform="translate(87.1 20.7) rotate(18.5)" className={styles.armShade}>
+          <line x1="0" y1="-9" x2="0" y2="42" strokeWidth={2.3} strokeLinecap="round" />
+          <rect x="-2.7" y="-12.5" width="5.4" height="7" rx="0.9" />
+          <rect x="-2.3" y="-5" width="4.6" height="9.5" rx="0.7" transform="translate(0 47) rotate(10)" />
+        </g>
+        <g transform="translate(86 19) rotate(18.5)">
+          {/* The base plate, which a turn about its own centre leaves still. */}
+          <circle r="6.4" strokeWidth={0.6} className="fill-[#b9b1a1] stroke-ink" />
+          <circle r="5.2" strokeWidth={0.3} className="fill-none stroke-ink opacity-40" />
+          {/* Counterweight and its stub, behind the pivot. */}
+          <line x1="0" y1="0" x2="0" y2="-9" strokeWidth={1.9} strokeLinecap="round" className="stroke-ink" />
+          <rect x="-2.7" y="-12.5" width="5.4" height="7" rx="0.9" strokeWidth={0.6} className="fill-[#22201d] stroke-ink" />
+          <line x1="-2.7" y1="-7.4" x2="2.7" y2="-7.4" strokeWidth={0.35} className="stroke-[#e6e0d2] opacity-60" />
+          <line x1="-2.7" y1="-10.6" x2="2.7" y2="-10.6" strokeWidth={0.35} className="stroke-[#e6e0d2] opacity-30" />
+          {/* The tube: an ink outline under a pale core. */}
+          <line x1="0" y1="0" x2="0" y2="42.5" strokeWidth={2.3} strokeLinecap="round" className="stroke-ink" />
+          <line x1="0" y1="0" x2="0" y2="42.5" strokeWidth={1.1} strokeLinecap="round" className="stroke-[#e6e0d2]" />
+          {/* The gimbal over the pivot. */}
+          <circle r="3.8" strokeWidth={0.7} className="fill-[#d9d2c4] stroke-ink" />
+          <circle r="2.5" strokeWidth={0.3} className="fill-none stroke-ink opacity-50" />
+          <circle r="1.2" className="fill-ink" />
+          {/* The headshell, offset as a real one is, its finger lift on the
+              outside and the stylus under its nose in the accent. */}
+          <g transform="translate(0 47) rotate(10)">
+            <line x1="2.3" y1="-2.6" x2="5.6" y2="-3.7" strokeWidth={1.3} strokeLinecap="round" className="stroke-ink" />
+            <line x1="2.3" y1="-2.6" x2="5.6" y2="-3.7" strokeWidth={0.55} strokeLinecap="round" className="stroke-[#e6e0d2]" />
+            <rect x="-2.3" y="-5" width="4.6" height="9.5" rx="0.7" strokeWidth={0.6} className="fill-[#22201d] stroke-ink" />
+            <line x1="-2.3" y1="-2.4" x2="2.3" y2="-2.4" strokeWidth={0.35} className="stroke-[#e6e0d2] opacity-50" />
+            <circle cx="-1" cy="-3.7" r="0.45" className="fill-[#e6e0d2] opacity-70" />
+            <circle cx="1" cy="-3.7" r="0.45" className="fill-[#e6e0d2] opacity-70" />
+            <line x1="1.2" y1="4.5" x2="1.39" y2="6.15" strokeWidth={1.1} strokeLinecap="round" className="stroke-[var(--accent)]" />
+          </g>
+        </g>
       </svg>
     </div>
   );
@@ -252,6 +305,23 @@ export default function PlatterSkin(_props: SkinProps) {
   const onMic = useDjOnAir();
   const talk = playing && onMic && !!voice;
 
+  // Lyrics live in focus mode alone, where the folded column leaves them
+  // room, so the station is asked only there. One answer for the wheel and
+  // its settings. L shows or hides them; the header's button opens the
+  // settings.
+  const lyricsOn = state.lyrics?.enabled === true && focusOn;
+  const lyricsPref = useLyricsPreference();
+  const showLyrics = lyricsOn && lyricsPref.shown && !offline;
+  const lyricsTrack = useTrackLyrics(showLyrics ? nowPlaying?.subsonic_id : null);
+  // While this track has lyrics the deck gives them the stage's left third.
+  const [lyricsPresent, setLyricsPresent] = useState(false);
+  const deckAside = showLyrics && lyricsPresent;
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const lyricsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lyricsPopoverRef = useRef<HTMLDivElement | null>(null);
+  const closeLyrics = useCallback(() => setLyricsOpen(false), []);
+  usePopoverDismiss(lyricsOpen, closeLyrics, lyricsPopoverRef, lyricsButtonRef);
+
   useKeyboardShortcuts({
     space: handleTune,
     k: handleTune,
@@ -266,6 +336,7 @@ export default function PlatterSkin(_props: SkinProps) {
       else reqInputRef.current?.focus();
     },
     f: () => { if (desktop) toggleFocus(); },
+    ...(lyricsOn ? { l: () => void lyricsPref.toggle() } : {}),
     // Only while focus is on, so Escape still reaches menus otherwise.
     escape: focusOn ? toggleFocus : undefined,
   });
@@ -320,6 +391,26 @@ export default function PlatterSkin(_props: SkinProps) {
               {contextLine(context) || (offline ? 'off air' : 'on air')}
             </span>
           </div>
+          {lyricsOn && (
+            <button
+              ref={lyricsButtonRef}
+              type="button"
+              onClick={() => setLyricsOpen(open => !open)}
+              aria-expanded={lyricsOpen}
+              aria-haspopup="dialog"
+              aria-label="Lyrics settings"
+              title="Lyrics (L shows or hides them)"
+              className={cn(
+                'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none hover:text-ink',
+                CAP_CENTRE_16,
+                lyricsPref.shown || lyricsOpen ? 'text-ink' : 'text-muted',
+              )}
+            >
+              {lyricsPref.shown
+                ? <Captions className="size-4" aria-hidden="true" />
+                : <CaptionsOff className="size-4" aria-hidden="true" />}
+            </button>
+          )}
           <button
             type="button"
             onClick={toggleFocus}
@@ -345,18 +436,49 @@ export default function PlatterSkin(_props: SkinProps) {
           className={cn(
             'relative flex flex-none flex-col items-center gap-3 border-b border-ink px-6 py-3 lg:flex-1 lg:flex-row lg:justify-center lg:gap-0 lg:border-b-0 lg:py-10',
             styles.deckTable,
-            focusOn ? 'lg:w-full' : 'lg:w-[46%] lg:max-w-[680px] lg:border-r',
+            focusOn ? 'lg:w-full' : 'lg:w-[46%] lg:max-w-[760px] lg:border-r',
           )}
         >
+          {/* The sleeve's colours, thrown faintly on the table round the
+              record. One still, blurred image, so it is painted once; lite
+              mode goes without. */}
+          {!focusOn && spins && nowPlaying?.subsonic_id && !offline && (
+            <div className={cn('pointer-events-none absolute inset-0 overflow-hidden', styles.wash)} aria-hidden="true">
+              <img
+                key={nowPlaying.subsonic_id}
+                src={client.coverUrl(nowPlaying.subsonic_id)}
+                alt=""
+                className="absolute inset-0 size-full scale-110 object-cover opacity-40 blur-3xl saturate-150"
+              />
+            </div>
+          )}
+
           <span className="absolute top-5 left-6 font-mono text-[9px] tracking-[0.24em] text-muted uppercase">
             {focusOn ? 'direct drive · drawn at 30°' : 'direct drive · quartz lock'}
           </span>
 
           {focusOn ? (
-            <div className={cn('absolute inset-x-6 top-12 bottom-6', stageMoves && styles.stageIn)}>{isoDeck}</div>
+            <div
+              className={cn(
+                'absolute top-12 right-6 bottom-6',
+                deckAside ? 'left-[33%]' : 'left-6',
+                stageMoves && cn(styles.stageIn, styles.stageSlides),
+              )}
+            >
+              {isoDeck}
+            </div>
           ) : (
             <div className="flex w-full items-center justify-center pt-8 lg:contents">
               <Deck playing={playing} ratio={ratio} stationName={stationName} title={title} artist={artist} />
+            </div>
+          )}
+
+          {/* The song's lines give the DJ the floor: mounted throughout, so
+              a talk break never refetches them or moves the deck back, and
+              hidden while the caption is up in their third. */}
+          {showLyrics && (
+            <div className={cn('contents', talk && 'invisible')}>
+              <PlatterLyrics track={lyricsTrack} trackStartedAt={trackStartedAt} onPresenceChange={setLyricsPresent} />
             </div>
           )}
 
@@ -669,6 +791,17 @@ export default function PlatterSkin(_props: SkinProps) {
         )}
         <span className="ml-auto hidden text-muted sm:inline">stereo · 96 kHz</span>
       </div>
+
+      {lyricsOn && lyricsOpen && !showOverlay && (
+        <div
+          ref={lyricsPopoverRef}
+          role="dialog"
+          aria-label="Lyrics settings"
+          className={cn('absolute top-14 right-6 z-30 w-[min(340px,calc(100vw-2rem))] border border-ink bg-bg p-4', styles.slab)}
+        >
+          <LyricsSettings shown={lyricsPref.shown} onToggle={lyricsPref.toggle} track={lyricsTrack} />
+        </div>
+      )}
 
       {/* The tap is the browser's audio-unblock gesture. */}
       {showOverlay && !offline && (

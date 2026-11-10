@@ -10,8 +10,10 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
-import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { warnLimiter } from '../util/warn-limiter.js';
+import { describeFetchError, fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
+import { parseWholeLoudnessCurve, type WholeLoudnessCurve } from './whole-loudness-curve.js';
 
 // A structural span over the track, in ms. Contiguous over the analysed
 // window; the first is the intro/leading section.
@@ -77,6 +79,23 @@ export interface AnalysisResult {
   // never reconstructs it as (tagged duration - gap); tag and decoded file
   // disagree often enough to move the cut. null whenever tailSilenceMs is.
   tailStartMs: number | null;
+  // Whole-file facets (absent on window answers and on older backends).
+  // `loudness`: which measurement loudnessLufs/peakDb are (2 = the whole file
+  // at its native rate, peakDb a true peak), with the same pass's sample peak
+  // and loudness range. `edges`: silence at each end against the absolute
+  // floor, and the decoded length.
+  loudnessVersion?: number | null;
+  samplePeakDb?: number | null;
+  loudnessRangeLu?: number | null;
+  // The same pass's short-term loudness curve (whole-loudness-curve.ts).
+  wholeLoudnessCurve?: WholeLoudnessCurve | null;
+  // Why a whole-file answer has no curve, when the analyzer ran and had none
+  // to give: its own reason, or 'rejected' for one this controller's parser
+  // refuses. null for an analyzer that predates the curve (it says nothing).
+  loudnessCurveUnavailable?: string | null;
+  edgeLeadMs?: number | null;
+  edgeTailMs?: number | null;
+  decodedDurationMs?: number | null;
 }
 
 // The outgoing track's measured ending. Timestamps are absolute ms.
@@ -231,6 +250,20 @@ interface WorkerMessage {
   // Facet protocol (version signal): {"facets": [...]} requests. Absent on
   // workers that predate it.
   facets_capable?: boolean;
+  // Whole-file facets (loudness v2, edges): the worker has ffmpeg. Absent on
+  // workers that predate them.
+  whole_file_capable?: boolean;
+  // Whole-file loudness answers carry `loudness_curve`. Absent on workers
+  // that predate it.
+  loudness_curve_capable?: boolean;
+  loudness_curve?: unknown;
+  loudness_curve_unavailable?: unknown;
+  loudness_version?: unknown;
+  sample_peak_db?: unknown;
+  lra_lu?: unknown;
+  edge_lead_ms?: unknown;
+  edge_tail_ms?: unknown;
+  decoded_duration_ms?: unknown;
   // Facet-shape answer.
   facets?: Record<string, { status?: string; reason?: string; data?: WorkerMessage }>;
   source?: Record<string, unknown>;
@@ -280,6 +313,8 @@ let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
 let _localTailVocalCapable: boolean | null = null;
 let _localFacetsCapable: boolean | null = null;
+let _localWholeFileCapable: boolean | null = null;
+let _localLoudnessCurveCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
 // Local twins of _sidecarAudioError / _sidecarVocalError — see there.
 let _localAudioError: string | null = null;
@@ -340,6 +375,8 @@ function startWorker(): Promise<void> {
           if (typeof msg.tail_vocal_capable === 'boolean' && _localVocalError === null) _localTailVocalCapable = msg.tail_vocal_capable;
           if (typeof msg.text_embedding_capable === 'boolean' && _localAudioError === null) _localTextCapable = msg.text_embedding_capable;
           _localFacetsCapable = msg.facets_capable === true;
+          _localWholeFileCapable = typeof msg.whole_file_capable === 'boolean' ? msg.whole_file_capable : null;
+          _localLoudnessCurveCapable = typeof msg.loudness_curve_capable === 'boolean' ? msg.loudness_curve_capable : null;
         }
         // After the ready assignments, so a reported loss always wins.
         noteLocalCapabilityLoss(msg);
@@ -397,6 +434,7 @@ export interface AnalyzeRequestOpts {
 // The flat field names (worker message, sidecar body, facet `data`) mapped to
 // an AnalysisResult; absent fields read null.
 function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
+  const curve = msg.loudness_curve == null ? null : parseWholeLoudnessCurve(msg.loudness_curve);
   return {
           bpm: msg.bpm ?? null,
           musicalKey: msg.key ?? null,
@@ -416,6 +454,16 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
           tailStartMs: parseSilenceMs(msg.tail_start_ms),
           stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
+          loudnessVersion: parseFinite(msg.loudness_version),
+          samplePeakDb: parseFinite(msg.sample_peak_db),
+          loudnessRangeLu: parseFinite(msg.lra_lu),
+          wholeLoudnessCurve: curve,
+          loudnessCurveUnavailable: curve ? null
+            : msg.loudness_curve != null ? 'rejected'
+            : typeof msg.loudness_curve_unavailable === 'string' ? msg.loudness_curve_unavailable : null,
+          edgeLeadMs: parseSilenceMs(msg.edge_lead_ms),
+          edgeTailMs: parseSilenceMs(msg.edge_tail_ms),
+          decodedDurationMs: parseSilenceMs(msg.decoded_duration_ms),
   };
 }
 
@@ -496,6 +544,12 @@ let _sidecarVocalCapable: boolean | null = null;
 let _sidecarTailVocalCapable: boolean | null = null;
 // Facet protocol (version signal; null on old sidecars).
 let _sidecarFacetsCapable: boolean | null = null;
+let _sidecarWholeFileCapable: boolean | null = null;
+let _sidecarLoudnessCurveCapable: boolean | null = null;
+let _sidecarWholeFileConcurrency: number | null = null;
+// The sidecar's analysis pool size (ANALYZE_CONCURRENCY); null on a sidecar
+// that predates the field.
+let _sidecarConcurrency: number | null = null;
 // The CLAP TEXT tower (embed-text).
 let _sidecarTextCapable: boolean | null = null;
 // Why a capability is false, when the cause is a failed model load rather than
@@ -509,7 +563,7 @@ let _sidecarBase = '';
 
 async function probeSidecar(url: string): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000 });
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000, retryStaleSocket: true });
     if (!res.ok) return false;
     const body = (await res.json()) as {
       ok?: boolean;
@@ -519,6 +573,10 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_tail_vocal_capable?: boolean | null;
       analyze_text_capable?: boolean | null;
       analyze_facets_capable?: boolean | null;
+      analyze_whole_file_capable?: boolean | null;
+      analyze_loudness_curve_capable?: boolean | null;
+      analyze_whole_file_concurrency?: number | null;
+      analyze_concurrency?: number | null;
       analyze_audio_error?: string | null;
       analyze_vocal_error?: string | null;
     };
@@ -529,6 +587,12 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
       _sidecarTailVocalCapable = typeof body.analyze_tail_vocal_capable === 'boolean' ? body.analyze_tail_vocal_capable : null;
       _sidecarFacetsCapable = typeof body.analyze_facets_capable === 'boolean' ? body.analyze_facets_capable : null;
+      _sidecarWholeFileCapable = typeof body.analyze_whole_file_capable === 'boolean' ? body.analyze_whole_file_capable : null;
+      _sidecarLoudnessCurveCapable = typeof body.analyze_loudness_curve_capable === 'boolean' ? body.analyze_loudness_curve_capable : null;
+      _sidecarWholeFileConcurrency = Number.isInteger(body.analyze_whole_file_concurrency) && (body.analyze_whole_file_concurrency as number) > 0
+        ? (body.analyze_whole_file_concurrency as number) : null;
+      _sidecarConcurrency = Number.isInteger(body.analyze_concurrency) && (body.analyze_concurrency as number) > 0
+        ? (body.analyze_concurrency as number) : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
       _sidecarAudioError = typeof body.analyze_audio_error === 'string' ? body.analyze_audio_error : null;
       _sidecarVocalError = typeof body.analyze_vocal_error === 'string' ? body.analyze_vocal_error : null;
@@ -585,6 +649,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     body: JSON.stringify(body),
     timeoutMs: config.analyzer.requestTimeoutMs,
     bodyDeadline: true,
+    retryStaleSocket: true,
   });
   if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
@@ -683,6 +748,35 @@ export function vocalActivityError(): string | null {
 
 // Backends predating the feature never report it, so consumers must treat only
 // `=== true` as capable.
+// The whole-file facets (loudness v2, edges): the backend's worker has
+// ffmpeg. null = unknown (not probed, or a backend that predates them).
+export function wholeFileAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarWholeFileCapable;
+  if (_backend === 'local') return _localWholeFileCapable;
+  return null;
+}
+
+// Whole-file loudness answers carry the short-term curve. A v2 figure stored
+// without one is re-planned only on `=== true`: an analyzer that predates the
+// curve would answer without it again, every run.
+export function loudnessCurveAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarLoudnessCurveCapable;
+  if (_backend === 'local') return _localLoudnessCurveCapable;
+  return null;
+}
+
+// How many whole-file requests the sidecar runs at once in its own lane.
+// null = not advertised (local backend, or an older sidecar).
+export function wholeFileConcurrency(): number | null {
+  return _backend === 'sidecar' ? _sidecarWholeFileConcurrency : null;
+}
+
+// How many analysis workers the sidecar's pool holds (its ANALYZE_CONCURRENCY).
+// null = not advertised (local backend, or a sidecar that predates the field).
+export function sidecarConcurrency(): number | null {
+  return _backend === 'sidecar' ? _sidecarConcurrency : null;
+}
+
 export function tailVocalAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarTailVocalCapable;
   if (_backend === 'local') return _localTailVocalCapable;
@@ -757,6 +851,21 @@ export function isTimeoutError(err: unknown): boolean {
   return name === 'AbortError' || (typeof message === 'string' && message.includes('timed out'));
 }
 
+// An analyzer outage fails every embed call, and a tagger run makes hundreds:
+// name the cause at most once per EMBED_WARN_EVERY_MS, then say how many more
+// failed in between, so the log shows the outage without one line per track.
+export const EMBED_WARN_EVERY_MS = 60_000;
+const embedWarnings = warnLimiter(EMBED_WARN_EVERY_MS);
+
+export function warnEmbedFailure(cause: string, now: number = Date.now()): boolean {
+  return embedWarnings.warn(`[analyzer] text embedding failed: ${cause}`, now);
+}
+
+/** Test hook: forget the last warning. */
+export function _resetEmbedWarningsForTests(): void {
+  embedWarnings.reset();
+}
+
 // Embed texts through the CLAP text tower — 512-d L2-normalised vectors in the
 // same space as stored track audio vectors, so cosine against them is
 // meaningful. Returns null whenever the capability is absent; callers degrade,
@@ -784,6 +893,7 @@ export async function embedTexts(
         body: JSON.stringify({ texts }),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
         ...(signal ? { signal } : {}),
       });
       // 404 = pre-text-tower sidecar, 500 = lean build; both mean "no text
@@ -796,14 +906,20 @@ export async function embedTexts(
     if (signal?.aborted) return null;
     return await localEmbedTexts(texts, timeoutMs, signal);
   };
+  // A failure still degrades to null, but names its cause once: a caller's
+  // "text embedding failed" warning cannot see it.
+  const failed = (err: unknown): null => {
+    if (!signal?.aborted) warnEmbedFailure(describeFetchError(err));
+    return null;
+  };
   try {
     return await attempt();
   } catch (err) {
-    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return null;
+    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return failed(err);
     try {
       return await attempt();
-    } catch {
-      return null;
+    } catch (retryErr) {
+      return failed(retryErr);
     }
   }
 }
@@ -860,6 +976,7 @@ export async function renderTransition(
         body: JSON.stringify(payload),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
       });
       if (!res.ok) return null; // 404 = pre-render sidecar — silently no blend
       const body = (await res.json()) as WorkerMessage & { ok?: boolean };
@@ -1051,7 +1168,12 @@ export async function analyzePathWithUrlFallback(
 // the backend advertises it; callers fall back to the flat request otherwise.
 // ---------------------------------------------------------------------------
 
-export type FacetName = 'head' | 'loudness' | 'tail' | 'clap' | 'vocal' | 'stems';
+export type FacetName = 'head' | 'loudness' | 'tail' | 'clap' | 'vocal' | 'stems' | 'edges';
+// Read off one decode of the WHOLE file (the stream URL, or a staged copy
+// known to be complete), not the analysis windows.
+export const WHOLE_FILE_FACET_NAMES: readonly FacetName[] = ['loudness', 'edges'];
+const readsWholeFile = (body: Record<string, unknown>) =>
+  Array.isArray(body.facets) && body.facets.some(f => (WHOLE_FILE_FACET_NAMES as readonly unknown[]).includes(f));
 export type FacetAnswerStatus = 'ok' | 'unmeasurable' | 'unavailable' | 'failed';
 
 export interface FacetAnswer {
@@ -1074,11 +1196,17 @@ export interface FacetAnalysis {
   source: FacetSourceInfo;
 }
 
+export type StemWindow = 'head' | 'tail';
+
 export interface FacetRequestOpts {
   facets: FacetName[];
   // Tail facet also carries the outro's vocal ranges (Demucs on the tail only).
   tailVocals?: boolean;
   stems_dir?: string;
+  // Which windows the stems facet separates; omitted = both. Only sent with a
+  // stems_dir. A worker that predates it separates both (pick-stems-policy.ts
+  // stemsWindowsFor).
+  stems_windows?: StemWindow[];
   complete?: boolean;
   // The request's deadline. Omitted, the pass's ANALYZE_REQUEST_TIMEOUT_MS. A
   // pick-time separation passes its own longer one (pick-stems-policy.ts).
@@ -1128,10 +1256,17 @@ export function parseFacetAnswer(msg: WorkerMessage): FacetAnalysis {
 
 async function facetRequest(
   body: Record<string, unknown>,
-  timeoutMs = config.analyzer.requestTimeoutMs,
+  deadlineMs?: number,
 ): Promise<FacetAnalysis> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
+  // A request that reads the whole file gets the whole-file deadline, which
+  // a caller's own deadline can only lengthen. Any other request keeps the
+  // caller's deadline as given, shorter than the pass's included (a pick-time
+  // separation's own budget, and the tests that shorten it), else the pass's.
+  const timeoutMs = readsWholeFile(body)
+    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs, deadlineMs ?? 0)
+    : deadlineMs ?? config.analyzer.requestTimeoutMs;
   let msg: WorkerMessage;
   if (backend === 'sidecar') {
     const res = await fetchWithTimeout(`${_sidecarBase}/analyze`, {
@@ -1140,6 +1275,7 @@ async function facetRequest(
       body: JSON.stringify(body),
       timeoutMs,
       bodyDeadline: true,
+      retryStaleSocket: true,
     });
     if (!res.ok) return sidecarFailure(res);
     msg = (await res.json()) as WorkerMessage;
@@ -1163,7 +1299,13 @@ export async function analyzeFacets(
 ): Promise<FacetAnalysis> {
   const body: Record<string, unknown> = { facets: opts.facets };
   if (opts.tailVocals) body.tail_vocals = true;
-  const stems = opts.stems_dir ? { stems_dir: opts.stems_dir, stems_require_marker: true } : {};
+  const stems = opts.stems_dir
+    ? {
+        stems_dir: opts.stems_dir,
+        stems_require_marker: true,
+        ...(opts.stems_windows?.length ? { stems_windows: opts.stems_windows } : {}),
+      }
+    : {};
   const url = subsonic.getRawStreamUrl(songId);
   const timeoutMs = opts.timeoutMs; // undefined: facetRequest's default
   if (!localPath) return facetRequest({ url, ...body, ...stems }, timeoutMs);
@@ -1172,6 +1314,9 @@ export async function analyzeFacets(
       path: localPath,
       ...body,
       ...(opts.complete !== undefined ? { complete: opts.complete } : {}),
+      // The whole-file facets read the stream URL unless the staged copy is
+      // known to be complete; the worker decides, never the sidecar.
+      ...(readsWholeFile(body) ? { stream_url: url } : {}),
       ...stems,
     }, timeoutMs);
   } catch (err) {

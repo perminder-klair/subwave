@@ -37,6 +37,9 @@ interface CliFlags {
   reEnrich: boolean;
   skipEnrich: boolean;
   upgrade: boolean;
+  // With --upgrade: re-decide only the blind rows measured since (#2281,
+  // db.blindTaggedIds), instead of the rows with a stale prompt or model.
+  upgradeBlind: boolean;
   skipAnalyze: boolean;
   reAnalyze: boolean;
   reconcileOnly: boolean;
@@ -75,6 +78,7 @@ export function parseFlags(): CliFlags {
     // db.staleTaggedIds excludes source='manual' — operator tags are ground
     // truth and never go stale.
     upgrade: args.includes('--upgrade'),
+    upgradeBlind: args.includes('--upgrade-blind'),
     skipAnalyze: args.includes('--skip-analyze'),
     reAnalyze: args.includes('--re-analyze'),
     // Walk Navidrome, prune rows for tracks it no longer contains, then exit —

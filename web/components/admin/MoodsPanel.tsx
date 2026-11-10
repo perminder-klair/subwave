@@ -96,7 +96,7 @@ const PERIODS: Array<{ id: string; label: string; hours: string }> = [
   { id: 'after-hours', label: 'After hours', hours: '01–05' },
 ];
 
-// The 6 fixed weather conditions (controller context.ts mapWeatherCode).
+// The 6 fixed weather conditions (controller weather-codes.ts conditionForCode).
 const CONDITIONS: Array<{ id: string; label: string }> = [
   { id: 'clear', label: 'Clear' },
   { id: 'cloudy', label: 'Cloudy' },

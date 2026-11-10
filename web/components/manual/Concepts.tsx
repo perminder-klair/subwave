@@ -14,7 +14,7 @@ const DIALS: { dial: string; low: string; high: string }[] = [
   {
     dial: 'Local Colour',
     low: 'Keeps it universal; skips local references and place-specific colour.',
-    high: 'Leans on the local setting — the town, the weather, the hour — as texture.',
+    high: 'Leans on the local setting — the town, the hour — as texture.',
   },
   {
     dial: 'Warmth',
@@ -78,14 +78,18 @@ export default function Concepts() {
         </table>
         <p>
           <strong>Local Colour</strong> is the one people ask about. It governs how much
-          the DJ reaches for <em>where and when you are</em> &mdash; your town,
-          today&rsquo;s weather, the hour &mdash; as raw material. Turned up, links open
-          with the drizzle outside. Turned down, the same DJ could be broadcasting from
-          anywhere.
+          the DJ reaches for <em>where and when you are</em> &mdash; your town and
+          the hour &mdash; as raw material. Turned up, a link might open on the late hour
+          or the town. Turned down, the same DJ could be broadcasting from anywhere. It
+          leaves the weather out on purpose: links, idents and handoffs are given no
+          forecast, so a dial that asked for it got invented weather. The weather skill
+          is where the forecast goes on air.
         </p>
         <p className="text-muted">
-          It doesn&rsquo;t add facts: the place, the weather and the clock reach the DJ
-          either way, and the dial only decides whether it leans on them. It can&rsquo;t
+          It doesn&rsquo;t add facts: the place and the clock reach the DJ either way,
+          the weather only the segments given it (the weather skill, or any skill whose{' '}
+          <code className="bs-code-inline">context:</code> lists it), and the dial only
+          decides whether it leans on them. It can&rsquo;t
           invent a second location either &mdash; exactly one place name reaches any
           script, the on-air location under Settings &rarr; Station, and none does once you
           drop <code className="bs-code-inline">{'{location}'}</code> from the DJ prompt

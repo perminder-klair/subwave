@@ -17,7 +17,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 ## Env and secrets
 
-- Read env through `util/env.ts` (`envInt`, `envFloat`, `envUrl`, `envEnum`, `envStr`), never `parseInt(process.env.X || …)`, whose NaN travels. A malformed value warns and falls back, never throws, and the warnings reach the booth log. A few legacy `parseInt` reads remain; don't add more.
+- Read env through `util/env.ts` (`envInt`, `envFloat`, `envUrl`, `envEnum`, `envStr`, `envBool`), never `parseInt(process.env.X || …)`, whose NaN travels. A malformed value warns and falls back, never throws, and the warnings reach the booth log. A few legacy `parseInt` reads remain; don't add more.
 - `state/secrets.env` has one parse (`setup/secrets.ts` `readSecretsFile`), shared by boot and `saveSecrets`' read-then-rewrite merge, and `envEscape` is its designed writer. A second parse that misreads a value destroys that secret on the next save.
 
 ## LLM layer (`llm/`)
@@ -36,6 +36,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 - `broadcast/dj-agent.ts` picks through `llm.trackSelection` (`agentic` or `shortlist`). Both routes run inside `pickViaSelectionRoute`, sharing the guards, the breaker and pool recovery, and `music/picker.ts` is the stateless pool fallback. `trackSelection` is the only route switch (`pickerAgent` is derived for old clients). The Musical Leanings review is one pass for both routes (`dj-agent/leanings-pass.ts`). See `docs/internals/music.md` → Track Shortlist discovery parity, and → Direct listener requests.
 - Listener-request safety is `util/request-guard.ts`, and whether an ack or intro names the queued track is `util/request-claim.ts`. Both serve `routes/request.ts` and the agent's request path; inline neither.
+- An operator steer (`settings.steer`, `routes/steer.ts`, `music/steer.ts`) leans picks and talk without changing the show on air. Pick paths read the show through `settings.resolvePickShow()`, pinned by `scripts/steer-show.test.ts`; a new pick path that calls `resolveActiveShow` directly silently ignores a steer. The text reaches models only through `steerClause`, or `quotedSteer` in the steer's own introduction, and talk prompts opt in (`buildContextLines`' `steer: true`). See `docs/internals/music.md`.
 - A per-client limiter map is a `util/bounded-key-map.ts`, never a hand-rolled `Map` with its own cleanup.
 
 ## Broadcast
@@ -62,7 +63,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 ## Backup and personas
 
-- `backup/zip.ts` is the one archive assembly. Retention may only name the anchored `subwave-auto-backup-…` grammar (`backup/pure.ts`), because `GET /backup/restorable` lists every `*.zip` in the state dir. Restore routes sidecars through their owners (`jingles.restoreMeta`, `sfx.restoreMeta`, `skills/install.ts`).
+- `backup/zip.ts` is the one archive assembly. Retention may only name the anchored `subwave-auto-backup-…` grammar (`backup/pure.ts`), because `GET /backup/restorable` lists every `*.zip` in the state dir. Restore routes sidecars through their owners (`jingles.restoreMeta`, `sfx.restoreMeta`, `blocklist.restore`, `skills/install.ts`).
 - `personas/install.ts` is the one path for a community install and a bundle import (the admin roster still adds through `settings.update()`). A bundle import reserves its filenames and dry-runs validation before writing a byte. A clashing audio filename is suffixed and the persona re-pointed at it, never overwritten.
 
 ## HTTP

@@ -11,6 +11,8 @@ import {
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BACKUP_KEEP_BOUNDS,
   BACKUP_KEEP_DEFAULT,
+  TAGGER_AUTO_DEFAULTS,
+  type TaggerAutoSettings,
   BEDS_THRESHOLD_SEC_BOUNDS,
   SHORTLIST_PASSES_DEFAULT,
   CROSSFADE_DURATION_BOUNDS,
@@ -81,6 +83,14 @@ export const DEFAULTS = {
   // so an upgrade that changes nothing must produce byte-identical behaviour —
   // no zips written, no zips pruned. `keep` is inert until a cadence is picked.
   backups: { cadence: 'off' as const, keep: BACKUP_KEEP_DEFAULT },
+  // Scheduled tagging (#2282). OFF by default: an upgrade that changes nothing
+  // never starts a tagger run on its own. When on, one run a station day at
+  // `time` (station clock), with the Run tab's steps and `limit` (0 = all
+  // untagged). Policy: music/tag-schedule-policy.ts.
+  tagger: {
+    // Copies: the frozen shared constant must never be the live settings object.
+    auto: { ...TAGGER_AUTO_DEFAULTS, steps: { ...TAGGER_AUTO_DEFAULTS.steps } } as TaggerAutoSettings,
+  },
   stream: {
     // Secondary Ogg-Opus mount (/stream.opus). Off by default — only Blink
     // selects it (web/hooks/usePlayer.ts), and it costs a continuous encoder
@@ -257,6 +267,13 @@ export const DEFAULTS = {
     // it off in DJ Behaviour → Show changes.
     previewNextShow: true,
     sameHostAcknowledgement: false,
+    // Keep the music ducked for the whole multi-voice exchange instead of
+    // letting it lift between speakers. On, the lines are handed to the mixer
+    // as one batch so its voice queue never drains; off is the established
+    // per-line delivery, where the duck releases and returns between speakers.
+    // Off by default: an upgrade must sound byte-identical, and the release
+    // between lines is what every station has always heard.
+    holdDuckBetweenSpeakers: false,
     extendedSleeveNotes: false,
     releaseYearMentions: 'regular',
     // Compact anti-repeat material carried into every DJ script prompt. These
@@ -290,6 +307,9 @@ export const DEFAULTS = {
   // Timed takeover (#930): an epoch-ms window that outranks the weekly grid in
   // resolveActiveShow while live. Persisted in schedule.json.
   scheduleOverride: null,
+  // Operator steer: a bounded lean on the music and the talk that leaves the
+  // schedule alone (schemas/steer.ts). Read through persona.ts:activeSteer().
+  steer: null,
   tts: {
     // Station-wide voice switch. false = music only: no links, idents, hourly
     // checks, segments, banter, mic-passes, programme beats or request intros —

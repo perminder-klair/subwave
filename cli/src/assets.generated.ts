@@ -144,8 +144,9 @@ services:
       # Enables the production-only admin gate (refuses to boot without
       # ADMIN_USER + ADMIN_PASS).
       - NODE_ENV=production
-      # Schedule slots are day-of-week + hour via date.getHours(); without TZ
-      # the container runs UTC and fires shows an hour early during BST.
+      # Schedule slots follow the station timezone (Settings, \`timezone\`);
+      # left on Auto they follow this TZ, and without it the container runs
+      # UTC and fires shows an hour early during BST.
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
@@ -374,6 +375,9 @@ services:
       - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
@@ -729,6 +733,9 @@ services:
       - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -1022,6 +1029,9 @@ services:
       - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=\${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=\${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -1337,6 +1347,13 @@ SITE_URL=
 #                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
 #                                   # otherwise set base URL in admin → Settings → Scrobbling
 
+# ───────── Original years (optional — also configurable in admin UI) ─────────
+# Era-bounded shows ask MusicBrainz (keyless) for the original year of reissues
+# and compilations. With a Discogs personal access token (Discogs → Settings →
+# Developers, free), Discogs is asked when MusicBrainz has no year: one search
+# per track, sending its artist and title. Admin → Settings → Library → Enrichment.
+# DISCOGS_TOKEN=
+
 # ───────── Lyrics (optional) ─────────
 # The LRCLIB fallback (admin → Settings → Listeners → Lyrics panel, on by
 # default) asks lrclib.net for synced lyrics the music server lacks, sending each
@@ -1387,6 +1404,28 @@ SITE_URL=
 #                        # both station and GPU hosts. Each worker can load its
 #                        # own models, increasing CPU/RAM/VRAM plus network and
 #                        # source-server demand; tune to the smaller host limit.
+# ANALYZE_WHOLE_FILE=1   # opt-in: every analysis run also measures the
+#                        # whole-file facets for tracks that need them —
+#                        # loudness v2 (integrated loudness + true peak over the
+#                        # WHOLE file at its own rate) and edges (silence at both
+#                        # ends + the decoded length, used by silence trim). One
+#                        # ffmpeg decode per track, streamed from the music
+#                        # server; the first library pass reads every file once.
+#                        # Unset = off. On demand instead:
+#                        #   npm run analyze -- --facets loudness,edges
+# ANALYZE_WHOLE_FILE_CONCURRENCY=4  # whole-file facet jobs in flight (1-32).
+#                        # The analyzer runs them in their own lane (one ffmpeg
+#                        # process each, no model), outside ANALYZE_CONCURRENCY's
+#                        # pool; set the SAME value on station and analyzer
+#                        # hosts. The bound is mostly reading files from the
+#                        # music server.
+# ANALYZE_WHOLE_FILE_TIMEOUT_S=900  # analyzer host: wall-clock limit for ONE
+#                        # whole-file run, in seconds (30-7200). Raise it for
+#                        # DJ sets of several hours streamed from a slow server.
+# ANALYZE_WHOLE_FILE_TIMEOUT_MS=960000  # station host: how long the controller
+#                        # waits for that answer (90000-7260000). Keep it 60 s
+#                        # above the analyzer's limit, so the analyzer reports
+#                        # its own timeout first.
 # ANALYZE_PROBE_MS=60000  # how long "no analyzer at all" is cached before the
 #                         # /health probe runs again. A backend that ANSWERED is
 #                         # remembered until restart; only the miss is timed, so
@@ -1543,4 +1582,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `1.29.0`; // x-release-please-version
+export const CLI_VERSION = `1.31.0`; // x-release-please-version

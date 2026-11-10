@@ -419,19 +419,30 @@ export function LibraryProvider({
   const retagTrack = useCallback(async (track: Track) => {
     setRetagging(track.id);
     try {
-      const j = await adminJson<{ moods?: string[]; energy?: string | null }>(adminFetch, '/library/retag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(track),
-      });
-      const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
-      notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
+      const j = await adminJson<{ moods?: string[]; energy?: string | null; untaggable?: boolean }>(
+        adminFetch, '/library/retag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(track),
+        },
+      );
       flash(track.id);
-      // The server stamps retagged rows source='llm'.
-      applyTagEvent(qc, {
-        track, moods: j.moods || [], energy: j.energy ?? null,
-        cleared: false, applyToAlbum: false, source: 'llm',
-      });
+      if (j.untaggable) {
+        // No usable mood (#2283): the server left the track untagged, so it stays
+        // in Needs tags.
+        notify.info(`the model couldn't tag “${track.title}” · left untagged`);
+        applyTagEvent(qc, {
+          track, moods: [], energy: null, cleared: true, applyToAlbum: false, source: 'llm',
+        });
+      } else {
+        const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
+        notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
+        // The server stamps retagged rows source='llm'.
+        applyTagEvent(qc, {
+          track, moods: j.moods || [], energy: j.energy ?? null,
+          cleared: false, applyToAlbum: false, source: 'llm',
+        });
+      }
       reloadCoverage();
     } catch (err) {
       notify.err(errorMessage(err));

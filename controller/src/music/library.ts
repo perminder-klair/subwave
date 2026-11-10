@@ -9,6 +9,7 @@ import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
 import { artistRootKey, setKnownActsProvider, trackKey, type CandidateLike } from './recency.js';
 import { isInstrumental } from './lyric-vocal.js';
+import { clearWalk } from './library-walk.js';
 
 let loaded = false;
 
@@ -36,6 +37,9 @@ export async function reset() {
   loaded = false;
   invalidateAiredIndex();
   knownActsCache = null;
+  // The table is about to stop holding the last walk (music/library-walk.ts).
+  // Cleared first, so a reset that fails half-way still reads as unsettled.
+  clearWalk();
   await db.reset();
   await load();
 }
@@ -125,6 +129,11 @@ export function get(songId: string): any {
     leadSilenceMs: t.leadSilenceMs,
     tailSilenceMs: t.tailSilenceMs,
     tailStartMs: t.tailStartMs,
+    // The whole-file edges facet, which the resolver prefers over the three
+    // window figures above. Same rule: a missing field disables it silently.
+    edgeLeadMs: t.edgeLeadMs,
+    edgeTailMs: t.edgeTailMs,
+    decodedDurationMs: t.decodedDurationMs,
   };
 }
 

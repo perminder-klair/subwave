@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "1.29.0",
+  "version": "1.31.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -28,7 +28,8 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "gen:themes": "tsx scripts/gen-theme-tokens.ts",
-    "gen:schemas": "tsx scripts/gen-schemas.ts"
+    "gen:schemas": "tsx scripts/gen-schemas.ts",
+    "check:publish-matrix": "tsx scripts/check-publish-matrix.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.74",

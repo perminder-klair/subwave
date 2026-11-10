@@ -22,13 +22,16 @@ import * as chatterbox from '../../audio/chatterbox.js';
 import * as piper from '../../audio/piper.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
+import { updateEndingSteer } from '../../broadcast/takeover-steer.js';
 import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { forgetDiscogsRefusal } from '../../music/discogs.js';
 import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
+import { scheduledTagView } from '../../broadcast/tag-schedule.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
 import { firecrawlKeySource, keenableKeySource, searchKeyRefusedBy } from '../../skills/web-search.js';
@@ -71,6 +74,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
       jingles: await jingles.list(),
       libraryStats: library.stats(),
       tagger: taggerView(),
+      // The scheduled run's own record (#2282): last start, outcome, a hold.
+      taggerSchedule: await scheduledTagView().catch(() => null),
       // Daily-token-budget tier (normal|soft|hard); 'normal' when the cap is off.
       budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
@@ -104,6 +109,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
         archive: s.archive,
         // Edited from the Backup panel, but saved through POST /settings.
         backups: s.backups,
+        // Scheduled tagging (#2282), edited on the Library Tagger's Run tab.
+        tagger: s.tagger,
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
@@ -242,13 +249,23 @@ export async function logCompatDetection(): Promise<void> {
 // settings.update(): backup restore hands update() a whole settings.json, and
 // a key from a newer version must cost one setting, not the whole restore.
 router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) => {
+  // A steer starts and ends through /steer, which serialises the write, works
+  // out its opening tracks, clears a takeover and refuses a window that has
+  // already run out. Through here it would do none of that.
+  if (req.body && typeof req.body === 'object' && 'steer' in req.body) {
+    return res.status(400).json({ error: 'start or clear a steer with POST or DELETE /steer' });
+  }
   try {
     // A hosted station's LLM route and voice engine belong to its box agent
     // (setup/hosted.ts): those keys are dropped, the rest of the save applies.
     const { patch: body, dropped } = stripManagedSettings(req.body || {}, {
       defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
     });
-    const result = await settings.update(body);
+    // A takeover saved here ends a running steer, as one pinned through
+    // /schedule/override does (broadcast/takeover-steer.ts).
+    const result = 'scheduleOverride' in body
+      ? (await updateEndingSteer(body)).result
+      : await settings.update(body);
     // context.ts reads the live settings cache, so the update already applies;
     // the route only owns the operator-facing log.
     if ('weather' in (req.body || {})) {
@@ -368,6 +385,8 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       return res.json({ saved: [], ...managed });
     }
     await saveSecrets(allowed);
+    // A saved Discogs token is asked again, even one Discogs refused before.
+    if ('DISCOGS_TOKEN' in allowed) forgetDiscogsRefusal();
     res.json({ saved: Object.keys(allowed), ...managed });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);

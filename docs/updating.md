@@ -18,8 +18,9 @@ Two minutes, once, and rollback stops being a research project.
 **Admin → Settings → Backup → Export** downloads a zip containing
 `settings.json`, the
 show schedule, the library tag database (`library.db` — a consistent online
-copy, not a raw file grab), your jingles, SFX, custom voices, themes, skills
-and persona avatars.
+copy, not a raw file grab), the never-play list (`blocklist.json`: blocked
+tracks, albums, artists and rules), your jingles, SFX, custom voices, themes,
+skills and persona avatars.
 
 Two things it deliberately does **not** contain:
 
@@ -35,7 +36,10 @@ backup you share shows your folder layout.
 Restoring runs the archive through the same checks the dedicated imports
 use. `jingles.m3u` is never copied: it is rebuilt from the restored
 `jingles.json`, keeping only entries with an ordinary audio filename.
-`sfx.json` keeps only rows of the shape the effect library writes. A skill's
+`sfx.json` keeps only rows of the shape the effect library writes. The
+never-play list replaces the station's and takes effect at once, without a
+restart; a backup made before it was included leaves the current list alone.
+A skill's
 `tool.mjs` that isn't already live on this station is held for review rather
 than loaded — see [custom skills](custom-skills.md#restoring-a-backup). The
 restore reports anything it left out. Still: restore backups you made, or that

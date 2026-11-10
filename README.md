@@ -202,9 +202,10 @@ The next `docker compose up -d` removes it and it stays gone. This is a Compose
 setting, so it does nothing on the all-in-one image, which runs the analyzer
 in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
 
-Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. The CUDA
-images use torch/torchaudio 2.7.1 with CUDA 12.8 wheels, including support for
-RTX 50-series Blackwell GPUs. For a one-off run, layer the
+Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. The
+split-stack CUDA analyzer uses torch/torchaudio 2.7.1 with CUDA 12.8 wheels,
+which cover Turing (RTX 20-series) through RTX 50-series Blackwell GPUs; older
+cards have no split-stack CUDA build. For a one-off run, layer the
 `docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
@@ -215,8 +216,12 @@ To keep the overlay across normal rebuilds and restarts, set `COMPOSE_FILE` in
 `.env` to `docker-compose.yml:docker-compose.analyzer-gpu.yml`.
 
 All-in-one installs have no `analyzer` service to swap, so they take the GPU on
-the image instead: pull `subwave-aio-cuda` and hand the container the card
-(`--gpus all`, or the Unraid steps in [`docs/unraid.md`](docs/unraid.md)).
+the image instead: pull `subwave-aio-cuda` at the tag named for your card's
+architecture (`:pascal` for a GTX 10-series, `:ampere` for an RTX 30-series;
+[every tag](docs/internals/infrastructure.md#aio-cuda-tags)) and hand the
+container the card (`--gpus all`, or the Unraid steps in
+[`docs/unraid.md`](docs/unraid.md)). `:latest` needs Turing (RTX 20-series) or
+newer.
 
 ### Local dev (contributors)
 

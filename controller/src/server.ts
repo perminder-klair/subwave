@@ -54,6 +54,7 @@ import { router as likesRoutes } from './routes/likes.js';
 import { router as lyricsRoutes } from './routes/lyrics.js';
 import { router as personasRoutes } from './routes/personas.js';
 import { router as showsRoutes } from './routes/shows.js';
+import { router as steerRoutes } from './routes/steer.js';
 import { router as communityRoutes } from './routes/community.js';
 import { router as backupRoutes } from './routes/backup.js';
 import { router as stemsRoutes } from './routes/stems.js';
@@ -140,6 +141,7 @@ app.use(likesRoutes);
 app.use(lyricsRoutes);
 app.use(personasRoutes);
 app.use(showsRoutes);
+app.use(steerRoutes);
 app.use(communityRoutes);
 app.use(backupRoutes);
 app.use(stemsRoutes);
@@ -258,6 +260,17 @@ app.listen(config.server.port, async (err?: Error) => {
   } catch (err: any) {
     console.error('[id-rotation] boot apply failed (will retry next boot):', err.message);
   }
+
+  // Hearts whose file came back under a new id (a re-import) follow it. Never
+  // fatal: a miss leaves the heart where it was, for the next boot or tag run.
+  // Not awaited: a planned move asks Navidrome first (music/heart-follow.ts), and
+  // a server still starting must not hold the boot behind its timeout. Nothing
+  // else in the boot depends on where a heart sits.
+  void import('./music/heart-follow.js')
+    .then(({ followMovedHearts }) => followMovedHearts())
+    .catch((err: unknown) => {
+      console.error('[likes] following moved hearts failed (will retry):', err instanceof Error ? err.message : err);
+    });
 
   // Start the remote-TTS /health probe loop now that settings are loaded — its
   // URL lives in settings (not env), so it can't self-start at import time the
