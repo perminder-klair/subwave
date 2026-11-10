@@ -2,17 +2,17 @@
 
 // The drawn stack. The switch, knob and keys in the drawing ARE the controls:
 // power tunes in, the knob sets volume, MUTE mutes, REC opens a request, KEEP
-// likes the track. It is built in Unit SW-9's hardware, as Cipher-3 is:
-// brushed plates lit from above, dark keys and weighted knobs standing proud
-// at 30°, display glass in the dot-matrix face and smoked bulbs that glow when
-// lit; standby dims the glass and the lamps, never the metal. One rAF loop
-// moves what the music moves (reels, record, tonearm, cones, sound lines) by
-// writing attributes straight to the nodes, and only the ones that changed
-// (loop.ts); lite mode and reduced motion stop it outright and the render
-// paints one still frame instead, since neither the CSS animation kill nor the
-// media query can reach a JS loop. The drawing itself is memoised (Stack):
-// the skin re-renders every second, and only the few parts that read the
-// song's progress (TickCtx) re-render with it.
+// likes the track. It is drawn in pen at 30°: every box its three faces in
+// the theme's paper shaded toward its ink, hairlines where faces meet and a
+// heavier silhouette round each unit. Unpowered, the hairlines fall back to
+// dashed construction lines in a faded pen, and tuning in inks them. One rAF
+// loop moves what the music moves (reels, record, tonearm, cones, sound
+// lines) by writing attributes straight to the nodes, and only the ones that
+// changed (loop.ts); lite mode and reduced motion stop it outright and the
+// render paints one still frame instead, since neither the CSS animation kill
+// nor the media query can reach a JS loop. The drawing itself is memoised
+// (Stack): the skin re-renders every second, and only the few parts that read
+// the song's progress (TickCtx) re-render with it.
 
 import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
@@ -94,13 +94,12 @@ function beatSeconds(bpm: number | null): number {
 
 const noSubscribe = () => () => {};
 
-// The scene's paint servers: gradients, the grain pattern and the glow
-// filter. Ids are unique per mounted scene (desktop and mobile both render, so
-// a fixed id would collide), and every part reads them from context.
-const PAINTS = [
-  'plate', 'side', 'key', 'keyDown', 'acc', 'accDown', 'knobO', 'knobI', 'bulb', 'lamp', 'cone',
-  'sheen', 'fall', 'dropX', 'dropY', 'glow', 'grain', 'glowF',
-] as const;
+// The scene's gradients: a side panel receding, a top falling into the shadow
+// of the shelf above, the contact shadow a unit leaves on its shelf, and the
+// light a lit lamp spills. Ids are unique per mounted scene (desktop and
+// mobile both render, so a fixed id would collide), and every part reads them
+// from context.
+const PAINTS = ['shade', 'fall', 'dropX', 'dropY', 'glow'] as const;
 type PaintKey = (typeof PAINTS)[number];
 type PaintIds = Record<PaintKey, string>;
 const paintIds = (uid: string) => Object.fromEntries(PAINTS.map(k => [k, `${uid}-${k}`])) as PaintIds;
@@ -115,34 +114,6 @@ interface Tick {
   screen: LidScreenInfo | null;
 }
 const TickCtx = createContext<Tick>({ ratio: null, counter: '', screen: null });
-
-/** How each kind of part is finished: its face (a gradient or a flat fill),
- *  the side of it that faces up, the side that faces front and the side that
- *  turns away from the light, and the hairline round its face. */
-// CSS module lookups type as string | undefined, so the classes do too.
-type Cls = string | undefined;
-interface Finish { paint?: PaintKey; flat?: Cls; up: Cls; front: Cls; side: Cls; rim?: Cls }
-const FINISH = {
-  plate: { paint: 'plate', up: styles.fPlateHi, front: styles.fPlate, side: styles.fSide },
-  key: { paint: 'key', up: styles.fKeyHi, front: styles.fKeyLo, side: styles.fEdge, rim: styles.sBlack },
-  keyDown: { paint: 'keyDown', up: styles.fKey, front: styles.fEdge, side: styles.fEdgeLo, rim: styles.sBlack },
-  acc: { paint: 'acc', up: styles.fAccHi, front: styles.fAccLo, side: styles.fAccEdge, rim: styles.sBlack },
-  accDown: { paint: 'accDown', up: styles.fAcc, front: styles.fAccEdge, side: styles.fAccEdge, rim: styles.sBlack },
-  knob: { paint: 'knobO', up: styles.fKeyHi, front: styles.fEdge, side: styles.fEdgeLo, rim: styles.sBlack },
-  knobCap: { paint: 'knobI', up: styles.fKeyHi, front: styles.fEdge, side: styles.fEdge, rim: styles.sBlack },
-  bulb: { paint: 'bulb', up: styles.fSocket, front: styles.fSocket, side: styles.fSocket, rim: styles.sBlack },
-  lamp: { paint: 'lamp', up: styles.fAccHi, front: styles.fAccEdge, side: styles.fAccEdge, rim: styles.sBlack },
-  vinyl: { flat: styles.fVinyl, up: styles.fSocket, front: styles.fSocket, side: styles.fSocket, rim: styles.sBlack },
-} satisfies Record<string, Finish>;
-type FinishName = keyof typeof FINISH;
-
-/** A part's face: its gradient rides the fill attribute, so the class it
- *  takes alongside may only set the stroke. */
-function faceProps(f: Finish, p: PaintIds, extra?: string) {
-  return f.paint
-    ? { fill: url(p[f.paint]), className: cn(f.rim, extra) }
-    : { className: cn(f.flat, f.rim, extra) };
-}
 
 function AxoScene(props: AxoSceneProps) {
   const { ratio, counter, screen = null, ...drawn } = props;
@@ -382,11 +353,6 @@ const Stack = memo(function Stack(props: StackProps) {
   const sigLit = live ? 4 : connecting ? 1 : 0;
   // The loop scrolls a long line; a still frame ends it with an ellipsis.
   const lcdStill = lcd.length > LCD_CHARS ? `${lcd.slice(0, LCD_CHARS - 1)}…` : lcd;
-  const lcdLine = (className: Cls, filter?: string) => (
-    <text data-lcd="" x="17" y="56.4" fontSize={7.5} letterSpacing="0.04em" filter={filter} className={cn(className, styles.doto)}>
-      {hydrated && !calm ? lcd : lcdStill}
-    </text>
-  );
 
   const drag = useRef<{ y: number; v: number } | null>(null);
   const setVol = (v: number) => onVolume(Math.round(clamp01(v) * 100) / 100);
@@ -408,12 +374,11 @@ const Stack = memo(function Stack(props: StackProps) {
   // The KEEP legend: a heart and the count, centred as a pair on the key.
   const likeCount = like.available ? String(like.count) : '';
   const likeX = 198 - (6 + (likeCount ? 1.5 + likeCount.length * 3.9 : 0)) / 2;
-  const likeInk = like.liked ? styles.icOn : like.available ? styles.icKey : styles.icDim;
+  const likeInk = like.liked ? styles.icOn : like.available ? styles.icTx : styles.icMuted;
   const canLike = like.available && !like.liked && !like.pending;
-  const glow = url(paint.glowF);
 
   return (
-    <div ref={rootRef} className={cn(styles.scene, !powered && styles.dim, 'absolute inset-0')}>
+    <div ref={rootRef} className={cn(styles.scene, 'absolute inset-0')}>
       <svg
         viewBox={mob ? VIEWBOX.mobile : VIEWBOX.desk}
         preserveAspectRatio="xMidYMid meet"
@@ -427,40 +392,33 @@ const Stack = memo(function Stack(props: StackProps) {
         </defs>
 
         <PaintCtx.Provider value={paint}>
-          <g className={styles.hw} aria-hidden="true">
-            {AXO.floor.map((b, i) => (
-              <rect key={i} transform={b.T} width={b.w} height={b.d} fill={url(paint.dropX)} className={styles.ns} />
-            ))}
+          <g className={cn(styles.draw, !powered && styles.drawOff)} aria-hidden="true">
+            <path d={AXO.hatch} strokeWidth={0.5} opacity={0.5} />
 
             <Speaker block={AXO.spL} />
 
             <Bay level={AXO.rack[0]} />
 
             {/* Receiver */}
-            <Face of={AXO.rcv} side="T" className={styles.fPlateHi} grain shade="fall">
-              <path d="M24 18H196M24 26H196M24 34H196" strokeWidth={1.8} strokeDasharray="9 3" className={styles.sEdge} opacity={0.35} />
+            <Face of={AXO.rcv} side="T" className={styles.fBg} shade="fall">
+              <path d="M14 20H206M14 28H206M14 36H206" strokeWidth={0.4} opacity={0.5} />
             </Face>
-            <Face of={AXO.rcv} side="R" paint="side" />
-            <Face of={AXO.rcv} side="L" paint="plate" grain>
-              <Well id={`${uid}-dial`} x={12} y={10} w={112} h={26} t={2.5} glass>
-                <path d={AXO.dialTicks} strokeWidth={0.6} className={styles.sGlass} />
-                <text x="15" y="34" fontSize={5.5} fontWeight={500} className={cn(styles.txGlassDim, styles.mono)}>0:00</text>
-                <text x="121" y="34" fontSize={5.5} fontWeight={500} textAnchor="end" className={cn(styles.txGlassDim, styles.mono)}>
+            <Face of={AXO.rcv} side="R" className={styles.fR} shade="shade" />
+            <Face of={AXO.rcv} side="L" className={styles.fL}>
+              <Well id={`${uid}-dial`} x={12} y={10} w={112} h={26} t={2.5} className={styles.fBg}>
+                <path d={AXO.dialTicks} strokeWidth={0.6} className={styles.solid} />
+                <text x="15" y="34" fontSize={5.5} fontWeight={500} className={cn(styles.tx, styles.mono)}>0:00</text>
+                <text x="121" y="34" fontSize={5.5} fontWeight={500} textAnchor="end" className={cn(styles.tx, styles.mono)}>
                   {duration}
                 </text>
                 <DialNeedle phase={phase} calm={calm} />
               </Well>
-              <Well id={`${uid}-lcd`} x={12} y={42} w={112} h={20} t={2} glass>
-                {/* WebKit re-runs a filter whenever what it filters moves, so
-                    a line scrolling through the window blurred itself afresh
-                    every frame. On iOS its glow is two wider, fainter copies
-                    beneath it instead, which the loop scrolls with it; they
-                    are hidden, and the filter kept, everywhere else. */}
-                {lcdLine(styles.lcdHalo)}
-                {lcdLine(styles.lcdGlow)}
-                {lcdLine(cn(styles.txGlass, styles.lcdLit), powered ? glow : undefined)}
+              <Well id={`${uid}-lcd`} x={12} y={42} w={112} h={20} t={2} className={styles.fInk}>
+                <text data-lcd="" x="17" y="56" fontSize={6.5} fontWeight={700} letterSpacing="0.12em" className={cn(styles.txBg, styles.mono)}>
+                  {hydrated && !calm ? lcd : lcdStill}
+                </text>
               </Well>
-              <text x="12" y="74" fontSize={5} fontWeight={700} letterSpacing="0.18em" className={cn(styles.tx, styles.mono)}>AXO-1</text>
+              <text x="12" y="74" fontSize={5} fontWeight={500} letterSpacing="0.18em" className={cn(styles.txMuted, styles.mono)}>AXO-1</text>
               <text x="46" y="74" fontSize={4.5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>SIG</text>
               {AXO.sigBars.map((b, i) => (
                 <rect
@@ -469,8 +427,8 @@ const Stack = memo(function Stack(props: StackProps) {
                   y={b.y}
                   width="2.6"
                   height={b.h}
-                  filter={i < sigLit ? glow : undefined}
-                  className={cn(i < sigLit ? styles.fAcc : styles.fWell, styles.ns)}
+                  strokeWidth={i < sigLit ? undefined : 0.4}
+                  className={i < sigLit ? cn(styles.fInk, styles.ns) : cn(styles.fNone, styles.solid)}
                 />
               ))}
               <Lamp cx={90} cy={72.4} r={2.2} lit={live} />
@@ -483,14 +441,13 @@ const Stack = memo(function Stack(props: StackProps) {
                 r={calm ? (standby ? 13 : 12) : undefined}
                 opacity={calm ? (standby || connecting ? 0.8 : 0) : undefined}
                 strokeWidth={1.3}
-                className={cn(styles.fNone, styles.sAcc)}
+                className={cn(styles.fNone, styles.sAcc, styles.solid)}
               />
-              <Boss on="L" cx={142} cy={24} r={9} t={3} finish="key">
+              <Boss on="L" cx={142} cy={24} r={9} t={3} className={styles.fW}>
                 <path
                   d="M-3.18 -3.18A4.5 4.5 0 1 0 3.18 -3.18M0 -6V-0.5"
                   strokeWidth={1.6}
-                  filter={powered ? glow : undefined}
-                  className={powered ? styles.sAcc : styles.sKey}
+                  className={cn(powered ? styles.sAcc : styles.sInk, styles.solid)}
                 />
               </Boss>
               <text x="142" y="41" fontSize={5} fontWeight={700} letterSpacing="0.14em" textAnchor="middle" className={cn(styles.tx, styles.mono)}>
@@ -498,7 +455,7 @@ const Stack = memo(function Stack(props: StackProps) {
               </text>
 
               {/* A latching key: muted, it stays pressed in and lit. */}
-              <Key on="L" x={130} y={48} w={24} h={14} t={muted ? 1 : 3} finish={muted ? 'accDown' : 'key'}>
+              <Key on="L" x={130} y={48} w={24} h={14} t={muted ? 1 : 3} className={muted ? styles.fAcc : styles.fBg}>
                 <text
                   x="142"
                   y="57.2"
@@ -506,78 +463,66 @@ const Stack = memo(function Stack(props: StackProps) {
                   fontWeight={700}
                   letterSpacing="0.1em"
                   textAnchor="middle"
-                  className={cn(muted ? styles.txOn : styles.txKey, styles.mono)}
+                  className={cn(muted ? styles.txOn : styles.tx, styles.mono)}
                 >
                   {muted ? 'MUTED' : 'MUTE'}
                 </text>
               </Key>
 
-              <path d={AXO.volTicks} strokeWidth={0.8} className={styles.sTxt} />
-              {/* The knob: a weighted flange, then a cap standing proud of it
-                  with the pointer lit on its face. */}
-              <Boss on="L" cx={186} cy={38} r={22} t={2.5} finish="knob">
-                <circle r="19.5" strokeWidth={0.6} className={cn(styles.fNone, styles.glint)} opacity={0.25} />
-              </Boss>
-              <Boss on="L" cx={183.5} cy={40.5} r={15} t={5} finish="knobCap">
+              <path d={AXO.volTicks} strokeWidth={0.8} className={styles.solid} />
+              {/* The knob: a flange, then a cap standing proud of it with the pointer on its face. */}
+              <Boss on="L" cx={186} cy={38} r={22} t={2.5} className={styles.fW} />
+              <Boss on="L" cx={183.5} cy={40.5} r={15} t={5} className={styles.fBg}>
                 <g transform={`rotate(${knobAngle(volume).toFixed(1)})`}>
-                  {powered && <line x1="0" y1="-13" x2="0" y2="-5" strokeWidth={4.6} opacity={0.35} className={styles.sAcc} />}
-                  <line x1="0" y1="-13" x2="0" y2="-5" strokeWidth={2.2} className={styles.sAcc} />
+                  <line x1="0" y1="-13" x2="0" y2="-5" strokeWidth={2.4} className={cn(styles.sAcc, styles.solid)} />
                 </g>
               </Boss>
               <text x="186" y="75" fontSize={5} fontWeight={700} letterSpacing="0.14em" textAnchor="middle" className={cn(styles.tx, styles.mono)}>
                 VOLUME
               </text>
             </Face>
-            <path d={AXO.rcv.sil} strokeWidth={1.2} className={styles.sSil} />
+            <path d={AXO.rcv.sil} strokeWidth={1.5} className={styles.solid} />
 
             <Posts of={AXO.rack[0]} />
             <Bay level={AXO.rack[1]} />
 
             {/* Tape deck */}
-            <Face of={AXO.tape} side="T" className={styles.fPlateHi} grain shade="fall" />
-            <Face of={AXO.tape} side="R" paint="side" />
-            <Face of={AXO.tape} side="L" paint="plate" grain>
-              <Well id={`${uid}-tape`} x={12} y={8} w={110} h={46} t={3}>
+            <Face of={AXO.tape} side="T" className={styles.fBg} shade="fall" />
+            <Face of={AXO.tape} side="R" className={styles.fR} shade="shade" />
+            <Face of={AXO.tape} side="L" className={styles.fL}>
+              <Well id={`${uid}-tape`} x={12} y={8} w={110} h={46} t={3} className={styles.fW}>
                 {/* The cassette sits in the well, its shell proud of the floor. */}
-                <Key on="L" x={18} y={12} w={98} h={38} t={2} finish="key">
-                  <rect x="24" y="14.5" width="86" height="9" rx="0.8" className={cn(styles.fLabel, styles.ns)} />
-                  <text x="27" y="21" fontSize={5} fontWeight={700} letterSpacing="0.14em" className={cn(styles.txLabel, styles.mono)}>
+                <Key on="L" x={18} y={12} w={98} h={38} t={2} className={styles.fBg}>
+                  <Spools />
+                  <rect x="56" y="28" width="22" height="12" strokeWidth={0.5} />
+                  <rect x="24" y="14" width="86" height="9" strokeWidth={0.5} className={styles.fBg} />
+                  <text x="27" y="20.6" fontSize={5} fontWeight={700} letterSpacing="0.14em" className={cn(styles.tx, styles.mono)}>
                     {tapeLabel}
                   </text>
-                  {/* The window: the tape packs through smoked plastic, the
-                      left spool emptying onto the right as the song plays. */}
-                  <clipPath id={`${uid}-cwin`}>
-                    <rect x="28" y="26" width="78" height="17" rx="2" />
-                  </clipPath>
-                  <rect x="28" y="26" width="78" height="17" rx="2" className={cn(styles.fGlass, styles.ns)} />
-                  <g clipPath={`url(#${uid}-cwin)`}>
-                    <Spools />
-                    <Reel cx={44} />
-                    <Reel cx={90} />
-                  </g>
-                  <rect x="28" y="26" width="78" height="17" rx="2" fill={url(paint.sheen)} className={styles.sBlack} />
+                  <Reel cx={44} />
+                  <Reel cx={90} />
                 </Key>
               </Well>
-              <Well id={`${uid}-count`} x={134} y={8} w={44} h={14} t={1.5} glass>
-                <Counter filter={powered ? glow : undefined} />
+              <Well id={`${uid}-count`} x={134} y={8} w={44} h={14} t={1.5} className={styles.fInk}>
+                <Counter />
               </Well>
-              <text x="186" y="18" fontSize={5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>TAPE</text>
-              <Key on="L" x={134} y={30} w={44} h={16} t={3} finish="key">
-                <circle cx="143" cy="38" r="2.6" filter={powered ? glow : undefined} className={cn(styles.fAcc, styles.ns)} />
-                <text x="149" y="40.4" fontSize={6.5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.txKey, styles.mono)}>REC</text>
+              <text x="186" y="18" fontSize={5} fontWeight={500} letterSpacing="0.16em" className={cn(styles.txMuted, styles.mono)}>TAPE</text>
+              <Key on="L" x={134} y={30} w={44} h={16} t={3} className={styles.fBg}>
+                <circle cx="143" cy="38" r="3" className={cn(styles.fAcc, styles.ns)} />
+                <text x="149" y="40.4" fontSize={6.5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>REC</text>
               </Key>
               <text x="156" y="55" fontSize={5} fontWeight={700} letterSpacing="0.16em" textAnchor="middle" className={cn(styles.txAcc, styles.mono)}>
                 REQUEST
               </text>
               {/* Latching too: a kept track leaves KEEP pressed in and lit. */}
-              <Key on="L" x={184} y={30} w={28} h={16} t={like.liked ? 1 : 3} finish={like.liked ? 'accDown' : 'key'}>
+              <Key on="L" x={184} y={30} w={28} h={16} t={like.liked ? 1 : 3} className={like.liked ? styles.fAcc : styles.fBg}>
                 <Heart
                   x={likeX}
                   y={35}
                   width={6}
                   height={6}
                   strokeWidth={3.5}
-                  className={cn(likeInk, like.liked && styles.icFill)}
+                  className={cn(styles.icon, likeInk, like.liked && styles.icFill)}
                 />
                 {likeCount && (
                   <text
@@ -585,7 +530,7 @@ const Stack = memo(function Stack(props: StackProps) {
                     y="40.6"
                     fontSize={6.5}
                     fontWeight={700}
-                    className={cn(like.liked ? styles.txOn : styles.txKey, styles.mono)}
+                    className={cn(like.liked ? styles.txOn : styles.tx, styles.mono)}
                   >
                     {likeCount}
                   </text>
@@ -603,7 +548,7 @@ const Stack = memo(function Stack(props: StackProps) {
                 KEEP
               </text>
             </Face>
-            <path d={AXO.tape.sil} strokeWidth={1.2} className={styles.sSil} />
+            <path d={AXO.tape.sil} strokeWidth={1.5} className={styles.solid} />
 
             <Posts of={AXO.rack[1]} />
             <Bay level={AXO.rack[2]} />
@@ -611,64 +556,61 @@ const Stack = memo(function Stack(props: StackProps) {
             {/* Turntable. The cover leans back past upright, wholly behind the
                 plinth, so it goes down first and the plinth covers its foot. */}
             <DustCover powered={powered} ids={screenIds} />
-            <Face of={AXO.tt} side="L" paint="plate" grain>
-              <text x="12" y="15" fontSize={5} fontWeight={700} letterSpacing="0.18em" className={cn(styles.tx, styles.mono)}>
+            <Face of={AXO.tt} side="L" className={styles.fL}>
+              <text x="12" y="15" fontSize={5} fontWeight={500} letterSpacing="0.18em" className={cn(styles.txMuted, styles.mono)}>
                 AXO-1 · DIRECT DRIVE · 33⅓
               </text>
             </Face>
-            <Face of={AXO.tt} side="R" paint="side" />
-            <Face of={AXO.tt} side="T" className={styles.fPlateHi} grain>
+            <Face of={AXO.tt} side="R" className={styles.fR} shade="shade" />
+            <Face of={AXO.tt} side="T" className={styles.fBg}>
               {/* The platter stands proud of the plinth and the record lies on
                   it. Only what looks different turned is turned (WebKit
                   repaints a turning node on the CPU every frame): the cylinder
-                  sides, the grooves, the label and the light lying across the
-                  vinyl stay put. On iOS so do the strobe dots round the
-                  platter's rim, as a strobe's do at speed; turning, they
-                  repainted the whole platter. */}
-              <Boss on="T" cx={96} cy={66} r={58} t={5} finish="plate">
+                  sides, the grooves and the label stay put. On iOS so do the
+                  strobe dots round the platter's rim, as a strobe's do at
+                  speed; turning, they repainted the whole platter. */}
+              <Boss on="T" cx={96} cy={66} r={58} t={5} className={styles.fW}>
                 <g data-spin={SPIN_PLATTER} data-touch-still="">
-                  <circle r="56.5" strokeWidth={1.6} strokeDasharray="0.8 2.6" strokeLinecap="butt" className={styles.sTxt} />
+                  <circle r="56.5" strokeWidth={1.6} strokeDasharray="0.8 2.6" strokeLinecap="butt" />
                 </g>
               </Boss>
-              <Boss on="T" cx={91} cy={61} r={53} t={1.5} finish="vinyl">
-                <circle r="49" strokeWidth={0.35} className={styles.groove} />
-                <circle r="45" strokeWidth={0.35} className={styles.groove} />
-                <circle r="38" strokeWidth={0.7} className={styles.grooveHi} />
-                <circle r="33" strokeWidth={0.35} className={styles.groove} />
-                <circle r="27" strokeWidth={0.7} className={styles.grooveHi} />
-                <circle r="23" strokeWidth={0.35} className={styles.groove} />
+              <Boss on="T" cx={91} cy={61} r={53} t={1.5} className={styles.fL}>
+                <circle r="49" strokeWidth={0.35} />
+                <circle r="45" strokeWidth={0.35} />
+                <circle r="38" strokeWidth={0.7} />
+                <circle r="33" strokeWidth={0.35} />
+                <circle r="27" strokeWidth={0.7} />
+                <circle r="23" strokeWidth={0.35} />
                 <circle r="18" className={cn(styles.fAcc, styles.ns)} />
-                <circle r="14" strokeWidth={0.4} className={cn(styles.fNone, styles.sBlack)} opacity={0.4} />
                 <g data-spin={SPIN_PLATTER}>
-                  <line x1="0" y1="-17" x2="0" y2="-7" strokeWidth={1.8} className={styles.sMetal} />
-                  <line x1="0" y1="-53" x2="0" y2="-45" strokeWidth={1.4} className={styles.grooveHi} />
+                  <line x1="0" y1="-17" x2="0" y2="-7" strokeWidth={1.8} className={cn(styles.sBg, styles.solid)} />
+                  <line x1="0" y1="-53" x2="0" y2="-45" strokeWidth={1.4} className={styles.solid} />
                 </g>
-                <path d="M0 0L-30 -42A52 52 0 0 1 -12 -51.5ZM0 0L30 42A52 52 0 0 1 12 51.5Z" className={cn(styles.vinylSheen, styles.ns)} />
-                <circle r="2" className={cn(styles.fPlateHi, styles.ns)} />
+                <circle r="2" className={cn(styles.fInk, styles.ns)} />
               </Boss>
-              <Key on="T" x={203} y={34} w={6} h={14} t={3} finish="key" />
-              <Boss on="T" cx={182} cy={104} r={3.5} t={7} finish="key" />
-              <Boss on="T" cx={190} cy={24} r={11} t={3} finish="plate" />
-              <Boss on="T" cx={187} cy={21} r={4.5} t={6} finish="key" />
+              <Key on="T" x={203} y={34} w={6} h={14} t={3} className={styles.fW} />
+              <Boss on="T" cx={182} cy={104} r={3.5} t={7} className={styles.fW} />
+              <Boss on="T" cx={190} cy={24} r={11} t={3} className={styles.fW} />
+              <Boss on="T" cx={187} cy={21} r={4.5} t={6} className={styles.fBg} />
               <Tonearm phase={phase} calm={calm} />
-              <Key on="T" x={12} y={108} w={16} h={12} t={1} finish="keyDown">
-                <text x="20" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.txAcc, styles.mono)}>33</text>
+              <Key on="T" x={12} y={108} w={16} h={12} t={2} className={styles.fInk}>
+                <text x="20" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.txBg, styles.mono)}>33</text>
               </Key>
-              <Key on="T" x={32} y={108} w={16} h={12} t={2} finish="key">
-                <text x="40" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.txKey, styles.mono)}>45</text>
+              <Key on="T" x={32} y={108} w={16} h={12} t={2} className={styles.fBg}>
+                <text x="40" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.tx, styles.mono)}>45</text>
               </Key>
               {/* The pilot lamp: lit while the platter turns. */}
-              <Lamp on="T" cx={57} cy={114} r={2.4} lit={live} />
+              <Lamp cx={57} cy={114} r={2.4} lit={live} />
             </Face>
-            <path d={AXO.tt.sil} strokeWidth={1.2} className={styles.sSil} />
+            <path d={AXO.tt.sil} strokeWidth={1.5} className={styles.solid} />
             {AXO.hinges.map((h, i) => <Box key={i} block={h} />)}
 
             <Speaker block={AXO.spR} />
           </g>
 
-          {/* What isn't the stack: the sound coming off the speakers, and the
-              studio's ON AIR sign, lit while the DJ is on the mic. */}
-          <g className={styles.waves} strokeWidth={mob ? 1.6 : 1.2} aria-hidden="true">
+          {/* The inked layer: the sound coming off the speakers, and the ON
+              AIR stamp while the DJ is on the mic. */}
+          <g className={styles.ink} strokeWidth={mob ? 1.6 : 1.3} aria-hidden="true">
             {AXO.arcs.map(([s, k]) => (
               <path
                 key={`${s}:${k}`}
@@ -677,10 +619,10 @@ const Stack = memo(function Stack(props: StackProps) {
                 opacity={calm ? arcOpacity(k, staticEnergy) : undefined}
               />
             ))}
+            {live && talk && (
+              <OnAirStamp djName={djName} transform={mob ? 'translate(250 -330) rotate(-8) scale(0.9)' : 'translate(258 -322) rotate(-8)'} />
+            )}
           </g>
-          {live && talk && (
-            <OnAirSign djName={djName} transform={mob ? 'translate(250 -332) scale(0.9)' : 'translate(258 -326)'} />
-          )}
         </PaintCtx.Provider>
 
         {/* With the tune-in overlay up, a tap anywhere on the drawing tunes in
@@ -782,50 +724,46 @@ const Stack = memo(function Stack(props: StackProps) {
   );
 });
 
-/** The dial's needle, where the song has got to. A filter can't light a line
- *  this straight (its box has no width, so the filter region has none), so
- *  the glow is a wider, fainter stroke beneath it. While tuning in the loop
- *  sweeps both, and React leaves their x alone. */
+/** The dial's needle, where the song has got to. While tuning in the loop
+ *  sweeps it, and React leaves its x alone. */
 function DialNeedle({ phase, calm }: { phase: ListenPhase; calm: boolean }) {
   const { ratio } = useContext(TickCtx);
   const live = phase === 'live';
   const connecting = phase === 'connecting';
   const x = (16 + 104 * (live ? (ratio ?? 0.5) : connecting ? 0.5 : 0)).toFixed(2);
   const owned = calm || !connecting;
-  return [3.6, 1.4].map(sw => (
+  return (
     <line
-      key={sw}
       data-needle=""
       x1={owned ? x : undefined}
       x2={owned ? x : undefined}
       y1="10"
       y2="38"
-      strokeWidth={sw}
-      opacity={sw > 2 ? (isPowered(phase) ? 0.35 : 0) : undefined}
-      className={styles.sAcc}
+      strokeWidth={1.6}
+      className={cn(styles.sAcc, styles.solid)}
     />
-  ));
+  );
 }
 
-/** The tape counter, on its own display glass. */
-function Counter({ filter }: { filter?: string }) {
+/** The tape counter, in its window. */
+function Counter() {
   const { counter } = useContext(TickCtx);
   return (
-    <text x="156" y="18.6" fontSize={9} textAnchor="middle" filter={filter} className={cn(styles.txGlass, styles.doto)}>
+    <text x="156" y="18" fontSize={8} fontWeight={700} letterSpacing="0.06em" textAnchor="middle" className={cn(styles.txBg, styles.mono)}>
       {counter}
     </text>
   );
 }
 
-/** The tape packed on each spool, seen through the cassette's window: the
- *  left emptying onto the right as the song plays. */
+/** The tape packed on each spool: the left emptying onto the right as the
+ *  song plays. */
 function Spools() {
   const { ratio } = useContext(TickCtx);
   const r = ratio ?? 0.5;
   return (
     <>
-      <circle cx="44" cy="34.5" r={(9 + 7 * (1 - r)).toFixed(2)} className={cn(styles.fTape, styles.ns)} />
-      <circle cx="90" cy="34.5" r={(9 + 7 * r).toFixed(2)} className={cn(styles.fTape, styles.ns)} />
+      <circle cx="44" cy="34" r={(9 + 7 * (1 - r)).toFixed(2)} strokeWidth={0.5} className={styles.fL} />
+      <circle cx="90" cy="34" r={(9 + 7 * r).toFixed(2)} strokeWidth={0.5} className={styles.fL} />
     </>
   );
 }
@@ -835,7 +773,6 @@ function Spools() {
  *  still frame prints it here: an undefined transform is never written, so
  *  a one-second re-render can't snap a moving arm back. */
 function Tonearm({ phase, calm }: { phase: ListenPhase; calm: boolean }) {
-  const p = useContext(PaintCtx);
   const { ratio } = useContext(TickCtx);
   const pose = phase === 'live' ? 'play' : phase === 'connecting' ? 'cue' : 'rest';
   const still = calm ? `rotate(${armAngle(pose, ratio)} 190 24)` : undefined;
@@ -849,79 +786,49 @@ function Tonearm({ phase, calm }: { phase: ListenPhase; calm: boolean }) {
       </g>
       <g transform="translate(-9 -9)">
         <g data-arm="" transform={still}>
-          <rect x="186" y="3" width="8" height="11" rx="1" fill={url(p.knobO)} className={styles.sBlack} />
-          <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3.4} className={styles.sEdge} />
-          <line x1="190" y1="24" x2="190" y2="102" strokeWidth={1.8} className={styles.sMetal} />
-          <rect x="185" y="100" width="10" height="12" rx="1" fill={url(p.key)} className={styles.sBlack} />
+          <rect x="186" y="3" width="8" height="11" className={styles.fInk} />
+          <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3} />
+          <line x1="190" y1="24" x2="190" y2="102" strokeWidth={1.2} className={cn(styles.sBg, styles.solid)} />
+          <rect x="185" y="100" width="10" height="12" className={styles.fInk} />
         </g>
       </g>
     </>
   );
 }
 
-/** The scene's paint servers. Light comes from above and a little to the
- *  left: plates lit at the top, sides receding, each unit sitting in its own
- *  contact shadow and casting a longer one across the floor. */
+/** The scene's gradients. Light comes from above and a little to the left:
+ *  a side panel deepens toward the back, a top tucked under the shelf above
+ *  darkens toward it, each unit leaves a contact shadow on its shelf, and a
+ *  lit lamp glows. */
 function Paints({ ids }: { ids: PaintIds }) {
-  const lin = (id: string, vertical: boolean, stops: Array<[number, Cls]>) => (
+  const lin = (id: string, vertical: boolean, stops: Array<[number, string | undefined]>) => (
     <linearGradient id={id} x1="0" y1="0" x2={vertical ? 0 : 1} y2={vertical ? 1 : 0}>
       {stops.map(([o, c]) => <stop key={o} offset={o} className={c} />)}
     </linearGradient>
   );
-  const rad = (id: string, cx: string, cy: string, rr: string, stops: Array<[number, Cls]>) => (
-    <radialGradient id={id} cx={cx} cy={cy} r={rr}>
-      {stops.map(([o, c]) => <stop key={o} offset={o} className={c} />)}
-    </radialGradient>
-  );
   return (
     <>
-      {lin(ids.plate, true, [[0, styles.plate0], [0.46, styles.plate1], [1, styles.plate2]])}
-      {lin(ids.side, false, [[0, styles.side0], [1, styles.side1]])}
-      {lin(ids.key, true, [[0, styles.key0], [1, styles.key1]])}
-      {lin(ids.keyDown, true, [[0, styles.keyDown0], [1, styles.keyDown1]])}
-      {lin(ids.acc, true, [[0, styles.acc0], [1, styles.acc1]])}
-      {lin(ids.accDown, true, [[0, styles.accDown0], [1, styles.accDown1]])}
-      {rad(ids.knobO, '50%', '22%', '80%', [[0, styles.knobO0], [0.72, styles.knobO1]])}
-      {rad(ids.knobI, '50%', '20%', '85%', [[0, styles.knobI0], [0.78, styles.knobI1]])}
-      {rad(ids.bulb, '34%', '28%', '75%', [[0, styles.bulb0], [0.62, styles.bulb1], [1, styles.bulb2]])}
-      {rad(ids.lamp, '30%', '26%', '80%', [[0, styles.lamp0], [0.3, styles.lamp1], [0.65, styles.lamp1], [1, styles.lamp2]])}
-      {rad(ids.cone, '42%', '36%', '70%', [[0, styles.cone0], [1, styles.cone1]])}
-      {rad(ids.glow, '50%', '50%', '50%', [[0, styles.glow0], [1, styles.glow1]])}
-      <linearGradient id={ids.sheen} x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" className={styles.sheen0} />
-        <stop offset="0.34" className={styles.sheen1} />
-      </linearGradient>
+      {lin(ids.shade, false, [[0, styles.shade0], [1, styles.shade1]])}
       {lin(ids.fall, true, [[0, styles.fall0], [1, styles.fall1]])}
       {lin(ids.dropX, false, [[0, styles.drop0], [1, styles.drop1]])}
       {lin(ids.dropY, true, [[0, styles.drop0], [1, styles.drop1]])}
-      {/* Brushed metal: grain along the plate, in the face's own units, so it
-          runs with the face at 30°. */}
-      <pattern id={ids.grain} width="9" height="1.7" patternUnits="userSpaceOnUse">
-        <line x1="0" y1="0.5" x2="9" y2="0.5" className={styles.grain} />
-      </pattern>
-      {/* Light off a lit part: the part itself, blurred under it. */}
-      <filter id={ids.glowF} x="-60%" y="-60%" width="220%" height="220%">
-        <feGaussianBlur in="SourceGraphic" stdDeviation="1.1" result="b" />
-        <feMerge>
-          <feMergeNode in="b" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
+      <radialGradient id={ids.glow}>
+        <stop offset="0" className={styles.glow0} />
+        <stop offset="1" className={styles.glow1} />
+      </radialGradient>
     </>
   );
 }
 
 /** One face of a block: its plane, and a rect sized from the block filling it
  *  (top w × d, front-left w × h, front-right d × h), with whatever is drawn
- *  on it laid out in that plane. `paint` fills it with one of the scene's
- *  gradients, `grain` brushes it, and `shade` lays a gradient over it — a top
- *  falling into the shadow of the shelf above. */
-function Face({ of: b, side, className, paint, grain, shade, children }: {
+ *  on it laid out in that plane. `shade` lays one of the scene's gradients
+ *  over it — a side panel receding, a top falling into the shadow of the
+ *  shelf above. */
+function Face({ of: b, side, className, shade, children }: {
   of: DrawnBlock;
   side: 'T' | 'L' | 'R';
   className?: string;
-  paint?: PaintKey;
-  grain?: boolean;
   shade?: PaintKey;
   children?: ReactNode;
 }) {
@@ -930,24 +837,21 @@ function Face({ of: b, side, className, paint, grain, shade, children }: {
   const height = side === 'T' ? b.d : b.h;
   return (
     <g transform={b[side]}>
-      {paint
-        ? <rect width={width} height={height} fill={url(p[paint])} />
-        : <rect width={width} height={height} className={className} />}
-      {grain && <rect width={width} height={height} fill={url(p.grain)} className={styles.ns} />}
+      <rect width={width} height={height} className={className} />
       {shade && <rect width={width} height={height} fill={url(p[shade])} className={styles.ns} />}
       {children}
     </g>
   );
 }
 
-/** A whole small box in metal: its three faces and silhouette. */
+/** A whole small box: its three faces and silhouette. */
 function Box({ block }: { block: DrawnBlock }) {
   return (
     <>
-      <Face of={block} side="T" className={styles.fPlateHi} />
-      <Face of={block} side="L" className={styles.fPlate} />
-      <Face of={block} side="R" className={styles.fSide} />
-      <path d={block.sil} strokeWidth={0.8} className={styles.sSil} />
+      <Face of={block} side="T" className={styles.fBg} />
+      <Face of={block} side="L" className={styles.fL} />
+      <Face of={block} side="R" className={styles.fR} />
+      <path d={block.sil} strokeWidth={0.9} className={styles.solid} />
     </>
   );
 }
@@ -961,30 +865,26 @@ type Surface = keyof typeof OUT;
 /** A key standing `t` proud of its face. Of its four sides only the two
  *  turned toward the viewer show (a front panel's key: its top and right; a
  *  top's key: its front and right), and what's printed on it rides on its
- *  cap, whose top edge catches the light. A smaller `t` is a key held pressed
- *  in. */
-function Key({ on, x, y, w, h, t, finish = 'key', children }: {
+ *  cap. A smaller `t` is a key held pressed in. */
+function Key({ on, x, y, w, h, t, className, children }: {
   on: Surface;
   x: number;
   y: number;
   w: number;
   h: number;
   t: number;
-  finish?: FinishName;
+  className?: string;
   children?: ReactNode;
 }) {
-  const p = useContext(PaintCtx);
-  const f: Finish = FINISH[finish];
   const dx = OUT[on][0] * t;
   const dy = OUT[on][1] * t;
   const edge = dy > 0 ? y : y + h;
   return (
     <>
-      <path d={`M${x} ${edge}H${x + w}l${dx} ${dy}H${x + dx}Z`} strokeWidth={0.4} className={on === 'L' ? f.up : f.front} />
-      <path d={`M${x + w} ${y}V${y + h}l${dx} ${dy}V${y + dy}Z`} strokeWidth={0.4} className={f.side} />
+      <path d={`M${x} ${edge}H${x + w}l${dx} ${dy}H${x + dx}Z`} strokeWidth={0.5} className={on === 'L' ? styles.fBg : styles.fL} />
+      <path d={`M${x + w} ${y}V${y + h}l${dx} ${dy}V${y + dy}Z`} strokeWidth={0.5} className={styles.fR} />
       <g transform={`translate(${dx} ${dy})`}>
-        <rect x={x} y={y} width={w} height={h} rx={0.8} strokeWidth={0.5} {...faceProps(f, p)} />
-        <path d={`M${x + 0.8} ${y + 0.5}H${x + w - 0.8}`} strokeWidth={0.5} className={styles.glint} opacity={0.4} />
+        <rect x={x} y={y} width={w} height={h} className={className} />
         {children}
       </g>
     </>
@@ -995,17 +895,15 @@ function Key({ on, x, y, w, h, t, finish = 'key', children }: {
  *  proud of its face: the side band between the two tangents, the base
  *  circle's near arc beneath it, and the cap on top. Children are laid out
  *  about the cap's centre. */
-function Boss({ on, cx, cy, r, t, finish = 'plate', children }: {
+function Boss({ on, cx, cy, r, t, className, children }: {
   on: Surface;
   cx: number;
   cy: number;
   r: number;
   t: number;
-  finish?: FinishName;
+  className?: string;
   children?: ReactNode;
 }) {
-  const p = useContext(PaintCtx);
-  const f: Finish = FINISH[finish];
   const [ox, oy] = OUT[on];
   const tx = round2(cx + ox * t);
   const ty = round2(cy + oy * t);
@@ -1016,11 +914,11 @@ function Boss({ on, cx, cy, r, t, finish = 'plate', children }: {
   const c = `${round2(tx - px)} ${round2(ty - py)}`, d = `${round2(cx - px)} ${round2(cy - py)}`;
   return (
     <>
-      <circle cx={cx} cy={cy} r={r} strokeWidth={0.4} className={f.side} />
-      <path d={`M${a}L${b}L${c}L${d}Z`} className={cn(f.side, styles.ns)} />
-      <path d={`M${a}L${b}M${c}L${d}`} strokeWidth={0.4} />
+      <circle cx={cx} cy={cy} r={r} className={styles.fR} />
+      <path d={`M${a}L${b}L${c}L${d}Z`} className={cn(styles.fR, styles.ns)} />
+      <path d={`M${a}L${b}M${c}L${d}`} />
       <g transform={`translate(${tx} ${ty})`}>
-        <circle r={r} strokeWidth={0.5} {...faceProps(f, p)} />
+        <circle r={r} className={className} />
         {children}
       </g>
     </>
@@ -1028,79 +926,62 @@ function Boss({ on, cx, cy, r, t, finish = 'plate', children }: {
 }
 
 /** A window sunk `t` into a front panel. Its floor shows shifted up and to
- *  the right; of its walls only the left (turned from the light) and the
- *  bottom (facing up, lit) show. Glass is a black floor under a sheen; a
- *  plain well is the plate in shade. What sits in it lies on the floor,
- *  clipped to the opening. */
-function Well({ id, x, y, w, h, t, glass, children }: {
+ *  the right; of its walls only the left and the bottom face the viewer.
+ *  What sits in it lies on the floor, clipped to the opening. */
+function Well({ id, x, y, w, h, t, className, children }: {
   id: string;
   x: number;
   y: number;
   w: number;
   h: number;
   t: number;
-  glass?: boolean;
+  className?: string;
   children?: ReactNode;
 }) {
-  const p = useContext(PaintCtx);
   return (
     <>
       <clipPath id={id}>
         <rect x={x + t} y={y} width={w - t} height={h - t} />
       </clipPath>
-      <rect x={x + t} y={y} width={w - t} height={h - t} className={cn(glass ? styles.fGlass : styles.fWell, styles.ns)} />
+      <rect x={x + t} y={y} width={w - t} height={h - t} className={cn(className, styles.ns)} />
       <g clipPath={`url(#${id})`}>
         <g transform={`translate(${t} ${-t})`}>{children}</g>
       </g>
-      {glass && <rect x={x + t} y={y} width={w - t} height={h - t} fill={url(p.sheen)} className={styles.ns} />}
-      <path d={`M${x} ${y}H${x + t}V${y + h - t}L${x} ${y + h}Z`} strokeWidth={0.4} className={styles.fSideLo} />
-      <path d={`M${x} ${y + h}L${x + t} ${y + h - t}H${x + w}V${y + h}Z`} strokeWidth={0.4} className={styles.fPlateHi} />
-      <rect x={x} y={y} width={w} height={h} strokeWidth={0.6} className={styles.fNone} />
+      <path d={`M${x} ${y}H${x + t}V${y + h - t}L${x} ${y + h}Z`} strokeWidth={0.4} className={styles.fR} />
+      <path d={`M${x} ${y + h}L${x + t} ${y + h - t}H${x + w}V${y + h}Z`} strokeWidth={0.4} className={styles.fBg} />
+      <rect x={x} y={y} width={w} height={h} className={styles.fNone} />
     </>
   );
 }
 
-/** An indicator lamp: a smoked bulb standing in its socket, with a glint on
- *  its glass. Lit, it glows in the accent and throws a little light on the
- *  panel round it. */
-function Lamp({ on = 'L', cx, cy, r, lit }: { on?: Surface; cx: number; cy: number; r: number; lit: boolean }) {
+/** An indicator lamp; lit, it throws a little light on the panel round it. */
+function Lamp({ cx, cy, r, lit }: { cx: number; cy: number; r: number; lit: boolean }) {
   const p = useContext(PaintCtx);
   return (
     <>
-      {lit && <circle cx={cx} cy={cy} r={r * 3.4} fill={url(p.glow)} className={styles.ns} />}
-      <Boss on={on} cx={cx} cy={cy} r={r} t={r * 0.45} finish={lit ? 'lamp' : 'bulb'}>
-        <ellipse
-          cx={round2(-r * 0.32)}
-          cy={round2(-r * 0.38)}
-          rx={round2(r * 0.34)}
-          ry={round2(r * 0.2)}
-          transform={`rotate(-30 ${round2(-r * 0.32)} ${round2(-r * 0.38)})`}
-          opacity={lit ? 0.6 : 0.16}
-          className={cn(styles.fSpec, styles.ns)}
-        />
-      </Boss>
+      {lit && <circle cx={cx} cy={cy} r={r * 3.2} fill={url(p.glow)} className={styles.ns} />}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        strokeWidth={0.5}
+        className={lit ? cn(styles.fAcc, styles.ns) : cn(styles.fBg, styles.solid)}
+      />
     </>
   );
 }
 
-/** The studio's ON AIR sign, facing the reader as Cipher's plate does: a
- *  housing whose side and lip recede down the 30° axis, a pane of display
- *  glass with the words lit in the accent, and whose mic it is beneath. */
-function OnAirSign({ djName, transform }: { djName: string; transform: string }) {
-  const p = useContext(PaintCtx);
-  const dx = 5.2, dy = 3;
+/** The ON AIR stamp, inked beside the stack, and whose mic it is. */
+function OnAirStamp({ djName, transform }: { djName: string; transform: string }) {
   return (
-    <g transform={transform} className={styles.hw} aria-hidden="true">
-      <path d={`M54 -18l${dx} ${dy}V${18 + dy}l${-dx} ${-dy}Z`} className={styles.fEdge} />
-      <path d={`M-54 18H54l${dx} ${dy}H${-54 + dx}Z`} className={styles.fEdgeLo} />
-      <rect x="-54" y="-18" width="108" height="36" rx="2" fill={url(p.key)} className={styles.sBlack} />
-      <rect x="-48" y="-12.5" width="96" height="25" rx="1" className={cn(styles.fGlass, styles.ns)} />
-      <rect x="-48" y="-12.5" width="96" height="25" rx="1" fill={url(p.sheen)} className={styles.ns} />
-      <text y="6.5" fontSize={17} letterSpacing="0.08em" textAnchor="middle" filter={url(p.glowF)} className={cn(styles.txAcc, styles.doto)}>
+    <g transform={transform}>
+      <rect x="-54" y="-18" width="108" height="36" strokeWidth={1.6} />
+      <rect x="-49" y="-13" width="98" height="26" strokeWidth={0.6} />
+      <text y="6" fontSize={15} fontWeight={700} letterSpacing="0.22em" textAnchor="middle" className={cn(styles.txAcc, styles.mono)}>
         ON AIR
       </text>
-      <text y="36" fontSize={9} fontWeight={700} letterSpacing="0.22em" textAnchor="middle" className={cn(styles.tx, styles.mono)}>
-        {djName.toUpperCase()}
+      <text y="40" fontSize={15} fontWeight={600} textAnchor="middle" className={cn(styles.txAcc, styles.display)}>
+        — {djName}
       </text>
     </g>
   );
@@ -1123,12 +1004,12 @@ function DustCover({ powered, ids }: { powered: boolean; ids: ScreenIds }) {
       <path d={lid.panel} strokeWidth={0.5} className={styles.fLid} />
       {screen
         ? <LidScreen screen={screen} powered={powered} ids={ids} />
-        : <path d={lid.glint} strokeWidth={0.8} className={styles.glint} />}
+        : <path d={lid.glint} strokeWidth={0.6} opacity={0.4} />}
       <path d={lid.left} strokeWidth={0.5} className={styles.fLidWall} />
       <path d={lid.front} strokeWidth={0.5} className={styles.fLidWall} />
       <path d={lid.right} strokeWidth={0.6} className={styles.fLidSide} />
       <path d={lid.rim} strokeWidth={0.9} />
-      <path d={lid.sil} strokeWidth={1.1} className={styles.sSil} />
+      <path d={lid.sil} strokeWidth={1.3} className={styles.solid} />
     </>
   );
 }
@@ -1143,7 +1024,8 @@ const GLASS = (() => {
   return { x: x0 + 2, y: y0 + 2, w: x1 - x0 - 4, h: y1 - y0 - 4 };
 })();
 
-/** HUD corner marks round the glass: lit in the accent while powered. */
+/** HUD corner marks round the glass: inked when lit, construction lines in
+ *  standby, as everything unpowered is. */
 const GLASS_CORNERS = (() => {
   const { x, y, w, h } = GLASS;
   const a = 7, x1 = x + w, y1 = y + h;
@@ -1166,8 +1048,9 @@ function ScreenDefs({ ids }: { ids: ScreenIds }) {
         <stop offset="0.5" className={styles.sweep1} />
         <stop offset="1" className={styles.sweep0} />
       </linearGradient>
-      {/* The bloom is an accent halo behind each legend: the display's own
-          light spilling round its letters. */}
+      {/* The bloom is an accent halo behind each legend, not a blur of the
+          legend itself: a halo of the ink would read as a smudge on a pale
+          theme, where one of the accent reads as light. */}
       <filter id={ids.bloom} x="-5%" y="-20%" width="110%" height="140%">
         <feGaussianBlur in="SourceAlpha" stdDeviation="1.1" result="blur" />
         <feFlood className={styles.bloomFlood} result="tint" />
@@ -1183,10 +1066,9 @@ function ScreenDefs({ ids }: { ids: ScreenIds }) {
 
 /** The now-playing card on the cover's panel, laid out flat by screen.ts and
  *  set into the panel's plane by LID_SHEET, so it leans back with the glass.
- *  The panel is display glass, as the receiver's window is: powered, it
- *  lights (scanlines, a sweep as it comes on, the bloom); in standby it stays
- *  dark and the card dims with it. Every row that could run long carries
- *  data-fit, which the scene's measure reads. */
+ *  Powered, the glass lights (tint, scanlines, a sweep as it comes on, the
+ *  bloom); in standby the card stays printed in the faded pen. Every row
+ *  that could run long carries data-fit, which the scene's measure reads. */
 function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: boolean; ids: ScreenIds }) {
   const L = screenLayout(screen);
   const { x, w } = SCREEN;
@@ -1196,9 +1078,9 @@ function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: b
   return (
     <g transform={LID_SHEET.transform}>
       <g clipPath={`url(#${ids.clip})`}>
-        <rect x={GLASS.x} y={GLASS.y} width={GLASS.w} height={GLASS.h} className={cn(styles.screenGlass, styles.ns)} />
         {powered && (
           <>
+            <rect x={GLASS.x} y={GLASS.y} width={GLASS.w} height={GLASS.h} className={cn(styles.glass, styles.ns)} />
             <rect x={GLASS.x} y={GLASS.y} width={GLASS.w} height={GLASS.h} fill={`url(#${ids.scan})`} className={styles.ns} />
             <g className={styles.sweep}>
               <rect x={GLASS.x} y={GLASS.y - 26} width={GLASS.w} height={26} fill={`url(#${ids.sweep})`} className={styles.ns} />
@@ -1230,7 +1112,8 @@ function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: b
                 x={x}
                 y={r.y}
                 fontSize={L.title.size}
-                className={cn(styles.txGlass, styles.doto)}
+                fontWeight={800}
+                className={cn(styles.tx, styles.display)}
               >
                 {r.text}
               </text>
@@ -1243,7 +1126,7 @@ function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: b
                 fontSize={ROW.artist.size}
                 fontWeight={700}
                 letterSpacing={`${ROW.artist.tracking}em`}
-                className={cn(styles.txGlass, styles.mono)}
+                className={cn(styles.tx, styles.mono)}
               >
                 {L.artist.text}
               </text>
@@ -1256,7 +1139,7 @@ function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: b
                 fontSize={ROW.detail.size}
                 fontWeight={500}
                 letterSpacing={`${ROW.detail.tracking}em`}
-                className={cn(styles.txGlassDim, styles.mono)}
+                className={cn(styles.txMuted, styles.mono)}
               >
                 {L.detail.text}
               </text>
@@ -1277,7 +1160,7 @@ function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: b
               fontSize={ROW.time.size}
               fontWeight={700}
               letterSpacing={`${ROW.time.tracking}em`}
-              className={cn(styles.txGlass, styles.mono)}
+              className={cn(styles.tx, styles.mono)}
             >
               {screen.elapsed}
             </text>
@@ -1288,7 +1171,7 @@ function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: b
               fontWeight={500}
               letterSpacing={`${ROW.time.tracking}em`}
               textAnchor="end"
-              className={cn(styles.txGlassDim, styles.mono)}
+              className={cn(styles.txMuted, styles.mono)}
             >
               {screen.duration.toUpperCase()}
             </text>
@@ -1302,84 +1185,76 @@ function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: b
                 className={styles.mono}
               >
                 <tspan fontWeight={700} className={styles.txAcc}>NEXT</tspan>
-                <tspan dx="4" fontWeight={500} className={styles.txGlass}>{L.foot.text}</tspan>
+                <tspan dx="4" fontWeight={500} className={styles.tx}>{L.foot.text}</tspan>
               </text>
             )}
             {L.foot?.kind === 'quote' && (
-              <text data-fit={w} x={x} y={L.foot.y} fontSize={ROW.quote.size} fontWeight={500} className={cn(styles.txGlass, styles.display)}>
+              <text data-fit={w} x={x} y={L.foot.y} fontSize={ROW.quote.size} fontWeight={500} className={cn(styles.tx, styles.display)}>
                 {L.foot.text}
               </text>
             )}
           </g>
         </g>
       </g>
-      <path d={GLASS_CORNERS} strokeWidth={0.9} className={powered ? styles.sAcc : styles.sGlass} />
+      <path d={GLASS_CORNERS} strokeWidth={0.9} className={cn(powered && styles.sAcc, powered && styles.solid)} />
     </g>
   );
 }
 
-/** A floor-standing speaker: a metal cabinet with its drivers set in a dark
- *  baffle, as the keys are set in the plate. */
+/** A floor-standing speaker: the cabinet, a bevel round its baffle and its
+ *  top, and the drivers set in the baffle. */
 function Speaker({ block }: { block: DrawnBlock }) {
-  const p = useContext(PaintCtx);
   return (
     <>
-      <Face of={block} side="T" className={styles.fPlateHi} grain />
-      <Face of={block} side="R" paint="side" />
-      <Face of={block} side="L" paint="key">
-        <rect x="5" y="5" width="70" height="240" rx="2" strokeWidth={0.6} className={cn(styles.fNone, styles.sEdge)} />
-        {/* Each driver: a metal trim ring standing off the baffle, a rubber
-            surround inside it, and the cone sunk into that, its inner wall
-            showing as a crescent. The tweeter is a dome. */}
-        <Boss on="L" cx={40} cy={36} r={10} t={2} finish="plate">
-          <circle r="7.2" className={cn(styles.fRubber, styles.ns)} />
-          <Boss on="L" cx={0} cy={0} r={4.2} t={1.5} finish="knobCap" />
+      <Face of={block} side="T" className={styles.fBg}>
+        <rect x="8" y="8" width="64" height="84" strokeWidth={0.4} opacity={0.6} />
+      </Face>
+      <Face of={block} side="R" className={styles.fR} shade="shade" />
+      <Face of={block} side="L" className={styles.fL}>
+        <rect x="6" y="6" width="68" height="238" strokeWidth={0.4} />
+        {/* Each driver: a surround standing off the baffle, and the cone
+            sunk into it, its inner wall showing as a crescent. */}
+        <Boss on="L" cx={40} cy={36} r={10} t={2} className={styles.fBg}>
+          <Boss on="L" cx={0} cy={0} r={4} t={1.5} className={styles.fW} />
         </Boss>
-        <Boss on="L" cx={40} cy={92} r={22} t={2.5} finish="plate">
-          <circle r="19" className={cn(styles.fRubber, styles.ns)} />
-          <circle r="17.6" className={cn(styles.fSocket, styles.ns)} />
+        <Boss on="L" cx={40} cy={92} r={22} t={2.5} className={styles.fBg}>
+          <circle r="18" strokeWidth={0.5} className={styles.fR} />
           <g transform="translate(1.4 -1.4)">
             <g data-cone="mid">
-              <circle r="16.5" fill={url(p.cone)} className={styles.sBlack} />
-              <circle r="5.5" fill={url(p.knobI)} className={styles.sBlack} />
+              <circle r="16.5" className={styles.fW} />
+              <circle r="5.5" className={styles.fBg} />
             </g>
           </g>
         </Boss>
-        <Boss on="L" cx={40} cy={178} r={34} t={3} finish="plate">
-          <circle r="30" className={cn(styles.fRubber, styles.ns)} />
-          <circle r="28.4" className={cn(styles.fSocket, styles.ns)} />
+        <Boss on="L" cx={40} cy={178} r={34} t={3} className={styles.fBg}>
+          <circle r="29" strokeWidth={0.5} className={styles.fR} />
           <g transform="translate(1.8 -1.8)">
             <g data-cone="big">
-              <circle r="27" fill={url(p.cone)} className={styles.sBlack} />
-              <circle r="18" strokeWidth={0.5} className={cn(styles.fNone, styles.groove)} />
-              <circle r="9.5" fill={url(p.knobI)} className={styles.sBlack} />
+              <circle r="27" className={styles.fW} />
+              <circle r="18" strokeWidth={0.4} />
+              <circle r="9.5" className={styles.fBg} />
             </g>
           </g>
         </Boss>
-        <rect x="27" y="225" width="26" height="8" rx="1" fill={url(p.plate)} strokeWidth={0.4} />
-        <text x="40" y="231" fontSize={4.6} fontWeight={700} letterSpacing="0.2em" textAnchor="middle" className={cn(styles.tx, styles.mono)}>
-          AXO
-        </text>
+        <rect x="30" y="226" width="20" height="6" opacity={0.55} className={cn(styles.fInk, styles.ns)} />
       </Face>
-      <path d={block.sil} strokeWidth={1.2} className={styles.sSil} />
+      <path d={block.sil} strokeWidth={1.5} className={styles.solid} />
     </>
   );
 }
 
-/** A shelf of the rack, in the same dark finish as the keys, with the
- *  contact shadow of the unit standing on it along the strips of it that
- *  show: in front of the unit and to its right. */
+/** A shelf, with the contact shadow of the unit standing on it along the
+ *  strips of it that show: in front of the unit and to its right. */
 function Shelf({ block }: { block: DrawnBlock }) {
   const p = useContext(PaintCtx);
   return (
     <>
-      <Face of={block} side="T" className={styles.fKeyHi}>
+      <Face of={block} side="T" className={styles.fBg}>
         <rect x="10" y="142" width="220" height="6" fill={url(p.dropY)} className={styles.ns} />
         <rect x="230" y="10" width="6" height="138" fill={url(p.dropX)} className={styles.ns} />
       </Face>
-      <Face of={block} side="L" paint="key" />
-      <Face of={block} side="R" className={styles.fEdge} />
-      <path d={block.sil} strokeWidth={0.8} className={styles.sSil} />
+      <Face of={block} side="L" className={styles.fL} />
+      <Face of={block} side="R" className={styles.fR} />
     </>
   );
 }
@@ -1388,8 +1263,8 @@ function Shelf({ block }: { block: DrawnBlock }) {
 function Post({ block }: { block: DrawnBlock }) {
   return (
     <>
-      <Face of={block} side="L" className={styles.fKey} />
-      <Face of={block} side="R" className={styles.fEdge} />
+      <Face of={block} side="L" className={styles.fL} />
+      <Face of={block} side="R" className={styles.fR} />
     </>
   );
 }
@@ -1410,17 +1285,17 @@ function Posts({ of: level }: { of: RackLevel }) {
   return level.front.map((p, i) => <Post key={i} block={p} />);
 }
 
-/** A cassette hub seen through the window: white plastic, three spokes. Only
- *  the spokes turn; the ring round them looks the same at any angle. */
+/** A cassette hub: three spokes in a ring. Only the spokes turn; the ring
+ *  looks the same at any angle. */
 function Reel({ cx }: { cx: number }) {
   return (
     <>
-      <circle cx={cx} cy="34.5" r="7" className={cn(styles.fLabel, styles.ns)} />
-      <g transform={`translate(${cx} 34.5)`}>
+      <circle cx={cx} cy="34" r="8" className={styles.fBg} />
+      <g transform={`translate(${cx} 34)`}>
         <g data-spin={SPIN_REEL}>
-          <path d="M0 -2.6V-6.2M2.25 1.3L5.37 3.1M-2.25 1.3L-5.37 3.1" strokeWidth={1.3} className={styles.sEdge} />
+          <path d="M0 -3V-7M2.6 1.5L6.06 3.5M-2.6 1.5L-6.06 3.5" strokeWidth={1.2} className={styles.solid} />
         </g>
-        <circle r="2.6" strokeWidth={0.8} className={cn(styles.fNone, styles.sEdge)} />
+        <circle r="3" strokeWidth={0.8} />
       </g>
     </>
   );

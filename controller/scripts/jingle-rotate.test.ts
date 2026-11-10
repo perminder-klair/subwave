@@ -169,6 +169,7 @@ test('the draw is random but never the same stinger twice running', () => {
 test('the debug row reports the mixer ratio it intended AND the one on disk', () => {
   assert.deepEqual(jingleRotateStatus({ jingleRatio: 30, jingleRotate: 'mixer' }, 7, '30'), {
     owner: 'mixer',
+    placement: 'between',
     ratio: 30,
     mixerRatioIntended: '30',
     mixerRatioOnDisk: '30',
@@ -177,6 +178,7 @@ test('the debug row reports the mixer ratio it intended AND the one on disk', ()
   });
   assert.deepEqual(jingleRotateStatus({ jingleRatio: 30, jingleRotate: 'controller' }, 7, '0'), {
     owner: 'controller',
+    placement: 'between',
     ratio: 30,
     mixerRatioIntended: '0',
     mixerRatioOnDisk: '0',

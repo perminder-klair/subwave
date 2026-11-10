@@ -1,4 +1,5 @@
 import { clientLabel, type ListenerConnection } from '../../../lib/clientLabel';
+import type { FileFormat } from '../../../lib/fileFormat';
 import type { SessionTurn } from '../../../lib/types';
 import type {
   NowPlayingTrack,
@@ -166,6 +167,14 @@ export function trustedProxyHint(s: TrustedProxyState | undefined): string | nul
     return `Showing the connecting peer: ${why}. Set ICECAST_TRUSTED_PROXY_IPS to your edge’s address and restart the broadcast container.${dropped}`;
   }
   return dropped.trim() || null;
+}
+
+/** GET /now-playing/file: the playing file's own format. `id` is the track
+ *  on air: when it is not the one asked about, that track has finished,
+ *  `format` is null and the caller shows nothing. */
+export interface NowPlayingFile {
+  id: string | null;
+  format: FileFormat | null;
 }
 
 // Mirrors the durable record the controller's request-log writes (GET /requests).

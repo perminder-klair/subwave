@@ -1,5 +1,6 @@
 // Library tagger orchestrator. Phases: 0 enrich → 1 embed → 2 seed →
-// 3 KNN-propagate → 4 active-learn → 5 acoustic analyze. Each phase
+// 3 KNN-propagate → 4 active-learn → 5 acoustic analyze, then a forward run
+// re-embeds the vectors phase 5's measurements marked. Each phase
 // short-circuits cleanly so partial runs make progress.
 //
 // Run:  docker exec sub-wave-controller npx tsx src/music/tag-library.ts
@@ -22,6 +23,9 @@
 //                         (never source='manual'). promptHash keys off
 //                         TAGGER_CONTRACT_VERSION + the mood vocabulary, not
 //                         the prompt text (#1548).
+//   --upgrade-blind       with --upgrade: re-tag only rows the LLM tagged
+//                         without audio measurements that have been measured
+//                         since (#2281), whatever their stamp
 //   --rescan              fire ONLY the selected re-* passes, each scoped to
 //                         already-done tracks; never forward-process the
 //                         untagged remainder
@@ -35,7 +39,6 @@ import { vote, fuseNeighbours } from './tag-propagator.js';
 import { summariseEval, formatEvalSummary } from './propagation-eval.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { setRawDebugStderrMirror } from '../llm/log.js';
-import { TAGGER_CONTRACT_VERSION } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { adoptAndPrune } from './id-rotation.js';
 import { reportProgress, reportCatalogueReady, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
@@ -52,6 +55,7 @@ import {
   walkNavidrome,
 } from './tag-library/flags.js';
 import { llmTagInBatches, resolveTagConsumers } from './tag-library/tag.js';
+import { rememberedUntaggable, tagPromptStamp } from './tag-library/tag-input.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 
 
@@ -235,7 +239,7 @@ async function main() {
     if (flags.rescan && reembedIds.length === 0) reembedIds = db.unembeddedIds();
   }
 
-  const promptHash = embeddings.promptVocabHash(TAGGER_CONTRACT_VERSION);
+  const promptHash = tagPromptStamp();
   const modelLabel = activeModelLabel();
 
   // Single- vs dual-LLM tagging: probed once here, not per phase, so the banner
@@ -264,7 +268,7 @@ async function main() {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
   } else if (walked > 0) {
     const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: flags.confirmPrune });
-    if (held) logEvent('warning', held.message);
+    if (held) logEvent('warning', held.message, { hold: true });
     if (pruned > 0) {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
     }
@@ -278,7 +282,15 @@ async function main() {
   // Forward scope: the untagged tracks this run discovers and tags, capped by
   // --limit. A re-scan's forward scope is empty — each re-* pass below redoes
   // only tracks that already carry that artifact, never the remainder.
-  const allUntagged = db.untaggedIds();
+  // Tracks the LLM already found untaggable with this same input, prompt stamp
+  // and model (#2283) stay in scope for enrich, embed and propagation, but never
+  // go to the LLM again. They sort last, so a --limit spends itself on the rest.
+  const noLlm = rememberedUntaggable(promptHash, tagConsumers.map(c => c.label));
+  const untaggedAll = db.untaggedIds();
+  const allUntagged = [
+    ...untaggedAll.filter(id => !noLlm.has(id)),
+    ...untaggedAll.filter(id => noLlm.has(id)),
+  ];
   const targetUntagged = flags.rescan
     ? []
     : flags.limit === Infinity
@@ -290,11 +302,20 @@ async function main() {
         `(not forward-processing ${allUntagged.length} untagged)`,
     );
   } else {
+    // The remembered untaggables are in scope but not "to tag": count them apart.
+    const held = targetUntagged.filter(id => noLlm.has(id)).length;
     logEvent(
       'info',
-      `${targetUntagged.length.toLocaleString('en-GB')} new tracks to tag ` +
+      `${(targetUntagged.length - held).toLocaleString('en-GB')} new tracks to tag ` +
         `(${allUntagged.length.toLocaleString('en-GB')} still untagged)`,
     );
+    if (held > 0) {
+      logEvent(
+        'info',
+        `${held.toLocaleString('en-GB')} more held back from the LLM: they came back untaggable before ` +
+          `with the same details, prompt and model (they can still take a neighbour vote)`,
+      );
+    }
   }
 
   // Phase 0: ENRICH. Normal runs enrich only the in-scope untagged tracks;
@@ -315,7 +336,7 @@ async function main() {
       const scopeNote = flags.rescan ? 'already-enriched tracks' : 'tracks';
       console.log(`[tag] --re-enrich: refreshing metadata for ${enrichIds.length} ${scopeNote}`);
     }
-    await phaseEnrich(enrichIds, flags.reEnrich);
+    await phaseEnrich(enrichIds, flags.reEnrich, flags.limit);
   } else if (flags.skipEnrich) {
     console.log('[tag] --skip-enrich: not fetching Last.fm tags or lyrics');
   }
@@ -351,6 +372,7 @@ async function main() {
       // --limit must reach the seed layer too, or layers 2-4 pull picks from
       // the full untagged pool. Bulk runs pass undefined.
       untaggedPool: limited ? new Set(targetUntagged) : undefined,
+      skip: noLlm,
       // k-means diversity layer. Candidates without a vector return null and
       // drop out inside the selector; the shortfall tops up randomly.
       embeddingForId: (id) => db.getVector(id),
@@ -367,7 +389,9 @@ async function main() {
       llmCalls += tagged.callCount;
       llmTagged += tagged.tagged;
       mergeByLeg(tagged.byLeg);
-      logEvent('success', `Mood tagging done — ${tagged.tagged}/${seedSelection.seeds.length}`);
+      for (const id of tagged.untaggable) noLlm.add(id);
+      const untaggableNote = tagged.untaggable.length > 0 ? ` (${tagged.untaggable.length} untaggable)` : '';
+      logEvent('success', `Mood tagging done — ${tagged.tagged}/${seedSelection.seeds.length}${untaggableNote}`);
     }
     lap('seed');
 
@@ -406,7 +430,9 @@ async function main() {
           model: modelLabel,
         });
         propagated += 1;
-      } else {
+      } else if (!noLlm.has(id)) {
+        // An untaggable track may still take its neighbours' vote above, but
+        // asking the LLM again would get the same empty answer.
         uncertain.push(id);
       }
     }
@@ -429,6 +455,7 @@ async function main() {
       llmCalls += tagged.callCount;
       llmTagged += tagged.tagged;
       mergeByLeg(tagged.byLeg);
+      for (const id of tagged.untaggable) noLlm.add(id);
 
       // Re-propagate over in-scope tracks still untagged after this LLM round.
       let extra = 0;
@@ -451,7 +478,7 @@ async function main() {
             model: modelLabel,
           });
           extra += 1;
-        } else {
+        } else if (!noLlm.has(id)) {
           stillUncertain.push(id);
         }
       }
@@ -519,23 +546,29 @@ async function main() {
 
   // Re-scan RE-DECIDE: re-LLM-tag tagged rows whose prompt or model went stale
   // (never manual). Scoped to the tagged set, never the untagged remainder.
+  // --upgrade-blind swaps the scope for the rows tagged without measurements
+  // that have been measured since (#2281); it never adds the stale ones.
   if (plan.reDecide) {
-    const stale = db.staleTaggedIds(
-      promptHash,
-      modelLabel,
-      flags.limit === Infinity ? undefined : flags.limit,
-    );
-    if (stale.length === 0) {
-      console.log('[tag] re-decide: no tagged rows are stale (prompt/model unchanged) — nothing to redo');
+    const reDecideLimit = flags.limit === Infinity ? undefined : flags.limit;
+    const redo = flags.upgradeBlind
+      ? db.blindTaggedIds(reDecideLimit)
+      : db.staleTaggedIds(promptHash, modelLabel, reDecideLimit);
+    const scope = flags.upgradeBlind ? 'blind' : 'stale';
+    if (redo.length === 0) {
+      console.log(
+        flags.upgradeBlind
+          ? '[tag] re-decide: no blind rows have been measured since they were tagged — nothing to redo'
+          : '[tag] re-decide: no tagged rows are stale (prompt/model unchanged) — nothing to redo',
+      );
     } else {
-      console.log(`[tag] re-decide: re-tagging ${stale.length} stale row(s)`);
+      console.log(`[tag] re-decide: re-tagging ${redo.length} ${scope} row(s)`);
       const tagged = await llmTagInBatches(
-        stale, tagBatchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
+        redo, tagBatchSize, promptHash, 'llm', tagConsumers, { phase: 'seed' },
       );
       llmCalls += tagged.callCount;
       llmTagged += tagged.tagged;
       mergeByLeg(tagged.byLeg);
-      console.log(`[tag] re-decide done: ${tagged.tagged}/${stale.length} re-tagged`);
+      console.log(`[tag] re-decide done: ${tagged.tagged}/${redo.length} re-tagged`);
     }
     lap('seed');
   }
@@ -557,6 +590,19 @@ async function main() {
     }
   }
   lap('analyze');
+
+  // Phase 5 measures the tracks phase 1 just embedded, so their Sound: words
+  // land after their vectors and mark them dirty (#2236). Re-embed only the
+  // marked rows now, so a new track gets its Sound: line in the run that
+  // analysed it. Best-effort: a failure leaves the marks for the next run.
+  if (plan.forwardTag && plan.analyze) {
+    try {
+      await phaseEmbed([], tagBatchSize, textMode);
+    } catch (err) {
+      logEvent('warning', `Re-embedding analysed tracks failed (non-fatal; the next run retries): ${err?.message || err}`);
+    }
+    lap('embed');
+  }
 
   finish(startedAt, llmCalls, llmTagged, byLeg, timings);
 }

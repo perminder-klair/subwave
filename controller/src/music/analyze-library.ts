@@ -16,7 +16,9 @@
 // Facet mode — scope read from track_facet_status instead of the legacy
 // queries (music/acoustics-plan.ts). Never walks; --re-analyze/--audio/--vocal
 // are ignored.
-//   --facets F[,F]       head, loudness, tail, clap, vocal, stems
+//   --facets F[,F]       head, loudness, tail, clap, vocal, stems, edges, year
+//                        (year = the MusicBrainz original-year lookup for
+//                        era-suspect tracks; it never calls the analyzer)
 //   --where W            needs (default) | missing | unmeasurable[:reason] |
 //                        failed | outdated | all
 //   --ids a,b,c          restrict to these track ids
@@ -28,6 +30,7 @@
 //
 //   e.g. npm run analyze -- --facets clap --where failed --dry-run
 //        npm run analyze -- --facets tail --where unmeasurable:capped --limit 200
+//        npm run analyze -- --facets year --where unmeasurable:not-found
 
 import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
@@ -40,8 +43,10 @@ import { adoptAndPrune } from './id-rotation.js';
 import * as analyzer from './analyzer.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { readFileSync } from 'node:fs';
-import { formatPlan, parseFacets, parseWhere, planAcoustics, type AcousticsPlan } from './acoustics-plan.js';
+import { analysisPart, formatPlan, parseFacets, parseWhere, planAcoustics, yearPart, type AcousticsPlan } from './acoustics-plan.js';
+import { runYearLookups } from './original-year.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
+import { walkFileInfo } from './tag-library/flags.js';
 
 const logEvent = makeEventLogger('analyze');
 
@@ -106,8 +111,12 @@ async function buildFacetPlan(args: string[], limit: number | undefined): Promis
     if (unknown > 0) console.log(`[analyze] ${unknown} of the given ids are not in the library — ignored`);
   }
   // Probe so capabilities are real; an unreachable analyzer leaves them unknown.
-  const available = await analyzer.isAvailable().catch(() => false);
-  if (!available) console.log('[analyze] analyzer not reachable — capabilities unknown');
+  // A year-only plan never talks to the analyzer, so it is not probed.
+  const needsAnalyzer = facets.some(db.isAnalysisFacet);
+  const available = needsAnalyzer ? await analyzer.isAvailable().catch(() => false) : false;
+  if (needsAnalyzer && !available) console.log('[analyze] analyzer not reachable — capabilities unknown');
+  const enrichCfg: { originalYear?: boolean } =
+    (settings.get() as { embedding?: { enrichment?: { originalYear?: boolean } } }).embedding?.enrichment ?? {};
   return planAcoustics({
     ids,
     facets,
@@ -117,6 +126,9 @@ async function buildFacetPlan(args: string[], limit: number | undefined): Promis
       clap: available ? analyzer.audioEmbeddingAvailable() : null,
       demucs: available ? analyzer.vocalActivityAvailable() : null,
       tailVocal: available ? analyzer.tailVocalAvailable() : null,
+      wholeFile: available ? analyzer.wholeFileAvailable() : null,
+      loudnessCurve: available ? analyzer.loudnessCurveAvailable() : null,
+      yearLookups: enrichCfg.originalYear !== false,
     },
     limit,
   });
@@ -180,9 +192,19 @@ async function main() {
       console.log('[analyze] nothing planned');
       process.exit(0);
     }
-    const stats = await runAnalysisPass({ plan });
+    // Audio first, then the MusicBrainz lookups: two independent passes.
+    const audio = analysisPart(plan);
+    const stats = audio ? await runAnalysisPass({ plan: audio }) : null;
     analyzer.shutdown();
-    console.log('[analyze] stats:', JSON.stringify(stats));
+    if (stats) console.log('[analyze] stats:', JSON.stringify(stats));
+    const yearIds = yearPart(plan);
+    if (yearIds.length) {
+      // Planned means due: a not-found re-asked by --where unmeasurable/all is
+      // asked again, a resolved or manual year never is (the planner skipped it).
+      const years = await runYearLookups(yearIds, { force: true, label: '[analyze]' });
+      logEvent('info', `Original years: ${years.found} found, ${years.notFound} not found, ${years.errors} errors`);
+      console.log('[analyze] year stats:', JSON.stringify(years));
+    }
     process.exit(0);
   }
 
@@ -227,6 +249,9 @@ async function main() {
           year: song.year,
           genres: subsonic.songGenres(song),
           duration: song.duration,
+          // A walk, so always a value: this is how a tag that has gone clears.
+          explicitStatus: db.normaliseExplicitStatus(song.explicitStatus),
+          ...walkFileInfo(song),
         });
         liveIds.add(song.id);
         walked += 1;
@@ -257,7 +282,7 @@ async function main() {
     // adopt.
     if (walkComplete && walked > 0) {
       const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: args.includes('--confirm-prune') });
-      if (held) logEvent('warning', held.message);
+      if (held) logEvent('warning', held.message, { hold: true });
       if (pruned > 0) {
         console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
       }

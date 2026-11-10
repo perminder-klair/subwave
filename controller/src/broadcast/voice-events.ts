@@ -1,7 +1,7 @@
 // Publish actual mixer air time at the live edge with the listener buffer offset. Unknown air
 // time sets estimated: true and omits timestamps. #1382, #1114.
 
-import * as settings from '../settings.js';
+import { advertisedBufferSeconds } from './stream-mounts.js';
 import * as webhooks from './webhooks.js';
 
 export interface SpokenSegment {
@@ -45,16 +45,6 @@ export interface QueuedSegment {
 // Bounds the voice.end timer so a mangled WAV header can't park one hours out.
 const MAX_SEGMENT_MS = 90_000;
 
-function bufferSeconds(): number {
-  try {
-    const s = settings.get() as { stream?: { bufferSeconds?: number } } | null;
-    const n = Number(s?.stream?.bufferSeconds);
-    return Number.isFinite(n) ? n : 22;
-  } catch {
-    return 22;
-  }
-}
-
 // voice.queued → voice.start → voice.end, all three paired by `voiceId`.
 //
 // This fires when the station COMMITS to a clip, before the queue wait, the
@@ -79,8 +69,9 @@ export function notifyQueued(seg: QueuedSegment): void {
     expectedAirAt: new Date(Date.now() + estimatedAirInMs).toISOString(),
     estimated: true,
     // The listener's offset from the live edge, so a consumer syncing to what
-    // people HEAR doesn't have to look it up (#1114).
-    streamBufferSeconds: bufferSeconds(),
+    // people HEAR doesn't have to look it up (#1114): the same figure
+    // /now-playing advertises, the burst the running mounts hold (#2142).
+    streamBufferSeconds: advertisedBufferSeconds(),
     ...(seg.personaId ? { personaId: seg.personaId } : {}),
     ...(seg.personaName ? { personaName: seg.personaName } : {}),
   });
@@ -115,8 +106,8 @@ export function notifySpoken(seg: SpokenSegment): void {
     ...identity,
     text: seg.text,
     ...(endsAtMs != null ? { endsAt: new Date(endsAtMs).toISOString() } : {}),
-    // The listener's offset from the live edge (#1114).
-    streamBufferSeconds: bufferSeconds(),
+    // The listener's offset from the live edge (#1114, #2142).
+    streamBufferSeconds: advertisedBufferSeconds(),
     ...(seg.personaId ? { personaId: seg.personaId } : {}),
     ...(seg.personaName ? { personaName: seg.personaName } : {}),
   });

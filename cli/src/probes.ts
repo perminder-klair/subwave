@@ -159,45 +159,24 @@ export async function probeOpenRouter(args: {
   }
 }
 
-// Unlike OpenRouter, a key is required here, so a bad one surfaces as a 401.
-export async function probeRequesty(args: {
+// A fixed-endpoint OpenAI-compatible gateway (the catalogue's openaiCompatible,
+// e.g. Requesty). Requesty's model list is public but, unlike OpenRouter's,
+// answers a bearer it can't verify with 403 ("Invalid authorization token"), so
+// a 401 or a 403 is a rejected key, as in the admin Test key.
+export async function probeGatewayModels(args: {
   apiKey: string;
+  baseUrl: string;         // the gateway's base URL, /v1 suffix included
   timeoutMs?: number;
 }): Promise<ProbeResult> {
-  const { apiKey } = args;
+  const { apiKey, baseUrl } = args;
   const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (!apiKey) return { ok: false, reason: 'no api key' };
   try {
-    const res = await fetch('https://router.requesty.ai/v1/models', {
+    const res = await fetch(`${baseUrl}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (res.status === 401) return { ok: false, reason: '401 — key rejected' };
-    if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
-    const body = await res.json() as { data?: Array<unknown> };
-    const n = body.data?.length ?? 0;
-    return { ok: true, detail: `${n} model${n === 1 ? '' : 's'} visible` };
-  } catch (e) {
-    return { ok: false, reason: fetchErrorReason(e) };
-  }
-}
-
-// Cheaper Inference is an OpenAI-compatible gateway; its /v1/models lists the
-// models enabled for the account. A key is required, so a bad one surfaces as
-// a 401.
-export async function probeCheaperInference(args: {
-  apiKey: string;
-  timeoutMs?: number;
-}): Promise<ProbeResult> {
-  const { apiKey } = args;
-  const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  if (!apiKey) return { ok: false, reason: 'no api key' };
-  try {
-    const res = await fetch('https://api.cheaperinference.com/v1/models', {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (res.status === 401) return { ok: false, reason: '401 — key rejected' };
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: `${res.status} — key rejected` };
     if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
     const body = await res.json() as { data?: Array<unknown> };
     const n = body.data?.length ?? 0;

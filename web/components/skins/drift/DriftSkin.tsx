@@ -1,9 +1,9 @@
 'use client';
 
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
-import { Headphones, Heart } from 'lucide-react';
+import { Captions, CaptionsOff, Headphones, Heart } from 'lucide-react';
 import styles from './Drift.module.css';
 import {
   usePlayerActions,
@@ -32,8 +32,11 @@ import {
   turnClock,
 } from '../shared';
 import { CAP_CENTRE } from '../capCentre';
+import { useLyricsPreference, useTrackLyrics } from '../lyrics';
+import LyricsSettings, { usePopoverDismiss } from '../LyricsSettings';
 import { useCrossfade, useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
+import DriftLyrics from './DriftLyrics';
 
 /* Opacity only, paced against the washes' twenty seconds. mode="wait" leaves a
    beat of empty page between tracks. */
@@ -111,18 +114,29 @@ function ClockLine({ timezone, locale, context }: {
     : contextLine(context);
 }
 
-function Progress({ startedAt, duration }: { startedAt: number | null; duration: number }) {
+function Progress({ startedAt, duration, compact = false }: {
+  startedAt: number | null;
+  duration: number;
+  /** The small form, under the title while lyrics hold the centre. */
+  compact?: boolean;
+}) {
   const elapsed = useElapsed(startedAt);
   const ratio = progressRatio(elapsed, duration) ?? 0;
   const fillRef = useRef<HTMLDivElement | null>(null);
   useDynamicStyle(fillRef, { width: `${Math.round(ratio * 100)}%` });
+  const time = cn('font-mono text-ink/70', compact ? 'text-[9px]' : 'text-[11px]');
   return (
-    <div className="mt-2 flex items-center gap-3">
-      <span className="font-mono text-[11px] text-ink/70">{fmtTime(elapsed)}</span>
-      <div className="relative h-[3px] w-[min(260px,50vw)] bg-[color-mix(in_oklab,var(--ink)_18%,transparent)]">
+    <div className={cn('flex items-center', compact ? 'mt-1.5 gap-2' : 'mt-2 gap-3')}>
+      <span className={time}>{fmtTime(elapsed)}</span>
+      <div
+        className={cn(
+          'relative bg-[color-mix(in_oklab,var(--ink)_18%,transparent)]',
+          compact ? 'h-[2px] w-[min(140px,30vw)]' : 'h-[3px] w-[min(260px,50vw)]',
+        )}
+      >
         <div ref={fillRef} className="absolute top-0 bottom-0 left-0 bg-[var(--accent)]" />
       </div>
-      <span className="font-mono text-[11px] text-ink/70">{fmtTime(duration)}</span>
+      <span className={time}>{fmtTime(duration)}</span>
     </div>
   );
 }
@@ -168,7 +182,24 @@ export default function DriftSkin(_props: SkinProps) {
   const typeSwap = animates ? TYPE_DISSOLVE : TYPE_CUT;
   const coverSwap = animates ? COVER_DISSOLVE : COVER_CUT;
 
+  // Lyrics, synced or not, take the centre of the page (DriftLyrics) and
+  // everything else there shrinks around them. The operator's switch rides GET /state;
+  // within it, L shows and hides them for this browser, and the corner's
+  // lyrics icon (the ··· panel on a phone) opens their settings. One answer
+  // per track feeds both the lines and the settings.
+  const lyricsOn = state.lyrics?.enabled === true;
+  const lyricsPref = useLyricsPreference();
+  const showLyrics = lyricsOn && lyricsPref.shown && !offline;
+  const lyricsTrack = useTrackLyrics(showLyrics ? nowPlaying?.subsonic_id : null);
+  const [lyricsPresent, setLyricsPresent] = useState(false);
+  const focus = showLyrics && lyricsPresent;
+
   const [panelOpen, setPanelOpen] = useState(false);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const lyricsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lyricsPopoverRef = useRef<HTMLDivElement | null>(null);
+  const closeLyrics = useCallback(() => setLyricsOpen(false), []);
+  usePopoverDismiss(lyricsOpen, closeLyrics, lyricsPopoverRef, lyricsButtonRef);
   const slip = useRequestSlip({
     sent: 'the DJ has it.',
     refused: 'not this time.',
@@ -185,6 +216,7 @@ export default function DriftSkin(_props: SkinProps) {
       arrowdown: () => adjustVolume(-0.05),
       m: toggleMute,
       r: () => setPanelOpen(true),
+      ...(lyricsOn ? { l: () => void lyricsPref.toggle() } : {}),
     },
     { disabled: panelOpen },
   );
@@ -266,6 +298,31 @@ export default function DriftSkin(_props: SkinProps) {
             {like.count > 0 && like.count}
           </button>
         )}
+        {lyricsOn && (
+          // An icon, like the heart beside it, and from sm up only: on a phone
+          // the corner already reaches the ··· button, whose panel carries the
+          // same settings.
+          <button
+            ref={lyricsButtonRef}
+            type="button"
+            onClick={() => {
+              setPanelOpen(false);
+              setLyricsOpen((open) => !open);
+            }}
+            aria-expanded={lyricsOpen}
+            aria-haspopup="dialog"
+            aria-label="Lyrics settings"
+            title="Lyrics (L shows or hides them)"
+            className={cn(
+              'v3-focus hidden cursor-pointer items-baseline border-0 bg-transparent p-0 hover:text-ink sm:inline-flex',
+              lyricsPref.shown || lyricsOpen ? 'text-ink' : 'text-muted',
+            )}
+          >
+            {lyricsPref.shown
+              ? <Captions aria-hidden className={cn('size-3', CAP_CENTRE)} strokeWidth={1.5} />
+              : <CaptionsOff aria-hidden className={cn('size-3', CAP_CENTRE)} strokeWidth={1.5} />}
+          </button>
+        )}
         <button type="button" aria-label="Volume down" onClick={() => adjustVolume(-0.05)}
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">−</button>
         <button
@@ -281,51 +338,117 @@ export default function DriftSkin(_props: SkinProps) {
 
       {/* Keep the title clickable without intercepting clicks on the corner controls. */}
       {!showOverlay && (
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 text-center">
-          {coverSrc && !offline && (
-            <div className="relative h-[128px] w-[128px] border border-soft-border sm:h-[152px] sm:w-[152px]">
-              <AnimatePresence mode="popLayout" initial={false}>
-                <m.img
-                  key={coverSrc}
-                  src={coverSrc}
-                  alt=""
-                  {...coverSwap}
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              </AnimatePresence>
-            </div>
+        <div
+          className={cn(
+            'pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-6 text-center',
+            focus ? 'gap-6' : 'gap-4',
           )}
-          <div className="mt-2 font-mono text-[10px] tracking-[0.28em] text-accent-2 uppercase">
-            {offline ? 'off air' : tunedIn ? 'now playing' : 'now playing — tap to listen'}
-          </div>
-          {!offline && (
-            <AnimatePresence mode="wait" initial={false}>
-              <m.button
-                key={trackKey}
-                type="button"
-                onClick={handleTune}
-                {...typeSwap}
-                className="v3-focus pointer-events-auto max-w-full cursor-pointer border-0 bg-transparent p-0 font-display text-[clamp(26px,5vw,46px)] leading-[1.1] font-semibold text-ink"
-              >
-                {nowPlaying?.title ?? 'somewhere on the dial'}
-              </m.button>
-            </AnimatePresence>
-          )}
-          {!offline && metaLine && (
-            <AnimatePresence mode="wait" initial={false}>
-              <m.div
-                key={trackKey}
-                {...typeSwap}
-                className="max-w-full truncate font-mono text-[12px] tracking-[0.2em] text-ink/75 uppercase"
-              >
-                {metaLine}
+        >
+          {/* Two arrangements that dissolve into each other: the full stack,
+              or one small line while lyrics hold the centre. */}
+          <AnimatePresence mode="wait" initial={false}>
+            {focus ? (
+              <m.div key="compact" {...typeSwap} className="flex max-w-full items-center gap-3.5">
+                {coverSrc && (
+                  <div className="relative h-12 w-12 shrink-0 border border-soft-border sm:h-14 sm:w-14">
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      <m.img
+                        key={coverSrc}
+                        src={coverSrc}
+                        alt=""
+                        {...coverSwap}
+                        className="absolute inset-0 h-full w-full object-cover"
+                      />
+                    </AnimatePresence>
+                  </div>
+                )}
+                <div className="flex min-w-0 flex-col items-start text-left">
+                  <AnimatePresence mode="wait" initial={false}>
+                    <m.button
+                      key={trackKey}
+                      type="button"
+                      onClick={handleTune}
+                      {...typeSwap}
+                      className="v3-focus pointer-events-auto max-w-[min(420px,60vw)] cursor-pointer truncate border-0 bg-transparent p-0 text-left font-display text-[clamp(16px,2vw,20px)] leading-tight font-semibold text-ink"
+                    >
+                      {nowPlaying?.title ?? 'somewhere on the dial'}
+                    </m.button>
+                  </AnimatePresence>
+                  {metaLine && (
+                    <div className="mt-0.5 max-w-[min(420px,60vw)] truncate font-mono text-[9px] tracking-[0.2em] text-ink/70 uppercase">
+                      {metaLine}
+                    </div>
+                  )}
+                  {duration != null && duration > 0 && (
+                    <Progress startedAt={trackStartedAt} duration={duration} compact />
+                  )}
+                </div>
               </m.div>
-            </AnimatePresence>
+            ) : (
+              <m.div key="full" {...typeSwap} className="flex max-w-full flex-col items-center gap-4">
+                {coverSrc && !offline && (
+                  <div className="relative h-[128px] w-[128px] border border-soft-border sm:h-[152px] sm:w-[152px]">
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      <m.img
+                        key={coverSrc}
+                        src={coverSrc}
+                        alt=""
+                        {...coverSwap}
+                        className="absolute inset-0 h-full w-full object-cover"
+                      />
+                    </AnimatePresence>
+                  </div>
+                )}
+                <div className="mt-2 font-mono text-[10px] tracking-[0.28em] text-accent-2 uppercase">
+                  {offline ? 'off air' : tunedIn ? 'now playing' : 'now playing — tap to listen'}
+                </div>
+                {!offline && (
+                  <AnimatePresence mode="wait" initial={false}>
+                    <m.button
+                      key={trackKey}
+                      type="button"
+                      onClick={handleTune}
+                      {...typeSwap}
+                      className="v3-focus pointer-events-auto max-w-full cursor-pointer border-0 bg-transparent p-0 font-display text-[clamp(26px,5vw,46px)] leading-[1.1] font-semibold text-ink"
+                    >
+                      {nowPlaying?.title ?? 'somewhere on the dial'}
+                    </m.button>
+                  </AnimatePresence>
+                )}
+                {!offline && metaLine && (
+                  <AnimatePresence mode="wait" initial={false}>
+                    <m.div
+                      key={trackKey}
+                      {...typeSwap}
+                      className="max-w-full truncate font-mono text-[12px] tracking-[0.2em] text-ink/75 uppercase"
+                    >
+                      {metaLine}
+                    </m.div>
+                  </AnimatePresence>
+                )}
+                {!offline && duration != null && duration > 0 && (
+                  <Progress startedAt={trackStartedAt} duration={duration} />
+                )}
+              </m.div>
+            )}
+          </AnimatePresence>
+
+          {/* Mounted in both arrangements, at one place in the tree, so a
+              change of arrangement never refetches or resets the lyrics. */}
+          {showLyrics && (
+            <DriftLyrics
+              track={lyricsTrack}
+              trackStartedAt={trackStartedAt}
+              onPresenceChange={setLyricsPresent}
+            />
           )}
-          {!offline && duration != null && duration > 0 && (
-            <Progress startedAt={trackStartedAt} duration={duration} />
-          )}
-          {voice && (
+
+          {voice && (focus ? (
+            <div className="flex max-w-[min(560px,90vw)] items-baseline gap-2">
+              <span className="min-w-0 truncate font-display text-[13px] text-ink/60 italic">“{voice.text}”</span>
+              <span className="shrink-0 font-mono text-[9px] tracking-[0.3em] text-muted uppercase">— {djName}</span>
+            </div>
+          ) : (
             <div className="mt-9 flex max-w-[520px] flex-col gap-2.5">
               <div className="font-display text-[clamp(15px,2.4vw,21px)] leading-normal italic">
                 “{voice.text}”
@@ -334,14 +457,17 @@ export default function DriftSkin(_props: SkinProps) {
                 — {djName}, on air
               </div>
             </div>
-          )}
+          ))}
         </div>
       )}
 
       {!showOverlay && (
         <button
           type="button"
-          onClick={() => setPanelOpen(o => !o)}
+          onClick={() => {
+            setLyricsOpen(false);
+            setPanelOpen(o => !o);
+          }}
           aria-expanded={panelOpen}
           className="v3-focus absolute bottom-6 left-1/2 -translate-x-1/2 cursor-pointer border border-soft-border/50 bg-[var(--field)]/25 px-4 py-1 font-mono text-[12px] tracking-[0.3em] text-muted backdrop-blur-md hover:bg-[var(--field)]/45 hover:text-ink"
         >
@@ -416,6 +542,24 @@ export default function DriftSkin(_props: SkinProps) {
               ))}
             </div>
           )}
+          {lyricsOn && (
+            // A phone's way to the lyrics settings; from sm up the corner
+            // icon opens them.
+            <div className="border-t border-soft-border pt-2.5 sm:hidden">
+              <LyricsSettings shown={lyricsPref.shown} onToggle={lyricsPref.toggle} track={lyricsTrack} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {lyricsOn && lyricsOpen && !showOverlay && (
+        <div
+          ref={lyricsPopoverRef}
+          role="dialog"
+          aria-label="Lyrics settings"
+          className="absolute right-8 bottom-14 z-30 w-[min(340px,calc(100vw-2rem))] border border-soft-border bg-[var(--bg)]/95 p-4"
+        >
+          <LyricsSettings shown={lyricsPref.shown} onToggle={lyricsPref.toggle} track={lyricsTrack} />
         </div>
       )}
 

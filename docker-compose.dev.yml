@@ -210,6 +210,9 @@ services:
       # Fallback Chatterbox reference WAV when a line has no persona voice of
       # its own — a path inside this container (see docker-compose.yml).
       - CHATTERBOX_REFERENCE_WAV=${CHATTERBOX_REFERENCE_WAV:-}
+      # On-air level targets (linear RMS); empty keeps each worker's default.
+      - CHATTERBOX_TARGET_RMS=${CHATTERBOX_TARGET_RMS:-}
+      - POCKET_TTS_TARGET_RMS=${POCKET_TTS_TARGET_RMS:-}
       # Optional — PocketTTS voice cloning (#238); weights gated on HF.
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
@@ -272,6 +275,9 @@ services:
       - DEMUCS_OVERLAP=${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.

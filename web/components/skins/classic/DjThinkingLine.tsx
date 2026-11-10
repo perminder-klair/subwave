@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
+import { cn } from '@/lib/cn';
 import { selectThinkingTurn, turnClass, turnText } from '@/lib/sessionFeed';
 import BoothBuddy, { type BuddyMood } from '@/components/BoothBuddy';
 import { useLiteMode } from '@/hooks/useLiteMode';
@@ -87,9 +88,10 @@ export interface DjThinkingLineProps {
    *  false. Defaults off (operator opts in). */
   buddyOn?: boolean;
   onOpenBooth?: () => void;
+  className?: string;
 }
 
-export default function DjThinkingLine({ feed, enabled, currentTrackId = null, buddyOn = false, onOpenBooth }: DjThinkingLineProps) {
+export default function DjThinkingLine({ feed, enabled, currentTrackId = null, buddyOn = false, onOpenBooth, className }: DjThinkingLineProps) {
   // The turn relevant to what's ON AIR now — see selectThinkingTurn (#546).
   const latest = useMemo<SessionTurn | null>(
     () => selectThinkingTurn(feed, currentTrackId),
@@ -137,7 +139,10 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
       }}
       title="Open booth feed"
       // Full width on phones; the 82% cap is a desktop line-length limit.
-      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-full cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:max-w-[82%] sm:text-[15px]"
+      className={cn(
+        'v3-focus mt-[22px] mb-[10px] flex w-full max-w-full cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:max-w-[82%] sm:text-[15px]',
+        className,
+      )}
     >
       {buddyOn ? (
         <span ref={buddyRef} aria-hidden="true" className="mt-[1px] shrink-0">

@@ -30,6 +30,10 @@ export const libraryKeys = {
   likeIndex: () => ['library', 'likeIndex'] as const,
   coverage: () => ['library', 'coverage'] as const,
   tagger: () => ['library', 'tagger'] as const,
+  // The run log read by sequence number, and the kept run-log files. Outside
+  // the `tagger` family so a snapshot refresh never refetches the log.
+  taggerLog: () => ['library', 'tagger-log'] as const,
+  taggerLogFiles: () => ['library', 'tagger-log-files'] as const,
   analysisFailures: () => ['library', 'analysis-failures'] as const,
   moodVocab: () => ['library', 'mood-vocab'] as const,
   genres: () => ['library', 'genres'] as const,

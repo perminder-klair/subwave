@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { settingsForm } from '../components/admin/settings/form-state';
-import { archivesSavePayload, dangerSavePayload } from '../components/admin/settings/save-payload';
+import { archivesSavePayload, dangerSavePayload, stemsSavePayload } from '../components/admin/settings/save-payload';
 import { countLeafDiffs, dirtyPaths, restorePaths, ownsErrorPath, mergePatchErrors } from '../components/admin/settings/form-diff';
-import { sectionById } from '../components/admin/settings/registry';
+import { RESTART_PATHS, sectionById } from '../components/admin/settings/registry';
+import { samePath, sameForm } from '../components/admin/settings/form-diff';
+import { rebaselineSavedPatch } from '../components/admin/settings/form-reconciliation';
+import {
+  lastfmTagsChoice, lastfmTagsEnabled, lastfmTagsFromChoice, lastfmTrackTagsBlocker,
+} from '../components/admin/settings/lastfm-track-tags';
 
 test('cold hydration preserves defaults and independent primary/fallback fields', () => {
   const form = settingsForm({
@@ -68,7 +73,7 @@ test('whole-block saves refuse blank numbers and preserve explicit zero and deci
   assert.deepEqual(danger.fieldErrors, { 'stream.bufferSeconds': 'enter a number' });
   assert.equal(danger.patch.maxTrackSeconds, 0);
   assert.equal(danger.patch.ducking.voice, 0.22);
-  assert.equal(danger.patch.audio.stemCacheGb, 1.5);
+  assert.equal(stemsSavePayload(form).patch.audio.stemCacheGb, 1.5);
   form.archive.retentionDays = '';
   const archive = archivesSavePayload(form);
   assert.deepEqual(archive.fieldErrors, { 'archive.retentionDays': 'enter a number' });
@@ -118,4 +123,132 @@ test('provider dirtiness and discard do not own selection or segment runtime', (
   assert.equal(restored.llm.model, baseline.llm.model);
   assert.equal(restored.llm.trackSelection, 'shortlist');
   assert.equal(restored.llm.segmentRuntime, 'direct');
+});
+
+test('Last.fm track tags hydrate off, and read as unavailable without what they need', () => {
+  assert.equal(settingsForm({}).embedding.enrichment.lastfmTrackTags, false);
+  assert.equal(settingsForm({ embedding: { enrichment: { lastfmTrackTags: true } } }).embedding.enrichment.lastfmTrackTags, true);
+
+  assert.equal(lastfmTrackTagsBlocker(true, true), null);
+  assert.match(lastfmTrackTagsBlocker(false, true) ?? '', /API key/);
+  assert.match(lastfmTrackTagsBlocker(false, false) ?? '', /API key/, 'the key is the first thing to fix');
+  assert.match(lastfmTrackTagsBlocker(true, false) ?? '', /Last\.fm tags/);
+  // Auto turns Last.fm tags on with the key the first check already asked for.
+  assert.equal(lastfmTrackTagsBlocker(true, null), null);
+  assert.match(lastfmTrackTagsBlocker(false, null) ?? '', /API key/);
+});
+
+test('Last.fm tags keep Auto through the Library form (#2233)', () => {
+  // Unset hydrates as Auto, never as Off: Off was what the next save wrote.
+  assert.equal(settingsForm({}).embedding.enrichment.lastfmTags, null);
+  assert.equal(settingsForm({ embedding: { enrichment: { lastfmTags: null } } }).embedding.enrichment.lastfmTags, null);
+  assert.equal(settingsForm({ embedding: { enrichment: { lastfmTags: false } } }).embedding.enrichment.lastfmTags, false);
+  assert.equal(settingsForm({ embedding: { enrichment: { lastfmTags: true } } }).embedding.enrichment.lastfmTags, true);
+
+  // The control shows each value as its own choice and maps back to it.
+  assert.equal(lastfmTagsChoice(null), 'auto');
+  assert.equal(lastfmTagsChoice(false), 'off');
+  assert.equal(lastfmTagsChoice(true), 'on');
+  for (const value of [null, false, true]) assert.equal(lastfmTagsFromChoice(lastfmTagsChoice(value)), value);
+
+  // What Auto resolves to, as the controller's lastfmEnrichEnabled decides it.
+  assert.equal(lastfmTagsEnabled(null, true), true);
+  assert.equal(lastfmTagsEnabled(null, false), false);
+  assert.equal(lastfmTagsEnabled(true, false), true, 'forced on takes the keyless path');
+  assert.equal(lastfmTagsEnabled(false, true), false);
+
+  // A save that leaves Auto alone: clean before, posts null, clean after, and
+  // the read that follows (the controller keeps null) hydrates the same form.
+  const keys = sectionById('library')!.formKeys;
+  const baseline = settingsForm({});
+  const form = structuredClone(baseline);
+  assert.deepEqual(dirtyPaths(form, baseline, keys), [], 'an untouched Auto is not an unsaved change');
+  form.embedding.enrichment.lyrics = false;
+  assert.deepEqual(dirtyPaths(form, baseline, keys), ['embedding']);
+  // The enrichment block LibrarySection.save() posts.
+  const enrichment = {
+    lastfmTags: form.embedding.enrichment.lastfmTags,
+    lastfmTrackTags: form.embedding.enrichment.lastfmTrackTags,
+    lyrics: form.embedding.enrichment.lyrics,
+  };
+  assert.equal(enrichment.lastfmTags, null);
+  const rebased = rebaselineSavedPatch(baseline, form, { embedding: { enrichment } });
+  assert.deepEqual(dirtyPaths(form, rebased, keys), []);
+  const reread = settingsForm({ embedding: { enrichment } });
+  assert.ok(sameForm(reread, rebased), 'the post-save read matches the new baseline');
+});
+
+test('Broadcast & mixer and Stems split transitions at the leaf: each page sees and saves only its own fields', () => {
+  const broadcast = sectionById('broadcast')!.formKeys;
+  const stems = sectionById('stems')!.formKeys;
+  const baseline = settingsForm({});
+  // The crossfade curve lives on Broadcast & mixer: its save bar comes up,
+  // with the restart warning, and the Stems page stays clean.
+  const curve = structuredClone(baseline);
+  curve.transitions.equalPowerCrossfade = !baseline.transitions.equalPowerCrossfade;
+  assert.deepEqual(dirtyPaths(curve, baseline, broadcast), ['transitions.equalPowerCrossfade']);
+  assert.deepEqual(dirtyPaths(curve, baseline, stems), []);
+  const restartWarn = (keys: readonly string[]) => RESTART_PATHS.some(path =>
+    keys.some(key => path === key || path.startsWith(`${key}.`)) && !samePath(curve, baseline, path));
+  assert.equal(restartWarn(broadcast), true);
+  assert.equal(restartWarn(stems), false);
+  // An effect toggle is Broadcast's too.
+  const fx = structuredClone(baseline);
+  fx.transitions.effects.sweep = !baseline.transitions.effects.sweep;
+  assert.deepEqual(dirtyPaths(fx, baseline, broadcast), ['transitions.effects']);
+  assert.deepEqual(dirtyPaths(fx, baseline, stems), []);
+  // The stem budget is the Stems page's, and its errors route there.
+  const budget = structuredClone(baseline);
+  budget.transitions.stemCacheGb = '7';
+  assert.deepEqual(dirtyPaths(budget, baseline, stems), ['transitions.stemCacheGb']);
+  assert.deepEqual(dirtyPaths(budget, baseline, broadcast), []);
+  assert.equal(ownsErrorPath(stems, 'audio.stemCacheGb'), true);
+  assert.equal(ownsErrorPath(broadcast, 'audio.stemCacheGb'), false);
+});
+
+test('the Stems save and the Broadcast save post disjoint fields, so neither commits the other page\'s edit', () => {
+  const form = settingsForm({});
+  const stems = stemsSavePayload(form).patch;
+  const danger = dangerSavePayload(form).patch;
+  assert.deepEqual(Object.keys(stems.transitions).sort(), ['pairDrain', 'pickTimeStems', 'stemBlends']);
+  assert.deepEqual(Object.keys(stems.audio).sort(), ['stemCache', 'stemCacheGb']);
+  assert.deepEqual(Object.keys(danger.transitions).sort(), ['effects', 'equalPowerCrossfade']);
+  assert.equal('audio' in danger, false);
+  assert.deepEqual(Object.keys(stems).sort(), ['audio', 'transitions']);
+});
+
+test('the Stems save bar owns its fields through one list, alias paths included', async () => {
+  const { ownedFieldErrors } = await import('../components/admin/settings/shared');
+  const { STEM_FORM_KEYS } = await import('../components/admin/settings/registry');
+  // The cache fields report under audio.*, the form keeps them under transitions.
+  const errors = {
+    'audio.stemCacheGb': 'must be a number',
+    'transitions.pairDrain': 'bad',
+    'transitions.equalPowerCrossfade': 'not this page',
+    'audio.vocalActivity': 'not this page',
+  };
+  assert.deepEqual(ownedFieldErrors(errors, STEM_FORM_KEYS).map(([path]) => path).sort(),
+    ['audio.stemCacheGb', 'transitions.pairDrain']);
+});
+
+test('pick-time stems (#2197) hydrates off unless saved true, and saves from the Stems page', async () => {
+  // Absent, or anything but true, is the pre-existing behaviour: off.
+  assert.equal(settingsForm({}).transitions.pickTimeStems, false);
+  assert.equal(settingsForm({ transitions: { pickTimeStems: 'yes' as unknown as boolean } }).transitions.pickTimeStems, false);
+  const on = settingsForm({ transitions: { pickTimeStems: true } });
+  assert.equal(on.transitions.pickTimeStems, true);
+  assert.equal(stemsSavePayload(on).patch.transitions.pickTimeStems, true);
+  assert.equal('pickTimeStems' in dangerSavePayload(on).patch.transitions, false);
+  // Its dirty state and its errors belong to the Stems page.
+  const stems = sectionById('stems')!.formKeys;
+  const broadcast = sectionById('broadcast')!.formKeys;
+  const baseline = settingsForm({});
+  const flipped = structuredClone(baseline);
+  flipped.transitions.pickTimeStems = true;
+  assert.deepEqual(dirtyPaths(flipped, baseline, stems), ['transitions.pickTimeStems']);
+  assert.deepEqual(dirtyPaths(flipped, baseline, broadcast), []);
+  const { ownedFieldErrors } = await import('../components/admin/settings/shared');
+  const { STEM_FORM_KEYS } = await import('../components/admin/settings/registry');
+  assert.deepEqual(ownedFieldErrors({ 'transitions.pickTimeStems': 'bad' }, STEM_FORM_KEYS).map(([path]) => path),
+    ['transitions.pickTimeStems']);
 });

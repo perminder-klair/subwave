@@ -6,6 +6,7 @@ import { djAgent, djObject } from '../llm/sdk.js';
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import * as settings from '../settings.js';
 import { cohostedSkillSchema, cohostedSkillSystem } from '../llm/internal/prompts/cohosted-skill.js';
+import { withoutStandIns } from '../broadcast/stand-in-policy.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 
 interface Persona {
@@ -21,6 +22,8 @@ interface CohostedResult {
   aired: boolean;
   lines: Array<{ persona: Persona; text: string }> | null;
   reason: string | null;
+  /** Nothing aired because every line was a stand-in (stand-in-policy). */
+  standIn?: boolean;
 }
 
 type CohostedObject = { reason?: unknown; air?: unknown; lines?: Array<{ speaker?: unknown; text?: unknown }> } | undefined;
@@ -49,7 +52,7 @@ async function deadlinedObject(runObject: ObjectRunner, args: Record<string, unk
 }
 
 export async function runCohostedCapability({
-  capability, host, guests, context, situation, segmentState, forced = false,
+  capability, host, guests, context, situation, segmentState, forced = false, onData,
   runAgent = djAgent as unknown as AgentRunner,
   runObject = djObject as unknown as ObjectRunner,
 }: {
@@ -60,6 +63,9 @@ export async function runCohostedCapability({
   situation: string;
   segmentState: any;
   forced?: boolean;
+  // Sees every result the skill's tool returns, on both paths (the weather
+  // segment records what its tool handed over). Never fatal.
+  onData?: (kind: string, data: unknown) => void;
   runAgent?: AgentRunner;
   runObject?: ObjectRunner;
 }): Promise<CohostedResult> {
@@ -79,6 +85,7 @@ export async function runCohostedCapability({
     // so there is no model call at all. Same rule, same wording, as the solo
     // pool path in runCapability.
     const data = await fetchSegmentData(capability, context, segmentState);
+    try { onData?.(capability.kind, data); } catch { /* observation is never fatal */ }
     const blocked = standDownReason(capability, data);
     if (blocked) return { aired: false, lines: null, reason: blocked };
     out = await deadlinedObject(runObject, {
@@ -96,7 +103,8 @@ export async function runCohostedCapability({
     let usableSeen = false;
     let blocked: string | null = null;
     const tools = buildSegmentTools(context, segmentState, [capability], {
-      onResult: (_kind, data) => {
+      onResult: (kind, data) => {
+        try { onData?.(kind, data); } catch { /* observation is never fatal */ }
         const why = standDownReason(capability, data);
         if (why) blocked = why;
         else usableSeen = true;
@@ -143,9 +151,17 @@ export async function runCohostedCapability({
   if (lines.length !== cast.length || lines.some((line) => !line.persona || !line.text)) {
     throw new Error(`skill "${capability.skill || capability.kind}" produced no co-hosted discussion`);
   }
+  // The gate drops a stand-in before TTS (queue.speakable), so `lines` leaves
+  // it out: callers report and record these lines as what aired. A discussion
+  // with nothing left is a stand-down the callers already back off on, not a
+  // failed render, and that holds for a forced run too.
+  const spoken = withoutStandIns(lines, cast.map((persona) => persona.name || ''));
+  if (!spoken.length) {
+    return { aired: false, lines: null, reason: 'the DJs wrote stand-ins, not lines, so nothing aired', standIn: true };
+  }
   return {
     aired: true,
-    lines: lines as Array<{ persona: Persona; text: string }>,
+    lines: spoken as Array<{ persona: Persona; text: string }>,
     reason: String(out?.reason || '').trim() || null,
   };
 }

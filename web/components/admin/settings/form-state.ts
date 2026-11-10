@@ -49,6 +49,8 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
     transitions: {
       pairDrain: v.transitions?.pairDrain ?? true,
       stemBlends: v.transitions?.stemBlends ?? false,
+      pickTimeStems: v.transitions?.pickTimeStems === true,
+      equalPowerCrossfade: v.transitions?.equalPowerCrossfade === true,
       // Absent reads as ON, matching the controller's resolver
       // (settings/transition-effects.ts) — a station that has never saved
       // this block has the whole kit.
@@ -112,6 +114,9 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       showWelcome: v.djBehaviour?.showWelcome === true,
       previewNextShow: v.djBehaviour?.previewNextShow !== false,
       sameHostAcknowledgement: v.djBehaviour?.sameHostAcknowledgement === true,
+      // Absent (a settings.json predating the key) reads as OFF, the
+      // established per-line delivery, matching settings.load()'s coercion.
+      holdDuckBetweenSpeakers: v.djBehaviour?.holdDuckBetweenSpeakers === true,
       extendedSleeveNotes: v.djBehaviour?.extendedSleeveNotes === true,
       releaseYearMentions: v.djBehaviour?.releaseYearMentions ?? 'regular',
       recapLimit: String(v.djBehaviour?.recapLimit ?? 10),
@@ -295,7 +300,10 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       audioFusionWeight: String(v.embedding?.audioFusionWeight ?? 0.5),
       batchSize: String(v.embedding?.batchSize ?? 25),
       enrichment: {
-        lastfmTags: v.embedding?.enrichment?.lastfmTags ?? false,
+        // Unset is auto, never off: loading it as false wrote false on the next
+        // Library save and stopped Last.fm enrichment on a keyed install (#2233).
+        lastfmTags: v.embedding?.enrichment?.lastfmTags ?? null,
+        lastfmTrackTags: v.embedding?.enrichment?.lastfmTrackTags ?? false,
         lyrics: v.embedding?.enrichment?.lyrics ?? true,
       },
     },
@@ -334,6 +342,11 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       influenceDj: !!v.likes?.influenceDj,
       maxTracks: String(v.likes?.maxTracks ?? 10),
       windowDays: String(v.likes?.windowDays ?? 30),
+    },
+    // Off unless the station has said otherwise: the controller's default.
+    lyrics: {
+      enabled: v.lyrics?.enabled === true,
+      lrclib: v.lyrics?.lrclib === true,
     },
   };
 }

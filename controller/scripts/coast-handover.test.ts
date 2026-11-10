@@ -482,7 +482,9 @@ test('auto-pick off hands over where the last queued track starts, and at the sw
 
 test('auto-pick off rebuilds the coast only when it holds what the operator aired', async () => {
   reset();
-  await settings.update({ llm: { pauseWhenEmpty: false }, shows: [], scheduleOverride: null } as never);
+  // libraryCalls stands in for "a rebuild reached Navidrome", so the LRCLIB
+  // fallback's own lyrics read for the queued track (on by default) is off.
+  await settings.update({ llm: { pauseWhenEmpty: false }, shows: [], scheduleOverride: null, lyrics: { lrclib: false } } as never);
   listenersNow = 1;
   await listeners.refresh();
   queue.setAutoPick(false);

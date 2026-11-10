@@ -11,6 +11,8 @@ import {
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BACKUP_KEEP_BOUNDS,
   BACKUP_KEEP_DEFAULT,
+  TAGGER_AUTO_DEFAULTS,
+  type TaggerAutoSettings,
   BEDS_THRESHOLD_SEC_BOUNDS,
   SHORTLIST_PASSES_DEFAULT,
   CROSSFADE_DURATION_BOUNDS,
@@ -21,6 +23,7 @@ import {
   LOUDNESS_TARGET_LUFS_BOUNDS,
   normalizeGeminiSafety,
   type JingleRotateOwner,
+  type JinglePlacement,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
@@ -39,6 +42,7 @@ import {
 } from './vocab.js';
 
 export const DEFAULTS = {
+  jinglePlacement: 'between' as JinglePlacement,
   jingleRatio: 30, // 1 jingle per N music tracks
   // WHO counts those tracks (#1619). 'mixer' is the pre-existing station —
   // radio.liq's own rotate draws the stinger and the controller finds out
@@ -79,6 +83,14 @@ export const DEFAULTS = {
   // so an upgrade that changes nothing must produce byte-identical behaviour —
   // no zips written, no zips pruned. `keep` is inert until a cadence is picked.
   backups: { cadence: 'off' as const, keep: BACKUP_KEEP_DEFAULT },
+  // Scheduled tagging (#2282). OFF by default: an upgrade that changes nothing
+  // never starts a tagger run on its own. When on, one run a station day at
+  // `time` (station clock), with the Run tab's steps and `limit` (0 = all
+  // untagged). Policy: music/tag-schedule-policy.ts.
+  tagger: {
+    // Copies: the frozen shared constant must never be the live settings object.
+    auto: { ...TAGGER_AUTO_DEFAULTS, steps: { ...TAGGER_AUTO_DEFAULTS.steps } } as TaggerAutoSettings,
+  },
   stream: {
     // Secondary Ogg-Opus mount (/stream.opus). Off by default — only Blink
     // selects it (web/hooks/usePlayer.ts), and it costs a continuous encoder
@@ -94,8 +106,10 @@ export const DEFAULTS = {
     // entrypoint converts per mount (#993).
     //
     // This is also how far behind the live edge every listener sits for their
-    // whole connection, so /now-playing publishes it as stream.bufferSeconds and
-    // players subtract it to line titles up with the audio in someone's ears (#1114).
+    // whole connection, so /now-playing publishes the burst last rendered
+    // (stream-mounts.json, #2142; this setting when there is no usable one) as
+    // stream.bufferSeconds, and players subtract that to line titles up with the
+    // audio in someone's ears (#1114).
     bufferSeconds: 22,
     // Legacy ICY (out-of-band) title compatibility for the Opus mount. FLAC
     // always uses native chained Ogg tags; MP3/AAC behavior is unaffected. Keep
@@ -253,6 +267,13 @@ export const DEFAULTS = {
     // it off in DJ Behaviour → Show changes.
     previewNextShow: true,
     sameHostAcknowledgement: false,
+    // Keep the music ducked for the whole multi-voice exchange instead of
+    // letting it lift between speakers. On, the lines are handed to the mixer
+    // as one batch so its voice queue never drains; off is the established
+    // per-line delivery, where the duck releases and returns between speakers.
+    // Off by default: an upgrade must sound byte-identical, and the release
+    // between lines is what every station has always heard.
+    holdDuckBetweenSpeakers: false,
     extendedSleeveNotes: false,
     releaseYearMentions: 'regular',
     // Compact anti-repeat material carried into every DJ script prompt. These
@@ -286,6 +307,9 @@ export const DEFAULTS = {
   // Timed takeover (#930): an epoch-ms window that outranks the weekly grid in
   // resolveActiveShow while live. Persisted in schedule.json.
   scheduleOverride: null,
+  // Operator steer: a bounded lean on the music and the talk that leaves the
+  // schedule alone (schemas/steer.ts). Read through persona.ts:activeSteer().
+  steer: null,
   tts: {
     // Station-wide voice switch. false = music only: no links, idents, hourly
     // checks, segments, banter, mic-passes, programme beats or request intros —
@@ -621,6 +645,11 @@ export const DEFAULTS = {
       // images and tags always came back empty; it stays as the fallback when
       // forced on with no api_key, for custom Navidromes that DO expose tag[].
       lastfmTags: null as boolean | null,
+      // Add each song's own tags (track.getTopTags) ahead of its artist's, in the
+      // same lastfm_tags list. Off by default, unlike the rest of this block:
+      // it costs one call per track plus a re-embed of whatever changes, about 50
+      // minutes on a 10k library. Needs an api_key and lastfmTags not forced off.
+      lastfmTrackTags: false,
       lyrics: true,       // fetch + include lyric excerpt in embed text
       // Resolve original release years for compilation tracks via MusicBrainz
       // (#842) — a compilation's `year` tag is the compilation's release date, so
@@ -631,7 +660,8 @@ export const DEFAULTS = {
   },
   // Web-search backend for the segment director's web-search capability.
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
-  // override here).
+  // override here); `keenable` needs no key but uses a `keen_` one if set;
+  // `firecrawl` and `outcrawl` read SEARCH_API_KEY like Tavily and Brave.
   search: {
     provider: 'duckduckgo',
     apiKey: '',
@@ -662,6 +692,9 @@ export const DEFAULTS = {
     // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
+    // Daily orphan stem-dir purge (quarantine, then delete after a week).
+    // Off by default — deleting operator files is opt-in (#1570 discipline).
+    stemOrphanPurgeEnabled: false,
     // Pause the analysis pass while anyone is listening, resuming once the stream
     // has been listener-free for analyzeQuietMinutes (#1099). Checked between
     // tracks inside runAnalysisPass, so it covers the tagger child, `npm run
@@ -679,6 +712,18 @@ export const DEFAULTS = {
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
+    // Separate a picked track's missing stem windows while it is held behind
+    // the on-air one (broadcast/pick-stems.ts, #2197), so the cache fills with
+    // what the station plays instead of waiting for the bulk backfill. Off
+    // until its load on the mixer has been measured: it runs Demucs during
+    // the broadcast, on the same worker as the blend render.
+    pickTimeStems: false,
+    // Fade curve for PLAIN song-to-song crossfades: false = linear (two
+    // different songs dip ~3 dB mid-fade), true = equal-power (cos out, sin^1.5
+    // in, level held within 0.7 dB). Effects, stem-blend clip seams, jingles
+    // and beds keep their own curves. Read once by the mixer at startup, so a
+    // change needs a restart.
+    equalPowerCrossfade: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
     // and lose all six. Resolved through settings/transition-effects.ts, which
@@ -727,8 +772,8 @@ export const DEFAULTS = {
   },
   // Dead-air trim — cut near-silent runs off the head/tail of a track so a bad
   // rip's leading blank or a long mastering gap doesn't air as silence
-  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; radio.liq's
-  // cue_cut does the cutting). OFF by default: it acts on a MEASUREMENT, and
+  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; Liquidsoap cuts
+  // at request resolution). OFF by default: it acts on a MEASUREMENT, and
   // an upgrade must sound byte-identical until the operator asks for this.
   // Controller-side only — no mixer restart.
   silenceTrim: {
@@ -807,6 +852,27 @@ export const DEFAULTS = {
     influenceDj: false,
     maxTracks: 10,
     windowDays: 30, // 0 = all time
+  },
+
+  // The listener Lyrics panel (`GET /lyrics/current`). On out of the box, and
+  // an upgrade turns it on too: it republishes lyric text publicly and costs a
+  // music-server call per track, which an operator can switch off. Per-track
+  // timing fixes live in library.db, not here.
+  lyrics: {
+    enabled: true,
+    // Look up synced lyrics on LRCLIB for a queued or on-air track the music
+    // server has no timed lyrics for (music/lyrics-sources.ts). On by default
+    // with the panel: it sends each such track's artist, title, album and
+    // length to lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
+    lrclib: true,
+  },
+  // The Navidrome connection itself is in setup-config.json; this block is the
+  // station's behaviour toward it. `reportRealPath`: keep Navidrome's "Report
+  // Real Path" ticked on SUB/WAVE's own player rows (hourly + at boot), so
+  // `path` is the file on disk rather than one built from tags. Off by default:
+  // it writes to the operator's Navidrome. See music/navidrome-players-policy.ts.
+  musicSource: {
+    reportRealPath: false,
   },
 };
 

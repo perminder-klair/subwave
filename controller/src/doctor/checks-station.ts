@@ -4,7 +4,7 @@
 // Part of the doctor/ split - see ../doctor.ts for the section runner.
 
 import { recentCalls } from '../llm/log.js';
-import { searchReady, searchWeb } from '../skills/web-search.js';
+import { searchKeyProblem, searchReady, searchWeb } from '../skills/web-search.js';
 import * as system from '../system.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
 import * as analyzer from '../music/analyzer.js';
@@ -13,6 +13,7 @@ import * as stemCache from '../music/stem-cache.js';
 import type { Finding, StationSettings } from './types.js';
 import { fmtTokens, isSchemaFailure } from './util.js';
 import { settingsAgentRoutes } from '../schemas/settings.js';
+import { advertisedMounts } from '../setup/hosted.js';
 import {
   AGENT_DEADLINE_WARN_RATIO, AGENT_NUM_CTX_FLOOR, agentDeadlineRatio, contextWindowTooSmall, latencyP90,
 } from './agent-fit.js';
@@ -20,19 +21,24 @@ import {
 export async function checkCapabilities(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  // Web search — backs the DJ's artist-news segments. DuckDuckGo is keyless;
-  // Tavily needs a key. Report config readiness, then do a short live probe so
-  // "is it actually working?" is answered, not just "is it configured?".
+  // Web search — backs the DJ's artist-news segments. DuckDuckGo and Keenable
+  // are keyless; Tavily, Brave, Firecrawl and Outcrawl need a key; SearXNG needs its server URL.
+  // Report config readiness, then do a short live probe so "is it actually
+  // working?" is answered, not just "is it configured?".
   const provider = s?.search?.provider || 'duckduckgo';
   let ready = true;
   try { ready = searchReady(); } catch { ready = true; }
 
   if (!ready) {
+    // "The key on file is …", lowercased to follow "selected but".
+    const wrongKey = searchKeyProblem();
     out.push({
       label: 'web search',
       status: 'warn',
-      detail: `${provider} selected but no API key`,
-      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily and Brave need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo (keyless).',
+      detail: wrongKey
+        ? `${provider} selected but ${wrongKey.charAt(0).toLowerCase()}${wrongKey.slice(1)}`
+        : `${provider} selected but no ${provider === 'searxng' ? 'server URL' : 'API key'}`,
+      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily, Brave, Firecrawl and Outcrawl need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
     });
     return out;
   }
@@ -336,7 +342,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
           detail: `only ${cached.toLocaleString('en-GB')} of ${total.toLocaleString('en-GB')} tracks have stems on disk` +
             (attempted > cached ? ` (${attempted.toLocaleString('en-GB')} attempted)` : ''),
           hint: holds < total
-            ? `Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade. The ${budgetGb} GB budget only holds ~${holds.toLocaleString('en-GB')} tracks — raise Stem cache budget in Settings → Broadcast & mixer → Stem transitions to cover more of the library, then let the analysis pass backfill the rest.`
+            ? `Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade. The ${budgetGb} GB budget only holds ~${holds.toLocaleString('en-GB')} tracks — raise Stem cache budget in Settings → Stems → Stem transitions to cover more of the library, then let the analysis pass backfill the rest.`
             : 'Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade until the backfill catches up. Run the analysis pass (it now targets tracks with no cached stems) and this fills in over a few runs.',
         });
       }
@@ -348,7 +354,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         label: 'stem transitions',
         status: 'warn',
         detail: 'stem blends are on but pair-drain scheduling is off',
-        hint: 'Stem-blend seams requires Pair-aware transitions — a blend can only be inserted at a pair-aware drain. Re-enable Pair-aware transitions or turn Stem-blend seams off in Settings → Broadcast & mixer → Stem transitions.',
+        hint: 'Stem-blend seams requires Pair-aware transitions — a blend can only be inserted at a pair-aware drain. Re-enable Pair-aware transitions or turn Stem-blend seams off in Settings → Stems → Stem transitions.',
       });
     }
   } catch { /* analyzer unavailable — skip */ }
@@ -358,10 +364,13 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // Flag it only when several are on AND the host is already under pressure.
   try {
     const st: NonNullable<StationSettings['stream']> = s?.stream || {};
+    // The encoders the mixer runs: through a hosted plan's ceiling, which can
+    // switch FLAC and AAC off whatever was saved.
+    const running = advertisedMounts(st);
     const extra: string[] = [];
-    if (st.opusEnabled) extra.push('opus');
-    if (st.flacEnabled) extra.push('flac');
-    if (st.aacEnabled) extra.push('aac');
+    if (running.opusEnabled) extra.push('opus');
+    if (running.flacEnabled) extra.push('flac');
+    if (running.aacEnabled) extra.push('aac');
     if (s?.archive?.enabled) extra.push('hourly archive');
     const encoderCount = 1 + extra.length; // /stream.mp3 always
     const sys = await system.summary();

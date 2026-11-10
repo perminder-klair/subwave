@@ -87,6 +87,14 @@ and progress must also be checked in the car.
   `react-native-google-cast` runs under the New Architecture in **compat
   (interop) mode** (v5 will be native); if a Cast API breaks after an RN/Expo
   upgrade, check the library's v5 status before patching.
+- **The Android Cast SDK is pinned** (`androidPlayServicesCastFrameworkVersion`
+  on the `react-native-google-cast` plugin in `app.json`). The library defaults
+  to `play-services-cast-framework:+`, so every build takes Google's newest, and
+  23.0.0 pulls `androidx.mediarouter:mediarouter:1.9.0-beta01`, which needs
+  compileSdk 37 and AGP 9.1: `:app:checkReleaseAarMetadata` fails the build.
+  Raise the pin alongside an Expo SDK upgrade that moves compileSdk/AGP, and
+  ship it in a binary for both platforms, because the plugin options are in the
+  shared app config, so the pin is in the iOS fingerprint too.
 
 ---
 
@@ -330,6 +338,33 @@ eas submit --profile production --platform ios     # uploads to App Store Connec
 > `patches/`, config plugins, `app.json` native sections) still need a store
 > build; the fingerprint runtime version guarantees an OTA can't land on a binary
 > with mismatched native code. Full decision table + commands: [`RELEASE.md`](./RELEASE.md).
+
+---
+
+## A listener's playback log
+
+A store build prints nothing a listener can reach, so it keeps the last 300
+`plog` lines (`src/hooks/usePlayer.ts`) in memory instead: the playback state
+events and errors, iOS route changes, and every hold and reload
+`src/lib/stream-recovery.ts` decides, with its reason. Ask a listener with a
+playback problem for **About SUB/WAVE → Share playback log** (the share sheet
+has Copy on iOS and Android 10+; older Android sends it to a mail or notes app)
+before they kill the app, which empties it.
+
+The first line names the app version, the JS bundle (`OTA <id>` or
+`built-in <id>`, and the channel) and the OS. Times are the phone's clock in
+UTC. Each `reload [reason] #n` line should match one new stream request (its
+`t=` cache-buster) in the station's Icecast access log; a `skipped` line loads
+nothing. `(failure n)` on an automatic reload is its place on the backoff: it
+climbs while loads fail or items fail within 4 s of playing, and it starts over
+at 1 once an item stays up or stalls. A playback error reads `event playback-error code=<code> msg=<text>`:
+Android sends both, and its code is the part that tells a refused stream
+(`android-io-bad-http-status`) from a dead link
+(`android-io-network-connection-failed`); iOS sends only the text, AVPlayer's
+own description. Lines are redacted before they are stored
+(`src/lib/playback-log.ts`): URLs keep only scheme, host and path, the station
+password, Station login and `Authorization` values are gone, and a route lists
+port types without device names, with `Other` for a word that isn't a known port.
 
 ---
 

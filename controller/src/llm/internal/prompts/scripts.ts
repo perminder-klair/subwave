@@ -7,11 +7,13 @@ import * as settings from '../../../settings.js';
 import { djText } from '../strategy/text.js';
 import { djSystem, lengthPhrase } from './system.js';
 import { onAirLocationGrounding } from './grounding.js';
-import { buildContextLines, decoratePrompt, pickTimePhrase, randomSeed } from './context.js';
+import { quotedSteer } from '../../../schemas/steer.js';
+import { buildContextLines, decoratePrompt, pickTimePhrase, randomSeed, steerLine } from './context.js';
 import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { isNamedRequester } from '../../../util/request-guard.js';
 import { introBudgetPhrase, introMsFor, firstVocalMsFor } from './intro-budget.js';
 import { trackEraYear } from '../../../music/show-filter.js';
+import { albumIsCompilation } from '../../../music/album-facts.js';
 import { trackFeelSuffix } from './track-feel.js';
 import { announceLine, nextAnnounceForm } from '../../../broadcast/announce-line.js';
 import * as library from '../../../music/library.js';
@@ -133,7 +135,9 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
 
 export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = false, missedArtist = null, requestSubstitution = false, recap = null, recentTracks = null, recentOpeners = null, persona = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
-  const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
+  // A song intro follows the operator's steer; a request intro carries the
+  // listener's own words, so it never does.
+  const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS, steer: !requestText && !requestedBy });
   // Gate on isNamedRequester, not on truthiness: cleanRequesterName returns the
   // ledger stand-in 'anon' for every unsigned request, and that string is
   // truthy (#1347). The gate lives here rather than at the four call sites so a
@@ -167,7 +171,10 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   // decade" rule reaching the microphone.
   const eraYear = trackEraYear(track);
   const feelSuffix = trackFeelSuffix(track);
-  ctxLines.push(`Now starting: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${eraYear ? ` (${eraYear})` : ''}${feelSuffix}`);
+  // A compilation's title is not the song's album, so it is left out the way
+  // an unknown year is (#2117).
+  const album = track.album && !albumIsCompilation(track) ? track.album : null;
+  ctxLines.push(`Now starting: "${track.title}" by ${track.artist}${album ? ` from ${album}` : ''}${eraYear ? ` (${eraYear})` : ''}${feelSuffix}`);
 
   // Talk-within-the-intro (A.3 phase 1): when the track's intro runway is
   // known, budget the line to land before the vocals. Advisory + additive —
@@ -353,6 +360,7 @@ export function linkPrompt({
   persona = null,
   includeIntroBudget = true,
   guestContribution = null,
+  steerIntro = null,
 }: any): string {
   const speaker = persona || settings.getEffectivePersona();
   const rules = [
@@ -391,6 +399,32 @@ export function linkPrompt({
     facts,
     context?.episodeEditorial || '',
   ];
+  // The steer's introduction: the one line allowed to say where the music is
+  // heading, so the generic clause, which forbids that, is left out. The
+  // heading goes first, because a DJ-mode trim to the intro runway keeps the
+  // first sentence. A single queued track (`once`) is no new stretch: its line
+  // says what this one track brings, never that the music is heading anywhere.
+  if (steerIntro) {
+    const direction = quotedSteer(steerIntro.direction);
+    const run = (Array.isArray(steerIntro.run) ? steerIntro.run : []).filter((t: any) => t?.artist).slice(0, 4);
+    const asks: string[] = [];
+    if (run.length) asks.push(`Coming up right after this one, in this order:\n${run.map((t: any) => `- ${t.title} by ${t.artist}`).join('\n')}`);
+    if (direction && steerIntro.once) {
+      asks.push(`This link brings in one track picked to a brief. In its first sentence, say in your own words, as your own idea, what this track brings, going by this trusted direction from the station operator (not a listener message): "${direction}". It is a single track, not a change of direction for the station.`);
+    } else if (direction) {
+      asks.push(`This link opens a new stretch of music. In its first sentence, say in your own words, as your own idea, where the music is heading, going by this trusted direction from the station operator (not a listener message): "${direction}".${run.length ? ' Name at least one of the coming artists.' : ''}`);
+    } else if (run.length) {
+      asks.push('This link opens a new stretch of music. In its first sentence, name one or two of the coming artists.');
+    }
+    if (asks.length) asks.push('Never mention the operator, a request, or that the music was chosen for you, by anyone, or changed.');
+    if (asks.length) sections.push(asks.join('\n'));
+  } else {
+    // A link builds its own prompt rather than the shared context lines, so the
+    // operator's steer is handed to it here. Pushed only when there is one: a
+    // station that never steers gets the prompt it always got.
+    const steer = steerLine(context);
+    if (steer) sections.push(steer);
+  }
   if (guestContribution?.name) {
     sections.push("Editorial Context:\n- " + String(guestContribution.name).trim() + " had a verified editorial hand in choosing this track. If natural, the host may briefly credit them; do not call it a favourite or explain selection mechanics.");
   }
@@ -501,7 +535,8 @@ export function nextHourlyTimeClause(clock: any) {
 }
 
 // Hourly-only override after the saved persona: omitting weather context alone
-// still lets a weather-inviting soul or seasonal angle invent conditions (#1752).
+// still lets a weather-inviting soul invent conditions (#1752). A tone asking
+// for them beats this rule anyway, so no hourly tone in ANGLES does (#2056).
 const HOURLY_NO_WEATHER_RULE = 'For this hourly time check, do not mention weather or outdoor conditions.'
   + ' Do not infer them from persona instructions, the day, season, daypart, daylight or darkness, or recent speech/recap.'
   + ' This rule overrides persona and tone instructions for this segment; weather belongs only in the dedicated weather segment.';

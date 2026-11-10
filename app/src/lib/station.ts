@@ -86,6 +86,17 @@ export async function loadStationCredentials(
   return credentialVault.get(split.base);
 }
 
+/** Replace or remove a saved station's login (#1873), leaving which station
+ *  is active and the recents untouched. */
+export async function saveStationCredentials(
+  rawUrl: string,
+  credentials: StationCredentials | null,
+): Promise<void> {
+  const url = splitStationAddress(rawUrl).base;
+  if (credentials) await credentialVault.set(url, credentials);
+  else await credentialVault.remove(url);
+}
+
 export async function loadStationPassword(rawUrl: string): Promise<string | null> {
   return stationPasswords.get(splitStationAddress(rawUrl).base);
 }

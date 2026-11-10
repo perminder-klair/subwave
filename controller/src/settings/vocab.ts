@@ -60,7 +60,9 @@ import {
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
   SETTINGS_SEARCH_PROVIDERS,
+  stripSecretControlChars,
 } from '../schemas/settings.js';
+import { EMBEDDING_PROVIDER_IDS, LLM_PROVIDER_IDS } from '../schemas/providers.js';
 
 export { normalizeGeminiSafety } from '../schemas/settings.js';
 
@@ -111,7 +113,10 @@ const TONE_DIAL_PHRASES: Record<string, { low: string; high: string }> = {
   },
   localColour: {
     low: 'Keep it universal; skip local references and place-specific colour.',
-    high: 'Lean on the local setting (the town, the weather, the hour) as texture.',
+    // No weather here: links, idents and handoffs are given none (#471), so a
+    // dial that invited it had the DJ invent it ("the sun is blazing" under
+    // full cloud). The weather skill brings its own.
+    high: 'Lean on the local setting (the town, the hour) as texture.',
   },
   warmth: {
     low: 'Keep a cool, dry distance; let the music carry the warmth.',
@@ -236,36 +241,17 @@ export function validateTtsCorrectionsStrict(raw: any): Array<{ from: string; to
 // Resolved by llm/provider.js. `openai-compatible` targets any self-hosted
 // server via `llm.baseUrl`; `locca` is the same transport with a default base
 // URL and onboarding discovery.
-export const LLM_PROVIDERS = [
-  'ollama',
-  'openai-compatible',
-  'locca',
-  'openrouter',
-  'requesty',
-  'cheaperinference',
-  'anthropic',
-  'openai',
-  'google',
-  'deepseek',
-  'gateway',
-];
+// Every LLM provider, in catalogue order (schemas/providers.ts).
+export const LLM_PROVIDERS: string[] = [...LLM_PROVIDER_IDS];
 
 // Longest inline `embedding.apiKey` update() accepts. A chat leg's inline key
 // may run to 1000 (applyInlineKey), so whatever copies one into the embedding
 // leg (the LLM swap's pin, settings/llm-swap.ts) must check this first.
 export const EMBEDDING_API_KEY_MAX = 200;
 
-// Subset of LLM_PROVIDERS that can produce text embeddings (#493, #522).
-export const EMBEDDING_PROVIDERS = [
-  'ollama',
-  'openai-compatible',
-  'locca',
-  'openrouter',
-  'openai',
-  'google',
-  'requesty',
-  'cheaperinference',
-];
+// Subset of LLM_PROVIDERS that can produce text embeddings (#493, #522): the
+// catalogue entries with an `embedding` block.
+export const EMBEDDING_PROVIDERS: string[] = [...EMBEDDING_PROVIDER_IDS];
 
 // Ollama context window; 0 disables, else floored into [2048, 131072].
 // Non-numeric falls back to `def`. Shared by both legs.
@@ -461,7 +447,7 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
 // sentinel) and undefined leave it untouched.
 export function applyInlineKey(llmHost: { keys?: Record<string, string> }, provider: string, rawApiKey: unknown): void {
   if (rawApiKey === undefined || rawApiKey === 'set') return;
-  const v = String(rawApiKey);
+  const v = stripSecretControlChars(String(rawApiKey));
   if (v.length > 1000) throw new Error('llm.apiKey must be 0-1000 chars');
   if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
   if (v) llmHost.keys[provider] = v;
@@ -592,7 +578,9 @@ export const TTS_CLOUD_PROVIDERS: readonly string[] = TTS_CLOUD_PROVIDER_VALUES;
 
 // Web-search backends. `duckduckgo` is free and keyless (useful only for
 // entity/definition queries); `tavily` and `brave` read SEARCH_API_KEY;
-// `searxng` is keyless self-hosted meta-search via settings.search.baseUrl.
+// `searxng` is keyless self-hosted meta-search via settings.search.baseUrl;
+// `keenable` is keyless, and a Keenable key in SEARCH_API_KEY raises its limit;
+// `firecrawl` and `outcrawl` read SEARCH_API_KEY.
 export const SEARCH_PROVIDERS = SETTINGS_SEARCH_PROVIDERS;
 
 // SEED mood vocabulary + each mood's CLAP sound-prompt. The operator edits the
@@ -921,6 +909,9 @@ export interface NormalizedShow {
    *  order and resume across airings. Inert without it. */
   playlistInOrder: boolean;
   excludedPlaylistIds: string[];
+  /** A clean show: tracks tagged explicit stay off air. Only a positive tag
+   *  counts. See music/explicit-policy.ts. */
+  excludeExplicit: boolean;
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */
   tags: string[];

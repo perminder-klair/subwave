@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "1.26.0",
+  "version": "1.31.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -16,9 +16,11 @@
     "test": "tsx scripts/run-tests.ts",
     "bench:lookups": "tsx scripts/library-lookup-scale.bench.ts",
     "bench:admin": "tsx scripts/admin-library-scale.bench.ts",
+    "bench:observatory": "tsx scripts/observatory-scale.bench.ts",
     "leanings:replay": "tsx scripts/agentic-leanings-replay.ts",
     "llm-bench": "tsx scripts/llm-bench/cli.ts",
     "llm-bench:publish": "tsx scripts/llm-bench/publish-manual.ts",
+    "tts-bench": "tsx scripts/tts-bench/cli.ts",
     "leanings-eval": "tsx scripts/leanings-eval.ts",
     "leanings:review-replay": "tsx scripts/agentic-leanings-review-replay.ts",
     "soul-library-eval": "tsx scripts/soul-library-eval.ts",
@@ -26,7 +28,8 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "gen:themes": "tsx scripts/gen-theme-tokens.ts",
-    "gen:schemas": "tsx scripts/gen-schemas.ts"
+    "gen:schemas": "tsx scripts/gen-schemas.ts",
+    "check:publish-matrix": "tsx scripts/check-publish-matrix.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.74",

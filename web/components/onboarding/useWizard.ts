@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
 import { fishAudioIssue } from '@/lib/schemas.generated';
+import { LLM_ENV_VARS } from '../admin/llm/providerMeta';
 
 // Every step reads and writes through the `set` updater rather than its own
 // state, so the Review step can show the whole picture without prop-drilling.
@@ -77,6 +78,10 @@ export const DEFAULT_DATA: WizardData = {
 export type StepId = 'navidrome' | 'llm' | 'tts' | 'dj' | 'review';
 
 export const STEP_ORDER: StepId[] = ['navidrome', 'llm', 'tts', 'dj', 'review'];
+// A station run by SUB/WAVE Cloud (status.hosted): its box agent manages the
+// LLM route and the voice engine, so those steps would only offer choices the
+// controller then ignores (setup/hosted.ts).
+export const HOSTED_STEP_ORDER: StepId[] = ['navidrome', 'dj', 'review'];
 
 export const STEP_LABELS: Record<StepId, string> = {
   navidrome: 'Navidrome',
@@ -96,18 +101,19 @@ function fetchErrorMsg(err: unknown): string {
   return `could not reach the controller${m ? ` (${m})` : ''}`;
 }
 
-export function useWizard() {
+export function useWizard(hosted = false) {
   const auth = useAdminAuth();
   const [data, setData] = useState<WizardData>(DEFAULT_DATA);
   const [stepIdx, setStepIdx] = useState(0);
 
-  const step = STEP_ORDER[stepIdx];
-  const next = useCallback(() => setStepIdx(i => Math.min(i + 1, STEP_ORDER.length - 1)), []);
+  const steps = hosted ? HOSTED_STEP_ORDER : STEP_ORDER;
+  const step = steps[stepIdx];
+  const next = useCallback(() => setStepIdx(i => Math.min(i + 1, steps.length - 1)), [steps]);
   const back = useCallback(() => setStepIdx(i => Math.max(i - 1, 0)), []);
   const goto = useCallback((id: StepId) => {
-    const i = STEP_ORDER.indexOf(id);
+    const i = steps.indexOf(id);
     if (i >= 0) setStepIdx(i);
-  }, []);
+  }, [steps]);
 
   const patch = useCallback((p: Partial<WizardData> | ((d: WizardData) => Partial<WizardData>)) => {
     setData(d => {
@@ -175,15 +181,7 @@ export function useWizard() {
   const save = useCallback(async () => {
     const apiKeys: Record<string, string> = { ...data.apiKeys };
     if (data.llm.apiKey) {
-      const k =
-        data.llm.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' :
-        data.llm.provider === 'openai' ? 'OPENAI_API_KEY' :
-        data.llm.provider === 'google' ? 'GOOGLE_GENERATIVE_AI_API_KEY' :
-        data.llm.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' :
-        data.llm.provider === 'openrouter' ? 'OPENROUTER_API_KEY' :
-        data.llm.provider === 'requesty' ? 'REQUESTY_API_KEY' :
-        data.llm.provider === 'cheaperinference' ? 'CHEAPER_INFERENCE_API_KEY' :
-        data.llm.provider === 'gateway' ? 'AI_GATEWAY_API_KEY' : '';
+      const k = LLM_ENV_VARS[data.llm.provider] ?? '';
       if (k) apiKeys[k] = data.llm.apiKey;
     }
     if (data.tts.cloud.enabled && data.tts.cloud.apiKey) {
@@ -235,19 +233,24 @@ export function useWizard() {
       timezone: data.dj.timezone,
       apiKeys,
     };
+    // Hosted: never send the LLM, the voice engine or provider keys. The box
+    // agent owns them, and the controller drops them anyway.
+    const { llm: _llm, tts: _tts, apiKeys: _keys, ...hostedBody } = body;
     const r = await auth.adminFetch('/onboarding/save', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(hosted ? hostedBody : body),
     });
     const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
     return { ok: !!j.ok, error: j.error };
-  }, [auth, data]);
+  }, [auth, data, hosted]);
 
   return {
     auth,
     data,
     patch,
+    hosted,
+    steps,
     step,
     stepIdx,
     next,

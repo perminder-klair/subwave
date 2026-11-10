@@ -5,8 +5,10 @@ import {
   Radio, Palette, Cpu, Mic, Library, Search, ListMusic,
   Archive, Save, RadioTower, Heart, Music2, BrainCircuit,
   MessageCircle,
+  Layers,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { EMBEDDING_PROVIDER_IDS, LLM_PROVIDER_IDS } from '../../../lib/schemas.generated';
 
 /**
  * The four rail clusters, in rail order.
@@ -40,6 +42,14 @@ export const LLM_PROVIDER_FORM_KEYS = [
   'llm.providerBaseUrls', 'llm.headers', 'llm.compatibleMode', 'llm.reasoning',
   'llm.toolChoice', 'llm.pauseWhenEmpty', 'llm.dailyTokenCap', 'llm.budgetSoftPct',
   'llm.exemptRequests', 'llm.maxOutputTokens', 'llm.geminiSafety', 'llm.fallback',
+] as const;
+
+// The Stems page's fields: the stem half of `transitions` (the form keeps the
+// stem cache under transitions; it saves to `audio.*`). One list, read by the
+// section's dirty check and its SaveBar's error scope.
+export const STEM_FORM_KEYS = [
+  'transitions.pairDrain', 'transitions.stemBlends', 'transitions.pickTimeStems',
+  'transitions.stemCache', 'transitions.stemCacheGb',
 ] as const;
 
 // `satisfies`, never a `readonly SectionSpec[]` annotation: the annotation
@@ -79,8 +89,8 @@ export const SECTIONS = [
     // Likes and scrobbling were two small tabs under a "listeners" group of
     // their own; both are about what listeners leave behind, so one tab.
     id: 'listeners', group: 'the station', label: 'Listeners',
-    hint: 'likes · scrobbling', icon: Heart,
-    formKeys: ['likes', 'scrobble'],
+    hint: 'likes · lyrics · scrobbling', icon: Heart,
+    formKeys: ['likes', 'lyrics', 'scrobble'],
   },
   {
     id: 'behaviour', group: 'the dj', label: 'DJ behaviour',
@@ -122,6 +132,16 @@ export const SECTIONS = [
     formKeys: [],
   },
   {
+    // The whole stem story on one page: the cache/blends settings (moved off
+    // Broadcast & mixer) above the orphan-dir cleanup. The old
+    // ?section=orphans link redirects here (SettingsPanel RENAMED).
+    // `transitions` is split at the leaf: the crossfade curve and the DJ
+    // transition effects stay on Broadcast & mixer, where their cards are.
+    id: 'stems', group: 'operations', label: 'Stems',
+    hint: 'cache · blends · cleanup', icon: Layers,
+    formKeys: STEM_FORM_KEYS,
+  },
+  {
     // Was "Danger zone": most of it is everyday broadcast tuning, and the name
     // put operators off it. ?section=danger still lands here (SettingsPanel).
     id: 'broadcast', group: 'operations', label: 'Broadcast & mixer',
@@ -131,7 +151,9 @@ export const SECTIONS = [
     // list is what drives the dirty-check that decides whether the save bar
     // shows at all. Without it, toggling "Fade out at a show change" alone
     // never registers as a change and the save prompt never appears.
-    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'transitions', 'stream', 'loudness'],
+    // The stem fields of 'transitions' moved to the Stems section with their
+    // card; the crossfade curve and the effects stay here with theirs.
+    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'transitions.equalPowerCrossfade', 'transitions.effects', 'stream', 'loudness'],
   },
 ] as const satisfies readonly SectionSpec[];
 
@@ -152,6 +174,7 @@ export const RESTART_PATHS: readonly string[] = [
   'station',
   'privacy.listenerAuth',
   'crossfadeDuration',
+  'transitions.equalPowerCrossfade',
   'ducking.voice',
   'ducking.intro',
   'archive.enabled',
@@ -177,13 +200,13 @@ export const RESTART_PATHS: readonly string[] = [
 export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   station: ['listener-requests', 'public-api'],
   selection: ['agent-deadline', 'repeat-variety', 'minimum-track-length', 'guest-musical-leanings'],
-  behaviour: ['pause-and-talk', 'prompt-memory', 'extended-sleeve-notes'],
+  behaviour: ['pause-and-talk', 'prompt-memory', 'banter', 'extended-sleeve-notes'],
   llm: ['fallback', 'reasoning', 'idle-behaviour', 'daily-token-budget'],
   tts: ['fallback-voice'],
   library: ['seed-phase', 'propagation', 'enrichment'],
   listeners: ['ai-dj-influence'],
   broadcast: [
-    'crossfade', 'duck-depth', 'stem-transitions', 'dj-transition-effects', 'max-track-length', 'dead-air-trim',
+    'crossfade', 'duck-depth', 'dj-transition-effects', 'max-track-length', 'dead-air-trim',
     'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
     'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
     'listener-country',
@@ -237,7 +260,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Show the Booth Sprite', section: 'theme', card: 'Booth Buddy', keywords: 'mascot sprite request box' },
 
   // ── llm provider ───────────────────────────────────────────────────────────
-  { label: 'Provider', section: 'llm', card: 'Provider', keywords: 'ollama anthropic openai google deepseek openrouter requesty cheaperinference gateway compatible' },
+  { label: 'Provider', section: 'llm', card: 'Provider', keywords: LLM_PROVIDER_IDS.join(' ') },
   { label: 'Ollama server URL', section: 'llm', card: 'Provider', keywords: 'host docker internal 11434 local' },
   { label: 'API key', section: 'llm', card: 'Provider', keywords: 'token secret credential sk-' },
   { label: 'Model', section: 'llm', card: 'Provider', keywords: 'llama claude gpt gemini model id' },
@@ -284,13 +307,14 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Lookback window', section: 'behaviour', card: 'Prompt memory', keywords: 'minutes recap repeat anti-repeat context history' },
   { label: 'Characters per line', section: 'behaviour', card: 'Prompt memory', keywords: 'chars length recap tokens context' },
   { label: 'Show changes', section: 'behaviour', card: 'Show changes', keywords: 'handoff presenter same host acknowledgement shift transition programme' },
+  { label: 'Hold the music between presenters', section: 'behaviour', card: 'Banter', keywords: 'air gap duck music between speakers banter exchange fade multi-voice' },
   { label: 'Extended Sleeve Notes', section: 'behaviour', card: 'Extended Sleeve Notes', keywords: 'source backed editorial provenance provider credits artist context coming soon' },
   { label: 'Link style', section: 'behaviour', card: 'Link style', keywords: 'release year regular occasional rare metadata sleeve notes' },
 
   // ── library tagger ─────────────────────────────────────────────────────────
   { label: 'Tagger', section: 'library', card: 'Tagger', keywords: 'enabled tagging runs moods genres' },
   { label: 'LLM batch size', section: 'library', card: 'Tagger', keywords: 'batch tracks per call seed' },
-  { label: 'Provider', section: 'library', card: 'Embedding server', keywords: 'embedding ollama openai google inherit' },
+  { label: 'Provider', section: 'library', card: 'Embedding server', keywords: `embedding ${EMBEDDING_PROVIDER_IDS.join(' ')} inherit` },
   { label: 'Model', section: 'library', card: 'Embedding server', keywords: 'nomic-embed-text embedding model reindex' },
   { label: 'Embedding server URL', section: 'library', card: 'Embedding server', keywords: 'base url host' },
   { label: 'Bearer token', section: 'library', card: 'Embedding server', keywords: 'embedding api key auth' },
@@ -301,11 +325,12 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Audio fusion weight', section: 'library', card: 'Propagation', keywords: 'clap audio text fusion analyzer' },
   { label: 'Active-learning rounds', section: 'library', card: 'Propagation', keywords: 'rounds least confident passes' },
   { label: 'Last.fm tags', section: 'library', card: 'Enrichment', keywords: 'crowd tags embed text' },
+  { label: 'Last.fm track tags', section: 'library', card: 'Enrichment', keywords: 'lastfm per song crowd tags backfill' },
   { label: 'Lyrics', section: 'library', card: 'Enrichment', keywords: 'lyrics embed text' },
 
   // ── web search ─────────────────────────────────────────────────────────────
-  { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng live facts' },
-  { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave token search_api_key' },
+  { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng keenable firecrawl outcrawl live facts' },
+  { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave keenable firecrawl outcrawl token search_api_key' },
   { label: 'SearXNG URL', section: 'search', card: 'Provider', keywords: 'self hosted meta search json' },
   { label: 'Engines', section: 'search', card: 'Provider', keywords: 'searxng engines pin restrict google duckduckgo wikipedia' },
 
@@ -315,6 +340,10 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Use likes to influence picks', section: 'listeners', card: 'AI DJ influence', keywords: 'taste preference signal picker' },
   { label: 'Tracks included', section: 'listeners', card: 'AI DJ influence', keywords: 'top liked count' },
   { label: 'Time window (days)', section: 'listeners', card: 'AI DJ influence', keywords: 'window days all time' },
+
+  // ── lyrics ─────────────────────────────────────────────────────────────────
+  { label: 'Enabled', section: 'listeners', card: 'Lyrics panel', keywords: 'lyrics words synced karaoke lrc timing' },
+  { label: 'LRCLIB fallback', section: 'listeners', card: 'Lyrics panel', keywords: 'lyrics synced timed lrc lrclib fallback missing' },
 
   // ── scrobbling ─────────────────────────────────────────────────────────────
   { label: 'Enabled', section: 'listeners', card: 'Last.fm', keywords: 'lastfm scrobble spins' },
@@ -339,10 +368,12 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Crossfade duration', section: 'broadcast', card: 'Crossfade', keywords: 'overlap seams transition restart' },
   { label: 'DJ over silence duck depth', section: 'broadcast', card: 'Duck depth', keywords: 'ducking voice smooth_add say idents heavy restart' },
   { label: 'DJ over a track duck depth', section: 'broadcast', card: 'Duck depth', keywords: 'ducking intro talk over link light smooth_add restart' },
-  { label: 'Pair-aware transitions', section: 'broadcast', card: 'Stem transitions', keywords: 'pair drain successor crossfade' },
-  { label: 'Stem cache', section: 'broadcast', card: 'Stem transitions', keywords: 'demucs drums bass vocals disk' },
-  { label: 'Stem cache budget', section: 'broadcast', card: 'Stem transitions', keywords: 'gb evict oldest' },
-  { label: 'Stem-blend seams', section: 'broadcast', card: 'Stem transitions', keywords: 'drums carry under intro blend' },
+  { label: 'Pair-aware transitions', section: 'stems', card: 'Stem transitions', keywords: 'pair drain successor crossfade' },
+  { label: 'Stem cache', section: 'stems', card: 'Stem transitions', keywords: 'demucs drums bass vocals disk' },
+  { label: 'Stem cache budget', section: 'stems', card: 'Stem transitions', keywords: 'gb evict oldest' },
+  { label: 'Stem-blend seams', section: 'stems', card: 'Stem transitions', keywords: 'drums carry under intro blend' },
+  { label: 'Orphan stems cleanup', section: 'stems', card: 'Orphan stems cleanup', keywords: 'quarantine purge deleted tracks left library reclaim disk daily pass' },
+  { label: 'Crossfade curve', section: 'broadcast', card: 'Crossfade', keywords: 'equal power linear dip fade shape' },
   { label: 'Sweep', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect filter gear change clash dj mode' },
   { label: 'Washout', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect echo tail dub exit length cap dj mode' },
   { label: 'Blend', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect spectral handover locked pair dj mode' },

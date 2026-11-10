@@ -264,6 +264,21 @@ export function settingsTrimmedString(max: number, message: string) {
 }
 
 /**
+ * A control character (C0 or DEL) in a saved secret. No real key holds one, and
+ * fetch refuses a header value with a NUL, CR or LF in it, quoting the whole
+ * value in its error. Every save path strips them, as the admin form's inputs
+ * already do for line breaks, so a key pasted across a wrap through the API or
+ * a restored backup is joined rather than refused; the key probes refuse one
+ * instead (setup/secrets.ts secretValueIssue). The load path leaves a stored
+ * value alone. Defined here because a mirrored module may import only zod.
+ */
+export const SECRET_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+
+export function stripSecretControlChars(value: string): string {
+  return value.replace(new RegExp(SECRET_CONTROL_CHAR_RE.source, 'g'), '');
+}
+
+/**
  * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture.
  *
  * `null` becomes the four-character string 'null' and is STORED. That is not a
@@ -403,7 +418,81 @@ export const SETTINGS_LOUDNESS_SOURCES = [
   'measured',
 ] as const;
 
-export const SETTINGS_SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
+// The search Select's groups, in display order.
+export const SEARCH_PROVIDER_GROUPS = ['keyless', 'keyed', 'self-hosted'] as const;
+export type SearchProviderGroup = (typeof SEARCH_PROVIDER_GROUPS)[number];
+
+export interface SearchProviderEntry {
+  id: string;
+  group: SearchProviderGroup;
+  // The Settings → Web search dropdown label, and the hint under it.
+  label: string;
+  hint: string;
+  // How the backend takes the shared SEARCH_API_KEY: it needs one, it searches
+  // without one and a key raises its limits, or it takes none.
+  key: 'required' | 'optional' | 'none';
+  // The key field: whose key it is, its placeholder, and where to get one.
+  keyName?: string;
+  keyPlaceholder?: string;
+  keyUrl?: string;
+  // An optional key is sent only when it starts with this, so a key left in the
+  // shared slot by another provider is ignored rather than sent.
+  keyPrefix?: string;
+}
+
+// The web-search backends, one record each and data only, in the order
+// GET /settings serves them. Lives beside searchPatchSchema because a mirrored
+// module may not import a sibling. The backends themselves are
+// skills/web-search.ts and the key probes routes/settings/llm.ts.
+export const SEARCH_PROVIDER_CATALOG = [
+  {
+    id: 'duckduckgo', group: 'keyless', label: 'DuckDuckGo (free, no key)', key: 'none',
+    hint: 'DuckDuckGo Instant Answer, free and keyless. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.',
+  },
+  {
+    id: 'tavily', group: 'keyed', label: 'Tavily (paid web search)', key: 'required',
+    keyName: 'Tavily', keyPlaceholder: 'tvly-…', keyUrl: 'https://app.tavily.com/home',
+    hint: 'Tavily, paid web search with full results and an answer summary. Needs an API key.',
+  },
+  {
+    id: 'brave', group: 'keyed', label: 'Brave Search (API key, free monthly credits)', key: 'required',
+    keyName: 'Brave Search', keyPlaceholder: 'BSA…', keyUrl: 'https://api-dashboard.search.brave.com/app/keys',
+    hint: 'Brave Search API: real web + news results for artist queries. Metered billing with $5/month in free credits (~1,000 queries; a card on file is required). SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'searxng', group: 'self-hosted', label: 'SearXNG (self-hosted)', key: 'none',
+    hint: 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed, just a running SearXNG instance.',
+  },
+  {
+    id: 'keenable', group: 'keyless', label: 'Keenable (free, no key needed)', key: 'optional',
+    keyName: 'Keenable', keyPlaceholder: 'keen_…', keyUrl: 'https://keenable.ai/console', keyPrefix: 'keen_',
+    hint: 'Keenable web search: real web results with no signup or API key, rate limited per IP. An optional Keenable key raises the limit. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'firecrawl', group: 'keyed', label: 'Firecrawl (API key)', key: 'required',
+    keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
+    hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
+    keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
+    hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
+] as const satisfies readonly SearchProviderEntry[];
+
+export const SETTINGS_SEARCH_PROVIDERS = SEARCH_PROVIDER_CATALOG.map((p) => p.id);
+
+// One catalogue row by id, or undefined for an id the catalogue doesn't list.
+export function searchProviderEntry(id: string | undefined): SearchProviderEntry | undefined {
+  return SEARCH_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+// A key name with its indefinite article: "a Tavily", "an Outcrawl". Every
+// sentence that names a provider's key, in the controller and the admin UI,
+// takes its article from here, so the two can't disagree.
+export function withIndefiniteArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
 
 /**
  * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
@@ -438,14 +527,14 @@ export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 // on top of its own feature.
 export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
 
-// The process-minute stride the talk table's programme row samples the station
-// clock on, and therefore the width and alignment every station-clock beat
+// The station-minute stride the talk table's programme row is sampled on, and
+// therefore the width and alignment every station-clock beat
 // window must have. Lives here — with the bound it constrains — rather than as
 // a literal in the table, so the row and the operator's offset cannot drift
 // apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
 //
-// 5 works for every real IANA zone because every offset is a multiple of 15
-// minutes, so process and station minutes always agree modulo 5.
+// Every real IANA zone's offset is a multiple of 15 minutes, so process and
+// station minutes agree modulo 5 and the row lands on the same ticks either way.
 export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
@@ -536,6 +625,12 @@ export const jingleRatioSchema = settingsIntLike(
   JINGLE_RATIO_BOUNDS,
   `jingleRatio must be int in [${JINGLE_RATIO_BOUNDS.min}, ${JINGLE_RATIO_BOUNDS.max}]`,
 );
+
+export const JINGLE_PLACEMENTS = ['between', 'over', 'both'] as const;
+export type JinglePlacement = (typeof JINGLE_PLACEMENTS)[number];
+export const jinglePlacementSchema = z.enum(JINGLE_PLACEMENTS, {
+  error: `jinglePlacement must be one of ${JINGLE_PLACEMENTS.join(', ')}`,
+});
 
 /**
  * WHO counts the tracks between jingles (#1619).
@@ -649,6 +744,8 @@ export const transitionsPatchSchema = settingsBlockOf({
   // save-time refusal. Do not add one here.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
+  pickTimeStems: settingsBoolLike(),
+  equalPowerCrossfade: settingsBoolLike(),
   effects: transitionEffectsPatchSchema,
 });
 
@@ -745,13 +842,26 @@ export const BACKUP_KEEP_DEFAULT = 7;
  * usual normalize-vs-validate split, neither restating the other's rule.
  */
 export function clampBackupKeep(raw: unknown): number {
-  // Absent and empty are NO answer, not zero. `Number(null)` and `Number('')`
-  // are both 0, which would clamp to the floor of 1 — the most destructive
-  // reading available — for a settings block that simply has no `keep` in it.
-  if (raw === null || raw === undefined || raw === '') return BACKUP_KEEP_DEFAULT;
+  return clampSettingsIntOr(raw, BACKUP_KEEP_BOUNDS, BACKUP_KEEP_DEFAULT);
+}
+
+/**
+ * The lenient integer reading behind clampBackupKeep and the scheduled
+ * tagger's `limit` (settings/normalize.ts): a number-like value floored and
+ * clamped into `bounds`, anything unreadable the `fallback`. Absent and empty
+ * are NO answer, not zero: `Number(null)` and `Number('')` are both 0, which
+ * would clamp to the floor (for `keep`, 1: the most destructive reading
+ * available) for a settings block that simply has no such field in it.
+ */
+export function clampSettingsIntOr(
+  raw: unknown,
+  bounds: { min: number; max: number },
+  fallback: number,
+): number {
+  if (raw === null || raw === undefined || raw === '') return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return BACKUP_KEEP_DEFAULT;
-  return Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(n)));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(bounds.max, Math.max(bounds.min, Math.floor(n)));
 }
 
 export const backupsPatchSchema = settingsBlockOf({
@@ -766,6 +876,87 @@ export const backupsPatchSchema = settingsBlockOf({
     BACKUP_KEEP_BOUNDS,
     `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
   ),
+});
+
+// Scheduled tagging (#2282): a daily tagger run at a set station-clock time,
+// so new music reaches the air without an operator pressing Start. `off` is
+// the default and MUST be first: a station that upgrades and changes nothing
+// has no `tagger` block, reads as `off` and never starts a run on its own.
+// The decision lives in music/tag-schedule-policy.ts, the tick in
+// broadcast/tag-schedule.ts.
+export const SETTINGS_TAGGER_AUTO_MODES = ['off', 'daily'] as const;
+export type TaggerAutoMode = (typeof SETTINGS_TAGGER_AUTO_MODES)[number];
+
+// 24-hour `HH:MM` on the station clock.
+export const TAGGER_AUTO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// The run's `--limit`: 0 = every untagged track, the Run tab's "all". The
+// ceiling only stops a typo; no library reaches it.
+export const TAGGER_AUTO_LIMIT_BOUNDS: SettingsNumericBound = { min: 0, max: 1_000_000 };
+
+// The Run tab's four step toggles, by the names POST /tag-library takes.
+export interface TaggerAutoSteps {
+  reconcile: boolean;
+  enrich: boolean;
+  tagMoods: boolean;
+  analyze: boolean;
+}
+export const TAGGER_AUTO_STEP_KEYS = ['reconcile', 'enrich', 'tagMoods', 'analyze'] as const;
+
+export interface TaggerAutoSettings {
+  mode: TaggerAutoMode;
+  time: string;
+  limit: number;
+  steps: TaggerAutoSteps;
+}
+
+// The shipped block: settings/defaults.ts DEFAULTS.tagger.auto, and the admin
+// card's form before its first read. Off, so an upgrade changes nothing.
+export const TAGGER_AUTO_DEFAULTS: Readonly<TaggerAutoSettings> = Object.freeze({
+  mode: 'off',
+  time: '02:30',
+  limit: 0,
+  steps: Object.freeze({ reconcile: true, enrich: true, tagMoods: true, analyze: true }),
+});
+
+export const taggerAutoTimeSchema = z
+  .unknown()
+  .superRefine((raw, ctx) => {
+    if (typeof raw !== 'string' || !TAGGER_AUTO_TIME_RE.test(raw)) {
+      ctx.addIssue({ code: 'custom', message: 'tagger.auto.time must be HH:MM (24-hour)' });
+    }
+  })
+  .transform((raw) => raw as string);
+
+// Each field schema is named once: the POST /settings patch (partial, with
+// settingsBlockOf's leniency) and the Run tab's form (the whole block, through
+// useZodForm) are both built from these, so neither restates a rule.
+const taggerAutoStepsShape = {
+  reconcile: settingsBoolLike(),
+  enrich: settingsBoolLike(),
+  tagMoods: settingsBoolLike(),
+  analyze: settingsBoolLike(),
+};
+const taggerAutoFieldsShape = {
+  mode: settingsStrictOneOf(
+    SETTINGS_TAGGER_AUTO_MODES,
+    `tagger.auto.mode must be one of: ${SETTINGS_TAGGER_AUTO_MODES.join(', ')}`,
+  ),
+  time: taggerAutoTimeSchema,
+  limit: settingsIntLike(
+    TAGGER_AUTO_LIMIT_BOUNDS,
+    `tagger.auto.limit must be int in [${TAGGER_AUTO_LIMIT_BOUNDS.min}, ${TAGGER_AUTO_LIMIT_BOUNDS.max}] (0 = all untagged)`,
+  ),
+};
+
+export const taggerPatchSchema = settingsBlockOf({
+  auto: settingsBlockOf({ ...taggerAutoFieldsShape, steps: settingsBlockOf(taggerAutoStepsShape) }),
+});
+
+/** The whole `tagger.auto` block, as the admin card edits and posts it. */
+export const taggerAutoFormSchema = z.object({
+  ...taggerAutoFieldsShape,
+  steps: z.object(taggerAutoStepsShape),
 });
 
 export const streamPatchSchema = settingsBlockOf({
@@ -910,6 +1101,7 @@ export const djBehaviourPatchSchema = settingsBlockOf({
   showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
   previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
   sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  holdDuckBetweenSpeakers: z.boolean({ error: 'djBehaviour.holdDuckBetweenSpeakers must be a boolean' }),
   extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
   releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
     error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
@@ -967,6 +1159,7 @@ export const audioPatchSchema = settingsBlockOf({
     { min: 1, max: 1000 },
     'audio.stemCacheGb must be between 1 and 1000',
   ),
+  stemOrphanPurgeEnabled: settingsBoolLike(),
   analyzeQuietMinutes: settingsNumberFloorLike(
     { min: 1, max: 120 },
     'audio.analyzeQuietMinutes must be between 1 and 120',
@@ -1002,6 +1195,22 @@ export const likesPatchSchema = settingsBlockOf({
   ),
 });
 
+// The listener Lyrics panel and its public read (`GET /lyrics/current`). On by
+// default, and an operator can switch it off: it republishes third-party lyric
+// text on an unauthenticated route and turns listener polling into calls
+// against the music server.
+export const lyricsPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  // The LRCLIB fallback for tracks with no timed lyrics on the music server.
+  // Its own switch, also on by default: it sends what the station plays to a
+  // third party.
+  lrclib: settingsBoolLike(),
+});
+
+export const musicSourcePatchSchema = settingsBlockOf({
+  reportRealPath: settingsBoolLike(),
+});
+
 export const searchPatchSchema = settingsBlockOf({
   provider: settingsStrictOneOf(
     SETTINGS_SEARCH_PROVIDERS,
@@ -1030,7 +1239,7 @@ export const searchPatchSchema = settingsBlockOf({
       }
     })
     .transform((raw) => String(raw).trim()),
-  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
+  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars').transform(stripSecretControlChars),
   // Optional comma-separated SearXNG engine pin (#1353), appended as the
   // `engines=` query param when non-empty. New field, so it takes the trimmed
   // posture rather than search.apiKey's raw one — there is no stored behaviour
@@ -1044,15 +1253,15 @@ export const searchPatchSchema = settingsBlockOf({
 const scrobbleLastfmSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.lastfm.username must be 0-40 chars'),
-  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars'),
-  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars'),
-  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars'),
+  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars').transform(stripSecretControlChars),
+  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars').transform(stripSecretControlChars),
+  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars').transform(stripSecretControlChars),
 });
 
 const scrobbleListenbrainzSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.listenbrainz.username must be 0-40 chars'),
-  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars'),
+  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars').transform(stripSecretControlChars),
   // No trailing-slash strip: the consumer appends /submit-listens.
   baseUrl: settingsUrlLike({
     max: 500,

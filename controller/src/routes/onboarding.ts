@@ -2,7 +2,7 @@
 // probes; /onboarding/save is the only mutation path.
 
 import express from 'express';
-import { generateText } from 'ai';
+import { generateText, createGateway } from 'ai';
 import { createOllama } from 'ai-sdk-ollama';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -19,14 +19,16 @@ import {
   normalizeNavidromeCredentials,
   type LlmProbeInput,
 } from '../schemas/onboarding.js';
-import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, DEFAULT_CHEAPER_INFERENCE_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
+import { DEFAULT_LOCCA_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
+import { openaiCompatibleGateway } from '../schemas/providers.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
-import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
+import { saveSecrets, SECRET_ENV_KEYS, secretValueIssue } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
+import { stripManagedSecrets, stripManagedSettings } from '../setup/hosted.js';
 import { pingWith } from '../music/subsonic.js';
 
 export const router = express.Router();
@@ -61,6 +63,8 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
   // The schema owns "provider and model required" and "openai-compatible needs a
   // baseUrl"; the wizard runs the same rule to hold the button shut.
   const { provider, model, apiKey, baseUrl, ollamaUrl } = req.body as LlmProbeInput;
+  const keyIssue = apiKey ? secretValueIssue(apiKey) : null;
+  if (keyIssue) return res.json({ ok: false, error: keyIssue });
 
   try {
     let m: any;
@@ -92,18 +96,20 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
       case 'openrouter':
         m = createOpenRouter({ headers: OPENROUTER_APP_HEADERS, ...(apiKey ? { apiKey } : {}) })(model);
         break;
-      case 'requesty':
-        // OpenAI-compatible gateway at a fixed base URL; model ids are
-        // provider/model (openai/gpt-4o-mini).
-        m = createOpenAI({ baseURL: DEFAULT_REQUESTY_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
-        break;
-      case 'cheaperinference':
-        // OpenAI-compatible gateway at a fixed base URL; model ids are bare
-        // (gpt-5.4-mini).
-        m = createOpenAI({ baseURL: DEFAULT_CHEAPER_INFERENCE_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
+      case 'gateway':
+        // Vercel AI Gateway; with no apiKey the SDK resolves env / OIDC
+        // credentials, as the registry's client does.
+        m = createGateway(apiKey ? { apiKey } : {})(model);
         break;
       case 'ollama':
       default: {
+        // A fixed-endpoint OpenAI-compatible gateway from the catalogue; model
+        // ids are provider/model (openai/gpt-4o-mini). Any other id is Ollama.
+        const gw = openaiCompatibleGateway(provider);
+        if (gw) {
+          m = createOpenAI({ baseURL: gw.openaiCompatible.baseUrl, apiKey: apiKey || 'unused' }).chat(model);
+          break;
+        }
         const url = ollamaUrl || 'http://localhost:11434';
         m = createOllama({ baseURL: url })(model);
         break;
@@ -162,13 +168,19 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
       }
     }
 
+    // What hosted mode dropped from this save (setup/hosted.ts), so the reply
+    // can say so, as POST /settings does.
+    const managed: string[] = [];
+
     // state/secrets.env (0600), also set on process.env for immediate use.
     if (b.apiKeys && typeof b.apiKeys === 'object') {
       const patch: Record<string, string> = {};
       for (const k of SECRET_ENV_KEYS) {
         if (typeof b.apiKeys[k] === 'string') patch[k] = b.apiKeys[k];
       }
-      if (Object.keys(patch).length) await saveSecrets(patch);
+      const { patch: allowed, dropped } = stripManagedSecrets(patch);
+      managed.push(...dropped.map(k => `apiKeys.${k}`));
+      if (Object.keys(allowed).length) await saveSecrets(allowed);
     }
 
     const settingsPatch: any = {};
@@ -179,7 +191,12 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     if (b.weather && typeof b.weather === 'object') settingsPatch.weather = b.weather;
     if (typeof b.station === 'string') settingsPatch.station = b.station;
     if (typeof b.timezone === 'string') settingsPatch.timezone = b.timezone;
-    if (Object.keys(settingsPatch).length) await settings.update(settingsPatch);
+    // A hosted station's LLM route and voice engine belong to its box agent.
+    const { patch: allowedPatch, dropped } = stripManagedSettings(settingsPatch, {
+      defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
+    });
+    managed.push(...dropped);
+    if (Object.keys(allowedPatch).length) await settings.update(allowedPatch);
 
     // Mark setup complete so the wizard exits even if Navidrome was skipped.
     await saveSetupConfig({ setupCompletedAt: new Date().toISOString() });
@@ -191,7 +208,7 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
       queue.log('error', `Post-onboarding playlist refresh failed: ${err.message}`),
     );
 
-    res.json({ ok: true, status: await getSetupStatus() });
+    res.json({ ok: true, status: await getSetupStatus(), ...(managed.length ? { managed } : {}) });
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message || 'save failed' });
   }

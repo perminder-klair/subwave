@@ -110,6 +110,9 @@ workflow opens (or updates) a release PR that bumps `package.json` +
 `CHANGELOG.md` based on the Conventional Commits since the last tag. Merging
 that PR creates a `vX.Y.Z` tag and a GitHub Release, which triggers
 `publish-images.yml` to build and push the Docker images to GHCR.
+`publish-cli.yml` builds the CLI binaries from the same tag but keeps the
+release marked pre-release until that version's images are on GHCR, then
+attaches the binaries and marks it latest.
 
 ## Code of conduct
 

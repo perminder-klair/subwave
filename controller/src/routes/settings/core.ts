@@ -2,9 +2,12 @@
 // Navidrome) that land outside settings.json.
 
 import express from 'express';
+import { isHosted, stripManagedSecrets, stripManagedSettings } from '../../setup/hosted.js';
 import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
+import { passiveRealPathStatus, realPathOptedIn, realPathStatus } from '../../music/navidrome-players.js';
+import type { RealPathStatus } from '../../music/navidrome-players-policy.js';
 import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
@@ -19,14 +22,19 @@ import * as chatterbox from '../../audio/chatterbox.js';
 import * as piper from '../../audio/piper.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
+import { updateEndingSteer } from '../../broadcast/takeover-steer.js';
 import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { forgetDiscogsRefusal } from '../../music/discogs.js';
+import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
+import { scheduledTagView } from '../../broadcast/tag-schedule.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
+import { firecrawlKeySource, keenableKeySource, searchKeyRefusedBy } from '../../skills/web-search.js';
 import { planLlmSwap, LlmSwapError } from '../../settings/llm-swap.js';
 import { llmSwapFit } from '../../settings/llm-swap-fit.js';
 import { recentCalls } from '../../llm/log.js';
@@ -66,6 +74,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
       jingles: await jingles.list(),
       libraryStats: library.stats(),
       tagger: taggerView(),
+      // The scheduled run's own record (#2282): last start, outcome, a hold.
+      taggerSchedule: await scheduledTagView().catch(() => null),
       // Daily-token-budget tier (normal|soft|hard); 'normal' when the cap is off.
       budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
@@ -84,6 +94,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // Who counts the tracks between jingles (#1619) — the admin control that
         // hands the rotate to the controller and writes the mixer's ratio 0.
         jingleRotate: s.jingleRotate,
+        jinglePlacement: s.jinglePlacement,
         crossfadeDuration: s.crossfadeDuration,
         ducking: s.ducking,
         // Repaired on the way out via the same function the air path uses: a
@@ -98,6 +109,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
         archive: s.archive,
         // Edited from the Backup panel, but saved through POST /settings.
         backups: s.backups,
+        // Scheduled tagging (#2282), edited on the Library Tagger's Run tab.
+        tagger: s.tagger,
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
@@ -131,6 +144,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         search: s.search,
         embedding: s.embedding,
         likes: s.likes,
+        // The Listeners form hydrates the Lyrics switch from this, and saves it
+        // with likes; omit it and every likes save turns the panel off.
+        lyrics: s.lyrics,
         // The admin form hydrates the album-cooldown/min-length inputs from
         // this; omit it and the next save on that card zeroes them.
         picker: s.picker,
@@ -185,28 +201,19 @@ router.get('/settings', requireAdmin, async (req, res) => {
       },
       search: {
         providers: settings.SEARCH_PROVIDERS,
+        // 'settings' | 'env' | null: where the key a Keenable search sends comes
+        // from. The env flag below can't tell a keen_ key from a Tavily one.
+        keenableKeySource: keenableKeySource(),
+        // The same answer for Firecrawl; null with a key on file means that key
+        // is another provider's, and searches refuse it.
+        firecrawlKeySource: firecrawlKeySource(),
+        // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl) that would refuse the
+        // key on file, so the page can warn for whichever one is picked.
+        keyRefusedBy: searchKeyRefusedBy(),
       },
-      // Which provider API keys are present in the environment; the UI keys
-      // its "key missing" alerts off this.
-      env: {
-        OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
-        ELEVENLABS_API_KEY: !!process.env.ELEVENLABS_API_KEY,
-        FISH_API_KEY: !!process.env.FISH_API_KEY,
-        ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
-        GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-        DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
-        OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
-        REQUESTY_API_KEY: !!process.env.REQUESTY_API_KEY,
-        CHEAPER_INFERENCE_API_KEY: !!process.env.CHEAPER_INFERENCE_API_KEY,
-        AI_GATEWAY_API_KEY: !!process.env.AI_GATEWAY_API_KEY,
-        SEARCH_API_KEY: !!process.env.SEARCH_API_KEY,
-        EMBEDDING_API_KEY: !!process.env.EMBEDDING_API_KEY,
-        LASTFM_API_KEY: !!process.env.LASTFM_API_KEY,
-        LASTFM_API_SECRET: !!process.env.LASTFM_API_SECRET,
-        LASTFM_SESSION_KEY: !!process.env.LASTFM_SESSION_KEY,
-        LISTENBRAINZ_USER_TOKEN: !!process.env.LISTENBRAINZ_USER_TOKEN,
-        LISTENBRAINZ_API_URL: !!process.env.LISTENBRAINZ_API_URL,
-      },
+      // Which writable keys (SECRET_ENV_KEYS) are present in the environment,
+      // as booleans only; the UI keys its "key missing" alerts off this.
+      env: Object.fromEntries(SECRET_ENV_KEYS.map(k => [k, !!process.env[k]])),
       skills: { catalog: skillCatalog() },
     });
   } catch (err) {
@@ -242,8 +249,23 @@ export async function logCompatDetection(): Promise<void> {
 // settings.update(): backup restore hands update() a whole settings.json, and
 // a key from a newer version must cost one setting, not the whole restore.
 router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) => {
+  // A steer starts and ends through /steer, which serialises the write, works
+  // out its opening tracks, clears a takeover and refuses a window that has
+  // already run out. Through here it would do none of that.
+  if (req.body && typeof req.body === 'object' && 'steer' in req.body) {
+    return res.status(400).json({ error: 'start or clear a steer with POST or DELETE /steer' });
+  }
   try {
-    const result = await settings.update(req.body || {});
+    // A hosted station's LLM route and voice engine belong to its box agent
+    // (setup/hosted.ts): those keys are dropped, the rest of the save applies.
+    const { patch: body, dropped } = stripManagedSettings(req.body || {}, {
+      defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
+    });
+    // A takeover saved here ends a running steer, as one pinned through
+    // /schedule/override does (broadcast/takeover-steer.ts).
+    const result = 'scheduleOverride' in body
+      ? (await updateEndingSteer(body)).result
+      : await settings.update(body);
     // context.ts reads the live settings cache, so the update already applies;
     // the route only owns the operator-facing log.
     if ('weather' in (req.body || {})) {
@@ -257,12 +279,12 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     }
     // Re-detect a changed LLM connection in the background: the save must not
     // wait on a probe of a server that may be down.
-    if (req.body?.llm !== undefined) void logCompatDetection();
+    if (body?.llm !== undefined) void logCompatDetection();
     // Re-probe now so the admin badge doesn't wait out the 30s probe tick.
-    if (req.body?.tts?.remote?.url !== undefined) {
+    if (body?.tts?.remote?.url !== undefined) {
       await remoteTts.refresh();
     }
-    res.json(result);
+    res.json(dropped.length ? { ...result, managed: dropped } : result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -317,6 +339,7 @@ router.get('/settings/llm/swap/fit', requireAdmin, async (_req, res) => {
 // admin UI only ever sees a leg's headers redacted. Answers only the receipt —
 // never update()'s raw `saved`, which carries unredacted keys and header values.
 router.post('/settings/llm/swap', requireAdmin, async (_req, res) => {
+  if (isHosted()) return res.status(403).json({ error: 'The LLM is managed by SUB/WAVE Cloud on this station.' });
   try {
     await settings.load();
     const plan = planSwap();
@@ -347,16 +370,24 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     for (const [key, value] of Object.entries(body)) {
       if (!(SECRET_ENV_KEYS as readonly string[]).includes(key)) continue;
       if (typeof value !== 'string') continue;
-      const trimmed = value.trim();
+      // Stripped before the blank check, so a value of only control characters
+      // keeps the stored key rather than clearing it in saveSecrets.
+      const trimmed = stripSecretControlChars(value).trim();
       if (!trimmed) continue;
       if (trimmed.length > 4096) continue;
       patch[key] = trimmed;
     }
-    if (Object.keys(patch).length === 0) {
-      return res.json({ saved: [] });
+    // Hosted: the LLM, voice and embedding keys are the box agent's
+    // (setup/hosted.ts); the reply names the ones it dropped, as POST /settings does.
+    const { patch: allowed, dropped } = stripManagedSecrets(patch);
+    const managed = dropped.length ? { managed: dropped } : {};
+    if (Object.keys(allowed).length === 0) {
+      return res.json({ saved: [], ...managed });
     }
-    await saveSecrets(patch);
-    res.json({ saved: Object.keys(patch) });
+    await saveSecrets(allowed);
+    // A saved Discogs token is asked again, even one Discogs refused before.
+    if ('DISCOGS_TOKEN' in allowed) forgetDiscogsRefusal();
+    res.json({ saved: Object.keys(allowed), ...managed });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
@@ -417,6 +448,43 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message || 'save failed' });
   }
+});
+
+// "Report Real Path" on SUB/WAVE's own Navidrome player rows. GET is what the
+// card paints when it opens, so it reads them only with the opt-in
+// `musicSource.reportRealPath` on. The two POSTs are the operator's buttons and
+// run whatever it says: check reads the rows, real-path switches every one still
+// off. Row ids stay server-side.
+function realPathView(st: RealPathStatus) {
+  return {
+    state: st.state,
+    reason: st.reason ?? null,
+    server: st.server ?? null,
+    switched: st.switched.length,
+    autoEnable: realPathOptedIn(),
+    players: st.players.map(p => ({
+      client: p.client,
+      userAgent: p.userAgent,
+      reportRealPath: p.reportRealPath,
+      lastSeen: p.lastSeen,
+    })),
+  };
+}
+
+router.get('/settings/navidrome/players', requireAdmin, async (_req, res) => {
+  res.json(realPathView(await passiveRealPathStatus()));
+});
+
+router.post('/settings/navidrome/players/check', requireAdmin, async (_req, res) => {
+  res.json(realPathView(await realPathStatus()));
+});
+
+router.post('/settings/navidrome/players/real-path', requireAdmin, async (_req, res) => {
+  const st = await realPathStatus({ enable: true });
+  if (st.switched.length) {
+    queue.log('scheduler', `Navidrome: Report Real Path switched on for ${st.switched.length} SUB/WAVE player(s) (operator)`);
+  }
+  res.json(realPathView(st));
 });
 
 // Non-mutating test. Merges over the effective values like save does, so Test

@@ -121,6 +121,93 @@ test('magnitude words match whole words only ($5 millionaire)', () => {
 test('an unknown glued suffix leaves the amount alone ($100x)', () => {
   assert.equal(normalizeForSpeech('the $100x return'), 'the $100x return');
 });
+test('a comma after the amount ends it instead of joining the unit', () => {
+  assert.equal(normalizeForSpeech('$25, doors at eight'), '25 dollars, doors at eight');
+  assert.equal(normalizeForSpeech('£25, doors at eight'), '25 pounds, doors at eight');
+});
+test('a decimal comma keeps the amount unspoken instead of splitting it', () => {
+  assert.equal(normalizeForSpeech('$1,20'), '$1,20');
+  assert.equal(normalizeForSpeech('$1,2345'), '$1,2345');
+  assert.equal(normalizeForSpeech('€12,50 a pint'), '€12,50 a pint');
+  assert.equal(normalizeForSpeech('a £1,5 million deal'), 'a £1,5 million deal');
+  assert.equal(normalizeForSpeech('a €1,5m fee'), 'a €1,5m fee');
+});
+test('a hyphen still ends the amount: a range is two numbers', () => {
+  assert.equal(normalizeForSpeech('tickets £10-20'), 'tickets 10 pounds-20');
+  assert.equal(normalizeForSpeech('tickets $10-20'), 'tickets 10 dollars-20');
+});
+test('£ before a number reads as pounds after it', () => {
+  assert.equal(normalizeForSpeech('tickets £25 at the door'), 'tickets 25 pounds at the door');
+  assert.equal(normalizeForSpeech('raised £1,200'), 'raised 1,200 pounds');
+  assert.equal(normalizeForSpeech('a £2.5 million offer'), 'a 2.5 million pounds offer');
+  assert.equal(normalizeForSpeech('a £2.5m offer'), 'a 2.5 million pounds offer');
+  assert.equal(normalizeForSpeech('won £100k'), 'won 100 thousand pounds');
+  assert.equal(normalizeForSpeech('a £2bn deal'), 'a 2 billion pounds deal');
+});
+test('€ before a number reads as euros after it', () => {
+  assert.equal(normalizeForSpeech('€10 online'), '10 euros online');
+  assert.equal(normalizeForSpeech('a €1.5M fee'), 'a 1.5 million euros fee');
+});
+test('already-spoken pounds and euros are not doubled', () => {
+  assert.equal(normalizeForSpeech('£5 pounds at the door'), '5 pounds at the door');
+  assert.equal(normalizeForSpeech('€5 euros at the door'), '5 euros at the door');
+});
+test('£/€ without digits to lead stay untouched', () => {
+  assert.equal(normalizeForSpeech('the B£Ł catalogue'), 'the B£Ł catalogue');
+  assert.equal(normalizeForSpeech('costs 5 € today'), 'costs 5 € today');
+});
+test('a glued meridiem reads as the dotted letters form', () => {
+  assert.equal(normalizeForSpeech('doors at 8pm'), 'doors at 8 p.m.');
+  assert.equal(normalizeForSpeech('doors at 8pm.'), 'doors at 8 p.m.');
+  assert.equal(normalizeForSpeech('on air at 6am'), 'on air at 6 a.m.');
+  assert.equal(normalizeForSpeech('the 8 P.M. show'), 'the 8 p.m. show');
+});
+test('a spaced meridiem needs a clock hour', () => {
+  assert.equal(normalizeForSpeech('doors at 8 pm'), 'doors at 8 p.m.');
+  assert.equal(normalizeForSpeech('doors at 7:30 pm'), 'doors at 7:30 p.m.');
+  assert.equal(normalizeForSpeech('doors at 7:30 p.m.'), 'doors at 7:30 p.m.');
+  assert.equal(normalizeForSpeech('by 4567 pm'), 'by 4567 pm');
+});
+test('a meridiem needs a 1–12 hour that starts its own number', () => {
+  assert.equal(normalizeForSpeech('on air at 12am'), 'on air at 12 a.m.');
+  assert.equal(normalizeForSpeech('doors at 7:30pm'), 'doors at 7:30 p.m.');
+  assert.equal(normalizeForSpeech('doors at 7.30pm'), 'doors at 7.30 p.m.');
+  assert.equal(normalizeForSpeech('tune in to 1010am'), 'tune in to 1010am');
+  assert.equal(normalizeForSpeech('the R2am droid'), 'the R2am droid');
+  assert.equal(normalizeForSpeech('by 24pm'), 'by 24pm');
+  assert.equal(normalizeForSpeech('at 0am'), 'at 0am');
+});
+test('an identifier prefix keeps a meridiem-shaped number', () => {
+  assert.equal(normalizeForSpeech('meet in Room 2am'), 'meet in Room 2am');
+  assert.equal(normalizeForSpeech('room 4 pm'), 'room 4 pm');
+});
+test('No. before a digit reads as number', () => {
+  assert.equal(normalizeForSpeech('it reached No. 1 in the UK'), 'it reached number 1 in the UK');
+  assert.equal(normalizeForSpeech('chart no.42'), 'chart number 42');
+  assert.equal(normalizeForSpeech('No. 1967'), 'number 1967');
+});
+test('a bare No. without a digit stays untouched', () => {
+  assert.equal(normalizeForSpeech("No. I'm not done"), "No. I'm not done");
+});
+test('lowercase no. before a spaced number stays the sentence word', () => {
+  assert.equal(normalizeForSpeech('They said no. 50 people left.'), 'They said no. 50 people left.');
+});
+test('non-English lines keep meridiem, No. and £/€ for the engine', () => {
+  assert.equal(
+    normalizeForSpeech('puertas a las 8pm, No. 5, £25', [], 'es', 'piper'),
+    'puertas a las 8pm, No. 5, £25',
+  );
+  assert.equal(normalizeForSpeech('€10 online, €2.5m, €5 euros', [], 'de'), '€10 online, €2.5m, €5 euros');
+});
+test('$ still expands on non-English lines, as it did before #2103', () => {
+  assert.equal(normalizeForSpeech('$10 online', [], 'de'), '10 dollars online');
+});
+test('currency, clock and catalogue forms expand in one line', () => {
+  assert.equal(
+    normalizeForSpeech('It reached No. 1, tickets £25, doors at 8pm. That was MØ.', [], '', 'piper'),
+    'It reached number 1, tickets 25 pounds, doors at 8 p.m. That was MØ.',
+  );
+});
 test('HTML entities decode before the & rule', () => {
   assert.equal(normalizeForSpeech('Florence &amp; the Machine'), 'Florence and the Machine');
   assert.equal(normalizeForSpeech('it&#39;s a classic'), "it's a classic");

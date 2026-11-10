@@ -12,6 +12,8 @@ import { recordPick } from '../../llm/log.js';
 import { echoesRecentRequest } from '../../util/request-guard.js';
 import { speechPaceScale } from '../../audio/tts.js';
 import { normalizeForDisplay, normalizeForSpeech, spokenWordScale, stripSpeakerLabel } from '../../audio/speech-text.js';
+import { logEvent } from '../../observability/events.js';
+import { standInToken } from '../stand-in-policy.js';
 import { introMsOf } from './runs.js';
 
 export interface GeneratedHostLink {
@@ -78,12 +80,26 @@ export function dropEchoedLink(link: string | null, queue: any): string | null {
 // Returns the DISPLAY form (#1186): it becomes introScript, which is
 // booth-logged, remembered in the session and shown in the player's feed. The
 // pronunciation layer is applied separately by speak() at render time.
-export function trimLinkToIntro(text: string | null | undefined, song: any, persona: Persona | null = null): string | null {
+export function trimLinkToIntro(
+  text: string | null | undefined,
+  song: any,
+  persona: Persona | null = null,
+  queue: { log?: (kind: string, message: string) => void } | null = null,
+): string | null {
   const raw = (text || '').trim();
   if (!raw) return null;
   const speaker = persona ?? settings.getEffectivePersona();
   // Budget the words that will air, using the author captured at generation.
   const clean = stripSpeakerLabel(stripThinking(raw), speaker?.name ? [speaker.name] : []);
+  // The stand-in test wants the words as written (stand-in-policy), and the
+  // line below is where a pick link stops being that: by push() a long
+  // template has lost its brackets and reads as prose.
+  const token = standInToken(clean);
+  if (token) {
+    queue?.log?.('scheduler', `link: dropped a stand-in line ("${token}") instead of airing it`);
+    logEvent('speech.standInDropped', { kind: 'link', token });
+    return null;
+  }
   const display = normalizeForDisplay(clean);
   // Non-DJ personas skip the budget but not the cleanup.
   if (!speaker?.djMode) return display || null;
@@ -112,7 +128,7 @@ export async function enqueuePick(
   link: string | null = null,
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
-  { linkClockAt = null, introPersona = null, hostSpeech = null, showAt = null }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null; showAt?: Date | null } = {},
+  { linkClockAt = null, introPersona = null, hostSpeech = null, showAt = null, steerKey = null, introByOperator = false }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null; showAt?: Date | null; steerKey?: string | null; introByOperator?: boolean } = {},
 ): Promise<number> {
   // Single chokepoint for the intro budget: every pick path funnels its link
   // through here, so a new caller can't skip it. Near-idempotent for callers
@@ -121,7 +137,7 @@ export async function enqueuePick(
   // and the queued text always honours the budget.
   const introLink = hostSpeech && !session.isHostSpeechCurrent(hostSpeech)
     ? null
-    : dropEchoedLink(trimLinkToIntro(link, song, introPersona), queue);
+    : dropEchoedLink(trimLinkToIntro(link, song, introPersona, queue), queue);
   const track: any = trackFields(song);
   // Transition effects (DJ mode only); getAnnotatedUri stamps the liq_* flags
   // and radio.liq ramps them. sweep muffles the crossfade INTO this pick;
@@ -150,6 +166,10 @@ export async function enqueuePick(
     linkPrev,
     linkClockAt,
     selectionShowAt: showAt,
+    // Marks one of a steer's opening tracks (queue/types.ts); private.
+    steer: steerKey,
+    // The operator asked for this line by hand (a steer's introduction).
+    introByOperator: !!introLink && introByOperator,
   });
   if (pos === -2) {
     // Never-play blocklist refused the pick (library-db candidates can slip

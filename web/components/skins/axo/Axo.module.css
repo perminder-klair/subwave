@@ -1,198 +1,94 @@
-/* AXO — the hi-fi stack at 30°, built in Unit SW-9's hardware as Cipher-3 is:
-   brushed plates lit from above, dark top-lit keys and weighted knobs, display
-   glass and smoked bulbs. Colour lives here as theme tokens (the strict lint
-   forbids inline styles, and SVG presentation attributes don't reliably
-   resolve var()), geometry stays on the elements as attributes. A gradient
-   rides an element's fill ATTRIBUTE, so a class on that element sets only its
-   stroke: a CSS fill there would beat the attribute. */
+/* AXO — the hi-fi stack drawn in pen at 30°, beside a column built in Unit
+   SW-9's hardware. Colour lives here as theme tokens (the strict lint forbids
+   inline styles, and SVG presentation attributes don't reliably resolve
+   var()), geometry stays on the elements as attributes. */
 
-/* The finish. Metal is the theme's paper; a dark part (key, knob, baffle,
-   rack) is its ink. Every lit top, shaded foot and side is a shade of the
-   part's OWN face mixed toward white or black, never toward the theme's ink:
-   on a dark theme the ink is the pale end, and mixing toward it lit every
-   part from below. Glass, vinyl and bulbs are self-lit or black hardware,
-   deliberately off-token, as Unit's display is. */
+/* Face shading: the three visible sides of every box, plus wells and knobs. */
 .scene {
-  --plate-hi: color-mix(in oklab, var(--bg) 90%, #fff);
-  --plate: color-mix(in oklab, var(--bg) 96%, #000);
-  --plate-lo: color-mix(in oklab, var(--bg) 88%, #000);
-  --side: color-mix(in oklab, var(--bg) 80%, #000);
-  --side-lo: color-mix(in oklab, var(--bg) 68%, #000);
-  --well: color-mix(in oklab, var(--bg) 82%, #000);
-  --line: color-mix(in srgb, var(--ink) 34%, transparent);
-  --sil: color-mix(in srgb, var(--ink) 78%, transparent);
-  --key: color-mix(in oklab, var(--ink) 92%, var(--bg));
-  --key-hi: color-mix(in oklab, var(--key) 90%, #fff);
-  --key-lo: color-mix(in oklab, var(--key) 88%, #000);
-  --edge: color-mix(in oklab, var(--key) 58%, #000);
-  --edge-lo: color-mix(in oklab, var(--key) 44%, #000);
-  --knob: color-mix(in oklab, var(--ink) 88%, var(--bg));
-  --keytext: color-mix(in oklab, var(--bg) 87%, var(--ink));
-  --keytext-dim: color-mix(in srgb, var(--keytext) 50%, transparent);
-  --acc-hi: color-mix(in oklab, var(--accent) 82%, #fff);
-  --acc-lo: color-mix(in oklab, var(--accent) 80%, #000);
-  --acc-edge: color-mix(in oklab, var(--accent) 56%, #000);
-  --lit-txt: #fff4ec;
-  --txt: var(--ink);
-  --glass: #0e0d0b;
-  --glass-txt: #f4f0e6;
-  --glass-dim: rgba(244, 240, 230, 0.5);
-  --glass-faint: rgba(244, 240, 230, 0.16);
-}
-/* Standby and off air: the glass dims and the lamps go out. The hardware stays. */
-.dim {
-  --txt: var(--muted);
-  --glass-txt: rgba(244, 240, 230, 0.34);
-  --glass-dim: rgba(244, 240, 230, 0.2);
-  --glass-faint: rgba(244, 240, 230, 0.08);
+  --iso-l: color-mix(in oklab, var(--ink) 4%, var(--bg));
+  --iso-r: color-mix(in oklab, var(--ink) 10%, var(--bg));
+  --iso-w: color-mix(in oklab, var(--ink) 16%, var(--bg));
 }
 
-/* The hardware layer: hairline seams where faces meet, a heavier silhouette
-   round each unit (sSil), and no fill unless a part asks for one. */
-.hw {
+/* The hairline layer. Unpowered, it falls back to dashed construction lines in
+   a faded pen; powering up inks it solid. */
+.draw {
   fill: none;
-  stroke: var(--line);
-  stroke-width: 0.5;
+  stroke: var(--ink);
+  stroke-width: 0.75;
+  stroke-dasharray: 6 0;
   stroke-linejoin: round;
   stroke-linecap: round;
+  --txt: var(--ink);
 }
-.ns { stroke: none; }
-.sSil { stroke: var(--sil); }
-.sAcc { stroke: var(--accent); }
-.sKey { stroke: var(--keytext); }
-.sEdge { stroke: var(--edge-lo); }
-.sMetal { stroke: var(--plate-hi); }
-.sGlass { stroke: var(--glass-dim); }
-.sTxt { stroke: var(--txt); }
-.sBlack { stroke: rgba(0, 0, 0, 0.55); }
+.drawOff {
+  stroke: color-mix(in oklab, var(--ink) 45%, var(--bg));
+  stroke-dasharray: 3 2.5;
+  --txt: var(--muted);
+}
 
-/* Flat fills. */
-.fNone { fill: none; }
-.fPlate { fill: var(--plate); }
-.fPlateHi { fill: var(--plate-hi); }
-.fSide { fill: var(--side); }
-.fSideLo { fill: var(--side-lo); }
-.fWell { fill: var(--well); }
-.fKey { fill: var(--key); }
-.fKeyHi { fill: var(--key-hi); }
-.fKeyLo { fill: var(--key-lo); }
-.fEdge { fill: var(--edge); }
-.fEdgeLo { fill: var(--edge-lo); }
-.fAcc { fill: var(--accent); }
-.fAccHi { fill: var(--acc-hi); }
-.fAccLo { fill: var(--acc-lo); }
-.fAccEdge { fill: var(--acc-edge); }
-.fGlass { fill: var(--glass); }
-.fVinyl { fill: #121110; }
-.fSocket { fill: #050404; }
-.fRubber { fill: #1b1917; }
-.fTape { fill: #3b2b20; }
-.fLabel { fill: #efeadd; }
-.fSpec { fill: #fff; opacity: 0.5; }
-/* The dust cover's smoked acrylic, as Cipher's lamps are smoked: the panel
-   faintest, a wall seen edge-on through more plastic darker, the wall turned
-   toward the viewer darkest. */
-.fLid { fill: rgba(24, 21, 18, 0.1); }
-.fLidWall { fill: rgba(24, 21, 18, 0.18); }
-.fLidSide { fill: rgba(24, 21, 18, 0.26); }
-.glint { stroke: #fff; stroke-opacity: 0.35; }
-/* Grooves and the light lying across a record. */
-.groove { stroke: #fff; stroke-opacity: 0.07; }
-.grooveHi { stroke: #fff; stroke-opacity: 0.13; }
-.vinylSheen { fill: #fff; opacity: 0.07; }
-
-/* Paint servers: SVG stops take their colour from CSS, so the theme reaches
-   them. */
-.plate0 { stop-color: var(--plate-hi); }
-.plate1 { stop-color: var(--plate); }
-.plate2 { stop-color: var(--plate-lo); }
-.side0 { stop-color: var(--side); }
-.side1 { stop-color: var(--side-lo); }
-.key0 { stop-color: var(--key-hi); }
-.key1 { stop-color: var(--key-lo); }
-/* Latched in: shadowed from the panel's lip above it. */
-.keyDown0 { stop-color: color-mix(in oklab, var(--key) 66%, #000); }
-.keyDown1 { stop-color: color-mix(in oklab, var(--key) 86%, #000); }
-.acc0 { stop-color: var(--acc-hi); }
-.acc1 { stop-color: color-mix(in oklab, var(--accent) 88%, #000); }
-.accDown0 { stop-color: color-mix(in oklab, var(--accent) 78%, #000); }
-.accDown1 { stop-color: color-mix(in oklab, var(--accent) 92%, #000); }
-.knobO0 { stop-color: color-mix(in oklab, var(--knob) 88%, #fff); }
-.knobO1 { stop-color: color-mix(in oklab, var(--knob) 82%, #000); }
-.knobI0 { stop-color: color-mix(in oklab, var(--knob) 92%, #fff); }
-.knobI1 { stop-color: color-mix(in oklab, var(--knob) 88%, #000); }
-.bulb0 { stop-color: #3a3631; }
-.bulb1 { stop-color: #161412; }
-.bulb2 { stop-color: #0b0a09; }
-.lamp0 { stop-color: color-mix(in oklab, var(--accent) 60%, #fff6e8); }
-.lamp1 { stop-color: var(--accent); }
-.lamp2 { stop-color: color-mix(in oklab, var(--accent) 70%, #000); }
-.cone0 { stop-color: #36322d; }
-.cone1 { stop-color: #0d0c0b; }
-.sheen0 { stop-color: #fff; stop-opacity: 0.12; }
-.sheen1 { stop-color: #fff; stop-opacity: 0; }
-.fall0 { stop-color: #000; stop-opacity: 0.14; }
-.fall1 { stop-color: #000; stop-opacity: 0; }
-.drop0 { stop-color: #000; stop-opacity: 0.26; }
-.drop1 { stop-color: #000; stop-opacity: 0; }
-.glow0 { stop-color: var(--accent); stop-opacity: 0.55; }
-.glow1 { stop-color: var(--accent); stop-opacity: 0; }
-/* Brushed metal: a faint grain along each plate. */
-.grain { stroke: #fff; stroke-opacity: 0.09; stroke-width: 0.35; }
-
-/* The sound coming off the speakers: clean accent lines, no pen. */
-.waves {
+/* The inked layer: the sound lines and the ON AIR stamp, in the accent. */
+.ink {
   fill: none;
   stroke: var(--accent);
   stroke-linecap: round;
+  stroke-linejoin: round;
 }
+
+.fBg { fill: var(--bg); }
+.fL { fill: var(--iso-l); }
+.fR { fill: var(--iso-r); }
+.fW { fill: var(--iso-w); }
+.fInk { fill: var(--ink); }
+.fAcc { fill: var(--accent); }
+/* The dust cover's smoked acrylic: the panel faintest, a wall seen edge-on
+   through more plastic darker, the wall turned toward the viewer darkest. */
+.fLid { fill: color-mix(in oklab, var(--ink) 5%, transparent); }
+.fLidWall { fill: color-mix(in oklab, var(--ink) 9%, transparent); }
+.fLidSide { fill: color-mix(in oklab, var(--ink) 14%, transparent); }
+.fNone { fill: none; }
+
+/* Paint servers: SVG stops take their colour from CSS, so the theme reaches
+   them. A side panel recedes, a top falls into the shelf's shadow, a unit
+   sits in its own contact shadow, and a lit lamp spills a little light. */
+.shade0 { stop-color: var(--ink); stop-opacity: 0; }
+.shade1 { stop-color: var(--ink); stop-opacity: 0.09; }
+.fall0 { stop-color: var(--ink); stop-opacity: 0.08; }
+.fall1 { stop-color: var(--ink); stop-opacity: 0; }
+.drop0 { stop-color: var(--ink); stop-opacity: 0.2; }
+.drop1 { stop-color: var(--ink); stop-opacity: 0; }
+.glow0 { stop-color: var(--accent); stop-opacity: 0.5; }
+.glow1 { stop-color: var(--accent); stop-opacity: 0; }
 
 /* A cast shadow: the tonearm's, on the record beneath it. */
 .shadow {
-  fill: #000;
-  stroke: #000;
-  opacity: 0.3;
+  fill: var(--ink);
+  stroke: var(--ink);
+  stroke-dasharray: none;
+  opacity: 0.13;
 }
+
+.ns { stroke: none; }
+.solid { stroke-dasharray: none; }
+.sAcc { stroke: var(--accent); }
+.sBg { stroke: var(--bg); }
+.sInk { stroke: var(--ink); }
 
 /* Printed legends. --txt follows the power state; the rest are fixed inks. */
 .tx { fill: var(--txt); stroke: none; }
 .txMuted { fill: var(--muted); stroke: none; }
+.txBg { fill: var(--bg); stroke: none; }
 .txAcc { fill: var(--accent); stroke: none; }
-.txKey { fill: var(--keytext); stroke: none; }
-.txOn { fill: var(--lit-txt); stroke: none; }
-.txGlass { fill: var(--glass-txt); stroke: none; }
-.txGlassDim { fill: var(--glass-dim); stroke: none; }
-.txLabel { fill: #2a2622; stroke: none; }
+/* A lit key's legend: the same foreground the theme puts on an accent fill. */
+.txOn { fill: var(--primary-foreground); stroke: none; }
 /* An icon printed on a key: lucide strokes in currentColor, so these set the
-   colour. */
-.icKey { color: var(--keytext); }
-.icDim { color: var(--keytext-dim); }
-.icOn { color: var(--lit-txt); }
+   colour. Solid even in standby — a legend, not a construction line. */
+.icon { stroke-dasharray: none; }
+.icTx { color: var(--txt); }
+.icMuted { color: var(--muted); }
+.icOn { color: var(--primary-foreground); }
 .icFill { fill: currentColor; }
-/* The receiver's display line. Its glow is the scene's blur filter, except on
-   iOS (the only browsers -webkit-touch-callout answers to): WebKit re-runs a
-   filter whenever what it filters moves, which a scrolling line does every
-   frame, so there the filter is struck and two wider, fainter copies of the
-   line beneath it glow instead, a soft halo and a brighter rim. The copies
-   show nowhere else, nor in standby, when the line takes no glow. */
-.lcdHalo,
-.lcdGlow { display: none; }
-@supports (-webkit-touch-callout: none) {
-  .lcdHalo,
-  .lcdGlow {
-    display: inline;
-    fill: none;
-    stroke: var(--glass-txt);
-    stroke-linejoin: round;
-  }
-  .lcdHalo { stroke-opacity: 0.09; stroke-width: 2.8; }
-  .lcdGlow { stroke-opacity: 0.16; stroke-width: 1.4; }
-  .dim .lcdHalo,
-  .dim .lcdGlow { display: none; }
-  .lcdLit { filter: none; }
-}
 .mono { font-family: var(--mono-font), ui-monospace, monospace; }
-.doto { font-family: var(--font-doto), var(--mono-font), ui-monospace, monospace; font-weight: 900; }
 .display { font-family: var(--display-font), Georgia, serif; font-style: italic; }
 
 /* Hit areas over drawn controls. Transparent still counts as painted, so they
@@ -214,12 +110,12 @@
   touch-action: none;
 }
 
-/* The floor the stack stands on: a dot on every isometric grid point. */
+/* The drawing table: a dot on every isometric grid point. */
 .gridDesk,
 .gridMob {
   background-image:
-    radial-gradient(circle, color-mix(in oklab, var(--ink) 18%, transparent) 0.9px, transparent 1.4px),
-    radial-gradient(circle, color-mix(in oklab, var(--ink) 18%, transparent) 0.9px, transparent 1.4px);
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 22%, transparent) 0.9px, transparent 1.4px),
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 22%, transparent) 0.9px, transparent 1.4px);
 }
 .gridDesk {
   background-size: 24px 13.856px;
@@ -230,18 +126,18 @@
   background-position: 0 0, 8px 4.619px;
 }
 
-/* Focus mode's screen: the cover's panel as a sheet of display glass, with
-   scanlines under the legends, an accent halo behind them (the bloom
-   filter's flood), and dim segments where the song hasn't been. */
-.screenGlass { fill: var(--glass); opacity: 0.92; }
+/* Focus mode's screen: the cover's panel lit as a sheet of display glass. A
+   faint accent tint and scanlines under the legends, an accent halo behind
+   them (the bloom filter's flood), dim segments where the song hasn't been. */
+.glass { fill: color-mix(in oklab, var(--accent) 7%, transparent); }
 .scanLine {
   fill: none;
-  stroke: #fff;
-  stroke-opacity: 0.035;
+  stroke: var(--ink);
+  stroke-opacity: 0.07;
   stroke-width: 0.5;
 }
 .bloomFlood { flood-color: var(--accent); flood-opacity: 0.35; }
-.seg { fill: var(--glass-faint); }
+.seg { fill: color-mix(in oklab, var(--ink) 13%, transparent); }
 .sweep0 { stop-color: var(--accent); stop-opacity: 0; }
 .sweep1 { stop-color: var(--accent); stop-opacity: 0.22; }
 /* The band that runs down the glass as it lights. At rest it isn't there. */
@@ -369,11 +265,13 @@
 .pulse { animation: axo-pulse 2.4s ease-in-out infinite; }
 @keyframes axo-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-/* Screen and column motion is layered on, never resting: the still frame above
-   is what reduced motion and lite get. The column only glides once the
-   listener has toggled it (sideMoves), so a remembered focus mode applied at
-   hydration doesn't animate shut on every load. */
+/* The pen inking up, the screen and the column: motion is layered on, never
+   resting, and the still frame above is what reduced motion and lite get.
+   The column only glides once the listener has toggled it (sideMoves), so a
+   remembered focus mode applied at hydration doesn't animate shut on every
+   load. */
 @media (prefers-reduced-motion: no-preference) {
+  .draw { transition: stroke 1.2s ease, stroke-dasharray 1.6s ease; }
   .sweep { animation: axo-sweep 1.5s ease-out 0.1s both; }
   .screenIn { animation: axo-screen-in 0.7s ease-out both; }
   .sideMoves { transition: width 0.55s cubic-bezier(0.65, 0, 0.35, 1), border-color 0.55s ease; }
@@ -393,6 +291,7 @@
   100% { opacity: 1; }
 }
 
+:global(html.lite) .draw { transition: none; }
 :global(html.lite) .sweep,
 :global(html.lite) .screenIn { animation: none; }
 :global(html.lite) .sideMoves,

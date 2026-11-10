@@ -7,10 +7,13 @@ import * as settings from '../../settings.js';
 import * as llmProvider from '../../llm/provider.js';
 import { probeEmbeddingConfig } from '../../music/embeddings.js';
 import { requireAdmin } from '../../middleware/auth.js';
-import { SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { SECRET_ENV_KEYS, secretValueIssue } from '../../setup/secrets.js';
+import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway } from '../../schemas/providers.js';
 import { applyCustomHeadersPatch } from '../../settings/vocab.js';
 import type { EmbeddingCfg } from '../../llm/provider.js';
 import { listenbrainzApiBase } from '../../broadcast/scrobble.js';
+import { buildOutcrawlRequest, isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
+import { searchKeyMismatch } from '../../skills/search-key-policy.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -50,7 +53,7 @@ function briefLlmError(err: unknown): string {
 
 // Non-mutating probe of one secret; builds a one-off client and never writes
 // process.env or secrets.env. `hint` disambiguates a key shared by several
-// providers (SEARCH_API_KEY is Tavily or Brave) because the UI tests before
+// providers (SEARCH_API_KEY is Tavily, Brave, Keenable, Firecrawl or Outcrawl) because the UI tests before
 // saving, so the stored provider can't be trusted mid-edit; it falls back to
 // the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
 // Responses API rejects anything below 16.
@@ -130,7 +133,16 @@ async function probeKey(
     }
     case 'SEARCH_API_KEY': {
       const provider = hint || settings.get().search?.provider || 'tavily';
+      // Brave and Tavily searches refuse a key carrying another provider's
+      // prefix, so the probe refuses it too, before any request: a Firecrawl key
+      // pasted under Tavily must not reach Tavily (search-key-policy.ts).
+      const refused = (target: string) => {
+        const mismatch = searchKeyMismatch(target, value);
+        return mismatch ? { ok: false, message: mismatch.charAt(0).toUpperCase() + mismatch.slice(1) } : null;
+      };
       if (provider === 'brave') {
+        const refusal = refused('brave');
+        if (refusal) return refusal;
         const url = new URL('https://api.search.brave.com/res/v1/web/search');
         url.searchParams.set('q', 'test');
         url.searchParams.set('count', '1');
@@ -148,6 +160,77 @@ async function probeKey(
         }
         return { ok: true, message: '✓ Brave Search key valid' };
       }
+      if (provider === 'keenable') {
+        // keenableSearch sends only a keen_ value and runs keyless otherwise,
+        // so any other key is not a rejected key, just one that goes unused.
+        if (!isKeenableKey(value)) {
+          return { ok: false, message: 'Not a Keenable key (they start with keen_) — searches run keyless without one' };
+        }
+        const r = await fetch('https://api.keenable.ai/v1/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': value, 'X-Keenable-Title': 'subwave' },
+          body: JSON.stringify({ query: 'test', max_results: 1 }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!r.ok) {
+          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
+        }
+        return { ok: true, message: '✓ Keenable key valid' };
+      }
+      if (provider === 'firecrawl') {
+        // firecrawlSearch refuses anything but an fc- key, so another provider's
+        // key is not sent here either.
+        if (!isFirecrawlKey(value)) {
+          return { ok: false, message: 'Not a Firecrawl key (they start with fc-)' };
+        }
+        // credit-usage rather than a search, which would spend credits on every
+        // click. It answers a bad key with a 401 all the same.
+        const r = await fetch('https://api.firecrawl.dev/v2/team/credit-usage', {
+          headers: { Authorization: `Bearer ${value}` },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!r.ok) {
+          return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
+        }
+        // A 200 proves the key, not its balance, so the count goes in the message
+        // and a drained key doesn't read as valid. A body without a count stays a
+        // plain pass: the key itself was accepted.
+        const j = await r.json().catch(() => ({})) as { data?: { remainingCredits?: unknown } };
+        const left = j?.data?.remainingCredits;
+        if (typeof left !== 'number' || !Number.isFinite(left)) {
+          return { ok: true, message: '✓ Firecrawl key valid' };
+        }
+        if (left <= 0) return { ok: false, message: 'Firecrawl key valid, but it has no credits left' };
+        return { ok: true, message: `✓ Firecrawl key valid · ${left} credit${left === 1 ? '' : 's'} left` };
+      }
+      if (provider === 'outcrawl') {
+        // Outcrawl searches refuse anything but an ock_ key, so the probe does too.
+        const refusal = refused('outcrawl');
+        if (refusal) return refusal;
+        // A one-result search, the cheapest call that proves the key.
+        const { url, init } = buildOutcrawlRequest({ query: 'test', apiKey: value, limit: 1 });
+        const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10000) });
+        if (!r.ok) {
+          // Outcrawl's error body is { code, message, details }, and its docs map
+          // no HTTP status to a code, so a documented code decides first.
+          // `quota_exceeded` is a plan ceiling, either requests per minute or
+          // monthly credits, so the message names both. A body without a code
+          // falls back to the status.
+          const j = await r.json().catch(() => ({})) as { code?: unknown };
+          const code = typeof j?.code === 'string' ? j.code : '';
+          if (code === 'unauthorized' || r.status === 401 || r.status === 403) {
+            return { ok: false, message: 'Key rejected — check it\'s correct and active' };
+          }
+          if (code === 'quota_exceeded') {
+            return { ok: false, message: 'Outcrawl key valid, but the account is over its plan limit (monthly credits or requests per minute)' };
+          }
+          if (r.status === 402) return { ok: false, message: 'Outcrawl key valid, but it has no credits left' };
+          return { ok: false, message: `Request failed (${r.status})` };
+        }
+        return { ok: true, message: '✓ Outcrawl key valid' };
+      }
+      const refusal = refused('tavily');
+      if (refusal) return refusal;
       const r = await fetch('https://api.tavily.com/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${value}` },
@@ -195,8 +278,34 @@ async function probeKey(
       }
       return { ok: true, message: `✓ ListenBrainz token valid${j.user_name ? ` · user: ${j.user_name}` : ''}` };
     }
-    default:
-      return { ok: false, message: `No probe defined for ${key}` };
+    case 'DISCOGS_TOKEN': {
+      const r = await fetch('https://api.discogs.com/oauth/identity', {
+        headers: { Authorization: `Discogs token=${value}`, 'User-Agent': 'subwave/1.0 +https://github.com/perminder-klair/subwave' },
+        signal: AbortSignal.timeout(8000),
+      });
+      // 401 or 403 is the token refused, as the year lookup reads it (music/discogs.ts).
+      if (!r.ok) {
+        return { ok: false, message: r.status === 401 || r.status === 403 ? 'Token rejected — check your Discogs personal access token' : `Request failed (${r.status})` };
+      }
+      const j = await r.json().catch(() => ({})) as { username?: string };
+      return { ok: true, message: `✓ Discogs token valid${j.username ? ` · user: ${j.username}` : ''}` };
+    }
+    default: {
+      // A fixed-endpoint gateway's model list, with the key as a Bearer; no
+      // model is called, as in the CLI's probeGatewayModels. Requesty's list is
+      // public, but a bearer it can't verify is a 403 ("Invalid authorization
+      // token"), so 401 and 403 both read as a rejected key.
+      const gw = OPENAI_COMPATIBLE_GATEWAYS.find(g => g.envVar === key);
+      if (!gw) return { ok: false, message: `No probe defined for ${key}` };
+      const r = await fetch(`${gw.openaiCompatible.baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${value}` },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!r.ok) {
+        return { ok: false, message: r.status === 401 || r.status === 403 ? 'Key rejected — check it\'s correct and active' : `Request failed (${r.status})` };
+      }
+      return { ok: true, message: `✓ ${gw.label} key valid` };
+    }
   }
 }
 
@@ -219,6 +328,8 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
     }
     targetValue = envValue;
   }
+  const issue = secretValueIssue(targetValue);
+  if (issue) return res.json({ ok: false, message: issue, latencyMs: 0 });
   const t0 = Date.now();
   try {
     const result = await probeKey(
@@ -329,8 +440,11 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
 });
 
 // Providers whose model API returns one mixed chat+embedding list with no type
-// flag, so scope=embedding has to trim them by the name heuristic below.
-const MIXED_MODEL_LIST_PROVIDERS = new Set(['ollama', 'openai-compatible', 'locca', 'requesty', 'cheaperinference']);
+// flag, so scope=embedding has to trim them by the name heuristic below. Every
+// fixed-endpoint gateway is one: its {base}/models list is passed through whole.
+const MIXED_MODEL_LIST_PROVIDERS = new Set([
+  'ollama', 'openai-compatible', 'locca', ...OPENAI_COMPATIBLE_GATEWAYS.map(gw => gw.id),
+]);
 
 // Name heuristic: almost all embedding models carry "embed", the rest come from
 // a short list of families. An unmatched model can still be typed by hand.
@@ -501,36 +615,6 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         break;
       }
 
-      case 'requesty': {
-        const apiKey = resolveKey('REQUESTY_API_KEY');
-        if (!apiKey) throw new Error('REQUESTY_API_KEY not set');
-        const r = await fetch(`${llmProvider.DEFAULT_REQUESTY_BASE_URL}/models`, {
-          signal: ctrl.signal,
-          headers: { 'Authorization': `Bearer ${apiKey}` },
-        });
-        if (!r.ok) throw new Error(`Requesty HTTP ${r.status}`);
-        const data = (await r.json()) as { data?: unknown };
-        models = Array.isArray(data?.data)
-          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
-          : [];
-        break;
-      }
-
-      case 'cheaperinference': {
-        const apiKey = resolveKey('CHEAPER_INFERENCE_API_KEY');
-        if (!apiKey) throw new Error('CHEAPER_INFERENCE_API_KEY not set');
-        const r = await fetch(`${llmProvider.DEFAULT_CHEAPER_INFERENCE_BASE_URL}/models`, {
-          signal: ctrl.signal,
-          headers: { 'Authorization': `Bearer ${apiKey}` },
-        });
-        if (!r.ok) throw new Error(`Cheaper Inference HTTP ${r.status}`);
-        const data = (await r.json()) as { data?: unknown };
-        models = Array.isArray(data?.data)
-          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
-          : [];
-        break;
-      }
-
       case 'gateway': {
         // Use the SDK's getAvailableModels() rather than a hand-rolled URL, so
         // the key/OIDC resolves exactly as the registry's createGateway does.
@@ -553,8 +637,24 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         break;
       }
 
-      default:
-        return res.json({ ok: false, models: [], provider, error: `unknown provider: ${provider}` });
+      default: {
+        // A fixed-endpoint OpenAI-compatible gateway: {base}/models with its key
+        // as a Bearer.
+        const gw = openaiCompatibleGateway(provider);
+        if (!gw) return res.json({ ok: false, models: [], provider, error: `unknown provider: ${provider}` });
+        const apiKey = resolveKey(gw.envVar);
+        if (!apiKey) throw new Error(`${gw.envVar} not set`);
+        const r = await fetch(`${gw.openaiCompatible.baseUrl}/models`, {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`${gw.label} HTTP ${r.status}`);
+        const data = (await r.json()) as { data?: unknown };
+        models = Array.isArray(data?.data)
+          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
     }
 
     // Mixed-list providers only; the rest were already filtered by their API.
@@ -581,6 +681,8 @@ router.post('/settings/embedding/probe', requireAdmin, async (req, res) => {
     const v = (req.body || {})[k];
     if (typeof v === 'string' && v.trim()) overrides[k] = v.trim();
   }
+  const keyIssue = overrides.apiKey ? secretValueIssue(overrides.apiKey) : null;
+  if (keyIssue) return res.json({ ok: false, dim: null, code: 'invalid', message: keyIssue });
   if ((req.body || {}).headers !== undefined) {
     try {
       const saved = settings.get().embedding?.headers || {};

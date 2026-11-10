@@ -158,7 +158,11 @@ test('the MCP state tool still returns public state during an admin lockout', as
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   registerSubwaveTools(mcpServer, wrong);
   try {
-    for (let i = 0; i < 10; i++) assert.equal(await wrong.boothLog(), null);
+    // Ten different guesses: a client repeating one stale password never locks.
+    for (let i = 0; i < 10; i++) {
+      const guesser = new SubwaveClient({ baseUrl: base, adminUser: 'feed-admin', adminPass: `guess-${i}` });
+      assert.equal(await guesser.boothLog(), null);
+    }
     assert.equal((await fetch(`${base}/debug/dj-log`, { headers: ADMIN })).status, 429, 'admin lock is engaged');
     const publicState = await wrong.state();
     await mcpServer.connect(serverTransport);

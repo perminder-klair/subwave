@@ -9,6 +9,7 @@ import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
 import { artistRootKey, setKnownActsProvider, trackKey, type CandidateLike } from './recency.js';
 import { isInstrumental } from './lyric-vocal.js';
+import { clearWalk } from './library-walk.js';
 
 let loaded = false;
 
@@ -36,6 +37,9 @@ export async function reset() {
   loaded = false;
   invalidateAiredIndex();
   knownActsCache = null;
+  // The table is about to stop holding the last walk (music/library-walk.ts).
+  // Cleared first, so a reset that fails half-way still reads as unsettled.
+  clearWalk();
   await db.reset();
   await load();
 }
@@ -92,6 +96,8 @@ export function get(songId: string): any {
     // this projection for Subsonic-sourced rows.
     lastfmTags: t.lastfmTags,
     energy: t.energy,
+    // music/explicit-policy's fallback for a candidate that carries no tag field.
+    explicitStatus: t.explicitStatus,
     source: t.source,
     confidence: t.confidence,
     taggerVersion: t.taggerVersion,
@@ -110,6 +116,8 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // clean timing spans; classify through isInstrumental
     vocalRangesInvalid: t.vocalRangesInvalid,
+    tailVocalRanges: t.tailVocalRanges,
+    tailVocalRangesInvalid: t.tailVocalRangesInvalid,
     paceMean: paceMeanOf(t.pace),
     // Boundary keys for bpmKeyFor / queue.mixAnalysisFor.
     keyRanges: t.keyRanges,
@@ -121,6 +129,11 @@ export function get(songId: string): any {
     leadSilenceMs: t.leadSilenceMs,
     tailSilenceMs: t.tailSilenceMs,
     tailStartMs: t.tailStartMs,
+    // The whole-file edges facet, which the resolver prefers over the three
+    // window figures above. Same rule: a missing field disables it silently.
+    edgeLeadMs: t.edgeLeadMs,
+    edgeTailMs: t.edgeTailMs,
+    decodedDurationMs: t.decodedDurationMs,
   };
 }
 
@@ -208,6 +221,28 @@ export function getAlbumFacts(songId: string) {
 // acoustic *_json blobs (#723).
 export function getPlaybackMeta(songId: string): db.TrackLite | null {
   return loaded ? db.getTrackLite(songId) : null;
+}
+
+// The operator's station-wide lyric timing correction (library-db/lyrics.ts).
+export async function getLyricOffset(songId: string): Promise<number> {
+  await load();
+  return db.getLyricOffset(songId);
+}
+
+export async function setLyricOffset(songId: string, offsetMs: number): Promise<void> {
+  await load();
+  db.setLyricOffset(songId, offsetMs);
+}
+
+// LRCLIB's stored answer for a track (library-db/lyrics.ts, music/lyrics-sources.ts).
+export async function getExternalLyrics(songId: string): Promise<db.ExternalLyrics | null> {
+  await load();
+  return db.getExternalLyrics(songId);
+}
+
+export async function setExternalLyrics(songId: string, answer: Omit<db.ExternalLyrics, 'checkedAt'>): Promise<void> {
+  await load();
+  db.setExternalLyrics(songId, answer);
 }
 
 // When a track entered the library, null if not in the tagged index. Playlist
@@ -301,6 +336,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     // separate from the editorial `moods`.
     audioMoods: r.audioMoods,
     energy: r.energy,
+    // Inline, so a clean show's check needs no per-track DB lookup.
+    explicitStatus: r.explicitStatus,
     // Seconds, for the max-track-length cap (#447). null = unknown.
     durationSec: r.durationSec,
     // Acoustic analysis — null on un-analysed tracks, read as "no signal".
@@ -311,6 +348,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     structure: r.structure,
     vocalRanges: r.vocalRanges,
     vocalRangesInvalid: r.vocalRangesInvalid,
+    tailVocalRanges: r.tailVocalRanges,
+    tailVocalRangesInvalid: r.tailVocalRangesInvalid,
     // Scalar mean pace (0..1); the full curve stays in the record.
     paceMean: paceMeanOf(r.pace),
   };
@@ -705,7 +744,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       musicalKey: r.musicalKey,
       loudnessLufs: r.loudnessLufs,
       paceMean: paceMeanOf(r.pace),
-      instrumental: isInstrumental(r.vocalRanges, r.vocalRangesInvalid),
+      instrumental: isInstrumental(r),
     })),
   };
 }

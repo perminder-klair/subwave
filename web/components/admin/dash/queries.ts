@@ -1,13 +1,14 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { SessionTurn } from '../../../lib/types';
 import { AdminResponseError, adminJson, type AdminFetch } from '../../../lib/admin-query';
-import type { ScheduleOverride } from '../../../lib/schemas.generated';
+import type { ScheduleOverride, Steer } from '../../../lib/schemas.generated';
 import {
   UNKNOWN_TRUSTED_PROXIES,
   type ActResponse,
   type ConnectionsState,
   type DashStatus,
   type HealthStats,
+  type NowPlayingFile,
   type QueueState,
   type RequestEntry,
 } from './types';
@@ -25,8 +26,12 @@ export const dashKeys = {
   // Nested under takeover() on purpose: a pin write invalidates that prefix,
   // and the preview it invalidates alongside is stale the moment one lands.
   takeoverWindow: () => ['dash', 'takeover', 'window'] as const,
+  steer: () => ['dash', 'steer'] as const,
   navidrome: () => ['dash', 'banner', 'navidrome'] as const,
   musicStarved: () => ['dash', 'banner', 'music-starved'] as const,
+  // Keyed by the track the request names (?id=): the format of one file never
+  // changes, so a known one is fetched once per track.
+  nowPlayingFile: (id: string) => ['dash', 'now-playing-file', id] as const,
 };
 
 async function degradedJson<T>(request: Promise<T>): Promise<T | null> {
@@ -183,6 +188,33 @@ export async function fetchTakeover(fetcher: AdminFetch, signal: AbortSignal): P
   };
 }
 
+export interface SteerTrack {
+  id: string;
+  title: string;
+  artist: string;
+}
+
+export interface SteerData {
+  steer: Steer | null;
+  /** The steer's opening tracks still to air. Operator-only: the public queue does not mark them. */
+  queued: (SteerTrack & { sent: boolean })[];
+  /** The token budget tier, so the card can say what a steer is worth now. */
+  budgetMode: 'normal' | 'soft' | 'hard';
+}
+
+export async function fetchSteer(fetcher: AdminFetch, signal: AbortSignal): Promise<SteerData> {
+  const body = await adminJson<Partial<SteerData>>(fetcher, '/steer', undefined, signal);
+  return { steer: body.steer ?? null, budgetMode: body.budgetMode ?? 'normal', queued: body.queued ?? [] };
+}
+
+export function writeSteer(client: QueryClient, steer: Steer | null, queued: SteerTrack[] = []): void {
+  client.setQueryData<SteerData>(dashKeys.steer(), current => ({
+    steer,
+    budgetMode: current?.budgetMode ?? 'normal',
+    queued: steer ? queued.map(t => ({ ...t, sent: false })) : [],
+  }));
+}
+
 export interface NavidromeStatus {
   ok: boolean;
   reason?: string;
@@ -196,4 +228,8 @@ export function fetchNavidromeStatus(fetcher: AdminFetch, signal: AbortSignal): 
 export async function fetchMusicStarved(fetcher: AdminFetch, signal: AbortSignal): Promise<boolean> {
   const body = await adminJson<{ musicStarved?: boolean }>(fetcher, '/state', undefined, signal);
   return body.musicStarved === true;
+}
+
+export function fetchNowPlayingFile(fetcher: AdminFetch, id: string, signal: AbortSignal): Promise<NowPlayingFile> {
+  return adminJson(fetcher, `/now-playing/file?id=${encodeURIComponent(id)}`, undefined, signal);
 }

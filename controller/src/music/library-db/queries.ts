@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { parseVocalRangesJson } from '../lyric-vocal.js';
+import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
+import { hasTaggerSoundWords } from '../sound-line.js';
 import { preparationTrackSchema } from '../../schemas/show-preparation.js';
 import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
-import { SQL_HAS_MOODS, SQL_NO_MOODS, requireDb } from './handle.js';
-import type { EnergyValue, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
+import { SQL_HAS_MOODS, SQL_NO_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
+import type { EnergyValue, ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
 import { rowToMoodPool, rowToEnergyPool, safeParseArray } from './rows.js';
 
 // Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
@@ -38,7 +39,7 @@ export function ruleMatchRows(): Array<{
 }
 
 const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artist_id,
-  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec`;
+  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec, t.explicit_status`;
 
 export function songsByMood(mood: string): MoodPoolRecord[] {
   // Start at the covering membership index, never scan tracks/json_each.
@@ -54,7 +55,8 @@ export function songsByEnergy(energy: EnergyValue): EnergyPoolRecord[] {
   const rows = requireDb().prepare(`SELECT ${MOOD_POOL_COLUMNS},
     t.original_year, t.is_compilation, t.era_untrusted, t.audio_moods,
     t.bpm, t.musical_key, t.intro_ms, t.loudness_lufs,
-    t.structure_json, t.vocal_ranges_json, t.pace_json
+    t.structure_json, t.vocal_ranges_json, t.pace_json,
+    ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json
     FROM tracks t WHERE t.energy = ? AND ${SQL_HAS_MOODS} ORDER BY t.rowid`).all(energy) as EnergyPoolRow[];
   return rows.map(rowToEnergyPool);
 }
@@ -106,6 +108,51 @@ export function staleTaggedIds(promptHash: string, model: string, limit?: number
   return rows.map(r => r.id);
 }
 
+// "Re-decide moods → blind rows only" scope (#2281): rows the LLM decided
+// without measurements of their audio that have been measured since, so a
+// re-decide now gives the model a Sound: line. A blind row that is still
+// unmeasured stays out: re-tagging it would be blind again. Blind is
+// tagged_measured = 0, or a NULL stamp on a model-decided row, which is every row
+// tagged before the stamp existed (no earlier prompt carried measurements).
+// Never manual or propagated: neither was decided by the LLM. "Measured since" is
+// the stamp's own rule (hasTaggerSoundWords) run over the row, never a SQL copy
+// of it; the WHERE only narrows to rows carrying one of its inputs.
+export function blindTaggedIds(limit?: number): string[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT id, bpm, musical_key, vocal_ranges_json,
+              ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges
+         FROM tracks
+        WHERE ${SQL_HAS_MOODS}
+          AND (source IS NULL OR source NOT IN ('manual', 'propagated'))
+          AND (tagged_measured IS NULL OR tagged_measured = 0)
+          AND (bpm IS NOT NULL OR musical_key IS NOT NULL
+               OR vocal_ranges_json IS NOT NULL OR outro_json IS NOT NULL)
+        ORDER BY id`,
+    )
+    .iterate() as IterableIterator<{
+      id: string;
+      bpm: number | null;
+      musical_key: string | null;
+      vocal_ranges_json: string | null;
+      tail_vocal_ranges: string | null;
+    }>;
+  const cap = limit && limit > 0 ? Math.floor(limit) : Infinity;
+  const ids: string[] = [];
+  for (const r of rows) {
+    const measured = hasTaggerSoundWords({
+      bpm: r.bpm,
+      musicalKey: r.musical_key,
+      ...parseVocalRangesJson(r.vocal_ranges_json),
+      ...parseTailVocalRangesJson(r.tail_vocal_ranges),
+    });
+    if (measured) ids.push(r.id);
+    // Leaving the loop closes the statement's iterator.
+    if (ids.length >= cap) break;
+  }
+  return ids;
+}
+
 // "Re-enrich" scope: only what was already enriched. Distinct from --re-enrich,
 // which spans the full live catalogue (#531).
 export function enrichedIds(): string[] {
@@ -123,6 +170,14 @@ export function untaggedIds(limit?: number): string[] {
   const stmt = requireDb().prepare(q);
   const rows = (limit ? stmt.all(limit) : stmt.all()) as Array<{ id: string }>;
   return rows.map(r => r.id);
+}
+
+// Untagged rows the tagger marked untaggable, with the key each was marked
+// under. Whether a marker still holds is tag-library's call (tag-input.ts).
+export function untaggableMarks(): Array<{ id: string; key: string }> {
+  return requireDb()
+    .prepare(`SELECT id, untaggable_key AS key FROM tracks WHERE ${SQL_NO_MOODS} AND untaggable_key IS NOT NULL`)
+    .all() as Array<{ id: string; key: string }>;
 }
 
 export function unembeddedIds(limit?: number): string[] {
@@ -262,9 +317,13 @@ export function candidateFilterTracks(): Array<{
   energy: EnergyValue;
   vocalRanges: unknown[] | null;
   vocalRangesInvalid: boolean;
+  tailVocalRanges: unknown[] | null;
+  tailVocalRangesInvalid: boolean;
   // For the minimum-track-length floor (#1573); without this column every row
   // reads as unknown length and the funnel over-counts.
   durationSec: number | null;
+  // Carried, so a clean show's walk over this whole projection is no per-row read.
+  explicitStatus: ExplicitStatus | null;
 }> {
   type CandidateFilterRow = {
     id: string;
@@ -280,11 +339,13 @@ export function candidateFilterTracks(): Array<{
     audio_moods: string | null;
     energy: EnergyValue;
     vocal_ranges_json: string | null;
+    tail_vocal_ranges_json: string | null;
     duration_sec: number | null;
+    explicit_status: ExplicitStatus | null;
   };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
-    vocal_ranges_json
+    vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json, explicit_status
     FROM tracks`).all() as CandidateFilterRow[];
   return rows.map((row) => ({
     id: row.id,
@@ -302,7 +363,9 @@ export function candidateFilterTracks(): Array<{
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     energy: row.energy ?? null,
     ...parseVocalRangesJson(row.vocal_ranges_json),
+    ...parseTailVocalRangesJson(row.tail_vocal_ranges_json),
     durationSec: row.duration_sec ?? null,
+    explicitStatus: row.explicit_status ?? null,
   }));
 }
 

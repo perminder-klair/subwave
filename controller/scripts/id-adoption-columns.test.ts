@@ -102,6 +102,16 @@ test('the analyze-failure counters ride the analysis group, not COALESCE', () =>
   }
 });
 
+// The stamp describes the list. COALESCE-carried, an old row's stamp would land
+// on a new row's own artist-only list and mark it done for good.
+test('the track-tag stamp rides the enrichment group with the list it describes', () => {
+  const enrichment = plan.grouped.find((g) => g.anchor === 'enriched_at');
+  assert.ok(enrichment, 'enrichment group present');
+  assert.ok(enrichment.cols.includes('lastfm_tags'));
+  assert.ok(enrichment.cols.includes('lastfm_track_tags_at'));
+  assert.ok(!plan.coalesced.includes('lastfm_track_tags_at'));
+});
+
 test('walk-owned columns are never written by adoption', () => {
   // Spot-check the ones a rotation would visibly corrupt: carrying a stale
   // album_id/artist_id would re-break the album blocks #1467 fixed.

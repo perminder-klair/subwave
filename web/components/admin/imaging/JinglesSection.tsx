@@ -17,6 +17,7 @@ import {
   IMAGING_DESCRIPTION_MAX,
   JINGLE_RATIO_BOUNDS,
   JINGLE_ROTATE_OWNERS,
+  JINGLE_PLACEMENTS,
   JINGLE_TEXT_MAX,
   jingleCreateSchema,
   jingleImportSchema,
@@ -308,6 +309,7 @@ export function JinglesSection({
   // click like every other toggle. Un-hydrated reads as the default, which is
   // also what an older controller (no key in /settings) answers.
   const rotateOwner = data.values?.jingleRotate === 'controller' ? 'controller' : 'mixer';
+  const placement = data.values?.jinglePlacement ?? 'between';
   const jingles = data.jingles || [];
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
@@ -318,7 +320,7 @@ export function JinglesSection({
     <section className="grid gap-[22px]">
       <SectionMasthead
         title="Jingles"
-        sub="Short station idents that play between tracks. One ships with the station and stays put — add as many of your own as you like alongside it."
+        sub="Station idents between songs, over their opening, or both. One ships with the station — add your own alongside it."
         metrics={
           <>
             <TabMetric n={pad2(jingles.length)} l="files" />
@@ -350,8 +352,8 @@ export function JinglesSection({
             <span className="font-mono text-[13px]">music tracks</span>
           </div>
           <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
-            Set it to 0 to switch jingles off altogether. Changes take effect once you restart
-            the mixer — that button lives in Settings → Broadcast & mixer.
+            Set it to 0 to stop automatic jingles; manual jingles still work. In Both, each placement
+            gets this frequency. Busy song openings are skipped. Restart the mixer after saving.
           </p>
           <Btn
             sm
@@ -376,6 +378,29 @@ export function JinglesSection({
         </div>
         <div className="flex flex-wrap items-center gap-5 border-t border-separator-soft px-[18px] py-[18px]">
           <div className="flex flex-wrap items-center gap-2.5 sm:flex-none">
+            <span className="font-mono text-[13px]">placement</span>
+            <Seg
+              value={placement}
+              aria-label="Automatic jingle placement"
+              options={JINGLE_PLACEMENTS.map(id => ({
+                id,
+                label: id === 'between' ? 'Between songs' : id === 'over' ? 'Over music' : 'Both',
+              }))}
+              onChange={id => {
+                if (busy || id === placement) return;
+                void saveSettings({ jinglePlacement: id });
+              }}
+            />
+          </div>
+          <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
+            Over music plays an ID after the opening crossfade with the light talk-over duck.
+            Songs carrying DJ speech, busy openings, short tracks and IDs that do not fit are skipped.
+            Over music and Both let the controller count and draw the IDs.
+            {' '}<strong>Restart the mixer after switching</strong> in Settings → Broadcast &amp; mixer.
+          </p>
+        </div>
+        {placement === 'between' && <div className="flex flex-wrap items-center gap-5 border-t border-separator-soft px-[18px] py-[18px]">
+          <div className="flex flex-wrap items-center gap-2.5 sm:flex-none">
             <span className="font-mono text-[13px]">counted by</span>
             <Seg
               value={rotateOwner}
@@ -392,13 +417,13 @@ export function JinglesSection({
           </div>
           <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
             The mixer has always counted for itself, and the DJ only found out afterwards.
-            Hand the count to the controller and a jingle becomes part of the same running
+            For Between songs, hand the count to the controller and a jingle becomes part of the same running
             order as the station ID — nothing else speaks on the minute it takes, and it
             waits its turn behind anything already queued for the next track.
             {' '}<strong>Restart the mixer after switching</strong>, or both will count for a
-            while and you&rsquo;ll hear twice the jingles.
+            while and you may hear jingles more often than configured. Over music and Both always use the controller.
           </p>
-        </div>
+        </div>}
       </PanelBox>
 
       <PanelBox>

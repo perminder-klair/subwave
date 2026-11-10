@@ -66,11 +66,14 @@ cooldown: 6h              # hard min gap between autonomous firings — "90m" | 
 cron: 0 * * * *           # OPTIONAL: fire on a fixed schedule instead of/alongside the cooldown gate (see below)
 cronOnly: true            # OPTIONAL: with a cron: set, withhold this skill from random autonomous picks entirely
 cohosts: true             # OPTIONAL: host + every active guest each speak in their own voice (see below)
+voiceEngine: remote       # OPTIONAL: this skill's own TTS voice, with voiceId and voiceProvider (see below)
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
 feed: https://…/rss.xml   # OPTIONAL: an RSS/Atom feed this skill reads before it speaks (see below)
 feedMaxItems: 10          # OPTIONAL: how much of that feed to read per fire (1-50, default 10)
+feedMaxAgeDays: 7         # OPTIONAL: skip feed items published longer ago (1-365 days)
+feed2: https://…/rss.xml  # OPTIONAL: a second (and feed3: a third) feed, merged with the first
 toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described
 ---
 The markdown body is the DJ's brief for this segment. Keep it tight: what to
@@ -130,6 +133,30 @@ every feed skill gets the same behaviour:
 - **RSS 2.0, Atom and RDF/RSS-1.0** all parse — namespaced tags
   (`<dc:title>`, `<content:encoded>`) and CDATA included.
 - `feedMaxItems` (1–50, default 10) caps how much of the feed is read per fire.
+  With `feed2`/`feed3` it is read from each feed, and a fire offers no more than
+  that many items in total. The next fire moves on to the ones left, so a low
+  value still reaches every feed. The merged list holds at most 60 items, taken
+  round-robin: three full 50-item feeds offer 60 of their 150, then report that
+  every item has aired until new ones appear.
+- `feedMaxAgeDays` (1–365, default no limit) drops items published longer ago
+  than that, before `feedMaxItems` counts them. Search feeds need it: Google News
+  ignores its own `when:7d` on a long query and mixes in items months old, which
+  the DJ would otherwise present as news. Undated items are kept.
+- Every item the feed dates reaches the DJ with its day in the station's timezone
+  (`published: 2026-10-30`), so it can tell news from history. A feed that gives
+  a day and no clock keeps that day as written. This is on for every skill the
+  generated tool serves, with no key to set; an undated item simply carries no
+  date. A skill with its own `tool.mjs` passes on what its code returns.
+- `feed2` and `feed3` add further feeds. They are fetched together and merged
+  round-robin, so a busy feed cannot crowd a quiet one out, and a headline that
+  appears in two of them is offered once. One of them failing, taking more than
+  6 seconds, or answering with something that isn't a feed (a pasted site URL, a
+  challenge page) is skipped while another answers, with a warning in the log
+  naming the feed and the error (once, until it recovers). If the feeds that answered have no items, the
+  failure is reported as the fetch error, as with a single feed, naming every
+  feed that failed by its key (`feed2: News feed HTTP 500`); all of them failing
+  does the same and stands the segment down. Only the log carries a feed's host
+  and path: the error can reach the model, and a path or query can hold a token.
 - Items are **burned on read**: at most 6 fresh items reach one segment, and the
   next fire offers the ones after them rather than repeating. That memory is
   per-skill and lives for as long as the controller runs.
@@ -141,8 +168,9 @@ every feed skill gets the same behaviour:
   of ordering a line with nothing in it. Set `requiresData: false` if your skill
   would rather write from its brief.
 
-The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL* and
-*Max items*, so a feed can be added, changed or cleared without touching disk.
+The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL*,
+*Max items*, *Max age · days*, *Second feed URL* and *Third feed URL*, so a feed
+can be added, changed or cleared without touching disk.
 
 > Only an `http:` or `https:` URL creates the tool. Anything else is logged as a
 > warning naming the skill and leaves it prompt-only — a `feed:` line must never
@@ -152,6 +180,15 @@ A skill that ships its own `tool.mjs` keeps it: the generic feed tool fills the
 gap, it never displaces a fetcher you wrote. If you want feed items *and*
 something else, read `config.feed` yourself via
 `services.fetchHeadlines` (see the table below).
+
+`feedMaxAgeDays`, `feed2` and `feed3` are read by the generated tool only. On a
+skill with its own `tool.mjs` they do nothing unless that code reads them, and the
+loader logs a warning naming them. That includes **News on a station first booted
+before feeds moved out of it** (#1616): its `state/skills/news/tool.mjs` is still
+the old hand-written fetcher, so these keys have no effect there and its items
+reach the DJ with no `published` date. **Reset to default** on the skill removes
+that file. It also restores the shipped `SKILL.md`,
+so set your feed and any other edits again afterwards.
 
 ### `cohosts: true` — one contribution from every host
 
@@ -196,6 +233,61 @@ Find one well-sourced historical case and have the hosts discuss the outcome and
 investigation. Give every host a distinct perspective; do not write name labels.
 ```
 
+### `voiceEngine:` / `voiceId:` / `voiceProvider:` — the skill's own voice
+
+Absent everything, a skill airs in the on-air DJ's voice. Set `voiceEngine`
+(with `voiceId`, and `voiceProvider` for cloud) and it always speaks in its
+own, through the same engine and voice picker personas use (`/admin/skills →
+Edit → Voice`, with a sample button to audition before saving). Only the voice
+changes: the segment is still the speaker's, at the speaker's own loudness and
+pace.
+
+```yaml
+---
+name: early-bulletin
+label: Early bulletin
+cooldown: 3h
+voiceEngine: remote
+voiceId: newsreader
+---
+```
+
+`voiceId` follows the same rules as a persona's voice, per engine:
+
+| `voiceEngine` | `voiceId` | Empty means |
+| --- | --- | --- |
+| `piper` | an `.onnx` filename in the voice folder | the built-in voice |
+| `kokoro` | a Kokoro id such as `bf_isabella` | not allowed |
+| `chatterbox` | a `.wav` clone reference in the voice folder | the built-in voice |
+| `pocket-tts` | a built-in id such as `alba`, or a `.wav` clone reference | `alba` |
+| `gemini` | a Google voice name | the station's Gemini voice |
+| `remote` | whatever id your remote server understands | its default |
+| `cloud` | the provider's voice id | not allowed, except on `openai-compatible`, where the server picks |
+
+`voiceProvider` is read only for `cloud`: `openai` (the default), `elevenlabs`,
+`fish-audio` or `openai-compatible`.
+
+The admin form refuses a voice that breaks these rules. A hand-edited
+`SKILL.md` is read leniently instead, so the skill still loads:
+
+- An unknown `voiceEngine` reads as no override, and the skill speaks in the
+  DJ's voice.
+- A blank `voiceId` for ElevenLabs or Fish Audio also reads as no override,
+  because neither has a default voice to fall back on. A blank OpenAI voice is
+  `alloy`.
+- Any other voice the engine can't use is reset the way a persona's would be:
+  a bad Kokoro id becomes `bf_isabella`, a bad PocketTTS voice becomes `alba`,
+  and a bad Piper or Chatterbox file, a path among them, becomes the built-in
+  voice.
+
+If the chosen engine is unavailable when the skill airs, the line is read by
+the station's fallback or default voice instead.
+
+A co-hosted skill ignores its voice: every contribution speaks in its roster
+persona's own voice. A voice does not travel through the community catalog,
+because clone references and server-specific ids are station-local, but a zip
+export carries it, arriving disabled for review like everything else.
+
 ### `context:` — what the segment is allowed to mention
 
 `context:` is a comma-separated allow-list of the "right now" fields the DJ may
@@ -206,7 +298,7 @@ weave into this segment. Valid fields:
 | `date` | day of week, date, season |
 | `clock` | local clock time, plus weekend / late-night / commute tags |
 | `time` | the daypart and its vibe (e.g. "morning, productive") |
-| `weather` | current condition, temperature, location |
+| `weather` | current conditions in the forecast's own words ("mainly clear", "light rain showers"), temperature, and the on-air location unless the DJ prompt template drops `{location}` |
 | `festival` | the named festival, if today is one |
 | `show` | the scheduled show on air, if any |
 | `listeners` | how many people are tuned in |
@@ -239,9 +331,19 @@ tick-box per field. An empty selection resets the skill to the default profile.
 `cron:` is an OPTIONAL standard 5-field cron expression (`"0 * * * *"` = top of
 every hour, `"*/30 * * * *"` = every 30 minutes); a leading seconds field is
 accepted too (`"0 0 8 * * *"`). When set, the scheduler registers a dedicated
-timer for that skill and fires it the moment the expression matches — bypassing
+timer for that skill and fires it when the expression matches, bypassing
 the cooldown and the DJ's frequency floor. Leave it blank (the default) and the
 skill only airs through the normal cooldown / frequency-gated segment tick.
+
+**With Talk only between tracks on** (`djTalkOnlyBetweenTracks`, the Station
+voice card in the admin TTS section), a cron fire waits for the next track
+boundary like every scheduled segment, solo and co-hosted alike. The station has
+one boundary slot, so a fire that finds it already taken (another segment
+rendered and waiting for it, or another skill's cron still writing for it)
+stands down before it writes anything, and the booth log says so. It is **not
+retried**: the skill next speaks at its next cron tick, so a sparse expression
+such as `10 */2 * * *` that loses its boundary stays quiet for two hours. With
+the switch off a cron speaks the moment it matches, as it always has.
 
 The expression runs in the station's own timezone (Settings → Station), so a
 `cron: 0 8 * * *` fires at 8am local time wherever the station is configured to
@@ -432,15 +534,17 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 
 | call | what it does |
 |---|---|
-| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG) |
+| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG / Keenable / Firecrawl / Outcrawl) |
 | `services.searchReady()` | `true` when a search provider is usable |
 | `services.nowPlaying()` | the track on air — `{ artist, title, album, year, id }` or `null` |
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
 | `services.library.getArtist(id)` / `.getAlbum(id)` / `.searchArtists(name, opts?)` | Navidrome/Subsonic reads |
 | `services.onThisDay()` | Wikipedia "on this day" events for today |
-| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) |
+| `services.fetchHeadlines({ feedUrl?, maxItems?, maxAgeDays?, deadlineMs?, requireFeed? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) into `{ title, description, published? }` items. `published` is an ISO time, or a bare `YYYY-MM-DD` when the feed gives a day and no clock. `deadlineMs` replaces the 15 s default with a limit that covers the body too, and `requireFeed` throws on a 200 that isn't a feed instead of returning no items |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
+| `services.weatherOutlook()` | the next six hours of the station's forecast — `{ nextHours, notes, kinds }`: one row per hour (`inHours`, where 0 is within the hour, `conditions`, `temp`, `rainChancePct`), plain-English notes such as "rain likely in about 3 hours (70% chance)" or "light drizzle possible in about 5 hours", and `kinds`, what each note is about without its timing (`rain-likely`, `clearing`, `cooler`, …), for telling a new note from a standing one. Empty, with `kinds: null`, when no forecast is known or the last one is over an hour and a half old (an Open-Meteo outage). No extra fetch: it reads the forecast `ctx.weather` came from, aged to the moment you call it |
+| `services.weatherNews({ condition, kinds }, state)` | whether that reading is news against the skill's `state`: `{ skyChanged, outlookChanged, withdrawn }`. The sky is the condition. The outlook is news only when it says something the last weather segment didn't: a note whose timing moved is not news, nor a temperature note, nor rain going from possible to likely, nor a note that has gone, except rain (or snow, or thunderstorms) the last segment promised that is no longer coming, for which `withdrawn` holds a note to add to your outlook ("rain no longer expected in the next 6 hours"). It is the same check the station's segment gates make, so a weather tool that reports through it can't call news what the station would not air |
 
 Every skill's `tool.mjs` is **timeout-guarded (8 s)** and any throw degrades
 cleanly to "no data" — a slow or broken skill can never hang the between-track

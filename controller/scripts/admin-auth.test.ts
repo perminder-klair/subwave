@@ -47,6 +47,21 @@ test('UI admin auth check accepts valid credentials', async () => {
   assert.equal(response.headers.get('cache-control'), 'no-store');
 });
 
+test('the web console is never challenged, so no native dialog opens over it', async () => {
+  const response = await fetch(`${base}/protected`, {
+    headers: { authorization: invalidAuthorization, 'x-subwave-console': '1' },
+  });
+
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get('www-authenticate'), null);
+});
+
+test('the console header grants nothing', async () => {
+  const response = await fetch(`${base}/protected`, { headers: { 'x-subwave-console': '1' } });
+
+  assert.equal(response.status, 401);
+});
+
 test('ordinary admin routes retain the Basic Auth challenge', async () => {
   const response = await fetch(`${base}/protected`, {
     headers: { authorization: invalidAuthorization },

@@ -25,10 +25,16 @@ import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase, onAirLocat
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
+import { searchKeyProblem } from './web-search.js';
+import { searchKeyRequired } from './search-key-policy.js';
+import { searchProviderEntry, withIndefiniteArticle } from '../schemas/settings.js';
 import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
 import * as sfx from '../broadcast/sfx.js';
+import { getWeatherOutlook } from '../context.js';
+import { isWeatherNews, recordWeatherAired, weatherMention, type WeatherMention } from './weather-policy.js';
+import type { WeatherCondition } from '../weather-codes.js';
 
 // dataBlock lives in llm/segment-tools.js so the co-hosted pool path can share
 // it without an import cycle; re-exported here for llm-bench's existing path.
@@ -39,6 +45,13 @@ export { dataBlock };
 // toggles all iterate THIS. Read live so a rescan takes effect at once.
 function allCapabilities() {
   return loadedCapabilities();
+}
+
+// The refused-key sentence when the search key is what's stopping this skill, or
+// null. A skill that never asks about search isn't stopped by that key.
+function refusedKeyProblem(cap: any): string | null {
+  const problem = searchKeyProblem();
+  return problem && cap.asksSearchReady?.() ? problem : null;
 }
 
 // Default per-skill context profile: every "right now" field EXCEPT weather.
@@ -145,7 +158,7 @@ ${list}`;
 
 let tickBusy = false;
 const lastFired = new Map<string, number>(); // kind → ms timestamp of last aired segment
-const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of last unusable pool-mode fetch
+const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of the last run with nothing to air: an unusable fetch, a co-hosted stand-down or a stand-in line
 
 // An unavailable source shouldn't retry on the very next 5-minute tick, nor
 // inherit a multi-hour on-air cooldown when the next track may change its
@@ -165,7 +178,10 @@ interface SegmentState {
   // Burn-on-read memory for the generic feed tool (skills/feed.ts), keyed by
   // kind so two feed skills can't suppress each other's items.
   feedSeen: Map<string, Set<string>>;
-  lastWeatherCondition: string | null;
+  lastWeatherCondition: WeatherCondition | null;
+  // The outlook key (weather-policy.ts outlookKey) the last aired weather
+  // segment's tool returned; null until one returned an outlook.
+  lastWeatherOutlook: string | null;
   lastSearchedArtist: string | null;
   lastAnySegment: number;
 }
@@ -174,9 +190,34 @@ const segmentState: SegmentState = {
   seenHeadlines: new Set<string>(),
   feedSeen: new Map<string, Set<string>>(),
   lastWeatherCondition: null,
+  lastWeatherOutlook: null,
   lastSearchedArtist: null,
   lastAnySegment: 0,
 };
+
+// Whether the weather is news this tick: the sky or its outlook changed since
+// the last aired weather segment. Both gates below ask this, and the weather
+// tool asks the same helper through services.weatherNews (weather-policy.ts).
+function weatherIsNews(ctx) {
+  return isWeatherNews({ condition: ctx?.weather?.condition, kinds: getWeatherOutlook().kinds }, segmentState);
+}
+
+// One run's view of the weather tool. `onData` sees every tool result the run
+// gets (the agent's tool loop, or the direct fetch), and `aired` records what
+// the weather tool actually returned, rather than re-reading a forecast that the
+// model call and TTS may have given time to move on. One per run, since an
+// operator press can overlap a tick.
+function weatherRun() {
+  let mention: WeatherMention | null = null;
+  return {
+    onData: (kind: string, data: unknown) => {
+      if (kind !== 'weather') return;
+      const seen = weatherMention(data);
+      if (seen) mention = seen;
+    },
+    aired: (ctx) => recordWeatherAired(segmentState, ctx?.weather?.condition, mention),
+  };
+}
 
 // Minimum gap between ANY two segments, by station frequency. Infinity for
 // silent: the auto tick never airs (forced runs bypass this).
@@ -186,6 +227,36 @@ function frequencyFloorMs(freq: string) {
   if (freq === 'chatty') return 8 * 60 * 1000;
   if (freq === 'aggressive') return 0;
   return 15 * 60 * 1000; // moderate
+}
+
+// A skill's own TTS voice override (SKILL.md voiceEngine/voiceId/voiceProvider).
+// Returns the speaker with only its tts engine, voice and provider replaced, for
+// this clip: id, name, gain and speed stay the speaker's. With no override,
+// `overridden` is false and the speaker comes back as the same object. Both
+// solo sites always have a speaker (a Run now that names none speaks as the
+// on-air persona); the `|| {}` only keeps a missing one from throwing.
+// `cap.voice` is the loader's normalizeSkillVoice output, so all three of its
+// fields are set. Co-hosted skills never reach here: each line speaks in its
+// own roster persona's voice. Exported for scripts/skill-voice.test.ts.
+export function skillVoiceFor(cap, speaker) {
+  const v = cap?.voice;
+  if (!v?.engine) return { persona: speaker, overridden: false };
+  const base = speaker || {};
+  const baseTts = (base.tts && typeof base.tts === 'object' ? base.tts : {});
+  return {
+    persona: {
+      ...base,
+      tts: {
+        ...baseTts,
+        engine: v.engine,
+        voice: v.voice,
+        cloudProvider: v.cloudProvider,
+        gainDb: typeof baseTts.gainDb === 'number' ? baseTts.gainDb : 0,
+        speed: typeof baseTts.speed === 'number' ? baseTts.speed : 1,
+      },
+    },
+    overridden: true,
+  };
 }
 
 // Capabilities on offer this tick: enabled, owned by the on-air persona,
@@ -279,10 +350,10 @@ export const directorAgent = defineAgent({
   timeoutMs: segmentDeadline,
   buildSystem: ({ persona, caps, freq, sfxCatalog }) =>
     directorSystem(persona, caps, freq, sfxCatalog),
-  buildTools: ({ ctx, segmentState, caps }) => ({
+  buildTools: ({ ctx, segmentState, caps, onData }) => ({
     // Co-hosted skills run their own cast-shaped tool loop after selection.
     // Their data tools must not be called in this generic selection pass.
-    tools: buildSegmentTools(ctx, segmentState, caps.filter((cap) => !cap.cohosts)),
+    tools: buildSegmentTools(ctx, segmentState, caps.filter((cap) => !cap.cohosts), { onResult: onData }),
   }),
 });
 
@@ -290,7 +361,7 @@ export const directorAgent = defineAgent({
 // queue.getDjRecap(), never the track-pick session history.
 export function buildSituation(ctx, { forced = false, contextFields, recentCuriosity }: { forced?: boolean; contextFields?: string[]; recentCuriosity?: string[] } = {}) {
   const lines = ['The current moment:'];
-  const ctxLines = buildContextLines(ctx, { contextFields });
+  const ctxLines = buildContextLines(ctx, { contextFields, steer: true });
   if (ctxLines.length) lines.push(...ctxLines);
   const cur = queue.current?.track;
   if (cur) lines.push(`On air now: "${cur.title}" by ${cur.artist || 'unknown'}`);
@@ -332,16 +403,15 @@ function buildCohostedSituation(ctx, cap, { forced = false, brief = null }: { fo
 // model still gets to choose silence. Everything downstream is shared with
 // agenticTick.
 
-// Which capability the simple path airs. Weather wins when the condition
-// actually changed (the one segment with a hard freshness signal) and is dropped
-// entirely when it hasn't; otherwise the least-recently-aired capability, random
-// among ties so the rotation spreads across the catalogue.
+// Which capability the simple path airs. Weather wins when it is news (the sky
+// or its outlook changed: the one segment with a hard freshness signal) and is
+// dropped entirely when it isn't; otherwise the least-recently-aired
+// capability, random among ties so the rotation spreads across the catalogue.
 export function chooseCapability(caps, ctx) {
-  const condition = ctx.weather?.condition || null;
-  const weatherChanged = !!condition && condition !== segmentState.lastWeatherCondition;
-  const pool = caps.filter(c => c.kind !== 'weather' || weatherChanged);
+  const weatherNew = weatherIsNews(ctx);
+  const pool = caps.filter(c => c.kind !== 'weather' || weatherNew);
   if (!pool.length) return null;
-  if (weatherChanged) {
+  if (weatherNew) {
     const weather = pool.find(c => c.kind === 'weather');
     if (weather) return weather;
   }
@@ -397,7 +467,7 @@ async function deadlinedSegmentObject(args: Record<string, unknown>) {
 // usable or the skill permits free generation — one djObject call. Returns the
 // same shape agenticTick consumes from the agent, seg null for silence. Unusable
 // data is silence with no model call at all.
-async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
+async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog, onData }) {
   const cap = chooseCapability(caps, ctx);
   if (!cap) return { seg: null, exchange: null, reason: 'nothing fresh to say' };
   if (cap.cohosts) {
@@ -406,7 +476,7 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     const result = await runCohostedCapability({
       capability: cap, host, guests, context: ctx,
       situation: buildCohostedSituation(ctx, cap),
-      segmentState, forced: false,
+      segmentState, forced: false, onData,
     });
     if (result.aired) lastUnavailable.delete(cap.kind);
     else lastUnavailable.set(cap.kind, Date.now());
@@ -418,6 +488,7 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     };
   }
   const data = await fetchSegmentData(cap, ctx, segmentState);
+  onData(cap.kind, data);
   const blocked = standDownReason(cap, data);
   if (blocked || data?.error) {
     lastUnavailable.set(cap.kind, Date.now());
@@ -471,12 +542,11 @@ export async function agenticTick(ctx) {
   const caps = availableCapabilities(ctx, now);
   if (caps.length === 0) return;
 
-  // Weather alone and unchanged is provably nothing to say; skip the LLM call.
-  if (caps.length === 1 && caps[0].kind === 'weather'
-      && ctx.weather?.condition && ctx.weather.condition === segmentState.lastWeatherCondition) {
-    return;
-  }
+  // Weather alone and not news (neither the sky nor its outlook changed, or no
+  // reading at all) is provably nothing to say; skip the LLM call.
+  if (caps.length === 1 && caps[0].kind === 'weather' && !weatherIsNews(ctx)) return;
 
+  const weather = weatherRun();
   tickBusy = true;
   try {
     // Empty catalogue when SFX are disabled — the agent is never offered effects.
@@ -487,7 +557,7 @@ export async function agenticTick(ctx) {
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
     if (settings.get().llm?.segmentRuntime === 'direct') {
-      ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
+      ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog, onData: weather.onData }));
     } else {
       // Brief the agent with aired curiosity so a pool-exhausted fallback
       // doesn't repeat itself (#577).
@@ -495,7 +565,7 @@ export async function agenticTick(ctx) {
       const { object } = await directorAgent.run({
         messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps), recentCuriosity }) }],
         persona: speaker, caps, freq, sfxCatalog,
-        ctx, segmentState,
+        ctx, segmentState, onData: weather.onData,
       });
       // `air: false` is the explicit silence signal; a missing segment despite
       // air=true degrades to silence rather than erroring.
@@ -512,7 +582,7 @@ export async function agenticTick(ctx) {
           const result = await runCohostedCapability({
             capability: selected, host, guests, context: ctx,
             situation: buildCohostedSituation(ctx, selected),
-            segmentState, forced: false,
+            segmentState, forced: false, onData: weather.onData,
           });
           exchange = result.aired ? { kind: selected.kind, lines: result.lines || [], castNames: [host, ...guests].map(p => p.name) } : null;
           if (result.aired) lastUnavailable.delete(selected.kind);
@@ -524,11 +594,16 @@ export async function agenticTick(ctx) {
     }
 
     if (exchange) {
-      const aired = await queue.announceExchange(exchange.lines, exchange.kind, { castNames: exchange.castNames });
-      if (!aired) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
+      const delivery = await queue.deliverExchange(exchange.lines, exchange.kind, { castNames: exchange.castNames });
+      // Losing the boundary is a stand-down, not a render failure (#2259).
+      if (!delivery.accepted && delivery.reason === 'boundary-taken') {
+        queue.log('scheduler', `[segment] ${exchange.kind} stood down — the next track boundary is already taken`);
+        return;
+      }
+      if (!delivery.accepted) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
       lastFired.set(exchange.kind, Date.now());
       segmentState.lastAnySegment = Date.now();
-      if (exchange.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
+      if (exchange.kind === 'weather') weather.aired(ctx);
       if (exchange.kind === 'curiosity') recordCuriosity(exchange.lines.map((line) => line.text).join(' '), { aired: true });
       return;
     }
@@ -556,23 +631,29 @@ export async function agenticTick(ctx) {
     }
 
     // The speaker's id rides in meta so session.windowMessages names a guest's
-    // turn as theirs rather than the host's own words.
+    // turn as theirs rather than the host's own words. A skill voice override
+    // changes only the voice (skillVoiceFor).
+    const voiced = skillVoiceFor(cap, speaker);
     const delivery = await queue.announce(seg.text.trim(), seg.kind, {
-      persona: speaker,
+      persona: voiced.persona,
       meta: { personaId: speaker?.id, personaName: speaker?.name },
       pauseTalkEligible: true,
       sfx: selectedSfx,
       hostSpeech,
     });
-    if (!delivery.accepted) return;
+    if (!delivery.accepted) {
+      // A stand-in means the skill had nothing to say: back off like the
+      // "nothing to say" stand-down, or the segment row re-runs the director
+      // and the skill model every few minutes for a line dropped again.
+      if (delivery.reason === 'stand-in') lastUnavailable.set(seg.kind, Date.now());
+      return;
+    }
 
     // Reserve the kind as soon as it owns an air path so a held segment is not
     // generated twice. Durable "aired" facts wait for the voice lifecycle.
     lastFired.set(seg.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
-    if (seg.kind === 'weather' && ctx.weather?.condition) {
-      segmentState.lastWeatherCondition = ctx.weather.condition;
-    }
+    if (seg.kind === 'weather') weather.aired(ctx);
 
     // Record what aired so the durable ledger keeps both the tool and the
     // fallback path from repeating it after a restart (#577).
@@ -700,13 +781,17 @@ export async function runCapability(
     return { aired: false, queued: false, deferred: false, text: null, reason: 'reserved for episode preparation' };
   }
   ctx = await prepareEpisodeContext(ctx);
+  const weather = weatherRun();
   if (cap.ready && !cap.ready()) {
     // Hint at the missing key when the capability is keyed.
     let hint = '';
-    const searchProvider = settings.get().search?.provider;
-    if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
-      const name = searchProvider === 'brave' ? 'Brave Search' : 'Tavily';
-      hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
+    const searchProvider = settings.get().search?.provider || 'duckduckgo';
+    const keyProblem = refusedKeyProblem(cap);
+    if (keyProblem) {
+      hint = ` — ${keyProblem}. Paste one into Settings → Web search`;
+    } else if (cap.kind === 'web-search' && searchKeyRequired(searchProvider)) {
+      const name = searchProviderEntry(searchProvider)?.keyName || searchProvider;
+      hint = ` — set SEARCH_API_KEY or paste ${withIndefiniteArticle(name)} key into the admin UI`;
     } else if (cap.toolPending && !cap.toolFn) {
       hint = ' — its tool.mjs is awaiting your review in /admin/skills';
     } else if (cap.requiresKey) {
@@ -728,17 +813,27 @@ export async function runCapability(
     const situation = buildCohostedSituation(ctx, cap, { forced: true, brief });
     const result = await runCohostedCapability({
       capability: cap, host, guests, context: ctx, situation, segmentState, forced: true,
+      onData: weather.onData,
     });
     if (!result.aired || !result.lines) {
+      // The same backoff as a solo forced run that wrote a stand-in, below.
+      if (result.standIn) lastUnavailable.set(cap.kind, Date.now());
       const reason = result.reason || 'nothing usable to discuss';
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
       return { aired: false, queued: false, deferred: false, text: null, reason };
     }
-    const aired = await queue.announceExchange(result.lines, cap.kind, { castNames: [host, ...guests].map(p => p.name) });
-    if (!aired) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
+    const delivery = await queue.deliverExchange(result.lines, cap.kind, { castNames: [host, ...guests].map(p => p.name) });
+    // Losing the boundary is a stand-down, not a render failure (#2259): a cron
+    // fire or a programme beat whose exchange met a clip already waiting there.
+    if (!delivery.accepted && delivery.reason === 'boundary-taken') {
+      const reason = 'the next track boundary is already taken';
+      queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
+      return { aired: false, queued: false, deferred: false, text: null, reason };
+    }
+    if (!delivery.accepted) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
     lastFired.set(cap.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
-    if (cap.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
+    if (cap.kind === 'weather') weather.aired(ctx);
     if (cap.kind === 'curiosity') recordCuriosity(result.lines.map((line) => line.text).join(' '), { aired: true });
     const text = result.lines.map((line) => `${line.persona.name || 'DJ'}: ${line.text}`).join('\n');
     return { aired: true, queued: true, deferred: false, text, reason: result.reason };
@@ -772,6 +867,7 @@ export async function runCapability(
     // and the moment alone); a GROUNDED skill does not, since its whole segment
     // was to be about what the fetch didn't return, so there is no model call.
     const data = await fetchSegmentData(cap, ctx, segmentState);
+    weather.onData(cap.kind, data);
     const blocked = standDownReason(cap, data);
     if (blocked) return standDown(blocked);
     object = await deadlinedSegmentObject({
@@ -795,7 +891,8 @@ export async function runCapability(
       messages: [{ role: 'user', content: situation }],
       persona: speaker, cap, sfxCatalog,
       ctx, segmentState,
-      onData: (_kind: string, data: unknown) => {
+      onData: (kind: string, data: unknown) => {
+        weather.onData(kind, data);
         const why = standDownReason(cap, data as never);
         if (why) blocked = why; else usableSeen = true;
       },
@@ -824,17 +921,37 @@ export async function runCapability(
   }
 
   // A rotated speaker rides through announce so voice and session attribution
-  // agree (windowMessages names foreign speakers by meta id).
-  const delivery = await queue.announce(text, cap.kind, (persona || automaticHostSpeech)
+  // agree (windowMessages names foreign speakers by meta id). A Run now names
+  // no persona: `speaker` is then the on-air persona announce() resolves for
+  // itself, so it is not passed and the turn carries no speaker meta. A skill
+  // voice override changes only the voice. Its slot has to ride on a persona,
+  // so a Run now with one passes the on-air persona carrying it, still with no
+  // meta; the queued and spoken events, which name a passed persona, then name
+  // the persona that was speaking anyway.
+  const voiced = skillVoiceFor(cap, speaker);
+  const pinsSpeaker = Boolean(persona) || Boolean(automaticHostSpeech);
+  const delivery = await queue.announce(text, cap.kind, pinsSpeaker
     ? {
-        persona: speaker,
+        persona: voiced.persona,
         meta: { personaId: speaker?.id, personaName: speaker?.name },
         pauseTalkEligible,
         sfx: selectedSfx,
         hostSpeech: speechOwner.hostSpeech,
       }
-    : { pauseTalkEligible, sfx: selectedSfx });
+    : {
+        ...(voiced.overridden ? { persona: voiced.persona } : {}),
+        pauseTalkEligible,
+        sfx: selectedSfx,
+      });
   if (!delivery.accepted) {
+    if (delivery.reason === 'stand-in') {
+      // Nothing was rendered: the model wrote a stand-in, not speech. Other
+      // forced stand-downs leave the backoff alone. A stand-in sets it, here and
+      // on the co-hosted path, so the director is not offered a skill that has
+      // just written one.
+      lastUnavailable.set(cap.kind, Date.now());
+      return standDown('the DJ wrote a stand-in, not a line, so nothing aired');
+    }
     const reason = 'the station could not queue the rendered segment';
     queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
     return { aired: false, queued: false, deferred: false, text: null, reason };
@@ -844,9 +961,7 @@ export async function runCapability(
   // waits for actual post-air completion.
   lastFired.set(cap.kind, Date.now());
   segmentState.lastAnySegment = Date.now();
-  if (cap.kind === 'weather' && ctx.weather?.condition) {
-    segmentState.lastWeatherCondition = ctx.weather.condition;
-  }
+  if (cap.kind === 'weather') weather.aired(ctx);
 
   // Record an operator-fired curiosity line in the ledger too (#577).
   if (cap.kind === 'curiosity') {
@@ -869,27 +984,30 @@ export function skillCatalog() {
   const enabledMap = s.skills?.enabled || {};
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
-    // web-search's key requirement depends on the active provider:
-    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo needs nothing.
+    // web-search's key requirement depends on the active provider: a keyed one
+    // (the catalogue's key: 'required') needs SEARCH_API_KEY and links to its
+    // catalogue keyUrl; DuckDuckGo, SearXNG and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
     if (c.kind === 'web-search') {
-      if (searchProvider === 'tavily') {
+      if (searchKeyRequired(searchProvider)) {
         requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://app.tavily.com/home';
-      } else if (searchProvider === 'brave') {
-        requiresKey = 'SEARCH_API_KEY';
-        keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
+        keyUrl = searchProviderEntry(searchProvider)?.keyUrl || null;
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;
         hint = 'SearXNG self-hosted meta-search. Configure base URL in admin → Settings → Search.';
+      } else if (searchProvider === 'keenable') {
+        requiresKey = null;
+        keyUrl = null;
+        hint = 'Keenable web search, keyless. An optional Keenable key (SEARCH_API_KEY) raises the rate limit.';
       } else {
         requiresKey = null;
         keyUrl = null;
       }
     }
+    const ready = typeof c.ready === 'function' ? !!c.ready() : true;
     return {
       name: c.skill,
       hasTool: typeof c.toolFn === 'function',
@@ -905,10 +1023,13 @@ export function skillCatalog() {
       // an operator-authored skill and explain the off-by-default behaviour.
       custom: !c.seeded,
       // `ready` is false when a required env key isn't set; `requiresKey` names
-      // it and `keyUrl` links to its source.
-      ready: typeof c.ready === 'function' ? !!c.ready() : true,
+      // it and `keyUrl` links to its source. `keyProblem` is set instead when a
+      // key is on file and the search provider refuses it, so setting the env
+      // var wouldn't help.
+      ready,
       requiresKey,
       keyUrl,
+      keyProblem: ready ? null : refusedKeyProblem(c),
       hint,
       // The "right now" fields this situation may include (#471), resolved to
       // the default profile when unset so the admin UI needn't guess.

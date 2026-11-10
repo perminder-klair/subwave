@@ -135,8 +135,9 @@ services:
       # Enables the production-only admin gate (refuses to boot without
       # ADMIN_USER + ADMIN_PASS).
       - NODE_ENV=production
-      # Schedule slots are day-of-week + hour via date.getHours(); without TZ
-      # the container runs UTC and fires shows an hour early during BST.
+      # Schedule slots follow the station timezone (Settings, `timezone`);
+      # left on Auto they follow this TZ, and without it the container runs
+      # UTC and fires shows an hour early during BST.
       - TZ=${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
@@ -288,6 +289,11 @@ services:
       # The local (AIO) chatterbox path already honoured this; forwarding it
       # here is what makes the sidecar agree (#1591).
       - CHATTERBOX_REFERENCE_WAV=${CHATTERBOX_REFERENCE_WAV:-}
+      # On-air level of each engine's clips: the linear RMS a clip is
+      # normalised to before the soft limiter. Read by the workers, which
+      # inherit this env; empty keeps each worker's own default.
+      - CHATTERBOX_TARGET_RMS=${CHATTERBOX_TARGET_RMS:-}
+      - POCKET_TTS_TARGET_RMS=${POCKET_TTS_TARGET_RMS:-}
       # Optional — PocketTTS voice CLONING (#238): the cloning weights are
       # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
       # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.
@@ -360,6 +366,9 @@ services:
       - DEMUCS_OVERLAP=${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
+      # Whole-file facets (loudness v2, edges): their own lane width on this host.
+      - ANALYZE_WHOLE_FILE_CONCURRENCY=${ANALYZE_WHOLE_FILE_CONCURRENCY:-}
+      - ANALYZE_WHOLE_FILE_TIMEOUT_S=${ANALYZE_WHOLE_FILE_TIMEOUT_S:-}
       - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
