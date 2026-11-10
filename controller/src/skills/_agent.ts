@@ -594,8 +594,13 @@ export async function agenticTick(ctx) {
     }
 
     if (exchange) {
-      const aired = await queue.announceExchange(exchange.lines, exchange.kind, { castNames: exchange.castNames });
-      if (!aired) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
+      const delivery = await queue.deliverExchange(exchange.lines, exchange.kind, { castNames: exchange.castNames });
+      // Losing the boundary is a stand-down, not a render failure (#2259).
+      if (!delivery.accepted && delivery.reason === 'boundary-taken') {
+        queue.log('scheduler', `[segment] ${exchange.kind} stood down — the next track boundary is already taken`);
+        return;
+      }
+      if (!delivery.accepted) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
       lastFired.set(exchange.kind, Date.now());
       segmentState.lastAnySegment = Date.now();
       if (exchange.kind === 'weather') weather.aired(ctx);
@@ -817,8 +822,15 @@ export async function runCapability(
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
       return { aired: false, queued: false, deferred: false, text: null, reason };
     }
-    const aired = await queue.announceExchange(result.lines, cap.kind, { castNames: [host, ...guests].map(p => p.name) });
-    if (!aired) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
+    const delivery = await queue.deliverExchange(result.lines, cap.kind, { castNames: [host, ...guests].map(p => p.name) });
+    // Losing the boundary is a stand-down, not a render failure (#2259): a cron
+    // fire or a programme beat whose exchange met a clip already waiting there.
+    if (!delivery.accepted && delivery.reason === 'boundary-taken') {
+      const reason = 'the next track boundary is already taken';
+      queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
+      return { aired: false, queued: false, deferred: false, text: null, reason };
+    }
+    if (!delivery.accepted) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
     lastFired.set(cap.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
     if (cap.kind === 'weather') weather.aired(ctx);

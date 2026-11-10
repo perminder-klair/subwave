@@ -331,9 +331,19 @@ tick-box per field. An empty selection resets the skill to the default profile.
 `cron:` is an OPTIONAL standard 5-field cron expression (`"0 * * * *"` = top of
 every hour, `"*/30 * * * *"` = every 30 minutes); a leading seconds field is
 accepted too (`"0 0 8 * * *"`). When set, the scheduler registers a dedicated
-timer for that skill and fires it the moment the expression matches — bypassing
+timer for that skill and fires it when the expression matches, bypassing
 the cooldown and the DJ's frequency floor. Leave it blank (the default) and the
 skill only airs through the normal cooldown / frequency-gated segment tick.
+
+**With Talk only between tracks on** (`djTalkOnlyBetweenTracks`, the Station
+voice card in the admin TTS section), a cron fire waits for the next track
+boundary like every scheduled segment, solo and co-hosted alike. The station has
+one boundary slot, so a fire that finds it already taken (another segment
+rendered and waiting for it, or another skill's cron still writing for it)
+stands down before it writes anything, and the booth log says so. It is **not
+retried**: the skill next speaks at its next cron tick, so a sparse expression
+such as `10 */2 * * *` that loses its boundary stays quiet for two hours. With
+the switch off a cron speaks the moment it matches, as it always has.
 
 The expression runs in the station's own timezone (Settings → Station), so a
 `cron: 0 8 * * *` fires at 8am local time wherever the station is configured to
