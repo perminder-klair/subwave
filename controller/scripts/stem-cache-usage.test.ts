@@ -179,19 +179,53 @@ test('adjustUsage moves only a snapshot the next read would use as is', async ()
   assert.equal(await stemCache.adjustUsage({ bytes: 0, dirs: 0 }), 'unchanged');
   assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'adjusted');
   assert.deepEqual([(await stemCache.storedUsage())?.bytes, (await stemCache.storedUsage())?.dirs], [79 * GB, 3990]);
-  // A stale one is owed a walk: a delta onto it would launder the flag.
+  // A stale one is owed a walk: a delta onto it would launder the flag, so it
+  // is left to that walk as it is.
   await stemCache.markUsageStale();
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'stale');
-  assert.equal((await stemCache.storedUsage())?.bytes, 79 * GB);
+  const staleBefore = readFileSync(snapFile, 'utf8');
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'unchanged');
+  assert.equal(readFileSync(snapFile, 'utf8'), staleBefore, 'not touched');
   assert.equal((await stemCache.storedUsage())?.stale, true);
   // Nothing stored stays nothing.
   rmSync(snapFile, { force: true });
   assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'unchanged');
   assert.equal(await stemCache.storedUsage(), null);
-  // The measuredAt of the last full walk is kept, so the daily walk still comes due.
+  // Too old to use: also the walk's, and not flagged stale by a writer that
+  // only had a delta (the walk is owed for its age, not for a change).
   const old = new Date(Date.now() - 2 * 24 * HOUR).toISOString();
   writeSnap({ bytes: 80 * GB, dirs: 4000, measuredAt: old });
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }), 'stale', 'too old to move');
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }), 'unchanged', 'too old to move');
+  assert.equal((await stemCache.storedUsage())?.stale, false);
+  assert.equal((await stemCache.storedUsage())?.bytes, 80 * GB);
+});
+
+test('adjustUsage with a pass writing marks the snapshot stale, so the pass settles by a walk', async () => {
+  writeSnap({ bytes: 80 * GB, dirs: 4000, pending: { pid: process.pid, since: new Date().toISOString() } });
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'stale');
+  assert.equal((await stemCache.storedUsage())?.stale, true);
+  assert.equal((await stemCache.storedUsage())?.bytes, 80 * GB);
+});
+
+test('adjustUsage applies a delta only to the measurement it was counted from (compare-and-set on measuredAt)', async () => {
+  writeSnap({ bytes: 80 * GB, dirs: 4000 });
+  const since = await stemCache.usageBase();
+  assert.equal(typeof since, 'string');
+  // Nothing walked in between: the delta lands.
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }, { since }), 'adjusted');
+  assert.equal((await stemCache.storedUsage())?.bytes, 79 * GB);
+  // A pick-time settle in between is additive and keeps measuredAt: still lands.
+  writeSnap({ bytes: 79 * GB, dirs: 3999, measuredAt: since, updatedAt: new Date().toISOString() });
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }, { since }), 'adjusted');
+  // A walk in between wrote a new measurement, which may already leave the
+  // moved dirs out: the delta would count them twice. Stale, and the walk's
+  // figure stays as it measured it.
+  writeSnap({ bytes: 70 * GB, dirs: 3500, measuredAt: new Date(Date.now() + 1000).toISOString() });
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }, { since }), 'stale');
+  assert.equal((await stemCache.storedUsage())?.bytes, 70 * GB);
+  assert.equal((await stemCache.storedUsage())?.stale, true);
+  // No snapshot when the writer started, one now (a walk wrote it): stale too.
+  writeSnap({ bytes: 70 * GB, dirs: 3500 });
+  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }, { since: null }), 'stale');
 });
 
 test('a stale snapshot is still reported, flagged, and never walked for', async () => {

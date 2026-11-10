@@ -51,7 +51,9 @@
 //   cannot delete on a squashed share must keep running and keep saying so.
 // - The moves keep the usage snapshot (stem-cache's cached walk totals) true:
 //   each moved dir is measured, and the totals move by exactly that
-//   (stemCache.adjustUsage), so the next read needs no walk of the cache.
+//   (stemCache.adjustUsage), so the next read needs no walk of the cache. The
+//   delta applies only to the measurement the pass started from: a walk that
+//   lands during the moves marks the snapshot stale instead (usageBase).
 //   Deletes from the quarantine change nothing there, since the quarantine is
 //   outside the total. A move that cannot be measured marks the snapshot stale
 //   instead, so the next sweep re-measures, while the budget field keeps a
@@ -411,6 +413,10 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     let movedBytes = 0;
     let movedDirs = 0;
     let movesExact = true;
+    // The snapshot the moves are counted against, read before the first one:
+    // a sweep or walk that lands during them rewrites the totals from what it
+    // found, which may already hold some of them (usageBase).
+    const usageSince = await stemCache.usageBase();
     // 1. Releases first: an id that is both known now and sitting in the
     //    quarantine gets its copy back rather than being re-quarantined below.
     for (const name of toRelease) {
@@ -490,7 +496,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     // a move that could not be measured marks them stale (stem-cache.ts,
     // usage snapshot). Deleting aged quarantines alone touches nothing.
     if (!movesExact) await stemCache.markUsageStale();
-    else await stemCache.adjustUsage({ bytes: movedBytes, dirs: movedDirs });
+    else await stemCache.adjustUsage({ bytes: movedBytes, dirs: movedDirs }, { since: usageSince });
   } else {
     // Dry run: every count, zero mutations.
     report.quarantined = plan.quarantine.length;

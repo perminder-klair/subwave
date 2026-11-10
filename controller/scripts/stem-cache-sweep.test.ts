@@ -118,6 +118,44 @@ async function main() {
     assert.deepEqual([...(await stemCache.cachedTrackIdSet())].sort(), ['mid', 'new']);
   });
 
+  await test('a sweep whose walk overlapped another writer stores its figure flagged stale', async () => {
+    // The walk is minutes on a share. A purge or forgetStems that adjusted the
+    // snapshot meanwhile may or may not be in what the walk counted, so the
+    // sweep's figure must not be trusted as is.
+    const snapFile = join(stateDir, 'stem-cache-usage.json');
+    resetCache();
+    for (let i = 0; i < 4; i++) makeDir(`w${i}`, 10 * MB, 4000 - i * 1000);
+    await stemCache.usage();   // a stored, trusted measurement
+    const measured = readFileSync(snapFile, 'utf8');
+    // keepLast is read after the walk, before the snapshot is written: another
+    // writer moves the snapshot there.
+    class Moving extends Set<string> {
+      moved = false;
+      override has(v: string) {
+        if (!this.moved) {
+          this.moved = true;
+          const s = JSON.parse(readFileSync(snapFile, 'utf8'));
+          writeFileSync(snapFile, JSON.stringify({ ...s, bytes: s.bytes - MB, updatedAt: new Date().toISOString() }));
+        }
+        return super.has(v);
+      }
+    }
+    const keep = new Moving(['not-cached']);
+    await stemCache.sweep(25 * MB, { force: true, keepLast: keep });
+    assert.equal(keep.moved, true);
+    const after = JSON.parse(readFileSync(snapFile, 'utf8'));
+    assert.equal(after.stale, true, 'overlapped: re-measured next read');
+    assert.equal(after.bytes, 20 * MB, 'the walk\'s own figure is kept for the budget field');
+    // Untouched in between, the sweep's figure is trusted as before.
+    writeFileSync(snapFile, measured);
+    resetCache();
+    for (let i = 0; i < 4; i++) makeDir(`w${i}`, 10 * MB, 4000 - i * 1000);
+    await stemCache.usage();
+    await stemCache.sweep(25 * MB, { force: true, keepLast: new Set() });
+    assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).stale, undefined);
+    resetCache();
+  });
+
   await test('no keep-last set, or an empty one, evicts exactly as before', async () => {
     // What a station with pick-time stems off gets (pick-stems-policy.ts
     // sweepKeepLast returns no set): the same dirs in the same order.

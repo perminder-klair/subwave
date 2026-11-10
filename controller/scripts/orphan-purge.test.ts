@@ -247,6 +247,41 @@ test('a pass\'s moves keep the stored size true, and nothing walks the cache for
   assert.deepEqual({ bytes: stored?.bytes, dirs: stored?.dirs }, walked, 'the stored size is what a walk finds');
 });
 
+test('a walk that lands during the moves is never adjusted again: the figure is flagged stale', async () => {
+  // The reviewer's race: the hourly sweep (or any walk) rewrites the totals
+  // from the disk while the purge is moving dirs, then the purge applied its
+  // whole delta on top of that new measurement, counting every move the walk
+  // had already seen twice, and left the result marked trusted.
+  const N = NOW_BASE + 910 * DAY;
+  await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: N });
+  const gone = seedStem();
+  writeFileSync(join(ROOT, gone, 'tail-vocals.flac'), 'y'.repeat(4096));
+  await storeMeasuredSnapshot();
+  let walkedMidPass = false;
+  // A names lookup is read right after each move: the walk lands there, and
+  // writes its own measurement (a new measuredAt) of the cache as it is then.
+  const names = {
+    get() {
+      if (!walkedMidPass) {
+        walkedMidPass = true;
+        const at = new Date(Date.now() + 1000).toISOString();
+        writeFileSync(SNAP, JSON.stringify({ version: 1, root: ROOT, bytes: 1_000_000, dirs: 3, measuredAt: at, updatedAt: at }));
+      }
+      return undefined;
+    },
+  } as unknown as Map<string, never>;
+  const rep = await purge.runOrphanPurge({
+    knownIds: [...liveDirs().filter(n => n !== gone), '_sentinel'], confirm: true, now: N + DAY,
+    resolveNames: async () => names,
+  });
+  assert.ok(rep.quarantined >= 1 && walkedMidPass, 'moved, with a walk in between');
+  const stored = await cache.storedUsage();
+  assert.equal(stored?.stale, true, 'flagged for the next sweep to re-measure');
+  assert.equal(stored?.fresh, false);
+  assert.equal(stored?.bytes, 1_000_000, 'the walk\'s figure, with no delta laid over it');
+  rmSync(SNAP, { force: true });
+});
+
 test('deleting aged quarantines alone leaves the stored size exactly as it was', async () => {
   // The quarantine is outside the cache total, so its deletes change nothing there.
   const N = NOW_BASE + 920 * DAY;

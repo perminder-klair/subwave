@@ -433,10 +433,11 @@ async function writeSnapshot(snap: BuiltSnapshot): Promise<boolean> {
   }
 }
 
-// For a writer outside the pass and the sweep (the orphan purge, forgetStems, a
-// pick-time separation whose request failed mid-write): the stored
-// totals no longer match the disk, so the next read walks instead of trusting
-// them. The file stays, because the budget field reads it (storedUsage) and an
+// For a writer outside the pass and the sweep that cannot count what it
+// changed exactly (adjustUsage below, when a dir could not be measured, a
+// delete was refused part-way or a walk overlapped its changes; a pick-time
+// separation whose snapshot could not take the addition): the stored totals no
+// longer match the disk, so the next read walks instead of trusting them. The file stays, because the budget field reads it (storedUsage) and an
 // operator about to lower the budget is better served by a flagged figure than
 // by none: with no figure the warning and the confirm both go. Totals that
 // cannot be marked must not outlive this, so a failed write removes them.
@@ -447,32 +448,65 @@ export async function markUsageStale(): Promise<void> {
   if (!marked) await rm(snapshotPath(), { force: true }).catch(() => {});
 }
 
+// Where a delta is counted from: the `measuredAt` of the snapshot a writer
+// read before it started changing dirs (null: there was none). adjustUsage
+// applies the delta only to that same measurement. A walk that lands while
+// the writer is measuring and moving dirs (the hourly sweep, a read that found
+// the snapshot untrusted) rewrites the totals from the disk as it found it,
+// which may already count some of those changes: applying the delta on top
+// would count them twice and leave a wrong size marked as trusted.
+export async function usageBase(): Promise<string | null> {
+  return (await readSnapshot())?.measuredAt ?? null;
+}
+
 // For a writer outside the pass and the sweep that knows exactly what it
 // changed: move the stored totals by that much and keep them trusted. Marking
 // them stale instead costs the next read a full walk, and on a network share
 // holding tens of thousands of dirs that walk takes many minutes, during which
 // an import's stems step starts no worker: one replaced file, or a night's
-// purge, must not cost that. Only a snapshot the next read would use as is
-// moves; one it would walk for anyway (none, stale, too old, another root) is
-// left to that walk. With a pass writing, the delta is not applied: the pass
-// settles onto its own base, and a dir it wrote could be among the ones moved,
-// so the snapshot is marked stale as before. `measuredAt` is kept, so the
-// daily full walk still comes due on time.
-export async function adjustUsage(delta: { bytes: number; dirs: number }): Promise<'adjusted' | 'stale' | 'unchanged'> {
+// purge, must not cost that. `measuredAt` is kept, so the daily full walk
+// still comes due on time. Each case that can't take the delta:
+// - no snapshot, or one the next read walks for anyway (stale, too old,
+//   another root): left to that walk, untouched;
+// - `since` given and the snapshot is no longer that measurement (a walk ran
+//   during the change, see usageBase): which of the changes it saw is
+//   unknown, so it is marked stale;
+// - a pass writing: the pass settles onto its own base, and a dir it wrote
+//   could be among the ones moved, so it is marked stale, which makes the
+//   settle walk;
+// - this process could not save the snapshot last time (snapshotUntrusted):
+//   another process may still trust the file, so it is marked stale there.
+export async function adjustUsage(
+  delta: { bytes: number; dirs: number },
+  { since }: { since?: string | null } = {},
+): Promise<'adjusted' | 'stale' | 'unchanged'> {
   if (delta.bytes === 0 && delta.dirs === 0) return 'unchanged';
-  const { snap, verdict } = await snapshotState();
-  if (!snap) return 'unchanged';
-  if (verdict !== 'use' || !Number.isFinite(delta.bytes) || !Number.isFinite(delta.dirs)) {
+  const snap = await readSnapshot();
+  if (since !== undefined && (snap?.measuredAt ?? null) !== since) {
+    if (!snap) return 'unchanged';
     await markUsageStale();
     return 'stale';
   }
-  const moved = await writeSnapshot({
+  if (!snap) return 'unchanged';
+  const verdict = snapshotVerdict({
+    snap,
+    root: stemsRoot(),
+    nowMs: Date.now(),
+    pendingAlive: snap.pending ? pidAlive(snap.pending.pid) : false,
+  });
+  if (verdict === 'walk') return 'unchanged';
+  if (verdict !== 'use' || snapshotUntrusted || !Number.isFinite(delta.bytes) || !Number.isFinite(delta.dirs)) {
+    await markUsageStale();
+    return 'stale';
+  }
+  const moved = await writeSnapshot(buildSnapshot({
     ...snap,
     bytes: Math.max(0, snap.bytes + delta.bytes),
     dirs: Math.max(0, snap.dirs + delta.dirs),
     updatedAt: new Date().toISOString(),
-  });
+  }, unevictableOf(snap)));
   if (!moved) {
+    // Totals that cannot be updated must not outlive this, as in markUsageStale.
     await rm(snapshotPath(), { force: true }).catch(() => {});
     return 'stale';
   }
@@ -577,7 +611,7 @@ export interface StoredUsage {
   fresh: boolean;
   /** An analysis pass is adding stems right now; the figure is a floor. */
   passRunning: boolean;
-  /** The cache changed since this was measured (an orphan pass); the sweep re-measures it. */
+  /** The cache changed since this was measured by more than a writer could count (adjustUsage); the sweep re-measures it. */
   stale: boolean;
 }
 
@@ -667,28 +701,17 @@ export async function trackDirBytes(trackId: string): Promise<number | null> {
 }
 
 // After a pick-time separation: add what the track's dir grew by to the
-// snapshot, so the hourly sweep's budget check counts it without a walk. A
-// snapshot that can't take an addition (none, untrusted, stale, or a pass
-// writing, whose settle owns the baseline) is marked stale instead, and the
-// next read walks. Totals that can't be updated must not outlive this, as in
-// markUsageStale.
+// snapshot, so the hourly sweep's budget check counts it without a walk. The
+// one delta rule is adjustUsage's: a snapshot that can't take the addition (a
+// pass writing, whose settle owns the baseline, or totals this process could
+// not save) is marked stale, one the next read walks for anyway is left to
+// that walk.
 export async function settleTrackWrite(trackId: string, bytesBefore: number | null): Promise<void> {
   const after = await dirBytes(dirFor(trackId));
   const grew = (after ?? 0) - (bytesBefore ?? 0);
   const newDir = bytesBefore === null && after !== null;
   if (grew === 0 && !newDir) return;
-  const { snap, verdict } = await snapshotState();
-  if (verdict !== 'use' || !snap) {
-    await markUsageStale();
-    return;
-  }
-  const settled = buildSnapshot({
-    ...snap,
-    bytes: Math.max(0, snap.bytes + grew),
-    dirs: snap.dirs + (newDir ? 1 : 0),
-    updatedAt: new Date().toISOString(),
-  }, unevictableOf(snap));
-  if (!(await writeSnapshot(settled))) await rm(snapshotPath(), { force: true }).catch(() => {});
+  await adjustUsage({ bytes: grew, dirs: newDir ? 1 : 0 });
 }
 
 // Track ids with a stem dir on disk: one readdir, no per-dir walk. The analysis
@@ -759,6 +782,9 @@ export async function forgetStems(trackIds: readonly string[]): Promise<{ remove
   let failed = 0;
   let freed = 0;
   let exact = true;
+  // Read before the first delete: a walk landing during them makes the delta
+  // unsafe to apply (usageBase).
+  const since = await usageBase();
   for (const id of trackIds) {
     const dir = dirFor(id);
     const there = await stat(dir).then(() => true, () => false);
@@ -786,7 +812,7 @@ export async function forgetStems(trackIds: readonly string[]): Promise<{ remove
   // process: the walk that drops stems is the tagger's, and whichever process
   // reads next must walk again.
   if (!exact) await markUsageStale();
-  else if (removed > 0) await adjustUsage({ bytes: -freed, dirs: -removed });
+  else if (removed > 0) await adjustUsage({ bytes: -freed, dirs: -removed }, { since });
   return { removed, failed };
 }
 
@@ -834,7 +860,7 @@ export async function sweep(
   const dirs = await scanDirs();
   let total = dirs.reduce((n, d) => n + d.bytes, 0);
   if (total <= budget) {
-    await writeSnapshot(snapshotFromWalk(total, dirs.length, 0));
+    await writeSweepSnapshot(before.snap, snapshotFromWalk(total, dirs.length, 0));
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 };
   }
 
@@ -862,6 +888,18 @@ export async function sweep(
   }
   // The stuck bytes go in the snapshot beside the total, so pick-time stems
   // (budgetVeto) can judge the part this sweep can evict, as it did above.
-  await writeSnapshot(snapshotFromWalk(total, dirs.length - removed, unevictable));
+  await writeSweepSnapshot(before.snap, snapshotFromWalk(total, dirs.length - removed, unevictable));
   return { removed, freedBytes, failedDirs, overBudgetBytes: Math.max(0, total - budget) };
+}
+
+// The sweep's walk is minutes on a share. If another writer moved the stored
+// snapshot meanwhile (the orphan purge or forgetStems adjusting it, a pick-time
+// settle, a pass's pending mark), the walk may or may not have seen that
+// writer's dirs, so its total is written for the budget field but marked
+// stale: the next read walks again rather than trust a figure that may count
+// a change twice or miss it.
+async function writeSweepSnapshot(before: UsageSnapshot | null, walked: BuiltSnapshot): Promise<void> {
+  const now = await readSnapshot();
+  const overlapped = JSON.stringify(now) !== JSON.stringify(before);
+  await writeSnapshot(overlapped ? buildSnapshot({ ...walked, stale: true }, unevictableOf(walked)) : walked);
 }
