@@ -161,6 +161,7 @@ import {
   VOICE_HOLD_MAX_MS,
   airVoice,
   airVoiceExchange,
+  batchExchangeDelivery,
   voiceBusy,
   measuredClipDurationMs,
   clipDurationMs,
@@ -2869,7 +2870,7 @@ class Queue {
       ...exchangeSegment(l, kind),
       settlesHandoff: kind === 'handoff' ? index === rendered.length - 1 : undefined,
     }));
-    if (!settings.get().djBehaviour.holdDuckBetweenSpeakers) {
+    if (!batchExchangeDelivery()) {
       for (const [index, l] of rendered.entries()) {
         if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
           this.log('scheduler', `Dropped ${kind} exchange — the show handoff completed while it rendered`);
@@ -3376,7 +3377,7 @@ class Queue {
         }
       : { kind: p.kind, channel: 'intro', text: clip.text, meta: clip.meta, persona: clip.persona };
     const segs = clips.map(segFor);
-    if (p.exchange && settings.get().djBehaviour.holdDuckBetweenSpeakers) {
+    if (p.exchange && batchExchangeDelivery()) {
       // One batch for the conversation, so the intro queue never drains between
       // speakers and the light duck stays down for the whole exchange. A
       // per-line handoff after the playback hold let the music ramp up and back

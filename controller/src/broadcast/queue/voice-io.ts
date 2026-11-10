@@ -9,7 +9,7 @@ import { config } from '../../config.js';
 import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
 import { sleep, type Interposed } from './pure.js';
-import { awaitVoiceAir, VOICE_AIR_TIMEOUT_MS } from './voice-marker.js';
+import { awaitVoiceAir, markerFilePresent, VOICE_AIR_TIMEOUT_MS } from './voice-marker.js';
 import { mpegLayer3Frame, mp3FrameOffset } from '../../audio/mp3-frames.js';
 import { levelledGainDb, voiceLevellingEnabled } from '../../audio/clip-level.js';
 
@@ -231,6 +231,22 @@ interface AirExchangeOptions {
   // A write that throws stops the exchange at that line; the caller still gets
   // the handoffs that did land, so it can log what aired.
   onWriteError?: (err: unknown, index: number) => void;
+}
+
+// Whether a multi-voice exchange goes to the mixer as one batch
+// (airVoiceExchange) or one line at a time (airVoice per line, the established
+// delivery). Both exchange call sites ask here, so the rule lives once. The
+// batch is the operator's opt-in (`djBehaviour.holdDuckBetweenSpeakers`), and
+// it also needs a mixer that writes voice markers. With no voice-playing.json
+// (a mixer that has not spoken since it started, or one older than #1382),
+// every line's `aired` resolves null the moment it is handed over. A batch
+// hands every line over within a second, so all of their bookkeeping would run
+// together: a handoff settled and the incoming presenter announced while the
+// outgoing one is still in their lead-in. Per-line delivery spaces that
+// bookkeeping by each line's playback hold, as it always has, and the first
+// clip it airs writes the file, so the next exchange batches.
+export function batchExchangeDelivery(): boolean {
+  return settings.get().djBehaviour.holdDuckBetweenSpeakers === true && markerFilePresent();
 }
 
 // Air a prepared multi-voice exchange back-to-back on one voice channel.

@@ -123,7 +123,7 @@ export function resetVoiceMarkers() {
 // #1382 or one that has not spoken since it started — both of which must
 // degrade to instant, handoff-time bookkeeping rather than a 20s stall on every
 // segment.
-function markerFilePresent(): boolean {
+export function markerFilePresent(): boolean {
   return existsSync(config.liquidsoap.voicePlayingFile);
 }
 
