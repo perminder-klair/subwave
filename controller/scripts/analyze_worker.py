@@ -237,9 +237,10 @@ VOCAL_STEM_REL = _env_float("VOCAL_STEM_REL", 0.15)  # x 90th-pct of vocal-stem 
 # 0.06 Demucs bleed on loud electronic and instrumental hip-hop masters, which
 # sits 8-14 dB under the mix, read as 13-27 s of singing on tracks labelled
 # instrumental. 0.15 comes from one 18-track sample (11 of those instrumentals,
-# 7 sung controls) that NOBODY HAS LISTENED TO: unshifted, it brought the head
-# under 5 s on 4 of the 11 and kept all 7 controls sung, the quietest a rap
-# vocal at 10.8 s. Two of the 11 still sit just over the line (5.4, 5.7 s),
+# 7 vocal controls) that NOBODY HAS LISTENED TO: unshifted, it brought the head
+# under 5 s on 4 of the 11 and kept the 6 controls that sing in their opening
+# sung, the quietest a rap vocal at 10.8 s (the 7th has no singing in its
+# first 40 s and reads instrumental before and after). Two of the 11 still sit just over the line (5.4, 5.7 s),
 # and a sung tail keeps one of the 4 vocal. A lead instrument
 # Demucs files as vocals at full level (a sax, a reed) sits where real voices
 # do, and no mix floor can tell the two apart.
