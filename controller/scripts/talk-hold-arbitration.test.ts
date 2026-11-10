@@ -11,6 +11,9 @@
 //    still takes the boundary by design.
 //  - With the switch OFF the old ident rule stands: a fresh ident supersedes a
 //    waiting one, exactly as before this fix.
+//  - The rule is for SCHEDULED speech, which is speech inside a talk-air scope.
+//    A manual trigger runs outside any scope (a Run now on a pause-and-talk show
+//    reaches holdForNextTrack that way), so it keeps newer-wins.
 //
 // STATE_DIR is redirected before the first import, like talk-air.test.ts.
 
@@ -26,6 +29,8 @@ process.env.STATE_DIR = root;
 const settings = await import('../src/settings.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { scheduledTalkAir, withTalkAir } = await import('../src/broadcast/talk-air.js');
+// holdForNextTrack is synchronous; the scope wants a promise.
+const scheduled = <T>(fn: () => T): Promise<T> => withTalkAir('next-track', async () => fn());
 const { mayReplacePendingTalk, PENDING_VOICE_MAX_AGE_MS } =
   await import('../src/broadcast/queue/kinds.js');
 
@@ -64,23 +69,40 @@ test('the queue declines a second scheduled segment while the switch is on', asy
   await settings.update({ djTalkOnlyBetweenTracks: true } as never);
   queue._pendingVoice = null;
   let supersededAired: boolean | undefined;
-  const accepted = queue.holdForNextTrack('station-id', clip('ident'), {
+  const accepted = await scheduled(() => queue.holdForNextTrack('station-id', clip('ident'), {
     onCompleted: aired => { supersededAired = aired; },
-  });
+  }));
   assert.equal(accepted, true);
-  assert.equal(queue.holdForNextTrack('news', clip('news')), false,
+  assert.equal(await scheduled(() => queue.holdForNextTrack('news', clip('news'))), false,
     'no second segment is written over the one already waiting');
   assert.equal(pendingKind(), 'station-id', 'the ident keeps the boundary');
   assert.equal(supersededAired, undefined, 'and is not settled as a drop');
 });
 
+test('a manual trigger outside any scope still supersedes with the switch on', async () => {
+  // A Run now on a pause-and-talk show reaches holdForNextTrack with no scope.
+  // It has already paid for its script and TTS, and the operator asked for it,
+  // so the one-boundary rule does not apply: newer wins, as it always did.
+  await settings.update({ djTalkOnlyBetweenTracks: true } as never);
+  queue._pendingVoice = null;
+  let supersededAired: boolean | undefined;
+  await scheduled(() => queue.holdForNextTrack('station-id', clip('ident'), {
+    onCompleted: aired => { supersededAired = aired; },
+  }));
+  assert.equal(queue.holdForNextTrack('news', clip('manual-news')), true,
+    'the manual segment takes the boundary');
+  assert.equal(pendingKind(), 'news');
+  assert.equal(supersededAired, false, 'and the scheduled ident is settled as superseded');
+  queue._pendingVoice = null;
+});
+
 test('a stale waiting segment is replaced rather than blocking the fire', async () => {
   await settings.update({ djTalkOnlyBetweenTracks: true } as never);
   queue._pendingVoice = null;
-  queue.holdForNextTrack('station-id', clip('ident'));
+  await scheduled(() => queue.holdForNextTrack('station-id', clip('ident')));
   const held = pendingVoice();
   if (held) held.t = Date.now() - PENDING_VOICE_MAX_AGE_MS - 1;
-  assert.equal(queue.holdForNextTrack('news', clip('news')), true);
+  assert.equal(await scheduled(() => queue.holdForNextTrack('news', clip('news'))), true);
   assert.equal(pendingKind(), 'news');
 });
 

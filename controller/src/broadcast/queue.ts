@@ -60,6 +60,7 @@ import { speakClockAllowed, stationIdDaypartDrifted, stationIdDaypartStamp } fro
 import { standInToken } from './stand-in-policy.js';
 import {
   currentTalkAir,
+  inTalkAirScope,
   suppressScheduledSpeechDuringHandoff,
   talkOnlyBetweenTracks,
   withTalkAir,
@@ -2943,7 +2944,8 @@ class Queue {
   // the talk-slot planner holds every row while a clip is waiting, precisely so
   // a second scheduled segment is never WRITTEN, let alone dropped on the floor
   // here. A cron fire has no row and so no hold (#2259), which is why the rule
-  // is also enforced here rather than trusted to the planner. It is logged
+  // is also enforced here rather than trusted to the planner — for scoped
+  // (scheduled) speech only; a manual trigger still supersedes. It is logged
   // where it does, because a segment paid for in tokens and TTS and then
   // silently deleted is exactly the failure that hold exists to prevent.
   holdForNextTrack(
@@ -2983,8 +2985,12 @@ class Queue {
     }
     // The one-boundary rule for scheduled speech when every segment is placed
     // between tracks: a clip already waiting keeps the slot. See
-    // mayReplacePendingTalk for what may still take it.
-    if (superseded && talkOnlyBetweenTracks()
+    // mayReplacePendingTalk for what may still take it. SCHEDULED only: the
+    // talk-air scope is what marks it (a slot-table fire or a cron fire), and a
+    // manual trigger runs outside any scope, so a Run now that reaches here (a
+    // pause-and-talk show) keeps newer-wins and is never declined after the
+    // model and TTS have already run.
+    if (superseded && talkOnlyBetweenTracks() && inTalkAirScope()
         && !mayReplacePendingTalk(kind, { kind: superseded.kind, queuedAt: superseded.t }, Date.now())) {
       this.log('scheduler', `Declined ${kind} — ${superseded.kind} is already waiting for the next track boundary`);
       return false;
