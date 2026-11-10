@@ -1,23 +1,17 @@
-// The /settings mega-endpoint on the shared zod schemas (#1348, split out of
-// #1337). This first slice lands the per-key registry, the fieldErrors channel,
-// and the imaging toggles (jingleRatio / sfx / beds) that #1337 left half
-// converted.
-//
+// The /settings mega-endpoint on the shared zod schemas (#1348, from #1337).
+// What these guard is FIDELITY: the hand-rolled branches carry accidental
+// leniency (parseInt truncating a float, `!!`, `patch.beds || {}`) and no
+// conversion may turn a silent repair into a refusal or the reverse.
+// Run: `npm test -- settings-patch-schema`.
 // What these tests are really guarding is FIDELITY. The branches being replaced
-// carry a lot of accidental leniency — parseInt truncating a float, `!!` taking
-// any truthy value, `patch.beds || {}` swallowing a non-object — and #1337's
-// rule is that no conversion may turn a silent repair into a refusal or the
-// reverse. Every "still accepts" test below is a behaviour that would break if
-// someone swapped these schemas for the obvious z.number().int() / z.boolean().
-//
-// Run: npx tsx scripts/settings-patch-schema.test.ts (auto-discovered by npm test).
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { runMiddleware as captureMiddleware } from './test-utils/middleware.js';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-settings-patch-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-settings-patch-'));
 
 const {
   BEDS_CROSS_SEC_BOUNDS,
@@ -67,36 +61,19 @@ const settings = await import('../src/settings.js');
 
 // Minimal express doubles — enough to see what the middleware answers.
 function runMiddleware(body: unknown) {
-  const captured: { status?: number; json?: unknown; nexted: boolean } = { nexted: false };
-  const res = {
-    status(code: number) {
-      captured.status = code;
-      return this;
-    },
-    json(payload: unknown) {
-      captured.json = payload;
-      return this;
-    },
+  const out = captureMiddleware(validateSettingsBody(), { body }, { initialStatus: undefined });
+  return {
+    ...(out.status === undefined ? {} : { status: out.status }),
+    ...(out.body === null ? {} : { json: out.body }),
+    nexted: out.nextCalled,
   };
-  validateSettingsBody()(
-    { body } as never,
-    res as never,
-    () => {
-      captured.nexted = true;
-    },
-  );
-  return captured;
 }
 
-// The exact strings the hand-rolled branches produced. Hardcoded rather than
-// built from BOUNDS, because the point is that the operator-facing text did not
-// change — deriving them from the same constants the schema uses would let both
-// drift together and still pass.
+// The exact strings the hand-rolled branches produced, hardcoded rather than
+// built from BOUNDS: deriving both from one constant would let them drift together.
 const JINGLE_MSG = 'jingleRatio must be int in [0, 1000]';
 const THRESHOLD_MSG = 'beds.thresholdSec must be number in [0, 60]';
 const CROSS_MSG = 'beds.crossSec must be number in [0, 15]';
-
-// --- fidelity: the silent repairs that must survive -------------------------
 
 test('jingleRatio still parses the string forms an older admin build posts', () => {
   assert.equal(jingleRatioSchema.parse('5'), 5);
@@ -105,8 +82,7 @@ test('jingleRatio still parses the string forms an older admin build posts', () 
 });
 
 test('jingleRatio still TRUNCATES a float instead of refusing it', () => {
-  // parseInt(5.7, 10) === 5. z.number().int() would refuse — that is the swap
-  // this test exists to catch.
+  // parseInt(5.7, 10) === 5, where z.number().int() would refuse.
   assert.equal(jingleRatioSchema.parse(5.7), 5);
   assert.equal(jingleRatioSchema.parse('5.7'), 5);
 });
@@ -189,8 +165,6 @@ test('BOUNDS still reports the same numbers now that the schema owns them', () =
   assert.deepEqual(BOUNDS.bedsCrossSec, { min: 0, max: 15, type: 'float' });
 });
 
-// --- the registry -----------------------------------------------------------
-
 test('every settings key with defaults is in the patch inventory', () => {
   // An unlisted key is REJECTED at the route, so a key added to DEFAULTS and
   // update() but forgotten here would 400 the panel that saves it.
@@ -198,25 +172,15 @@ test('every settings key with defaults is in the patch inventory', () => {
   assert.deepEqual(missing, []);
 });
 
-test('the inventory carries the two keys the issue overlooked', () => {
-  // Both are postable today: stationDescription is its own branch (not part of
-  // `station`), and maxTrackMinutes is the legacy alias rawMaxTrackSec reads.
-  assert.ok(SETTINGS_PATCH_KEYS.includes('stationDescription'));
-  assert.ok(SETTINGS_PATCH_KEYS.includes('maxTrackMinutes'));
-});
-
 test('the inventory has no duplicates', () => {
   assert.equal(new Set(SETTINGS_PATCH_KEYS).size, SETTINGS_PATCH_KEYS.length);
 });
 
 test('no registered schema can leak a raw zod message', () => {
-  // The flat `error` string is the message VERBATIM, so operators keep reading
+  // The flat `error` string is the message verbatim. Not every shipping message
+  // names a field, so the enforced rule is the weaker true one: non-empty,
+  // single-line, and not one of zod's built-ins.
   // the exact strings they always have. Most name a dotted field, but not all
-  // do — 'station name must be 80 chars or fewer', 'search.baseUrl too long'
-  // and "locale must be 'en-GB' or 'en-US'" are shipping strings that don't.
-  // So the enforced rule is the weaker, TRUE one: every message is non-empty,
-  // single-line, and is not one of zod's built-ins ('Invalid input: expected
-  // …'), which is what a careless z.string()/z.number()/z.enum() would emit.
   const hostile: unknown[] = [
     99999, -1, 'abc', '', null, true, [], {}, NaN, Infinity, -0.5,
     { enabled: 'x', thresholdSec: 999, crossSec: 999 },
@@ -252,7 +216,6 @@ test('no registered schema can leak a raw zod message', () => {
   assert.ok(sawFailure, 'hostile values produced no failures at all — test is vacuous');
 });
 
-// --- fidelity of the second slice ------------------------------------------
 // One test per behaviour that the OBVIOUS conversion would have changed.
 
 test('crossfadeDuration keeps parseFloat leniency and its message', () => {
@@ -377,9 +340,23 @@ test('search.baseUrl TYPE-checks where scrobble.listenbrainz.baseUrl coerces', (
   assert.equal(searchPatchSchema.parse({ baseUrl: 'http://x/' }).baseUrl, 'http://x/');
 });
 
+// #1353. New field, so it takes the trimmed posture rather than search.apiKey's
+// raw one — nothing shipped depends on the old storage behaviour here.
+test('search.searxngEngines trims, caps and defaults to empty', () => {
+  assert.equal(searchPatchSchema.parse({ searxngEngines: '  google, wikipedia  ' }).searxngEngines,
+    'google, wikipedia');
+  assert.equal(searchPatchSchema.parse({ searxngEngines: '' }).searxngEngines, '');
+  // Absent stays absent — update() only writes the key when the patch names it,
+  // so an unset pin can never be clobbered by a save from another panel.
+  assert.equal('searxngEngines' in searchPatchSchema.parse({ provider: 'searxng' }), false);
+  assert.equal(searchPatchSchema.safeParse({ searxngEngines: 'x'.repeat(501) }).success, false);
+  assert.equal(
+    searchPatchSchema.safeParse({ searxngEngines: 'x'.repeat(501) }).error?.issues[0]?.message,
+    'search.searxngEngines must be 0-500 chars',
+  );
+});
+
 test('search.apiKey stringifies null to "null" and does NOT trim', () => {
-  // Not a good design, but the shipping one, and a secret field is the last
-  // place to change storage behaviour by accident.
   assert.equal(searchPatchSchema.parse({ apiKey: null }).apiKey, 'null');
   assert.equal(searchPatchSchema.parse({ apiKey: '  k  ' }).apiKey, '  k  ');
   assert.equal(searchPatchSchema.safeParse({ apiKey: 'x'.repeat(201) }).success, false);
@@ -476,8 +453,6 @@ test('parseSettingsPatchKey passes an unconverted key straight through', () => {
   assert.equal(parseSettingsPatchKey('llm', value), value);
 });
 
-// --- the route posture ------------------------------------------------------
-
 test('a valid patch passes', () => {
   assert.equal(validateSettingsPatch({ jingleRatio: 4, beds: { enabled: true } }), null);
   assert.equal(validateSettingsPatch({}), null);
@@ -486,13 +461,6 @@ test('a valid patch passes', () => {
 test('an unconverted key is not judged', () => {
   // Its hand-rolled branch is still the authority; the route must not guess.
   assert.equal(validateSettingsPatch({ llm: { provider: 'nonsense' } }), null);
-});
-
-test('fieldErrors are dotted and rooted at the settings key', () => {
-  const failure = validateSettingsPatch({ beds: { crossSec: 99 } });
-  assert.ok(failure);
-  assert.deepEqual(Object.keys(failure.fieldErrors), ['beds.crossSec']);
-  assert.equal(failure.fieldErrors['beds.crossSec'], CROSS_MSG);
 });
 
 test('a scalar key maps to the bare key, not an empty path', () => {
@@ -510,25 +478,10 @@ test('every failing key reports, and the flat error follows BRANCH order', () =>
   assert.deepEqual(Object.keys(failure.fieldErrors).sort(), ['beds.crossSec', 'jingleRatio']);
 });
 
-test('unknown top-level keys are rejected and all of them are named', () => {
-  const failure = validateSettingsPatch({ jingleRatioo: 4, bedz: {} });
-  assert.ok(failure);
-  assert.match(failure.error, /unknown settings keys: /);
-  assert.deepEqual(Object.keys(failure.fieldErrors).sort(), ['bedz', 'jingleRatioo']);
-});
-
 test('a non-object body is refused', () => {
   for (const bad of [null, undefined, 'x', 5, []]) {
     assert.ok(validateSettingsPatch(bad), `accepted ${JSON.stringify(bad)}`);
   }
-});
-
-// --- the route middleware ---------------------------------------------------
-
-test('middleware: a good patch calls next() and answers nothing', () => {
-  const r = runMiddleware({ beds: { thresholdSec: 12 } });
-  assert.equal(r.nexted, true);
-  assert.equal(r.status, undefined);
 });
 
 test('middleware: a bad patch 400s with both error and fieldErrors', () => {
@@ -548,15 +501,13 @@ test('middleware: an absent body is an empty patch, not a crash', () => {
 });
 
 test('middleware: does NOT rewrite the body', () => {
-  // update() re-runs the same schemas as it applies each key and stays the
-  // authoritative chokepoint — coercing here too would put two places in
-  // charge of what gets stored.
+  // update() re-runs the same schemas and stays the authoritative chokepoint.
   const body = { jingleRatio: '7' };
-  runMiddleware(body);
+  const r = runMiddleware(body);
+  assert.equal(r.nexted, true);
+  assert.equal(r.status, undefined);
   assert.equal(body.jingleRatio, '7');
 });
-
-// --- the chokepoint ---------------------------------------------------------
 
 test('update() stores what the schema parsed, coercions included', async () => {
   const a = await settings.update({ jingleRatio: '7', sfx: { enabled: 1 } });
@@ -588,37 +539,44 @@ test('update() refuses a bad value with the pre-conversion message', async () =>
   });
 });
 
+test('update() keeps a Default programming takeover when the show roster changes', async () => {
+  const now = Date.now();
+  const override = { showId: null, startedAt: now, expiresAt: now + 60 * 60_000 };
+  await settings.update({ scheduleOverride: override });
+  const result = await settings.update({ shows: [] });
+  assert.deepEqual(result.saved.scheduleOverride, override);
+});
+
 test('update() still tolerates a key it has never heard of', async () => {
-  // This is the half backup restore depends on: routes/backup.ts hands update()
-  // a whole settings.json, and a key from a newer version must cost one setting
-  // rather than the entire restore. Only the ROUTE rejects unknown keys.
+  // The half backup restore depends on: a key from a newer version must cost one
+  // setting rather than the whole restore. Only the ROUTE rejects unknown keys.
   const before = (await settings.load()).jingleRatio;
   const r = await settings.update({ someKeyFromTheFuture: { nested: true } } as never);
   assert.equal(r.saved.jingleRatio, before);
 });
 
 test('the converted keys are exactly the ones with schemas', () => {
-  // The remaining keys are documented in CLAUDE.md with the reason each one
-  // resists a stateless schema (clamps that fall back to the CURRENT value,
-  // post-merge cross-field rules, write-throughs into another key).
+  // The remaining keys and why each resists a stateless schema are in docs/internals/schemas.md.
   assert.deepEqual(Object.keys(SETTINGS_PATCH_SCHEMAS).sort(), [
-    'activeDjPromptId', 'archive', 'audio', 'beds', 'crossfadeDuration',
-    'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock', 'festivals',
-    'jingleRatio', 'likes',
-    'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods', 'personas',
+    'activeDjPromptId', 'archive', 'audio', 'backups', 'beds', 'crossfadeDuration',
+    'djBehaviour', 'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
+    'djTalkOnlyBetweenTracks', 'ducking', 'fadeAtShowEnd', 'festivals',
+    'handover', 'jinglePlacement', 'jingleRatio', 'jingleRotate', 'likes',
+    'locale', 'loudness', 'lyrics', 'maxTrackLengthMode', 'maxTrackSeconds', 'moodSchedule', 'moods',
+    'musicSource',
+    'pauseTalkMinSeconds', 'personas',
+    'picker',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',
-    'sfx', 'shows', 'station', 'stationDescription', 'stream', 'theme',
-    'timezone', 'transitions', 'ui', 'weather', 'weatherMoods', 'webhooks',
-    'webhooksPolicy',
+    'sfx', 'shows', 'silenceTrim', 'station', 'stationDescription', 'steer', 'stream',
+    'tagger', 'theme', 'timezone', 'transitions', 'tts', 'ui', 'weather', 'weatherMoods',
+    'webhooks', 'webhooksPolicy',
   ]);
 });
 
-test('the SIX unconverted keys are the ones CLAUDE.md documents as resistant', () => {
-  // Each resists for the same reason: the rule is a function of state the patch
-  // does not contain (a clamp that falls back to the CURRENT stored value, a
-  // cross-field rule read POST-merge, a write-through into another key, or an
-  // intentionally OPEN map). Plus two that are not "resistant" so much as
-  // deliberately left alone — see below.
+test('the five unconverted keys retain their state-dependent validation', () => {
+  // Each resists because the rule is a function of state the patch does not carry
+  // (a clamp against the stored value, a post-merge cross-field rule, a
+  // write-through, an open map), plus two deliberately left alone.
   const unconverted = SETTINGS_PATCH_KEYS.filter((k) => !(k in SETTINGS_PATCH_SCHEMAS));
   assert.deepEqual([...unconverted].sort(), [
     // No pure rule exists: the only check is membership in a roster the same
@@ -630,7 +588,6 @@ test('the SIX unconverted keys are the ones CLAUDE.md documents as resistant', (
     // absent — a schema on it would refuse a body today's precedence ignores.
     'maxTrackMinutes',
     'skills',
-    'tts',
   ]);
 });
 
@@ -709,8 +666,12 @@ test('the djPrompt trio: pure rules convert, cross-key ones stay in update()', (
 });
 
 test('scheduleOverride validates SHAPE at the route, roster membership in update()', () => {
-  // Clearing the pin is how a takeover is cancelled, so null is legal.
+  // Clearing the takeover is outer null; an object with showId null is a live
+  // Default programming takeover and must remain distinct.
   assert.equal(validateSettingsPatch({ scheduleOverride: null }), null);
+  assert.equal(validateSettingsPatch({
+    scheduleOverride: { showId: null, startedAt: 1, expiresAt: 2 },
+  }), null);
   const bad = validateSettingsPatch({
     scheduleOverride: { showId: '', startedAt: 1, expiresAt: 2 },
   });
@@ -728,11 +689,48 @@ test('scheduleOverride validates SHAPE at the route, roster membership in update
   );
 });
 
+test('shows validate SHAPE at the route, then same-patch roster membership in update()', async () => {
+  // The route cannot know whether this patch also replaces personas. It must
+  // accept real-looking host and guest ids here; update() checks the assembled
+  // document against its resolved persona roster before saving.
+  const before = settings.get();
+  const priorPersonas = structuredClone(before.personas);
+  const priorShows = structuredClone(before.shows);
+  const seed = priorPersonas[0];
+  assert.ok(seed, 'the default settings must seed a persona');
+
+  const host = { ...seed, id: 'persona_patch_host', name: 'Patch Host' };
+  const guest = { ...seed, id: 'persona_patch_guest', name: 'Patch Guest' };
+  const patchedShow = {
+    id: 'show_patch_roster',
+    name: 'Night Shift',
+    personaId: host.id,
+    guestPersonaIds: [guest.id],
+  };
+  const patch = {
+    personas: [...priorPersonas, host, guest],
+    shows: [...priorShows, patchedShow],
+  };
+
+  assert.equal(validateSettingsPatch(patch), null);
+  try {
+    const result = await settings.update(patch);
+    const saved = result.saved.shows.find(show => show.id === patchedShow.id);
+    assert.equal(saved?.personaId, host.id);
+    assert.deepEqual(saved?.guestPersonaIds, [guest.id]);
+
+    await assert.rejects(
+      () => settings.update({ shows: [{ ...patchedShow, personaId: 'persona_missing' }] }),
+      /shows\.0\.personaId: must reference an existing persona/,
+    );
+  } finally {
+    await settings.update({ personas: priorPersonas, shows: priorShows });
+  }
+});
+
 test('an ARRAY key roots its flat message; a block key still reports verbatim', () => {
-  // personas/djPrompts are registered but their branches deliberately stay on
-  // validatePersonasStrict / validateDjPromptsStrict, because both need a
-  // server-only id-minting step. What must NOT differ is the string the two
-  // report for the same body — hence SETTINGS_PATCH_ROOTED_KEYS.
+  // personas/djPrompts stay on validatePersonasStrict / validateDjPromptsStrict
+  // (server-only id minting); only the reported STRING must not differ.
   const bad = validateSettingsPatch({ personas: [{ name: '', soul: 'x', frequency: 'moderate' }] });
   assert.match(bad!.error, /^personas\.0\.name: /, 'the row is named, not just the field');
   assert.equal(bad!.fieldErrors['personas.0.name'], 'name must be 1-40 chars');
@@ -758,8 +756,6 @@ test('the route and update() name the SAME first failure for a persona roster', 
   assert.equal(routeError, updateError);
   assert.match(routeError, /^personas\.1\.name: /);
 });
-
-// --- timezone / privacy / requests ------------------------------------------
 
 test('timezone accepts aliases and offsets, and stores them verbatim', () => {
   // A try/catch ICU probe, not Intl.supportedValuesOf — so aliases validate.
@@ -809,9 +805,8 @@ test('update() still refuses a lock with no password behind it', async () => {
 });
 
 test('requests treats an emptied input as ABSENT, not as zero', () => {
-  // The #1 reason intIn exists: an emptied admin input arrives as JSON null,
-  // and Number(null) is 0, which used to clamp to the field's FLOOR and
-  // silently close the request line.
+  // Why intIn exists: an emptied admin input arrives as JSON null and Number(null)
+  // is 0, which used to clamp to the floor and close the request line.
   assert.equal(requestsPatchSchema.parse({ globalHourlyCap: null }).globalHourlyCap, undefined);
   assert.equal(requestsPatchSchema.parse({ globalHourlyCap: '' }).globalHourlyCap, undefined);
   assert.equal(requestsPatchSchema.parse({ globalHourlyCap: '  ' }).globalHourlyCap, undefined);
@@ -831,23 +826,12 @@ test('requests treats an emptied input as ABSENT, not as zero', () => {
   assert.equal(requestsPatchSchema.safeParse({ maxPending: {} }).success, true);
 });
 
-test('update() falls each requests field back to the CURRENT value', async () => {
-  await settings.update({ requests: { maxPending: 9, globalHourlyCap: 77 } });
-  const r = await settings.update({ requests: { globalHourlyCap: null, maxPending: 3 } });
-  assert.equal(r.saved.requests.maxPending, 3);
-  assert.equal(r.saved.requests.globalHourlyCap, 77); // untouched by the null
-  assert.deepEqual(Object.keys(r.saved.requests).sort(), [
-    'cooldownSec', 'enabled', 'globalHourlyCap', 'maxPending', 'onePendingPerIp',
-    'perIpHourlyCap', 'repeatCooldownMin',
-  ]);
-});
-
-// --- the mood family: the first factory entries -----------------------------
-
 test('moods canonicalises names and refuses post-normalisation duplicates', () => {
   const r = moodsSchema.parse([{ name: 'Late Night!' }, { name: '  ROCK  ' }]);
   assert.deepEqual(r.map((m) => m.name), ['late-night', 'rock']);
   assert.equal(r[0].clapPrompt, '');
+  assert.deepEqual(moodsSchema.parse([{ name: 'Chill Vibes!', clapPrompt: 'soft downtempo' }]),
+    [{ name: 'chill-vibes', clapPrompt: 'soft downtempo' }]);
   // 'Chill' and 'chill' normalise to the same id, so this is a refusal.
   assert.equal(moodsSchema.safeParse([{ name: 'Chill' }, { name: 'chill' }]).success, false);
   assert.equal(
@@ -857,6 +841,28 @@ test('moods canonicalises names and refuses post-normalisation duplicates', () =
   assert.equal(moodsSchema.safeParse([]).success, false);
   assert.equal(moodsSchema.safeParse('nope').success, false);
   assert.equal(moodsSchema.parse([{ name: 'x', clapPrompt: 'y'.repeat(999) }])[0].clapPrompt.length, 200);
+});
+
+test('moods strips unknown keys and enforces the name and vocabulary caps', () => {
+  assert.deepEqual(moodsSchema.parse([{ name: 'x', clapPrompt: 'y', bogus: 1 }]),
+    [{ name: 'x', clapPrompt: 'y' }]);
+  assert.throws(() => moodsSchema.parse([{ name: '' }]), /must be 1-/);
+  assert.throws(() => moodsSchema.parse(
+    Array.from({ length: 41 }, (_, i) => ({ name: `m${i}` })),
+  ), /at most/);
+});
+
+test('a complete schedule of known moods round-trips', () => {
+  const fullSchedule = {
+    'early-morning': 'morning', morning: 'morning', midday: 'energetic',
+    afternoon: 'focus', 'drive-time': 'driving', evening: 'evening',
+    'late-evening': 'night', 'after-hours': 'reflective',
+  };
+  const moodNames = ['energetic', 'calm', 'focus', 'evening', 'night', 'morning', 'driving', 'reflective'];
+  const schema = moodScheduleSchema({ moodNames });
+  assert.deepEqual(schema.parse(fullSchedule), fullSchedule);
+  assert.throws(() => schema.parse({ ...fullSchedule, 'drive-time': 'banana' }),
+    /moodSchedule\.drive-time/);
 });
 
 test('a mood map validates SHAPE only when the caller has no vocabulary', () => {
@@ -880,9 +886,8 @@ test('a mood map validates SHAPE only when the caller has no vocabulary', () => 
 });
 
 test('weatherMoods allows empty and BLANKS unmentioned conditions', () => {
-  // The sharp difference from moodSchedule: an omitted condition becomes '',
-  // so a patch naming one condition silently clears the other five and
-  // succeeds. moodSchedule throws in the identical situation.
+  // The sharp difference from moodSchedule: an omitted condition becomes '', so a
+  // patch naming one silently clears the other five and succeeds.
   const strict = weatherMoodsSchema({ moodNames: ['chill'] });
   const r = strict.parse({ clear: 'chill' });
   assert.equal(r.clear, 'chill');

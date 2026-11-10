@@ -1,19 +1,5 @@
-// The music-chain starve signal (#1300 bug 7) — pure decision logic.
-//
-// Split from the reader (music-starve.ts) so scripts/music-starve.test.ts can
-// pin it without dragging in config.js / node:fs, the same split as
-// stream-idle-pure.ts and programme-pure.ts.
-//
-// radio.liq's jingle rotate skips unavailable sources, so with the music chain
-// starved (Navidrome unreachable, auto.m3u empty or exhausted) it serves
-// stingers back to back forever — and the emergency fallback below it can't
-// see that, because `radio` IS available: it is producing jingles. radio.liq
-// now samples the pre-rotate chain itself and reports the verdict here, in
-// music-starved.json.
-//
-// Every ambiguous input resolves toward NOT starved — a false "your station is
-// broken" banner that never clears is worse than a missed one, and
-// NavidromeBanner already covers the most common cause on its own.
+// The mixer measures pre-rotate music starvation because available jingles can hide it from
+// emergency fallback. Ambiguous marker data means not starved. #1300.
 
 /** How stale the heartbeat may get before the marker stops counting as live. */
 export const STARVE_MARKER_STALE_MS = 60_000;
@@ -44,8 +30,8 @@ export function starveState(marker: unknown, now: number): StarveState {
   // Only a literal true. A truthy value is a malformed marker, not a starve.
   if (m.starved !== true) return NOT_STARVED;
 
-  // The heartbeat is the liveness proof. The marker is never deleted, so
-  // without this a mixer that died mid-outage reports a starve forever.
+  // Heartbeat is the liveness proof: the marker is never deleted, so a mixer
+  // that died mid-outage would otherwise report a starve forever.
   const atMs = toMs(m.at);
   if (atMs === null) return NOT_STARVED;
   if (now - atMs > STARVE_MARKER_STALE_MS) return NOT_STARVED;

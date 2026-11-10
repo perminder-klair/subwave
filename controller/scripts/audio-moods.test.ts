@@ -2,12 +2,12 @@
 // topAudioMoods (relative top-K selection over a {mood: cosine} map — the rule
 // that decides which labels land in tracks.audio_moods) and moodVocabHash
 // (the invalidation key that re-scores the library when vocabulary/prompts
-// change). Run: `tsx scripts/audio-moods.test.ts`.
+// change). Run: `npm test -- audio-moods`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
 
 import assert from 'node:assert/strict';
-import { topAudioMoods, moodVocabHash, moodPrompt } from '../src/music/audio-moods.js';
+import { topAudioMoods, moodVocabHash } from '../src/music/audio-moods.js';
 import { SHOW_MOODS } from '../src/settings.js';
 
 // ── topAudioMoods ────────────────────────────────────────────────────────────
@@ -67,14 +67,5 @@ assert.notEqual(
   'reordering changes the hash',
 );
 assert.equal(moodVocabHash().length, 16, 'hash is the 16-char short form');
-
-// ── moodPrompt ───────────────────────────────────────────────────────────────
-
-// Every vocabulary entry has a curated prompt (no accidental bare-word
-// fallbacks for the shipped vocab), and unknown moods still produce something.
-for (const m of SHOW_MOODS) {
-  assert.notEqual(moodPrompt(m), `${m} music`, `curated prompt exists for "${m}"`);
-}
-assert.equal(moodPrompt('zydeco'), 'zydeco music', 'unknown mood falls back to the bare word');
 
 console.log('audio-moods: all assertions passed');

@@ -1,119 +1,81 @@
-// Native port of web/web/hooks/useMediaSession.ts (the metadata half).
-//
-// Pushes current-track metadata to the OS lock screen / CarPlay / Android Auto
-// via TrackPlayer.updateNowPlayingMetadata. Artwork is the /cover/:id proxy.
-// While the DJ is talking (a voice turn landed in the last 15s) we swap in the
-// persona avatar + name, exactly like the web. Remote control HANDLERS live in
-// service.ts (headless); this hook only owns the displayed metadata.
+// Talking state and card contents come from lib/voice-turn and lib/air-card,
+// shared with the Live Activity.
 
-import { useEffect, useMemo, useState } from 'react';
-import TrackPlayer from 'react-native-track-player';
+import { useEffect, useRef, useState } from 'react';
+import TrackPlayer, { Event, useTrackPlayerEvents } from 'react-native-track-player';
+import { useAppActive } from '@/hooks/useAppActive';
+import { useTalking } from '@/hooks/useTalking';
+import type { PlayerStatus } from '@/hooks/usePlayer';
+import { resolveAirCard } from '@/lib/air-card';
 import type { StationApi } from '@/lib/api';
+import { cardArtwork, hasPlayed, sendsCard, type SentCard } from '@/lib/now-playing-card';
 import type { ActiveShow, NowPlayingTrack, SessionTurn } from '@/lib/types';
-
-const TALKING_LINGER_MS = 15_000;
-
-const VOICE_TURN_KINDS = new Set([
-  'voice',
-  'segment',
-  'link',
-  'intro',
-  'station-id',
-  'weather',
-  'hourly',
-  'say',
-]);
-
-function isVoiceTurn(turn: SessionTurn | undefined): boolean {
-  if (!turn) return false;
-  const kind = (turn.kind || '').toLowerCase();
-  if (VOICE_TURN_KINDS.has(kind)) return true;
-  const role = (turn.role || '').toLowerCase();
-  return role === 'voice' || role === 'segment';
-}
-
-function lastVoiceTurnTime(feed: SessionTurn[] | undefined): number | null {
-  if (!feed?.length) return null;
-  for (let i = feed.length - 1; i >= 0; i--) {
-    const turn = feed[i];
-    if (!isVoiceTurn(turn)) continue;
-    const t =
-      typeof turn?.t === 'number'
-        ? turn.t
-        : typeof turn?.t === 'string'
-          ? Date.parse(turn.t)
-          : NaN;
-    return Number.isFinite(t) ? t : null;
-  }
-  return null;
-}
+import { nowPlayingProgress } from '@/lib/track-progress';
 
 export interface UseNowPlayingInfoParams {
   api: StationApi | null;
   tunedIn: boolean;
+  status: PlayerStatus;
   nowPlaying: NowPlayingTrack | null;
   boothFeed?: SessionTurn[];
+  /** Listener buffer behind the live edge (useStationFeed.leadMs). */
+  leadMs: number;
+  /** Listener-time start shared with the player and Live Activity. */
+  trackStartedAt: number | null;
   activeShow?: ActiveShow | null;
 }
 
 export function useNowPlayingInfo({
   api,
   tunedIn,
+  status,
   nowPlaying,
   boothFeed,
+  leadMs,
+  trackStartedAt,
   activeShow,
 }: UseNowPlayingInfoParams): void {
-  const [talking, setTalking] = useState(false);
-  const lastVoiceTs = useMemo(() => lastVoiceTurnTime(boothFeed), [boothFeed]);
+  const talking = useTalking(boothFeed, leadMs);
+  const appActive = useAppActive();
+  const card = api ? resolveAirCard({ api, nowPlaying, activeShow, talking }) : null;
 
-  const personaName = activeShow?.persona?.name ?? null;
-  const personaAvatar = activeShow?.persona?.avatar ?? null;
+  // Use resolved strings as dependencies to avoid flickering artwork on unchanged polls.
+  const title = card?.title;
+  const artist = card?.artist;
+  const album = card?.album;
+  const artwork = card?.artworkUrl;
+  const duration = nowPlaying?.duration;
 
-  useEffect(() => {
-    if (lastVoiceTs == null) {
-      setTalking(false);
-      return;
-    }
-    const remaining = TALKING_LINGER_MS - (Date.now() - lastVoiceTs);
-    if (remaining <= 0) {
-      setTalking(false);
-      return;
-    }
-    setTalking(true);
-    const id = setTimeout(() => setTalking(false), remaining);
-    return () => clearTimeout(id);
-  }, [lastVoiceTs]);
+  // A loaded item resets the native card, so each one gets the card again.
+  const [item, setItem] = useState(0);
+  useTrackPlayerEvents([Event.PlaybackActiveTrackChanged], () => setItem((n) => n + 1));
+  const sentRef = useRef<SentCard | null>(null);
 
   useEffect(() => {
-    if (!api || !tunedIn) return;
-    const coverUrl = nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : undefined;
-    const avatarUrl = personaAvatar ? api.avatar(personaAvatar) : undefined;
-    const useAvatar = talking && !!avatarUrl;
-
-    const title = nowPlaying?.title || 'SUB/WAVE';
-    const artist = useAvatar
-      ? personaName || nowPlaying?.artist || 'Live broadcast'
-      : nowPlaying?.artist || 'Live broadcast';
-    const album = nowPlaying?.album || 'SUB/WAVE';
-    const artwork = useAvatar ? avatarUrl : coverUrl;
-
-    TrackPlayer.updateNowPlayingMetadata({
-      title,
-      artist,
-      album,
-      artwork,
-    }).catch(() => {
-      /* no active track yet — ignored */
-    });
-  }, [
-    api,
-    tunedIn,
-    nowPlaying?.title,
-    nowPlaying?.artist,
-    nowPlaying?.album,
-    nowPlaying?.subsonic_id,
-    talking,
-    personaAvatar,
-    personaName,
-  ]);
+    if (!api || !tunedIn || !title) {
+      sentRef.current = null;
+      return;
+    }
+    const last = sentRef.current;
+    const played = hasPlayed(last, item, status === 'playing');
+    const next: SentCard = { title, artist, album, artwork, item, played };
+    const withCard = sendsCard(last, next);
+    sentRef.current = next;
+    const update = (includeCard: boolean) => {
+      TrackPlayer.updateNowPlayingMetadata({
+        ...(includeCard ? { title, artist, album, artwork: cardArtwork(next) } : {}),
+        // Retain iOS's LIVE presentation and the absence of seek controls.
+        isLiveStream: true,
+        ...nowPlayingProgress({ track: { duration }, trackStartedAt, talking }),
+      }).catch(() => {
+        /* no active track yet */
+      });
+    };
+    // Card or not, every refresh re-anchors progress (lib/now-playing-card).
+    update(withCard);
+    // Native playback state extrapolates between updates. Re-anchor from the
+    // absolute listener clock even while the foreground elapsed timer sleeps.
+    const timer = setInterval(() => update(false), 30000);
+    return () => clearInterval(timer);
+  }, [api, tunedIn, status, title, artist, album, artwork, duration, trackStartedAt, talking, appActive, item]);
 }

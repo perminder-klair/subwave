@@ -178,6 +178,28 @@ export async function listThemes(): Promise<Theme[]> {
   return [...BUILTIN_THEMES, ...user];
 }
 
+/** Registry after an import's file replacements, without bootstrapping or changing the cache. */
+export async function themeIdsAfterImport(imported: ReadonlyMap<string, string>): Promise<Set<string>> {
+  const dir = userThemesDir();
+  const files = new Map<string, string>();
+  for (const file of await fs.readdir(dir).catch(() => [])) {
+    if (!file.endsWith('.json')) continue;
+    const source = await fs.readFile(join(dir, file), 'utf8').catch(() => null);
+    if (source !== null) files.set(file, source);
+  }
+  for (const [file, source] of imported) files.set(file, source);
+  const ids = new Set(BUILTIN_IDS);
+  for (const source of files.values()) {
+    try {
+      const parsed = ThemeSchema.safeParse(JSON.parse(source));
+      if (parsed.success && !BUILTIN_IDS.has(parsed.data.id)) ids.add(parsed.data.id);
+    } catch {
+      // Malformed user files are skipped by the live registry too.
+    }
+  }
+  return ids;
+}
+
 export type ThemeListItem = Theme & { builtin: boolean };
 
 // Same registry as listThemes(), but each entry is tagged with whether it's a

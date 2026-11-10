@@ -15,16 +15,17 @@
 // The opposite must hold too: a declared knob the operator CLEARED stays
 // cleared, or the form could never delete a line.
 //
-// Run: `tsx scripts/skill-scaffold-preserve.test.ts`.
+// Run: `npm test -- skill-scaffold-preserve`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // STATE_DIR must be set before config.js resolves it at import time — scaffold.ts
 // derives SKILLS_DIR from it at module scope.
-const stateDir = mkdtempSync(join(tmpdir(), 'skill-scaffold-test-'));
+const stateDir = createTempDir(join(tmpdir(), 'skill-scaffold-test-'));
 process.env.STATE_DIR = stateDir;
 
 const { writeSkillFile } = await import('../src/skills/scaffold.js');
@@ -172,5 +173,23 @@ const form = {
   assert.doesNotMatch(md, /cron/, 'cron and cronOnly are both gone once cleared');
   assert.equal(data.cron, undefined, 'cron cannot be resurrected from a stale carried line');
 }
+
+// ── cohosts is OWNED and omitted when false ──────────────────────────────────
+{
+  await writeSkillFile({ kind: 'case-discussion', brief: 'Discuss one case.', cohosts: true });
+  const cohostFile = join(stateDir, 'skills', 'case-discussion', 'SKILL.md');
+  let md = readFileSync(cohostFile, 'utf8');
+  assert.match(md, /^cohosts: true$/m, 'the opt-in is persisted when enabled');
+  const { loadSkills } = await import('../src/skills/loader.js');
+  let loaded = await loadSkills();
+  assert.equal(loaded.find(c => c.kind === 'case-discussion')?.cohosts, true, 'rescan reloads the opt-in');
+
+  await writeSkillFile({ kind: 'case-discussion', brief: 'Discuss one case.', cohosts: false });
+  md = readFileSync(cohostFile, 'utf8');
+  assert.doesNotMatch(md, /cohosts/, 'clearing the opt-in removes the owned frontmatter line');
+  loaded = await loadSkills();
+  assert.equal(loaded.find(c => c.kind === 'case-discussion')?.cohosts, false, 'rescan returns the skill to solo mode');
+}
+
 
 console.log('skill-scaffold-preserve.test.ts — all assertions passed');

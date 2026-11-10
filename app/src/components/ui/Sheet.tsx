@@ -1,13 +1,5 @@
-// One bottom sheet, content switched by the active drawer — mirrors the single
-// <Sheet> in web PlayerApp.
-//
-// Built on React Native's core <Modal>, NOT @gorhom/bottom-sheet. gorhom (and
-// the react-native-gesture-handler it rides on) installed a root touch
-// interceptor that swallowed every tap across the whole app on the New
-// Architecture on some Android devices — renders fine, no crash, just dead to
-// touch (issue #458). A core <Modal> renders in its own native window and
-// nothing at all when closed, so it can't intercept the app's touches. We lose
-// drag-to-dismiss; tap-the-scrim or the back button closes it.
+// Core Modal avoids the gesture-handler touch interceptor that blocks taps
+// on some Android devices under the New Architecture (#458).
 
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -34,7 +26,6 @@ export function Sheet({ open, onClose, title, children }: SheetProps) {
       navigationBarTranslucent
     >
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-        {/* Dimmed scrim — tap to dismiss. Sits behind the panel. */}
         <Pressable
           style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.5)' }]}
           onPress={onClose}
@@ -50,7 +41,6 @@ export function Sheet({ open, onClose, title, children }: SheetProps) {
             paddingBottom: insets.bottom + 8,
           }}
         >
-          {/* Grabber */}
           <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 4 }}>
             <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.muted }} />
           </View>

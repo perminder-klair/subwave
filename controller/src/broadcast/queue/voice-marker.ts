@@ -1,25 +1,6 @@
-// Air-time marker reader for spoken segments (#1382).
-//
-// Everything the controller knows about a segment is handoff-time: airVoice
-// resolves when the path has been written into say.txt/intro.txt, which is one
-// 0.5s Liquidsoap poll plus the request queue, the lead-in and the duck ramp
-// before a listener hears the first word. radio.liq writes voice-playing.json
-// the moment the clip actually starts feeding, carrying the `voiceId` the
-// controller stamped into the clip's annotate: URI — so a segment can be told
-// exactly when it went to air rather than when it was handed over.
-//
-// The STAMP is what matters, not the detection: `startedAt` comes from the
-// mixer's own clock, so a consumer gets the exact air time even though this
-// poller notices it up to POLL_MS later. That is why the cadence here is a
-// cheap 500ms rather than something tighter.
-//
-// Degrading is deliberate and silent. A mixer that predates this marker never
-// writes the file, so awaitVoiceAir() resolves null IMMEDIATELY (see
-// markerFilePresent) rather than making every station without it wait out the
-// timeout before its booth log and webhooks fire. Callers treat null as "air
-// time unknown" and fall back to today's handoff-time behaviour.
-//
-// Part of the queue/ split - see ../queue.ts, which owns the Queue class.
+// Match voice IDs against voice-playing.json for the mixer's actual startedAt, not handoff
+// time. Polling latency does not change that timestamp. A missing marker returns null
+// immediately for unverified mixers; verified overlays wait for the first marker. #1382.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { config } from '../../config.js';
@@ -32,7 +13,8 @@ export interface VoiceMarker {
   filename: string | null;
 }
 
-const POLL_MS = 500;
+export const VOICE_MARKER_POLL_MS = 500;
+const POLL_MS = VOICE_MARKER_POLL_MS;
 // How long a segment waits for its own marker before giving up and reporting an
 // unknown air time. Generous: the normal lag is well under 2s, but a clip
 // handed over while the queue still holds the previous one airs later, and a
@@ -142,7 +124,7 @@ export function resetVoiceMarkers() {
 // #1382 or one that has not spoken since it started — both of which must
 // degrade to instant, handoff-time bookkeeping rather than a 20s stall on every
 // segment.
-function markerFilePresent(): boolean {
+export function markerFilePresent(): boolean {
   return existsSync(config.liquidsoap.voicePlayingFile);
 }
 
@@ -152,13 +134,16 @@ function markerFilePresent(): boolean {
 export function awaitVoiceAir(
   voiceId: string,
   timeoutMs: number = VOICE_AIR_TIMEOUT_MS,
+  { requireMarker = false }: { requireMarker?: boolean } = {},
 ): Promise<number | null> {
   const seen = _recent.get(voiceId);
   if (seen) {
     _recent.delete(voiceId);
     return Promise.resolve(seen.airedAt);
   }
-  if (!markerFilePresent()) return Promise.resolve(null);
+  // Optional overlays have already verified mixer capability. On a fresh
+  // station their first start creates this file, so absence is not a fallback.
+  if (!requireMarker && !markerFilePresent()) return Promise.resolve(null);
   startPoller();
   return new Promise<number | null>(resolve => {
     const timer = setTimeout(() => {

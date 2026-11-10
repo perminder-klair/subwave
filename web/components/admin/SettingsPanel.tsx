@@ -1,11 +1,17 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
-import { useEffect, useState } from 'react';
+import { settingsForm } from './settings/form-state';
+import { atPath, samePath, sameForm, countLeafDiffs, dirtyPaths, restorePaths, ownsErrorPath, mergePatchErrors, unsavedAnywhere } from './settings/form-diff';
+import { archivesSavePayload, dangerSavePayload, stemsSavePayload } from './settings/save-payload';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { notify, errorMessage } from '../../lib/notify';
-import { normalizeStationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import {
+  AdminResponseError,
+  adminResponse,
+} from '../../lib/admin-query';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -16,48 +22,85 @@ import { Card, Btn, Pill, Seg } from './ui';
 import { SkeletonForm } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { cn } from '../../lib/cn';
+import { fieldAria } from '../../lib/form';
 import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
+import OrphanStemsPanel from './OrphanStemsPanel';
 import {
   SETTINGS_AAC_BITRATES,
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
 } from '@/lib/schemas.generated';
+import { AlertTriangle } from 'lucide-react';
 import {
-  Radio, Palette, Cpu, Mic, Library, Search,
-  Activity, Archive, Save, AlertTriangle, Heart, Music2,
-} from 'lucide-react';
-import {
-  SectionHeader, SettingsFieldError, ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS,
+  SectionHeader, SaveBar, SettingsFieldError, NowBanner,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
-  type LoudnessSource, type LlmForm, type LlmFallbackForm,
+  type LoudnessSource, type TransitionEffect,
 } from './settings/shared';
+import { useHosted } from './HostedContext';
+import {
+  SECTIONS, SECTION_GROUPS, RESTART_PATHS, STEM_FORM_KEYS, sectionById, type SectionId,
+} from './settings/registry';
+import { Advanced, SectionChromeProvider } from './settings/section-chrome';
+import { SettingsSearch, type SettingsJump } from './settings/SettingsSearch';
 import { TtsSection } from './settings/TtsSection';
+import { DjBehaviourSection } from './settings/DjBehaviourSection';
 import { LlmSection } from './settings/LlmSection';
+import { BrainSection } from './settings/BrainSection';
 import { SearchSection } from './settings/SearchSection';
 import { LibrarySection } from './settings/LibrarySection';
 import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
-import { ScrobbleSection } from './settings/ScrobbleSection';
-import { LikesSection } from './settings/LikesSection';
+import { ListenersSection } from './settings/ListenersSection';
 import { NavidromeSection } from './settings/NavidromeSection';
+import { MusicSelectionSection } from './settings/MusicSelectionSection';
+import {
+  useLlmSwapMutation,
+  useSettingsMutation,
+  useSettingsQuery,
+  useStemUsageQuery,
+} from './settings/queries';
+import { fmtGb, fmtMeasured, pickTimeOvershoot, stemBudgetImpact, usageCaveat } from './settings/stem-budget';
+import {
+  cloudSaveSnapshot, cloudSaveReadReady, rebaselineSavedPatch, reconcileSavedCloud,
+  adoptServerPaths, committedReadReady, LLM_SWAP_FORM_KEYS,
+  type PendingCloudSave, type PendingCommittedRead,
+} from './settings/form-reconciliation';
 
-const SECTIONS = [
-  { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
-  { id: 'music',    label: 'Music source', hint: 'navidrome · subsonic', icon: Music2 },
-  { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
-  { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
-  { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
-  { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation', icon: Library },
-  { id: 'search',   label: 'Web search', hint: 'live-facts backend', icon: Search },
-  { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
-  { id: 'likes',    label: 'Likes', hint: 'heart button · navidrome stars', icon: Heart },
-  { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
-  { id: 'backup',   label: 'Backup', hint: 'export · restore', icon: Save },
-  { id: 'danger',   label: 'Danger zone', hint: 'broadcast control', icon: AlertTriangle },
-] as const;
-
-type SectionId = (typeof SECTIONS)[number]['id'];
+// Operator copy for the shared transition vocabulary. The drift test keeps
+// these labels in the schema's order and ensures every gesture has a hint.
+const TRANSITION_EFFECT_FIELDS = [
+  {
+    id: 'sweep',
+    label: 'Sweep',
+    hint: 'The outgoing track sinks under a closing filter while the next one rises clean — the dramatic gear-change across a clashing pair.',
+  },
+  {
+    id: 'washout',
+    label: 'Washout',
+    hint: 'A track dissolves into a tempo-synced echo tail as it ends. Also what makes an over-length track cut by the length cap sound intentional, so switching it off leaves those cuts as plain crossfades.',
+  },
+  {
+    id: 'blend',
+    label: 'Blend',
+    hint: 'A spectral handover between two tempo- and key-locked tracks, so the pair reads as one continuous piece.',
+  },
+  {
+    id: 'dissolve',
+    label: 'Dissolve',
+    hint: 'The outgoing track melts into a beatless reverb wash under the incoming one — the smooth way to hide a jump. The most expensive gesture in the kit: it runs on Liquidsoap\u2019s single streaming thread, so switch it off first if the mixer reports catch-up warnings on a slow host.',
+  },
+  {
+    id: 'chop',
+    label: 'Chop',
+    hint: 'The outgoing track is cut on its own beat, stabs thinning as the next rises through the gaps — the percussive way to lift the energy.',
+  },
+  {
+    id: 'loop',
+    label: 'Exit loop',
+    hint: 'A track\u2019s final bar repeats under whatever follows before it cuts away. Needs the track\u2019s measured tempo.',
+  },
+] as const satisfies readonly { id: TransitionEffect; label: string; hint: string }[];
 
 // The three encoder vocabularies, from the mirror rather than re-typed. radio.liq
 // has a literal `%mp3(bitrate=…)` branch per value, so each set is genuinely
@@ -69,51 +112,74 @@ const OPUS_BITRATES = SETTINGS_OPUS_BITRATES;
 const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 
 /**
- * Replace exactly the errors belonging to the keys this patch carried.
- *
- * Scoped by TOP-LEVEL key, because that is the unit a save button posts and the
- * unit the controller reports against: a `{beds: …}` save owns every
- * `beds.*` error and nothing else. Merging blindly would let a fixed field keep
- * showing its old message; clearing everything would wipe an unrelated
- * section's unresolved error the moment any other control saved.
+ * How long a search jump waits for its target card to mount, in animation
+ * frames (~1s at 60Hz). Generous on purpose: the cost of waiting is invisible
+ * — the scroll simply happens on the frame the card appears — while the cost of
+ * giving up early is a jump that silently does nothing.
  */
-function mergePatchErrors(
-  prev: Record<string, string>,
-  patch: Record<string, unknown>,
-  next: Record<string, string> | undefined,
-): Record<string, string> {
-  const owned = Object.keys(patch);
-  const isOwned = (path: string) =>
-    owned.some((key) => path === key || path.startsWith(`${key}.`));
-  const out: Record<string, string> = {};
-  for (const [path, message] of Object.entries(prev)) {
-    if (!isOwned(path)) out[path] = message;
-  }
-  for (const [path, message] of Object.entries(next || {})) out[path] = message;
-  return out;
-}
+const JUMP_MAX_FRAMES = 60;
 
-export default function SettingsPanel() {
+export default function SettingsPanel({ djBrainEnabled = false, hosted = false }: { djBrainEnabled?: boolean; hosted?: boolean }) {
+  // Hosted: the plan's listener ceiling, shown instead of the editable field,
+  // and its bitrate ceiling: the stream pickers offer only what the plan
+  // allows (the controller drops anything higher on save) and FLAC is off.
+  const { listenerCap, maxBitrate } = useHosted();
+  const underCeiling = (values: readonly number[]) => (maxBitrate ? values.filter(br => br <= maxBitrate) : values);
+  const ceilingHint = maxBitrate ? <> Up to {maxBitrate} kbps on this station&apos;s plan · Managed by SUB/WAVE Cloud.</> : null;
+  // Hosted (SUB/WAVE Cloud): the LLM provider page is the agent's, so it goes;
+  // the voice page stays for what the operator still owns (see TtsSection).
+  const sections = useMemo(
+    () => SECTIONS.filter(s => (s.id !== 'brain' || djBrainEnabled) && (s.id !== 'llm' || !hosted)),
+    [djBrainEnabled, hosted],
+  );
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<SettingsData | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const settingsQuery = useSettingsQuery<SettingsData>({
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+    refetchInterval: 3_000,
+  });
+  const data = settingsQuery.data ?? null;
+  const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
+  // The stem cache's stored size, for the budget field's "cache used"
+  // line and the lowered-budget warning. The snapshot, never a walk.
+  const stemUsageResponse = useStemUsageQuery({ adminFetch, enabled: hydrated && !needsAuth }).data;
+  const stemUsage = stemUsageResponse?.usage ?? null;
+  const [confirmStemBudget, setConfirmStemBudget] = useState(false);
+  const [commandBusy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
+  const formBaselineRef = useRef<FormState | null>(null);
+  const appliedRevisionRef = useRef(0);
+  const pendingFormRevisionRef = useRef<{ revision: number; form: FormState } | null>(null);
+  const [pendingCloudSave, setPendingCloudSave] = useState<PendingCloudSave | null>(null);
+  // A committed LLM swap whose llm/embedding keys still have to be adopted from
+  // a read that reflects it (see the hydration effect).
+  const [pendingSwapRead, setPendingSwapRead] = useState<PendingCommittedRead | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionId>('station');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const lengthModeAria = fieldAria('max-track-length-mode',
+    fieldErrors.maxTrackLengthMode ? { message: fieldErrors.maxTrackLengthMode } : undefined);
+  // Portal target for the one sticky save bar. Null while nothing is unsaved,
+  // which is what makes every section's SaveBar render nothing when clean.
+  const [saveSlot, setSaveSlot] = useState<HTMLElement | null>(null);
+  // Dirtiness reported by a section whose state does not ride FormState.
+  const [localDirty, setLocalDirty] = useState<Record<string, boolean>>({});
+  // Advanced disclosure, per section — remembered while the panel is open so
+  // flipping away to check another section and back does not re-collapse it.
+  const [advOpen, setAdvOpen] = useState<Record<string, boolean>>({});
   const router = useRouter();
 
-  const refresh = async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) return;
-      const j = (await r.json()) as SettingsData;
-      setData(j); setErr(null);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-  };
+  const reportDirty = useCallback((id: string, dirty: boolean) => {
+    setLocalDirty(prev => (!!prev[id] === dirty ? prev : { ...prev, [id]: dirty }));
+  }, []);
+
+  const refresh = async () => { await settingsQuery.refetch(); };
+
+  const saveMutation = useSettingsMutation<SettingsData>({ adminFetch });
+  const swapMutation = useLlmSwapMutation<SettingsData>({ adminFetch });
+  const busy = commandBusy || saveMutation.isPending || swapMutation.isPending;
 
   // Jingles / SFX / Beds now live on /admin/imaging; their old ?section
   // deep-links are forwarded so existing bookmarks survive. Read through
@@ -122,294 +188,128 @@ export default function SettingsPanel() {
   // only the query changes.
   const searchParams = useSearchParams();
   useEffect(() => {
-    const s = searchParams.get('section');
-    if (s === 'jingles' || s === 'sfx' || s === 'beds') {
-      router.replace(`/admin/imaging?tab=${s}`);
+    const requested = searchParams.get('section');
+    if (requested === 'jingles' || requested === 'sfx' || requested === 'beds') {
+      router.replace(`/admin/imaging?tab=${requested}`);
       return;
     }
-    if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
-  }, [router, searchParams]);
+    // Retired tab ids, so an old bookmark or doc link still lands somewhere.
+    const RENAMED: Record<string, SectionId> = { danger: 'broadcast', likes: 'listeners', scrobble: 'listeners', orphans: 'stems' };
+    const s = requested && RENAMED[requested] ? RENAMED[requested] : requested;
+    if (s === 'brain' && !djBrainEnabled) {
+      setActiveSection('station');
+      return;
+    }
+    if (s && sections.some(x => x.id === s)) setActiveSection(s as SectionId);
+  }, [router, searchParams, sections, djBrainEnabled]);
 
   useEffect(() => {
-    if (!data?.values || form) return;
-    const v = data.values;
-    setForm({
-      crossfadeDuration: String(v.crossfadeDuration ?? ''),
-      maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
-      transitions: {
-        pairDrain: v.transitions?.pairDrain ?? true,
-        stemBlends: v.transitions?.stemBlends ?? false,
-        stemCache: v.audio?.stemCache ?? false,
-        stemCacheGb: String(v.audio?.stemCacheGb ?? 15),
-      },
-      archive: {
-        enabled: v.archive?.enabled ?? false,
-        bitrate: String(v.archive?.bitrate ?? 128),
-        retentionDays: String(v.archive?.retentionDays ?? 30),
-      },
-      stream: {
-        opusEnabled: v.stream?.opusEnabled ?? true,
-        opusBitrate: String(v.stream?.opusBitrate ?? 96),
-        flacEnabled: v.stream?.flacEnabled ?? false,
-        aacEnabled: v.stream?.aacEnabled ?? false,
-        aacBitrate: String(v.stream?.aacBitrate ?? 192),
-        bitrate: String(v.stream?.bitrate ?? 192),
-        oggIcyMetadata: v.stream?.oggIcyMetadata ?? true,
-        idleWhenEmpty: v.stream?.idleWhenEmpty ?? false,
-        idleAfterMinutes: String(v.stream?.idleAfterMinutes ?? 10),
-      },
-      loudness: {
-        targetLufs: String(v.loudness?.targetLufs ?? -14),
-        maxBoostDb: String(v.loudness?.maxBoostDb ?? 6),
-        source: v.loudness?.source ?? 'replaygain-then-measured',
-      },
-      station: v.station ?? '',
-      stationDescription: v.stationDescription ?? '',
-      timezone: v.timezone ?? '',
-      locale: normalizeStationLocale(v.locale),
-      privacy: {
-        privatePlayer: v.privacy?.privatePlayer ?? false,
-        listenerAuth: v.privacy?.listenerAuth ?? false,
-        // Arrives as the 'set' sentinel ('' when unset) — never the secret.
-        password: v.privacy?.password ?? '',
-        publishPersonaSouls: v.privacy?.publishPersonaSouls ?? false,
-      },
-      requests: {
-        enabled: v.requests?.enabled !== false,
-        maxPending: String(v.requests?.maxPending ?? 6),
-        cooldownSec: String(v.requests?.cooldownSec ?? 60),
-        perIpHourlyCap: String(v.requests?.perIpHourlyCap ?? 8),
-        globalHourlyCap: String(v.requests?.globalHourlyCap ?? 30),
-        repeatCooldownMin: String(v.requests?.repeatCooldownMin ?? 120),
-        onePendingPerIp: v.requests?.onePendingPerIp !== false,
-      },
-      kokoroLang: v.tts?.kokoro?.lang ?? '',
-      weather: {
-        lat: String(v.weather?.lat ?? ''),
-        lng: String(v.weather?.lng ?? ''),
-        locationName: v.weather?.locationName ?? '',
-        onAirLocation: v.weather?.onAirLocation ?? '',
-        units: v.weather?.units === 'imperial' ? 'imperial' : 'metric',
-      },
-      tts: {
-        // Absent (a settings.json predating the key) reads as ON, matching the
-        // controller's own coercion in settings.load().
-        enabled: v.tts?.enabled !== false,
-        defaultEngine: v.tts?.defaultEngine ?? 'piper',
-        // Absent block = off, matching the controller's normalizeTtsFallback().
-        fallback: {
-          enabled: v.tts?.fallback?.enabled === true,
-          engine: v.tts?.fallback?.engine ?? 'piper',
-          voice: v.tts?.fallback?.voice ?? '',
-          cloudProvider: v.tts?.fallback?.cloudProvider ?? 'openai',
-        },
-        kokoro: { voice: v.tts?.kokoro?.voice ?? 'bf_isabella' },
-        chatterbox: { referenceVoice: v.tts?.chatterbox?.referenceVoice ?? '' },
-        pocketTts: { voice: v.tts?.pocketTts?.voice ?? 'alba' },
-        cloud: {
-          enabled: v.tts?.cloud?.enabled ?? false,
-          provider: v.tts?.cloud?.provider ?? 'openai',
-          model: v.tts?.cloud?.model ?? '',
-          voice: v.tts?.cloud?.voice ?? '',
-          baseUrl: v.tts?.cloud?.baseUrl ?? '',
-          voiceStability: typeof v.tts?.cloud?.voiceStability === 'number' ? v.tts.cloud.voiceStability : ELEVENLABS_VS_DEFAULTS.voiceStability,
-          voiceStyle: typeof v.tts?.cloud?.voiceStyle === 'number' ? v.tts.cloud.voiceStyle : ELEVENLABS_VS_DEFAULTS.voiceStyle,
-          voiceSimilarityBoost: typeof v.tts?.cloud?.voiceSimilarityBoost === 'number' ? v.tts.cloud.voiceSimilarityBoost : ELEVENLABS_VS_DEFAULTS.voiceSimilarityBoost,
-          voiceUseSpeakerBoost: typeof v.tts?.cloud?.voiceUseSpeakerBoost === 'boolean' ? v.tts.cloud.voiceUseSpeakerBoost : ELEVENLABS_VS_DEFAULTS.voiceUseSpeakerBoost,
-          temperature: typeof v.tts?.cloud?.temperature === 'number' ? v.tts.cloud.temperature : FISH_TTS_DEFAULTS.temperature,
-          topP: typeof v.tts?.cloud?.topP === 'number' ? v.tts.cloud.topP : FISH_TTS_DEFAULTS.topP,
-          latency: v.tts?.cloud?.latency === 'low'
-            ? 'low'
-            : v.tts?.cloud?.latency === 'balanced'
-              ? 'balanced'
-              : FISH_TTS_DEFAULTS.latency,
-          // Extra openai-compatible body fields (issue #1317). Rows are text
-          // pairs on the wire too — the controller coerces them to JSON types
-          // at send time, so the form never has to guess a value's shape.
-          compatParams: Array.isArray(v.tts?.cloud?.compatParams)
-            ? v.tts.cloud.compatParams.map(p => ({ key: String(p?.key ?? ''), value: String(p?.value ?? '') }))
-            : [],
-        },
-        remote: { url: v.tts?.remote?.url ?? '' },
-        // Per-engine voice level (dB), keyed by engine id — `pocket-tts` (hyphen).
-        gainDb: {
-          piper: 0,
-          kokoro: 0,
-          chatterbox: 0,
-          'pocket-tts': 0,
-          cloud: 0,
-          remote: 0,
-          ...(v.tts?.gainDb || {}),
-        },
-        // Per-engine speech speed (×), keyed by engine id — `pocket-tts` (hyphen).
-        speed: {
-          piper: 1,
-          kokoro: 1,
-          chatterbox: 1,
-          'pocket-tts': 1,
-          cloud: 1,
-          remote: 1,
-          ...(v.tts?.speed || {}),
-        },
-        corrections: (v.tts?.corrections || []).map(c => ({ from: c.from ?? '', to: c.to ?? '' })),
-      },
-      llm: {
-        provider: v.llm?.provider ?? 'ollama',
-        model: v.llm?.model ?? '',
-        ollamaUrl: v.llm?.ollamaUrl ?? '',
-        numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
-        repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,
-        // Stored providerBaseUrls win; otherwise the legacy single baseUrl seeds
-        // the current provider's slot so no URL is lost.
-        providerBaseUrls: (() => {
-          const llmAny = v.llm as (Partial<LlmForm> & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
-          const stored = llmAny?.providerBaseUrls;
-          if (stored && typeof stored === 'object') return { ...stored };
-          const legacy = llmAny?.baseUrl ?? '';
-          const prov = llmAny?.provider ?? 'ollama';
-          return legacy ? { [prov]: legacy } : {};
-        })(),
-        reasoning: !!v.llm?.reasoning,
-        toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
-        pickerAgent: !!v.llm?.pickerAgent,
-        // Fallback must track the controller's default (config.ts, 250): a
-        // settings.json written before the field existed omits the key, and
-        // seeding the OLD default here means opening Settings and saving any
-        // LLM field silently persists it over the new one.
-        noRepeatWindow: String(typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 250),
-        requestWebResolve: !!v.llm?.requestWebResolve,
-        agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
-        pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
-        dailyTokenCap: typeof v.llm?.dailyTokenCap === 'number' ? v.llm.dailyTokenCap : 0,
-        budgetSoftPct: typeof v.llm?.budgetSoftPct === 'number' ? v.llm.budgetSoftPct : 80,
-        exemptRequests: v.llm?.exemptRequests !== false,
-        maxOutputTokens: typeof v.llm?.maxOutputTokens === 'number' ? v.llm.maxOutputTokens : 0,
-        discoverySteps: typeof v.llm?.discoverySteps === 'number' ? v.llm.discoverySteps : 0,
-        fallback: {
-          enabled: !!v.llm?.fallback?.enabled,
-          provider: v.llm?.fallback?.provider ?? 'ollama',
-          model: v.llm?.fallback?.model ?? '',
-          ollamaUrl: v.llm?.fallback?.ollamaUrl ?? '',
-          numCtx: typeof v.llm?.fallback?.numCtx === 'number' ? v.llm.fallback.numCtx : 16384,
-          repeatPenalty: typeof v.llm?.fallback?.repeatPenalty === 'number' ? v.llm.fallback.repeatPenalty : 1.15,
-          discoverySteps: typeof v.llm?.fallback?.discoverySteps === 'number' ? v.llm.fallback.discoverySteps : 0,
-          providerBaseUrls: (() => {
-            const fbAny = v.llm?.fallback as (LlmFallbackForm & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
-            const stored = fbAny?.providerBaseUrls;
-            if (stored && typeof stored === 'object') return { ...stored };
-            const legacy = fbAny?.baseUrl ?? '';
-            const prov = fbAny?.provider ?? 'ollama';
-            return legacy ? { [prov]: legacy } : {};
-          })(),
-          reasoning: !!v.llm?.fallback?.reasoning,
-        },
-      },
-      search: {
-        provider: v.search?.provider ?? 'duckduckgo',
-        // GET /settings returns the apiKey redacted to 'set' | '' — that
-        // round-trips through POST harmlessly (settings.update ignores 'set').
-        apiKey: v.search?.apiKey ?? '',
-        baseUrl: v.search?.baseUrl ?? '',
-      },
-      embedding: {
-        enabled: v.embedding?.enabled ?? true,
-        provider: v.embedding?.provider ?? '',
-        model: v.embedding?.model ?? '',
-        providerBaseUrls: (() => {
-          const stored = (v.embedding as { providerBaseUrls?: Record<string, string> })?.providerBaseUrls;
-          if (stored && typeof stored === 'object') return { ...stored };
-          // Legacy migration keys by the EFFECTIVE provider (own, else the chat
-          // provider), the same key LibrarySection reads and writes.
-          const legacy = v.embedding?.baseUrl ?? '';
-          const prov = v.embedding?.provider || v.llm?.provider || '';
-          return legacy && prov ? { [prov]: legacy } : {};
-        })(),
-        ollamaUrl: v.embedding?.ollamaUrl ?? '',
-        seedCount: String(v.embedding?.seedCount ?? 0),
-        knnNeighbours: String(v.embedding?.knnNeighbours ?? 10),
-        moodVoteThreshold: String(v.embedding?.moodVoteThreshold ?? 0.4),
-        confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.35),
-        maxActiveLearningRounds: String(v.embedding?.maxActiveLearningRounds ?? 3),
-        audioFusionWeight: String(v.embedding?.audioFusionWeight ?? 0.5),
-        batchSize: String(v.embedding?.batchSize ?? 25),
-        enrichment: {
-          lastfmTags: v.embedding?.enrichment?.lastfmTags ?? false,
-          lyrics: v.embedding?.enrichment?.lyrics ?? true,
-        },
-      },
-      scrobble: {
-        lastfm: {
-          enabled: !!v.scrobble?.lastfm?.enabled,
-          // 'set' sentinel from getRedacted() — round-trips harmlessly.
-          apiKey: v.scrobble?.lastfm?.apiKey ?? '',
-          apiSecret: v.scrobble?.lastfm?.apiSecret ?? '',
-          sessionKey: v.scrobble?.lastfm?.sessionKey ?? '',
-          username: v.scrobble?.lastfm?.username ?? '',
-        },
-        listenbrainz: {
-          enabled: !!v.scrobble?.listenbrainz?.enabled,
-          userToken: v.scrobble?.listenbrainz?.userToken ?? '',
-          username: v.scrobble?.listenbrainz?.username ?? '',
-          baseUrl: v.scrobble?.listenbrainz?.baseUrl ?? '',
-        },
-      },
-      likes: {
-        enabled: v.likes?.enabled ?? true,
-        starInNavidrome: v.likes?.starInNavidrome ?? true,
-        influenceDj: !!v.likes?.influenceDj,
-        maxTracks: String(v.likes?.maxTracks ?? 10),
-        windowDays: String(v.likes?.windowDays ?? 30),
-      },
-    });
-  }, [data, form]);
-
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    refresh();
-    const id = setInterval(() => { refresh(); }, 3000);
-    return () => clearInterval(id);
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!data?.values) return;
+    const nextForm = settingsForm(data.values);
+    const revision = settingsQuery.dataUpdatedAt;
+    if (revision && appliedRevisionRef.current !== revision) {
+      pendingFormRevisionRef.current = { revision, form: nextForm };
+    }
+    const pending = pendingFormRevisionRef.current;
+    if (!pending) return;
+    let displayed = form;
+    if (displayed && formBaselineRef.current && pendingCloudSave
+      && cloudSaveReadReady(pendingCloudSave, revision)) {
+      const reconciled = reconcileSavedCloud(
+        formBaselineRef.current, displayed, pendingCloudSave.snapshot, nextForm.tts.cloud,
+      );
+      displayed = reconciled.form;
+      formBaselineRef.current = reconciled.baseline;
+      setPendingCloudSave(null);
+    }
+    // The swap wrote llm/embedding on the server. Adopt them now even when
+    // another section's unsaved edit is holding this revision back: left
+    // stale, the LLM page would show the pre-swap legs and the next save of
+    // either section would post them straight back over the swap.
+    if (displayed && formBaselineRef.current && pendingSwapRead
+      && committedReadReady(pendingSwapRead, revision)) {
+      const adopted = adoptServerPaths(formBaselineRef.current, displayed, nextForm, LLM_SWAP_FORM_KEYS);
+      displayed = adopted.form;
+      formBaselineRef.current = adopted.baseline;
+      setPendingSwapRead(null);
+    }
+    const baseline = formBaselineRef.current;
+    const clean = !displayed || !baseline || sameForm(displayed, baseline);
+    if (!clean) {
+      if (displayed !== form) setForm(displayed);
+      return;
+    }
+    // Compare against the rendered form: reconciliation may have restored
+    // omitted fields only in `displayed`, even when the GET was unchanged.
+    if (!form || !sameForm(form, pending.form)) setForm(pending.form);
+    formBaselineRef.current = pending.form;
+    appliedRevisionRef.current = pending.revision;
+    pendingFormRevisionRef.current = null;
+  }, [data, form, settingsQuery.dataUpdatedAt, pendingCloudSave, pendingSwapRead]);
 
   const saveSettings: SaveSettings = async (patch) => {
-    setBusy(true);
+    const submitted = form;
+    const cloudSnapshot = submitted ? cloudSaveSnapshot(submitted, patch) : null;
     try {
-      const r = await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string;
-        requiresRestart?: boolean;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // Land the failure on the inputs it belongs to. The toast still fires —
-        // a save button can be off-screen from the control that failed — but
-        // the operator now also sees WHICH field, without decoding a dotted
-        // path out of a sentence.
-        //
-        // Only the keys THIS patch carried are replaced, so a stale error from
-        // an unrelated section can't linger and a section that saved cleanly
-        // can't be blamed for another's failure.
-        setFieldErrors((prev) => mergePatchErrors(prev, patch, j.fieldErrors));
-        throw new Error(j.error || `failed (${r.status})`);
+      const j = await saveMutation.mutateAsync(patch);
+      // The refetch may resolve while this local form is still dirty against
+      // its old baseline. Mark only submitted fields clean: an edit in another
+      // settings section must continue to hold the queued revision back.
+      if (submitted) {
+        const baseline = formBaselineRef.current;
+        formBaselineRef.current = baseline
+          ? rebaselineSavedPatch(baseline, submitted, patch)
+          : submitted;
+      }
+      if (cloudSnapshot) {
+        // Wake hydration even if the authoritative GET rendered before this
+        // continuation. After a failed GET, wait for a later successful poll.
+        setPendingCloudSave({
+          snapshot: cloudSnapshot, refreshedAt: j.refreshedAt, refreshAfter: Date.now(),
+        });
       }
       setFieldErrors((prev) => mergePatchErrors(prev, patch, undefined));
       if (j.requiresRestart) setPendingRestart(true);
-      notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
-      await refresh();
+      if (j.refreshError) notify.err(`saved, but refresh failed: ${j.refreshError}`);
+      else notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
       return true;
     } catch (e) {
+      const body = e instanceof AdminResponseError
+        ? e.body as { fieldErrors?: Record<string, string> }
+        : undefined;
+      setFieldErrors((prev) => mergePatchErrors(prev, patch, body?.fieldErrors));
       notify.err(errorMessage(e));
       return false;
-    } finally { setBusy(false); }
+    }
+  };
+
+  /**
+   * "Swap with primary". The controller builds and saves the swap, so there is
+   * no submitted patch to re-baseline: the swapped keys are adopted from the
+   * authoritative read instead (pendingSwapRead, applied in the hydration
+   * effect, or by a later poll if that read failed).
+   */
+  const swapLlmLegs = async (): Promise<boolean> => {
+    try {
+      const j = await swapMutation.mutateAsync();
+      setPendingSwapRead({ refreshedAt: j.refreshedAt, refreshAfter: Date.now() });
+      if (j.requiresRestart) setPendingRestart(true);
+      if (j.refreshError) notify.err(`swapped, but refresh failed: ${j.refreshError}`);
+      else notify.ok('swapped: the backup is now the primary');
+      if (j.keyNotPinned) {
+        notify.err('swapped, but the Library tagger could not keep the primary’s API key (too long to store): if embeddings stop working, set an embedding key in Library tagger');
+      }
+      return true;
+    } catch (e) {
+      notify.err(`swap failed: ${errorMessage(e)}`);
+      return false;
+    }
   };
 
   const restartMixer = async () => {
     setBusy(true);
     try {
-      const r = await adminFetch('/restart-mixer', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/restart-mixer', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setPendingRestart(false);
@@ -422,7 +322,7 @@ export default function SettingsPanel() {
   const stopStream = async () => {
     setBusy(true);
     try {
-      const r = await adminFetch('/stream-stop', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/stream-stop', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       notify.ok('stream stopped, station is off air');
@@ -435,7 +335,7 @@ export default function SettingsPanel() {
   const startStream = async () => {
     setBusy(true);
     try {
-      const r = await adminFetch('/stream-start', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/stream-start', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       notify.ok('stream started, station is on air');
@@ -445,37 +345,176 @@ export default function SettingsPanel() {
     } finally { setBusy(false); }
   };
 
+  /**
+   * Post a whole-block patch — unless a number box in it was left blank, in
+   * which case name the box and save nothing. See `save-payload.ts`.
+   */
+  const saveBlock = ({ patch, fieldErrors }: ReturnType<typeof dangerSavePayload> | ReturnType<typeof archivesSavePayload> | ReturnType<typeof stemsSavePayload>) => {
+    const blanks = Object.keys(fieldErrors);
+    if (blanks.length > 0) {
+      setFieldErrors(prev => mergePatchErrors(prev, patch, fieldErrors));
+      notify.err(blanks.length === 1
+        ? 'a number field is empty — fill it in before saving'
+        : `${blanks.length} number fields are empty — fill them in before saving`);
+      return;
+    }
+    saveSettings(patch);
+  };
+
+  /**
+   * Archives and Broadcast & mixer used to carry a Save button per card — one for
+   * the bitrate, one for the retention window, one for each stream mount. Each
+   * now folds into the section's one save.
+   *
+   * Posting the whole block is safe rather than noisy: `settings.update()`
+   * change-gates every field in these two blocks against the CURRENT value
+   * before deciding it changed, so an untouched field posted alongside an
+   * edited one neither writes nor flags a restart. What it is NOT safe against
+   * is a blank number box, which is why both go through `saveBlock`.
+   */
+  const saveArchives = () => {
+    if (form) saveBlock(archivesSavePayload(form));
+  };
+
+  const saveBroadcast = () => {
+    if (form) saveBlock(dangerSavePayload(form));
+  };
+  const saveStems = () => {
+    if (form) saveBlock(stemsSavePayload(form));
+  };
+  // The budget's save path: a budget lowered under what the cache holds
+  // makes the next hourly sweep delete the difference, so that save asks
+  // first. An unchanged budget (even one already under the cache) and a
+  // raised one save straight through.
+  const stemBudgetCut = form
+    && formBaselineRef.current
+    && Number(form.transitions.stemCacheGb) < Number(formBaselineRef.current.transitions.stemCacheGb)
+    ? stemBudgetImpact(stemUsage, Number(form.transitions.stemCacheGb))
+    : null;
+  const saveStemsGuarded = () => {
+    if (stemBudgetCut) setConfirmStemBudget(true);
+    else saveStems();
+  };
+
+  const activeSpec = sectionById(activeSection);
+  const baseline = formBaselineRef.current;
+  const changedPaths = dirtyPaths(form, baseline, activeSpec?.formKeys ?? []);
+  const changedCount = changedPaths.reduce(
+    (n, path) => n + countLeafDiffs(atPath(form, path), atPath(baseline, path)),
+    0,
+  );
+  // A section can be dirty in either currency: form paths the panel diffs, or a
+  // section-local edit it cannot see (Navidrome creds, which live in
+  // setup-config.json rather than settings.json).
+  const hasLocalDirty = Object.values(localDirty).some(Boolean);
+  const sectionDirty = changedCount > 0 || hasLocalDirty;
+  // Warn BEFORE the save, from the mirrored path list. The controller stays the
+  // authority afterwards — its `requiresRestart` is what raises the persistent
+  // banner above.
+  const restartWarn = RESTART_PATHS.some(path =>
+    (activeSpec?.formKeys ?? []).some(key => path === key || path.startsWith(`${key}.`))
+    && !samePath(form, baseline, path));
+
+  const dirtyLabel = changedCount > 0
+    ? `${changedCount} unsaved change${changedCount === 1 ? '' : 's'} in ${activeSpec?.label.toLowerCase() ?? 'this section'}`
+    : `unsaved changes in ${activeSpec?.label.toLowerCase() ?? 'this section'}`;
+
+  /** Roll this section's fields back to the last saved baseline, nothing else. */
+  const discardSection = () => {
+    if (!form || !baseline || !activeSpec) return;
+    setForm(restorePaths(form, baseline, activeSpec.formKeys));
+    // The errors belonged to values that no longer exist — same ownership rule
+    // the save path uses, so an unrelated section's message survives.
+    setFieldErrors(prev => {
+      const out: Record<string, string> = {};
+      for (const [path, message] of Object.entries(prev)) {
+        if (!ownsErrorPath(activeSpec.formKeys, path)) out[path] = message;
+      }
+      return out;
+    });
+  };
+
+  /** Search result → switch section, open Advanced if needed, scroll and flash. */
+  const jumpTo = useCallback(({ section, anchor, advanced }: SettingsJump) => {
+    if (!sections.some(s => s.id === section)) return;
+    setActiveSection(section);
+    if (advanced) setAdvOpen(prev => ({ ...prev, [section]: true }));
+    // The section swap and the disclosure both have to commit before the target
+    // card exists to scroll to. A fixed delay is a bet against render time that
+    // a 1200-control section can lose, and a lost jump looks exactly like a
+    // broken search result — no scroll, no flash, no error. So watch for the
+    // card across frames instead, and give up only after JUMP_MAX_FRAMES.
+    let frames = 0;
+    const settle = () => {
+      const el = document.querySelector(`[data-card="${anchor}"]`);
+      if (!(el instanceof HTMLElement)) {
+        if (frames++ < JUMP_MAX_FRAMES) window.requestAnimationFrame(settle);
+        return;
+      }
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.setAttribute('data-flash', '');
+      window.setTimeout(() => el.removeAttribute('data-flash'), 2600);
+    };
+    window.requestAnimationFrame(settle);
+  }, [sections]);
+
+  const chrome = useMemo(() => ({
+    saveSlot,
+    reportDirty,
+    advOpen: !!advOpen[activeSection],
+    setAdvOpen: (open: boolean) =>
+      setAdvOpen(prev => ({ ...prev, [activeSection]: open })),
+  }), [saveSlot, reportDirty, advOpen, activeSection]);
+
   return (
-    <div className="stack-mobile grid grid-cols-[240px_1fr] items-start gap-6">
-      <aside className="grid gap-1 sm:sticky sm:top-6">
-        <span className="caption pb-2">settings</span>
-        {SECTIONS.map(s => {
-          const isActive = activeSection === s.id;
-          const Icon = s.icon;
-          return (
-            <button
-              key={s.id}
-              onClick={() => setActiveSection(s.id)}
-              className={cn(
-                'flex cursor-pointer items-center gap-2.5 border border-ink px-3 py-2.5 text-left font-[inherit] transition-colors',
-                isActive ? 'bg-ink text-bg' : 'bg-[var(--ink-soft)] text-ink hover:bg-ink/10',
-              )}
-            >
-              <Icon className="size-4 shrink-0 opacity-80" strokeWidth={2} aria-hidden />
-              <span className="grid min-w-0 gap-1">
-                <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
-                  {s.label}
-                </span>
-                <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
-                  {s.hint}
-                </span>
-              </span>
-            </button>
-          );
-        })}
+    <div className="grid min-w-0 grid-cols-1 items-start gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+      <aside className="grid min-w-0 gap-3.5 lg:sticky lg:top-6">
+        {SECTION_GROUPS.map(group => (
+          <div key={group} className="grid gap-1">
+            <span className="caption pb-1">{group}</span>
+            {sections.filter(s => s.group === group).map(s => {
+              const isActive = activeSection === s.id;
+              const Icon = s.icon;
+              // A section not on screen can only be dirty in form paths — its
+              // own component is unmounted, so a section-local edit (music)
+              // shows a dot on the active section alone. That is accurate
+              // rather than approximate: leaving those sections discards them.
+              const dirty = dirtyPaths(form, baseline, s.formKeys).length > 0
+                || (isActive && hasLocalDirty);
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => setActiveSection(s.id)}
+                  className={cn(
+                    'flex cursor-pointer items-center gap-2.5 border border-ink px-3 py-2.5 text-left font-[inherit] transition-colors',
+                    isActive ? 'bg-ink text-bg' : 'bg-[var(--ink-soft)] text-ink hover:bg-ink/10',
+                  )}
+                >
+                  <Icon className="size-4 shrink-0 opacity-80" strokeWidth={2} aria-hidden />
+                  <span className="grid min-w-0 flex-1 gap-1">
+                    <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
+                      {s.label}
+                    </span>
+                    <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
+                      {s.hint}
+                    </span>
+                  </span>
+                  {dirty && (
+                    <span
+                      className="size-1.5 shrink-0 bg-vermilion"
+                      title="unsaved changes"
+                      aria-label="unsaved changes"
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </aside>
 
-      <div className="grid gap-4">
+      <div className="grid min-w-0 grid-cols-1 gap-4">
+        <SettingsSearch onJump={jumpTo} sections={sections} />
         {err && <ErrorState error={err} onRetry={refresh} />}
         {pendingRestart && (
           <div
@@ -501,21 +540,62 @@ export default function SettingsPanel() {
         )}
         {!data && !err && <SkeletonForm fields={5} />}
 
+        {sectionDirty && (
+          <div className="sticky top-[3.25rem] z-30 grid gap-2.5 border border-vermilion bg-bg p-3 shadow-drawer">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <span className="size-2 shrink-0 bg-vermilion" aria-hidden />
+              <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
+                {dirtyLabel}
+              </span>
+              {restartWarn && (
+                <Pill tone="accent" dot>needs a mixer restart</Pill>
+              )}
+              {changedCount > 0 && (
+                <Btn sm className="ml-auto" onClick={discardSection} disabled={busy}>
+                  Discard
+                </Btn>
+              )}
+            </div>
+            <div ref={setSaveSlot} className="grid gap-2.5" />
+          </div>
+        )}
+
+        <SectionChromeProvider value={chrome}>
         {data && form && (() => {
           const updateForm: FormUpdater = (updater) =>
             setForm(prev => (prev ? updater(prev) : prev));
           return (
           <>
+            {activeSection === 'selection' && (
+              <MusicSelectionSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} fieldErrors={fieldErrors}
+              />
+            )}
             {activeSection === 'tts' && data.tts && (
               <TtsSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+                hosted={hosted}
               />
             )}
-            {activeSection === 'llm' && data.llm && (
+            {activeSection === 'behaviour' && (
+              <DjBehaviourSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} fieldErrors={fieldErrors}
+              />
+            )}
+            {djBrainEnabled && activeSection === 'brain' && (
+              <BrainSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+              />
+            )}
+            {!hosted && activeSection === 'llm' && data.llm && (
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+                unsavedChanges={unsavedAnywhere(form, baseline, hasLocalDirty)} swapLegs={swapLlmLegs}
               />
             )}
             {activeSection === 'search' && (
@@ -545,23 +625,15 @@ export default function SettingsPanel() {
                 adminFetch={adminFetch}
               />
             )}
-            {activeSection === 'scrobble' && (
-              <ScrobbleSection
+            {activeSection === 'listeners' && (
+              <ListenersSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
-              />
-            )}
-            {activeSection === 'likes' && (
-              <LikesSection
-                data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings} fieldErrors={fieldErrors}
               />
             )}
           </>
           );
         })()}
-        {/* Self-contained panels — each re-calls useAdminAuth and owns its
-            own data fetch, so they render outside the data && form guard. */}
         {activeSection === 'archives' && (
           <>
             <ArchivesPanel />
@@ -586,15 +658,6 @@ export default function SettingsPanel() {
                           )
                         }
                       />
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({ archive: { enabled: form.archive.enabled } })
-                        }
-                        disabled={busy}
-                      >
-                        Save
-                      </Btn>
                     </div>
                     <SettingsFieldError path="archive.enabled" errors={fieldErrors} />
                     <div className="field-hint">
@@ -627,17 +690,6 @@ export default function SettingsPanel() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            archive: { bitrate: parseInt(form.archive.bitrate, 10) },
-                          })
-                        }
-                        disabled={busy || !form.archive.enabled}
-                      >
-                        Save bitrate
-                      </Btn>
                     </div>
                     <div className="field-hint">
                       Lower bitrate = smaller archives, less encoder CPU
@@ -666,17 +718,6 @@ export default function SettingsPanel() {
                         }
                       />
                       <span className="text-[12px] text-muted">days</span>
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            archive: { retentionDays: parseInt(form.archive.retentionDays, 10) },
-                          })
-                        }
-                        disabled={busy}
-                      >
-                        Save retention
-                      </Btn>
                     </div>
                     <div className="field-hint">
                       Defaults to 30 days; 0 = keep forever. With a window set, the hourly
@@ -690,143 +731,27 @@ export default function SettingsPanel() {
                 </div>
               </Card>
             )}
+            <SaveBar
+              note="Turning the archive on or off, and changing its bitrate, need a mixer restart. The retention window applies live."
+              busy={busy}
+              onSave={saveArchives}
+              saveLabel="Save archives"
+              errors={fieldErrors}
+              ownedKeys={['archive']}
+            />
           </>
         )}
         {activeSection === 'backup' && <BackupPanel />}
-        {activeSection === 'danger' && (
+        {activeSection === 'stems' && (
           <>
             <SectionHeader
-              eyebrow="danger zone"
-              title="Crossfade, stream control, and mixer restart."
-              sub="Crossfade is grouped here because it needs a mixer restart to apply. Stream stop and mixer restart both affect every current listener."
+              eyebrow="stems"
+              title="The Demucs side of the station."
+              sub="The stem cache, the rendered-blend seam, and what happens to cached dirs when their track leaves the library. Everything here applies live; no mixer restart."
               metrics={[
-                {
-                  n: data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air',
-                  l: 'broadcast',
-                  accent: data?.streamOnAir === true,
-                },
-                { n: `${data?.values?.crossfadeDuration ?? '—'}s`, l: 'crossfade' },
+                { n: data?.values?.audio?.stemCache ? 'on' : 'off', l: 'stem cache', accent: data?.values?.audio?.stemCache === true },
               ]}
             />
-
-            <Card title="Broadcast" sub={data?.streamOnAir === false ? 'currently off air' : 'currently on air'}>
-              <div className="grid gap-2">
-                {data?.streamOnAir === false ? (
-                  <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
-                    Start stream
-                  </Btn>
-                ) : (
-                  <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
-                    Stop stream
-                  </Btn>
-                )}
-                <div className="field-hint">
-                  Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
-                </div>
-              </div>
-            </Card>
-
-            {form && (
-              <Card title="Idle pause" sub="silence the programme when nobody is listening">
-                <div className="field">
-                  <Label>Pause when the room is empty</Label>
-                  {/* Seg + "after" + minutes + "min" + Save is wider than a
-                      phone card, so the row wraps below 640px. */}
-                  <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
-                    <Seg
-                      options={[
-                        { id: 'on', label: 'On' },
-                        { id: 'off', label: 'Off' },
-                      ]}
-                      value={form.stream.idleWhenEmpty ? 'on' : 'off'}
-                      onChange={id =>
-                        setForm(f =>
-                          f ? { ...f, stream: { ...f.stream, idleWhenEmpty: id === 'on' } } : f,
-                        )
-                      }
-                    />
-                    <span className="text-[12px] text-muted">after</span>
-                    <Input
-                      className="mono-num w-24"
-                      aria-label="Pause after (minutes)"
-                      type="number"
-                      step={1}
-                      min={1}
-                      max={1440}
-                      value={form.stream.idleAfterMinutes}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm(f =>
-                          f
-                            ? { ...f, stream: { ...f.stream, idleAfterMinutes: e.target.value } }
-                            : f,
-                        )
-                      }
-                    />
-                    <span className="text-[12px] text-muted">min</span>
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({
-                          stream: {
-                            idleWhenEmpty: form.stream.idleWhenEmpty,
-                            idleAfterMinutes: parseInt(form.stream.idleAfterMinutes, 10),
-                          },
-                        })
-                      }
-                      disabled={busy}
-                    >
-                      Save
-                    </Btn>
-                  </div>
-                  <div className="field-hint">
-                    After this long with zero listeners the programme pauses mid-track and the DJ
-                    goes quiet: no track pulls from Navidrome, no LLM or TTS work. The stream
-                    mounts stay up, so any player (VLC, Sonos, the web player) connects normally;
-                    playback resumes where it left off within a few seconds of the first listener
-                    tuning in. Applies live, no mixer restart.
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {form && (
-              <Card title="Crossfade" sub="track transition overlap">
-                <div className="field">
-                  <div className="flex items-center gap-2">
-                    <Label>Crossfade duration</Label>
-                    <Pill tone="ink">restart required</Pill>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      className="mono-num w-28"
-                      aria-label="Crossfade duration (seconds)"
-                      type="number"
-                      step={0.5}
-                      max={30}
-                      value={form.crossfadeDuration}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setForm(f => (f ? { ...f, crossfadeDuration: e.target.value } : f))
-                      }
-                    />
-                    <span className="text-[12px] text-muted">sec</span>
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({ crossfadeDuration: parseFloat(form.crossfadeDuration) })
-                      }
-                      disabled={busy}
-                    >
-                      Save crossfade
-                    </Btn>
-                  </div>
-                  <SettingsFieldError path="crossfadeDuration" errors={fieldErrors} />
-                  <div className="field-hint">
-                    Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
-                    Saving flags a pending restart. Apply it with the Mixer card below.
-                  </div>
-                </div>
-              </Card>
-            )}
 
             {form && (
               <Card title="Stem transitions" sub="pair-aware scheduling + rendered blends">
@@ -900,8 +825,7 @@ export default function SettingsPanel() {
                       />
                       <span className="text-sm opacity-70">
                         GB &middot; holds ~
-                        {/* /25 mirrors the controller's stem-cache APPROX_TRACK_BYTES
-                            ceiling, /13 the field-measured average (#1257). */}
+                        {/* Track counts use the controller's 25 MB ceiling and the measured 13 MB average. */}
                         {Math.floor(
                           ((Number(form.transitions.stemCacheGb) || 15) * 1024) / 25,
                         ).toLocaleString('en-GB')}
@@ -911,23 +835,48 @@ export default function SettingsPanel() {
                         ).toLocaleString('en-GB')}{' '}
                         tracks
                       </span>
-                      {/* Its own save button: without one, an edit here misses the
-                          card-level "Save transitions" and silently reverts. */}
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            audio: { stemCacheGb: Number(form.transitions.stemCacheGb) },
-                          })
-                        }
-                        disabled={busy}
-                      >
-                        Save budget
-                      </Btn>
                     </div>
+                    {(() => {
+                      if (!stemUsage) {
+                        return (
+                          <div className="field-hint">
+                            Cache used: not measured yet (the hourly sweep records it).
+                          </div>
+                        );
+                      }
+                      const impact = stemBudgetImpact(stemUsage, Number(form.transitions.stemCacheGb));
+                      // Pick-time stems runs the cache over its budget between
+                      // sweeps by design: not a fault while it stays inside that.
+                      const pickTimeOver = pickTimeOvershoot(stemUsageResponse, Number(form.transitions.stemCacheGb));
+                      const at = fmtMeasured(stemUsage.measuredAt);
+                      return (
+                        <>
+                          <div className="field-hint">
+                            Cache used: <span className="mono-num">{fmtGb(stemUsage.bytes)}</span>
+                            {' '}&middot; {stemUsage.dirs.toLocaleString('en-GB')} tracks
+                            {at ? ` (measured ${at}${usageCaveat(stemUsage)})` : ''}
+                          </div>
+                          {pickTimeOver !== null ? (
+                            <div className="field-hint" role="status">
+                              Pick-time stems has taken the cache{' '}
+                              <span className="mono-num">{fmtGb(pickTimeOver)}</span> over this budget,
+                              as it may; the next hourly sweep trims it back, lowest stem priority
+                              first.
+                            </div>
+                          ) : impact && (
+                            <div className="field-hint text-destructive" role="status">
+                              This budget is below what the cache holds: the next hourly sweep
+                              deletes about <strong>{fmtGb(impact.deleteBytes)}</strong>, the stems
+                              of ~{impact.deleteTracks.toLocaleString('en-GB')} tracks (lowest
+                              stem priority first), keeping ~{impact.keepTracks.toLocaleString('en-GB')}.
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                     <div className="field-hint">
                       How much disk the stem cache may use before the oldest entries are evicted
-                      (1&ndash;500&nbsp;GB). A blend only fires when BOTH tracks of a pair are
+                      (1&ndash;1,000&nbsp;GB). A blend only fires when BOTH tracks of a pair are
                       cached, so a budget well under your library size means most seams stay
                       plain crossfades. The backfill stops once the budget is full rather than
                       separating tracks it would immediately evict.
@@ -949,24 +898,6 @@ export default function SettingsPanel() {
                           )
                         }
                       />
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            transitions: {
-                              pairDrain: form.transitions.pairDrain,
-                              stemBlends: form.transitions.stemBlends,
-                            },
-                            audio: {
-                              stemCache: form.transitions.stemCache,
-                              stemCacheGb: Number(form.transitions.stemCacheGb),
-                            },
-                          })
-                        }
-                        disabled={busy}
-                      >
-                        Save transitions
-                      </Btn>
                     </div>
                     <div className="field-hint">
                       When two tempo-compatible tracks meet and both have cached stems, the seam
@@ -976,12 +907,320 @@ export default function SettingsPanel() {
                       config that can&rsquo;t deliver.
                     </div>
                   </div>
+
+                  <div className="field">
+                    <Label>Separate stems when a track is picked</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.pickTimeStems ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, pickTimeStems: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      While a picked track waits behind the one about to air, separate whatever stems
+                      it is missing, so the cache turns over to what the station actually plays. A
+                      full cache may run a little over its budget for this (about an hour of picks, or
+                      5% of a small budget, plus the track being separated) until the hourly cleanup
+                      trims it back, lowest stem priority first, leaving tracks still waiting to air
+                      until last. Its tail is usually ready for the seam out of it; the seam into it
+                      renders before this starts, so its head pays off the next time it is picked.
+                      This runs Demucs on air, one track at a time, on the same analyzer the blends
+                      use, and keeps the model loaded, so on a GPU its memory stays in use. Not
+                      recommended below about 4 CPU cores: watch the stream for dropouts before
+                      leaving it on. Needs stem-blend seams and the stem cache, and only separates
+                      tracks the analysis pass has already measured.
+                    </div>
+                    {form.transitions.pickTimeStems && data?.values?.audio?.analyzeQuietOnly === true && (
+                      <div className="field-hint text-destructive" role="status">
+                        Quiet-only analysis is on (Library), so nothing is separated at pick time.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <OrphanStemsPanel />
+            <SaveBar
+              note="Stem cache, budget and blend settings apply to the next pick — no restart."
+              busy={busy}
+              onSave={saveStemsGuarded}
+              saveLabel="Save stems"
+              errors={fieldErrors}
+              ownedKeys={STEM_FORM_KEYS}
+            />
+          </>
+        )}
+        {activeSection === 'broadcast' && (
+          <>
+            <SectionHeader
+              eyebrow="broadcast & mixer"
+              title="How the station sounds on every stream."
+              sub="Crossfade, ducking, transitions, levelling and the stream mounts. Most are read by the mixer at startup, so the save bar warns before a change that needs a restart. Stopping the stream and restarting the mixer affect every current listener and ask before they run."
+              metrics={[
+                {
+                  n: data?.streamOnAir == null ? '—' : data.streamOnAir ? 'on air' : 'off air',
+                  l: 'broadcast',
+                  accent: data?.streamOnAir === true,
+                },
+                { n: `${data?.values?.crossfadeDuration ?? '—'}s`, l: 'crossfade' },
+              ]}
+            />
+
+            <Card title="Broadcast" sub={data?.streamOnAir === false ? 'currently off air' : 'currently on air'}>
+              <div className="grid gap-2">
+                {data?.streamOnAir === false ? (
+                  <Btn sm tone="accent" onClick={startStream} disabled={busy || !data}>
+                    Start stream
+                  </Btn>
+                ) : (
+                  <Btn sm tone="danger" onClick={() => setConfirmStop(true)} disabled={busy || !data || data?.streamOnAir == null}>
+                    Stop stream
+                  </Btn>
+                )}
+                <div className="field-hint">
+                  Takes the station off air by disconnecting the Icecast mount. A mixer restart brings it back on air.
+                </div>
+              </div>
+            </Card>
+
+            {form && (
+              <Card title="Idle pause" sub="silence the programme when nobody is listening">
+                <div className="field">
+                  <Label>Pause when the room is empty</Label>
+                  <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.stream.idleWhenEmpty ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, stream: { ...f.stream, idleWhenEmpty: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">after</span>
+                    <Input
+                      className="mono-num w-24"
+                      aria-label="Pause after (minutes)"
+                      type="number"
+                      step={1}
+                      min={1}
+                      max={1440}
+                      value={form.stream.idleAfterMinutes}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f =>
+                          f
+                            ? { ...f, stream: { ...f.stream, idleAfterMinutes: e.target.value } }
+                            : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">min</span>
+                  </div>
+                  <div className="field-hint">
+                    After this long with zero listeners the programme pauses mid-track and the DJ
+                    goes quiet: no track pulls from Navidrome, no LLM or TTS work. The stream
+                    mounts stay up, so any player (VLC, Sonos, the web player) connects normally;
+                    playback resumes where it left off within a few seconds of the first listener
+                    tuning in. Applies live, no mixer restart.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <Advanced note="crossfade, duck depth, transitions, loudness and the extra stream mounts">
+            {form && (
+              <Card title="Crossfade" sub="track transition overlap">
+                <div className="grid gap-3">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Crossfade duration</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      aria-label="Crossfade duration (seconds)"
+                      type="number"
+                      step={0.5}
+                      max={30}
+                      value={form.crossfadeDuration}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => (f ? { ...f, crossfadeDuration: e.target.value } : f))
+                      }
+                    />
+                    <span className="text-[12px] text-muted">sec</span>
+                  </div>
+                  <SettingsFieldError path="crossfadeDuration" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
+                    Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Crossfade curve</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'linear', label: 'Linear' },
+                        { id: 'equal-power', label: 'Equal-power' },
+                      ]}
+                      value={form.transitions.equalPowerCrossfade ? 'equal-power' : 'linear'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, transitions: { ...f.transitions, equalPowerCrossfade: id === 'equal-power' } } : f,
+                        )
+                      }
+                    />
+                  </div>
+                  <SettingsFieldError path="transitions.equalPowerCrossfade" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Linear fades dip about 3&nbsp;dB in the middle of a crossfade between two songs,
+                    because the two halves add up in amplitude, not in power. Equal-power keeps the
+                    level steady through the overlap. Applies to plain song-to-song crossfades only:
+                    effects, stem blends, jingles and beds keep their own curves.
+                  </div>
+                </div>
                 </div>
               </Card>
             )}
 
             {form && (
-              <Card title="Max track length" sub="cut over-length tracks on air">
+              <Card title="Duck depth" sub="how far the music drops under the DJ">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over silence</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for solo DJ speech"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.voice}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, voice: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.voice" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The heavy duck: station IDs, the hourly time, weather and request intros
+                      (current: {data?.values?.ducking?.voice}). It is the fraction of the music
+                      LEFT UP, so smaller is deeper — 0.22 is about −13 dB, 1 is no duck at all
+                      and 0 mutes the music while the DJ talks. Saving flags a pending restart;
+                      apply it with the Mixer card below.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over a track</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for talk-over links"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.intro}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, intro: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.intro" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The light duck for between-track links, which talk over the song rather
+                      than replacing it (current: {data?.values?.ducking?.intro}). Keep it above
+                      the heavy duck — 0.30 is about −10 dB. Saving flags a pending restart.
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="DJ transition effects" sub="which gestures the DJ may reach for">
+                <div className="field-hint">
+                  Only ever heard when the on-air persona is in DJ mode — this switches off
+                  individual gestures without giving up the rest of the kit. The station still
+                  validates every choice against the audio analysis, so switching one on is
+                  permission, not a guarantee. Applies live; no restart.
+                </div>
+                <div className="grid gap-3">
+                  {TRANSITION_EFFECT_FIELDS.map(({ id, label, hint }) => {
+                    const aria = fieldAria(`transition-effect-${id}`, undefined, { hasDescription: true });
+                    return (
+                      <div className="field" key={id}>
+                        <Label {...aria.labelledByProps}>{label}</Label>
+                        <div className="flex items-center gap-2">
+                          <Seg
+                            {...aria.groupProps}
+                            options={[
+                              { id: 'on', label: 'On' },
+                              { id: 'off', label: 'Off' },
+                            ]}
+                            value={form.transitions.effects[id] ? 'on' : 'off'}
+                            onChange={v =>
+                              setForm(f =>
+                                f
+                                  ? {
+                                    ...f,
+                                    transitions: {
+                                      ...f.transitions,
+                                      effects: { ...f.transitions.effects, [id]: v === 'on' },
+                                    },
+                                  }
+                                  : f,
+                              )
+                            }
+                          />
+                        </div>
+                        <div {...aria.descriptionProps} className="field-hint">{hint}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Max track length" sub={form.maxTrackLengthMode === 'exclude' ? 'exclude known over-length automatic tracks' : 'cut over-length tracks on air'}>
+                <div className="field">
+                  <Label {...lengthModeAria.labelProps}>Maximum length behavior</Label>
+                  <Select value={form.maxTrackLengthMode} onValueChange={v => setForm(f => f ? { ...f, maxTrackLengthMode: v as 'cut' | 'exclude' } : f)}>
+                    <SelectTrigger {...lengthModeAria.controlProps}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cut">Cut on air (legacy)</SelectItem>
+                      <SelectItem value="exclude">Exclude longer automatic tracks</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <SettingsFieldError path="maxTrackLengthMode" errors={fieldErrors} id={lengthModeAria.errorProps.id} />
+                </div>
                 <div className="field">
                   <Label>Maximum track length</Label>
                   <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
@@ -1000,22 +1239,119 @@ export default function SettingsPanel() {
                     <span className="text-[12px] text-muted">
                       sec · 0 = no limit · min {data?.values?.minTrackSeconds ?? 30}s
                     </span>
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({ maxTrackSeconds: parseInt(form.maxTrackSeconds, 10) || 0 })
-                      }
-                      disabled={busy}
-                    >
-                      Save limit
-                    </Btn>
                   </div>
                   <SettingsFieldError path="maxTrackSeconds" errors={fieldErrors} />
                   <div className="field-hint">
-                    The DJ won&rsquo;t auto-pick tracks longer than this, handy for hour-long
-                    album mixes or DJ sets that keep landing in rotation. Listener requests still
-                    play any length, and a show can override this with its own limit (0 there means
-                    unlimited). Applies on the next pick; no restart needed.
+                    {form.maxTrackLengthMode === 'exclude'
+                      ? 'Automatic picks and fallback playlists exclude tracks with known duration above the limit. Tracks exactly at the limit are allowed. Tracks with unknown durations remain eligible and play without this cutoff. A library of only longer tracks can leave no eligible music.'
+                      : 'Long tracks remain eligible for automatic picks and fade out at this limit on air.'}
+                    {' '}Listener requests and explicit studio choices are exempt. Shows inherit this
+                    station behavior and can override the limit (0 means unlimited). Changes apply to
+                    future automatic tracks without a restart. Already handed-off playback keeps its
+                    previous policy. Silence trimming and show-boundary fades still apply.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Show boundaries" sub="stop a long track spilling into the next show">
+                <div className="field">
+                  <Label>Fade out at a show change</Label>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.fadeAtShowEnd ? 'on' : 'off'}
+                      onChange={id => setForm(f => (f ? { ...f, fadeAtShowEnd: id === 'on' } : f))}
+                    />
+                  </div>
+                  <SettingsFieldError path="fadeAtShowEnd" errors={fieldErrors} />
+                  <div className="field-hint">
+                    On a schedule built from long records — ambient, classical, prog — the last
+                    track of a show can still be playing well into the next one, so the incoming
+                    host talks over the outgoing show&rsquo;s music. With this on, a track that
+                    would run past the boundary is faded out there instead. A short overrun is
+                    left alone, a track is never cut down to a stub, and listener requests always
+                    play in full. Each show can override this. Applies on the next pick; no
+                    restart needed.
+                  </div>
+                  {(() => {
+                    // The minimum play time plus overrun tolerance prevents boundary
+                    // cuts at this cap. Shows can override the station cap.
+                    const floor = data?.values?.boundaryFadeMinTrackSeconds ?? 150;
+                    const cap = Number(form.maxTrackSeconds);
+                    if (form.maxTrackLengthMode !== 'cut' || !form.fadeAtShowEnd || !Number.isFinite(cap) || cap <= 0 || cap > floor) return null;
+                    return (
+                      <div className="field-hint italic">
+                        With <b>Maximum track length</b> at {cap}s, boundary fading cannot apply
+                        to tracks using this cap: it requires more than {floor}s of playable
+                        music. The cap limits track length, but a track starting near the end
+                        of a show can still run into the next one. Shows that override this
+                        cap may still use boundary fading.
+                      </div>
+                    );
+                  })()}
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Dead-air trim" sub="cut silent gaps off track edges">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <Label>Trim silent edges</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.silenceTrim.enabled ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, silenceTrim: { ...f.silenceTrim, enabled: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <SettingsFieldError path="silenceTrim.enabled" errors={fieldErrors} />
+                    <div className="field-hint">
+                      Some rips carry a chunk of silence before the music starts, or a long blank
+                      after it ends — on air that plays as dead air. With this on, the station
+                      skips past the silence and cuts away at the end instead of waiting it out.
+                      Needs the track analysed; unanalysed tracks play whole as before.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Shortest gap worth cutting</Label>
+                    <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Shortest gap worth cutting (milliseconds)"
+                        type="number"
+                        step={100}
+                        min={250}
+                        max={30000}
+                        value={form.silenceTrim.minGapMs}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f =>
+                            f ? { ...f, silenceTrim: { ...f.silenceTrim, minGapMs: e.target.value } } : f,
+                          )
+                        }
+                      />
+                      <span className="text-[12px] text-muted">ms</span>
+                    </div>
+                    <SettingsFieldError path="silenceTrim.minGapMs" errors={fieldErrors} />
+                    <div className="field-hint">
+                      Anything shorter than this is left alone. Tracks often open a beat after
+                      zero, and albums that segue leave space between songs on purpose — raise
+                      this if your library is full of them, lower it to catch smaller gaps.
+                      Applies on the next pick; no restart needed.
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -1102,29 +1438,15 @@ export default function SettingsPanel() {
                         }
                       />
                       <span className="text-[12px] text-muted">dB · 0 to 12</span>
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            loudness: {
-                              targetLufs: parseFloat(form.loudness.targetLufs),
-                              maxBoostDb: parseFloat(form.loudness.maxBoostDb),
-                              source: form.loudness.source,
-                            },
-                          })
-                        }
-                        disabled={busy}
-                      >
-                        Save loudness
-                      </Btn>
                     </div>
                     <div className="field-hint">
                       Cap on how far a quiet track is turned up (0 = level down only). Boost is
                       also limited by each track&rsquo;s own measured peak headroom, so raising
                       this won&rsquo;t distort dynamic material; very quiet, dynamic masters
-                      simply can&rsquo;t reach the target cleanly. Loud tracks are turned down as
-                      far as needed. Applies from the next queued track; no restart, tracks need
-                      acoustic analysis (Library → Analyze).
+                      simply can&rsquo;t reach the target cleanly. A track whose peak is unknown
+                      is not turned up at all. Loud tracks are turned down as far as needed.
+                      Applies from the next queued track; no restart, tracks need acoustic
+                      analysis (Library → Analyze).
                     </div>
                   </div>
                 </div>
@@ -1152,15 +1474,6 @@ export default function SettingsPanel() {
                           )
                         }
                       />
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({ stream: { opusEnabled: form.stream.opusEnabled } })
-                        }
-                        disabled={busy}
-                      >
-                        Save
-                      </Btn>
                     </div>
                     <SettingsFieldError path="stream.opusEnabled" errors={fieldErrors} />
                     <div className="field-hint">
@@ -1188,26 +1501,16 @@ export default function SettingsPanel() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {OPUS_BITRATES.map(br => (
+                          {underCeiling(OPUS_BITRATES).map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            stream: { opusBitrate: parseInt(form.stream.opusBitrate, 10) },
-                          })
-                        }
-                        disabled={busy}
-                      >
-                        Save bitrate
-                      </Btn>
                     </div>
                     <SettingsFieldError path="stream.opusBitrate" errors={fieldErrors} />
+                    {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                     <div className="field-hint">
                       96 kbps is transparent for most music; 256/320 suits hifi listeners
                       (current: {data?.values?.stream?.opusBitrate ?? '—'} kbps). Raising it
@@ -1219,7 +1522,16 @@ export default function SettingsPanel() {
               </Card>
             )}
 
-            {form && (
+            {form && maxBitrate && (
+              <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
+                <NowBanner label={<>FLAC stream · Managed by SUB/WAVE Cloud</>}>
+                  The lossless mount runs near 1 Mbps a listener, so it isn&apos;t part of this
+                  station&apos;s plan (streams go up to {maxBitrate} kbps). MP3, Opus and AAC serve
+                  everyone.
+                </NowBanner>
+              </Card>
+            )}
+            {form && !maxBitrate && (
               <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
                 <div className="field">
                   <div className="flex items-center gap-2">
@@ -1239,15 +1551,6 @@ export default function SettingsPanel() {
                         )
                       }
                     />
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({ stream: { flacEnabled: form.stream.flacEnabled } })
-                      }
-                      disabled={busy}
-                    >
-                      Save
-                    </Btn>
                   </div>
                   <SettingsFieldError path="stream.flacEnabled" errors={fieldErrors} />
                   {form.stream.flacEnabled && (
@@ -1266,18 +1569,19 @@ export default function SettingsPanel() {
                     (FLAC/ALAC/WAV); for a lossy-source library (e.g. AAC/MP3) it faithfully
                     carries lossy audio and adds no fidelity over MP3/Opus. Meant for external
                     players (VLC, foobar2000, a network streamer); the web and mobile players
-                    stay on MP3/Opus and won&apos;t auto-select it. The mandatory{' '}
-                    <code>/stream.mp3</code> mount always serves everyone.
+                    stay on MP3/Opus and won&apos;t auto-select it. Changing title, artist, and
+                    album metadata is carried automatically as native chained Ogg tags. The
+                    mandatory <code>/stream.mp3</code> mount always serves everyone.
                   </div>
                 </div>
               </Card>
             )}
 
             {form && (
-              <Card title="Ogg metadata" sub="ICY titles on /stream.opus + /stream.flac">
+              <Card title="Ogg metadata" sub="Opus ICY compatibility; FLAC tags are automatic">
                 <div className="field">
                   <div className="flex items-center gap-2">
-                    <Label>Push ICY track titles on the Ogg mounts</Label>
+                    <Label>Push ICY track titles on the Opus mount</Label>
                     <Pill tone="ink">restart required</Pill>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1293,25 +1597,15 @@ export default function SettingsPanel() {
                         )
                       }
                     />
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({ stream: { oggIcyMetadata: form.stream.oggIcyMetadata } })
-                      }
-                      disabled={busy}
-                    >
-                      Save
-                    </Btn>
                   </div>
                   <SettingsFieldError path="stream.oggIcyMetadata" errors={fieldErrors} />
                   <div className="field-hint">
-                    On by default. Sends each track&apos;s title out-of-band (ICY) on the Opus and
-                    FLAC mounts, which most internet-radio players and Cast receivers need: they
-                    read the in-band Ogg tags only once, at connect, and otherwise stay stuck on
-                    the first title. Turn it <strong>off</strong> if your listeners use
-                    foobar2000: it reads the in-band tags correctly, and the extra ICY channel
-                    breaks its FLAC metadata display. The MP3 and AAC mounts always use ICY and
-                    are unaffected either way.
+                    On by default for legacy Opus compatibility. This controls out-of-band ICY
+                    updates on <code>/stream.opus</code> only. <code>/stream.flac</code> always
+                    carries changing title, artist, and album metadata as native chained Ogg tags;
+                    a missing <code>Icy-MetaInt</code> response header there is expected. Receiver
+                    support varies, and this setting does not embed or guarantee artwork. MP3 and
+                    AAC behavior is unaffected.
                   </div>
                 </div>
               </Card>
@@ -1338,15 +1632,6 @@ export default function SettingsPanel() {
                           )
                         }
                       />
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({ stream: { aacEnabled: form.stream.aacEnabled } })
-                        }
-                        disabled={busy}
-                      >
-                        Save
-                      </Btn>
                     </div>
                     <SettingsFieldError path="stream.aacEnabled" errors={fieldErrors} />
                     {form.stream.aacEnabled && (
@@ -1381,26 +1666,16 @@ export default function SettingsPanel() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {AAC_BITRATES.map(br => (
+                          {underCeiling(AAC_BITRATES).map(br => (
                             <SelectItem key={br} value={String(br)}>
                               {br} kbps
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
-                      <Btn
-                        sm
-                        onClick={() =>
-                          saveSettings({
-                            stream: { aacBitrate: parseInt(form.stream.aacBitrate, 10) },
-                          })
-                        }
-                        disabled={busy}
-                      >
-                        Save bitrate
-                      </Btn>
                     </div>
                     <SettingsFieldError path="stream.aacBitrate" errors={fieldErrors} />
+                    {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                     <div className="field-hint">
                       AAC-LC is transparent around 256 kbps (current:{' '}
                       {data?.values?.stream?.aacBitrate ?? '—'} kbps).
@@ -1428,26 +1703,16 @@ export default function SettingsPanel() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {MP3_BITRATES.map(br => (
+                        {underCeiling(MP3_BITRATES).map(br => (
                           <SelectItem key={br} value={String(br)}>
                             {br} kbps
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                    <Btn
-                      sm
-                      onClick={() =>
-                        saveSettings({
-                          stream: { bitrate: parseInt(form.stream.bitrate, 10) },
-                        })
-                      }
-                      disabled={busy}
-                    >
-                      Save bitrate
-                    </Btn>
                   </div>
                   <SettingsFieldError path="stream.bitrate" errors={fieldErrors} />
+                  {ceilingHint && <div className="field-hint">{ceilingHint}</div>}
                   <div className="field-hint">
                     Higher bitrate = better quality, more listener bandwidth
                     (current: {data?.values?.stream?.bitrate ?? '—'} kbps). 192 kbps is the
@@ -1456,6 +1721,159 @@ export default function SettingsPanel() {
                 </div>
               </Card>
             )}
+
+            {form && (
+              <Card title="Listener buffer" sub="all stream mounts">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Listener buffer</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      aria-label="Listener buffer (seconds)"
+                      type="number"
+                      min={0}
+                      max={60}
+                      step={1}
+                      value={form.stream.bufferSeconds}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f =>
+                          f
+                            ? { ...f, stream: { ...f.stream, bufferSeconds: e.target.value } }
+                            : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">seconds</span>
+                  </div>
+                  <SettingsFieldError path="stream.bufferSeconds" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Icecast primes this much audio when a listener connects. Lower values start
+                    closer to live and shorten idle wake-up on radios and apps (the web player
+                    skips most of it on MP3 in Chrome and Firefox), but leave less immediate cushion
+                    for network stalls; 0 disables the connect burst. Applies on the next
+                    broadcast restart; until then listeners keep, and players are told, the
+                    buffer the stream started with. Saved: {data?.values?.stream?.bufferSeconds ?? '—'}
+                    {' '}seconds.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && hosted && (
+              <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
+                <NowBanner label={<>Max listeners · Managed by SUB/WAVE Cloud</>}>
+                  {listenerCap
+                    ? <>Up to <strong>{listenerCap}</strong> people can listen at once on this station&apos;s plan.</>
+                    : <>Your plan sets how many people can listen at once.</>}
+                </NowBanner>
+              </Card>
+            )}
+            {form && !hosted && (
+              <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Max listeners</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      aria-label="Max concurrent listeners"
+                      type="number"
+                      min={1}
+                      max={10000}
+                      step={1}
+                      value={form.stream.maxListeners}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f =>
+                          f
+                            ? { ...f, stream: { ...f.stream, maxListeners: e.target.value } }
+                            : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">connections</span>
+                  </div>
+                  <SettingsFieldError path="stream.maxListeners" errors={fieldErrors} />
+                  <div className="field-hint">
+                    How many people can be tuned in at once, across all mounts. Icecast
+                    refuses connections past this; each one costs bandwidth at the mount&apos;s
+                    bitrate, so size it against your upstream. Some countries calculate
+                    licensing fees on simultaneous listener capacity, which is the usual
+                    reason to set it deliberately rather than leave it at 100. Applies on the
+                    next broadcast restart. Current:{' '}
+                    {data?.values?.stream?.maxListeners ?? '—'}.
+                  </div>
+                  <div className="field-hint">
+                    <strong>ICECAST_MAX_CLIENTS</strong>{' '}in the environment overrides this —
+                    it predates the setting and stays authoritative where it&apos;s set. The
+                    broadcast log names the source it used on every boot
+                    (<code>max listeners N (from …)</code>), so check there if this field
+                    saves but nothing changes.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Listener country" sub="where the Stats rollup gets geography from">
+                <div className="field">
+                  <Label>Country header</Label>
+                  <Input
+                    className="w-full"
+                    aria-label="Proxy header carrying the listener country"
+                    placeholder="x-country-code"
+                    value={form.stream.countryHeader}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f =>
+                        f
+                          ? { ...f, stream: { ...f.stream, countryHeader: e.target.value } }
+                          : f,
+                      )
+                    }
+                  />
+                  <SettingsFieldError path="stream.countryHeader" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Stats reads <code>CF-IPCountry</code> first, which only Cloudflare sets.
+                    If your own proxy adds a country header, name it here and it is read
+                    when Cloudflare&apos;s is absent. Leave blank if you have neither —
+                    an unknown country is simply left out of the rollup.
+                  </div>
+                </div>
+                <div className="field">
+                  <Label>GeoIP database</Label>
+                  <Input
+                    className="w-full"
+                    aria-label="Path to an offline GeoIP database"
+                    placeholder="/var/sub-wave/geoip/GeoLite2-Country.mmdb"
+                    value={form.stream.geoipDbPath}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f =>
+                        f
+                          ? { ...f, stream: { ...f.stream, geoipDbPath: e.target.value } }
+                          : f,
+                      )
+                    }
+                  />
+                  <SettingsFieldError path="stream.geoipDbPath" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Last resort when no header carries the answer: the path, inside the
+                    controller container, of a MaxMind-format <code>.mmdb</code> country
+                    database you supply — GeoLite2, DB-IP Lite and IP2Location LITE all
+                    work. Nothing is bundled; each has its own licence and attribution
+                    terms. An unreadable file is logged once and then ignored, so a wrong
+                    path costs the lookup, never a listener.{' '}
+                    <strong>GEOIP_DB_PATH</strong>{' '}in the environment overrides this.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+
+            </Advanced>
 
             <Card title="Mixer" sub="apply pending Liquidsoap-level settings">
               <div className="grid gap-2">
@@ -1472,10 +1890,31 @@ export default function SettingsPanel() {
                 </div>
               </div>
             </Card>
+
+            <SaveBar
+              note="Crossfade, the encoder settings and the listener buffer only reach the stream after a mixer restart. Idle pause, loudness, dead-air trim and the track-length cap apply live."
+              busy={busy}
+              onSave={saveBroadcast}
+              saveLabel="Save broadcast & mixer"
+              errors={fieldErrors}
+              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'transitions.equalPowerCrossfade', 'transitions.effects', 'loudness', 'stream']}
+            />
           </>
         )}
+        </SectionChromeProvider>
       </div>
 
+      <V3AlertDialog
+        open={confirmStemBudget}
+        onOpenChange={setConfirmStemBudget}
+        title="Lower the stem cache budget"
+        description={stemBudgetCut
+          ? `The cache holds ${fmtGb(stemUsage?.bytes ?? 0)}. At ${form?.transitions.stemCacheGb} GB, the next hourly sweep deletes about ${fmtGb(stemBudgetCut.deleteBytes)}: the stems of ~${stemBudgetCut.deleteTracks.toLocaleString('en-GB')} tracks, lowest stem priority first. Re-separating them later takes hours of analysis.`
+          : ''}
+        confirmLabel="save and delete"
+        danger
+        onConfirm={saveStems}
+      />
       <V3AlertDialog
         open={confirmRestart}
         onOpenChange={setConfirmRestart}

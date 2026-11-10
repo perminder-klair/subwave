@@ -36,12 +36,23 @@ RUN mkdir -p /opt/piper/voices && \
 
 # --- Kokoro (optional second TTS — slower, more natural) --------------------
 # Isolated venv; the worker loads the model once and stays resident
-# (controller/scripts/kokoro_worker.py).
+# (controller/scripts/kokoro_worker.py). pyopenjtalk-plus provides CPython 3.11
+# wheels for amd64 and arm64 with its dictionary bundled, so Japanese synthesis
+# needs neither a compiler nor a first-use download.
 RUN python3 -m venv /opt/kokoro/venv && \
     /opt/kokoro/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/kokoro/venv/bin/pip install --no-cache-dir \
-      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4
+      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4 \
+      pyopenjtalk-plus==0.4.1.post10 \
+      cn2an==0.5.24 jieba==0.42.1 ordered-set==4.1.0 pypinyin==0.55.0 pypinyin-dict==0.9.0 && \
+    /opt/kokoro/venv/bin/python -c \
+      "from misaki.ja import JAG2P; from misaki.zh import ZHG2P; assert JAG2P(version='pyopenjtalk')('生ビール')[0]; assert ZHG2P()('中文')[0]"
 
+# The model-files-v1.0 export, on purpose: model-files-v1.1 re-exports the same
+# weights but renders ~3.7 dB quieter. kokoro-onnx stays on 0.5.0 above for the
+# same kind of reason: 0.6.x depends on upstream phonemizer instead of
+# phonemizer-fork, and under it misaki's espeak G2P drops everything after a
+# decimal point ("sold 2.5 million copies" phonemizes as "sold two.").
 RUN mkdir -p /opt/kokoro/models && \
     wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \
       https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
@@ -130,12 +141,13 @@ ENV POCKET_TTS_PYTHON=/opt/pocket-tts/venv/bin/python \
 
 # --- Controller app -------------------------------------------------------
 WORKDIR /app
-# .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
-# stale `peer ai@^6`); it must land before install or npm hits ERESOLVE.
+# Use the same strict peer-dependency resolution as local controller installs.
 COPY controller/package*.json controller/.npmrc ./
 RUN npm ci --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
+RUN /opt/kokoro/venv/bin/python -c \
+      "from scripts.kokoro_worker import build_g2p; from misaki import espeak, ja, zh; raw, _ = ja.JAG2P(version='pyopenjtalk')('生ビール'); phonemes, _ = build_g2p('ja', espeak, ja, zh)('生ビール'); assert phonemes == raw[:len(raw) // 2]"
 
 # Version reported by the controller (backup manifest). Set from `git describe`
 # by scripts/update.sh + CI; unset → controller/package.json (routes/backup.ts).

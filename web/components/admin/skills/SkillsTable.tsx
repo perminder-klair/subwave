@@ -1,7 +1,5 @@
 'use client';
 
-// The "list" half of the cards/list toggle on /admin/skills. Same contract as the
-// slate cards: the row opens the edit sheet, and the switch and Run now act in place.
 
 import { useMemo } from 'react';
 import { cn } from '../../../lib/cn';
@@ -55,10 +53,11 @@ export function SkillsTable({
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate font-extrabold text-ink">{s.label || s.name}</span>
           {s.custom && <Pill className="text-[8px]">custom</Pill>}
-          {/* The card carries the full V3Alert; the table just flags it and the
-              guidance stays one click away in the edit sheet. */}
-          {s.ready === false && (
-            <MetaChip className="border-[var(--danger)] text-[var(--danger)]">needs key</MetaChip>
+          {s.cohosts && <MetaChip accent>co-hosted</MetaChip>}
+          {s.toolPending ? (
+            <MetaChip className="border-[var(--danger)] text-[var(--danger)]">code to review</MetaChip>
+          ) : s.ready === false && (
+            <MetaChip className="border-[var(--danger)] text-[var(--danger)]">{s.keyProblem ? 'wrong key' : 'needs key'}</MetaChip>
           )}
           {isPinned(s) && <MetaChip accent>pinned</MetaChip>}
         </span>

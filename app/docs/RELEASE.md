@@ -22,10 +22,10 @@ store round-trip for a one-line fix.
 | Change touches… | Ship via | Command |
 |---|---|---|
 | **JS / TS only** — components, hooks, styles, copy, business logic, assets bundled by Metro | **OTA** | `eas update --channel <channel>` |
-| **Native** — a dependency add/upgrade, `patches/`, a config plugin, `app.json` `ios`/`android`/`infoPlist`/`plugins`, `expo-build-properties` | **New store build** | `eas build --profile production --platform <ios\|android>` then submit |
+| **Native** — a dependency add/upgrade, `patches/`, a config plugin, Swift under `targets/` or `modules/*/ios`, `app.json` `ios`/`android`/`infoPlist`/`plugins`, `expo-build-properties` | **New store build** | `eas build --profile production --platform <ios\|android>` then submit |
 
 Rule of thumb: **if you ran `npx expo install <something>` or edited anything
-under `patches/` or `plugins/`, it's a new binary.** Pure `src/**` edits are OTA.
+under `patches/`, `plugins/`, `targets/` or `modules/*/ios`, it's a new binary.** Pure `src/**` edits are OTA.
 
 ### Why the runtime version protects you
 

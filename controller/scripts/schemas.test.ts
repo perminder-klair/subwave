@@ -8,12 +8,12 @@
 // object are contractual — plus the message SHAPE (one readable line, never a
 // ZodError JSON blob), which is pinned at the bottom of this file.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'subwave-schemas-'));
+process.env.STATE_DIR = createTempDir(path.join(tmpdir(), 'subwave-schemas-'));
 
 const { validateWebhooksStrict } = await import('../src/settings/validate.js');
 const { normalizeWebhooks } = await import('../src/settings/normalize.js');
@@ -24,7 +24,7 @@ const { WEBHOOK_EVENTS, WEBHOOKS_LIMIT, webhooksPatchSchema } = await import(
 const hook = (over = {}) => ({
   id: 'wh_aaa111',
   url: 'https://example.com/hook',
-  events: ['track.play'],
+  events: ['track.play'] satisfies Array<(typeof WEBHOOK_EVENTS)[number]>,
   enabled: true,
   authHeader: '',
   ...over,

@@ -4,28 +4,40 @@
 // here reads only the core contexts, per the skin contract (see types.ts);
 // wording and layout stay with each skin.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
+import { useReducedMotion } from 'motion/react';
 import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore';
 import { useLiteMode } from '@/hooks/useLiteMode';
+import { isRefusedOutcome } from '@/lib/request-outcome';
+import { lastVoiceLine, voiceOnAirMs } from './shared';
+import { crossfadeSettled, crossfadeStart, crossfadeTo, type Crossfade } from './crossfade';
+import { fitSvgTexts } from './svgTextFit';
 
 /** Whether a skin may run a JS-driven (motion) transition right now. Lite
- *  mode's `animation: none !important` only reaches CSS keyframes, so motion
- *  sails through it and a skin that skips this gate silently stops honouring
- *  the low-power toggle.
+ *  mode's `animation: none !important` reaches only CSS keyframes, so a skin
+ *  that skips this gate stops honouring the low-power toggle.
  *
- *  Reduced motion is NOT this hook's job — MotionConfig's reducedMotion="user"
- *  (components/MotionProvider.tsx) already drops transforms app-wide. The
- *  exception is an opacity-only transition, which that setting deliberately
- *  preserves; those must also call useReducedMotion() (see subamp's LCD
- *  latch). */
+ *  Reduced motion is not this hook's job: MotionConfig's reducedMotion="user"
+ *  drops transforms app-wide. It preserves opacity-only transitions, so those
+ *  must also call useReducedMotion() (see subamp's LCD latch). */
 export function useSkinMotion(): boolean {
   const { lite } = useLiteMode();
   return !lite;
 }
 
-// Poll cadence + give-up window for a submitted request's outcome. The
-// controller resolves within a few seconds; 60s is a generous ceiling after
-// which the accepted line simply stands.
+/** True when a skin that runs its own JS motion (a rAF loop, a timeout chain)
+ *  must stand it down and paint a still frame: lite mode, through
+ *  useSkinMotion, or reduced motion, which no media query can reach inside a
+ *  JS loop. */
+export function useSkinCalm(): boolean {
+  const reduced = useReducedMotion();
+  const motion = useSkinMotion();
+  return !motion || !!reduced;
+}
+
+// Poll cadence + give-up window for a submitted request's outcome. Past the
+// deadline the accepted line stands.
 const POLL_INTERVAL_MS = 1500;
 const POLL_DEADLINE_MS = 60_000;
 
@@ -40,25 +52,29 @@ export interface RequestSlipCopy {
   failed: string;
 }
 
+/** How a submitted request ended, for skins that word success and refusal
+ *  differently. Upgrades along with `ack` when the booth resolves the pick. */
+export type RequestOutcome = 'sent' | 'refused' | 'failed';
+
 export interface RequestSlip {
   text: string;
   setText: (v: string) => void;
-  /** Optional "from" name. Every skin renders a field for it now (#1347) — a
-   *  skin that doesn't simply never calls setName, and the request goes up
-   *  unsigned. Deliberately NOT cleared by send(): the text is a one-off, the
-   *  name is who you are, so it carries to your next request in the session. */
+  /** Optional "from" name (#1347); a skin that renders no field never calls
+   *  setName and the request goes up unsigned. Deliberately not cleared by
+   *  send(), so it carries to the next request in the session. */
   name: string;
   setName: (v: string) => void;
   /** Outcome line to show in place of the form, or null while composing.
-   *  Upgrades in place: the instant accept ack is replaced by the DJ's on-air
-   *  ack (or the matched track) once the pick resolves, and by the miss copy
-   *  if the booth can't place it. */
+   *  Upgrades in place once the pick resolves. */
   ack: string | null;
+  /** What `ack` reports, null alongside it. */
+  outcome: RequestOutcome | null;
   /** Clear the ack and return to the form. Cancels any in-flight polling. */
   reset: () => void;
   sending: boolean;
-  /** Submit the current text. No-op while empty or already sending. */
-  send: () => Promise<void>;
+  /** Submit the current text, or `text` when a skin keeps its own (Cipher's
+   *  tape). No-op while empty or already sending. */
+  send: (text?: string) => Promise<void>;
 }
 
 /** The shared request-slip state machine: compose → send → show the
@@ -68,6 +84,7 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
   const [text, setText] = useState('');
   const [name, setName] = useState('');
   const [ack, setAck] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<RequestOutcome | null>(null);
   const [sending, setSending] = useState(false);
 
   // Poll lifecycle held in refs so reset()/unmount can stop an in-flight loop
@@ -83,14 +100,12 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
   }, []);
   useEffect(() => stopPolling, [stopPolling]);
 
-  // The accepted ack holds while pending; on resolve it becomes the DJ's
-  // on-air line (or the matched track), on failure the miss copy.
   const startPolling = (requestId: string) => {
     pollStopRef.current = false;
     const deadline = Date.now() + POLL_DEADLINE_MS;
     const tick = async () => {
       if (pollStopRef.current) return;
-      if (Date.now() > deadline) return; // give up quietly; accepted line stands
+      if (Date.now() > deadline) return;
       const data = await pollRequest(requestId);
       if (pollStopRef.current) return;
       if (data?.status === 'resolved') {
@@ -99,16 +114,15 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
           typeof data.queuePosition === 'number' && data.queuePosition > 0
             ? ` — #${data.queuePosition} in the queue`
             : '';
-        setAck(
-          data.ack ||
-            (t?.title
-              ? `Lining up “${t.title}”${t.artist ? ` by ${t.artist}` : ''}${pos}.`
-              : copy.sent),
-        );
+        const refused = isRefusedOutcome(data.outcome);
+        const identity = t?.title ? `“${t.title}”${t.artist ? ` by ${t.artist}` : ''}` : '';
+        setAck([data.ack || (identity ? `Lining up ${identity}${pos}.` : copy.sent), data.ack && identity ? identity : ''].filter(Boolean).join(' '));
+        setOutcome(refused ? 'refused' : 'sent');
         return;
       }
       if (data?.status === 'failed') {
         setAck(data.message || copy.refused);
+        setOutcome('refused');
         return;
       }
       if (data?.status === 'unknown') return;
@@ -118,22 +132,24 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
     pollTimerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
   };
 
-  const send = async () => {
-    const trimmed = text.trim();
+  const send = async (override?: string) => {
+    const trimmed = (override ?? text).trim();
     if (!trimmed || sending) return;
     stopPolling();
     setSending(true);
     try {
       const res = await submitRequest(trimmed, name.trim());
       setAck(res.success ? (res.ack || copy.sent) : (res.message || copy.refused));
+      setOutcome(res.success ? 'sent' : 'refused');
       if (res.success) {
         setText('');
-        // Accepted in ~50ms with a request id; the match runs in the booth, so
-        // poll for the real pick and upgrade the ack to the answer.
+        // The match runs in the booth, so poll for the real pick and upgrade
+        // the ack to the answer.
         if (res.requestId) startPolling(res.requestId);
       }
     } catch {
       setAck(copy.failed);
+      setOutcome('failed');
     } finally {
       setSending(false);
     }
@@ -142,8 +158,9 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
   const reset = useCallback(() => {
     stopPolling();
     setAck(null);
+    setOutcome(null);
   }, [stopPolling]);
-  return { text, setText, name, setName, ack, reset, sending, send };
+  return { text, setText, name, setName, ack, outcome, reset, sending, send };
 }
 
 export interface TrackLike {
@@ -160,9 +177,8 @@ export interface TrackLike {
   like: () => Promise<void>;
 }
 
-/** The heart button's state machine (#991): refresh liked-state when the
- *  on-air track changes, optimistic fill on tap, settle on the controller's
- *  answer. Wording and iconography stay with each skin. */
+/** The heart button's state machine (#991). Wording and iconography stay with
+ *  each skin. */
 export function useTrackLike(): TrackLike {
   const { likeCurrent, likeStatus } = usePlayerActions();
   const feed = usePlayerFeed();
@@ -185,8 +201,8 @@ export function useTrackLike(): TrackLike {
     likeStatus().then(st => {
       if (cancelled || !st) return;
       setEnabled(st.enabled !== false);
-      // Only apply if the answer is about the track we asked for — a status
-      // that raced a track change would paint the wrong liked-state.
+      // Only apply if the answer is about the track we asked for; a status
+      // racing a track change paints the wrong liked-state.
       if (st.songId && st.songId !== songId) return;
       setState({ songId, liked: !!st.liked, count: st.count ?? 0 });
     });
@@ -217,6 +233,51 @@ export function useTrackLike(): TrackLike {
   };
 }
 
+/** True while the DJ's latest spoken line is plausibly still on air for this
+ *  listener (see voiceOnAirMs). Keyed on the line itself, so a later poll that
+ *  appends a track or an event never stretches the window. */
+export function useDjOnAir(): boolean {
+  const { session } = usePlayerFeed();
+  const line = useMemo(() => lastVoiceLine(session.messages), [session.messages]);
+  const text = line?.text ?? null;
+  const t = line?.t;
+  const [onAir, setOnAir] = useState(false);
+
+  useEffect(() => {
+    const ms = voiceOnAirMs(text == null ? null : { text, t }, Date.now());
+    if (ms <= 0) {
+      setOnAir(false);
+      return;
+    }
+    setOnAir(true);
+    const id = window.setTimeout(() => setOnAir(false), ms);
+    return () => window.clearTimeout(id);
+  }, [text, t]);
+
+  return onAir;
+}
+
+/** Which of two stacked layers shows `value`, for a colour change done as an
+ *  opacity crossfade (see crossfade.ts). `fadeMs` must match the layers' CSS
+ *  opacity transition; 0 means they have none (lite, reduced motion) and the
+ *  swap is instant. */
+export function useCrossfade<T>(value: T, fadeMs: number): Crossfade<T> {
+  const [state, setState] = useState(() => crossfadeStart(value));
+  // Adjusted during render, not in an effect, so the new layer is painted in
+  // the same commit that starts its fade.
+  const next = crossfadeTo(state, value, fadeMs <= 0);
+  if (next !== state) setState(next);
+  // Keyed on `front` as well: a fade queued behind another starts in the same
+  // render that settles the first, so `fading` alone would never re-arm.
+  const { fading, front } = next;
+  useEffect(() => {
+    if (!fading) return;
+    const id = window.setTimeout(() => setState(crossfadeSettled), fadeMs);
+    return () => window.clearTimeout(id);
+  }, [fading, front, fadeMs]);
+  return next;
+}
+
 /** Keyboard/button volume nudge — clamps to [0, 1] on whole-percent steps. */
 export function useVolumeNudge(): (delta: number) => void {
   const { setVolume } = usePlayerActions();
@@ -225,4 +286,27 @@ export function useVolumeNudge(): (delta: number) => void {
       setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100))),
     [setVolume],
   );
+}
+
+/** Squeeze any SVG `<text>` under `rootRef` that carries `data-fit="<room>"`
+ *  and runs past that room (svgTextFit.ts). A skin that sets legends inside a
+ *  drawing lays them out by character budget, which can't know the theme's
+ *  face, so each row is measured once drawn. Re-measures when `key` changes,
+ *  and again once web fonts land if they haven't yet; an empty key skips.
+ *  Key it on what the fitted rows say, never on a running clock: a pass
+ *  forces a layout and rewrites the squeezed rows, which repaints them and
+ *  re-runs any filter over them. Measuring isn't motion, so this runs in lite
+ *  and reduced motion too. A hidden tree measures zero and is left alone. */
+export function useSvgTextFit(rootRef: RefObject<Element | null>, key: string): void {
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || !key) return;
+    const fit = () => fitSvgTexts(Array.from(root.querySelectorAll<SVGTextElement>('[data-fit]')));
+    fit();
+    const fonts = document.fonts;
+    if (!fonts || fonts.status === 'loaded') return;
+    let alive = true;
+    void fonts.ready.then(() => { if (alive) fit(); });
+    return () => { alive = false; };
+  }, [rootRef, key]);
 }

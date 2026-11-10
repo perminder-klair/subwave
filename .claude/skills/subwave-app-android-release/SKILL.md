@@ -216,7 +216,11 @@ on EAS; you don't need to rebuild to re-share.
 - **Another test build of the same version** (the common case): change nothing
   and rebuild — internal APKs install over each other regardless of build number.
 - **New marketing version** (e.g. `1.0.0` → `1.1.0`, what users see): edit
-  `expo.version` in `app/app.json` first, commit, then rebuild.
+  `expo.version` in `app/app.json` first, commit, then rebuild. That bump is
+  four fields — `app/app.json`, `app/package.json`, and **both** version fields
+  in `app/package-lock.json` (`.version` and `.packages[""].version`). See the
+  iOS skill's version section; `app` is outside release-please, so nothing keeps
+  them in step for you.
 
 Unlike Apple, **Play won't reject a same-`versionName` upload** — it keys
 releases on `versionCode` (which `autoIncrement` always bumps), so you *can*

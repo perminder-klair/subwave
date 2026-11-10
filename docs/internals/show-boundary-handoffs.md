@@ -1,0 +1,182 @@
+# Show-boundary handoffs
+
+## Why this needs a boundary model
+
+Show changes are audible editorial boundaries, not merely a different prompt
+context for the next picker run. A listener should hear one coherent final
+outgoing-show track, a natural handoff during that track, then the incoming
+show. Preparing the next track ahead of time must not make the incoming show
+or its host appear on air early.
+
+The controller's playback queue, session identity, presenter roster, and
+spoken-segment scheduling therefore need an explicit distinction between a
+**planned** boundary and an **on-air** boundary.
+
+## Observed failure modes
+
+### Early handoff
+
+The picker uses a look-ahead time to decide which show's constraints apply to
+a future pick. When that same look-ahead immediately rolls the live session,
+the outgoing presenter can sign off several minutes before the scheduled
+change. The new host and show then become the active identity while the final
+outgoing-show track is still playing.
+
+### Cross-boundary speech
+
+Track-linked speech is rendered and queued ahead of playback. If it survives
+an early identity roll, an outgoing presenter can speak after the handoff, or
+an incoming presenter can describe the outgoing programme as though they
+already host it. A handoff must be the outgoing presenter's final ordinary
+spoken contribution.
+
+### Host/guest inversion
+
+Two adjacent shows may deliberately reverse the same presenters' roles. For
+example, presenter A may host the outgoing show with presenter B as a guest,
+while B hosts the incoming show with A as the guest. Applying the incoming
+roster while the outgoing show is still on air produces contradictory IDs,
+links, and banter even when each generated line follows its prompt correctly.
+
+### Repeated schedule mentions
+
+This is not a vanilla SUB/WAVE behaviour. It applies only when an optional
+context integration supplies next-show or remaining-show facts to every speech
+request. In that configuration, the facts invite repetition unless the
+integration has a cadence policy. They are useful near a boundary, but are
+programme beats rather than default material for every link, ident, segment,
+or co-host exchange.
+
+## Required on-air sequence
+
+1. Identify and queue the final track that still belongs to the outgoing show.
+2. Let that track's linked intro play, when one exists.
+3. Prepare one atomic outgoing-sign-off/incoming-greeting pair without rolling
+   the live session early.
+4. With normal talk placement, air that pair during the final track. With
+   **Talk only between tracks**, prefer the first real track seam at or after
+   the scheduled boundary. That preference has one absolute two-minute
+   deadline: if the pair is already rendered, release it through the light-duck
+   intro channel; if it has not started rendering because the final track is
+   still live, generate and duck it over that track instead.
+5. After the handoff is claimed, suppress ordinary outgoing-presenter speech.
+6. At the real changeover, activate the incoming session and roster; its first
+   track then starts under the new show's identity. There is no mandatory
+   spacer track between the two halves of a handoff.
+
+Pair-drain discovers the incoming pick while the track before the final one is
+still live. That look-ahead may arm the record and prepare the incoming episode,
+but it cannot publish speech. The record carries the final outgoing track's
+identity; only the corresponding `now-playing.json` transition authorises the
+pair. `airIntro()` is awaited to the handoff-write boundary first, which puts the
+final track's own line ahead of the handoff on the shared voice serialiser.
+
+The pick forecast may look one attribution window beyond a track's expected
+start, but it is capped at one such window beyond the next real show boundary;
+it cannot accumulate through a run of picks into the following programme. A
+handoff is stricter still: its anchor's expected end must reach that boundary.
+When a track-start cycle arms its own current track, it re-checks that anchor in
+the same cycle because the normal start-marker pass has already occurred.
+
+The boundary must be driven by confirmed playback state where possible. A
+queued URI is only handed to Liquidsoap, not proof that a listener has reached
+the corresponding on-air moment.
+
+The generation deadline still waits for the current track's complete intro
+publication and rechecks that track and the pending handoff after context
+loading. It only changes placement for an eligible pair. It cannot confirm or
+replace a final-track anchor, and its timer does not keep the controller process
+alive during shutdown.
+
+If the recorded final track remains unconfirmed six minutes after the scheduled
+boundary, the next confirmed music start may replace its identity, including an
+untracked auto-playlist fallback. Read/debug/pick paths do not relax this gate.
+The replacement remains recorded while the pair renders so generic callers
+cannot bypass the confirmed runner's placement policy. A newly armed pair on a
+track already playing uses that same runner, awaiting the track's complete
+intro-publication promise, including any pending TTS. If another track starts
+while that intro is pending, the old runner yields to the newer track.
+
+## Design constraints
+
+- Keep look-ahead selection: it is needed to choose music appropriate for the
+  upcoming show.
+- Do not use look-ahead selection as permission to roll the live session,
+  switch the on-air roster, or speak a handoff.
+- Preserve listener-request handling and manual operator actions.
+- Keep the outgoing sign-off and incoming greeting as the only intentional
+  cross-persona handoff speech.
+- A top-of-hour check postponed by between-tracks placement must be generated
+  under the incoming identity and current clock once the handoff has cleared.
+- A pair rendered for a future seam is **queued**, not aired. `session.json`
+  persists that lifecycle and the regeneration fallback; `queue.json` persists
+  the rendered clip manifest and its absolute post-boundary deadline. After a
+  controller restart, valid WAVs are reclaimed without another model/TTS run
+  and the remaining wait is re-armed (or fires immediately when overdue). A
+  missing or invalid manifest/audio leaves the session record eligible for the
+  established regeneration path. Only the final line's stream-edge marker
+  settles the complete pair as aired.
+- The same absolute deadline also covers an **unrendered** durable handoff.
+  This prevents a long final track from postponing generation until a seam many
+  minutes into the incoming show. At expiry the normal immediate voice path is
+  used, so the pair is ducked over the current track; pending-state checks and
+  the handoff runner's claim keep a late seam or a concurrent trigger from
+  duplicating it.
+- If the wall-clock session roll wins the race with the final-track marker, the
+  armed record transfers to the incoming session and generic roll/drain hooks
+  still leave it for the confirmed-track runner.
+- The outgoing half reads the still-live outgoing session; the incoming half
+  starts with clean prompt memory. If the incoming show is a programme, its plan
+  is prepared onto the boundary record and transferred at the real roll so the
+  greeting carries the incoming angle and durably replaces the standalone intro.
+- Episode research for the outgoing half is saved on the session and copied into
+  the handoff record. Both ordinary post-roll and armed handoffs recover that
+  source snapshot after restart. Preparing an incoming occurrence cannot replace
+  the live outgoing snapshot. A legacy record without source data omits it rather
+  than reconstructing the outgoing episode from a roll timestamp.
+- Handoff suppression applies only inside the scheduled-talk scope. Manual
+  operator speech remains immediate, and listener-request intros remain governed
+  by their request/session rules rather than by the handoff lifecycle.
+- Treat a missing/unknown duration conservatively: never invent an exact
+  boundary time or delay music waiting for one.
+
+## Optional schedule-fact cadence
+
+Optional context integrations that supply schedule facts should use a dedicated
+cadence policy shared by all automatic speech paths. This branch neither adds
+nor changes such an integration. Where those facts are available, the policy
+should allow only a small number of mentions in the final part of a show (for
+example, one general final-half-hour mention and one nearer the handoff), while
+leaving the handoff itself to name the incoming show naturally. It must not
+depend on model self-restraint.
+
+## Regression coverage
+
+Tests should cover at least:
+
+- a normal show transition with an outgoing linked intro;
+- a handoff that would previously have fired early due to look-ahead;
+- a long forecast capped at the next boundary and an anchor that ends before it;
+- no outgoing ordinary speech after the handoff;
+- a host/guest role reversal between adjacent shows;
+- no schedule-fact repetition outside an optional integration's cadence allowance;
+- a real seam before the two-minute bound, and light-duck fallback when no seam arrives;
+- a long final track where no handoff has rendered by the deadline;
+- a controller restart that preserves the rendered pair and its original deadline;
+
+## Resolved live finding — 8 September 2026
+
+An ordinary link was generated under the outgoing presenter immediately before
+the clock boundary, survived the session roll, and aired under that outgoing
+voice on a later incoming-show track. Live evidence: Carol's `generateLink`
+completed at 22:59:40 BST; the station changed to Dante's Inferno at 23:00;
+the Carol-authored link aired at 23:05:35.
+
+Track-linked speech is now stamped with the editorial session key that created
+it. At air time, a link whose key differs from the live session is vetoed
+before rendering or playback. This is deliberately session-based, rather than
+persona-based, so it also prevents context leaking between two adjacent shows
+hosted by the same DJ (for example Lucy's Dawn Chorus → Get up and Go!).
+Request acknowledgements and old queue items without a session stamp retain
+their existing behaviour. The regression coverage pins Carol → Dante, Lucy →
+Lucy, same-session links, and request/legacy compatibility.

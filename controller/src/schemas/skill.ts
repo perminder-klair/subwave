@@ -64,7 +64,6 @@ export const SKILL_CRON_RE = /^\S+(?:\s+\S+){4,5}$/;
 // When a custom skill may air. 'commute' restricts it to the commute hours;
 // 'any' is the default and is NOT written to frontmatter.
 export const SKILL_WINDOWS = ['any', 'commute'] as const;
-export type SkillWindow = (typeof SKILL_WINDOWS)[number];
 
 // The "right now" context vocabulary a segment may weave in (#471). Homed here
 // because it is validated on both sides: the controller checks a submitted
@@ -256,12 +255,73 @@ const skillCronOnlySchema = z.preprocess(
   z.boolean({ error: 'cronOnly must be a boolean' }).default(false),
 );
 
+// Opt-in multi-persona discussion. Absent/null stays false for compatibility;
+// a present form value must be a literal boolean so a typo cannot silently turn
+// a normal skill into a multi-voice exchange.
+const skillCohostsSchema = z.preprocess(
+  skillNullToUndefined,
+  z.boolean({ error: 'cohosts must be a boolean' }).default(false),
+);
+
+// A skill's own TTS voice override: the engine, voice and cloud provider of a
+// persona's voice slot. Gain and speed are not part of it, because they stay
+// the speaker's: an override changes whose voice is heard, never how loud or
+// how fast. Absent or null means the on-air DJ's voice.
+export interface SkillVoiceSlot {
+  engine: string;
+  voice: string;
+  cloudProvider: string;
+}
+
+// The per-engine voice rules live once, in persona.ts (ttsVoiceSlotSchema, and
+// repairTtsVoiceSlot for the disk read). This module may import only zod, so
+// it takes the slot schema as an argument: schemas/skill-server.ts passes
+// persona's for the routes, and the skill editor passes the mirrored copy.
+// What stays here is the skill's own posture around that slot: null is "no
+// override", and a missing provider is openai, as it is in SKILL.md.
+export function skillVoiceSchema(slot: z.ZodType<SkillVoiceSlot>) {
+  // `.optional()` so a body with no `voice` key at all (a community install, an
+  // older client) reaches the transform as "no override", where zod would
+  // otherwise refuse the missing key.
+  return z.unknown().optional().transform((raw, ctx): SkillVoiceSlot | null => {
+    if (raw == null) return null;
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      ctx.issues.push({ code: 'custom', input: raw, message: 'voice must be an object or null' });
+      return z.NEVER;
+    }
+    const t = raw as Record<string, unknown>;
+    const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : v);
+    const parsed = slot.safeParse({
+      ...t,
+      engine: trim(t.engine),
+      cloudProvider: trim(t.cloudProvider) || 'openai',
+    });
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.issues.push({ code: 'custom', input: raw, message: issue.message });
+      }
+      return z.NEVER;
+    }
+    const { engine, voice, cloudProvider } = parsed.data;
+    return { engine, voice, cloudProvider };
+  });
+}
+
+/** A skill-file schema below with the voice override attached. */
+export function withSkillVoice<Shape extends z.ZodRawShape>(
+  schema: z.ZodObject<Shape>,
+  slot: z.ZodType<SkillVoiceSlot>,
+) {
+  return schema.extend({ voice: skillVoiceSchema(slot) });
+}
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
   cooldown: skillCooldownSchema,
   cron: skillCronSchema,
   cronOnly: skillCronOnlySchema,
+  cohosts: skillCohostsSchema,
   context: skillContextSchema,
   tags: skillTagsSchema,
   brief: skillBriefSchema,
@@ -286,9 +346,10 @@ export const skillCreateSchema = customSkillFileSchema.extend({
   name: skillSlugSchema,
 });
 
-export type SkillFileInput = z.input<typeof customSkillFileSchema>;
+// The voice is attached by withSkillVoice, so it is optional here: a body
+// parsed without it (a community install) carries no override.
 export type SkillFileParsed = z.output<typeof builtinSkillFileSchema> &
-  Partial<z.output<typeof customSkillFileSchema>>;
+  Partial<z.output<typeof customSkillFileSchema>> & { voice?: SkillVoiceSlot | null };
 
 /**
  * Parsed body → the field object writeSkillFile consumes. The only real work
@@ -304,10 +365,12 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     cooldown: parsed.cooldown,
     cron: parsed.cron,
     cronOnly: parsed.cronOnly,
+    cohosts: parsed.cohosts,
     contextFields: parsed.context,
     window: parsed.window,
     requiresKey: parsed.requiresKey,
     tags: parsed.tags,
     brief: parsed.brief,
+    voice: parsed.voice ?? null,
   };
 }

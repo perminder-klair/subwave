@@ -10,14 +10,8 @@ import { getShowcaseStations } from '@/lib/stations';
 // restarting the web container with a different env value, no rebuild.
 export const dynamic = 'force-dynamic';
 
-// Per-request metadata for the root. The baseline pins canonical + og:url to
-// the absolute origin, which the Metadata API leaves untouched even though it
-// drops metadataBase on this force-dynamic route.
-//
-// In player mode the share-card preview is personalised from the controller's
-// station name + description (issues #272, #1086); landing mode, an unset
-// station or any controller failure falls through to generic SUB/WAVE branding
-// so the preview never breaks.
+// Player metadata uses the station name and description. Landing mode and failed controller reads
+// use generic branding. Absolute canonical and og:url survive the Metadata API metadataBase issue.
 export async function generateMetadata(): Promise<Metadata> {
   const base: Metadata = {
     alternates: { canonical: absoluteUrl('/') },

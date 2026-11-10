@@ -80,9 +80,17 @@ label: Moon phase         # label shown in admin (defaults to a title-cased name
 cooldown: 6h              # min gap between auto firings — "90m" | "6h" | "2d" | "45" (minutes)
 cron: 0 8 * * *           # OPTIONAL: also fire on a fixed schedule, station time
 cronOnly: true            # OPTIONAL: with a cron, never fire at random too
+cohosts: true             # OPTIONAL: active host + guests, each in their own voice
+voiceEngine: remote       # OPTIONAL: speak in this engine, not the DJ's (see below)
+voiceId: newsreader       # OPTIONAL: the voice on that engine; empty = its default
+voiceProvider: openai     # OPTIONAL: for voiceEngine: cloud only (default openai)
 window: any               # "any" (default) | "commute" — commute hours only
 context: time, festival   # OPTIONAL: "right now" fields it may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; unset → stays inert
+feed: https://…/rss.xml   # OPTIONAL: a feed to read before speaking (see below)
+feedMaxItems: 10          # OPTIONAL: how much of it per fire (1–50, default 10)
+feedMaxAgeDays: 7         # OPTIONAL: skip items older than this (1–365 days)
+feed2: https://…/rss.xml  # OPTIONAL: a second feed (feed3: a third), merged
 ---
 If tonight's moon is at a notable phase, work it into one short, in-character
 line, the way a late-night presenter might glance out the window. Skip it when
@@ -103,6 +111,146 @@ the phase is unremarkable.`}</CodeBlock>
           the dedicated weather skill so the DJ doesn&rsquo;t staple the forecast to every break.
           Tick it back on (in the frontmatter, or per-field on the admin Edit sheet) where
           it&rsquo;s genuinely topical.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">FEEDS WITHOUT CODE</p>
+        <h2>A <code className="bs-code-inline">feed:</code> line is a fetch.</h2>
+        <p>
+          Give any skill a <code className="bs-code-inline">feed:</code> URL — in the
+          frontmatter, or as <strong>Feed URL</strong> on its Edit sheet — and the DJ fetches
+          it before writing the line. The items arrive as that segment&rsquo;s source data,
+          and the skill gets its own{' '}
+          <code className="bs-code-inline">skill_&lt;name&gt;</code> tool. No{' '}
+          <code className="bs-code-inline">tool.mjs</code> needed; News works exactly this way.
+        </p>
+        <CodeBlock>{`---
+name: giveaway
+label: Giveaway watch
+cooldown: 30m
+feed: https://contest.example.com/state.rss
+feedMaxItems: 10
+---
+The feed is the current state of the contest — report on who is already in it
+rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
+        <ul className="bs-list">
+          <li>
+            <strong>RSS 2.0, Atom and RDF</strong> all parse, namespaced tags and CDATA
+            included.
+          </li>
+          <li>
+            <code className="bs-code-inline">feedMaxItems</code> (1–50, default 10) caps how
+            much of the feed is read per fire. With{' '}
+            <code className="bs-code-inline">feed2</code> or{' '}
+            <code className="bs-code-inline">feed3</code> it is read from each feed, and a
+            fire offers no more than that many items in total; the next fire moves on to
+            the ones left. The merged list holds at most 60 items, taken round-robin: three
+            full 50-item feeds offer 60 of their 150, then report that every item has aired
+            until new ones appear.
+          </li>
+          <li>
+            <code className="bs-code-inline">feedMaxAgeDays</code> (1–365, default no limit)
+            skips items published longer ago than that. Search feeds need it: they mix in
+            items months old. Undated items are kept.
+          </li>
+          <li>
+            Every item the feed dates reaches the DJ with its day in the station&rsquo;s
+            timezone, so it can tell news from history. A feed that gives a day and no clock
+            keeps that day as written. This is on for every skill the generated tool serves,
+            with no key to set; a skill with its own{' '}
+            <code className="bs-code-inline">tool.mjs</code> passes on what its code returns.
+          </li>
+          <li>
+            <code className="bs-code-inline">feed2</code> and{' '}
+            <code className="bs-code-inline">feed3</code> add further feeds, merged
+            round-robin with the first, and a headline in two of them is offered once. One
+            that fails, takes more than six seconds or answers with something that isn&rsquo;t
+            a feed is skipped while another answers, with a warning in the log naming it
+            (once, until it recovers). If the feeds that
+            answered have no items, the failure is the fetch error, naming every feed that
+            failed by its key.
+          </li>
+          <li>
+            Items are <strong>burned on read</strong>: at most six fresh ones reach a
+            segment, and the next fire offers the ones after them rather than repeating.
+          </li>
+          <li>
+            A fetch that fails or times out <strong>stands the segment down</strong> rather
+            than letting the DJ invent one. So does a feed with nothing fresh left: a{' '}
+            <strong>Run now</strong> or <code className="bs-code-inline">cron:</code> on a
+            drained feed reports that it stood down.
+          </li>
+        </ul>
+        <p className="text-muted">
+          Only an <code className="bs-code-inline">http</code> or{' '}
+          <code className="bs-code-inline">https</code> URL creates the tool — anything else
+          is logged as a warning naming the skill, so a{' '}
+          <code className="bs-code-inline">feed:</code> line never quietly does nothing. On a
+          skill with its own <code className="bs-code-inline">tool.mjs</code>,{' '}
+          <code className="bs-code-inline">feedMaxAgeDays</code>,{' '}
+          <code className="bs-code-inline">feed2</code> and{' '}
+          <code className="bs-code-inline">feed3</code> do nothing unless that code reads
+          them, and the log says so. A station that still has News&rsquo;s old{' '}
+          <code className="bs-code-inline">tool.mjs</code> gets none of these keys and no{' '}
+          <code className="bs-code-inline">published</code> date until{' '}
+          <strong>Reset to default</strong> removes it. A
+          skill that ships its own <code className="bs-code-inline">tool.mjs</code> keeps it;
+          the generated tool fills a gap, it never displaces a fetcher you wrote.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">CO-HOSTED DISCUSSIONS</p>
+        <h2>One roster, one real voice per person.</h2>
+        <p>
+          Set <code className="bs-code-inline">cohosts: true</code>, or turn on{' '}
+          <strong>Co-hosted discussion</strong> in the skill editor. The skill then uses the
+          active scheduled show&apos;s host plus every guest co-host — the show roster is the
+          authority, not a persona list stored in the skill. It produces exactly one
+          contribution per person, in roster order, with 2–5 short sentences each.
+        </p>
+        <p>
+          Speaker names do not belong in the spoken text. Each contribution carries the
+          persona id separately, so it is rendered in that persona&apos;s own TTS voice and
+          attributed to them in the booth and session memory. The whole exchange is
+          rendered before the first line airs, then played back-to-back rather than mixed.
+        </p>
+        <p className="text-muted">
+          On a solo or off-show hour the skill stands down; Run now reports that it requires
+          a co-hosted show before any model or TTS call. If it has a data tool, that data
+          must come back usable — gathered by the skill&apos;s own tool loop, or fetched in
+          code when Segments &amp; Skills runs direct — or the whole discussion stays silent instead
+          of inventing facts.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">A VOICE OF ITS OWN</p>
+        <h2>The DJ&apos;s segment, in another voice.</h2>
+        <p>
+          A skill normally airs in the on-air DJ&apos;s voice. Turn on <strong>Voice</strong>{' '}
+          in the skill editor, or set <code className="bs-code-inline">voiceEngine</code>{' '}
+          with <code className="bs-code-inline">voiceId</code> (and{' '}
+          <code className="bs-code-inline">voiceProvider</code> for cloud), and it always
+          speaks in its own. The picker is the one personas use, with a sample button to
+          audition before saving. Only the voice changes: the line is still the
+          speaker&apos;s, at their own loudness and pace.
+        </p>
+        <p>
+          The voice follows a persona&apos;s rules for its engine: a Kokoro id, a{' '}
+          <code className="bs-code-inline">.wav</code> clone reference, a cloud voice id, or
+          whatever your remote server understands. The editor refuses one that breaks
+          them. A hand-edited file is read leniently: an unknown engine, or a blank
+          ElevenLabs or Fish Audio voice, means no override, and any other voice the engine
+          can&apos;t use is reset to that engine&apos;s default, as it would be for a persona.
+        </p>
+        <p className="text-muted">
+          A co-hosted skill ignores its voice, since every contribution already speaks in
+          its roster persona&apos;s own. If the engine is unavailable when the skill airs,
+          the station&apos;s fallback or default voice reads it instead. A voice is not sent
+          to the community catalog (clone references and server ids are station-local),
+          but a zip export carries it.
         </p>
       </section>
 
@@ -133,15 +281,16 @@ the phase is unremarkable.`}</CodeBlock>
         </p>
         <p>
           The big one: <strong>News reads the BBC by default</strong>. Hit{' '}
-          <strong>Edit</strong> on the News skill, paste your own RSS feed (any RSS 2.0 feed,
-          though not Atom yet) and rewrite the brief in your station&rsquo;s
-          voice, then Save. It&rsquo;s live on the next break, no restart.
+          <strong>Edit</strong> on the News skill, paste your own feed URL and rewrite the
+          brief in your station&rsquo;s voice, then Save. It&rsquo;s live on the next break,
+          no restart. News is an ordinary feed skill — the same{' '}
+          <code className="bs-code-inline">feed:</code> line any skill can carry.
         </p>
         <CodeBlock>{`---
 name: news
 label: News headlines
 cooldown: 45m
-feed: https://feeds.npr.org/1001/rss.xml   # any RSS 2.0 feed
+feed: https://feeds.npr.org/1001/rss.xml   # RSS, Atom or RDF
 feedMaxItems: 10
 ---
 One fresh headline in a single sentence — in the station's voice,
@@ -166,7 +315,8 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
           is the station facade (<code className="bs-code-inline">searchWeb</code>,{' '}
           <code className="bs-code-inline">library</code>, <code className="bs-code-inline">nowPlaying</code>,{' '}
           <code className="bs-code-inline">recentPlays</code>, <code className="bs-code-inline">onThisDay</code>,{' '}
-          <code className="bs-code-inline">fetchHeadlines</code>, durable{' '}
+          <code className="bs-code-inline">fetchHeadlines</code>,{' '}
+          <code className="bs-code-inline">weatherOutlook</code>, <code className="bs-code-inline">weatherNews</code>, durable{' '}
           <code className="bs-code-inline">recall</code>), so a custom skill can reach as far as a built-in.
         </p>
         <CodeBlock>{`export default async function (ctx, state, services, config, input) {
@@ -190,13 +340,24 @@ export const inputs = { query: 'what to search for; null for the default dig' };
 // OPTIONAL: operator knobs — each one becomes a field in this skill's edit
 // sheet. Values are saved to this skill's own SKILL.md and arrive as \`config\`.
 export const configFields = {
-  feed:         { type: 'url',    label: 'News feed · RSS 2.0' },
-  feedMaxItems: { type: 'number', label: 'Max items', min: 1, max: 50, integer: true },
+  endpoint: { type: 'url',    label: 'Status API' },
+  maxRows:  { type: 'number', label: 'Rows to read', min: 1, max: 50, integer: true },
 };`}</CodeBlock>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">A FEED NEEDS NO TOOL</div>
+          <p>
+            For an RSS/Atom feed you don&rsquo;t need any of this — a{' '}
+            <code className="bs-code-inline">feed:</code> line does it (see{' '}
+            <strong>Feeds without code</strong> above). Write a{' '}
+            <code className="bs-code-inline">tool.mjs</code> when the skill needs something a
+            feed can&rsquo;t give it: an authenticated API, the music library, the play log.
+          </p>
+        </div>
         <p>
           The call is timeout-guarded and any error degrades cleanly to &ldquo;no
-          data&rdquo;; a slow or broken skill can never hang the station. With no{' '}
-          <code className="bs-code-inline">tool.mjs</code>, the skill writes from its brief
+          data&rdquo;; a slow or broken skill can never hang the station. With neither a{' '}
+          <code className="bs-code-inline">tool.mjs</code> nor a{' '}
+          <code className="bs-code-inline">feed:</code>, the skill writes from its brief
           alone — no live data to look at.
         </p>
         <p>
@@ -255,9 +416,11 @@ export const configFields = {
           <p>
             Unlike the reviewed catalog, an imported{' '}
             <code className="bs-code-inline">.zip</code> may include a{' '}
-            <code className="bs-code-inline">tool.mjs</code> — the same trust as dropping a
-            folder in by hand. When it does, the UI flags it on arrival; read the code before
-            you enable it.
+            <code className="bs-code-inline">tool.mjs</code>. It is held unloaded — none of
+            it runs — and the skill shows <strong>code to review</strong>. Open it with{' '}
+            <strong>Edit</strong>, read the source, then <strong>trust and load</strong> it
+            or <strong>discard</strong> it. A restored backup&rsquo;s skill code is held the
+            same way unless it is already live on this station.
           </p>
         </div>
       </section>
@@ -268,7 +431,9 @@ export const configFields = {
         <p>
           A freshly dropped skill appears on the admin <strong>Skills</strong> page toggled{' '}
           <strong>off</strong>. It can&rsquo;t air (by itself or via the DJ) until you
-          enable it there. Dropping a folder never puts unreviewed content (or code) on air.
+          enable it there. Dropping a folder never puts unreviewed content on air, but a{' '}
+          <code className="bs-code-inline">tool.mjs</code> you place by hand is loaded on
+          every scan, enabled or not — so only drop in code you&rsquo;ve read.
         </p>
         <p>
           Skills load at boot, and on demand via the <strong>Rescan state/skills</strong>{' '}
@@ -278,7 +443,7 @@ export const configFields = {
           built-ins, a custom skill only fires autonomously when it&rsquo;s enabled{' '}
           <em>and</em> assigned to the persona on air (Personas page). <strong>Run now</strong>{' '}
           is an operator override that ignores the toggle, the persona, the frequency gate,
-          and the cooldown.
+          and the cooldown. A co-hosted skill still requires an active host-and-guest show roster.
         </p>
         <p>
           A <code className="bs-code-inline">cron:</code> timer sits between the two. It

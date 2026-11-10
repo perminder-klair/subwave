@@ -1,15 +1,13 @@
-// Multi-voice banter — a short scripted exchange between the show's host and
-// guest co-hosts, aired between tracks. One structured-output call writes the
-// WHOLE exchange (a per-line call would multiply latency and lose the
-// back-and-forth); each line is then rendered in its speaker's own TTS voice
-// and aired back-to-back through the serialized voice chain
-// (queue.announceExchange). Speaker ids ride a per-call Zod enum, so the model
-// can't invent a voice we can't render.
+// Generate the exchange in one call, then queue.announceExchange renders each
+// persona's voice through the serialized chain. Speaker enums stay strict;
+// repairing ids could air the wrong voice. castSpeakerIdRule mitigates rejection (#1512).
 
 import { z } from 'zod';
+import * as settings from '../../../settings.js';
 import { soulBrief } from '../core/pure.js';
 import { djObject } from '../strategy/object.js';
 import { buildContextLines } from './context.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471 — it dominated every segment); the dedicated
@@ -30,6 +28,30 @@ function castBlock(host: any, guests: any[]): string {
   return [entry(host, 'HOST'), ...guests.map((g: any) => entry(g, 'GUEST'))].join('\n');
 }
 
+// The exchange's system prompt. Exported pure for the same reason as
+// programme.ts's exchangeSystem: the station house rules have to be PROVABLY
+// on this path (issue #1420 — they weren't), and a test that only asserts the
+// block builder exists is exactly the regression it fails to catch.
+export function banterSystem({ host, guests, show = null }: any): string {
+  const showClause = show?.name ? ` of "${show.name}"` : '';
+  const lang = String(host?.language || '').trim() || 'English';
+  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}`;
+  return `You write short on-air exchanges between the hosts${showClause} on a personal internet radio station, mid-show. This is people who know each other talking in one studio: quick, warm, a little loose — real speech, not sketch comedy or a scripted bit.
+
+The cast (persona id — name (role): voice notes):
+${castBlock(host, guests)}
+
+Rules:
+- ${MIN_LINES} to ${MAX_LINES} lines total, at least two different speakers. Let the turn-taking breathe — it doesn't have to alternate mechanically, but nobody monologues.
+- ${settings.castSpeakerIdRule()}
+- Each speaker stays in THEIR OWN character per the voice notes. The host carries the room; guests chip in as themselves.
+- Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
+- This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.
+- No greetings or sign-offs — the show is already rolling. No invented listener messages, callers, or events.
+- ${onAirLocationGrounding()}
+- Plain spoken words only: no stage directions, no asterisks, no emoji. Speaker names in supplied recap are reference-only: never prefix a spoken line with any speaker name or a name-and-colon label; the separate speaker field already routes each line to the right voice.${langClause}${settings.castHouseRulesBlock()}`;
+}
+
 // Returns air-ready lines [{ persona, text }] in order, or null when the model
 // couldn't produce a usable exchange (fewer than two lines or a single voice
 // throughout — a monologue should go through the normal segment paths, not
@@ -43,30 +65,16 @@ export async function generateBanter({
   const schema = z.object({
     lines: z.array(z.object({
       speaker: z.enum(ids as [string, ...string[]]).describe('the persona id of who says this line, from the cast list'),
-      text: z.string().min(1).max(400).describe('the spoken line — one or two short conversational sentences, plain speech, no stage directions or sound effects'),
+      text: z.string().min(1).max(400).describe('the spoken line only — one or two short conversational sentences, with no speaker name or label prefix; the separate speaker field selects the voice'),
     })).min(MIN_LINES).max(MAX_LINES).describe('the exchange, in air order'),
   });
 
   // The host's on-air language governs the room — co-hosts on one show share
-  // a broadcast language, same rule as the rest of the station.
-  const lang = String(host?.language || '').trim();
-  const langClause = lang ? ` Everyone speaks ${lang} on air; keep proper nouns (artist names, track titles, the station name) untranslated.` : '';
+  // a broadcast language, same rule as the rest of the station. banterSystem
+  // owns the language and spoken-name policy so pure prompt tests cover it.
+  const system = banterSystem({ host, guests, show });
 
-  const showClause = show?.name ? ` of "${show.name}"` : '';
-  const system = `You write short on-air exchanges between the hosts${showClause} on a personal internet radio station, mid-show. This is people who know each other talking in one studio: quick, warm, a little loose — real speech, not sketch comedy or a scripted bit.
-
-The cast (persona id — name (role): voice notes):
-${castBlock(host, guests)}
-
-Rules:
-- ${MIN_LINES} to ${MAX_LINES} lines total, at least two different speakers. Let the turn-taking breathe — it doesn't have to alternate mechanically, but nobody monologues.
-- Each speaker stays in THEIR OWN character per the voice notes. The host carries the room; guests chip in as themselves.
-- Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
-- This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.
-- No greetings or sign-offs — the show is already rolling. No invented listener messages, callers, or events.
-- Plain spoken words only: no stage directions, no asterisks, no emoji.${langClause}`;
-
-  const ctxLines = buildContextLines(context, { contextFields: BANTER_CONTEXT_FIELDS });
+  const ctxLines = buildContextLines(context, { contextFields: BANTER_CONTEXT_FIELDS, steer: true });
   if (current?.title) ctxLines.push(`On air right now: "${current.title}" by ${current.artist || 'unknown'}`);
   if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
   if (recentOpeners?.length) ctxLines.push(`Recent opening words (start the first line differently): ${recentOpeners.join(' | ')}`);

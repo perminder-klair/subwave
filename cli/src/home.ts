@@ -5,7 +5,7 @@
 // command that doesn't.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 export const HOME_CONFIG_DIR = resolve(homedir(), '.config', 'subwave');
@@ -111,14 +111,4 @@ export function isCloneMode(home: string): boolean {
     existsSync(resolve(home, 'controller', 'package.json')) &&
     existsSync(resolve(home, 'web', 'package.json'))
   );
-}
-
-export function requireCloneMode(home: string, commandName: string): void {
-  if (isCloneMode(home)) return;
-  process.stderr.write(
-    `\`subwave ${commandName}\` needs the cloned repo (controller/, web/, scripts/).\n` +
-    `Current SUBWAVE_HOME=${home} looks like a standalone install.\n` +
-    'Clone the repo with `git clone https://github.com/perminder-klair/subwave.git` to use this command.\n',
-  );
-  process.exit(2);
 }

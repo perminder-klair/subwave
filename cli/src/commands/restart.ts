@@ -1,8 +1,6 @@
-// `subwave restart [service]` — encodes the rebuild-vs-restart split from
-// CLAUDE.md. The controller COPYs its source at build time, so a plain restart
-// reruns the same code and it always needs a rebuild; broadcast bind-mounts
-// radio.liq in dev but bakes it in prod, so only prod needs one. The no-arg
-// picker carries these hints so the operator doesn't have to remember them.
+// `subwave restart [service]` — the rebuild-vs-restart split from CLAUDE.md. The
+// controller COPYs its source at build time, so it always needs a rebuild;
+// broadcast bind-mounts radio.liq in dev but bakes it in prod, so only prod does.
 
 import { detectCompose, listDeclaredServices, type ComposeFile, type ComposeEnv } from '../compose.ts';
 import { composeRestart, composeUpBuild, composeUpRecreate } from '../docker.ts';
@@ -81,8 +79,7 @@ export async function runRestartCommand(opts: RestartOpts = {}): Promise<void> {
 
   const policy = POLICY[service] ?? { rebuild: false, hint: 'restart' };
   // A standalone install has no source to build from, so a wanted rebuild
-  // degrades to recreate rather than erroring — bouncing the container and
-  // re-reading .env is the realistic intent there anyway.
+  // degrades to recreate rather than erroring.
   const cloneMode = isCloneMode(getSubwaveHome());
   const wantsBuild = opts.forceBuild || policy.rebuild;
   const action: 'build' | 'recreate' | 'restart' =
@@ -130,8 +127,7 @@ async function pickService(file: ComposeFile, env: ComposeEnv): Promise<string |
       hint: policy.hint,
     };
   });
-  // The dev web server isn't a compose service, so it never appears in
-  // `declared` — add it by hand.
+  // The dev web server isn't a compose service, so add it by hand.
   if (env === 'dev') {
     options.push({
       value: WEB_DEV_SERVICE,

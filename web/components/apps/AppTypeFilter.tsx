@@ -3,14 +3,10 @@
 import { useState, type ReactNode } from 'react';
 import { APP_TYPE_LABELS, type AppType } from '@/lib/apps';
 
-// Wraps the server-rendered grid rather than rendering the cards itself: it
-// sets data-filter here and CSS hides the cards whose data-type doesn't match
-// (see .bs-apps-filterwrap in globals.css), which keeps AppCard a server
-// component.
-//
-// `types` is only the types present in the catalog (lib/apps presentTypes), so
-// every chip has a card behind it and there is no reachable "nothing matched"
-// state to render.
+// Wraps the server-rendered grid rather than rendering the cards: it sets
+// data-filter and CSS hides non-matching data-type (.bs-apps-filterwrap in
+// globals.css), which keeps AppCard a server component. `types` holds only the
+// types present in the catalog, so no chip can produce an empty grid.
 export default function AppTypeFilter({
   types,
   children,

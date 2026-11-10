@@ -1,28 +1,16 @@
-// Shared display helpers for live-session turns from GET /session.
-//
-// The live session is the single source of truth for the booth log wherever
-// it's shown to people (player Booth feed, broadcast ticker, /admin/dash). The
-// controller's in-memory `djLog` is operator diagnostics only and stays behind
-// /admin/debug.
-//
-// role → display class: voice (spoken on-air verbatim), dj (the agent's pick /
-// request reasoning), track (a track that aired), system (session events).
+// Listener booth logs use GET /session. djLog remains operator diagnostics in /admin/debug.
 
 import type { SessionTurn } from './types';
 
 export type TurnDisplayClass = 'voice' | 'dj' | 'track' | 'system';
 
-// A spoken turn is stamped with `meta.airedAt` — the LIVE-EDGE moment the words
-// left the mixer (issue #1382). This listener is `leadMs` behind that edge for
-// their whole connection (#1114), so a line shown the moment it appears in the
-// feed is shown before it is spoken *here*, which is exactly the complaint the
-// air-time stamp exists to answer. Same trick useStationFeed already plays with
-// the track switch: hold the line until its audio has actually arrived.
-//
-// Turns with no stamp (every non-voice turn, and any voice turn from a mixer
-// that couldn't measure its air time) are shown immediately — degrading to the
-// old behaviour, never to a line that is hidden forever.
+// Delay stamped speech by leadMs to match listener audio (#1382, #1114). Show unstamped turns
+// immediately.
 const MAX_HOLD_MS = 120_000;
+
+/** Ceiling on the listener's buffer behind the live edge, in seconds:
+ *  useStationFeed clamps the station's `stream.bufferSeconds` to it. */
+export const MAX_LEAD_SECONDS = 60;
 
 export function airedAtMs(turn: SessionTurn | null | undefined): number | null {
   const raw = turn?.meta?.airedAt;
@@ -31,9 +19,7 @@ export function airedAtMs(turn: SessionTurn | null | undefined): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-// Split a feed into what this listener can already have heard and when the next
-// held turn becomes audible (null = nothing pending). Pure, so the hook can run
-// it on both a poll and a timer without re-deriving the rule.
+// Return audible turns and the next pending display time. Use the same rule for polls and timers.
 export function splitAudibleTurns(
   messages: SessionTurn[] | null | undefined,
   leadMs: number,
@@ -44,10 +30,8 @@ export function splitAudibleTurns(
   for (const turn of messages || []) {
     const at = airedAtMs(turn);
     const audibleAt = at == null ? null : at + Math.max(0, leadMs);
-    // A stamp far enough in the future to be implausible (a skewed station
-    // clock, an absurd buffer setting) is treated as unknown rather than
-    // withheld — the failure mode of this hold must always be "shown early",
-    // never "never shown".
+    // An implausibly future stamp (skewed clock, absurd buffer) counts as
+    // unknown: this hold fails towards "shown early", never "never shown".
     if (audibleAt == null || audibleAt <= nowMs || audibleAt - nowMs > MAX_HOLD_MS) {
       visible.push(turn);
       continue;
@@ -72,6 +56,32 @@ export const isDjTurn = (turn: SessionTurn | null | undefined): boolean => {
   return c === 'voice' || c === 'dj';
 };
 
+// For a while after a hard roll GET /session leads with the outgoing show's
+// tail (`meta.carried: true`) and one `kind: 'show-boundary'` separator, so a
+// passive display does not go blank at a show boundary (#1690).
+export function isShowBoundary(turn: SessionTurn | null | undefined): boolean {
+  return turn?.role === 'event' && turn.kind === 'show-boundary';
+}
+
+export function isCarriedTurn(turn: SessionTurn | null | undefined): boolean {
+  return turn?.meta?.carried === true;
+}
+
+// Separator text: the boundary moment in the client's own clock style plus the
+// incoming show (or host). Falls back to the server-rendered `text`.
+export function showBoundaryLabel(
+  turn: SessionTurn | null | undefined,
+  clock: (at: string) => string,
+): string {
+  const b = turn?.meta?.boundary as { at?: unknown; show?: unknown; persona?: unknown } | undefined;
+  const at = typeof b?.at === 'string' && Number.isFinite(Date.parse(b.at)) ? b.at : null;
+  if (!at) return turn?.text || '';
+  const name = (typeof b?.show === 'string' && b.show)
+    || (typeof b?.persona === 'string' && b.persona)
+    || 'On air';
+  return `${clock(at)} · ${name}`;
+}
+
 // Session turns carry no id, so key off timestamp + index.
 export function turnKey(turn: SessionTurn | null | undefined, i: number): string {
   return `${turn?.t || 'x'}-${i}`;
@@ -85,8 +95,7 @@ export function turnText(turn: SessionTurn | null | undefined): string {
   return text;
 }
 
-// The `pick` event turn is the literal prompt posted to the DJ agent — ~700
-// chars of coaching the model needs verbatim but that drowns the booth log.
+// The `pick` event turn is the literal ~700-char prompt posted to the DJ agent.
 // Returns a one-liner for long event turns; null means render the turn as-is.
 export function eventTurnSummary(turn: SessionTurn | null | undefined): string | null {
   if (turn?.role !== 'event') return null;
@@ -108,13 +117,8 @@ export function eventTurnSummary(turn: SessionTurn | null | undefined): string |
   return `${firstSentence.trim()} …`;
 }
 
-// The single voice/dj turn to surface as the DJ "thinking" line under
-// now-playing. Walk newest→oldest and skip `dj`/pick turns whose `meta.trackId`
-// isn't what's on air: a pick turn is written at the *previous* track's start,
-// so its trackId is the NEXT track, and showing it reads as this song's
-// reasoning when it isn't (#546). Voice/segment turns carry no trackId and are
-// whatever was last spoken, so they always qualify. A null/unknown
-// currentTrackId yields the latest voice turn, since no pick can be confirmed.
+// Skip pick turns for tracks not yet on air (#546). Picks are logged during the preceding track;
+// voice turns qualify unless carried from the previous show (#1690).
 export function selectThinkingTurn(
   feed: SessionTurn[] | null | undefined,
   currentTrackId: string | null = null,
@@ -124,9 +128,91 @@ export function selectThinkingTurn(
     const turn = feed[i];
     const cls = turnClass(turn);
     if (!turn?.text || (cls !== 'voice' && cls !== 'dj')) continue;
+    if (isCarriedTurn(turn)) continue;
     const trackId = turn.meta?.trackId as string | undefined;
     if (cls === 'dj' && trackId && trackId !== currentTrackId) continue;
     return turn;
   }
   return null;
+}
+
+/** Rough spoken length of a line at broadcast pace (~2.6 words a second) plus
+ *  a breath, clamped to something a link or segment actually runs. */
+export function speechMs(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.min(45_000, Math.max(3_000, Math.round((words / 2.6) * 1000) + 1_200));
+}
+
+// Turn kinds that map to "the DJ is on the mic". Tracks and request acks share
+// the booth-feed channel but aren't voiced over the music bus.
+const VOICE_TURN_KINDS = new Set([
+  'voice',
+  'segment',
+  'link',
+  'intro',
+  'station-id',
+  'weather',
+  'hourly',
+  'say',
+]);
+
+export function isVoiceTurn(turn: SessionTurn | null | undefined): boolean {
+  if (!turn) return false;
+  const kind = (turn.kind || '').toLowerCase();
+  if (VOICE_TURN_KINDS.has(kind)) return true;
+  const role = (turn.role || '').toLowerCase();
+  return role === 'voice' || role === 'segment';
+}
+
+// Sanity bound on a reported clip length, so a garbage value cannot hold the
+// window open; a real segment is a few minutes at most.
+const MAX_CLIP_MS = 15 * 60_000;
+
+/** How long a spoken turn lasts: the controller's measured `meta.durationMs`
+ *  when it sends one (#1848), else speechMs's estimate. */
+export function lineMs(turn: SessionTurn): number {
+  const d = turn.meta?.durationMs;
+  if (typeof d === 'number' && Number.isFinite(d) && d > 0 && d <= MAX_CLIP_MS) return d;
+  return speechMs(turn.text || '');
+}
+
+/** Whether one of the DJ's lines is being HEARD at `nowMs`, and when that next
+ *  changes (null = not until the feed does) — the lock screen's avatar swap.
+ *  The window runs from the line's live-edge stamp (`meta.airedAt`, else `t`)
+ *  plus the listener's buffer, for the clip's length. A window counted from the
+ *  stamp alone closes before the listener hears a word whenever the buffer
+ *  (22s by default) outlasts it.
+ *
+ *  The latest line that has started decides; a later line still inside the
+ *  buffer only schedules the next change. The previous show's carried tail
+ *  never counts, and a start too far ahead to be a real buffer is ignored.
+ *  The native app's lib/voice-turn.ts holds the same rule. */
+export function talkingState(
+  feed: SessionTurn[] | null | undefined,
+  leadMs: number,
+  nowMs: number,
+): { talking: boolean; nextChangeMs: number | null } {
+  const turns = feed ?? [];
+  let pendingMs: number | null = null;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (!turn || !isVoiceTurn(turn) || isCarriedTurn(turn)) continue;
+    const stamp =
+      airedAtMs(turn) ??
+      (typeof turn.t === 'number' ? turn.t : typeof turn.t === 'string' ? Date.parse(turn.t) : NaN);
+    if (!Number.isFinite(stamp)) continue;
+    const startMs = stamp + Math.max(0, leadMs);
+    if (startMs > nowMs) {
+      if (startMs - nowMs <= MAX_HOLD_MS && (pendingMs == null || startMs < pendingMs)) {
+        pendingMs = startMs;
+      }
+      continue;
+    }
+    const endMs = startMs + lineMs(turn);
+    if (nowMs < endMs) {
+      return { talking: true, nextChangeMs: pendingMs == null ? endMs : Math.min(endMs, pendingMs) };
+    }
+    break;
+  }
+  return { talking: false, nextChangeMs: pendingMs };
 }

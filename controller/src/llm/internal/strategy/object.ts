@@ -1,28 +1,23 @@
-// djObject — schema-validated structured output. `schema` is a Zod object
-// schema; the returned value is parsed and validated.
-//
-// Two attempts, because small/cloud models occasionally botch structured output
-// (the AI SDK throws NoObjectGeneratedError — "could not parse the response"):
-//   1. native    — Output.object, which forwards the schema to the provider's
-//                   structured-output mode (constrained decoding where it's
-//                   supported). Ollama instead takes the forced-tool path
-//                   (objectViaToolCall) — it ignores JSON mode.
-//   2. recovery  — plain free-text, then strip <think> blocks / ``` fences and
-//                   Zod-validate ourselves. Catches models that wrap the JSON
-//                   in reasoning the native parser chokes on.
-// Throws only if BOTH attempts fail.
+// Use native structured output or a forced tool, then recover via text parsing.
+// Permanent model failures go directly to failover. Each branch owns its output
+// instruction; callers must not impose a conflicting JSON/tool channel (#1536).
 
 import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, perfOf, warningsOf, failureDiagnostics, schemaHint } from '../core/pure.js';
-import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs } from '../provider/capabilities.js';
+import { stripThinking, extractJson, perfOf, warningsOf, failureDiagnostics, schemaHint, isModelUnavailable, isGenerationControlError, createUsageMeter } from '../core/pure.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, googleSafetyOptions } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
 // Operator-overridable via settings.llm.maxOutputTokens (issue #712); 0 keeps
 // this default.
 const MAX_TOKENS_OBJECT = 8000;
+
+// Native providers may ignore response_format. State the required format here
+// without forbidding tool calls: Anthropic implements JSON with a synthesized tool (#1536).
+export const NATIVE_JSON_INSTRUCTION =
+  'The result must be a single JSON object matching the required shape — no prose, no markdown fences.';
 
 export async function djObject({
   system,
@@ -32,60 +27,54 @@ export async function djObject({
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_OBJECT),
   kind = 'sdk.djObject',
   leg = undefined,
-  // Optional caller-supplied abort signal. No live caller wraps djObject in
-  // withDeadline today, so this is inert unless one starts to — kept in the
-  // shape as a precaution so a future deadline-wrapped call can cut the
-  // Retry-After sleep short and prevent a ghost retry after the abort (mirrors
-  // djAgent's threading, PR #751 review).
+  // Callers may attach controller-resolved diagnostics to the recent-call
+  // record. Objects inside this value are deliberately retained by reference:
+  // selection code learns the verified queued track only after djObject
+  // returns, before withFailover records the successful call.
+  telemetry = {},
+  // Includes the tighter simple-segment caller budget; never reset for failover.
   signal = undefined,
 }: any): Promise<any> {
   return withFailover(
     kind,
-    (err) => ({ user: prompt, ...failureDiagnostics(err) }),
+    (err) => ({ user: prompt, ...failureDiagnostics(err), ...telemetry }),
     async (l) => {
       let lastErr;
-      // Track the strategy actually attempted so a failure record attributes to
-      // the right sub-path — bucketing every failure as 'ai-sdk' hides which
-      // structured-output branch is breaking in /stats.
+      // Log the actual branch on failure so /stats identifies the broken output path.
       let lastVia;
+      // Both attempts are billed, so the record carries their sum on success
+      // AND on the throw — attempt 1's spend must not vanish behind attempt 2.
+      const meter = createUsageMeter();
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
           let object;
-          let usage;
           let perf;
           let warnings;
           if (attempt === 1 && needsToolCallObject(l.cfg)) {
             lastVia = 'ai-sdk:tool';
-            ({ object, usage, perf, warnings } = await withTransientRetry(kind,
-              () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens, signal }), signal));
+            ({ object, perf, warnings } = await withTransientRetry(kind,
+              () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens, signal, meter }), signal));
           } else if (attempt === 1) {
             lastVia = 'ai-sdk';
             const result = await withTransientRetry(kind, () => generateText({
               model: l.model,
               instructions: system,
-              prompt,
+              // Append to prompt to preserve the caller's system prompt hash.
+              prompt: `${prompt}\n\n${NATIVE_JSON_INSTRUCTION}`,
               temperature,
               maxOutputTokens,
               output: Output.object({ schema }),
               reasoning: reasoningFor(l.cfg),
+              ...googleSafetyOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
+              onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
             }), signal);
             object = result.output;
-            usage = usageOf(result);
             perf = perfOf(result);
             warnings = warningsOf(result);
           } else {
             lastVia = 'ai-sdk:recovery';
-            // Self-describing retry: the native/tool attempt above conveys the
-            // schema to the model via a real provider channel (response_format
-            // or a forced tool's inputSchema) — this plain generateText call has
-            // neither, so without restating the shape here the model is guessing
-            // required keys from whatever the caller's own prose happens to
-            // mention (observed: GLM dropping `reason`/`say` entirely — see
-            // schemaHint's comment). Also route through the no-think model +
-            // forced suppression, same as every other structured-output leg
-            // (objectViaToolCall, djAgent's done-tool path) — this was the one
-            // branch still using the operator's raw reasoning-on model instance.
+            // Text recovery has no schema channel; include schemaHint and suppress reasoning.
             const hint = schemaHint(schema);
             const result = await withTransientRetry(kind, () => generateText({
               model: l.noThinkModel ?? l.model,
@@ -95,21 +84,23 @@ export async function djObject({
               temperature,
               maxOutputTokens,
               reasoning: reasoningFor(l.cfg, { forceNoThink: true }),
+              ...googleSafetyOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
+              onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
             }), signal);
             try {
               object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
             } catch (parseErr: any) {
-              // Surface the raw output on a shape/parse miss, mirroring the
-              // done-tool agent's diagnostics — without this a recovery-path
-              // failure carried no evidence of what the model actually
-              // produced, only the Zod/JSON error.
-              parseErr.text = result.text || '';
-              parseErr.finishReason = result.finishReason;
-              parseErr.usage = result.usage;
-              throw parseErr;
+              // A fixed message, with the parse error kept as `cause`: V8's
+              // JSON.parse message quotes the model's own reply, and the
+              // failover/retry classifiers read messages — a reply mentioning
+              // "Forbidden" or a "quota" must not read as a provider rejection.
+              // Raw output rides along for diagnosis, as before.
+              const err: any = new Error('object recovery reply was not valid JSON for the schema', { cause: parseErr });
+              err.text = result.text || '';
+              err.finishReason = result.finishReason;
+              throw err;
             }
-            usage = usageOf(result);
             perf = perfOf(result);
             warnings = warningsOf(result);
           }
@@ -117,25 +108,30 @@ export async function djObject({
             value: object,
             via: lastVia,
             sampling: samplingWithLocalKnobs(l.cfg, { temperature }),
-            usage,
+            usage: meter.usage(),
             perf,
             warnings,
-            // Full, untruncated — the /debug surface shows the whole call, and
-            // the ring buffer holds only 120 entries so size isn't a concern.
-            // (A .slice(0, 500) here used to cut pick reasons mid-sentence in
-            // /admin/debug; the durable events.jsonl still caps via cap().)
-            extra: { system, user: prompt, response: JSON.stringify(object) },
+            // Keep /debug output complete; durable events still apply cap().
+            extra: { system, user: prompt, response: JSON.stringify(object), ...telemetry },
           };
         } catch (err) {
+          if (isGenerationControlError(err)) {
+            (err as any).__via = lastVia;
+            meter.attachTo(err);
+            throw err;
+          }
           lastErr = err;
+          // Changing the output format cannot recover a retired/missing model.
+          // Keep the common failure attribution before handing it to failover.
+          if (isModelUnavailable(err)) break;
         }
       }
-      // Attribute the failure to the last sub-path tried, then let withFailover
-      // decide whether the error is host-unreachable (→ try the backup leg) or
-      // a model/parse failure (→ surface it).
+      // Record the last branch, then let withFailover decide whether the backup can help.
       (lastErr as any).__via = lastVia;
+      meter.attachTo(lastErr);
       throw lastErr;
     },
     leg,
+    signal,
   );
 }

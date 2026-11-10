@@ -1,31 +1,6 @@
-// What an unauthenticated, ROSTER-WIDE read is allowed to say about a persona.
-//
-// Two endpoints share this: GET /schedule's persona index and GET /personas.
-// They must never drift apart on what they disclose, and the rule is easier to
-// reason about (and to pin) as a pure function than as two inline object
-// literals in routes/public.ts — same split as util/listener-auth.ts.
-//
-// The disclosure line:
-//
-//   id / name / avatar   always — already public, and the schedule has shipped
-//                        them since it existed.
-//   tagline              always — the persona's public one-liner, the field an
-//                        operator writes as a bio, and GET /dj has published it
-//                        for the on-air persona all along.
-//   soul                 OPT-IN (settings.privacy.publishPersonaSouls). A soul
-//                        is the persona's SYSTEM PROMPT, not a written bio:
-//                        operators author it assuming it stays backstage, and
-//                        these reads hand over every persona at once. Default
-//                        off, so upgrading a station changes no public bytes.
-//
-// Deliberately NOT here at any setting: tts (engine/voice/gain), skills, the
-// behaviour dials (humour/localColour/warmth), djMode, language, frequency.
-// Those are operator configuration, not station identity.
-//
-// GET /dj is intentionally out of scope. It publishes the ON-AIR persona's
-// soul, one at a time, and has since it existed — public clients already read
-// it, so gating it now would be a breaking change to a stable public read. The
-// toggle governs bulk disclosure of the roster, which is the new capability.
+// /schedule and /personas share this public roster shape. Soul requires
+// privacy.publishPersonaSouls; never expose TTS, skills or behavior fields.
+// /dj's existing on-air soul contract is separate.
 
 /** The subset of a stored persona these reads touch. */
 export interface PersonaLike {
@@ -50,23 +25,14 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
-/**
- * Whether roster-wide reads may publish persona souls.
- *
- * Strict `=== true`: absent (every settings.json written before the key
- * existed), null, and any non-boolean all read as OFF. Opting in has to be a
- * deliberate act, never something an upgrade or a malformed value does for you.
- */
+/** Strict `=== true`: absent, null and any non-boolean read as OFF, so an
+ * upgrade or a malformed value never opts a station in. */
 export function soulsArePublic(s: { privacy?: { publishPersonaSouls?: unknown } } | null | undefined): boolean {
   return s?.privacy?.publishPersonaSouls === true;
 }
 
-/**
- * One persona, reduced to what an unauthenticated roster-wide read may show.
- *
- * `avatarUrl` is injected rather than built here so this module stays free of
- * the route layer's URL conventions (routes/public.ts owns `avatarUrlFor`).
- */
+/** One persona reduced to the public shape. `avatarUrl` is injected so this
+ * module stays free of the route layer's URL conventions. */
 export function publicPersonaShape(
   p: PersonaLike,
   withSouls: boolean,
@@ -82,14 +48,9 @@ export function publicPersonaShape(
 }
 
 /**
- * Guest co-host ids for a show, filtered to personas that still exist.
- *
- * A guest deleted after the show was saved simply vanishes — the same rule
- * settings/persona.ts resolveShowShape applies when it hydrates guests for the
- * on-air roster, kept in agreement here so /schedule and /now-playing never
- * disagree about who is in the booth. Ids only: the payload's persona index
- * already carries name/tagline/avatar, so clients join on id instead of us
- * repeating every blurb per show.
+ * Guest co-host ids, filtered to personas that still exist — the same rule
+ * resolveShowShape applies, so /schedule and /now-playing agree on who is in the
+ * booth. Ids only; clients join against the payload's persona index.
  */
 export function publicGuestIds(
   guestPersonaIds: unknown,

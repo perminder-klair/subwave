@@ -1,7 +1,7 @@
 // Unit tests for the playlist builder's pure helpers (music/playlist-gen-pure.ts):
 // dedupe/merge, cap, energy-arc arrangement, artist spacing, the deterministic
 // fallback's never-empty invariant, id resolution, and count fitting.
-// Run: `tsx scripts/playlist-gen-pure.test.ts` (auto-discovered by run-tests.ts).
+// Run: `npm test -- playlist-gen-pure`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
 
@@ -19,7 +19,6 @@ import {
   pickDeterministic,
   orderByIds,
   fitToCount,
-  totalDurationSec,
   filterByDurationBand,
   filterByBpmBand,
   filterByArtists,
@@ -255,12 +254,6 @@ function t(id: string, over: Partial<PoolTrack> = {}): PoolTrack {
   const capped = selectAppendable(pool, { sinceIso: cut, requireVibe: false, cap: 1, excludeIds: new Set(['mem']) });
   assert.equal(capped.length, 1);
   assert.equal(capped[0]!.id, 'newv', 'cap keeps highest score');
-}
-
-// ── totalDurationSec ─────────────────────────────────────────────────────────
-{
-  assert.equal(totalDurationSec([{ durationSec: 100 }, { durationSec: 50 }, { durationSec: null }]), 150);
-  assert.equal(totalDurationSec([]), 0);
 }
 
 // ── filterByDurationBand ─────────────────────────────────────────────────────

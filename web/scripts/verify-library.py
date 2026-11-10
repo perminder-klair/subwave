@@ -12,9 +12,11 @@ Every check in CHECKS runs with no args; name one or more to run a subset.
 STACK. The isolated verify stack from the `verify` skill — controller on
 :7791, web dev server on :7793, admin creds test:test. The controller needs a
 seeded library.db in its STATE_DIR (copy one in; a fresh state dir indexes
-nothing and every row assertion fails) and a reachable Subsonic backend for
-the two tabs that do not read library.db: Search (/dj/search) and Tracks →
-All (/dj/recent). Everything else answers from library.db alone.
+nothing and every row assertion fails). Search (/dj/search) and Tracks → All
+(/dj/recent) normally read Subsonic; this harness routes those two GETs to
+deterministic envelopes built from the copied library.db so the isolated stack
+never needs an operator's music-server credentials. Everything else answers
+from the controller directly.
 
 Unlike verify-forms.py these checks are read-mostly, so there is no
 SUBWAVE_VERIFY_ALLOW_DESTRUCTIVE gate — but assert_throwaway_stack() still
@@ -35,6 +37,7 @@ import json
 import sys
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from playwright.sync_api import sync_playwright
@@ -142,6 +145,35 @@ def mode_button(page, label):
     return page.locator("[role=radio]").filter(has_text=label).first
 
 
+def stub_subsonic_library_modes(page):
+    """Keep the two Subsonic-backed tabs deterministic on the isolated stack.
+
+    The verify controller deliberately points NAVIDROME_URL at a dead loopback
+    port so it can never inherit or mutate an operator's music server. These
+    route fixtures replace only the two read envelopes normally supplied by
+    that server; their rows still come from the isolated controller's copied
+    library.db, and Search still exercises offset paging and append behavior.
+    """
+    rows = api("/library/browse?limit=100").get("rows") or []
+    assert len(rows) > 50, "fixture library needs more than one Search page"
+
+    def route_subsonic_read(route):
+        parsed = urllib.parse.urlparse(route.request.url)
+        params = urllib.parse.parse_qs(parsed.query)
+        if parsed.path == "/dj/recent":
+            limit = int(params.get("limit", ["50"])[0])
+            body = {"results": rows[:limit]}
+        else:
+            limit = int(params.get("limit", ["50"])[0])
+            offset = int(params.get("offset", ["0"])[0])
+            page_rows = rows[offset:offset + limit]
+            body = {"results": page_rows, "hasMore": len(page_rows) == limit}
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+    page.route("http://localhost:7791/dj/recent**", route_subsonic_read)
+    page.route("http://localhost:7791/dj/search**", route_subsonic_read)
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -171,6 +203,7 @@ def browse_filters(page):
 @check
 def search_modes(page):
     """A metadata search returns rows; Load more appends rather than replaces."""
+    stub_subsonic_library_modes(page)
     goto_tab(page, "?tab=search", wait=EMPTY)
     page.fill('input[placeholder*="floating"]', "love")
     page.get_by_role("button", name="Search", exact=True).click()
@@ -199,6 +232,7 @@ def tracks_modes(page):
     Seeds an operator like so Liked mode has something to render — an empty
     likes store would let the mode 'pass' without ever exercising the list.
     """
+    stub_subsonic_library_modes(page)
     seed = (api("/library/browse?limit=1").get("rows") or [])[0]
     api_write("POST", f"/likes/song/{seed['id']}", {
         "title": seed.get("title"), "artist": seed.get("artist"),

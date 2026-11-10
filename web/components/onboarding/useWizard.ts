@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
 import { fishAudioIssue } from '@/lib/schemas.generated';
+import { LLM_ENV_VARS } from '../admin/llm/providerMeta';
 
 // Every step reads and writes through the `set` updater rather than its own
 // state, so the Review step can show the whole picture without prop-drilling.
@@ -20,10 +21,9 @@ export interface WizardData {
   llmTest: { ok: boolean | null; msg?: string };
 
   tts: {
-    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts' | 'remote';
+    defaultEngine: 'piper' | 'kokoro' | 'cloud' | 'chatterbox' | 'pocket-tts' | 'remote' | 'gemini';
     // Advisory only: the web wizard can't start the tts-heavy sidecar, so this
-    // captures intent (persisted to settings.tts.heavyEnabled) and shows the
-    // copy-paste docker commands. The CLI setup writes COMPOSE_PROFILES to .env.
+    // records intent (settings.tts.heavyEnabled) and shows the docker commands.
     heavyEnabled: boolean;
     cloud: { enabled: boolean; provider: string; apiKey: string; model: string; voice: string };
   };
@@ -78,6 +78,10 @@ export const DEFAULT_DATA: WizardData = {
 export type StepId = 'navidrome' | 'llm' | 'tts' | 'dj' | 'review';
 
 export const STEP_ORDER: StepId[] = ['navidrome', 'llm', 'tts', 'dj', 'review'];
+// A station run by SUB/WAVE Cloud (status.hosted): its box agent manages the
+// LLM route and the voice engine, so those steps would only offer choices the
+// controller then ignores (setup/hosted.ts).
+export const HOSTED_STEP_ORDER: StepId[] = ['navidrome', 'dj', 'review'];
 
 export const STEP_LABELS: Record<StepId, string> = {
   navidrome: 'Navidrome',
@@ -87,9 +91,8 @@ export const STEP_LABELS: Record<StepId, string> = {
   review: 'Review',
 };
 
-// AbortSignal timeouts reject with a TimeoutError; everything else (connection
-// refused, DNS, CORS/TLS) is a bare "Failed to fetch" that means nothing to an
-// operator, so point them at the real culprit: reaching the controller.
+// AbortSignal timeouts reject with TimeoutError; everything else (refused, DNS,
+// CORS/TLS) is a bare "Failed to fetch", so name the controller instead.
 function fetchErrorMsg(err: unknown): string {
   if (err instanceof DOMException && err.name === 'TimeoutError') {
     return 'timed out — the controller did not respond';
@@ -98,18 +101,19 @@ function fetchErrorMsg(err: unknown): string {
   return `could not reach the controller${m ? ` (${m})` : ''}`;
 }
 
-export function useWizard() {
+export function useWizard(hosted = false) {
   const auth = useAdminAuth();
   const [data, setData] = useState<WizardData>(DEFAULT_DATA);
   const [stepIdx, setStepIdx] = useState(0);
 
-  const step = STEP_ORDER[stepIdx];
-  const next = useCallback(() => setStepIdx(i => Math.min(i + 1, STEP_ORDER.length - 1)), []);
+  const steps = hosted ? HOSTED_STEP_ORDER : STEP_ORDER;
+  const step = steps[stepIdx];
+  const next = useCallback(() => setStepIdx(i => Math.min(i + 1, steps.length - 1)), [steps]);
   const back = useCallback(() => setStepIdx(i => Math.max(i - 1, 0)), []);
   const goto = useCallback((id: StepId) => {
-    const i = STEP_ORDER.indexOf(id);
+    const i = steps.indexOf(id);
     if (i >= 0) setStepIdx(i);
-  }, []);
+  }, [steps]);
 
   const patch = useCallback((p: Partial<WizardData> | ((d: WizardData) => Partial<WizardData>)) => {
     setData(d => {
@@ -118,20 +122,10 @@ export function useWizard() {
     });
   }, []);
 
-  // Every wizard write goes through adminFetch for the admin shell's
-  // 401-handling. Both test helpers catch their own failures into the result
-  // pill: a rejected or timed-out fetch must surface as a red pill, never as an
-  // unhandled throw that wedges the button on "Testing…" (issue #682).
-  //
-  // Both now take the credentials/config as an explicit argument rather than
-  // reading `data.navidrome` / `data.llm` — each step owns its own
-  // react-hook-form instance and only writes back into `data` on Next, so the
-  // Test button (which must probe whatever is CURRENTLY typed, not the last
-  // committed value) hands over the step form's live values directly.
+  // Tests use live form values because wizard data updates only on Next. Catch failures into the
+  // result pill to clear the testing state.
   const testNavidrome = useCallback(async (creds: WizardData['navidrome']) => {
-    // The browser→controller hop has no default timeout, so a request that
-    // never answers wedges the button. 15s clears the 5s server-side Subsonic
-    // probe with margin.
+    // 15s: clears the 5s server-side Subsonic probe; the hop has no default.
     try {
       const r = await auth.adminFetch('/onboarding/test-navidrome', {
         method: 'POST',
@@ -151,8 +145,8 @@ export function useWizard() {
   }, [auth, patch]);
 
   const testLlm = useCallback(async (values: WizardData['llm']) => {
-    // 60s sits just above the controller's 45s generateText abort, so a slow
-    // model surfaces the server's error rather than a bare client timeout.
+    // 60s sits above the controller's 45s generateText abort, so a slow model
+    // surfaces the server's error rather than a client timeout.
     try {
       const r = await auth.adminFetch('/onboarding/test-llm', {
         method: 'POST',
@@ -187,15 +181,7 @@ export function useWizard() {
   const save = useCallback(async () => {
     const apiKeys: Record<string, string> = { ...data.apiKeys };
     if (data.llm.apiKey) {
-      const k =
-        data.llm.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' :
-        data.llm.provider === 'openai' ? 'OPENAI_API_KEY' :
-        data.llm.provider === 'google' ? 'GOOGLE_GENERATIVE_AI_API_KEY' :
-        data.llm.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' :
-        data.llm.provider === 'openrouter' ? 'OPENROUTER_API_KEY' :
-        data.llm.provider === 'requesty' ? 'REQUESTY_API_KEY' :
-        data.llm.provider === 'orcarouter' ? 'ORCAROUTER_API_KEY' :
-        data.llm.provider === 'gateway' ? 'AI_GATEWAY_API_KEY' : '';
+      const k = LLM_ENV_VARS[data.llm.provider] ?? '';
       if (k) apiKeys[k] = data.llm.apiKey;
     }
     if (data.tts.cloud.enabled && data.tts.cloud.apiKey) {
@@ -205,11 +191,8 @@ export function useWizard() {
         data.tts.cloud.provider === 'fish-audio' ? 'FISH_API_KEY' : '';
       if (k) apiKeys[k] = data.tts.cloud.apiKey;
     }
-    // The key may already come from the root environment, so fishAudioIssue
-    // only judges the fields the wizard itself must persist for a usable Fish
-    // request. Same helper the controller's save handler runs — the two
-    // hand-rolled copies this replaces had already drifted in the message
-    // ('1-100' vs '1–100') before they could in logic.
+    // The key may come from the root environment, so fishAudioIssue judges only
+    // the fields the wizard must persist. Same helper the controller's save runs.
     const fishIssue = fishAudioIssue(data.tts.cloud);
     if (fishIssue) return { ok: false, error: fishIssue };
 
@@ -218,15 +201,18 @@ export function useWizard() {
       llm: {
         provider: data.llm.provider,
         model: data.llm.model,
-        // Deliberately NO apiKey field. Cloud keys go to apiKeys
-        // (state/secrets.env), so the wizard has none to offer here — but
-        // settings.llm.apiKey does not mean "no key", it means "CLEAR the
-        // stored key for this provider" (applyInlineKey, #657). This block sent
-        // '' on every save, so re-running onboarding deleted the inline key of
-        // whichever provider it selected (#1351). Absent = leave it alone; the
-        // admin LLM panel omits the field the same way unless one is typed.
+        // Deliberately NO apiKey field: cloud keys go to apiKeys
+        // (state/secrets.env), and an empty settings.llm.apiKey means "clear the
+        // stored key", not "no key" (applyInlineKey, #657/#1351). Absent =
+        // leave it alone.
         baseUrl: data.llm.baseUrl,
         ollamaUrl: data.llm.ollamaUrl,
+        // Exception: openai-compatible has no env var, so its key lives inline
+        // in settings.llm.apiKey. Sent only when typed this run, absent
+        // otherwise (#1351). The hosted DJ Brain preset rides this path.
+        ...(data.llm.provider === 'openai-compatible' && data.llm.apiKey
+          ? { apiKey: data.llm.apiKey }
+          : {}),
       },
       tts: {
         defaultEngine: data.tts.defaultEngine,
@@ -247,19 +233,24 @@ export function useWizard() {
       timezone: data.dj.timezone,
       apiKeys,
     };
+    // Hosted: never send the LLM, the voice engine or provider keys. The box
+    // agent owns them, and the controller drops them anyway.
+    const { llm: _llm, tts: _tts, apiKeys: _keys, ...hostedBody } = body;
     const r = await auth.adminFetch('/onboarding/save', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify(hosted ? hostedBody : body),
     });
     const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
     return { ok: !!j.ok, error: j.error };
-  }, [auth, data]);
+  }, [auth, data, hosted]);
 
   return {
     auth,
     data,
     patch,
+    hosted,
+    steps,
     step,
     stepIdx,
     next,

@@ -1,22 +1,38 @@
 // Shim that folds the pure-stdlib Python suites into `npm test`'s *.test.ts
 // auto-discovery, so they actually run with the rest of the suite instead of
 // only when someone remembers `python3 scripts/<file>.py`. Each suite is
-// deliberately dependency-free (no torch / demucs / librosa / audio), so a
-// plain python3 is the only requirement; a box without one skips cleanly
-// (exit 0) rather than failing the suite — CI runs lint only, so this gate is
-// for contributors' own `npm test` runs.
+// lightweight and isolated from the analyzer runtime (no torch / demucs /
+// librosa / audio), with one exception: vocal_gate_test.py's case 6 needs
+// torch, so it skips here and runs only inside the subwave-analyzer-heavy
+// image. Three numerical suites use NumPy; when it is unavailable,
+// this shim installs the pinned test-only wheel into a temporary directory, so
+// a clean checkout's `npm test` is reproducible without modifying the user's
+// Python environment. A box without python3 still skips cleanly (exit 0).
 
 import { spawnSync } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
 const SUITES = [
+  'analyzer_sidecar_contract_test.py', // typed missing-path response for URL fallback (#1331)
+  'analyzer_embedding_test.py', // batched CLAP + embedding-only backfills (#1426)
+  'analyzer_decode_test.py', // incomplete FLAC prefix recovery (#1670)
   'idle_release_test.py', // idle model release + heavy clock (#1099/#1204)
-  'vocal_gate_test.py', // vocal-stem gate thresholds (#1125)
+  'vocal_gate_test.py', // vocal-stem gate thresholds (#1125) + DEMUCS_OVERLAP; case 6 needs torch, skips here
   'test_chatterbox_chunk.py', // chatterbox chunk_text (#1130)
+  'tts_heavy_idle_test.py', // tts-heavy idle unload + cold-engine health (#1579)
   'analyzer_noise_test.py', // decode-noise filter + capability loss (#1300)
+  'analyzer_silence_test.py', // edge dead-air measurement (silence trim)
+  'analyzer_beat_test.py', // main beat tracking is best-effort (#1647)
+  'analyzer_facets_test.py', // facet functions are pure; path wrappers = decode + facet
+  'analyzer_whole_file_test.py', // loudness v2 + edges: one whole-file decode, absolute floor
+  'analyzer_stems_marker_test.py', // no stem writes into an unmarked (unmounted) stems root
+  'analyzer_shared_modes_test.py', // shared stems/transitions written 777/666 whatever the umask
 ];
 
 const probe = spawnSync('python3', ['--version'], { stdio: 'ignore' });
@@ -25,11 +41,34 @@ if (probe.error || probe.status !== 0) {
   process.exit(0);
 }
 
+const NUMPY_VERSION = '2.5.2';
+const pythonEnv = { ...process.env };
+let depsDir: string | null = null;
+const numpyProbe = spawnSync('python3', ['-c', 'import numpy'], { stdio: 'ignore' });
+if (numpyProbe.status !== 0) {
+  depsDir = createTempDir(join(tmpdir(), 'subwave-python-test-deps-'));
+  console.log(`— installing test dependency numpy==${NUMPY_VERSION}`);
+  const install = spawnSync(
+    'python3',
+    ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--target', depsDir, `numpy==${NUMPY_VERSION}`],
+    { stdio: 'inherit' },
+  );
+  if (install.error || install.status !== 0) {
+    console.error(`✗ could not install test dependency numpy==${NUMPY_VERSION}`);
+    process.exit(1);
+  }
+  pythonEnv.PYTHONPATH = pythonEnv.PYTHONPATH ? `${depsDir}:${pythonEnv.PYTHONPATH}` : depsDir;
+}
+
 const failed: string[] = [];
-for (const file of SUITES) {
-  console.log(`— ${file}`);
-  const { status } = spawnSync('python3', [join(scriptsDir, file)], { stdio: 'inherit' });
-  if (status !== 0) failed.push(file);
+try {
+  for (const file of SUITES) {
+    console.log(`— ${file}`);
+    const { status } = spawnSync('python3', [join(scriptsDir, file)], { stdio: 'inherit', env: pythonEnv });
+    if (status !== 0) failed.push(file);
+  }
+} finally {
+  if (depsDir) rmSync(depsDir, { recursive: true, force: true });
 }
 
 if (failed.length > 0) {

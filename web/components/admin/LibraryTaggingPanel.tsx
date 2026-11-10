@@ -1,70 +1,64 @@
 'use client';
 
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Sparkles, Activity, Play, Square, Terminal, Loader2, Moon } from 'lucide-react';
+import { Sparkles, Activity, Play, Square, Terminal, Loader2, Moon, RefreshCw, Maximize2, Minimize2, Download } from 'lucide-react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
+import { relTime } from '../../lib/format';
 import { Btn, Eyebrow } from './ui';
 import { Input } from '../ui/input';
 import { cn } from '../../lib/cn';
 import LibraryTaggingModal from './LibraryTaggingModal';
+import RunHoldsBanner from './library/RunHoldsBanner';
+import SceneVocabSection from './library/SceneVocabSection';
+import { useTaggerRunLog } from './library/useTaggerRunLog';
+import { notify } from '../../lib/notify';
 
 export interface Coverage {
   tagged: number;
   analysed: number;
-  // Tracks with a CLAP audio (sounds-like) embedding. Same analysis backend,
-  // gated on ANALYZE_AUDIO_EMBEDDING — 0 when that's off even if bpm/key runs.
+  // Tracks with a CLAP audio (sounds-like) embedding. Gated on ANALYZE_AUDIO_EMBEDDING.
   audioEmbedded?: number;
-  // Tracks with Demucs vocal-activity ranges (vocal_ranges_json NOT NULL). Only
-  // surfaced when vocalWanted; hidden by default for the common case (#646).
+  // Tracks with Demucs vocal-activity ranges. Only surfaced when vocalWanted (#646).
   vocalAnalyzed?: number;
   total: number | null;
   percent: number | null;
   analysedPercent: number | null;
   audioEmbeddedPercent?: number | null;
   vocalAnalyzedPercent?: number | null;
-  // Vocal analysis is wanted via env ANALYZE_VOCAL_ACTIVITY or
-  // settings.audio.vocalActivity — drives whether the vocal coverage row shows.
+  // Vocal analysis wanted via env ANALYZE_VOCAL_ACTIVITY or settings.audio.vocalActivity.
   vocalWanted?: boolean;
   scannedAt: string | null;
   scanning: boolean;
+  // Why the last count failed; null = it worked, or none has run. Optional so an older controller reads as "no failure".
+  scanError?: string | null;
   // null = still probing; false = no analysis backend (sidecar/librosa) running.
   analysisAvailable?: boolean | null;
   analysisBackend?: string | null;
-  // false = engine is up but on an image without the CLAP stack; null = still
-  // probing. Drives the "pull the latest image" warning.
+  // false = engine up but on an image without the CLAP stack; null = still probing.
   audioAnalysisAvailable?: boolean | null;
-  // Audio vectors stored + CLAP text tower not reported absent. Gates the Search
-  // tab's mode toggle. Absent on old controllers.
+  // Audio vectors stored + CLAP text tower not reported absent. Absent on old controllers.
   soundSearchAvailable?: boolean;
-  // false = engine up but built without Demucs (WITH_DEMUCS=0) — drives the
-  // "rebuild with WITH_DEMUCS=1" warning when vocal activity is enabled.
+  // false = engine up but built without Demucs (WITH_DEMUCS=0).
   vocalAnalysisAvailable?: boolean | null;
-  // `embeddingStale` = the library was embedded with a different model than the
-  // one configured, so a tag run is BLOCKED until a re-embed.
+  // `embeddingStale` = the library was embedded with a different model than the one configured; a tag run is BLOCKED until a re-embed.
   embeddedModel?: string | null;
   embeddedDim?: number | null;
   currentEmbeddingModel?: string | null;
   embeddingStale?: boolean;
-  // Embed-text SHAPE, separate from the model staleness above (#1246). An older
-  // format still answers KNN and never blocks a tag run — advisory only.
-  // `labelOnlyVectors` counts embedded tracks with NO musical signal in their
-  // text, so their similarity is artist/album wording. Absent on old controllers.
+  // Embed-text SHAPE, separate from model staleness (#1246). Advisory only; never blocks a run.
+  // `labelOnlyVectors` counts embedded tracks with NO musical signal in their text. Absent on old controllers.
   embeddingFormatStale?: boolean;
   embeddedTextFormat?: number | null;
   currentTextFormat?: number | null;
   embeddedVectors?: number | null;
   labelOnlyVectors?: number | null;
-  // Why a capability is false when the model is INSTALLED and its load failed
-  // (no weights downloaded, broken checkpoint). null/absent in every other
-  // case — including a lean image, where nothing is wrong. Paired with the
-  // 'load-failed' status: same false, opposite advice.
+  // Why a capability is false when the model is INSTALLED and its load failed.
+  // null/absent otherwise, including a lean image. Paired with the 'load-failed' status.
   audioAnalysisError?: string | null;
   vocalAnalysisError?: string | null;
-  // Tracks dropped from every analysis scope after repeated failures. Non-zero
-  // means there are files the pass has given up on and can now name.
+  // Tracks dropped from every analysis scope after repeated failures.
   analysisFailed?: number;
-  // Backend-computed (controller/src/music/coverage-status.ts) and the single
-  // source of truth for the sounds-like + vocal rows.
+  // Backend-computed (controller/src/music/coverage-status.ts): the single source of truth for the sounds-like + vocal rows.
   audioStatus?: DimensionStatus;
   vocalStatus?: DimensionStatus;
 }
@@ -91,8 +85,7 @@ export interface AnalysisFailure {
   excluded: boolean;
 }
 
-// Mirrors controller/src/music/tagger-progress.ts — the structured sentinel
-// the tagger child emits and /settings relays.
+// Mirrors controller/src/music/tagger-progress.ts.
 export interface TaggerProgress {
   phase: 'walk' | 'enrich' | 'embed' | 'seed' | 'propagate' | 'learn' | 'analyze' | 'done';
   label: string;
@@ -106,17 +99,15 @@ export interface TaggerProgress {
   updatedAt: string;
 }
 
-// Relayed from the tagger child (music/tagger-progress.ts EVENT_PREFIX channel).
-// The child DECLARES what a line means so the panel renders by kind rather than
-// regex-scraping console strings.
+// Relayed from the tagger child. The child DECLARES what a line means, so the
+// panel renders by kind rather than regex-scraping console strings.
 export interface TaggerEvent {
   kind: 'info' | 'success' | 'warning' | 'error';
   text: string;
   at: string;
 }
 
-// Outcome of the last finished run — drives the idle failure banner. 'stopped'
-// (Stop button / a controller-restart kill) is operator-context and shows nothing.
+// Outcome of the last finished run. 'stopped' (Stop button / restart kill) shows nothing.
 export interface TaggerLastRun {
   mode: 'tag' | 'analyze' | 'reconcile';
   outcome: 'ok' | 'failed' | 'stopped';
@@ -131,13 +122,16 @@ export interface TaggerState {
   running?: boolean;
   pid?: number;
   startedAt?: string;
-  // Raw console lines interleaved with structured events, in chronological order
-  // (broadcast/tagger.ts relays both). Capped at 100 server-side.
+// Raw console lines interleaved with structured events, chronological. Capped at 100 server-side.
   lastLog?: (string | TaggerEvent)[];
   // All three run through the same single-flight child slot.
   mode?: 'tag' | 'analyze' | 'reconcile' | null;
   progress?: TaggerProgress | null;
   lastRun?: TaggerLastRun | null;
+  // The current (or last) run's full log id; null before this controller's first run.
+  runLogId?: string | null;
+  // What the current (or last) run held back for the operator.
+  holds?: string[];
 }
 
 // Rides along on /settings, so it needs no extra request on any tab.
@@ -160,16 +154,15 @@ export type RescanOpts = {
   reEnrich?: boolean;
   reAnalyze?: boolean;
   upgrade?: boolean;
+  // With upgrade: re-decide only rows tagged before they were measured (--upgrade-blind).
+  upgradeBlind?: boolean;
   // false → --no-vocal (redo bpm/key + sounds-like, keep existing vocal ranges).
   vocal?: boolean;
-  // After rebuilding vectors, forward-tag the untagged remainder in the same run
-  // (drops --rescan on the backend). Only honoured when reseed is the sole pass.
+  // After rebuilding vectors, forward-tag the untagged remainder in the same run. Only honoured when reseed is the sole pass.
   thenTag?: boolean;
 };
 
-// An unchecked box sends `false`, which the controller maps to a skip flag
-// (enrich→--skip-enrich, tagMoods→--skip-tag, analyze→--skip-analyze,
-// reconcile→--no-prune). Only-reconcile is routed to onReconcile instead.
+// An unchecked box sends `false`, which the controller maps to a skip flag.
 export type TagSteps = {
   reconcile: boolean;
   enrich: boolean;
@@ -197,6 +190,9 @@ interface TaggingPanelProps {
   onRescan: (opts: RescanOpts) => void;
   // Walk Navidrome and prune library entries for tracks that no longer exist.
   onReconcile: () => void;
+  // Count the library — the only expensive read on this page, and the operator asks for it (#1570).
+  onCountLibrary: () => void;
+  countingLibrary: boolean;
   // Wipes ALL tagging data and starts fresh, behind a typed confirmation.
   onReset: () => void;
   // sounds-like (CLAP) controls — null until the first settings poll lands.
@@ -206,11 +202,9 @@ interface TaggingPanelProps {
   // Vocal-activity (Demucs) controls — parallel to the sounds-like pair (#646).
   onToggleVocal: () => void;
   onVocalBackfill: () => void;
-  // null until the first settings poll lands. Drives the "build WITH_DEMUCS=1"
-  // warning when on but the backend can't produce vocal ranges.
+  // null until the first settings poll lands.
   vocalEnabled: boolean | null;
-  // Quiet-times gate (#1099) — any analysis run pauses while listeners are
-  // tuned in, resuming after the idle window. Null until the settings poll.
+  // Quiet-times gate (#1099): analysis pauses while listeners are tuned in.
   quietEnabled: boolean | null;
   quietMinutes: number | null;
   onToggleQuiet: () => void;
@@ -218,13 +212,10 @@ interface TaggingPanelProps {
   onQuietMinutes: (minutes: number) => void;
   // null until the first slow poll lands.
   budgetMode: BudgetMode | null;
-  // Which provider the mood/energy LLM calls vs. the embedding calls bill to
-  // (#1162). null until the settings poll lands.
+  // Which provider the mood/energy LLM calls vs. the embedding calls bill to (#1162).
   llmLabel: string | null;
   embedLabel: string | null;
-  // Per-track analysis failures (#1300 bug 3c). Fetched on demand rather than
-  // polled: the list is empty on a healthy station and the count in
-  // `coverage.analysisFailed` is enough to know whether to look.
+  // Per-track analysis failures. Fetched on demand rather than polled.
   failures: AnalysisFailure[] | null;
   onLoadFailures: () => void;
   onClearFailures: () => void;
@@ -241,8 +232,7 @@ const PHASE_HINT: Record<TaggerProgress['phase'], string> = {
   done: 'Wrapping up.',
 };
 
-// Keys match the tagger's timings map, which includes 'setup'/'walk' that
-// aren't user-facing phases.
+// Keys match the tagger's timings map, which includes non-user-facing 'setup'/'walk'.
 const PHASE_LABEL: Record<string, string> = {
   setup: 'setup',
   walk: 'scan',
@@ -254,16 +244,12 @@ const PHASE_LABEL: Record<string, string> = {
   analyze: 'acoustics',
 };
 
-// Execution order, used to decide which phases are behind/ahead of the live
-// one. Excludes 'done' (a terminal marker, not a stage).
+// Execution order, used to decide which phases are behind/ahead of the live one. Excludes 'done'.
 const PIPELINE: TaggerProgress['phase'][] = [
   'walk', 'enrich', 'embed', 'seed', 'propagate', 'learn', 'analyze',
 ];
 
-// Only the phases a given run mode can reach. Not every tag run hits every
-// phase (steps can be deselected), so the caller marks phases BEFORE the live
-// one as done — a skipped phase is swept into "done" rather than sticking as a
-// permanent "pending".
+// Only the phases a given run mode can reach.
 function stepsForMode(mode: TaggerState['mode']): TaggerProgress['phase'][] {
   if (mode === 'analyze') return ['analyze'];
   if (mode === 'reconcile') return ['walk'];
@@ -279,9 +265,7 @@ function fmtDur(ms: number): string {
   return r ? `${m}m ${r}s` : `${m}m`;
 }
 
-// Mirror of controller/src/music/coverage-status.ts `isBackfillable`. The panel
-// ANDs it with the optimistic enable prop so the button toggles the instant
-// Enable is clicked, ahead of the next /coverage poll.
+// Mirror of controller/src/music/coverage-status.ts `isBackfillable`.
 function canBackfill(s: DimensionStatus | undefined): boolean {
   return (
     s != null &&
@@ -292,16 +276,14 @@ function canBackfill(s: DimensionStatus | undefined): boolean {
   );
 }
 
-// Coarser than fmtDur: a live ETA wobbles as the sampled rate drifts, so round
-// hard — 5s buckets under a minute, whole minutes above.
+// Coarser than fmtDur: a live ETA wobbles, so round to 5s buckets under a minute, whole minutes above.
 function fmtEta(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `~${Math.max(5, Math.round(s / 5) * 5)}s left`;
   return `~${Math.round(s / 60)}m left`;
 }
 
-// Keyed on the kind the child declared — the friendly wording lives at the
-// tagger call sites and rides the event `text`.
+// Keyed on the kind the child declared; the friendly wording rides the event `text`.
 const EVENT_STYLE: Record<TaggerEvent['kind'], { emoji: string; cls: string }> = {
   error: { emoji: '⚠️', cls: 'text-vermilion font-semibold' },
   warning: { emoji: '⚠', cls: 'text-vermilion' },
@@ -328,13 +310,30 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // Keyed on the run's finishedAt so a NEW failure re-shows the banner.
   const [dismissedFailAt, setDismissedFailAt] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
+  // Follow the newest line only while the operator is at the bottom: scrolling
+  // up to read something must not be yanked away by the next poll.
+  const logStick = useRef(true);
+  const [logTall, setLogTall] = useState(false);
+  const [pickedLog, setPickedLog] = useState('');
+  const runLog = useTaggerRunLog(p.logOpen, p.tagger);
+  // Every line fetched for this run, keyed by its seq; before the first read
+  // (or with no run since the controller started) the snapshot's short tail
+  // stands in, keyed by position.
+  const ownLog = runLog.log && runLog.log.runId === p.tagger?.runLogId ? runLog.log : null;
+  const logRows: { key: number | string; line: string | TaggerEvent }[] = ownLog
+    ? ownLog.entries.map(e => ({ key: e.seq, line: e.line }))
+    : (p.tagger?.lastLog ?? []).map((line, i) => ({ key: `tail-${i}`, line }));
+  // Moves with every new line, including once the page holds its 5000 and
+  // the count has stopped growing.
+  const logEnd = logRows.length ? logRows[logRows.length - 1]!.key : null;
+  // A picked run that retention has since removed falls back to the newest.
+  const pickedLogId = runLog.files.some(f => f.id === pickedLog) ? pickedLog : runLog.files[0]?.id;
   const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
   const audioFillRef = useRef<HTMLSpanElement>(null);
   const vocalFillRef = useRef<HTMLSpanElement>(null);
   const runFillRef = useRef<HTMLSpanElement>(null);
-  // Pinned at phase entry so the rate is a stable phase-average rather than a
-  // jittery instantaneous window; reset by the effect below.
+  // Pinned at phase entry so the rate is a stable phase-average; reset by the effect below.
   const etaRef = useRef<{ phase: string; round: number | null; done: number; at: number } | null>(null);
 
   const tagged = p.coverage?.tagged ?? p.libStats?.total ?? null;
@@ -346,14 +345,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const apct = p.coverage?.analysedPercent ?? null;
   const audpct = p.coverage?.audioEmbeddedPercent ?? null;
   const vpct = p.coverage?.vocalAnalyzedPercent ?? null;
-  // Audio embeddings only exist once at least one is written; until then the
-  // row reads "not enabled" rather than a misleading 0% (CLAP is opt-in).
+  // Audio embeddings only exist once at least one is written; until then the row reads "not enabled".
   const audioOn = (audioEmbedded ?? 0) > 0;
   // Backend resolves env-vs-settings precedence.
   const vocalWanted = p.coverage?.vocalWanted === true;
-  // Drive the button + layout off the OPTIMISTIC settings prop so a toggle
-  // applies at once; vocalWanted rides the 60s /coverage poll and only fills
-  // the gap before /settings first loads. Only vocalStatus stays coverage-driven.
+  // Drive the button + layout off the OPTIMISTIC settings prop so a toggle applies at once.
   const vocalOptedIn = p.vocalEnabled ?? vocalWanted;
 
   // Out-of-range or unparsable values snap back to the persisted setting.
@@ -366,31 +362,24 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     if (v !== p.quietMinutes) p.onQuietMinutes(v);
   };
   const vocalOn = (vocalAnalyzed ?? 0) > 0;
-  // On a virgin library the per-dimension Backfill buttons stay hidden — the
-  // honest affordance there is the primary Start-tagging run.
+  // On a virgin library the per-dimension Backfill buttons stay hidden.
   const anyWorkDone = (tagged ?? 0) > 0 || (analysed ?? 0) > 0 || audioOn || vocalOn;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
-  // Distinct from a FAILED scan, where `scanning` is back to false but `total`
-  // stays null: only an active count shows "checking…" and gates Start, so a
-  // failed scan falls through to "Library size unknown".
   const scanning = !!p.coverage?.scanning;
-  const libraryCounting = scanning && total == null;
+  // A first count still in flight: `total` is null but a number is coming.
+  const awaitingFirstCount = scanning && total == null;
+  // `total` is the ONE figure here that isn't live: it is the last count.
+  const countedAt = p.coverage?.scannedAt ?? null;
+  const countLabel = scanning ? 'Counting…' : countedAt ? 'Re-count' : 'Count library';
+  // A count that FAILED is not a count that never happened, so say so.
+  const countError = !scanning ? (p.coverage?.scanError ?? null) : null;
   const analysisOff = p.coverage?.analysisAvailable === false;
-  // 'pending-heavy' = lean/older engine that can't do this dimension;
-  // 'incapable' = bpm/key ran but produced none. Both are enable-independent,
-  // so the panel pairs them with the optimistic enable prop below to pick
-  // "waiting…" vs "off · needs…". `undefined` on an old controller → the
-  // capability branches simply don't fire.
+  // 'pending-heavy' = lean/older engine that can't do this dimension.
   const audioStatus = p.coverage?.audioStatus;
   const vocalStatus = p.coverage?.vocalStatus;
 
-  // How you GET the heavy analyzer depends on the backend, and the two answers
-  // don't overlap. On 'local' (the AIO image, or a dev ANALYZE_PYTHON venv)
-  // ANALYZER_HEAVY does nothing — it picks a compose service that isn't running
-  // (#1300 bug 9). An unknown backend keeps the compose wording: that's the
-  // majority install, where the AIO advice would be actively wrong. Mirrors the
-  // doctor's split in doctor/checks-station.ts.
+  // How you GET the heavy analyzer depends on the backend.
   const analyzerIsLocal = p.coverage?.analysisBackend === 'local';
   const heavyUpgradeShort = analyzerIsLocal
     ? 'Needs the heavy build (subwave-aio-heavy, or heavy Python deps on a dev venv).'
@@ -417,12 +406,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     </>
   );
 
-  // For a model that IS installed and failed to load — distinct from
-  // 'pending-heavy', whose "get the heavy build" advice would be advice to do
-  // the thing already done. The latch is sticky, so a restart is the operator's
-  // only exit, and what to restart differs per install: a sidecar holds the
-  // failure in the analyzer container, an AIO/local venv has no analyzer
-  // container at all. Mirrors retryHint() in music/analyze-capability.ts.
+  // For a model that IS installed and failed to load, distinct from 'pending-heavy'.
   const restartHint =
     p.coverage?.analysisBackend === 'sidecar'
       ? 'restart the analyzer'
@@ -434,13 +418,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     : p.coverage?.vocalAnalysisError
       ? { model: 'Demucs', what: 'vocal separation', error: p.coverage.vocalAnalysisError, restart: restartHint }
       : null;
-  // Tracks the analysis pass has given up on. Zero on a healthy station, so the
-  // list behind it is fetched only when the operator opens it.
+  // Tracks the analysis pass has given up on; the list behind it is fetched on demand.
   const failureCount = p.coverage?.analysisFailed ?? 0;
   const [failuresOpen, setFailuresOpen] = useState(false);
 
-  // Forced open while an analyze/backfill run is in flight so progress and Pause
-  // stay visible; reverts to the manual choice when the run finishes.
+  // Forced open while a run is in flight; reverts to the manual choice when it finishes.
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const analysisRunning = !!p.tagger?.running && p.tagger?.mode === 'analyze';
   const showAnalysis = analysisOpen || analysisRunning;
@@ -472,10 +454,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const embeddingMissing =
     (tagged ?? 0) > 0 && p.libStats != null && p.libStats.withEmbedding === 0;
 
-  // Similarity-signal advisory (#1246): how much of the index can only be
-  // compared on its label text. Only shown when it dominates — under half is
-  // ordinary. Guarded on both fields so an older controller shows nothing
-  // rather than "0 of 0".
+  // Similarity-signal advisory (#1246). Only shown when label-only dominates.
   const labelOnly = p.coverage?.labelOnlyVectors ?? null;
   const embeddedVectors = p.coverage?.embeddedVectors ?? null;
   const labelOnlyShare =
@@ -483,18 +462,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       ? labelOnly / embeddedVectors
       : null;
   const similarityThin = labelOnlyShare != null && labelOnlyShare >= 0.5;
-  // An older text format only matters once there IS something better to embed
-  // (share < 1). Must NOT be nested inside similarityThin: labelOnlyVectors
-  // counts rows as they are TODAY, so running the analysis the banner advises
-  // drops the share below the threshold and would hide re-embedding exactly
-  // when it becomes the step that matters.
+  // An older text format only matters once there IS something better to embed.
   const embeddingFormatStale =
     p.coverage?.embeddingFormatStale === true &&
     labelOnlyShare != null &&
     labelOnlyShare < 1;
 
-  // Comes from the tagger child, so it survives page reloads and runs started
-  // elsewhere. Null on an old child binary → the view falls back to generic copy.
+  // Comes from the tagger child, so it survives page reloads and runs started elsewhere.
   const progress = running ? (p.tagger?.progress ?? null) : null;
   const runPct = progress?.total
     ? Math.min(100, Math.round(((progress.done ?? 0) / progress.total) * 100))
@@ -502,8 +476,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const runIndeterminate = !!progress && progress.total == null && progress.phase !== 'done';
   const legEntries = progress?.llm ? Object.entries(progress.llm.legs) : [];
 
-  // Each stage is tagged done/active/pending by its position relative to the
-  // live phase in PIPELINE order, so a skipped phase never strands as "pending".
+  // Each stage is done/active/pending by its position relative to the live phase.
   const stepList = progress
     ? (() => {
         const curIdx =
@@ -516,12 +489,9 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       })()
     : [];
 
-  // Lives in state, not a render-time derivation, because it needs Date.now().
-  // Suppressed for indeterminate phases, the first ~10s of a phase (too little
-  // signal), and a stalled rate.
+  // In state, not a render-time derivation, because it needs Date.now().
   const [etaMs, setEtaMs] = useState<number | null>(null);
-  // Re-pin the baseline whenever the phase or active-learn round changes so each
-  // phase's rate is measured from its own start.
+  // Re-pin the baseline whenever the phase or active-learn round changes.
   useEffect(() => {
     if (!progress || progress.phase === 'done') {
       etaRef.current = null;
@@ -554,8 +524,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     );
   }, [progress]);
 
-  // broadcast/tagger.ts keeps the child's final 'done' event post-exit, so its
-  // per-phase breakdown is still readable when idle.
+  // broadcast/tagger.ts keeps the child's final 'done' event post-exit.
   const lastTimings =
     !running && p.tagger?.progress?.phase === 'done' ? p.tagger.progress.timings : undefined;
   const lastTimingEntries = lastTimings
@@ -564,8 +533,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         .sort((a, b) => b[1] - a[1])
     : [];
 
-  // A signal exit (Stop / restart-kill) is 'stopped' and shows nothing. A fresh
-  // failure has a new timestamp, so it re-shows past a dismiss.
+  // A signal exit (Stop / restart-kill) is 'stopped' and shows nothing.
   const lastRun = p.tagger?.lastRun ?? null;
   const showFailBanner =
     !running && lastRun?.outcome === 'failed' && lastRun.finishedAt !== dismissedFailAt;
@@ -585,8 +553,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
 
   useEffect(() => {
-    if (p.logOpen && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [p.logOpen, p.tagger?.lastLog?.length]);
+    if (p.logOpen && logRef.current && logStick.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [p.logOpen, logRows.length, logEnd, logTall]);
+  const downloadLog = (id: string) => {
+    runLog.download(id).catch((e: unknown) => notify.err(e instanceof Error ? e.message : String(e)));
+  };
 
   const openModal = (intent: 'reembed' | null = null) => {
     setModalIntent(intent);
@@ -620,11 +591,23 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
             <span className="mono-num text-[13px] font-bold">{pct != null ? `${pct}%` : '—'}</span>
           </div>
-          <div className="mt-2 flex items-baseline gap-2">
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
             <span className="lib-cov-big mono-num">{num(tagged)}</span>
             <span className="text-[13px] text-muted">
-              / {total != null ? num(total) : p.coverage?.scanning ? 'scanning…' : '—'} tracks
+              / {total != null ? num(total) : scanning ? 'counting…' : '—'} tracks
             </span>
+            <Btn
+              sm
+              onClick={p.onCountLibrary}
+              // Also gated on `running`: a tag run already walks Navidrome.
+              disabled={scanning || p.countingLibrary || running}
+              title={running
+                ? 'A tagging run is already walking Navidrome — it refreshes the total when it finishes.'
+                : 'Counts every track in Navidrome — one request per album, so it takes a while on a big library. Nothing else on this page needs it.'}
+            >
+              <RefreshCw size={11} className={scanning ? 'animate-spin' : undefined} />{' '}
+              {countLabel}
+            </Btn>
           </div>
           <div
             className="lib-bar mt-3"
@@ -639,20 +622,24 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           <div className="mt-2.5 text-[11px] text-muted">
             {remaining != null && remaining > 0 ? (
               <>
-                <b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags ·{' '}
-                <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
+                <b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags
               </>
             ) : (
-              <>
-                {remaining === 0
-                  ? 'Every track is tagged'
-                  : scanning
-                    ? 'Coverage updating…'
-                    : 'Library size unknown'}{' '}
-                · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
-              </>
-            )}
+              remaining === 0
+                ? 'Every track is tagged'
+                : scanning
+                  ? 'Counting your library…'
+                  : 'Library not counted yet'
+            )}{' '}
+            · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
+            {countedAt && ` · counted ${relTime(countedAt)} ago`}
           </div>
+          {countError && (
+            <div className="mt-2 text-[11px] text-[var(--danger)]">
+              Couldn&rsquo;t count the library: {countError}
+              {countedAt ? ' — showing the previous count.' : ''}
+            </div>
+          )}
           {embeddingStale && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink">
               <span>
@@ -731,8 +718,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         </div>
       </div>
 
-      {/* Disclosure state is not persisted — a fresh load starts collapsed,
-          same as the log drawer. */}
       <div className="border-b border-ink px-4 py-3.5 sm:px-6">
         <button
           type="button"
@@ -850,7 +835,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
           )}
         </div>
-        {/* Collapsed to a single "off · Enable" line until opted in (#646). */}
         {(vocalOptedIn || !analysisOff) && (
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
             <span className="caption flex items-center gap-2">
@@ -944,8 +928,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             )}
           </div>
         )}
-        {/* Quiet-times gate (#1099) — a pass-level control, not a coverage
-            dimension, and engine-independent, so it always renders. */}
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
           <span className="caption flex items-center gap-2">
             <Moon size={13} /> Quiet times · analyse only while idle
@@ -1020,6 +1002,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         ) : null}
       </div>
       )}
+
+      <SceneVocabSection />
+
+      <RunHoldsBanner holds={p.tagger?.holds} onViewLog={() => p.setLogOpen(() => true)} />
 
       {showFailBanner && (
         <div className="mx-4 mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink sm:mx-6">
@@ -1122,8 +1108,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       {!running ? (
         <div className="flex flex-wrap items-center gap-4 p-4 sm:p-6">
           <div className="min-w-0 flex-1 text-[13px] sm:min-w-[220px]">
-            {libraryCounting ? (
-              <>Counting your library&hellip; this only takes a moment.</>
+            {awaitingFirstCount ? (
+              <>Counting your library&hellip; a big one takes a few minutes.</>
             ) : remaining != null && remaining > 0 ? (
               <>
                 <b>{num(remaining)}</b> tracks are waiting. Tag them and they become DJ-ready.
@@ -1135,8 +1121,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <Btn lg tone="accent" onClick={() => openModal()} disabled={p.busy || libraryCounting}>
-              {libraryCounting ? (
+            <Btn lg tone="accent" onClick={() => openModal()} disabled={p.busy || awaitingFirstCount}>
+              {awaitingFirstCount ? (
                 <>
                   <Loader2 size={13} className="animate-spin" /> Checking library…
                 </>
@@ -1184,8 +1170,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               <Square size={11} /> Stop
             </Btn>
           </div>
-          {/* Without this, a bar that resets to 0% each phase reads as
-              "starting over". Hidden when there's no structured progress. */}
           {stepList.length > 0 && (
             <div className="lib-steps">
               {stepList.map((s, i) => (
@@ -1257,21 +1241,63 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         >
           <Terminal size={13} /> {p.logOpen ? 'Hide log' : 'View log'}
         </button>
+        {p.logOpen && (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold text-muted hover:text-ink"
+            onClick={() => setLogTall(t => !t)}
+          >
+            {logTall ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {logTall ? 'Shrink log' : 'Expand log'}
+          </button>
+        )}
+        {p.logOpen && runLog.files.length > 0 && (
+          <span className="inline-flex items-center gap-2 text-[11px] text-muted">
+            <select
+              aria-label="Run log to download"
+              className="rounded border border-separator-strong bg-transparent px-1 py-0.5 text-[11px]"
+              value={pickedLogId}
+              onChange={e => setPickedLog(e.target.value)}
+            >
+              {runLog.files.map(f => (
+                <option key={f.id} value={f.id}>
+                  {new Date(f.startedAt).toLocaleString()} · {f.mode} · {Math.max(1, Math.round(f.bytes / 1024))} KB
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 font-bold text-muted hover:text-ink"
+              onClick={() => downloadLog(pickedLogId!)}
+            >
+              <Download size={13} /> Download log
+            </button>
+          </span>
+        )}
       </div>
 
       {p.logOpen && (
         <pre
           ref={logRef}
           aria-live="polite"
-          className="term term-crt m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong"
+          className={cn(
+            'term term-crt m-0 overflow-y-auto !border-t !border-l-0 border-separator-strong',
+            logTall ? 'max-h-[80vh]' : 'max-h-96',
+          )}
+          onScroll={e => {
+            const el = e.currentTarget;
+            logStick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          }}
         >
-          {(p.tagger?.lastLog ?? []).length
-            ? (p.tagger?.lastLog ?? []).map((line, i) => {
+          {ownLog?.gap && (
+            <div className="text-muted">… earlier lines are no longer held here; download the log for the whole run.</div>
+          )}
+          {logRows.length
+            ? logRows.map(({ key, line }) => {
                 // Structured events render by kind; raw strings fall back.
                 if (typeof line === 'object' && line !== null) {
                   const st = EVENT_STYLE[line.kind] ?? EVENT_STYLE.info;
                   return (
-                    <div key={i} className={cn('whitespace-pre-wrap', st.cls)}>
+                    <div key={key} className={cn('whitespace-pre-wrap', st.cls)}>
                       {st.emoji ? `${st.emoji}  ` : ''}
                       {line.text}
                     </div>
@@ -1279,7 +1305,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 }
                 const f = beautifyLog(String(line));
                 return (
-                  <div key={i} className={cn('whitespace-pre-wrap', f.cls)}>
+                  <div key={key} className={cn('whitespace-pre-wrap', f.cls)}>
                     {f.text}
                   </div>
                 );
@@ -1299,8 +1325,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         libraryTotal={total}
         analysisOff={analysisOff}
         vocalWanted={vocalOptedIn}
-        // Only true when the dimension is on AND the engine can do it —
-        // otherwise the acoustics steps are bpm/key-only.
+        // Only true when the dimension is on AND the engine can do it.
         soundsLikeActive={!analysisOff && audioStatus !== 'pending-heavy' && !!p.audioEnabled}
         budgetMode={p.budgetMode}
         llmLabel={p.llmLabel}

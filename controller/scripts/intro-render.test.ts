@@ -43,3 +43,20 @@ test('a render rejection is reported as failure rather than timeout', async () =
   assert.equal(result.status, 'failed');
   if (result.status === 'failed') assert.equal(result.error, failure);
 });
+
+
+test('invalidating a render detaches it so a replacement job cannot be overwritten', async () => {
+  const tracker = new IntroRenderTracker<object>();
+  const item = {};
+  let finishOld!: (wav: string) => void;
+  const old = tracker.start(item, () => new Promise<string>(resolve => { finishOld = resolve; }));
+
+  tracker.invalidate(item);
+  const replacement = tracker.start(item, async () => '/tmp/new.wav');
+  assert.notEqual(replacement, old);
+  assert.deepEqual(await replacement, { status: 'rendered', wav: '/tmp/new.wav' });
+
+  finishOld('/tmp/old.wav');
+  assert.deepEqual(await old, { status: 'rendered', wav: '/tmp/old.wav' });
+  assert.equal(tracker.get(item), null, 'the old completion cannot restore itself over the replacement');
+});

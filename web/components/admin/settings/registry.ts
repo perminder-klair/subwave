@@ -1,0 +1,401 @@
+'use client';
+
+
+import {
+  Radio, Palette, Cpu, Mic, Library, Search, ListMusic,
+  Archive, Save, RadioTower, Heart, Music2, BrainCircuit,
+  MessageCircle,
+  Layers,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { EMBEDDING_PROVIDER_IDS, LLM_PROVIDER_IDS } from '../../../lib/schemas.generated';
+
+/**
+ * The four rail clusters, in rail order.
+ *
+ * Grouping is editorial, not structural: "the station" is what the operator
+ * sets up once, "the dj" is what talks, "listeners" is what the audience
+ * touches, "operations" is what can interrupt the broadcast.
+ */
+export const SECTION_GROUPS = ['the station', 'the dj', 'operations'] as const;
+
+export type SectionGroup = (typeof SECTION_GROUPS)[number];
+
+export interface SectionSpec {
+  id: string;
+  group: SectionGroup;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+  /**
+   * Top-level FormState keys this section owns. The sticky save bar and the
+   * rail's unsaved dot both diff these against the saved baseline, so a section
+   * whose state does NOT ride FormState (music: Navidrome creds live in
+   * setup-config.json; theme: every control saves on click) lists none and
+   * reports its own dirtiness through SaveBar's `dirty` prop instead.
+   */
+  formKeys: readonly string[];
+}
+
+export const LLM_PROVIDER_FORM_KEYS = [
+  'llm.provider', 'llm.model', 'llm.ollamaUrl', 'llm.numCtx', 'llm.repeatPenalty',
+  'llm.providerBaseUrls', 'llm.headers', 'llm.compatibleMode', 'llm.reasoning',
+  'llm.toolChoice', 'llm.pauseWhenEmpty', 'llm.dailyTokenCap', 'llm.budgetSoftPct',
+  'llm.exemptRequests', 'llm.maxOutputTokens', 'llm.geminiSafety', 'llm.fallback',
+] as const;
+
+// The Stems page's fields: the stem half of `transitions` (the form keeps the
+// stem cache under transitions; it saves to `audio.*`). One list, read by the
+// section's dirty check and its SaveBar's error scope.
+export const STEM_FORM_KEYS = [
+  'transitions.pairDrain', 'transitions.stemBlends', 'transitions.pickTimeStems',
+  'transitions.stemCache', 'transitions.stemCacheGb',
+] as const;
+
+// `satisfies`, never a `readonly SectionSpec[]` annotation: the annotation
+// widens every `id` back to `string` and takes `SectionId` — and with it every
+// typo guard on SETTINGS_INDEX, ADVANCED_CARDS and `activeSection` — down with
+// it. A bad id then compiles clean and dies quietly at runtime (`sectionById`
+// → undefined → no formKeys → no dirty tracking, no save bar).
+export const SECTIONS = [
+  {
+    id: 'station', group: 'the station', label: 'Station',
+    hint: 'name · location · privacy', icon: Radio,
+    formKeys: ['station', 'stationDescription', 'timezone', 'locale', 'weather', 'privacy', 'requests'],
+  },
+  {
+    id: 'music', group: 'the station', label: 'Music source',
+    hint: 'navidrome · subsonic', icon: Music2,
+    formKeys: [],
+  },
+  {
+    // The library's own processing (embeddings, mood propagation), so it sits
+    // beside the source it reads rather than with the DJ's voice and model.
+    id: 'library', group: 'the station', label: 'Library tagger',
+    hint: 'embedding · propagation', icon: Library,
+    formKeys: ['embedding'],
+  },
+  {
+    id: 'selection', group: 'the station', label: 'Music selection',
+    hint: 'agentic · shortlist · requests', icon: ListMusic,
+    formKeys: ['llm.trackSelection', 'llm.shortlistPasses', 'llm.shortlistSearchPreparation', 'llm.guestMusicalLeanings', 'llm.requestMatching', 'llm.requestWebResolve', 'llm.noRepeatWindow', 'llm.artistVarietyWindow', 'llm.genreVarietyWindow', 'llm.discoverySteps', 'llm.agentTimeoutMs', 'picker'],
+  },
+  {
+    id: 'theme', group: 'the station', label: 'Skin & Themes',
+    hint: 'player skin · palette', icon: Palette,
+    formKeys: [],
+  },
+  {
+    // Likes and scrobbling were two small tabs under a "listeners" group of
+    // their own; both are about what listeners leave behind, so one tab.
+    id: 'listeners', group: 'the station', label: 'Listeners',
+    hint: 'likes · lyrics · scrobbling', icon: Heart,
+    formKeys: ['likes', 'lyrics', 'scrobble'],
+  },
+  {
+    id: 'behaviour', group: 'the dj', label: 'DJ behaviour',
+    hint: 'speech · segments · handovers', icon: MessageCircle,
+    formKeys: ['djTalkOnlyBetweenTracks', 'pauseTalkMinSeconds', 'djBehaviour', 'llm.segmentRuntime'],
+  },
+  {
+    // One-field setup for the hosted DJ Brain: writes both `llm` and
+    // `tts.cloud` in a single save, but owns neither slice — the LLM provider
+    // and TTS voice sections keep the dirty tracking for those keys, and this
+    // one holds local state only, so it lists no formKeys.
+    id: 'brain', group: 'the dj', label: 'DJ Brain',
+    hint: 'one field · brain + voice', icon: BrainCircuit,
+    formKeys: [],
+  },
+  {
+    id: 'llm', group: 'the dj', label: 'LLM provider',
+    hint: 'model routing', icon: Cpu,
+    formKeys: LLM_PROVIDER_FORM_KEYS,
+  },
+  {
+    id: 'tts', group: 'the dj', label: 'TTS voice',
+    hint: 'default engine', icon: Mic,
+    formKeys: ['tts', 'kokoroLang'],
+  },
+  {
+    id: 'search', group: 'the dj', label: 'Web search',
+    hint: 'live-facts backend', icon: Search,
+    formKeys: ['search'],
+  },
+  {
+    id: 'archives', group: 'operations', label: 'Archives',
+    hint: 'hourly recordings', icon: Archive,
+    formKeys: ['archive'],
+  },
+  {
+    id: 'backup', group: 'operations', label: 'Backup',
+    hint: 'export · restore', icon: Save,
+    formKeys: [],
+  },
+  {
+    // The whole stem story on one page: the cache/blends settings (moved off
+    // Broadcast & mixer) above the orphan-dir cleanup. The old
+    // ?section=orphans link redirects here (SettingsPanel RENAMED).
+    // `transitions` is split at the leaf: the crossfade curve and the DJ
+    // transition effects stay on Broadcast & mixer, where their cards are.
+    id: 'stems', group: 'operations', label: 'Stems',
+    hint: 'cache · blends · cleanup', icon: Layers,
+    formKeys: STEM_FORM_KEYS,
+  },
+  {
+    // Was "Danger zone": most of it is everyday broadcast tuning, and the name
+    // put operators off it. ?section=danger still lands here (SettingsPanel).
+    id: 'broadcast', group: 'operations', label: 'Broadcast & mixer',
+    hint: 'crossfade · streams · restart', icon: RadioTower,
+    // fadeAtShowEnd belongs here too — SettingsPanel's `ownedKeys` for this
+    // section's save bar already includes it (Save broadcast & mixer), but this
+    // list is what drives the dirty-check that decides whether the save bar
+    // shows at all. Without it, toggling "Fade out at a show change" alone
+    // never registers as a change and the save prompt never appears.
+    // The stem fields of 'transitions' moved to the Stems section with their
+    // card; the crossfade curve and the effects stay here with theirs.
+    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'transitions.equalPowerCrossfade', 'transitions.effects', 'stream', 'loudness'],
+  },
+] as const satisfies readonly SectionSpec[];
+
+export type SectionId = (typeof SECTIONS)[number]['id'];
+
+export const sectionById = (id: string) => SECTIONS.find(s => s.id === id);
+
+/**
+ * Dotted FormState paths whose change costs a mixer restart.
+ *
+ * Mirrors the `restart = true` branches in `controller/src/settings.ts` — the
+ * controller stays the authority (it answers `requiresRestart` on the save and
+ * the existing banner reacts to that). This list only decides whether the save
+ * bar warns BEFORE the operator commits, so a stale entry costs a missing or
+ * spurious warning, never a wrong save.
+ */
+export const RESTART_PATHS: readonly string[] = [
+  'station',
+  'privacy.listenerAuth',
+  'crossfadeDuration',
+  'transitions.equalPowerCrossfade',
+  'ducking.voice',
+  'ducking.intro',
+  'archive.enabled',
+  'archive.bitrate',
+  'stream.opusEnabled',
+  'stream.opusBitrate',
+  'stream.flacEnabled',
+  'stream.oggIcyMetadata',
+  'stream.aacEnabled',
+  'stream.aacBitrate',
+  'stream.bitrate',
+  'stream.bufferSeconds',
+  'stream.maxListeners',
+];
+
+/**
+ * Card titles that sit behind each section's Advanced disclosure.
+ *
+ * Keyed by section id → the anchors (see `cardAnchor`) of the cards to defer.
+ * A section renders its own <Advanced> wrapper; this table exists so the search
+ * index can say "adv" on a result and open the disclosure when it jumps there.
+ */
+export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
+  station: ['listener-requests', 'public-api'],
+  selection: ['agent-deadline', 'repeat-variety', 'minimum-track-length', 'guest-musical-leanings'],
+  behaviour: ['pause-and-talk', 'prompt-memory', 'banter', 'extended-sleeve-notes'],
+  llm: ['fallback', 'reasoning', 'idle-behaviour', 'daily-token-budget'],
+  tts: ['fallback-voice'],
+  library: ['seed-phase', 'propagation', 'enrichment'],
+  listeners: ['ai-dj-influence'],
+  broadcast: [
+    'crossfade', 'duck-depth', 'dj-transition-effects', 'max-track-length', 'dead-air-trim',
+    'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
+    'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
+    'listener-country',
+  ],
+};
+
+export const isAdvancedCard = (section: SectionId, anchor: string) =>
+  (ADVANCED_CARDS[section] || []).includes(anchor);
+
+export interface IndexEntry {
+  /** The control's own label, as the operator reads it on screen. */
+  label: string;
+  section: SectionId;
+  /** Card title, shown as the result's trail and used as the scroll anchor. */
+  card: string;
+  /** Extra words that should match but are not in the label. */
+  keywords?: string;
+}
+
+/** Every setting the operator can search for, in rail order. */
+export const SETTINGS_INDEX: readonly IndexEntry[] = [
+  // ── station ────────────────────────────────────────────────────────────────
+  { label: 'Station name', section: 'station', card: 'Station identity', keywords: 'call sign title dj prompt' },
+  { label: 'Share description', section: 'station', card: 'Station identity', keywords: 'blurb og meta social' },
+  { label: 'Location', section: 'station', card: 'Station location', keywords: 'weather forecast open-meteo latitude longitude' },
+  { label: 'On-air location', section: 'station', card: 'Station location', keywords: 'spoken public place' },
+  { label: 'Weather units', section: 'station', card: 'Station location', keywords: 'metric imperial celsius fahrenheit' },
+  { label: 'Station timezone', section: 'station', card: 'Timezone', keywords: 'clock time zone schedule slots' },
+  { label: 'Station locale', section: 'station', card: 'Localization', keywords: 'language 24h am pm date format' },
+  { label: 'Private player', section: 'station', card: 'Privacy', keywords: 'password gate hide lock' },
+  { label: 'Stream password', section: 'station', card: 'Privacy', keywords: 'listener auth icecast lock restart' },
+  { label: 'Station password', section: 'station', card: 'Privacy', keywords: 'secret shared passphrase' },
+  { label: 'Accept requests', section: 'station', card: 'Listener requests', keywords: 'request line open closed' },
+  { label: 'Max queued requests', section: 'station', card: 'Listener requests', keywords: 'pending queue limit' },
+  { label: 'Seconds between requests', section: 'station', card: 'Listener requests', keywords: 'cooldown rate limit' },
+  { label: 'Per-listener hourly cap', section: 'station', card: 'Listener requests', keywords: 'ip rate limit hour' },
+  { label: 'Station hourly cap', section: 'station', card: 'Listener requests', keywords: 'global rate limit hour' },
+  { label: 'Repeat cooldown', section: 'station', card: 'Listener requests', keywords: 'same track again minutes' },
+  { label: 'One request per listener at a time', section: 'station', card: 'Listener requests', keywords: 'ip pending single' },
+  { label: 'Publish persona souls', section: 'station', card: 'Public API', keywords: 'system prompt schedule personas public json' },
+
+  // ── music source ───────────────────────────────────────────────────────────
+  { label: 'Server URL', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic host url' },
+  { label: 'Username', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic login user' },
+  { label: 'Password', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic secret salt token' },
+
+  // ── skin & themes ──────────────────────────────────────────────────────────
+  { label: 'Station skin', section: 'theme', card: 'Player skin', keywords: 'classic unit platter drift subamp tty listen face' },
+  { label: 'Active theme', section: 'theme', card: 'Themes', keywords: 'palette colours colors newsprint nightshift dark light' },
+  { label: 'Show the tune-in overlay', section: 'theme', card: 'Tune-in overlay', keywords: 'gate tap to listen splash' },
+  { label: 'Show the Booth Sprite', section: 'theme', card: 'Booth Buddy', keywords: 'mascot sprite request box' },
+
+  // ── llm provider ───────────────────────────────────────────────────────────
+  { label: 'Provider', section: 'llm', card: 'Provider', keywords: LLM_PROVIDER_IDS.join(' ') },
+  { label: 'Ollama server URL', section: 'llm', card: 'Provider', keywords: 'host docker internal 11434 local' },
+  { label: 'API key', section: 'llm', card: 'Provider', keywords: 'token secret credential sk-' },
+  { label: 'Model', section: 'llm', card: 'Provider', keywords: 'llama claude gpt gemini model id' },
+  { label: 'Forced tool calls', section: 'llm', card: 'Provider', keywords: 'tool choice required auto' },
+  { label: 'Context window (num_ctx)', section: 'llm', card: 'Provider', keywords: 'tokens history numctx' },
+  { label: 'Repetition penalty (repeat_penalty)', section: 'llm', card: 'Provider', keywords: 'repeat penalty phrasing' },
+  { label: 'Max response size (tokens)', section: 'llm', card: 'Reasoning', keywords: 'max output tokens' },
+  { label: 'Reasoning', section: 'llm', card: 'Reasoning', keywords: 'thinking trace chain of thought' },
+  { label: 'Backup provider', section: 'llm', card: 'Fallback', keywords: 'fallback secondary offline' },
+  { label: 'Backup model', section: 'llm', card: 'Fallback', keywords: 'fallback secondary model id' },
+  { label: 'Track selection', section: 'selection', card: 'Track selection', keywords: 'route agentic tools shortlist local model picker' },
+  { label: 'Prepare targeted searches', section: 'selection', card: 'Track selection', keywords: 'optional opt in show brief search preparation' },
+  { label: 'Shortlist passes', section: 'selection', card: 'Track selection', keywords: 'controller discovery candidates' },
+  { label: 'Discovery rounds per pick', section: 'selection', card: 'Track selection', keywords: 'steps tool loops agent' },
+  { label: 'Request matching', section: 'selection', card: 'Request matching', keywords: 'direct agentic compound listener request' },
+  { label: 'Resolve described requests via web', section: 'selection', card: 'Request matching', keywords: 'web search describe song movie' },
+  { label: 'Agent deadline', section: 'selection', card: 'Agent deadline', keywords: 'timeout seconds give up fallback' },
+  { label: 'Guest Musical Leanings', section: 'selection', card: 'Guest Musical Leanings', keywords: 'guest taste preference tie-break' },
+  { label: 'Segments & Skills', section: 'behaviour', card: 'Segments & Skills', keywords: 'direct agentic runtime tools' },
+  { label: 'Daily token cap', section: 'llm', card: 'Daily token budget', keywords: 'budget spend limit cost' },
+  { label: 'Soft threshold', section: 'llm', card: 'Daily token budget', keywords: 'warning percent budget dash' },
+  { label: 'Pause the DJ when nobody is listening', section: 'llm', card: 'Idle behaviour', keywords: 'idle empty room quiet' },
+
+  // ── tts voice ──────────────────────────────────────────────────────────────
+  { label: 'DJ speech', section: 'tts', card: 'Station voice', keywords: 'on air music only mute silent' },
+  { label: 'Engine', section: 'tts', card: 'Voice engine', keywords: 'piper kokoro chatterbox pocket-tts cloud remote' },
+  { label: 'Voice', section: 'tts', card: 'Voice engine', keywords: 'speaker accent alba amy' },
+  { label: 'Voice level (dB)', section: 'tts', card: 'Voice engine', keywords: 'gain trim loudness decibel' },
+  { label: 'Speech speed', section: 'tts', card: 'Voice engine', keywords: 'rate tempo faster slower' },
+  { label: 'API key', section: 'tts', card: 'Voice engine', keywords: 'openai elevenlabs fish audio cloud token' },
+  { label: 'Model', section: 'tts', card: 'Voice engine', keywords: 'cloud speech model gpt-4o-mini-tts' },
+  { label: 'Latency mode', section: 'tts', card: 'Voice engine', keywords: 'fish audio low normal balanced' },
+  { label: 'Server URL', section: 'tts', card: 'Voice engine', keywords: 'remote http endpoint' },
+  { label: 'Fallback engine', section: 'tts', card: 'Fallback voice', keywords: 'rescue voice slot backup' },
+
+  // ── dj behaviour ───────────────────────────────────────────────────────────
+  { label: 'No-repeat window', section: 'selection', card: 'Repeat & variety', keywords: 'recency repeat tracks' },
+  { label: 'Artist spacing', section: 'selection', card: 'Repeat & variety', keywords: 'variety repeat artist slots' },
+  { label: 'Album cooldown', section: 'selection', card: 'Repeat & variety', keywords: 'record repeat hours' },
+  { label: 'Minimum track length', section: 'selection', card: 'Minimum track length', keywords: 'short tracks seconds skits interludes' },
+  { label: 'Pause-and-talk', section: 'behaviour', card: 'Pause-and-talk', keywords: 'pause music silence segment minimum length' },
+  { label: 'Talk placement', section: 'behaviour', card: 'Talk placement', keywords: 'between tracks boundary interrupt over song duck mid-song' },
+  { label: 'Recent lines', section: 'behaviour', card: 'Prompt memory', keywords: 'recap repeat anti-repeat context history limit' },
+  { label: 'Lookback window', section: 'behaviour', card: 'Prompt memory', keywords: 'minutes recap repeat anti-repeat context history' },
+  { label: 'Characters per line', section: 'behaviour', card: 'Prompt memory', keywords: 'chars length recap tokens context' },
+  { label: 'Show changes', section: 'behaviour', card: 'Show changes', keywords: 'handoff presenter same host acknowledgement shift transition programme' },
+  { label: 'Hold the music between presenters', section: 'behaviour', card: 'Banter', keywords: 'air gap duck music between speakers banter exchange fade multi-voice' },
+  { label: 'Extended Sleeve Notes', section: 'behaviour', card: 'Extended Sleeve Notes', keywords: 'source backed editorial provenance provider credits artist context coming soon' },
+  { label: 'Link style', section: 'behaviour', card: 'Link style', keywords: 'release year regular occasional rare metadata sleeve notes' },
+
+  // ── library tagger ─────────────────────────────────────────────────────────
+  { label: 'Tagger', section: 'library', card: 'Tagger', keywords: 'enabled tagging runs moods genres' },
+  { label: 'LLM batch size', section: 'library', card: 'Tagger', keywords: 'batch tracks per call seed' },
+  { label: 'Provider', section: 'library', card: 'Embedding server', keywords: `embedding ${EMBEDDING_PROVIDER_IDS.join(' ')} inherit` },
+  { label: 'Model', section: 'library', card: 'Embedding server', keywords: 'nomic-embed-text embedding model reindex' },
+  { label: 'Embedding server URL', section: 'library', card: 'Embedding server', keywords: 'base url host' },
+  { label: 'Bearer token', section: 'library', card: 'Embedding server', keywords: 'embedding api key auth' },
+  { label: 'Seed count', section: 'library', card: 'Seed phase', keywords: 'seed tracks auto size' },
+  { label: 'KNN neighbours', section: 'library', card: 'Propagation', keywords: 'neighbours vote knn similarity' },
+  { label: 'Mood vote threshold', section: 'library', card: 'Propagation', keywords: 'mood share vote stick' },
+  { label: 'Confidence threshold', section: 'library', card: 'Propagation', keywords: 'confidence active learning' },
+  { label: 'Audio fusion weight', section: 'library', card: 'Propagation', keywords: 'clap audio text fusion analyzer' },
+  { label: 'Active-learning rounds', section: 'library', card: 'Propagation', keywords: 'rounds least confident passes' },
+  { label: 'Last.fm tags', section: 'library', card: 'Enrichment', keywords: 'crowd tags embed text' },
+  { label: 'Last.fm track tags', section: 'library', card: 'Enrichment', keywords: 'lastfm per song crowd tags backfill' },
+  { label: 'Lyrics', section: 'library', card: 'Enrichment', keywords: 'lyrics embed text' },
+
+  // ── web search ─────────────────────────────────────────────────────────────
+  { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng keenable firecrawl outcrawl live facts' },
+  { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave keenable firecrawl outcrawl token search_api_key' },
+  { label: 'SearXNG URL', section: 'search', card: 'Provider', keywords: 'self hosted meta search json' },
+  { label: 'Engines', section: 'search', card: 'Provider', keywords: 'searxng engines pin restrict google duckduckgo wikipedia' },
+
+  // ── likes ──────────────────────────────────────────────────────────────────
+  { label: 'Enabled', section: 'listeners', card: 'Heart button', keywords: 'heart like listener tap' },
+  { label: 'Star in Navidrome', section: 'listeners', card: 'Heart button', keywords: 'subsonic starred favourites' },
+  { label: 'Use likes to influence picks', section: 'listeners', card: 'AI DJ influence', keywords: 'taste preference signal picker' },
+  { label: 'Tracks included', section: 'listeners', card: 'AI DJ influence', keywords: 'top liked count' },
+  { label: 'Time window (days)', section: 'listeners', card: 'AI DJ influence', keywords: 'window days all time' },
+
+  // ── lyrics ─────────────────────────────────────────────────────────────────
+  { label: 'Enabled', section: 'listeners', card: 'Lyrics panel', keywords: 'lyrics words synced karaoke lrc timing' },
+  { label: 'LRCLIB fallback', section: 'listeners', card: 'Lyrics panel', keywords: 'lyrics synced timed lrc lrclib fallback missing' },
+
+  // ── scrobbling ─────────────────────────────────────────────────────────────
+  { label: 'Enabled', section: 'listeners', card: 'Last.fm', keywords: 'lastfm scrobble spins' },
+  { label: 'API key', section: 'listeners', card: 'Last.fm', keywords: 'lastfm credential' },
+  { label: 'API secret', section: 'listeners', card: 'Last.fm', keywords: 'lastfm shared secret handshake' },
+  { label: 'Session key', section: 'listeners', card: 'Last.fm', keywords: 'authorize session token' },
+  { label: 'Username (display)', section: 'listeners', card: 'Last.fm', keywords: 'lastfm user dash' },
+  { label: 'Enabled', section: 'listeners', card: 'ListenBrainz', keywords: 'listenbrainz scrobble spins' },
+  { label: 'User token', section: 'listeners', card: 'ListenBrainz', keywords: 'listenbrainz profile token' },
+  { label: 'API base URL', section: 'listeners', card: 'ListenBrainz', keywords: 'self hosted instance endpoint' },
+  { label: 'Username (display)', section: 'listeners', card: 'ListenBrainz', keywords: 'listenbrainz user dash' },
+  { label: 'Enabled', section: 'listeners', card: 'Navidrome', keywords: 'navidrome play count last played smart playlist nsp rotation subsonic' },
+
+  // ── archives ───────────────────────────────────────────────────────────────
+  { label: 'Record the broadcast to disk', section: 'archives', card: 'Hourly archive', keywords: 'archive recording mp3 tapes restart' },
+  { label: 'Archive bitrate', section: 'archives', card: 'Hourly archive', keywords: 'kbps encoder cpu restart' },
+  { label: 'Keep recordings for', section: 'archives', card: 'Hourly archive', keywords: 'retention days disk cleanup' },
+
+  // ── broadcast & mixer ────────────────────────────────────────────────────────────
+  { label: 'Stop stream', section: 'broadcast', card: 'Broadcast', keywords: 'off air disconnect icecast mount' },
+  { label: 'Pause when the room is empty', section: 'broadcast', card: 'Idle pause', keywords: 'idle empty listeners resume' },
+  { label: 'Crossfade duration', section: 'broadcast', card: 'Crossfade', keywords: 'overlap seams transition restart' },
+  { label: 'DJ over silence duck depth', section: 'broadcast', card: 'Duck depth', keywords: 'ducking voice smooth_add say idents heavy restart' },
+  { label: 'DJ over a track duck depth', section: 'broadcast', card: 'Duck depth', keywords: 'ducking intro talk over link light smooth_add restart' },
+  { label: 'Pair-aware transitions', section: 'stems', card: 'Stem transitions', keywords: 'pair drain successor crossfade' },
+  { label: 'Stem cache', section: 'stems', card: 'Stem transitions', keywords: 'demucs drums bass vocals disk' },
+  { label: 'Stem cache budget', section: 'stems', card: 'Stem transitions', keywords: 'gb evict oldest' },
+  { label: 'Stem-blend seams', section: 'stems', card: 'Stem transitions', keywords: 'drums carry under intro blend' },
+  { label: 'Orphan stems cleanup', section: 'stems', card: 'Orphan stems cleanup', keywords: 'quarantine purge deleted tracks left library reclaim disk daily pass' },
+  { label: 'Crossfade curve', section: 'broadcast', card: 'Crossfade', keywords: 'equal power linear dip fade shape' },
+  { label: 'Sweep', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect filter gear change clash dj mode' },
+  { label: 'Washout', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect echo tail dub exit length cap dj mode' },
+  { label: 'Blend', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect spectral handover locked pair dj mode' },
+  { label: 'Dissolve', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect reverb wash ambient cpu latency catchup stutter dj mode' },
+  { label: 'Chop', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect crossfader cut beat stabs dj mode' },
+  { label: 'Exit loop', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect final bar repeat groove tempo dj mode' },
+  { label: 'Maximum track length', section: 'broadcast', card: 'Max track length', keywords: 'cap cut long tracks seconds' },
+  { label: 'Trim silent edges', section: 'broadcast', card: 'Dead-air trim', keywords: 'silence cue in cue out dead air' },
+  { label: 'Shortest gap worth cutting', section: 'broadcast', card: 'Dead-air trim', keywords: 'min gap ms silence' },
+  { label: 'Loudness source', section: 'broadcast', card: 'Loudness levelling', keywords: 'replaygain measured lufs' },
+  { label: 'Target loudness', section: 'broadcast', card: 'Loudness levelling', keywords: 'lufs normalisation level' },
+  { label: 'Max boost', section: 'broadcast', card: 'Loudness levelling', keywords: 'db cap gain ceiling' },
+  { label: 'Serve the secondary Opus mount', section: 'broadcast', card: 'Opus stream', keywords: 'opus ogg mount restart' },
+  { label: 'Bitrate', section: 'broadcast', card: 'Opus stream', keywords: 'opus kbps restart' },
+  { label: 'Serve the lossless FLAC mount', section: 'broadcast', card: 'FLAC stream', keywords: 'flac lossless ogg mount restart' },
+  { label: 'Push ICY track titles on the Opus mount', section: 'broadcast', card: 'Ogg metadata', keywords: 'opus icy metadata ogg flac native tags titles' },
+  { label: 'Serve the AAC mount', section: 'broadcast', card: 'AAC stream', keywords: 'aac adts mount restart' },
+  { label: 'Bitrate', section: 'broadcast', card: 'AAC stream', keywords: 'aac kbps restart' },
+  { label: 'Bitrate', section: 'broadcast', card: 'Stream MP3 bitrate', keywords: 'mp3 kbps stream restart' },
+  { label: 'Listener buffer', section: 'broadcast', card: 'Listener buffer', keywords: 'burst size seconds behind live edge restart' },
+  { label: 'Max listeners', section: 'broadcast', card: 'Max listeners', keywords: 'icecast max clients concurrent connections capacity limit licensing fees restart' },
+  { label: 'Country header', section: 'broadcast', card: 'Listener country', keywords: 'geoip cf-ipcountry cloudflare proxy header stats audience country rollup' },
+  { label: 'GeoIP database', section: 'broadcast', card: 'Listener country', keywords: 'mmdb maxmind geolite2 db-ip ip2location offline lookup stats audience country' },
+  { label: 'Restart mixer', section: 'broadcast', card: 'Mixer', keywords: 'restart liquidsoap apply pending' },
+];

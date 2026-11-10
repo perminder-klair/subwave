@@ -1,16 +1,13 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// Scoped to the Library page for now, not mounted in AdminShell: converting the
-// other admin panels is a later PR, and a provider in the shell would put every
-// one of those conversions behind this PR's review. Hoisting it is a two-line
-// move when the second panel converts.
-//
-// Created in a useState initialiser, not at module scope: a module-level client
-// is shared across requests during SSR, which leaks one render pass's cached
-// admin data into another.
+// Mounted by AdminShell only after its authenticated checks pass, so one client
+// survives navigation between admin panels but is destroyed with the signed-out
+// branch. Created in a useState initializer, not at module scope: a module-level
+// client is shared across requests during SSR, which leaks one render pass's
+// cached admin data into another.
 export default function AdminQueryProvider({ children }: { children: ReactNode }) {
   const [client] = useState(() => new QueryClient({
     defaultOptions: {
@@ -29,5 +26,35 @@ export default function AdminQueryProvider({ children }: { children: ReactNode }
       },
     },
   }));
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production') return;
+    const observable = window as typeof window & {
+      __subwaveAdminMutationCacheSnapshot?: () => Array<Record<string, unknown>>;
+      __subwaveAdminQueryCacheSnapshot?: () => Array<Record<string, unknown>>;
+    };
+    observable.__subwaveAdminMutationCacheSnapshot = () =>
+      client.getMutationCache().getAll().map(mutation => ({
+        mutationKey: mutation.options.mutationKey ?? null,
+        status: mutation.state.status,
+        variables: mutation.state.variables ?? null,
+        data: mutation.state.data ?? null,
+        error: mutation.state.error instanceof Error
+          ? { name: mutation.state.error.name, message: mutation.state.error.message }
+          : mutation.state.error ?? null,
+      }));
+    observable.__subwaveAdminQueryCacheSnapshot = () =>
+      client.getQueryCache().getAll().map(query => ({
+        queryKey: query.queryKey,
+        status: query.state.status,
+        data: query.state.data ?? null,
+        error: query.state.error instanceof Error
+          ? { name: query.state.error.name, message: query.state.error.message }
+          : query.state.error ?? null,
+      }));
+    return () => {
+      delete observable.__subwaveAdminMutationCacheSnapshot;
+      delete observable.__subwaveAdminQueryCacheSnapshot;
+    };
+  }, [client]);
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }

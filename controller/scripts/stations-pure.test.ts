@@ -1,5 +1,5 @@
 // Unit pins for the pure multi-station helpers.
-// Run: npx tsx scripts/stations-pure.test.ts — auto-discovered by npm test.
+// Run: `npm test -- stations-pure`.
 
 import assert from 'node:assert/strict';
 import {
@@ -45,20 +45,21 @@ assert.ok(STATION_ID_RE.test(slugifyStationName('Ünïcode Béats!!')));
 // --- duplicate allowlist (spec §5) ------------------------------------------
 // copy: station identity + derived config
 for (const f of [
-  'settings.json', 'setup-config.json', 'secrets.env', 'moods.json',
+  'settings.json', 'secrets.env',
   'schedule.json', 'jingles.m3u', 'jingles.json', 'beds.json', 'bed.mp3',
   'voices', 'persona-avatars', 'jingles', 'beds', 'skills', 'sfx',
   'liquidsoap_crossfade.txt', 'liquidsoap_station_name.txt',
-  'icecast_listener_auth.txt', 'themes', 'sfx.json', 'playlist-recipes.json',
+  'icecast_listener_auth.txt', 'themes', 'sfx.json',
 ]) assert.equal(duplicateAction(f), 'copy', f);
-// library.db goes through better-sqlite3 .backup(), not a file copy
-assert.equal(duplicateAction('library.db'), 'backup');
+// Credentials and source-specific data must be configured for the new station.
+for (const f of ['setup-config.json', 'library.db', 'moods.json', 'playlist-recipes.json'])
+  assert.equal(duplicateAction(f), 'skip');
 // skip: runtime + listener history + everything unknown (allowlist default)
 for (const f of [
-  'session.json', 'sessions', 'logs', 'archive', 'queue.json',
+  'session.json', 'sessions', 'logs', 'archive', 'queue.json', 'show-preparations.json',
   'recent-plays.json', 'now-playing.json', 'jingle-playing.json',
   'bed-playing.json', 'listeners.jsonl', 'audience.json', 'likes.json',
-  'seen-curiosity.json', 'next.txt', 'say.txt', 'intro.txt', 'sfx.txt',
+  'seen-curiosity.json', 'next.txt', 'jingle-now.txt', 'say.txt', 'intro.txt', 'sfx.txt',
   'auto.m3u', 'library.db-wal', 'library.db-shm', 'station.json',
   'settings.json.bak-pre-ollama', 'some-future-file.xyz',
 ]) assert.equal(duplicateAction(f), 'skip', f);
@@ -66,7 +67,7 @@ for (const f of [
 // --- conversion classification (spec §6) --------------------------------------
 for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found'])
   assert.equal(conversionAction(f), 'keep', f);
-for (const f of ['settings.json', 'library.db', 'jingles', 'logs', 'archive', 'session.json'])
+for (const f of ['settings.json', 'library.db', 'jingles', 'logs', 'archive', 'session.json', 'show-preparations.json'])
   assert.equal(conversionAction(f), 'move', f);
 
 console.log('stations-pure.test: OK');

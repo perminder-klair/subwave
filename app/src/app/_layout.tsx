@@ -19,12 +19,8 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { View } from 'react-native';
-// No GestureHandlerRootView / BottomSheetModalProvider: that gesture-handler +
-// bottom-sheet stack installed a root touch interceptor that swallowed every tap
-// across the app on the New Architecture on some Android devices (issue #458).
-// It existed only for the Themes sheet, which is now a core <Modal> (see
-// components/ui/Sheet.tsx). Bisection confirmed on-device: removing this stack
-// is what restores touch.
+// Gesture-handler root interceptors block Android taps under New Architecture (#458).
+// Use core Modal sheets.
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ErrorScreen from '@/components/ErrorScreen';
 import { StationProvider, useStation } from '@/config/StationContext';
@@ -32,11 +28,8 @@ import { ThemeProvider } from '@/theme/ThemeContext';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-// expo-router renders this in place of the route tree when any descendant
-// throws during render. Hide the splash here too — a crash inside SplashGate
-// (before `ready`) would otherwise strand the native splash over a frozen app.
-// A throw from RootLayout itself still falls through to expo-router's default
-// handler; that's an accepted gap (see docs/PRODUCTION-READINESS.md A2).
+// Hide the splash here too: a SplashGate render failure would otherwise
+// leave it covering the error screen. RootLayout errors use Expo Router's default boundary.
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   useEffect(() => {
     SplashScreen.hideAsync().catch(() => {});
@@ -83,6 +76,7 @@ export default function RootLayout() {
                 <Stack.Screen name="index" />
                 <Stack.Screen name="onboarding" />
                 <Stack.Screen name="stations" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="station-login" options={{ presentation: 'modal' }} />
               </Stack>
             </SplashGate>
           </ThemeProvider>

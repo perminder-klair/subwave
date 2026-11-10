@@ -1,12 +1,7 @@
 'use client';
 
-// Unsaved-work guard for admin panels that batch edits locally and push them in
-// one save. Two exits are covered: leaving/reloading the tab (the browser's own
-// beforeunload prompt) and in-app link clicks, intercepted in the CAPTURE phase
-// before Next's router sees them and handed to the caller as a href.
-//
-// Deliberately NOT covered: the browser back button. Trapping it means pushing a
-// decoy history entry, which breaks back for everyone with nothing pending.
+// Intercept in-app links before Next navigation and use beforeunload for tab exits. Leave browser
+// Back alone; a decoy history entry would disrupt normal navigation.
 
 import { useEffect, useRef } from 'react';
 

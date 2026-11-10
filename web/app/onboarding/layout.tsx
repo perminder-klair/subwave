@@ -11,5 +11,5 @@ export const metadata: Metadata = {
 };
 
 export default function OnboardingLayout({ children }: { children: ReactNode }) {
-  return <>{children}</>;
+  return children;
 }

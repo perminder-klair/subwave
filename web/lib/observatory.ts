@@ -31,14 +31,8 @@ interface BulkResponse {
   stats: ObservatoryStats;
 }
 
-// Loads the tagged library (up to `max` nodes) and falls back to a seeded mock
-// on an empty library so the view is never blank. `enabled` gates the fetch on
-// admin auth being ready. `max: null` sends no cap, so the server's own default
-// (OBSERVATORY_MAX) applies and the response's `max` reports what was used.
-//
-// On a fetch error the mock only fills an EMPTY view — never clobbering a map a
-// previous load produced — and `error` stays set so the UI can say the
-// controller was unreachable.
+// Use mock data for an empty library. On fetch errors, preserve a previously loaded map and expose
+// the error. max: null uses the server default.
 export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: number | null): ObservatoryResult {
   const [data, setData] = useState<LibraryData | null>(null);
   const [loading, setLoading] = useState(true);

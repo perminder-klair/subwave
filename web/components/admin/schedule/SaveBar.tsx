@@ -1,10 +1,5 @@
 'use client';
 
-// The unsaved-edits bar. Every edit on the Rundown is a LOCAL write, and the
-// header's "Save the week" scrolls out of view the moment the operator drops into
-// the board, so this strip is `sticky bottom-0` for as long as the week differs
-// from the server. It is the last child of the panel's flex column, so it also
-// occupies real layout space and never permanently covers content.
 
 import { AnimatePresence, m } from 'motion/react';
 import { useEffect, useState } from 'react';
@@ -57,8 +52,6 @@ export default function SaveBar({ dirty, busy, onReview, onDiscard, onSave }: Sa
                 </Mu>
               </span>
             </span>
-            {/* Full-width on a phone so the three actions get real tap targets
-                instead of being squeezed onto the end of the message line. */}
             <span className="ml-auto flex w-full flex-none items-center gap-2 sm:w-auto">
               <Button
                 variant="ghost"

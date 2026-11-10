@@ -1,0 +1,100 @@
+{
+  "name": "Russell / generic energetic mood is not Leanings evidence",
+  "djName": "Russell Mercer",
+  "currentTrack": {
+    "id": "5Poy6K6U1o1h4K7DljJVMj",
+    "title": "Pleasures of the Flesh",
+    "artist": "Killing Joke"
+  },
+  "musicalLeanings": "Russell has broad, accessible tastes spanning classic pop, soul, singer-songwriters, sophisticated rock, jazz-influenced material and well-crafted contemporary music. He tends to favour strong songwriting and distinctive voices over extremes of style. His preferences are eclectic and moderate, allowing the show's subject and guests plenty of room to shape the music.",
+  "baseline": {
+    "id": "5HRaFfU36piXMvsXToez1G",
+    "title": "Café del Mar",
+    "artist": "Energy 52",
+    "year": 2003,
+    "genre": "Progressive House",
+    "moods": ["calm"],
+    "energy": "low",
+    "instrumental": false,
+    "bpm": 66.3,
+    "key": "8A"
+  },
+  "candidates": [
+    {
+      "id": "5hxph0tY5eyLLUiOnmXk4I",
+      "title": "And Love Said No",
+      "artist": "HIM",
+      "year": 2004,
+      "genre": "Metal",
+      "moods": ["reflective", "spiritual"],
+      "energy": "medium",
+      "instrumental": false,
+      "bpm": 129.2,
+      "key": "10A"
+    },
+    {
+      "id": "6Qu6ISvtYMpNS8g47jzKnh",
+      "title": "Wolves",
+      "artist": "Garbage",
+      "year": 2021,
+      "genre": "Alternative Rock",
+      "moods": ["energetic"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 143.6,
+      "key": "7B"
+    },
+    {
+      "id": "7cN7fGmMQgyU4U3MhoAInp",
+      "title": "Rats (PMEDIA)",
+      "artist": "Ghost",
+      "year": 2018,
+      "genre": "Hard Rock",
+      "moods": ["energetic", "celebratory"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 123,
+      "key": "7A"
+    },
+    {
+      "id": "1okaDQ0aeZztJFWr12OXQI",
+      "title": "Ziltoidian Empire",
+      "artist": "Devin Townsend",
+      "year": 2014,
+      "genre": "Progressive Metal",
+      "moods": ["energetic", "workout"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 117.5,
+      "key": "2A"
+    },
+    {
+      "id": "4nXnWdD9LwPnwQ5gVBzjqj",
+      "title": "Faster Disco",
+      "artist": "Faith No More",
+      "year": 1987,
+      "genre": "Alternative Metal",
+      "moods": ["energetic", "celebratory"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 117.5,
+      "key": "12B"
+    },
+    {
+      "id": "0UlJ2YtJziuGqD6okl8XGz",
+      "title": "Xavier",
+      "artist": "Paradise Lost",
+      "year": 2002,
+      "genre": "Gothic Metal",
+      "moods": ["energetic"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 129.2,
+      "key": "2A"
+    }
+  ],
+  "expected": {
+    "selectedId": "5HRaFfU36piXMvsXToez1G",
+    "leaningsBasis": "NO_LEANINGS_INFLUENCE"
+  }
+}

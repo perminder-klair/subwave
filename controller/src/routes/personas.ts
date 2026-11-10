@@ -1,48 +1,36 @@
-// Admin-gated persona avatar upload + delete.
-//
-// Avatars are written to ${STATE_DIR}/persona-avatars/<personaId>.<ext>. The
-// browser resizes/crops the source image to 512×512 before POSTing it as a
-// data URL, so we only ever accept small (~50–300 KB) PNG/JPEG/WebP payloads.
-//
-// The dedicated upload route is the single writer; the basename is recorded on
-// the persona's `avatar` field via settings.update(), and the public
-// /persona-avatar/:id endpoint reads from that field. Magic-byte sniffing
-// rejects payloads whose decoded bytes don't match a supported image format,
-// so an operator can't smuggle anything else past the data-URL header.
+// Avatar upload is the sole file writer; settings stores the basename for public reads.
+// Validate image bytes, not data-URL headers. Community and bundle installs share
+// personas/install.ts; packing lives in personas/bundle.ts (#1620).
 
 import express from 'express';
+import { PERSONA_TTS_INHERIT } from '../schemas/persona.js';
 import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { readCommunityPersona } from '../personas/community.js';
+import { installPersona } from '../personas/install.js';
+import { applyPersonaBundle, buildPersonaBundle } from '../personas/bundle.js';
+import { bundleFilename } from '../personas/bundle-pure.js';
 import { SLUG_RE } from '../skills/loader.js';
 import { queue } from '../broadcast/queue.js';
 
 export const router = express.Router();
 
-// Match the persona id regex used in settings.ts — kept local to avoid widening
-// settings.ts's export surface for a 24-char regex.
+// Matches the persona id regex in settings.ts; kept local deliberately.
 const PERSONA_ID_RE = /^[a-z0-9_]{3,32}$/;
-// Hard cap on the decoded image. The browser-side resize lands us comfortably
-// below this for any reasonable source. Anything bigger almost certainly means
-// the operator bypassed the picker.
+// Hard cap on the DECODED image.
 const MAX_AVATAR_BYTES = 300 * 1024;
-// JSON payload cap is set per-route — the base64 body inflates the raw bytes
-// by ~33%, plus the data-URL prefix. 600 KB is plenty for a 300 KB image.
+// Per-route cap: base64 inflates the raw bytes by ~33%, plus the data-URL prefix.
 const JSON_BODY_LIMIT = '600kb';
 
-// Quick magic-byte sniff. The data-URL prefix is operator-supplied and easy
-// to fake; this checks the decoded bytes against the canonical signatures.
+// The data-URL prefix is easy to fake, so check the decoded bytes themselves.
 function sniffMime(buf: Buffer): 'image/png' | 'image/jpeg' | 'image/webp' | null {
   if (buf.length < 12) return null;
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
   if (
     buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
     buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
   ) return 'image/png';
-  // JPEG: FF D8 FF
   if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
-  // WebP: 'RIFF' .... 'WEBP'
   if (
     buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
     buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
@@ -56,10 +44,7 @@ function extForMime(mime: string): 'png' | 'jpg' | 'webp' {
   return 'png';
 }
 
-// Removes any existing avatar file for this persona, regardless of extension —
-// re-uploading a JPEG over a previous PNG would otherwise leave the PNG
-// behind and the persona.avatar field would (correctly) only point at the
-// newer one, so the orphan would just waste disk.
+// Remove old extensions so a JPEG replacement cannot orphan a PNG.
 async function removeExisting(personaId: string) {
   try {
     const entries = await readdir(settings.PERSONA_AVATAR_DIR);
@@ -69,7 +54,7 @@ async function removeExisting(personaId: string) {
         .map(e => unlink(`${settings.PERSONA_AVATAR_DIR}/${e}`).catch(() => {})),
     );
   } catch {
-    // Directory doesn't exist yet — nothing to remove.
+    // Directory doesn't exist yet.
   }
 }
 
@@ -77,8 +62,6 @@ async function writeAvatar(personaId: string, dataUrl: string) {
   if (!PERSONA_ID_RE.test(personaId)) {
     throw new Error('invalid persona id');
   }
-  // settings.load() may not have run yet if this is the first request; the
-  // server boot block does run it, but be defensive.
   await settings.load();
   const personas = settings.get().personas || [];
   if (!personas.some((p: any) => p.id === personaId)) {
@@ -106,10 +89,7 @@ async function writeAvatar(personaId: string, dataUrl: string) {
   const filename = `${personaId}.${extForMime(sniffed)}`;
   await writeFile(`${settings.PERSONA_AVATAR_DIR}/${filename}`, buf);
 
-  // Record the basename on the persona so /persona-avatar/:id and the
-  // /now-playing payload pick it up immediately. We resend the full personas
-  // array because settings.update() validates the whole list — the orphan
-  // sweep inside update() is what keeps the on-disk files consistent.
+  // Update the full persona array so validation and orphan cleanup remain shared.
   const nextPersonas = personas.map((p: any) =>
     p.id === personaId ? { ...p, avatar: filename } : p,
   );
@@ -166,15 +146,50 @@ router.delete('/personas/:id/avatar', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /personas/community/:slug/install — append a community catalog persona
-// to the station's roster as an ordinary persona: editable, deletable, and NOT
-// on air (activePersonaId is untouched — the analogue of a community skill
-// arriving disabled). Station-specific fields get the roster defaults: a
-// minted id, the piper tts block, no avatar, skills=null ("all skills").
-// Rejects a roster at PERSONA_LIMIT and a duplicate on-air name (409) so the
-// operator isn't left with two indistinguishable DJs.
-// ---------------------------------------------------------------------------
+// Removes one persona, persisted immediately (#1950), the same shape as
+// DELETE /shows/:id. Reads the PERSISTED roster, never the panel's local copy,
+// so the operator's unsaved edits to other personas are neither saved nor lost
+// by a delete; the panel splices its own row out on success. One update() does
+// the whole cascade through its post-patch sweep: hosted shows go, with their
+// schedule hours and any takeover pinning one; guest seats are dropped;
+// activePersonaId is re-pointed if it named this persona; the avatar file is
+// collected. 404 is a persona the panel added and never saved, so the local
+// splice is enough. Deleting the last saved persona is refused here with the
+// reason, rather than as the schema's array-size message.
+router.delete('/personas/:id', requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+
+  await settings.load();
+  const existing = settings.get().personas || [];
+  const target = existing.find((p: any) => p.id === id);
+  if (!target) return res.status(404).json({ error: `no such persona: ${id}` });
+  const personas = existing.filter((p: any) => p.id !== id);
+  if (!personas.length) {
+    return res.status(409).json({
+      error: `“${target.name || id}” is the only saved persona. Save another persona before deleting this one.`,
+    });
+  }
+
+  try {
+    await settings.update({ personas });
+    const next = settings.get();
+    queue.log('scheduler', `[personas] "${id}" deleted via admin UI`);
+    res.json({
+      personas: next.personas,
+      activePersonaId: next.activePersonaId,
+      shows: next.shows,
+      schedule: next.schedule,
+      // GET /schedule's projection, so the panel caches the same shape.
+      scheduleOverride: settings.getScheduleOverride(),
+    });
+  } catch (err: any) {
+    queue.log('error', `DELETE /personas/${id} failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Installs a community persona as an ordinary roster entry, NOT on air
+// (activePersonaId is untouched). A full roster or a duplicate on-air name 409s.
 router.post('/personas/community/:slug/install', requireAdmin, async (req, res) => {
   const slug = String(req.params.slug);
   if (!SLUG_RE.test(slug)) {
@@ -186,42 +201,105 @@ router.post('/personas/community/:slug/install', requireAdmin, async (req, res) 
     return res.status(404).json({ error: `no such community persona: ${slug}` });
   }
 
-  await settings.load();
-  const personas = settings.get().personas || [];
-  if (personas.length >= settings.PERSONA_LIMIT) {
-    return res.status(409).json({ error: `the roster is full (${settings.PERSONA_LIMIT} personas max) — remove one first` });
-  }
-  const wanted = cp.displayName.trim().toLowerCase();
-  if (personas.some((p: any) => String(p.name).trim().toLowerCase() === wanted)) {
-    return res.status(409).json({ error: `a persona named "${cp.displayName}" is already in the roster` });
-  }
-
-  // A complete persona object — settings.update() validates strictly and
-  // mints the id (no valid `id` supplied → mintId('p_')).
+  // settings.update validates the full object and mints its id.
   const persona = {
     name: cp.displayName,
     tagline: cp.tagline || '',
     frequency: cp.frequency,
     scriptLength: cp.scriptLength,
     djMode: cp.djMode,
+    linkStyle: cp.linkStyle ?? 'natural',
     humour: cp.humour ?? 5,
     localColour: cp.localColour ?? 5,
     warmth: cp.warmth ?? 5,
     soul: cp.soul,
     language: cp.language || '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: '', gainDb: 0, speed: 1 },
+    tts: { engine: PERSONA_TTS_INHERIT, cloudProvider: 'openai', voice: '', gainDb: 0, speed: 1 },
     skills: null,
   };
 
   try {
-    await settings.update({ personas: [...personas, persona] });
-    const next = settings.get().personas || [];
-    const installed = next.find((p: any) => String(p.name).trim().toLowerCase() === wanted) || null;
+    const result = await installPersona(persona);
+    if (!result.ok) {
+      // 409 roster/name conflicts are expected; log save refusals reported as 400.
+      if (result.status !== 409) {
+        queue.log('error', `POST /personas/community/${slug}/install failed: ${result.error}`);
+      }
+      return res.status(result.status).json({ error: result.error });
+    }
     queue.log('scheduler', `[personas] community "${slug}" installed via admin UI as "${cp.displayName}"`);
-    res.json({ personas: next, persona: installed });
+    res.json({ personas: result.personas, persona: result.persona, ...(result.managed ? { managed: result.managed } : {}) });
   } catch (err: any) {
     queue.log('error', `POST /personas/community/${slug}/install failed: ${err.message}`);
     res.status(400).json({ error: err.message });
   }
 });
+
+// ---------------------------------------------------------------------------
+// GET /personas/:id/export — download this persona as a single zip: the JSON,
+// the reference WAV its engine clones from (chatterbox / pocket-tts only — see
+// bundle-pure.personaCloneVoice), and the operator's own jingles whose text
+// names this DJ. Whole-station export stays out of scope: that is what
+// GET /backup/export already is.
+//
+// Refuses (409) when the persona names a clone sample this station no longer
+// has: the zip would be well-formed and the DJ inside it mute.
+// ---------------------------------------------------------------------------
+router.get('/personas/:id/export', requireAdmin, async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    if (!PERSONA_ID_RE.test(id)) {
+      return res.status(400).json({ error: `invalid persona id: ${id}` });
+    }
+    const built = await buildPersonaBundle(id);
+    // Reject missing clone samples so the exported persona cannot import as a mute DJ.
+    if (!built.ok) return res.status(built.status).json({ error: built.error });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${bundleFilename(String(built.persona.name || ''))}"`,
+    );
+    res.send(built.zip.toBuffer());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /personas/import — create a persona from a bundle. The body is the raw
+// zip (the global express.json parser caps at 600kb and cannot carry it), so a
+// route-scoped raw parser buffers it instead — the same shape as
+// POST /backup/import, at a cap sized for one DJ's audio rather than a tag DB.
+//
+// The persona arrives OFF AIR with a minted id, like a community install: this
+// route and that one share personas/install.ts rather than each writing the
+// roster their own way.
+// ---------------------------------------------------------------------------
+router.post(
+  '/personas/import',
+  requireAdmin,
+  express.raw({ type: () => true, limit: '50mb' }),
+  async (req, res) => {
+    try {
+      const outcome = await applyPersonaBundle(req.body as Buffer);
+      if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.error });
+      queue.log(
+        'scheduler',
+        `[personas] bundle imported as "${outcome.persona?.name || 'persona'}"`
+        + `${outcome.voice ? ` (voice ${outcome.voice})` : ''}`
+        + `${outcome.jingles.length ? ` (+${outcome.jingles.length} jingle${outcome.jingles.length === 1 ? '' : 's'})` : ''}`,
+      );
+      res.json({
+        personas: outcome.personas,
+        persona: outcome.persona,
+        voice: outcome.voice,
+        jingles: outcome.jingles,
+        ...(outcome.managed ? { managed: outcome.managed } : {}),
+      });
+    } catch (err: any) {
+      queue.log('error', `POST /personas/import failed: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);

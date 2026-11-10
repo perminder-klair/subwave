@@ -1,23 +1,5 @@
-// Listener likes (#991) — the heart button's HTTP surface.
-//
-//   POST /like        public   like the currently playing track
-//   GET  /like        public   liked-state + count for the current airing
-//   GET  /likes       admin    totals + top liked + recent activity
-//   GET  /likes/index admin    {songId: {count, operator}} for row decoration
-//   POST /likes/song/:id            admin  the operator's own heart
-//   DELETE /likes/song/:id/operator admin  un-heart (operator's record only)
-//   DELETE /likes/song/:id  admin  drop all likes for one song
-//   DELETE /likes     admin    clear the store
-//
-// A like optionally mirrors to Navidrome as a Subsonic star
-// (settings.likes.starInNavidrome), fire-and-forget so a slow Navidrome never
-// blocks the tap. Deleting likes here does NOT unstar: those are the operator's
-// catalogue data, to prune from a Subsonic client.
-//
-// The ONE exception is the operator un-heart, and only when no likes remain —
-// that is the operator toggling their own heart rather than pruning listener
-// data, and a toggle that stars on but never off is a bug. The "none remain"
-// guard is what stops a star earned by twenty listener likes being discarded.
+// Mirroring likes to Navidrome is fire-and-forget (#991). Deleting likes must not unstar
+// operator catalogue data; only their own un-heart with no remaining likes may do so.
 
 import express from 'express';
 import { queue } from '../broadcast/queue.js';
@@ -26,18 +8,22 @@ import * as subsonic from '../music/subsonic.js';
 import * as db from '../music/library-db.js';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
-import { clientIp } from '../middleware/ratelimit.js';
+import { clientIp, LIMITER_MAX_KEYS } from '../middleware/ratelimit.js';
+import { BoundedKeyMap } from '../util/bounded-key-map.js';
 
 export const router = express.Router();
 
 // Own limiter, deliberately NOT the /request one: a like must never eat a
-// listener's request quota, and likes are far cheaper (no LLM/TTS). The
-// per-airing dedup in the store is the real ceiling — this just blunts floods.
+// listener's request quota. The store's per-airing dedup is the real ceiling.
 const LIKE_COOLDOWN_MS = 2_000;
 const LIKE_HOURLY_CAP = 60;
-const likeHistory = new Map<string, { last: number; hits: number[] }>();
+const likeHistory = new BoundedKeyMap<{ last: number; hits: number[] }>({
+  maxKeys: LIMITER_MAX_KEYS,
+  // `last` is always the newest hit, so it alone says whether the record binds.
+  isLive: (rec, now) => now - rec.last < 3_600_000,
+});
 
-function checkLikeLimit(ip: string): { ok: boolean; retryAfter?: number } {
+export function checkLikeLimit(ip: string): { ok: boolean; retryAfter?: number } {
   const now = Date.now();
   const oneHourAgo = now - 3_600_000;
   const rec = likeHistory.get(ip) || { last: 0, hits: [] };
@@ -50,19 +36,18 @@ function checkLikeLimit(ip: string): { ok: boolean; retryAfter?: number } {
   }
   rec.last = now;
   rec.hits.push(now);
-  likeHistory.set(ip, rec);
-  if (likeHistory.size > 2000) {
-    for (const [k, v] of likeHistory) {
-      if (!v.hits.length && now - v.last > 3_600_000) likeHistory.delete(k);
-    }
-  }
+  likeHistory.set(ip, rec, now);
   return { ok: true };
 }
 
-// The likeable thing on air right now. Prefers the queue's own current item
-// (full Subsonic song — album/genre/year ride into the stored snapshot) and
-// falls back to the Liquidsoap-reported now-playing (id/title/artist only).
-// Jingles and spoken segments carry no subsonic_id → null → nothing to like.
+// Test seam.
+export function likeLimiterKeyCount(): number {
+  return likeHistory.size;
+}
+
+// Prefers the queue's own current item (full Subsonic song) over the
+// Liquidsoap-reported now-playing (id/title/artist only). Jingles and spoken
+// segments carry no subsonic_id → null → nothing to like.
 async function currentLikeable() {
   const np = await queue.getNowPlaying();
   const songId = np?.subsonic_id ? String(np.subsonic_id) : '';
@@ -88,8 +73,7 @@ router.post('/like', async (req, res) => {
   try {
     const on = await currentLikeable();
     if (!on) return res.status(409).json({ error: 'Nothing likeable on air right now' });
-    // A stale tap (track changed between render and click) must not like the
-    // wrong song — the client sends what it thinks is playing.
+    // A stale tap must not like the wrong song.
     const asked = typeof req.body?.songId === 'string' ? req.body.songId : '';
     if (asked && asked !== on.songId) {
       return res.status(409).json({ error: 'That track just ended', songId: on.songId });
@@ -98,9 +82,6 @@ router.post('/like', async (req, res) => {
     const result = await likes.recordLike({ track: on.track, startedAt: on.startedAt, ip });
     if (!result.ok) return res.status(409).json({ error: 'Nothing likeable on air right now' });
 
-    // Mirror into Navidrome on every accepted (non-duplicate) like — star is
-    // idempotent, and re-starring heals a star the operator removed by hand
-    // only when listeners actually like the song again.
     if (!result.duplicate && cfg.starInNavidrome) {
       subsonic.star(on.songId).catch((err) =>
         console.error(`[likes] Navidrome star failed for ${on.songId}:`, err.message),
@@ -135,8 +116,6 @@ router.get('/like', async (req, res) => {
   }
 });
 
-// --- admin -----------------------------------------------------------------
-
 router.get('/likes', requireAdmin, async (req, res) => {
   await likes.load();
   const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '30'), 10) || 30));
@@ -153,9 +132,8 @@ router.get('/likes/index', requireAdmin, async (_req, res) => {
   res.json({ songs: likes.index() });
 });
 
-// The snapshot stored with an operator like. The admin library always posts the
-// row it already has, so the common path costs no extra I/O; the lookups are
-// the fallback for an API caller that sends only an id.
+// The admin library posts the row it already has; the lookups are the fallback
+// for a caller that sends only an id.
 async function resolveSnapshot(id: string, body: any) {
   const b = body && typeof body === 'object' ? body : {};
   if (b.title || b.artist) {

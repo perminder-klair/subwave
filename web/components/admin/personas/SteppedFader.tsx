@@ -1,8 +1,4 @@
 'use client';
-// Detented horizontal fader for the behaviour settings. Pointer-draggable AND
-// keyboard-operable (role="slider" with arrows/Home/End). Cap/tick/fill positions
-// come from the fixed lookups in constants.ts, since inline styles are forbidden in
-// admin sources (issue #50).
 import { useRef } from 'react';
 import type {
   KeyboardEvent as ReactKeyboardEvent,
@@ -82,8 +78,6 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
 
   return (
     <div>
-      {/* Horizontal padding = half the cap width, so the cap and the edge
-          ticks stay inside the card at both ends of the travel. */}
       <div className="px-2.5">
         <div
           ref={railRef}
@@ -125,8 +119,6 @@ export function SteppedFader({ ariaLabel, stops, value, onChange }: SteppedFader
           </div>
         </div>
 
-        {/* clickable stop labels — first/last hug the rail ends, middles
-            centre on their tick */}
         <div className="relative mt-1 h-4">
           {stops.map((s, i) => (
             <button

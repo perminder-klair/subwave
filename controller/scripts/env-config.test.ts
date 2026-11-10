@@ -1,17 +1,11 @@
-// Pins for the typed env readers (src/util/env.ts).
-//
-// The behaviour that matters is the FALLBACK: config.ts used to read every
-// numeric var through parseInt, which yields NaN for anything non-numeric and
-// then lets the NaN travel (an uncapped headline fetch, a random listen port,
-// `atempo=NaN` reaching ffmpeg). These readers turn that into a warning plus the
-// documented default. They must never throw — a station that refuses to boot
-// over one malformed convenience var is worse than one that boots on defaults.
-//
-// Run: `npm test -- env-config`.
+// The typed env readers (src/util/env.ts). What matters is the FALLBACK: a
+// malformed var warns and yields the documented default rather than letting a
+// NaN travel, and these readers must never throw.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { envEnum, envFloat, envInt, envIssues, envStr, envUrl } from '../src/util/env.js';
+import { z } from 'zod';
+import { envBool, envEnum, envFloat, envInt, envIssues, envParsed, envStr, envUrl } from '../src/util/env.js';
 
 // Each case sets its own var name so the shared `envIssues` ledger stays
 // readable and cases can't interfere with each other.
@@ -38,7 +32,7 @@ test('an absent var is the default, silently', () => {
   assert.equal(envIssues().length, before, 'not setting a var is not a mistake');
 });
 
-test('an EMPTY var means absent, not empty — `ANALYZE_URL=` is ordinary', () => {
+test('an EMPTY var means absent, not empty — `ANALYZE_PYTHON=` is ordinary', () => {
   const before = envIssues().length;
   assert.equal(envUrl(withEnv(''), ''), '');
   assert.equal(envInt(withEnv('   '), 10), 10);
@@ -100,10 +94,46 @@ test('config.ts builds on real defaults with a hostile environment', async () =>
   process.env.PORT = 'eight thousand';
   process.env.PIPER_SPEED = 'fast';
   process.env.NAVIDROME_URL = 'navidrome:4533';
+  process.env.ANALYZE_CONCURRENCY = 'many';
   const { config } = await import('../src/config.js');
   assert.equal(config.news.maxItems, 10);
   assert.equal(config.server.port, 7701);
   assert.equal(config.piper.speed, 1);
   assert.equal(config.navidrome.url, 'http://navidrome:4533');
+  assert.equal(config.analyzer.concurrency, 1);
   assert.ok(Number.isFinite(config.tts.cloudSpeed), 'no NaN reaches the TTS layer');
+});
+
+test('an on/off var reads its words in any case, and warns on anything else', () => {
+  const before = envIssues().length;
+  for (const on of ['1', 'true', 'YES', 'On']) assert.equal(envBool(withEnv(on), false), true, on);
+  for (const off of ['0', 'False', 'no', 'OFF']) assert.equal(envBool(withEnv(off), true), false, off);
+  assert.equal(envBool(withEnv(''), true), true, 'empty is unset');
+  assert.equal(envIssues().length, before);
+  // A typo used to read as off with nothing said.
+  const typo = withEnv('enable');
+  assert.equal(envBool(typo, false), false);
+  const issues = envIssues();
+  assert.equal(issues.length, before + 1);
+  assert.equal(issues[issues.length - 1].name, typo);
+  assert.equal(issues[issues.length - 1].usedInstead, 'false');
+});
+
+test('envParsed reads through a shared schema, warns once per bad value, and names its fallback', () => {
+  const kbps = z.string().regex(/^\d+$/, 'is not a whole number').transform(Number);
+  assert.equal(envParsed(withEnv(' 192 '), kbps, undefined), 192);
+  assert.equal(envParsed(withEnv(undefined), kbps, undefined), undefined);
+
+  // Read on every request (hosted mode's vars are), so one bad value is one
+  // warning, not one per read; a different bad value is a new one.
+  const name = withEnv('fast');
+  const before = envIssues().length;
+  assert.equal(envParsed(name, kbps, undefined, { fallbackLabel: 'no ceiling' }), undefined);
+  assert.equal(envParsed(name, kbps, undefined, { fallbackLabel: 'no ceiling' }), undefined);
+  assert.equal(envIssues().length, before + 1);
+  assert.deepEqual(envIssues().at(-1), { name, value: 'fast', problem: 'is not a whole number', usedInstead: 'no ceiling' });
+  process.env[name] = 'faster';
+  envParsed(name, kbps, undefined);
+  assert.equal(envIssues().length, before + 2);
+  assert.equal(envIssues().at(-1)!.usedInstead, 'undefined');
 });

@@ -66,13 +66,8 @@ export function cacheStationSkin(id: string): void {
   } catch { /* non-fatal */ }
 }
 
-// Pre-hydration <script> body, the skin twin of THEME_INIT_SCRIPT. SSR can't
-// know the browser's skin override, so the server paints the default face and
-// the shell swaps one tick after hydration. When this browser resolves to a
-// NON-default skin, stamp `data-skin-pending` on <html> and hide the shell, so
-// first paint is a quiet blank instead of a flash of the wrong skin.
-// PlayerShell removes the attribute once the resolved skin mounts. Static
-// constant, inlined via dangerouslySetInnerHTML; no untrusted input reaches it.
+// Hide non-default skins before hydration with data-skin-pending. PlayerShell removes it after the
+// resolved skin mounts. The script contains no untrusted input.
 export const SKIN_INIT_SCRIPT = `
   try {
     var o = localStorage.getItem('${OVERRIDE_KEY}');

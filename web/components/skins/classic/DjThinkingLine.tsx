@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
+import { cn } from '@/lib/cn';
 import { selectThinkingTurn, turnClass, turnText } from '@/lib/sessionFeed';
 import BoothBuddy, { type BuddyMood } from '@/components/BoothBuddy';
 import { useLiteMode } from '@/hooks/useLiteMode';
@@ -63,10 +64,8 @@ function thinkingText(turn: SessionTurn): string {
   return cls === 'voice' ? `"${text}"` : text;
 }
 
-// Total enter time stays under ~600 ms regardless of line length. The type-on
-// is word-by-word rather than per character: near-identical under the blur ramp
-// at a fraction of the animated element count (a long script used to mount
-// hundreds of motion spans).
+// Total enter time stays under ~600 ms regardless of line length. Type-on is
+// word-by-word, not per character, to keep the animated element count down.
 function staggerFor(count: number): number {
   if (count <= 0) return 0;
   return Math.min(0.08, 0.5 / count);
@@ -81,18 +80,18 @@ export interface DjThinkingLineProps {
   /** Live session messages, oldest first. */
   feed: SessionTurn[] | undefined;
   enabled: boolean;
-  /** Subsonic id of the track on air. A `dj`/pick turn's `meta.trackId` is the
-   *  *picked* song — which, because picks run at the previous track's start, is
-   *  the track to play NEXT, not the one playing now. Used to skip pick
-   *  reasoning that isn't about the current track (#546). */
+  /** Subsonic id of the track on air. A pick turn's `meta.trackId` is the
+   *  NEXT track (picks run at the previous track's start), so this filters
+   *  out reasoning that isn't about the current track (#546). */
   currentTrackId?: string | null;
   /** Station-wide Booth Sprite toggle; falls back to the classic marker when
    *  false. Defaults off (operator opts in). */
   buddyOn?: boolean;
   onOpenBooth?: () => void;
+  className?: string;
 }
 
-export default function DjThinkingLine({ feed, enabled, currentTrackId = null, buddyOn = false, onOpenBooth }: DjThinkingLineProps) {
+export default function DjThinkingLine({ feed, enabled, currentTrackId = null, buddyOn = false, onOpenBooth, className }: DjThinkingLineProps) {
   // The turn relevant to what's ON AIR now — see selectThinkingTurn (#546).
   const latest = useMemo<SessionTurn | null>(
     () => selectThinkingTurn(feed, currentTrackId),
@@ -105,7 +104,7 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
   const buddyRef = useRef<HTMLSpanElement>(null);
 
   // MotionConfig reducedMotion="user" only drops transform animations (this
-  // one is opacity+blur), and html.lite's `animation: none` can't reach a
+  // one is opacity-only), and html.lite's `animation: none` can't reach a
   // JS-driven tween, so both need an explicit gate here.
   const reduced = useReducedMotion();
   const { lite } = useLiteMode();
@@ -140,7 +139,10 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
       }}
       title="Open booth feed"
       // Full width on phones; the 82% cap is a desktop line-length limit.
-      className="v3-focus mt-[22px] mb-[10px] flex w-full max-w-full cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:max-w-[82%] sm:text-[15px]"
+      className={cn(
+        'v3-focus mt-[22px] mb-[10px] flex w-full max-w-full cursor-pointer items-start gap-2 font-mono text-[14px] leading-[1.6] text-muted sm:max-w-[82%] sm:text-[15px]',
+        className,
+      )}
     >
       {buddyOn ? (
         <span ref={buddyRef} aria-hidden="true" className="mt-[1px] shrink-0">
@@ -151,9 +153,6 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
           {MARKER[cls] || '·'}
         </span>
       )}
-      {/* Clamped so a long script can't grow the column and shove the title
-          under the header, or spill down over the waveform (issue #576).
-          Tighter on short windows; the full text stays in the Booth. */}
       <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] [@media(min-height:760px)]:line-clamp-6">
         <AnimatePresence mode="wait">
           <m.span
@@ -173,9 +172,12 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
               : words.map((word, i) => (
                   <m.span
                     key={i}
+                    // Opacity only. A per-word blur was a filter layer on every
+                    // word at once, which WebKit paints on the main thread; an
+                    // inline span can't take a transform either.
                     variants={{
-                      hidden:  { opacity: 0, filter: 'blur(2px)' },
-                      visible: { opacity: 1, filter: 'blur(0px)', transition: { duration: 0.12 } },
+                      hidden:  { opacity: 0 },
+                      visible: { opacity: 1, transition: { duration: 0.12 } },
                     }}
                     aria-hidden="true"
                     // `pre` would suppress every wrap opportunity and overflow

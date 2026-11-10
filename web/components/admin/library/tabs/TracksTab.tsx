@@ -107,8 +107,6 @@ export default function TracksTab({
         <RowsTable tab={MODE_VARIANT[trackMode]} rows={rows} loading={loading} />
       </Card>
 
-      {/* Offset paging, not the untagged tab's cursor: the likes store is a
-          bounded in-memory array with a cheap, stable total. */}
       {trackMode === 'liked' && liked.total > PAGE_SIZE && (
         <div className="flex flex-wrap items-center justify-between gap-y-2 text-[11px] text-muted">
           <span className="mono-num">

@@ -1,6 +1,8 @@
 // Admin-gated GET /debug — everything-at-a-glance for the debug UI.
 import express from 'express';
-import { readFile, readdir } from 'node:fs/promises';
+import { readPlaybackFailures } from '../observability/playback-failures.js';
+import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { config } from '../config.js';
 import * as dj from '../llm/dj.js';
 import * as llmProvider from '../llm/provider.js';
@@ -10,6 +12,12 @@ import {
   LLM_DEBUG_LOG,
   LLM_DEBUG_MAX,
   agentDoneRetryCount,
+  generationHealthSnapshot,
+  failoverRoutingSnapshot,
+  llmCallExportFormat,
+  llmCallExportFilename,
+  serializeLlmCalls,
+  LLM_CALL_EXPORT_CONTENT_TYPE,
 } from '../llm/log.js';
 import * as tts from '../audio/tts.js';
 import { ttsCalls } from '../stats.js';
@@ -17,23 +25,174 @@ import * as library from '../music/library.js';
 import * as subsonicLog from '../music/subsonic-log.js';
 import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
+import { withSteer } from '../music/steer.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
 import { voiceStatus } from '../broadcast/voice-policy.js';
 import { clockStatus } from '../broadcast/clock-policy.js';
+import { talkAirStatus } from '../broadcast/talk-air.js';
+import { jingleRotateStatus } from '../broadcast/jingle-rotate.js';
+import { LIQ_JINGLE_RATIO_PATH } from '../settings/liquidsoap.js';
+import { handoverStatus } from '../broadcast/handover-policy.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
 import { publicOrigin } from './public.js';
+import { advertisedMounts, capStreamBitrates } from '../setup/hosted.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { BadStatePathError, listStateDir } from '../util/state-tree.js';
+import { buildPickerTools, PICKER_TOOLS } from '../llm/tools.js';
+import { livePickerScope, selectionContextForPick, shouldExplore, runActive } from '../broadcast/dj-agent.js';
+import { nearestId } from '../llm/sdk.js';
+import { pickerAgent } from '../broadcast/dj-agent/agents.js';
+import { buildShortlist } from '../music/shortlist.js';
+import { prepareShortlistSearches } from '../broadcast/shortlist-search-preparation.js';
+import { predecessorContext } from '../broadcast/dj-agent/pick-context.js';
+import { djPick } from '../broadcast/dj-agent/shortlist-pick.js';
+import { SHORTLIST_PASSES_DEFAULT } from '../schemas/settings.js';
+import { icecastDebugSnapshot, type IcecastSource, type IcecastStats } from './debug-icecast.js';
+import { createSessionArchiveReader } from '../util/session-archives.js';
+import { sessionArchivePageQuery } from '../schemas/session-archives.js';
 
 export const router = express.Router();
+
+// ---------------------------------------------------------------------------
+// Discovery bench — maintainer-only (SUBWAVE_DISCOVERY_BENCH), never queues
+// a track or changes live pick/run state. The listing and per-tool routes run the
+// exact picker-tool registry with no model call. /compare is different: it
+// runs BOTH configured routes for real, so its calls spend tokens, count
+// against the daily budget and feed the context-window stats. Opt-in search
+// preparation uses the live airing cache; comparisons never record offers.
+// ---------------------------------------------------------------------------
+const REQUEST_ONLY_PICKER_TOOL = 'identifyRequestedTrack';
+const DISCOVERY_BENCH_ENABLED = /^(1|true|yes|on)$/i.test(process.env.SUBWAVE_DISCOVERY_BENCH || '');
+
+function discoveryBenchDisabled(res: express.Response): boolean {
+  if (DISCOVERY_BENCH_ENABLED) return false;
+  res.status(404).json({ error: 'not found' });
+  return true;
+}
+
+async function discoveryBench() {
+  const { scope } = await livePickerScope(queue, { context: await getFullContext() });
+  const { tools } = buildPickerTools(scope);
+  return { scope, tools };
+}
+
+router.get('/debug/discovery', requireAdmin, async (_req, res) => {
+  if (discoveryBenchDisabled(res)) return;
+  try {
+    const { tools } = await discoveryBench();
+    const current = queue.current?.track ?? null;
+    res.json({
+      current: current ? { id: current.id, title: current.title, artist: current.artist, genre: current.genre } : null,
+      tools: PICKER_TOOLS
+        .filter((entry) => entry.name !== REQUEST_ONLY_PICKER_TOOL)
+        .map((entry) => ({
+          name: entry.name,
+          available: !!tools[entry.name],
+          description: (tools[entry.name] as any)?.description ?? null,
+        })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+router.post('/debug/discovery/tool/:tool', requireAdmin, async (req, res) => {
+  if (discoveryBenchDisabled(res)) return;
+  try {
+    const name = String(req.params.tool || '');
+    if (name === REQUEST_ONLY_PICKER_TOOL || !PICKER_TOOLS.some((entry) => entry.name === name)) {
+      return res.status(404).json({ error: 'unknown next-track discovery tool' });
+    }
+    const { tools } = await discoveryBench();
+    const tool: any = tools[name];
+    if (!tool) return res.status(409).json({ error: `${name} is unavailable for the current picker scope` });
+    const args = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const parsed = tool.inputSchema?.safeParse?.(args);
+    if (parsed && !parsed.success) return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'invalid tool input' });
+    const started = performance.now();
+    const result = await tool.execute(parsed?.data ?? args, { toolCallId: `discovery-bench:${name}`, messages: [], abortSignal: AbortSignal.timeout(10_000) });
+    res.json({ name, elapsedMs: Math.round(performance.now() - started), result });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// Deliberately non-airing: it runs each configured route against the same live
+// scope, but never hands either result to the queue or fallback machinery.
+router.post('/debug/discovery/compare', requireAdmin, async (_req, res) => {
+  if (discoveryBenchDisabled(res)) return;
+  try {
+    const { scope, activeShow, playlistTracks, episodeSource, context: pickContext } = await livePickerScope(queue, { context: await getFullContext() });
+    const current = queue.current?.track ?? null;
+    const agentStarted = performance.now();
+    // The live pick's messages, steer included, so the dry run sees what a pick would.
+    const agent = await pickerAgent.run({ messages: withSteer(session.pickWindowMessages(), settings.activeSteer()?.prompt), scope });
+    const agentElapsedMs = Math.round(performance.now() - agentStarted);
+    const shortlistStarted = performance.now();
+    const explore = shouldExplore({ inRun: runActive(), audioWaypoint: scope.audioWaypoint, strictPlaylist: activeShow?.playlistStrict });
+    const searches = await prepareShortlistSearches({ activeShow, context: pickContext, episodeSource });
+    const shortlist = await buildShortlist({
+      scope,
+      currentTrackId: current?.id ?? null,
+      currentArtist: current?.artist ?? null,
+      discoveryPasses: settings.get().llm?.shortlistPasses ?? SHORTLIST_PASSES_DEFAULT,
+      moods: activeShow?.moods,
+      energies: activeShow?.energies,
+      genres: activeShow?.genres ?? scope.genreLock,
+      eras: activeShow?.eras,
+      dominantMood: pickContext?.dominantMood,
+      searches, explore,
+      transitionTarget: current ? library.bpmKeyFor(current) : null,
+    });
+    const shortlistSelection = shortlist.candidates.length
+      ? await djPick({
+        candidates: shortlist.candidates,
+        playlistResolved: !!playlistTracks?.length,
+        context: selectionContextForPick(queue, pickContext, {
+          scope, pickAnchor: current, predecessor: predecessorContext(current),
+          audioWaypoint: scope.audioWaypoint, explore,
+          showGenres: activeShow?.genres ?? scope.genreLock,
+        }),
+      })
+      : null;
+    // The live route repairs a near-miss id before judging the pick (#939).
+    const shortlistSelectedId = shortlistSelection
+      ? (shortlist.candidates.some((track) => track.id === shortlistSelection.id)
+        ? shortlistSelection.id
+        : nearestId(shortlistSelection.id, shortlist.candidates.map((track) => track.id)))
+      : null;
+    const compact = (track: any) => track?.id
+      ? { id: track.id, title: String(track.title || ''), artist: String(track.artist || '') }
+      : null;
+    res.json({
+      current: compact(current),
+      agentic: {
+        discoveryRounds: settings.get().llm?.discoverySteps ?? 0,
+        elapsedMs: agentElapsedMs,
+        selected: compact(agent.extras.seen.get(agent.object?.id)),
+        sources: agent.toolCalls.map((call: any, index: number) => ({ round: call.round ?? index + 1, source: call.name || 'unknown' })),
+      },
+      shortlist: {
+        passes: settings.get().llm?.shortlistPasses ?? SHORTLIST_PASSES_DEFAULT,
+        elapsedMs: Math.round(performance.now() - shortlistStarted),
+        selected: compact(shortlistSelectedId && shortlist.candidates.find((track) => track.id === shortlistSelectedId)),
+        sources: shortlist.sourceRuns.map((run, index) => ({ pass: index + 1, family: run.family, source: run.source, returned: run.returned, accepted: run.accepted })),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
 
 // GET /requests — recent listener requests and exactly how the AI DJ resolved
 // each (intent breakdown, which path handled it, the picked track, the spoken
 // ack + full intro script, timing). Durable across restarts via request-log's
 // on-disk JSONL. Feeds the dashboard's Requests card.
+// Recent listener requests and how the DJ resolved each. Durable across
+// restarts via request-log's on-disk JSONL.
 router.get('/requests', requireAdmin, (req, res) => {
   try {
     res.json({ requests: requestLog.snapshot(50) });
@@ -42,13 +201,10 @@ router.get('/requests', requireAdmin, (req, res) => {
   }
 });
 
-// A debug snapshot is expensive to assemble — it loads the mood library, fetches
-// Icecast + weather, sweeps the state dir with stat(), and serialises the whole
-// DJ session (~170KB). The admin panel polls it every ~2s. Coalesce concurrent
-// and rapid hits behind a tiny single-flight cache so a burst of polls — or
-// several open admin tabs — triggers the build at most once per TTL, instead of
-// stacking that work on the single-threaded event loop and starving other
-// /api/* routes (the cause of the edge 524s).
+// The snapshot is expensive (mood library, Icecast + weather fetches, whole DJ
+// session) and the admin panel polls it every ~2s, so concurrent and rapid hits
+// coalesce behind this single-flight cache; without it several open tabs starve
+// the other /api/* routes.
 const DEBUG_CACHE_TTL_MS = 1000;
 let debugCache: { at: number; payload: any } | null = null;
 let debugInflight: Promise<any> | null = null;
@@ -71,9 +227,20 @@ router.get('/debug', requireAdmin, async (req, res) => {
   }
 });
 
+// The booth log on its own, for operator clients (the MCP station-state tool)
+// that want the newest lines without the whole /debug snapshot. GET /state
+// carried these 50 lines until it became a public projection; this is the
+// admin-gated home for the same slice.
+router.get('/debug/dj-log', requireAdmin, (req, res) => {
+  res.json({
+    djLog: queue.djLog.slice(0, 50),
+    djLogCount: queue.djLog.length,
+    timezone: getStationTimezone(),
+  });
+});
+
 async function buildDebugSnapshot(req: express.Request): Promise<any> {
-  // Station zone so the DJ-log timestamps render in station-local time, matching
-  // what the DJ speaks on-air (#418).
+  // Station zone so DJ-log timestamps render in station-local time (#418).
   let settingsSnapshot: any = null;
   try { settingsSnapshot = settings.get(); } catch { settingsSnapshot = null; }
   const out: any = {
@@ -82,14 +249,13 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     locale: settingsSnapshot?.locale,
   };
 
-  // 1. now-playing.json (what Liquidsoap last wrote)
+  // What Liquidsoap last wrote.
   try {
     out.nowPlaying = JSON.parse(await readFile(config.liquidsoap.nowPlayingFile, 'utf8'));
   } catch (err) {
     out.nowPlaying = { error: err.message };
   }
 
-  // 2. Queue snapshot (current + upcoming + history + djLog)
   out.queue = {
     current: queue.current ? {
       title: queue.current.track.title,
@@ -111,34 +277,29 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     pickerBusy: queue.pickerBusy,
   };
 
-  // 3. Icecast status — capture the full source array so the per-mount block
-  // below can reuse it (one status-json fetch, not two).
-  let icecastSources: any[] = [];
+  // Capture the full source array so the per-mount block below reuses it
+  // (one status-json fetch, not two).
+  let icecastSources: IcecastSource[] = [];
   try {
     const r = await fetch(config.icecast.statusUrl);
-    const ic: any = (await r.json() as any).icestats;
-    icecastSources = Array.isArray(ic.source) ? ic.source : ic.source ? [ic.source] : [];
-    const src = icecastSources[0];
-    out.icecast = src ? {
-      title: src.title,
-      bitrate: src.bitrate,
-      listeners: src.listeners,
-      listener_peak: src.listener_peak,
-      mount: src.listenurl,
-      stream_start: src.stream_start_iso8601,
-      server_start: ic.server_start_iso8601,
-    } : { error: 'no source connected' };
+    const ic = (await r.json() as { icestats: IcecastStats }).icestats;
+    const snapshot = icecastDebugSnapshot(ic);
+    icecastSources = snapshot.sources;
+    out.icecast = snapshot.status;
   } catch (err) {
     out.icecast = { error: err.message };
   }
 
-  // 3b. Listen mounts — per-mount config vs. live Icecast status, plus the
-  // tune-in files. `configured` is the operator's intent (mp3 is the mandatory
-  // floor; opus/flac/aac are opt-in); `live` is whether Icecast actually has a
-  // source on that mount. configured-but-not-live = encoder didn't connect /
-  // needs a mixer restart — the diagnostic this surfaces.
+  // Per-mount config vs live Icecast status. `configured` is operator intent
+  // (mp3 is the mandatory floor), `live` is whether Icecast has a source on it;
+  // configured-but-not-live means the encoder didn't connect. Both read the
+  // saved settings through a hosted plan's ceiling (setup/hosted.ts), the
+  // values the mixer files get, so a mount the ceiling switched off is not
+  // "configured" and a capped bitrate is the one shown.
   {
-    const st = settingsSnapshot?.stream || {};
+    const saved = settingsSnapshot?.stream || {};
+    const st = capStreamBitrates({ ...saved });
+    const mounts = advertisedMounts(saved);
     const origin = publicOrigin(req);
     const audioParam = (src: any, key: 'samplerate' | 'channels'): number | null => {
       const direct = Number(src?.[key]);
@@ -172,9 +333,9 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     };
     const list = [
       mountEntry('/stream.mp3', 'MP3', true, st.bitrate ?? 192),
-      mountEntry('/stream.opus', 'Opus', st.opusEnabled === true, st.opusBitrate ?? 96),
-      mountEntry('/stream.flac', 'FLAC', st.flacEnabled === true, null),
-      mountEntry('/stream.aac', 'AAC-LC', st.aacEnabled === true, st.aacBitrate ?? 192),
+      mountEntry('/stream.opus', 'Opus', mounts.opusEnabled, st.opusBitrate ?? 96),
+      mountEntry('/stream.flac', 'FLAC', mounts.flacEnabled, null),
+      mountEntry('/stream.aac', 'AAC-LC', mounts.aacEnabled, st.aacBitrate ?? 192),
     ];
     out.mounts = {
       list,
@@ -186,18 +347,10 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     };
   }
 
-  // 4. Liquidsoap log tail — Liquidsoap writes radio.log into the shared
-  // state dir's logs/ subfolder (see radio.liq + the liquidsoap volume
-  // mount), which the controller sees via the shared state mount.
-  // Reading it here means no extra controller-side log mount is needed.
-  // Read from the state ROOT, not the active station dir: the compose bind
-  // mount pins /var/log/liquidsoap to the root logs/ (compose can't follow
-  // the active-station pointer), so radio.log is install-level — like
-  // icecast-secrets.env. In single-station mode stateRoot === stateDir.
-  // Station-dir fallback: right after a multi-station conversion the bind
-  // mount still follows the moved logs/ inode into stations/<id>/, so the
-  // live log sits there until the broadcast CONTAINER is recreated (a
-  // telnet mixer restart doesn't remount).
+  // radio.log is install-level: the compose bind mount pins it to the state
+  // ROOT's logs/, which can't follow the active-station pointer. The station-dir
+  // fallback covers the window after a multi-station conversion, where the mount
+  // still follows the moved inode until the broadcast container is recreated.
   try {
     const log = await readFile(`${config.stateRoot}/logs/radio.log`, 'utf8')
       .catch(() => readFile(`${config.stateDir}/logs/radio.log`, 'utf8'));
@@ -206,37 +359,57 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     out.liquidsoapLog = `error: ${err.message}`;
   }
 
-  // 5. State dir listing — deliberately NOT here. It used to run a readdir plus
-  // a stat fan-out over the state dir AND state/voice on every 2s poll of this
-  // handler. The debug panel now browses the tree lazily via GET /debug/state-tree
-  // below, one directory per expand, on mount rather than on a timer.
-
-  // 6. Recent LLM calls — `llm` reflects the active provider/model resolved
-  // by the registry; `ollamaUrl` is the effective endpoint (settings or default).
+  // No state-dir listing here on purpose: it is browsed lazily, one directory
+  // per expand, via GET /debug/state-tree below.
   out.llm = {
+    generation: generationHealthSnapshot(),
     provider: llmProvider.providerName(),
     activeModel: llmProvider.activeModelLabel(),
+    // While calls go to the backup instead of the primary (any failover,
+    // sticky or one-off): which backup, why, since when. Null = normal routing.
+    routedToBackup: (() => { try { return failoverRoutingSnapshot(); } catch { return null; } })(),
     ollamaUrl: llmProvider.activeOllamaUrl(),
-    // Daily token budget — today's usage vs the cap and the resulting tier
-    // (normal / soft / hard). `enabled:false` when no cap is set.
+    // Today's usage vs the cap; enabled:false when no cap is set.
     budget: (() => { try { return budgetStatus(); } catch (err: any) { return { error: err.message }; } })(),
-    // Station-wide voice switch (settings.tts.enabled). `enabled:false` means
-    // every autonomous talk moment is standing down — worth seeing here before
-    // anyone debugs "why is the DJ quiet".
+    // settings.tts.enabled; false means every autonomous talk moment stands down.
     voice: (() => { try { return voiceStatus(); } catch (err: any) { return { error: err.message }; } })(),
-    // Station clock switch (settings.djSpeakClock). `enabled:false` means the
-    // wall clock is off air and the automatic top-of-the-hour time check is
-    // standing down — the same "why has the DJ gone quiet about X" question
-    // `voice` above answers, one surface further in.
+    // settings.djSpeakClock; false means the hourly time check stands down.
     clock: (() => { try { return clockStatus(); } catch (err: any) { return { error: err.message }; } })(),
-    // Done-tool retry churn (D2) — since-boot count of the strategy layer's
-    // two "stopped without calling done" retry sites (agent.ts), the same
-    // symptom the corrective re-pick in dj-agent.ts exists to salvage.
+    // settings.djTalkOnlyBetweenTracks; true means a late-looking segment is
+    // waiting for a track boundary rather than missing.
+    talkAir: (() => { try { return talkAirStatus(); } catch (err: any) { return { error: err.message }; } })(),
+    // Who draws the automatic jingle (settings.jingleRotate, #1619). `owner`
+    // answers both halves of "why are there no stingers" and "why are there
+    // two of them", and while the controller owns the rotate
+    // `tracksSinceJingle` says how close the next one is.
+    //
+    // The ratio is reported TWICE — intended (from settings) and on-disk (the
+    // verbatim bytes of the handoff file) — because they can disagree, and the
+    // disagreement IS the "why are there two of them" answer. The read is here
+    // rather than in the policy module so that module stays I/O-free; it is one
+    // small synchronous read on an admin-only route that already does several.
+    // An unreadable file reports `null`, never a guess: the file is absent on a
+    // station that has never saved settings, and that is not the same claim as
+    // the mixer having been handed the wrong value.
+    jingleRotate: (() => {
+      try {
+        let onDisk: string | null = null;
+        try { onDisk = readFileSync(LIQ_JINGLE_RATIO_PATH, 'utf8').trim(); } catch { onDisk = null; }
+        return jingleRotateStatus(settings.get(), queue.rotateJingleTracksSince(), onDisk);
+      } catch (err: any) { return { error: err.message }; }
+    })(),
+    // Programme-outro timing. Persona handoffs themselves are armed from the
+    // final outgoing track and expose their live state through the session.
+    handover: (() => {
+      try { return handoverStatus(); }
+      catch (err: any) { return { error: err.message }; }
+    })(),
+    // Since-boot count of the strategy layer's "stopped without calling done"
+    // retries.
     agentDoneRetries: agentDoneRetryCount(),
     recentCalls: dj.recentCalls,
-    // Raw-request capture status — the admin UI shows the toggle + the file path
-    // so operators know where to look. `viaEnv` means LLM_DEBUG_RAW forces it on
-    // (the UI toggle can't turn it off in that case).
+    // viaEnv means LLM_DEBUG_RAW forces capture on and the UI toggle can't
+    // turn it off.
     debug: {
       enabled: rawDebugEnabled(),
       viaEnv: rawDebugEnabledViaEnv(),
@@ -245,18 +418,14 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     },
   };
 
-  // 6c. TTS routing — which engine/voice the effective persona resolves to,
-  // and whether it's silently falling back from the engine the persona asked
-  // for (e.g. a cloud voice with the Cloud engine switched off). Plus the raw
-  // TTS call ring (stats.ts, same since-boot window as the LLM ring) so the
-  // debug panel can show what actually aired, per call.
+  // Which engine/voice the effective persona resolves to, whether it is
+  // silently falling back, plus the since-boot TTS call ring.
   try {
     out.tts = { ...tts.describeRouting(), recentCalls: ttsCalls };
   } catch (err) {
     out.tts = { error: err.message };
   }
 
-  // 6b. Library tagging stats
   try {
     await library.load();
     out.library = library.stats();
@@ -264,39 +433,33 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     out.library = { error: err.message };
   }
 
-  // 6d. Subsonic API call tracking — every request to Navidrome, plus
-  // library-coverage stats (distinct songs returned vs. tagged total).
+  // Every request to Navidrome plus library-coverage stats.
   try {
     out.subsonic = subsonicLog.snapshot(out.library?.total ?? null);
   } catch (err) {
     out.subsonic = { error: err.message };
   }
 
-  // 7. Context snapshot
   try {
     out.context = await getFullContext();
   } catch (err) {
     out.context = { error: err.message };
   }
 
-  // 7b. Live DJ session — the current run's chat history.
   try {
     out.session = session.getSession();
+    out.boundaryHandoff = session.boundaryHandoffStatus();
   } catch (err) {
     out.session = { error: err.message };
   }
 
-  // 8. Config (redacted) — show *effective* values: the admin UI's location
-  // setting overrides the env-derived config, so read that from settings
-  // (falling back to config) rather than the stale env default. The LLM
-  // provider/model/endpoint is provider-agnostic (any AI SDK provider or
-  // router) and already reported in `out.llm` — not duplicated here.
+  // Effective values, not the env defaults: the admin location setting
+  // overrides env-derived config. LLM config is already in out.llm.
   out.config = {
     navidromeUrl: config.navidrome.url,
     navidromeUser: config.navidrome.user,
-    // Admin-only, so both are safe to show — and showing both is the operator's
-    // proof the split is live: `location` drives the forecast, `onAirLocation`
-    // is what the DJ says and what the public endpoints publish.
+    // `location` drives the forecast; `onAirLocation` is what the DJ says and
+    // what the public endpoints publish.
     location: settingsSnapshot?.weather?.locationName || config.weather.locationName,
     onAirLocation: settings.resolveOnAirLocation(settingsSnapshot ?? { weather: config.weather }),
     port: config.server.port,
@@ -305,48 +468,30 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
   return out;
 }
 
-// GET /sessions — archived session list, newest first. The live session is
-// served inline by /debug; this lists the rolled-off runs in state/sessions/.
+// Archived sessions in state/sessions/, newest first; the live one is in /debug.
+const readSessionArchives = createSessionArchiveReader(config.session.dir);
 router.get('/sessions', requireAdmin, async (req, res) => {
+  const page = sessionArchivePageQuery.safeParse(req.query);
+  if (!page.success) return res.status(400).json({ error: 'invalid session pagination' });
   try {
-    let names: string[] = [];
-    try {
-      names = (await readdir(config.session.dir)).filter((n: string) => n.endsWith('.json'));
-    } catch { names = []; }
-    const entries: any[] = await Promise.all(names.map(async (name: string) => {
-      try {
-        const s = JSON.parse(await readFile(`${config.session.dir}/${name}`, 'utf8'));
-        return {
-          id: s.id, kind: s.kind, key: s.key,
-          startedAt: s.startedAt, endedAt: s.endedAt,
-          show: s.show?.name || null,
-          persona: s.persona?.name || null,
-          turns: Array.isArray(s.messages) ? s.messages.length : 0,
-        };
-      } catch { return null; }
-    }));
-    res.json({
-      sessions: entries.filter(Boolean).sort((a: any, b: any) => (b.startedAt || '').localeCompare(a.startedAt || '')),
-    });
+    const sessions = await readSessionArchives();
+    const { limit, offset } = page.data;
+    res.json({ sessions: sessions.slice(offset, limit === undefined ? undefined : offset + limit) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /debug/state-tree — ONE directory of the state dir, for the debug panel's
-// read-only tree. Metadata only: names, sizes, mtimes, dir/file/symlink. There is
-// deliberately no content endpoint beside it — settings.json, secrets.env and
+// ONE directory of the active station dir, metadata only. There is deliberately
+// no content endpoint beside it: settings.json, secrets.env and
 // icecast-secrets.env all live in this tree and hold live credentials.
-//
-// Rooted at config.stateDir (the ACTIVE station dir), which is what the old flat
-// State dir card listed. Install-level files at stateRoot stay out of scope.
 router.get('/debug/state-tree', requireAdmin, async (req, res) => {
   const rel = typeof req.query.path === 'string' ? req.query.path : '';
   try {
     res.json(await listStateDir(config.stateDir, rel));
   } catch (err: any) {
-    // A malformed path is a bad REQUEST; a path that is merely missing or
-    // unreadable is a listing that failed, and the panel renders it inline.
+    // A malformed path is a bad request; a missing/unreadable one is a failed
+    // listing the panel renders inline.
     if (err instanceof BadStatePathError) {
       res.status(400).json({ error: err.message });
       return;
@@ -355,9 +500,53 @@ router.get('/debug/state-tree', requireAdmin, async (req, res) => {
   }
 });
 
-// POST /debug/subsonic/reset — zero the Subsonic call tracker so coverage can
-// be watched building from scratch during a targeted test run.
+// The recent-calls ring as a download (#1485). `?format=ndjson` for one call
+// per line, else a single JSON document. It writes the same array /debug serves
+// as `llm.recentCalls` VERBATIM: adding or filtering a field here makes this a
+// second, divergent reader of the log. Deliberately outside the snapshot cache
+// above (a one-shot download must reflect the ring at press time) and outside
+// the Connect catalog.
+router.get('/debug/llm-calls/export', requireAdmin, (req, res) => {
+  try {
+    const format = llmCallExportFormat(req.query.format);
+    const body = serializeLlmCalls(dj.recentCalls, format);
+    res.setHeader('Content-Type', LLM_CALL_EXPORT_CONTENT_TYPE[format]);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${llmCallExportFilename(format)}"`,
+    );
+    // The ring is a since-boot window that moves under any cache.
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(body);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// Zero the Subsonic call tracker so coverage can be watched from scratch.
 router.post('/debug/subsonic/reset', requireAdmin, (req, res) => {
   subsonicLog.reset();
   res.json({ ok: true });
 });
+
+// Explicit historical scans, deliberately separate from the fast /debug poll.
+for (const exportRows of [false, true]) {
+  router.get(`/debug/playback-failures${exportRows ? '/export' : ''}`,
+    (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); },
+    requireAdmin, async (_req, res) => {
+      try {
+        const history = await readPlaybackFailures({ stationDir: config.stateDir });
+        if (!exportRows) { res.json(history); return; }
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Content-Disposition', `attachment; filename="subwave-playback-failures-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson"`);
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, X-History-Retention-Days, X-History-Limit, X-History-Truncated, X-History-Warnings');
+        res.setHeader('X-History-Retention-Days', String(history.retentionDays));
+        res.setHeader('X-History-Limit', '1000');
+        res.setHeader('X-History-Truncated', String(history.truncated));
+        res.setHeader('X-History-Warnings', String(history.warnings.length));
+        res.send(history.failures.map(row => JSON.stringify(row) + '\n').join(''));
+      } catch {
+        res.status(500).json({ error: 'Failure history could not be read.' });
+      }
+    });
+}

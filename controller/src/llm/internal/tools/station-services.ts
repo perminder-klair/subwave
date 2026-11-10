@@ -1,3 +1,4 @@
+import { randomLibraryArtist } from '../../../music/episode-source.js';
 // Station services — the curated facade a skill's data tool (a built-in or an
 // operator's custom tool.mjs) gets to look at the world before the DJ speaks.
 // This is the SINGLE place segment tools reach into the controller's internals
@@ -18,12 +19,15 @@
 import { queue } from '../../../broadcast/queue.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { fetchOnThisDay, curiositySeen, recordCuriosity } from '../../../skills/curiosity.js';
-import { fetchHeadlines, hashHeadline } from '../../../skills/news.js';
+import { fetchHeadlines, hashHeadline } from '../../../skills/feed.js';
 import { getArtist, getAlbum, searchArtists } from '../../../music/subsonic.js';
+import { getWeatherOutlook } from '../../../context.js';
+import { weatherNews } from '../../../skills/weather-policy.js';
 
 export interface StationServices {
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /
-  // SearXNG). `searchReady()` is false when no provider is usable.
+  // Brave / SearXNG / Keenable / Firecrawl / Outcrawl). `searchReady()` is false
+  // when no provider is usable.
   searchWeb: typeof searchWeb;
   searchReady: typeof searchReady;
   // The track currently on air (artist/title/album/year/id), or null.
@@ -31,7 +35,7 @@ export interface StationServices {
   // Play-log lookup over the last `hours` — { ids, keys } sets for dedup.
   recentPlays: (hours: number) => { ids: Set<string>; keys: Set<string> };
   // Subsonic/Navidrome library reads.
-  library: { getArtist: typeof getArtist; getAlbum: typeof getAlbum; searchArtists: typeof searchArtists };
+  library: { getArtist: typeof getArtist; getAlbum: typeof getAlbum; searchArtists: typeof searchArtists; randomArtist: typeof randomLibraryArtist };
   // Wikipedia "on this day" events for today's date.
   onThisDay: () => Promise<any[]>;
   // Fetch + parse an RSS feed (defaults to the configured news feed).
@@ -42,6 +46,16 @@ export interface StationServices {
   recall: { seen: (key: string) => boolean; remember: (key: string) => void };
   // Append a namespaced line to the station event log.
   log: (msg: string) => void;
+  // The next few hours of the station's forecast (the same cached Open-Meteo
+  // fetch as ctx.weather): one row per hour plus plain-English notes such as
+  // "rain likely in about 3 hours". Empty when no forecast is known.
+  weatherOutlook: typeof getWeatherOutlook;
+  // Whether a reading ({ condition, kinds }) is news against the skill's state:
+  // { skyChanged, outlookChanged, withdrawn }, where `withdrawn` holds a note for
+  // rain the last segment promised that is no longer coming. The same helper the
+  // segment gates use (skills/weather-policy.ts), so the tool and the gates
+  // cannot disagree.
+  weatherNews: typeof weatherNews;
 }
 
 let cached: StationServices | null = null;
@@ -56,12 +70,14 @@ export function buildStationServices(): StationServices {
     searchReady,
     nowPlaying: () => queue.current?.track ?? null,
     recentPlays: (hours: number) => queue.recentlyPlayed(hours),
-    library: { getArtist, getAlbum, searchArtists },
+    library: { getArtist, getAlbum, searchArtists, randomArtist: randomLibraryArtist },
     onThisDay: () => fetchOnThisDay(),
     fetchHeadlines,
     hashHeadline,
     recall: { seen: (key: string) => curiositySeen(key), remember: (key: string) => recordCuriosity(key) },
     log: (msg: string) => queue.log('scheduler', `[skill] ${msg}`),
+    weatherOutlook: getWeatherOutlook,
+    weatherNews,
   };
   return cached;
 }

@@ -19,14 +19,16 @@
 // load() line removed.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
+import { readFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 // STATE_DIR is redirected at a throwaway dir BEFORE the first import of
 // anything config-derived (same pattern as scripts/llm-repeat-penalty.test.ts).
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-buffer-seconds-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-buffer-seconds-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');
@@ -35,16 +37,10 @@ const { writeLiquidsoapSettings } = await import('../src/settings/liquidsoap.js'
 const { DEFAULTS } = await import('../src/settings/defaults.js');
 const { STREAM_BUFFER_SECONDS_BOUNDS } = await import('../src/schemas/settings.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 const HANDOFF_PATH = path.join(stateRoot, 'liquidsoap_stream_buffer_seconds.txt');
 
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(stream: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ stream }));
-  setCache(null);
-  await settings.load();
-  return settings.get().stream;
-}
+async function coldLoad(stream: Record<string, unknown>) { return (await coldLoadSettings({ stream })).stream; }
 
 test('a configured buffer depth survives a controller restart', async () => {
   const stream = await coldLoad({ bufferSeconds: 40 });

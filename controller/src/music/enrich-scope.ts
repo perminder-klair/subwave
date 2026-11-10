@@ -1,19 +1,7 @@
-// Pure helper: which track IDs phase-0 enrichment (Last.fm tags + lyrics) runs
-// over for a given tagger run. Extracted from tag-library.main() so the scope
-// decision is unit-pinned (scripts/lastfm-enrich.test.ts) — kept in its own
-// module because tag-library.ts runs main() on import and so can't be imported
-// by a test.
-//
-// Normal runs enrich only the in-scope untagged tracks. A raw --re-enrich pass
-// is an explicit "refresh the whole library" request, so it widens to the full
-// walked catalogue (limit-capped). Passing the untagged set there is what made
-// re-enrich a silent no-op on a fully-tagged library — untagged is empty, so
-// phase 0 exited immediately (issue #531).
-//
-// A RE-SCAN re-enrich is narrower than that: it redoes metadata only for tracks
-// that were ALREADY enriched (`enrichedIds`), never the never-touched remainder —
-// the "redo what's done, not the rest" rule. `enrichedIds` is the captured
-// already-enriched set; it's only consulted when rescan && reEnrich.
+// Normal enrichment targets untagged tracks. Re-enrich targets the limit-capped catalogue;
+// rescan re-enrich targets only previously enriched tracks. #531.
+
+import { shuffle } from '../util/shuffle.js';
 
 export function selectEnrichIds(opts: {
   reEnrich: boolean;
@@ -26,4 +14,29 @@ export function selectEnrichIds(opts: {
   if (!opts.reEnrich) return opts.targetUntagged;
   const source = opts.rescan ? [...(opts.enrichedIds ?? [])] : [...opts.liveIds];
   return opts.limit === Infinity ? source : source.slice(0, opts.limit);
+}
+
+// Who a pass asks Last.fm about, song by song. A normal pass covers the rows
+// still owed, whatever the tagger's own scope: gating on that would never
+// backfill an already-tagged library. This run's new tracks go first, so a
+// --limit can't leave them to be embedded without tags. --re-enrich re-asks
+// answered rows too, within the scope the caller already resolved for it, which
+// is what keeps it inside --limit and a re-scan's already-enriched population.
+//
+// The order is new every pass. A pass ends after a run of failures and a failed
+// row stays owed, so in a fixed order a few rows Last.fm always refuses would
+// sit at the front and end every pass before it reached the rest of the library.
+export function selectTrackTagIds(opts: {
+  reEnrich: boolean;
+  limit: number;
+  ids: string[];
+  owed: string[];
+  order?: (ids: string[]) => string[];
+}): string[] {
+  const order = opts.order ?? shuffle;
+  const owed = new Set(opts.owed);
+  const scope = opts.reEnrich
+    ? order(opts.ids)
+    : [...new Set([...order(opts.ids.filter(id => owed.has(id))), ...order(opts.owed)])];
+  return opts.limit === Infinity ? scope : scope.slice(0, opts.limit);
 }

@@ -1,5 +1,5 @@
 // Regression test for the stale back-announce safety-net (shouldDropStaleLink).
-// Run: `tsx scripts/stale-link.test.ts`.
+// Run: `npm test -- stale-link`.
 //
 // Auto-pick links are written FORWARD-LOOKING: they introduce the track now
 // starting and never name the just-played track (see llm prompts + dj-agent
@@ -14,95 +14,127 @@
 // asserts pin every branch — crucially, that a forward-looking link is NEVER
 // suppressed (no silent hand-off) even when a request jumped ahead.
 //
-// node:assert-via-tsx style, matching scripts/request-dedup.test.ts.
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldDropStaleLink } from '../src/broadcast/queue.js';
+import { shouldDropCrossSessionLink, shouldDropObsoleteHostSpeech, shouldDropStaleLink } from '../src/broadcast/queue.js';
 
 const X = { id: 'song-X', title: 'Track Xenon', artist: 'Artist X' };
 const R = { id: 'song-R', title: 'Request Rondo', artist: 'Artist R' };
 
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err: any) {
-    failures++;
-    console.error(`  ✗ ${name}\n      ${err?.message || err}`);
-  }
-}
+test('no linkPrev (request intro never back-announces) → always airs', () => {
+  assert.equal(shouldDropStaleLink({ linkPrev: null, introScript: 'anything' }, R), false);
+  assert.equal(shouldDropStaleLink({ introScript: 'anything' }, R), false);
+  assert.equal(shouldDropStaleLink({ linkPrev: null }, null), false);
+});
 
-function main() {
-  console.log('stale back-announce safety-net (shouldDropStaleLink):');
+test('forward-looking link (does NOT name the previous track) → airs even when a request jumped ahead', () => {
+  // The whole point: a request bumped X out of the just-played slot (predecessor
+  // is R), but the line never names X, so there is nothing stale to drop — it airs.
+  assert.equal(
+    shouldDropStaleLink({ linkPrev: X, introScript: "Here's a fresh one coming up for you now" }, R),
+    false,
+  );
+});
 
-  test('no linkPrev (request intro never back-announces) → always airs', () => {
-    assert.equal(shouldDropStaleLink({ linkPrev: null, introScript: 'anything' }, R), false);
-    assert.equal(shouldDropStaleLink({ introScript: 'anything' }, R), false);
-    assert.equal(shouldDropStaleLink({ linkPrev: null }, null), false);
-  });
+test('link that NAMES the previous track + a request jumped ahead → dropped', () => {
+  assert.equal(
+    shouldDropStaleLink({ linkPrev: X, introScript: 'That was Track Xenon — now something new' }, R),
+    true,
+  );
+});
 
-  test('forward-looking link (does NOT name the previous track) → airs even when a request jumped ahead', () => {
-    // The whole point: a request bumped X out of the just-played slot (predecessor
-    // is R), but the line never names X, so there is nothing stale to drop — it airs.
-    assert.equal(
-      shouldDropStaleLink({ linkPrev: X, introScript: "Here's a fresh one coming up for you now" }, R),
-      false,
-    );
-  });
+test('names the previous track by ARTIST (not title) + request jumped ahead → dropped', () => {
+  assert.equal(
+    shouldDropStaleLink({ linkPrev: X, introScript: 'That was Artist X for you' }, R),
+    true,
+  );
+});
 
-  test('link that NAMES the previous track + a request jumped ahead → dropped', () => {
-    assert.equal(
-      shouldDropStaleLink({ linkPrev: X, introScript: 'That was Track Xenon — now something new' }, R),
-      true,
-    );
-  });
+test('link names the previous track but it IS what just played (common case) → airs', () => {
+  assert.equal(
+    shouldDropStaleLink({ linkPrev: X, introScript: 'That was Track Xenon' }, X),
+    false,
+  );
+});
 
-  test('names the previous track by ARTIST (not title) + request jumped ahead → dropped', () => {
-    assert.equal(
-      shouldDropStaleLink({ linkPrev: X, introScript: 'That was Artist X for you' }, R),
-      true,
-    );
-  });
+test('predecessor matched by id even when its title drifts (re-tag) → airs', () => {
+  const sameIdNewTitle = { id: 'song-X', title: 'Track Xenon (Remaster)', artist: 'Artist X' };
+  assert.equal(
+    shouldDropStaleLink({ linkPrev: X, introScript: 'That was Track Xenon' }, sameIdNewTitle),
+    false,
+  );
+});
 
-  test('link names the previous track but it IS what just played (common case) → airs', () => {
-    assert.equal(
-      shouldDropStaleLink({ linkPrev: X, introScript: 'That was Track Xenon' }, X),
-      false,
-    );
-  });
+test('id-less auto-playlist predecessor falls back to title match', () => {
+  const prevNoId = { id: null, title: 'Track Xenon', artist: 'Artist X' };
+  assert.equal(
+    shouldDropStaleLink({ linkPrev: { id: null, title: 'Track Xenon', artist: 'Artist X' }, introScript: 'That was Track Xenon' }, prevNoId),
+    false,
+  );
+});
 
-  test('predecessor matched by id even when its title drifts (re-tag) → airs', () => {
-    const sameIdNewTitle = { id: 'song-X', title: 'Track Xenon (Remaster)', artist: 'Artist X' };
-    assert.equal(
-      shouldDropStaleLink({ linkPrev: X, introScript: 'That was Track Xenon' }, sameIdNewTitle),
-      false,
-    );
-  });
+test('short/common titles (<4 chars) do not trigger an incidental match', () => {
+  const shortPrev = { id: 'song-OK', title: 'OK', artist: 'U2' };
+  // "ok" and "u2" appear incidentally but are too short to count as naming it.
+  assert.equal(
+    shouldDropStaleLink({ linkPrev: shortPrev, introScript: 'OK everyone, here we go' }, R),
+    false,
+  );
+});
 
-  test('id-less auto-playlist predecessor falls back to title match', () => {
-    const prevNoId = { id: null, title: 'Track Xenon', artist: 'Artist X' };
-    assert.equal(
-      shouldDropStaleLink({ linkPrev: { id: null, title: 'Track Xenon', artist: 'Artist X' }, introScript: 'That was Track Xenon' }, prevNoId),
-      false,
-    );
-  });
+test('a Carol link held across a Carol → Dante show change is dropped', () => {
+  assert.equal(
+    shouldDropCrossSessionLink({ introKind: 'link', introSessionKey: 'show:bedtime' }, 'show:dante'),
+    true,
+  );
+});
 
-  test('short/common titles (<4 chars) do not trigger an incidental match', () => {
-    const shortPrev = { id: 'song-OK', title: 'OK', artist: 'U2' };
-    // "ok" and "u2" appear incidentally but are too short to count as naming it.
-    assert.equal(
-      shouldDropStaleLink({ linkPrev: shortPrev, introScript: 'OK everyone, here we go' }, R),
-      false,
-    );
-  });
+test('a Lucy link is also dropped between her adjacent Dawn Chorus and Get up and Go! shows', () => {
+  assert.equal(
+    shouldDropCrossSessionLink({ introKind: 'link', introSessionKey: 'show:dawn-chorus' }, 'show:get-up-and-go'),
+    true,
+  );
+});
 
-  if (failures > 0) {
-    console.error(`\n${failures} test(s) failed`);
-    process.exit(1);
-  }
-  console.log('\nall stale-link tests passed');
-  process.exit(0);
-}
+test('a link remains eligible within its originating show session', () => {
+  assert.equal(
+    shouldDropCrossSessionLink({ introKind: 'link', introSessionKey: 'show:dawn-chorus' }, 'show:dawn-chorus'),
+    false,
+  );
+});
 
-main();
+test('request acknowledgements and legacy links without a session stamp are unaffected', () => {
+  assert.equal(
+    shouldDropCrossSessionLink({ introKind: 'dj-speak', introSessionKey: 'show:bedtime' }, 'show:dante'),
+    false,
+  );
+  assert.equal(shouldDropCrossSessionLink({ introKind: 'link' }, 'show:dante'), false);
+});
+
+const liveHost = { showKey: 'show:relay', personaId: 'p_sara', revision: 3 };
+
+test('an explicit earlier host revision is obsolete even when the persona id returned', () => {
+  assert.equal(shouldDropObsoleteHostSpeech({
+    introHostSpeech: { showKey: 'show:relay', personaId: 'p_sara', revision: 1 },
+  }, liveHost), true);
+});
+
+test('current explicit host speech and independent speech remain eligible', () => {
+  assert.equal(shouldDropObsoleteHostSpeech({ introHostSpeech: liveHost }, liveHost), false);
+  assert.equal(shouldDropObsoleteHostSpeech({
+    introHostSpeech: { showKey: 'show:other', personaId: 'p_old', revision: 1 },
+  }, liveHost), false, 'cross-show links remain under the existing session-key policy');
+  assert.equal(shouldDropObsoleteHostSpeech({ introKind: 'station-id', introPersona: { id: 'p_old' } }, liveHost), false);
+});
+
+test('legacy known-author links drop only within the same live show', () => {
+  assert.equal(shouldDropObsoleteHostSpeech({
+    aiPicked: true, introKind: 'link', requestedBy: null,
+    introPersona: { id: 'p_old' }, introSessionKey: 'show:relay',
+  }, liveHost), true);
+  assert.equal(shouldDropObsoleteHostSpeech({
+    aiPicked: true, introKind: 'link', requestedBy: null,
+    introPersona: { id: 'p_old' }, introSessionKey: 'show:other',
+  }, liveHost), false);
+});

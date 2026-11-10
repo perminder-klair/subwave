@@ -83,7 +83,6 @@ export function EnergyGraph({ tracks, arc, open, onToggle, onBarClick }: {
                 </rect>
               );
             })}
-            {/* Second ink: the target arc is a reference overlay, not data. */}
             <polyline
               points={targetPts}
               fill="none"

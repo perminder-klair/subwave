@@ -2,9 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import { adminResponse, useAdminMutation } from '../../../lib/admin-query';
+import { notify, errorMessage } from '../../../lib/notify';
 import { Checkbox } from '../../ui/checkbox';
 import { Label } from '../../ui/label';
-import { Card } from '../ui';
+import { Btn, Card } from '../ui';
 import { ScrollArea } from '../../ui/scroll-area';
 import { cn } from '../../../lib/cn';
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput } from '../../ai-elements/tool';
@@ -14,6 +16,35 @@ import type { DebugLlm } from './types';
 import { oneLine } from './format';
 import { CallSection, FilterChip, JsonBlock, JsonOrText } from './bits';
 import { mapChatRole } from './TtsPanels';
+import { debugKeys } from './queries';
+import BackupRouteNote from './BackupRouteNote';
+
+function callUsesMusicalLeanings(call: {
+  ok?: boolean;
+  kind?: string;
+  response?: string;
+  agentPickResolution?: { usedMusicalLeanings?: boolean };
+  shortlistResolution?: { usedMusicalLeanings?: boolean };
+}): boolean {
+  if (call.ok === false) return false;
+  const agentic = call.kind === 'djAgentPick' || call.kind === 'djAgentLeaningsReview';
+  const shortlist = call.kind === 'djShortlistPick' || call.kind === 'djShortlistRepick' || call.kind === 'djShortlistLeaningsReview';
+  if (!agentic && !shortlist) return false;
+  // Agentic influence is controller-derived after guards and enqueue. Never
+  // resurrect the old self-reported model flag from the raw response.
+  if (agentic) return call.agentPickResolution?.usedMusicalLeanings === true;
+  return call.shortlistResolution?.usedMusicalLeanings === true;
+}
+
+function isShortlistCall(kind?: string): boolean {
+  return kind === 'djShortlistPick' || kind === 'djShortlistRepick' || kind === 'djShortlistLeaningsReview';
+}
+
+function leaningsBadgeTitle(kind?: string): string {
+  return isShortlistCall(kind)
+    ? 'Track Shortlist: a separate Musical Leanings review changed the initial choice, and that exact replacement passed the guards and reached the queue'
+    : 'Agentic Tools: Musical Leanings changed the preliminary choice, and that exact replacement passed the guards and reached the queue';
+}
 
 function MessageList({ messages }: { messages: Array<{ role?: string; content?: unknown }> }) {
   return (
@@ -85,10 +116,42 @@ function ToolList({ calls }: { calls: Array<{ name?: string; args?: unknown; res
 }
 
 
+// Filenames the controller already stamps to the second — the browser never
+// invents one, so the file on disk matches what the route says it sent.
+function filenameFrom(res: Response, fallback: string): string {
+  const m = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+  return m?.[1] || fallback;
+}
+
 export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
   const { adminFetch } = useAdminAuth();
   const calls = llm?.recentCalls || [];
   const [filter, setFilter] = useState('all');
+  const [exporting, setExporting] = useState<'json' | 'ndjson' | null>(null);
+
+  // One-shot download, not server state: adminFetch + a blob, because a plain
+  // <a href> can't carry the Basic-auth header. Exports the WHOLE ring, not the
+  // `shown` filter, so an attached file is never a silent subset.
+  const exportCalls = async (format: 'json' | 'ndjson') => {
+    setExporting(format);
+    try {
+      // admin-query-imperative: llm-call-export
+      const r = await adminResponse(adminFetch, `/debug/llm-calls/export?format=${format}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filenameFrom(r, `subwave-llm-calls.${format}`);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.err(`Export failed: ${errorMessage(e)}`);
+    } finally {
+      setExporting(null);
+    }
+  };
   const kinds = Array.from(new Set(calls.map(c => c.kind).filter(Boolean) as string[]));
   const shown = filter === 'all' ? calls : calls.filter(c => c.kind === filter);
 
@@ -98,16 +161,27 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const enabled = override ?? !!dbg?.enabled;
   useEffect(() => { setOverride(null); }, [dbg?.enabled]);
+  const toggleRawMutation = useAdminMutation<void, boolean>({
+    adminFetch,
+    toastOnError: false,
+    request: async (next, fetcher) => {
+      // Preserve the old posture: only a network failure rolls the optimistic
+      // switch back; an HTTP answer is reconciled by the next /debug result.
+      await fetcher('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llm: { debugRawRequests: next } }),
+      });
+    },
+    onDone: (_data, _next, client) =>
+      client.invalidateQueries({ queryKey: debugKeys.status() }),
+  });
 
   const toggleRaw = async (next: boolean) => {
     if (viaEnv) return; // LLM_DEBUG_RAW forces it on — can't change from here
     setOverride(next);
     try {
-      await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ llm: { debugRawRequests: next } }),
-      });
+      await toggleRawMutation.mutateAsync(next);
     } catch {
       setOverride(null);
     }
@@ -116,9 +190,14 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
   return (
     <Card
       title="LLM recent calls"
-      sub={`${calls.length} calls · ${llm?.provider || '—'} / ${llm?.activeModel || '—'}`}
+      sub={
+        <>
+          {`${calls.length} calls · ${llm?.provider || '—'} / ${llm?.activeModel || '—'}`}
+          {llm?.routedToBackup ? <>{' '}<BackupRouteNote routing={llm.routedToBackup} /></> : null}
+        </>
+      }
       right={
-        <div className="flex flex-wrap justify-end gap-1">
+        <div className="flex flex-wrap items-center justify-end gap-1">
           <FilterChip active={filter === 'all'} onClick={() => setFilter('all')}>
             all {calls.length}
           </FilterChip>
@@ -127,6 +206,22 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
               {k} {calls.filter(c => c.kind === k).length}
             </FilterChip>
           ))}
+          <Btn
+            sm
+            onClick={() => exportCalls('json')}
+            disabled={!calls.length || exporting !== null}
+            title="Download all recent calls as one JSON document"
+          >
+            {exporting === 'json' ? 'Exporting…' : 'Export JSON'}
+          </Btn>
+          <Btn
+            sm
+            onClick={() => exportCalls('ndjson')}
+            disabled={!calls.length || exporting !== null}
+            title="Download all recent calls as NDJSON — one call per line, for jq/grep"
+          >
+            {exporting === 'ndjson' ? 'Exporting…' : 'NDJSON'}
+          </Btn>
         </div>
       }
     >
@@ -160,15 +255,24 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 i === 0 && filter === 'all' ? 'bg-[var(--ink-softer)]' : 'bg-transparent',
               )}
             >
-              {/* minmax(0,1fr), not 1fr: an unbroken kind like `djAgentSegment` takes
-                  its min-content width and shoves the ms/clock cells off the card. */}
               <summary className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] items-center gap-2 px-2.5 py-2 sm:gap-2.5">
                 <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
                   {c.ok ? '✓' : '✗'}
                 </span>
-                <span className="truncate text-[12px] font-bold">{c.kind}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-[12px] font-bold">{c.kind}</span>
+                  {callUsesMusicalLeanings(c) && (
+                    <span className="shrink-0 border border-vermilion/40 bg-vermilion/10 px-1 py-px text-[8px] font-bold tracking-[0.08em] text-vermilion" title={leaningsBadgeTitle(c.kind)}>
+                      LEANINGS
+                    </span>
+                  )}
+                </span>
                 <span className="caption text-[10px] whitespace-nowrap">
-                  {c.toolCalls?.length ? `🔧 ${c.toolCalls.length}` : ''}
+                  {c.toolCalls?.length
+                    ? isShortlistCall(c.kind)
+                      ? `◈ ${c.toolCalls.length}`
+                      : `🔧 ${c.toolCalls.length}`
+                    : ''}
                   {c.steps != null ? `${c.toolCalls?.length ? ' · ' : ''}${c.steps} steps` : ''}
                 </span>
                 <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
@@ -187,7 +291,6 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 )}
                 {c.responseText && (
                   <CallSection label="model said instead" tone="err" preview={oneLine(c.responseText)}>
-                    {/* Model free text may contain markdown — the one MessageResponse call. */}
                     <MessageResponse className="whitespace-normal">
                       {c.responseText}
                     </MessageResponse>
@@ -221,6 +324,22 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                     <ToolList calls={c.toolCalls} />
                   </CallSection>
                 )}
+                {c.shortlistResolution?.final && (
+                  <CallSection
+                    label="verified selection"
+                    preview={[c.shortlistResolution.final.title, c.shortlistResolution.final.artist].filter(Boolean).join(' — ')}
+                  >
+                    <JsonBlock value={c.shortlistResolution} />
+                  </CallSection>
+                )}
+                {c.agentPickResolution?.final && (
+                  <CallSection
+                    label="verified selection"
+                    preview={[c.agentPickResolution.final.title, c.agentPickResolution.final.artist].filter(Boolean).join(' — ')}
+                  >
+                    <JsonBlock value={c.agentPickResolution} />
+                  </CallSection>
+                )}
                 {c.response && (
                   <CallSection label="response" preview={oneLine(c.response)}>
                     <JsonOrText text={c.response} />
@@ -234,5 +353,3 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
     </Card>
   );
 }
-
-

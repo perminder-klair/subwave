@@ -3,7 +3,7 @@
    hover state and feeds {track, x, y}. */
 'use client';
 
-import type { ObsTrack } from './data';
+import { genreText, type ObsTrack } from './data';
 
 export interface TipState {
   track: ObsTrack;
@@ -21,7 +21,7 @@ export default function Tooltip({ data }: { data: TipState | null }) {
       style={{ left: x + (flip ? -16 : 16), top: y + 16, transform: flip ? 'translateX(-100%)' : 'none' }}
     >
       <div className="tip-genre t-caption ad-muted">
-        {(track.genre || 'UNFILED')}
+        {(genreText(track) || 'UNFILED')}
         {track.year ? ` · ${track.year}` : ''}
       </div>
       <div className="tip-title">{track.title || 'Untitled'}</div>

@@ -4,22 +4,19 @@ import { TrackTable } from './TrackTable';
 import { useLibrary } from './LibraryContext';
 import type { TableVariant, Track } from './types';
 
-// TrackTable takes 20 props and every tab passed the same 17 of them — only
-// the variant, the rows and the loading flag actually differ. This binds the
-// shared 17 to the provider so a tab renders three.
-//
-// TrackTable itself stays a pure presentational component taking explicit
-// props: it is also rendered by surfaces that are not inside a LibraryProvider.
+// Binds the provider-derived TrackTable props so a tab passes only variant,
+// rows and loading. TrackTable itself stays presentational with explicit
+// props: it is also rendered outside a LibraryProvider.
 export function RowsTable({ tab, rows, loading }: {
   tab: TableVariant;
   rows: Track[];
   loading: boolean;
 }) {
   const {
-    queuing, retagging, flashId, blocking, vocab, editingId, manualBusy,
+    queuing, retagging, flashId, blocking, vocab, editingId, manualBusy, eraBusy,
     selected, likeIndex, liking,
-    queueTrack, retagTrack, blockTrack, unblockRow,
-    onEditTrack, saveManualTag, cancelEdit,
+    queueTrack, queueBlock, retagTrack, blockTrack, unblockRow,
+    onEditTrack, saveManualTag, saveEraYear, cancelEdit,
     toggleSelect, toggleAllRows, toggleLike, clearLikes,
   } = useLibrary();
 
@@ -32,6 +29,7 @@ export function RowsTable({ tab, rows, loading }: {
       retagging={retagging}
       flashId={flashId}
       onQueue={queueTrack}
+      onQueueBlock={queueBlock}
       onRetag={retagTrack}
       blocking={blocking}
       onBlock={blockTrack}
@@ -39,8 +37,10 @@ export function RowsTable({ tab, rows, loading }: {
       vocab={vocab}
       editingId={editingId}
       manualBusy={manualBusy}
+      eraBusy={eraBusy}
       onEdit={onEditTrack}
       onSaveManual={saveManualTag}
+      onSaveEraYear={saveEraYear}
       onCancelEdit={cancelEdit}
       selected={selected}
       onToggleSelect={toggleSelect}

@@ -63,8 +63,6 @@ async function AppsGrid({ apps }: { apps: Promise<CommunityApp[]> }) {
           ))}
         </ul>
       </AppTypeFilter>
-      {/* Only when a skin is actually listed — a skins-free directory shouldn't
-          carry the caveat. */}
       {all.some((a) => a.type === 'skin') && (
         <p className="bs-stations-report">
           Skins are player faces built into the web app, not add-ons a running station can

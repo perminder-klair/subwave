@@ -1,10 +1,5 @@
-// Last-resort crash screen for the root ErrorBoundary (src/app/_layout.tsx).
-//
-// Deliberately self-contained: hardcoded palette, no useTheme / SafeAreaContext
-// / NativeWind class tokens — any of those providers could be the thing that
-// just crashed, and expo-router renders the boundary OUTSIDE the layout's
-// provider tree. Pure inline styles + the (already-loaded) mono font keep it
-// rendering no matter what fell over upstream.
+// Expo Router renders this boundary outside the layout providers.
+// Use inline styles so a failed theme or safe-area provider cannot break it.
 
 import { Pressable, Text, View } from 'react-native';
 

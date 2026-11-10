@@ -1,11 +1,9 @@
 'use client';
 
-// Runtime station origin for the player tree. Every hook and component that
-// talks to a controller or an Icecast mount reads its base URLs from this
-// context rather than module-level env constants, so one PlayerApp tree can
-// point at ANY SUB/WAVE station (the landing showcase tabs between directory
-// stations). The context default is same-origin `/api` + `/stream.mp3` in the
-// prod image, NEXT_PUBLIC_* overrides in dev.
+// Runtime station origin for the player tree. Everything talking to a controller
+// or Icecast mount reads its base URLs from this context rather than module-level
+// env constants, so one PlayerApp tree can point at any SUB/WAVE station. Default
+// is same-origin `/api` + `/stream.mp3`; NEXT_PUBLIC_* overrides in dev.
 import { createContext, useContext } from 'react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
@@ -44,11 +42,10 @@ export const DEFAULT_STATION_ORIGIN: StationOrigin = {
   streams: defaultStreams(),
 };
 
-// Every SUB/WAVE deployment serves the same route table on one hostname
-// (`/api/*` → controller, `/stream.mp3` → Icecast), so the site origin is
-// enough. Cross-origin works end to end: the controller's CORS is wide open and
-// Icecast sends `Access-Control-Allow-Origin: *`, which the player's
-// crossOrigin="anonymous" <audio> and the cover-colour canvas both require.
+// Every deployment serves the same route table on one hostname (`/api/*` →
+// controller, `/stream.mp3` → Icecast), so the site origin is enough.
+// Cross-origin works: both send permissive CORS, which the player's
+// crossOrigin="anonymous" <audio> and the cover-colour canvas require.
 export function originForStation(siteUrl: string): StationOrigin {
   const base = siteUrl.replace(/\/+$/, '');
   return {

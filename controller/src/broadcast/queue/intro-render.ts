@@ -38,6 +38,10 @@ export class IntroRenderTracker<Item extends object> {
     return this.active.get(item) ?? null;
   }
 
+  invalidate(item: Item): void {
+    this.active.delete(item);
+  }
+
   transfer(from: Item, to: Item): void {
     const pending = this.active.get(from);
     if (!pending) return;

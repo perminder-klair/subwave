@@ -1,0 +1,618 @@
+# Reverse-proxy recipes
+
+SUB/WAVE expects the player, API, tune-in files, and live mounts to share one
+public origin, such as `https://radio.example.com`. This page gives complete
+recipes for the split-service [`docker-compose.byo.yml`](../docker-compose.byo.yml)
+deployment and the simpler Cloudflare Tunnel path through the bundled edge.
+
+Set these in the root `.env` before starting the stack:
+
+```ini
+SITE_URL=https://radio.example.com
+
+# Use this when nginx runs directly on the same host. It keeps the three BYO
+# ports off the LAN while leaving them reachable on loopback.
+BIND_ADDRESS=127.0.0.1
+```
+
+A proxy in another container cannot reach the host's loopback address. Attach
+it to SUB/WAVE's Docker network and use service names, or bind the ports to an
+address that container can reach and protect them with the host firewall.
+
+## The route contract
+
+Every split-service proxy must apply these rules in this order:
+
+| Public path | Upstream | Path sent upstream | Required handling |
+|---|---|---|---|
+| `/api/listener-auth` and anything starting with it | none | none | Return 404 or otherwise deny it before the general API rule. Match it as a case-insensitive prefix: the controller also answers `/listener-auth/` and any case variant, so an exact-path rule leaves those routed. Icecast calls this password callback over the private Compose network; it must not be public. |
+| `/stream*` | Icecast on `:7702` | unchanged | Disable response buffering, caching, and compression. Match the prefix so optional Opus, FLAC, and AAC mounts work without another proxy edit. Drop `WWW-Authenticate` from the response for a client that can't answer it, and only then: see [The stream's 401 challenge](#the-streams-401-challenge). |
+| `/listen.pls`, `/listen.m3u` | Controller on `:7701` | unchanged | These tune-in files are controller routes, not Icecast routes. |
+| `/api/*` | Controller on `:7701` | strip `/api` | `/api/health` must reach the controller as `/health`. Keep streaming responses such as diagnosis events unbuffered. Pass error responses through unchanged, with no custom error pages (nginx `proxy_intercept_errors`, a Traefik `errors` middleware): the web player and the app read the controller's own `/api/station-auth` answers to tell a right or wrong station password from a proxy's 401 or login page. |
+| everything else | Web on `:7700` | unchanged | Player, admin, onboarding, manual, and static assets. |
+
+The examples use the default ports and a proxy on the same host. Replace
+`127.0.0.1` with an address or Docker service name reachable from your proxy
+when it runs elsewhere.
+
+### The stream's 401 challenge
+
+With the [stream password](private-station.md#stream-password-the-real-boundary)
+on, Icecast refuses a listener with a 401 carrying `WWW-Authenticate: Basic`.
+That challenge has to reach some clients and must not reach others:
+
+- **ffmpeg, mpv, GStreamer, wget and the like need it.** With a
+  `https://listener:PASSWORD@host/stream.mp3` address they send no password
+  until they are challenged, so a 401 without one is the end of the connection.
+  Firefox does the same for an `<audio>` element on another site.
+- **The web player can't use it.** Chrome and Firefox both answer the challenge
+  on the station's own page by putting a native "Sign in" dialog over all of it.
+  The listener can't reach the player, and the dialog stays until the player's
+  own password check comes round, up to two minutes later.
+
+So drop `WWW-Authenticate` from a `/stream*` response when the request has either
+of these, and only then:
+
+- an `auth` query parameter. The web player, the app and Google Cast all ride
+  `?auth=`, and none of them can answer a challenge.
+- `Sec-Fetch-Dest: audio` or `video` together with `Sec-Fetch-Site: same-origin`.
+  That is the station's own player before it has a token. Browsers send these
+  headers to https and localhost only, so on a plain-http address such a tap can
+  still raise the dialog once.
+
+Drop only the header. The 401 and its body stay, and a 200 is untouched. A
+browser tab on the stream URL sends `Sec-Fetch-Dest: document`, so it keeps its
+native prompt.
+
+Every recipe below does this. Running your own Caddy? Copy the `@streams`
+matcher and its `handle` block from [`docker/Caddyfile`](../docker/Caddyfile).
+
+The nginx and Traefik recipes give these requests a route of their own, so
+anything you add to the stream route has to go on both. nginx runs `return 418`
+before access checks, so an `auth_basic`, `allow`/`deny` or `limit_req` left in
+`location ^~ /stream` alone is skipped by any request with `?auth=`. The same goes
+for a Traefik middleware on `subwave-stream` alone.
+
+If your proxy can't make this conditional, leave the header alone. **Never strip
+it for every client.** Leaving it costs listeners with an out-of-date password
+that dialog until the player's check clears it. Stripping it locks every client
+in the first list out, with no error that says why.
+
+### Optional: a listener-country header
+
+Admin → Stats rolls listener sessions up by country, and the value it reads
+first is `CF-IPCountry` — which only Cloudflare sets. If your proxy can add a
+country header of its own (nginx with the GeoIP2 module, Traefik behind a CDN),
+forward it and name it in Admin → Settings → Broadcast & mixer → **Listener country**.
+Where it can't, point the same card at an offline `.mmdb` database instead.
+Neither is required: with no country, sessions are still counted, just without
+geography. Full recipe, including where to get a database:
+[deployment.md → Listener country on the Stats page](deployment.md#listener-country-on-the-stats-page).
+
+## nginx
+
+Put these directives inside the existing `server` block for
+`radio.example.com`; keep your current TLS certificate and redirect settings.
+The trailing slash on the controller `proxy_pass` is what removes `/api/`.
+
+```nginx
+# Forward the public request identity to every upstream.
+proxy_http_version 1.1;
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+# Overwrite, rather than append, so a client cannot seed a forged address.
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+
+# Icecast's private URL-auth callback. This must win over location /api/.
+# A case-insensitive regex prefix, not `location =`: the controller also
+# answers a trailing slash and any case, which an exact match lets through.
+location ~* ^/api/listener-auth {
+    return 404;
+}
+
+# All present and future stream mounts keep their original path.
+location ^~ /stream {
+    # A client that can't answer Icecast's 401 challenge takes the route below.
+    error_page 418 = @stream-media;
+    set $stream_fetch "$http_sec_fetch_site:$http_sec_fetch_dest";
+    if ($arg_auth) { return 418; }
+    if ($stream_fetch ~ ^same-origin:(audio|video)$) { return 418; }
+
+    proxy_pass http://127.0.0.1:7702;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    gzip off;
+}
+
+# The same stream, minus the challenge. proxy_hide_header can't sit inside an
+# `if`, which is why this needs a route of its own. Repeat here any auth_basic,
+# allow/deny or limit_req you add above, or `?auth=` skips it.
+location @stream-media {
+    proxy_pass http://127.0.0.1:7702;
+    proxy_hide_header WWW-Authenticate;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    gzip off;
+}
+
+# Tune-in files are generated by the controller and keep their root path.
+location = /listen.pls {
+    proxy_pass http://127.0.0.1:7701;
+}
+
+location = /listen.m3u {
+    proxy_pass http://127.0.0.1:7701;
+}
+
+# The controller mounts routes at /, so the trailing slash strips /api/.
+location /api/ {
+    proxy_pass http://127.0.0.1:7701/;
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+}
+
+location / {
+    proxy_pass http://127.0.0.1:7700;
+}
+```
+
+If this nginx server is itself behind another trusted edge, configure nginx's
+real-IP module with only that edge's addresses first. `$remote_addr` will then
+hold the resolved client address and the rule above will still replace any
+client-supplied forwarding chain.
+
+**Name this proxy in SUB/WAVE's `.env` too.** Sending the header is only half
+the job: Icecast ignores `X-Forwarded-For` unless the peer that sent it is on
+its own trusted list, and on `docker-compose.byo.yml` there is no bundled Caddy
+for it to find by name. Without this, Admin → Listeners shows the same private
+address on every row.
+
+```bash
+# .env — the address nginx reaches Icecast from. On a host-network nginx
+# talking to the container, that is usually the Docker bridge gateway.
+ICECAST_TRUSTED_PROXY_IPS=172.17.0.1
+```
+
+Icecast matches an **exact IP**, so a subnet like `172.17.0.0/16` is accepted
+and then never matches anything; list the addresses. If you are unsure what
+Icecast is seeing, the current (wrong) IP in the Listeners table *is* the
+address to trust. Restart the broadcast container to apply it — Admin →
+Listeners says so itself when nothing was trusted.
+
+Reload only after nginx accepts the configuration:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+## Nginx Proxy Manager
+
+Create one **Proxy Host** for `radio.example.com`:
+
+- Scheme: `http`
+- Forward Hostname / IP: the SUB/WAVE host
+- Forward Port: `7700`
+- Websockets Support: on
+- SSL: request or select the certificate you normally use
+
+Then open its **Advanced** tab and paste the block below. Replace
+`SUBWAVE_HOST` with an address reachable from the NPM container; it is usually
+the Docker host's LAN address, not `127.0.0.1`.
+
+```nginx
+proxy_http_version 1.1;
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+# Overwrite, rather than append, so a client cannot seed a forged address.
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+
+location ~* ^/api/listener-auth {
+    return 404;
+}
+
+location ^~ /stream {
+    error_page 418 = @stream-media;
+    set $stream_fetch "$http_sec_fetch_site:$http_sec_fetch_dest";
+    if ($arg_auth) { return 418; }
+    if ($stream_fetch ~ ^same-origin:(audio|video)$) { return 418; }
+
+    proxy_pass http://SUBWAVE_HOST:7702;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    gzip off;
+}
+
+location @stream-media {
+    proxy_pass http://SUBWAVE_HOST:7702;
+    proxy_hide_header WWW-Authenticate;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    gzip off;
+}
+
+location = /listen.pls {
+    proxy_pass http://SUBWAVE_HOST:7701;
+}
+
+location = /listen.m3u {
+    proxy_pass http://SUBWAVE_HOST:7701;
+}
+
+location /api/ {
+    proxy_pass http://SUBWAVE_HOST:7701/;
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+}
+```
+
+NPM's generated `/` location continues to send the web UI to the Proxy Host's
+port `7700`. The Advanced locations override only the API, tune-in files, and
+stream mounts. `@stream-media` is
+[the stream without its 401 challenge](#the-streams-401-challenge), so repeat
+there anything you add to `location ^~ /stream`.
+
+Set `ICECAST_TRUSTED_PROXY_IPS` for real listener IPs here too — the NPM
+container's own address, exactly as in [nginx](#nginx) above.
+
+## Traefik with Docker labels
+
+This overlay attaches the three public services to the external Docker network
+used by Traefik and declares one router per rule. Change `proxy`, `websecure`,
+and `letsencrypt` if your Traefik installation uses different names. Keep
+`BIND_ADDRESS=127.0.0.1` in SUB/WAVE's root `.env`: Traefik reaches the services
+over Docker's `proxy` network, while the inherited BYO port mappings remain
+loopback-only.
+
+Save it as `docker-compose.traefik.yml` beside the SUB/WAVE compose file:
+
+```yaml
+services:
+  broadcast:
+    networks:
+      - default
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+      traefik.http.routers.subwave-stream.rule: "Host(`radio.example.com`) && PathPrefix(`/stream`)"
+      traefik.http.routers.subwave-stream.entrypoints: websecure
+      traefik.http.routers.subwave-stream.tls: "true"
+      traefik.http.routers.subwave-stream.tls.certresolver: letsencrypt
+      traefik.http.routers.subwave-stream.priority: "20"
+      traefik.http.routers.subwave-stream.service: subwave-stream
+      traefik.http.services.subwave-stream.loadbalancer.server.port: "7702"
+      # The same stream, minus Icecast's 401 challenge, for a client that can't
+      # answer it. An empty value removes the header.
+      traefik.http.middlewares.subwave-no-challenge.headers.customresponseheaders.WWW-Authenticate: ""
+      traefik.http.routers.subwave-stream-media.rule: "Host(`radio.example.com`) && PathPrefix(`/stream`) && (QueryRegexp(`auth`, `.+`) || (HeaderRegexp(`Sec-Fetch-Dest`, `^(audio|video)$`) && Header(`Sec-Fetch-Site`, `same-origin`)))"
+      traefik.http.routers.subwave-stream-media.entrypoints: websecure
+      traefik.http.routers.subwave-stream-media.tls: "true"
+      traefik.http.routers.subwave-stream-media.tls.certresolver: letsencrypt
+      traefik.http.routers.subwave-stream-media.priority: "30"
+      traefik.http.routers.subwave-stream-media.middlewares: subwave-no-challenge
+      traefik.http.routers.subwave-stream-media.service: subwave-stream
+
+  controller:
+    networks:
+      - default
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+      traefik.http.middlewares.subwave-strip-api.stripprefix.prefixes: /api
+      traefik.http.routers.subwave-api.rule: "Host(`radio.example.com`) && PathPrefix(`/api/`)"
+      traefik.http.routers.subwave-api.entrypoints: websecure
+      traefik.http.routers.subwave-api.tls: "true"
+      traefik.http.routers.subwave-api.tls.certresolver: letsencrypt
+      traefik.http.routers.subwave-api.priority: "20"
+      traefik.http.routers.subwave-api.middlewares: subwave-strip-api
+      traefik.http.routers.subwave-api.service: subwave-controller
+      traefik.http.routers.subwave-listen.rule: "Host(`radio.example.com`) && (Path(`/listen.pls`) || Path(`/listen.m3u`))"
+      traefik.http.routers.subwave-listen.entrypoints: websecure
+      traefik.http.routers.subwave-listen.tls: "true"
+      traefik.http.routers.subwave-listen.tls.certresolver: letsencrypt
+      traefik.http.routers.subwave-listen.priority: "20"
+      traefik.http.routers.subwave-listen.service: subwave-controller
+      traefik.http.services.subwave-controller.loadbalancer.server.port: "7701"
+
+  web:
+    networks:
+      - default
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+      # Route the private callback to Next.js, where it is a guaranteed 404.
+      # Priority 100 makes this rule win over the controller's /api prefix.
+      # A case-insensitive prefix (Traefik v3 PathRegexp): the controller also
+      # answers a trailing slash and any case, which Path() would let through.
+      traefik.http.routers.subwave-auth-block.rule: "Host(`radio.example.com`) && PathRegexp(`(?i)^/api/listener-auth`)"
+      traefik.http.routers.subwave-auth-block.entrypoints: websecure
+      traefik.http.routers.subwave-auth-block.tls: "true"
+      traefik.http.routers.subwave-auth-block.tls.certresolver: letsencrypt
+      traefik.http.routers.subwave-auth-block.priority: "100"
+      traefik.http.routers.subwave-auth-block.service: subwave-web
+      traefik.http.routers.subwave-web.rule: "Host(`radio.example.com`)"
+      traefik.http.routers.subwave-web.entrypoints: websecure
+      traefik.http.routers.subwave-web.tls: "true"
+      traefik.http.routers.subwave-web.tls.certresolver: letsencrypt
+      traefik.http.routers.subwave-web.priority: "1"
+      traefik.http.routers.subwave-web.service: subwave-web
+      traefik.http.services.subwave-web.loadbalancer.server.port: "7700"
+
+networks:
+  proxy:
+    external: true
+```
+
+Traefik sets `X-Forwarded-For` itself, but Icecast only reads it from a peer on
+its own trusted list — and on `docker-compose.byo.yml` there is no bundled
+Caddy for it to resolve by name, so real listener IPs need Traefik's own
+container address named in SUB/WAVE's `.env`:
+
+```bash
+# .env — Traefik's address on the `proxy` network (docker network inspect proxy).
+ICECAST_TRUSTED_PROXY_IPS=172.18.0.2
+```
+
+Icecast matches an **exact IP**, so a subnet is accepted and then never
+matches. Pin Traefik's address on that network if it moves between restarts.
+Without this every row in Admin → Listeners shows Traefik's container address
+instead of the listener's; the Listeners card says so when nothing was trusted.
+
+Traefik forwards response bodies as they arrive unless a buffering middleware
+is added, so the stream routers need no buffering option. `subwave-stream-media`
+exists for [the stream's 401 challenge](#the-streams-401-challenge). Do not attach
+Traefik's `Buffering` or `Compress` middleware to either router; if either is
+configured on the `websecure` entrypoint, it applies to every router on that
+entrypoint and cannot be exempted per router. Remove the global middleware or
+give the stream router a dedicated entrypoint without it. Start SUB/WAVE with
+both files:
+
+```bash
+docker compose \
+  -f docker-compose.byo.yml \
+  -f docker-compose.traefik.yml \
+  up -d
+```
+
+## Cloudflare Tunnel
+
+Keep the bundled edge for this topology. The Caddy container already owns the
+route contract, so the tunnel needs one public hostname and one upstream—not
+four path rules. Before trusting private proxy addresses, close Caddy's direct
+public route so every request must pass through the tunnel:
+
+- If `cloudflared` runs on the host, change Caddy's port mapping in
+  `docker-compose.yml` to
+  `127.0.0.1:${CADDY_PORT:-7700}:80` (or firewall port 7700 to the tunnel host)
+  and use `http://127.0.0.1:7700` below.
+- If `cloudflared` runs in Docker, remove Caddy's host `ports` mapping, attach
+  `cloudflared` to SUB/WAVE's private Docker network, and use
+  `http://caddy:80`. The tunnel must then be the only public ingress.
+
+For a locally managed tunnel running on the host, use:
+
+```yaml
+tunnel: YOUR-TUNNEL-UUID
+credentials-file: /etc/cloudflared/YOUR-TUNNEL-UUID.json
+
+ingress:
+  - hostname: radio.example.com
+    service: http://127.0.0.1:7700
+  - service: http_status:404
+```
+
+In the Cloudflare dashboard, the equivalent is a single published application
+whose service URL is the bundled edge.
+
+Validate a locally managed configuration before running the tunnel:
+
+```bash
+cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
+```
+
+Create a Cache Rule that bypasses cache for paths beginning with `/stream`.
+Cloudflare Access should not guard the stream mount unless every listening
+client can complete its login flow; use SUB/WAVE's own stream password when
+ordinary players and hardware radios need access.
+
+Cloudflare Tunnel reaches Caddy from a private address rather than a Cloudflare
+edge address. Once the direct public route is closed, preserve real listener
+IPs with the trusted-proxy setup in
+[deployment.md](deployment.md#cloudflare-tunnel).
+
+## Public stream, LAN-only admin
+
+A common homelab shape: the player and the stream reachable from the internet,
+the operator console reachable only from home. SUB/WAVE has no setting for
+this — the split is made at your proxy, and this section is the recipe.
+
+### What can and cannot be split
+
+There are two operator surfaces, and only one of them separates cleanly by
+path.
+
+| Surface | Paths | Can you restrict it by path? |
+| --- | --- | --- |
+| Operator **UI** | `/admin*`, `/onboarding` | **Yes.** Distinct prefixes, served by the web container. |
+| Operator **API** | admin routes under `/api/*` | **No.** The controller mounts public and admin routes on one flat namespace — `/api/now-playing` and `/api/settings` are siblings. There is no `/api/admin/` prefix to deny. |
+
+So the practical split is: **deny the console's pages from the internet, and
+let the admin API stay guarded by HTTP Basic auth**, which is what guards it
+today on every default install (`ADMIN_USER` / `ADMIN_PASS`, mandatory in
+production). That gets you the requested outcome — nobody outside your LAN sees
+a login box, let alone a console — without an allowlist that breaks the next
+time a listener-facing endpoint is added.
+
+If you want the admin API off the public interface as well, see
+[Two front doors](#two-front-doors) below.
+
+Leave `SITE_URL` pointing at the **public** origin either way. It's the
+canonical address the tune-in files, share cards and the Connect panel hand
+out; the LAN address is how *you* reach the box, not how listeners reach the
+station.
+
+### One hostname, restricted console
+
+Add this to the recipe you already applied, above the catch-all web rule.
+
+**nginx** — order matters, `location` prefixes are matched before the `/`
+fallback:
+
+```nginx
+# Operator console: LAN only. Everything else on this server block stays public.
+location ~ ^/(admin|onboarding) {
+    allow 192.168.1.0/24;   # your LAN
+    allow 100.64.0.0/10;    # Tailscale, if you use it
+    deny  all;
+
+    proxy_pass http://127.0.0.1:7700;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+**Caddy** — including the bundled `docker/Caddyfile`, where this goes above the
+final `handle`:
+
+```caddyfile
+@console path /admin /admin/* /onboarding /onboarding/*
+handle @console {
+	@notlan not remote_ip 192.168.1.0/24 100.64.0.0/10
+	respond @notlan 404
+	reverse_proxy web:7700
+}
+```
+
+`404` rather than `403` — a 403 confirms there is a console there to find.
+
+**Traefik** — attach an `ipAllowList` middleware to a higher-priority router
+matching the same paths:
+
+```yaml
+labels:
+  - "traefik.http.middlewares.subwave-lan.ipallowlist.sourcerange=192.168.1.0/24,100.64.0.0/10"
+  - "traefik.http.routers.subwave-console.rule=Host(`radio.example.com`) && (PathPrefix(`/admin`) || PathPrefix(`/onboarding`))"
+  - "traefik.http.routers.subwave-console.priority=100"
+  - "traefik.http.routers.subwave-console.middlewares=subwave-lan@docker"
+  - "traefik.http.routers.subwave-console.service=subwave-web"
+```
+
+Behind Cloudflare or a tunnel, the connecting peer is the edge, not the
+listener — your allowlist must read the forwarded address, which means the
+trusted-proxy setup in [deployment.md](deployment.md#real-listener-ips-behind-a-proxy)
+has to be correct first. Test it before you rely on it: a misconfigured
+trusted-proxy list turns an IP allowlist into either a lockout or a no-op.
+
+Do **not** add `/api` to the allowlist. The player calls `/api/now-playing`,
+`/api/state`, `/api/session`, `/api/request`, `/api/like` and `/api/cover/:id`
+from every listener's browser; denying `/api` from the internet takes the
+public player down with it.
+
+### Two front doors
+
+For a genuinely separate admin surface — the console *and* its API off the
+public interface — run two front ends over the same containers. The web bundle
+calls `/api` and `/stream.mp3` **relative to its own origin**, so both work
+with the stock image and no rebuild.
+
+Use [`docker-compose.byo.yml`](../docker-compose.byo.yml) with
+`BIND_ADDRESS=127.0.0.1`, then:
+
+- **Public front end** (`radio.example.com`, port 443 on the WAN) — the route
+  contract above, minus the console: `/admin*` and `/onboarding` return 404.
+- **LAN front end** (`subwave.lan`, or port 8443 bound to your LAN interface) —
+  the full route contract, nothing denied.
+
+Then decide what the public front end does with `/api/*`. Two honest options:
+
+- **Pass it through** (simple, recommended). The admin API stays reachable from
+  the internet and stays protected by Basic auth. This is the same posture as a
+  default install; the win is that the console pages are gone.
+- **Allowlist the listener endpoints** (strict, brittle). Route only
+  `/api/now-playing`, `/api/state`, `/api/session`, `/api/health`,
+  `/api/schedule`, `/api/themes`, `/api/beacon`, `/api/cover/*`, `/api/request`,
+  `/api/request/*`, `/api/like` and `/api/station-auth`, and 404 the rest. It
+  works, and it will silently break a listener feature the first time a release
+  adds an endpoint to that list. Pin `SUBWAVE_VERSION` and re-read this list at
+  each upgrade if you take this path.
+
+`/api/onboarding/status` is deliberately absent from that list. The player
+calls it to redirect a fresh install to the wizard and treats any non-200 as
+"nothing to do", so denying it publicly costs nothing and stops the public
+origin advertising an unconfigured station.
+
+`/api/listener-auth` stays denied on **both** front ends. Icecast calls the
+controller over the private Compose network; it never needs a route.
+
+### On the all-in-one image
+
+The AIO image can't do this internally — it bundles Caddy, the controller, the
+web UI and Icecast behind one host port by design. Put your own proxy in front
+of that single port and apply the console rule there, exactly as above with the
+AIO's port as the upstream. That works on Unraid, where the outer proxy is
+usually SWAG or Nginx Proxy Manager already fronting everything else.
+
+## Verify the public route table
+
+Run these after applying any recipe:
+
+```bash
+BASE=https://radio.example.com
+
+# Controller reached with /api stripped.
+curl -fsS "$BASE/api/health"
+
+# Tune-in files come from the controller at the public root.
+curl -fsS "$BASE/listen.pls"
+curl -fsS "$BASE/listen.m3u"
+
+# The private Icecast callback must not reach the controller: expect 404/403
+# for the exact path, a trailing slash and a case variant alike.
+for AUTH_PATH in /api/listener-auth /api/listener-auth/ /api/Listener-Auth; do
+  AUTH_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
+    -X POST "$BASE$AUTH_PATH")
+  case "$AUTH_STATUS" in
+    403|404) ;;
+    *) echo "$AUTH_PATH is public (HTTP $AUTH_STATUS)" >&2; exit 1 ;;
+  esac
+done
+
+# Check the stream headers, then confirm a bounded GET receives audio bytes.
+curl -fsSI "$BASE/stream.mp3" | grep -i '^content-type:'
+STREAM_SAMPLE=$(mktemp)
+trap 'rm -f "$STREAM_SAMPLE"' EXIT
+curl -fsS --max-time 10 "$BASE/stream.mp3" -o "$STREAM_SAMPLE" || \
+  test -s "$STREAM_SAMPLE"
+test -s "$STREAM_SAMPLE"
+```
+
+Also open `/admin/connect?tab=integrations`; every enabled mount should show a
+copyable URL on the same public hostname.
+
+When SUB/WAVE's stream-password setting is on, `/listen.pls` and `/listen.m3u`
+always return 403; they do not accept credentials. Verify the stream itself
+with `curl -u listener:PASSWORD "$BASE/stream.mp3"` (any username works) or
+append `?auth=PASSWORD`. See
+[Private station mode](private-station.md#tuning-in-with-a-password).
+
+With the stream password on, also check
+[the 401 challenge](#the-streams-401-challenge). Both requests below are 401s;
+only the first may carry it:
+
+```bash
+# Expect one line: WWW-Authenticate: Basic …
+curl -sS -o /dev/null -D - --max-time 5 "$BASE/stream.mp3" | grep -i '^www-authenticate:'
+
+# Expect no output. A wrong token gets no challenge.
+curl -sS -o /dev/null -D - --max-time 5 "$BASE/stream.mp3?auth=wrong" | grep -i '^www-authenticate:'
+```

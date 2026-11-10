@@ -14,9 +14,13 @@ import {
   coerceShowEras,
   coerceShowGenres,
   coerceShowMoods,
+  isDefaultTakeover,
   personaToneDirectives,
+  takeoverShowId,
 } from './vocab.js';
-import { DEFAULTS, coerceMaxTrackSeconds } from './defaults.js';
+import { steerActiveAt, type Steer } from '../schemas/steer.js';
+import { steeredShow } from '../music/steer.js';
+import { DEFAULTS, coerceMaxTrackSeconds, coerceMinTrackLengthSeconds } from './defaults.js';
 import { get, peek } from './store.js';
 
 // DJ mode makes a persona behave like a working radio DJ rather than a
@@ -38,13 +42,58 @@ export function effectiveFrequency(persona: unknown = getEffectivePersona()) {
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
 
-// Single gate for the transition effects (filter sweep + echo washout): they're
-// on whenever the on-air persona is in DJ mode — no separate toggle. The picker
-// schema/prompt builders use this to decide whether to offer the DJ the
-// `transition` choice; when off, the guidance is never shown and nothing is
-// applied.
+// Gate for the six DJ transition effects (TRANSITION_EFFECTS): on whenever the
+// on-air persona is in DJ mode. The per-effect operator switches
+// (settings/transition-effects.ts, #1565) narrow it and compose with it at the
+// call sites, never in here. The picker schema/prompt builders use this to
+// decide whether to offer the DJ the `transition` choice; when off, the
+// guidance is never shown and nothing is applied. DJ mode also drives
+// pair-drain, stem blends and the transition stinger, which read djMode
+// directly.
 export function effectsActive(persona: unknown = getEffectivePersona()): boolean {
   return !!(persona as { djMode?: unknown } | null | undefined)?.djMode;
+}
+
+// True only when the effective persona's linkStyle is explicitly 'announce'.
+// Absent/invalid (normalisation already repairs those to 'natural') reads as
+// false, so a station that never touched the field keeps its old links.
+// Every announce-aware call site (dj-agent.ts, dj-agent/schemas.ts,
+// llm/internal/prompts/scripts.ts) reads it from here rather than inlining
+// the string compare, same precedent as effectsActive() above.
+export function announceLinks(persona: unknown = getEffectivePersona()): boolean {
+  return (persona as { linkStyle?: unknown } | null | undefined)?.linkStyle === 'announce';
+}
+
+// A private, music-specific editorial preference for track selection. It is
+// intentionally separate from Soul: Soul informs the DJ's voice, while Music
+// Leanings can only break a close tie between already eligible candidates.
+export function personaMusicLeanings(persona: unknown = getEffectivePersona()): string | null {
+  const leaning = String((persona as { musicLean?: unknown } | null | undefined)?.musicLean || '').trim();
+  return leaning || null;
+}
+
+export type GuestEditorialNudge = {
+  guest: { id: string; name: string };
+  musicalLeanings: string;
+};
+
+// Guests can occasionally add a music-specific secondary nudge. The host
+// remains the primary editorial influence, and a guest's Soul stays strictly
+// on-air character rather than programming input.
+export function guestEditorialNudgeFromGuests(
+  guests: Array<{ id?: unknown; name?: unknown; musicLean?: unknown }>,
+  random: () => number = Math.random,
+): GuestEditorialNudge | null {
+  const eligible = guests.filter((guest) => String(guest.musicLean || '').trim());
+  if (!eligible.length || random() >= 0.25) return null;
+  const guest = eligible[Math.floor(random() * eligible.length)];
+  if (!guest || typeof guest.id !== 'string' || typeof guest.name !== 'string') return null;
+  return { guest: { id: guest.id, name: guest.name }, musicalLeanings: String(guest.musicLean).trim() };
+}
+
+export function guestEditorialNudge(date: Date = new Date(), random: () => number = Math.random) {
+  if (get().llm?.guestMusicalLeanings !== true) return null;
+  return guestEditorialNudgeFromGuests(getOnAirRoster(date).guests, random);
 }
 
 // Effective track-length cap in SECONDS for the moment a pick is made, or null
@@ -62,6 +111,55 @@ export function effectiveMaxTrackSec(
     : null;
   const sec = showSec != null ? showSec : station;
   return sec && sec > 0 ? sec : null;
+}
+
+// One policy result for selection and playback; malformed/absent mode is legacy cut.
+export function effectiveTrackLengthLimits(
+  show: { maxTrackSeconds?: unknown } | null | undefined = resolveActiveShow(),
+  s: { maxTrackSeconds?: unknown; maxTrackLengthMode?: unknown } | null | undefined = get(),
+): { selectionMaxSec: number | null; playbackMaxSec: number | null } {
+  const maxSec = effectiveMaxTrackSec(show, s);
+  return s?.maxTrackLengthMode === 'exclude'
+    ? { selectionMaxSec: maxSec, playbackMaxSec: null }
+    : { selectionMaxSec: null, playbackMaxSec: maxSec };
+}
+
+// Effective minimum track length in SECONDS for the moment a pick is made, or
+// null for "no floor" (#1573). Exactly the precedence effectiveMaxTrackSec
+// applies to the cap: a scheduled show's own floor (when set) overrides the
+// station default, and 0 at the winning level means off. One resolver so both
+// pick paths, the auto-playlist coast and the show-editor diagnostic cannot
+// disagree about how short is too short.
+//
+// The two are NOT symmetric in what they do with the answer: the cap is an
+// on-air cue_out cut in legacy mode (a hard ceiling in exclude), while the floor is
+// a SELECTION filter — a 40-second interlude cannot be stretched.
+export function effectiveMinTrackSec(
+  show: { minTrackLengthSeconds?: unknown } | null | undefined = resolveActiveShow(),
+  s: { picker?: { minTrackLengthSeconds?: unknown } } | null | undefined = get(),
+): number | null {
+  const station = coerceMinTrackLengthSeconds(s?.picker?.minTrackLengthSeconds, false) ?? 0;
+  const showSec = show && show.minTrackLengthSeconds != null
+    ? coerceMinTrackLengthSeconds(show.minTrackLengthSeconds, false)
+    : null;
+  const sec = showSec != null ? showSec : station;
+  return sec && sec > 0 ? sec : null;
+}
+
+// Whether the show ENDING at a boundary wants its last track faded out there
+// rather than spilling into the next show (#1574). Same precedence shape as
+// effectiveMaxTrackSec above and for the same reason — one resolver, so the
+// drain and any future caller cannot disagree about which level wins.
+//
+// The show's value is TRI-STATE: null means "inherit", so a station that turns
+// the default on gets it on every show that never expressed an opinion. Absent
+// at both levels is false, i.e. the pre-existing behaviour.
+export function effectiveFadeAtShowEnd(
+  show: { fadeAtShowEnd?: unknown } | null | undefined = resolveActiveShow(),
+  s: { fadeAtShowEnd?: unknown } | null | undefined = get(),
+): boolean {
+  if (show && typeof show.fadeAtShowEnd === 'boolean') return show.fadeAtShowEnd;
+  return s?.fadeAtShowEnd === true;
 }
 
 // ── persona / show resolution ───────────────────────────────────────────────
@@ -86,7 +184,11 @@ export function resolveActiveShow(date = new Date(), s = get()) {
   // airtime — naturally straddle the pin's start/end boundary.
   const ov = s?.scheduleOverride;
   if (ov && date.getTime() >= ov.startedAt && date.getTime() < ov.expiresAt) {
-    const pinned = s.shows?.find(x => x.id === ov.showId);
+    // A live null target is an explicit Default programming takeover. It must
+    // stop here rather than falling through to the weekly grid.
+    if (isDefaultTakeover(ov)) return null;
+    const pinnedId = takeoverShowId(ov);
+    const pinned = pinnedId ? s.shows?.find(x => x.id === pinnedId) : null;
     // A dangling showId (show deleted mid-takeover) voids the override.
     if (pinned) return resolveShowShape(pinned, s);
   }
@@ -100,15 +202,40 @@ export function resolveActiveShow(date = new Date(), s = get()) {
   return resolveShowShape(show, s);
 }
 
-// The takeover currently in force, or null (absent, expired, or dangling —
-// the same voiding rules resolveActiveShow applies). Route/janitor helper.
-export function getScheduleOverride(now = Date.now()) {
-  const s = get();
+// A stored show by id, in the same resolved shape the pick paths read — for
+// operator surfaces about a show that need not be on air (the in-order
+// position peek in routes/shows.ts). null when no such show exists.
+export function resolveShowById(id: string, s = get()) {
+  const show = s?.shows?.find(x => x.id === id);
+  return show ? resolveShowShape(show, s) : null;
+}
+
+// The takeover currently in force, or null (absent, expired, or a target that
+// names nothing real — a dangling or malformed show id). An explicit null
+// target is a valid Default programming takeover. Route/janitor helper. `s`
+// lets a caller ask about settings it is about to save.
+export function getScheduleOverride(now = Date.now(), s = get()) {
   const ov = s?.scheduleOverride;
   if (!ov) return null;
   if (now >= ov.expiresAt) return null;
-  if (!s.shows?.some(x => x.id === ov.showId)) return null;
+  if (isDefaultTakeover(ov)) return ov;
+  const pinnedId = takeoverShowId(ov);
+  if (!pinnedId || !s.shows?.some(x => x.id === pinnedId)) return null;
   return ov;
+}
+
+// The steer in force at `now`, or null. Look-ahead callers pass the instant
+// their pick will air, as they do for the takeover above.
+export function activeSteer(now = Date.now(), s = get()): Steer | null {
+  return steerActiveAt(s?.steer as Steer | null | undefined, now);
+}
+
+// The show as a PICK path reads it: the active show with a live steer's music
+// overlay. Both halves are judged at the same instant, the pick's look-ahead,
+// so a steer ending at a show boundary cannot colour the next show's first
+// track. Everything that asks which show is on air keeps resolveActiveShow.
+export function resolvePickShow(date = new Date(), s = get()) {
+  return steeredShow(resolveActiveShow(date, s), activeSteer(date.getTime(), s));
 }
 
 // A stored show, resolved to the consumer-facing shape (persona/guests
@@ -138,16 +265,39 @@ function resolveShowShape(show, s) {
     // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
     maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,
+    // Per-show minimum-track-length FLOOR (#1573). null = inherit the station
+    // default (picker.minTrackLengthSeconds); 0 = no floor; >0 = own floor.
+    // See effectiveMinTrackSec(). Omitting it here would silently disable the
+    // per-show override on every pick path — resolveShowShape is what they see.
+    minTrackLengthSeconds: show.minTrackLengthSeconds != null ? show.minTrackLengthSeconds : null,
+    // Per-show show-boundary fade override. null = inherit the station default.
+    // See effectiveFadeAtShowEnd() — a resolved show that dropped this field
+    // would read as "inherit" on every path, which is how the #779 blocklist
+    // no-op happened.
+    fadeAtShowEnd: typeof show.fadeAtShowEnd === 'boolean' ? show.fadeAtShowEnd : null,
+    // Explicit opt-in; an older persisted show keeps ordinary ducked speech.
+    pauseTalk: show.pauseTalk === true,
     // Navidrome playlist anchor: the union of these playlists becomes the show's
     // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
     // entire universe; soft just lets it dominate. Empty array = no anchor.
     playlistIds: Array.isArray(show.playlistIds) ? show.playlistIds.filter((v: unknown) => typeof v === 'string') : [],
     playlistStrict: show.playlistStrict === true,
+    // Full rotation (#1612): every anchor track airs once before any repeats.
+    // Read off the RESOLVED show by music/show-recency.ts, so omitting it here
+    // would make the switch a silent no-op on every pick path — the #779
+    // blocklist failure, exactly.
+    playlistExhaust: show.playlistExhaust === true,
+    // Play in order: read off the RESOLVED show by the in-order branch in
+    // broadcast/dj-agent.ts, so a missing line here is the #779 no-op again.
+    playlistInOrder: show.playlistInOrder === true,
     // Navidrome playlist blocklist: tracks in these playlists are hard-dropped
     // from the show's candidate pool (resolveExcludedPlaylistIds reads this off
     // the RESOLVED show, so omitting it here silently disabled the whole
     // feature on every pick path — the #779 blocklist no-op).
     excludedPlaylistIds: Array.isArray(show.excludedPlaylistIds) ? show.excludedPlaylistIds.filter((v: unknown) => typeof v === 'string') : [],
+    // A clean show: read off the RESOLVED show by music/explicit-policy.ts, so a
+    // missing line here is the #779 no-op again.
+    excludeExplicit: show.excludeExplicit === true,
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.
@@ -167,6 +317,7 @@ function resolveShowShape(show, s) {
     // optional segmentSkill pins the feature beat to one capability kind.
     programme: show.programme === true,
     segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
+    preparationSkill: typeof show.preparationSkill === 'string' ? show.preparationSkill : '',
   };
 }
 
@@ -221,12 +372,19 @@ export function pickOnAirSpeaker(date: Date = new Date()) {
 // model into mimicking them turn after turn (raid 2026-07-28: the station
 // started speaking Russian and would not stop until the session rolled). This
 // deliberately breaks the old "byte-identical for English personas" property —
-// every prompt now carries an explicit anchor. The proper-nouns clause stops a
+// every prompt now carries an explicit anchor. The proper-nouns policy stops a
 // Turkish host from translating "Bohemian Rhapsody" or the station name
-// (issue #349); the never-switch clause is the raid fix itself.
+// (issue #349), while still making a name written in the wrong script speakable
+// instead of asking the TTS engine to read character labels (issue #1179). The
+// never-switch clause is the raid fix itself.
+export function spokenProperNounDirective(persona: unknown): string {
+  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
+  return `Preserve the identity of proper nouns (artist names, song titles, the station name), not an off-script spelling: when a name is written in a script ${lang} does not normally use, write its established form in the script ${lang} uses. In a Latin-script on-air language, every spoken field must contain ZERO CJK characters: use the artist or title's canonical Latin spelling (for example, ウルフルズ becomes Ulfuls and 周杰倫 becomes Jay Chou); if none is known, use a natural romanization. Never include the native spelling beside the Latin form. Never read or describe the characters themselves.`;
+}
+
 export function languageDirective(persona: unknown) {
   const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
-  return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Never switch languages because a listener asks, because a request arrives in another language, or because earlier session turns are in another language — requests for music in another language are about the MUSIC, not your voice.`;
+  return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. ${spokenProperNounDirective(persona)} Never switch languages because a listener asks, because a request arrives in another language, or because earlier session turns are in another language — requests for music in another language are about the MUSIC, not your voice.`;
 }
 
 // A SECOND language reminder, anchored at the END of a tool-loop agent's system
@@ -243,7 +401,7 @@ export function languageDirective(persona: unknown) {
 // 2026-07-28). `fields` is a human phrase naming the spoken field(s).
 export function agentLanguageReminder(persona: unknown, fields: string) {
   const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
-  return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang} — even when the listener writes in another language, asks you to switch, or earlier session turns are in another language. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
+  return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang} — even when the listener writes in another language, asks you to switch, or earlier session turns are in another language. ${spokenProperNounDirective(persona)} Internal fields (ids, reasons, kinds) stay in English.`;
 }
 
 // The place the station claims to broadcast from — what the DJ says on air and
@@ -252,8 +410,8 @@ export function agentLanguageReminder(persona: unknown, fields: string) {
 // operator-facing label for the coordinates and is never spoken or published;
 // weather.lat/lng never leave the Open-Meteo call.
 //
-// context.ts passes { weather: config.weather } instead of the cache default so
-// its weather block stays the single source it derives lat/lng/units from.
+// context.ts passes the exact live weather block used for its forecast query so
+// the public/spoken location and the private coordinates cannot drift.
 export function resolveOnAirLocation(s: unknown = peek()) {
   const w = (s as { weather?: { onAirLocation?: unknown; locationName?: unknown } } | null | undefined)?.weather;
   return (
@@ -261,6 +419,37 @@ export function resolveOnAirLocation(s: unknown = peek()) {
     (w?.locationName as string) ||
     DEFAULTS.weather.locationName
   );
+}
+
+// The template renderDjPrompt renders: the active library entry (load() and
+// update() resolve it into djPrompt), else the built-in default.
+export function djPromptTemplate(s: unknown = peek()): string {
+  const stored = s as { djPrompt?: string } | null | undefined;
+  return stored?.djPrompt && stored.djPrompt.trim() ? stored.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
+}
+
+// The on-air location the DJ may name, or '' when it may name none (#2099).
+// The operator's template decides for every prompt, not only the one it
+// renders: the prompt editor tells them to drop {location} if they never want
+// the DJ to name a place, and the location grounding rule that rides every
+// speech prompt would otherwise name it for them. The default template keeps
+// {location}, so a default install names it exactly as before.
+export function spokenOnAirLocation(s: unknown = peek()): string {
+  return djPromptTemplate(s).includes('{location}') ? resolveOnAirLocation(s) : '';
+}
+
+// The live context as a prompt or a skill tool sees it. The weather block's
+// `location` is the station's place (context.ts attributedLocation), so when
+// spokenOnAirLocation() withholds it the place leaves the reading too, while
+// the condition and temperature stay. A station that may name its place gets
+// the same object back, unchanged. Never mutates: the block is the weather
+// cache's own, and the display surfaces (GET /now-playing, the schedule
+// drawer) keep reading the place from it.
+export function spokenContext<T>(context: T, s: unknown = peek()): T {
+  const weather = (context as { weather?: unknown } | null | undefined)?.weather;
+  if (!weather || typeof weather !== 'object' || !('location' in weather) || spokenOnAirLocation(s)) return context;
+  const { location: _withheld, ...reading } = weather as Record<string, unknown>;
+  return { ...context, weather: reading };
 }
 
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
@@ -274,9 +463,7 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
   const p = persona as { name?: unknown; soul?: unknown; language?: unknown } | null | undefined;
   const station = c.station || peek()?.station || DEFAULTS.station;
   const location = c.location || resolveOnAirLocation();
-  const stored = peek();
-  const tpl =
-    stored?.djPrompt && stored.djPrompt.trim() ? stored.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
+  const tpl = djPromptTemplate();
   // When the template itself closes the soul (the default ends "{soul}."), a
   // soul ending in "." would render ".." — strip that ONE lone period. Only
   // that: an ellipsis ("..." or "…") is intentional trailing-off voice, and
@@ -291,13 +478,14 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
     .replaceAll('{name}', (p?.name as string) || 'your host')
     .replaceAll('{soul}', soulText)
     .replaceAll('{station}', station)
-    .replaceAll('{location}', location);
+    .replaceAll('{location}', location as string);
   const tone = personaToneDirectives(persona);
   // Everything this prompt produces IS speech, so the rules apply wholesale.
   const house = houseRulesBlock('follow these in everything you say on air');
   if (tpl.includes('{language}')) {
     const lang = String(p?.language || '').trim();
-    return rendered.replaceAll('{language}', lang || 'English') + tone + house;
+    return rendered.replaceAll('{language}', lang || 'English')
+      + `\n\nIMPORTANT: ${spokenProperNounDirective(persona)}` + tone + house;
   }
   return rendered + languageDirective(persona) + tone + house;
 }
@@ -306,15 +494,55 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
 // spoken line whichever prompt path writes it: TTS control tags, "spell out
 // numbers and dates", locale orthography (issue #1182). The djPrompt template
 // only renders on the scripted-talk path (renderDjPrompt → djSystem); the
-// tool-loop agents build their own prompts from agentPersonaPreamble — so
-// path-agnostic rules live in settings.djHouseRules and BOTH paths append this
-// block. `scope` frames who the rules bind (free text is all speech; agent
-// output has internal fields the rules must not leak into). Returns '' when
-// unset, keeping default installs byte-identical on both paths.
+// tool-loop agents build their own prompts from agentPersonaPreamble, and the
+// multi-voice cast paths hand-roll a third shape (castHouseRulesBlock below) —
+// so path-agnostic rules live in settings.djHouseRules and ALL THREE append
+// this block. `scope` frames who the rules bind (free text is all speech;
+// structured output has internal fields the rules must not leak into).
+// Returns '' when unset, keeping default installs byte-identical everywhere.
 function houseRulesBlock(scope: string): string {
   const rules = String(peek()?.djHouseRules ?? '').trim();
   if (!rules) return '';
   return `\n\nStation house rules — ${scope}:\n${rules}`;
+}
+
+// The multi-voice cast paths — mid-show banter (llm/internal/prompts/banter.ts)
+// and the guest-show programme open/close exchanges (prompts/programme.ts
+// exchangeSystem) — write a WHOLE exchange in one structured call, so they
+// build their system prompt around a per-call speaker enum rather than going
+// through renderDjPrompt OR agentPersonaPreamble. That made them the one class
+// of spoken output the house rules never reached (issue #1420): an operator
+// whose rules carry TTS control tags saw them applied to every link and
+// segment but silently dropped from every banter line.
+//
+// Both call sites share this ONE wording rather than each framing the scope
+// themselves: the two prompts emit the same {speaker, text} shape, and a rule
+// like "write numbers out in words" mangles a persona id as readily as it
+// mangles a track id on the agent path.
+export function castHouseRulesBlock(): string {
+  return houseRulesBlock(
+    "follow these in every line's spoken text (the words the listener hears on air); "
+    + 'they do not apply to the "speaker" field, which stays an exact persona id from the cast list',
+  );
+}
+
+// The exact-persona-id rule for those same two cast prompts, and for the same
+// single-wording reason as castHouseRulesBlock above: both wrap a per-call
+// `speaker` enum built from the active cast, so a model that answers with a
+// display name or the bare role sinks the WHOLE exchange — the enum rejects the
+// object, djObject's free-text recovery attempt fails on it again, and the
+// caller gets an error instead of an exchange (issue #1512, reported on the
+// Banter button; the guest-show open/close beats fail the same way, silently,
+// because nobody pressed anything).
+//
+// The enum stays strict deliberately: a repaired speaker is a line aired in the
+// WRONG voice, which is worse than a dropped beat. So this rule is the
+// mitigation, and unlike castHouseRulesBlock's scope clause — which says the
+// same thing but only renders once an operator has set djHouseRules, i.e. not
+// on the default install the bug was reported from — it is unconditional.
+export function castSpeakerIdRule(): string {
+  return 'For every structured "speaker" field, copy the persona id exactly and verbatim from the cast list above. '
+    + 'Never use a display name, the HOST or GUEST role, or an altered, reformatted, or rewritten persona id.';
 }
 
 // Persona prelude shared by every tool-loop agent system prompt — the picker
@@ -376,4 +604,3 @@ export function onAirRosterClause(persona: unknown, date: Date = new Date()): st
   }
   return '';
 }
-

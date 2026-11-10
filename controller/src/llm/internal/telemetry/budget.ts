@@ -1,15 +1,5 @@
-// Daily LLM token counter — the running tally the budget cap is enforced
-// against (see core/pure.ts `budgetMode`).
-//
-// Lives low in the dependency graph alongside log.ts so the call recorder can
-// increment it without an upward import (no `settings`, no policy — just the
-// number). The cap/thresholds and the normal/soft/hard policy live higher, in
-// broadcast/dj-budget.ts, which reads `dailyTokensUsed()` from here.
-//
-// Bucketed by UTC day to match the events-*.jsonl files (which the seed below
-// sums) and how most provider quota windows roll. The bucket resets itself when
-// the UTC date changes, with no daemon — a long-running process crossing
-// midnight simply reads 0 for the new day and accumulates from there.
+// Count tokens by UTC day, matching events-*.jsonl; reset on the next read after midnight.
+// This module stores the count; broadcast/dj-budget.ts owns cap policy.
 
 import { readFile } from 'node:fs/promises';
 import { STATE_DIR } from '../../../config.js';

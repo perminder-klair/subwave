@@ -1,8 +1,4 @@
 'use client';
-// The global system-prompt library: templates shared by every persona, one active
-// at a time ('' = the built-in default). Two views — the library list and a single
-// template's editor. Form data lives in the container; this holds only which view
-// is showing.
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useFormState, useWatch, type Control, type UseFormSetValue } from 'react-hook-form';
@@ -58,12 +54,9 @@ export function SystemPromptModal({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   // The schema's own per-row verdict — not a local reimplementation of it.
   const { errors } = useFormState({ control, name: 'djPrompts' });
-  // `promptFields` (useFieldArray) is the ROW identity list (_rhfKey, order,
-  // id) — it is not guaranteed to reflect a live keystroke on an already-
-  // mounted row's name/text (those are written by TextField's OWN
-  // useController elsewhere in the tree). `useWatch` reads the live values
-  // from the same central RHF store every writer updates, regardless of
-  // which component performed the write.
+  // `promptFields` is the row identity list (_rhfKey, order, id) and does not
+  // reflect live keystrokes written by TextField's own useController.
+  // `useWatch` reads the current values from the central RHF store.
   const watchedPrompts = useWatch({ control, name: 'djPrompts' });
 
   // Re-opening always lands on the library list, never a stale editor.
@@ -138,9 +131,8 @@ export function SystemPromptModal({
     </div>
   );
 
-  // Both footers own a full-width wrapping row rather than sitting as bare children
-  // of the modal's non-wrapping footer flex: on a phone the status line plus two
-  // buttons has to break onto two lines.
+  // Full-width wrapping row rather than bare children of the modal's
+  // non-wrapping footer flex, so phones can break onto two lines.
   const libraryFooter = (
     <div className="flex w-full flex-wrap items-center justify-end gap-2">
       <span
@@ -198,13 +190,15 @@ export function SystemPromptModal({
             <p className="mb-3 max-w-[70ch] text-[12px] leading-[1.6] text-muted">
               One template wraps the DJ&rsquo;s scripted talk (intros, links, idents, time
               checks, programme beats), shared by all personas. The tool-using agents (track
-              picker, requests, skill segments) use each persona&rsquo;s name and soul directly
-              instead — only the house rules below reach those too. Keep several saved and
+              picker, requests, skill segments) and the multi-voice guest exchanges (banter,
+              show open/close) use each persona&rsquo;s name and soul directly instead — only
+              the house rules below reach those too. Keep several saved and
               switch between them. Placeholders:{' '}
               <code>{'{name}'}</code> · <code>{'{soul}'}</code> · <code>{'{station}'}</code> ·{' '}
               <code>{'{location}'}</code> · <code>{'{language}'}</code>. <code>{'{location}'}</code> is the
               station&rsquo;s on-air location, not the weather coordinates; drop it if you never
-              want the DJ to name a place. Most stations stay on the built-in default.
+              want the DJ to say where the station is, and the agents and guest exchanges stop
+              naming it too. Most stations stay on the built-in default.
             </p>
             <div className="grid gap-2">
               {row({
@@ -244,14 +238,12 @@ export function SystemPromptModal({
               </Btn>
             </div>
 
-            {/* The one operator block that reaches EVERY spoken line: the scripted
-                talk the template wraps AND the tool-using agents it never touches
-                (issue #1182). */}
             <div className="mt-5 border-t border-ink/40 pt-4">
               <div className="caption mb-1.5">station house rules</div>
               <p className="mb-2 max-w-[70ch] text-[12px] leading-[1.6] text-muted">
-                Appended to <b>everything</b> the DJ speaks — scripted talk and the
-                tool-using agents alike, whichever template is active. Use it for rules
+                Appended to <b>everything</b> the DJ speaks — scripted talk, the
+                tool-using agents and guest banter alike, whichever template is
+                active. Use it for rules
                 that must never be skipped: TTS control tags, &ldquo;spell out numbers and
                 dates in words&rdquo;, language-specific spelling. Leave empty for none.
               </p>

@@ -4,6 +4,10 @@
 // Part of the queue/ split - see ../queue.ts, which owns the Queue class.
 
 import type { TrackOutro, TrackKeyRange } from '../../music/library-db.js';
+import type { HostSpeechStamp } from '../session.js';
+import type { ClipSeamCues } from '../stem-seam.js';
+import type { TransitionEffect } from '../../settings/vocab.js';
+import type { MixDropReason } from '../../schemas/transitions.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
 // `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
@@ -51,7 +55,25 @@ export interface Track {
   loop?: boolean;
   loopBar?: number;
   crossSec?: number;
+  // Show-boundary fade (#1574): this track was cued out at a show change, so
+  // its ending is a cut rather than its own. radio.liq reads liq_show_fade off
+  // the OUTGOING track and suppresses the exit gestures above.
+  showFade?: boolean;
+  // The durable seam record (library.db plays.transition_*): the DJ's ask on
+  // this pick before any strip, and every armed gesture a strip took back.
+  // Rides the track so it survives queue.json across a restart; written to
+  // the play row when the track airs. Never annotated to Liquidsoap.
+  transitionAsk?: TransitionEffect | 'normal';
+  mixDrops?: MixDrop[];
   [k: string]: unknown;
+}
+
+// One armed gesture that did not reach air, and why. `auto` marks the
+// length-cap washout, which the controller armed rather than the DJ.
+export interface MixDrop {
+  effect: TransitionEffect;
+  reason: MixDropReason;
+  auto?: true;
 }
 
 // One entry in the queue. `upcoming` holds these before play; `current` and
@@ -60,18 +82,78 @@ export interface Track {
 export interface QueueItem {
   track: Track;
   requestedBy?: string | null;
+  // This item was queued by the OPERATOR, not by a listener. It exists because
+  // `requestedBy` cannot answer that question: the studio queue pushes
+  // `requestedBy: 'studio'` precisely so it inherits the four exemptions that
+  // discriminator carries (the #447 length cap, the show-boundary cut, the
+  // bed's request reason, the sub-crossfade warning), and every one of those
+  // is right for an operator push. What is NOT right is `routes/request.ts`
+  // reading the same truthiness as "a listener is waiting" — six manual Queue
+  // presses then filled `requests.maxPending` and shut the listener request
+  // line, with nothing in the refusal naming the cause.
+  //
+  // So the origin gets its own field rather than overloading that one, and the
+  // two questions stay separable. Read ONLY by `pendingListenerRequests()`;
+  // nothing on the air path may branch on it, or the exemptions above quietly
+  // acquire a second discriminator that can disagree with the first.
+  //
+  // ABSENT means "not known to be an operator push", which is what an item
+  // recovered from a `queue.json` written before this field reads as — i.e.
+  // exactly the old behaviour, for the ≤2h such a snapshot survives.
+  operator?: boolean;
+  // This item was queued as part of an operator BLOCK — a whole album, or a
+  // run of tracks for an artist show (#1622 FR 4).
+  //
+  // IDENTITY ONLY. Nothing on the air path may branch on it: the block airs as
+  // ordinary FIFO queue items, with exactly the exemptions `requestedBy:
+  // 'studio'` and `allowDuplicate` already carried, and adding a third
+  // discriminator here is how the drain would come to treat "in a block"
+  // as a fourth kind of track. It exists so three surfaces can say what a
+  // listener already hears — the booth log names the block once instead of
+  // thirty times, the admin queue badges the rows, and
+  // `DELETE /dj/queue/block/:id` can undo one press with one press.
+  //
+  // `index`/`size` are stamped from the PLAN, so they describe the block as it
+  // was queued and do not shrink as it plays out ("3 of 11" stays "3 of 11").
+  block?: { id: string; label: string; index: number; size: number };
+  // One of a steer's opening tracks, keyed by that steer's start. PRIVATE:
+  // identity for clearing them with the steer, never projected (snapshot()'s
+  // field list does not name it), so to a listener it is an ordinary pick.
+  // A single queued track (`until: 'once'`) carries STEER_ONCE_KEY instead.
+  steer?: string;
+  // This item's link was asked for by the operator by hand (a steer's "Introduce
+  // on air"): a manual trigger, so the station voice switch does not silence it
+  // (voice-policy.ts trackLineVoiceAllowed). Absent on every automatic line.
+  introByOperator?: boolean;
   intent?: string | null;
   introScript?: string | null;
+  // Persist the one-label pass so retries/recovery cannot eat a second label
+  // that belongs to the spoken text. Absent on legacy queue snapshots.
+  introLabelChecked?: boolean;
   introKind?: string;
   // Who WROTE introScript. Carried on the item because the line is rendered in
   // drainToLiquidsoap and aired in airIntro, both later than generation and
   // both of which used to re-resolve the speaker from the wall clock — so
   // across a show boundary a line written for the incoming DJ got spoken in the
-  // outgoing DJ's voice. Decided once, at push time. Not persisted: a restart
-  // drops unrendered intros anyway, and a stale persona blob is worse than the
-  // live fallback.
+  // outgoing DJ's voice. Decided once at generation and persisted in the
+  // wholesale queue snapshot, so recovery keeps the real author. Host-owned
+  // speech is separately freshness-stamped below and invalidated before redrain.
   introPersona?: Persona | null;
+  /** Explicit ownership of ordinary host speech, captured when its script was written. */
+  introHostSpeech?: HostSpeechStamp | null;
+  // Editorial session that wrote a DJ link. A link may be rendered and held
+  // beyond a show boundary, but it must never cross into the next show's
+  // session — even when the same persona hosts both shows.
+  introSessionKey?: string | null;
   aiPicked?: boolean;
+  // Picker's padded show forecast, independent of whether its link spoke a
+  // clock. Persisted so selection checks follow that show's live length limit.
+  selectionShowAt?: number | null;
+  // The show this item was chosen for (show-boundary showKeyAt, at its
+  // selection moment), stamped when queued. Kept, not recomputed later: a
+  // takeover that has since expired or a grid edited meanwhile would change
+  // the answer for a moment in the past.
+  showKey?: string | null;
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
   // Epoch ms of the air moment this item's link was WRITTEN against — stamped
   // only when the generator actually handed the model a clock to speak
@@ -85,13 +167,24 @@ export interface QueueItem {
   // this item, meaning its link airs over the BED rather than over this track
   // (broadcast/bed-policy.ts). The bed's own start is what fires airIntro — see
   // onBedStarted — so this is how that event finds the item it belongs to.
-  // Both bed fields ride persist()'s wholesale item snapshot, which is what
-  // makes the maybePushBed re-drain guard hold across a controller restart.
+  // All three bed fields ride persist()'s wholesale item snapshot, which is
+  // what makes the maybePushBed re-drain guard hold across a controller
+  // restart.
   bedded?: boolean;
   // The predecessor's exit canvas the bed fades in under. The bed's marker
   // fires at cross-FEED time, this many seconds before the bed is dominant —
   // onBedStarted holds the link for what remains of it.
   bedEntrySec?: number;
+  // Seconds the bed really pushes this item back: its own length less the two
+  // crosses it overlaps (the predecessor's exit canvas on the way in, its own
+  // on the way out). A bed is handed straight to next.txt and is NEVER an
+  // `upcoming` entry, so nothing that forecasts an air time from the queue can
+  // see it — this is how the show-boundary cut (#1574) accounts for it.
+  bedDelaySec?: number;
+  // Seconds a pause-and-talk silence pushes this item back after subtracting
+  // the two crossfades it overlaps. Like bedDelaySec, the silent request goes
+  // straight to next.txt and is otherwise invisible to queue forecasts.
+  pauseDelaySec?: number;
   queuedAt?: string;
   sent?: boolean;
   confirmedInLiquidsoap?: boolean;
@@ -103,26 +196,42 @@ export interface QueueItem {
   startedAt?: string;
   endedAt?: string;
   source?: string;
-  // Effective early end (seconds) stamped at drain time — the length cap's
-  // liq_cue_out today, a stem-blend cue later. The pair-drain deadline math
-  // uses min(duration, cueOutSec): a capped track ends at its cue, minutes
-  // before its tagged duration.
+  // Effective cue points stamped at drain time. The pair-drain deadline math
+  // uses cueOutSec - cueInSec: both are absolute file offsets, while startedAt
+  // is the moment playback begins at cueInSec.
+  cueInSec?: number;
   cueOutSec?: number;
   // Stem-blend seam (feature: stem-blend transitions). `stemBlend` rides the
   // OUTGOING item: a rendered clip airs after it (written to next.txt right
   // behind its own URI). `stemSeam`/`stemCueInSec` ride the INCOMING item:
   // its entry-side effects are stripped at its own drain (the seam INTO it
   // is pre-rendered) and it cues in past the head the clip already played.
-  stemBlend?: { clipPath: string; blendStartSec: number; inCueSec: number } | null;
+  stemBlend?: ClipSeamCues & {
+    clipPath: string;
+    // Persist the provisional exit so restart recovery can undo it exactly.
+    originalExit?: Pick<Track, 'washout' | 'washoutAuto' | 'washoutDelay' | 'loop' | 'loopBar' | 'crossSec'>;
+  } | null;
   stemSeam?: boolean;
+  // Outgoing music already committed an early ending into this clip/track.
+  lengthPolicyCommitted?: boolean;
   stemCueInSec?: number;
 }
+
+// The `steer` marker on a single queued track. No steer is stored for it, so
+// nothing that tidies up after a stored steer may take it.
+export const STEER_ONCE_KEY = 'once';
+
 
 // One row in the rolling recent-plays sidecar (the picker's repeat window).
 export interface RecentPlay {
   id: string | null;
   title: string | null;
   artist: string | null;
+  // The record this play came off, for the album cooldown (#1485 FR 3).
+  // OPTIONAL because the sidecar is durable: every row written before the
+  // cooldown existed carries no album, and so takes no part in it — an upgrade
+  // starts remembering albums from the next play, never retroactively.
+  album?: string | null;
   endedAt: string;
 }
 
@@ -152,3 +261,4 @@ export interface NowPlaying {
 //   chatty     → uniform 1-5 tracks
 //   aggressive → uniform 1-3 tracks
 // A DJ-mode persona reads one rung chattier (effectiveFrequency), so it links
+

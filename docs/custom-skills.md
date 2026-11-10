@@ -15,8 +15,9 @@ skills the same way: from the admin UI, or by dropping a folder into
 > a name, a brief, and a cooldown, then **Create skill**. It writes
 > `state/skills/<slug>/SKILL.md` for you (and arrives **disabled** — enable it when
 > you're happy). Custom skills can also be **edited** and **deleted** from the same
-> page. The form is prompt-only; a `tool.mjs` data fetcher is still a disk-drop (see
-> [tool.mjs (optional)](#toolmjs-optional) below).
+> page. The form can also point the skill at an RSS/Atom feed (see
+> [Feeds without code](#feeds-without-code)); anything else it should fetch is a
+> `tool.mjs` disk-drop (see [tool.mjs (optional)](#toolmjs-optional) below).
 
 > **TL;DR — News reads UK/BBC and you want something local?** Open
 > **/admin/skills → News → Edit**, paste your own RSS feed URL and rewrite the
@@ -24,8 +25,8 @@ skills the same way: from the admin UI, or by dropping a folder into
 
 This borrows the *format* of [Anthropic's skills](https://github.com/anthropics/skills)
 — a `SKILL.md` with YAML frontmatter and a markdown body, plus optional code —
-but **not** their meaning. A SUB/WAVE skill is exactly one thing: a between-track
-**spoken segment**. (You can't drop in `anthropics/skills/pdf` and have it do
+but **not** their meaning. A SUB/WAVE skill provides a between-track **spoken segment**, or its data tool
+can prepare a show through **Episode preparation skill**. (You can't drop in `anthropics/skills/pdf` and have it do
 anything — those manipulate documents.)
 
 ## Layout
@@ -37,15 +38,23 @@ state/skills/
     tool.mjs      # OPTIONAL: a data fetcher, wrapped as a tool the DJ can call
 ```
 
-Two copy-ready examples live in [`docs/examples/skills`](./examples/skills) — copy
-a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
+Copy-ready examples live in [`docs/examples/skills`](./examples/skills) —
+copy a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
 
+- [`random-artist-pick`](./examples/skills/random-artist-pick) prepares an artist spotlight show. Select it as the show's **Episode preparation skill**.
 - [`moon-phase`](./examples/skills/moon-phase) — the small end. No settings, no
   network, no memory: it works out the lunar phase from the date and returns it.
 - [`sunset`](./examples/skills/sunset) — the other end. Operator settings
   (`configFields`), a call out to a public API, and `state` so it marks the
   sunset once a day rather than every time it fires. Fill in its coordinates in
   the edit sheet before it will say anything.
+- [`todoist`](./examples/skills/todoist) — the same shape against an
+  **authenticated** API: the DJ picks one outstanding task off your Todoist list
+  and dares the room to go and do it before the next record ends. Put
+  `TODOIST_API_TOKEN` in the root `.env` — the whole file is passed into the
+  controller, so any key you add there reaches `process.env` — then set the
+  filter in the edit sheet. Each task is burned on read for the rest of the day,
+  so it nudges rather than nags.
 
 ## SKILL.md
 
@@ -56,10 +65,16 @@ label: Moon phase         # human label in /admin/skills (defaults to title-case
 cooldown: 6h              # hard min gap between autonomous firings — "90m" | "6h" | "2d" | "45" (bare = minutes)
 cron: 0 * * * *           # OPTIONAL: fire on a fixed schedule instead of/alongside the cooldown gate (see below)
 cronOnly: true            # OPTIONAL: with a cron: set, withhold this skill from random autonomous picks entirely
+cohosts: true             # OPTIONAL: host + every active guest each speak in their own voice (see below)
+voiceEngine: remote       # OPTIONAL: this skill's own TTS voice, with voiceId and voiceProvider (see below)
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
-toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described (only matters with tool.mjs)
+feed: https://…/rss.xml   # OPTIONAL: an RSS/Atom feed this skill reads before it speaks (see below)
+feedMaxItems: 10          # OPTIONAL: how much of that feed to read per fire (1-50, default 10)
+feedMaxAgeDays: 7         # OPTIONAL: skip feed items published longer ago (1-365 days)
+feed2: https://…/rss.xml  # OPTIONAL: a second (and feed3: a third) feed, merged with the first
+toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described
 ---
 The markdown body is the DJ's brief for this segment. Keep it tight: what to
 say, in what tone, and — importantly — when to stay silent. The agent reads
@@ -91,6 +106,188 @@ ignored. A block that isn't valid YAML — most often an unquoted colon in a
 value — still loads, read with the old line-by-line parser, and logs a warning
 naming the file.
 
+### `feed:` — feeds without code
+
+<a id="feeds-without-code"></a>
+
+A `feed:` line is a **fetch**, not a note to yourself. Any skill that declares
+one — with or without a `tool.mjs` — gets a `skill_<name>` tool the DJ calls
+before it writes the line, and the items land in the prompt as that segment's
+source data:
+
+```yaml
+---
+name: giveaway
+label: Giveaway watch
+cooldown: 30m
+feed: https://contest.example.com/state.rss
+feedMaxItems: 10
+---
+The feed is the current state of the contest — report on who is already in it
+rather than inventing a new name. Say nothing if it is empty.
+```
+
+The generated tool is the one the built-in News skill used to hand-roll, so
+every feed skill gets the same behaviour:
+
+- **RSS 2.0, Atom and RDF/RSS-1.0** all parse — namespaced tags
+  (`<dc:title>`, `<content:encoded>`) and CDATA included.
+- `feedMaxItems` (1–50, default 10) caps how much of the feed is read per fire.
+  With `feed2`/`feed3` it is read from each feed, and a fire offers no more than
+  that many items in total. The next fire moves on to the ones left, so a low
+  value still reaches every feed. The merged list holds at most 60 items, taken
+  round-robin: three full 50-item feeds offer 60 of their 150, then report that
+  every item has aired until new ones appear.
+- `feedMaxAgeDays` (1–365, default no limit) drops items published longer ago
+  than that, before `feedMaxItems` counts them. Search feeds need it: Google News
+  ignores its own `when:7d` on a long query and mixes in items months old, which
+  the DJ would otherwise present as news. Undated items are kept.
+- Every item the feed dates reaches the DJ with its day in the station's timezone
+  (`published: 2026-10-30`), so it can tell news from history. A feed that gives
+  a day and no clock keeps that day as written. This is on for every skill the
+  generated tool serves, with no key to set; an undated item simply carries no
+  date. A skill with its own `tool.mjs` passes on what its code returns.
+- `feed2` and `feed3` add further feeds. They are fetched together and merged
+  round-robin, so a busy feed cannot crowd a quiet one out, and a headline that
+  appears in two of them is offered once. One of them failing, taking more than
+  6 seconds, or answering with something that isn't a feed (a pasted site URL, a
+  challenge page) is skipped while another answers, with a warning in the log
+  naming the feed and the error (once, until it recovers). If the feeds that answered have no items, the
+  failure is reported as the fetch error, as with a single feed, naming every
+  feed that failed by its key (`feed2: News feed HTTP 500`); all of them failing
+  does the same and stands the segment down. Only the log carries a feed's host
+  and path: the error can reach the model, and a path or query can hold a token.
+- Items are **burned on read**: at most 6 fresh items reach one segment, and the
+  next fire offers the ones after them rather than repeating. That memory is
+  per-skill and lives for as long as the controller runs.
+- A fetch that fails or times out stands the segment down instead of letting the
+  DJ invent one — the same grounding rule every data-backed skill follows. So
+  does a feed with **nothing fresh left**: once every item has aired, or when the
+  feed has no items at all, the tool returns `{ available: false }` rather than
+  an empty list, and **Run now** or a `cron:` reports that it stood down instead
+  of ordering a line with nothing in it. Set `requiresData: false` if your skill
+  would rather write from its brief.
+
+The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL*,
+*Max items*, *Max age · days*, *Second feed URL* and *Third feed URL*, so a feed
+can be added, changed or cleared without touching disk.
+
+> Only an `http:` or `https:` URL creates the tool. Anything else is logged as a
+> warning naming the skill and leaves it prompt-only — a `feed:` line must never
+> quietly do nothing.
+
+A skill that ships its own `tool.mjs` keeps it: the generic feed tool fills the
+gap, it never displaces a fetcher you wrote. If you want feed items *and*
+something else, read `config.feed` yourself via
+`services.fetchHeadlines` (see the table below).
+
+`feedMaxAgeDays`, `feed2` and `feed3` are read by the generated tool only. On a
+skill with its own `tool.mjs` they do nothing unless that code reads them, and the
+loader logs a warning naming them. That includes **News on a station first booted
+before feeds moved out of it** (#1616): its `state/skills/news/tool.mjs` is still
+the old hand-written fetcher, so these keys have no effect there and its items
+reach the DJ with no `published` date. **Reset to default** on the skill removes
+that file. It also restores the shipped `SKILL.md`,
+so set your feed and any other edits again afterwards.
+
+### `cohosts: true` — one contribution from every host
+
+`cohosts: true` turns the skill from one DJ line into a co-hosted discussion. It
+uses the **active scheduled show's roster**: the show's host followed by every
+resolved `guestPersonaIds` co-host. A skill cannot choose arbitrary personas, and
+the existing enable toggle and persona assignment remain keyed to the host.
+
+The discussion contains exactly one contribution per live roster member, in that
+order. The model is instructed to give each person **2–5 short sentences**, in
+that persona's own character, as one coherent conversation. Do not put labels
+such as `Mara:` in the brief or returned speech: speaker identity is structured
+metadata, and each contribution is rendered through that persona's own TTS
+configuration and fallback. The clips are pre-rendered as a complete exchange
+before any reaches air, then played back-to-back rather than mixed.
+
+A co-hosted skill only runs while an active show has a host and at least one
+resolved guest. Autonomous selection withholds it on a solo/off-show hour; its
+cron logs `requires a co-hosted show`; **Run now**, MCP and programme use stand
+down with that same reason before any model or TTS work — reported, not an
+error, exactly like a data-backed skill that found nothing to say. Ordinary
+skills, including ones with no `cohosts` field, keep the existing one-speaker
+path.
+
+If the skill has a `tool.mjs`, the co-hosted discussion gathers its data the same
+way every other segment does: the skill's own tool loop when `llm.segmentRuntime`
+is `agentic`, and a code-driven fetch plus one structured call when it is
+`direct` (for models that aren't trusted with tool loops). Data-backed skills must
+obtain usable source data before anyone speaks; `{ available: false }` or a tool
+error stands the whole exchange down instead of letting several personas amplify
+an invented fact.
+
+Set it in the admin editor with **Co-hosted discussion**, or in frontmatter:
+
+```yaml
+---
+name: case-discussion
+label: Case discussion
+cohosts: true
+---
+Find one well-sourced historical case and have the hosts discuss the outcome and
+investigation. Give every host a distinct perspective; do not write name labels.
+```
+
+### `voiceEngine:` / `voiceId:` / `voiceProvider:` — the skill's own voice
+
+Absent everything, a skill airs in the on-air DJ's voice. Set `voiceEngine`
+(with `voiceId`, and `voiceProvider` for cloud) and it always speaks in its
+own, through the same engine and voice picker personas use (`/admin/skills →
+Edit → Voice`, with a sample button to audition before saving). Only the voice
+changes: the segment is still the speaker's, at the speaker's own loudness and
+pace.
+
+```yaml
+---
+name: early-bulletin
+label: Early bulletin
+cooldown: 3h
+voiceEngine: remote
+voiceId: newsreader
+---
+```
+
+`voiceId` follows the same rules as a persona's voice, per engine:
+
+| `voiceEngine` | `voiceId` | Empty means |
+| --- | --- | --- |
+| `piper` | an `.onnx` filename in the voice folder | the built-in voice |
+| `kokoro` | a Kokoro id such as `bf_isabella` | not allowed |
+| `chatterbox` | a `.wav` clone reference in the voice folder | the built-in voice |
+| `pocket-tts` | a built-in id such as `alba`, or a `.wav` clone reference | `alba` |
+| `gemini` | a Google voice name | the station's Gemini voice |
+| `remote` | whatever id your remote server understands | its default |
+| `cloud` | the provider's voice id | not allowed, except on `openai-compatible`, where the server picks |
+
+`voiceProvider` is read only for `cloud`: `openai` (the default), `elevenlabs`,
+`fish-audio` or `openai-compatible`.
+
+The admin form refuses a voice that breaks these rules. A hand-edited
+`SKILL.md` is read leniently instead, so the skill still loads:
+
+- An unknown `voiceEngine` reads as no override, and the skill speaks in the
+  DJ's voice.
+- A blank `voiceId` for ElevenLabs or Fish Audio also reads as no override,
+  because neither has a default voice to fall back on. A blank OpenAI voice is
+  `alloy`.
+- Any other voice the engine can't use is reset the way a persona's would be:
+  a bad Kokoro id becomes `bf_isabella`, a bad PocketTTS voice becomes `alba`,
+  and a bad Piper or Chatterbox file, a path among them, becomes the built-in
+  voice.
+
+If the chosen engine is unavailable when the skill airs, the line is read by
+the station's fallback or default voice instead.
+
+A co-hosted skill ignores its voice: every contribution speaks in its roster
+persona's own voice. A voice does not travel through the community catalog,
+because clone references and server-specific ids are station-local, but a zip
+export carries it, arriving disabled for review like everything else.
+
 ### `context:` — what the segment is allowed to mention
 
 `context:` is a comma-separated allow-list of the "right now" fields the DJ may
@@ -101,7 +298,7 @@ weave into this segment. Valid fields:
 | `date` | day of week, date, season |
 | `clock` | local clock time, plus weekend / late-night / commute tags |
 | `time` | the daypart and its vibe (e.g. "morning, productive") |
-| `weather` | current condition, temperature, location |
+| `weather` | current conditions in the forecast's own words ("mainly clear", "light rain showers"), temperature, and the on-air location unless the DJ prompt template drops `{location}` |
 | `festival` | the named festival, if today is one |
 | `show` | the scheduled show on air, if any |
 | `listeners` | how many people are tuned in |
@@ -134,9 +331,19 @@ tick-box per field. An empty selection resets the skill to the default profile.
 `cron:` is an OPTIONAL standard 5-field cron expression (`"0 * * * *"` = top of
 every hour, `"*/30 * * * *"` = every 30 minutes); a leading seconds field is
 accepted too (`"0 0 8 * * *"`). When set, the scheduler registers a dedicated
-timer for that skill and fires it the moment the expression matches — bypassing
+timer for that skill and fires it when the expression matches, bypassing
 the cooldown and the DJ's frequency floor. Leave it blank (the default) and the
 skill only airs through the normal cooldown / frequency-gated segment tick.
+
+**With Talk only between tracks on** (`djTalkOnlyBetweenTracks`, the Station
+voice card in the admin TTS section), a cron fire waits for the next track
+boundary like every scheduled segment, solo and co-hosted alike. The station has
+one boundary slot, so a fire that finds it already taken (another segment
+rendered and waiting for it, or another skill's cron still writing for it)
+stands down before it writes anything, and the booth log says so. It is **not
+retried**: the skill next speaks at its next cron tick, so a sparse expression
+such as `10 */2 * * *` that loses its boundary stays quiet for two hours. With
+the switch off a cron speaks the moment it matches, as it always has.
 
 The expression runs in the station's own timezone (Settings → Station), so a
 `cron: 0 8 * * *` fires at 8am local time wherever the station is configured to
@@ -161,7 +368,9 @@ the segment is required to produce a line, and the model is not offered a "stay
 silent" option.
 
 The one exception is the case where there is nothing to write from. If your
-skill has a `tool.mjs` and it returns `{ available: false }` or fails, the
+skill has a data tool — its own `tool.mjs`, or the one a
+[`feed:`](#feeds-without-code) line generates — and it returns
+`{ available: false }` or fails, the
 forced run **stands down** rather than ordering a line anyway: nothing airs, and
 the reason is logged (and returned to **Run now** as `aired: false`). Without
 that, a skill handed no facts and told it must speak can only invent them — which
@@ -171,17 +380,27 @@ is exactly what the web-search skill did when a search came back empty
 `{ available: false }` merely means "no external item this time" — that is what
 the built-in `curiosity` does.
 
+On the autonomous pool-mode tick, grounded `{ available: false }` results are
+skipped before the LLM call and logged with the selected skill. The scheduler
+then backs that skill off in memory for the shorter of its configured cooldown
+or 15 minutes, so an empty source does not consume retrieval work again on the
+next five-minute tick. Successful-air cooldowns remain separate.
+
 So a cron suits a skill that is worth hearing at a fixed moment every time — a
 morning bulletin, a sign-off, a running joke tied to a particular hour. It still
 suits a skill that speaks *only when something is notable* less well: it fires
 on the clock rather than on the news, so it will keep asking at 8am whether
 there is anything to say. It just no longer makes something up when the answer
-is no. Both example skills in
-[`docs/examples/skills`](examples/skills) are in that second group and
-deliberately carry no `cron:` — `moon-phase` is meant to skip an unremarkable
-gibbous, and `sunset` tracks a time that moves through the year, so pinning it to
-a fixed clock reading would be wrong in a different way. Leave those on
-`cooldown:` and let the director decide.
+is no. The example skills in
+[`docs/examples/skills`](examples/skills) ship without a `cron:` for that reason
+— `moon-phase` is meant to skip an unremarkable gibbous, and `sunset` tracks a
+time that moves through the year, so pinning it to a fixed clock reading would be
+wrong in a different way. Leave those on `cooldown:` and let the director decide.
+
+`todoist` is the one that goes either way, which is why its frontmatter carries
+the line commented out: on `cooldown:` it is a nudge that turns up when it turns
+up, and with `cron: 0 8 * * *` + `cronOnly: true` it becomes a fixed morning
+alarm that never fires at random. Pick the one you actually want to hear.
 
 **Daylight saving.** A normal daily cron survives a clock change: `cron: 0 8 * * *`
 fires once at 08:00 local on the spring-forward day, the autumn day, and every
@@ -276,10 +495,14 @@ export const inputs = { query: 'what to search for; null for the default dig' };
 // HERE (rather than in the controller) is what makes a copy of the skill keep
 // its settings: a duplicate copies tool.mjs verbatim, name and all.
 export const configFields = {
-  feed:         { type: 'url',    label: 'News feed · RSS 2.0', placeholder: 'https://…/rss.xml' },
-  feedMaxItems: { type: 'number', label: 'Max items', min: 1, max: 50, integer: true },
+  endpoint: { type: 'url',    label: 'Status API', placeholder: 'https://…/status.json' },
+  maxRows:  { type: 'number', label: 'Rows to read', min: 1, max: 50, integer: true },
 };
 ```
+
+> **You don't need a `tool.mjs` for a feed.** A `feed:` line in the frontmatter
+> is enough — see [Feeds without code](#feeds-without-code) below. Write a
+> `tool.mjs` when the skill needs something a feed can't give it.
 
 **`configFields` reference.** A flat `{ key: { … } }` map, up to 8 entries per
 skill. Each entry takes:
@@ -292,8 +515,9 @@ skill. Each entry takes:
 | `min` / `max` / `integer` | `number` only — bounds, and whether fractions are refused |
 
 Keys must be `letters, digits, _` starting with a letter, and can't shadow a key
-the editor already owns (`name`, `label`, `cooldown`, `context`, `window`,
-`requiresKey`, `tags`, `toolDescription`, `brief`). A malformed declaration is
+the editor already owns (`name`, `label`, `cooldown`, `cron`, `cronOnly`,
+`cohosts`, `context`, `window`, `requiresKey`, `tags`, `toolDescription`,
+`brief`). A malformed declaration is
 narrowed away rather than breaking the skill — the skill still loads and airs, it
 just shows no settings. A bad *value* is the opposite: the save fails loudly with
 a 400 rather than dropping the knob you just set.
@@ -310,15 +534,17 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 
 | call | what it does |
 |---|---|
-| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG) |
+| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG / Keenable / Firecrawl / Outcrawl) |
 | `services.searchReady()` | `true` when a search provider is usable |
 | `services.nowPlaying()` | the track on air — `{ artist, title, album, year, id }` or `null` |
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
 | `services.library.getArtist(id)` / `.getAlbum(id)` / `.searchArtists(name, opts?)` | Navidrome/Subsonic reads |
 | `services.onThisDay()` | Wikipedia "on this day" events for today |
-| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS feed |
+| `services.fetchHeadlines({ feedUrl?, maxItems?, maxAgeDays?, deadlineMs?, requireFeed? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) into `{ title, description, published? }` items. `published` is an ISO time, or a bare `YYYY-MM-DD` when the feed gives a day and no clock. `deadlineMs` replaces the 15 s default with a limit that covers the body too, and `requireFeed` throws on a 200 that isn't a feed instead of returning no items |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
+| `services.weatherOutlook()` | the next six hours of the station's forecast — `{ nextHours, notes, kinds }`: one row per hour (`inHours`, where 0 is within the hour, `conditions`, `temp`, `rainChancePct`), plain-English notes such as "rain likely in about 3 hours (70% chance)" or "light drizzle possible in about 5 hours", and `kinds`, what each note is about without its timing (`rain-likely`, `clearing`, `cooler`, …), for telling a new note from a standing one. Empty, with `kinds: null`, when no forecast is known or the last one is over an hour and a half old (an Open-Meteo outage). No extra fetch: it reads the forecast `ctx.weather` came from, aged to the moment you call it |
+| `services.weatherNews({ condition, kinds }, state)` | whether that reading is news against the skill's `state`: `{ skyChanged, outlookChanged, withdrawn }`. The sky is the condition. The outlook is news only when it says something the last weather segment didn't: a note whose timing moved is not news, nor a temperature note, nor rain going from possible to likely, nor a note that has gone, except rain (or snow, or thunderstorms) the last segment promised that is no longer coming, for which `withdrawn` holds a note to add to your outlook ("rain no longer expected in the next 6 hours"). It is the same check the station's segment gates make, so a weather tool that reports through it can't call news what the station would not air |
 
 Every skill's `tool.mjs` is **timeout-guarded (8 s)** and any throw degrades
 cleanly to "no data" — a slow or broken skill can never hang the between-track
@@ -330,8 +556,11 @@ alone.
 > **Security.** A `tool.mjs` runs operator-supplied code inside the controller
 > container, and `services` lets it spend your search-provider quota and read
 > your library — the same trust model as a locally-installed Claude Code skill.
-> Only drop in code you've read and trust. (Skills you add stay disabled until
-> you enable them in `/admin/skills`.)
+> Only drop in code you've read and trust. A `tool.mjs` you place on disk
+> yourself is loaded on the next scan whether or not the skill is enabled —
+> enabling only decides whether it airs. Code that arrives from somewhere else
+> (an [imported zip](#zip-export--import) or a [restored backup](#restoring-a-backup))
+> is held back until you review it.
 
 ## Editing the built-in skills
 
@@ -363,46 +592,54 @@ How a built-in still differs from a skill you add:
 
 ### News: swapping the feed
 
-The `news` skill's `tool.mjs` declares two knobs (`configFields`, above), so
-**/admin/skills → News → Edit** carries a feed field and a max-items field. They
-are stored as two extra frontmatter keys, editable on disk just as well:
+News is an ordinary feed skill (see [Feeds without code](#feeds-without-code)):
+**/admin/skills → News → Edit** carries a feed field and a max-items field,
+stored as two frontmatter keys and editable on disk just as well.
 
 ```yaml
 ---
 name: news
 label: News headlines
 cooldown: 45m
-feed: https://www.npr.org/rss/rss.php?id=1001   # any RSS 2.0 feed
+feed: https://www.npr.org/rss/rss.php?id=1001
 feedMaxItems: 10
 ---
 Read one fresh headline in a single sentence — keep it conversational, in the
 station's voice. Skip a headline that is dull or stale; silence is fine.
 ```
 
-> **Heads-up.** The parser handles **RSS 2.0** (`<item>`) feeds. **Atom** feeds
-> (`<entry>`) return zero items today — use an RSS URL.
-
 `NEWS_FEED_URL` / `NEWS_MAX_ITEMS` in `.env` only *seed* this file on the very first
 boot. Once `state/skills/news/SKILL.md` exists, **the file wins** — change the feed
 there (or in `/admin/skills`), not in `.env`.
 
-**Running a second news source** is just a copy: export the skill, rename it in
-both the `.md` and the `.zip`, re-import, and point its feed somewhere else. The
-knobs ride in `tool.mjs`, so the copy gets its own feed field under its own name.
+**Running a second news source** is just another skill with another `feed:` line
+— no export/rename dance, and nothing to copy.
+
+> Stations first booted before this was generic still have the old
+> `state/skills/news/tool.mjs` on disk, and keep running it — same behaviour,
+> its own copy of the same fetch. **↺ Reset to default** on the News skill
+> removes it and moves that install onto the shared path.
 
 ## Lifecycle
 
 - **Discovered but disabled.** A freshly dropped skill shows up in
-  `/admin/skills` toggled **off**. It cannot air — autonomously or otherwise —
-  until you enable it there. Merely dropping a folder never puts unreviewed
-  content (or code) on air.
+  `/admin/skills` toggled **off**. It cannot air autonomously until you enable
+  it there. Merely dropping a folder never puts unreviewed content on air —
+  but a hand-placed `tool.mjs` is still *loaded* (its module code runs) on
+  every scan, so only put code there you've read.
+- **Held for review.** A `tool.mjs` that came in a zip import or a backup
+  restore is written as `tool.mjs.pending`, which the loader never imports.
+  The skill shows **code to review** and can't air until you open it with
+  **Edit**, read the source, and choose **trust and load** (renames it to
+  `tool.mjs` and loads it) or **Discard code**.
 - **Loaded at boot**, and on demand via the **Rescan state/skills** button on
   the admin Skills page (`POST /api/dj/skills/rescan`). Rescan picks up new
   folders and edits to `SKILL.md` / `tool.mjs` without a controller restart.
 - **Persona ownership still applies.** Like built-in skills, a custom skill only
   fires autonomously when it's enabled *and* assigned to the persona on air
   (Personas page). **Run now** is an operator override that bypasses the toggle,
-  the persona assignment, the frequency gate, and the cooldown.
+  the persona assignment, the frequency gate, and the cooldown. A co-hosted skill's active host-plus-guest roster requirement is not
+  bypassed.
 
 ## Sharing skills
 
@@ -418,7 +655,10 @@ by other operators. It's fetched **live** from the
 repo, so it isn't tied to your controller version. **Install** copies one into
 `state/skills/` as an ordinary custom skill — **disabled on arrival**, for you to
 read before it airs. The catalog is **prompt-only by contract**: no `tool.mjs` is
-ever shipped or written, so installing from it never runs third-party code.
+ever shipped or written, so installing from it never runs third-party code. A
+catalog skill may still declare a [`feed:`](#feeds-without-code), which is a URL
+rather than code: install writes it into the skill's own `SKILL.md`, the modal
+shows which site it reads, and you can change or clear it like any other feed.
 
 ### Sharing your own
 
@@ -447,9 +687,120 @@ For a direct operator-to-operator handoff, the skill edit sheet has **↓ Export
 (`POST /api/dj/skills/import`) takes it back in, deriving the slug from the
 bundle's `name:`.
 
-> **A zip may carry code.** Unlike the reviewed catalog, an imported `.zip` can
-> include a `tool.mjs` — a direct action on your own box, the same trust as
-> dropping a folder in by hand or restoring a backup. Imports arrive **disabled**;
-> when the bundle has a tool, the response flags it so the UI can warn you before
-> you enable it. (Hardened against zip-slip; 5 MB upload cap, only `SKILL.md` +
-> `tool.mjs` are extracted. Reserved names and re-imports are rejected.)
+> **A zip may carry code, and none of it runs on import.** Unlike the reviewed
+> catalog, an imported `.zip` can include a `tool.mjs`. The skill arrives
+> **disabled**, and the tool is written as `tool.mjs.pending` — not loaded, not
+> evaluated, its `ready()` never called. The skill shows **code to review**
+> until you open its edit sheet, read the source and either **trust and load**
+> it or **Discard code**. Trusting sends back the SHA-256 of the source you were
+> shown, so a file that changed in between is refused rather than loaded
+> unread. (Hardened against zip-slip; 5 MB upload cap, 8 MB uncompressed, only
+> `SKILL.md` + `tool.mjs` are extracted. Reserved names and re-imports are
+> rejected. A `name:` with capitals, such as `My-Skill`, installs as
+> `my-skill`, and the `name:` line is rewritten to match.)
+
+The review is also an API, for scripting it:
+
+| Route | |
+| --- | --- |
+| `GET /api/dj/skills/:slug/tool/pending` | `{ source, sha256, bytes }` of the held code |
+| `POST /api/dj/skills/:slug/tool/trust` | body `{ "sha256": "…" }` — renames it to `tool.mjs` and reloads; `409` if the file changed since you read it |
+| `DELETE /api/dj/skills/:slug/tool/pending` | discards it without loading it |
+
+### Restoring a backup
+
+A station backup carries `state/skills/`, and a restore puts each skill's
+`SKILL.md` back (replacing the one on disk — restoring means replacing).
+Code is treated like an import: a `tool.mjs` that is byte-identical to the one
+already live, or to the template a built-in ships in this image, is written as
+is; any other is held as `tool.mjs.pending` for review, and a skill that
+already had trusted code keeps running it until you trust the new one. Only
+`SKILL.md` and `tool.mjs` are restored from a skill folder; a folder whose
+name isn't a valid skill slug, or that shadows a reserved name, is skipped.
+The restore response lists what was skipped and which skills wait for review.
+
+## Prepare an artist spotlight show
+
+A show's **Episode preparation skill** runs its `tool.mjs` before automatic music
+selection. The controller saves the result for that airing and supplies its
+research to the DJ. An artist result also restricts both selection routes (Agentic
+Tools and Track Shortlist), the pool fallback, and `auto.m3u` to that artist's catalogue.
+
+1. Copy [`random-artist-pick`](./examples/skills/random-artist-pick) into
+   `state/skills/random-artist-pick/`.
+2. Open **Admin → Skills**, click **Rescan**, and enable the skill.
+3. Allow `random-artist-pick` in the show's host persona's skills list.
+4. Open **Admin → Shows**, edit the show, and select **Artist spotlight preparation**
+   under **Episode preparation skill**. Save the show.
+5. Give the show a topic such as “Explore the chosen artist's records using the
+   prepared sources.” Enable **Programme** for an opening, feature, and sign-off.
+
+Use the folder slug `random-artist-pick` for `preparationSkill`. A skill name in
+free-text instructions does not execute the skill. **Feature segment skill** is
+a separate spoken segment and cannot be the preparation skill too.
+
+The prepared subject survives a controller restart and the four-hour DJ session
+roll. Consecutive scheduled hours of the same show share one result, including
+across midnight. A takeover has its own result. Returning from a takeover resumes
+the scheduled airing's choice. A show scheduled for the entire week starts a new
+preparation at Sunday midnight in the station timezone.
+
+The current subject and failures appear in the show editor. **Retry preparation**
+retries a failed tool before it has selected a subject. An accepted subject stays
+fixed until the next airing, even if you change or remove the configured skill.
+**Retry catalogue** checks the saved artist again after a catalogue failure;
+it never runs the preparation tool or chooses another artist.
+
+### Preparation result contract
+
+The existing tool signature stays `tool(ctx, state, services, config, input)`.
+Preparation invokes that tool directly with an empty input. It creates no speech
+and does not ask a model to choose a tool. `state` starts empty for preparation;
+the controller owns the saved result.
+
+Return this shape for a successful preparation:
+
+```js
+{
+	available: true,
+	subject: 'Library artist name',
+	data: { facts: [], sources: [] },
+	music: { type: 'artist', artistId: 'exact-Navidrome-artist-id' }
+}
+```
+
+`subject` is required and limited to 160 characters. `data` is JSON, limited to
+32 KB. The DJ receives at most 6,000 characters of that data. `music` is optional;
+without it, the prepared subject affects speech while normal music selection
+continues. Unsupported music types and missing artist IDs are refused.
+
+Return `{ available: false, reason: '...' }` when no subject is available. Tool
+errors and invalid output leave ordinary broadcasting available. Automatic tool
+retries are limited to two attempts, at least one minute apart. Catalogue lookup
+has its own two attempts and keeps the already selected artist. A failure after
+the catalogue was ready keeps the research but returns to emergency ordinary
+selection until the catalogue is available again. The editor reports that loss
+of the artist restriction.
+
+The skill remains subject to its enabled setting, host allowlist, and readiness
+check. Its spoken co-host requirement does not apply to preparation. While the
+show owns this skill for preparation, the segment director, skill cron, and
+programme features cannot automatically run it again. Manual **Run now** remains
+an operator override. Listener and manual track requests also remain overrides.
+
+The artist restriction keeps playlist exclusions, blocklists, duration limits,
+and strict playlist intersections. Usual artist-spacing rules yield to the
+artist spotlight. Track deduplication and repeat protection still apply, with
+repeat protection sized to the available artist catalogue. The example chooses
+artists with at least two distinct tracks so the queue can rotate them.
+Membership uses exact track artist or lead album artist IDs. This includes
+collaborations released under the chosen artist, even when Navidrome assigns
+their combined track credit a different ID. A guest credit alone is insufficient.
+
+`services.library.randomArtist({ minDistinctTracks: 2 })` samples canonical
+Navidrome artist-index IDs with enough distinct tracks in the library mirror,
+including untagged tracks. Without a suitable mirror, it
+tries up to five artists from Navidrome's artist index. Research is optional in
+the example: no search results means the DJ must stick to supplied library facts.
+Existing custom tools that return arbitrary data need this result envelope to
+serve as preparation skills.

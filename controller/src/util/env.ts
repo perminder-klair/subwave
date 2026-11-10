@@ -1,24 +1,5 @@
-// Typed environment-variable readers — the one place a raw `process.env` string
-// becomes a number, a URL or a bounded value.
-//
-// The problem these replace: config.ts read every numeric var as
-// `parseInt(process.env.X || '<default>', 10)`, which yields **NaN** for
-// anything that isn't a number, and NaN then travels. `NEWS_MAX_ITEMS=ten`
-// removed the headline cap entirely; `PORT=7701 ` (a stray character from a
-// copy-pasted .env) bound a random port; a bad `PIPER_SPEED` reached ffmpeg as
-// `atempo=NaN`. Every one of those failures is silent at the point of the
-// mistake and confusing everywhere downstream.
-//
-// The posture is WARN AND FALL BACK, never throw. Same reasoning as the state
-// bootstrap in docker/broadcast-entrypoint.sh: a station that refuses to boot
-// over one malformed convenience var is strictly worse than one that boots on
-// the default and says so. A var that is genuinely load-bearing has its own
-// explicit check at its own call site (ADMIN_USER/ADMIN_PASS exit on boot in
-// production, and that stays where it is).
-//
-// Issues are collected in `envIssues` as well as warned, so startup can repeat
-// them into the booth log — the operator's actual log surface — rather than
-// only into a container stdout they may never read.
+// Malformed convenience vars warn and fall back; they must not stop boot.
+// Required vars keep explicit call-site checks. envIssues feeds the startup booth log.
 
 import { z } from 'zod';
 
@@ -30,6 +11,9 @@ export interface EnvIssue {
 }
 
 const issues: EnvIssue[] = [];
+// name + value already reported: a var read on every request (envParsed) warns
+// once per distinct value, not once per read.
+const reported = new Set<string>();
 
 /** Every malformed env var seen while building config, in read order. */
 export function envIssues(): readonly EnvIssue[] {
@@ -37,27 +21,27 @@ export function envIssues(): readonly EnvIssue[] {
 }
 
 function note(name: string, value: string, problem: string, usedInstead: unknown): void {
+  const key = `${name}\0${value}`;
+  if (reported.has(key)) return;
+  reported.add(key);
   issues.push({ name, value, problem, usedInstead: String(usedInstead) });
   console.warn(`[env] ${name}="${value}" ${problem} — using ${String(usedInstead)} instead`);
 }
 
-// Read a var through a schema, falling back to `fallback` (and warning) when it
-// is present but doesn't parse. ABSENT and EMPTY both mean "not set" — an env
-// file that carries `ANALYZE_URL=` is expressing absence, not an empty value,
-// and warning about it would fire on a perfectly ordinary compose file.
-function read<T>(name: string, schema: z.ZodType<T>, fallback: T): T {
+// Absent/empty means unset; malformed nonempty values warn and fall back.
+// `usedInstead` names the fallback in the warning when its value alone would
+// not say what happens (an `undefined` that means "no ceiling").
+function read<T>(name: string, schema: z.ZodType<T>, fallback: T, reportIssue = true, usedInstead: unknown = fallback): T {
   const raw = process.env[name];
   if (raw == null || raw.trim() === '') return fallback;
   const parsed = schema.safeParse(raw.trim());
   if (parsed.success) return parsed.data;
-  note(name, raw, parsed.error.issues[0]?.message || 'is not valid', fallback);
+  if (reportIssue) note(name, raw, parsed.error.issues[0]?.message || 'is not valid', usedInstead);
   return fallback;
 }
 
 export interface NumOptions {
-  /** Smallest accepted value, inclusive. Defaults to 1 — the vars here are
-   *  timeouts, ports, counts and rate multipliers, where 0 or negative is not a
-   *  meaningful setting. Pass 0 explicitly where zero means "disabled". */
+  /** Inclusive floor, default 1. Pass 0 explicitly where zero means "disabled". */
   min?: number;
   max?: number;
 }
@@ -67,9 +51,7 @@ function bounded(base: z.ZodNumber, { min = 1, max }: NumOptions): z.ZodNumber {
   return max == null ? s : s.max(max, `must be at most ${max}`);
 }
 
-/** An integer var. Rejects floats outright rather than truncating them the way
- *  parseInt did — `AUTO_QUEUE_REFRESH_MINUTES=0.5` meant 0 minutes, i.e. a
- *  refresh cron that never rested. */
+/** An integer var; floats are rejected outright rather than truncated. */
 export function envInt(name: string, fallback: number, opts: NumOptions = {}): number {
   const schema = z
     .string()
@@ -89,14 +71,10 @@ export function envFloat(name: string, fallback: number, opts: NumOptions = {}):
   return read(name, schema, fallback);
 }
 
-/** An http(s) URL var. A bare host or a `postgres://`-style scheme is rejected —
- *  every URL in the controller's config is fetched with fetch(). */
-export function envUrl(name: string, fallback: string): string {
-  // One check, not `z.url().refine(…)`: zod runs every check on a string even
-  // after an earlier one fails, so the refine still saw the unparseable input
-  // and `new URL()` threw straight out of this function — which is exactly the
-  // "never throw" contract these readers exist to hold. Parsing inside the
-  // predicate is also the honest test: URL is what fetch() will use.
+/** An http(s) URL var; a bare host or non-http scheme is rejected. */
+export function envUrl(name: string, fallback: string, { reportIssue = true } = {}): string {
+  // A refine can run after URL parsing fails and throw from new URL().
+  // Use one check to preserve the never-throw contract.
   const schema = z.string().refine((u) => {
     try {
       return /^https?:$/.test(new URL(u).protocol);
@@ -104,17 +82,45 @@ export function envUrl(name: string, fallback: string): string {
       return false;
     }
   }, 'is not an http(s) URL');
-  return read(name, schema, fallback);
+  return read(name, schema, fallback, reportIssue);
 }
 
-/** A plain string var. Present for symmetry — no validation to fail, so it
- *  never warns; use it so config.ts reads uniformly. */
+/** A plain string var; nothing to fail, so it never warns. */
 export function envStr(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
+}
+
+const ON_WORDS = ['1', 'true', 'yes', 'on'];
+const OFF_WORDS = ['0', 'false', 'no', 'off'];
+
+/** An on/off var: 1/true/yes/on or 0/false/no/off, in any case. Anything else
+ *  (`enable`, a typo) warns and keeps the fallback rather than reading as off. */
+export function envBool(name: string, fallback: boolean): boolean {
+  const schema = z
+    .string()
+    .refine((v) => ON_WORDS.includes(v.toLowerCase()) || OFF_WORDS.includes(v.toLowerCase()),
+      'is not on or off (1/true/yes/on, 0/false/no/off)')
+    .transform((v) => ON_WORDS.includes(v.toLowerCase()));
+  return read(name, schema, fallback);
 }
 
 /** A string var constrained to a fixed set of values. */
 export function envEnum<T extends string>(name: string, values: readonly T[], fallback: T): T {
   const schema = z.enum(values as unknown as [T, ...T[]]);
   return read<T>(name, schema, fallback);
+}
+
+/**
+ * A var parsed by a shared schema, for a var with more than one reader: the
+ * web reads the same SUBWAVE_* vars through the generated mirror of the same
+ * schema (schemas/hosted.ts), so both sides parse one value one way. Read on
+ * every call, never cached; a malformed value warns once (see `note`).
+ */
+export function envParsed<T>(
+  name: string,
+  schema: z.ZodType<T, string>,
+  fallback: T,
+  { fallbackLabel }: { fallbackLabel?: string } = {},
+): T {
+  return read<T>(name, schema, fallback, true, fallbackLabel ?? fallback);
 }

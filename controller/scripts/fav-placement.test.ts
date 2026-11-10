@@ -22,10 +22,11 @@
 // imports. node:assert-via-tsx style, matching scripts/voice-policy.test.ts.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-favs-'));
 process.env.STATE_DIR = root;
@@ -96,5 +97,5 @@ try {
 
   console.log('all listener-favourites placement tests passed');
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 }

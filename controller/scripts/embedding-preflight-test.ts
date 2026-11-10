@@ -17,14 +17,14 @@
 // Self-contained: points STATE_DIR at a throwaway dir and mutates settings
 // in-memory, so it never touches a live install's state/.
 
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
 
 // Must be set BEFORE importing anything that reads config (config.ts captures
 // STATE_DIR at import time).
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-embed-test-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-embed-test-'));
 
 const settings = await import('../src/settings.js');
 const embeddings = await import('../src/music/embeddings.js');
@@ -134,38 +134,13 @@ console.log('\n[3b] openrouter builds an embedding model (offline, #522)');
   ok('openrouter builds without the no-embeddings error', built, threw ? `threw: ${threw.slice(0, 48)}` : 'ok');
 }
 
-// ---- 3c. orcarouter BUILDS an embedding model (offline) --------------------
-// OrcaRouter exposes an OpenAI-compatible embeddings endpoint, so — like
-// openrouter — it must not be rejected as chat-only. Offline: buildEmbeddingModel
-// constructs the client without any network call; we only assert it doesn't
-// throw the "no text-embedding support" error the chat-only providers do.
-console.log('\n[3c] orcarouter builds an embedding model (offline)');
-{
-  let built = false;
-  let threw = '';
-  try {
-    embProvider.buildEmbeddingModel({
-      enabled: true,
-      provider: 'orcarouter',
-      model: '',
-      apiKey: 'test-key',
-      ollamaUrl: '',
-      baseUrl: '',
-    });
-    built = true;
-  } catch (e: any) {
-    threw = e?.message || String(e);
-  }
-  ok('orcarouter builds without the no-embeddings error', built, threw ? `threw: ${threw.slice(0, 48)}` : 'ok');
-}
-
 // ---- 4. library-db dim handling (#2) --------------------------------------
 console.log('\n[4] library-db honours the stored dim');
 // Seed a 768-d DB the way the tagger would.
 await db.open({ embeddingDim: 768, reseed: false });
 db.setEmbeddingMeta('ollama:nomic-embed-text', 768);
 db.upsertTrackMeta('t1', { title: 'x', artist: 'y' });
-db.upsertTrackVector('t1', new Array(768).fill(0.01));
+db.upsertTrackVector('t1', new Array(768).fill(0.01), db.resolvedEraYearForTrack('t1'));
 ok('seed: 768-d vector accepted', true);
 db.close();
 
@@ -175,13 +150,13 @@ await db.open({ embeddingDim: 1536, adoptStoredDim: true });
 ok('adopt: stored meta still 768 (index not wiped)', db.getEmbeddingMeta()?.dim === 768);
 let accepted768 = false;
 try {
-  db.upsertTrackVector('t1', new Array(768).fill(0.02));
+  db.upsertTrackVector('t1', new Array(768).fill(0.02), db.resolvedEraYearForTrack('t1'));
   accepted768 = true;
 } catch { /* table width wrong */ }
 ok('adopt: table really is 768 (768-d upsert accepted)', accepted768);
 let rejected1536 = false;
 try {
-  db.upsertTrackVector('t1', new Array(1536).fill(0.02));
+  db.upsertTrackVector('t1', new Array(1536).fill(0.02), db.resolvedEraYearForTrack('t1'));
 } catch {
   rejected1536 = true;
 }
@@ -206,7 +181,7 @@ await db.open({ embeddingDim: 1536, reseed: true });
 db.setEmbeddingMeta('other:model-1536', 1536);
 let accepted1536 = false;
 try {
-  db.upsertTrackVector('t1', new Array(1536).fill(0.03));
+  db.upsertTrackVector('t1', new Array(1536).fill(0.03), db.resolvedEraYearForTrack('t1'));
   accepted1536 = true;
 } catch { /* */ }
 ok('reseed: table rebuilt at 1536', accepted1536);

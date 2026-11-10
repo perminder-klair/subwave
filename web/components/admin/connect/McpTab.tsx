@@ -1,6 +1,7 @@
 'use client';
 
 import { Card, Pill } from '../ui';
+import AuthPill from './AuthPill';
 import { CodeBlock, CodeBlockCopyButton } from '../../ai-elements/code-block';
 import { Snippet, SnippetAddon, SnippetCopyButton, SnippetInput } from '../../ai-elements/snippet';
 import type { Catalog } from './types';
@@ -97,9 +98,7 @@ export default function McpTab({ catalog }: Props) {
             <div key={t.name} className="border border-separator-strong bg-bg px-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 <code className="text-[12px] font-semibold">{t.name}</code>
-                {t.auth === 'admin'
-                  ? <Pill tone="accent">admin</Pill>
-                  : <Pill>public</Pill>}
+                <AuthPill auth={t.auth} />
                 {t.mutatesAir && <Pill className="border-vermilion text-vermilion">on-air</Pill>}
                 <code className="ml-auto text-[11px] text-muted">{t.endpoint}</code>
               </div>

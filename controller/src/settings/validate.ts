@@ -14,34 +14,8 @@ import { resolveShowIds } from '../schemas/show-server.js';
 import { djPromptsSchema, personasSchema, ttsVoiceSlotSchema } from '../schemas/persona.js';
 import { resolveDjPromptIds, resolvePersonaIds } from '../schemas/persona-server.js';
 import { scheduleSchema, scheduleOverrideSchema } from '../schemas/schedule.js';
-import {
-  festivalsSchema,
-  moodScheduleSchema,
-  moodsSchema,
-  weatherMoodsSchema,
-} from '../schemas/settings.js';
+import { steerSchema, type Steer } from '../schemas/steer.js';
 import { firstMessage } from '../util/zod-error.js';
-
-/**
- * Run a mood-family schema and rethrow as a plain Error (#1348).
- *
- * These four validators are now thin wrappers — the rules live once, in
- * schemas/settings.ts, shared with the registry and the browser mirror. What
- * stays here is the SIGNATURE (backup import, onboarding and scripts/moods
- * .test.ts all call them) and the throw, because update() answers
- * `{ error: err.message }` and a raw ZodError's `.message` is a ~15-line JSON
- * blob.
- *
- * The message is taken verbatim rather than through `firstMessage`, for the
- * reason patch-registry.flatten() documents: every message here already names
- * its own indexed field ('festivals[0].month must be …'), so prefixing the
- * issue path would double it.
- */
-function runMoodSchema<T>(schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown; error?: { issues: Array<{ message: string }> } } }, raw: unknown): T {
-  const r = schema.safeParse(raw);
-  if (!r.success) throw new Error(r.error?.issues[0]?.message || 'invalid value');
-  return r.data as T;
-}
 
 /**
  * Strict validator for a `{engine, voice, cloudProvider}` voice slot.
@@ -148,6 +122,14 @@ export function validateScheduleOverrideStrict(raw, shows): ScheduleOverride | n
   return r.data;
 }
 
+// The steer's strict twin. `now: null` for the takeover's reason above.
+export function validateSteerStrict(raw): Steer | null {
+  if (raw === null || raw === undefined) return null;
+  const r = steerSchema({ now: null }).safeParse(raw);
+  if (!r.success) throw new Error(firstMessage(r.error, 'steer'));
+  return r.data;
+}
+
 // Strict validator — used by update(). Shape and format now come from the
 // shared schema (controller/src/schemas/webhook.ts), which the web form runs
 // too; the stateful rules (redaction sentinel, id minting, cross-item dedupe)
@@ -170,24 +152,6 @@ export function validateWebhooksStrict(raw: unknown, existing: Webhook[] = []) {
   // 'webhooks.0.url' rather than 'webhooks: 0.url'.
   if (!r.success) throw new Error(firstMessage(r.error, 'webhooks'));
   return mergeWebhookSecrets(r.data, existing);
-}
-
-// --- Strict update() validators for the mood system (the validateFestivalsStrict
-// shape: whole-value replace, indexed throws, rebuilt objects strip unknown
-// keys). `moodNames` is the effective vocabulary being saved, so a schedule /
-// weather / festival entry may reference a mood added in the SAME patch. ---
-// Exported for unit tests (scripts/moods.test.ts) — the pure validation/guard
-// logic that keeps the mood system consistent on every save.
-export function validateMoodsStrict(raw: any): Array<{ name: string; clapPrompt: string }> {
-  return runMoodSchema(moodsSchema, raw);
-}
-
-export function validateMoodScheduleStrict(raw: any, moodNames: string[]): Record<string, string> {
-  return runMoodSchema(moodScheduleSchema({ moodNames }), raw);
-}
-
-export function validateWeatherMoodsStrict(raw: any, moodNames: string[]): Record<string, string> {
-  return runMoodSchema(weatherMoodsSchema({ moodNames }), raw);
 }
 
 // Reject a vocabulary edit that would orphan a mood still referenced by the
@@ -217,9 +181,4 @@ export function assertNoOrphanMoods(next: any): void {
   }
 }
 
-export function validateFestivalsStrict(raw, moodNames: string[] = SHOW_MOODS) {
-  return runMoodSchema(festivalsSchema({ moodNames }), raw);
-}
-
 // Validate + persist. Returns { saved, requiresRestart } so the UI can react.
-

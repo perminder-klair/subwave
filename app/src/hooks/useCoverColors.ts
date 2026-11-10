@@ -1,10 +1,3 @@
-// Pull representative colours out of the current cover art so the player can
-// wash a soft, art-derived tint behind itself.
-//
-// The web does this with a canvas (web/web/hooks/useCoverColors.ts); RN has no
-// canvas, so we use react-native-image-colors (UIImageColors on iOS, Palette on
-// Android). Any failure resolves to nulls and the caller simply skips the tint.
-
 import { useEffect, useState } from 'react';
 import { getColors } from 'react-native-image-colors';
 
@@ -15,7 +8,7 @@ export interface CoverColors {
 
 const EMPTY: CoverColors = { vibrant: null, average: null };
 
-export function useCoverColors(coverSrc: string | null): CoverColors {
+export function useCoverColors(coverSrc: string | null, headers?: Record<string, string>): CoverColors {
   const [colors, setColors] = useState<CoverColors>(EMPTY);
 
   useEffect(() => {
@@ -24,10 +17,9 @@ export function useCoverColors(coverSrc: string | null): CoverColors {
       return;
     }
     let cancelled = false;
-    getColors(coverSrc, { cache: true, key: coverSrc, quality: 'low' })
+    getColors(coverSrc, { cache: true, key: coverSrc, quality: 'low', headers })
       .then((res) => {
         if (cancelled) return;
-        // The result shape differs per platform; pick a vivid + a calm colour.
         if (res.platform === 'ios') {
           setColors({ vibrant: res.primary, average: res.secondary });
         } else if (res.platform === 'android') {
@@ -42,7 +34,7 @@ export function useCoverColors(coverSrc: string | null): CoverColors {
     return () => {
       cancelled = true;
     };
-  }, [coverSrc]);
+  }, [coverSrc, headers]);
 
   return colors;
 }

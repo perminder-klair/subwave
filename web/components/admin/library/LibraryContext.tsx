@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  createContext, useCallback, useContext, useMemo, useState,
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,37 +9,36 @@ import { notify, errorMessage } from '../../../lib/notify';
 import type { PlaylistSummary } from './types';
 import type { Coverage, TaggerState } from '../LibraryTaggingPanel';
 import {
-  applyBlockMarks, applyLikeChange, applyTagEvent, libraryKeys, rowsOf,
-  useQueryErrorToast,
+  applyEraYearEvent, applyLikeChange, applyTagEvent, libraryKeys,
 } from './queries';
+import {
+  adminJson,
+  useQueryErrorToast,
+  type AdminFetch,
+} from '../../../lib/admin-query';
 import type {
-  BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, Track,
+  BlockRef, BlockType, BrowseResponse, LikeIndex, QueueBlockKind, QueueBlockResult, Track,
 } from './types';
-
-// Per-call cap on POST /library/blocklist/check, matching the controller's.
-// A Search tab paged deep with Load more can hold more rows than that.
-const CHECK_CHUNK = 500;
+import { refreshPlaylistCatalogues } from '../playlist-cache';
+import {
+  deleteBlockEntry, liftedText, notifyBlockedWithUndo, postBlock, reconcileBlockCaches,
+  restampCachedBlockMarks,
+} from './block-actions';
 
 // Stable fallbacks for the two queries whose absent data has a meaning. A fresh
 // literal per render would change the context value's identity every time.
 const EMPTY_LIKES: LikeIndex = {};
 const EMPTY_PLAYLISTS: PlaylistSummary[] = [];
 
-type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
-
 export interface LibraryShared {
-  // The ONE useAdminAuth instance for the whole library page, passed down
-  // rather than re-created per tab: useAdminAuth is a per-instance hook
-  // holding its own hydration state, so N callers race N hydrations and an
-  // unauthenticated first request can wipe a sibling's token
-  // (see lib/adminAuth.ts:80).
+  // Passed down from the page owner so every Library resource shares one
+  // feature boundary.
   adminFetch: AdminFetch;
   ready: boolean;
 
-  // The two page-wide polls. They live here rather than in useTaggerControls
-  // because the coverage cadence depends on the tagger snapshot, and both are
-  // read outside the Tagging panel (Search gates its mode toggle on coverage) —
-  // one owner keeps them from being observed at two different intervals.
+  // The two page-wide polls live here, not in useTaggerControls: the coverage
+  // cadence depends on the tagger snapshot and both are read outside the
+  // Tagging panel, so one owner keeps them off two different intervals.
   coverage: Coverage | null;
   reloadCoverage: () => Promise<void>;
   tagger: TaggerState | null;
@@ -60,8 +59,7 @@ export interface LibraryShared {
   plBusy: boolean;
   addSelectedToPlaylist: (t: { playlistId?: string; name?: string }) => Promise<void>;
 
-  // Mood vocabulary for the inline editor. Only the browse response carries
-  // it, so other tabs trigger a one-row browse rather than bundling the list.
+  // Mood vocabulary for the inline editor. Only the browse response carries it.
   vocab: string[];
   seedVocab: (v: string[]) => void;
   ensureVocab: () => Promise<void>;
@@ -71,14 +69,17 @@ export interface LibraryShared {
   flashId: string | null;
   editingId: string | null;
   manualBusy: string | null;
+  eraBusy: string | null;
   blocking: string | null;
   queueTrack: (t: Track) => Promise<void>;
+  queueBlock: (t: Track, kind: QueueBlockKind) => Promise<void>;
   retagTrack: (t: Track) => Promise<void>;
   onEditTrack: (t: Track) => void;
   cancelEdit: () => void;
   saveManualTag: (
     t: Track, moods: string[], energy: string | null, applyToAlbum: boolean,
   ) => Promise<void>;
+  saveEraYear: (t: Track, originalYear: number | null, applyToAlbum: boolean) => Promise<void>;
   blockTrack: (t: Track, type: BlockType) => Promise<void>;
   unblockRow: (t: Track, ref: BlockRef) => Promise<void>;
   removeBlockEntry: (
@@ -104,19 +105,15 @@ export function LibraryProvider({
 }) {
   const qc = useQueryClient();
 
-  // --- the two page-wide polls --------------------------------------------
-  // Deliberately two queries, not one doing both: the fast loop carries only
-  // the tagger snapshot so a 3s running poll doesn't drag the whole heavy
-  // /settings body across each time, and neither writes the other's state —
-  // that is what keeps them from racing. Both stay silent on failure (their
-  // predecessors each carried a `/* transient */`): a 3s poll that toasts on a
-  // blip would bury the console.
+  // Two queries, not one: the fast loop carries only the tagger snapshot so a 3s
+  // poll doesn't drag the heavy /settings body across each time. Both stay
+  // silent on failure -- a 3s poll that toasts on a blip would bury the console.
   const taggerQuery = useQuery({
     queryKey: libraryKeys.tagger(),
-    queryFn: async () => {
-      const r = await adminFetch('/library/tagger');
-      if (!r.ok) throw new Error(`tagger failed (${r.status})`);
-      const j = await r.json() as { tagger?: TaggerState };
+    queryFn: async ({ signal }) => {
+      const j = await adminJson<{ tagger?: TaggerState }>(
+        adminFetch, '/library/tagger', undefined, signal,
+      );
       return j.tagger ?? null;
     },
     enabled: ready,
@@ -125,17 +122,23 @@ export function LibraryProvider({
   });
   const tagger = taggerQuery.data ?? null;
 
+  // GET /library/coverage is a cheap read (DB counts plus the last-known
+  // Navidrome total), so it runs on mount. It must NOT run on a timer: the total
+  // behind it is a full album-by-album walk of Navidrome (#1570). The count is
+  // now the operator's own press (useTaggerControls' countLibrary).
+  // No `staleTime` key on purpose: an explicit `staleTime: 0` made this refetch
+  // on every remount, so the client's 30s default is left alone.
   const coverageQuery = useQuery({
     queryKey: libraryKeys.coverage(),
-    queryFn: async () => {
-      const r = await adminFetch('/library/coverage');
-      if (!r.ok) throw new Error(`coverage failed (${r.status})`);
-      return await r.json() as Coverage;
-    },
+    queryFn: ({ signal }) => adminJson<Coverage>(
+      adminFetch, '/library/coverage', undefined, signal,
+    ),
     enabled: ready,
-    staleTime: 0,
-    // While a run is live, poll faster so the % visibly climbs.
-    refetchInterval: tagger?.running ? 3_000 : 60_000,
+    // The two live states only: a tagging run whose % must climb, and a count
+    // the operator just asked for. Idle, nothing polls.
+    refetchInterval: q => (
+      tagger?.running || q.state.data?.scanning ? 3_000 : false
+    ),
   });
   const coverage = coverageQuery.data ?? null;
   const reloadCoverage = useCallback(
@@ -143,62 +146,40 @@ export function LibraryProvider({
     [qc],
   );
 
-  // Re-marks the rows already loaded: refetching every tab would lose
-  // pagination and re-hit Navidrome, and matching client-side would duplicate
-  // the normalised-name rules in music/blocklist.ts, free to drift.
-  //
-  // The rows come from the query cache rather than a registry of mounted lists,
-  // which is the whole point of the conversion — and it reaches lists a tab
-  // switch has unmounted but not yet evicted, so returning to one shows correct
-  // marks instead of stale ones.
-  const restampBlockMarks = useCallback(async () => {
-    const byId = new Map<string, Track>();
-    for (const [, data] of qc.getQueriesData({ queryKey: libraryKeys.rows })) {
-      for (const t of rowsOf(data)) if (t?.id && !byId.has(t.id)) byId.set(t.id, t);
-    }
-    if (byId.size === 0) return;
-    const rows = [...byId.values()].map(t => ({ id: t.id, artist: t.artist, album: t.album }));
-    try {
-      const marks: Record<string, BlockRef | null> = {};
-      // Chunked to stay under the endpoint's per-call cap.
-      for (let i = 0; i < rows.length; i += CHECK_CHUNK) {
-        const r = await adminFetch('/library/blocklist/check', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tracks: rows.slice(i, i + CHECK_CHUNK) }),
-        });
-        if (!r.ok) return;
-        const j = await r.json() as { blocked?: Record<string, BlockRef | null> };
-        Object.assign(marks, j.blocked || {});
-      }
-      applyBlockMarks(qc, marks);
-    } catch {
-      // Enrichment, not the operation — the block itself succeeded, so leave
-      // the last-known marks rather than toasting.
-    }
-  }, [adminFetch, qc]);
+  // A finished tagger run has just written its tags AND kicked a fresh count
+  // server-side, but `running` going false is what stops the poll -- so refetch
+  // once here or the final figures sit unread until the next mount.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    const now = !!tagger?.running;
+    if (wasRunning.current && !now) void reloadCoverage();
+    wasRunning.current = now;
+  }, [tagger?.running, reloadCoverage]);
 
-  // --- likes (#1253) -------------------------------------------------------
+  // Re-marks the loaded rows after a block write; block-actions has why.
+  const restampBlockMarks = useCallback(
+    () => restampCachedBlockMarks(qc, adminFetch),
+    [adminFetch, qc],
+  );
+
   const [liking, setLiking] = useState<string | null>(null);
 
   const likeIndexQuery = useQuery({
     queryKey: libraryKeys.likeIndex(),
-    queryFn: async () => {
-      const r = await adminFetch('/likes/index');
-      if (!r.ok) throw new Error(`likes failed (${r.status})`);
-      const j = await r.json() as { songs?: LikeIndex };
+    queryFn: async ({ signal }) => {
+      const j = await adminJson<{ songs?: LikeIndex }>(
+        adminFetch, '/likes/index', undefined, signal,
+      );
       return j.songs || {};
     },
     enabled: ready,
   });
-  // A missing index just means no hearts are lit — never toast this, and never
-  // let a failed fetch read as "some hearts unknown". Memoised because the
-  // fallback would otherwise be a fresh object per render, which invalidates
-  // the whole context value and re-renders every tab.
+  // A missing index just means no hearts are lit -- never toast, and never let a
+  // failed fetch read as "some hearts unknown". Memoised so the fallback doesn't
+  // invalidate the context value every render.
   const likeIndex = useMemo(() => likeIndexQuery.data ?? EMPTY_LIKES, [likeIndexQuery.data]);
 
   // Patches the index without a refetch so the heart responds immediately.
-  // The Liked list's own row removal rides applyLikeChange with a null `next`.
   const patchLike = useCallback((
     id: string, next: { count: number; operator: boolean } | null,
   ) => {
@@ -220,19 +201,25 @@ export function LibraryProvider({
       operator: !isLiked,
     });
     try {
-      const r = isLiked
-        ? await adminFetch(`/likes/song/${encodeURIComponent(track.id)}/operator`, { method: 'DELETE' })
-        : await adminFetch(`/likes/song/${encodeURIComponent(track.id)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: track.title, artist: track.artist, album: track.album,
-            genre: track.genre, year: track.year, duration: track.duration,
-          }),
-        });
-      const j = await r.json().catch(() => ({})) as { count?: number; error?: string };
-      if (!r.ok) throw new Error(j.error || `like failed (${r.status})`);
-      // Settle on the server's count — it folds in listener likes that landed
+      const j = isLiked
+        ? await adminJson<{ count?: number }>(
+          adminFetch,
+          `/likes/song/${encodeURIComponent(track.id)}/operator`,
+          { method: 'DELETE' },
+        )
+        : await adminJson<{ count?: number }>(
+          adminFetch,
+          `/likes/song/${encodeURIComponent(track.id)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: track.title, artist: track.artist, album: track.album,
+              genre: track.genre, year: track.year, duration: track.duration,
+            }),
+          },
+        );
+      // Settle on the server's count: it folds in listener likes that landed
       // between render and click.
       patchLike(track.id, { count: j.count ?? 0, operator: !isLiked });
     } catch (err) {
@@ -243,14 +230,14 @@ export function LibraryProvider({
     }
   }, [adminFetch, likeIndex, patchLike]);
 
-  // Wraps DELETE /likes/song/:id — drops LISTENER likes too, which the heart
+  // Wraps DELETE /likes/song/:id -- drops LISTENER likes too, which the heart
   // deliberately never does.
   const clearLikes = useCallback(async (track: Track) => {
     setLiking(track.id);
     try {
-      const r = await adminFetch(`/likes/song/${encodeURIComponent(track.id)}`, { method: 'DELETE' });
-      const j = await r.json().catch(() => ({})) as { removed?: number; error?: string };
-      if (!r.ok) throw new Error(j.error || `clear failed (${r.status})`);
+      const j = await adminJson<{ removed?: number }>(
+        adminFetch, `/likes/song/${encodeURIComponent(track.id)}`, { method: 'DELETE' },
+      );
       patchLike(track.id, null);
       notify.ok(`Cleared ${j.removed ?? 0} like${j.removed === 1 ? '' : 's'} on “${track.title || track.id}”`);
     } catch (err) {
@@ -260,38 +247,30 @@ export function LibraryProvider({
     }
   }, [adminFetch, patchLike]);
 
-  // --- selection + playlists ----------------------------------------------
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [plBusy, setPlBusy] = useState(false);
 
-  // Fetched lazily, only once a row is selected — the Add-to-playlist bar is
-  // the only consumer, and it does not exist before then. `enabled` is what the
-  // old "if selected.size > 0 && playlists === null" effect said.
+  // Fetched lazily, only once a row is selected: the Add-to-playlist bar is the
+  // only consumer and does not exist before then.
   const playlistsQuery = useQuery({
     queryKey: libraryKeys.playlists(),
-    queryFn: async () => {
-      const r = await adminFetch('/playlists');
-      const j = await r.json().catch(() => ({})) as { playlists?: PlaylistSummary[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `playlists failed (${r.status})`);
+    queryFn: async ({ signal }) => {
+      const j = await adminJson<{ playlists?: PlaylistSummary[] }>(
+        adminFetch, '/playlists', undefined, signal,
+      );
       return j.playlists || [];
     },
     enabled: ready && selected.size > 0,
   });
   useQueryErrorToast(playlistsQuery.error, true);
   // An errored fetch reads as "no playlists", not "still loading", so the bar
-  // offers the create-new path rather than spinning forever. Memoised for the
-  // same reason as likeIndex above.
+  // offers the create-new path rather than spinning forever.
   const playlists = useMemo(
     () => playlistsQuery.data ?? (playlistsQuery.error ? EMPTY_PLAYLISTS : null),
     [playlistsQuery.data, playlistsQuery.error],
   );
-  const reloadPlaylists = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: libraryKeys.playlists() });
-  }, [qc]);
-
-  // Selection is per-view: ids from another tab would be invisible, and
-  // "Add 12" with 9 off-screen rows is a foot-gun. The panel calls this on
-  // every tab change — the provider cannot see `tab`.
+  // Selection is per-view: ids from another tab would be invisible. The panel
+  // calls this on every tab change -- the provider cannot see `tab`.
   const clearSelection = useCallback(() => { setSelected(new Set()); }, []);
 
   const toggleSelect = useCallback((id: string) => {
@@ -318,53 +297,65 @@ export function LibraryProvider({
     if (songIds.length === 0) return;
     setPlBusy(true);
     try {
-      const r = target.playlistId
-        ? await adminFetch(`/playlists/${encodeURIComponent(target.playlistId)}/tracks`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ songIds }),
-          })
-        : await adminFetch('/playlists', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: target.name, songIds }),
-          });
-      const j = await r.json().catch(() => ({})) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `add to playlist failed (${r.status})`);
+      let detailId: string | undefined;
+      if (target.playlistId) {
+        await adminJson(adminFetch, `/playlists/${encodeURIComponent(target.playlistId)}/tracks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ songIds }),
+        });
+        detailId = target.playlistId;
+      } else {
+        const result = await adminJson<{ playlist?: { id?: string } }>(adminFetch, '/playlists', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: target.name, songIds }),
+        });
+        detailId = result.playlist?.id;
+      }
+      await refreshPlaylistCatalogues(qc, detailId ? [detailId] : []);
       const plName = target.name
         || playlists?.find(p => p.id === target.playlistId)?.name
         || 'playlist';
       notify.ok(`added ${songIds.length} track${songIds.length === 1 ? '' : 's'} to “${plName}”`);
       setSelected(new Set());
-      reloadPlaylists();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
       setPlBusy(false);
     }
-  }, [adminFetch, selected, playlists, reloadPlaylists]);
+  }, [adminFetch, selected, playlists, qc]);
 
-  // --- mood vocab ----------------------------------------------------------
-  const [vocab, setVocab] = useState<string[]>([]);
+  const vocabQuery = useQuery({
+    queryKey: libraryKeys.moodVocab(),
+    queryFn: async ({ signal }) => {
+      const response = await adminJson<BrowseResponse>(
+        adminFetch, '/library/browse?limit=1', undefined, signal,
+      );
+      return response.moodVocab ?? [];
+    },
+    enabled: false,
+  });
+  const vocab = useMemo(() => vocabQuery.data ?? [], [vocabQuery.data]);
   const seedVocab = useCallback((v: string[]) => {
-    if (v.length) setVocab(prev => (prev.length ? prev : v));
-  }, []);
+    if (v.length) qc.setQueryData<string[]>(
+      libraryKeys.moodVocab(),
+      previous => previous?.length ? previous : v,
+    );
+  }, [qc]);
   const ensureVocab = useCallback(async () => {
     if (vocab.length) return;
-    try {
-      const r = await adminFetch('/library/browse?limit=1');
-      if (!r.ok) return;
-      const j = (await r.json()) as BrowseResponse;
-      if (j.moodVocab?.length) setVocab(j.moodVocab);
-    } catch { /* editor shows a "loading moods…" hint until this lands */ }
-  }, [vocab.length, adminFetch]);
+    await vocabQuery.refetch();
+  }, [vocab.length, vocabQuery]);
 
-  // --- per-row actions -----------------------------------------------------
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [manualBusy, setManualBusy] = useState<string | null>(null);
+  // Separate from manualBusy: one spinner covering both would grey out the tag
+  // chips while a year is saving.
+  const [eraBusy, setEraBusy] = useState<string | null>(null);
   const [blocking, setBlocking] = useState<string | null>(null);
 
   const flash = useCallback((id: string) => {
@@ -375,14 +366,49 @@ export function LibraryProvider({
   const queueTrack = useCallback(async (track: Track) => {
     setQueuing(track.id);
     try {
-      const r = await adminFetch('/dj/queue-track', {
+      const j = await adminJson<{ queuePosition?: number }>(adminFetch, '/dj/queue-track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(track),
       });
-      const j = await r.json().catch(() => ({})) as { queuePosition?: number; error?: string };
-      if (!r.ok) throw new Error(j.error || `queue failed (${r.status})`);
       notify.ok(`queued “${track.title}” · position ${j.queuePosition}`);
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setQueuing(null);
+    }
+  }, [adminFetch]);
+
+  // Queue the whole record, or a set by the artist, in one press (#1622 FR 4).
+  //
+  // Only the track id goes over the wire: the server resolves the album/artist
+  // off it, exactly as POST /library/blocklist does, because a row never sees
+  // either id.
+  //
+  // The toast reports every caveat the response carries rather than just the
+  // count. A block does NOT bypass the never-play list, so a skipped track is
+  // the operator's own rule firing and must be visible; and
+  // `runsPastShowChange` is a warning, not a refusal — the block was queued in
+  // full and the operator decides what to do about the overrun.
+  const queueBlock = useCallback(async (track: Track, kind: QueueBlockKind) => {
+    setQueuing(track.id);
+    try {
+      const j = await adminJson<QueueBlockResult>(adminFetch, '/dj/queue-block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, trackId: track.id }),
+      });
+      const notes = [
+        j.skipped?.length ? `${j.skipped.length} skipped (never-play)` : null,
+        j.truncated ? `${j.truncated} over the 30-track limit` : null,
+        j.runsPastShowChange
+          ? `runs ~${Math.round(j.runsPastShowChange.bySec / 60)}min past ${j.runsPastShowChange.show || 'the next show'}`
+          : null,
+      ].filter(Boolean);
+      notify.ok(
+        `queued ${j.queued} track${j.queued === 1 ? '' : 's'} · ${j.label}`
+        + (notes.length ? ` · ${notes.join(' · ')}` : ''),
+      );
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -393,21 +419,30 @@ export function LibraryProvider({
   const retagTrack = useCallback(async (track: Track) => {
     setRetagging(track.id);
     try {
-      const r = await adminFetch('/library/retag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(track),
-      });
-      const j = await r.json() as { moods?: string[]; energy?: string | null; error?: string };
-      if (!r.ok) throw new Error(j.error || `retag failed (${r.status})`);
-      const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
-      notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
+      const j = await adminJson<{ moods?: string[]; energy?: string | null; untaggable?: boolean }>(
+        adminFetch, '/library/retag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(track),
+        },
+      );
       flash(track.id);
-      // The server stamps retagged rows source='llm'.
-      applyTagEvent(qc, {
-        track, moods: j.moods || [], energy: j.energy ?? null,
-        cleared: false, applyToAlbum: false, source: 'llm',
-      });
+      if (j.untaggable) {
+        // No usable mood (#2283): the server left the track untagged, so it stays
+        // in Needs tags.
+        notify.info(`the model couldn't tag “${track.title}” · left untagged`);
+        applyTagEvent(qc, {
+          track, moods: [], energy: null, cleared: true, applyToAlbum: false, source: 'llm',
+        });
+      } else {
+        const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
+        notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
+        // The server stamps retagged rows source='llm'.
+        applyTagEvent(qc, {
+          track, moods: j.moods || [], energy: j.energy ?? null,
+          cleared: false, applyToAlbum: false, source: 'llm',
+        });
+      }
       reloadCoverage();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -431,14 +466,15 @@ export function LibraryProvider({
   ) => {
     setManualBusy(track.id);
     try {
-      const r = await adminFetch('/library/manual-tag', {
+      const j = await adminJson<{ ok?: boolean; updated?: number; cleared?: boolean }>(
+        adminFetch,
+        '/library/manual-tag',
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: track.id, moods, energy, applyToAlbum }),
-      });
-      const j = (await r.json().catch(() => ({}))) as
-        { ok?: boolean; updated?: number; cleared?: boolean; error?: string };
-      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+        },
+      );
       const cleared = !!j.cleared;
       const n = j.updated ?? 1;
       const scope = applyToAlbum ? `${n} album track${n === 1 ? '' : 's'}` : 'track';
@@ -454,63 +490,78 @@ export function LibraryProvider({
     }
   }, [adminFetch, qc, flash, reloadCoverage]);
 
-  // --- blocklist -----------------------------------------------------------
+  // The manual era override (#1418). Does NOT touch coverage or the untagged
+  // list -- an original year is not a tag. The editor stays OPEN afterwards
+  // because a year is often the first of several corrections on the same row.
+  const saveEraYear = useCallback(async (
+    track: Track, originalYear: number | null, applyToAlbum: boolean,
+  ) => {
+    setEraBusy(track.id);
+    try {
+      const j = await adminJson<{ ok?: boolean; updated?: number; cleared?: boolean; tracks?: Array<{ id: string }> }>(
+        adminFetch,
+        '/library/original-year',
+        {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: track.id, originalYear, applyToAlbum }),
+        },
+      );
+      const n = j.updated ?? 1;
+      const scope = applyToAlbum ? `${n} album track${n === 1 ? '' : 's'}` : 'track';
+      notify.ok(originalYear == null
+        ? `cleared the year override · ${scope}`
+        : `era year ${originalYear} · ${scope}`);
+      flash(track.id);
+      applyEraYearEvent(qc, {
+        originalYear,
+        // Current controllers return the authoritative target set; the fallback
+        // keeps a newer web build safe against an older controller.
+        trackIds: j.tracks?.map((t) => t.id) ?? [track.id],
+      });
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setEraBusy(null);
+    }
+  }, [adminFetch, qc, flash]);
+
   // Shared by the Blocked tab's Unblock, the row-level unblock and the block
   // toast's Undo, so all three get the same list update and re-mark.
   const removeBlockEntry = useCallback(async (
     e: { type: BlockType; id: string; name?: string | null },
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
-    const r = await adminFetch(`/library/blocklist/${e.type}/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
-    if (!r.ok && r.status !== 404) {
-      const j = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(j.error || `unblock failed (${r.status})`);
-    }
-    // The Blocked tab's list is a query like any other — invalidating reaches
-    // it whether or not that tab is mounted, which is what registerBlockList
-    // existed to do.
-    void qc.invalidateQueries({ queryKey: libraryKeys.blocked() });
-    if (!quiet) notify.ok(`“${e.name || e.id}” can play again`);
-    await restampBlockMarks();
-  }, [adminFetch, qc, restampBlockMarks]);
+    await deleteBlockEntry(adminFetch, e);
+    if (!quiet) notify.ok(liftedText(e));
+    await reconcileBlockCaches(qc, adminFetch);
+  }, [adminFetch, qc]);
 
   const blockTrack = useCallback(async (track: Track, type: BlockType) => {
     setBlocking(track.id);
     try {
-      const r = await adminFetch('/library/blocklist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, trackId: track.id }),
-      });
-      const j = await r.json().catch(() => ({})) as { entry?: BlockEntry; purged?: number; error?: string };
-      if (!r.ok) throw new Error(j.error || `block failed (${r.status})`);
+      const j = await postBlock(adminFetch, type, track.id);
       const what = type === 'track' ? `“${track.title}”` : type === 'album' ? `album “${track.album}”` : track.artist;
       const entry = j.entry;
       // Undo rather than a confirm dialog: the row badge keeps a wrong scope
       // visible even after the toast goes.
       const msg = `${what} will never air${j.purged ? ` · ${j.purged} dropped from queue` : ''}`;
       if (entry) {
-        notify.undo(msg, () => {
-          removeBlockEntry(entry, { quiet: true })
-            .then(() => notify.ok(`“${entry.name || entry.id}” can play again`))
-            .catch(err => notify.err(errorMessage(err)));
-        });
+        notifyBlockedWithUndo(msg, entry, e => removeBlockEntry(e, { quiet: true }));
       } else {
         notify.ok(`${msg} — manage in the Blocked tab`);
       }
-      void qc.invalidateQueries({ queryKey: libraryKeys.blocked() });
-      await restampBlockMarks();
+      await reconcileBlockCaches(qc, adminFetch);
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
       setBlocking(null);
     }
-  }, [adminFetch, qc, removeBlockEntry, restampBlockMarks]);
+  }, [adminFetch, qc, removeBlockEntry]);
 
-  // Lifts whichever entry matched this row — possibly an album or artist block
-  // made from a different row entirely. Rule refs never reach here (TrackTable
-  // offers no one-click unblock for them — a rule can block hundreds of rows),
-  // so the guard is a type-level formality.
+  // Lifts whichever entry matched this row, possibly an album or artist block
+  // made from a different row. Rule refs never reach here, so the guard is a
+  // type-level formality.
   const unblockRow = useCallback(async (track: Track, ref: BlockRef) => {
     if (ref.kind === 'rule') return;
     setBlocking(track.id);
@@ -529,8 +580,8 @@ export function LibraryProvider({
     selected, toggleSelect, toggleAllRows, clearSelection,
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
-    queuing, retagging, flashId, editingId, manualBusy, blocking,
-    queueTrack, retagTrack, onEditTrack, cancelEdit, saveManualTag,
+    queuing, retagging, flashId, editingId, manualBusy, eraBusy, blocking,
+    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
     blockTrack, unblockRow, removeBlockEntry,
   }), [
     adminFetch, ready, coverage, reloadCoverage, tagger, restampBlockMarks,
@@ -538,8 +589,8 @@ export function LibraryProvider({
     selected, toggleSelect, toggleAllRows, clearSelection,
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
-    queuing, retagging, flashId, editingId, manualBusy, blocking,
-    queueTrack, retagTrack, onEditTrack, cancelEdit, saveManualTag,
+    queuing, retagging, flashId, editingId, manualBusy, eraBusy, blocking,
+    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
     blockTrack, unblockRow, removeBlockEntry,
   ]);
 

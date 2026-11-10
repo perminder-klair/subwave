@@ -2,12 +2,17 @@
 
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/cn';
+import { EmptyArt, type EmptyArtKind } from '@/components/iso/EmptyArt';
 
 /* Shared "nothing here yet" panel for the admin console. Copy is
    caller-supplied so panels can carry a light SUB/WAVE voice where it fits. */
 export interface EmptyStateProps {
   /** Sits in a bordered square above the title. */
   icon?: ReactNode;
+  /** A small isometric drawing above the title, in construction lines. A
+   *  full-size panel with no icon gets the empty crate unless it names
+   *  another; `false` leaves it bare. Compact panels never draw one. */
+  art?: EmptyArtKind | false;
   title?: ReactNode;
   description?: ReactNode;
   action?: ReactNode;
@@ -18,12 +23,14 @@ export interface EmptyStateProps {
 
 export function EmptyState({
   icon,
+  art,
   title = 'Nothing here yet',
   description,
   action,
   compact,
   className,
 }: EmptyStateProps) {
+  const drawing = compact || icon ? null : art === undefined ? 'crate' : art || null;
   return (
     <div
       // The one selectable hook on this panel: everything else here is utility
@@ -36,6 +43,7 @@ export function EmptyState({
         className,
       )}
     >
+      {drawing && <EmptyArt kind={drawing} className="mb-3 w-[150px] max-w-full" />}
       {icon && (
         <div className="mb-3 flex size-10 items-center justify-center border border-separator-strong text-muted [&_svg]:size-5">
           {icon}

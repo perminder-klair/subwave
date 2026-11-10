@@ -7,11 +7,15 @@
  *   - the standalone stdio server (mcp-subwave/src/index.ts), which points it at
  *     SUBWAVE_API_URL with admin creds from its own environment.
  *
- * Three endpoint classes matter here:
+ * Four endpoint classes matter here:
  *   - public, read-only:        GET /health, /now-playing, /state, /schedule,
  *                               /session, /request/:id
  *   - public, rate-limited:     POST /request (202 receipt + background resolve)
- *   - admin, Basic-auth gated:  the /dj/* command surface and /sfx
+ *   - station-password gated:   GET /similar-tracks — open on a public station,
+ *                               closed on a private one (a DIFFERENT secret
+ *                               from the admin one; see stationHeader)
+ *   - admin, Basic-auth gated:  the /dj/* command surface, /sfx and
+ *                               /debug/dj-log (the booth log)
  *
  * Every failure is turned into a SubwaveError carrying a message written for
  * the agent — it says what went wrong AND what to do about it, so the model
@@ -50,6 +54,20 @@ export interface SubwaveConfig {
    * caller instead of collapsing every MCP user into the loopback address.
    */
   forwardIp?: string;
+  /**
+   * The STATION password (settings.privacy.password) — a different credential
+   * from the admin one, gating the listener-facing reads (GET /similar-tracks).
+   * Unset is the normal case: a public station has no locks and the gate is
+   * open. From the stdio server this is SUBWAVE_STATION_PASSWORD.
+   */
+  stationPassword?: string;
+  /**
+   * Pre-formed x-station-auth value to forward verbatim, used by the
+   * controller's HTTP MCP mount to pass the caller's station password through
+   * exactly as the Authorization header is. Takes precedence over
+   * stationPassword when set.
+   */
+  forwardStationAuth?: string;
 }
 
 /** POST /request hands back a receipt; the booth resolves in the background. */
@@ -102,9 +120,41 @@ export interface QueueTrackResult {
   queuePosition: number;
 }
 
+/** POST /dj/queue-block — a whole album or artist block queued in one action. */
+export interface QueueBlockResult {
+  ok: boolean;
+  kind: 'album' | 'artist';
+  blockId: string;
+  label: string;
+  queued: number;
+  queuePosition: number | null;
+  truncated: number;
+  /** Tracks the never-play blocklist refused — the block is NOT exempt from it. */
+  skipped: { title: string | null; artist: string | null; reason: string; blockedBy: unknown | null }[];
+  /** A warning only; nothing is cut at the boundary. */
+  runsPastShowChange: { at: string; show: string | null; bySec: number } | null;
+}
+
+/** POST /dj/skip. `reason`/`error` are set only when a targeted skip was refused (HTTP 409). */
+export interface SkipResult {
+  ok: boolean;
+  /** The queued pick had to be committed first, and whether it confirmed in time. */
+  pending?: boolean;
+  committed?: boolean;
+  reason?: string;
+  error?: string;
+  /** What now-playing names, on a refusal. */
+  onAirId?: string | null;
+}
+
 export interface SfxPlayResult {
   ok: boolean;
   name: string;
+}
+
+export interface JinglePlayResult {
+  ok: boolean;
+  filename: string;
 }
 
 export class SubwaveClient {
@@ -112,6 +162,17 @@ export class SubwaveClient {
 
   private get hasAdminCreds(): boolean {
     return Boolean(this.config.forwardAuth || (this.config.adminUser && this.config.adminPass));
+  }
+
+  private get hasStationCreds(): boolean {
+    return Boolean(this.config.forwardStationAuth || this.config.stationPassword);
+  }
+
+  // The station gate reads three shapes (util/listener-auth.stationAuthCandidate);
+  // the explicit header is the one an API client should send, so send that.
+  private stationHeader(): Record<string, string> {
+    const token = this.config.forwardStationAuth || this.config.stationPassword;
+    return token ? { "x-station-auth": token } : {};
   }
 
   private authHeader(): Record<string, string> {
@@ -124,7 +185,13 @@ export class SubwaveClient {
   /** Core fetch wrapper: timeout, JSON parsing, and agent-readable errors. */
   private async call<T>(
     path: string,
-    init: { method?: string; body?: unknown; admin?: boolean; allowStatuses?: number[] } = {},
+    init: {
+      method?: string;
+      body?: unknown;
+      admin?: boolean;
+      station?: boolean;
+      allowStatuses?: number[];
+    } = {},
   ): Promise<T> {
     const url = `${this.config.baseUrl}${path}`;
 
@@ -137,6 +204,7 @@ export class SubwaveClient {
           ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
           ...(this.config.forwardIp ? { "x-forwarded-for": this.config.forwardIp } : {}),
           ...(init.admin ? this.authHeader() : {}),
+          ...(init.station ? this.stationHeader() : {}),
         },
         body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
       });
@@ -170,6 +238,21 @@ export class SubwaveClient {
           `Rate limited — wait ${retryAfter ?? "a moment"}s before requesting again. ` +
             `The controller caps song requests at 1 per 20s and 8 per hour.`,
         retryAfter,
+      );
+    }
+
+    // A station-gated endpoint rejects the STATION password, not the admin
+    // one, so the recovery advice has to name a different secret — telling the
+    // agent to supply admin credentials it may already have is a dead end.
+    if ((res.status === 401 || res.status === 403) && init.station) {
+      throw new SubwaveError(
+        `This station is private and rejected the station password for ${path}. ` +
+          (this.hasStationCreds
+            ? `The station password provided to this MCP connection doesn't match the ` +
+              `station's privacy password.`
+            : `Provide the station's listener password to this MCP connection (an ` +
+              `x-station-auth header for the HTTP endpoint, or SUBWAVE_STATION_PASSWORD ` +
+              `for the stdio server).`),
       );
     }
 
@@ -216,9 +299,24 @@ export class SubwaveClient {
     return this.call<Record<string, unknown>>("/now-playing");
   }
 
-  /** GET /state — upcoming queue, recent history, and the DJ booth log. */
+  /** GET /state — upcoming queue and recent history (public; no booth log). */
   async state(): Promise<Record<string, unknown>> {
     return this.call<Record<string, unknown>>("/state");
+  }
+
+  /**
+   * GET /debug/dj-log — the newest booth-log lines, admin-gated. Null without
+   * admin credentials, when they are refused or locked out, or against a
+   * controller that predates the route, so the state tool degrades to the
+   * public view instead of failing.
+   */
+  async boothLog(): Promise<unknown[] | null> {
+    if (!this.hasAdminCreds) return null;
+    const body = await this.call<{ djLog?: unknown }>("/debug/dj-log", {
+      admin: true,
+      allowStatuses: [401, 403, 404, 429],
+    });
+    return Array.isArray(body?.djLog) ? body.djLog : null;
   }
 
   /** GET /schedule — shows, personas, and the weekly schedule grid. */
@@ -294,6 +392,24 @@ export class SubwaveClient {
     );
   }
 
+  /**
+   * GET /similar-tracks — CLAP "sounds like this" neighbours for a seed track.
+   * Station-gated, not admin-gated, and never an error for a missing
+   * embedding: an empty `results` always arrives with a `reason`.
+   */
+  async similarTracks(params: { id?: string; q?: string; limit?: number }): Promise<{
+    seed: { id: string; title: string | null; artist: string | null } | null;
+    results: Record<string, unknown>[];
+    reason: string;
+    message: string | null;
+  }> {
+    const qs = new URLSearchParams();
+    if (params.id) qs.set("id", params.id);
+    if (params.q) qs.set("q", params.q);
+    if (params.limit) qs.set("limit", String(params.limit));
+    return this.call(`/similar-tracks?${qs.toString()}`, { station: true });
+  }
+
   /** POST /dj/queue-track — queue an exact track from a search result. */
   async queueTrack(track: Record<string, unknown>): Promise<QueueTrackResult> {
     return this.call<QueueTrackResult>("/dj/queue-track", {
@@ -303,9 +419,30 @@ export class SubwaveClient {
     });
   }
 
-  /** POST /dj/skip — force-end the current track (operator override). */
-  async skipTrack(): Promise<{ ok: boolean }> {
-    return this.call<{ ok: boolean }>("/dj/skip", { method: "POST", admin: true });
+  /** POST /dj/queue-block — queue a whole album or a block of an artist's tracks. */
+  async queueBlock(body: Record<string, unknown>): Promise<QueueBlockResult> {
+    return this.call<QueueBlockResult>("/dj/queue-block", {
+      method: "POST",
+      admin: true,
+      body,
+    });
+  }
+
+  /**
+   * POST /dj/skip — force-end the current track (operator override). With
+   * `expectId` the skip is targeted: the controller answers 409 rather than
+   * skip when that track is no longer what is on air, returned as `ok: false`
+   * with its reason. Without it, the bare skip sent exactly as before.
+   */
+  async skipTrack(expectId?: string | null): Promise<SkipResult> {
+    if (!expectId) return this.call<SkipResult>("/dj/skip", { method: "POST", admin: true });
+    const body = await this.call<SkipResult>("/dj/skip", {
+      method: "POST",
+      admin: true,
+      body: { expectId },
+      allowStatuses: [409],
+    });
+    return body.reason ? { ...body, ok: false } : body;
   }
 
   /** POST /dj/refresh-playlist — rebuild the fallback auto-playlist now. */
@@ -321,6 +458,18 @@ export class SubwaveClient {
   /** POST /sfx/:name/play — fire a sound effect on-air now. */
   async playSfx(name: string): Promise<SfxPlayResult> {
     return this.call<SfxPlayResult>(`/sfx/${encodeURIComponent(name)}/play`, {
+      method: "POST",
+      admin: true,
+    });
+  }
+
+  async listJingles(): Promise<Record<string, unknown>> {
+    return this.call<Record<string, unknown>>("/jingles", { admin: true });
+  }
+
+  /** POST /jingles/:filename/play — queue a jingle for the next boundary. */
+  async playJingle(filename: string): Promise<JinglePlayResult> {
+    return this.call<JinglePlayResult>(`/jingles/${encodeURIComponent(filename)}/play`, {
       method: "POST",
       admin: true,
     });

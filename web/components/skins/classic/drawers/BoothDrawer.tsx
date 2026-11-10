@@ -2,9 +2,18 @@
 
 import { useMemo, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
-import { turnClass, turnKey, turnText, isDjTurn, type TurnDisplayClass } from '@/lib/sessionFeed';
+import {
+  turnClass,
+  turnKey,
+  turnText,
+  isCarriedTurn,
+  isDjTurn,
+  isShowBoundary,
+  showBoundaryLabel,
+  type TurnDisplayClass,
+} from '@/lib/sessionFeed';
 import { cn } from '@/lib/cn';
-import { fmtClock } from '@/lib/format';
+import { fmtClock, fmtClockMinute } from '@/lib/format';
 import type { SessionTurn, StationLocale } from '@/lib/types';
 
 type FilterId = 'all' | 'dj' | 'tracks';
@@ -45,13 +54,16 @@ export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProp
   const filtered = useMemo<SessionTurn[]>(() => {
     if (!items?.length) return [];
     // System turns (session cues, pick prompts) are operator-facing and never
-    // reach listeners.
+    // reach listeners. The one exception is the show-boundary separator that
+    // follows the previous show's carried tail after a hard roll (#1690); it
+    // stays in every filter so dimmed rows below it read as the last show.
     const ordered = [...items]
-      .filter((turn) => turnClass(turn) !== 'system')
+      .filter((turn) => turnClass(turn) !== 'system' || isShowBoundary(turn))
       .reverse();
     if (filter === 'all') return ordered;
     return ordered.filter((turn) =>
-      filter === 'dj' ? isDjTurn(turn) : turnClass(turn) === 'track');
+      isShowBoundary(turn) ||
+      (filter === 'dj' ? isDjTurn(turn) : turnClass(turn) === 'track'));
   }, [items, filter]);
 
   return (
@@ -85,16 +97,39 @@ export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProp
 
       <AnimatePresence initial={false} mode="popLayout">
         {filtered.map((turn, i) => {
+          if (isShowBoundary(turn)) {
+            const label = showBoundaryLabel(turn, (at) => fmtClockMinute(at, timezone, locale));
+            return (
+              <m.div
+                key={turnKey(turn, i)}
+                layout
+                role="separator"
+                aria-label={`Show boundary: ${label}`}
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.14, ease: [0.2, 0.7, 0.2, 1] }}
+                className="flex items-center gap-3 border-b border-soft-border py-3"
+              >
+                <span className="h-px flex-1 bg-soft-border" aria-hidden="true" />
+                <span className="v3-tab-num text-[10px] tracking-[0.2em] text-muted">{label}</span>
+                <span className="h-px flex-1 bg-soft-border" aria-hidden="true" />
+              </m.div>
+            );
+          }
           const cls = turnClass(turn);
           const isVoice = cls === 'voice';
           const color = CLASS_COLOR[cls];
           const text = turnText(turn);
+          // The previous show's tail is dimmed. Motion owns the row's opacity,
+          // so the dim goes through `animate`, not a class it would override.
+          const carried = isCarriedTurn(turn);
           return (
             <m.div
               key={turnKey(turn, i)}
               layout
               initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
+              animate={{ opacity: carried ? 0.6 : 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.14, ease: [0.2, 0.7, 0.2, 1] }}
               className={cn(
@@ -109,6 +144,11 @@ export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProp
                 <span className={cn('text-[9px] font-semibold tracking-[0.3em] uppercase', color)}>
                   {turn.kind}
                 </span>
+                {carried && isVoice && typeof turn.meta?.personaName === 'string' && turn.meta.personaName ? (
+                  <span className="min-w-0 truncate text-[9px] font-semibold tracking-[0.2em] text-vermilion uppercase">
+                    {turn.meta.personaName}
+                  </span>
+                ) : null}
               </div>
               <div
                 className={cn(

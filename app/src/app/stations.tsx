@@ -1,14 +1,10 @@
-// Station switcher, styled after the web mock: the tuned-in station as an accent
-// card, recents as live-dot rows, and a dashed "Add a station". Switching goes
-// through selectStation (which tears down playback before re-pointing the app);
-// navigation returns to the EXISTING root player via dismissTo — replace() here
-// would stack a second player screen on top of the modal (overlapping screens,
-// duplicate polling). Saved stations carry a trash button (long-press works
-// too); both confirm before forgetting. The featured station is config-seeded
-// and would silently reappear, so it never offers removal.
+// Use dismissTo to return to the existing player; replace stacks a second
+// player inside the modal. The config-seeded featured station cannot be removed,
+// but every saved station, the featured and tuned-in ones included, can have its
+// Station login edited (#1873).
 
 import { router } from 'expo-router';
-import { ChevronRight, Trash2, X } from 'lucide-react-native';
+import { ChevronRight, KeyRound, Trash2, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -46,33 +42,53 @@ export default function Stations() {
   }, []);
 
   const switchTo = async (ref: StationRef) => {
-    if (normalizeBase(ref.url) !== base) {
-      await selectStation(ref);
+    try {
+      if (normalizeBase(ref.url) !== base) {
+        await selectStation(ref);
+      }
+      router.dismissTo('/');
+    } catch {
+      Alert.alert(
+        "Couldn't load station login",
+        "The device's secure storage could not be read. Current playback was left untouched; unlock the device and try again.",
+      );
     }
-    router.dismissTo('/');
   };
 
   const confirmForget = (st: StationRef) => {
     Alert.alert('Remove station?', `${st.name} will be removed from your stations.`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: () => forgetStation(st.url) },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await forgetStation(st.url);
+          } catch {
+            Alert.alert(
+              "Couldn't remove station",
+              "The device's secure storage could not be updated, so the station and its saved login were left in place.",
+            );
+          }
+        },
+      },
     ]);
   };
 
-  // Tapping a directory station deep-links into onboarding's health-check so a
-  // dead/asleep station fails gracefully before we tune in (see onboarding.tsx).
+  const editLogin = (st: StationRef) =>
+    router.push({ pathname: '/station-login', params: { url: st.url, name: st.name } });
+
+  // Check station health in onboarding before tuning in.
   const discover = (st: DirectoryStation) =>
     router.push({ pathname: '/onboarding', params: { url: st.url, name: st.name } });
 
   const currentUrl = base;
-  // `name` comes from the recents lookup; if the active station was forgotten
-  // (long-press) fall back to its host, not the featured station's name.
+  // If an active station was forgotten, use its host as the display name.
   const currentName =
     name || (currentUrl === featured.url ? featured.name : stripProto(currentUrl ?? ''));
   const others: StationRef[] = [featured, ...recents].filter(
     (r) => normalizeBase(r.url) !== currentUrl,
   );
-  // de-dupe by url
   const seen = new Set<string>();
   const recentRows = others.filter((r) => {
     const k = normalizeBase(r.url);
@@ -81,8 +97,6 @@ export default function Stations() {
     return true;
   });
 
-  // Discover = the community directory minus anything already shown above
-  // (tuned-in, featured, or a recent) and minus directory dupes.
   if (currentUrl) seen.add(normalizeBase(currentUrl));
   const discoverRows = directory.filter((st) => {
     const k = normalizeBase(st.url);
@@ -121,6 +135,22 @@ export default function Stations() {
               <Text className="font-mono text-ink" style={{ fontSize: 11, opacity: 0.8 }} numberOfLines={1}>
                 {stripProto(currentUrl)}
               </Text>
+              <Pressable
+                onPress={() => editLogin({ url: currentUrl, name: currentName })}
+                accessibilityRole="button"
+                accessibilityLabel={`Station login for ${currentName}`}
+                className="flex-row items-center"
+                style={{ gap: 8, marginTop: 6, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.softBorder }}
+              >
+                <KeyRound size={14} color={colors.accent} />
+                <Text
+                  className="font-mono text-ink"
+                  style={{ flex: 1, fontSize: 10.5, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: '700' }}
+                >
+                  Station login
+                </Text>
+                <ChevronRight size={14} color={colors.muted} />
+              </Pressable>
             </View>
           </>
         ) : null}
@@ -147,6 +177,15 @@ export default function Stations() {
                   {stripProto(st.url)}
                 </Text>
               </View>
+              <Pressable
+                onPress={() => editLogin(st)}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel={`Station login for ${st.name}`}
+                style={{ padding: 4 }}
+              >
+                <KeyRound size={15} color={colors.muted} />
+              </Pressable>
               {removable ? (
                 <Pressable
                   onPress={() => confirmForget(st)}

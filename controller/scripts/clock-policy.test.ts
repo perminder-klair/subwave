@@ -35,6 +35,7 @@ const { clockEnabled, speakClockAllowed, autoTimeCheckAllowed, clockStatus } =
 const { shouldFire } = await import('../src/broadcast/dj-gate.js');
 const { buildContextLines } = await import('../src/llm/internal/prompts/context.js');
 const { pickSchemaBase } = await import('../src/broadcast/dj-agent/schemas.js');
+const { linkPrompt } = await import('../src/llm/internal/prompts/scripts.js');
 
 // A moment carrying every tag at once, so one assertion covers all three.
 const CTX = {
@@ -52,12 +53,14 @@ function periodLine(): string | undefined {
     .find((l: string) => l.startsWith('Period:'));
 }
 
-// pickSchemaBase() returns a plain ZodObject; keep the lookup tolerant of a
-// future wrap, the same way voice-policy.test.ts does for requestSchema().
-function sayDescription(): string {
-  const schema: any = pickSchemaBase();
-  const shape = schema?.def?.out?.shape ?? schema.shape;
-  return String(shape.say.description ?? '');
+// Picker output is now selection-only. Clock wording belongs exclusively to
+// the isolated post-selection link prompt.
+function linkDescription(): string {
+  return linkPrompt({
+    current: { title: 'Clock Test', artist: 'Subwave' },
+    context: CTX,
+    clockIsAirTime: speakClockAllowed(),
+  });
 }
 
 const KINDS_UNAFFECTED = ['stationId', 'banter'];
@@ -91,8 +94,10 @@ try {
   assert.ok(liveUnaffected.length > 0,
     'baseline: idents/banter fire somewhere, else the "unaffected" check is vacuous');
   assert.ok(shouldFire('hourly', atMinute(0)), 'baseline: the hourly check fires');
-  assert.match(sayDescription(), /unless the event message tells you/,
-    'clock on: the say schema keeps its conditional clock rule');
+  assert.equal('say' in (pickSchemaBase() as any).shape, false,
+    'the picker schema is selection-only');
+  assert.match(linkDescription(), /If you mention the time, use only the approximate phrase supplied in Current Context/,
+    'clock on: the isolated link writer receives the conditional clock rule');
 
   // ── OFF ────────────────────────────────────────────────────────────────────
   await settings.update({ djSpeakClock: false });
@@ -121,12 +126,10 @@ try {
   assert.deepEqual(stillLive, liveUnaffected,
     'clock off must NOT gag idents or banter — they just stop mentioning the time');
 
-  // The agent path carries its own clock rule and has to follow too.
-  const offSay = sayDescription();
-  assert.ok(!/unless the event message tells you/.test(offSay),
-    'clock off: the say schema drops the escape hatch that can never be met');
-  assert.match(offSay, /Never state a clock time/,
-    'clock off: the say schema states a flat ban');
+  // The isolated link writer carries the clock policy after selection.
+  const offLink = linkDescription();
+  assert.match(offLink, /Do not state a clock time; no verified air time was supplied/,
+    'clock off: the link writer states a flat ban');
 
   // ── Back ON: everything resumes exactly ────────────────────────────────────
   await settings.update({ djSpeakClock: true });

@@ -1,8 +1,4 @@
-// Static config + tiny pure helpers for the personas editor. No React, no DOM.
-
-// Ordered ascending in chattiness / verbosity — rendered as the stops of a
-// SteppedFader, so the array order IS the fader travel. Ids must match the
-// controller's FREQUENCIES / SCRIPT_LENGTHS ladders (settings.ts).
+// Fader stops are ordered by increasing chattiness and verbosity. IDs match the controller ladders.
 export const FREQUENCIES = [
   { id: 'silent',     label: 'Silent',     desc: 'Never talks on its own — no links, idents, banter or segments. Manual triggers and listener requests still speak.' },
   { id: 'quiet',      label: 'Quiet',      desc: 'Talks every 8–20 tracks · station ID once an hour · segments at most every 30 min.' },
@@ -15,6 +11,11 @@ export const SCRIPT_LENGTHS = [
   { id: 'concise',     label: 'Concise',     desc: 'Standard one-to-four sentence segments. The default.' },
   { id: 'extended',    label: 'Extended',    desc: 'Longer, storytelling segments. Roughly double the length across intros, links, weather and idents.' },
   { id: 'storyteller', label: 'Storyteller', desc: 'Long-form — proper scene-setting monologues, roughly triple the default length.' },
+];
+// Ids must match the controller's PERSONA_LINK_STYLES (schemas/persona.ts).
+export const LINK_STYLES = [
+  { id: 'natural',  label: 'Natural',  desc: 'The ordinary between-track link — sets the track up, names the artist or captures its feel, varies the opener.' },
+  { id: 'announce', label: 'Announce only', desc: 'Matter-of-fact: the link is exactly "This is <artist>." or "Next up, <artist>." — nothing else.' },
 ];
 // 0–10, default 5, mapping to three prompt bands server-side
 // (settings.personaToneDirectives): 0–3 low, 7–10 high, 4–6 neutral (nothing
@@ -67,9 +68,13 @@ import {
   DJ_PROMPT_TEXT_MAX,
   PERSONA_LANGUAGE_MAX,
   PERSONA_LIMIT,
+  PERSONA_MUSIC_LEAN_MAX,
   PERSONA_NAME_MAX,
   PERSONA_SOUL_MAX,
+  PERSONA_TAG_MAX,
+  PERSONA_TAG_RE,
   PERSONA_TAGLINE_MAX,
+  TAGS_PER_PERSONA_LIMIT,
   TTS_CHATTERBOX_VOICE_RE,
   TTS_KOKORO_VOICE_RE,
   TTS_POCKET_VOICE_RE,
@@ -85,7 +90,11 @@ export const KOKORO_RE = TTS_KOKORO_VOICE_RE;
 export const NAME_MAX = PERSONA_NAME_MAX;
 export const TAGLINE_MAX = PERSONA_TAGLINE_MAX;
 export const SOUL_MAX = PERSONA_SOUL_MAX;
+export const MUSIC_LEAN_MAX = PERSONA_MUSIC_LEAN_MAX;
 export const LANGUAGE_MAX = PERSONA_LANGUAGE_MAX;
+export const TAGS_MAX = TAGS_PER_PERSONA_LIMIT;
+export const TAG_MAX = PERSONA_TAG_MAX;
+export const TAG_RE = PERSONA_TAG_RE;
 export const PROMPT_MAX = DJ_PROMPT_TEXT_MAX;
 export const PROMPT_PRESET_MAX = DJ_PROMPT_LIMIT;
 export const PROMPT_NAME_MAX = DJ_PROMPT_NAME_MAX;

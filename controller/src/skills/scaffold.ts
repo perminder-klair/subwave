@@ -1,29 +1,16 @@
-// Seed the shipped built-in skills into state/skills/<kind>/ as full, editable
-// skills — both SKILL.md AND tool.mjs.
-//
-// On boot we copy each built-in out of its read-only template
-// (src/skills/builtins/<kind>/, the source of truth) into state/skills/<kind>/.
-// From then on the operator owns those files: edit the brief in /admin/skills,
-// or the tool.mjs on disk + Rescan, exactly like a custom skill. The loader
-// (skills/loader.js) then scans state/skills as the single load root — built-ins
-// are no longer special at load time, just pre-installed.
-//
-// Idempotent: an existing file is never clobbered, so hand-edits survive a
-// restart. A MISSING file is restored — which is also how a deleted built-in
-// folder heals on the next boot (the delete posture is disable-only). Writes are
-// best-effort — a failure is logged, never fatal to boot.
-//
-// `resetBuiltinSkill()` is the opposite: it force-overwrites both files from the
-// template, restoring the as-shipped skill (and pulling in a newer image's
-// tool.mjs). It backs the admin "Reset to default" button.
+// Seed missing SKILL.md/tool.mjs files from builtins into state/skills.
+// Preserve existing operator edits and log write failures without stopping boot.
+// resetBuiltinSkill explicitly overwrites both files with shipped defaults.
 
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { STATE_DIR, config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
-import { SEEDED_KINDS, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
+import { SEEDED_KINDS, PENDING_TOOL_FILE, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
 import { preservedFrontmatter } from './config-fields.js';
+import type { SkillVoiceSlot } from '../schemas/skill.js';
+import { SKILL_VOICE_KEYS } from '../schemas/skill-server.js';
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 
@@ -68,6 +55,7 @@ interface SkillFileFields {
   cooldown?: string;
   cron?: string;            // cron expression for a dedicated timer (bypasses normal gating)
   cronOnly?: boolean;       // withhold from random selection — fires ONLY on the cron timer
+  cohosts?: boolean;        // use the active host + guest roster as one exchange
   contextFields?: string[]; // "right now" fields the segment may mention (#471)
   window?: 'any' | 'commute'; // custom skills only — emitted when 'commute'
   requiresKey?: string;       // custom skills only — env var the skill needs
@@ -82,6 +70,9 @@ interface SkillFileFields {
   configKeys?: string[];
   tags?: string[];      // freeform organisation tags
   brief?: string;
+  // This skill's own TTS voice override, or null/absent for the on-air DJ's
+  // voice. Written as flat frontmatter lines (SKILL_VOICE_KEYS).
+  voice?: SkillVoiceSlot | null;
 }
 
 // Render + write a skill's SKILL.md from form fields. Used by the admin routes:
@@ -113,12 +104,23 @@ export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
   if (fields.cooldown) lines.push(line('cooldown', fields.cooldown));
   if (fields.cron) lines.push(line('cron', fields.cron));
   if (fields.cronOnly) lines.push('cronOnly: true');
+  if (fields.cohosts) lines.push('cohosts: true');
   // The "right now" fields this segment may weave in (issue #471).
   if (fields.contextFields && fields.contextFields.length) lines.push(line('context', fields.contextFields.join(', ')));
   // Custom-skill knobs. `window: any` is the loader default, so only the
   // restrictive `commute` value is worth writing.
   if (fields.window === 'commute') lines.push('window: commute');
   if (fields.requiresKey) lines.push(line('requiresKey', fields.requiresKey));
+  // The skill's own voice override. Absent lines read as "no override", so
+  // clearing the form removes all three. The provider means something only to
+  // the cloud engine, so it is written only there.
+  if (fields.voice?.engine) {
+    lines.push(line(SKILL_VOICE_KEYS.engine, fields.voice.engine));
+    if (fields.voice.voice) lines.push(line(SKILL_VOICE_KEYS.voice, fields.voice.voice));
+    if (fields.voice.engine === 'cloud' && fields.voice.cloudProvider) {
+      lines.push(line(SKILL_VOICE_KEYS.cloudProvider, fields.voice.cloudProvider));
+    }
+  }
   // Skill-declared knobs (news' feed / feedMaxItems, and anything a custom
   // tool.mjs declares). Insertion order follows the declaration.
   for (const [key, value] of Object.entries(fields.config || {})) {
@@ -216,6 +218,22 @@ export async function resetBuiltinSkill(kind: string): Promise<void> {
   const dir = join(SKILLS_DIR, kind);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'SKILL.md'), seedSkillMd(kind, tpl.skillMd), 'utf8');
-  if (tpl.toolPath) await copyFile(tpl.toolPath, join(dir, 'tool.mjs'));
+  if (tpl.toolPath) {
+    await copyFile(tpl.toolPath, join(dir, 'tool.mjs'));
+  } else {
+    // The template ships no tool.mjs, so neither may the reset copy. A station
+    // seeded before #1616 still has news' hand-written feed tool on disk, and
+    // leaving it would make "Reset to default" restore everything EXCEPT the one
+    // file that is now stale — the skill would keep running its own copy of a
+    // fetch the loader generates (skills/feed.ts). Removing it is the same
+    // posture as the overwrite above: reset means the shipped shape, whatever
+    // the operator's edits were.
+    try {
+      await rm(join(dir, 'tool.mjs'));
+      queue.log('scheduler', `[skills] reset removed the state-only "${kind}" tool.mjs — the shipped skill has none`);
+    } catch { /* no tool.mjs to remove — the normal case */ }
+  }
+  // Reset means the shipped shape, so code waiting for review goes too.
+  await rm(join(dir, PENDING_TOOL_FILE), { force: true });
   queue.log('scheduler', `[skills] reset built-in "${kind}" to shipped default`);
 }

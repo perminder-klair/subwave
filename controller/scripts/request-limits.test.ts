@@ -1,11 +1,11 @@
 // Pins settings.requests (raid hardening, 2026-07-28): defaults when absent,
 // clamped when patched, byte-tolerant of pre-upgrade settings.json files.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-reqlimits-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-reqlimits-'));
 const settings = await import('../src/settings.js');
 await settings.load();
 
@@ -86,7 +86,8 @@ for (let i = 0; i < 5; i++) {
 }
 const g = checkGlobalRateLimit();
 assert.equal(g.ok, false);
-assert.ok(g.retryAfter > 0);
+assert.equal(typeof g.retryAfter, 'number');
+assert.ok(g.retryAfter !== undefined && g.retryAfter > 0);
 
 // --- check/commit are SEPARATE: a rejected request must not spend the hourly
 // budgets. POST /request has gates after these two (the one-pending hold, the
@@ -112,7 +113,8 @@ commitRateLimit('10.0.0.99');
 commitRateLimit('10.0.0.99');
 const capped = checkRateLimit('10.0.0.99');
 assert.equal(capped.ok, false);
-assert.ok(capped.retryAfter > 3000, `hourly refusal, not the 5s cooldown (got ${capped.retryAfter})`);
+assert.equal(typeof capped.retryAfter, 'number');
+assert.ok(capped.retryAfter !== undefined && capped.retryAfter > 3000, `hourly refusal, not the 5s cooldown (got ${capped.retryAfter})`);
 
 // --- schema shape: chat escapes exist on both request paths -----------------
 const { requestSchema } = await import('../src/broadcast/dj-agent/schemas.js');

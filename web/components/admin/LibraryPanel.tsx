@@ -3,7 +3,6 @@
 import { useEffect } from 'react';
 import { ListMusic, Telescope, ArrowRight } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
-import AdminQueryProvider from './AdminQueryProvider';
 import TaggingPanel from './LibraryTaggingPanel';
 import { LibraryProvider, useLibrary } from './library/LibraryContext';
 import { useLibraryUrlState } from './library/useLibraryUrlState';
@@ -16,22 +15,12 @@ import BlockedTabContainer from './library/tabs/BlockedTabContainer';
 import { Tabs } from './library/Tabs';
 import { AddToPlaylistBar } from './library/AddToPlaylistBar';
 
-// The QueryClient is mounted here rather than in AdminShell: this PR converts
-// the Library page only, and a provider in the shell would put every other
-// panel's future conversion behind this PR's review. Hoisting it is a two-line
-// move when the second panel converts.
 export default function LibraryPanel() {
-  return (
-    <AdminQueryProvider>
-      <LibraryPanelInner />
-    </AdminQueryProvider>
-  );
+  return <LibraryPanelInner />;
 }
 
-// Owns the ONE useAdminAuth instance for the page. Split from the body purely
-// so the body can consume its own provider — useAdminAuth is a per-instance
-// hook, and a second caller inside a tab would race a second hydration
-// (lib/adminAuth.ts:80).
+// Owns the Library feature boundary. Split from the body so every tab consumes
+// the same LibraryProvider while useAdminAuth mirrors the shell's shared store.
 function LibraryPanelInner() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   return (
@@ -121,6 +110,8 @@ function LibraryBody() {
         onStop={tag.stopTagger}
         onRescan={tag.rescanTagger}
         onReconcile={tag.reconcile}
+        onCountLibrary={tag.countLibrary}
+        countingLibrary={tag.countingLibrary}
         onReset={tag.resetLibrary}
         audioEnabled={tag.audioEnabled}
         onToggleAudio={tag.toggleAudio}

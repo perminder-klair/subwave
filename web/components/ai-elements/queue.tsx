@@ -8,28 +8,8 @@ import {
 } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/cn";
-import { ChevronDownIcon, PaperclipIcon } from "lucide-react";
+import { ChevronDownIcon } from "lucide-react";
 import type { ComponentProps } from "react";
-
-export interface QueueMessagePart {
-  type: string;
-  text?: string;
-  url?: string;
-  filename?: string;
-  mediaType?: string;
-}
-
-export interface QueueMessage {
-  id: string;
-  parts: QueueMessagePart[];
-}
-
-export interface QueueTodo {
-  id: string;
-  title: string;
-  description?: string;
-  status?: "pending" | "completed";
-}
 
 export type QueueItemProps = ComponentProps<"li">;
 
@@ -136,49 +116,6 @@ export const QueueItemAction = ({
   />
 );
 
-export type QueueItemAttachmentProps = ComponentProps<"div">;
-
-export const QueueItemAttachment = ({
-  className,
-  ...props
-}: QueueItemAttachmentProps) => (
-  <div className={cn("mt-1 flex flex-wrap gap-2", className)} {...props} />
-);
-
-export type QueueItemImageProps = ComponentProps<"img">;
-
-export const QueueItemImage = ({
-  className,
-  ...props
-}: QueueItemImageProps) => (
-  <img
-    alt=""
-    className={cn("h-8 w-8 rounded border object-cover", className)}
-    height={32}
-    width={32}
-    {...props}
-  />
-);
-
-export type QueueItemFileProps = ComponentProps<"span">;
-
-export const QueueItemFile = ({
-  children,
-  className,
-  ...props
-}: QueueItemFileProps) => (
-  <span
-    className={cn(
-      "flex items-center gap-1 rounded border bg-[var(--overlay)] px-2 py-1 text-xs",
-      className
-    )}
-    {...props}
-  >
-    <PaperclipIcon size={12} />
-    <span className="max-w-[100px] truncate">{children}</span>
-  </span>
-);
-
 export type QueueListProps = ComponentProps<typeof ScrollArea>;
 
 export const QueueList = ({
@@ -187,8 +124,7 @@ export const QueueList = ({
   ...props
 }: QueueListProps) => (
   <ScrollArea className={cn("mt-2 -mb-1", className)} {...props}>
-    {/* Height is themeable from the call site via the --queue-max-h custom
-        property (e.g. className="[--queue-max-h:26rem]" on QueueList). */}
+    {/* Callers can override --queue-max-h on QueueList. */}
     <div className="max-h-[var(--queue-max-h,10rem)] pr-4">
       <ul>{children}</ul>
     </div>

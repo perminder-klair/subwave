@@ -1,0 +1,714 @@
+// The WIRING of the persona mic-pass: which prompt memory each half is handed.
+//
+// prompt-memory-boundary.test.ts pins the selection policy — what belongs to a
+// session and what a hard roll drops. This file pins how runPersonaHandoff
+// composes it, which is where the two sides diverge and the half that was
+// previously only verifiable by reading:
+//
+//   - An ordinary post-roll sign-off reads the archived session; a final-track
+//     sign-off runs before the real roll and reads the still-live outgoing one.
+//   - Either greeting opens a fresh editorial session and must NOT inherit the
+//     outgoing memory — a clean slate at the boundary is the point of #1479.
+//
+// Swap those two and every policy assertion still passes, which is exactly how
+// the defect shipped. The two model calls are injected (the artist-guard-run
+// pattern), so there is no LLM here; the session, the queue readers and the
+// roll are all real.
+//
+// Run: npm test -- handoff-memory-wiring
+
+import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
+import { emptyWeek as emptyScheduleWeek } from '../src/schemas/schedule.js';
+import { test, type TestContext } from 'node:test';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const root = createTempDir(join(tmpdir(), 'subwave-handoff-wiring-'));
+process.env.STATE_DIR = root;
+
+const settings = await import('../src/settings.js');
+const session = await import('../src/broadcast/session.js');
+const { queue } = await import('../src/broadcast/queue.js');
+const djAgent = await import('../src/broadcast/dj-agent.js');
+const programme = await import('../src/broadcast/programme.js');
+const { currentTalkAir } = await import('../src/broadcast/talk-air.js');
+const { config } = await import('../src/config.js');
+const contextHelpers = await import('../src/context.js');
+const promptScripts = await import('../src/llm/internal/prompts/scripts.js');
+
+// Cloned off the shipped default rather than hand-built: the persona schema
+// validates tts slots, frequency and soul, and none of that is what this file
+// is about.
+const template = settings.get().personas[0];
+const WREN = { ...template, id: 'p_wren', name: 'Wren' };
+const GIGI = { ...template, id: 'p_gigi', name: 'Gigi' };
+
+function context(show: { id: string; name: string }, atMs: number) {
+  return {
+    at: new Date(atMs).toISOString(),
+    time: { period: 'morning', vibe: 'morning', mood: 'calm' },
+    weather: null,
+    festival: null,
+    dominantMood: 'calm',
+    date: {},
+    clock: {},
+    listeners: 1,
+    activeShow: { ...show, topic: '', moods: ['calm'] },
+  } as any;
+}
+
+// Register before setup so a failed update or arming assertion cannot leak the
+// fake clock or prompt settings into the next test.
+function restorePromptSettingsAfter(t: TestContext) {
+  const realNow = Date.now;
+  const { timezone, locale, personas, activePersonaId, shows, schedule, djSpeakClock } = settings.get();
+  const prior = structuredClone({ timezone, locale, personas, activePersonaId, shows, schedule, djSpeakClock });
+  t.after(async () => {
+    Date.now = realNow;
+    await settings.update(prior as never);
+  });
+}
+
+// Recovery now verifies show continuity against the station grid. These
+// handoff fixtures must schedule the incoming show they put in the context.
+async function scheduleIncoming() {
+  const week: Record<number, string[]> = fullScheduleWeek('s_incoming');
+  await settings.update({
+    shows: [{ id: 's_incoming', name: 'Cultural Currents', topic: 'culture', programme: true, personaId: GIGI.id }],
+    schedule: week,
+  });
+}
+
+async function armIncoming({
+  atMs = Date.now(), finalTrack, scheduled = false,
+  patch = {},
+}: {
+  atMs?: number;
+  finalTrack?: Parameters<typeof session.armBoundaryHandoff>[1];
+  scheduled?: boolean;
+  patch?: Parameters<typeof settings.update>[0];
+} = {}) {
+  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id, ...patch } as never);
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, atMs));
+  await settings.update({ activePersonaId: GIGI.id } as never);
+  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, atMs + 60_000);
+  if (scheduled) await scheduleIncoming();
+  assert.equal(session.armBoundaryHandoff(incoming, finalTrack), true);
+  return incoming;
+}
+
+// Records what each generator was handed. Neither returns anything the test
+// asserts on — the arguments ARE the assertion.
+function generators() {
+  const seen: Record<string, {
+    recap: string | null;
+    recentOpeners: string[];
+    personaOut: string;
+    personaIn: string;
+    showOut?: string | null;
+    showIn: string | null;
+    episodeAngle?: string | null;
+    context: any;
+    prompt: string;
+  }> = {};
+  return {
+    seen,
+    deps: {
+      generateSignoff: async (args: any) => {
+        const { recap, recentOpeners, personaOut, personaIn, showOut, showIn } = args;
+        seen.signoff = {
+          recap: recap ?? null, recentOpeners: recentOpeners ?? [],
+          personaOut: personaOut.name, personaIn: personaIn.name, showOut, showIn,
+          context: args.context, prompt: promptScripts.signoffPrompt(args),
+        };
+        return 'That was the hour. Gigi has the next one.';
+      },
+      generateHandoffGreeting: async (args: any) => {
+        const { recap, recentOpeners, personaOut, personaIn, showIn, episodeAngle } = args;
+        seen.greeting = {
+          recap: recap ?? null, recentOpeners: recentOpeners ?? [],
+          personaOut: personaOut.name, personaIn: personaIn.name, showIn,
+          episodeAngle: episodeAngle ?? null, context: args.context,
+          prompt: promptScripts.handoffGreetingPrompt(args),
+        };
+        return 'Cultural Currents starts now.';
+      },
+    },
+  };
+}
+
+// A hard roll with a real persona change, so pendingHandoff() is armed exactly
+// the way the boundary arms it in production.
+async function rollWithMicPass() {
+  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
+  const t0 = Date.now();
+  session.start(context({ id: 's_soft_start', name: 'The Soft Start Procedure' }, t0));
+
+  queue.log('link', "The ceiling fan thinks it's an aircraft propeller.");
+  session.appendTurn({
+    role: 'segment', kind: 'link',
+    text: "The ceiling fan thinks it's an aircraft propeller.",
+    meta: { personaId: WREN.id, personaName: WREN.name },
+  });
+
+  await settings.update({ activePersonaId: GIGI.id } as never);
+  await session.maybeRoll(context({ id: 's_cultural', name: 'Cultural Currents' }, t0 + 60_000));
+}
+
+test('the mic-pass hands each half the session it actually belongs to', async (t) => {
+  queue.djLog = [];
+  await rollWithMicPass();
+  assert.ok(session.pendingHandoff(), 'the roll armed a mic-pass');
+
+  const { seen, deps } = generators();
+  const announced: { text: string; personaId: string }[] = [];
+  t.mock.method(queue, 'announce', async (text: string, _kind: string, opts: any = {}) => {
+    announced.push({ text, personaId: opts?.meta?.personaId });
+  });
+  t.mock.method(queue, 'announceExchange', async (lines: any[]) => {
+    announced.push(...lines.map(line => ({ text: line.text, personaId: line.persona.id })));
+    return true;
+  });
+  await djAgent.runPersonaHandoff(queue, context({ id: 's_cultural', name: 'Cultural Currents' }, Date.now()), deps);
+
+  assert.ok(seen.signoff, 'the sign-off was generated');
+  assert.ok(seen.greeting, 'the greeting was generated');
+
+  // The outgoing DJ still remembers its own hour...
+  assert.match(seen.signoff.recap || '', /ceiling fan/i);
+  assert.deepEqual(seen.signoff.recentOpeners, ["The ceiling fan thinks it's"]);
+  assert.equal(seen.signoff.showOut, 'The Soft Start Procedure');
+  assert.equal(seen.signoff.showIn, 'Cultural Currents');
+
+  // ...and the incoming one inherits none of it.
+  assert.equal(seen.greeting.recap, null);
+  assert.deepEqual(seen.greeting.recentOpeners, []);
+
+  assert.deepEqual(
+    announced.map((a) => a.personaId),
+    [WREN.id, GIGI.id],
+    'the sign-off is stamped with the outgoing persona and the greeting with the incoming one',
+  );
+});
+
+test('a failed sign-off still leaves the greeting on a clean slate', async (t) => {
+  queue.djLog = [];
+  await rollWithMicPass();
+
+  const { seen, deps } = generators();
+  t.mock.method(queue, 'announce', async () => {});
+  await djAgent.runPersonaHandoff(
+    queue,
+    context({ id: 's_cultural', name: 'Cultural Currents' }, Date.now()),
+    { ...deps, generateSignoff: async () => { throw new Error('tts down'); } },
+  );
+
+  assert.equal(seen.signoff, undefined, 'the sign-off never reported its arguments');
+  assert.ok(seen.greeting, 'the greeting still ran — it stands alone');
+  assert.equal(seen.greeting.recap, null);
+});
+
+test('an enabled same-host show change renders one acknowledgement, not a self-handoff', async (t) => {
+  queue.djLog = [];
+  await settings.update({
+    personas: [WREN], activePersonaId: WREN.id,
+    djBehaviour: { sameHostAcknowledgement: true },
+  } as never);
+  const t0 = Date.now();
+  session.start(context({ id: 's_dawn', name: 'The Dawn Chorus' }, t0));
+  await session.maybeRoll(context({ id: 's_go', name: 'Get up and Go!' }, t0 + 60_000));
+  assert.equal(session.pendingHandoff()?.sameHost, true, 'the scheduled same-host change is armed');
+
+  let signoffs = 0;
+  let acknowledgement: any = null;
+  const announced: string[] = [];
+  const sameHostContext = context({ id: 's_go', name: 'Get up and Go!' }, Date.now());
+  t.mock.method(queue, 'announce', async (text: string) => { announced.push(text); });
+  await djAgent.runPersonaHandoff(
+    queue,
+    sameHostContext,
+    {
+      generateSignoff: async () => { signoffs++; return 'This must not be used.'; },
+      generateHandoffGreeting: async (args: any) => {
+        acknowledgement = args;
+        return 'A fresh start for Get up and Go!';
+      },
+    },
+  );
+
+  assert.equal(signoffs, 0, 'the host does not sign off to themself');
+  assert.equal(acknowledgement.sameHost, true);
+  assert.equal(acknowledgement.showIn, 'Get up and Go!');
+  assert.equal(acknowledgement.context, sameHostContext,
+    'ordinary same-host acknowledgements keep their original context');
+  assert.deepEqual(announced, ['A fresh start for Get up and Go!']);
+});
+
+test('a final-track handoff uses the incoming identity captured at arm time', async (t) => {
+  queue.djLog = [];
+  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
+  const t0 = Date.now();
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
+  session.appendTurn({
+    role: 'segment', kind: 'link',
+    text: 'The current outgoing hour followed the midnight train.',
+    meta: { personaId: WREN.id, personaName: WREN.name },
+  });
+
+  // This models a scheduler edit or look-ahead resolution: the live session is
+  // still Wren, while the next show belongs to Gigi.
+  const priorShows = settings.get().shows;
+  const priorSchedule = settings.get().schedule;
+  const week: Record<number, string[]> = fullScheduleWeek('s_incoming');
+  await settings.update({
+    activePersonaId: GIGI.id,
+    shows: [{
+      id: 's_incoming', name: 'Cultural Currents', topic: 'culture',
+      personaId: GIGI.id, programme: true,
+    }],
+    schedule: week,
+  } as never);
+  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
+  assert.equal(session.armBoundaryHandoff(incoming), true);
+  await programme.prepareBoundaryPlan(incoming, {
+    generateProgrammePlan: async () => ({
+      angle: 'Incoming programme angle', features: [], introNote: null, outroNote: null,
+    }),
+  });
+
+  const { seen, deps } = generators();
+  const aired: string[] = [];
+  t.mock.method(queue, 'announceExchange', async (lines: any[]) => {
+    aired.push(...lines.map(line => line.persona.name));
+    return true;
+  });
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
+
+  assert.equal(seen.signoff.personaOut, WREN.name);
+  assert.equal(seen.signoff.personaIn, GIGI.name);
+  assert.equal(seen.signoff.showIn, 'Cultural Currents');
+  assert.match(seen.signoff.recap || '', /current outgoing hour followed the midnight train/i,
+    'a pre-roll sign-off reads the outgoing session that is still live');
+  assert.equal(seen.greeting.recap, null,
+    'the incoming greeting does not inherit the outgoing session');
+  assert.deepEqual(seen.greeting.recentOpeners, [],
+    'the incoming greeting also starts with a clean opener window');
+  assert.equal(seen.greeting.personaIn, GIGI.name);
+  assert.equal(seen.greeting.episodeAngle, 'Incoming programme angle',
+    'the greeting reads the incoming programme plan prepared before the roll');
+  assert.deepEqual(aired, [WREN.name, GIGI.name]);
+  assert.equal(session.pendingHandoff(), null,
+    'a live controller keeps the rendered pair in its queue instead of generating it twice');
+  assert.equal(session.boundaryHandoffStatus()?.state, 'queued',
+    'the pair is durable-but-not-aired until the stream edge confirms it');
+  await session.maybeRoll(incoming);
+  assert.equal(session.getProgramme()?.plan?.angle, 'Incoming programme angle',
+    'the prepared programme plan transfers to the incoming session');
+  let duplicateIntros = 0;
+  await programme.maybeRunIntro({
+    getDjRecap: () => null,
+    getRecentOpeners: () => [],
+    announce: async () => { duplicateIntros++; },
+    announceExchange: async () => { duplicateIntros++; return true; },
+    log: () => {},
+  } as any, incoming);
+  assert.equal(duplicateIntros, 0,
+    'the queued handoff greeting owns the programme opening at the incoming roll');
+  assert.equal(session.getProgramme()?.beats?.intro, true,
+    'the standalone intro is durably marked covered rather than queued behind the handoff');
+  session.markHandoffAired();
+  assert.equal(session.boundaryHandoffStatus()?.state, 'aired');
+  await settings.update({ shows: priorShows, schedule: priorSchedule } as never);
+});
+
+test('a final-track handoff grounds both rendered prompts at the stored boundary clock', async (t) => {
+  restorePromptSettingsAfter(t);
+  const generatedAt = Date.parse('2026-09-18T13:57:00.000Z'); // 14:57 Europe/London
+  const boundaryAt = Date.parse('2026-09-18T14:00:00.000Z');  // 15:00 Europe/London
+  const contextAt = Date.parse('2026-09-18T14:03:00.000Z');   // picker look-ahead
+  Date.now = () => generatedAt;
+
+  const week: Record<number, string[]> = {};
+  for (let day = 0; day < 7; day++) {
+    week[day] = Array(24).fill('s_outgoing');
+    week[day][15] = 's_incoming';
+  }
+  await settings.update({
+    timezone: 'Europe/London', locale: 'en-GB',
+    personas: [WREN, GIGI], activePersonaId: WREN.id,
+    shows: [
+      { id: 's_outgoing', name: 'The Soft Start Procedure', topic: 'soft', personaId: WREN.id },
+      { id: 's_incoming', name: 'Cultural Currents', topic: 'culture', personaId: GIGI.id, programme: true },
+    ],
+    schedule: week, djSpeakClock: true,
+  } as never);
+
+  const incoming = {
+    ...context({ id: 's_incoming', name: 'Cultural Currents' }, contextAt),
+    time: contextHelpers.getTimeContext(new Date(contextAt)),
+    date: contextHelpers.getDateContext(new Date(contextAt)),
+    clock: contextHelpers.getClockContext(new Date(contextAt)),
+    dominantMood: 'curious',
+    activeShow: {
+      id: 's_incoming', name: 'Cultural Currents', topic: 'culture',
+      moods: ['curious'], episodeAngle: 'The city after the last train',
+    },
+  } as any;
+  const original = structuredClone(incoming);
+
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, generatedAt));
+  assert.equal(session.armBoundaryHandoff(incoming), true);
+  assert.equal(session.boundaryHandoffStatus()?.boundaryAt, boundaryAt);
+  session.attachBoundaryProgramme({
+    status: 'ok', plan: { angle: 'The city after the last train' }, beats: {}, introAiredAt: null,
+  });
+
+  const { seen, deps } = generators();
+  t.mock.method(queue, 'announceExchange', async () => true);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
+
+  for (const half of [seen.signoff, seen.greeting]) {
+    assert.match(half.prompt, /Day: Friday, 18 September \(autumn\)/);
+    assert.match(half.prompt, /Local time: 15:00/);
+    assert.match(half.prompt, /Period: afternoon/);
+    assert.doesNotMatch(half.prompt, /Local time: 15:03/);
+  }
+  assert.equal(seen.greeting.showIn, 'Cultural Currents');
+  assert.equal(seen.greeting.episodeAngle, 'The city after the last train');
+  assert.equal(seen.greeting.context.dominantMood, 'curious');
+  assert.equal(seen.greeting.context.activeShow.episodeAngle, 'The city after the last train');
+  assert.deepEqual(incoming, original, 'prompt clock normalization does not mutate the picker context');
+});
+
+test('boundary prompt clocks stay on the stored side of calendar and daypart transitions', async (t) => {
+  restorePromptSettingsAfter(t);
+  await settings.update({
+    timezone: 'Europe/London', locale: 'en-GB',
+    personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: true,
+  } as never);
+  const cases = [
+    {
+      boundaryAt: Date.parse('2026-09-18T22:59:00.000Z'), // Friday 23:59 BST
+      contextAt: Date.parse('2026-09-18T23:02:00.000Z'),  // Saturday 00:02 BST
+      expected: [/^Day: Friday, 18 September \(autumn\)$/m, /^Local time: 23:59/m, /^Period: late-evening$/m],
+      rejected: [/^Day: Saturday, 19 September/m, /^Local time: 00:02/m],
+    },
+    {
+      boundaryAt: Date.parse('2026-09-18T12:59:00.000Z'), // 13:59 BST, midday
+      contextAt: Date.parse('2026-09-18T13:02:00.000Z'),  // 14:02 BST, afternoon
+      expected: [/^Local time: 13:59/m, /^Period: midday$/m],
+      rejected: [/^Local time: 14:02/m, /^Period: afternoon$/m],
+    },
+  ];
+
+  for (const sample of cases) {
+    const incoming = {
+      ...context({ id: 's_incoming', name: 'Cultural Currents' }, sample.contextAt),
+      time: contextHelpers.getTimeContext(new Date(sample.contextAt)),
+      date: contextHelpers.getDateContext(new Date(sample.contextAt)),
+      clock: contextHelpers.getClockContext(new Date(sample.contextAt)),
+    } as any;
+    session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, sample.contextAt - 60_000));
+    await settings.update({ activePersonaId: GIGI.id } as never);
+    assert.equal(session.armBoundaryHandoff(incoming), true);
+    (session.getSession() as any).boundaryHandoff.boundaryAt = sample.boundaryAt;
+
+    const { seen, deps } = generators();
+    const exchangeMock = t.mock.method(queue, 'announceExchange', async () => true);
+    try {
+      await djAgent.runPersonaHandoff(queue, incoming, deps);
+    } finally {
+      exchangeMock.mock.restore();
+      await settings.update({ activePersonaId: WREN.id } as never);
+    }
+
+    for (const half of [seen.signoff, seen.greeting]) {
+      for (const expected of sample.expected) assert.match(half.prompt, expected);
+      for (const rejected of sample.rejected) assert.doesNotMatch(half.prompt, rejected);
+    }
+  }
+});
+
+test('a boundary handoff omits all temporal prompt facts when its stored boundary is untrustworthy', async (t) => {
+  restorePromptSettingsAfter(t);
+  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: true } as never);
+  const at = Date.parse('2026-09-18T14:03:00.000Z');
+  const incoming = {
+    ...context({ id: 's_incoming', name: 'Cultural Currents' }, at),
+    time: contextHelpers.getTimeContext(new Date(at)),
+    date: contextHelpers.getDateContext(new Date(at)),
+    clock: contextHelpers.getClockContext(new Date(at)),
+  } as any;
+
+  for (const invalid of [null, '2026-09-18T14:00:00Z', Number.NaN, Number.POSITIVE_INFINITY, 9e15, undefined]) {
+    session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, at - 60_000));
+    await settings.update({ activePersonaId: GIGI.id } as never);
+    assert.equal(session.armBoundaryHandoff(incoming), true);
+    const handoff = (session.getSession() as any).boundaryHandoff;
+    if (invalid === undefined) delete handoff.boundaryAt;
+    else handoff.boundaryAt = invalid;
+
+    const { seen, deps } = generators();
+    const exchangeMock = t.mock.method(queue, 'announceExchange', async () => true);
+    try {
+      await djAgent.runPersonaHandoff(queue, incoming, deps);
+    } finally {
+      exchangeMock.mock.restore();
+      await settings.update({ activePersonaId: WREN.id } as never);
+    }
+
+    for (const half of [seen.signoff, seen.greeting]) {
+      assert.doesNotMatch(half.prompt, /^Day:/m, String(invalid));
+      assert.doesNotMatch(half.prompt, /^Local time:/m, String(invalid));
+      assert.doesNotMatch(half.prompt, /^Period:/m, String(invalid));
+      assert.equal(half.context.activeShow.name, 'Cultural Currents');
+    }
+  }
+});
+
+test('the station clock switch still withholds boundary numerals after normalization', async (t) => {
+  restorePromptSettingsAfter(t);
+  await settings.update({
+    timezone: 'Europe/London', locale: 'en-GB',
+    personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: false,
+  } as never);
+  const contextAt = Date.parse('2026-09-18T14:03:00.000Z');
+  const boundaryAt = Date.parse('2026-09-18T14:00:00.000Z');
+  const incoming = {
+    ...context({ id: 's_incoming', name: 'Cultural Currents' }, contextAt),
+    time: contextHelpers.getTimeContext(new Date(contextAt)),
+    date: contextHelpers.getDateContext(new Date(contextAt)),
+    clock: { ...contextHelpers.getClockContext(new Date(contextAt)), isDark: true },
+  } as any;
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, contextAt - 60_000));
+  await settings.update({ activePersonaId: GIGI.id } as never);
+  assert.equal(session.armBoundaryHandoff(incoming), true);
+  (session.getSession() as any).boundaryHandoff.boundaryAt = boundaryAt;
+
+  const { seen, deps } = generators();
+  t.mock.method(queue, 'announceExchange', async () => true);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
+
+  for (const half of [seen.signoff, seen.greeting]) {
+    assert.doesNotMatch(half.prompt, /^Local time:/m);
+    assert.match(half.prompt, /^Vibe: after dark/m);
+    assert.match(half.prompt, /^Day: Friday, 18 September \(autumn\)$/m);
+    assert.match(half.prompt, /^Period: afternoon$/m);
+  }
+});
+
+test('a queued final-track handoff survives a controller restart for re-rendering', async (t) => {
+  restorePromptSettingsAfter(t);
+  const t0 = Date.now();
+  const incoming = await armIncoming({ atMs: t0, scheduled: true });
+  const storedBoundaryAt = t0;
+  (session.getSession() as any).boundaryHandoff.boundaryAt = storedBoundaryAt;
+  session.markHandoffQueued();
+
+  // The session writer is deliberately debounced in production. Once its
+  // snapshot exists, recover() follows the same key-mismatch path a restart
+  // after the actual clock boundary uses.
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  await session.recover(incoming);
+
+  assert.equal(session.boundaryHandoffStatus()?.state, 'queued');
+  assert.equal(session.boundaryHandoffStatus()?.recovered, true);
+  assert.ok(session.pendingHandoff(), 'the lost in-memory WAV pair is regenerated on the next queue cycle');
+
+  const { seen, deps } = generators();
+  t.mock.method(queue, 'announceExchange', async () => true);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
+  assert.equal(seen.signoff.context.at, new Date(storedBoundaryAt).toISOString());
+  assert.equal(seen.greeting.context.at, new Date(storedBoundaryAt).toISOString());
+  assert.equal(session.boundaryHandoffStatus()?.boundaryAt, storedBoundaryAt,
+    'regeneration leaves the persisted scheduled boundary unchanged');
+  assert.equal(session.boundaryHandoffContextAt()?.toISOString(), incoming.at,
+    'regeneration leaves the future identity timestamp unchanged');
+});
+
+test('a refused final-track handoff remains armed for retry', async (t) => {
+  const incoming = await armIncoming();
+
+  const { deps } = generators();
+  t.mock.method(queue, 'announceExchange', async () => false);
+  await djAgent.runPersonaHandoff(queue, incoming, deps);
+
+  assert.equal(session.boundaryHandoffStatus()?.state, 'armed',
+    'a pause-owned seam cannot be recorded as though the handoff reached the voice queue');
+  assert.ok(session.pendingHandoff(), 'the handoff remains available to the next eligible seam');
+});
+
+test('an armed handoff survives a restart that crosses the boundary', async (t) => {
+  restorePromptSettingsAfter(t);
+  const incoming = await armIncoming({ scheduled: true,
+    finalTrack: { id: 'final-track', title: 'Last Song', artist: 'Wren' },
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  await session.recover(incoming);
+
+  assert.equal(session.boundaryHandoffStatus()?.state, 'armed');
+  assert.ok(session.pendingHandoff(),
+    'the incoming session can still render a handoff that was only armed before restart');
+});
+
+test('an aired boundary handoff survives a restart without reopening the incoming show', async (t) => {
+  restorePromptSettingsAfter(t);
+  const t0 = Date.now();
+  const incoming = await armIncoming({ atMs: t0, scheduled: true });
+  session.attachBoundaryProgramme({
+    status: 'ok', plan: { angle: 'Already introduced angle' }, beats: {}, introAiredAt: null,
+  });
+  session.markHandoffQueued();
+  session.markHandoffAired();
+
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  await session.recover(incoming);
+
+  assert.equal(session.getProgramme()?.plan?.angle, 'Already introduced angle',
+    'the incoming programme plan remains attached after recovery');
+  assert.equal(session.getSession()?.handoffAired, true,
+    'the recovered incoming session remembers that its mic-pass already aired');
+  assert.ok(session.getSession()?.rolledFrom,
+    'the aired handoff remains visible as the reason the standalone intro is covered');
+  let duplicateIntros = 0;
+  await programme.maybeRunIntro({
+    getDjRecap: () => null,
+    getRecentOpeners: () => [],
+    announce: async () => { duplicateIntros++; },
+    announceExchange: async () => { duplicateIntros++; return true; },
+    log: () => {},
+  } as any, incoming);
+  assert.equal(duplicateIntros, 0);
+});
+
+test('an armed handoff waits for confirmed playback of its final outgoing track', async (t) => {
+  restorePromptSettingsAfter(t);
+  const finalTrack = { id: 'final-track', title: 'Last Song', artist: 'Wren' };
+  const incoming = await armIncoming({ scheduled: true, finalTrack });
+
+  assert.equal(session.boundaryHandoffReadyForTrack({
+    id: 'preceding-track', title: 'One Song Early', artist: 'Wren',
+  }), false, 'pair-drain look-ahead cannot speak over the preceding track');
+  assert.equal(session.boundaryHandoffReadyForTrack(finalTrack), true,
+    'the handoff becomes eligible when Liquidsoap confirms the final track');
+  assert.equal(session.boundaryHandoffContextAt()?.toISOString(), incoming.at,
+    'the later runner can reconstruct the incoming show context without rolling early');
+
+  await session.maybeRoll(incoming);
+  assert.equal(session.boundaryHandoffStatus()?.state, 'armed',
+    'the wall-clock roll cannot discard the armed final-track confirmation');
+  assert.equal(session.boundaryHandoffReadyForTrack(finalTrack), true,
+    'the explicit final-track runner still owns the handoff after the roll');
+});
+
+test('the queue runs an armed handoff only while the recorded final track is live', async () => {
+  const finalTrack = { id: 'final-track', title: 'Last Song', artist: 'Wren' };
+  const incoming = await armIncoming({ finalTrack, patch: {
+    djTalkOnlyBetweenTracks: true,
+    tts: { ...settings.get().tts, enabled: false },
+  } });
+
+  const calls: string[] = [];
+  const deps = {
+    getContext: async () => { calls.push('context'); return incoming; },
+    preparePlan: async () => { calls.push('plan'); },
+    runHandoff: async () => { calls.push(`handoff:${currentTalkAir()}`); },
+  };
+  queue.current = {
+    track: { id: 'preceding-track', title: 'One Song Early', artist: 'Wren' },
+    startedAt: new Date().toISOString(), source: 'ai',
+  } as never;
+  await (queue as any).runArmedBoundaryHandoff(deps);
+  assert.deepEqual(calls, [], 'the preceding track cannot trigger the pair');
+
+  queue.current = {
+    track: finalTrack, startedAt: new Date().toISOString(), source: 'ai',
+  } as never;
+  await (queue as any).runArmedBoundaryHandoff(deps);
+  assert.deepEqual(calls, ['context', 'plan', 'handoff:next-track']);
+  await settings.update({
+    djTalkOnlyBetweenTracks: false,
+    tts: { ...settings.get().tts, enabled: true },
+  } as never);
+});
+
+test('a handoff pair settles only after its final live-edge marker', async () => {
+  await armIncoming();
+  session.markHandoffQueued();
+
+  let resolveSignoff!: (at: number) => void;
+  let resolveGreeting!: (at: number) => void;
+  const signoffAired = new Promise<number>(resolve => { resolveSignoff = resolve; });
+  const greetingAired = new Promise<number>(resolve => { resolveGreeting = resolve; });
+
+  (queue as any).onSpoken(
+    { voiceId: 'signoff', clipMs: 1_000, aired: signoffAired },
+    {
+      kind: 'handoff', channel: 'say', text: 'That was the hour.',
+      persona: WREN, meta: {}, legacy: false, settlesHandoff: false,
+    },
+  );
+  (queue as any).onSpoken(
+    { voiceId: 'greeting', clipMs: 1_000, aired: greetingAired },
+    {
+      kind: 'handoff', channel: 'say', text: 'The next show starts here.',
+      persona: GIGI, meta: {}, legacy: false, settlesHandoff: true,
+    },
+  );
+
+  resolveSignoff(Date.now());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(session.boundaryHandoffStatus()?.state, 'queued',
+    'hearing the sign-off alone does not make the complete pair durable as aired');
+
+  resolveGreeting(Date.now() + 1_000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(session.boundaryHandoffStatus()?.state, 'aired',
+    'the final line marker settles the complete pair');
+});
+
+test('same-show recovery repairs the host without disturbing armed, queued, or aired boundary handoffs', async () => {
+  for (const state of ['armed', 'queued', 'aired'] as const) {
+    const emptyWeek: Record<number, (string | null)[]> = emptyScheduleWeek();
+    await settings.update({
+      personas: [WREN, GIGI], activePersonaId: WREN.id,
+      shows: [], schedule: emptyWeek, scheduleOverride: null,
+    } as never);
+    const now = Date.now();
+    const outgoing = context({ id: 's_same_show', name: 'Same Show' }, now);
+    const incoming = context({ id: 's_next_show', name: 'Next Show' }, now + 60_000);
+    session.start(outgoing);
+    session.appendTurn({ role: 'segment', kind: 'link', text: 'Already aired continuity.', meta: { personaId: WREN.id } });
+    await settings.update({ activePersonaId: GIGI.id } as never);
+    assert.equal(session.armBoundaryHandoff(incoming), true);
+    session.attachBoundaryProgramme({
+      status: 'ok', plan: { angle: `${state} plan` }, beats: { intro: true }, introAiredAt: new Date().toISOString(),
+    });
+    if (state === 'queued' || state === 'aired') session.markHandoffQueued();
+    if (state === 'aired') session.markHandoffAired();
+    const stale = structuredClone(session.getSession()!);
+    const before = { id: stale.id, key: stale.key, startedAt: stale.startedAt, messages: stale.messages.length };
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+
+    const week: Record<number, string[]> = fullScheduleWeek('s_same_show');
+    await settings.update({
+      activePersonaId: WREN.id,
+      shows: [{ id: 's_same_show', name: 'Same Show', topic: 'tests', personaId: GIGI.id }],
+      schedule: week,
+    } as never);
+    writeFileSync(config.session.currentFile, JSON.stringify(stale, null, 2));
+
+    const recovered = await session.recover(outgoing);
+    assert.equal(recovered.persona?.id, GIGI.id, state);
+    assert.equal(session.boundaryHandoffStatus()?.state, state, state);
+    assert.equal(recovered.boundaryHandoff?.programme?.plan?.angle, `${state} plan`, state);
+    assert.equal(recovered.id, before.id, state);
+    assert.equal(recovered.key, before.key, state);
+    assert.equal(recovered.startedAt, before.startedAt, state);
+    assert.ok(recovered.messages.length > before.messages, state);
+  }
+});

@@ -26,7 +26,8 @@ import {
   SETTINGS_STATION_NAME_MAX,
 } from '@/lib/schemas.generated';
 import type { WizardController, WizardData } from './useWizard';
-import { ProviderSelector } from '../admin/llm/ProviderSelector';
+import { ProviderPicker } from '../admin/llm/ProviderPicker';
+import { useSettingsQuery } from '../admin/settings/queries';
 import { ModelCombobox } from '../admin/llm/ModelCombobox';
 import { PROVIDER_IDS } from '../admin/llm/providerMeta';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
@@ -36,12 +37,10 @@ import { Input } from '@/components/ui/input';
 import { V3Alert } from '@/components/ui/alert';
 
 // Presentation primitives kept local to the wizard, so a screen most operators
-// see once doesn't drag in the full admin UI library. Labels, fills and borders
-// ride the theme tokens.
+// see once doesn't drag in the full admin UI library.
 
-// Shared by the bare-span composite-control labels below (Provider/Model/
-// Location — none of these are a single labelable input, so none of them use
-// FieldLabel/htmlFor; see the comment at each site).
+// Shared by the bare-span composite-control labels below; none of them is a
+// single labelable input, so none uses FieldLabel/htmlFor.
 const WIZARD_LABEL_CLASS =
   'font-mono text-[11px] font-bold tracking-[0.18em] text-ink uppercase';
 
@@ -82,14 +81,9 @@ function NextButton({ disabled }: { disabled: boolean }) {
   );
 }
 
-// ─── NAVIDROME ────────────────────────────────────────────────────────────
-//
-// Skipping Navidrome mid-wizard is a supported path (useWizard.save() and
-// routes/onboarding.ts both persist empty creds fine — the only thing that
-// requires all three fields is the PROBE), so this step's own schema carries
-// no format rules at all: Next stays enabled regardless of content. The
-// stricter, shared navidromeProbeSchema gates only the Test button, with the
-// exact rule the controller enforces server-side.
+// Skipping Navidrome mid-wizard is a supported path (only the PROBE needs all
+// three fields), so this step's schema carries no format rules and Next stays
+// enabled. The stricter shared navidromeProbeSchema gates only the Test button.
 const navidromeStepSchema = z.object({
   url: z.string(),
   user: z.string(),
@@ -101,12 +95,8 @@ export function NavidromeStep({ w }: { w: WizardController }) {
   const form = useZodForm(navidromeStepSchema, { ...w.data.navidrome });
   const values = form.watch();
   const navParsed = navidromeProbeSchema.safeParse(values);
-  // Typing lives in this step's own form now, not in `w.data`, so the old
-  // "reset the pill on every keystroke" behaviour (every onChange used to
-  // patch `navidromeTest: { ok: null }`) has to be reproduced locally: track
-  // what was actually tested, and hide the pill once the live values drift
-  // from it — otherwise a stale "connection ok" would survive an edit until
-  // the next Next-submit.
+  // Track what was actually tested and hide the pill once the live values drift
+  // from it, or a stale "connection ok" survives an edit until the next Next.
   const testedRef = useRef<string | null>(null);
   const stale = testedRef.current !== JSON.stringify(values);
 
@@ -122,14 +112,12 @@ export function NavidromeStep({ w }: { w: WizardController }) {
   };
 
   const onNext = form.handleSubmit(vals => {
-    // patch() itself merges with the existing data — the callback returns
-    // only the keys to overwrite, never the whole object back (that would
-    // clobber this very update on the next render).
+    // patch() merges with the existing data; the callback returns only the keys
+    // to overwrite, never the whole object.
     w.patch({
       navidrome: vals,
-      // Commit clears the pill only when the committed values differ from
-      // whatever was last tested — an untouched, already-tested value keeps
-      // its result across Next.
+      // Commit clears the pill only when the committed values differ from what
+      // was last tested.
       ...(testedRef.current !== JSON.stringify(vals) ? { navidromeTest: { ok: null } } : {}),
     });
     w.next();
@@ -190,16 +178,7 @@ export function NavidromeStep({ w }: { w: WizardController }) {
   );
 }
 
-// ─── LLM ────────────────────────────────────────────────────────────────
-//
-// Provider list, labels and blurbs come from admin/llm/providerMeta so
-// onboarding and the admin Settings tab never drift.
-//
-// llmProbeSchema can't be handed to useZodForm directly: it's rooted at
-// `z.unknown()`, so there is no object shape for RHF to bind fields against.
-// This step's schema is a real z.object whose superRefine calls llmProbeSchema
-// to run the ACTUAL rule, so formState.isValid is exactly that schema's verdict
-// in a shape RHF can use.
+// Wrap llmProbeSchema in a Zod object so RHF can bind fields; superRefine preserves the probe validation.
 const llmStepSchema = z.object({
   provider: z.string(),
   model: z.string(),
@@ -214,6 +193,13 @@ const llmStepSchema = z.object({
     }
   }
 });
+
+// The hosted DJ Brain is a preset over the openai-compatible provider, not a
+// provider of its own: one click fills base URL + model and everything
+// downstream is the ordinary compat path.
+const DJ_BRAIN_BASE_URL = 'https://my.getsubwave.com/v1';
+const DJ_BRAIN_MODEL = 'dj-brain';
+const DJ_BRAIN_SIGNUP_URL = 'https://my.getsubwave.com/brain';
 
 export function LlmStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
@@ -232,12 +218,19 @@ export function LlmStep({ w }: { w: WizardController }) {
   const isOllama = provider === 'ollama';
   const isLocca = provider === 'locca';
   const isCustom = provider === 'openai-compatible';
+  const isDjBrain = isCustom && baseUrl.trim() === DJ_BRAIN_BASE_URL;
 
   const providerField = useController({ control, name: 'provider' });
+  const useDjBrain = () => {
+    form.setValue('provider', 'openai-compatible', { shouldValidate: true });
+    form.setValue('baseUrl', DJ_BRAIN_BASE_URL, { shouldValidate: true });
+    form.setValue('model', DJ_BRAIN_MODEL, { shouldValidate: true });
+    form.setValue('ollamaUrl', '', { shouldValidate: true });
+  };
   const modelField = useController({ control, name: 'model' });
   const modelAria = fieldAria('llm-model', modelField.fieldState.error);
 
-  // Same staleness tracking as NavidromeStep — see its comment.
+  // Same staleness tracking as NavidromeStep.
   const testedRef = useRef<string | null>(null);
   const liveValues = form.watch();
   const stale = testedRef.current !== JSON.stringify(liveValues);
@@ -266,6 +259,14 @@ export function LlmStep({ w }: { w: WizardController }) {
     adminFetch: w.auth.adminFetch,
   });
 
+  // The server's provider list, as Settings renders it; the client's copy of
+  // the catalogue stands in until it arrives, or if the read fails.
+  const settingsQuery = useSettingsQuery<{ llm?: { providers?: string[] } }>({
+    adminFetch: w.auth.adminFetch,
+    enabled: true,
+  });
+  const serverProviders = settingsQuery.data?.llm?.providers;
+
   const onNext = form.handleSubmit(vals => {
     const v = vals as unknown as WizardData['llm'];
     w.patch({
@@ -282,17 +283,26 @@ export function LlmStep({ w }: { w: WizardController }) {
         blurb="The DJ talks between tracks. Ollama running on the host is the homelab default — no API key needed."
       />
       <div className="grid gap-3">
-        {/* Bare span, not FieldLabel: ProviderSelector renders its own
-            role="radiogroup" aria-label, and a wrapping <label> around a
-            radiogroup of buttons hijacks clicks. Raw useController (not
-            SelectField) because ProviderSelector is a radio-card composite
-            the shared select wrapper can't express — see lib/form-fields.tsx's
-            header. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border border-ink bg-accent-soft p-3">
+          <div className="grid gap-0.5">
+            <span className={WIZARD_LABEL_CLASS}>No model to run?</span>
+            <span className="text-sm text-ink">
+              SUB/WAVE DJ Brain is a hosted brain for this station — one key, from £5/month.{' '}
+              <a href={DJ_BRAIN_SIGNUP_URL} target="_blank" rel="noreferrer" className="underline">Get a key</a>
+              {isDjBrain ? ', then paste it below.' : '.'}
+            </span>
+          </div>
+          <Button type="button" variant={isDjBrain ? 'solid' : 'outline'} onClick={useDjBrain} disabled={isDjBrain}>
+            {isDjBrain ? '✓ Using DJ Brain' : 'Use DJ Brain'}
+          </Button>
+        </div>
+        {/* ProviderPicker labels its radiogroup. A wrapping label would hijack clicks. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Provider</span>
-          <ProviderSelector
+          <ProviderPicker
             value={providerField.field.value}
-            providerIds={PROVIDER_IDS}
+            providerIds={serverProviders ?? PROVIDER_IDS}
+            label="LLM provider"
             keyAware={false}
             onChange={providerField.field.onChange}
           />
@@ -310,7 +320,7 @@ export function LlmStep({ w }: { w: WizardController }) {
             control={control}
             name="baseUrl"
             label="Base URL"
-            description="e.g. http://localhost:8080/v1 (llama.cpp / vLLM / LM Studio)"
+            description={isDjBrain ? 'The hosted DJ Brain proxy' : 'e.g. http://localhost:8080/v1 (llama.cpp / vLLM / LM Studio)'}
           />
         )}
         {isLocca && (
@@ -329,14 +339,13 @@ export function LlmStep({ w }: { w: WizardController }) {
             label="API key"
             type="password"
             autoComplete="off"
-            description="Stored in state/secrets.env (mode 0600), not in settings.json"
+            description={isDjBrain
+              ? 'Your DJ Brain access token from my.getsubwave.com/brain — stored in settings.json'
+              : isCustom
+                ? 'Optional for most self-hosted servers — stored in settings.json'
+                : 'Stored in state/secrets.env (mode 0600), not in settings.json'}
           />
         )}
-        {/* Bare span, not FieldLabel: the combobox trigger is a <button>, and
-            a wrapping <label> would hijack the click. Raw useController: the
-            control itself swaps between ModelCombobox and a plain input
-            depending on live discovery state — neither TextField nor a
-            select wrapper can express that swap alone. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Model</span>
           <div className="flex items-stretch gap-2">
@@ -385,10 +394,6 @@ export function LlmStep({ w }: { w: WizardController }) {
           <FieldError {...modelAria.errorProps} errors={modelField.fieldState.error ? [modelField.fieldState.error] : undefined} />
         </div>
         <div>
-          {/* The step's own resolver IS llmProbeSchema now, so formState.isValid
-              is byte-for-byte the old inline `llmProbeSchema.safeParse(w.data.llm)`
-              check — kept as the one gate for both this button and Next, per
-              the migration brief ("pick one and delete the other"). */}
           <Button variant="solid" type="button" onClick={onTest} disabled={busy || !form.formState.isValid}>
             {busy ? 'Asking…' : 'Send a test prompt'}
           </Button>
@@ -400,7 +405,6 @@ export function LlmStep({ w }: { w: WizardController }) {
   );
 }
 
-// ─── TTS ──────────────────────────────────────────────────────────────────
 const ttsStepSchema = z.object({
   defaultEngine: z.enum(TTS_ENGINES),
   heavyEnabled: z.boolean(),
@@ -422,9 +426,9 @@ const TTS_ENGINE_OPTIONS = [
   { value: 'remote', label: 'Remote (your own server)' },
 ];
 
-// Only the three cloud providers the wizard actually collects credentials
-// for — TTS_CLOUD_PROVIDERS (imported) also lists 'openai-compatible', which
-// this step doesn't offer a base-URL field for, so it stays off this list.
+// Only the three cloud providers the wizard collects credentials for.
+// TTS_CLOUD_PROVIDERS also lists 'openai-compatible', which has no base-URL
+// field here.
 const TTS_CLOUD_PROVIDER_OPTIONS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'elevenlabs', label: 'ElevenLabs' },
@@ -432,18 +436,16 @@ const TTS_CLOUD_PROVIDER_OPTIONS = [
 ];
 
 export function TtsStep({ w }: { w: WizardController }) {
-  // WizardData's cloud.provider is a plain `string` (it also has to hold
-  // 'openai-compatible', which this step's own narrower enum below never
-  // offers) — cast the seed once rather than widen the schema.
+  // WizardData's cloud.provider is a plain `string` (it also holds
+  // 'openai-compatible'), so cast the seed once rather than widen the schema.
   const form = useZodForm(ttsStepSchema, { ...w.data.tts } as z.input<typeof ttsStepSchema>);
   const engine = form.watch('defaultEngine');
   const heavyEnabled = form.watch('heavyEnabled');
   const cloudEnabled = form.watch('cloud.enabled');
   const heavyPicked = engine === 'chatterbox' || engine === 'pocket-tts';
 
-  // Side-effecting onChange (clears the credential, and for Fish Audio
-  // pre-fills its model/voice defaults) — a raw useController, not
-  // SelectField, per lib/form-fields.tsx's header.
+  // Side-effecting onChange (clears the credential, pre-fills Fish Audio
+  // defaults), so a raw useController rather than SelectField.
   const cloudProviderField = useController({ control: form.control, name: 'cloud.provider' });
   const cloudProviderAria = fieldAria('tts-cloud-provider', cloudProviderField.fieldState.error);
 
@@ -568,7 +570,6 @@ export function TtsStep({ w }: { w: WizardController }) {
   );
 }
 
-// ─── DJ PERSONA ─────────────────────────────────────────────────────────
 const djStepSchema = z.object({
   stationName: z.string().max(
     SETTINGS_STATION_NAME_MAX,
@@ -594,8 +595,8 @@ export function DjStep({ w }: { w: WizardController }) {
   const timezone = form.watch('timezone');
 
   const onNext = form.handleSubmit(vals => {
-    // `frequency` isn't part of this step's schema (nothing here edits it),
-    // so merge rather than replace — a plain overwrite would drop it.
+    // `frequency` isn't part of this step's schema, so merge rather than
+    // replace.
     w.patch(d => ({ dj: { ...d.dj, ...vals } }));
     w.next();
   });
@@ -608,10 +609,7 @@ export function DjStep({ w }: { w: WizardController }) {
       />
       <div className="grid gap-3">
         <TextField control={form.control} name="stationName" label="Station name" />
-        {/* Bare span, not FieldLabel: the picker is a composite (three fields
-            at once) that can't live inside one <label>, and it has no single
-            RHF field name to bind a Controller to — read/write directly via
-            watch()/setValue() instead. */}
+        {/* This picker has three fields and no single labelable control. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Location</span>
           <LocationPicker
@@ -642,9 +640,7 @@ export function DjStep({ w }: { w: WizardController }) {
   );
 }
 
-// ─── REVIEW + SAVE ──────────────────────────────────────────────────────
-// No fields of its own (a read-only summary of `data` plus one Save button),
-// so nothing here to bind to react-hook-form.
+// REVIEW + SAVE. No fields of its own, so nothing to bind to react-hook-form.
 export function ReviewStep({
   w,
   onDone,
@@ -667,15 +663,21 @@ export function ReviewStep({
   };
   const rows: Array<[string, string]> = [
     ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
-    ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`],
-    ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')],
+    ...(w.hosted
+      ? [['DJ & voice', 'Managed by SUB/WAVE Cloud'] as [string, string]]
+      : [
+        ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`] as [string, string],
+        ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')] as [string, string],
+      ]),
     ['Station', `${w.data.dj.stationName} — ${w.data.dj.locationName}`],
   ];
   return (
     <div>
       <StepHeader
         title="All set?"
-        blurb="Review and save. Settings land in state/settings.json + state/setup-config.json; API keys land in state/secrets.env (mode 0600)."
+        blurb={w.hosted
+          ? 'Review and save. You can change all of this later in the admin panel.'
+          : 'Review and save. Settings land in state/settings.json + state/setup-config.json; API keys land in state/secrets.env (mode 0600).'}
       />
       <dl className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-2 text-sm">
         {rows.map(([k, v]) => (
@@ -685,12 +687,7 @@ export function ReviewStep({
           </div>
         ))}
       </dl>
-      {/* POST /onboarding/save never emits fieldErrors — it's a hand-rolled
-          try/catch (routes/onboarding.ts), not validateBody(schema), so there
-          is no field-addressable channel here to route through
-          applyServerFieldErrors. Confirmed by reading the route AND by curl:
-          see verify-forms.py's `onboarding` check. Plain string display, same
-          as before. */}
+      {/* The onboarding endpoint returns no fieldErrors to map onto inputs. */}
       {err && <p role="alert" className="mt-3 text-sm text-destructive">{err}</p>}
       <Button variant="solid" size="lg" className="mt-5" onClick={onSave} disabled={busy}>
         {busy ? 'Saving…' : 'Save and finish'}

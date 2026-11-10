@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { useAdminQuery, type AdminFetch } from '../../lib/admin-query';
+import { dashKeys, fetchMusicStarved } from './dash/queries';
 
 // The mixer reports its music chain starved (#1300 bug 7): nothing to play, so
 // the emergency loop is on air. Broader than NavidromeBanner on purpose — a
@@ -15,36 +17,26 @@ import { AlertTriangle } from 'lucide-react';
 export default function MusicStarvedBanner({
   adminFetch,
   suppressed = false,
+  onStatus,
 }: {
-  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  adminFetch: AdminFetch;
   suppressed?: boolean;
+  // Lets the shell's DJ Doc badge react to a starve even while this banner
+  // stands down for the Navidrome one.
+  onStatus?: (starved: boolean) => void;
 }) {
-  const [starved, setStarved] = useState(false);
-  // adminFetch's identity changes as auth state ticks; hold the latest in a ref
-  // so the poll interval mounts once instead of tearing down every render.
-  const fetchRef = useRef(adminFetch);
-  fetchRef.current = adminFetch;
+  const starvedQuery = useAdminQuery({
+    key: dashKeys.musicStarved(),
+    adminFetch,
+    staleTime: 0,
+    refetchInterval: () => 30_000,
+    request: fetchMusicStarved,
+  });
+  const starved = starvedQuery.data ?? false;
 
   useEffect(() => {
-    let cancelled = false;
-    const check = async () => {
-      try {
-        const r = await fetchRef.current('/state');
-        if (!r.ok) return; // 401 / 5xx — don't flip the banner on an auth blip
-        const j = (await r.json()) as { musicStarved?: boolean };
-        if (!cancelled) setStarved(j.musicStarved === true);
-      } catch {
-        // Controller unreachable — leave the last known state rather than
-        // flapping; a dead controller has its own, louder failure modes.
-      }
-    };
-    check();
-    const id = setInterval(check, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
+    onStatus?.(starved);
+  }, [onStatus, starved]);
 
   if (!starved || suppressed) return null;
 

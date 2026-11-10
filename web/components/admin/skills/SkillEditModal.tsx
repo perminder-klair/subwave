@@ -1,17 +1,7 @@
 'use client';
 
-// Skill Edit Card — the segment-sheet editor, shown as a modal over /admin/skills.
-//
-// One component serves three jobs:
-//   • create a custom (prompt-only) skill  → POST /dj/skills
-//   • edit an existing custom skill        → PUT  /dj/skills/:slug/file
-//   • edit a built-in skill (incl. News)   → PUT  /dj/skills/:kind/file
-// The controller is the validation gate; this form does light client checks.
-//
-// The on/off toggle and Run now are LIVE operator actions (/dj/skill-toggle,
-// /dj/skill) — they don't participate in the Save/dirty flow, which only writes
-// the SKILL.md file fields.
-import { useEffect, useId, useState } from 'react';
+// Enable and Run now act immediately; Save writes the skill file.
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   Controller, useWatch,
@@ -20,6 +10,12 @@ import {
 import type { z } from 'zod';
 import { notify, errorMessage } from '../../../lib/notify';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import {
+  AdminResponseError,
+  adminJson,
+  adminResponse,
+  useAdminMutation,
+} from '../../../lib/admin-query';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { EditorDialog, EditorFooter } from '../../ui/editor-dialog';
 import { SkeletonForm } from '@/components/ui/skeleton';
@@ -31,25 +27,32 @@ import {
   TAGS_PER_SKILL_LIMIT,
   skillCreateSchema,
   skillFileSchema,
+  ttsVoiceSlotSchema,
+  withSkillVoice,
+  type SkillVoiceSlot,
 } from '@/lib/schemas.generated';
 import { skillSubmitUrl } from '../../../lib/repo';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, TextareaField } from '@/lib/form-fields';
 import { Switch } from '@/components/ui/switch';
+import { EngineVoiceFields, ENGINE_UNAVAILABLE, type EngineVoiceData } from '../tts/EngineVoiceFields';
+import { useSettingsQuery } from '../settings/queries';
+import PendingToolReview from './PendingToolReview';
+import {
+  skillKeys,
+  useSkillFileQuery,
+  writeInstalledSkills,
+  type SkillConfigField,
+  type SkillDefaults,
+  type SkillFileResponse,
+  type SkillLike,
+  type SkillsResponse,
+} from './queries';
 
-// Only what this modal needs from GET /dj/skills; the full list type lives in
-// SkillsPanel.
-export interface SkillLike {
-  name: string;
-  kind?: string;
-  label?: string;
-  custom?: boolean;
-  enabled?: boolean;
-  cooldownMs?: number;
-}
+// Only what this modal needs from GET /dj/skills.
+export type { SkillLike } from './queries';
 
-// `skills: null` is the "all skills" sentinel (controller
-// settings.ts:validatePersonasStrict).
+// `skills: null` is the "all skills" sentinel.
 export interface PersonaLite {
   id: string;
   name: string;
@@ -62,93 +65,45 @@ interface SkillEditModalProps {
   personas?: PersonaLite[];          // roster for the DJ assignment checklist
   tagSuggestions?: string[];         // tags already used elsewhere in the catalog
   onClose: () => void;
-  onSkillsChange: (skills: SkillLike[]) => void;  // refresh the panel list after any mutation
-  onRosterChange?: () => void;       // re-fetch personas after assignments change
-}
-
-// The shipped defaults for a built-in, used only to gate the "Reset to default"
-// button — the reset itself is server-side.
-interface SkillDefaults {
-  label?: string;
-  cooldown?: string;
-  context?: string;
-  brief?: string;
-}
-
-// A knob the skill declares for itself in its tool.mjs (`configFields`, see the
-// controller's skills/config-fields.ts). The form renders whatever the skill
-// declares — nothing here is keyed on the skill's NAME, which is what let a
-// renamed copy of News keep its feed field (#1300).
-export interface SkillConfigField {
-  key: string;
-  type: 'text' | 'url' | 'number';
-  label: string;
-  placeholder?: string;
-  hint?: string;
-  min?: number;
-  max?: number;
-  /** number fields only — whole numbers only, so the stepper moves by 1. */
-  integer?: boolean;
-}
-
-// GET /dj/skills/:kind/file — covers built-in and custom responses.
-interface SkillFileResponse {
-  kind: string;
-  custom?: boolean;
-  configFields?: SkillConfigField[];
-  config?: Record<string, string | number>;
-  label?: string;
-  cooldown?: string;
-  cron?: string | null;
-  // Set when the file on disk carries an expression node-cron can't register.
-  // Only a hand-edited SKILL.md can produce one — every save route refuses it —
-  // and the scheduler's skip is logged where the operator won't see it, so the
-  // editor is the surface that has to say so.
-  cronInvalid?: boolean;
-  cronOnly?: boolean;
-  context?: string;
-  knownContextFields?: string[];
-  window?: 'any' | 'commute';
-  requiresKey?: string;
-  hasTool?: boolean;
-  tags?: string[];
-  brief?: string;
-  defaults?: SkillDefaults | null;
-  error?: string;
 }
 
 const COOLDOWN_PRESETS = ['15m', '25m', '45m', '1h', '6h'];
 
-// The RHF-bound shape of the SKILL.md fields. `name` is create-only and rides
-// along unused in edit mode. `config` (the skill's own declared knobs) stays
-// out: it's runtime data from the skill's tool.mjs, validated separately by
-// the controller's skills/config-fields.ts, so it keeps its own useState.
+// The RHF-bound shape of the SKILL.md fields. `name` is create-only. `config`
+// (the skill's own declared knobs) stays out: runtime data from the skill's
+// tool.mjs, validated by the controller, so it keeps its own useState.
 interface SkillFormValues {
   name?: string;
   label: string;
   cooldown: string;
   cron: string;
   cronOnly: boolean;
+  cohosts: boolean;
   context: string[];
   tags: string[];
   brief: string;
   window: 'any' | 'commute';
   requiresKey: string;
+  voice: SkillVoiceSlot | null;
 }
 
-// The skill's current knob values as form strings (the controller sends numbers
-// as numbers).
+// The persona voice slot, the one home of the per-engine voice rules, behind
+// the skill's override posture. The controller's routes compose the same two
+// pieces (schemas/skill-server.ts).
+const voiceSlot = ttsVoiceSlotSchema('voice');
+// What the Voice switch turns on: the floor engine, on its built-in voice.
+const NEW_SKILL_VOICE: SkillVoiceSlot = { engine: 'piper', voice: '', cloudProvider: 'openai' };
+
+// The skill's current knob values as form strings.
 function configValues(j: SkillFileResponse): Record<string, string> {
   return Object.fromEntries(
     Object.entries(j.config || {}).map(([k, v]) => [k, v == null ? '' : String(v)]),
   );
 }
 
-// Comparison key for `config` alone — the one file field that stays outside
-// the RHF form (see SkillFormValues above) and therefore needs its own
-// dirty tracking. A knob the controller reports as unset is ABSENT, so
-// typing into an empty field and clearing it again must not read as an
-// unsaved change.
+// Comparison key for `config`, the one file field outside the RHF form. An
+// unset knob is ABSENT, so typing into an empty field and clearing it again
+// must not read as an unsaved change.
 function configKey(config: Record<string, string>): string {
   return JSON.stringify(
     Object.fromEntries(
@@ -160,51 +115,59 @@ function configKey(config: Record<string, string>): string {
   );
 }
 
-// GET /dj/skills/:kind/file → the RHF defaultValues shape. Shared by the load
-// effect and Reset to default so the two can't map the response differently.
+// GET /dj/skills/:kind/file -> the RHF defaultValues shape. Shared by the load
+// effect and Reset to default.
 function fileToFormValues(j: SkillFileResponse) {
   return {
     label: j.label || '',
     cooldown: j.cooldown || '',
     cron: j.cron || '',
     cronOnly: !!j.cronOnly,
+    cohosts: !!j.cohosts,
     context: splitContext(j.context),
     window: (j.window === 'commute' ? 'commute' : 'any') as 'any' | 'commute',
     tags: Array.isArray(j.tags) ? j.tags : [],
     brief: j.brief || '',
     requiresKey: j.requiresKey || '',
+    // The controller sends the override already normalised (normalizeSkillVoice).
+    voice: j.voice?.engine ? { ...j.voice } : null,
   };
 }
+
+// Width of a number field in SKILL SETTINGS: wide enough for its label and a
+// two-line hint, so a row of fields keeps one rhythm.
+const NUMBER_FIELD_WIDTH = 170;
 
 function titleCase(slug: string): string {
   return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-export default function SkillEditModal({ mode, skill, personas, tagSuggestions, onClose, onSkillsChange, onRosterChange }: SkillEditModalProps) {
+export default function SkillEditModal({ mode, skill, personas, tagSuggestions, onClose }: SkillEditModalProps) {
   const { adminFetch } = useAdminAuth();
 
   const isEdit = mode === 'edit';
-  // File id for GET/PUT — the kind (built-in) or slug (custom). For toggle/run/
-  // delete the controller keys off the skill name.
+  // File id for GET/PUT: kind (built-in) or slug (custom). Toggle/run/delete
+  // key off the skill name instead.
   const fileId = skill ? (skill.kind || skill.name) : '';
+  const fileQuery = useSkillFileQuery(adminFetch, fileId, isEdit);
 
   const [loaded, setLoaded] = useState(!isEdit);   // create starts ready
   const [kind, setKind] = useState(skill?.kind || skill?.name || '');
   const [custom, setCustom] = useState(mode === 'create' ? true : !!skill?.custom);
   const [configFields, setConfigFields] = useState<SkillConfigField[]>([]);
   const [hasTool, setHasTool] = useState(false);
+  const [toolPending, setToolPending] = useState(false);
   const [cronInvalid, setCronInvalid] = useState(false);
   const [knownContext, setKnownContext] = useState<string[]>(CONTEXT_FIELDS_FALLBACK);
 
-  // The skill's own declared knobs (news' feed/feedMaxItems, …) — runtime data
-  // read off tool.mjs, not part of the shared schema, so it keeps its own
-  // state + dirty snapshot outside the RHF form (see SkillFormValues above).
+  // The skill's own declared knobs, resolved by the controller's loader. Not
+  // part of the shared schema, so it keeps its own state + dirty snapshot.
   const [config, setConfig] = useState<Record<string, string>>({});
   const [configSnapshot, setConfigSnapshot] = useState<string>(() => configKey({}));
   const [tagDraft, setTagDraft] = useState('');   // the tag input's in-progress text
 
-  // Seeded from the roster at mount (a `skills: null` persona runs everything);
-  // saved via PUT /dj/skills/:slug/personas after the file save.
+  // Seeded from the roster at mount; saved via PUT /dj/skills/:slug/personas
+  // after the file save.
   const roster = personas || [];
   const initialAssigned = () => (skill
     ? roster.filter(p => p.skills === null || p.skills.includes(skill.name)).map(p => p.id)
@@ -216,31 +179,74 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [busy, setBusy] = useState(false);          // saving / creating
   const [acting, setActing] = useState(false);      // toggle / run in flight
   const [flash, setFlash] = useState<string | null>(null);
+  // Voice lists for the skill-voice picker (EngineVoiceFields), from the one
+  // redacted /settings read the skills page already holds. A failure leaves
+  // the engine picker usable with empty lists.
+  const settingsQuery = useSettingsQuery<EngineVoiceData>({ adminFetch, enabled: true });
+  const voiceData = settingsQuery.data ?? null;
   const [confirmDelete, setConfirmDelete] = useState(false);  // delete confirm dialog
   const [defaults, setDefaults] = useState<SkillDefaults | null>(null); // built-in shipped defaults
 
+  const requestClose = useCallback(() => {
+    if (!busy) onClose();
+  }, [busy, onClose]);
+
   // The same schema the controller runs, so a bad cooldown is caught at the
-  // input rather than coming back as a 400. Declared as the widened ZodType
-  // rather than the create/edit union: several fields are z.preprocess-wrapped,
-  // whose z.input is `unknown`, so the union's input type collapses — handled
-  // with one cast on `control` below instead of at every call site.
-  const schema: z.ZodType<FieldValues, FieldValues> =
-    mode === 'create' ? skillCreateSchema : skillFileSchema(custom);
+  // input. Declared as the widened ZodType rather than the create/edit union:
+  // several fields are z.preprocess-wrapped, so the union's input collapses.
+  const schema: z.ZodType<FieldValues, FieldValues> = useMemo(
+    () => withSkillVoice(mode === 'create' ? skillCreateSchema : skillFileSchema(custom), voiceSlot),
+    [mode, custom],
+  );
 
   const form = useZodForm(
     schema,
     (mode === 'create'
-      ? { name: '', label: '', cooldown: '', cron: '', cronOnly: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
-      : { label: '', cooldown: '', cron: '', cronOnly: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
+      ? { name: '', label: '', cooldown: '', cron: '', cronOnly: false, cohosts: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '', voice: null }
+      : { label: '', cooldown: '', cron: '', cronOnly: false, cohosts: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '', voice: null }
     ) as DefaultValues<z.input<typeof schema>>,
   );
   const control = form.control as unknown as Control<SkillFormValues>;
   const uid = useId();
+  const fileHydratedRef = useRef(false);
+  const fileErrorRef = useRef<unknown>(null);
 
-  // `custom` can flip after mount (the file GET below corrects the list row's
-  // guess), swapping `schema`. RHF picks up the new resolver on the next render
-  // but won't re-run it against already-computed error state — same as
-  // MoodsPanel's schedule/weather schema.
+  const applyFile = useCallback((j: SkillFileResponse) => {
+    form.reset(fileToFormValues(j) as DefaultValues<z.input<typeof schema>>);
+    const cfg = configValues(j);
+    setConfig(cfg);
+    setConfigSnapshot(configKey(cfg));
+    setKind(j.kind || fileId);
+    setCustom(!!j.custom);
+    setConfigFields(Array.isArray(j.configFields) ? j.configFields : []);
+    setHasTool(!!j.hasTool);
+    setToolPending(!!j.toolPending);
+    setCronInvalid(!!j.cronInvalid);
+    setDefaults(j.defaults || null);
+    setKnownContext(
+      Array.isArray(j.knownContextFields) && j.knownContextFields.length
+        ? j.knownContextFields
+        : CONTEXT_FIELDS_FALLBACK,
+    );
+    setLoaded(true);
+  }, [fileId, form]);
+
+  useEffect(() => {
+    if (!isEdit || !fileQuery.data || fileHydratedRef.current) return;
+    fileHydratedRef.current = true;
+    applyFile(fileQuery.data);
+  }, [applyFile, fileQuery.data, isEdit]);
+
+  useEffect(() => {
+    if (!isEdit || !fileQuery.error || fileErrorRef.current === fileQuery.error) return;
+    fileErrorRef.current = fileQuery.error;
+    notify.err(`Couldn't load skill: ${errorMessage(fileQuery.error)}`);
+    requestClose();
+  }, [fileQuery.error, isEdit, requestClose]);
+
+  // `custom` can flip after mount (the file GET corrects the list row's guess),
+  // swapping `schema`. RHF picks up the new resolver on the next render but
+  // won't re-run it against already-computed error state.
   useEffect(() => {
     void form.trigger();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -267,56 +273,18 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     window.setTimeout(() => setFlash(cur => (cur === msg ? null : cur)), 2000);
   };
 
-  useEffect(() => {
-    if (!isEdit || !fileId) return;
-    let cancelled = false;
-    setLoaded(false);
-    (async () => {
-      try {
-        const r = await adminFetch(`/dj/skills/${fileId}/file`);
-        const j = (await r.json().catch(() => ({}))) as SkillFileResponse;
-        if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-        if (cancelled) return;
-        form.reset(fileToFormValues(j) as DefaultValues<z.input<typeof schema>>);
-        const cfg = configValues(j);
-        setConfig(cfg);
-        setConfigSnapshot(configKey(cfg));
-        setKind(j.kind || fileId);
-        setCustom(!!j.custom);
-        setConfigFields(Array.isArray(j.configFields) ? j.configFields : []);
-        setHasTool(!!j.hasTool);
-        setCronInvalid(!!j.cronInvalid);
-        setDefaults(j.defaults || null);
-        setKnownContext(
-          Array.isArray(j.knownContextFields) && j.knownContextFields.length
-            ? j.knownContextFields
-            : CONTEXT_FIELDS_FALLBACK,
-        );
-        setLoaded(true);
-      } catch (e) {
-        if (cancelled) return;
-        notify.err(`Couldn't load skill: ${errorMessage(e)}`);
-        onClose();
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEdit, fileId, adminFetch]);
-
-  // Escape-to-close and scroll-lock come from EditorDialog (Radix). No manual key
-  // listener: that is what lets the nested delete confirm get Escape first.
+  // Escape-to-close and scroll-lock come from EditorDialog (Radix). No manual
+  // key listener, so the nested delete confirm gets Escape first.
 
   const assignDirty = isEdit && JSON.stringify([...assigned].sort()) !== assignSnapshot;
   const configDirty = configKey(config) !== configSnapshot;
   const dirty = loaded && (form.formState.isDirty || configDirty || assignDirty);
 
   const canSave = loaded && form.formState.isValid && !busy;
-  // Every field has its own inline error slot, so listing them here too would
-  // render each message twice. `requiresKey` is the exception: it's a hidden
-  // passthrough with no rendered control, so a disk-authored value that isn't
-  // UPPER_SNAKE_CASE has nowhere else to surface, and a gated Save would
-  // otherwise never say why.
-  const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'cron', 'cronOnly', 'context', 'tags', 'window', 'brief'];
+  // Every field has its own inline error slot. `requiresKey` is the exception:
+  // a hidden passthrough with no rendered control, so a bad disk-authored value
+  // has nowhere else to surface.
+  const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'cron', 'cronOnly', 'cohosts', 'context', 'tags', 'window', 'brief', 'voice'];
   const blockingIssue = (() => {
     const entry = Object.entries(form.formState.errors).find(
       ([key, err]) => err && !FIELDS_WITH_INLINE_ERRORS.includes(key),
@@ -332,52 +300,108 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const cooldownValue = (useWatch({ control, name: 'cooldown' }) as string | undefined) || '';
   const contextValue = (useWatch({ control, name: 'context' }) as string[] | undefined) || [];
   const windowValue = (useWatch({ control, name: 'window' }) as 'any' | 'commute' | undefined) || 'any';
+  const cohostsValue = !!useWatch({ control, name: 'cohosts' });
   const displayName = labelValue || (isEdit ? titleCase(kind) : (nameValue ? titleCase(nameValue) : 'New skill'));
+
+  const saveMutation = useAdminMutation<SkillsResponse, {
+    path: string;
+    method: 'POST' | 'PUT';
+    body: Record<string, unknown>;
+    fileId: string | null;
+  }>({
+    adminFetch,
+    request: ({ path, method, body }, fetcher) => adminJson(fetcher, path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    onDone: async (response, vars, client) => {
+      writeInstalledSkills(client, response);
+      if (vars.fileId) {
+        await client.invalidateQueries({
+          queryKey: skillKeys.file(vars.fileId), exact: true, refetchType: 'active',
+        });
+        // The modal hydrates the file once. If the authoritative read failed,
+        // don't leave its older payload for a quick reopen to consume.
+        if (client.getQueryState(skillKeys.file(vars.fileId))?.status === 'error') {
+          client.removeQueries({ queryKey: skillKeys.file(vars.fileId), exact: true });
+        }
+      }
+    },
+    toastOnError: false,
+  });
+  const rosterMutation = useAdminMutation<unknown, { slug: string; personaIds: string[] }>({
+    adminFetch,
+    request: ({ slug, personaIds }, fetcher) => adminJson(
+      fetcher,
+      `/dj/skills/${encodeURIComponent(slug)}/personas`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personaIds }),
+      },
+    ),
+    // The assignment endpoint returns only a roster receipt; never put that
+    // partial response in the redacted settings cache.
+    onDone: async (_response, _vars, client) => {
+      await client.invalidateQueries({ queryKey: skillKeys.roster(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const toggleMutation = useAdminMutation<SkillsResponse, { name: string; on: boolean }>({
+    adminFetch,
+    request: (vars, fetcher) => adminJson(fetcher, '/dj/skill-toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(vars),
+    }),
+    onDone: (response, _vars, client) => writeInstalledSkills(client, response),
+    toastOnError: false,
+  });
+  const removeMutation = useAdminMutation<SkillsResponse, { name: string }>({
+    adminFetch,
+    request: ({ name }, fetcher) => adminJson(
+      fetcher, `/dj/skills/${encodeURIComponent(name)}`, { method: 'DELETE' },
+    ),
+    onDone: (response, vars, client) => {
+      writeInstalledSkills(client, response);
+      client.removeQueries({ queryKey: skillKeys.file(vars.name), exact: true });
+    },
+    toastOnError: false,
+  });
+  const resetMutation = useAdminMutation<SkillsResponse, { fileId: string }>({
+    adminFetch,
+    request: ({ fileId: id }, fetcher) => adminJson(
+      fetcher, `/dj/skills/${encodeURIComponent(id)}/reset`, { method: 'POST' },
+    ),
+    onDone: async (response, vars, client) => {
+      writeInstalledSkills(client, response);
+      await client.invalidateQueries({
+        queryKey: skillKeys.file(vars.fileId), exact: true, refetchType: 'none',
+      });
+    },
+    toastOnError: false,
+  });
 
   const onSubmit = form.handleSubmit(async (values) => {
     setBusy(true);
     try {
-      // `requiresKey` (and, for a custom skill, `window`) ride along in `values`
-      // only when the schema in force declares them — a built-in edit's schema
-      // doesn't, so zod has already stripped them from the parsed output.
+      // `requiresKey` (and `window` for a custom skill) ride along in `values`
+      // only when the schema in force declares them.
       const body: Record<string, unknown> = { ...values };
       // Always sent when the skill declares knobs, so clearing a field clears
-      // the frontmatter line; omitted for a skill with none, which the
-      // controller reads as "leave whatever is on disk". Read off the raw body
-      // server-side, so it travels outside `values` here too.
+      // the frontmatter line; omitted for a skill with none, which the controller
+      // reads as "leave whatever is on disk".
       if (configFields.length) {
         body.config = Object.fromEntries(
           configFields.map(f => [f.key, (config[f.key] || '').trim()]),
         );
       }
 
-      let r: Response;
-      if (mode === 'create') {
-        r = await adminFetch('/dj/skills', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      } else {
-        r = await adminFetch(`/dj/skills/${fileId}/file`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      }
-      const j = (await r.json().catch(() => ({}))) as {
-        skills?: SkillLike[];
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // A server-side name rule (reserved slug, slug already on disk) comes
-        // back as fieldErrors.name. Typing a different slug is the way out, so
-        // land it on the input rather than only in a toast.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
-      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
+      await saveMutation.mutateAsync({
+        path: mode === 'create' ? '/dj/skills' : `/dj/skills/${encodeURIComponent(fileId)}/file`,
+        method: mode === 'create' ? 'POST' : 'PUT',
+        body,
+        fileId: mode === 'create' ? null : fileId,
+      });
 
       if (mode === 'create') {
         notify.ok(`Created "${values.name}" — disabled until you enable it`);
@@ -385,19 +409,12 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       } else {
         form.reset(values as DefaultValues<z.input<typeof schema>>);   // edits are now the saved baseline
         setConfigSnapshot(configKey(config));
-        // A separate resource (personas[].skills): the file save above already
-        // stood, so a failure here reports on its own.
+        // A separate resource (personas[].skills): the file save already stood,
+        // so a failure here reports on its own.
         if (assignDirty && skill) {
           try {
-            const ar = await adminFetch(`/dj/skills/${skill.name}/personas`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ personaIds: assigned }),
-            });
-            const aj = (await ar.json().catch(() => ({}))) as { error?: string };
-            if (!ar.ok) throw new Error(aj.error || `failed (${ar.status})`);
+            await rosterMutation.mutateAsync({ slug: skill.name, personaIds: assigned });
             setAssignSnapshot(JSON.stringify([...assigned].sort()));
-            onRosterChange?.();
           } catch (e) {
             notify.err(`Skill saved, but updating DJ assignments failed: ${errorMessage(e)}`);
           }
@@ -405,6 +422,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         flashFor('SAVED TO BOOTH');
       }
     } catch (e) {
+      if (e instanceof AdminResponseError) applyServerFieldErrors(form, e.body.fieldErrors);
       notify.err(`${mode === 'create' ? 'Create' : 'Save'} failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
@@ -416,15 +434,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     setActing(true);
     const next = !enabled;
     try {
-      const r = await adminFetch('/dj/skill-toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: skill.name, on: next }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { skills?: SkillLike[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await toggleMutation.mutateAsync({ name: skill.name, on: next });
       setEnabled(next);
-      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
       flashFor(next ? 'ON AIR' : 'OFF AIR');
     } catch (e) {
       notify.err(`Toggle failed: ${errorMessage(e)}`);
@@ -435,19 +446,21 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     if (!isEdit || !skill) return;
     setActing(true);
     try {
-      const r = await adminFetch('/dj/skill', {
+      const r = await adminResponse(adminFetch, '/dj/skill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: skill.name }),
       });
       const j = (await r.json().catch(() => ({}))) as {
-        spoken?: string | null; aired?: boolean; reason?: string | null; error?: string;
+        spoken?: string | null; aired?: boolean; queued?: boolean; deferred?: boolean;
+        reason?: string | null; error?: string;
       };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      // The skill can run and decide it has nothing usable to speak from — a
-      // 200 with `aired: false` (issue #1412). Flashing "QUEUED TO BOOTH" at
-      // that would tell the operator something aired when nothing did.
-      if (j.aired === false) {
+      // The skill can run and decide it has nothing usable to speak from: a 200
+      // with `aired: false` (#1412).
+      if (j.queued && j.deferred) {
+        flashFor('QUEUED FOR BREAK');
+        if (j.spoken) notify.ok(`Queued for the next break: “${j.spoken}”`);
+      } else if (j.aired === false) {
         flashFor('STOOD DOWN');
         notify.info(`${skill.name} stayed silent — ${j.reason || 'nothing usable to speak from'}`);
       } else {
@@ -465,10 +478,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     setConfirmDelete(false);
     setActing(true);
     try {
-      const r = await adminFetch(`/dj/skills/${skill.name}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { skills?: SkillLike[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
+      await removeMutation.mutateAsync({ name: skill.name });
       notify.ok(`Deleted “${skill.name}”`);
       onClose();
     } catch (e) {
@@ -477,15 +487,11 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     }
   };
 
-  // The download goes through adminFetch + a blob because a plain <a href> can't
-  // carry the Basic-auth header.
+  // adminFetch + blob because a plain <a href> can't carry the Basic-auth header.
   const exportZip = async () => {
     try {
-      const r = await adminFetch(`/dj/skills/${fileId}/export`);
-      if (!r.ok) {
-        const j = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      // admin-query-imperative: skill-export
+      const r = await adminResponse(adminFetch, `/dj/skills/${encodeURIComponent(fileId)}/export`);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -500,9 +506,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     }
   };
 
-  // Opens the prefilled add-skill Issue Form on GitHub. Only offered for tool-less
-  // custom skills — built-ins already ship, and executable tool.mjs skills aren't
-  // accepted through this path.
+  // Opens the prefilled add-skill Issue Form on GitHub. Tool-less custom skills
+  // only.
   const shareToCommunity = () => {
     const url = skillSubmitUrl({
       'skill-name': kind,
@@ -511,32 +516,23 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       cooldown: cooldownValue,
       context: contextValue.join(', '),
       window: windowValue === 'commute' ? 'commute' : '',
+      cohosts: cohostsValue ? 'true' : '',
+      // The form's feed fields are plain inputs, which GitHub prefills by id.
+      feed: config.feed,
+      'feed-max-items': config.feedMaxItems,
     });
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  // Server-side and immediate: the POST overwrites BOTH the SKILL.md AND the
-  // tool.mjs in state/skills/<kind>/ from the image template, which an in-form
-  // repopulate could not do. The refetch afterwards mirrors the shipped values back.
+  // Server-side and immediate: the POST overwrites BOTH the SKILL.md and the
+  // tool.mjs from the image template, which an in-form repopulate could not do.
   const resetToDefault = async () => {
     if (custom || !isEdit || busy) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/dj/skills/${fileId}/reset`, { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as { skills?: SkillLike[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
-
-      const fr = await adminFetch(`/dj/skills/${fileId}/file`);
-      const fj = (await fr.json().catch(() => ({}))) as SkillFileResponse;
-      if (fr.ok) {
-        form.reset(fileToFormValues(fj) as DefaultValues<z.input<typeof schema>>);
-        const cfg = configValues(fj);
-        setConfig(cfg);
-        setConfigSnapshot(configKey(cfg));
-        setConfigFields(Array.isArray(fj.configFields) ? fj.configFields : []);
-        setHasTool(!!fj.hasTool);
-      }
+      await resetMutation.mutateAsync({ fileId });
+      const refreshed = await fileQuery.refetch();
+      if (refreshed.data) applyFile(refreshed.data);
       flashFor('RESET TO SHIPPED DEFAULT');
       notify.ok(`Reset “${kind}” to default`);
     } catch (e) {
@@ -580,8 +576,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const headerSub = (
     <span className="caption truncate">{custom ? 'custom segment' : 'built-in segment'}</span>
   );
-  // Sized down on a phone (52x26): the footer is fixed furniture, and this is the
-  // one control that can't collapse into the overflow menu.
+  // Sized down on a phone (52x26): the one footer control that can't collapse
+  // into the overflow menu.
   const airToggle = isEdit ? (
     <div
       onClick={() => { if (!acting) toggleEnabled(); }}
@@ -650,11 +646,11 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
           label: '↗ Share to community',
           onClick: shareToCommunity,
           title: 'Open a prefilled GitHub issue to share this skill with the community',
-          hidden: !(isEdit && custom && !hasTool),
+          hidden: !(isEdit && custom && !hasTool && !toolPending),
         },
       ]}
       primary={[
-        { id: 'close', label: 'Close', onClick: onClose },
+        { id: 'close', label: 'Close', onClick: requestClose, disabled: busy },
         {
           id: 'save',
           label: busy
@@ -671,7 +667,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   return (
     <EditorDialog
       open
-      onOpenChange={(o) => { if (!o) onClose(); }}
+      onOpenChange={(o) => { if (!o) requestClose(); }}
+      busy={busy}
       title={headerTitle}
       sub={headerSub}
       footer={footer}
@@ -751,7 +748,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             </div>
 
-            {/* Cron timer — optional dedicated schedule that fires the skill immediately */}
             <div className="sw-section">
               <div style={sectionLabel}>CRON TIMER — FIRE ON A FIXED SCHEDULE</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
@@ -798,6 +794,101 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             </div>
 
+            <div className="sw-section">
+              <Controller
+                control={control}
+                name="cohosts"
+                render={({ field }) => {
+                  const baseId = `${uid}-cohosts`;
+                  const aria = fieldAria(baseId);
+                  return (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <Switch
+                          {...aria.controlProps}
+                          checked={!!field.value}
+                          onCheckedChange={field.onChange}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                        <label {...aria.labelProps} style={{ ...sectionLabel, cursor: 'pointer' }}>
+                          CO-HOSTED DISCUSSION
+                        </label>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
+                        Uses the current show&apos;s host plus every guest co-host, with each contribution spoken in that persona&apos;s own voice. It runs only while a co-hosted show is active; the show roster, not this skill, chooses the participants.
+                      </div>
+                    </>
+                  );
+                }}
+              />
+            </div>
+
+            {/* Voice — optional dedicated TTS voice for this skill. Off means
+                the on-air DJ's voice. Ignored by co-hosted discussions, where
+                each line speaks in its roster persona's own voice. */}
+            <div className="sw-section">
+              <Controller
+                control={control}
+                name="voice"
+                render={({ field, fieldState }) => {
+                  const baseId = `${uid}-voice`;
+                  const aria = fieldAria(baseId, fieldState.error);
+                  const slot = field.value as SkillVoiceSlot | null;
+                  return (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <Switch
+                          {...aria.controlProps}
+                          checked={!!slot}
+                          onCheckedChange={on => field.onChange(on ? { ...NEW_SKILL_VOICE } : null)}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                        <label {...aria.labelProps} style={{ ...sectionLabel, cursor: 'pointer' }}>
+                          VOICE · SET A CUSTOM VOICE FOR THIS SKILL
+                        </label>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
+                        Off by default: the segment airs in the on-air DJ&apos;s voice.
+                        Turn this on to pin the skill to its own engine and voice — the
+                        same picker personas use. Use the sample button to
+                        audition the voice before saving.
+                        {cohostsValue && (
+                          <> This skill is co-hosted, so the override is ignored: every
+                          contribution speaks in its roster persona&apos;s own voice.</>
+                        )}
+                      </div>
+                      {!!slot && (
+                        <div style={{ marginTop: 16 }}>
+                          <EngineVoiceFields
+                            value={slot}
+                            onChange={patch => field.onChange({ ...slot, ...patch })}
+                            data={voiceData}
+                            adminFetch={adminFetch}
+                            unavailableNote={engine => (
+                              <>{ENGINE_UNAVAILABLE[engine]} This skill would be read by the station&apos;s
+                                fallback or default engine until it&apos;s up.</>
+                            )}
+                            previewHint={<>
+                              Plays a short sample in this skill&apos;s voice. Pick from
+                              the list where one exists; where it doesn&apos;t (remote,
+                              or a server with no advertised voices) type the id in.
+                            </>}
+                          />
+                        </div>
+                      )}
+                      {fieldState.error && (
+                        <div {...aria.errorProps} role="alert" style={{ fontSize: 12, color: 'var(--accent)', marginTop: 12 }}>
+                          {fieldState.error.message}
+                        </div>
+                      )}
+                    </>
+                  );
+                }}
+              />
+            </div>
+
             {/* Window — custom skills only (built-in window isn't editable) */}
             {custom && (
               <div className="sw-section">
@@ -831,10 +922,14 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
             {configFields.length > 0 && (
               <div className="sw-section">
                 <div style={sectionLabel}>SKILL SETTINGS</div>
-                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
+                {/* Top-aligned: each field is label, input, then an optional hint, so
+                    aligning the tops lines the labels and the inputs up across a row
+                    whatever hint hangs under a neighbour. A number field has a fixed
+                    width its hint wraps inside, instead of stretching to the hint. */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
                   {configFields.map(f => (
-                    <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: f.type === 'number' ? '0 0 auto' : '1 1 320px', minWidth: 0 }}>
-                      <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>{f.label}</span>
+                    <label key={f.key} style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: f.type === 'number' ? `0 0 ${NUMBER_FIELD_WIDTH}px` : '1 1 320px', minWidth: 0 }}>
+                      <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={f.label}>{f.label}</span>
                       <input
                         type={f.type === 'number' ? 'number' : f.type === 'url' ? 'url' : 'text'}
                         min={f.type === 'number' ? f.min : undefined}
@@ -846,13 +941,13 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                         style={{
                           ...inputBase,
                           ...(f.type === 'number'
-                            ? { width: 110, padding: '11px 12px', fontVariantNumeric: 'tabular-nums' }
+                            ? { width: '100%', padding: '11px 12px', fontVariantNumeric: 'tabular-nums' }
                             : { width: '100%', minWidth: 0, padding: '11px 15px' }),
                           boxSizing: 'border-box',
                           fontSize: 14,
                         }}
                       />
-                      {f.hint && <span style={{ fontSize: 12, color: 'var(--muted)' }}>{f.hint}</span>}
+                      {f.hint && <span style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.4 }}>{f.hint}</span>}
                     </label>
                   ))}
                 </div>
@@ -1022,6 +1117,21 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                 <span style={{ fontSize: 10, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>DJ VOICE · IN CHARACTER</span>
                 <span style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{briefValue.length} CHARS</span>
               </div>
+              {isEdit && toolPending && (
+                <PendingToolReview
+                  slug={kind}
+                  fileId={fileId}
+                  onResolved={async () => {
+                    // Only the tool flags: the brief may hold unsaved edits.
+                    const refreshed = await fileQuery.refetch();
+                    if (refreshed.data) {
+                      setHasTool(!!refreshed.data.hasTool);
+                      setToolPending(!!refreshed.data.toolPending);
+                      setConfigFields(Array.isArray(refreshed.data.configFields) ? refreshed.data.configFields : []);
+                    }
+                  }}
+                />
+              )}
               {hasTool && (
                 <div style={{ marginTop: 14, border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', borderLeft: '3px solid var(--accent)', padding: '12px 14px', fontSize: 12, lineHeight: 1.6, color: 'var(--muted)' }}>
                   A <code>tool.mjs</code> data fetcher is attached and runs each tick before the DJ speaks. It isn&apos;t editable here; edit it on disk in <code>state/skills/{kind}/</code>, then Rescan.{custom ? ' Deleting the skill removes it too.' : ' Use ↺ Reset to default to restore the shipped version.'}

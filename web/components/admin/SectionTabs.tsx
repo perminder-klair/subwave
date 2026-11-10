@@ -1,7 +1,5 @@
 'use client';
 
-/* The one section-tab row shared by Imaging / Moods / Connect, so the three
-   pages can't drift. Renders as the foot of a hero card. */
 
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/cn';

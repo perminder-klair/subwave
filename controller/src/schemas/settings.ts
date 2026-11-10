@@ -59,6 +59,15 @@ export const BEDS_THRESHOLD_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 60
 // The bed's ramp into the next song. bed-policy clamps this against the bed's
 // own length too, so a long ramp on a short link can't invert the arithmetic.
 export const BEDS_CROSS_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
+export const BEDS_TAIL_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
+
+// Dead-air trim: the smallest edge gap worth cutting. The FLOOR is what keeps
+// the feature from eating deliberate silence — a segued album leaves a beat
+// between tracks on purpose, and a mastering blank worth a cue point is
+// measured in seconds, not frames. The ceiling bounds the same mistake from
+// the other side: past 30s an operator is describing a different problem
+// (a corrupt rip) than the one a cue point solves.
+export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
 
 /**
  * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
@@ -255,6 +264,21 @@ export function settingsTrimmedString(max: number, message: string) {
 }
 
 /**
+ * A control character (C0 or DEL) in a saved secret. No real key holds one, and
+ * fetch refuses a header value with a NUL, CR or LF in it, quoting the whole
+ * value in its error. Every save path strips them, as the admin form's inputs
+ * already do for line breaks, so a key pasted across a wrap through the API or
+ * a restored backup is joined rather than refused; the key probes refuse one
+ * instead (setup/secrets.ts secretValueIssue). The load path leaves a stored
+ * value alone. Defined here because a mirrored module may import only zod.
+ */
+export const SECRET_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+
+export function stripSecretControlChars(value: string): string {
+  return value.replace(new RegExp(SECRET_CONTROL_CHAR_RE.source, 'g'), '');
+}
+
+/**
  * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture.
  *
  * `null` becomes the four-character string 'null' and is STORED. That is not a
@@ -268,6 +292,78 @@ export function settingsRawStringLike(max: number, message: string) {
       if (String(raw).length > max) ctx.addIssue({ code: 'custom', message });
     })
     .transform((raw) => String(raw));
+}
+
+/**
+ * The header-name grammar `stream.countryHeader` accepts.
+ *
+ * RFC 7230 token characters minus the separators nobody puts in a proxy header,
+ * capped at 64. It lives HERE rather than beside the resolver because a
+ * mirrored module may import only `zod`, so the schema cannot import the
+ * constant — the resolver (`broadcast/listener-country.ts`) imports it from
+ * this file instead, keeping one declaration for the save path, the browser
+ * pre-flight and the read path alike.
+ */
+export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+/**
+ * `llm.headers` / `llm.fallback.headers` — extra request headers the
+ * openai-compatible transport sends on every call (#1618).
+ *
+ * The NAME grammar is `STREAM_COUNTRY_HEADER_RE`, not a second copy of it:
+ * both fields are naming an HTTP header and the rule is the same RFC 7230
+ * token, so this is an alias for the same reason `settings/vocab.ts`'s `ID_RE`
+ * aliases `SHOW_ID_RE`. The VALUE grammar is printable ASCII on one line — a
+ * header value is latin-1 on the wire, and a CR/LF in one is header injection
+ * rather than a typo, so it is REFUSED rather than repaired.
+ *
+ * They live here for the same reason the country header's rule does: the admin
+ * form runs the mirrored copy so a bad header name is caught before the save,
+ * and the save path (`applyLlmLegPatch`) and the lenient load path
+ * (`normalizeLlmHeaders`) import them rather than each restating the rule.
+ */
+export const LLM_HEADER_NAME_RE = STREAM_COUNTRY_HEADER_RE;
+export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
+
+/** At most this many custom headers per leg, and this long a value. */
+export const LLM_HEADERS_MAX = 10;
+export const LLM_HEADER_VALUE_MAX = 500;
+
+// Native Google safety flags are independent per LLM leg. Only a literal true
+// enables blocking; absent or malformed flags preserve the permissive default.
+const geminiSafetyFlagSchema = z.unknown().transform((raw) => raw === true).default(false);
+export const geminiSafetySchema = z.object({
+  harassment: geminiSafetyFlagSchema,
+  hateSpeech: geminiSafetyFlagSchema,
+  sexuallyExplicit: geminiSafetyFlagSchema,
+  dangerousContent: geminiSafetyFlagSchema,
+});
+export type GeminiSafety = z.output<typeof geminiSafetySchema>;
+
+export function normalizeGeminiSafety(raw: unknown): GeminiSafety {
+  return geminiSafetySchema.parse(
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {},
+  );
+}
+
+/** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
+export const STREAM_GEOIP_DB_PATH_MAX = 512;
+
+/**
+ * `String(raw ?? '').trim()` + the header-name grammar, empty allowed.
+ *
+ * Empty is the default and means "don't read a second header", so it must stay
+ * accepted; anything else either matches the grammar or is REFUSED, because a
+ * repaired header name would silently read a header the operator never named.
+ */
+export function settingsHeaderNameLike(message: string) {
+  return z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      const v = String(raw ?? '').trim();
+      if (v && !STREAM_COUNTRY_HEADER_RE.test(v)) ctx.addIssue({ code: 'custom', message });
+    })
+    .transform((raw) => String(raw ?? '').trim());
 }
 
 /**
@@ -322,9 +418,124 @@ export const SETTINGS_LOUDNESS_SOURCES = [
   'measured',
 ] as const;
 
-export const SETTINGS_SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
+// The search Select's groups, in display order.
+export const SEARCH_PROVIDER_GROUPS = ['keyless', 'keyed', 'self-hosted'] as const;
+export type SearchProviderGroup = (typeof SEARCH_PROVIDER_GROUPS)[number];
+
+export interface SearchProviderEntry {
+  id: string;
+  group: SearchProviderGroup;
+  // The Settings → Web search dropdown label, and the hint under it.
+  label: string;
+  hint: string;
+  // How the backend takes the shared SEARCH_API_KEY: it needs one, it searches
+  // without one and a key raises its limits, or it takes none.
+  key: 'required' | 'optional' | 'none';
+  // The key field: whose key it is, its placeholder, and where to get one.
+  keyName?: string;
+  keyPlaceholder?: string;
+  keyUrl?: string;
+  // An optional key is sent only when it starts with this, so a key left in the
+  // shared slot by another provider is ignored rather than sent.
+  keyPrefix?: string;
+}
+
+// The web-search backends, one record each and data only, in the order
+// GET /settings serves them. Lives beside searchPatchSchema because a mirrored
+// module may not import a sibling. The backends themselves are
+// skills/web-search.ts and the key probes routes/settings/llm.ts.
+export const SEARCH_PROVIDER_CATALOG = [
+  {
+    id: 'duckduckgo', group: 'keyless', label: 'DuckDuckGo (free, no key)', key: 'none',
+    hint: 'DuckDuckGo Instant Answer, free and keyless. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.',
+  },
+  {
+    id: 'tavily', group: 'keyed', label: 'Tavily (paid web search)', key: 'required',
+    keyName: 'Tavily', keyPlaceholder: 'tvly-…', keyUrl: 'https://app.tavily.com/home',
+    hint: 'Tavily, paid web search with full results and an answer summary. Needs an API key.',
+  },
+  {
+    id: 'brave', group: 'keyed', label: 'Brave Search (API key, free monthly credits)', key: 'required',
+    keyName: 'Brave Search', keyPlaceholder: 'BSA…', keyUrl: 'https://api-dashboard.search.brave.com/app/keys',
+    hint: 'Brave Search API: real web + news results for artist queries. Metered billing with $5/month in free credits (~1,000 queries; a card on file is required). SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'searxng', group: 'self-hosted', label: 'SearXNG (self-hosted)', key: 'none',
+    hint: 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed, just a running SearXNG instance.',
+  },
+  {
+    id: 'keenable', group: 'keyless', label: 'Keenable (free, no key needed)', key: 'optional',
+    keyName: 'Keenable', keyPlaceholder: 'keen_…', keyUrl: 'https://keenable.ai/console', keyPrefix: 'keen_',
+    hint: 'Keenable web search: real web results with no signup or API key, rate limited per IP. An optional Keenable key raises the limit. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'firecrawl', group: 'keyed', label: 'Firecrawl (API key)', key: 'required',
+    keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
+    hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
+    keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
+    hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
+] as const satisfies readonly SearchProviderEntry[];
+
+export const SETTINGS_SEARCH_PROVIDERS = SEARCH_PROVIDER_CATALOG.map((p) => p.id);
+
+// One catalogue row by id, or undefined for an id the catalogue doesn't list.
+export function searchProviderEntry(id: string | undefined): SearchProviderEntry | undefined {
+  return SEARCH_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+// A key name with its indefinite article: "a Tavily", "an Outcrawl". Every
+// sentence that names a provider's key, in the controller and the admin UI,
+// takes its article from here, so the two can't disagree.
+export function withIndefiniteArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
+
+/**
+ * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
+ * is a comma-separated list of SearXNG `name:` fields, so a dozen engines with
+ * multi-word names still fits well inside it.
+ */
+export const SETTINGS_SEARXNG_ENGINES_MAX = 500;
 
 export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30 };
+
+// `smooth_add`'s `p` — the fraction of the music the mixer LEAVES UP while a
+// voice channel has signal, so it reads backwards from a dB cut: SMALLER is a
+// deeper duck. 1 is no duck at all (the DJ competes with the song) and 0 is a
+// full mute under the voice, which is a legitimate operator taste and is NOT
+// the music-paused interlude — the music keeps rolling underneath, silenced.
+// Shared by both layers because they are the same knob at two depths.
+export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
+
+// How long BEFORE a show boundary the outgoing host signs off — the programme
+// outro beat's placement, in station-clock minutes (`handover.offsetMinutes`).
+//
+// The step is not decoration. The outro is a window on the STATION clock that
+// the talk table's programme row samples on a fixed PROCESS stride (see
+// HANDOVER_OFFSET_STEP_MINUTES); the row gets exactly one sample inside a
+// window only while that window is as wide as the stride and opens on a
+// multiple of it. An offset the stride cannot land on is an outro that never
+// airs at all, so the constraint is enforced at the save path rather than left
+// to be discovered on air.
+//
+// The maximum keeps the moved window clear of the feature beat at :35–:39: at
+// 20 the outro opens at :40, and anything larger would have the show sign off
+// on top of its own feature.
+export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
+
+// The station-minute stride the talk table's programme row is sampled on, and
+// therefore the width and alignment every station-clock beat
+// window must have. Lives here — with the bound it constrains — rather than as
+// a literal in the table, so the row and the operator's offset cannot drift
+// apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
+//
+// Every real IANA zone's offset is a multiple of 15 minutes, so process and
+// station minutes agree modulo 5 and the row lands on the same ticks either way.
+export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
 // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty.
@@ -336,8 +547,65 @@ export const LOUDNESS_MAX_BOOST_DB_BOUNDS: SettingsNumericBound = { min: 0, max:
 // the load path drift.
 export const STREAM_BUFFER_SECONDS_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
+// Icecast's <limits><clients> ceiling. 1 is the floor because 0 would render a
+// station nobody can tune into; 10000 is far past what one homelab box serves
+// and exists only to keep a typo out of the config. Licensing bodies in some
+// countries calculate fees on simultaneous listener capacity, which is why this
+// is a first-class setting rather than a convenience (#1300 FR 15).
+export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 10000 };
+
 // Falling back to the product default is what an emptied station name does —
 // see stationSchema.
+// Album cooldown, in HOURS: how long after a track from a record airs before
+// another track from that same record may be picked (#1485 FR 3). 0 = off, and
+// off is the shipped default — the artist window already spaces everything an
+// album window below it would catch, so a non-zero default would be a
+// behaviour change on upgrade rather than a setting.
+//
+// Fractional hours are allowed (0.5 is a real answer on a small library) and
+// the ceiling is 72: past three days this stops being a cooldown and becomes a
+// second no-repeat window, which is what llm.noRepeatWindow is for, and on any
+// catalogue small enough to notice the difference it would just walk the
+// starvation cascade every pick.
+export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72 };
+
+// Station-wide minimum track length, in SECONDS: a track shorter than this is
+// never PICKED (#1573). 0 = off, and off is the shipped default so an upgrade
+// picks byte-identically.
+//
+// This is NOT settings.minTrackSeconds(), which is the crossfade-derived floor
+// on the max-track-length CAP. That figure is this key's own lower bound (a
+// positive value below it is refused in update(), where the crossfade is
+// known), which is why the two must not share a name.
+//
+// The ceiling twins schemas/show.ts's SHOW_MIN_TRACK_LENGTH_MAX, which bounds
+// the per-show override — a mirrored module may import only zod, so the two are
+// separate declarations of one number and must move together.
+export const PICKER_MIN_TRACK_LENGTH_BOUNDS: SettingsNumericBound = { min: 0, max: 3600 };
+
+// Track Shortlist discovery passes (#1687): how many controller-run source
+// calls build one shortlist. Unlike the agent's discoverySteps, 0 has no
+// meaning here, because one pass is the smallest real shortlist.
+export const SHORTLIST_PASSES_BOUNDS: SettingsNumericBound = { min: 1, max: 5 };
+export const SHORTLIST_PASSES_DEFAULT = 3;
+
+// Which of the three model routes run an agent tool loop (#1687): track
+// selection, listener-request matching and segment delivery each choose
+// independently. The agent deadline, the context-window floor and the
+// output-cap warning apply to whichever of them are agentic, so every reader
+// (DJ Doc, the Music selection form) asks here instead of re-deriving it.
+// Absent values read as the shipped default, which is agentic for all three.
+export function settingsAgentRoutes(llm: {
+  trackSelection?: unknown;
+  requestMatching?: unknown;
+  segmentRuntime?: unknown;
+} | null | undefined) {
+  const picks = llm?.trackSelection !== 'shortlist';
+  const requests = llm?.requestMatching !== 'direct';
+  const segments = llm?.segmentRuntime !== 'direct';
+  return { picks, requests, segments, any: picks || requests || segments };
+}
+
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
 export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
@@ -358,12 +626,41 @@ export const jingleRatioSchema = settingsIntLike(
   `jingleRatio must be int in [${JINGLE_RATIO_BOUNDS.min}, ${JINGLE_RATIO_BOUNDS.max}]`,
 );
 
+export const JINGLE_PLACEMENTS = ['between', 'over', 'both'] as const;
+export type JinglePlacement = (typeof JINGLE_PLACEMENTS)[number];
+export const jinglePlacementSchema = z.enum(JINGLE_PLACEMENTS, {
+  error: `jinglePlacement must be one of ${JINGLE_PLACEMENTS.join(', ')}`,
+});
+
+/**
+ * WHO counts the tracks between jingles (#1619).
+ *
+ * `'mixer'` is the pre-existing station: radio.liq's own
+ * `rotate(weights=[1, jingle_ratio()])` draws a stinger every N tracks and the
+ * controller only learns about it afterwards, through `jingle-playing.json`.
+ * `'controller'` moves the count into the talk-slot planner, so a jingle is a
+ * row like every other thing that takes the listener's ear — and the mixer's
+ * ratio handoff file is written 0, which is already the documented way to
+ * switch its rotate off (#997).
+ *
+ * Strict, like the two switches above and for the same reason: the key is new,
+ * so there is no hand-rolled branch to inherit leniency from. `load()` still
+ * coerces an unrecognised value in a hand-edited settings.json back to
+ * `'mixer'`, so only a PATCH is refused.
+ */
+export const JINGLE_ROTATE_OWNERS = ['mixer', 'controller'] as const;
+export type JingleRotateOwner = (typeof JINGLE_ROTATE_OWNERS)[number];
+export const jingleRotateSchema = z.enum(JINGLE_ROTATE_OWNERS, {
+  error: `jingleRotate must be one of ${JINGLE_ROTATE_OWNERS.join(', ')}`,
+});
+
 export const sfxPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
 });
 
 export const bedsPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
+  requestIntros: settingsBoolLike(),
   thresholdSec: settingsFloatLike(
     BEDS_THRESHOLD_SEC_BOUNDS,
     `beds.thresholdSec must be number in [${BEDS_THRESHOLD_SEC_BOUNDS.min}, ${BEDS_THRESHOLD_SEC_BOUNDS.max}]`,
@@ -372,6 +669,18 @@ export const bedsPatchSchema = settingsBlockOf({
     BEDS_CROSS_SEC_BOUNDS,
     `beds.crossSec must be number in [${BEDS_CROSS_SEC_BOUNDS.min}, ${BEDS_CROSS_SEC_BOUNDS.max}]`,
   ),
+  tailSec: settingsFloatLike(
+    BEDS_TAIL_SEC_BOUNDS,
+    `beds.tailSec must be number in [${BEDS_TAIL_SEC_BOUNDS.min}, ${BEDS_TAIL_SEC_BOUNDS.max}]`,
+  ),
+});
+
+export const silenceTrimPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  minGapMs: settingsIntLike(
+    SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
+    `silenceTrim.minGapMs must be int in [${SILENCE_TRIM_MIN_GAP_MS_BOUNDS.min}, ${SILENCE_TRIM_MIN_GAP_MS_BOUNDS.max}]`,
+  ),
 });
 
 export const crossfadeDurationSchema = settingsFloatLike(
@@ -379,12 +688,65 @@ export const crossfadeDurationSchema = settingsFloatLike(
   `crossfadeDuration must be number in [${CROSSFADE_DURATION_BOUNDS.min}, ${CROSSFADE_DURATION_BOUNDS.max}]`,
 );
 
+// Both depths ride ONE block so the pair is edited and posted together — they
+// are read once at mixer startup out of two liquidsoap_duck_*.txt files, and a
+// half-applied pair would leave the light layer louder than the heavy one until
+// the next save.
+export const duckingPatchSchema = settingsBlockOf({
+  voice: settingsFloatLike(
+    DUCK_DEPTH_BOUNDS,
+    `ducking.voice must be number in [${DUCK_DEPTH_BOUNDS.min}, ${DUCK_DEPTH_BOUNDS.max}]`,
+  ),
+  intro: settingsFloatLike(
+    DUCK_DEPTH_BOUNDS,
+    `ducking.intro must be number in [${DUCK_DEPTH_BOUNDS.min}, ${DUCK_DEPTH_BOUNDS.max}]`,
+  ),
+});
+
+// Show handover timing (#1576). One field today, a block because the ordering
+// half of the handover is a placement rule with no dial — a second timing knob
+// belongs beside this one rather than as another flat top-level key.
+export const handoverOffsetMinutesSchema = settingsIntLike(
+  HANDOVER_OFFSET_BOUNDS,
+  `handover.offsetMinutes must be int in [${HANDOVER_OFFSET_BOUNDS.min}, ${HANDOVER_OFFSET_BOUNDS.max}]`,
+).refine(
+  v => v % HANDOVER_OFFSET_STEP_MINUTES === 0,
+  `handover.offsetMinutes must be a multiple of ${HANDOVER_OFFSET_STEP_MINUTES}`,
+);
+
+export const handoverPatchSchema = settingsBlockOf({
+  offsetMinutes: handoverOffsetMinutesSchema,
+});
+
+// Per-effect kill switches for the DJ transition kit (#1565). A nested block
+// rather than six flat keys beside pairDrain/stemBlends: those two are drain
+// SCHEDULING, these are which gestures may air, and one operator turning off
+// the dissolve should not read as a sibling of the pair-drain kill switch.
+//
+// Every field is absent-means-on, so a station that has never written this
+// block keeps the whole kit — the resolver is settings/transition-effects.ts
+// and it is the only place that rule is stated.
+export const TRANSITION_EFFECTS = ['sweep', 'washout', 'blend', 'dissolve', 'chop', 'loop'] as const;
+export type TransitionEffect = (typeof TRANSITION_EFFECTS)[number];
+
+const transitionEffectsPatchSchema = settingsBlockOf({
+  sweep: settingsBoolLike(),
+  washout: settingsBoolLike(),
+  blend: settingsBoolLike(),
+  dissolve: settingsBoolLike(),
+  chop: settingsBoolLike(),
+  loop: settingsBoolLike(),
+});
+
 export const transitionsPatchSchema = settingsBlockOf({
   // stemBlends is documented as needing pairDrain, but that dependency is
   // resolved at drain time in broadcast/drain-policy.ts and has never been a
   // save-time refusal. Do not add one here.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
+  pickTimeStems: settingsBoolLike(),
+  equalPowerCrossfade: settingsBoolLike(),
+  effects: transitionEffectsPatchSchema,
 });
 
 export const webhooksPolicyPatchSchema = settingsBlockOf({
@@ -433,6 +795,170 @@ export const archivePatchSchema = settingsBlockOf({
   ),
 });
 
+// Scheduled, rotating backups (#1570). `off` is the default and MUST be first:
+// a station that upgrades and changes nothing has no `backups` block at all,
+// reads as `off`, and writes nothing — the absent-coerces-to-prior-behaviour
+// rule, which for a feature that DELETES files is the whole safety story.
+//
+// Cadences are elapsed-time, not calendar (`monthly` is 30 days); the tick that
+// applies them is hourly, so a station that is only up for part of the day
+// still gets its backup. See backup/pure.ts.
+export const SETTINGS_BACKUP_CADENCES = ['off', 'daily', 'weekly', 'monthly'] as const;
+
+// The vocabulary and the block shape, named once. Every path that handles a
+// schedule — the normaliser, `update()`, the runner, the admin card's labels —
+// spells the same two names instead of restating `{ cadence: string; keep:
+// number }`, so a cadence added here is a compile error everywhere it is not
+// handled rather than a silent `?? id` fallback (#1585 review).
+export type BackupCadence = (typeof SETTINGS_BACKUP_CADENCES)[number];
+export interface ScheduledBackupSettings {
+  cadence: BackupCadence;
+  keep: number;
+}
+
+// Keep-last-N. The floor is 1, not 0: a retention that could delete the backup
+// the run just wrote is a schedule that runs forever and leaves nothing behind.
+// The ceiling is disk sympathy — a tag DB for a 30k-track library is >100 MB,
+// so 100 kept dailies is already a hundred gigabytes.
+export const BACKUP_KEEP_BOUNDS: SettingsNumericBound = { min: 1, max: 100 };
+
+// The shipped retention, named rather than spelled `7` in three files. It is
+// also the answer every lenient path gives for a `keep` it cannot read — see
+// clampBackupKeep.
+export const BACKUP_KEEP_DEFAULT = 7;
+
+/**
+ * The one lenient reading of `keep`, shared by every path that repairs rather
+ * than refuses: `settings.load()`'s normaliser and the retention sweep itself.
+ *
+ * An unreadable value falls to BACKUP_KEEP_DEFAULT, never to the floor. The
+ * floor is 1 — "keep only the newest" — which is the most destructive answer
+ * available, and this is the only scheduled job in the station that deletes
+ * operator files. Two copies of this clamp disagreeing about that direction is
+ * exactly the drift the module boundary exists to stop, so there is one copy
+ * and it lives beside the bound it enforces.
+ *
+ * The strict path (`backupsPatchSchema`) still REFUSES what this repairs — the
+ * usual normalize-vs-validate split, neither restating the other's rule.
+ */
+export function clampBackupKeep(raw: unknown): number {
+  return clampSettingsIntOr(raw, BACKUP_KEEP_BOUNDS, BACKUP_KEEP_DEFAULT);
+}
+
+/**
+ * The lenient integer reading behind clampBackupKeep and the scheduled
+ * tagger's `limit` (settings/normalize.ts): a number-like value floored and
+ * clamped into `bounds`, anything unreadable the `fallback`. Absent and empty
+ * are NO answer, not zero: `Number(null)` and `Number('')` are both 0, which
+ * would clamp to the floor (for `keep`, 1: the most destructive reading
+ * available) for a settings block that simply has no such field in it.
+ */
+export function clampSettingsIntOr(
+  raw: unknown,
+  bounds: { min: number; max: number },
+  fallback: number,
+): number {
+  if (raw === null || raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(bounds.max, Math.max(bounds.min, Math.floor(n)));
+}
+
+export const backupsPatchSchema = settingsBlockOf({
+  cadence: settingsStrictOneOf(
+    SETTINGS_BACKUP_CADENCES,
+    `backups.cadence must be one of: ${SETTINGS_BACKUP_CADENCES.join(', ')}`,
+  ),
+  // parseInt-family, like archive.retentionDays next door: the admin number
+  // input posts a string on some paths and a float here is a typo worth
+  // truncating rather than a body worth refusing.
+  keep: settingsIntLike(
+    BACKUP_KEEP_BOUNDS,
+    `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
+  ),
+});
+
+// Scheduled tagging (#2282): a daily tagger run at a set station-clock time,
+// so new music reaches the air without an operator pressing Start. `off` is
+// the default and MUST be first: a station that upgrades and changes nothing
+// has no `tagger` block, reads as `off` and never starts a run on its own.
+// The decision lives in music/tag-schedule-policy.ts, the tick in
+// broadcast/tag-schedule.ts.
+export const SETTINGS_TAGGER_AUTO_MODES = ['off', 'daily'] as const;
+export type TaggerAutoMode = (typeof SETTINGS_TAGGER_AUTO_MODES)[number];
+
+// 24-hour `HH:MM` on the station clock.
+export const TAGGER_AUTO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// The run's `--limit`: 0 = every untagged track, the Run tab's "all". The
+// ceiling only stops a typo; no library reaches it.
+export const TAGGER_AUTO_LIMIT_BOUNDS: SettingsNumericBound = { min: 0, max: 1_000_000 };
+
+// The Run tab's four step toggles, by the names POST /tag-library takes.
+export interface TaggerAutoSteps {
+  reconcile: boolean;
+  enrich: boolean;
+  tagMoods: boolean;
+  analyze: boolean;
+}
+export const TAGGER_AUTO_STEP_KEYS = ['reconcile', 'enrich', 'tagMoods', 'analyze'] as const;
+
+export interface TaggerAutoSettings {
+  mode: TaggerAutoMode;
+  time: string;
+  limit: number;
+  steps: TaggerAutoSteps;
+}
+
+// The shipped block: settings/defaults.ts DEFAULTS.tagger.auto, and the admin
+// card's form before its first read. Off, so an upgrade changes nothing.
+export const TAGGER_AUTO_DEFAULTS: Readonly<TaggerAutoSettings> = Object.freeze({
+  mode: 'off',
+  time: '02:30',
+  limit: 0,
+  steps: Object.freeze({ reconcile: true, enrich: true, tagMoods: true, analyze: true }),
+});
+
+export const taggerAutoTimeSchema = z
+  .unknown()
+  .superRefine((raw, ctx) => {
+    if (typeof raw !== 'string' || !TAGGER_AUTO_TIME_RE.test(raw)) {
+      ctx.addIssue({ code: 'custom', message: 'tagger.auto.time must be HH:MM (24-hour)' });
+    }
+  })
+  .transform((raw) => raw as string);
+
+// Each field schema is named once: the POST /settings patch (partial, with
+// settingsBlockOf's leniency) and the Run tab's form (the whole block, through
+// useZodForm) are both built from these, so neither restates a rule.
+const taggerAutoStepsShape = {
+  reconcile: settingsBoolLike(),
+  enrich: settingsBoolLike(),
+  tagMoods: settingsBoolLike(),
+  analyze: settingsBoolLike(),
+};
+const taggerAutoFieldsShape = {
+  mode: settingsStrictOneOf(
+    SETTINGS_TAGGER_AUTO_MODES,
+    `tagger.auto.mode must be one of: ${SETTINGS_TAGGER_AUTO_MODES.join(', ')}`,
+  ),
+  time: taggerAutoTimeSchema,
+  limit: settingsIntLike(
+    TAGGER_AUTO_LIMIT_BOUNDS,
+    `tagger.auto.limit must be int in [${TAGGER_AUTO_LIMIT_BOUNDS.min}, ${TAGGER_AUTO_LIMIT_BOUNDS.max}] (0 = all untagged)`,
+  ),
+};
+
+export const taggerPatchSchema = settingsBlockOf({
+  auto: settingsBlockOf({ ...taggerAutoFieldsShape, steps: settingsBlockOf(taggerAutoStepsShape) }),
+});
+
+/** The whole `tagger.auto` block, as the admin card edits and posts it. */
+export const taggerAutoFormSchema = z.object({
+  ...taggerAutoFieldsShape,
+  steps: z.object(taggerAutoStepsShape),
+});
+
 export const streamPatchSchema = settingsBlockOf({
   opusEnabled: settingsBoolLike(),
   flacEnabled: settingsBoolLike(),
@@ -460,6 +986,25 @@ export const streamPatchSchema = settingsBlockOf({
   idleAfterMinutes: settingsIntLike(
     { min: 1, max: 1440 },
     'stream.idleAfterMinutes must be an integer between 1 and 1440',
+  ),
+  maxListeners: settingsIntLike(
+    STREAM_MAX_LISTENERS_BOUNDS,
+    `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
+  ),
+  // A header NAME, not a country. Refused rather than dropped when malformed:
+  // this is typed by hand into a field whose only feedback is the Stats page
+  // staying blank a day later, so a silent drop is the operator watching their
+  // own input disappear — the same reasoning as the roster tag fields.
+  countryHeader: settingsHeaderNameLike(
+    'stream.countryHeader must be a header name (letters, digits and - _ . ~ ! # $ % & \' * + ^ ` |), or empty',
+  ),
+  // Absolute path to an operator-supplied MaxMind-format (.mmdb) database. Not
+  // existence-checked here: a settings save must not depend on a bind mount the
+  // broadcast container has and this process may not, and the reader already
+  // fails open with a log line naming the path it could not read.
+  geoipDbPath: settingsTrimmedString(
+    STREAM_GEOIP_DB_PATH_MAX,
+    `stream.geoipDbPath must be ${STREAM_GEOIP_DB_PATH_MAX} characters or fewer`,
   ),
 });
 
@@ -512,6 +1057,81 @@ export const djSpeakClockSchema = z.boolean({
 });
 
 /**
+ * Talk placement switch (FR 5b of #1485). Same strict posture as
+ * `djSpeakClockSchema` above and for the same reason: this key has never had a
+ * hand-rolled branch to inherit leniency from, so it starts strict rather than
+ * acquiring a coercion nobody asked for. load() still coerces a hand-edited
+ * settings.json to the default, so only a PATCH is refused.
+ */
+export const djTalkOnlyBetweenTracksSchema = z.boolean({
+  error: 'djTalkOnlyBetweenTracks must be a boolean',
+});
+
+export const ttsVoiceLevellingSchema = z.boolean({
+  error: 'tts.voiceLevelling must be a boolean',
+});
+
+// Only this new flag is stateless; the other TTS fields retain their merged-state validation.
+export const ttsPatchSchema = settingsBlockOf({
+  voiceLevelling: ttsVoiceLevellingSchema,
+});
+export type TtsPatch = z.infer<typeof ttsPatchSchema>;
+
+// The floor a rendered skill segment must clear before an opted-in show gives
+// it a real gap instead of a duck. settingsIntLike, like every other numeric
+// settings key: it accepts the admin form's string and truncates a float rather
+// than refusing either, and its message names the field in house style instead
+// of leaking zod's own wording.
+export const PAUSE_TALK_MIN_SECONDS_BOUNDS: SettingsNumericBound = { min: 5, max: 90 };
+export const pauseTalkMinSecondsSchema = settingsIntLike(
+  PAUSE_TALK_MIN_SECONDS_BOUNDS,
+  'pauseTalkMinSeconds must be a whole number of seconds between 5 and 90',
+);
+
+// The prompt-memory recap injected into every DJ script. The four-hour session
+// roll is the hard ceiling on useful history, and the line/character caps keep
+// an operator typo from consuming the model's whole context window.
+export const DJ_RECAP_LIMIT_BOUNDS: SettingsNumericBound = { min: 1, max: 50 };
+export const DJ_RECAP_MINUTES_BOUNDS: SettingsNumericBound = { min: 1, max: 240 };
+export const DJ_RECAP_CHARS_BOUNDS: SettingsNumericBound = { min: 40, max: 1000 };
+
+// DJ policy controls are grouped so future speaking/transition behaviour has
+// one stable home in Settings. A missing block remains the pre-existing off.
+export const djBehaviourPatchSchema = settingsBlockOf({
+  showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
+  previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
+  sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  holdDuckBetweenSpeakers: z.boolean({ error: 'djBehaviour.holdDuckBetweenSpeakers must be a boolean' }),
+  extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
+  releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
+    error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
+  }),
+  recapLimit: settingsIntLike(
+    DJ_RECAP_LIMIT_BOUNDS,
+    'djBehaviour.recapLimit must be a whole number between 1 and 50',
+  ),
+  recapMinutes: settingsIntLike(
+    DJ_RECAP_MINUTES_BOUNDS,
+    'djBehaviour.recapMinutes must be a whole number of minutes between 1 and 240',
+  ),
+  recapChars: settingsIntLike(
+    DJ_RECAP_CHARS_BOUNDS,
+    'djBehaviour.recapChars must be a whole number between 40 and 1000',
+  ),
+});
+
+/**
+ * Station default for the show-boundary fade (#1574). Strict boolean, the same
+ * posture as the two switches above and for the same reason — the key is new,
+ * so there is no hand-rolled branch whose accidental leniency has to be
+ * preserved. A show's own `fadeAtShowEnd` (schemas/show.ts) is the tri-state
+ * that overrides it; this one is only ever true or false.
+ */
+export const fadeAtShowEndSchema = z.boolean({
+  error: 'fadeAtShowEnd must be a boolean',
+});
+
+/**
  * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
  *
  * Not settingsStrictOneOf: that tests the raw value, which is right for
@@ -539,9 +1159,28 @@ export const audioPatchSchema = settingsBlockOf({
     { min: 1, max: 1000 },
     'audio.stemCacheGb must be between 1 and 1000',
   ),
+  stemOrphanPurgeEnabled: settingsBoolLike(),
   analyzeQuietMinutes: settingsNumberFloorLike(
     { min: 1, max: 120 },
     'audio.analyzeQuietMinutes must be between 1 and 120',
+  ),
+});
+
+// Track-selection windows that are neither LLM config nor stream config, and
+// that BOTH pick paths read. A new key, so there is no hand-rolled branch to
+// reproduce: `settingsNumberLike` is chosen on merit (Number() refuses '6abc'
+// and keeps the fraction) rather than to preserve an accident.
+export const pickerPatchSchema = settingsBlockOf({
+  albumHours: settingsNumberLike(
+    PICKER_ALBUM_HOURS_BOUNDS,
+    `picker.albumHours must be between ${PICKER_ALBUM_HOURS_BOUNDS.min} and ${PICKER_ALBUM_HOURS_BOUNDS.max} (0 = off)`,
+  ),
+  // Bounds only. The crossfade-derived lower bound on a POSITIVE value is a
+  // function of settings.crossfadeDuration, which a stateless schema does not
+  // have — update() enforces it, exactly as it does for maxTrackSeconds.
+  minTrackLengthSeconds: settingsNumberLike(
+    PICKER_MIN_TRACK_LENGTH_BOUNDS,
+    `picker.minTrackLengthSeconds must be between ${PICKER_MIN_TRACK_LENGTH_BOUNDS.min} and ${PICKER_MIN_TRACK_LENGTH_BOUNDS.max} (0 = off)`,
   ),
 });
 
@@ -554,6 +1193,22 @@ export const likesPatchSchema = settingsBlockOf({
     { min: 0, max: 365 },
     'likes.windowDays must be 0-365 (0 = all time)',
   ),
+});
+
+// The listener Lyrics panel and its public read (`GET /lyrics/current`). On by
+// default, and an operator can switch it off: it republishes third-party lyric
+// text on an unauthenticated route and turns listener polling into calls
+// against the music server.
+export const lyricsPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  // The LRCLIB fallback for tracks with no timed lyrics on the music server.
+  // Its own switch, also on by default: it sends what the station plays to a
+  // third party.
+  lrclib: settingsBoolLike(),
+});
+
+export const musicSourcePatchSchema = settingsBlockOf({
+  reportRealPath: settingsBoolLike(),
 });
 
 export const searchPatchSchema = settingsBlockOf({
@@ -584,21 +1239,29 @@ export const searchPatchSchema = settingsBlockOf({
       }
     })
     .transform((raw) => String(raw).trim()),
-  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
+  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars').transform(stripSecretControlChars),
+  // Optional comma-separated SearXNG engine pin (#1353), appended as the
+  // `engines=` query param when non-empty. New field, so it takes the trimmed
+  // posture rather than search.apiKey's raw one — there is no stored behaviour
+  // to preserve here, and a stray space around a name is a typo, not a value.
+  searxngEngines: settingsTrimmedString(
+    SETTINGS_SEARXNG_ENGINES_MAX,
+    `search.searxngEngines must be 0-${SETTINGS_SEARXNG_ENGINES_MAX} chars`,
+  ),
 });
 
 const scrobbleLastfmSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.lastfm.username must be 0-40 chars'),
-  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars'),
-  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars'),
-  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars'),
+  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars').transform(stripSecretControlChars),
+  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars').transform(stripSecretControlChars),
+  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars').transform(stripSecretControlChars),
 });
 
 const scrobbleListenbrainzSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.listenbrainz.username must be 0-40 chars'),
-  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars'),
+  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars').transform(stripSecretControlChars),
   // No trailing-slash strip: the consumer appends /submit-listens.
   baseUrl: settingsUrlLike({
     max: 500,
@@ -607,9 +1270,17 @@ const scrobbleListenbrainzSchema = settingsBlockOf({
   }),
 });
 
+// Navidrome (#1298) carries an enable flag and nothing else: the credentials
+// are already the station's own `config.navidrome` (env / setup-config), so
+// there is no key to paste here and no secret to redact.
+const scrobbleNavidromeSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+});
+
 export const scrobblePatchSchema = settingsBlockOf({
   lastfm: scrobbleLastfmSchema,
   listenbrainz: scrobbleListenbrainzSchema,
+  navidrome: scrobbleNavidromeSchema,
 });
 
 /**
@@ -1010,6 +1681,8 @@ export const themePatchSchema = z.preprocess(
   }),
 );
 
+export const maxTrackLengthModeSchema = z.enum(['cut', 'exclude'], { error: 'maxTrackLengthMode must be cut or exclude' });
+
 // ── maxTrackSeconds ──────────────────────────────────────────────────────────
 
 /**
@@ -1104,4 +1777,60 @@ export function djPromptTextSchema(bounds: { min: number; max: number }) {
       }
       return v;
     });
+}
+
+// ── Gemini Extended Voice Library default filter ──────────────────────────────
+// A BCP-47 language tag, used ONLY to decide which page of the voice catalogue
+// the admin browser opens on. It is not a constraint on a persona's voice and it
+// never reaches the engine — Gemini takes its accent from the voice itself.
+//
+// Deliberately NOT an enum of the languages Google currently serves. That
+// vocabulary changes under us, and a list here would silently exclude a voice
+// the operator can see in AI Studio (the failure being fixed). The shape is
+// checked instead; the real values are discovered at browse time.
+export const GEMINI_LIBRARY_LANGUAGE_MAX = 35;
+
+// language[-Script][-REGION][-variant…]: a 2-3 letter (or 5-8 letter) primary
+// subtag, then optional 4-letter script, 2-letter/3-digit region, and any number
+// of 1-8 alphanumeric subtags. Structural only — it proves the string is a tag,
+// never that Google serves it.
+const BCP47 = /^[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|[0-9]{3}))?(-[a-z0-9]{1,8})*$/i;
+
+/** Canonicalise a BCP-47 tag so `en-au`, `EN-AU` and `en-AU` cannot become three
+ *  dropdown entries: primary subtag lowercase, script Titlecase, region
+ *  UPPERCASE. Google's filter is a case-insensitive exact match, so this is
+ *  safe, and an unrecognisable tag is returned trimmed rather than dropped. */
+export function normalizeGeminiLibraryLanguage(raw: unknown): string {
+  const v = String(raw ?? '').trim();
+  if (!v) return '';
+  // Index-safe rather than `parts[0]` / `p[0]`: this file is COPIED into the web
+  // bundle, which compiles it with `noUncheckedIndexedAccess`, and a mirror that
+  // does not typecheck is a mirror nobody can regenerate.
+  const out: string[] = [];
+  const parts = v.split('-');
+  for (let i = 0; i < parts.length; i += 1) {
+    const p = parts[i] ?? '';
+    // Empty segments are KEPT, not skipped. Skipping them turned the malformed
+    // `en-AU-` into the valid `en-AU`, so a typo was silently repaired into a
+    // setting the operator never typed — the exact silent-repair behaviour the
+    // patch-path rules forbid. Preserved, the trailing hyphen fails BCP47 below
+    // and the save is refused, which is the answer the operator needs.
+    if (i > 0 && /^[a-z]{4}$/i.test(p)) {
+      out.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+    } else if (i > 0 && /^([a-z]{2}|[0-9]{3})$/i.test(p)) {
+      out.push(p.toUpperCase());
+    } else {
+      out.push(p.toLowerCase());
+    }
+  }
+  return out.join('-');
+}
+
+/** Whether a value is a usable `libraryLanguage`. Empty is valid and means
+ *  "every language". Shared by the strict save path and the lenient load path
+ *  so a hand-edited settings.json cannot wedge boot — and mirrored, so the
+ *  admin form pre-flights with the same rule the route enforces. */
+export function isGeminiLibraryLanguage(raw: unknown): boolean {
+  const v = normalizeGeminiLibraryLanguage(raw);
+  return v === '' || (v.length <= GEMINI_LIBRARY_LANGUAGE_MAX && BCP47.test(v));
 }

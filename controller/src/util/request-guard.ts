@@ -1,22 +1,43 @@
-// On-air safety policy for listener requests (raid of 2026-07-28). Pure and
-// side-effect-free — the policy chokepoint for routes/request.ts and
-// broadcast/dj-agent.ts, pinned by scripts/request-guard.test.ts. The echo
-// guard is the load-bearing layer: it is language-agnostic and catches any
-// "read this on air" phrasing the opener regexes miss.
+// Pure on-air safety policy for listener requests: the one chokepoint for
+// routes/request.ts and broadcast/dj-agent.ts. Never inline a copy of these
+// checks at a call site.
 import { REQUEST_NAME_MAX } from '../schemas/request.js';
 
-// "Read this verbatim" directive family. The payload always trails the
-// directive, so cutting at the earliest match keeps the musical intent
-// ("Play something Lo-Fi.") and drops the script. en + ru cover the observed
-// raid; extend the list, never inline new patterns at call sites.
-//
-// The `(?=…)` tail on the first pattern is load-bearing, not decoration: the
-// directive nouns are ordinary words, so "open the message BOARD and play some
-// jazz" matched and silently truncated a real request to "Please". Requiring
-// what follows to look like the start of a payload ("… as follows", "… with
-// 'X'", "…: X") keeps every observed raid phrasing and drops the mid-sentence
-// collisions. The residue guard below is the backstop for the ones a lookahead
-// can't express (notably the two ru patterns).
+// The ONE normaliser for listener text, run before every check below and before
+// the text is stored. NFKC folds full-width and compatibility forms onto their
+// plain letters; then every format character (\p{Cf}: zero-width space/joiners,
+// word joiner, soft hyphen, BOM, bidi controls) is DELETED, not replaced with a
+// space. Those characters are invisible on screen and silent in TTS, so leaving
+// them in lets "start\u200b your answer" slip past the opener patterns and lets a
+// payload salted inside each word split into fragments the echo match never
+// lines up. Combining marks are kept: Devanagari, Thai and friends need them.
+export function normalizeListenerText(raw: string | null | undefined): string {
+  return String(raw ?? '').normalize('NFKC').replace(/\p{Cf}/gu, '');
+}
+
+// Strip prompt-injection markup from listener text before it is stored, logged,
+// displayed or fed to the LLM. A belt over the prompt framing, not the only layer.
+// NFKC can expand text; the shared request schema caps both forms before this runs.
+export function sanitizeRequestText(raw: string | null | undefined): string {
+  return normalizeListenerText(raw)
+    // chat/template role + instruction tokens
+    .replace(/\[\/?INST\]|<<\/?SYS>>|<\|[^|>]*\|>/gi, ' ')
+    // any HTML/XML-ish tag
+    .replace(/<\/?[a-z][^>]*>/gi, ' ')
+    // leading role markers that fake a new turn
+    .replace(/^[ \t]*(system|assistant|developer)\s*:/gim, ' ')
+    // the "ignore the previous instructions" family
+    .replace(/\b(ignore|disregard|forget|override)\b[^.!?\n]*\b(previous|prior|above|earlier|all)\b[^.!?\n]*\binstructions?\b/gi, ' ')
+    // double quotes would break out of the "${text}" framing
+    .replace(/"/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// "Read this verbatim" directive family; the payload always trails the
+// directive, so the earliest match is the cut point. The `(?=…)` tail on the
+// first pattern is required: its nouns are ordinary words, so without it
+// "open the message board and play some jazz" truncates a real request.
 const OPENER_DIRECTIVES: RegExp[] = [
   /\b(?:start|begin|open)\s+(?:your|the)\s+(?:message|answer|reply|response)\b(?=\s*(?:with|as|by|using|like|[:,]|["“'‘«]))/i,
   /\b(answer|respond|reply|write)(\s+\S+){0,3}\s+as\s+follows\b/i,
@@ -26,17 +47,13 @@ const OPENER_DIRECTIVES: RegExp[] = [
   /ответь?\s+следующим\s+образом(?!\w)/iu,
 ];
 
-// Below this many words, whatever survived the cut is not a request — it's the
-// tail of a false positive ("Please") or a message that was nothing BUT script.
-// Either way it must not go on to the matcher: resolving "Please" against the
-// library airs an arbitrary track nobody asked for. Returning '' routes it to
-// the route's 400, which is the honest answer — we could not read a request out
-// of it. Two words clears every real short request we see ("Добавь рэгги",
-// "surprise me", "sunny afternoon").
+// Below this many surviving words the remainder is not a request; returning ''
+// routes it to the route's 400 rather than letting the matcher air an arbitrary
+// track. Two words clears every real short request.
 const MIN_KEPT_WORDS = 2;
 
 export function stripScriptedOpener(raw: string): { text: string; injection: string | null } {
-  const text = String(raw ?? '');
+  const text = normalizeListenerText(raw);
   let cut = -1;
   for (const re of OPENER_DIRECTIVES) {
     const m = re.exec(text);
@@ -49,43 +66,23 @@ export function stripScriptedOpener(raw: string): { text: string; injection: str
   return { text: kept, injection: 'scripted-opener' };
 }
 
-// Word-level normalization shared by the echo checks — lowercase, punctuation
-// stripped, unicode-safe. Elongated troll tokens ("HEEEELP") survive as-is,
-// which makes matches on them trivially strong.
+// Lowercase, punctuation-stripped, unicode-safe tokens shared by the echo checks.
+// Both sides go through the same normaliser, and combining marks are deleted
+// rather than turned into spaces, so a word only splits where it visibly does.
 function words(s: string | null | undefined): string[] {
-  return String(s ?? '')
+  return normalizeListenerText(s)
     .toLowerCase()
+    .replace(/\p{M}/gu, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .split(/\s+/)
     .filter(Boolean);
 }
 
 // True when `script` reads the request back: a common CONTIGUOUS run of
-// >= minRun words. Verbatim quotation is the whole signal — an injected script
-// is reproduced, not paraphrased.
-//
-// There used to be a second measure here: an in-order longest-common-
-// SUBSEQUENCE ratio, on the theory that it would catch a reordered echo the
-// contiguous run misses. It was removed because it does not separate. Measured
-// against the raid fixtures and a corpus of natural intros/acks:
-//
-//   case                        run   lcs-ratio
-//   raid: "Get Crank"      TRUE  15        0.58
-//   reordered echo         TRUE  10        0.59
-//   "like the track now"   FALSE  5        0.86   <- highest ratio of the set
-//   "slow sad song"        FALSE  8        0.67
-//
-// The ratio ranked two ordinary paraphrases ABOVE both real attacks, so no
-// threshold exists that admits the attacks and rejects the paraphrases —
-// filtering stopwords or short words doesn't move it either. In production it
-// meant a listener writing more than ~10 words got a canned ack and a
-// regenerated (request-blind) intro almost every time. The contiguous run
-// separates cleanly on the same corpus (true: 10/15/26, false: 5-8).
-//
-// What this gives up, stated plainly: an echo the model genuinely shuffles
-// below minRun words of contiguity now passes. That path is covered downstream
-// rather than here — the prompts forbid readback on both agent paths
-// (LISTENER_TEXT_CLAUSE), and dropEchoedLink re-checks the pick path.
+// >= minRun words. Contiguity is the only measure that separates real echoes
+// from paraphrase; a subsequence ratio ranked ordinary acks above real attacks.
+// A shuffled echo below minRun passes here and is caught downstream (prompt
+// clauses + dropEchoedLink).
 export function echoesRequest(
   script: string | null | undefined,
   requestText: string | null | undefined,
@@ -115,159 +112,196 @@ export function echoesRequest(
 // keeping every ordinary name (Latin, Cyrillic, Arabic, Indic, CJK, ...).
 const NAME_DISALLOWED = /[^\p{sc=Latin}\p{sc=Cyrillic}\p{sc=Greek}\p{sc=Arabic}\p{sc=Hebrew}\p{sc=Devanagari}\p{sc=Gurmukhi}\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}\p{sc=Thai}\p{Nd}\s\-_.']/gu;
 
-// The screen-name cap — an alias of the shared schema's figure, which the
-// route boundary and the player's request boxes both enforce as a refusal.
-// The slice below stays as this module's belt: cleanRequesterName is a repair
-// path by design ('anon', not a 400), and callers that never crossed the
-// route boundary still get a bounded name.
+// Alias of the shared schema's cap; the slice below still bounds callers that
+// never crossed the route boundary, since cleanRequesterName repairs, not 400s.
 const NAME_MAX = REQUEST_NAME_MAX;
 
-// The stand-in cleanRequesterName returns when there is no usable name. It is a
-// LEDGER value, not a name: the request log, the webhook payload and the admin
-// row all want a non-empty string, so this stays what it has always been. What
-// it must never be is a name a prompt hands to a model — `'anon'` is truthy, so
-// every anonymous request used to push a literal `Requested by: anon` line plus
-// the screening clause below it, inviting the DJ to read a fake name on air.
-// Prompt sites gate on isNamedRequester(), never on the bare string (#1347).
+// Ledger stand-in for "no usable name" — never hand it to a prompt as a name;
+// prompt sites gate on isNamedRequester(), never on the bare string (#1347).
 export const ANON_REQUESTER = 'anon';
 
-/**
- * Did this request arrive with a real screen name? The one answer to "may a
- * prompt name this listener" — never compare against ANON_REQUESTER inline, or
- * the next prompt site added will forget to.
- */
+/** The one answer to "may a prompt name this listener"; never compare against
+ * ANON_REQUESTER inline. */
 export function isNamedRequester(name: string | null | undefined): boolean {
   const v = String(name ?? '').trim();
   return v !== '' && v !== ANON_REQUESTER;
 }
 
-/**
- * The "nothing matched" decline, addressed to the listener when they signed and
- * left impersonal when they didn't. Here rather than at the two route call
- * sites because it is the same isNamedRequester question, and the version it
- * replaces read "Sorry anon, nothing in the crates matched that." on air.
- */
+/** The "nothing matched" decline, named only when the listener really signed. */
 export function sorryNoMatch(requester: string | null | undefined): string {
   return isNamedRequester(requester)
     ? `Sorry ${String(requester).trim()}, nothing in the crates matched that.`
     : 'Sorry, nothing in the crates matched that.';
 }
 
+// Latin look-alikes from the two other scripts the name allow-list admits. Only
+// used to compare a name against the reserved list, never to rewrite what a
+// listener typed, so an ordinary Cyrillic or Greek name is left as written.
+const CONFUSABLES: Record<string, string> = {
+  а: 'a', в: 'b', е: 'e', ё: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c',
+  т: 't', у: 'y', х: 'x', і: 'i', ї: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ӏ: 'l', ɡ: 'g',
+  α: 'a', β: 'b', ε: 'e', η: 'n', ι: 'i', κ: 'k', μ: 'u', ν: 'v', ο: 'o', ρ: 'p',
+  τ: 't', υ: 'u', χ: 'x', ω: 'w', ϲ: 'c',
+};
+
+// Comparison key for the reserved-name screen: normalised, case-folded,
+// look-alikes folded, and split into words on anything that is not a letter or
+// digit, so "Wren.", "Ｗｒｅｎ" and "Wrеn" (Cyrillic е) all key the same as
+// "Wren".
+function nameWords(s: string | null | undefined): string[] {
+  return normalizeListenerText(s)
+    .toLowerCase()
+    .replace(/\p{M}/gu, '')
+    .replace(/./gsu, (ch) => CONFUSABLES[ch] ?? ch)
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
+// True when the name IS a reserved name or carries one as a run of whole words
+// ("DJ Wren", "Admin_", "night owl fan" against a persona "Night Owl"). Whole
+// words only, so a name that merely contains the letters ("Madjid" vs "dj",
+// "Ghost" vs "host") is never caught.
+function impersonatesReserved(name: string, reserved: string[]): boolean {
+  const nw = nameWords(name);
+  if (!nw.length) return false;
+  for (const r of reserved) {
+    const key = nameWords(r).join('');
+    if (key.length < 2) continue;
+    for (let i = 0; i < nw.length; i++) {
+      let run = '';
+      for (let j = i; j < nw.length && run.length < key.length; j++) {
+        run += nw[j];
+        if (run === key) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function cleanRequesterName(raw: string | null | undefined, reserved: string[] = []): string {
-  const cleaned = String(raw ?? '')
+  const cleaned = normalizeListenerText(raw)
     .replace(NAME_DISALLOWED, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, NAME_MAX)
     .trim();
   if (!cleaned) return ANON_REQUESTER;
-  const lc = cleaned.toLowerCase();
-  if (reserved.some((r) => r && String(r).trim().toLowerCase() === lc)) return ANON_REQUESTER;
+  if (impersonatesReserved(cleaned, reserved)) return ANON_REQUESTER;
   return cleaned;
 }
 
-// Echo-guard a spoken intro. `regenerate` must produce a script WITHOUT the
-// request text in its prompt — it physically cannot echo what it never saw,
-// so one retry suffices; if it somehow still echoes (or throws), drop the
-// intro entirely (the track still airs, just unannounced).
+// The artist a listener asked for that the library does not have, in the form
+// an intro may name on air ("no Katy Perry in the crates"). It is the matcher's
+// reading of the listener's own words, so it is listener text: normalised,
+// reduced to the characters artist names actually use, and refused outright
+// (null) when it is too long to be a name or carries a scripted opener. A
+// refused name is dropped, never truncated, so the intro owns the miss without
+// naming anyone rather than reading out half a sentence. The prompt still
+// frames whatever survives as data with a judgment clause; this is the half a
+// rule can decide.
+const MISSED_ARTIST_MAX_CHARS = 60;
+const MISSED_ARTIST_MAX_WORDS = 8;
+const MISSED_ARTIST_DISALLOWED = /[^\p{L}\p{M}\p{N}\s.,'’&+!?\-/$()*#@~_]/gu;
+
+export function cleanMissedArtist(raw: string | null | undefined): string | null {
+  const cleaned = normalizeListenerText(raw)
+    .replace(MISSED_ARTIST_DISALLOWED, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return null;
+  if (cleaned.length > MISSED_ARTIST_MAX_CHARS) return null;
+  if (cleaned.split(' ').length > MISSED_ARTIST_MAX_WORDS) return null;
+  if (stripScriptedOpener(cleaned).injection) return null;
+  return cleaned;
+}
+
+// Every request text a line must not read back: the request being answered plus
+// any other listener text the model could see. An empty entry is skipped.
+type RequestTexts = string | ReadonlyArray<string | null | undefined>;
+
+function echoesAny(script: string | null | undefined, texts: RequestTexts, minRun?: number): boolean {
+  const list = typeof texts === 'string' ? [texts] : texts;
+  return list.some((t) => !!t && echoesRequest(script, t, minRun ? { minRun } : {}));
+}
+
+// Echo-guard a spoken intro. `regenerate` must build its script WITHOUT the
+// request text in the prompt, so one retry suffices; a still-echoing or throwing
+// retry drops the intro (the track still airs). `requestText` may also carry the
+// other request texts in the model's window, so a line that reads out a
+// DIFFERENT listener's request is caught too.
 export async function guardIntro(
   script: string | null,
-  requestText: string,
+  requestText: RequestTexts,
   regenerate: () => Promise<string | null>,
 ): Promise<{ script: string | null; guard: string | null }> {
-  if (!script || !echoesRequest(script, requestText)) return { script, guard: null };
+  if (!script || !echoesAny(script, requestText)) return { script, guard: null };
   let clean: string | null = null;
   try { clean = await regenerate(); } catch { clean = null; }
-  if (clean && !echoesRequest(clean, requestText)) return { script: clean, guard: 'echo-regenerated' };
+  if (clean && !echoesAny(clean, requestText)) return { script: clean, guard: 'echo-regenerated' };
   return { script: null, guard: 'echo-dropped' };
 }
 
-// Acks get a LOOSER threshold than intros (10 vs 8), which is the opposite of
-// what it was — worth spelling out, because "shorter line, tighter guard" is
-// the intuitive answer and it was wrong on both halves.
-//
-// An ack's job is to restate the ask ("Old school hip hop from the nineties, on
-// the way") — quoting a few words is the line working, not failing. And unlike
-// an intro it never airs: `introScript` is the only field that reaches
-// tts.speak; the ack is the HTTP receipt the requester reads back on their own
-// screen, plus a session turn. So the blast radius of a missed echo is the
-// session window, which dropEchoedLink already re-checks on the way to air.
-// At 6 the guard replaced a correct ack with the canned fallback for most
-// requests over ~10 words. At 10 a real injected readback (>= 10 contiguous
-// words, which every raid sample cleared by a wide margin) still trips it.
-//
-// A failing ack is replaced, not regenerated — it's one line, the fallback
-// reads fine, and it saves a model call under raid load.
+// Acks get a LOOSER threshold than intros (10 vs 8) on purpose: an ack's job is
+// to restate the ask, and it never airs (only introScript reaches tts.speak).
 const ACK_MIN_RUN = 10;
-//
-// Reports the verdict so call sites get guardIntro's treatment: log the swap
-// and flag it on the durable request record. Silent replacement left the
-// operator with no signal at all under conversational trolling — the ack is
-// the one line that always reaches the listener, so a run of replacements is
-// exactly the shape of an attack in progress.
-//
-// An EMPTY ack is not a replacement: the model wrote nothing, so the fallback
-// is filling a hole rather than covering an echo. Only a real echo flags.
+
+// Replaces rather than regenerates, and reports the verdict so a run of
+// replacements is visible to the operator. An EMPTY ack is a hole being filled,
+// not an echo, so it does not flag.
 export function screenAck(
   ack: string | null | undefined,
-  requestText: string,
+  requestText: RequestTexts,
   fallback: string,
 ): { ack: string; guard: string | null } {
   const a = String(ack ?? '').trim();
   if (!a) return { ack: fallback, guard: null };
-  if (!echoesRequest(a, requestText, { minRun: ACK_MIN_RUN })) return { ack: a, guard: null };
+  if (!echoesAny(a, requestText, ACK_MIN_RUN)) return { ack: a, guard: null };
   return { ack: fallback, guard: 'ack-replaced' };
 }
 
-// Plain-string form of screenAck. Prefer `screenAck` — every production call
-// site uses it, because a replacement the operator can't see is how the raid
-// stayed invisible for five hours. This exists for callers that genuinely have
-// nowhere to report a verdict, and to keep the pinned contract in
-// scripts/request-guard.test.ts intact.
-export function guardAck(ack: string | null | undefined, requestText: string, fallback: string): string {
-  return screenAck(ack, requestText, fallback).ack;
-}
-
-// Pick-path echo guard. The picker agent reads the live session window, which
-// carries listener request text verbatim for up to ~40 turns / 4h, so an
-// injected phrasing that slipped past the opener regexes can resurface in a
-// LATER pick's spoken link — a path neither guardIntro nor screenAck sees
-// (they only run on the request that carried the text). Same thresholds as
-// guardIntro; `recent` is the request log's newest-first ring, so only the
-// last `lookback` texts are checked — an echo of something asked hours ago
-// isn't the attack this defends against, and the scan is O(script x text).
+// Pick-path echo guard: the session window carries request text verbatim, so an
+// injected phrasing can resurface in a LATER pick's link, which neither
+// guardIntro nor screenAck sees. `windowTexts` must be every request text still
+// in the window the agent read (session.windowRequestTexts()), pending requests
+// included: a guard whose horizon is shorter than the window lets a request age
+// out of the check while the model can still quote it.
 export function echoesRecentRequest(
   script: string | null | undefined,
-  recent: Array<{ text?: string | null }> | null | undefined,
-  { lookback = 5 }: { lookback?: number } = {},
+  windowTexts: ReadonlyArray<string | null | undefined> | null | undefined,
 ): boolean {
-  if (!script || !Array.isArray(recent)) return false;
-  for (const entry of recent.slice(0, lookback)) {
-    const text = entry?.text;
-    if (text && echoesRequest(script, text)) return true;
-  }
-  return false;
+  if (!script || !Array.isArray(windowTexts)) return false;
+  return echoesAny(script, windowTexts);
 }
 
-// One-pending-per-IP hold (routes/request.ts POST /request): an IP's previous
-// request must resolve AND its pick must have fully left `queuedIds` (current
-// + upcoming — i.e. aired to completion) before a new one from that IP is
-// accepted. Pulled out as a pure predicate rather than inlined at the call
-// site so the invariant — spread across every `resolved()` closure that sets
-// `entry.pick` — has one place that's actually pinned by a test, instead of a
-// future resolution path silently forgetting to set `pick` and defeating the
-// hold with nothing catching it.
+// Will the mixer eat this pick whole? (#1594) `cross(duration=d)` buffers d
+// seconds of the outgoing track, so an item whose whole playable span is under d
+// never reaches output and nothing reports it. `playableSec` is the span AFTER
+// silence-trim; `crossfadeSec` is settings.crossfadeDuration. Fails FALSE on
+// either unknown and on crossfade 0, and EQUAL is not swallowed (strictly under
+// is the measured failure). It says nothing about whether the track should air.
+export function swallowedByCrossfade(
+  playableSec: number | null | undefined,
+  crossfadeSec: number | null | undefined,
+): boolean {
+  const span = Number(playableSec);
+  const cross = Number(crossfadeSec);
+  if (!Number.isFinite(span) || span <= 0) return false;
+  if (!Number.isFinite(cross) || cross <= 0) return false;
+  return span < cross;
+}
+
+// One-pending-per-IP hold (POST /request): the previous request must resolve AND
+// its pick must have left `queuedIds` (current + upcoming) before a new one from
+// that IP is accepted. Every resolution path must set `entry.pick` or the hold
+// is silently defeated.
 export function stillInFlight(
   prev: { status?: string; refused?: boolean; pick?: { id?: string } } | null | undefined,
   queuedIds: Set<string>,
 ): boolean {
   if (!prev) return false;
   if (prev.status === 'pending') return true;
-  // A REFUSED resolution (repeat cooldown, already-queued dedup) still records
-  // the track it declined on `pick`, so the operator log names it — but
-  // nothing was queued on this listener's behalf. Holding their next request
-  // until that track leaves the queue would lock them out over a play they
-  // never got: "that one just spun" followed by minutes of silence.
+  // A refused resolution still records the declined track on `pick`, but nothing
+  // was queued for this listener, so it must not hold their next request.
   if (prev.refused) return false;
   if (prev.status === 'resolved' && prev.pick?.id) return queuedIds.has(prev.pick.id);
   return false;

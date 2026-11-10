@@ -3,7 +3,10 @@
 //
 // Part of the doctor/ split - see ../doctor.ts for the section runner.
 
-
+// The one enum here that is not the doctor's own: `jingleRotate`'s vocabulary
+// belongs to schemas/settings.ts, and respelling the union inline would be a
+// third copy that the next value added to it would silently miss.
+import type { JingleRotateOwner } from '../schemas/settings.js';
 
 type Status = 'ok' | 'warn' | 'fail' | 'skip';
 
@@ -65,6 +68,9 @@ export interface DoctorReview {
 export interface StationSettings {
   llm?: {
     pickerAgent?: boolean;
+    trackSelection?: 'agentic' | 'shortlist';
+    requestMatching?: 'agentic' | 'direct';
+    segmentRuntime?: 'agentic' | 'direct';
     reasoning?: boolean;
     agentTimeoutMs?: number;
     provider?: string;
@@ -84,6 +90,7 @@ export interface StationSettings {
   archive?: { enabled?: boolean };
   crossfadeDuration?: number;
   jingleRatio?: number;
+  jingleRotate?: JingleRotateOwner;
   maxTrackSeconds?: number;
   loudness?: { targetLufs?: number };
 }

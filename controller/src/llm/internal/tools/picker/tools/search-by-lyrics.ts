@@ -12,7 +12,7 @@ import { definePickerTool } from '../defs.js';
 export default definePickerTool({
   name: 'searchByLyrics',
   available: ({ hasTextEmbeddings, hasEmbeddingProvider }) => hasTextEmbeddings && hasEmbeddingProvider,
-  build: ({ collect, emptyResult, knnExclude, textIndexDegraded }) => tool({
+  build: ({ collect, candidateLimit, emptyResult, knnExclude, textIndexDegraded }) => tool({
     description: 'Semantic lyric / theme search over the library — for thematic picks the mood vocab can\'t express, e.g. "songs about hometown", "tracks with hopeful lyrics", "feeling stuck".'
       + (textIndexDegraded
           ? ' NOTE: few tracks in this index carry lyric excerpts, so matches are mostly metadata text rather than actual lyrics — treat results loosely.'
@@ -23,14 +23,16 @@ export default definePickerTool({
     inputSchema: z.object({
       query: z.string().min(3),
     }),
-    execute: async ({ query }) => {
+    execute: async ({ query }, { abortSignal }: { abortSignal?: AbortSignal }) => {
       try {
         if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
         await library.load();
-        const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode());
+        // abortSignal is the agent's per-tool timeout: it cancels the provider
+        // call (and the SDK's own retries) rather than letting it run on.
+        const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode(), { abortSignal });
         if (!vec) return { error: 'embedding query failed' };
-        const list = library.tracksByVector(vec, 60, { excludeIds: knnExclude });
-        const out = collect(list);
+        const list = library.tracksByVector(vec, candidateLimit(60), { excludeIds: knnExclude });
+        const out = collect(list, 8, { similarity: { kind: 'text', reference: query.trim() } });
         return out.length ? out : emptyResult(list.length, 'no thematic match in the lyric index — choose from your other tool results this round');
       }
       catch (err) { return { error: (err as Error).message }; }

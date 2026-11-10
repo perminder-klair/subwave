@@ -14,7 +14,7 @@ whole HTTP API (and a live playground), see [`api.md`](./api.md) or the admin
 
 ## The short version
 
-There are two ways to connect — both expose the **same seventeen tools** from
+There are two ways to connect — both expose the **same twenty tools** from
 the **same source** (`controller/src/mcp/`):
 
 ```
@@ -29,7 +29,7 @@ Local alternative — stdio (runs from a repo clone via tsx):
 The tools own no state and almost no logic of their own — each is a typed
 wrapper over one controller HTTP endpoint (the one exception:
 `subwave_request_song` polls the request receipt so the agent gets an outcome,
-not a ticket). The model gets seventeen tools; the controller does the real work
+not a ticket). The model gets twenty tools; the controller does the real work
 (LLM matching, track selection, TTS, queueing).
 
 **HTTP endpoint (recommended).** The controller serves MCP directly at
@@ -41,8 +41,10 @@ claude mcp add --transport http subwave https://your-station/api/mcp \
 ```
 
 Auth mirrors the REST API: read tools work unauthenticated; DJ-control tools
-need the station's admin credentials in the `Authorization` header. No clone, no
-build, no separate process.
+need the station's admin credentials in the `Authorization` header. A private
+station's `subwave_similar_tracks` takes its *listener* password in an
+`x-station-auth` header — a separate secret, forwarded the same way. No clone,
+no build, no separate process.
 
 It is the agent-facing twin of the listener request drawer: where a human types
 into the browser and hits `POST /request`, an agent calls `subwave_request_song`
@@ -68,29 +70,36 @@ intent-shaped tools.
 |---|---|---|---|
 | `subwave_health` | `GET /health` | none | no |
 | `subwave_now_playing` | `GET /now-playing` | none | no |
-| `subwave_station_state` | `GET /state` | none | no |
+| `subwave_station_state` | `GET /state` (+ `GET /debug/dj-log` with admin creds) | none (booth log: admin) | no |
 | `subwave_schedule` | `GET /schedule` | none | no |
 | `subwave_session` | `GET /session` | none | no |
 | `subwave_request_song` | `POST /request` + `GET /request/:id` | none | queues a track |
 | `subwave_request_status` | `GET /request/:id` | none | no |
 | `subwave_search_library` | `GET /dj/search` | admin | no |
+| `subwave_similar_tracks` | `GET /similar-tracks` | station | no |
 | `subwave_queue_track` | `POST /dj/queue-track` | admin | queues a track |
-| `subwave_skip_track` | `POST /dj/skip` | admin | ends the current track |
+| `subwave_skip_track` | `POST /dj/skip` | admin | ends the current track (optional `expectId`: only that track, else refused) |
 | `subwave_dj_announce` | `POST /dj/say` | admin | speaks now |
 | `subwave_dj_segment` | `POST /dj/segment` | admin | speaks now |
 | `subwave_list_skills` | `GET /dj/skills` | admin | no |
 | `subwave_run_skill` | `POST /dj/skill` | admin | speaks now |
 | `subwave_list_sfx` | `GET /sfx` | admin | no |
 | `subwave_play_sfx` | `POST /sfx/:name/play` | admin | plays a stinger now |
+| `subwave_list_jingles` | `GET /jingles` | admin | no |
+| `subwave_play_jingle` | `POST /jingles/:filename/play` | admin | airs a jingle at the next safe boundary |
 | `subwave_refresh_playlist` | `POST /dj/refresh-playlist` | admin | no (fallback playlist only) |
 
 ### Read tools — `subwave_health`, `subwave_now_playing`, `subwave_station_state`, `subwave_schedule`, `subwave_session`
 
 All read-only passthroughs. `now-playing` returns the current track, station
 context (time, weather, dominant mood), and live listener counts; `state`
-returns the upcoming queue, recent history, and the DJ booth log; `schedule`
+returns the upcoming queue and recent history, plus the DJ booth log when the
+connection carries admin credentials (the log is operator diagnostics, so the
+public `GET /state` no longer serves it); `schedule`
 the personas, shows, and weekly grid (in the station's timezone); `session`
-the DJ's live session identity and recent transcript turns.
+the DJ's live session identity and recent transcript turns (for up to 30
+minutes after a show change these lead with the previous show's last few
+turns, flagged `meta.carried`, and a `kind: 'show-boundary'` separator).
 
 These exist so the agent can ground a request in what's actually on-air. A
 request like *"something slower than this"* is only meaningful if the model
@@ -130,6 +139,30 @@ mood tags), then queue an exact result by id. Admin-gated, no LLM, no rate
 limit, no DJ intro. This is the right pair when the agent already knows the
 exact track; `subwave_request_song` is for vibes and natural language.
 
+### `subwave_similar_tracks`
+
+The sound-alike lookup the admin Library panel runs, exposed to an API caller.
+It KNNs the CLAP audio embedding — timbre, instrumentation, production, energy,
+derived from the waveform — so it is blind to tags and works on instrumentals
+and non-English tracks where a text search does not. Seed it with a track id
+(`subwave_now_playing`'s `subsonic_id` is the obvious one) or free text that
+resolves to one.
+
+Two things separate it from the other read tools:
+
+- **It is station-gated, not admin-gated.** A public station serves it with no
+  credential at all; a private one wants the listener password. An operator's
+  call-in agent gets library reads without the admin console.
+- **A library with no audio analysis is not an error.** `results` comes back
+  empty with a `reason` — `no-audio-index` (the station has no CLAP vectors at
+  all, so it needs the heavy analyzer), `seed-not-analysed` (this track
+  specifically), `seed-not-found`, or `no-neighbours`. An agent can tell "ask
+  again after the analysis pass" from "your track id is wrong", which a bare
+  empty list or a 503 does not allow.
+
+Never-play tracks are filtered out on the way, at the library's own blocklist
+chokepoint.
+
 ### `subwave_dj_announce`
 
 Puts a spoken update on-air via `POST /dj/say`. Three axes:
@@ -137,7 +170,9 @@ Puts a spoken update on-air via `POST /dj/say`. Three axes:
 - **`mode`** — `styled` (default) hands the text to the LLM as an *instruction*
   and the DJ rewrites it in persona before speaking; `raw` speaks the text
   verbatim. Give a topic → `styled`. Give finished words → `raw` (also the
-  right choice for emergency wording that must not be paraphrased).
+  right choice for emergency wording that must not be paraphrased). A `raw`
+  line is booth-logged and shown in the session feed but never fed back into
+  the DJ's later prompts, so it cannot resurface as banter (#1908).
 - **`placement`** — `solo` (default) is a heavy-ducked solo DJ moment (maps to
   the controller's `dj-speak` kind → `say.txt`); `over-track` is lightly ducked
   so the DJ talks over the playing song (maps to `link` → `intro.txt`).
@@ -158,7 +193,7 @@ is the right tool.
 ### `subwave_list_skills` and `subwave_run_skill`
 
 `list` returns the skill catalogue — the seven built-ins (weather, news,
-traffic, curiosity, album-anniversary, library-deep-cut, web-search) plus any
+now-playing-dig, curiosity, album-anniversary, library-deep-cut, web-search) plus any
 operator-authored skills from `state/skills/`. `run` fires one by name through
 the segment director, which fetches real data (forecast, headlines, …) before
 voicing it. Manual runs ignore cooldowns and work even on disabled skills.
@@ -171,6 +206,30 @@ automation-facing trigger for external alerting agents. To pair a stinger with
 spoken words, prefer `subwave_dj_announce`'s `sfx` parameter, which aligns the
 effect with the voice's first words.
 
+### `subwave_list_jingles` and `subwave_play_jingle`
+
+`list` returns the jingle library — idents, sweepers and event announcements.
+`play` queues one to air at the next track boundary, at **full level, with the
+programme yielding to it**.
+
+This is the tool for anything longer than a stinger. `subwave_play_sfx` mixes
+its clip *under* the music with only a light duck, which is why effects are
+capped at 10 seconds: a longer one keeps droning over the programme after the
+moment has passed. A jingle is its own item in the music chain instead, and has
+no length cap — a sponsor spot or a two-minute event announcement is fine.
+
+It is queued, not instant. There is no skip in this system: Liquidsoap owns
+pacing and track-end is the only natural transition, so the clip airs when the
+current song finishes rather than cutting it off. Like `subwave_play_sfx`, it is
+a manual trigger and ignores the station's jingle-rotation dial — turning the
+rotate off silences the automatic draw, never an explicit call.
+
+**Do not retry a call that succeeded.** The queue behind this has no cancel, so
+a second push of the same clip airs the announcement twice back to back. Calling
+again while the first is still waiting for its boundary is refused (`409`,
+`"… is already queued and hasn't aired yet"`) — treat that as "your press
+landed", not as a failure to retry. Two *different* announcements queue normally.
+
 ---
 
 ## Authentication
@@ -180,7 +239,12 @@ The controller splits its surface in two (see
 
 - **Public** — `/health`, `/now-playing`, `/state`, `/schedule`, `/session`,
   `/request` (rate-limited), `/request/:id`. No auth.
-- **Admin, Basic-auth gated** — `/dj/*` and `/sfx`. Gated by the controller's
+- **Station-password gated** — `/similar-tracks`. Gated by the station's
+  *listener* password (Settings → Privacy), a different secret from the admin
+  one, and a different failure direction: open on a public station (no locks
+  on), closed on a private one. That is what lets an operator point a call-in
+  agent at their library without handing it the admin console.
+- **Admin, Basic-auth gated** — `/dj/*`, `/sfx` and `/jingles`. Gated by the controller's
   `ADMIN_USER` / `ADMIN_PASS`.
 
 `subwave-mcp` reads admin credentials from its own environment
@@ -196,13 +260,17 @@ prompt.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod behind Caddy: `http://localhost:7700/api`. |
+| `SUBWAVE_API_URL` | auto-detected | Controller base URL. Unset: the first of `http://localhost:7701` (dev) and `http://localhost:7700/api` (prod behind Caddy) whose `/health` answers, else `:7701`. |
 | `SUBWAVE_ADMIN_USER` | — | Matches the controller's `ADMIN_USER`. |
 | `SUBWAVE_ADMIN_PASS` | — | Matches the controller's `ADMIN_PASS`. |
+| `SUBWAVE_STATION_PASSWORD` | — | Matches `settings.privacy.password`. Only needed for `subwave_similar_tracks` on a station with a privacy lock on. |
 
 In dev the controller is exposed directly on `:7701`. In prod only Caddy binds
 a host port, so the server must target `:7700/api` — the `handle_path` rule
-strips the `/api` prefix before the controller sees the route.
+strips the `/api` prefix before the controller sees the route. With the variable
+unset the stdio server probes both once at launch, so the repo's `.mcp.json`
+works against either stack; a stack that is down at launch leaves it on `:7701`
+until the MCP server is restarted. Set the variable for any other host.
 
 ---
 

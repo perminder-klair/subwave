@@ -1,22 +1,8 @@
-// Pure decision logic for Icecast URL-based listener authentication (#478).
-//
-// Icecast POSTs an application/x-www-form-urlencoded body to the controller's
-// /listener-auth endpoint on every listener connect (action=listener_add) and
-// disconnect (action=listener_remove). The interesting fields:
-//   - user / pass — basic-auth credentials from the listener's URL
-//     (https://anything:PASSWORD@host/stream.mp3). One shared password, so
-//     the username is ignored.
-//   - mount — the requested mount INCLUDING its query string
-//     (e.g. /stream.mp3?t=1710000000&auth=PASSWORD). This is how the web
-//     player authenticates: browsers can't attach basic auth to an <audio>
-//     element, so it rides a ?auth= token instead.
-//
-// Kept pure (no settings/express imports) so it can be pinned by a unit test
-// alongside the other pure helpers.
+// Icecast posts listener_add/listener_remove with pass and the mount query (#478).
+// Username is ignored; browser audio uses ?auth= because it cannot send Basic headers.
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-// Constant-time string compare that also hides length differences by
-// comparing fixed-size digests.
+// Constant-time compare over fixed-size digests, so length leaks nothing.
 function safeEqual(a: string, b: string): boolean {
   if (!a || !b) return false;
   const da = createHash('sha256').update(a).digest();
@@ -24,7 +10,6 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(da, db);
 }
 
-// Pull the auth token out of a mount string's query, if any.
 export function mountAuthToken(mount: string): string {
   const q = mount.indexOf('?');
   if (q === -1) return '';
@@ -44,26 +29,44 @@ export function listenerAuthDecision(opts: {
 }): boolean {
   // Disconnect bookkeeping is never denied.
   if (opts.action === 'listener_remove') return true;
-  // Auth disabled in settings → allow everything. This also covers the window
-  // where the operator has switched auth off but the broadcast container
-  // hasn't restarted yet (icecast.xml still carries the auth blocks): the
-  // callback keeps firing but the controller waves listeners through.
+  // Fails OPEN when auth is off: covers the window where the setting is off but
+  // icecast.xml still carries the auth blocks.
   if (!opts.enabled) return true;
-  // Enabled with no password on file is a broken state (settings validation
-  // prevents it) — fail closed rather than open.
+  // Enabled with no password on file is a broken state: fail closed.
   if (!opts.password) return false;
   if (safeEqual(opts.pass || '', opts.password)) return true;
   return safeEqual(mountAuthToken(opts.mount || ''), opts.password);
 }
 
-// The web UI's gate. Deliberately NOT listenerAuthDecision: that one fails
-// OPEN when stream auth is off, which is right for Icecast (it covers the
-// restart window where icecast.xml still has the auth blocks but the setting
-// is already off) and catastrophic here — with privatePlayer on and
-// listenerAuth off, `enabled` is false and every password would be accepted,
-// making the player gate decorative.
-//
-// So this fails CLOSED: a lock that is on only opens for the real password.
+// Icecast calls POST /listener-auth over the private network with no
+// forwarding headers; every edge in the documented topologies (Caddy, nginx,
+// Traefik, Cloudflare) adds at least one. A forwarded call came through the
+// public route table, so it is not Icecast — whatever path variant got it past
+// the edge's deny rule. LISTENER_AUTH_URL must therefore point straight at the
+// controller, never through a proxy.
+const FORWARDING_HEADERS = [
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'forwarded',
+  'x-real-ip',
+  'cf-connecting-ip',
+  'via',
+] as const;
+
+export function forwardedByProxy(headers: Record<string, unknown> | undefined): boolean {
+  if (!headers) return false;
+  return FORWARDING_HEADERS.some((h) => headers[h] !== undefined);
+}
+
+// Whether either privacy lock is on. Read by stationAuthDecision and by
+// requireStationAuth's throttle, which must stay off on a public station.
+export function stationLockEngaged(opts: { privatePlayer: boolean; listenerAuth: boolean }): boolean {
+  return opts.privatePlayer || opts.listenerAuth;
+}
+
+// The UI gate fails closed. listenerAuthDecision fails open when stream auth
+// is off, so it cannot protect privatePlayer independently.
 export function stationAuthDecision(opts: {
   privatePlayer: boolean;
   listenerAuth: boolean;
@@ -71,9 +74,30 @@ export function stationAuthDecision(opts: {
   candidate?: string;
 }): boolean {
   // Neither lock engaged — nothing to unlock, so nothing to reject.
-  if (!opts.privatePlayer && !opts.listenerAuth) return true;
-  // A lock is on but no password is on file (settings validation prevents
-  // this) — fail closed rather than hand out the station.
+  if (!stationLockEngaged(opts)) return true;
+  // A lock is on but no password is on file: fail closed.
   if (!opts.password) return false;
   return safeEqual(opts.candidate || '', opts.password);
+}
+
+// Prefer x-station-auth, then Bearer, then ?auth= (#1575). Query tokens can
+// leak into logs/history/Referer but remain necessary for headerless stream clients.
+// First nonempty wins; ignore repeated query arrays.
+function firstString(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+export function stationAuthCandidate(src: {
+  headerToken?: unknown;
+  authorization?: unknown;
+  query?: unknown;
+}): string {
+  const header = firstString(src.headerToken).trim();
+  if (header) return header;
+  const auth = firstString(src.authorization).trim();
+  if (/^bearer\s+/i.test(auth)) {
+    const token = auth.replace(/^bearer\s+/i, '').trim();
+    if (token) return token;
+  }
+  return firstString(src.query).trim();
 }

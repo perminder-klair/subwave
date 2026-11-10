@@ -1,28 +1,18 @@
-// AI SDK tool library — wraps each on-offer skill's data tool (its tool.mjs)
-// for the segment-director agent (skills/_agent.js) to call before deciding
-// whether to air a between-track segment. The counterpart of the picker/ tool set
-// (music discovery): that set lets the DJ agent explore the library, these let
-// it look at the world.
+// Wrap each loaded skill tool as toolFn(ctx, state, services, config, input).
+// All skills run with a hard timeout and error recovery; failed tools return no data.
+// Built-ins and custom skills use the same state/skills loader path.
 //
-// Built-in and custom skills run on identical footing: every cap that ships a
-// `toolFn` (loaded from its directory's tool.mjs by skills/loader.js) gets one
-// tool here, invoked as `toolFn(ctx, state, services, config, input)`:
-//   ctx      — the moment ({ time, weather, festival, dominantMood, clock })
-//   state    — dedup memory carried across ticks (seen headlines, last artist…)
-//   services — the curated station facade (search, library, play log, feeds…)
-//   config   — the skill's own frontmatter (e.g. news' feed / feedMaxItems)
-//   input    — the agent's arguments for the skill's declared `inputs` params
-//              (nullable strings; {} for the historical zero-arg tools)
-//
-// Every skill tool now lives in state/skills (built-ins seeded there on first
-// boot), so all of them run behind a hard timeout + try/catch — a slow or
-// throwing skill degrades to "no data" rather than hanging the tick. The
-// network-heavy built-ins (web-search, news RSS, on-this-day) must finish within
-// the timeout or that tick simply yields no segment.
+// Every tool gets settings.spokenContext(ctx), never the raw context: a
+// tool.mjs is self-contained and seeded into state/skills once, so the weather
+// tool a station booted with keeps returning `location: ctx.weather.location`.
+// Withholding the place here (#2099) reaches that copy, an edited one and a
+// custom skill alike, without replacing an operator-owned file.
 
 import { tool } from 'ai';
 import { z } from 'zod';
 import { buildStationServices } from './station-services.js';
+import { spokenContext } from '../../../settings.js';
+import { repairLegacySkillData } from '../../../skills/abstain-policy.js';
 
 // `onResult(kind, data)` reports what each tool handed back, including the
 // `{ error }` degradation. The forced segment path needs it because the AGENT
@@ -37,6 +27,7 @@ export function buildSegmentTools(
   { onResult }: { onResult?: (kind: string, data: any) => void } = {},
 ) {
   const services = buildStationServices();
+  const toolCtx = spokenContext(ctx);
   const tools: any = {};
 
   for (const cap of caps as any[]) {
@@ -57,7 +48,7 @@ export function buildSegmentTools(
       execute: async (input: any) => {
         let data: any;
         try {
-          const p = Promise.resolve(cap.toolFn(ctx, state, services, cap.config, input || {}));
+          const p = Promise.resolve(cap.toolFn(toolCtx, state, services, cap.config, input || {}));
           data = await withTimeout(p, 8000);
         } catch (err: any) {
           data = { error: err?.message || String(err) };
@@ -66,6 +57,7 @@ export function buildSegmentTools(
         // degraded shape too — a tool that threw is exactly the case the
         // grounding check exists for. A throwing observer must not turn a
         // usable tool result into a tool error.
+        data = repairLegacySkillData(cap, data, input || {});
         try { onResult?.(cap.kind, data); } catch { /* observation is never fatal */ }
         return data;
       },
@@ -86,11 +78,27 @@ export async function fetchSegmentData(cap: any, ctx: any, state: any): Promise<
   if (typeof cap?.toolFn !== 'function') return null;
   const services = buildStationServices();
   try {
-    const p = Promise.resolve(cap.toolFn(ctx, state, services, cap.config, {}));
-    return await withTimeout(p, 8000);
+    const p = Promise.resolve(cap.toolFn(spokenContext(ctx), state, services, cap.config, {}));
+    return repairLegacySkillData(cap, await withTimeout(p, 8000));
   } catch (err: any) {
     return { error: err?.message || String(err) };
   }
+}
+
+// The fetched tool data, rendered into the prompt. Compact but readable;
+// capped so a fat feed can't crowd the system prompt out of a small context.
+//
+// Lives beside fetchSegmentData rather than in skills/_agent.ts because both
+// code-driven (pool-mode) callers need it — the segment director and the
+// co-hosted discussion path — and skills/cohosted.ts cannot import _agent.js
+// without closing an eval-time cycle. _agent.ts re-exports it, so llm-bench
+// and every other importer keep their existing path.
+export function dataBlock(data: unknown) {
+  if (data == null) return '';
+  let body: string;
+  try { body = JSON.stringify(data, null, 1); } catch { body = String(data); }
+  if (body.length > 6000) body = body.slice(0, 6000) + '\n…(truncated)';
+  return `\n\nSource data for this segment (write only from this and the current moment — do not invent facts):\n${body}`;
 }
 
 // Resolve `p`, or reject after `ms` — keeps any skill's tool.mjs from stalling

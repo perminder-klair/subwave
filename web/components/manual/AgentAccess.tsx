@@ -19,6 +19,8 @@ const TOOLS = [
   { name: 'subwave_run_skill', summary: 'Runs a named skill segment now, with real data behind it.', auth: 'Admin' },
   { name: 'subwave_list_sfx', summary: 'The sound-effects library: short stingers the station can play.', auth: 'Admin' },
   { name: 'subwave_play_sfx', summary: 'Fires a sound effect on air immediately, mixed over the programme.', auth: 'Admin' },
+  { name: 'subwave_list_jingles', summary: 'The jingle library: idents, sweepers and announcements — no length cap.', auth: 'Admin' },
+  { name: 'subwave_play_jingle', summary: 'Queues a jingle to air at the next track boundary, at full level with the music yielding to it.', auth: 'Admin' },
   { name: 'subwave_refresh_playlist', summary: 'Rebuilds the fallback auto-playlist for the current mood.', auth: 'Admin' },
 ];
 
@@ -99,6 +101,16 @@ export default function AgentAccess() {
           paraphrased, and <code className="bs-code-inline">sfx: airhorn</code> to cut
           through the music before the words land. Effects can also fire on their own
           with <code className="bs-code-inline">subwave_play_sfx</code>.
+        </p>
+        <p>
+          An effect is mixed <em>under</em> the programme, so it is capped at ten
+          seconds — past that it just drones on over the music. Anything longer is a
+          jingle: put the file in the jingle library and call{' '}
+          <code className="bs-code-inline">subwave_play_jingle</code> to give it its own
+          slot at full level, with the music yielding to it and no cap on length. That
+          is the one to use for a pre-recorded event announcement or a sponsor spot. It
+          airs at the next safe track boundary rather than cutting a song off
+          mid-play; active speech or a bed/track pair defers it briefly.
         </p>
       </section>
 

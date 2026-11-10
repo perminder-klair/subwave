@@ -1,24 +1,8 @@
-// Named-agent factory — bundles an agent's persona, schema, tools, and loop
-// limits in one declarable block, then exposes a `.run({ messages, ... })`
-// method that resolves the dynamic bits at call time and delegates to djAgent.
-//
-// Why bother: every djAgent call site used to repeat the same shape —
-// build system, build tools, hand both to djAgent with the same schema /
-// maxSteps / timeoutMs — and the agent's "spec" was scattered between the
-// call site and sdk.js. Pulling it into a single `defineAgent({...})` block
-// makes the agent's identity readable in one place, lets tests import the same
-// spec constants the live station uses (no drift), and means adding a new agent
-// is a declarative block instead of a fresh ad-hoc call.
-//
-// Persona/tools stay dynamic because both change per call:
-//   - buildSystem() resolves the on-air persona at call time (operator may
-//     have swapped persona since the module loaded).
-//   - buildTools() takes per-call state (recently-played ids, segment cooldown
-//     memory, current context) and returns the AI SDK tool set plus an
-//     optional `extras` blob the caller needs back (the picker's `seen` map,
-//     used to resolve the agent's chosen id to a full song object).
+// defineAgent groups system/schema/tool/loop configuration. Resolve persona and
+// tools per run; tool extras return caller state such as the picker's seen map.
 
 import { djAgent } from './strategy/agent.js';
+import { timePhase } from '../../observability/events.js';
 
 // TArgs is the run-argument shape this agent accepts — the same object
 // buildSystem and buildTools are handed. Naming it makes the hand-off from the
@@ -44,6 +28,9 @@ export interface AgentDefinition<TArgs = Record<string, any>, TExtras = any> {
   // extras (the picker checks its chosen id against the `seen` map). A miss
   // falls the run through to the done-tool harness — see djAgent's validate.
   validateObject?: (object: any, extras: TExtras) => boolean;
+  // A native answer this agent accepts without any tool call (the director's
+  // "stay silent"). Off by default: a pick's id must come from a tool result.
+  settledWithoutTools?: (object: any) => boolean;
   // Follow the leg's per-provider discovery budget instead of the single
   // historical step — see DjAgentOptions.providerDiscoveryBudget in
   // strategy/agent.ts for why this is opt-in per agent.
@@ -65,7 +52,7 @@ export interface DjAgentInstance<TArgs = Record<string, any>, TExtras = any> {
   readonly temperature: number | undefined;
   readonly maxOutputTokens: number | undefined;
   readonly providerDiscoveryBudget: boolean;
-  run(args: TArgs & { messages: any[] }): Promise<AgentRunResult<TExtras>>;
+  run(args: TArgs & { messages: any[]; telemetry?: Record<string, unknown> }): Promise<AgentRunResult<TExtras>>;
 }
 
 function resolveTimeout(t: number | (() => number) | undefined): number | undefined {
@@ -96,15 +83,15 @@ export function defineAgent<TArgs = Record<string, any>, TExtras = any>(
     temperature: def.temperature,
     maxOutputTokens: def.maxOutputTokens,
     providerDiscoveryBudget: def.providerDiscoveryBudget === true,
-    async run({ messages, ...rest }) {
+    async run({ messages, telemetry, ...rest }) {
       const toolArgs = rest as TArgs;
-      const system = def.buildSystem(toolArgs);
+      const system = timePhase(`${def.kind}.buildSystem`, () => def.buildSystem(toolArgs));
       // An agent with no buildTools has no extras. `extras` stays typed as
       // TExtras on the result rather than TExtras | undefined, because the only
       // agents that read it are the ones that build tools — widening it would
       // push a null check into every call site to describe a case they can't hit.
       const built = def.buildTools
-        ? def.buildTools(toolArgs)
+        ? timePhase(`${def.kind}.buildTools`, () => def.buildTools!(toolArgs))
         : { tools: undefined, extras: undefined };
       const extras = built.extras as TExtras;
       const result = await djAgent({
@@ -117,7 +104,9 @@ export function defineAgent<TArgs = Record<string, any>, TExtras = any>(
         temperature: def.temperature,
         maxOutputTokens: def.maxOutputTokens,
         kind: def.kind,
+        ...(telemetry ? { telemetry } : {}),
         providerDiscoveryBudget: def.providerDiscoveryBudget === true,
+        ...(def.settledWithoutTools ? { settledWithoutTools: def.settledWithoutTools } : {}),
         ...(def.validateObject
           ? { validate: (object: any) => def.validateObject!(object, extras) }
           : {}),

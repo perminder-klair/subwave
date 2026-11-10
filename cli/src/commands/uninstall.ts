@@ -1,8 +1,6 @@
-// `subwave uninstall` — the inverse of `init` + `start`, tiered so the default
-// is safe: the bare command keeps state/ (settings, secrets, sessions, jingles,
-// tags) and only `--purge` takes it. Everything destructive is confirmed unless
-// `--yes`. On a clone-mode home nothing is deleted at all — that's the
-// operator's source tree, not a scaffolded install, so we only bring it down.
+// `subwave uninstall` — the inverse of `init` + `start`. The bare command keeps
+// state/ and only `--purge` takes it; destructive steps confirm unless `--yes`.
+// A clone-mode home is only brought down, never deleted (it's the source tree).
 
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
@@ -20,7 +18,7 @@ export interface UninstallOptions {
   binary?: boolean;
 }
 
-// Keep in lockstep with init.ts:scaffold(). state/ is deliberately absent — a
+// Keep in lockstep with init.ts:scaffold(). state/ is absent on purpose: a
 // default uninstall never takes it.
 const GENERATED_FILES = [
   'docker-compose.yml',
@@ -38,8 +36,7 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
   const home = resolved?.home ?? null;
   const clone = home ? isCloneMode(home) : false;
 
-  // Prefer the file Docker says is running, else the first one present — a
-  // stopped-but-present stack still needs cleaning up.
+  // Prefer the file Docker says is running, else the first one present.
   let target: ComposeFile | null = null;
   let runningEnv = 'down';
   if (home) {

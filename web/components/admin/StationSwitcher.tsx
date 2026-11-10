@@ -1,14 +1,10 @@
 'use client';
 
-// Sidebar station switcher. Switching runs the same flow as the panel's MAKE
-// LIVE: confirm → POST /stations/:id/activate → full-screen overlay until the
-// restarted controller answers with the new boot-frozen station id
-// (useStationSwitchPoll). Renders nothing until the station list loads.
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ChevronsUpDown, Plus, RadioTower } from 'lucide-react';
-import { useAdminAuth } from '../../lib/adminAuth';
+import { adminJson, type AdminFetch } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useStationSwitchPoll } from '../../hooks/useStationSwitch';
 import { Pill } from './ui';
@@ -23,47 +19,24 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '../ui/sidebar';
+import { useStationsQuery, type StationRow } from './operations-queries';
 
-interface StationRow {
-  id: string | null;
-  name: string;
-  configured: boolean;
-  createdAt: string | null;
-  active: boolean;
-}
-
-interface StationsResponse {
-  multiStation: boolean;
-  activeId: string | null;
-  stations: StationRow[];
-}
-
-export default function StationSwitcher({ onNavigate }: { onNavigate?: () => void }) {
-  const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<StationsResponse | null>(null);
+export default function StationSwitcher({
+  adminFetch,
+  onNavigate,
+}: {
+  adminFetch: AdminFetch;
+  onNavigate?: () => void;
+}) {
+  const stationsQuery = useStationsQuery(adminFetch);
+  const data = stationsQuery.data ?? null;
   const [confirmLive, setConfirmLive] = useState<StationRow | null>(null);
   const [switching, setSwitching] = useState<string | null>(null);
   useStationSwitchPoll(switching);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await adminFetch('/stations');
-      if (!r.ok) return;
-      setData((await r.json()) as StationsResponse);
-    } catch {
-      /* sidebar chrome — fail quiet; the switcher just doesn't render */
-    }
-  }, [adminFetch]);
-
-  useEffect(() => {
-    if (hydrated && !needsAuth) void load();
-  }, [hydrated, needsAuth, load]);
-
   const activate = async (id: string) => {
     try {
-      const r = await adminFetch(`/stations/${id}/activate`, { method: 'POST' });
-      const j = (await r.json()) as { error?: string };
-      if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
+      await adminJson(adminFetch, `/stations/${id}/activate`, { method: 'POST' });
       setSwitching(id);
     } catch (e) {
       notify.err(`Switch failed: ${errorMessage(e)}`);
@@ -73,31 +46,24 @@ export default function StationSwitcher({ onNavigate }: { onNavigate?: () => voi
   const active = data?.stations.find(s => s.active) ?? null;
   const others = data?.stations.filter(s => !s.active) ?? [];
 
-  if (!hydrated || needsAuth || !active) return null;
+  if (!active) return null;
 
   return (
     <>
       <SidebarMenu>
         <SidebarMenuItem>
-          <DropdownMenu modal={false} onOpenChange={o => { if (o) void load(); }}>
+          <DropdownMenu modal={false} onOpenChange={o => { if (o) void stationsQuery.refetch(); }}>
             <DropdownMenuTrigger asChild>
-              <SidebarMenuButton size="lg" tooltip="Switch station">
-                <span className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-sm border border-ink">
-                  <RadioTower className="size-4" />
+              <SidebarMenuButton tooltip="Switch station">
+                <span className="flex aspect-square size-5 shrink-0 items-center justify-center rounded-sm border border-ink">
+                  <RadioTower className="size-3" />
                 </span>
-                <span className="grid min-w-0 flex-1 text-left leading-tight">
-                  <span className="truncate text-[13px] font-extrabold tracking-[0.08em] uppercase">
-                    {active.name}
-                  </span>
-                  <span className="caption truncate">
-                    {active.id ?? 'this install'} · on air
-                  </span>
+                <span className="min-w-0 flex-1 truncate text-[13px] font-extrabold tracking-[0.08em] uppercase">
+                  {active.name}
                 </span>
                 <ChevronsUpDown className="ml-auto size-4 opacity-60" />
               </SidebarMenuButton>
             </DropdownMenuTrigger>
-            {/* A long station name would otherwise size the menu past a phone
-                viewport — cap it and let the item labels truncate. */}
             <DropdownMenuContent side="bottom" align="start" className="max-w-[calc(100vw-2rem)] min-w-[13rem]">
               <DropdownMenuLabel>Stations</DropdownMenuLabel>
               <DropdownMenuItem disabled className="justify-between gap-2">

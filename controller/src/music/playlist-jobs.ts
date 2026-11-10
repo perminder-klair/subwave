@@ -1,16 +1,5 @@
-// In-memory job store for the playlist builder's async generation flow.
-//
-// POST /playlists/generate/jobs starts a run and returns immediately;
-// GET /playlists/generate/jobs/:id polls until it lands. This exists because a
-// generation legitimately runs for minutes (pool building plus one LLM curation
-// call), which outlives Cloudflare's ~100s proxy timeout — the synchronous
-// endpoint 524s into an HTML error page while the controller keeps working,
-// and WebKit surfaces that page to the operator as the cryptic "The string did
-// not match the expected pattern".
-//
-// Jobs are process-local: a controller restart forgets them, and the panel's
-// poller reports the vanished job as "start again". Sweeping is lazy (on every
-// create/get) so the store never holds a timer open.
+// Poll process-local generation jobs to avoid Cloudflare's roughly 100-second timeout.
+// Controller restarts lose jobs; expiration is lazy.
 
 import { randomUUID } from 'node:crypto';
 import type { GenerateResult } from './playlist-gen.js';

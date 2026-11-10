@@ -5,11 +5,9 @@ import Link from 'next/link';
 import { AnimatedLink } from '@/components/ui/animated-link';
 import { cn } from '@/lib/cn';
 
-// The Back Pages — the footer as a broadsheet back-page index. Six ruled
-// section panels give the station's secondary destinations (dispatches,
-// stations, skills, personas, shows, apps) real front-of-house billing, then a
-// single colophon strip carries the small print. Copy ends with the press-room
-// "-30-" mark.
+// The Back Pages: the footer as a broadsheet back-page index. Six ruled
+// section panels for the secondary destinations, then a colophon strip for the
+// small print.
 const BACK_PAGES = [
   {
     no: '01',
@@ -73,11 +71,7 @@ export default function StationFooter({ djName }: { djName?: string }) {
 
       <div className="bs-rule" />
 
-      {/* Two rows at lg: Dispatches + Stations across the top, the four
-          community catalogs beneath. Six equal columns squeezed the titles to
-          two lines apiece. Rules are drawn per panel off the index rather than
-          with divide-*, which adds a left border to every child but the first —
-          in a wrapping grid that lands one against the grid edge on row two. */}
+      {/* Per-panel borders avoid a left border on the first cell of a wrapped row. */}
       <nav aria-label="Back pages" className="grid lg:grid-cols-4">
         {BACK_PAGES.map((page, i) => (
           <Link
@@ -170,6 +164,14 @@ export default function StationFooter({ djName }: { djName?: string }) {
             className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
           >
             Reddit
+          </AnimatedLink>{' '}
+          ·{' '}
+          <AnimatedLink
+            href="https://ko-fi.com/pklair"
+            variant="arrow"
+            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
+          >
+            Buy me a coffee
           </AnimatedLink>
         </span>
       </div>

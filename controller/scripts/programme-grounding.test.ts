@@ -35,9 +35,10 @@
 // settings.load() touches nothing real — same idiom as house-rules.test.ts.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-progground-'));
 process.env.STATE_DIR = root;
@@ -157,5 +158,5 @@ try {
 
   console.log('programme-grounding: OK');
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 }

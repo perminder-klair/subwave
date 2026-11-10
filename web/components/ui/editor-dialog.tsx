@@ -14,25 +14,12 @@ import {
   DropdownMenuTrigger,
 } from './dropdown-menu';
 
-/* Full-screen, edge-to-edge editor for add/edit of shows, personas and skills.
-   Header carries title/sub/close only; ALL actions live in the footer transport
-   bar, so the header stays uniform across the three editors.
-
-   Full-screen rather than the centered `Modal` because a `fixed inset-0` panel
-   has no width to animate, so it can't reproduce the width-jump glitch that
-   pushed the shows/personas editors in-page (#694). Built on Radix Dialog for
-   focus trap, body scroll-lock and hierarchical Escape.
-
-   Motion mirrors `sheet.tsx`: AnimatePresence + Radix `forceMount` so the exit
-   plays before unmount, and `<m.div>` because LazyMotion is `strict` (see
-   MotionProvider). Reduced motion is honoured globally by `MotionConfig`, so
-   there is no per-component branch.
-
-   Portals into `.admin-root` (falling back to <body>) so the admin-scoped class
-   names resolve for the form controls inside. */
+/* Fixed inset-0 avoids the centred modal width jump (#694). Radix forceMount lets AnimatePresence
+ * finish exits. Portal into .admin-root so scoped control styles apply. */
 export interface EditorDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  busy?: boolean;
   title?: ReactNode;
   sub?: ReactNode;
   footer?: ReactNode;
@@ -44,6 +31,7 @@ export interface EditorDialogProps {
 export function EditorDialog({
   open,
   onOpenChange,
+  busy = false,
   title,
   sub,
   footer,
@@ -73,6 +61,7 @@ export function EditorDialog({
             </Dialog.Overlay>
             <Dialog.Content asChild forceMount aria-describedby={undefined}>
               <m.div
+                aria-busy={busy || undefined}
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 12 }}
@@ -88,6 +77,7 @@ export function EditorDialog({
                       {sub && <div className="flex-none">{sub}</div>}
                     </div>
                     <Dialog.Close
+                      disabled={busy}
                       className="v3-focus flex-none cursor-pointer border-0 bg-transparent p-0 text-[22px] leading-none text-muted"
                       aria-label="Close"
                     >
@@ -102,8 +92,6 @@ export function EditorDialog({
                   </div>
                 </div>
 
-                {/* Padding is tighter on a phone: the footer is fixed furniture
-                    stealing height from the form above it. */}
                 {footer && (
                   <div className="flex-none border-t border-ink">
                     <div className={cn(column, 'py-2 sm:py-3')}>

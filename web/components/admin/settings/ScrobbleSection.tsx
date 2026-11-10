@@ -3,37 +3,56 @@
 import type { ChangeEvent } from 'react';
 import { useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Card, Btn, Pill, Seg } from '../ui';
 import {
-  SectionHeader, SaveBar,
-  type SectionProps, type ScrobbleLastfmForm, type ScrobbleListenbrainzForm,
+  SaveBar,
+  type FormState, type SettingsData, type SectionProps, type ScrobbleLastfmForm, type ScrobbleListenbrainzForm,
 } from './shared';
 
-interface ScrobbleSectionProps extends SectionProps {
+interface ScrobbleCardsProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
 }
 
-export function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: ScrobbleSectionProps) {
+// Which backends would actually submit, from the form plus any env-supplied
+// credential. Shared by the cards and the Listeners header metrics.
+export function scrobbleReadiness(form: FormState, data: SettingsData) {
   const lf = form.scrobble.lastfm;
   const lb = form.scrobble.listenbrainz;
+  const env = (data.env || {}) as Record<string, unknown>;
+  const lfApiKeySet = lf.apiKey === 'set' || !!env.LASTFM_API_KEY;
+  const lfApiSecretSet = lf.apiSecret === 'set' || !!env.LASTFM_API_SECRET;
+  const lfSessionSet = lf.sessionKey === 'set' || !!env.LASTFM_SESSION_KEY;
+  const lbTokenSet = lb.userToken === 'set' || !!env.LISTENBRAINZ_USER_TOKEN;
+  return {
+    lfApiKeySet, lfApiSecretSet,
+    lfReady: lf.enabled && lfApiKeySet && lfApiSecretSet && lfSessionSet,
+    lbReady: lb.enabled && lbTokenSet,
+    // Navidrome has no credentials of its own — the station's existing
+    // connection is the credential, so "enabled" is the whole readiness test.
+    ndReady: !!form.scrobble.navidrome.enabled,
+  };
+}
+
+// The three scrobbling backends, as cards of the Listeners tab
+// (ListenersSection). Each keeps its own save, since each is independent.
+export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: ScrobbleCardsProps) {
+  const lf = form.scrobble.lastfm;
+  const lb = form.scrobble.listenbrainz;
+  const nd = form.scrobble.navidrome;
   const savedLf = data.values?.scrobble?.lastfm || {};
   const savedLb = data.values?.scrobble?.listenbrainz || {};
+  const savedNd = data.values?.scrobble?.navidrome || {};
 
   // 'set' means "stored": leave the input empty. The controller ignores 'set' on
   // POST, so a round-trip won't blank the secret.
   const inputValue = (v: string) => (v === 'set' ? '' : v);
   const placeholder = (v: string, fallback: string) =>
     v === 'set' ? '•••••• (on file)' : fallback;
-  const env = (data.env || {}) as Record<string, unknown>;
-  const lfApiKeySet = lf.apiKey === 'set' || !!env.LASTFM_API_KEY;
-  const lfApiSecretSet = lf.apiSecret === 'set' || !!env.LASTFM_API_SECRET;
-  const lfSessionSet = lf.sessionKey === 'set' || !!env.LASTFM_SESSION_KEY;
-  const lbTokenSet = lb.userToken === 'set' || !!env.LISTENBRAINZ_USER_TOKEN;
-  const lfReady = lf.enabled && lfApiKeySet && lfApiSecretSet && lfSessionSet;
-  const lbReady = lb.enabled && lbTokenSet;
+  const { lfApiKeySet, lfApiSecretSet, lfReady, lbReady, ndReady } = scrobbleReadiness(form, data);
 
   // Needs the API key + secret saved first (the backend reads them from settings/env).
   const canConnect = lfApiKeySet && lfApiSecretSet;
@@ -59,10 +78,13 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
     if (lb.userToken && lb.userToken !== 'set') patch.userToken = lb.userToken;
     saveSettings({ scrobble: { listenbrainz: patch } });
   };
+  const saveNavidrome = () => {
+    saveSettings({ scrobble: { navidrome: { enabled: nd.enabled } } });
+  };
 
-  const sendTest = async (provider: 'lastfm' | 'listenbrainz') => {
+  const sendTest = async (provider: 'lastfm' | 'listenbrainz' | 'navidrome') => {
     try {
-      const r = await adminFetch('/scrobble/test', {
+      const r = await adminResponse(adminFetch, '/scrobble/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider }),
@@ -81,7 +103,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
   const connectLastfm = async () => {
     setConnecting(true);
     try {
-      const r = await adminFetch('/scrobble/lastfm/connect', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/scrobble/lastfm/connect', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as {
         ok?: boolean; token?: string; authUrl?: string; message?: string;
       };
@@ -105,7 +127,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
     if (!authToken) return;
     setConnecting(true);
     try {
-      const r = await adminFetch('/scrobble/lastfm/complete', {
+      const r = await adminResponse(adminFetch, '/scrobble/lastfm/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: authToken }),
@@ -129,21 +151,6 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
 
   return (
     <>
-      <SectionHeader
-        eyebrow="scrobbling"
-        title="Station-wide scrobbling to Last.fm and ListenBrainz."
-        sub={<>
-          Each backend is independent, pick one or both. Tracks scrobble only when at
-          least one listener is tuned in to the stream. For Last.fm, enter your API key
-          and secret, then hit <strong>Connect to Last.fm</strong> to authorize, no
-          session-key wrangling. Nothing here leaves the controller.
-        </>}
-        metrics={[
-          { n: lfReady ? 'on' : 'off', l: 'last.fm', accent: lfReady },
-          { n: lbReady ? 'on' : 'off', l: 'listenbrainz', accent: lbReady },
-        ]}
-      />
-
       <Card
         title="Last.fm"
         sub={lfReady ? `scrobbling as ${savedLf.username || '(unknown)'}` : 'not connected'}
@@ -281,6 +288,19 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
               Cosmetic, used to label the &quot;scrobbling as&quot; status line above.
             </div>
           </div>
+
+          {/* Tests use saved credentials. */}
+          <div className="field">
+            <div className="flex flex-wrap items-center gap-3">
+              <Btn sm onClick={() => sendTest('lastfm')} disabled={busy || !lfReady}>
+                Test
+              </Btn>
+              <span className="text-[12px] leading-[1.5] text-muted">
+                Sends a now-playing update for the on-air track with the saved
+                credentials. Needs something playing.
+              </span>
+            </div>
+          </div>
         </div>
 
         <SaveBar
@@ -288,11 +308,6 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
           busy={busy}
           onSave={saveLastfm}
           saveLabel="Save Last.fm"
-          extra={
-            <Btn sm onClick={() => sendTest('lastfm')} disabled={busy || !lfReady}>
-              Test
-            </Btn>
-          }
         />
       </Card>
 
@@ -391,6 +406,19 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             />
             <div className="field-hint">Cosmetic only.</div>
           </div>
+
+          {/* Tests use saved credentials. */}
+          <div className="field">
+            <div className="flex flex-wrap items-center gap-3">
+              <Btn sm onClick={() => sendTest('listenbrainz')} disabled={busy || !lbReady}>
+                Test
+              </Btn>
+              <span className="text-[12px] leading-[1.5] text-muted">
+                Sends a now-playing update for the on-air track with the saved
+                credentials. Needs something playing.
+              </span>
+            </div>
+          </div>
         </div>
 
         <SaveBar
@@ -398,11 +426,72 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
           busy={busy}
           onSave={saveListenbrainz}
           saveLabel="Save ListenBrainz"
-          extra={
-            <Btn sm onClick={() => sendTest('listenbrainz')} disabled={busy || !lbReady}>
-              Test
-            </Btn>
-          }
+        />
+      </Card>
+
+      <Card
+        title="Navidrome"
+        sub={ndReady ? 'logging plays back to your library' : 'not logging plays'}
+      >
+        <div className="grid gap-[18px]">
+          <div className="field">
+            <div className="flex items-center gap-2">
+              <Label>Enabled</Label>
+              {nd.enabled !== !!savedNd.enabled && <Pill tone="accent" dot>unsaved</Pill>}
+            </div>
+            <Seg
+              value={nd.enabled ? 'on' : 'off'}
+              onChange={v =>
+                setForm(f => ({
+                  ...f,
+                  scrobble: {
+                    ...f.scrobble,
+                    navidrome: { ...f.scrobble.navidrome, enabled: v === 'on' },
+                  },
+                }))
+              }
+              options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+            />
+            <div className="field-hint">
+              Reports plays back to the Navidrome you already stream from, so
+              <strong> play count</strong> and <strong>last played</strong> move as the
+              station airs tracks. That is what <code>.nsp</code> smart playlists filter
+              on, so a rule like &ldquo;not played in the last 7 days&rdquo; finally keeps
+              the Auto-DJ off the same handful of songs. Off by default; nothing else to
+              configure, it reuses your existing Navidrome connection.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Listener gate</Label>
+            <div className="field-hint">
+              Unlike Last.fm and ListenBrainz, this one is <strong>not</strong> gated on
+              listeners. A track the station played to an empty room still has to stop
+              the picker reaching for it again an hour later, and this is your own
+              library rather than a public profile.
+            </div>
+          </div>
+
+          {/* Tests use the saved setting. */}
+          <div className="field">
+            <div className="flex flex-wrap items-center gap-3">
+              <Btn sm onClick={() => sendTest('navidrome')} disabled={busy || !ndReady}>
+                Test
+              </Btn>
+              <span className="text-[12px] leading-[1.5] text-muted">
+                Sends a now-playing ping for the on-air track. Needs something playing
+                that came from the library (an untracked auto-playlist file has no id to
+                report).
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <SaveBar
+          note="Applies on the next track transition, no restart needed."
+          busy={busy}
+          onSave={saveNavidrome}
+          saveLabel="Save Navidrome"
         />
       </Card>
     </>

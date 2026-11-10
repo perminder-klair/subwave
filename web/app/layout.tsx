@@ -1,25 +1,26 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono, Doto, Space_Grotesk, Instrument_Serif, IBM_Plex_Mono, Space_Mono, Fira_Code, Anton, Chakra_Petch, Saira_Stencil_One, Courier_Prime, Overpass_Mono } from 'next/font/google';
+import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono, Doto, Space_Grotesk, Instrument_Serif, IBM_Plex_Mono, Space_Mono, Fira_Code, Anton, Chakra_Petch, Saira_Stencil, VT323, Bricolage_Grotesque, Courier_Prime, Overpass_Mono, DM_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { LITE_INIT_SCRIPT } from '@/lib/lite';
+import { WEBKIT_INIT_SCRIPT } from '@/lib/platform';
 import { SKIN_INIT_SCRIPT } from '@/lib/skin';
 import { SITE_URL } from '@/lib/site';
 import { GA_ID } from '@/lib/ga';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import MotionProvider from '@/components/MotionProvider';
 import ThemeProvider from '@/components/ThemeProvider';
+import ThemeFinishFilters from '@/components/ThemeFinishFilters';
 import JsonLd from '@/components/JsonLd';
 import { Toaster } from '@/components/ui/toaster';
 
 // gtag.js only loads when a Measurement ID is configured (lib/ga, resolved from
-// the runtime env so it works without a rebuild), so dev and un-instrumented
-// deploys stay analytics-free.
+// the runtime env), so dev and un-instrumented deploys stay analytics-free.
 
-// Fraunces is the display serif; its opsz axis self-tunes contrast to the
-// rendered size. Plus Jakarta Sans carries body/UI, JetBrains Mono is data.
+// Fraunces is the display serif (its opsz axis self-tunes contrast). Plus
+// Jakarta Sans carries body/UI, JetBrains Mono is data.
 const fraunces = Fraunces({
   subsets: ['latin'],
   axes: ['opsz'],
@@ -28,9 +29,7 @@ const fraunces = Fraunces({
 });
 
 // Curated display faces a theme can select via the --display-font token (see
-// lib/theme FONT_STACKS). Loaded globally so the operator-picked headline face
-// applies across every skin + the admin console; kept small to bound bundle
-// weight.
+// lib/theme FONT_STACKS). Loaded globally; kept small to bound bundle weight.
 const doto = Doto({
   subsets: ['latin'],
   weight: 'variable',
@@ -65,11 +64,26 @@ const chakraPetch = Chakra_Petch({
   variable: '--font-chakra-petch',
 });
 
-const sairaStencilOne = Saira_Stencil_One({
+const sairaStencilOne = Saira_Stencil({
   subsets: ['latin'],
   weight: '400',
   display: 'swap',
+  adjustFontFallback: false,
   variable: '--font-saira-stencil-one',
+});
+
+const vt323 = VT323({
+  subsets: ['latin'],
+  weight: '400',
+  display: 'swap',
+  variable: '--font-vt323',
+});
+
+const bricolageGrotesque = Bricolage_Grotesque({
+  subsets: ['latin'],
+  axes: ['opsz'],
+  display: 'swap',
+  variable: '--font-bricolage-grotesque',
 });
 
 const plusJakarta = Plus_Jakarta_Sans({
@@ -79,8 +93,7 @@ const plusJakarta = Plus_Jakarta_Sans({
 });
 
 // The default data face. Its next/font variable is --font-jetbrains, NOT
-// --font-mono: the `font-mono` utility follows the themeable --mono-font token
-// (globals.css @theme), which defaults to JetBrains.
+// --font-mono: the `font-mono` utility follows the themeable --mono-font token.
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin', 'latin-ext'],
   weight: ['300', '400', '500', '700', '800'],
@@ -122,14 +135,20 @@ const overpassMono = Overpass_Mono({
   variable: '--font-overpass-mono',
 });
 
+const dmMono = DM_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500'],
+  display: 'swap',
+  variable: '--font-dm-mono',
+});
+
 const DESCRIPTION =
   'A real internet radio station. Single Icecast stream — every listener hears the same broadcast at the same time, picked and announced by an LLM-driven DJ.';
 
 const SOCIAL_TITLE = 'SUB/WAVE — A real internet radio station';
 const OG_IMAGE_ALT = 'SUB/WAVE — a real internet radio station';
 
-// WebSite + Organization give search engines the canonical name/logo for rich
-// results across every page.
+// WebSite + Organization give search engines the canonical name/logo.
 const SITE_JSONLD = [
   {
     '@context': 'https://schema.org',
@@ -149,10 +168,8 @@ const SITE_JSONLD = [
 
 // The share-card image tags (og:image, twitter:image) are emitted by hand in
 // <head> below, NOT via the Metadata API: Next routes every Metadata API URL
-// through `metadataBase` and drops metadataBase on the force-dynamic homepage,
-// pinning those URLs to a localhost origin. Hand-written <meta> tags are emitted
-// verbatim so the absolute SITE_URL survives. The Metadata API still owns
-// everything that isn't a fixed URL.
+// through `metadataBase`, which it drops on the force-dynamic homepage, pinning
+// those URLs to localhost. Hand-written <meta> tags are emitted verbatim.
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: { default: 'SUB/WAVE', template: '%s · SUB/WAVE' },
@@ -193,30 +210,22 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${plusJakarta.variable} ${jetbrainsMono.variable} ${doto.variable} ${spaceGrotesk.variable} ${instrumentSerif.variable} ${anton.variable} ${chakraPetch.variable} ${sairaStencilOne.variable} ${ibmPlexMono.variable} ${spaceMono.variable} ${firaCode.variable} ${courierPrime.variable} ${overpassMono.variable}`}
+      className={`${fraunces.variable} ${plusJakarta.variable} ${jetbrainsMono.variable} ${doto.variable} ${spaceGrotesk.variable} ${instrumentSerif.variable} ${anton.variable} ${chakraPetch.variable} ${sairaStencilOne.variable} ${vt323.variable} ${bricolageGrotesque.variable} ${ibmPlexMono.variable} ${spaceMono.variable} ${firaCode.variable} ${courierPrime.variable} ${overpassMono.variable} ${dmMono.variable}`}
       suppressHydrationWarning
     >
       <head>
-        {/* Apply stored theme before paint to avoid flash of wrong palette.
-            Script body is a static constant from lib/theme — no untrusted input. */}
+        {/* Apply cached theme before paint. The script contains no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 
-        {/* Resolve low-power "lite" mode (?lite=… or stored pref) before paint
-            so a pinned kiosk never flashes the heavy, blur-heavy build. Static
-            constant from lib/lite — no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: LITE_INIT_SCRIPT }} />
 
-        {/* Hide the player shell before paint when this browser resolves to a
-            non-default skin, so a reload never flashes the wrong face. Static
-            constant from lib/skin — no untrusted input. */}
+        <script dangerouslySetInnerHTML={{ __html: WEBKIT_INIT_SCRIPT }} />
+
         <script dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
 
         <JsonLd data={SITE_JSONLD} />
 
-        {/* Absolute share-card image tags — see the metadata comment above for
-            why these bypass the Metadata API. SITE_URL is resolved from the
-            runtime container env and the public pages render per-request (see
-            lib/site.ts), so these always carry the operator's domain. */}
+        {/* Explicit image tags work around the Metadata API issue described above. */}
         <meta property="og:image" content={`${SITE_URL}/og`} />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
@@ -226,13 +235,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <meta name="twitter:image:alt" content={OG_IMAGE_ALT} />
       </head>
       <body suppressHydrationWarning>
+        <ThemeFinishFilters />
         <MotionProvider>
           <ThemeProvider>
             <ServiceWorkerRegister />
             {children}
-            {/* Mounted once at the root so every route has somewhere for
-                `notify()` (lib/notify → Sonner) to appear. Do not add per-shell
-                mounts — they produce a duplicate toaster. */}
+            {/* Keep one root toaster to avoid duplicate notifications. */}
             <Toaster />
           </ThemeProvider>
         </MotionProvider>

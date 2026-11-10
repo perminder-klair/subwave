@@ -435,10 +435,22 @@ export function BoothWindow({ onClose }: { onClose: () => void }) {
               {tail.length === 0 && (
                 <div className={CAPTION}>the log fills as the session runs</div>
               )}
-              {tail.map((line, i) => (
+              {/* Newest first: the previous show's dimmed tail sits below the
+                  boundary rule after a hard roll (#1690). */}
+              {tail.map((line, i) => line.boundary ? (
                 <div
                   key={`${line.t ?? i}-${i}`}
-                  className="grid grid-cols-[58px_72px_minmax(0,1fr)] items-baseline gap-3.5"
+                  role="separator"
+                  className="flex items-center gap-3 font-mono text-[10px] tracking-[0.16em] text-[#7c7669]"
+                >
+                  <span className="h-px flex-1 bg-white/12" aria-hidden="true" />
+                  <span className="truncate">{line.text}</span>
+                  <span className="h-px flex-1 bg-white/12" aria-hidden="true" />
+                </div>
+              ) : (
+                <div
+                  key={`${line.t ?? i}-${i}`}
+                  className={cn('grid grid-cols-[58px_72px_minmax(0,1fr)] items-baseline gap-3.5', line.carried && 'opacity-60')}
                 >
                   <span className={cn(styles.doto, 'text-[13px] text-[#7c7669]')}>
                     {turnClock(line.t, timezone, stationLocale)}
@@ -447,6 +459,9 @@ export function BoothWindow({ onClose }: { onClose: () => void }) {
                     {line.label}
                   </span>
                   <span className="line-clamp-3 font-mono text-[12px] leading-[1.45] text-[#e6e0d4]">
+                    {line.carried && line.kind === 'voice' && line.speaker ? (
+                      <span className="font-bold text-[var(--accent)]">{line.speaker}: </span>
+                    ) : null}
                     {line.text}
                   </span>
                 </div>
@@ -562,9 +577,6 @@ export function RequestWindow({
                     {slip.sending ? '…' : 'send'}
                   </button>
                 </div>
-                {/* A second, quieter row inside the same chassis — signing is
-                    optional, and a signed request gets the name read on air
-                    (#1347). Inside the form, so Enter still sends from here. */}
                 <div className="flex items-center gap-3 border-t border-white/18 px-5 py-3">
                   <span className={cn(CAPTION, 'flex-none select-none')}>from</span>
                   <input

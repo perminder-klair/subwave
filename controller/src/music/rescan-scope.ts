@@ -1,17 +1,5 @@
-// Pure decision: which pipeline phases a tagger run executes. Extracted from
-// tag-library.main() so the re-scan scoping rule is unit-pinned
-// (scripts/rescan-scope.test.ts) — kept in its own module because tag-library.ts
-// runs main() on import and so can't be imported by a test.
-//
-// The rule (option B, issue: "re-scan also forward-processes the untagged
-// remainder"): a RE-SCAN redoes already-done work for the existing population
-// and must NEVER forward-process never-touched tracks. So it fires ONLY the
-// explicitly-selected re-* passes — each scoped by the caller to the tracks that
-// already carry that artifact (enriched / embedded / analysed / tagged) — and
-// the forward seed→propagate→active-learn discovery is suppressed entirely.
-//
-// A NORMAL run keeps the legacy skip-flag gating (a full forward pass minus any
-// deselected steps).
+// Rescans rerun selected phases only for previously processed tracks. Normal runs process new
+// tracks through enabled phases.
 
 export interface RunFlags {
   rescan: boolean;

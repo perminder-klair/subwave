@@ -1,0 +1,95 @@
+// Stamp the show fields used to build auto.m3u so boundaries and edits trigger a refresh. Sort
+// lists so reordering alone does not rebuild. #1111.
+
+export interface AutoPlaylistShow {
+  preparationIdentity?: string;
+  id?: unknown;
+  name?: unknown;
+  genres?: unknown;
+  eras?: unknown;
+  energies?: unknown;
+  moods?: unknown;
+  vocals?: unknown;
+  filtersStrict?: unknown;
+  playlistIds?: unknown;
+  playlistStrict?: unknown;
+  playlistExhaust?: unknown;
+  excludedPlaylistIds?: unknown;
+  excludeExplicit?: unknown;
+  maxTrackSeconds?: unknown;
+  minTrackLengthSeconds?: unknown;
+}
+
+const strings = (v: unknown): string[] =>
+  (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []).slice().sort();
+
+// Era windows are objects: flatten to `from-to` so the same sort applies and an
+// open end reads as an empty side.
+const eras = (v: unknown): string[] =>
+  (Array.isArray(v) ? v : [])
+    .map((e: { fromYear?: unknown; toYear?: unknown } | null) => `${e?.fromYear ?? ''}-${e?.toYear ?? ''}`)
+    .sort();
+
+/**
+ * A stable identity for the show the fallback should be built for. No show on
+ * air is itself an identity — coming off a show has to rebuild too.
+ */
+export function autoPlaylistShowKey(show: AutoPlaylistShow | null | undefined): string {
+  if (!show) return 'default';
+  return JSON.stringify({
+    preparationIdentity: show.preparationIdentity ?? '',
+    id: typeof show.id === 'string' ? show.id : '',
+    genres: strings(show.genres),
+    eras: eras(show.eras),
+    energies: strings(show.energies),
+    moods: strings(show.moods),
+    vocals: typeof show.vocals === 'string' ? show.vocals : '',
+    filtersStrict: show.filtersStrict === true,
+    playlistIds: strings(show.playlistIds),
+    playlistStrict: show.playlistStrict === true,
+    // A full rotation's coast is its longest-waiting tracks, not a sample (#1919).
+    playlistExhaust: show.playlistExhaust === true,
+    excludedPlaylistIds: strings(show.excludedPlaylistIds),
+    excludeExplicit: show.excludeExplicit === true,
+    maxTrackSeconds: typeof show.maxTrackSeconds === 'number' ? show.maxTrackSeconds : null,
+    // Changes WHICH tracks the fallback may contain (#1573), so it rebuilds.
+    minTrackLengthSeconds:
+      typeof show.minTrackLengthSeconds === 'number' ? show.minTrackLengthSeconds : null,
+  });
+}
+
+/** How the booth log names a show identity. Never the key — that is machinery. */
+export function autoPlaylistShowLabel(show: AutoPlaylistShow | null | undefined): string {
+  if (!show) return 'default programming';
+  const name = typeof show.name === 'string' ? show.name.trim() : '';
+  return name ? `"${name}"` : `show ${typeof show.id === 'string' ? show.id : '?'}`;
+}
+
+/**
+ * Stamp built only after a successful refresh. claim prevents concurrent rebuilds and provides
+ * rollback; initial null requires a rebuild.
+ */
+export function createShowBuildTracker() {
+  let builtFor: string | null = null;
+  const claims = new Map<symbol, string>();
+  return {
+    /** True when the file on disk was not built for this show. */
+    needsRebuild(show: AutoPlaylistShow | null | undefined): boolean {
+      const key = autoPlaylistShowKey(show);
+      return key !== builtFor && ![...claims.values()].includes(key);
+    },
+    /** Record a build that landed. */
+    built(show: AutoPlaylistShow | null | undefined): void {
+      builtFor = autoPlaylistShowKey(show);
+      claims.clear();
+    },
+    /** Claim a rebuild before awaiting it; call the returned rollback if it fails. */
+    claim(show: AutoPlaylistShow | null | undefined): () => void {
+      const token = Symbol();
+      claims.set(token, autoPlaylistShowKey(show));
+      // Claims are not publications. Overlapping failed/deferred refreshes
+      // must never restore another claim as if it were the file on disk.
+      return () => { claims.delete(token); };
+    },
+  };
+}

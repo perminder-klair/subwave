@@ -1,0 +1,17 @@
+/* The 404 receiver's one movement: the needle drifting along the dial,
+   hunting for a station. At rest (lite mode, reduced motion) it sits at the
+   bottom of the band. */
+@media (prefers-reduced-motion: no-preference) {
+  .needle {
+    animation: dead-air-hunt 9s ease-in-out infinite alternate;
+  }
+}
+
+@keyframes dead-air-hunt {
+  0%, 8% { transform: translateX(0); }
+  30% { transform: translateX(38px); }
+  38% { transform: translateX(34px); }
+  62% { transform: translateX(88px); }
+  70% { transform: translateX(84px); }
+  92%, 100% { transform: translateX(98px); }
+}

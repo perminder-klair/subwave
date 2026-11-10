@@ -12,7 +12,7 @@
 // The fix moves the declaration into tool.mjs (which a duplicate copies
 // verbatim), so the knobs travel with the skill rather than with its name.
 //
-// Run: `tsx scripts/skill-config-fields.test.ts`.
+// Run: `npm test -- skill-config-fields`.
 
 import assert from 'node:assert/strict';
 import {

@@ -1,6 +1,6 @@
-// Pins skills/abstain-policy.ts and the two surfaces that consume it — the
-// forced segment schema/prompt (skills/_agent.ts) and the web-search built-in's
-// own relevance filter (issue #1412).
+// Pins skills/abstain-policy.ts and the surfaces that consume it — the forced
+// segment schema/prompt, the autonomous pool-mode director (skills/_agent.ts),
+// and the web-search built-in's own relevance filter (issues #1412/#1446).
 //
 // The bug: a forced skill run (Run-now button, per-skill cron, programme
 // feature beat) was told "you must produce a line, silence is not an option",
@@ -20,18 +20,20 @@
 //   3. web-search's filter — the reporter's exact result set yields
 //      `available: false` rather than three off-topic sources.
 //
-// Run: `tsx scripts/skill-abstain.test.ts` (or `npm test -- abstain`).
+// Run: `npm test -- skill-abstain`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // _agent.ts pulls in settings/queue, which derive paths from STATE_DIR at
 // module scope — same preamble as skill-cron-gates.test.ts.
-const STATE_DIR = mkdtempSync(join(tmpdir(), 'skill-abstain-'));
+const STATE_DIR = createTempDir(join(tmpdir(), 'skill-abstain-'));
 process.env.STATE_DIR = STATE_DIR;
+const DRY_WELL_ATTEMPTS = join(STATE_DIR, 'dry-well-attempts.txt');
 
 // Two skills on disk for the end-to-end run below: one whose data tool reports
 // nothing usable, and one that reports nothing usable but declares it writes its
@@ -42,13 +44,21 @@ function writeSkill(slug: string, tool: string) {
   writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${slug}\n---\nSay something about ${slug}.\n`);
   writeFileSync(join(dir, 'tool.mjs'), tool);
 }
-writeSkill('dry-well', 'export default async () => ({ available: false });\n');
+writeSkill('dry-well', `import { appendFileSync } from 'node:fs';
+export default async () => {
+  appendFileSync(${JSON.stringify(DRY_WELL_ATTEMPTS)}, 'attempt\\n');
+  return { available: false };
+};
+`);
 writeSkill('own-material', 'export const requiresData = false;\nexport default async () => ({ available: false });\n');
 
-const { requiresGrounding, unusableDataReason, standDownReason, declaredBool } =
+const { requiresGrounding, unusableDataReason, standDownReason, declaredBool, repairLegacySkillData, mentionsArtist } =
   await import('../src/skills/abstain-policy.js');
-const { forcedSchema, forcedSystem, runCapability } = await import('../src/skills/_agent.js');
+const { agenticTick, forcedSchema, forcedSystem, runCapability } = await import('../src/skills/_agent.js');
+const { buildSegmentTools } = await import('../src/llm/segment-tools.js');
+const { queue } = await import('../src/broadcast/queue.js');
 const webSearch = (await import('../src/skills/builtins/web-search/tool.mjs')).default;
+const nowPlayingDig = (await import('../src/skills/builtins/now-playing-dig/tool.mjs')).default;
 
 const dataCap = (over = {}) => ({ kind: 'web-search', toolFn: () => ({}), ...over });
 
@@ -105,8 +115,73 @@ test('a fetch error and an explicit available:false are both unusable', () => {
   assert.equal(typeof unusableDataReason({ available: false }), 'string');
 });
 
+test('a persisted legacy news tool empty response is unavailable', () => {
+  const data = repairLegacySkillData({ kind: 'news' }, { headlines: [] });
+  assert.equal(typeof unusableDataReason(data), 'string');
+  assert.deepEqual(data, { headlines: [], available: false });
+});
+
+test('an older now-playing dig with only unrelated snippets is unavailable', () => {
+  const data = repairLegacySkillData({ kind: 'now-playing-dig' }, {
+    artist: 'Modest Mouse', title: 'Missed the Boat', answer: '',
+    sources: ['BING magazine: the web missed the boat on production credits'],
+  });
+  assert.deepEqual(data, {
+    artist: 'Modest Mouse', title: 'Missed the Boat', answer: '',
+    sources: ['BING magazine: the web missed the boat on production credits'], available: false,
+  });
+});
+
+test('an older artist web-search with only unrelated snippets is unavailable', () => {
+  const data = repairLegacySkillData({ kind: 'web-search' }, {
+    artist: 'Cue', answer: '', sources: ['Queueing etiquette: the latest advice'],
+  });
+  assert.deepEqual(data, {
+    artist: 'Cue', answer: '', sources: ['Queueing etiquette: the latest advice'], available: false,
+  });
+});
+
+test('legacy repair matches the artist as a whole word, like the shipped tool', () => {
+  assert.equal(mentionsArtist('Below the surface: a review', 'Low'), false, 'a substring is not a mention');
+  assert.equal(mentionsArtist('Low: Double Negative review', 'Low'), true);
+  const data = repairLegacySkillData({ kind: 'now-playing-dig' }, {
+    artist: 'Low', title: 'Lazy', answer: '', sources: ['Below average: why lazy reviews miss the point'],
+  });
+  assert.equal(data.available, false);
+  const kept = { artist: 'Low', answer: '', sources: ['Low: the slowcore band from Duluth'] };
+  assert.equal(repairLegacySkillData({ kind: 'now-playing-dig' }, kept), kept);
+  assert.equal(repairLegacySkillData({ kind: 'news' }, { headlines: [], available: true }).available, true,
+    'a tool that gives its own verdict is believed');
+});
+
+test('the segment wrapper preserves usable custom queries unrelated to the artist', async () => {
+  const sources = ['Sway: a ballroom standard recorded by many artists'];
+  const tools = buildSegmentTools({}, {}, [{
+    kind: 'web-search', toolName: 'search', toolInputs: { query: 'what to search for' },
+    toolFn: async (_ctx, _state, _services, _config, input) => webSearch({}, {}, {
+      nowPlaying: () => ({ artist: 'Cue' }),
+      searchWeb: async () => ({ answer: '', results: [{ title: 'Sway', content: 'a ballroom standard recorded by many artists' }] }),
+    }, {}, input),
+  }]);
+  const data = await tools.search.execute({ query: 'history of Sway' });
+  assert.deepEqual(data.sources, sources);
+  assert.equal(data.query, 'history of Sway');
+  assert.equal(unusableDataReason(data), null);
+});
+
+test('now-playing dig drops unrelated generic-title results before Direct can see them', async () => {
+  const data = await nowPlayingDig({}, {}, {
+    nowPlaying: () => ({ artist: 'Modest Mouse', title: 'Missed the Boat' }),
+    searchWeb: async () => ({ answer: '', results: [
+      { title: 'BING magazine', content: 'the web missed the boat on production credits' },
+    ] }),
+  });
+  assert.deepEqual(data, { available: false });
+});
+
 test('real data — and no data at all — are not stand-down reasons', () => {
-  assert.equal(unusableDataReason({ answer: 'a real answer', sources: [] }), null);
+  const data: Record<string, unknown> = { answer: 'a real answer', sources: [] };
+  assert.equal(unusableDataReason(data), null);
   assert.equal(unusableDataReason({ available: true }), null);
   // null is what fetchSegmentData returns for a capability with no tool.
   assert.equal(unusableDataReason(null), null);
@@ -117,7 +192,8 @@ test('standDownReason only fires for a grounded skill', () => {
   const empty = { available: false };
   assert.equal(typeof standDownReason(dataCap(), empty), 'string');
   assert.equal(standDownReason(dataCap({ kind: 'curiosity' }), empty), null);
-  assert.equal(standDownReason(dataCap(), { answer: 'something real' }), null);
+  const data: Record<string, unknown> = { answer: 'something real' };
+  assert.equal(standDownReason(dataCap(), data), null);
 });
 
 // --- 3. the schema and the prompt ------------------------------------------
@@ -132,17 +208,8 @@ test('the abstention field is absent, not false, on an ungrounded run', () => {
   assert.equal('air' in ungrounded, false);
   const grounded = forcedSchema({ mayAbstain: true })
     .parse({ reason: 'r', air: false, text: '', sfx: null });
+  assert.ok('air' in grounded);
   assert.equal(grounded.air, false);
-});
-
-test('a grounded schema accepts a stand-down with an empty line', () => {
-  const parsed = forcedSchema({ mayAbstain: true }).parse({
-    reason: 'the search came back about a different Cue',
-    air: false,
-    text: '',
-    sfx: null,
-  });
-  assert.equal(parsed.air, false);
 });
 
 test('the mandate flips with mayAbstain', () => {
@@ -236,6 +303,38 @@ test('a forced run on empty data stands down without ever calling the model', as
   assert.match(String(run.reason), /nothing fresh/);
 });
 
+test('pool mode skips generation and backs off when grounded data is unavailable', async () => {
+  const settings = await import('../src/settings.js');
+  await settings.update({
+    llm: { pickerAgent: false, provider: 'openai', apiKey: '', agentTimeoutMs: 5_000 },
+    skills: { enabled: { 'dry-well': true } },
+    personas: settings.get().personas.map((p: { id: string }, i: number) =>
+      (i === 0 ? { ...p, frequency: 'aggressive', djMode: false } : p)),
+  });
+
+  const attempts = () => existsSync(DRY_WELL_ATTEMPTS)
+    ? readFileSync(DRY_WELL_ATTEMPTS, 'utf8').trim().split('\n').filter(Boolean).length
+    : 0;
+  const before = attempts();
+  queue.djLog = [];
+
+  await agenticTick({ time: {}, clock: {} });
+
+  assert.equal(attempts(), before + 1, 'the first tick fetches the selected skill once');
+  assert.ok(
+    queue.djLog.some(e => e.kind === 'scheduler'
+      && e.message.includes('[segment] dry-well → unavailable → skipped before LLM')),
+    'the booth log exposes the pre-LLM skip and selected skill',
+  );
+  assert.ok(
+    !queue.djLog.some(e => e.kind === 'error' && e.message.startsWith('Segment agent failed:')),
+    'unavailable source data never reaches the LLM failure path',
+  );
+
+  await agenticTick({ time: {}, clock: {} });
+  assert.equal(attempts(), before + 1, 'the unavailable skill is backed off on the next scheduler tick');
+});
+
 test("a skill's own requiresData export survives the loader", async () => {
   // The other direction, and the wiring the exemption rides on: a
   // curiosity-style skill declares `requiresData = false` in its tool.mjs, and
@@ -249,15 +348,4 @@ test("a skill's own requiresData export survives the loader", async () => {
   assert.ok(dry && own, 'both fixture skills loaded');
   assert.equal(requiresGrounding(dry), true);
   assert.equal(requiresGrounding(own), false);
-});
-
-test('a custom query is not filtered against the on-air artist', async () => {
-  // The agent chose the wording, so there is no subject to check the results
-  // against — filtering here would drop every result of a good search.
-  const data = await webSearch({}, {}, servicesFor({
-    answer: '',
-    results: [{ title: 'Sway (dance)', content: 'A ballroom standard recorded many times.' }],
-  }), {}, { query: 'history of the song Sway' });
-  assert.equal(data.sources.length, 1);
-  assert.equal(data.query, 'history of the song Sway');
 });

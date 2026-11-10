@@ -1,18 +1,15 @@
-// Ring buffer of recent LLM calls — feeds the admin /debug surface so the
-// last MAX_CALLS model calls (prompt, response, latency, provider) are
-// inspectable without log diving.
-//
-// Lives low in the dependency graph so both the failover harness (core) and the
-// prompt layer (prompts) can record without an import cycle.
+// Keep telemetry below core and prompts in the dependency graph to avoid import cycles.
 
 import { appendFile } from 'node:fs/promises';
 import { statSync, renameSync } from 'node:fs';
 import { STATE_DIR } from '../../../config.js';
 import { logEvent, cap } from '../../../observability/events.js';
 import { addDailyUsage } from './budget.js';
+import { ContextMeasurements } from './context-window.js';
 
 const MAX_CALLS = 120;
 export const recentCalls: any[] = [];
+export const contextMeasurements = new ContextMeasurements();
 
 // Monotonic, since-boot sum of tokens reported by successful calls. Unlike the
 // ring buffer above (a rolling window of the last MAX_CALLS calls), this only
@@ -23,9 +20,22 @@ export function lifetimeTokenCount() {
   return lifetimeTokens;
 }
 
+function logSuccess(call: any) {
+  if (!call.ok) return;
+  const usage = Number.isFinite(call.usage?.input) && Number.isFinite(call.usage?.output)
+    ? `${call.usage.input}/${call.usage.output} tokens`
+    : 'token usage unavailable';
+  console.log(`[${call.kind}] ${call.model} via ${call.via} — ${call.ms}ms, ${usage}`);
+}
+
 export function record(call: any) {
+  contextMeasurements.record(call);
   recentCalls.unshift(call);
   if (recentCalls.length > MAX_CALLS) recentCalls.length = MAX_CALLS;
+  // Metadata only: prompts and responses stay in /debug and events.jsonl.
+  // One line per success makes long-running container logs attributable by
+  // generator without enabling raw request capture (#1435).
+  logSuccess(call);
   // Mirror summarizeLlm: only successful calls that report usage contribute.
   if (call.ok && call.usage?.total) lifetimeTokens += call.usage.total;
 

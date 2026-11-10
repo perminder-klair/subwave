@@ -217,7 +217,7 @@ export default function PressRun() {
   return (
     <EditorialReveal className="bs-section">
       <p className="bs-eyebrow">INTERMISSION · THE FACES</p>
-      <h2>Six faces. Eight coats of paint.</h2>
+      <h2>Eight faces. Eight coats of paint.</h2>
       <p className="text-muted">
         Skins are the furniture; themes are the ink. Every listener picks their
         own — the broadcast underneath is the same.

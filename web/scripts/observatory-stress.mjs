@@ -98,6 +98,7 @@ function buildPayload(n) {
       artist: `Artist ${i % 40000}`,
       album: `Album ${i % 60000}`,
       year: 1970 + (i % 55),
+      genres: [genre],
       genre,
       durationSec: 120 + Math.floor(rng() * 300),
       moods,
@@ -133,11 +134,11 @@ function buildPayload(n) {
 const detailPayload = (id) =>
   JSON.stringify({
     track: {
-      id, title: 'Detail', artist: 'A', album: 'B', year: 2000, genre: 'Genre 000', durationSec: 200,
+      id, title: 'Detail', artist: 'A', album: 'B', year: 2000, genres: ['Genre 000'], genre: 'Genre 000', durationSec: 200,
       moods: ['calm'], energy: 'low', source: 'llm', confidence: 0.9, taggerVersion: 3, model: 'mock',
       taggedAt: null, lastfmTags: null, lyricExcerpt: null, bpm: 120, musicalKey: '4A', introMs: 4000,
       analysisConfidence: 0.8, analysisVersion: 1, loudnessLufs: -12, peakDb: -1, structure: null,
-      vocalRanges: null, pace: null, keyRanges: null, audioMoods: [], audioMoodScores: null, outro: null,
+      vocalRanges: null, pace: null, keyRanges: null, audioMoods: [], audioMoodScores: null, audioDescriptors: [], audioDescriptorScores: null, outro: null,
     },
     textEmbedding: null,
     audioEmbedding: null,

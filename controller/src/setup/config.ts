@@ -1,19 +1,20 @@
 // Setup overlay — small JSON file the first-run wizard writes to capture
 // Navidrome credentials and the setup-complete timestamp. Lives at
 // state/setup-config.json (writable from any container UID via the existing
-// state-dir perms) and is read by config.ts as a fallback when env vars are
-// blank.
+// state-dir perms). Multi-station profiles use only their own stored connection;
+// single-station installs still let environment variables override it.
 //
 // Why not extend settings.ts? Settings.ts has thick schema validation for the
 // admin UI's many knobs (DJ personas, shows, schedules, TTS engines, …). The
 // wizard only needs a tiny structured store for fields that already had env-var
 // counterparts. A separate file keeps the surfaces clean: settings.ts stays
-// the runtime admin store, setup-config.json stays the one-shot wizard output.
+// the runtime admin store; setup-config.json holds the music connection.
 
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { config, STATE_DIR } from '../config.js';
+import { NAVIDROME_PROFILE_POLICY, resolveNavidrome } from './navidrome-policy.js';
+import { config, STATE_DIR, NAVIDROME_ENV_ENABLED } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
 const PATH = `${STATE_DIR}/setup-config.json`;
@@ -26,6 +27,7 @@ export interface SetupConfig {
   };
   // ISO timestamp written when the wizard saves successfully.
   setupCompletedAt?: string;
+  navidromePolicy?: typeof NAVIDROME_PROFILE_POLICY;
 }
 
 // No in-process cache: the file is ~200 bytes and only read on the rare
@@ -50,10 +52,17 @@ export async function saveSetupConfig(patch: Partial<SetupConfig>): Promise<Setu
     ...current,
     ...patch,
     navidrome: { ...(current.navidrome || {}), ...(patch.navidrome || {}) },
+    ...(!NAVIDROME_ENV_ENABLED && patch.navidrome ? { navidromePolicy: NAVIDROME_PROFILE_POLICY } : {}),
   };
   await mkdir(dirname(PATH), { recursive: true });
-  await writeFileAtomic(PATH, JSON.stringify(next, null, 2));
+  await writeFileAtomic(PATH, JSON.stringify(next, null, 2), { mode: 0o600 });
   return next;
+}
+
+// Used by the controller and both maintenance entrypoints.
+export async function loadNavidromeConfig(): Promise<void> {
+  const sc = await loadSetupConfig();
+  Object.assign(config.navidrome, resolveNavidrome(sc.navidrome, NAVIDROME_ENV_ENABLED));
 }
 
 // Kept for callers that previously invalidated the (now-removed) cache.

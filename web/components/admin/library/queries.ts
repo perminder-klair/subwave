@@ -1,25 +1,19 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
-import { errorMessage, notify } from '../../../lib/notify';
 import type { BlockRef, Energy, LikedSort, SearchMode, Sort, TagEvent, Track, Vocal } from './types';
 
-// The query-key factory and the cache-wide row operations. Deliberately imports
-// nothing from LibraryContext — the two hooks that need adminFetch live in
-// useAdminQuery.ts, so this file stays free of the cycle that would otherwise
-// run context → queries → context.
+// Query-key factory plus the cache-wide row operations. Imports nothing from
+// LibraryContext: that would be a context → queries → context cycle.
 
 export interface BrowseKeyFilters {
   moods: string[]; energy: Energy; vocal: Vocal; genre: string;
   yearFrom: string; yearTo: string; q: string; sort: Sort; page: number;
 }
 
-// Keys nest so a filter matches a family. ['library','rows'] is the one that
-// matters most: every cached list of Tracks sits under it, which is how a block
-// re-stamp or a tag edit reaches all of them in one setQueriesData call without
-// knowing which tabs are mounted. Never file a list here that holds anything but
-// Tracks (history rows are PlayEntry, blocklist rows are BlockEntry).
+// Keys nest so a filter matches a family. Every cached list of Tracks sits under
+// ['library','rows'], so one setQueriesData reaches all of them. Never file a
+// non-Track list there (history rows are PlayEntry, blocklist rows BlockEntry).
 export const libraryKeys = {
   all: ['library'] as const,
   rows: ['library', 'rows'] as const,
@@ -32,42 +26,30 @@ export const libraryKeys = {
   likedAll: ['library', 'rows', 'liked'] as const,
   history: (page: number) => ['library', 'history', page] as const,
   blocked: () => ['library', 'blocked'] as const,
+  blockRules: () => ['library', 'block-rules'] as const,
   likeIndex: () => ['library', 'likeIndex'] as const,
   coverage: () => ['library', 'coverage'] as const,
   tagger: () => ['library', 'tagger'] as const,
-  settings: () => ['library', 'settings'] as const,
+  // The run log read by sequence number, and the kept run-log files. Outside
+  // the `tagger` family so a snapshot refresh never refetches the log.
+  taggerLog: () => ['library', 'tagger-log'] as const,
+  taggerLogFiles: () => ['library', 'tagger-log-files'] as const,
+  analysisFailures: () => ['library', 'analysis-failures'] as const,
+  moodVocab: () => ['library', 'mood-vocab'] as const,
   genres: () => ['library', 'genres'] as const,
+  // The curatable genre vocabulary with its consolidation rules (#1577). Unlike
+  // `genres`, it excludes Navidrome's own index: only what the mirror holds.
+  scenes: () => ['library', 'scenes'] as const,
+  // What a staged merge would orphan (#1593). Keyed on the merge itself.
+  sceneReferences: (from: readonly string[], to: string) =>
+    ['library', 'scene-references', [...from].sort().join('\u0000'), to] as const,
   playlists: () => ['library', 'playlists'] as const,
+  rulePlaylists: () => ['library', 'rule-playlists'] as const,
 };
 
-/**
- * Toasts a query error once per distinct error.
- *
- * v5 removed useQuery's onError, and the toast-vs-silence split on this page is
- * deliberate and documented per call site — the polls that swallow failures
- * (coverage, tagger, settings, likeIndex) pass enabled=false. A global
- * QueryCache onError would toast all of them.
- */
-export function useQueryErrorToast(error: unknown, enabled: boolean): void {
-  const lastRef = useRef<string | null>(null);
-  useEffect(() => {
-    // Resetting on a cleared error is load-bearing: without it a
-    // failure → success → same failure sequence toasts only once.
-    if (!enabled || !error) { lastRef.current = null; return; }
-    const msg = errorMessage(error);
-    if (lastRef.current === msg) return;
-    lastRef.current = msg;
-    notify.err(msg);
-  }, [error, enabled]);
-}
-
-// --- cross-list cache patching ----------------------------------------------
-// The three shapes below are the whole contract between the row lists and the
-// operations that reach across them. All three are real and all three must be
-// handled: a plain list endpoint caches a bare Track[] (recent), an offset-paged
-// one caches { rows, total, … } (browse, liked), and useInfiniteQuery caches
-// { pages: [...] } (search, untagged). Miss one and a cross-tab update silently
-// no-ops — nothing throws, the rows just never change.
+// Row lists cache in three shapes and all three must be handled here: a bare
+// Track[] (recent), { rows, total } (browse, liked) and useInfiniteQuery's
+// { pages } (search, untagged). Miss one and a cross-list update silently no-ops.
 
 type PagedRows = InfiniteData<{ rows: Track[] }>;
 
@@ -84,11 +66,7 @@ export function rowsOf(data: unknown): Track[] {
   return [];
 }
 
-/**
- * Patches every cached list of Tracks — plain, offset-paged and infinite alike —
- * in one call. The cache already knows which lists are loaded, so nothing has to
- * register itself.
- */
+/** Patches every cached list of Tracks, in all three shapes, in one call. */
 export function patchAllRows(qc: QueryClient, fn: (t: Track) => Track) {
   qc.setQueriesData<unknown>({ queryKey: libraryKeys.rows }, (prev: unknown) => {
     if (!prev) return prev;
@@ -105,19 +83,32 @@ export function patchAllRows(qc: QueryClient, fn: (t: Track) => Track) {
   });
 }
 
-/**
- * Stamp fresh blockedBy marks across every cached list. Ids absent from the map
- * are left alone — the check only reports on rows it was asked about.
- */
+/** Stamp blockedBy marks across every cached list; ids absent from the map are left alone. */
 export function applyBlockMarks(qc: QueryClient, marks: Record<string, BlockRef | null>) {
   patchAllRows(qc, t => (t.id in marks ? { ...t, blockedBy: marks[t.id] } : t));
 }
 
 /**
- * A manual tag save or a single-track retag landed. Each list means something
- * different by it, so the plain patch is followed by the two exceptions.
- * `source` mirrors what the server stamped: 'manual' for the inline editor,
- * 'llm' for a single-track retag.
+ * A manual era-year override landed (#1418). Targets the ids the endpoint
+ * updated, never album titles, which are not identities. `originalYear: null`
+ * clears the override, so the source goes back to null too.
+ */
+export function applyEraYearEvent(qc: QueryClient, ev: {
+  originalYear: number | null;
+  trackIds: string[];
+}) {
+  const trackIds = new Set(ev.trackIds);
+
+  patchAllRows(qc, r => (!trackIds.has(r.id) ? r : {
+    ...r,
+    originalYear: ev.originalYear,
+    originalYearSource: ev.originalYear == null ? null : 'manual',
+  }));
+}
+
+/**
+ * A manual tag save or single-track retag landed; two lists need more than the
+ * plain patch. `source` mirrors the server stamp: 'manual' inline, 'llm' retag.
  */
 export function applyTagEvent(qc: QueryClient, ev: TagEvent) {
   const hits = (r: Track) =>
@@ -137,18 +128,14 @@ export function applyTagEvent(qc: QueryClient, ev: TagEvent) {
         : prev),
     );
   }
-  // Browse REFETCHES rather than patching: it is the one list whose MEMBERSHIP
-  // can change from a tag edit (a mood filter may stop matching).
+  // Browse refetches rather than patches: a tag edit can change its membership.
   void qc.invalidateQueries({ queryKey: libraryKeys.browseAll });
 }
 
 /**
- * A song's like state settled server-side; `next` null means none remain.
- *
- * Deliberately touches only the Liked list. TrackTable's likeStateFor prefers a
- * row's INLINE like fields over the shared index, so stamping them onto a browse
- * row would pin it to a snapshot and stop it tracking later index refreshes.
- * Only Liked carries them inline, and only Liked drops a row at zero.
+ * A song's like state settled server-side; `next` null means none remain. Touches
+ * only Liked: inline like fields outrank the shared index in likeStateFor, so
+ * stamping them on other lists would pin those rows to a snapshot.
  */
 export function applyLikeChange(
   qc: QueryClient, songId: string, next: { count: number; operator: boolean } | null,

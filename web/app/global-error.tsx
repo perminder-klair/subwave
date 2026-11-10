@@ -2,18 +2,8 @@
 
 import { useEffect } from 'react';
 
-// Last-resort boundary: catches throws in the ROOT layout itself, which
-// app/error.tsx cannot (error.js never wraps the layout in its own segment).
-//
-// It REPLACES the root layout when it renders, so: it must supply its own
-// <html>/<body>; globals.css is unavailable (no Tailwind, no bs- classes, no
-// custom properties — hence the self-contained <style> block with palette
-// values copied from globals.css); and the theme-init script is gone too, so
-// the palette follows prefers-color-scheme instead of the stored preference.
-//
-// Metadata exports aren't supported in a client component, so the tab title is
-// set with React's <title>. Styles are a <style> element because eslint forbids
-// inline styles.
+// Root-layout failures replace the layout. Supply html/body and standalone styles; globals.css and
+// the theme-init script are unavailable.
 
 const CSS = `
   :root {
@@ -119,9 +109,7 @@ export default function GlobalError({
             stream is very likely still on air.
           </p>
           <div className="ge-actions">
-            {/* No router here: the root layout is gone, so a full document
-                reload is the only reliable recovery. reset() is offered first in
-                case the failure was transient. */}
+            {/* The root layout is gone, so recovery needs a full document reload. */}
             <button type="button" className="ge-btn" onClick={() => reset()}>
               Try again
             </button>

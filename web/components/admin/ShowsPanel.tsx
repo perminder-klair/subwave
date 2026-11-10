@@ -1,10 +1,5 @@
 'use client';
 
-// Show definitions. A scheduled show puts its persona on air and overrides the
-// autonomous mood (empty moods = Any/auto); an empty hour runs autonomously.
-// The weekly plan lives at /admin/shows/schedule, which owns the board and
-// PUT /schedule — this page loads the schedule read-only for the hours-a-week
-// counts. Putting a show on air right now is a takeover, and lives on the dash.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { z } from 'zod';
@@ -21,18 +16,21 @@ import {
 import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { useZodForm, applyServerFieldErrors } from '@/lib/form';
 import { showSchema, type ShowSchemaContext } from '@/lib/schemas.generated';
 import { Button } from '../ui/button';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Metric } from './ui';
 import RosterViewToggle from './RosterViewToggle';
+import RosterToolbar from './RosterToolbar';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Modal } from '../ui/modal';
 import ShowsTable from './shows/ShowsTable';
-import { useRosterView } from '../../lib/adminView';
+import { useRosterView, useRosterSort } from '../../lib/adminView';
 import { showSubmitUrl } from '../../lib/repo';
 import { ShowDefRow } from './shows/ShowDefRow';
 import { ShowEditor } from './shows/ShowEditor';
@@ -46,54 +44,87 @@ import type {
   Show,
   ShowsFormValues,
   SkillOption,
-  ThemeOption,
 } from './shows/types';
 import { SHOWS_MAX } from './shows/types';
+// Radix Select forbids an empty-string item value, so "all hosts" travels as a
+// sentinel and is mapped back to ''.
+const ANY_HOST = '__any_host__';
+import {
+  SHOW_SORTS,
+  SHOW_SORT_LABELS,
+  orderShowRoster,
+  showFilterActive,
+  showTagVocabulary,
+  type ShowSort,
+} from './shows/roster-order';
+import { useSettingsQuery } from './settings/queries';
+import {
+  patchShowSettings,
+  showKeys,
+  useCommunityShowsQuery,
+  useShowGenresQuery,
+  useShowPlaylistsQuery,
+  useShowSkillsQuery,
+} from './shows/queries';
+import { useAdminThemesQuery } from './themes-queries';
 
-// `showSchema` is a factory (a show can't be validated against itself — it has
-// to name a real persona, mood and theme), so the resolver is rebuilt whenever
-// `showCtx` changes identity rather than built once at module scope. `schedule`
-// is deliberately not part of the shape: this panel only reads it, for the
-// hours-a-week counts.
+// `showSchema` is a factory (a show has to name a real persona, mood and theme),
+// so the resolver is rebuilt whenever `showCtx` changes identity. `schedule` is
+// not part of the shape: this panel only reads it.
 function showsFormSchema(ctx: ShowSchemaContext) {
   return z.object({ shows: z.array(showSchema(ctx)) });
 }
 
+function showWriteError(error: unknown): string {
+  if (error instanceof AdminResponseError) {
+    return typeof error.body.error === 'string' && error.body.error
+      ? error.body.error
+      : `failed (${error.status})`;
+  }
+  return errorMessage(error);
+}
+
 export default function ShowsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<SettingsResponse | null>(null);
   const [schedule, setSchedule] = useState<Schedule>(emptyWeek());
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  // Best-effort; null = still loading.
-  const [community, setCommunity] = useState<CommunityShow[] | null>(null);
   const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
   const [view, setView] = useRosterView('shows');
-  const [installing, setInstalling] = useState<string | null>(null);  // community slug installing, or null
+  // Sort is remembered per browser; the filters deliberately are not.
+  const [sort, setSort] = useRosterSort<ShowSort>('shows', SHOW_SORTS, 'az');
+  const [query, setQuery] = useState('');
+  const [tagSel, setTagSel] = useState<string[]>([]);
+  const [hostSel, setHostSel] = useState('');
 
-  // Shows are edited in place — no modal, no draft copy; edits land straight on
-  // the RHF field array and persist on Save show. null = none open.
+  // Shows are edited in place -- no modal, no draft copy. null = none open.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
   // The AI-draft field shows only while creating.
   const [creatingId, setCreatingId] = useState<string | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const scrollToEditorRef = useRef(false);
-  // Both the list ✕ and the editor's Remove route through this, so deletes
-  // always need confirming.
+  // Both the list x and the editor's Remove route through this.
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
-  // Public endpoint, no auth needed — same source the player ThemeProvider reads.
-  const [themes, setThemes] = useState<ThemeOption[]>([]);
-  const [skills, setSkills] = useState<SkillOption[]>([]);
-  const [activeThemeId, setActiveThemeId] = useState('');
-  // Admin-gated, so it runs after sign-in; failures are silent (the field still
-  // accepts free text).
-  const [genres, setGenres] = useState<string[]>([]);
-  // Admin-gated. A failure is no longer silent in the picker — see below.
-  const [playlists, setPlaylists] = useState<{ id: string; name: string; songCount: number | null }[]>([]);
-  // A pending or failed fetch leaves `playlists` empty too, so the editor needs
-  // to tell those apart from a genuinely empty Navidrome before it calls a show's
-  // pinned id missing (or tells the operator they have no playlists).
-  const [playlistsStatus, setPlaylistsStatus] = useState<PlaylistIndexStatus>('loading');
+  const queryEnabled = hydrated && !needsAuth;
+  const settingsQuery = useSettingsQuery<SettingsResponse>({ adminFetch, enabled: queryEnabled });
+  const themesQuery = useAdminThemesQuery(adminFetch, queryEnabled);
+  const skillsQuery = useShowSkillsQuery(adminFetch, queryEnabled);
+  const genresQuery = useShowGenresQuery(adminFetch, queryEnabled);
+  const playlistsQuery = useShowPlaylistsQuery(adminFetch, queryEnabled);
+  const communityQuery = useCommunityShowsQuery(adminFetch, queryEnabled);
+  const data = settingsQuery.data ?? null;
+  const themes = useMemo(() => themesQuery.data?.themes ?? [], [themesQuery.data?.themes]);
+  const activeThemeId = themesQuery.data?.active ?? '';
+  const err = settingsQuery.error && !data ? errorMessage(settingsQuery.error) : null;
+  const skills: SkillOption[] = skillsQuery.data ?? [];
+  const genres = genresQuery.data ?? [];
+  const playlists = playlistsQuery.data ?? [];
+  const playlistsStatus: PlaylistIndexStatus = playlistsQuery.isPending
+    ? 'loading'
+    : playlistsQuery.isError
+      ? 'error'
+      : 'ready';
+  // Best-effort: a failed community catalog is an empty but usable modal.
+  const community: CommunityShow[] | null = communityQuery.data
+    ?? (communityQuery.isError ? [] : null);
   // Guarded by scrollToEditorRef so unrelated re-renders don't yank the page.
   useEffect(() => {
     if (!scrollToEditorRef.current) return;
@@ -102,17 +133,12 @@ export default function ShowsPanel() {
   }, [focusIdx]);
 
   const load = async (): Promise<SettingsResponse | null> => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) return null;
-      const j = (await r.json()) as SettingsResponse;
-      setData(j); setErr(null);
-      return j;
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); return null; }
+    const result = await settingsQuery.refetch();
+    return result.data ?? null;
   };
 
   // Memoised because `x || []` is a fresh array every render, and showCtx
-  // identity is what decides whether the resolver is rebuilt.
+  // identity decides whether the resolver is rebuilt.
   const personas: Persona[] = useMemo(() => data?.values?.personas || [], [data?.values?.personas]);
   const moods: string[] = useMemo(() => data?.tts?.moods || [], [data?.tts?.moods]);
   // The four inputs the shared show schema needs, built once so the row badges,
@@ -125,15 +151,13 @@ export default function ShowsPanel() {
     }),
     [personas, moods, themes, data?.values?.minTrackSeconds],
   );
-  // showSchema(ctx) builds a fresh schema per call, so keep this memoised on
-  // ctx identity rather than rebuilding it every render.
+  // showSchema(ctx) builds a fresh schema per call, so memoise on ctx identity.
   const formSchema = useMemo(() => showsFormSchema(showCtx), [showCtx]);
 
   const form = useZodForm(formSchema, { shows: [] });
-  // showSchema's output is reached through z.preprocess/z.unknown() pipelines
-  // (the legacy-field migration wraps the whole object), so z.input<> types it
-  // `unknown` and no nested path would type-check as a FieldPath. Type-only
-  // casts onto the shape the resolver actually produces.
+  // showSchema's output is reached through z.preprocess/z.unknown() pipelines,
+  // so z.input<> types it `unknown` and no nested path would type-check as a
+  // FieldPath. Type-only casts.
   const control = form.control as unknown as Control<ShowsFormValues>;
   const setValue = form.setValue as unknown as UseFormSetValue<ShowsFormValues>;
   const getValues = form.getValues as unknown as UseFormGetValues<ShowsFormValues>;
@@ -141,145 +165,102 @@ export default function ShowsPanel() {
   const resetForm = form.reset as unknown as UseFormReset<ShowsFormValues>;
   const trigger = form.trigger as unknown as UseFormTrigger<ShowsFormValues>;
 
-  // `keyName: '_rhfKey'` is load-bearing — shows carry their own `id`, which
-  // RHF's default keyName ('id') would clobber. `fields` goes unused: renders
-  // below read live values via `watch('shows')`, as PersonasPanel does.
+  // `keyName: '_rhfKey'` is load-bearing: shows carry their own `id`, which
+  // RHF's default keyName ('id') would clobber. `fields` goes unused; renders
+  // read live values via `watch('shows')`.
   const { append: appendShowField, remove: removeShowField } =
     useFieldArray({ control, name: 'shows', keyName: '_rhfKey' });
 
-  // `showCtx` changes after mount: personas/moods and themes come from separate
-  // fetches, and `resetForm({shows})` below runs in the same callback as
-  // `setData(j)`, before the render that produces the fresh ctx. Re-validating
-  // from an effect (rather than remounting the form) is enough — RHF rewrites
-  // `control._options` on every render, so by the time this runs `trigger()`
+  // `showCtx` changes after mount as personas/moods and themes arrive. RHF
+  // rewrites `control._options` every render, so an effect-driven `trigger()`
   // reads the current resolver. Without it every valid show reads as
-  // "incomplete" after load; verify-forms.py's shows() covers the regression.
+  // "incomplete" after load; verify-forms.py's shows() covers it.
   useEffect(() => {
     void form.trigger();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCtx]);
 
+  // Server cache revisions must not reset a half-edited show: this mounted form
+  // hydrates exactly once.
+  const formHydratedRef = useRef(false);
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    (async () => {
-      const j = await load();
-      if (j?.values) {
-        const week = emptyWeek();
-        const sched: Schedule | Record<string, (string | null)[]> = j.values.schedule || {};
-        for (let d = 0; d < 7; d++) {
-          const day = (sched as Record<number, (string | null)[] | undefined>)[d];
-          if (Array.isArray(day)) for (let h = 0; h < 24; h++) week[d]![h] = day[h] ?? null;
-        }
-        setSchedule(week);
-        const shows: Show[] = (j.values.shows || []).map(hydrateShow);
-        resetForm({ shows });
-        // No trigger() here: the ctx-effect above fires on this same render
-        // (personas/moods derive from the `data` just set) and runs after the
-        // shows are populated, validating both in one pass.
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, needsAuth]);
-
-  // Skill catalogue for the programme feature-segment pin. Failures are silent:
-  // the picker falls back to "Producer's choice" with no pin options.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/dj/skills');
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { skills?: SkillOption[] };
-        if (Array.isArray(j.skills)) setSkills(j.skills.filter(s => s.enabled !== false));
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Themes for the per-show override. Public endpoint, so it runs before
-  // sign-in; on failure the picker offers only "Station default".
-  useEffect(() => {
-    if (!hydrated) return;
-    const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`${API}/themes`);
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { themes?: ThemeOption[]; active?: string };
-        if (Array.isArray(j.themes)) setThemes(j.themes);
-        if (typeof j.active === 'string') setActiveThemeId(j.active);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated]);
-
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/library/genres');
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { genres?: { value: string }[] };
-        if (Array.isArray(j.genres)) setGenres(j.genres.map(g => g.value).filter(Boolean));
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      // Every exit that isn't a well-formed list lands on 'error', including a
-      // 200 with no `results` array — the index is unknown either way, and
-      // 'loading' would spin forever.
-      try {
-        const r = await adminFetch('/dj/playlists');
-        if (cancelled) return;
-        if (!r.ok) { setPlaylistsStatus('error'); return; }
-        const j = (await r.json()) as { results?: { id: string; name: string; songCount: number | null }[] };
-        if (cancelled) return;
-        if (Array.isArray(j.results)) {
-          setPlaylists(j.results);
-          setPlaylistsStatus('ready');
-        } else {
-          setPlaylistsStatus('error');
-        }
-      } catch {
-        if (!cancelled) setPlaylistsStatus('error');
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Best-effort: a failure leaves the catalog empty so the Community button
-  // still opens to the empty state.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/shows/community');
-        if (!r.ok) throw new Error(`failed (${r.status})`);
-        const j = (await r.json()) as { community?: CommunityShow[] };
-        if (!cancelled) setCommunity(Array.isArray(j.community) ? j.community : []);
-      } catch {
-        if (!cancelled) setCommunity([]);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!data?.values || formHydratedRef.current) return;
+    formHydratedRef.current = true;
+    const week = emptyWeek();
+    const sched: Schedule | Record<string, (string | null)[]> = data.values.schedule || {};
+    for (let d = 0; d < 7; d++) {
+      const day = (sched as Record<number, (string | null)[] | undefined>)[d];
+      if (Array.isArray(day)) for (let h = 0; h < 24; h++) week[d]![h] = day[h] ?? null;
+    }
+    setSchedule(week);
+    resetForm({ shows: (data.values.shows || []).map(hydrateShow) });
+    // Query data and its showCtx land in the same render, so the ctx effect runs
+    // before this reset; validate the newly-hydrated rows once.
+    void trigger();
+  }, [data, resetForm, trigger]);
 
   const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
   const personaName = (id: string): string => personas.find(p => p.id === id)?.name || '—';
 
+  const deleteShowMutation = useAdminMutation<{
+    shows: Array<Partial<Show>>;
+    schedule: Schedule;
+  } | null, string>({
+    adminFetch,
+    request: async (id, fetcher) => {
+      try {
+        return await adminJson(fetcher, `/shows/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      } catch (error) {
+        if (error instanceof AdminResponseError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    onDone: (result, _id, client) => {
+      if (result) patchShowSettings(client, result);
+    },
+    toastOnError: false,
+  });
+
+  const installShowMutation = useAdminMutation<{
+    shows?: Array<Partial<Show>>;
+    show?: Partial<Show> | null;
+  }, string>({
+    adminFetch,
+    request: (slug, fetcher) => adminJson(
+      fetcher,
+      `/shows/community/${encodeURIComponent(slug)}/install`,
+      { method: 'POST' },
+    ),
+    onDone: (result, _slug, client) => {
+      if (result.shows) patchShowSettings(client, { shows: result.shows });
+    },
+    toastOnError: false,
+  });
+
+  const saveShowMutation = useAdminMutation<{
+    shows?: Array<Partial<Show>>;
+    show?: Partial<Show> | null;
+  }, { show: Show }>({
+    adminFetch,
+    request: ({ show }, fetcher) => adminJson(fetcher, '/shows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ show: showPayload(show) }),
+    }),
+    onDone: async (result, { show }, client) => {
+      if (result.shows) patchShowSettings(client, { shows: result.shows });
+      // A save can turn Play in order on or off, or change the anchor that
+      // decides where the walk stands — so the position line must re-ask.
+      await client.invalidateQueries({ queryKey: showKeys.playlistPosition(show.id), exact: true });
+    },
+    toastOnError: false,
+  });
+  const installing = installShowMutation.isPending ? installShowMutation.variables : null;
+  const busy = saveShowMutation.isPending;
+
   const focusShow = (i: number) => { scrollToEditorRef.current = true; setCreatingId(null); setFocusIdx(i); };
 
-  // Only used by the AI-draft "apply", which hands back several fields at once;
-  // every keystroke field binds straight to `control` instead.
+  // Used only by the AI-draft apply, which sets several fields at once.
   const applyShowPatch = (i: number, patch: Partial<Show>) => {
     const current = getValues(`shows.${i}`);
     if (!current) return;
@@ -294,11 +275,13 @@ export default function ShowsPanel() {
     const newIdx = current.length;
     appendShowField({
       id, name: '', topic: '',
-      personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, moods: [],
+      personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, pauseTalk: false, moods: [],
       themeId: '', genres: [], eras: [], energies: [], vocals: '',
-      filtersStrict: false, maxTrackSeconds: null,
-      playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
-      programme: false, segmentSkill: '',
+      filtersStrict: false, maxTrackSeconds: null, minTrackLengthSeconds: null,
+      fadeAtShowEnd: null,
+      playlistIds: [], playlistStrict: false, playlistExhaust: false, playlistInOrder: false, excludedPlaylistIds: [],
+      excludeExplicit: false,
+      programme: false, segmentSkill: '', preparationSkill: '', tags: [],
     });
     // errors populate only once a field is touched, so without this the new
     // row's "incomplete" badge stays silent about why.
@@ -313,20 +296,16 @@ export default function ShowsPanel() {
     const current = getValues('shows');
     const target = current[i];
     if (!target) return;
-    // Persisted immediately, not deferred to Save schedule. A 404 means a
-    // locally-added show never saved server-side, so the local splice is enough.
+    // Persisted immediately. A 404 means a locally-added show never saved
+    // server-side, so the local splice is enough.
     try {
-      const r = await adminFetch(`/shows/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
-      if (!r.ok && r.status !== 404) {
-        const j = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      await deleteShowMutation.mutateAsync(target.id);
     } catch (e) {
-      notify.err(`Delete failed: ${errorMessage(e)}`);
+      notify.err(`Delete failed: ${showWriteError(e)}`);
       return;
     }
-    // Splice by id, resolved at call time — the await may have elapsed and
-    // other rows may have shifted. Unsaved edits to other shows are preserved.
+    // Splice by id, resolved at call time: the await may have elapsed and other
+    // rows may have shifted.
     const latest = getValues('shows');
     const idx = latest.findIndex(sh => sh.id === target.id);
     if (idx !== -1) removeShowField(idx);
@@ -343,14 +322,10 @@ export default function ShowsPanel() {
   };
 
   // The controller persists the install (unscheduled, owned by the active
-  // persona); the returned show is appended to the local form as well so
-  // unsaved edits to other shows survive.
+  // persona); the returned show is appended locally so unsaved edits survive.
   const install = async (slug: string) => {
-    setInstalling(slug);
     try {
-      const r = await adminFetch(`/shows/community/${encodeURIComponent(slug)}/install`, { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; shows?: Array<Partial<Show>>; show?: Partial<Show> | null };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await installShowMutation.mutateAsync(slug);
       const added = j.show ? hydrateShow(j.show) : null;
       if (added) {
         appendShowField(added);
@@ -359,56 +334,47 @@ export default function ShowsPanel() {
       const host = added?.personaId ? personaName(added.personaId) : 'your active DJ';
       notify.ok(`Installed “${added?.name || slug}” — added unscheduled with ${host} as host. Assign a persona/guests, then schedule it on the Rundown.`);
     } catch (e) {
-      notify.err(`Install failed: ${errorMessage(e)}`);
-    } finally { setInstalling(null); }
+      notify.err(`Install failed: ${showWriteError(e)}`);
+    }
   };
 
   const scheduledHours = Object.values(schedule).flat().filter(Boolean).length;
   const countHours = (id: string): number => Object.values(schedule).flat().filter(c => c === id).length;
 
-  // Persists ONE show, independent of any other half-finished show in the
-  // panel — gated on THIS row's own errors, not form.formState.isValid (which
-  // would require every OTHER open-but-unsaved show to be valid too).
+  // Persists ONE show, gated on THIS row's own errors rather than
+  // form.formState.isValid, which would require every other open show to be
+  // valid too.
   const saveShow = async (index: number): Promise<boolean> => {
     const s = getValues(`shows.${index}`);
     if (!s || form.formState.errors.shows?.[index]) return false;
-    setBusy(true);
     try {
-      const r = await adminFetch('/shows', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ show: showPayload(s) }),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string; show?: Partial<Show> | null; fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // POST /shows sends ONE show, so refusals come back keyed `show.<field>`
-        // and need remapping onto this row's own field-array path.
-        if (j.fieldErrors) {
-          const remapped: Record<string, string> = {};
-          for (const [k, v] of Object.entries(j.fieldErrors)) {
-            remapped[k.replace(/^show\./, `shows.${index}.`)] = v;
-          }
-          applyServerFieldErrors(form, remapped);
-        }
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      const j = await saveShowMutation.mutateAsync({ show: s });
       const saved = j.show ? hydrateShow(j.show) : null;
       if (saved) setValue(`shows.${index}`, saved, { shouldDirty: true, shouldValidate: true });
       notify.ok('Show saved.');
       return true;
     } catch (e) {
-      notify.err(errorMessage(e));
+      if (e instanceof AdminResponseError && e.body.fieldErrors) {
+        // POST /shows sends ONE show, so refusals come back keyed `show.<field>`
+        // and need remapping onto this row's field-array path.
+        const remapped: Record<string, string> = {};
+        for (const [key, value] of Object.entries(e.body.fieldErrors)) {
+          if (typeof value === 'string') {
+            remapped[key.replace(/^show\./, `shows.${index}.`)] = value;
+          }
+        }
+        applyServerFieldErrors(form, remapped);
+      }
+      notify.err(showWriteError(e));
       return false;
-    } finally { setBusy(false); }
+    }
   };
 
   if (err) {
     return (
       <div className="grid gap-4">
         <Card title="Shows" sub="definitions">
-          <ErrorState error={err} onRetry={load} />
+          <ErrorState error={err} onRetry={load} retrying={settingsQuery.isFetching} />
         </Card>
       </div>
     );
@@ -424,12 +390,22 @@ export default function ShowsPanel() {
   }
 
   const shows = watch('shows');
-  // focusIdx can briefly point past the end after a removal, so an out-of-range
-  // index coerces to "nothing open".
+  // focusIdx can briefly point past the end after a removal.
   const focused = focusIdx != null ? (shows[focusIdx] ?? null) : null;
   // Same type-only cast as `control`/`setValue` above.
   const focusedErrors = (focusIdx != null ? form.formState.errors.shows?.[focusIdx] : undefined) as
     FieldErrors<Show> | undefined;
+
+  // Display order only -- every entry carries its form-array `index`, which is
+  // what focusShow, Save show and delete key off (shows/roster-order.ts).
+  const filter = { query, tags: tagSel, personaId: hostSel };
+  const filterOn = showFilterActive(filter);
+  const allTags = showTagVocabulary(shows);
+  const entries = orderShowRoster(shows, { sort, filter, personas, hoursFor: countHours });
+  const clearFilters = () => { setQuery(''); setTagSel([]); setHostSel(''); };
+  // Suggestions come from the WHOLE list, not the filtered view: a filtered list
+  // hides exactly the tags worth reusing.
+  const tagSuggestions = allTags;
 
   return (
     <div className="grid gap-4">
@@ -468,12 +444,7 @@ export default function ShowsPanel() {
 
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <span className="caption">show definitions · {shows.length}/{SHOWS_MAX} shows</span>
-        {/* Own line on a phone: sharing a row with the caption folds the
-            Cards/List toggle into two stacked icons. */}
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
-          <span className="flex-none">
-            <RosterViewToggle view={view} onChange={setView} />
-          </span>
           <Btn
             className="min-h-9 sm:min-h-0"
             onClick={() => setCommunityOpen(true)}
@@ -495,21 +466,67 @@ export default function ShowsPanel() {
           </Btn>
         </div>
       </div>
+      {shows.length > 5 && (
+        <RosterToolbar<ShowSort>
+          query={query}
+          onQueryChange={setQuery}
+          noun="shows"
+          sort={sort}
+          onSortChange={setSort}
+          sortOptions={SHOW_SORTS.map(k => [k, SHOW_SORT_LABELS[k]] as const)}
+          tags={allTags}
+          selectedTags={tagSel}
+          onTagsChange={setTagSel}
+          filtered={filterOn}
+          onClear={clearFilters}
+          view={view}
+          onViewChange={setView}
+          summary={filterOn ? `${entries.length} of ${shows.length}` : undefined}
+          extraFilters={personas.length > 1 && (
+            <Select value={hostSel || ANY_HOST} onValueChange={v => setHostSel(v === ANY_HOST ? '' : v)}>
+              <SelectTrigger className="min-w-0 flex-1 sm:w-[170px] sm:flex-none" aria-label="Filter by host">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ANY_HOST}>All hosts</SelectItem>
+                {personas.map(p => (
+                  <SelectItem key={p.id} value={p.id}>{p.name?.trim() || 'Unnamed'}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+      )}
+      {shows.length > 0 && shows.length <= 5 && (
+        <div className="flex justify-end">
+          <RosterViewToggle view={view} onChange={setView} />
+        </div>
+      )}
+
       {shows.length === 0 && (
         <EmptyState
+          art="calendar"
           title="No shows scheduled"
           description="Add one to start programming the week."
         />
       )}
 
-      {view === 'list' && shows.length > 0 && (
+      {shows.length > 0 && entries.length === 0 && (
+        <EmptyState
+          title="No shows match"
+          description="Nothing fits the current filters."
+          action={<Btn onClick={clearFilters}>Clear filters</Btn>}
+        />
+      )}
+
+      {view === 'list' && entries.length > 0 && (
         <ShowsTable
-          rows={shows.map((s, i) => showRow(s, i, personas, apiBase, countHours(s.id), !form.formState.errors.shows?.[i]))}
+          rows={entries.map(e => showRow(e.show, e.index, personas, apiBase, countHours(e.show.id), !form.formState.errors.shows?.[e.index]))}
           onEdit={r => focusShow(r.index)}
         />
       )}
 
-      {view === 'cards' && shows.map((s, i) => {
+      {view === 'cards' && entries.map(({ show: s, index: i }) => {
         const ok = !form.formState.errors.shows?.[i];
         const hrs = countHours(s.id);
         const host = personas.find(p => p.id === s.personaId) ?? null;
@@ -539,6 +556,7 @@ export default function ShowsPanel() {
           control={control}
           trigger={trigger}
           errors={focusedErrors}
+          tagSuggestions={tagSuggestions}
           editorRef={editorRef}
           personas={personas}
           moods={moods}
@@ -551,6 +569,7 @@ export default function ShowsPanel() {
           apiBase={apiBase}
           adminFetch={adminFetch}
           minTrackSeconds={data?.values?.minTrackSeconds}
+          stationMinTrackLengthSeconds={data?.values?.picker?.minTrackLengthSeconds}
           busy={busy}
           isNew={focused.id === creatingId}
           valid={!focusedErrors}
@@ -614,8 +633,8 @@ export default function ShowsPanel() {
         <div className="mt-4 grid gap-3">
           {community && community.length > 0 ? (
             community.map(c => {
-              // Shows can't be installed twice — the controller 409s on a name
-              // clash — so flag ones already in your list instead of a button.
+              // Shows can't be installed twice (the controller 409s on a name
+              // clash), so flag ones already in the list.
               const inShows = shows.some(
                 s => s.name.trim().toLowerCase() === c.name.trim().toLowerCase(),
               );

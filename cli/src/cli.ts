@@ -1,7 +1,7 @@
-// CLI entry point — dispatches a command, or opens the interactive menu when
-// given none. Boot order is load-bearing: `--home` has to reach SUBWAVE_HOME
-// before anything triggers util.ts's lazy resolver, and the commands that work
-// without an install must short-circuit above the resolved-home gate.
+// CLI entry point: dispatches a command, or opens the interactive menu. Boot
+// order is load-bearing: `--home` must reach SUBWAVE_HOME before anything
+// triggers util.ts's lazy resolver, and commands that work without an install
+// must short-circuit above the resolved-home gate.
 
 import { existsSync } from 'node:fs';
 import { consumeHomeFlag, resolveSubwaveHome } from './home.ts';
@@ -104,9 +104,8 @@ async function main(): Promise<void> {
     return;
   }
   if (cmd === 'uninstall') {
-    // Above the resolved-home gate on purpose: uninstall has to work on a
-    // half-broken install, and can still remove the CLI config and binary when
-    // there's no home at all.
+    // Above the resolved-home gate on purpose: uninstall must work on a
+    // half-broken install, or with no home at all.
     const { runUninstallCommand } = await import('./commands/uninstall.ts');
     await runUninstallCommand({
       yes: rest.includes('--yes') || rest.includes('-y'),
@@ -117,9 +116,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Everything below needs a home. util.ts would call requireSubwaveHome() on
-  // first path access anyway; pre-checking here buys a message that separates
-  // "no install at all" from "install with no .env".
+  // Everything below needs a home. Pre-checking here (util.ts would resolve
+  // lazily anyway) separates "no install" from "install with no .env".
   const resolved = resolveSubwaveHome();
   if (!resolved) {
     process.stderr.write(
@@ -130,8 +128,7 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  // The legacy controller/.env counts too, so a partial upgrade isn't sent back
-  // to init. `init` is exempt — it's the command that writes .env.
+  // The legacy controller/.env counts too. `init` is exempt: it writes .env.
   const haveEnv = existsSync(getRootEnv()) || existsSync(getLegacyControllerEnv());
   if (!haveEnv && cmd !== 'init') {
     process.stderr.write(

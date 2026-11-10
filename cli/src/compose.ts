@@ -7,9 +7,8 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getSubwaveHome } from './util.ts';
 
-// `prod-byo` is prod without the bundled Caddy. It is a prod sibling everywhere
-// except the URL helpers, which must point at host-bound service ports rather
-// than the Caddy edge.
+// `prod-byo` is prod without the bundled Caddy: a prod sibling everywhere except
+// the URL helpers, which point at host-bound service ports, not the Caddy edge.
 export type ComposeEnv = 'dev' | 'prod' | 'prod-byo' | 'down';
 
 export interface ComposeFile {
@@ -33,9 +32,8 @@ export function getComposeFiles(): ComposeFile[] {
   return _composeFiles;
 }
 
-// The two prods share every operational concern (mandatory admin gate, builds,
-// listener counts, confirm-before-stop). Write `isProdEnv(env)` rather than
-// `env === 'prod'` for any of those.
+// The two prods share every operational concern, so use this rather than
+// `env === 'prod'`.
 export function isProdEnv(env: ComposeEnv): env is 'prod' | 'prod-byo' {
   return env === 'prod' || env === 'prod-byo';
 }
@@ -47,9 +45,8 @@ export interface ComposeStatus {
 }
 
 // Every compose file shares one project name, so `ps -q` returns the same
-// containers whichever file you ask about — the answer has to come from the
-// `com.docker.compose.project.config_files` label instead, which records the
-// file Docker was actually launched with.
+// containers whichever file is asked about; the answer comes from the
+// `com.docker.compose.project.config_files` label, which records the real file.
 export function detectCompose(): ComposeStatus {
   for (const f of getComposeFiles()) {
     if (!existsSync(f.abs)) continue;
@@ -118,8 +115,7 @@ function listServices(f: ComposeFile): Record<string, string> {
 }
 
 // Image refs of the project's containers, running or stopped. `start` warns off
-// this when an already-up stack is on a different version than the .env pins —
-// a stale local build or a :dev image masking the release.
+// this when an up stack differs from the version the .env pins.
 export function runningImageRefs(file: ComposeFile): string[] {
   const r = spawnSync(
     'docker',
@@ -147,9 +143,8 @@ function byoPort(name: 'WEB_PORT' | 'CONTROLLER_PORT' | 'ICECAST_PORT' | 'CADDY_
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-// Prod routes through Caddy so the CLI uses the same paths the web UI does;
-// prod-byo goes straight to the host-bound controller port, because the
-// operator's external proxy isn't in the picture for CLI-internal calls.
+// Prod routes through Caddy; prod-byo goes straight to the host-bound
+// controller port, since the operator's external proxy isn't in the picture.
 export function apiBaseFor(env: ComposeEnv): string {
   if (env === 'prod') return `http://localhost:${byoPort('CADDY_PORT', 7700)}/api`;
   if (env === 'prod-byo') return `http://localhost:${byoPort('CONTROLLER_PORT', 7701)}`;
@@ -170,11 +165,9 @@ export function webBaseFor(env: ComposeEnv): string {
   return 'http://localhost:7700';
 }
 
-// `start`'s silent fallback when nothing is running and no preferredEnv is
-// persisted. A clone carries all three compose files, so only the dev file
-// identifies it; the .git check guards against a dev compose hand-dropped into
-// a standalone home. null means genuinely ambiguous — notably the standalone
-// shape, which has both prod files and no way to choose between them.
+// `start`'s fallback when nothing runs and no preferredEnv is persisted. A clone
+// carries all three compose files, so only the dev file plus .git identifies it.
+// null means ambiguous (the standalone shape has both prod files).
 export function inferEnvFromFilesystem(): Exclude<ComposeEnv, 'down'> | null {
   const home = getSubwaveHome();
   const hasDev = existsSync(resolve(home, 'docker-compose.dev.yml'));

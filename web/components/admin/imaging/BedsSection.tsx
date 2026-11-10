@@ -17,6 +17,7 @@ import type { BedsData, ImagingSubmitResult } from './types';
 import { notify } from '../../../lib/notify';
 import {
   BEDS_CROSS_SEC_BOUNDS,
+  BEDS_TAIL_SEC_BOUNDS,
   BEDS_THRESHOLD_SEC_BOUNDS,
   IMAGING_DESCRIPTION_MAX,
   IMAGING_NAME_MAX,
@@ -228,6 +229,7 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
   // entry snaps back on blur instead of lingering as a never-persisted number.
   const [thresholdEdit, setThresholdEdit] = useState<string | null>(null);
   const [crossEdit, setCrossEdit] = useState<string | null>(null);
+  const [tailEdit, setTailEdit] = useState<string | null>(null);
 
   if (!bedsData) {
     return <SkeletonCards cards={4} />;
@@ -238,8 +240,14 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
   const ready = !!bedsData.generatorReady;
   const beds = data?.values?.beds;
   const enabled = beds?.enabled === true;
+  // Mirrors the controller's default (settings/defaults.ts): on WITHIN beds,
+  // which are themselves off by default. `?? true` rather than `=== true` is
+  // the whole difference — a station saved before this field existed has no
+  // stored value and must read as on, the same way the controller decides it.
+  const requestIntros = beds?.requestIntros ?? true;
   const thresholdSec = beds?.thresholdSec ?? 12;
   const crossSec = beds?.crossSec ?? 6;
+  const tailSec = beds?.tailSec ?? 3;
 
   // Pre-flight against the SAME schema the controller enforces, so the bounds
   // can't drift and an out-of-range value gets the server's own message rather
@@ -298,6 +306,24 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
             onChange={v => { if (!busy) saveSettings({ beds: { enabled: v === 'on' } }); }}
           />
         </div>
+        {enabled && (
+          <div className="flex flex-wrap items-center justify-between gap-5 border-t border-separator-soft px-[18px] py-[16px]">
+            <div className="min-w-[240px] flex-1">
+              <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">listener requests</div>
+              <p className="mt-1.5 text-[12px] leading-[1.55] text-muted">
+                {requestIntros
+                  ? 'A requested song always gets a bed in front, however short the intro — somebody asked for it, so its opening plays clean.'
+                  : 'Off — request intros play over the song’s opening instead.'}
+              </p>
+            </div>
+            <Seg
+              accent
+              value={requestIntros ? 'on' : 'off'}
+              options={[{ id: 'on', label: 'On' }, { id: 'off', label: 'Off' }]}
+              onChange={v => { if (!busy) saveSettings({ beds: { requestIntros: v === 'on' } }); }}
+            />
+          </div>
+        )}
       </PanelBox>
 
       {enabled && list.length === 0 && (
@@ -309,10 +335,8 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
 
       <PanelBox>
         <PanelHead label="when to use a bed" />
-        {/* One column on mobile: two 155px cells can't hold a sentence, a number
-            field and a unit. */}
         <div className="grid grid-cols-1 sm:grid-cols-2">
-          <div className="border-b border-separator-soft p-[18px] sm:border-r sm:border-b-0">
+          <div className="border-b border-separator-soft p-[18px] sm:border-r">
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="text-[13px] font-semibold">Bed links longer than</span>
               <Input
@@ -339,7 +363,34 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
               instrumentals never get one. Saves when you click away.
             </p>
           </div>
-          <div className="p-[18px]">
+          <div className="border-b border-separator-soft p-[18px]">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="text-[13px] font-semibold">Bed alone before the next song</span>
+              <Input
+                className="mono-num w-[72px]"
+                type="number"
+                step={1}
+                min={BEDS_TAIL_SEC_BOUNDS.min}
+                max={BEDS_TAIL_SEC_BOUNDS.max}
+                value={tailEdit ?? String(tailSec)}
+                disabled={busy}
+                aria-label="Bed tail seconds"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setTailEdit(e.target.value)}
+                onBlur={() => {
+                  if (tailEdit == null) return;
+                  void saveNumber(tailEdit, tailSec,
+                    v => ({ beds: { tailSec: v } }), setTailEdit);
+                }}
+              />
+              <span className="font-mono text-[12px] text-muted">seconds</span>
+            </div>
+            <p className="mt-2.5 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
+              Bed playing on its own after your DJ stops talking, before the next song starts
+              coming in. This is a beat of breathing room, not a gap — 0 starts the next song on
+              the last syllable. Saves when you click away.
+            </p>
+          </div>
+          <div className="p-[18px] sm:col-span-2">
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="text-[13px] font-semibold">Ramp into the next song</span>
               <Input
@@ -361,8 +412,9 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
               <span className="font-mono text-[12px] text-muted">seconds</span>
             </div>
             <p className="mt-2.5 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-              How long the next song takes to fade in under your DJ’s closing words. 0 is a hard
-              cut. Saves when you click away.
+              How long the next song takes to fade in once the bed tail above has run. 0 is a
+              hard cut. Your DJ is never talking over this — that is what the bed is for. Saves
+              when you click away.
             </p>
           </div>
         </div>

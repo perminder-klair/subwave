@@ -8,10 +8,10 @@ section first — one wrong toggle and playback crashes on launch.
 
 ## Architecture-critical facts (read before changing native config)
 
-### Both platforms run the New Architecture — it's mandatory in RN 0.85
+### Both platforms run the New Architecture — it's mandatory in RN 0.86
 
 RN 0.82+ **removed the ability to opt out** of the New Architecture. Both
-platforms run it ON, and this is required (Reanimated 4.3.1 only works under new
+platforms run it ON, and this is required (Reanimated 4.5.1 only works under new
 arch):
 
 - **iOS** — `Info.plist RCTNewArchEnabled = true`, Pods built `-DRCT_NEW_ARCH_ENABLED=1`.
@@ -29,7 +29,8 @@ a no-op). Don't rely on such flags anywhere; they do nothing on this RN version.
 RNTP 4.1.2 is not natively New-Architecture-compatible — out of the box, Android
 playback crashes with `You should not use ReactNativeHost directly in the New
 Architecture` from `MusicService`. **The fix is `patches/react-native-track-player+4.1.2.patch`**,
-which makes two source edits:
+whose New Architecture half is two source edits (the rest of the patch is the
+progress and iOS metadata fixes described below):
 
 - `MusicModule.kt` — routes async `@ReactMethod`s through a Unit-returning
   `launch` helper (TurboModule interop requires void-returning async methods).
@@ -42,12 +43,35 @@ which makes two source edits:
 > patch is harmless there. Validated: Android `BUILD SUCCESSFUL` and iOS live
 > playback both with the patch applied.
 
+The patch also fixes live song progress (#857). RNTP 4.1.2's Android bridge
+ignores `elapsedTime`; KotlinAudio normally reports ExoPlayer's continuous
+stream position. `NowPlayingProgress` wraps only the session-facing player,
+retaining the existing remote-control interception. KotlinAudio 2.1.0's private
+`NotificationManager.player` and `mediaSessionConnector` fields are pinned by
+consumer ProGuard rules. Recheck this adapter when upgrading either dependency.
+The iOS metadata patch clears omitted song-clock fields and preserves artwork
+on progress-only refreshes, while retaining `isLiveStream` and the LIVE controls.
+These changes require a new binary, not an OTA update.
+
+For a device smoke test, play a track with a known duration and inspect
+`adb shell dumpsys media_session`: its duration should be the song's duration
+in milliseconds, and position should match the app's elapsed time, including
+the advertised listener buffer. Check that artwork remains visible during
+progress refreshes and changes with the track/persona. During DJ speech and
+on a track with no duration, the previous song's progress must disappear.
+Repeat after a track change, screen lock, reconnect, and tune-out/tune-in.
+Verify a release build too, so the reflection keep rules are exercised.
+On iOS, confirm the LIVE controls, artwork, and Live Activity still work;
+Cast should still tear down the local session. Bluetooth display of artwork
+and progress must also be checked in the car.
+
 ### Other load-bearing facts
 
 - **Expo Go does not work** — native modules (RNTP, Skia, Reanimated worklets)
   ship compiled code. You must build a **dev client**.
-- **Stream is MP3 only** (`{base}/stream.mp3`), same universal-floor choice as
-  the web player. No Opus/Ogg.
+- **MP3 is the default** (`{base}/stream.mp3`). The SIGNAL picker offers AAC on
+  both platforms and Opus/FLAC on Android when the station advertises the mount.
+  iOS cannot demux Ogg. Cast always uses MP3.
 - **No backend needed for testing** — the app defaults to the public
   `getsubwave.com` station, which is live. Onboarding pre-fills it.
 - **Base URL is fully runtime** — there are no hardcoded station URLs in source.
@@ -63,6 +87,14 @@ which makes two source edits:
   `react-native-google-cast` runs under the New Architecture in **compat
   (interop) mode** (v5 will be native); if a Cast API breaks after an RN/Expo
   upgrade, check the library's v5 status before patching.
+- **The Android Cast SDK is pinned** (`androidPlayServicesCastFrameworkVersion`
+  on the `react-native-google-cast` plugin in `app.json`). The library defaults
+  to `play-services-cast-framework:+`, so every build takes Google's newest, and
+  23.0.0 pulls `androidx.mediarouter:mediarouter:1.9.0-beta01`, which needs
+  compileSdk 37 and AGP 9.1: `:app:checkReleaseAarMetadata` fails the build.
+  Raise the pin alongside an Expo SDK upgrade that moves compileSdk/AGP, and
+  ship it in a binary for both platforms, because the plugin options are in the
+  shared app config, so the pin is in the iOS fingerprint too.
 
 ---
 
@@ -171,6 +203,16 @@ properly judged on a **physical device** — the remote-control wiring lives in
 `service.ts` (Play/Pause/Stop; Next/Seek intentionally omitted for a live
 stream).
 
+On Android, `PlaybackService` must **never resolve**. It runs as RNTP's
+headless JS task, and React Native fires JS timers behind a paused activity only
+while a headless task is active. Every background poll is a timer, including the
+`/now-playing` poll that feeds lock-screen and Bluetooth metadata. RN 0.85 never
+registered `HeadlessJsTaskSupport` under bridgeless, so the task never finished.
+RN 0.86 (Expo SDK 57) registers it, and app 1.6.0 shipped with metadata frozen
+behind the lock screen until the phone was unlocked. Device check: tune in, lock
+the phone, and wait through a track change. The notification (or a Bluetooth
+head unit) should show the new title without unlocking.
+
 ### CarPlay — Now-Playing in the car (iOS only)
 
 Scope is **Tier 1**: control the *already-playing* stream from the dash (metadata,
@@ -191,6 +233,58 @@ stream in the phone app first, then connect the car. RNTP feeds the iOS surface
 > stays Play-compliant. iOS CarPlay is unaffected (separate `MPNowPlayingInfoCenter`
 > path, no manifest declaration). Revisit only if Google's policy changes **and**
 > a compliant `MediaBrowserService` browse tree is added.
+
+### Live Activity — Lock Screen, Dynamic Island, Apple Watch (iOS only)
+
+The on-air card. A **widget extension target** (`targets/live-activity/`, wired by
+`@bacons/apple-targets`) plus a **local Expo module** (`modules/live-activity/`)
+that drives ActivityKit, started and stopped by `src/hooks/useLiveActivity.ts`.
+
+The reason it exists is the **Apple Watch**: React Native does not run on watchOS,
+so a real watch app is a second, Swift-only codebase. iOS 18+ mirrors an iPhone
+Live Activity into the **watch Smart Stack** for free — the same lock-screen
+SwiftUI view, rendered on the wrist. One target, no watchOS project, no second
+release path.
+
+**The floor is iOS 17** (the widget target builds at 17.0 for the interactive
+heart). `isLiveActivitySupported()` is the only gate; below it the app behaves
+exactly as it did before and the OS Now Playing card is untouched.
+
+What is easy to get wrong:
+
+- **`SubwaveLiveAttributes.swift` is compiled twice** — once into the widget, once
+  into the Expo module — because the two are different Swift modules and neither
+  can import the other. ActivityKit matches an activity to its widget by the type
+  NAME, not its module, which is why two copies work; it is the same split Apple's
+  own app/extension template has. `npm test` fails if they drift. A mismatched
+  `ContentState` does **not** fail the build — the card just silently stops
+  rendering on device, which is a miserable thing to debug.
+- **`_shared/` is load-bearing.** `LikeTrackIntent.swift` must compile into the
+  **main app target** as well as the widget — that is what `_shared/` means to
+  `@bacons/apple-targets`, and it is what makes the heart work at all, because a
+  `LiveActivityIntent` runs in the app's process (waking it if suspended). If the
+  intent ends up in the widget target only, the button does nothing. Confirm the
+  generated project lists it under the app target after a prebuild.
+- **The widget gets no network turn.** Cover art is downloaded by the app into the
+  `group.com.getsubwave.app` container and handed to the widget as a *filename*.
+  Miss the App Group entitlement on either side and every cover silently falls
+  back to the drawn disc mark.
+- **Version lockstep.** App Store Connect rejects an upload whose extension
+  `CFBundleShortVersionString` differs from the app's. `eas.json` uses
+  `autoIncrement` with remote `appVersionSource`; check the widget target picks up
+  the same version on the first production build rather than at submit time.
+- **The heart fills on the next feed poll (≤5s), not instantly.** Deliberate: the
+  intent hands the tap back to JS so the like goes out through the app's own
+  `StationApi` — no station URL and no SecureStore credential in an app extension —
+  and the controller rejects a stale tap, so a heart that fills and then un-fills
+  would be worse than one that fills a beat late.
+
+Iterate on it like any other native change: `npx expo prebuild -p ios --clean`,
+then `xed ios` and pick the **SUB/WAVE Live** scheme — `SubwaveLiveActivity.swift`
+carries a `#Preview` so the layout can be worked on without a device. It cannot
+run in Expo Go, and the Dynamic Island needs a Pro-class device or the matching
+simulator.
+
 
 ---
 
@@ -247,12 +341,39 @@ eas submit --profile production --platform ios     # uploads to App Store Connec
 
 ---
 
+## A listener's playback log
+
+A store build prints nothing a listener can reach, so it keeps the last 300
+`plog` lines (`src/hooks/usePlayer.ts`) in memory instead: the playback state
+events and errors, iOS route changes, and every hold and reload
+`src/lib/stream-recovery.ts` decides, with its reason. Ask a listener with a
+playback problem for **About SUB/WAVE → Share playback log** (the share sheet
+has Copy on iOS and Android 10+; older Android sends it to a mail or notes app)
+before they kill the app, which empties it.
+
+The first line names the app version, the JS bundle (`OTA <id>` or
+`built-in <id>`, and the channel) and the OS. Times are the phone's clock in
+UTC. Each `reload [reason] #n` line should match one new stream request (its
+`t=` cache-buster) in the station's Icecast access log; a `skipped` line loads
+nothing. `(failure n)` on an automatic reload is its place on the backoff: it
+climbs while loads fail or items fail within 4 s of playing, and it starts over
+at 1 once an item stays up or stalls. A playback error reads `event playback-error code=<code> msg=<text>`:
+Android sends both, and its code is the part that tells a refused stream
+(`android-io-bad-http-status`) from a dead link
+(`android-io-network-connection-failed`); iOS sends only the text, AVPlayer's
+own description. Lines are redacted before they are stored
+(`src/lib/playback-log.ts`): URLs keep only scheme, host and path, the station
+password, Station login and `Authorization` values are gone, and a route lists
+port types without device names, with `Other` for a word that isn't a known port.
+
+---
+
 ## Known issues / gotchas
 
-- **`patches/react-native-track-player+4.1.2.patch`** is the RNTP new-arch fix
-  (2 source files — see "Architecture-critical facts"). It was previously bloated
-  to 229 files with accidental Gradle build artifacts; **slimmed to just the 2
-  `.kt` source files** (2026-06) and re-verified with a clean `BUILD SUCCESSFUL`.
+- **`patches/react-native-track-player+4.1.2.patch`** contains the RNTP new-arch
+  and media-session progress fixes (see "Architecture-critical facts"). It was previously bloated
+  to 229 files with accidental Gradle build artifacts; slimmed in 2026-06 and
+  re-verified with a clean `BUILD SUCCESSFUL` before the progress fix was added.
   Keep it lean — never run `patch-package` after a Gradle build has populated
   `node_modules/react-native-track-player/android/build/`, or it recaptures the
   junk.
@@ -273,7 +394,7 @@ eas submit --profile production --platform ios     # uploads to App Store Connec
 |---|---|---|
 | `tsc --noEmit` | ✅ | ✅ |
 | Native build | ✅ simulator (new arch ON) | ✅ emulator + APK (new arch ON, JDK 17) |
-| RNTP slim patch (2 files) | ✅ live playback | ✅ `BUILD SUCCESSFUL` after slim |
+| RNTP New Architecture patch | ✅ live playback | ✅ `BUILD SUCCESSFUL` after slim |
 | Install + launch | ✅ | ✅ (emulator install) |
 | JS bundle | ✅ 4075 modules | ✅ build path |
 | Onboarding → health check | ✅ all 4 probes OK | (same JS; via skill on device) |

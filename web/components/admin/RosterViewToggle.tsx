@@ -1,7 +1,5 @@
 'use client';
 
-// Icon-only, so each option carries a visually-hidden label to keep the
-// accessible name "Cards"/"List" for screen readers and tests.
 
 import { LayoutList, Rows3 } from 'lucide-react';
 import { Seg } from './ui';

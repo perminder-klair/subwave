@@ -18,15 +18,8 @@ export interface UseKeyboardShortcutsOptions {
   disabled?: boolean;
 }
 
-// Registers global keydown shortcuts on window. `handlers` maps a normalised
-// key string ('space', 'arrowup', 't', '?', 'mod+k', …) to a callback.
-//
-// Bare-key shortcuts are suppressed while the user is typing in a field or
-// while `disabled` is true; the command-palette chord (Cmd/Ctrl+K) always
-// fires so the palette can be opened — and toggled shut — from anywhere.
-//
-// Handlers/disabled are read through refs so the window listener binds once
-// and survives PlayerApp's per-second re-renders.
+// Bare keys yield to text entry and disabled state. Cmd/Ctrl+K remains available to toggle the
+// palette. Refs keep the window listener stable across renders.
 export function useKeyboardShortcuts(
   handlers: ShortcutHandlers,
   { disabled = false }: UseKeyboardShortcutsOptions = {},
@@ -38,18 +31,12 @@ export function useKeyboardShortcuts(
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      // Ignore auto-repeat from a held key — a shortcut should fire once per
-      // press, not stutter (a held Space would otherwise toggle tune in/out).
       if (e.repeat) return;
 
-      // Several shortcut maps coexist (shell cycling keys, the skin's map, a
-      // skin's any-key tune-in gate). First consumer wins; one keypress never
-      // does two things.
+      // Respect earlier handlers so one keypress performs only one action.
       if (e.defaultPrevented) return;
 
-      // Chords are exempt from the typing guard since ordinary typing can't
-      // produce them. Only Cmd/Ctrl+K is claimed; every other combo is left to
-      // the browser. Nothing past this block runs for a modified keypress.
+      // Allow Cmd/Ctrl+K during text entry; leave other modified keys to the browser.
       if (e.metaKey || e.ctrlKey || e.altKey) {
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
           const run = handlersRef.current['mod+k'];
@@ -61,8 +48,6 @@ export function useKeyboardShortcuts(
         return;
       }
 
-      // Bare keys ONLY reach here, and must never fire while the user is typing
-      // or while a palette/dialog owns input via `disabled`.
       if (disabledRef.current || isTextEntry(e.target)) return;
 
       const key = e.key === ' ' ? 'space' : e.key.toLowerCase();

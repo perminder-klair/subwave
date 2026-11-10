@@ -1,16 +1,9 @@
 'use client';
 
-// The on-air + health card at the top of /admin/dash: a now-playing title row
-// over a status strip of four instruments (listeners, DJ latency, TTS fallback,
-// on air). All colour comes from theme tokens so it tracks light + dark.
-//
-// The meters animate via a single critically-damped (zeta≈1) rAF loop that
-// writes straight to the DOM — no per-frame re-render. Structure + state styling
-// live in globals.css under `.admin-root .hs-*`. Collapses under
-// prefers-reduced-motion.
 import { useEffect, useRef } from 'react';
 import type { NowPlayingTrack } from '../../lib/types';
 import { Btn } from './ui';
+import { latencyZone } from './dash/latency-gauge';
 
 export interface HealthMetrics {
   /** current listeners */
@@ -19,11 +12,16 @@ export interface HealthMetrics {
   listenersPeak: number;
   /** DJ think→speak p95 latency in ms, or null when unknown (stats not loaded) */
   latencyMs: number | null;
-  /**
-   * The live DJ-agent deadline in ms, and the redline anchor. Null until /stats
-   * loads, in which case the gauge uses its built-in default scale.
-   */
+  /** The live DJ-agent deadline in ms, and the redline anchor. Null until
+   *  /stats loads, in which case the gauge uses its default scale. */
   latencyDeadlineMs: number | null;
+  latencyAdaptive?: boolean;
+  /** Enough recent calls ran out the agent deadline to say the DJ is hitting
+   *  its fallbacks: turns the gauge red whatever the needle reads. */
+  latencyFallbacks?: boolean;
+  /** Failed calls / calls in the LLM log ring, or null when none failed.
+   *  The needle itself reads successful calls only. */
+  llmFailedCalls?: { failed: number; total: number; title: string } | null;
   /** TTS fallback rate as a percentage, or null when unknown */
   ttsFallbackPct: number | null;
   /** broadcast online? null before the first poll resolves */
@@ -38,10 +36,11 @@ const SCALE = {
   ttsBadPct: 25, // fallback above this = redline
 } as const;
 
-// The redline anchors to the live DJ-agent deadline, so a redlined needle means
-// "hitting fallbacks" rather than an arbitrary ceiling. The band stays at a
-// fixed fraction of the sweep, so only the numbers track the model in use,
-// never the gauge geometry. Falls back to 3 s until /stats reports a deadline.
+// The redline anchors to the live DJ-agent deadline, so red means "hitting
+// fallbacks" rather than an arbitrary ceiling. The needle reads successful calls
+// only, which finish under the deadline, so red is also driven by the calls that
+// ran it out (`latencyFallbacks`, see dash/latency-gauge.ts). The band stays at a
+// fixed fraction of the sweep, so only the numbers track the model in use.
 const DEFAULT_LATENCY_REDLINE_MS = 3000;
 const LATENCY_REDLINE_FRACTION = 0.6; // redline begins at 60% of the dial
 function latencyScale(deadlineMs: number | null): { redline: number; max: number } {
@@ -89,8 +88,8 @@ function el<K extends keyof SVGElementTagNameMap>(
   return n;
 }
 
-// Draw the static face of a gauge (arc, ticks, optional redline + peak tick),
-// append a needle <g>, and return imperative handles the rAF loop drives.
+// Draw the static face of a gauge, append a needle <g>, and return imperative
+// handles the rAF loop drives.
 function buildGauge(
   svg: SVGSVGElement,
   opts: { redlineFrom?: number | null; withPeak?: boolean } = {},
@@ -162,7 +161,12 @@ export interface StationHeaderProps {
   weatherText: string;
   pickerBusy: boolean;
   busy: string | null;
+  /** Opens the Skip dialog, which also offers the never-play blocks. */
   onSkip: () => void;
+  /** The playing file's own format line ("FLAC · 44.1 kHz · 16-bit"),
+   *  shown after the artist in the caption style of the album · DJ line
+   *  below it; null while unknown, so nothing renders. */
+  fileFormat?: string | null;
 }
 
 export default function StationHeader({
@@ -174,6 +178,7 @@ export default function StationHeader({
   pickerBusy,
   busy,
   onSkip,
+  fileFormat,
 }: StationHeaderProps) {
   // Latest targets, read by the animation loop without re-subscribing.
   const targets = useRef(metrics);
@@ -218,19 +223,15 @@ export default function StationHeader({
       // Redline and full-scale track the live agent deadline.
       const { redline: latRedline, max: latMax } = latencyScale(t.latencyDeadlineMs);
       aG?.setNeedle(sLatency.x / latMax);
-      const redlined = sLatency.x >= latRedline;
+      const latZone = latencyZone({
+        latencyMs: t.latencyMs,
+        needleMs: sLatency.x,
+        redlineMs: latRedline,
+        fallbacks: t.latencyFallbacks === true,
+      });
       if (latencyV.current) latencyV.current.textContent = t.latencyMs == null ? '—' : String(Math.round(sLatency.x));
-      latencyRead.current?.classList.toggle('warn', redlined);
-      if (zone.current) {
-        zone.current.textContent =
-          t.latencyMs == null
-            ? 'no data'
-            : redlined
-              ? 'redline'
-              : sLatency.x > latRedline * 0.8
-                ? 'rising'
-                : 'nominal';
-      }
+      latencyRead.current?.classList.toggle('warn', latZone.warn);
+      if (zone.current) zone.current.textContent = latZone.zone;
 
       const ttsPct = sTts.x;
       if (fill.current) {
@@ -278,6 +279,11 @@ export default function StationHeader({
             <>
               <div className="text-[18px] leading-[1.2] font-bold tracking-[-0.01em]">
                 {np.title} <span className="font-semibold text-muted">— {np.artist}</span>
+                {fileFormat && (
+                  <span className="caption ml-2 align-middle" title="Format of the file on air, from Navidrome">
+                    · {fileFormat}
+                  </span>
+                )}
               </div>
               <div className="caption mt-1.5">
                 {np.album ? `album · ${np.album} · ` : ''}DJ {djName} · {showName}
@@ -288,16 +294,18 @@ export default function StationHeader({
           )}
         </div>
         <div className="flex gap-2">
-          <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={onSkip}>
-            {busy === 'skip' ? 'skipping…' : 'Skip track'}
+          <Btn
+            lg
+            tone="danger"
+            disabled={!!busy || !np?.title}
+            onClick={onSkip}
+            title="Skip it, keep it off the air for good, or both"
+          >
+            {busy === 'never-play' ? 'blocking…' : busy === 'skip' ? 'skipping…' : 'Skip track'}
           </Btn>
         </div>
       </div>
 
-      {/* Four instruments at 140–196px can't sit in one 390px row, so on a phone
-          the flex rail becomes a 2-up grid. The `!` utilities are required
-          because the `.hs-*` rules in globals.css are unlayered and would
-          otherwise outrank Tailwind's utility layer regardless of specificity. */}
       <div className="hs-strip !grid !grid-cols-2 sm:!flex">
         <div className="hs-cell !min-w-0 sm:!min-w-[140px]">
           <div className="hs-head">
@@ -306,8 +314,6 @@ export default function StationHeader({
             </div>
           </div>
           <svg ref={listenersSvg} className="hs-gauge" />
-          {/* Readouts wrap on a phone so the trailing peak/redline figure drops
-              to its own line instead of being clipped by the cell. */}
           <div className="hs-read flex-wrap sm:flex-nowrap">
             <span className="hs-v" ref={listenersV}>
               0
@@ -324,8 +330,6 @@ export default function StationHeader({
             <div className="hs-lbl">
               <span className="idx">02</span>DJ&nbsp;Latency
             </div>
-            {/* The head's sub-label is nowrap and would squeeze the instrument
-                name to an ellipsis in a half-width cell — hidden on mobile. */}
             <div className="hs-sub hidden sm:block" ref={zone}>
               nominal
             </div>
@@ -336,8 +340,15 @@ export default function StationHeader({
               0
             </span>
             <span className="hs-u">ms</span>
-            <span className="hs-x">
-              redline <b>{Math.round(latencyScale(metrics.latencyDeadlineMs).redline / 1000)}k</b>
+            <span className="hs-x flex flex-col items-end">
+              {metrics.llmFailedCalls && (
+                <span title={metrics.llmFailedCalls.title}>
+                  failed <b>{metrics.llmFailedCalls.failed} / {metrics.llmFailedCalls.total}</b>
+                </span>
+              )}
+              <span>
+                {metrics.latencyAdaptive ? 'warning' : 'redline'} <b>{Math.round(latencyScale(metrics.latencyDeadlineMs).redline / 1000)}k</b>
+              </span>
             </span>
           </div>
         </div>

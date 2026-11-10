@@ -10,7 +10,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '../../../ui/input-
 import { Card, Btn, Seg } from '../../ui';
 import { RowsTable } from '../RowsTable';
 import { useLibrary } from '../LibraryContext';
-import { libraryKeys, useQueryErrorToast } from '../queries';
+import { libraryKeys } from '../queries';
+import { adminJson, useQueryErrorToast } from '../../../../lib/admin-query';
 import type { SearchMode, Track } from '../types';
 import { SEARCH_PAGE } from '../types';
 
@@ -41,22 +42,26 @@ export default function SearchTab({
     queryKey: libraryKeys.search(submitted?.q ?? '', submitted?.mode ?? 'library'),
     enabled: ready && !!submitted?.q,
     initialPageParam: 0,
-    queryFn: async ({ pageParam }) => {
+    queryFn: async ({ pageParam, signal }) => {
       // `enabled` already gates on submitted?.q, so this is unreachable — but
       // the queryFn's own types don't know that.
       if (!submitted?.q) return { rows: [], hasMore: false };
       const { q: text, mode } = submitted;
       if (mode === 'sound') {
-        const r = await adminFetch(`/library/search-sound?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}`);
-        const j = await r.json().catch(() => ({})) as { results?: Track[]; error?: string };
-        if (!r.ok) throw new Error(j.error || `sound search failed (${r.status})`);
+        const j = await adminJson<{ results?: Track[] }>(
+          adminFetch,
+          `/library/search-sound?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}`,
+          undefined,
+          signal,
+        );
         return { rows: j.results || [], hasMore: false };
       }
-      const r = await adminFetch(
-        `/dj/search?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}&offset=${pageParam as number}`);
-      const j = await r.json().catch(() => ({})) as
-        { results?: Track[]; hasMore?: boolean; error?: string };
-      if (!r.ok) throw new Error(j.error || `search failed (${r.status})`);
+      const j = await adminJson<{ results?: Track[]; hasMore?: boolean }>(
+        adminFetch,
+        `/dj/search?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}&offset=${pageParam as number}`,
+        undefined,
+        signal,
+      );
       // Absent on an old controller (fixed 12 rows) → no Load more, as before.
       return { rows: j.results || [], hasMore: !!j.hasMore };
     },
@@ -93,7 +98,6 @@ export default function SearchTab({
     <>
       <Card bodyClass="!py-3">
         <div className="grid gap-2.5">
-          {/* On lean installs the tab stays plain metadata search. */}
           {coverage?.soundSearchAvailable === true && (
             <div className="flex flex-wrap items-center gap-3">
               <Seg
@@ -114,7 +118,6 @@ export default function SearchTab({
               )}
             </div>
           )}
-          {/* Phone: query on its own row, both buttons on the row under it. */}
           <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto] gap-2 sm:grid-cols-[1fr_auto_auto]">
             <InputGroup className="col-span-2 sm:col-span-1">
               <InputGroupAddon><Search /></InputGroupAddon>

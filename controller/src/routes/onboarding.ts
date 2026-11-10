@@ -1,19 +1,8 @@
-// First-run wizard endpoints. All admin-gated — the operator must have set
-// ADMIN_USER + ADMIN_PASS in the root .env before they can reach these.
-//
-// Endpoints:
-//   GET  /onboarding/status           — needsSetup snapshot for the wizard shell.
-//   POST /onboarding/test-navidrome   — try the supplied creds, no mutation.
-//   POST /onboarding/test-llm         — try the supplied provider, no mutation.
-//   POST /onboarding/save             — persist Navidrome + LLM + TTS + DJ choices.
-//   POST /onboarding/generate-jingles — kick off the default-jingle render batch.
-//
-// Both test endpoints are non-mutating: they construct one-off clients with
-// the request body's values and report success/failure. They never touch the
-// live settings or live config. Save is the only mutation path.
+// First-run wizard endpoints. The test endpoints are non-mutating one-off
+// probes; /onboarding/save is the only mutation path.
 
 import express from 'express';
-import { generateText } from 'ai';
+import { generateText, createGateway } from 'ai';
 import { createOllama } from 'ai-sdk-ollama';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -30,21 +19,21 @@ import {
   normalizeNavidromeCredentials,
   type LlmProbeInput,
 } from '../schemas/onboarding.js';
-import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, DEFAULT_ORCAROUTER_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
+import { DEFAULT_LOCCA_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
+import { openaiCompatibleGateway } from '../schemas/providers.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
-import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
+import { saveSecrets, SECRET_ENV_KEYS, secretValueIssue } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
+import { stripManagedSecrets, stripManagedSettings } from '../setup/hosted.js';
 import { pingWith } from '../music/subsonic.js';
 
 export const router = express.Router();
 
-// Default jingle texts — the wizard fires these through the same render path
-// the admin Jingles UI uses. Mirrors scripts/generate-jingles.sh so existing
-// operators get the same idents either way.
+// Mirrors scripts/generate-jingles.sh so both paths render the same idents.
 const DEFAULT_JINGLES = [
   "You're listening to Subwave. Personal frequency from the homelab.",
   'Subwave radio. The signal continues.',
@@ -53,12 +42,8 @@ const DEFAULT_JINGLES = [
   'Subwave — broadcasting on whatever wavelength reaches you.',
 ];
 
-// ---------------------------------------------------------------------------
-// GET /onboarding/status — quick boolean for the wizard shell to decide what to
-// render. Public (not admin-gated) so the landing page can read it too — it
-// only leaks "is this station configured yet" which is already obvious from
-// the stream being silent.
-// ---------------------------------------------------------------------------
+// Deliberately public (not admin-gated) so the landing page can read it; it only
+// exposes whether the station is configured yet.
 router.get('/onboarding/status', async (req, res) => {
   try {
     res.json(await getSetupStatus());
@@ -67,25 +52,19 @@ router.get('/onboarding/status', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /onboarding/test-navidrome — body: { url, user, pass }
-// ---------------------------------------------------------------------------
 router.post('/onboarding/test-navidrome', requireAdmin, validateBody(navidromeProbeSchema), async (req, res) => {
   const { url, user, pass } = req.body as { url: string; user: string; pass: string };
   res.json(await pingWith({ url, user, pass, client: 'sub-wave-wizard' }));
 });
 
-// ---------------------------------------------------------------------------
-// POST /onboarding/test-llm — body: { provider, model, apiKey?, baseUrl? }
-// Constructs a one-off AI SDK model and asks it for a single token. Does NOT
-// touch the live llm settings.
-// ---------------------------------------------------------------------------
+// Constructs a one-off model and asks for a single token; never touches live
+// llm settings.
 router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), async (req, res) => {
-  // The schema owns "provider and model are required" AND "openai-compatible
-  // needs a baseUrl" — the latter used to be a throw inside the switch below,
-  // discoverable only by pressing Test; the wizard now runs the same rule to
-  // hold the button shut.
+  // The schema owns "provider and model required" and "openai-compatible needs a
+  // baseUrl"; the wizard runs the same rule to hold the button shut.
   const { provider, model, apiKey, baseUrl, ollamaUrl } = req.body as LlmProbeInput;
+  const keyIssue = apiKey ? secretValueIssue(apiKey) : null;
+  if (keyIssue) return res.json({ ok: false, error: keyIssue });
 
   try {
     let m: any;
@@ -97,13 +76,11 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
         m = createOpenAI(apiKey ? { apiKey } : {})(model);
         break;
       case 'openai-compatible':
-        // noThinkFetch so a thinking model (Qwen3 etc.) returns visible content
-        // in the test rather than spending its budget in the reasoning channel.
+        // noThinkFetch so a thinking model returns visible content, not reasoning.
         m = createOpenAI({ baseURL: baseUrl, apiKey: apiKey || 'unused', fetch: noThinkFetch }).chat(model);
         break;
       case 'locca':
-        // First-class locca: openai-compatible llama.cpp, base URL defaults to
-        // the host locca server when not supplied.
+        // openai-compatible llama.cpp; base URL defaults to the host locca server.
         m = createOpenAI({
           baseURL: baseUrl || DEFAULT_LOCCA_BASE_URL,
           apiKey: apiKey || 'unused',
@@ -119,21 +96,20 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
       case 'openrouter':
         m = createOpenRouter({ headers: OPENROUTER_APP_HEADERS, ...(apiKey ? { apiKey } : {}) })(model);
         break;
-      case 'requesty':
-        // Requesty is an OpenAI-compatible gateway at a fixed base URL; the test
-        // call goes through createOpenAI like openai-compatible, but with the
-        // hosted endpoint. Model ids use provider/model naming (openai/gpt-4o-mini).
-        m = createOpenAI({ baseURL: DEFAULT_REQUESTY_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
-        break;
-      case 'orcarouter':
-        // OrcaRouter is an OpenAI-compatible gateway at a fixed base URL; the
-        // test call goes through createOpenAI like requesty. Model ids use
-        // provider/model naming (anthropic/claude-sonnet-4.6) or the named
-        // router `orcarouter/auto`.
-        m = createOpenAI({ baseURL: DEFAULT_ORCAROUTER_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
+      case 'gateway':
+        // Vercel AI Gateway; with no apiKey the SDK resolves env / OIDC
+        // credentials, as the registry's client does.
+        m = createGateway(apiKey ? { apiKey } : {})(model);
         break;
       case 'ollama':
       default: {
+        // A fixed-endpoint OpenAI-compatible gateway from the catalogue; model
+        // ids are provider/model (openai/gpt-4o-mini). Any other id is Ollama.
+        const gw = openaiCompatibleGateway(provider);
+        if (gw) {
+          m = createOpenAI({ baseURL: gw.openaiCompatible.baseUrl, apiKey: apiKey || 'unused' }).chat(model);
+          break;
+        }
         const url = ollamaUrl || 'http://localhost:11434';
         m = createOllama({ baseURL: url })(model);
         break;
@@ -143,13 +119,10 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
     const out = await generateText({
       model: m,
       prompt: 'Reply with the single word OK.',
-      // OpenAI's Responses API (the default path for createOpenAI()(model))
-      // rejects max_output_tokens below 16, so the probe budget must clear it.
+      // OpenAI's Responses API rejects max_output_tokens below 16.
       maxOutputTokens: 32,
-      // A test must always answer. Without a bound an unreachable/stalled model
-      // hangs this handler forever, the wizard's fetch never resolves, and the
-      // button is stuck on "Asking…" with no feedback (issue #682). maxRetries:0
-      // so the operator sees the first real error fast instead of silent backoff.
+      // A test must always answer: an unbounded call hangs the wizard (#682).
+      // maxRetries 0 so the first real error surfaces instead of silent backoff.
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(45_000),
     });
@@ -159,60 +132,57 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /onboarding/save — persist the wizard's collected values.
-//
-// Body:
-//   {
-//     navidrome: { url, user, pass },                 // → state/setup-config.json
-//     llm:      { provider, model, apiKey, ... },     // → settings.update()
-//     tts:      { defaultEngine, ... },               // → settings.update()
-//     dj:       { djPrompt, ... },                    // → settings.update()
-//     station:  string,                               // → settings.update()
-//     apiKeys:  { ANTHROPIC_API_KEY, ... },           // → state/secrets.env
-//   }
-//
-// Everything is optional — the wizard sends only what it collected. The
-// navidrome block is the only field that affects needsSetup() going forward.
-// ---------------------------------------------------------------------------
+// The non-blank fields of a normalised credentials block. saveSetupConfig
+// spreads its patch over the stored block, so a blank that reached it would
+// overwrite a saved value rather than leave it alone.
+function providedNavidromeFields(nv: { url: string; user: string; pass: string }) {
+  const out: { url?: string; user?: string; pass?: string } = {};
+  if (nv.url) out.url = nv.url;
+  if (nv.user) out.user = nv.user;
+  if (nv.pass) out.pass = nv.pass;
+  return out;
+}
+
+// Every block is optional; the wizard sends only what it collected. navidrome
+// goes to state/setup-config.json, apiKeys to state/secrets.env, the rest through
+// settings.update(). Only the navidrome block affects needsSetup().
 router.post('/onboarding/save', requireAdmin, async (req, res) => {
   const b = req.body || {};
   try {
-    // Validate Fish's provider-specific settings before ANY wizard store is
-    // mutated. Navidrome/setup credentials are written earlier than the shared
-    // settings patch, so deferring this to settings.update() could otherwise
-    // make a rejected Fish save hide onboarding on the next reload. The rule
-    // itself lives in schemas/onboarding.ts (fishAudioIssue) — the wizard runs
-    // the same copy, because the two hand-rolled versions had already drifted
-    // in the MESSAGE ('1-100' here, '1–100' there) before they could in logic.
+    // Must run before ANY wizard store is mutated: setup credentials are written
+    // before the settings patch, so a late Fish rejection would leave onboarding
+    // hidden on the next reload.
     const fishIssue = fishAudioIssue(b.tts?.cloud);
     if (fishIssue) throw new Error(fishIssue);
 
-    // Navidrome — only the wizard-managed overlay; never mutate the live env.
-    // Save does NOT require the fields the probe does (skipping Navidrome is a
-    // supported way through the wizard), but it normalises identically —
-    // normalizeNavidromeCredentials is the one copy of trim + slash-strip.
+    // Wizard-managed overlay only; never mutates the live env. Unlike the probe,
+    // save does not require the fields (skipping Navidrome is supported). A blank
+    // field is "not provided", never "clear": the web wizard sends an empty block
+    // when the step is skipped, and a re-run must not wipe stored credentials.
     if (b.navidrome && typeof b.navidrome === 'object') {
-      await saveSetupConfig({
-        navidrome: normalizeNavidromeCredentials(b.navidrome),
-      });
-      // Apply to the live config so subsonic calls work without a restart.
-      applyNavidromeToLiveConfig(b.navidrome);
-      clearSetupConfigCache();
+      const nv = providedNavidromeFields(normalizeNavidromeCredentials(b.navidrome));
+      if (Object.keys(nv).length) {
+        await saveSetupConfig({ navidrome: nv });
+        applyNavidromeToLiveConfig(nv);
+        clearSetupConfigCache();
+      }
     }
 
-    // API keys — persisted to state/secrets.env (mode 0600), also set on
-    // process.env so subsequent AI SDK calls pick them up immediately.
+    // What hosted mode dropped from this save (setup/hosted.ts), so the reply
+    // can say so, as POST /settings does.
+    const managed: string[] = [];
+
+    // state/secrets.env (0600), also set on process.env for immediate use.
     if (b.apiKeys && typeof b.apiKeys === 'object') {
       const patch: Record<string, string> = {};
       for (const k of SECRET_ENV_KEYS) {
         if (typeof b.apiKeys[k] === 'string') patch[k] = b.apiKeys[k];
       }
-      if (Object.keys(patch).length) await saveSecrets(patch);
+      const { patch: allowed, dropped } = stripManagedSecrets(patch);
+      managed.push(...dropped.map(k => `apiKeys.${k}`));
+      if (Object.keys(allowed).length) await saveSecrets(allowed);
     }
 
-    // settings.update accepts a partial patch — pass through whatever the
-    // wizard sent for llm / tts / djPrompt / personas.
     const settingsPatch: any = {};
     if (b.llm && typeof b.llm === 'object') settingsPatch.llm = b.llm;
     if (b.tts && typeof b.tts === 'object') settingsPatch.tts = b.tts;
@@ -220,38 +190,32 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     if (Array.isArray(b.personas)) settingsPatch.personas = b.personas;
     if (b.weather && typeof b.weather === 'object') settingsPatch.weather = b.weather;
     if (typeof b.station === 'string') settingsPatch.station = b.station;
-    // Timezone rides along from the wizard's location picker (Open-Meteo returns
-    // the IANA zone for the picked city). settings.update() validates it.
     if (typeof b.timezone === 'string') settingsPatch.timezone = b.timezone;
-    if (Object.keys(settingsPatch).length) await settings.update(settingsPatch);
+    // A hosted station's LLM route and voice engine belong to its box agent.
+    const { patch: allowedPatch, dropped } = stripManagedSettings(settingsPatch, {
+      defaultEngine: (settings.get() as any)?.tts?.defaultEngine,
+    });
+    managed.push(...dropped);
+    if (Object.keys(allowedPatch).length) await settings.update(allowedPatch);
 
     // Mark setup complete so the wizard exits even if Navidrome was skipped.
     await saveSetupConfig({ setupCompletedAt: new Date().toISOString() });
     clearSetupConfigCache();
 
-    // Kick the auto-playlist refresher. The boot-time call from
-    // scheduler.start() runs before onboarding completes, so on a fresh
-    // install it fails (no Navidrome creds) and gives up — the next retry
-    // would otherwise be the 60-minute cron tick, leaving /stream.mp3 dark
-    // in the interim. Fire-and-forget so the wizard's response isn't held
-    // up by Navidrome + LLM round-trips; errors land in the controller log
-    // where the operator (or `subwave doctor`) can see them.
+    // The boot-time refresh ran before creds existed, and the next retry is the
+    // 60-minute cron, so kick it here or the stream stays dark. Fire-and-forget.
     refreshAutoPlaylist().catch(err =>
       queue.log('error', `Post-onboarding playlist refresh failed: ${err.message}`),
     );
 
-    res.json({ ok: true, status: await getSetupStatus() });
+    res.json({ ok: true, status: await getSetupStatus(), ...(managed.length ? { managed } : {}) });
   } catch (err: any) {
     res.status(400).json({ ok: false, error: err.message || 'save failed' });
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /onboarding/generate-jingles — fire off the default jingle batch through
-// the same code path the admin UI's "+" button uses. Synchronous — the wizard
-// reports per-jingle progress by polling /jingles between calls. We return
-// once everything has been rendered (or the first failure).
-// ---------------------------------------------------------------------------
+// Synchronous: returns once every default jingle is rendered, or on the first
+// failure. The wizard polls /jingles for progress.
 router.post('/onboarding/generate-jingles', requireAdmin, async (req, res) => {
   try {
     const existing = await jingles.list();

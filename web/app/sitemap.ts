@@ -28,6 +28,7 @@ const ROUTES = [
   '/manual/themes',
   '/manual/analysis',
   '/manual/observatory',
+  '/manual/concepts',
   '/manual/faq',
   '/setup',
   '/setup/prerequisites',

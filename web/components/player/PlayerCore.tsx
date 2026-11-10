@@ -1,28 +1,14 @@
 'use client';
 
-// The headless player core — the per-station singletons every skin shares,
-// split into three contexts by update cadence so a component subscribes only
-// to the churn it actually renders:
-//
-//   • feed    — the /now-playing + /state + /session snapshot, 5s cadence.
-//   • audio   — tune state, volume, signal meter; changes on user gestures
-//               and (while tuned in) each 5s signal probe. A volume drag
-//               re-renders audio consumers only, never the feed tree.
-//   • actions — permanently-stable callbacks (bridged through refs, since
-//               usePlayer recreates its closures per render); subscribing
-//               to this context never causes a re-render.
-//
-// The provider also runs the shared side-effect service every skin gets for
-// free: the OS media session (lock screen / headphones / car controls),
-// including the persona-avatar swap while the DJ is talking. The <audio>
-// element itself is rendered by the shell — skins need the ref in the tree
-// for the Waveform's Web Audio tap.
+// Split feed, audio, and actions contexts by update cadence. Ref-backed actions stay stable; the
+// shell owns the audio element.
 
 import {
   createContext,
   useContext,
   useMemo,
   useRef,
+  useState,
   type Dispatch,
   type ReactNode,
   type RefObject,
@@ -47,21 +33,25 @@ export interface PlayerAudio {
   volume: number;
   muted: boolean;
   idleStopped: boolean;
-  /** Stream confirmed offline. useStationFeed's streamOnline is null until
-   *  the first poll and only flips false after the confirm window, so this
-   *  never flashes true on load. */
+  /** Stream confirmed offline. useStationFeed's streamOnline is null until the
+   *  first poll and only flips false after the confirm window. */
   offline: boolean;
   signal: Signal;
 }
 
 export interface PlayerActions {
-  /** Toggle tune-in/out. */
   tune: () => void;
+  play: () => void;
+  pause: () => void;
   stop: () => void;
+  /** The station gate took this listener off the air and holds them for the right password
+   *  (lib/gateResume.ts). Written only by the gate; `pause` and `stop` drop it, because any other
+   *  tune-out does. Here rather than in the gate so a Media Session command under the prompt reaches
+   *  it, and so it dies with this provider on a showcase switch. */
+  gateHoldRef: RefObject<boolean>;
   toggleMute: () => void;
   setVolume: Dispatch<SetStateAction<number>>;
-  /** Submit a listener request. Rejects on network error — form state and
-   *  error toasts are the skin's business. */
+  /** Submit a listener request. Rejects on network error. */
   submitRequest: (text: string, name: string) => Promise<RequestResult>;
   /** Poll a submitted request's outcome (null on network error, so drawers
    *  keep trying). */
@@ -97,49 +87,66 @@ export function usePlayerActions(): PlayerActions {
 
 export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   const client = useStationClient();
+  // How much of the buffer the player skipped on its current connection
+  // (#2072). Held here because the feed, which needs it, renders first.
+  const [leadTrimMs, setLeadTrimMs] = useState(0);
   // Feed first: usePlayer's Opus upgrade is gated on the mount the station says
-  // it actually serves (issue #1300, bug 5).
-  const feed = useStationFeed();
+  // it actually serves (#1300).
+  const feed = useStationFeed({ leadTrimMs });
   const {
     audioRef,
     attachAudio,
     tunedIn,
+    playbackState,
     status,
     volume,
     setVolume,
     tune,
+    play,
+    pause,
     stop,
     toggleMute,
     muted,
     idleStopped,
-  } = usePlayer({ opusEnabled: feed.opusEnabled });
+  } = usePlayer({ opusEnabled: feed.opusEnabled, bufferSeconds: feed.bufferMs / 1000, onLeadTrim: setLeadTrimMs });
 
   // Only an explicit false is offline — see PlayerAudio.offline.
   const offline = feed.streamOnline === false;
   const signal = useSignal({ tunedIn, status, offline });
 
-  // usePlayer's tune/stop/toggleMute close over per-render state, so their
-  // identity changes every render. Bridge through refs so the actions context
-  // value is created exactly once — consumers can safely list actions in
-  // effect deps without re-running.
+  // usePlayer's tune/stop/toggleMute close over per-render state, so bridge
+  // through refs and create the actions context value exactly once.
   const tuneRef = useRef(tune);
+  const playRef = useRef(play);
+  const pauseRef = useRef(pause);
   const stopRef = useRef(stop);
   const muteRef = useRef(toggleMute);
   tuneRef.current = tune;
+  playRef.current = play;
+  pauseRef.current = pause;
   stopRef.current = stop;
   muteRef.current = toggleMute;
+  const gateHoldRef = useRef(false);
 
   const actions = useMemo<PlayerActions>(
     () => ({
       tune: () => tuneRef.current(),
-      stop: () => stopRef.current(),
+      play: () => playRef.current(),
+      pause: () => {
+        gateHoldRef.current = false;
+        pauseRef.current();
+      },
+      stop: () => {
+        gateHoldRef.current = false;
+        stopRef.current();
+      },
+      gateHoldRef,
       toggleMute: () => muteRef.current(),
       setVolume,
-      // Pre-flight against the shared request schema — the same rule the
-      // controller's validateBody enforces, run here once so every skin's box
-      // gets it (they all submit through this action). A refusal comes back as
-      // the ordinary failed RequestResult every box already renders, with the
-      // schema's own listener-facing message, and never touches the network.
+      // Pre-flight against the shared request schema, the same rule the
+      // controller's validateBody enforces, run once here for every skin. A
+      // refusal comes back as an ordinary failed RequestResult and never touches
+      // the network.
       submitRequest: (text, name) => {
         const parsed = listenerRequestSchema.safeParse({ text, name });
         if (!parsed.success) {
@@ -157,12 +164,10 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
     [setVolume, client],
   );
 
-  // Persona avatar to surface on the OS lock screen while the DJ is talking.
-  // Prefer the on-air show's persona (a scheduled show can hand the hour to a
-  // different DJ); fall back to the global "active" persona from /now-playing.
-  // The controller emits a path without the `/api` prefix; client.resolve
-  // prepends the station's API base so this resolves the same way in prod
-  // (via Caddy), dev (direct origin), and the landing showcase (remote).
+  // Persona avatar for the OS lock screen while the DJ is talking. Prefer the
+  // on-air show's persona; fall back to the global active one. The controller
+  // emits a path without the `/api` prefix; client.resolve prepends the
+  // station's API base.
   const avatarPath =
     (typeof feed.activeShow?.persona?.avatar === 'string' && feed.activeShow.persona.avatar) ||
     (typeof feed.dj?.avatar === 'string' ? feed.dj.avatar : '') ||
@@ -173,33 +178,34 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
     (typeof feed.dj?.name === 'string' ? feed.dj.name : '') ||
     null;
 
-  // Wire OS-level media controls (lock screen, headphones, car display).
-  // No onSkip on the public listener — a stray AirPods double-tap shouldn't
-  // skip the song for every other listener on the station.
+  // Wire OS-level media controls. No onSkip on the public listener: a stray
+  // AirPods double-tap shouldn't skip the song for everyone.
   useMediaSession({
-    tunedIn,
+    playbackState,
     nowPlaying: feed.nowPlaying,
-    audioRef,
-    onTune: actions.tune,
+    onPlay: actions.play,
+    onPause: actions.pause,
+    onStop: actions.stop,
     boothFeed: feed.session.messages,
+    leadMs: feed.leadMs,
     personaAvatarUrl,
     personaName,
   });
 
   // useStationFeed returns a fresh object every render; its fields are
-  // reference-stable (setIfChanged). Memoize on the fields so audio-context
-  // churn (a volume drag) doesn't cascade into every feed consumer.
+  // reference-stable. Memoize on the fields so a volume drag doesn't cascade
+  // into every feed consumer.
   const {
     nowPlaying, context, dj, activeShow, listeners, streamOnline,
-    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale,
+    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs, bufferMs,
   } = feed;
   const feedValue = useMemo<StationFeed>(
     () => ({
       nowPlaying, context, dj, activeShow, listeners, streamOnline,
-      llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale,
+      llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs, bufferMs,
     }),
     [nowPlaying, context, dj, activeShow, listeners, streamOnline,
-     llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale],
+     llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs, bufferMs],
   );
 
   const { latencyMs, quality } = signal;

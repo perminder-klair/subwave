@@ -1,11 +1,9 @@
 // Expo config plugin: pin the Android Gradle wrapper version.
 //
-// `expo prebuild` regenerates android/ from the template, which (for this
-// Expo/RN version) pins Gradle 9.3.1. That build fails because the bundled
-// React Native / Expo Gradle plugins reference `JvmVendorSpec.IBM_SEMERU`,
-// removed in Gradle 9. Until the toolchain catches up we pin the wrapper to a
-// Gradle 8.x that still has it. expo-build-properties has no setting for the
-// Gradle version, so we rewrite gradle-wrapper.properties via a dangerous mod.
+// The prebuild template pins Gradle 9.3.1, which fails because the bundled RN
+// and Expo Gradle plugins reference `JvmVendorSpec.IBM_SEMERU`, removed in
+// Gradle 9. Pin the wrapper to a Gradle 8.x that still has it.
+// expo-build-properties has no setting for this, hence the dangerous mod.
 //
 // Usage in app.json plugins: ["./plugins/withGradleVersion", { "version": "8.14.3" }]
 

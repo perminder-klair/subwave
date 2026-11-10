@@ -41,7 +41,7 @@ export function SessionChat({ session }: { session: DebugSession }) {
               </span>
             </span>
             <MessageContent className="rounded-none text-[12px] group-[.is-user]:rounded-none group-[.is-user]:bg-[var(--overlay)] group-[.is-user]:px-2.5 group-[.is-user]:py-1.5 group-[.is-user]:text-ink">
-              {/* Never markdown: MessageResponse would eat asterisks and underscores. */}
+              {/* Render raw session text to preserve asterisks and underscores. */}
               <div className="break-words whitespace-pre-wrap">{m.text}</div>
             </MessageContent>
           </Message>

@@ -22,13 +22,28 @@ See [`README.md`](README.md) for the architecture and [`DEPLOY.md`](DEPLOY.md)
 for deployment. For local development:
 
 ```bash
-cd docker && docker compose up -d        # Icecast + Liquidsoap + Controller
+docker compose -f docker-compose.dev.yml up -d   # Icecast + Liquidsoap + Controller
 cd controller && npm install && npm run dev
 cd web && npm install && npm run dev     # web UI on :7700
 ```
 
-There is no test runner, linter, or formatter configured. Match the style of
-the surrounding code.
+Compose files live at the repo root, not under `docker/` — the full set, and what
+each deployment shape is for, is in [`CLAUDE.md`](CLAUDE.md).
+
+All three packages expose `npm run lint` and CI runs all three on every PR.
+`controller/` and `web/` also expose `npm test`; `npm test -- <substring>` filters
+to matching paths.
+
+- `controller/` — `eslint . && tsc --noEmit`. Tests are `node:test` files under
+  `controller/scripts/`, discovered as `*.test.ts`.
+- `web/` — `eslint . && tsc --noEmit`. Tests are discovered under `tests/`,
+  `components/`, `hooks/`, `lib/` and `scripts/`, as `*.test.ts`, `*.test.tsx` or
+  `*.test.mjs`.
+- `mcp-subwave/` — `tsc --noEmit` only. No tests.
+
+**Neither test suite runs in CI**, so run it yourself before pushing: a green
+lint says nothing about it. There is no formatter; match the style of the
+surrounding code.
 
 ## Reporting bugs
 
@@ -70,6 +85,23 @@ footer, for anything that breaks compatibility.
 PR titles follow the same convention — squash-merging keeps history clean, and
 the commit carries through `develop` → `main`, where release-please reads it.
 
+Commits on `develop` are authored by the repo owner and carry no third-party
+trailers. That holds when a commit is written, but not in GitHub's squash box,
+which prefills the message from every commit on the branch plus the PR body — so
+for ordinary PRs squash-merged into `develop`, read that message before
+confirming. **The default is to delete the inherited tail**: keep the
+conventional PR title as the subject, keep the body you would have written for
+the commit yourself, and drop the concatenated branch commit messages under it.
+Remove anything that rode in that way — attribution trailers
+(`Co-Authored-By:`) and tool or session metadata (`Claude-Session:`,
+generated-by footers, session links).
+
+Two things survive the cut: a `Co-Authored-By:` line you are deliberately
+keeping to credit a genuine human co-author, and a `BREAKING CHANGE:` footer the
+change actually needs. The release PR is merged rather than squashed, for
+reasons of its own — see
+[`.claude/skills/subwave-release-pr/SKILL.md`](.claude/skills/subwave-release-pr/SKILL.md).
+
 ## Releases
 
 You don't cut releases by hand. Maintainers merge `develop` into `main` to ship;
@@ -78,6 +110,9 @@ workflow opens (or updates) a release PR that bumps `package.json` +
 `CHANGELOG.md` based on the Conventional Commits since the last tag. Merging
 that PR creates a `vX.Y.Z` tag and a GitHub Release, which triggers
 `publish-images.yml` to build and push the Docker images to GHCR.
+`publish-cli.yml` builds the CLI binaries from the same tag but keeps the
+release marked pre-release until that version's images are on GHCR, then
+attaches the binaries and marks it latest.
 
 ## Code of conduct
 

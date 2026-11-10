@@ -59,15 +59,18 @@ Icecast falls through to the Next.js catch-all and 404s. On one hostname:
 
 | Path | Upstream | Notes |
 |---|---|---|
-| `/stream.mp3` `/stream.opus` `/stream.flac` `/stream.aac` | Icecast `:7702` | Opus/FLAC/AAC are off by default but **still need routing** — enabling one in admin must not also need a proxy edit. Disable response buffering on these (Caddy `flush_interval -1`, nginx `proxy_buffering off`) or the audio arrives in lumps. |
-| `/listen.pls` `/listen.m3u` | Icecast `:7702` | Playlist files for hardware radios / VLC. Served at the **root**, not under `/api`. |
+| `/api/listener-auth*` | — | Return 404 at the edge, matched as a case-insensitive prefix (the controller also answers a trailing slash and any case). Icecast calls it directly over the internal network; exposed publicly it's an unthrottled password oracle (#478). This rule must win before the general `/api/*` rule. |
+| `/stream.mp3` `/stream.opus` `/stream.flac` `/stream.aac` | Icecast `:7702` | Opus/FLAC/AAC are off by default but **still need routing** — enabling one in admin must not also need a proxy edit. Disable response buffering on these (Caddy `flush_interval -1`, nginx `proxy_buffering off`) or the audio arrives in lumps. Drop `WWW-Authenticate` from the response only for a client that can't answer it: see [the stream's 401 challenge](reverse-proxy.md#the-streams-401-challenge). |
+| `/listen.pls` `/listen.m3u` | Controller `:7701` | Playlist files for hardware radios / VLC. Keep the path unchanged: they are controller routes served at the **root**, not under `/api`. |
 | `/api/*` | Controller `:7701` | Strip the `/api` prefix (Caddy `handle_path`). |
-| `/api/listener-auth` | — | Return 404 at the edge. Icecast calls it directly over the internal network; exposed publicly it's an unthrottled password oracle (#478). |
 | everything else | Web `:7700` | |
 
 A path-prefix rule matching `^/stream` covers the first row and any mount
 added later. Splitting the player across two hostnames is a different job —
 it needs a web rebuild with `NEXT_PUBLIC_*` pointing at each.
+
+Copy-paste nginx, Nginx Proxy Manager, Traefik, and Cloudflare Tunnel
+configurations live in [Reverse-proxy recipes](reverse-proxy.md).
 
 ### `docker-compose.dev.yml` — local development
 
@@ -210,6 +213,74 @@ the graphical operator UI.
 
 ---
 
+## Replacing music files
+
+Navidrome builds a track's id from its path, so a file replaced at the same path
+looks like the same track, with the old file's analysis. A tagger run or a
+reconcile spots the replacement and clears that analysis, so the next analysis
+run measures the new audio. Tags, the year and plays stay.
+
+It looks for a changed file size, and on Navidrome for a file dated after the
+track was last measured. Navidrome has to have re-read the file first, and a
+replacement that keeps its folder's date is only seen by a full scan.
+
+### When a replacement is held
+
+A tag editor's "save all", or a restore that reset file dates, makes a whole
+library look replaced. So above 200 tracks or 2% of the library, whichever is
+larger, a walk clears nothing, logs a warning, and leaves a banner on the admin
+Library page saying the files are on hold. The banner stays after the run ends,
+until the next run starts. Until you answer, every walk finds the same files
+again and raises it again, and any real replacement waits with them.
+
+**The audio did not change** (only tags or dates did). Accept the files. This
+keeps their analysis and stems, and they are not found again:
+
+```bash
+curl -u "$ADMIN_USER:$ADMIN_PASS" -X POST https://radio.example.com/api/library/reconcile \
+  -H 'Content-Type: application/json' -d '{"acceptReplaced": true}'
+```
+
+**The files really were replaced.** Confirm the clear. This throws away their
+analysis and stems, and measuring them again can take days on a large library:
+
+```bash
+curl -u "$ADMIN_USER:$ADMIN_PASS" -X POST https://radio.example.com/api/library/reconcile \
+  -H 'Content-Type: application/json' -d '{"confirmReplaced": true}'
+```
+
+Then start an analysis run from the admin Library page. To clear and measure in
+one go, send the same body to `/api/tag-library` instead, for a full tagger run.
+That run needs embeddings on, and stops before the walk without them.
+
+Both answers cover every file the walk finds that time, not just a held batch.
+Only one run happens at a time, and a request made during another answers 409.
+The same answers work from inside the controller container, as flags:
+
+```bash
+docker compose exec controller npx tsx src/music/tag-library.ts --reconcile-only --accept-replaced
+docker compose exec controller npx tsx src/music/tag-library.ts --reconcile-only --confirm-replaced
+```
+
+### What it can miss
+
+Each of these only affects a replacement of exactly the same size. A different
+size is found once the track has a stored size to compare with: the first walk
+after an upgrade only stores it, and a server that reports no sizes never does.
+
+- **An old file date.** A file copied with `cp -p` or `rsync -t`, moved in with
+  `mv`, or restored from a backup keeps its date. If that date is older than the
+  newest change the last walk saw, less 6 hours, it isn't read.
+- **Navidrome on a large library.** It stops answering past about 51,000 rows of
+  this list, so an older change isn't reached. A walk logs when its read was
+  partial.
+- **A server other than Navidrome.** Only Navidrome reports change times.
+- **Navidrome over plain http on a public address.** Reading change times needs
+  the password, which the station only sends over https or to a local address.
+  The Doctor says so under "real file paths".
+
+---
+
 ## State layout
 
 Everything that survives `docker compose down` lives in `state/`:
@@ -226,9 +297,9 @@ Everything that survives `docker compose down` lives in `state/`:
 | `voice/` | Controller | TTS WAVs rendered for each spoken segment |
 | `archive/` | Liquidsoap | Hourly MP3 archive (`YYYY-MM-DD/HH-00.mp3`) |
 | `logs/` | Controller + Liquidsoap | Event logs |
-| `stems/` | Analyzer | Cached Demucs stem windows for stem-blend transitions — byte-budgeted by `audio.stemCacheGb` (Settings → Transitions) |
+| `stems/` | Analyzer | Cached Demucs stem windows for stem-blend transitions — byte-budgeted by `audio.stemCacheGb` (Settings → Stems) |
 | `transitions/` | Analyzer | Rendered stem-blend clips (swept after ~1h) |
-| `next.txt`, `say.txt`, `intro.txt`, `auto.m3u`, `now-playing.json` | Controller ⇄ Liquidsoap | File-based IPC (see `CLAUDE.md`) |
+| `next.txt`, `jingle-now.txt`, `say.txt`, `intro.txt`, `auto.m3u`, `now-playing.json` | Controller ⇄ Liquidsoap | File-based IPC (see `CLAUDE.md`) |
 
 Back up `state/` to back up everything. Don't `git clean -dffx` without
 checking — `state/` lives inside the repo by default (`STATE_DIR=./state`)
@@ -241,36 +312,94 @@ cache to whatever `audio.stemCacheGb` allows (up to 1 TB), the archive by
 about 1.4 GB a day at 128 kbps. Both are usually the reason someone wants
 part of `state/` on a bigger, cheaper disk.
 
-There is no setting for this, by design: the paths are derived from the state
-dir (`stemsRoot()` is `<state>/stems`), so **the supported move is a bind
-mount at the same path**. Add it to every service that already mounts the
-state volume:
+Set `STEMS_DIR` in `.env` to the host folder you want to use. Compose mounts
+that folder into all three services at one fixed container path and hands them
+that path as `SUBWAVE_STEMS_DIR`, which is what the controller resolves the
+cache against:
 
-```yaml
-# docker-compose.override.yml
-services:
-  broadcast:
-    volumes:
-      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
-  controller:
-    volumes:
-      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
-  analyzer:
-    volumes:
-      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
+```dotenv
+# .env
+STEMS_DIR=/mnt/bigdisk/subwave-stems
 ```
 
-Three things to know before you do it:
+Move what is already cached across first — nothing migrates it for you, and
+the old copy is simply orphaned where it sits:
+
+```sh
+docker compose down
+mv state/stems/* /mnt/bigdisk/subwave-stems/    # multi-station: state/stations/<id>/stems
+docker compose up -d
+```
+
+If the stack is already on the new setting, recreating the three services is
+enough:
+
+```sh
+docker compose up -d --force-recreate broadcast controller analyzer
+```
+
+If `STEMS_DIR` is unset, the cache remains at `${STATE_DIR:-./state}/stems` —
+removing the line is a clean undo.
+
+**Multi-station installs get a folder per station under it**
+(`/mnt/bigdisk/subwave-stems/stations/<id>/`). Compose cannot read
+`state/stations/active.json`, so the mount has to address the install rather
+than the station; the per-station segment is re-appended on the other side.
+It has to stay split, because Navidrome credentials are per-station: two
+stations can index different libraries, and this cache is keyed by track id
+alone.
+
+Before you do it, know this:
 
 - **Mount it in the controller *and* the analyzer, at the identical path.**
   The controller hands the analyzer a filesystem *path*, not audio (the same
-  handoff that makes a remote analyzer need a matching mount — see
+  fast handoff a remote analyzer can fall back from for ordinary analysis, but
+  not for stem output — see
   ["Running the analyzer on another machine"](tts-heavy.md)). A stems mount
   that only one of them can see fails every write.
 - **Ownership sorts itself out on boot.** A fresh bind mount lands root-owned
   and the analyzer runs as uid 10001, so it could not write there. The
   broadcast entrypoint now opens `stems/` and `transitions/` to mode 777 on
-  every boot, exactly as it already did for `voice/`, `sfx/` and the rest.
+  every boot, exactly as it already did for `voice/`, `sfx/` and the rest —
+  and, when `STEMS_DIR` is set, the relocated root as well, which the in-state
+  loop never reaches.
+- **What the analyzer writes inside the cache stays deletable.** The
+  per-track folders (`stems/<id>/`) and the stem files are created 777 / 666
+  whatever the analyzer's umask, so a controller that is a different user on
+  the share (a remote analyzer, or NFS squashing root to `nobody`) can still
+  evict them. Before, they came out 755 / 644 and eviction failed with
+  `dir delete(s) failed — check ownership/permissions on state/stems`; a
+  `umask 0000` override on the analyzer's command was the workaround, and can
+  go.
+
+  Folders already on disk keep their old mode, because a cached track is not
+  written again. If you saw that error, open them once after upgrading, from
+  inside the analyzer, which is the user that owns them. Run this wherever the
+  analyzer runs. With a remote analyzer that is the GPU host, not the station:
+  `ANALYZER_REPLICAS=0` removes the station's `analyzer` container, and the
+  [compose file on the GPU host](tts-heavy.md#running-the-analyzer-on-another-machine)
+  uses the same service name and mount, so the command is the same:
+
+  ```sh
+  docker compose exec analyzer find /var/sub-wave/stems -mindepth 1 -type d ! -perm 777 -exec chmod 777 {} +
+  ```
+
+  On a multi-station install without `STEMS_DIR`, run it once per station on
+  `/var/sub-wave/stations/<id>/stems`. A `chmod` error names a folder the
+  analyzer cannot change: run `chmod 777` on it as root on the machine that
+  holds the files (the file server, on NFS). Until a stuck folder is opened the
+  sweep leaves it out of the budget check and warns, but its bytes still count
+  as used. A folder the sweep's permission check catches costs no other track.
+  One that passes the check and then refuses its delete leaves the budget check
+  only when that delete fails, so the tracks the sweep deleted before reaching
+  it may have gone in its place. A cache held over budget by stuck folders alone
+  writes no new stems.
+- **Transition clips are not part of this cache.** The rendered clips live in
+  `state/transitions` (multi-station: `state/stations/<id>/transitions`), so
+  `STEMS_DIR` does not move them and they do not count against the stem
+  budget. The analyzer writes them 666 too. The controller's hourly sweep
+  removes any clip over an hour old, unless it is still queued for a seam that
+  hasn't aired.
 - **A mount that refuses `chmod` no longer stops the station.** Read-only
   binds, some NFS exports and exFAT/NTFS disks won't take the permission
   change. That used to abort the broadcast entrypoint before Icecast started,
@@ -288,6 +417,17 @@ Three things to know before you do it:
   the share with the right `uid=`/`gid=` options) — a stem cache the analyzer
   can't write just means transitions fall back to a plain crossfade, but the
   same warning on `voice/` or `logs/` is worth acting on.
+- **An unmounted share is not read as an empty cache.** The cache root
+  carries a marker file, `.subwave-stems`, written the first time the analysis
+  pass uses the cache (an existing cache gets one on its next pass). If the
+  share is not mounted, the mount point is still there with no marker and no
+  stems in it while the library still has stems recorded, so the controller
+  treats the cache as offline: no stems are written, backfilled or swept, the
+  analysis pass and the hourly sweep log why, and the doctor warns. Mount the
+  share and everything resumes. An analyzer on another machine checks the
+  same marker on its own mount before writing. If you emptied the cache on
+  purpose and want to start again, create the file yourself:
+  `touch /mnt/bigdisk/subwave-stems/.subwave-stems`.
 
 ---
 
@@ -442,8 +582,99 @@ automatically.
 
 ---
 
+## Listener country on the Stats page
+
+Admin → **Stats** rolls listener sessions up by country. That geography comes
+from whatever the edge could work out, resolved as a chain — each link is tried
+only when the one before it came up empty:
+
+1. **`CF-IPCountry`.** Cloudflare sets it on every request it proxies. Nothing to
+   configure, and it is why the column has always been populated on the default
+   topology (Cloudflare in front of the bundled Caddy).
+2. **A header you name.** Most reverse proxies can add one — nginx with a GeoIP2
+   module, Traefik behind a CDN, Cloudflare Tunnel with a transform rule. Put its
+   name in Admin → Settings → Broadcast & mixer → **Listener country → Country header**
+   (`stream.countryHeader`). Empty by default.
+3. **An offline GeoIP database.** Admin → Settings → Broadcast & mixer → **Listener
+   country → GeoIP database** (`stream.geoipDbPath`), or `GEOIP_DB_PATH` in the
+   environment, which wins. See below.
+
+If none of them answers, the country is simply left out of the rollup — the
+Stats page shows the sessions without geography. **Nothing here can fail a
+request**: this runs inside the player's first-load beacon, so a header that
+isn't a country, a database that can't be read, an address that isn't in the
+tree — each is a miss that falls through, never an error.
+
+### Supplying a GeoIP database
+
+Nothing is bundled. Every IP-to-country database is a licensed download with its
+own attribution terms, so you fetch one yourself. Any file in **MaxMind's MMDB
+format** works, which includes the free tiers of all three of the usual sources:
+
+| Database | Cost | Notes |
+| --- | --- | --- |
+| [MaxMind GeoLite2 Country](https://dev.maxmind.com/geoip/geolite2-free-geolocation-data) | Free, account + licence key | Weekly updates; attribution required |
+| [DB-IP IP-to-Country Lite](https://db-ip.com/db/download/ip-to-country-lite) | Free, no account | Monthly; CC-BY 4.0 attribution |
+| [IP2Location LITE DB1](https://lite.ip2location.com/database/db1-ip-country) | Free, account | Monthly; attribution required |
+
+Put the `.mmdb` file somewhere the **controller** container can read — the state
+dir is already mounted, so that is the easy answer:
+
+```bash
+mkdir -p state/geoip
+curl -fsSL 'https://download.db-ip.com/free/dbip-country-lite-2026-09.mmdb.gz' \
+  | gunzip > state/geoip/country.mmdb
+```
+
+Then point the station at it. Either set it in the admin UI, or — for AIO/Unraid
+and anywhere you prefer environment config — put it in the root `.env`:
+
+```bash
+# .env — path as the CONTROLLER container sees it
+GEOIP_DB_PATH=/var/sub-wave/geoip/country.mmdb
+```
+
+`docker compose up -d controller` to pick the variable up. The database is read
+once, on the first beacon after a restart; a refreshed file needs a controller
+restart to take effect. If the path is wrong, the controller logs one line
+naming it and carries on with the header links:
+
+```
+[geoip] cannot read /var/sub-wave/geoip/country.mmdb: ENOENT … — listener country falls back to headers only
+```
+
+A note on order: the chain asks the database only when neither header answered,
+so configuring one behind Cloudflare costs nothing. `XX` (Cloudflare's own
+"couldn't tell") and `T1` (Tor exit) count as *not answering*, which is exactly
+when a fallback is worth having.
+
+---
+
+## Exporting the LLM call log
+
+Admin → **Debug** → *LLM recent calls* keeps the last 120 model calls since the
+controller started: the prompts, the tool trail, the response, the latency and
+the token usage. **Export JSON** downloads all of them as one document;
+**NDJSON** writes one call per line, for `jq` and `grep`:
+
+```bash
+# every call that failed, newest first
+jq -c 'select(.ok == false) | {t, kind, model, error}' subwave-llm-calls-*.ndjson
+
+# how long each pick took
+jq -r 'select(.kind == "djAgentPick") | [.t, .ms, .model] | @tsv' subwave-llm-calls-*.ndjson
+```
+
+The file holds exactly what the panel shows — same admin credential, same
+records, no extra fields and no extra filtering. That also means it holds
+whatever your prompts hold (persona souls, house rules, track metadata, listener
+request text), so read one before attaching it to a public issue. The ring is
+in-memory and since-boot: a restart empties it, and call 121 pushes call 1 out.
+
+---
+
 ## What's intentionally not included
 
 - **A `curl | sh` installer.** The two-file install (`curl docker-compose.yml` + `curl .env.example`) is the deliberate "as simple as it can be without piping random scripts into your shell" line.
-- **Multi-arch (arm64) images.** Piper, Kokoro, and Chatterbox wheels are amd64-only. Pin a Linux/amd64 host.
+- **A fully arm64 stack.** The split-stack core — `subwave-{caddy,broadcast,controller,web}` — and the lean `subwave-analyzer` ARE published for `linux/arm64` as well as `linux/amd64`, so a Pi 5 / arm64 NAS runs them natively (Dockerfile.controller picks its Piper build off `$TARGETARCH`; Kokoro/onnx have arm64 wheels). What is amd64-only: the `subwave-aio` all-in-one images (the bundled Next.js build fails its arm64 cross-build under QEMU), `subwave-tts-heavy` (Chatterbox), and the heavy/CUDA analyzer variants. On arm64, run the split stack and leave those opt-ins off — or set `DOCKER_DEFAULT_PLATFORM=linux/amd64` and accept emulation.
 - **Multi-host / k8s.** SUB/WAVE is a personal radio station — one Icecast mount, one broadcast. Scaling horizontally would mean per-listener streams, which defeats the design.

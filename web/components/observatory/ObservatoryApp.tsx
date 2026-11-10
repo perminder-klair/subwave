@@ -1,18 +1,21 @@
-/* Library Observatory — app shell. Full-bleed top bar plus a 3-column grid
-   (filter rail, constellation, stats/dossier), wired to the real library via
-   useObservatory()/useTrackDetail(). */
+/* Library Observatory app shell: top bar plus filter rail, constellation and
+   stats/dossier, wired to useObservatory()/useTrackDetail(). */
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useObservatory, useTrackDetail } from '../../lib/observatory';
 import { StatsView, Dossier } from './panels';
 import Tooltip, { type TipState } from './Tooltip';
 import {
+  genreText,
+  matchesObservatoryTrack,
   nearest,
   sourceStyle,
   tally,
+  trackGenres,
   type ColorBy,
   type MapProjectionStatus,
   type ObsTrack,
@@ -68,15 +71,32 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
   );
 }
 
-// Node-cap ladder for MAP SIZE, clamped to the server's hardMax. Measured at
-// 60 fps up to 500k, with a one-time geometry stall on load (~2s at 200k,
-// ~6s at 500k).
+// Node-cap ladder for MAP SIZE, clamped to the server's hardMax.
 const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000, 200000, 500000];
-// Display fallback before the first load resolves. The real default lives on
-// the server (OBSERVATORY_MAX): with nothing stored we fetch without ?max= and
-// adopt the cap the response reports, so an env override reaches the UI.
+// Display fallback only; the real default is the server's OBSERVATORY_MAX,
+// adopted from the response when nothing is stored (we then omit ?max=).
 const DEFAULT_MAX = 25000;
 const MAX_STORAGE_KEY = 'subwave_obs_max';
+// Folded side panels, remembered per browser like MAP SIZE. Unreadable
+// storage leaves both open.
+const RAIL_STORAGE_KEY = 'subwave_obs_rail';
+const SIDE_STORAGE_KEY = 'subwave_obs_side';
+
+function readPanelOpen(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function savePanelOpen(key: string, open: boolean): void {
+  try {
+    window.localStorage.setItem(key, open ? '1' : '0');
+  } catch {
+    /* ignore quota/availability */
+  }
+}
 
 const COLOR_MODES: [ColorBy, string][] = [
   ['energy', 'ENERGY'],
@@ -107,8 +127,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const { detail, loadingId, fetchDetail } = useTrackDetail(adminFetch);
 
   const [q, setQ] = useState('');
-  // `matched` scans every node, so at large caps filtering per keystroke lags.
-  // 150ms is under perception but coalesces a burst of keys into one scan.
+  // `matched` scans every node, so debounce a burst of keys into one scan.
   const [qDebounced, setQDebounced] = useState('');
   useEffect(() => {
     if (q === '') {
@@ -118,8 +137,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     const id = setTimeout(() => setQDebounced(q), 150);
     return () => clearTimeout(id);
   }, [q]);
-  // Deep-linkable (?color=). The page only mounts after admin auth hydrates,
-  // so reading the URL in the initializer never runs on SSR.
+  // Deep-linkable (?color=). Mounts only after admin auth hydrates, so the
+  // initializer never runs on SSR.
   const [colorBy, setColorBy] = useState<ColorBy>(() => {
     if (typeof window === 'undefined') return 'energy';
     const c = new URLSearchParams(window.location.search).get('color') as ColorBy | null;
@@ -134,6 +153,12 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const [selected, setSelected] = useState<ObsTrack | null>(null);
   const [tip, setTip] = useState<TipState | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [railOpen, setRailOpen] = useState(() => typeof window === 'undefined' || readPanelOpen(RAIL_STORAGE_KEY));
+  const [sideOpen, setSideOpen] = useState(() => typeof window === 'undefined' || readPanelOpen(SIDE_STORAGE_KEY));
+  useEffect(() => savePanelOpen(RAIL_STORAGE_KEY, railOpen), [railOpen]);
+  useEffect(() => savePanelOpen(SIDE_STORAGE_KEY, sideOpen), [sideOpen]);
+  const toggleRail = useCallback(() => setRailOpen((o) => !o), []);
+  const toggleSide = useCallback(() => setSideOpen((o) => !o), []);
 
   // Bumped by search picks, MIX NEXT picks and deep links, never by plain map
   // clicks — the node is already under the cursor there.
@@ -185,16 +210,14 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
 
   const matched = useMemo(() => {
     if (!lib) return [];
-    const qq = qDebounced.trim().toLowerCase();
-    return lib.tracks.filter((t) => {
-      if (energy.size && !(t.energy && energy.has(t.energy))) return false;
-      if (sources.size && !(t.source && sources.has(t.source))) return false;
-      if (genres.size && !(t.genre && genres.has(t.genre))) return false;
-      if (moods.size && !t.moods.some((m) => moods.has(m))) return false;
-      if (analysedOnly && !t.analysed) return false;
-      if (qq && !t.searchText.includes(qq)) return false;
-      return true;
-    });
+    return lib.tracks.filter((track) => matchesObservatoryTrack(track, {
+      query: qDebounced,
+      energy,
+      moods,
+      genres,
+      sources,
+      analysedOnly,
+    }));
   }, [lib, qDebounced, energy, moods, genres, sources, analysedOnly]);
 
   const matchSet = useMemo(() => new Set(matched.map((t) => t.idx)), [matched]);
@@ -207,8 +230,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     setSelected((cur) => (cur ? (byId.get(cur.id) ?? null) : cur));
   }, [byId]);
 
-  // Title matches first, then any other field. Single pass with an early exit,
-  // so a keystroke never pays more than one O(n) scan even at the 500k cap.
+  // Title matches first, then any other field; one O(n) pass with an early exit.
   const searchHits = useMemo(() => {
     const qq = qDebounced.trim().toLowerCase();
     if (!qq) return [];
@@ -246,9 +268,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     setAnalysedOnly(false);
   };
 
-  // ?track=<id>, captured ONCE at mount: the URL-sync effect below rewrites the
-  // query string from the initially empty selection before the library loads,
-  // so by the time tracks exist the live URL no longer carries the param.
+  // ?track=<id>, captured once at mount: the URL-sync effect below strips it
+  // from the live URL before the library has loaded.
   const initialTrack = useRef<string | null>(
     typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('track'),
   );
@@ -288,8 +309,20 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, q]);
 
-  // Adopt the status that rode the bulk load, then poll the lightweight status
-  // endpoint while a run is live; on finish, reload the map for the new coords.
+  // [ and ] fold the rail and the side panel, except while typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.key === '[') toggleRail();
+      else if (e.key === ']') toggleSide();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleRail, toggleSide]);
+
+  // Adopt the status from the bulk load, poll the light endpoint while a run is
+  // live, and reload the map on finish for the new coords.
   const [proj, setProj] = useState<MapProjectionStatus | null>(null);
   const [projBusy, setProjBusy] = useState(false);
   useEffect(() => {
@@ -340,7 +373,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             artist: t.artist,
             album: t.album,
             year: t.year,
-            genre: t.genre,
+            genre: trackGenres(t).join(', ') || null,
           }),
         });
         const body = await res.json().catch(() => null);
@@ -353,8 +386,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     [adminFetch],
   );
 
-  // Stable identities, or the galaxy's attribute-refresh effects re-run on the
-  // parent re-render a hover triggers.
+  // Stable identities, or the galaxy's attribute-refresh effects re-run on hover.
   const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
     if (!t || !e) {
       setTip(null);
@@ -376,9 +408,19 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const projLastLine = proj?.lastLog?.length ? proj.lastLog[proj.lastLog.length - 1] : null;
 
   return (
-    <div className="observatory-root">
-      <header className="obs-top">
+    <div className="observatory-root admin-booth">
+      <header className="obs-top admin-booth-bar">
         <div className="obs-top-l">
+          <button
+            className="obs-fold"
+            onClick={toggleRail}
+            aria-expanded={railOpen}
+            aria-controls="obs-rail"
+            aria-label={railOpen ? 'hide filters' : 'show filters'}
+            title={(railOpen ? 'Hide filters' : 'Show filters') + ' ([)'}
+          >
+            {railOpen ? <PanelLeftClose aria-hidden="true" /> : <PanelLeftOpen aria-hidden="true" />}
+          </button>
           <Link href="/admin/library" className="obs-back">
             ← ADMIN
           </Link>
@@ -434,11 +476,19 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
           <button className="obs-top-reset" onClick={onReset}>
             RESET DIAL
           </button>
+          <button
+            className="obs-fold"
+            onClick={toggleSide}
+            aria-expanded={sideOpen}
+            aria-controls="obs-side"
+            aria-label={sideOpen ? 'hide the side panel' : 'show the side panel'}
+            title={(sideOpen ? 'Hide' : 'Show') + ' the side panel (])'}
+          >
+            {sideOpen ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}
+          </button>
         </div>
       </header>
 
-      {/* A load failure never blanks the view, but must not read as a fresh
-          install either. */}
       {error && (
         <div className="obs-error" role="alert">
           <span>
@@ -451,8 +501,15 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
         </div>
       )}
 
-      <div className="obs-main">
-        <aside className="obs-rail">
+      <div className={'obs-main' + (railOpen ? '' : ' rail-shut') + (sideOpen ? '' : ' side-shut')}>
+        <aside id="obs-rail" className="obs-rail">
+          {/* Folded, the panel is this spine; open, it is hidden (globals.css). */}
+          <button className="obs-spine" onClick={toggleRail} aria-label="show filters">
+            <PanelLeftOpen aria-hidden="true" />
+            <span className="obs-spine-label">
+              FILTERS{matched.length !== total ? ` · ${matched.length.toLocaleString()} / ${total.toLocaleString()}` : ''}
+            </span>
+          </button>
           <div className="rail-search-wrap">
             <div className="rail-search">
               <span className="rail-search-ico">♪</span>
@@ -492,7 +549,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
                     <span className="hit-title">{t.title || 'Untitled'}</span>
                     <span className="hit-artist">
                       {t.artist || 'Unknown'}
-                      {t.genre ? ` · ${t.genre}` : ''}
+                      {genreText(t) ? ` · ${genreText(t)}` : ''}
                     </span>
                   </button>
                 ))}
@@ -631,7 +688,13 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
           )}
         </section>
 
-        <aside className="obs-side">
+        <aside id="obs-side" className="obs-side">
+          <button className="obs-spine" onClick={toggleSide} aria-label="show the side panel">
+            <PanelRightOpen aria-hidden="true" />
+            <span className="obs-spine-label">
+              {selected ? `DOSSIER · ${selected.title || 'Untitled'}` : 'LIBRARY STATS'}
+            </span>
+          </button>
           {lib &&
             (selected ? (
               <Dossier

@@ -1,38 +1,55 @@
-// Ring buffer + aggregate tracker for Subsonic/Navidrome API calls — feeds the
-// admin /debug surface so every request to the music server is inspectable.
-// Mirrors llm/log.js. Lives in its own module so subsonic.js can record
-// without an import cycle.
+// Ring buffer + aggregate tracker for Subsonic/Navidrome API calls, feeding the
+// admin /debug surface. Its own module so subsonic.js can record without a cycle.
 
 import { appendFile } from 'node:fs/promises';
 import { statSync, renameSync } from 'node:fs';
+import { basename } from 'node:path';
 import { STATE_DIR } from '../config.js';
-import { logEvent } from '../observability/events.js';
+import { currentTrace, logEvent } from '../observability/events.js';
 
 const MAX_CALLS = 150;
 export const recentCalls: any[] = [];
 
 // endpoint -> { calls, errors, totalMs, songResults }
 const endpointStats = new Map<string, any>();
-// songId -> { id, title, artist, count } — how often each song has come back,
-// the evidence for "is the picker drawing from the whole library or a pool?"
+// songId -> { id, title, artist, count }: how often each song has come back.
 const songCoverage = new Map<string, any>();
 
-// Durable append-only log. The in-memory structures above are lost on restart;
-// this tab-separated file in the shared state volume survives, so pool
-// patterns stay reviewable over days. Best-effort — a write failure must never
-// break a request.
+type RequestPurpose = 'api' | 'connection-test' | 'cover' | 'analysis-download';
+interface RequestProducer {
+  endpoint: string;
+  purpose: RequestPurpose;
+  traceKind: string | null;
+  attempts: number;
+}
+let attemptsSince = new Date().toISOString();
+const requestProducers = new Map<string, RequestProducer>();
+const processName = basename(process.argv[1] || 'node');
+
+// Count at fetch dispatch, including failed connects and retries. These are
+// attempts, not proof of receipt by Navidrome, DNS queries, or redirect hops.
+// Never accept a URL/params here: Subsonic URLs contain credentials.
+export function recordHttpAttempt(endpoint: string, purpose: RequestPurpose) {
+  const traceKind = currentTrace()?.kind ?? null;
+  const key = JSON.stringify([endpoint, purpose, traceKind]);
+  const producer = requestProducers.get(key);
+  if (producer) producer.attempts++;
+  else requestProducers.set(key, { endpoint, purpose, traceKind, attempts: 1 });
+  // Child taggers/analyzers write to the same event files, while /debug only
+  // sees this process's counters. The pid + entrypoint keep those distinguishable.
+  logEvent('navidrome.http-attempt', {
+    endpoint, purpose, traceKind, pid: process.pid, process: processName,
+  });
+}
+
+// Durable append-only log; the maps above are lost on restart. Best-effort — a
+// write failure must never break a request.
 const CALLS_LOG = `${STATE_DIR}/logs/subsonic.log`;
-// A busy station writes ~40 MB/month to this log. Rotate when it hits this
-// cap; one .old backup is kept (older content is overwritten). Tuned tight
-// because the in-memory ring + logEvent stream cover real observability —
-// this file just provides a few days of audit history.
+// One .old backup is kept; older content is overwritten.
 const CALLS_LOG_MAX_BYTES = 10 * 1024 * 1024;
 
-// Rotate on module load (catches the cap across redeploys) AND every ~1000
-// writes (catches it during long uptimes — a controller running a month would
-// otherwise blow past the cap with only the startup check). Sync calls are
-// fine: the startup check runs once, and the periodic check runs ~once an hour
-// at typical pick rates. Missing file or missing logs/ dir is fine.
+// Rotate on module load and every ~1000 writes, so a long-uptime controller does
+// not blow past the cap. Missing file or logs/ dir is fine.
 function maybeRotateLog() {
   try {
     if (statSync(CALLS_LOG).size > CALLS_LOG_MAX_BYTES) {
@@ -76,9 +93,8 @@ export function record(entry: any) {
   }
   appendFile(CALLS_LOG, line).catch(() => {});
 
-  // Durable, trace-correlated event — logEvent stamps the active traceId, so
-  // this Navidrome call is linked to the DJ decision that caused it. Carries
-  // the request params that the tab-separated CALLS_LOG above drops.
+  // logEvent stamps the active traceId, linking this call to the DJ decision that
+  // caused it, and carries the params CALLS_LOG drops.
   logEvent('navidrome', {
     endpoint: entry.endpoint,
     params: entry.params || null,
@@ -110,6 +126,15 @@ export function snapshot(libraryTotal = null) {
   return {
     recentCalls,
     endpoints,
+    httpAttempts: {
+      since: attemptsSince,
+      pid: process.pid,
+      process: processName,
+      total: [...requestProducers.values()].reduce((sum, p) => sum + p.attempts, 0),
+      producers: [...requestProducers.values()]
+        .map(p => ({ ...p }))
+        .sort((a, b) => b.attempts - a.attempts),
+    },
     coverage: {
       distinctSongs: songs.length,
       totalSongResults: songs.reduce((sum, s) => sum + s.count, 0),
@@ -123,4 +148,6 @@ export function reset() {
   recentCalls.length = 0;
   endpointStats.clear();
   songCoverage.clear();
+  requestProducers.clear();
+  attemptsSince = new Date().toISOString();
 }

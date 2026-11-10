@@ -1,8 +1,8 @@
 // The `POST /settings` patch registry (#1348).
 //
-// `settings.update()` takes a PARTIAL patch over 42 top-level keys and validates
+// `settings.update()` takes a PARTIAL patch over 49 top-level keys and validates
 // it in a long chain of `if ('<key>' in patch)` branches — a route that owns
-// forty-two shapes doesn't fit #1337's one-schema-per-form recipe.
+// forty-nine shapes doesn't fit #1337's one-schema-per-form recipe.
 //
 // This module is the frame the conversion lands in, one key at a time:
 //
@@ -31,17 +31,31 @@ import { ZodError, type ZodType } from 'zod';
 import {
   archivePatchSchema,
   audioPatchSchema,
+  backupsPatchSchema,
+  taggerPatchSchema,
   bedsPatchSchema,
+  silenceTrimPatchSchema,
   crossfadeDurationSchema,
+  duckingPatchSchema,
+  handoverPatchSchema,
   djHouseRulesSchema,
+  djBehaviourPatchSchema,
   djSpeakClockSchema,
+  djTalkOnlyBetweenTracksSchema,
+  pauseTalkMinSecondsSchema,
+  fadeAtShowEndSchema,
   festivalsSchema,
   jingleRatioSchema,
+  jinglePlacementSchema,
+  jingleRotateSchema,
   likesPatchSchema,
+  lyricsPatchSchema,
+  musicSourcePatchSchema,
   localeSchema,
   loudnessPatchSchema,
   moodScheduleSchema,
   moodsSchema,
+  pickerPatchSchema,
   privacyPatchSchema,
   requestsPatchSchema,
   scrobblePatchSchema,
@@ -52,6 +66,7 @@ import {
   streamPatchSchema,
   timezoneSchema,
   transitionsPatchSchema,
+  ttsPatchSchema,
   uiPatchSchema,
   weatherMoodsSchema,
   weatherPatchSchema,
@@ -61,6 +76,7 @@ import {
   activeDjPromptIdSchema,
   djPromptTextSchema,
   maxTrackSecondsSchema,
+  maxTrackLengthModeSchema,
   themePatchSchema,
 } from '../schemas/settings.js';
 import {
@@ -71,6 +87,7 @@ import {
 } from '../schemas/persona.js';
 import { scheduleOverrideSchema, scheduleSchema } from '../schemas/schedule.js';
 import { SHOW_MAX_TRACK_SECONDS, showsSchema } from '../schemas/show.js';
+import { steerSchema } from '../schemas/steer.js';
 import { webhooksSchema } from '../schemas/webhook.js';
 
 // Mirrors settings/defaults.ts's BOUNDS.maxTrackSeconds, which reads its ceiling
@@ -97,10 +114,17 @@ import { firstMessage, flattenIssues } from '../util/zod-error.js';
  */
 export const SETTINGS_PATCH_KEYS = [
   'jingleRatio',
+  'jingleRotate',
+  'jinglePlacement',
   'crossfadeDuration',
+  'ducking',
+  'handover',
+  'maxTrackLengthMode',
   'maxTrackSeconds',
   'maxTrackMinutes',
   'archive',
+  'backups',
+  'tagger',
   'stream',
   'loudness',
   'weather',
@@ -117,14 +141,20 @@ export const SETTINGS_PATCH_KEYS = [
   'activeDjPromptId',
   'djPrompt',
   'djHouseRules',
+  'djBehaviour',
   'djSpeakClock',
+  'djTalkOnlyBetweenTracks',
+  'pauseTalkMinSeconds',
+  'fadeAtShowEnd',
   'personas',
   'shows',
   'schedule',
   'scheduleOverride',
+  'steer',
   'activePersonaId',
   'tts',
   'llm',
+  'picker',
   'search',
   'embedding',
   'skills',
@@ -132,6 +162,7 @@ export const SETTINGS_PATCH_KEYS = [
   'transitions',
   'sfx',
   'beds',
+  'silenceTrim',
   'ui',
   'privacy',
   'requests',
@@ -139,6 +170,8 @@ export const SETTINGS_PATCH_KEYS = [
   'webhooksPolicy',
   'scrobble',
   'likes',
+  'lyrics',
+  'musicSource',
 ] as const;
 
 export type SettingsPatchKey = (typeof SETTINGS_PATCH_KEYS)[number];
@@ -184,25 +217,39 @@ type SettingsPatchEntry = ZodType | ((ctx: SettingsPatchContext) => ZodType);
  */
 export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, SettingsPatchEntry>>> = {
   jingleRatio: jingleRatioSchema,
+  jingleRotate: jingleRotateSchema,
+  jinglePlacement: jinglePlacementSchema,
   crossfadeDuration: crossfadeDurationSchema,
+  ducking: duckingPatchSchema,
+  handover: handoverPatchSchema,
   archive: archivePatchSchema,
+  backups: backupsPatchSchema,
+  tagger: taggerPatchSchema,
   stream: streamPatchSchema,
   loudness: loudnessPatchSchema,
   weather: weatherPatchSchema,
+  picker: pickerPatchSchema,
   station: stationSchema,
   stationDescription: stationDescriptionSchema,
   locale: localeSchema,
   djHouseRules: djHouseRulesSchema,
+  djBehaviour: djBehaviourPatchSchema,
   djSpeakClock: djSpeakClockSchema,
+  djTalkOnlyBetweenTracks: djTalkOnlyBetweenTracksSchema,
+  pauseTalkMinSeconds: pauseTalkMinSecondsSchema,
+  fadeAtShowEnd: fadeAtShowEndSchema,
   search: searchPatchSchema,
   audio: audioPatchSchema,
   transitions: transitionsPatchSchema,
   sfx: sfxPatchSchema,
   beds: bedsPatchSchema,
+  silenceTrim: silenceTrimPatchSchema,
   ui: uiPatchSchema,
   webhooksPolicy: webhooksPolicyPatchSchema,
   scrobble: scrobblePatchSchema,
   likes: likesPatchSchema,
+  lyrics: lyricsPatchSchema,
+  musicSource: musicSourcePatchSchema,
   moods: moodsSchema,
   moodSchedule: moodScheduleSchema,
   weatherMoods: weatherMoodsSchema,
@@ -210,6 +257,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   timezone: timezoneSchema,
   privacy: privacyPatchSchema,
   requests: requestsPatchSchema,
+  tts: ttsPatchSchema,
   // Both are validated by the SAME schema update() reaches through
   // validatePersonasStrict / validateDjPromptsStrict. Their branches are NOT
   // switched to parseSettingsPatchKey, because both need a server-only step the
@@ -226,6 +274,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   // library. Registering the pure half is still worth it: it is what gives these
   // inputs a `fieldErrors` key, and it moves the refusal to the boundary.
   theme: themePatchSchema,
+  maxTrackLengthMode: maxTrackLengthModeSchema,
   maxTrackSeconds: maxTrackSecondsSchema(MAX_TRACK_SECONDS_BOUNDS),
   activeDjPromptId: activeDjPromptIdSchema,
   djPrompt: djPromptTextSchema({ min: DJ_PROMPT_TEXT_MIN, max: DJ_PROMPT_TEXT_MAX }),
@@ -234,6 +283,8 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   // pin is how a takeover is cancelled.
   scheduleOverride: (ctx) =>
     scheduleOverrideSchema({ showIds: ctx.showIds, now: null }).nullable(),
+  // Nullable for the same reason: null is how a steer is cleared.
+  steer: steerSchema({ now: null }).nullable(),
   // These three were already on a shared schema before this registry existed —
   // update() reaches them through validateShowsStrict / validateScheduleStrict /
   // validateWebhooksStrict, which is where their server-only halves live (id
@@ -247,10 +298,10 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   // the same body may be changing. Shape and per-field rules still apply.
   shows: (ctx) =>
     showsSchema({
-      // personaIds is NOT nullable on ShowSchemaContext — a show with no owner
-      // has none on either path — so the route passes the empty roster, which
-      // makes host membership unresolvable and therefore unchecked here.
-      personaIds: [],
+      // The route cannot know the effective persona roster: personas may ride
+      // in this same patch. update() validates against its resolved roster
+      // after applying personas, so this pass checks shape and pure rules only.
+      personaIds: null,
       moodNames: ctx.moodNames,
       themeIds: null,
       minTrackSeconds: null,
@@ -337,6 +388,8 @@ const SETTINGS_PATCH_ROOTED_KEYS: ReadonlySet<string> = new Set<SettingsPatchKey
   // because validateScheduleOverrideStrict has always rooted them here. Adding
   // the key to the text instead would double it on that path.
   'scheduleOverride',
+  // validateSteerStrict roots its messages the same way.
+  'steer',
   // The same three validate*Strict functions already root at their settings
   // key, so the route must too or the two disagree about the same body.
   'shows',

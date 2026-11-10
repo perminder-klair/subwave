@@ -1,62 +1,67 @@
 // DJ-mode mini-runs: a short arc of picks that head somewhere together rather
 // than each being chosen from scratch. Holds the run state and decides, per
 // track, whether one starts, continues or ends.
-//
-// Part of the dj-agent/ split - see ../dj-agent.ts for the pick/request runs.
 
 import * as settings from '../../settings.js';
 import * as library from '../../music/library.js';
 import * as mix from '../../music/mix.js';
 import * as journey from '../../music/journey.js';
-import { shuffle } from '../../util/shuffle.js';
+import { journeyDestinationIds, type JourneyShow } from '../../music/journey-destination.js';
+import { shiftOnsetMs } from '../../music/silence-trim.js';
 import { energyForDaypart } from '../../context.js';
 
-// --- Feature 4: DJ-mode mini-runs ------------------------------------------
-// A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
-// run is active the pool re-rank is anchored to the run target (not just the
-// current track), and the link patter acknowledges the run. State is module-
-// level — one station, one run at a time. Cleared when it runs out or when the
-// active persona isn't in DJ mode.
+// A tempo/key target across 2-3 consecutive picks; while active the pool
+// re-rank anchors to it rather than the current track. Module-level state: one
+// station, one run at a time, cleared when it runs out, the persona leaves DJ
+// mode, or the show the picks are FOR changes (#1911).
 //
-// Phase 2 overlay — a SONIC JOURNEY. When the audio (CLAP) index is populated,
-// a run can also carry a sequence of waypoint vectors through the audio space
-// toward a destination vibe; each pick consumes one waypoint, handed to the
-// picker as the audio-KNN anchor so the pool drifts toward the destination
-// while the tempo/key re-rank still applies. `waypoints`/`step` are absent on a
-// plain tempo/key run (no audio index, or the journey couldn't be built), in
-// which case the run behaves exactly as it did before.
+// `showKey` is that show. A run belongs to the show it started in: the next
+// host must not inherit the previous host's arc, and a journey's destination
+// was drawn from inside the show that started it. It is compared per pick,
+// against the show resolved at the pick's own air time, rather than cleared by
+// the session roll — the first pick of an incoming show is made under the
+// look-ahead clock BEFORE the live session rolls, so a roll-time reset would
+// land one pick too late, on exactly the pick the issue is about.
+//
+// `waypoints`/`step` are the optional sonic-journey overlay: a path of CLAP
+// vectors toward a destination vibe, one consumed per pick as the audio-KNN
+// anchor. Absent on a plain tempo/key run.
 interface RunState {
   bpm: number | null;
   key: string | null;
   remaining: number;
+  showKey: string;
   waypoints?: number[][];
   step?: number;
 }
 let runState: RunState | null = null;
+// The show the previous pick was for; null before the first pick of this
+// process. A change between two picks is a show changeover.
+let lastPickShowKey: string | null = null;
 
 // What advanceRun hands back per pick: the tempo/key re-rank target (feature 4)
 // and, when a sonic journey is active, the current waypoint vector for the
-// picker's audio anchor. Either may be null independently.
+// picker's audio anchor. Either may be null independently. `endedForShow` is
+// set on the pick where a show change ended a run that was still going, so the
+// caller can say so in the booth.
 interface RunStep {
   rankTarget: { bpm: number | null; key: string | null } | null;
   audioWaypoint: number[] | null;
+  endedForShow?: boolean;
 }
 
-// How many candidate tracks to average for a destination-vibe centroid. Capped
-// so a big energy bucket doesn't turn the centroid into one getAudioVector read
-// per track in the library on every run start.
-// Small on purpose: the destination is the CENTROID of this sample, and a
-// 60-track sample of an energy bucket averages out to ~the bucket's mean every
-// time — journeys kept heading for the same two fixed points in audio space
-// (one per direction). Eight random tracks give a centroid that genuinely
-// varies run to run while still smoothing out any single outlier.
-//
-// Eight tracks WITH audio vectors, which is why the sampling below probes
-// rather than just slicing. audioCentroid silently drops ids the CLAP index
-// doesn't cover, and partial coverage is the normal state (analysis backfills
-// over days) — so on a 20 %-covered library a blind slice of 8 averages ~1.6
-// vectors, lands on a single arbitrary track's "centroid" more often than not,
-// and comes back empty (journey silently dropped) about one run in six.
+// The run's identity: the show on air at the pick, or one shared key for every
+// autonomous block. Autonomous daypart/mood turnovers are soft shifts for the
+// session too, and a run is shorter than any of them.
+export function runShowKey(show: { id?: string | null } | null | undefined): string {
+  return show?.id ? `show:${show.id}` : 'auto';
+}
+
+// How many candidate tracks to average for a destination-vibe centroid. Small
+// on purpose: a large sample averages out to the energy bucket's mean every
+// time, so every journey heads for the same fixed point. It must be 8 tracks
+// WITH audio vectors, which is why the sampling below probes rather than
+// slicing — CLAP coverage is normally partial.
 const JOURNEY_DEST_SAMPLE = 8;
 // Ceiling on those probes, so a bucket with no audio coverage at all costs a
 // bounded number of indexed lookups instead of a walk over the whole bucket.
@@ -71,25 +76,27 @@ function takeWaypoint(rs: RunState): number[] | null {
   return rs.waypoints[idx];
 }
 
-// Try to overlay a sonic journey on a freshly-started run. Destination is a
-// daypart-appropriate energy bucket's centroid (brisker daypart → toward the
-// high-energy sound, mellower → toward the low-energy sound), so the run drifts
-// in the same direction the tempo/key target already nudges. No-op (leaves the
-// run a plain tempo/key run) when the current track or the destination has no
-// audio coverage. `totalSteps` is the number of picks the run will influence.
-function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): void {
+// Overlay a sonic journey on a freshly-started run. The destination is the
+// centroid of a few tracks the show on air could play (music/journey-
+// destination.ts), drawn from the daypart's energy bucket first so the run
+// drifts the same way the tempo/key target nudges; with no show on air, the
+// daypart energy bucket itself. No-op when the current track or the
+// destination has no audio coverage, or the show cannot be placed in the
+// library. `totalSteps` is how many picks the run influences.
+async function maybeAttachJourney(rs: RunState, current: any, totalSteps: number, show: JourneyShow | null): Promise<void> {
   const startId = current?.id;
   if (!startId) return;
   try {
     const destEnergy = energyForDaypart().speed >= 1 ? 'high' : 'low';
-    const bucket = shuffle(library.songsByEnergy(destEnergy).map((s: any) => s.id));
-    // Draw JOURNEY_DEST_SAMPLE ids the audio index actually covers, rather than
-    // slicing blind and letting audioCentroid discover the gaps by averaging
-    // around them. Same sample size, honest denominator.
+    const bucket = await journeyDestinationIds(show, destEnergy);
+    if (!bucket) return;
+    // Draw ids the audio index actually covers, rather than slicing blind and
+    // letting audioCentroid average around the gaps. The blocklist check moved
+    // here from the bucket read, and only runs on ids that would be kept.
     const destIds: string[] = [];
     for (let i = 0; i < bucket.length && i < JOURNEY_DEST_PROBE_LIMIT; i++) {
       if (destIds.length >= JOURNEY_DEST_SAMPLE) break;
-      if (library.hasAudioVector(bucket[i])) destIds.push(bucket[i]);
+      if (library.hasAudioVector(bucket[i]) && !library.isBlockedId(bucket[i])) destIds.push(bucket[i]);
     }
     if (destIds.length === 0) return;
     const j = journey.buildJourney({ startId, endIds: destIds, steps: totalSteps });
@@ -111,9 +118,9 @@ function analysisOf(track: any): { bpm: number | null; key: string | null } {
 // Resolve a track's measured intro runway (ms), for the talk-within-the-intro
 // budget enforcement.
 export function introMsOf(track: any): number | null {
-  if (track?.introMs != null) return track.introMs;
-  const rec = track?.id ? library.get(track.id) : null;
-  return rec?.introMs ?? null;
+  const raw = track?.introMs != null ? track.introMs : (track?.id ? library.get(track.id)?.introMs ?? null : null);
+  // Trimmed timeline — see intro-budget.introMsFor for why.
+  return shiftOnsetMs(track, raw);
 }
 
 // Probability of STARTING a run on a given pick, by chattiness. Quiet personas
@@ -126,15 +133,29 @@ function runStartProbability(): number {
   return 0;
 }
 
-// Advance the mini-run state for this pick and return the re-rank target +
-// (optional) sonic-journey waypoint to use. rankTarget null means "anchor the
-// tempo/key re-rank to the current track as usual"; audioWaypoint null means
-// "no journey — the audio source anchors to the current track". Only does
-// anything in DJ mode with an analysed current track.
+// Advance the mini-run for this pick. A null rankTarget or audioWaypoint means
+// anchor to the current track as usual. DJ mode with an analysed track only.
+// `show` is the show on air when THIS pick plays (resolved at the pick's
+// look-ahead clock), null for an autonomous block.
 const NO_RUN: RunStep = { rankTarget: null, audioWaypoint: null };
 
-export function advanceRun(djMode: boolean, current: any): RunStep {
+export async function advanceRun(
+  djMode: boolean,
+  current: any,
+  { show = null }: { show?: JourneyShow | null } = {},
+): Promise<RunStep> {
+  const showKey = runShowKey(show);
+  const showChanged = lastPickShowKey !== null && lastPickShowKey !== showKey;
+  lastPickShowKey = showKey;
   if (!djMode) { runState = null; return NO_RUN; }
+  // A show change ends the run, and no new one starts on that pick: the first
+  // pick of a show is chosen for that show, not as the next step of an arc
+  // anchored on the outgoing host's last track. The next pick may start one.
+  if (showChanged || (runState && runState.showKey !== showKey)) {
+    const ended = !!(runState && runState.remaining > 0);
+    runState = null;
+    return ended ? { ...NO_RUN, endedForShow: true } : NO_RUN;
+  }
   if (runState && runState.remaining > 0) {
     runState.remaining--;
     const waypoint = takeWaypoint(runState);
@@ -151,11 +172,22 @@ export function advanceRun(djMode: boolean, current: any): RunStep {
   const target = mix.pickRunTarget(cur, energyForDaypart());
   if (!target) return NO_RUN;
   const extra = 1 + Math.floor(Math.random() * 2); // 1-2 more picks after this
-  runState = { bpm: target.bpm, key: target.key, remaining: extra };
-  // Overlay a sonic journey if the audio index can support one (this pick + the
-  // `extra` that follow → extra + 1 total waypoints). No-op otherwise.
-  maybeAttachJourney(runState, current, extra + 1);
-  return { rankTarget: target, audioWaypoint: takeWaypoint(runState) };
+  const started: RunState = { bpm: target.bpm, key: target.key, remaining: extra, showKey };
+  runState = started;
+  // This pick plus the `extra` that follow → extra + 1 waypoints.
+  await maybeAttachJourney(started, current, extra + 1, show);
+  return { rankTarget: target, audioWaypoint: takeWaypoint(started) };
+}
+
+// A pick that took no run step (the in-order walk, which replaces selection
+// outright) is still a pick FOR a show. Record it, and end a run that belongs
+// to another show, so the change it crossed is not missed: an autonomous run
+// left going when an in-order show began would otherwise resume on the first
+// pick after that show, since the walk never calls advanceRun.
+export function notePickShow(show: { id?: string | null } | null | undefined): void {
+  const showKey = runShowKey(show);
+  if (runState && runState.showKey !== showKey) runState = null;
+  lastPickShowKey = showKey;
 }
 
 export function runActive(): boolean {

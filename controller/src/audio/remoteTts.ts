@@ -1,23 +1,7 @@
-// HTTP client for a user-configured remote TTS engine.
-//
-// When settings.tts.remote.url is set, the `remote` engine POSTs to that
-// endpoint's /speak and receives the rendered audio BYTES back in the HTTP
-// response, then writes them to a local file the controller (and Liquidsoap)
-// can read. Unlike the tts-heavy sidecar — which shares the /var/sub-wave
-// volume and returns a path — `remote` carries the audio in the response
-// body, so the endpoint can live on any host reachable over the network
-// (LAN, Tailscale, …) with no shared filesystem. This is the TTS equivalent
-// of the LLM's custom base URL: a first-class, self-hosted HTTP engine
-// without impersonating pocket-tts or chatterbox.
-//
-// Contract:
-//   GET  {url}/health  → 200 JSON { ok: true }
-//   POST {url}/speak   → 200, request JSON { text, voice }, response BODY is
-//                        the rendered audio (WAV, Content-Type audio/*). The
-//                        controller writes the body to its own voice dir.
-//                        Optional response headers make a silent voice
-//                        substitution visible (issue #238): X-TTS-Fell-Back,
-//                        X-TTS-Voice-Used, X-TTS-Fell-Back-Reason.
+// Remote TTS returns audio bytes for the controller to write locally; no shared volume.
+// GET {url}/health returns 200 JSON { ok: true }. POST {url}/speak accepts
+// { text, voice } and returns audio/* WAV bytes. Voice fallback headers are
+// X-TTS-Fell-Back, X-TTS-Voice-Used, X-TTS-Fell-Back-Reason (#238).
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -26,6 +10,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { cachedHealthProbe } from '../util/health-probe.js';
+import { hasFfmpeg, transcodeAudio } from './audio-import.js';
 
 const PROBE_TIMEOUT_MS = 5_000;
 const PROBE_INTERVAL_MS = 30_000;
@@ -35,8 +20,8 @@ function getUrl(): string {
   return settings.get().tts?.remote?.url || '';
 }
 
-// One /health probe. true iff the endpoint reports ok. No engine-name check —
-// the remote endpoint is a generic bridge; it decides what it supports.
+// One /health probe: true iff the endpoint reports ok. No engine-name check —
+// the endpoint is a generic bridge and decides what it supports.
 // Network/timeout/parse failures collapse to unavailable.
 async function probeOnce(): Promise<boolean> {
   const url = getUrl();
@@ -51,10 +36,9 @@ async function probeOnce(): Promise<boolean> {
   }
 }
 
-// Cached availability — read synchronously by the dispatcher in tts.ts. The
-// shared probe runs probeOnce() on an interval (and on demand via refresh()),
-// caches the result, and logs only on a change — re-reading the URL so the
-// "no URL configured" variant stays intact.
+// Cached availability, read synchronously by the dispatcher. The shared probe
+// runs probeOnce() on an interval (and on demand via refresh()) and logs only on
+// a change.
 const probe = cachedHealthProbe<boolean>({
   probe: probeOnce,
   intervalMs: PROBE_INTERVAL_MS,
@@ -69,18 +53,15 @@ const probe = cachedHealthProbe<boolean>({
   },
 });
 
-// Start the periodic /health probe loop (idempotent). Called from server.ts
-// AFTER settings.load(): the remote URL lives in settings (not env), so unlike
-// the tts-heavy probe this can't self-start at import time — it would only ever
-// see the empty default and leave the engine unavailable for the first tick.
-// The interval is unref'd so it doesn't keep the event loop alive on its own.
+// Start the periodic /health probe loop (idempotent). Must be called AFTER
+// settings.load(): the remote URL lives in settings, not env, so starting at
+// import time would only ever see the empty default. The interval is unref'd.
 export function start(): void {
   probe.start();
 }
 
-// Force an immediate probe — called when the URL changes via the admin UI so
-// availability (and the UI badge) reflects the new endpoint without waiting for
-// the next 30s tick.
+// Force an immediate probe, so a URL change in the admin UI reflects without
+// waiting for the next 30s tick.
 export async function refresh(): Promise<void> {
   await probe.refresh();
 }
@@ -92,7 +73,7 @@ export function isAvailable(): boolean {
 
 export async function speak(
   text: string,
-  { outPath: customPath, voice }: { outPath?: string; voice?: string },
+  { outPath: customPath, voice, speedScale }: { outPath?: string; voice?: string; speedScale?: number } = {},
 ): Promise<string> {
   const url = getUrl();
   if (!url) throw new Error('remote TTS URL not configured');
@@ -117,7 +98,27 @@ export async function speak(
   // a zero-byte file (a silent segment with no error).
   const audio = Buffer.from(await res.arrayBuffer());
   if (audio.length === 0) throw new Error('remote TTS returned an empty response body');
-  await writeFile(outPath, audio);
+
+  // The endpoint keeps its deliberately small { text, voice } contract. Apply
+  // the already-composed engine/persona/current-programme rate locally, once.
+  // Invalid direct-call values degrade to unity; the dispatcher owns the normal
+  // 0.5–2.0 bounds. Unity is an exact-byte fast path and does not probe ffmpeg.
+  const rate = Number.isFinite(speedScale) && speedScale! > 0 ? speedScale! : 1;
+  if (rate === 1) {
+    await writeFile(outPath, audio);
+  } else {
+    try {
+      if (!await hasFfmpeg()) throw new Error('ffmpeg is not available');
+      await transcodeAudio(audio, { outPath, format: 'wav', atempo: rate });
+    } catch (err) {
+      console.warn(
+        `[remote] could not apply speech rate ${rate}; using original 1x audio: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // ffmpeg can leave a partial output before failing. Restore the endpoint's
+      // complete original bytes rather than handing that partial file onward.
+      await writeFile(outPath, audio);
+    }
+  }
 
   // Make a silent voice substitution visible (issue #238): the call succeeded
   // and audio plays, but NOT in the requested voice. Surfaced via optional

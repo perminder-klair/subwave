@@ -1,12 +1,4 @@
-// 120-bar spectrum, drawn with Skia, matching the web player's bars: slot-filling
-// rectangles (~1px gap) centred vertically like the web's `items-center` flex row,
-// so they grow symmetrically from the mid-line rather than off the floor. Native
-// has no Web Audio stream tap, so the heights come from the synthesised, musical
-// useSpectrum (the same place the web falls back to on iOS) — full motion while
-// tuned in, a calm shimmer at rest. Bars left of `progress` paint accent, the
-// rest paint ink. `visible` (LIVE page on screen) pauses the simulation when the
-// bars can't be seen; bar geometry is layout-derived and hoisted out of the
-// per-tick map.
+// The spectrum is simulated; native playback has no Web Audio stream tap.
 
 import { Canvas, Rect } from '@shopify/react-native-skia';
 import { memo, useMemo, useState } from 'react';
@@ -32,7 +24,6 @@ export default memo(function Waveform({ tunedIn, progress, visible = true }: Wav
 
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
 
-  // Geometry only changes on layout, not per tick.
   const geom = useMemo(() => {
     if (width <= 0) return null;
     const slot = width / BARS;

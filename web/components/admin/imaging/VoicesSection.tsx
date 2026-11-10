@@ -1,7 +1,5 @@
 'use client';
 
-/* The WAVs Chatterbox and PocketTTS clone from. Import-only — there is no
-   prompt-to-voice generator. Files dropped into state/voices/ by hand show up here. */
 
 import type { ChangeEvent } from 'react';
 import { useRef, useState } from 'react';
@@ -34,12 +32,10 @@ interface VoicesSectionProps {
 // Mirrors ACCEPTED_AUDIO_EXTS in controller/src/audio/audio-import.ts.
 const ACCEPT = '.wav,.mp3,.ogg,.oga,.flac,.m4a,.aac,.opus,audio/*';
 
-// `name` is imagingName underneath (z.preprocess-wrapped, unknown z.input) —
-// cast once, same as SfxSection/BedsSection. `file` rides alongside it but
-// isn't part of voiceImportSchema (a File isn't something the zod-only shared
-// schema module can describe), so it's read via useWatch, not handleSubmit's
-// validated `values` — the file picker is the raw-Controller case lib/form-
-// fields.tsx's header calls out.
+// `name` is imagingName underneath (z.preprocess-wrapped, unknown z.input), so
+// cast once as SfxSection/BedsSection do. `file` isn't in voiceImportSchema (a
+// zod-only shared module can't describe a File), so read it via useWatch
+// rather than handleSubmit's validated values.
 interface VoiceImportFormValues {
   name: string;
   file: File | null;
@@ -195,7 +191,6 @@ export function VoicesSection({ voicesData, busy, uploadVoice, onDelete, adminFe
                       </>
                     )}
                   </MetaLine>
-                  {/* Advisory, never blocking: the file is stored exactly as uploaded. */}
                   {v.warning === 'short' && (
                     <p className="mt-1.5 text-[11px] leading-[1.55] text-muted">
                       Under {minSec}s — there may not be enough speech here to clone reliably.

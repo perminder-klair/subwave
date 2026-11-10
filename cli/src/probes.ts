@@ -1,8 +1,5 @@
-// Reachability probes for the setup wizard. One uniform { ok, reason? } shape
-// so the wizard renders every service the same way, and deliberately non-fatal:
-// a real install often has Navidrome not up yet, cloud keys still to come, or an
-// Ollama the wizard's host can't see, so the operator decides whether to retry,
-// continue or abort.
+// Reachability probes for the setup wizard. One uniform { ok, reason? } shape,
+// and non-fatal throughout: the operator decides whether to retry or continue.
 
 import crypto from 'node:crypto';
 import { fetchErrorReason } from './util.ts';
@@ -57,8 +54,8 @@ export async function probeSubsonic(args: {
   }
 }
 
-// Also checks `model` is installed, so the wizard can flag it early. The fix is
-// `ollama pull <name>`, which we don't run — it's a multi-GB download.
+// Also checks `model` is installed. The fix is `ollama pull <name>`, which this
+// doesn't run (multi-GB download).
 export async function probeOllama(args: {
   url: string;
   model?: string;
@@ -139,8 +136,7 @@ export async function probeAnthropic(args: {
   }
 }
 
-// This endpoint answers with or without a key — the key only narrows the list
-// to what the account has enabled, so a bad key won't fail the probe.
+// This endpoint answers with or without a key, so a bad key won't fail the probe.
 export async function probeOpenRouter(args: {
   apiKey: string;
   timeoutMs?: number;
@@ -163,44 +159,24 @@ export async function probeOpenRouter(args: {
   }
 }
 
-// Unlike OpenRouter, a key is required here, so a bad one surfaces as a 401.
-export async function probeRequesty(args: {
+// A fixed-endpoint OpenAI-compatible gateway (the catalogue's openaiCompatible,
+// e.g. Requesty). Requesty's model list is public but, unlike OpenRouter's,
+// answers a bearer it can't verify with 403 ("Invalid authorization token"), so
+// a 401 or a 403 is a rejected key, as in the admin Test key.
+export async function probeGatewayModels(args: {
   apiKey: string;
+  baseUrl: string;         // the gateway's base URL, /v1 suffix included
   timeoutMs?: number;
 }): Promise<ProbeResult> {
-  const { apiKey } = args;
+  const { apiKey, baseUrl } = args;
   const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (!apiKey) return { ok: false, reason: 'no api key' };
   try {
-    const res = await fetch('https://router.requesty.ai/v1/models', {
+    const res = await fetch(`${baseUrl}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (res.status === 401) return { ok: false, reason: '401 — key rejected' };
-    if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
-    const body = await res.json() as { data?: Array<unknown> };
-    const n = body.data?.length ?? 0;
-    return { ok: true, detail: `${n} model${n === 1 ? '' : 's'} visible` };
-  } catch (e) {
-    return { ok: false, reason: fetchErrorReason(e) };
-  }
-}
-
-// Same shape as probeRequesty — OrcaRouter is an OpenAI-compatible gateway that
-// requires a key, so a bad one surfaces as a 401.
-export async function probeOrcarouter(args: {
-  apiKey: string;
-  timeoutMs?: number;
-}): Promise<ProbeResult> {
-  const { apiKey } = args;
-  const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  if (!apiKey) return { ok: false, reason: 'no api key' };
-  try {
-    const res = await fetch('https://api.orcarouter.ai/v1/models', {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (res.status === 401) return { ok: false, reason: '401 — key rejected' };
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: `${res.status} — key rejected` };
     if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
     const body = await res.json() as { data?: Array<unknown> };
     const n = body.data?.length ?? 0;

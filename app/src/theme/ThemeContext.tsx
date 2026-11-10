@@ -1,15 +1,4 @@
-// Station theme application for native.
-//
-// The web sets CSS variables on <html>. Here we use NativeWind's `vars()` to
-// override the same 7 token names (--bg/--ink/--muted/--accent/--overlay/
-// --soft-border/--field) on a root <View>, so all `className="bg-bg text-ink"`
-// usages resolve to the live station palette. We also expose a resolved
-// `colors` object for places that need raw values (Skia canvas, gradients,
-// icon `color` props) where class names don't apply.
-//
-// Token source order: per-listener override (AsyncStorage) → station active
-// theme (/themes) → seeded defaults. The override lets a listener pick a
-// palette without affecting other listeners (mirrors web lib/theme.ts).
+// Theme precedence: listener override, station theme, seeded defaults.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { vars } from 'nativewind';
@@ -19,13 +8,20 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { View } from 'react-native';
 import { useStation } from '@/config/StationContext';
+import { useAppActive } from '@/hooks/useAppActive';
+import { pollAsync } from '@/lib/poll';
 import type { Theme, ThemeMode } from '@/lib/types';
 
 const OVERRIDE_KEY = 'subwave.theme.override.v1';
+
+// Matches the web ThemeProvider. `active` is the effective theme, so an on-air
+// show's own theme takes over at the show change on the next read.
+const THEME_POLL_MS = 30_000;
 
 export interface ResolvedColors {
   bg: string;
@@ -47,11 +43,8 @@ const DARK_DEFAULTS: ResolvedColors = {
   field: '#1b1815',
 };
 
-// Light-mode counterpart. A light theme can ship a parseable dark `--ink`
-// alongside an `--bg`/`--field` expressed as oklch()/color-mix() (which RN
-// can't parse). Falling those back to the DARK defaults yields dark text on a
-// dark field — invisible. Mode-aware fallbacks keep an unparseable light field
-// light. Values track the seeded `classic-light` palette.
+// Unparseable light-mode backgrounds need light defaults to keep dark text legible.
+// These values match the seeded classic-light palette.
 const LIGHT_DEFAULTS: ResolvedColors = {
   bg: '#f3efe6',
   ink: '#161412',
@@ -62,11 +55,7 @@ const LIGHT_DEFAULTS: ResolvedColors = {
   field: '#e1ddd4',
 };
 
-// RN's style engine + Skia only parse hex / rgb(a) / hsl(a) / named colors —
-// NOT the CSS oklch() and color-mix() that the controller's /themes registry
-// uses (browsers handle those natively, RN doesn't). Anything unparseable
-// falls back to the token's dark default, which is visually equivalent for the
-// seeded palettes (e.g. oklch(0.62 0.22 25) ≈ #d94b2a).
+// RN and Skia cannot parse oklch or color-mix; use the mode default for those tokens.
 const RN_COLOR_RE = /^(#([0-9a-f]{3,8})|rgba?\(|hsla?\(|transparent$)/i;
 function safeColor(value: string | undefined, fallback: string): string {
   if (value && RN_COLOR_RE.test(value.trim())) return value;
@@ -116,29 +105,31 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [override, setOverrideState] = useState<string | null>(null);
 
-  // Load the saved override once.
   useEffect(() => {
     AsyncStorage.getItem(OVERRIDE_KEY).then((v) => setOverrideState(v || null));
   }, []);
 
-  // Fetch the station's theme registry + active id when the station changes.
+  // Foreground only. The Live Activity bakes the accent in and restarts on a
+  // change, and iOS cannot start one from the background, so a flip while the
+  // phone is locked would end the card. A change made meanwhile lands on return.
+  const appActive = useAppActive();
+  // An unchanged registry keeps its identity, or every poll would re-render the
+  // whole themed tree through new colour objects.
+  const themesSigRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!api) return;
-    let alive = true;
-    api
-      .themes()
-      .then((payload) => {
-        if (!alive) return;
-        setThemes(payload.themes || []);
-        setActiveId(payload.active || null);
-      })
-      .catch(() => {
-        /* keep defaults */
-      });
-    return () => {
-      alive = false;
-    };
-  }, [api]);
+    if (!api || !appActive) return;
+    return pollAsync(async (signal) => {
+      const payload = await api.themes(signal);
+      if (signal.aborted) return;
+      const list = payload.themes || [];
+      const sig = JSON.stringify(list);
+      if (sig !== themesSigRef.current) {
+        themesSigRef.current = sig;
+        setThemes(list);
+      }
+      setActiveId(payload.active || null);
+    }, THEME_POLL_MS);
+  }, [api, appActive]);
 
   const setOverride = useCallback((id: string | null) => {
     setOverrideState(id);
@@ -155,9 +146,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const mode: ThemeMode = activeTheme?.mode ?? 'dark';
   const colors = useMemo(() => colorsFromTokens(tokens, mode), [tokens, mode]);
 
-  // NativeWind className colors resolve to these CSS vars, so they must be
-  // RN-parseable too — feed vars() the sanitized colors, not the raw tokens
-  // (which may carry oklch()/color-mix()).
+  // NativeWind vars must use RN-parseable colors, not the raw registry tokens.
   const safeTokens = useMemo(
     () => ({
       '--bg': colors.bg,

@@ -27,7 +27,9 @@ for the full architecture write-up.
 | `subwave_request_song` | none | Natural-language song request — submits, then polls the outcome (~45s budget). |
 | `subwave_request_status` | none | Poll an earlier request by its `requestId`. |
 | `subwave_search_library` | admin | Deterministic library search (no LLM, no rate limit). |
+| `subwave_similar_tracks` | station | CLAP sound-alike neighbours for a seed track — matched on the sound, not the tags. |
 | `subwave_queue_track` | admin | Queue an exact search result — no DJ intro. |
+| `subwave_queue_block` | admin | Queue a whole album (in its own running order) or a run of an artist's tracks, in one action. |
 | `subwave_skip_track` | admin | Force-end the current track (operator override). |
 | `subwave_dj_announce` | admin | Speak an update on-air (`styled`/`raw`), optionally over an `sfx` stinger. |
 | `subwave_dj_segment` | admin | Fire a scripted segment: `station-id`, `hourly`, `link`, `banter`, `programme-*`. |
@@ -35,6 +37,8 @@ for the full architecture write-up.
 | `subwave_run_skill` | admin | Run a named skill segment now (weather, news, …). |
 | `subwave_list_sfx` | admin | The sound-effects library. |
 | `subwave_play_sfx` | admin | Fire a sound effect on-air immediately. |
+| `subwave_list_jingles` | admin | The jingle library — idents and announcements, no length cap. |
+| `subwave_play_jingle` | admin | Queue a jingle to air at the next safe boundary, at full level. |
 | `subwave_refresh_playlist` | admin | Rebuild the fallback auto-playlist for the current mood. |
 
 Listeners have no skip — track-end is the only transition, and a requested
@@ -53,9 +57,10 @@ The server is configured entirely through environment variables:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod (behind Caddy) is `http://localhost:7700/api`. |
+| `SUBWAVE_API_URL` | auto-detected | Controller base URL. Unset: probes `http://localhost:7701` (dev), then `http://localhost:7700/api` (prod behind Caddy), at launch; falls back to `:7701`. |
 | `SUBWAVE_ADMIN_USER` | — | Controller `ADMIN_USER`. Required for the DJ control tools. |
 | `SUBWAVE_ADMIN_PASS` | — | Controller `ADMIN_PASS`. Required for the DJ control tools. |
+| `SUBWAVE_STATION_PASSWORD` | — | The station's **listener** password (Settings → Privacy). A different secret from the admin one; only needed for `subwave_similar_tracks` on a station with a privacy lock on. |
 
 The tools marked `none` above work without admin credentials. The admin tools
 need them — if unset, those tools return an error explaining what to set.
@@ -150,5 +155,12 @@ The stdio transport keeps `stdout` clean; the server logs only to `stderr`.
   of an emergency weather warning), use `subwave_dj_announce`'s `sfx`
   parameter; `subwave_play_sfx` fires one standalone. For wording that must
   not be paraphrased, use `mode='raw'`.
+- **Effects vs jingles.** An effect is mixed *under* the programme, which is
+  why it is capped at 10s — a longer one drones on over the music. Anything
+  longer belongs in the jingle library: `subwave_play_jingle` gives the clip
+  its own slot at full level, with no cap, so a sponsor spot or a two-minute
+  event announcement works. It airs at the next track boundary rather than
+  instantly — there is no skip in this system, and a repeat call while it is
+  still waiting is refused (409) rather than airing the clip twice.
 - The controller must be running. If it isn't reachable, every tool returns an
   error naming the URL it tried and what to check.

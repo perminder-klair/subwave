@@ -1,14 +1,6 @@
-// The back panel — where a real receiver keeps everything that isn't
-// power/dial/volume: output jacks, the timer, the fascia switch. Collapses
-// what used to be four masthead icons (AirPlay, Cast, sleep, theme) into one
-// sheet so the fascia stays clean.
-//
-// OUTPUT renders the NATIVE AirPlay/Cast buttons (they must be real native
-// views to present their system pickers), framed as labeled sockets. TIMER,
-// SIGNAL, and FASCIA are drill-in rows — the parent swaps this sheet's content
-// for the sleep/format/themes drawers in place (one <Sheet>, switched content).
+// AirPlay and Cast require native views to open their system pickers.
 
-import { AudioLines, ChevronRight, MoonStar, Palette } from 'lucide-react-native';
+import { AudioLines, ChevronRight, Info, MoonStar, Palette } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import { CastButton } from 'react-native-google-cast';
@@ -24,11 +16,12 @@ export interface BackPanelDrawerProps {
   sleepRemainingSec: number | null;
   themeName: string | null;
   /** Label of the current stream format pick, or null to hide the SIGNAL row
-   *  (station only serves the MP3 floor — nothing to choose). */
+   *  when there is nothing to choose. */
   formatLabel: string | null;
   onOpenSleep: () => void;
   onOpenThemes: () => void;
   onOpenFormat: () => void;
+  onOpenAbout: () => void;
 }
 
 export default function BackPanelDrawer({
@@ -41,6 +34,7 @@ export default function BackPanelDrawer({
   onOpenSleep,
   onOpenThemes,
   onOpenFormat,
+  onOpenAbout,
 }: BackPanelDrawerProps) {
   const { colors } = useTheme();
   const hasOutputs = Platform.OS === 'ios' || castAvailable;
@@ -107,7 +101,16 @@ export default function BackPanelDrawer({
         onPress={onOpenThemes}
       />
 
-      {/* Serial plate — pure flavour, like the sticker on the back of the unit. */}
+      <View style={{ height: 14 }} />
+
+      <SectionLabel text="ABOUT" />
+      <PanelRow
+        icon={<Info size={18} color={colors.muted} />}
+        title="SUB/WAVE"
+        value="Run your own"
+        onPress={onOpenAbout}
+      />
+
       <Text
         className="font-mono text-muted"
         style={{ fontSize: 8.5, letterSpacing: 2, textAlign: 'center', marginTop: 26, opacity: 0.7 }}
@@ -127,7 +130,6 @@ function SectionLabel({ text }: { text: string }) {
   );
 }
 
-/** A labeled output "jack": bordered socket around a native picker button. */
 function Socket({
   label,
   sub,
@@ -172,7 +174,6 @@ function Socket({
   );
 }
 
-/** Drill-in row, styled after the SleepDrawer/ThemesDrawer row family. */
 function PanelRow({
   icon,
   title,

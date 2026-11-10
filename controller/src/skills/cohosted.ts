@@ -1,0 +1,167 @@
+// Return persona lines; queue.announceExchange owns TTS and playback.
+// settings.llm.segmentRuntime selects model tool calls or code-side data gathering.
+// Direct mode fetches and checks grounding before its single structured model call.
+
+import { djAgent, djObject } from '../llm/sdk.js';
+import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
+import * as settings from '../settings.js';
+import { cohostedSkillSchema, cohostedSkillSystem } from '../llm/internal/prompts/cohosted-skill.js';
+import { withoutStandIns } from '../broadcast/stand-in-policy.js';
+import { requiresGrounding, standDownReason } from './abstain-policy.js';
+
+interface Persona {
+  id: string;
+  name?: string;
+  soul?: string;
+  language?: string;
+  tts?: unknown;
+  [key: string]: unknown;
+}
+
+interface CohostedResult {
+  aired: boolean;
+  lines: Array<{ persona: Persona; text: string }> | null;
+  reason: string | null;
+  /** Nothing aired because every line was a stand-in (stand-in-policy). */
+  standIn?: boolean;
+}
+
+type CohostedObject = { reason?: unknown; air?: unknown; lines?: Array<{ speaker?: unknown; text?: unknown }> } | undefined;
+
+type AgentRunner = (args: Record<string, unknown>) => Promise<{ object?: unknown; steps?: number; toolCalls?: unknown[] }>;
+type ObjectRunner = (args: Record<string, unknown>) => Promise<unknown>;
+
+function agentDeadlineMs(): number {
+  return settings.get().llm?.agentTimeoutMs ?? 45000;
+}
+
+// Wall-clock guard for the pool path's single structured call, the same reason
+// deadlinedSegmentObject exists in _agent.ts: djObject carries no deadline of
+// its own and a grammar-constrained model can ramble inside an unbounded string
+// field all the way to the output-token cap. The agent path gets the same
+// ceiling through djAgent's own `timeoutMs`.
+async function deadlinedObject(runObject: ObjectRunner, args: Record<string, unknown>): Promise<unknown> {
+  const ms = agentDeadlineMs();
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error(`co-hosted segment call exceeded ${ms}ms deadline`)), ms);
+  try {
+    return await runObject({ ...args, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function runCohostedCapability({
+  capability, host, guests, context, situation, segmentState, forced = false, onData,
+  runAgent = djAgent as unknown as AgentRunner,
+  runObject = djObject as unknown as ObjectRunner,
+}: {
+  capability: any;
+  host: Persona;
+  guests: Persona[];
+  context: any;
+  situation: string;
+  segmentState: any;
+  forced?: boolean;
+  // Sees every result the skill's tool returns, on both paths (the weather
+  // segment records what its tool handed over). Never fatal.
+  onData?: (kind: string, data: unknown) => void;
+  runAgent?: AgentRunner;
+  runObject?: ObjectRunner;
+}): Promise<CohostedResult> {
+  const cast = [host, ...guests];
+  const grounded = requiresGrounding(capability);
+  const system = cohostedSkillSystem({ capability, host, guests, grounded });
+  const schema = cohostedSkillSchema(cast);
+  const ask = 'Write the complete co-hosted discussion now.';
+
+  let out: CohostedObject;
+
+  if (settings.get().llm?.segmentRuntime === 'direct') {
+    // Pool mode: fetch in code, decide in code, one structured call. A skill
+    // that writes from the moment survives a failed fetch (it writes from its
+    // brief, as it always could); a GROUNDED one doesn't get that degradation
+    // — the discussion was supposed to be ABOUT what the fetch didn't return,
+    // so there is no model call at all. Same rule, same wording, as the solo
+    // pool path in runCapability.
+    const data = await fetchSegmentData(capability, context, segmentState);
+    try { onData?.(capability.kind, data); } catch { /* observation is never fatal */ }
+    const blocked = standDownReason(capability, data);
+    if (blocked) return { aired: false, lines: null, reason: blocked };
+    out = await deadlinedObject(runObject, {
+      system,
+      prompt: `${situation}${data && !data.error ? dataBlock(data) : ''}\n\n${ask}`,
+      schema,
+      temperature: 0.9,
+      kind: 'generateCohostedSkill',
+    }) as CohostedObject;
+  } else {
+    // Agent mode: the model calls the skill's tool itself, so the grounding
+    // check runs on what the tool reported back rather than on what the prompt
+    // asked for. A single usable result clears the run; the reason kept is the
+    // most recent failure, for the log.
+    let usableSeen = false;
+    let blocked: string | null = null;
+    const tools = buildSegmentTools(context, segmentState, [capability], {
+      onResult: (kind, data) => {
+        try { onData?.(kind, data); } catch { /* observation is never fatal */ }
+        const why = standDownReason(capability, data);
+        if (why) blocked = why;
+        else usableSeen = true;
+      },
+    });
+
+    const { object } = await runAgent({
+      system,
+      messages: [{ role: 'user', content: `${situation}\n\n${ask}` }],
+      tools,
+      schema,
+      // Discovery (step 0) + exactly one committed done-tool attempt (step 1),
+      // pinned for the same reason as directorAgent's cap in _agent.ts: djAgent's
+      // default of 8 grows an "I already declined" trail on providers that don't
+      // comply on the first forced attempt, and was the direct cause of a run
+      // burning the FULL agentTimeoutMs before recovery got a turn (#555).
+      maxSteps: 2,
+      temperature: 0.9,
+      kind: 'generateCohostedSkill',
+      timeoutMs: agentDeadlineMs(),
+    });
+    out = object as CohostedObject;
+
+    if (!usableSeen && grounded) {
+      return {
+        aired: false,
+        lines: null,
+        reason: blocked || 'the skill obtained no usable source data for the discussion',
+      };
+    }
+  }
+
+  if (out?.air === false) {
+    const reason = String(out.reason || '').trim() || 'nothing usable to discuss';
+    if (forced && !grounded) throw new Error(`skill "${capability.skill || capability.kind}" declined the forced co-hosted discussion`);
+    return { aired: false, lines: null, reason };
+  }
+
+  const byId = new Map(cast.map((persona) => [persona.id, persona]));
+  const lines = (out?.lines || []).map((line) => ({
+    persona: byId.get(String(line.speaker || '')),
+    text: String(line.text || '').trim(),
+  }));
+  if (lines.length !== cast.length || lines.some((line) => !line.persona || !line.text)) {
+    throw new Error(`skill "${capability.skill || capability.kind}" produced no co-hosted discussion`);
+  }
+  // The gate drops a stand-in before TTS (queue.speakable), so `lines` leaves
+  // it out: callers report and record these lines as what aired. A discussion
+  // with nothing left is a stand-down the callers already back off on, not a
+  // failed render, and that holds for a forced run too.
+  const spoken = withoutStandIns(lines, cast.map((persona) => persona.name || ''));
+  if (!spoken.length) {
+    return { aired: false, lines: null, reason: 'the DJs wrote stand-ins, not lines, so nothing aired', standIn: true };
+  }
+  return {
+    aired: true,
+    lines: spoken as Array<{ persona: Persona; text: string }>,
+    reason: String(out?.reason || '').trim() || null,
+  };
+}

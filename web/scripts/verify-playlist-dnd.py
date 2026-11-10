@@ -11,8 +11,8 @@ Usage: python3 web/scripts/verify-playlist-dnd.py
 STACK. The isolated verify stack from the `verify` skill — controller on :7791,
 web dev server on :7793, admin creds test:test. Unlike the other verify-*
 scripts this one needs NO seeded library and NO music server, and it writes
-nothing anywhere: /playlists and /cover are stubbed in the browser, and a deck
-reorder is local state until Save, which this never clicks.
+nothing anywhere: /settings, /playlists and /cover are stubbed in the browser,
+and a deck reorder is local state until Save, which this never clicks.
 
 TWO MEASUREMENT TRAPS, both learned the hard way and both guarded below.
  1. Route globs. A bare `**/playlists` also matches the page's own document
@@ -70,6 +70,9 @@ API = "http://localhost:7791"
 def stub(page):
     # Scope to the CONTROLLER origin: a bare `**/playlists` also matches the
     # page's own document request at /admin/playlists and serves it JSON.
+    page.route(API + "/settings", lambda r: r.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"tts": {"moods": []}, "values": {}})))
     page.route(API + "/playlists", lambda r: r.fulfill(
         status=200, content_type="application/json",
         body=json.dumps({"playlists": [{"id": "p1", "name": "Verify Deck", "songCount": len(TRACKS)}]})))

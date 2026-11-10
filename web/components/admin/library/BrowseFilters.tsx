@@ -1,16 +1,31 @@
 'use client';
 
 import type { ChangeEvent, ReactNode } from 'react';
-import { Fragment, useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Input } from '../../ui/input';
-import { InputGroup, InputGroupAddon, InputGroupInput } from '../../ui/input-group';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../../ui/input-group';
 import { Field, FieldLabel } from '../../ui/field';
+import { fieldAria } from '../../../lib/form';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../../ui/select';
 import { cn } from '../../../lib/cn';
  
-import type { Energy, Sort, Vocal } from './types';
+import type { Energy, QueryError, Sort, Vocal } from './types';
 import { EnergyMeter } from './bits';
+
+// The search box's examples, phrased as what a person wants. Clicking one puts
+// it in the box. The first three are the empty box's suggestions.
+const QUERY_EXAMPLES: Array<{ want: string; query: string }> = [
+  { want: 'title starts with love', query: 'title:/^love/' },
+  { want: 'exactly this artist', query: 'artist:="ABBA"' },
+  { want: 'a decade, without pop', query: '-genre:pop year:[1990 TO 1999]' },
+  { want: 'title ends with (Live)', query: 'title:/\\(live\\)$/' },
+  { want: 'the whole word love', query: 'title:/\\blove\\b/' },
+  { want: 'either one', query: 'title:live OR title:remix' },
+  { want: 'faster than 140 bpm', query: 'bpm:>140' },
+  { want: 'by mood and tag', query: 'mood:calm tag:christmas' },
+  { want: 'anywhere in title, artist or album', query: 'live' },
+];
 
 interface BrowseFiltersProps {
   moodVocab: string[];
@@ -24,11 +39,69 @@ interface BrowseFiltersProps {
   yearFrom: string; setYearFrom: (s: string) => void;
   yearTo: string; setYearTo: (s: string) => void;
   q: string; setQ: (s: string) => void;
+  queryError: QueryError | null;
+  readsAs: string;
+  reindexing: boolean;
   sort: Sort; setSort: (s: Sort) => void;
+}
+
+// Under the search box: what the query was read as, why text ran as plain
+// text instead (with a marker under the character), whether the answer may be
+// missing tracks while the keys are rebuilt, or, for an empty box, three
+// examples to start from. The live region stays mounted so a screen reader
+// announces each new reading or error, and the box names it as its description
+// (`descriptionProps`), so tabbing back to the box reads it again.
+function QueryFeedback({ descriptionProps, q, queryError, readsAs, reindexing, setQ }: {
+  descriptionProps: { id: string };
+  q: string;
+  queryError: QueryError | null;
+  readsAs: string;
+  reindexing: boolean;
+  setQ: (s: string) => void;
+}) {
+  const text = q.trim();
+  // Inside quotes liqe reads `\` and `"` as escapes, so escape them to keep the text as written.
+  const quoted = `"${text.replace(/[\\"]/g, '\\$&')}"`;
+  return (
+    <>
+      <div {...descriptionProps} className="field-hint mt-1.5" aria-live="polite">
+        {queryError && text ? (
+          <>
+            <pre className="m-0 overflow-x-auto font-mono text-ink">{text}{'\n'}{' '.repeat(Math.min(queryError.offset, text.length))}^</pre>
+            <div className="mt-1">
+              {queryError.message} — searched as plain text instead.
+              {queryError.kind === 'syntax' && (
+                <> To search for this text as written: <button type="button" className="border-0 bg-transparent p-0 font-mono text-ink underline" onClick={() => setQ(quoted)}>{quoted}</button></>
+              )}
+            </div>
+          </>
+        ) : readsAs ? (
+          <>reads as <span className="text-ink">{readsAs}</span></>
+        ) : null}
+        {reindexing && text && (
+          <div className="mt-1">Still indexing recent library changes, so this may be missing tracks; it refreshes on its own.</div>
+        )}
+      </div>
+      {!text && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="field-hint">try</span>
+          {QUERY_EXAMPLES.slice(0, 3).map(ex => (
+            <button key={ex.query} type="button" className="lib-chip font-mono" title={ex.want} onClick={() => setQ(ex.query)}>
+              {ex.query}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
 }
 
 export function BrowseFilters(p: BrowseFiltersProps) {
   const [showAllMoods, setShowAllMoods] = useState(false);
+  const [showExamples, setShowExamples] = useState(false);
+  const examplesId = useId();
+  // The box is described by its feedback, which is always mounted.
+  const searchAria = fieldAria(useId(), undefined, { hasDescription: true });
   const ranked = useMemo(
     () => [...p.moodVocab].sort((a, b) => (p.moodCounts[b] || 0) - (p.moodCounts[a] || 0)),
     [p.moodVocab, p.moodCounts],
@@ -58,11 +131,46 @@ export function BrowseFilters(p: BrowseFiltersProps) {
         <InputGroup>
           <InputGroupAddon><Search /></InputGroupAddon>
           <InputGroupInput
-            placeholder="filter results by title, artist, or album…"
+            aria-label="Search tracks"
+            {...searchAria.controlProps}
+            placeholder="search tracks, or write a query — ? for examples"
             value={p.q}
             onChange={(e: ChangeEvent<HTMLInputElement>) => p.setQ(e.target.value)}
+            className="font-mono"
           />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton
+              aria-label="Query examples"
+              aria-expanded={showExamples}
+              aria-controls={examplesId}
+              onClick={() => setShowExamples(v => !v)}
+              className={cn('font-mono', showExamples && 'text-ink')}
+            >
+              ?
+            </InputGroupButton>
+          </InputGroupAddon>
         </InputGroup>
+        <QueryFeedback descriptionProps={searchAria.descriptionProps} q={p.q} queryError={p.queryError} readsAs={p.readsAs} reindexing={p.reindexing} setQ={p.setQ} />
+        {/* Hidden, not unmounted: aria-controls must point at an element. */}
+        <div id={examplesId} hidden={!showExamples} className="mt-3 border-t border-dashed border-separator-strong pt-3">
+          <div className="caption mb-2">write what you want</div>
+          <div className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+            {QUERY_EXAMPLES.map(ex => (
+              <button
+                key={ex.query}
+                type="button"
+                onClick={() => p.setQ(ex.query)}
+                className="flex min-w-0 items-baseline justify-between gap-3 border-0 bg-transparent py-1 text-left text-[12px] text-muted hover:text-ink focus-visible:text-ink"
+              >
+                <span className="truncate">{ex.want}</span>
+                <code className="shrink-0 font-mono text-ink">{ex.query}</code>
+              </button>
+            ))}
+          </div>
+          <div className="field-hint mt-2.5">
+            fields: title artist album genre tag mood energy year bpm · <code>/regex/</code> is case-insensitive · write <code className="whitespace-nowrap">title:a OR title:b</code>, not <code className="whitespace-nowrap">title:(a OR b)</code>
+          </div>
+        </div>
       </div>
 
       <div className="border-b border-dashed border-separator-strong p-4">
@@ -124,7 +232,6 @@ export function BrowseFilters(p: BrowseFiltersProps) {
       </div>
 
       <div className="flex flex-wrap items-end gap-x-4 gap-y-4 p-4">
-        {/* w-full on phones: three fixed-width dropdowns can't share a 390px row. */}
         <div className="flex w-full flex-col gap-2 sm:w-auto">
           <Field>
             <FieldLabel htmlFor="genre">genre</FieldLabel>

@@ -8,7 +8,7 @@ export function fmtTime(sec: number | null | undefined): string {
   return `${m}:${String(r).padStart(2, '0')}`;
 }
 
-/** Station display locale (#475) — UK keeps 24-hour time; US uses AM/PM. */
+/** Station display locale (#475): UK is 24-hour, US is AM/PM. */
 export type StationLocale = 'en-GB' | 'en-US';
 
 export const DEFAULT_STATION_LOCALE: StationLocale = 'en-GB';
@@ -21,13 +21,8 @@ function stationClockOptions(locale: StationLocale): Intl.DateTimeFormatOptions 
   return locale === 'en-US' ? { hour12: true } : { hour12: false };
 }
 
-// Wall-clock time-of-day for an on-air event, rendered in the station's zone.
-// The DJ speaks the time in the configured station timezone, so log/booth
-// timestamps must use that same zone — otherwise a listener viewing from a
-// different timezone sees stamps that disagree with what the DJ just said
-// (issue #418). `tz` is the IANA zone from /now-playing; falls back to the
-// device's local zone when absent. `locale` picks 24h vs AM/PM (#475).
-// Returns '' for a missing timestamp.
+// Use station zone and locale for on-air stamps; fall back to device zone.
+// Return empty for missing timestamps.
 export function fmtClock(
   t: string | number | null | undefined,
   tz?: string | null,
@@ -43,6 +38,40 @@ export function fmtClock(
   } catch {
     return String(t);
   }
+}
+
+// HH:MM (no seconds) in the station's zone; mirrors web's fmtClockMinute.
+// Used for the booth's show-boundary separator (#1690). '' when unparseable.
+export function fmtClockMinute(
+  t: string | number | Date,
+  tz?: string | null,
+  locale?: StationLocale | null,
+): string {
+  const stationLocale = normalizeStationLocale(locale);
+  try {
+    return new Date(t).toLocaleTimeString(stationLocale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      ...stationClockOptions(stationLocale),
+      ...(tz ? { timeZone: tz } : {}),
+    });
+  } catch {
+    return '';
+  }
+}
+
+/** When a history entry aired: `startedAt`, else the older `t`, else
+ *  `queuedAt` as a last resort. null when none parses. The web's entryTime
+ *  reads only `t` then `queuedAt`; `startedAt` is the truer "played at". */
+export function playedAt(e: {
+  t?: unknown;
+  startedAt?: unknown;
+  queuedAt?: unknown;
+} | null | undefined): string | null {
+  for (const v of [e?.startedAt, e?.t, e?.queuedAt]) {
+    if (typeof v === 'string' && Number.isFinite(Date.parse(v))) return v;
+  }
+  return null;
 }
 
 export function relTime(t: string | number | Date): string {

@@ -118,7 +118,7 @@ After the stack is up:
 ```
 
 Edit the `JINGLES` array at the top of the script to taste, then re-run.
-Liquidsoap's jingles playlist uses `reload_mode="watch"`, so new renders are
+The script tells the mixer to reload its jingles playlist, so new renders are
 picked up live — no restart.
 
 ## 6. Cloudflare
@@ -199,9 +199,23 @@ If a deploy goes wrong, roll back:
 
 ```bash
 git log --oneline -5
-git checkout <previous-sha>
+git checkout <previous-tag-or-sha>
 docker compose -f docker-compose.yml up -d --build
 ```
+
+On an **image** install (the standalone CLI, or plain compose off GHCR) there is
+nothing to check out — move the pin instead:
+
+```bash
+sed -i 's/^SUBWAVE_VERSION=.*/SUBWAVE_VERSION=1.4.2/' .env
+docker compose pull && docker compose up -d
+```
+
+Take a backup **before** you update, and read the state caveats before rolling
+back more than one release: settings the newer version added are dropped on the
+older version's first save, and the library database migrates forward only.
+Those, plus recovery for a broken login, a silent stream and a restart-looping
+controller, are in [`docs/updating.md`](docs/updating.md).
 
 ## 8. Operations
 
@@ -213,9 +227,6 @@ docker compose -f docker-compose.yml logs -f caddy
 
 # Restart just one service
 docker compose -f docker-compose.yml restart controller
-
-# Manual skip (controller exposes POST /skip, Caddy proxies it under /api)
-curl -X POST http://localhost/api/skip
 
 # What's queued / playing / in the DJ log
 curl -s http://localhost/api/state | jq
@@ -244,20 +255,22 @@ host port:
 | Port (default) | Service | What your proxy should forward |
 |---|---|---|
 | `${WEB_PORT:-7700}` | Next.js web UI | everything not matched below |
-| `${CONTROLLER_PORT:-7701}` | controller HTTP API | `/api/*` (with the `/api` prefix stripped) |
-| `${ICECAST_PORT:-7702}` | Icecast | `/stream.mp3` (disable buffering for live audio) |
+| `${CONTROLLER_PORT:-7701}` | controller HTTP API | `/api/*` (with the `/api` prefix stripped), plus `/listen.pls` and `/listen.m3u` with their paths unchanged |
+| `${ICECAST_PORT:-7702}` | Icecast | the whole `/stream*` family (disable buffering for live audio) |
 
 Liquidsoap stays internal-only — it has no public surface.
 
 Override any of the host ports by setting `WEB_PORT`, `CONTROLLER_PORT`, or
-`ICECAST_PORT` in `docker/.env`.
+`ICECAST_PORT` in the root `.env`.
 
 **Single-origin routing is the default.** The web UI is built to call `/api`
 and `/stream.mp3` relative to its own origin, so the cleanest setup is one
 hostname (e.g. `https://radio.example.com`) where your proxy fronts all three.
 `docker/Caddyfile` is a working reference for what that route table looks
 like — replicate it in your Traefik labels, nginx `location` blocks, or
-existing Caddyfile.
+existing Caddyfile. Complete nginx, Nginx Proxy Manager, Traefik, and
+Cloudflare Tunnel configurations are in
+[`docs/reverse-proxy.md`](docs/reverse-proxy.md).
 
 If you instead want separate hostnames per surface (e.g. `api.example.com`
 and `stream.example.com`), you'll have to rebuild the `web` image with
@@ -270,14 +283,26 @@ to bootstrap state, jingle rendering, updates, and backup. Skip section 6
 
 ## 10. Backup
 
-The only stateful path is `state/` (under the repo). Two things really matter:
+The only stateful path is `state/` (under the repo). Three things matter, in
+this order:
 
-- `archive/` — your show recordings. Big. Back up or rotate.
+- `settings.json` + `schedule.json` + `library.db` — your configuration, your
+  show grid, and every LLM enrichment pass over your library. The expensive
+  one is `library.db`: rebuilding it costs hours and tokens, not just a rescan.
+  **Admin → Settings → Backup → Export** zips all three (plus jingles, SFX,
+  custom voices, themes, skills and persona avatars) with a WAL-safe copy of
+  the database. API keys are redacted, so re-enter cloud keys after a restore.
+  `library.db` holds each track's file path as Navidrome reports it, so a backup
+  you share shows your folder layout.
+- `archive/` — your show recordings. Big, and deliberately **not** in the
+  export. Back up or rotate separately.
 - `jingles/` + `jingles.m3u` — re-derivable from `scripts/generate-jingles.sh`,
   so backup is optional.
 
 Everything else (`voice/`, `auto.m3u`, `now-playing.json`, the queue files)
 is ephemeral and regenerates within minutes of a fresh boot.
 
-A nightly tar of `state/archive/` to an external box is
-sufficient.
+A nightly tar of `state/` to an external box covers everything, archives
+included. If that's too big, tar `state/archive/` on its own schedule and take
+the admin export before each update — see
+[`docs/updating.md`](docs/updating.md#before-you-update).

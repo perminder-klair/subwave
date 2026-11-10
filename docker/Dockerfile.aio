@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # SUB/WAVE all-in-one image — the entire stack in one container, supervised by
 # docker/aio/supervisor.sh behind a loopback Caddy on :80. Exists because
 # Unraid's Community Applications catalogue is one container per template (also
@@ -30,15 +31,53 @@ RUN npm run build
 FROM caddy:2 AS caddybin
 
 # ---- node binary: lift Node 22 from the official image ----------------------
+# NOTE: still 22, while web/Dockerfile is on 24. One node binary serves BOTH the
+# controller and the bundled Next.js server here, so the AIO's web half carries
+# the TransformStream cancel race described in web/Dockerfile's header (#1535) —
+# a client that disconnects mid-render can 500 with
+# `controller[kState].transformAlgorithm is not a function`. Moving this to 24
+# is the fix, but it also moves the controller's runtime (better-sqlite3 /
+# sqlite-vec native builds), so it needs its own change with a full AIO build
+# behind it rather than riding the web-image fix.
 FROM node:22-bookworm-slim AS nodebin
 
 # ---- final: everything under the liquidsoap (Debian) base -------------------
-# v2.4.5 minimum — same reason as Dockerfile.broadcast (2.4.4's O(n) clock scan
-# stalled the stream at every DJ-effect crossfade).
-FROM savonet/liquidsoap:v2.4.5
+# v2.4.6 minimum — same reasons as Dockerfile.broadcast (2.4.4's O(n) clock
+# scan stalled the stream at every DJ-effect crossfade; 2.4.5's unbounded
+# unifier growth and lost partial frame after a `cross`).
+# Stock upstream release, pinned by manifest digest. Keep this stage identical
+# in both Dockerfiles (CI compares the two executables); see docker/liquidsoap/.
+FROM savonet/liquidsoap:v2.4.6@sha256:1d4ecfc1b53851c5f018d1ada430302a0678f789a6e96f6de5264255f679689c AS liquidsoap
+
+FROM liquidsoap AS runtime
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
+
+# Icecast-KH, not Debian's icecast2. The <x-forwarded-for> trusted-proxy list
+# the entrypoint renders, and the listener-auth behaviour it relies on, are KH
+# features: stock Icecast 2.4.4 boots, streams and ignores them, so every
+# listener shows the edge's container IP and loses its country. KH comes from
+# deb-multimedia, which the 2.4.5 base image happened to configure and 2.4.6
+# does not. Pinned to icecast2 alone so the rest of DMO cannot replace Debian
+# packages, the mixer's included: the stock 2.4.6 liquidsoap bundles a static
+# FFmpeg and fdk-aac, but links Debian's libmp3lame0, libopus0, libflac and
+# libvorbis dynamically, and DMO also ships libmp3lame0 (1:3.100-dmo3), so the
+# pin keeps the MP3 encoder on Debian's build. Same for the AIO's CLI ffmpeg.
+ADD --checksum=sha256:8dc6cbb266c701cfe58bd1d2eb9fe2245a1d6341c7110cfbfe3a5a975dcf97ca \
+    https://www.deb-multimedia.org/pool/main/d/deb-multimedia-keyring/deb-multimedia-keyring_2024.9.1_all.deb \
+    /tmp/deb-multimedia-keyring.deb
+RUN dpkg-deb --fsys-tarfile /tmp/deb-multimedia-keyring.deb \
+      | tar -xO ./usr/share/keyrings/deb-multimedia-keyring.pgp \
+      > /usr/share/keyrings/deb-multimedia-keyring.pgp \
+ && echo '11b17f001b376cea4bfdf541bbe4d40fef5391eb0772b9d61d68c2aca21de893  /usr/share/keyrings/deb-multimedia-keyring.pgp' | sha256sum -c - \
+ && rm /tmp/deb-multimedia-keyring.deb \
+ && printf '%s\n' 'Types: deb' 'URIs: https://www.deb-multimedia.org' 'Suites: trixie' \
+        'Components: main' 'Signed-By: /usr/share/keyrings/deb-multimedia-keyring.pgp' \
+        > /etc/apt/sources.list.d/dmo.sources \
+ && printf '%s\n' 'Package: *' 'Pin: origin www.deb-multimedia.org' 'Pin-Priority: 100' '' \
+        'Package: icecast2' 'Pin: origin www.deb-multimedia.org' 'Pin-Priority: 990' \
+        > /etc/apt/preferences.d/dmo-icecast-kh
 
 # icecast2 + sudo/openssl/curl: broadcast pair. espeak-ng/libsndfile1: Kokoro.
 # ffmpeg: jingle/SFX import transcode. python3/venv + wget/tar/xz-utils: the
@@ -50,9 +89,11 @@ RUN apt-get update -qq \
         espeak-ng libsndfile1 ffmpeg \
         python3 python3-venv \
         wget tar xz-utils \
+ && icecast2 -v 2>&1 | grep -q -- '-kh' \
  && rm -rf /var/lib/apt/lists/*
 
-# Node.js 22 — lifted from the official image (same bookworm libc) rather than
+# Node.js 22 — lifted from the official image (a bookworm build copied into a
+# trixie runtime: Node's non-glibc parts make the cross-distro copy fine) rather than
 # NodeSource's apt repo, whose CDN serves per-IP 403s
 # (nodesource/distributions#1844) and took out the v1.1.0 publish run.
 COPY --from=nodebin /usr/local/bin/node /usr/local/bin/node
@@ -91,13 +132,23 @@ RUN mkdir -p /opt/piper/voices && \
 # this base (Debian trixie) ships 3.13 — so provision a standalone CPython 3.12
 # via uv for THIS venv only (the analyzer venv stays on system python3). The
 # import check mirrors the worker's import block so a broken combo fails the
-# build instead of silently falling back to Piper at runtime.
+# build instead of silently falling back to Piper at runtime. pyopenjtalk-plus
+# provides Python 3.12 wheels for amd64 and arm64 with its dictionary bundled,
+# so Japanese synthesis needs neither a compiler nor a first-use download.
 COPY --from=ghcr.io/astral-sh/uv:0.11.27 /uv /usr/local/bin/uv
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv venv --python 3.12 /opt/kokoro/venv && \
     uv pip install --python /opt/kokoro/venv/bin/python --no-cache \
-      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4 && \
-    /opt/kokoro/venv/bin/python -c "import kokoro_onnx, misaki; from misaki import espeak"
+      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4 \
+      pyopenjtalk-plus==0.4.1.post10 \
+      cn2an==0.5.24 jieba==0.42.1 ordered-set==4.1.0 pypinyin==0.55.0 pypinyin-dict==0.9.0 && \
+    /opt/kokoro/venv/bin/python -c \
+      "import kokoro_onnx, misaki; from misaki import espeak; from misaki.ja import JAG2P; from misaki.zh import ZHG2P; assert JAG2P(version='pyopenjtalk')('生ビール')[0]; assert ZHG2P()('中文')[0]"
+# The model-files-v1.0 export, on purpose: model-files-v1.1 re-exports the same
+# weights but renders ~3.7 dB quieter. kokoro-onnx stays on 0.5.0 above for the
+# same kind of reason: 0.6.x depends on upstream phonemizer instead of
+# phonemizer-fork, and under it misaki's espeak G2P drops everything after a
+# decimal point ("sold 2.5 million copies" phonemizes as "sold two.").
 RUN mkdir -p /opt/kokoro/models && \
     wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \
       https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
@@ -113,19 +164,33 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # controller/scripts below) is the single source of truth.
 #
 # CLAP + Demucs are OFF by default (lean image); `subwave-aio-heavy` bakes
-# them, and `subwave-aio-cuda` (#1186) adds cu124 torch — WITH_CUDA implies the
+# them, and `subwave-aio-cuda` (#1186) adds CUDA torch — WITH_CUDA implies the
 # heavy tier (CUDA torch alone would be dead weight), and the worker still
 # picks its device (ANALYZE_DEVICE=auto), so it degrades to CPU on a driverless
 # host. See docs/unraid.md.
 #
-# Pins mirror docker/Dockerfile.analyzer — keep the two in lockstep. This venv
-# runs on the system python3 (trixie → 3.13, unlike the analyzer image's 3.11);
-# torch 2.6.0 publishes cp313 wheels on both indexes, so the shared pin holds.
+# Pins mirror docker/Dockerfile.analyzer — keep the two in lockstep. The one
+# exception is TORCH_CUDA=cu124, the AIO's second CUDA build, which pins torch
+# 2.6.0 because its cu124 wheel still ships sm_50, sm_60 and sm_70: cu128
+# dropped those three, and CUDA 13 cannot emit them. The analyzer image has no
+# cu124 build. This venv runs on the system python3 (trixie → 3.13, unlike the
+# analyzer image's 3.11). WITH_CUDA=1 defaults to the cu128 index (sm_75
+# through sm_120). publish-images.yml passes each build's cuda_family as
+# TORCH_CUDA; which tags each build publishes under is the AIO CUDA tag table
+# in docs/internals/infrastructure.md.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
+ARG TORCH_CUDA=cu128
 RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
-    if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu124"; fi && \
+    TORCH_VER=2.7.1 && \
+    if [ "$WITH_CUDA" = "1" ]; then \
+      case "$TORCH_CUDA" in \
+        cu128) TORCH_INDEX="https://download.pytorch.org/whl/cu128" ;; \
+        cu124) TORCH_INDEX="https://download.pytorch.org/whl/cu124"; TORCH_VER=2.6.0 ;; \
+        *) echo "unsupported TORCH_CUDA=$TORCH_CUDA" >&2; exit 1 ;; \
+      esac; \
+    fi && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
@@ -135,7 +200,7 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.6.0 transformers==5.13.0 onnxruntime==1.27.0 && \
+        torch==$TORCH_VER transformers==5.13.0 onnxruntime==1.27.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
@@ -146,8 +211,8 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
-      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \
+        torch==$TORCH_VER torchaudio==$TORCH_VER demucs==4.0.1 diffq==0.2.4 && \
+      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs, diffq" && \
       apt-get purge -y gcc libc6-dev python3-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
@@ -156,15 +221,19 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
 # ANALYZE_WORKER defaults to /app/scripts/analyze_worker.py (copied below).
 ENV ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
     HF_HOME=/var/sub-wave/hf-cache
+# Expose analyzer pip for maintenance while system python3 keeps precedence.
+# Kokoro and analyzer workers still use their explicit *_PYTHON paths.
+ENV PATH=$PATH:/opt/analyzer/venv/bin
 
 # --- Controller app ---------------------------------------------------------
 WORKDIR /app
-# .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
-# stale `peer ai@^6`); it must land before install or npm hits ERESOLVE.
+# Use the same strict peer-dependency resolution as local controller installs.
 COPY controller/package*.json controller/.npmrc ./
 RUN npm ci --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
+RUN /opt/kokoro/venv/bin/python -c \
+      "from scripts.kokoro_worker import build_g2p; from misaki import espeak, ja, zh; raw, _ = ja.JAG2P(version='pyopenjtalk')('生ビール'); phonemes, _ = build_g2p('ja', espeak, ja, zh)('生ビール'); assert phonemes == raw[:len(raw) // 2]"
 
 # --- Web app (standalone build from the webbuild stage) ---------------------
 # Mirrors web/Dockerfile's runner layout, rooted at /web instead of /app.

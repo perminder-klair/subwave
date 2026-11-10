@@ -1,9 +1,5 @@
 'use client';
 
-/* Playlist Builder: a RECIPE rail (prompt + seeds + tuning) beside a RESULT
-   pane state machine (result / empty / generating / no-match / error). Saves
-   land in Navidrome via the /playlists routes, so the set feeds the Shows
-   picker immediately. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebounceValue } from 'usehooks-ts';
@@ -29,7 +25,9 @@ import {
 } from '@dnd-kit/sortable';
 import { Controller, useWatch } from 'react-hook-form';
 import type { z } from 'zod';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
@@ -78,24 +76,27 @@ import {
   playlistHasIntent,
   playlistSaveSchema,
 } from '@/lib/schemas.generated';
+import { useSettingsQuery } from './settings/queries';
+import {
+  refreshPlaylistCatalogues,
+  removePlaylistFromCatalogues,
+} from './playlist-cache';
+import {
+  fetchPlaylistDetail,
+  playlistKeys,
+  usePlaylistGenresQuery,
+  usePlaylistIndexQuery,
+  usePlaylistSearchQuery,
+} from './playlist-builder/queries';
 
-// ─── The generate-vs-save split ────────────────────────────────────────────
-//
 // Two request bodies, two forms. The recipe rail (RecipeFormValues) feeds both
-// POST /playlists/generate and the `recipe` field of POST /playlists, since the
-// two share a shape. `seedArtist` and `genreInput` stay plain state: the latter
-// is an uncommitted text buffer, and neither carries a schema rule.
-//
-// `formState.isValid` on the recipe form is inert and never read. The only
-// whole-object rule is `playlistHasIntent`, which the schema's `.refine` reads
-// off the NESTED wire shape (`knobs.moods`, `sources.recentlyAdded`), while
-// this form's fields are flat to match the rail's own UI concepts. So
-// `playlistHasIntent(buildBody())` stays the real Generate gate.
-//
-// The SAVE modal is a separate form bound to playlistSaveSchema, where `name`
-// is the one real rule — songIds/playlistId/recipe are assembled at submit time
-// from live component state. `saveMode` isn't a schema key at all; it travels
-// here anyway as a save-time choice, and is read off raw form state.
+// POST /playlists/generate and the `recipe` field of POST /playlists.
+// `seedArtist` and `genreInput` stay plain state (uncommitted buffers, no rule).
+// `formState.isValid` on the recipe form is inert: the only whole-object rule,
+// `playlistHasIntent`, reads the NESTED wire shape while this form is flat, so
+// `playlistHasIntent(buildBody())` is the real Generate gate.
+// The SAVE modal is a separate form bound to playlistSaveSchema; `saveMode`
+// isn't a schema key and is read off raw form state.
 interface RecipeFormValues {
   prompt: string;
   seeds: SeedChip[];
@@ -150,12 +151,23 @@ interface SaveFormValues {
 
 const SAVE_DEFAULTS: SaveFormValues = { name: '', keepInSync: false, saveMode: 'create' };
 
+function playlistWriteError(error: unknown, fallback: string): string {
+  if (error instanceof AdminResponseError) {
+    return typeof error.body.error === 'string' && error.body.error
+      ? error.body.error
+      : fallback;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
 export default function PlaylistBuilderPanel() {
-  const { adminFetch } = useAdminAuth();
+  const { adminFetch, hydrated, needsAuth } = useAdminAuth();
+  const queryClient = useQueryClient();
+  const queryEnabled = hydrated && !needsAuth;
 
   // Both playlist schemas are `z.preprocess(...)`-wrapped, so their inferred
-  // `_input` is `unknown` and can't satisfy useZodForm's generic bound. Cast to
-  // the form's own field shape; the resolver still runs the real schema.
+  // `_input` is `unknown`. Cast to the form's field shape; the resolver still
+  // runs the real schema.
   const recipeForm = useZodForm(
     playlistGenerateSchema as unknown as z.ZodType<RecipeFormValues, RecipeFormValues>,
     RECIPE_DEFAULTS,
@@ -181,19 +193,15 @@ export default function PlaylistBuilderPanel() {
   const [usedFallback, setUsedFallback] = useState(false);
   const [poolSize, setPoolSize] = useState<number | null>(null);
   // Frozen at the last generation so manual deck edits don't rewrite the
-  // "chose N from M in pool" line. 'more' reports 'added', since its pool
-  // excludes the current deck and the figure is never a mixed total.
+  // "chose N from M in pool" line. 'more' reports 'added'.
   const [chosenCount, setChosenCount] = useState(0);
   const [poolVerb, setPoolVerb] = useState<'chose' | 'added'>('chose');
   const [errorMsg, setErrorMsg] = useState('');
   const [existingId, setExistingId] = useState<string | undefined>();
   const [keepInSync, setKeepInSync] = useState(false);
   const [syncInfo, setSyncInfo] = useState<{ lastSyncedAt: string | null } | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   const [modal, setModal] = useState<null | 'open' | 'save'>(null);
-  const [playlists, setPlaylists] = useState<PlaylistSummary[] | null>(null);
   const [playlistQuery, setPlaylistQuery] = useState('');
   // Two-click armed delete in the Open modal — the only delete surface.
   const [armedDelete, setArmedDelete] = useState<string | null>(null);
@@ -205,36 +213,57 @@ export default function PlaylistBuilderPanel() {
   const hotTimer = useRef<number | null>(null);
   const [toast, setToast] = useState('');
 
-  // The live mood names off /settings. Moods are operator-editable, so a
-  // hand-copied vocabulary here would miss custom ones and offer deleted ones.
-  const [liveMoods, setLiveMoods] = useState<string[]>([]);
-
   const [seedQuery, setSeedQuery] = useState('');
-  const [seedResults, setSeedResults] = useState<RawTrackRow[] | null>(null);
   const [addQuery, setAddQuery] = useState('');
-  const [addResults, setAddResults] = useState<RawTrackRow[] | null>(null);
   const [artistQuery, setArtistQuery] = useState('');
-  const [artistResults, setArtistResults] = useState<string[] | null>(null);
-  const [genreList, setGenreList] = useState<{ value: string; songCount: number }[] | null>(null);
+  const [genreRequested, setGenreRequested] = useState(false);
 
-  // The three suggestion boxes below all search /dj/search on a 250ms debounce
-  // and all ignore a query under two characters. Blanking the term is what
-  // clears the dropdown, and it happens off the RAW query so backspacing feels
-  // instant; only a term long enough to search waits for the debounce.
+  // The three suggestion boxes search /dj/search on a 250ms debounce and ignore
+  // queries under two characters. Blanking the term clears the dropdown off the
+  // RAW query, so backspacing feels instant.
   const [debouncedSeedQuery] = useDebounceValue(seedQuery, 250);
   const [debouncedAddQuery] = useDebounceValue(addQuery, 250);
   const [debouncedArtistQuery] = useDebounceValue(artistQuery, 250);
   const seedTerm = seedQuery.trim().length < 2 ? '' : debouncedSeedQuery.trim();
   const addTerm = addQuery.trim().length < 2 ? '' : debouncedAddQuery.trim();
   const artistTerm = artistQuery.trim().length < 2 ? '' : debouncedArtistQuery.trim();
+  const settingsQuery = useSettingsQuery<{ tts?: { moods?: string[] } }>({
+    adminFetch,
+    enabled: queryEnabled,
+  });
+  const seedQueryResult = usePlaylistSearchQuery(adminFetch, 'seed', seedTerm);
+  const addQueryResult = usePlaylistSearchQuery(adminFetch, 'add', addTerm);
+  const artistQueryResult = usePlaylistSearchQuery(adminFetch, 'artist', artistTerm);
+  const genresQuery = usePlaylistGenresQuery(adminFetch, queryEnabled && genreRequested);
+  const playlistIndexQuery = usePlaylistIndexQuery(
+    adminFetch,
+    queryEnabled && modal === 'open',
+  );
+  const liveMoods = useMemo(() => settingsQuery.data?.tts?.moods ?? [], [settingsQuery.data]);
+  const seedResults = useMemo(() => seedTerm
+    ? (seedQueryResult.data ?? (seedQueryResult.isError ? [] : null))
+    : null, [seedTerm, seedQueryResult.data, seedQueryResult.isError]);
+  const addResults = addTerm
+    ? (addQueryResult.data ?? (addQueryResult.isError ? [] : null))
+    : null;
+  const genreList = useMemo(() => genreRequested
+    ? (genresQuery.data ?? (genresQuery.isError ? [] : null))
+    : null, [genreRequested, genresQuery.data, genresQuery.isError]);
+  const playlists: PlaylistSummary[] | null = useMemo(() => modal === 'open'
+    ? (playlistIndexQuery.data ?? (playlistIndexQuery.isError ? [] : null))
+    : (playlistIndexQuery.data ?? null), [
+      modal,
+      playlistIndexQuery.data,
+      playlistIndexQuery.isError,
+    ]);
 
   const toastTimer = useRef<number | null>(null);
   const lastMode = useRef<GenMode>('fresh');
   const generatingRef = useRef(false);
 
-  // Header height, Navidrome banner and breadcrumb wrap all vary, so the frame
-  // top is measured and stretched to the viewport bottom less the 24px page
-  // gutter. The class-based calc() is only the first-paint estimate.
+  // Header height and banners vary, so the frame top is measured and stretched
+  // to the viewport bottom less the 24px gutter. The class-based calc() is only
+  // the first-paint estimate.
   const frameRef = useRef<HTMLDivElement>(null);
   const [frameH, setFrameH] = useState<number | null>(null);
   useEffect(() => {
@@ -260,8 +289,7 @@ export default function PlaylistBuilderPanel() {
     toastTimer.current = window.setTimeout(() => setToast(''), 4200);
   }, []);
 
-  // Document-level rather than on the dialog markup, so Escape fires wherever
-  // focus happens to be.
+  // Document-level, not on the dialog, so Escape fires wherever focus is.
   useEffect(() => {
     if (!modal) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModal(null); };
@@ -269,29 +297,14 @@ export default function PlaylistBuilderPanel() {
     return () => window.removeEventListener('keydown', onKey);
   }, [modal]);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/settings');
-        if (!r.ok || cancelled) return;
-        const j = await r.json() as { tts?: { moods?: string[] } };
-        if (!cancelled && Array.isArray(j.tts?.moods)) setLiveMoods(j.tts.moods);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [adminFetch]);
-
   // Already-selected moods union in, so retiring a mood at /admin/moods can't
-  // make a picked chip vanish from under the operator.
+  // make a picked chip vanish.
   const moodOptions = useMemo(() => {
     const out = [...liveMoods];
     for (const m of recipeValues.moods) if (!out.includes(m)) out.push(m);
     return out;
   }, [liveMoods, recipeValues.moods]);
 
-  // Without this the modal is only reachable by tabbing through the page behind
-  // it, and closing leaves focus on <body>.
   const modalPanelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!modal) return;
@@ -300,11 +313,11 @@ export default function PlaylistBuilderPanel() {
     return () => restoreTo?.focus?.();
   }, [modal]);
 
-  // Centres the row inside the LIST's own scroll context — scrollIntoView would
+  // Centres the row inside the LIST's own scroll context; scrollIntoView would
   // drag the page along.
   const jumpToRow = useCallback((i: number) => {
-    // ScrollArea scrolls its internal radix viewport, not the Root that listRef
-    // points at — resolve it so scrollTop/scrollTo act on the right element.
+    // ScrollArea scrolls its internal radix viewport, not the Root listRef
+    // points at.
     const root = listRef.current;
     const list = root?.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]') ?? root;
     const row = list?.querySelector<HTMLElement>(`[data-row="${i}"]`);
@@ -354,9 +367,8 @@ export default function PlaylistBuilderPanel() {
     excludeTrackIds,
   }), [recipeValues, seedArtist]);
 
-  // The same intent rule the /generate route enforces — exported as a predicate
-  // rather than living only inside the schema, because the Generate button needs
-  // the answer before a request exists. See the split comment at the top.
+  // Same intent rule the /generate route enforces; the Generate button needs
+  // the answer before a request exists.
   const hasIntent = useMemo(() => playlistHasIntent(buildBody()), [buildBody]);
 
   const generating = view === 'generating';
@@ -401,46 +413,8 @@ export default function PlaylistBuilderPanel() {
     }
   }, [tracks, adminFetch, buildBody, flash, name]);
 
-  // Seed search; `stale` guards a slow response clobbering a newer query.
-  // Only the FETCH waits on the debounce — a query that falls under two
-  // characters clears the dropdown off the raw value, so backspacing out of a
-  // search doesn't leave suggestions hanging for another 250ms.
-  useEffect(() => {
-    if (!seedTerm) { setSeedResults(null); return; }
-    let stale = false;
-    void (async () => {
-      try {
-        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(seedTerm)}&limit=8`);
-        const j = await r.json();
-        if (!stale) setSeedResults(j.results || j.songs || j.tracks || []);
-      } catch { if (!stale) setSeedResults([]); }
-    })();
-    return () => { stale = true; };
-  }, [seedTerm, adminFetch]);
-
-  // Manual add search (debounced, same staleness guard)
-  useEffect(() => {
-    if (!addTerm) { setAddResults(null); return; }
-    let stale = false;
-    void (async () => {
-      try {
-        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(addTerm)}&limit=10`);
-        const j = await r.json();
-        if (!stale) setAddResults(j.results || j.songs || j.tracks || []);
-      } catch { if (!stale) setAddResults([]); }
-    })();
-    return () => { stale = true; };
-  }, [addTerm, adminFetch]);
-
   // Genre vocabulary — fetched once on first focus; suggestions filter locally.
-  const loadGenres = useCallback(async () => {
-    if (genreList) return;
-    try {
-      const r = await adminFetch('/library/genres');
-      const j = await r.json();
-      setGenreList(j.genres || []);
-    } catch { setGenreList([]); }
-  }, [adminFetch, genreList]);
+  const loadGenres = useCallback(() => setGenreRequested(true), []);
 
   const genreSuggestions = useMemo(() => {
     if (!genreList) return null;
@@ -451,26 +425,23 @@ export default function PlaylistBuilderPanel() {
     return hits.slice(0, 8);
   }, [genreList, genreInput, recipeValues.genres]);
 
-  // Artist-filter search (debounced) — suggests distinct artist credits.
-  useEffect(() => {
-    if (!artistTerm) { setArtistResults(null); return; }
-    let stale = false;
-    void (async () => {
-      try {
-        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(artistTerm)}&limit=20`);
-        const j = await r.json();
-        const seen = new Set(recipeValues.artists.map(a => a.toLowerCase()));
-        const names: string[] = [];
-        for (const row of (j.results || []) as RawTrackRow[]) {
-          const a = (row.artist || '').trim();
-          if (a && !seen.has(a.toLowerCase())) { seen.add(a.toLowerCase()); names.push(a); }
-          if (names.length >= 6) break;
-        }
-        if (!stale) setArtistResults(names);
-      } catch { if (!stale) setArtistResults([]); }
-    })();
-    return () => { stale = true; };
-  }, [artistTerm, adminFetch, recipeValues.artists]);
+  // Artist-filter search uses the raw cached rows; selected artists stay local
+  // and filter the observer result without becoming part of the server key.
+  const artistResults = useMemo(() => {
+    if (!artistTerm) return null;
+    if (!artistQueryResult.data) return artistQueryResult.isError ? [] : null;
+    const seen = new Set(recipeValues.artists.map(artist => artist.toLowerCase()));
+    const names: string[] = [];
+    for (const row of artistQueryResult.data) {
+      const artist = (row.artist || '').trim();
+      if (artist && !seen.has(artist.toLowerCase())) {
+        seen.add(artist.toLowerCase());
+        names.push(artist);
+      }
+      if (names.length >= 6) break;
+    }
+    return names;
+  }, [artistTerm, artistQueryResult.data, artistQueryResult.isError, recipeValues.artists]);
 
   // Distinct artists in the seed results — the "seed the artist" rows.
   const seedArtists = useMemo(() => {
@@ -497,13 +468,10 @@ export default function PlaylistBuilderPanel() {
   };
   const removeAt = (i: number) => setTracks(prev => prev.filter((_, idx) => idx !== i));
 
-  // A sortable id has to be unique and survive a reorder, and a track id is
-  // neither: the same song can legitimately sit in the deck twice (that is what
-  // the DUPLICATE badge marks), and an index-derived id renames every row below
-  // the one that moved. The deck's own objects are the stable identity — a move
-  // splices them, it doesn't rebuild them — so the uid is minted per object and
-  // parked in a WeakMap. It doubles as the React key, which is why a reorder no
-  // longer remounts the rows below it and re-fetches their artwork.
+  // A track id can't be the sortable id: the same song can sit in the deck
+  // twice, and an index-derived id renames every row below a move. The deck's
+  // own objects are the stable identity, so the uid is minted per object into a
+  // WeakMap and doubles as the React key.
   const uids = useRef(new WeakMap<DraftTrack, string>());
   const nextUid = useRef(0);
   const uidOf = (t: DraftTrack): string => {
@@ -513,10 +481,8 @@ export default function PlaylistBuilderPanel() {
   };
   const rowIds = tracks.map(uidOf);
 
-  // Mouse and touch are separate sensors on purpose. One PointerSensor would
-  // have to claim the touch gesture the moment a finger lands to be able to
-  // drag, which costs the list its scroll; the delay makes a press-and-hold the
-  // drag and leaves a plain swipe scrolling.
+  // Mouse and touch are separate sensors: one PointerSensor would have to claim
+  // the touch gesture on finger-down to drag, costing the list its scroll.
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 6 } }),
@@ -531,8 +497,8 @@ export default function PlaylistBuilderPanel() {
     move(from, to);
   };
 
-  // dnd-kit announces "item 3" by default; a deck of songs should say which
-  // song. Positions are 1-based to match the number column on screen.
+  // dnd-kit announces "item 3" by default. Positions are 1-based to match the
+  // number column on screen.
   const announce = (id: string, at: number | null): string => {
     const i = rowIds.indexOf(id);
     const name = tracks[i]?.title || 'Track';
@@ -552,7 +518,6 @@ export default function PlaylistBuilderPanel() {
   const addTrack = (t: RawTrackRow) => {
     setTracks(prev => [...prev, rowToDraft(t)]);
     setAddQuery('');
-    setAddResults(null);
   };
 
   const doNew = useCallback(() => {
@@ -561,38 +526,44 @@ export default function PlaylistBuilderPanel() {
     setErrorMsg(''); setKeepInSync(false); setSyncInfo(null); setView('empty');
   }, []);
 
-  const openBrowse = useCallback(async () => {
+  const openBrowse = useCallback(() => {
     setModal('open');
     setPlaylistQuery('');
-    setPlaylists(null);
     setArmedDelete(null);
-    try {
-      const r = await adminFetch('/playlists');
-      const j = await r.json();
-      setPlaylists(j.playlists || []);
-    } catch { setPlaylists([]); }
-  }, [adminFetch]);
+  }, []);
+
+  const deletePlaylistMutation = useAdminMutation<unknown, PlaylistSummary>({
+    adminFetch,
+    request: (playlist, fetcher) => adminJson(
+      fetcher,
+      `/playlists/${encodeURIComponent(playlist.id)}`,
+      { method: 'DELETE' },
+    ),
+    onDone: async (_result, playlist, client) => {
+      removePlaylistFromCatalogues(client, playlist.id);
+    },
+    toastOnError: false,
+  });
 
   const deletePlaylist = useCallback(async (p: PlaylistSummary) => {
     try {
-      const r = await adminFetch(`/playlists/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { flash(j.error || 'delete failed'); return; }
-      setPlaylists(prev => (prev ? prev.filter(x => x.id !== p.id) : prev));
+      await deletePlaylistMutation.mutateAsync(p);
       // The deck keeps the tracks as an unsaved draft; only the server tie is gone.
       if (existingId === p.id) { setExistingId(undefined); setKeepInSync(false); setSyncInfo(null); }
       flash(`Deleted “${p.name}” from the music server`);
     } catch (err) {
-      flash(err instanceof Error ? err.message : 'delete failed');
+      flash(playlistWriteError(err, 'delete failed'));
     } finally {
       setArmedDelete(null);
     }
-  }, [adminFetch, existingId, flash]);
+  }, [deletePlaylistMutation, existingId, flash]);
 
   const loadPlaylist = useCallback(async (p: PlaylistSummary) => {
     try {
-      const r = await adminFetch(`/playlists/${encodeURIComponent(p.id)}`);
-      const j = await r.json();
+      const j = await queryClient.fetchQuery({
+        queryKey: playlistKeys.detail(p.id),
+        queryFn: ({ signal }) => fetchPlaylistDetail(adminFetch, p.id, signal),
+      });
       setTracks((j.entries || []).map(rowToDraft));
       setName(p.name);
       setDescription(null);
@@ -604,7 +575,7 @@ export default function PlaylistBuilderPanel() {
       setView('result');
       flash(`Loaded “${p.name}” from the music server`);
     } catch { flash('could not load playlist'); }
-  }, [adminFetch, flash]);
+  }, [adminFetch, flash, queryClient]);
 
   const openSave = useCallback(() => {
     if (!tracks.length) { flash('nothing to save'); return; }
@@ -614,37 +585,48 @@ export default function PlaylistBuilderPanel() {
       saveMode: existingId ? 'overwrite' : 'create',
     });
     // reset() doesn't validate, so an empty default would leave `isValid`
-    // stale-true until the field is touched, and the Save button wrongly
-    // enabled on first paint.
+    // stale-true and the Save button wrongly enabled on first paint.
     void saveForm.trigger();
     setModal('save');
   }, [tracks.length, name, existingId, keepInSync, flash, saveForm]);
 
+  const savePlaylistMutation = useAdminMutation<{
+    playlist?: { id?: string } | null;
+    added?: number;
+  }, {
+    name: string;
+    songIds: string[];
+    playlistId?: string;
+    keepInSync: boolean;
+    recipe?: ReturnType<typeof buildBody>;
+  }>({
+    adminFetch,
+    request: (body, fetcher) => adminJson(fetcher, '/playlists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    onDone: async (result, vars, client) => {
+      const detailId = vars.playlistId || result.playlist?.id;
+      await refreshPlaylistCatalogues(client, detailId ? [detailId] : []);
+    },
+    toastOnError: false,
+  });
+  const saving = savePlaylistMutation.isPending;
+
   const onSaveSubmit = saveForm.handleSubmit(async (values) => {
-    setSaving(true);
     try {
-      // Read off raw form state, NOT off `values`: `saveMode` is not a key of
-      // playlistSaveSchema, so the resolver's parsed output drops it and
-      // `values.saveMode` is always undefined — which once made every
-      // "Overwrite existing" save create a new playlist instead.
+      // Read off raw form state, NOT `values`: `saveMode` is not a key of
+      // playlistSaveSchema, so the resolver's parsed output drops it.
       const saveMode = saveForm.getValues('saveMode');
       const overwrite = saveMode === 'overwrite' && existingId;
-      const r = await adminFetch('/playlists', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: values.name,
-          songIds: tracks.map(t => t.id),
-          playlistId: overwrite ? existingId : undefined,
-          keepInSync: values.keepInSync,
-          recipe: values.keepInSync ? buildBody() : undefined,
-        }),
+      const j = await savePlaylistMutation.mutateAsync({
+        name: values.name,
+        songIds: tracks.map(t => t.id),
+        playlistId: overwrite ? existingId : undefined,
+        keepInSync: values.keepInSync,
+        recipe: values.keepInSync ? buildBody() : undefined,
       });
-      const j = await r.json();
-      if (!r.ok) {
-        if (!applyServerFieldErrors(saveForm, j.fieldErrors)) flash(j.error || 'save failed');
-        return;
-      }
       const id = j.playlist?.id || (overwrite ? existingId : undefined);
       setName(values.name);
       setExistingId(id);
@@ -653,32 +635,44 @@ export default function PlaylistBuilderPanel() {
       setModal(null);
       flash(`Saved “${values.name}” to Navidrome${values.keepInSync ? ' · sync on' : ''}`);
     } catch (err) {
-      flash(err instanceof Error ? err.message : 'save failed');
-    } finally {
-      setSaving(false);
+      if (err instanceof AdminResponseError && applyServerFieldErrors(saveForm, err.body.fieldErrors)) {
+        return;
+      }
+      flash(playlistWriteError(err, 'save failed'));
     }
   });
 
+  const syncPlaylistMutation = useAdminMutation<{ added?: number }, string>({
+    adminFetch,
+    request: (id, fetcher) => adminJson(
+      fetcher,
+      `/playlists/${encodeURIComponent(id)}/sync`,
+      { method: 'POST' },
+    ),
+    onDone: async (_result, id, client) => {
+      await refreshPlaylistCatalogues(client, [id]);
+    },
+    toastOnError: false,
+  });
+  const syncing = syncPlaylistMutation.isPending;
+
   const syncNow = useCallback(async () => {
     if (!existingId || syncing) return;
-    setSyncing(true);
     try {
-      const r = await adminFetch(`/playlists/${encodeURIComponent(existingId)}/sync`, { method: 'POST' });
-      const j = await r.json();
-      if (!r.ok) { flash(j.error || 'sync failed'); return; }
+      const j = await syncPlaylistMutation.mutateAsync(existingId);
       setSyncInfo({ lastSyncedAt: new Date().toISOString() });
       flash(j.added ? `Sync complete · added ${j.added} new track${j.added === 1 ? '' : 's'}` : 'Sync complete · nothing new');
       if (j.added) {
-        const pr = await adminFetch(`/playlists/${encodeURIComponent(existingId)}`);
-        const pj = await pr.json();
-        if (pr.ok) setTracks((pj.entries || []).map(rowToDraft));
+        const detail = await queryClient.fetchQuery({
+          queryKey: playlistKeys.detail(existingId),
+          queryFn: ({ signal }) => fetchPlaylistDetail(adminFetch, existingId, signal),
+        });
+        setTracks(detail.entries.map(rowToDraft));
       }
     } catch (err) {
-      flash(err instanceof Error ? err.message : 'sync failed');
-    } finally {
-      setSyncing(false);
+      flash(playlistWriteError(err, 'sync failed'));
     }
-  }, [existingId, syncing, adminFetch, flash]);
+  }, [existingId, syncing, syncPlaylistMutation, queryClient, adminFetch, flash]);
 
   const showResult = view === 'result' && tracks.length > 0;
   const showEmpty = view === 'empty' || (view === 'result' && tracks.length === 0);
@@ -696,8 +690,6 @@ export default function PlaylistBuilderPanel() {
     <div className="min-w-0">
       <div ref={frameRef} className="flex min-w-0 flex-col lg:h-[calc(100dvh-146px)] lg:min-h-[480px] lg:flex-row">
 
-        {/* --card-bg matches the other admin panels, keeping the rail distinct
-            from the deck. */}
         <aside className="flex min-h-0 flex-none flex-col border-b border-ink bg-[var(--card-bg)] lg:w-[380px] lg:border-r lg:border-b-0">
           <ScrollArea className="min-h-0 flex-1">
             <div className="px-5 pt-4 pb-[26px]">
@@ -716,9 +708,6 @@ export default function PlaylistBuilderPanel() {
               className="mb-[22px]"
             />
 
-            {/* Raw Controller: the array-mutation half (chips, add/remove) needs
-                RHF's field, but the search dropdown above it (seedQuery/
-                seedResults) is transient UI, not a form value. */}
             <Controller
               control={recipeControl}
               name="seeds"
@@ -746,7 +735,7 @@ export default function PlaylistBuilderPanel() {
                               if (!seedsField.value.some(x => x.id === s.id)) {
                                 seedsField.onChange([...seedsField.value, { id: s.id, title: s.title || '', artist: s.artist || '' }]);
                               }
-                              setSeedQuery(''); setSeedResults(null);
+                              setSeedQuery('');
                             }}
                             className="flex w-full items-center justify-between gap-2 border-b border-separator-soft px-[11px] py-2 text-left hover:bg-ink-soft"
                           >
@@ -761,7 +750,7 @@ export default function PlaylistBuilderPanel() {
                           <button
                             key={a}
                             type="button"
-                            onClick={() => { setSeedArtist(a); setSeedQuery(''); setSeedResults(null); }}
+                            onClick={() => { setSeedArtist(a); setSeedQuery(''); }}
                             className="flex w-full items-center justify-between gap-2 border-b border-separator-soft px-[11px] py-2 text-left last:border-b-0 hover:bg-ink-soft"
                           >
                             <span className="min-w-0">
@@ -822,9 +811,6 @@ export default function PlaylistBuilderPanel() {
                             : 'any'}
                     </span>
                   )}
-                  {/* Raw Controller, not SwitchField: the live length badge sits
-                      between the label and the switch in this row, a slot
-                      SwitchField's fixed label+switch layout has no place for. */}
                   <Controller
                     control={recipeControl}
                     name="capOn"
@@ -834,12 +820,6 @@ export default function PlaylistBuilderPanel() {
                   />
                 </div>
               </div>
-              {/* Raw Controller pair, not TextField: DualRange clamps lo
-                  against hi (and vice versa) INSIDE its own onChange before
-                  either prop fires, so the invariant lo<=hi holds by
-                  construction — there is no zod rule to bind and no error
-                  state to wire. Two Controllers because the two thumbs are
-                  two independent RHF field paths. */}
               <Controller control={recipeControl} name="minSec" render={({ field: lo }) => (
                 <Controller control={recipeControl} name="maxSec" render={({ field: hi }) => (
                   <DualRange
@@ -869,7 +849,6 @@ export default function PlaylistBuilderPanel() {
                             : 'any bpm'}
                     </span>
                   )}
-                  {/* Same reason as Track length's switch above. */}
                   <Controller
                     control={recipeControl}
                     name="bpmOn"
@@ -1011,8 +990,8 @@ export default function PlaylistBuilderPanel() {
                             <button
                               key={g.value}
                               type="button"
-                              // preventDefault on mousedown so the input's onBlur (which
-                              // commits raw text) doesn't fire before this click lands.
+                              // preventDefault on mousedown so the input's onBlur
+                              // doesn't commit raw text before this click lands.
                               onMouseDown={e => e.preventDefault()}
                               onClick={() => {
                                 genresField.onChange(
@@ -1068,7 +1047,7 @@ export default function PlaylistBuilderPanel() {
                             type="button"
                             onClick={() => {
                               if (!artistsField.value.some(x => x.toLowerCase() === a.toLowerCase())) artistsField.onChange([...artistsField.value, a]);
-                              setArtistQuery(''); setArtistResults(null);
+                              setArtistQuery('');
                             }}
                             className="flex w-full items-center justify-between gap-2 border-b border-separator-soft px-[11px] py-2 text-left last:border-b-0 hover:bg-ink-soft"
                           >
@@ -1141,8 +1120,6 @@ export default function PlaylistBuilderPanel() {
             {showResult && (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="flex-none border-b border-ink px-4 pt-1.5 pb-2.5 sm:px-6">
-                  {/* The three deck actions eat ~185px, leaving ~8 characters of
-                      title at 390px, so the name takes its own line. */}
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                     <input
                       value={name}
@@ -1387,12 +1364,11 @@ export default function PlaylistBuilderPanel() {
 
       {modal === 'open' && (
         <div
-          // Backdrop keeps no role and no tabIndex: `role="button"` would put a
-          // full-viewport control in the tab order, ahead of the dialog's real
-          // controls. Escape is handled at the document level.
+          // No role/tabIndex on the backdrop: `role="button"` would put a
+          // full-viewport control ahead of the dialog's real controls. Escape is
+          // handled at the document level.
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
-          // Only a click on the backdrop itself closes, so the panel needs no
-          // stopPropagation of its own.
+          // Only a click on the backdrop itself closes.
           onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
         >
           <div
@@ -1476,8 +1452,7 @@ export default function PlaylistBuilderPanel() {
 
       {modal === 'save' && (
         <div
-          // See the OPEN modal above: backdrop stays a plain div; Escape is
-          // owned by the document-level handler.
+          // Backdrop stays a plain div; Escape is owned by the document handler.
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
           onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
         >

@@ -1,12 +1,5 @@
-// Programme prompts — the "producer" layer behind broadcast/programme.ts.
-//
-// A programme show airs as a produced episode: intro → music → feature →
-// music → outro. One structured call at session start (generateProgrammePlan)
-// turns the show's topic brief + the moment into an episode plan; the beat
-// scripts below all reference that plan, which is what makes the hour read as
-// one produced sequence instead of three unrelated talk breaks. When the plan
-// call fails, the beats degrade to brief-only generation (the caller passes
-// plan: null) — the arc still airs, it just loses the cross-references.
+// Episode beats share a plan generated at session start. If planning fails,
+// plan:null falls back to the topic brief without cross-references.
 
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
@@ -16,6 +9,7 @@ import { djObject } from '../strategy/object.js';
 import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
 import { clipText } from '../core/pure.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471); the dedicated weather skill owns that beat.
@@ -140,6 +134,10 @@ export function featureKindsClause(skillKinds: { kind: string; desc: string }[] 
   }\nA feature whose topic needs specific facts — dates, credits, releases, news, anything the host would otherwise have to recall — must name a capability. Leave "kind" null only for a topic the host can honestly carry from the brief and the moment alone.`;
 }
 
+export function programmePlanSystem(): string {
+  return `You are the producer of a radio programme on a personal internet radio station. Given the show's standing brief and the moment, write today's episode plan: the angle this airing takes, what the opening establishes, one feature segment per hour, and how the sign-off wraps. Notes are for the host — concrete, specific, grounded in the brief. Never invent listener messages, callers, or events. Vary the angle from episode to episode.\n\n${onAirLocationGrounding()}`;
+}
+
 // `skillKinds` is the capability menu the plan may build features from
 // (already filtered to enabled + host-owned + ready by the caller). When the
 // show pins `segmentSkill`, the caller passes just that one and the plan is
@@ -149,7 +147,9 @@ export async function generateProgrammePlan({
   previousAngle = null, skillKinds = [], pinnedKind = null,
 }: any) {
   const featureCount = Math.max(1, Math.min(MAX_FEATURES, spanHours));
-  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
+  // Never the operator's steer: the plan outlives it for the whole episode,
+  // and its angle rides the public context (GET /now-playing, context.ts).
+  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS, steer: false });
   const cast = [
     `Host: ${host?.name || 'the DJ'}`,
     ...(guests || []).map((g: any) => `Guest co-host: ${g.name}`),
@@ -157,7 +157,7 @@ export async function generateProgrammePlan({
 
   const kindsClause = featureKindsClause(skillKinds, pinnedKind);
 
-  const system = `You are the producer of a radio programme on a personal internet radio station. Given the show's standing brief and the moment, write today's episode plan: the angle this airing takes, what the opening establishes, one feature segment per hour, and how the sign-off wraps. Notes are for the host — concrete, specific, grounded in the brief. Never invent listener messages, callers, or events. Vary the angle from episode to episode.`;
+  const system = programmePlanSystem();
 
   const promptLines = [
     `The show: "${show.name}"${spanHours > 1 ? ` — ${spanHours} hours on air` : ' — one hour on air'}.`,
@@ -169,13 +169,33 @@ export async function generateProgrammePlan({
     `\nWrite the plan — exactly ${featureCount} feature${featureCount > 1 ? 's' : ''}, in air order.`,
   ].filter(Boolean);
 
-  return djObject({
+  const plan = await djObject({
     system,
     prompt: promptLines.join('\n'),
     schema: planSchema(featureCount),
     temperature: 0.9,
     kind: 'generateProgrammePlan',
   });
+  return narrowPlanKinds(plan, skillKinds.map((k: { kind: string }) => k.kind), pinnedKind);
+}
+
+// The schema takes any string for `kind`, so a producer can name a capability
+// it was never offered — a built-in word like "news" is an easy guess for a
+// small model. Anything outside the menu (or the pinned kind) becomes null,
+// i.e. straight talk. broadcast/programme.ts runFeature re-checks at air time,
+// because the plan outlives the menu it was built from.
+export function narrowPlanKinds<T extends { features?: { kind?: string | null }[] }>(
+  plan: T,
+  offered: string[],
+  pinnedKind: string | null = null,
+): T {
+  if (!plan || !Array.isArray(plan.features)) return plan;
+  const allowed = new Set(pinnedKind ? [pinnedKind] : offered);
+  return {
+    ...plan,
+    features: plan.features.map((f) =>
+      (f?.kind != null && !allowed.has(f.kind) ? { ...f, kind: null } : f)),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +263,7 @@ export function featureTask({ show, topic, plan = null, speaker = null }: any): 
 
 export async function generateProgrammeFeature({ show, topic, plan = null, persona = null, context = null, recap = null, recentOpeners = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
-  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
+  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS, steer: true });
   if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
   ctxLines.push(featureTask({ show, topic, plan, speaker }));
   return djText({
@@ -268,7 +288,14 @@ const MAX_EXCHANGE_LINES = 5;
 // task builders — the grounding rule has to be provably ON this path too. A
 // guest open/close is the beat most likely to reach for a record ("wait till
 // you hear what we've got"), and it had only the listener-messages clause.
-export function exchangeSystem({ show, castBlock, beatTask, langClause = '' }: any): string {
+//
+// The station house rules land here as well (#1420): this prompt goes through
+// neither renderDjPrompt nor agentPersonaPreamble, so without the explicit
+// append an operator's TTS-tag or number-spelling rules reached every solo
+// beat of the show and were silently dropped from the open and the close.
+export function exchangeSystem({ host = null, show, castBlock, beatTask }: any): string {
+  const lang = String(host?.language || '').trim() || 'English';
+  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}`;
   return `You write short on-air exchanges between the hosts of "${show.name}" on a personal internet radio station.
 
 The cast (persona id — name (role): voice notes):
@@ -276,10 +303,12 @@ ${castBlock}
 
 Rules:
 - ${MIN_EXCHANGE_LINES} to ${MAX_EXCHANGE_LINES} lines total, at least two speakers; the host carries the room.
+- ${settings.castSpeakerIdRule()}
 - Each speaker stays in THEIR OWN character per the voice notes.
 - ${beatTask}
 - Plain spoken words only: no stage directions, no asterisks, no emoji. No invented listener messages, callers, or events.
-- ${PROGRAMME_GROUNDING_RULE}${langClause}`;
+- ${onAirLocationGrounding()}
+- ${PROGRAMME_GROUNDING_RULE}${langClause}${settings.castHouseRulesBlock()}`;
 }
 
 export async function generateProgrammeExchange({
@@ -303,14 +332,11 @@ export async function generateProgrammeExchange({
     ...guests.map((g: any) => `- ${g.id} — ${g.name} (GUEST): ${soulBrief(g.soul) || 'no notes'}`),
   ].join('\n');
 
-  const lang = String(host?.language || '').trim();
-  const langClause = lang ? ` Everyone speaks ${lang} on air; keep proper nouns untranslated.` : '';
-
   const beatTask = beat === 'outro'
     ? `The show is wrapping up in the next few minutes: sign the episode off together — a callback to what the hour was about, quick thanks between hosts, done.${nextShowName ? ` "${nextShowName}" is up next; the host may give it a quick nod.` : ''} Music keeps playing after — you're closing the show, not the station.`
     : `This is the TOP of the show: the host welcomes listeners in and sets up what this episode is about; the guest(s) chip in as themselves. Tease what's coming without over-promising.`;
 
-  const system = exchangeSystem({ show, castBlock, beatTask, langClause });
+  const system = exchangeSystem({ host, show, castBlock, beatTask });
 
   const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
   if (show?.topic) ctxLines.push(`The show's brief: ${show.topic}`);

@@ -1,4 +1,3 @@
-// Shared types for the personas editor (/admin/personas).
 
 import type { EngineAvailability } from '../tts/engineMeta';
 export type { EngineAvailability };
@@ -9,8 +8,8 @@ export interface PersonaTts {
   voice: string;
   // −12..+12, 0 = no change. Stacks on the per-engine gain (settings.ts:clampTtsGain).
   gainDb: number;
-  // 0.5..2.0×, 1.0 = no change. Composes with the per-engine speed + daypart
-  // energy; Piper/Kokoro/cloud only (settings.ts:clampTtsSpeed).
+  // 0.5..2.0×, 1.0 = no change. Composes with the per-engine speed and, on
+  // air, programme pacing; Piper/Kokoro/Cloud/Remote only.
   speed: number;
 }
 
@@ -20,22 +19,29 @@ export interface Persona {
   tagline: string;
   frequency: string;
   scriptLength: string;
-  // Back-announces AND teases what's next, and runs callbacks across the session.
-  // Off = the tasteful-narrator behaviour.
+  // Back-announces, teases what's next and runs callbacks across the session.
   djMode: boolean;
+  // 'announce' limits the link to exactly "This is <artist>." / "Next up,
+  // <artist>."; 'natural' (default) writes the ordinary between-track link.
+  linkStyle: 'natural' | 'announce';
   // Tone dials, 0–10, default 5 (neutral). Map to prompt bands server-side.
   humour: number;
   localColour: number;
   warmth: number;
   soul: string;
+  musicLean: string;
   // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
   // directive injected server-side).
   language: string;
-  // Basename like `p_abc123.png`, empty when none. The image itself is served from
+  voiceStyle?: string;
+  // Basename like `p_abc123.png`, empty when none. The image is served from
   // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;
   tts: PersonaTts;
   skills: string[];
+  /** Operator organisation tags: they filter and group the roster and nothing
+   *  else. */
+  tags: string[];
 }
 
 // Mirrors the controller's djPrompts entries (settings.ts:validateDjPromptsStrict).
@@ -51,8 +57,8 @@ export interface FormState {
   // '' selects the built-in default template.
   djPrompts: DjPromptPreset[];
   activeDjPromptId: string;
-  // Station house rules — appended to EVERY spoken-output prompt, including
-  // the agent paths the template never reaches (issue #1182). '' = off.
+  // Appended to every spoken-output prompt, including the agent and cast paths
+  // the template never reaches (#1182, #1420). '' = off.
   djHouseRules: string;
 }
 
@@ -101,7 +107,16 @@ export interface SettingsResponse {
     djPrompts?: Array<Partial<DjPromptPreset>>;
     activeDjPromptId?: string;
     djHouseRules?: string;
-    tts?: { defaultEngine?: string };
+    // Read only to warn what removing a persona takes with it.
+    shows?: Array<{ id?: string; name?: string; personaId?: string; guestPersonaIds?: string[] }>;
+    // An 'inherit' persona takes its engine and station speed from this block;
+    // when that engine is cloud it also takes the provider + voice. Kept in
+    // step with the public /settings projection used by this editor.
+    tts?: {
+      defaultEngine?: string;
+      speed?: Record<string, number>;
+      cloud?: { provider?: string; voice?: string } | null;
+    };
   };
   defaults?: { djPrompt?: string };
   skills?: { catalog?: SkillCatalogEntry[] };
@@ -134,6 +149,7 @@ export interface CommunityPersona {
   frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
+  linkStyle?: 'natural' | 'announce';
   humour?: number;
   localColour?: number;
   warmth?: number;

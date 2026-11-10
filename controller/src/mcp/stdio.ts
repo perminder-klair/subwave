@@ -12,21 +12,29 @@
  * Run via: `npx tsx mcp-subwave/src/index.ts` (see the repo-root .mcp.json).
  *
  * Environment:
- *   SUBWAVE_API_URL     controller base URL (default http://localhost:7701;
- *                       prod behind Caddy is http://localhost:7700/api)
+ *   SUBWAVE_API_URL     controller base URL. Unset: the first of
+ *                       http://localhost:7701 (dev) and
+ *                       http://localhost:7700/api (prod behind Caddy) whose
+ *                       /health answers — see base-url.ts
  *   SUBWAVE_ADMIN_USER  admin Basic-auth user  — required for DJ control tools
  *   SUBWAVE_ADMIN_PASS  admin Basic-auth pass  — required for DJ control tools
+ *   SUBWAVE_STATION_PASSWORD
+ *                       the station's listener password — only needed when the
+ *                       station is private (privacy.privatePlayer /
+ *                       privacy.listenerAuth); gates the listener-facing reads
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { resolveApiUrl } from "./base-url.js";
 import { SubwaveClient } from "./client.js";
 import { registerSubwaveTools } from "./tools.js";
 
 export async function startStdioServer(): Promise<void> {
   const client = new SubwaveClient({
-    baseUrl: (process.env.SUBWAVE_API_URL || "http://localhost:7701").replace(/\/$/, ""),
+    baseUrl: await resolveApiUrl(process.env.SUBWAVE_API_URL),
     adminUser: process.env.SUBWAVE_ADMIN_USER,
     adminPass: process.env.SUBWAVE_ADMIN_PASS,
+    stationPassword: process.env.SUBWAVE_STATION_PASSWORD,
   });
 
   const version = process.env.SUBWAVE_VERSION || "latest";

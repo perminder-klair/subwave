@@ -8,27 +8,25 @@
 
 set -eu
 
-# ---- Shared state bootstrap -------------------------------------------------
-# Mode 777 because the controller, analyzer and liquidsoap write here as OTHER
-# uids; without it an operator must chown every bind-mount source by hand.
+# Shared state bootstrap. Mode 777 because the controller, analyzer and
+# liquidsoap write here as OTHER uids; without it an operator must chown every
+# bind-mount source by hand. The state ROOT is 1777 instead: the sticky bit
+# still lets every uid create files there, but only a file's owner can rename or
+# delete it, so a sidecar's uid cannot replace root's icecast-secrets.env.
 #
-# NOTHING in here is fatal (#1300 bug 10). Under `set -eu` the old bulk
-# `mkdir -p a b c` / `chmod 777 a b c` made every state path load-bearing: one
-# on a mount that refuses the change (read-only bind, NFS export, the
-# exFAT/NTFS disk people move the stem cache to) aborted this script BEFORE
-# icecast started, and compose reported only `dependency failed to start:
-# container sub-wave-broadcast is unhealthy` — naming neither path nor cause.
-# A station running on a degraded mount still serves and still airs the
+# NOTHING in here is fatal (#1300 bug 10): under `set -eu` a bulk mkdir/chmod
+# makes every state path load-bearing, and one unwritable mount aborts this
+# script before icecast starts. A degraded mount still serves and still airs the
 # emergency loop; an exited container airs nothing.
 #
 # docker/aio/supervisor.sh keeps the same functions, list and messages;
 # scripts/state-bootstrap.test.ts drives both through one table.
 state_warn() { echo "broadcast: WARNING $*" >&2; }
+state_log() { echo "broadcast: $*" >&2; }
 
 # True when `other` can write the dir. The warning keys on this rather than on
-# chmod's exit status: a mount that is already world-writable and merely
-# refuses chmod is a WORKING config, and a line printed on every healthy boot
-# is a line operators learn to skip.
+# chmod's exit status: a mount that is already world-writable and merely refuses
+# chmod is a working config and must not warn on every boot.
 state_writable_by_others() {
     case "$(stat -c %a "$1" 2>/dev/null || echo 0)" in
         *[2367]) return 0 ;;
@@ -38,12 +36,13 @@ state_writable_by_others() {
 
 state_prepare_dir() {
     local p=$1
+    local mode=${2:-777}
     mkdir -p "$p" 2>/dev/null || true
     if [ ! -d "$p" ]; then
         state_warn "state dir $p could not be created — a read-only or unwritable mount; the station boots, but anything writing there will fail"
         return 0
     fi
-    chmod 777 "$p" 2>/dev/null || true
+    chmod "$mode" "$p" 2>/dev/null || true
     if [ ! -w "$p" ] || ! state_writable_by_others "$p"; then
         state_warn "state dir $p is mode $(stat -c %a "$p" 2>/dev/null || echo '?') and chmod could not change it — the controller and analyzer containers write there as other uids; chown/chmod it on the host"
     fi
@@ -66,23 +65,549 @@ bootstrap_state_dirs() {
     local root=$1
     local dir=$2
     local sub
-    state_prepare_dir "$root"
-    state_prepare_dir "$dir"
-    # stems + transitions are the analyzer's (uid 10001), and the only two
-    # dirs worth relocating to a bigger disk — the ONLY way to do that being a
-    # bind mount at <state>/stems (music/stem-cache.ts stemsRoot() has no
-    # setting behind it). A fresh bind mount lands root-owned 755, which the
-    # analyzer cannot write without the same 777 treatment as the rest.
+    state_prepare_dir "$root" 1777
+    # A single-station install serves from the root itself; a second plain 777
+    # would strip the sticky bit again.
+    [ "$dir" = "$root" ] || state_prepare_dir "$dir"
+    # stems + transitions are the analyzer's (uid 10001); a fresh bind mount
+    # lands root-owned 755, which it cannot write without the same 777.
     for sub in voice voices archive jingles logs sessions sfx stems transitions; do
         state_prepare_dir "$dir/$sub"
     done
-    # Liquidsoap's reload_mode="watch" playlists need the files to exist.
+    # A RELOCATED stem cache (STEMS_DIR in .env, container path
+    # SUBWAVE_STEMS_DIR) sits outside $dir, so the loop above never reaches it.
+    # Marker initialization shares any per-station directories it creates too.
+    if [ -n "${SUBWAVE_STEMS_DIR:-}" ]; then
+        state_prepare_dir "$SUBWAVE_STEMS_DIR"
+    fi
+    # Liquidsoap's file watches on these need the files to exist.
     state_prepare_file "$dir/auto.m3u" 666
     state_prepare_file "$dir/jingles.m3u" 666
-    # Keep a co-located Navidrome from scanning the hourly archive mixdowns in
-    # as junk "HH-00" tracks (issue #273). Harmless when paths don't overlap.
+    # Keeps a co-located Navidrome from scanning the hourly archive mixdowns in
+    # as junk "HH-00" tracks (#273).
     state_prepare_file "$dir/archive/.ndignore"
     return 0
+}
+
+# Listener buffer depth comes only from the controller-written handoff. An env
+# override would silently outrank the saved setting, and a controller older
+# than stream-mounts.json would keep advertising that setting, putting every
+# listener-facing clock on the wrong offset.
+read_state_num() {
+    # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
+    _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
+    case "$_v" in
+        ''|*[!0-9]*) echo "$2" ;;
+        *) echo "$_v" ;;
+    esac
+}
+
+stream_buffer_seconds() {
+    read_state_uint liquidsoap_stream_buffer_seconds.txt 22
+}
+
+# A handoff number as a plain decimal. What the controller writes reads here as
+# it does in radio.liq, and so does a CRLF or padded hand-edit: surrounding
+# whitespace is trimmed (its string.trim), so liquidsoap is handed the bitrate it
+# would have read itself, not the fallback. At most six digits (anything longer
+# is the fallback), and leading zeros as decimal, never as bash arithmetic's
+# octal. The trim below is quadratic, and a padded or corrupt file must not hold
+# icecast and the dead-air guard back at boot, so whitespace runs are squeezed
+# first and at most 64 bytes of that reach it. Squeezed, padding can neither push
+# a value out of those bytes nor cut one in half, which a plain `head -c` of the
+# file would: 62 spaces and 128 would read as 12. Other hand-edits part from
+# radio.liq, whose int_of_string also takes 0x80, +128, 1_000 and 7+ digits: each
+# of those is the fallback here.
+read_state_uint() {
+    local v
+    v=$(tr -s '[:space:]' ' ' 2>/dev/null < "$STATE_DIR/$1" | head -c 64 || true)
+    v=${v#"${v%%[![:space:]]*}"}
+    v=${v%"${v##*[![:space:]]}"}
+    case "$v" in ''|*[!0-9]*) v=$2 ;; esac
+    [ "${#v}" -le 6 ] || v=$2
+    echo "$(( 10#$v ))"
+}
+
+# A bitrate a burst can be sized for. Zero is junk here because radio.liq
+# refuses it too (`v > 0`): a burst sized for 0 kbps holds nothing, while the
+# encoder runs at its default.
+read_state_kbps() {
+    local v
+    v=$(read_state_uint "$1" "$2")
+    [ "$v" -gt 0 ] || v=$2
+    echo "$v"
+}
+
+# A burst's bitrate, from ICECAST_*_BITRATE or the setting it overrides, as a
+# plain number, so stream-mounts.json always holds valid JSON. $1 = the value,
+# $2 = the default for junk. Bash arithmetic reads it, because the burst sizing
+# always has: a leading zero is octal here (0100 is 64), and reading that as
+# decimal would re-size the burst of a station that sets one. 0128 is not octal,
+# and was an arithmetic error that aborted the render, so it reads as decimal,
+# like a handoff file.
+burst_kbps() {
+    local v=$1
+    case "$v" in
+        ''|*[!0-9]*) v=$2 ;;
+        0*[89]*) v=$(( 10#$v )) ;;
+    esac
+    echo "$(( v ))"
+}
+
+# Liquidsoap source $1 on one line, with its comments out. Whichever form starts
+# first wins, as in the lexer, so a `#<` inside a `#` comment opens nothing. Not
+# a lexer: a `#` in a string cuts too. A `#<` that never closes leaves a bare
+# %opus behind, which reads as doubt: Liquidsoap refuses such a file unless the
+# `#<` sat in a string, and then what it cut is real code. scripts/opus-cbr.test.ts
+# cuts the same way, and both answer to one table
+# (scripts/test-utils/opus-cbr-table.ts).
+liq_code() {
+    awk '{
+line = $0
+while ((i = index(line, block ? ">#" : "#"))) {
+    if (block) {
+        block = 0
+        line = substr(line, i + 2)
+    } else if (substr(line, i, 2) == "#<") {
+        block = 1
+        code = code substr(line, 1, i - 1) " "
+        line = substr(line, i + 2)
+    } else {
+        line = substr(line, 1, i - 1)
+        break
+    }
+}
+print code (block ? "" : line)
+code = ""
+}
+END { if (block) print "%opus" }' "$1" 2>/dev/null | tr '\n' ' '
+}
+
+# The Opus mount's encoding, read from the radio.liq liquidsoap is about to load:
+# `cbr` only when EVERY %opus encoder in it says vbr="none" (hard CBR, whose
+# byte-sized burst holds the seconds it was sized for), `vbr` when any does not,
+# and nothing when there is none to read. Taken from the encoder line itself,
+# not declared beside it, so the answer changes in the same edit as the encoder
+# (#2138) and cannot outlive it. A client may treat the Opus burst as seconds
+# only on `cbr` (#2142); every doubt reads as not-CBR:
+# - no vbr at all, or a bare %opus: the 2.4.6 default is constrained VBR;
+# - any dtx but a literal false: true can stop sending silent frames whatever the
+#   vbr mode, and dtx=(true) or dtx=d is as real;
+# - vbr given twice: the last one wins, so one saying "none" proves nothing;
+# - a `(` inside the call: the first `)` then need not close it, so a dtx or a
+#   second vbr can sit past it, and `bitrate=(96), dtx=true` is DTX on 2.4.6;
+# - libopus, an %ffmpeg encoder this cannot read.
+# Read in the C locale, or a UTF-8 grep would take an em space for [[:space:]] and
+# the operator's LC_ALL would change the answer.
+opus_encoding() {
+    local -x LC_ALL=C
+    local calls key='[^[:alnum:]_]' eq='[[:space:]]*=[[:space:]]*'
+    calls=$(liq_code "$1" | grep -oE 'libopus|%opus([[:space:]]*\([^)]*\)|[^[:alnum:]_])' || true)
+    [ -n "$calls" ] || return 0
+    if printf '%s\n' "$calls" | grep -qvE "${key}vbr$eq[\"']none[\"']" \
+        || printf '%s\n' "$calls" | grep -qE "libopus|\(.*\(|${key}vbr$eq.*${key}vbr$eq" \
+        || printf '%s\n' "$calls" | grep -oE "${key}dtx$eq[^,)[:space:]]*" | grep -qvE "^${key}dtx${eq}false$"; then
+        echo vbr
+    else
+        echo cbr
+    fi
+    return 0
+}
+
+# Appends one stream mount to the icecast.xml fragment $1, and its entry to the
+# caller's STREAM_MOUNTS_JSON. $2 = mount path, $3 = kbps this mount's burst is
+# sized for, $4 = listener-auth URL already XML-escaped ('' = auth off), $5 =
+# extra marker fields (',"key":"value"' or '').
+emit_stream_mount() {
+    local xml=$1 mount=$2 kbps=$3 auth_url=$4 extra=${5:-} burst queue
+    burst=$(( BUFFER_SECONDS * kbps * 125 ))
+    queue=$(( burst * 4 ))
+    [ "$queue" -ge 2097152 ] || queue=2097152
+    state_log "  $mount @ ${kbps}kbps → burst-size ${burst}B, queue-size ${queue}B"
+    {
+        echo '    <mount type="normal">'
+        echo "        <mount-name>$mount</mount-name>"
+        echo "        <burst-size>$burst</burst-size>"
+        echo "        <queue-size>$queue</queue-size>"
+        if [ -n "$auth_url" ]; then
+            echo '        <authentication type="url">'
+            echo "            <option name=\"listener_add\" value=\"$auth_url\"/>"
+            echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
+            # The station has ONE shared password and the username is ignored, so many
+            # listeners present the same name (docs suggest `listener`). icecast-kh admits
+            # one connection per username unless told otherwise: the second gets a 403,
+            # or hangs unanswered when it arrives while the first is still closing, which
+            # is what an iOS player's range probe followed by its real request does.
+            echo '            <option name="allow_duplicate_users" value="1"/>'
+            echo '        </authentication>'
+        fi
+        echo '    </mount>'
+    } >> "$xml"
+    STREAM_MOUNTS_JSON="$STREAM_MOUNTS_JSON,\"$mount\":{\"kbps\":$kbps,\"burstSeconds\":$BUFFER_SECONDS,\"burstBytes\":$burst$extra}"
+    return 0
+}
+
+# Replaces the state marker $1 with the line $2, non-zero if it could not.
+# Through a fresh mktemp file and a rename, like write_icecast_secrets, so a
+# symlink planted ahead of the write is not written through, and one planted at
+# $1 is replaced, not followed. The fixed-name temp this used to write is dropped
+# first. 644 before the rename, so the marker never shows at mktemp's 600; a
+# refused chmod is no failure, because a mount that refuses chmod is a working
+# config (see state_writable_by_others).
+write_state_marker() {
+    local marker=$1 line=$2 tmp
+    rm -f "$marker.tmp" 2>/dev/null || true
+    tmp=$(mktemp "$marker.XXXXXX" 2>/dev/null) || return 1
+    chmod 644 "$tmp" 2>/dev/null || true
+    if printf '%s\n' "$line" > "$tmp" 2>/dev/null \
+        && mv -fT "$tmp" "$marker" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+}
+
+# $STATE_DIR/stream-mounts.json: what this render gave each mount (#2142).
+# /now-playing advertises the MP3 mount's burstSeconds to listeners, so the
+# marker is rewritten on EVERY render. A failed write removes the old one rather
+# than leave it describing an earlier render (the controller then advertises the
+# setting), and is never fatal, same rule as the state bootstrap above. Only
+# when that removal fails too, as on a read-only state mount, does a marker
+# outlive its render.
+write_stream_mounts_marker() {
+    # $1 = the mounts JSON object
+    local dir=${STATE_DIR:-}
+    [ -n "$dir" ] || return 0
+    local marker=$dir/stream-mounts.json
+    if ! write_state_marker "$marker" "{\"mounts\":$1,\"at\":$(date +%s)}"; then
+        rm -f "$marker" 2>/dev/null || true
+        state_warn "could not write $marker — the station is unaffected, but listeners may be told a buffer these mounts were not rendered with"
+    fi
+    return 0
+}
+
+# Listener buffer depth (<burst-size>, #993/#1114) for every stream mount, ALWAYS
+# rendered (not just under auth). burst-size is a BYTE count, so it is sized in
+# SECONDS and converted per mount's bitrate: one global figure sized for MP3 is
+# a different depth everywhere else (22s of mp3-192k is ~43s of opus-96k, ~6s of
+# FLAC). Each <queue-size> is 4x its burst, floored at 2 MB, or a client is
+# evicted the moment it falls behind its own primed buffer (#993).
+#
+# Every setting is read ONCE, here (#2143). The same bitrates are handed to
+# liquidsoap as SUBWAVE_{STREAM,OPUS,AAC}_BITRATE, which radio.liq takes before
+# its own file read, so a save landing between this render and liquidsoap's
+# start cannot size a burst for one encoder and build another. What was
+# rendered goes to stream-mounts.json, because listeners must be told the burst
+# these mounts hold, not a setting saved since (#2142). A change applies on the
+# next pair launch.
+#
+#   render_stream_mounts $1=XML fragment path, $2=listener-auth URL already
+#   XML-escaped ('' = auth off), $3=the radio.liq liquidsoap will load.
+#
+# Sets BUFFER_SECONDS, STREAM_BITRATE, OPUS_BITRATE, AAC_BITRATE,
+# FLAC_BITRATE_EST, and the global <limits> ICECAST_BURST_SIZE /
+# ICECAST_QUEUE_SIZE (sized for MP3).
+#
+# docker/aio/supervisor.sh carries the same functions and the same messages;
+# scripts/stream-mounts.test.ts drives both from one table.
+render_stream_mounts() {
+    local xml=$1 auth_url=$2 radio_liq=$3 opus_enc STREAM_MOUNTS_JSON=''
+    BUFFER_SECONDS=$(stream_buffer_seconds)
+    [ "$BUFFER_SECONDS" -le 60 ] || BUFFER_SECONDS=60
+    SUBWAVE_STREAM_BITRATE=$(read_state_kbps liquidsoap_stream_bitrate.txt 192)
+    SUBWAVE_OPUS_BITRATE=$(read_state_kbps liquidsoap_opus_bitrate.txt 96)
+    SUBWAVE_AAC_BITRATE=$(read_state_kbps liquidsoap_aac_bitrate.txt 192)
+    export SUBWAVE_STREAM_BITRATE SUBWAVE_OPUS_BITRATE SUBWAVE_AAC_BITRATE
+    # ICECAST_*_BITRATE re-size a mount's burst and nothing else; the encoder
+    # keeps the setting, as it always has.
+    STREAM_BITRATE=$(burst_kbps "${ICECAST_STREAM_BITRATE:-$SUBWAVE_STREAM_BITRATE}" 192)
+    OPUS_BITRATE=$(burst_kbps "${ICECAST_OPUS_BITRATE:-$SUBWAVE_OPUS_BITRATE}" 96)
+    AAC_BITRATE=$(burst_kbps "${ICECAST_AAC_BITRATE:-$SUBWAVE_AAC_BITRATE}" 192)
+    # FLAC is VBR with no bitrate setting — ~900 kbps is a typical average for
+    # 44.1/16 stereo, close enough for a buffer depth.
+    FLAC_BITRATE_EST=900
+
+    # kbps → bytes/sec is bitrate * 1000 / 8 = bitrate * 125.
+    ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
+    ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
+    [ "$ICECAST_QUEUE_SIZE" -ge 2097152 ] || ICECAST_QUEUE_SIZE=2097152
+
+    opus_enc=$(opus_encoding "$radio_liq")
+    state_log "listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps / opus ${OPUS_BITRATE}kbps (${opus_enc:-unknown encoding}) / aac ${AAC_BITRATE}kbps / flac ~${FLAC_BITRATE_EST}kbps"
+    : > "$xml"
+    emit_stream_mount "$xml" /stream.mp3  "$STREAM_BITRATE"   "$auth_url"
+    emit_stream_mount "$xml" /stream.opus "$OPUS_BITRATE"     "$auth_url" "${opus_enc:+,\"encoding\":\"$opus_enc\"}"
+    emit_stream_mount "$xml" /stream.flac "$FLAC_BITRATE_EST" "$auth_url"
+    emit_stream_mount "$xml" /stream.aac  "$AAC_BITRATE"      "$auth_url"
+    write_stream_mounts_marker "{${STREAM_MOUNTS_JSON#,}}"
+    return 0
+}
+
+# Concurrent-listener ceiling (Icecast <limits><clients>). Two sources and the
+# ENV one WINS: ICECAST_MAX_CLIENTS is wired into all three compose files, so
+# demoting it would silently change a configured station on upgrade; the setting
+# (stream.maxListeners -> liquidsoap_icecast_max_clients.txt) is what reaches
+# AIO/Unraid, which has no .env. Echoes "<value> <source>" so the caller can log
+# which won. Non-numeric or zero falls back to 100 rather than failing icecast.
+# docker/aio/supervisor.sh carries the same function; scripts/max-listeners.test.ts
+# drives both from one table.
+resolve_max_clients() {
+    _src=ICECAST_MAX_CLIENTS
+    _v="${ICECAST_MAX_CLIENTS:-}"
+    if [ -z "$_v" ]; then
+        _src=settings
+        _v=$(read_state_num liquidsoap_icecast_max_clients.txt 100)
+    fi
+    case "$_v" in
+        *[!0-9]*|''|0) echo "100 fallback:$_v@$_src" ;;
+        *) echo "$_v $_src" ;;
+    esac
+}
+
+# Trusted reverse proxies — real listener IPs in admin -> Listeners instead of
+# the edge's container address. icecast-KH matches an EXACT IP: a CIDR is
+# accepted and then silently never matches, so a malformed entry is DROPPED and
+# named rather than interpolated (invalid XML here would stop the station
+# booting).
+#
+#   render_trusted_proxies $1=XML fragment path, $2=source label,
+#   $3..=candidate addresses (may be empty — a DNS lookup resolving nothing is
+#   the documented first-cold-boot case).
+#
+# It also writes $STATE_DIR/trusted-proxies.json (count, addresses, source,
+# dropped) so admin can explain what icecast trusted (#1613). Rewritten on EVERY
+# render, so it describes the config icecast is running unless that write
+# failed, which leaves the last render's marker in place and is never fatal,
+# same rule as the state bootstrap above.
+#
+# docker/aio/supervisor.sh carries the same function and the same messages;
+# scripts/trusted-proxies.test.ts drives both from one table.
+
+# A dropped entry is operator input on its way into JSON, so reduce it to a safe
+# token first: address / CIDR / hostname characters only, length capped. A quote
+# or backslash would produce a marker the controller cannot parse.
+trusted_proxy_token() {
+    printf '%s' "$1" | tr -cd '0-9A-Za-z.:/_-' | cut -c1-48
+}
+
+# True when $1 has the SHAPE of an address icecast can match. A bare character
+# class (`''|*[!0-9a-fA-F.:]*`) is NOT enough: it accepts every hex-only word,
+# so `cafe`, `beef`, `ff` and a bare `a` pass while `caddy` is dropped, and the
+# operator-facing count then claims proxies that can never match.
+#
+# Shape only, deliberately: whether the address is the RIGHT one is the
+# operator's to know, and this must keep dropping rather than repairing.
+trusted_proxy_valid() {
+    local addr=$1 rest octet n=0
+    # Anything with a colon is IPv6 (dots allowed for the ::ffff:1.2.3.4 form).
+    # Not a full parser; icecast's own exact match is the real arbiter.
+    case "$addr" in
+        *:*)
+            case "$addr" in *[!0-9a-fA-F:.]*) return 1 ;; esac
+            case "$addr" in *[0-9a-fA-F]*) return 0 ;; *) return 1 ;; esac
+            ;;
+    esac
+    # IPv4: exactly four dot-separated decimal octets, each 0-255.
+    rest=$addr
+    while [ "$n" -lt 4 ]; do
+        case "$rest" in
+            *.*) octet=${rest%%.*}; rest=${rest#*.} ;;
+            *)   octet=$rest; rest='' ;;
+        esac
+        n=$(( n + 1 ))
+        case "$octet" in ''|*[!0-9]*) return 1 ;; esac
+        # Length first: `[ 99999999999999999999 -le 255 ]` is an arithmetic
+        # error, not a false.
+        [ "${#octet}" -le 3 ] || return 1
+        [ "$octet" -le 255 ] || return 1
+        [ "$n" -eq 4 ] || [ -n "$rest" ] || return 1
+    done
+    [ -z "$rest" ] || return 1
+    return 0
+}
+
+write_trusted_proxy_marker() {
+    # $1 = count, $2 = source label, $3 = proxies JSON array, $4 = dropped array
+    local dir=${STATE_DIR:-}
+    [ -n "$dir" ] || return 0
+    local marker=$dir/trusted-proxies.json line
+    printf -v line '{"count":%s,"source":"%s","proxies":%s,"dropped":%s,"at":%s}' \
+        "$1" "$2" "$3" "$4" "$(date +%s)"
+    if ! write_state_marker "$marker" "$line"; then
+        state_warn "could not write $marker — the station is unaffected, but the admin Listeners table cannot explain a missing trusted proxy"
+    fi
+    return 0
+}
+
+render_trusted_proxies() {
+    local xml=$1
+    local source=$2
+    shift 2
+    local ip names="" kept="" dropped="" count=0
+    : > "$xml" 2>/dev/null || true
+    # Candidates arrive already word-split, so prose is dropped word by word.
+    # Left alone: the list has always been space-separated (the DNS path returns
+    # several addresses for one name).
+    for ip in "$@"; do
+        if ! trusted_proxy_valid "$ip"; then
+            state_warn "ignoring malformed trusted proxy '$ip' — icecast matches an exact IP, so a CIDR, a hostname or anything else that is not an address never matches"
+            dropped="$dropped,\"$(trusted_proxy_token "$ip")\""
+            continue
+        fi
+        echo "        <x-forwarded-for>$ip</x-forwarded-for>" >> "$xml"
+        names="$names $ip"
+        kept="$kept,\"$ip\""
+        count=$(( count + 1 ))
+    done
+    if [ "$count" -gt 0 ]; then
+        state_log "trusting X-Forwarded-For from$names (from $source)"
+    else
+        state_log "no trusted proxy resolved from $source — listener IPs will show the connecting peer (docs/reverse-proxy.md)"
+    fi
+    write_trusted_proxy_marker "$count" "$source" "[${kept#,}]" "[${dropped#,}]"
+    return 0
+}
+
+# Icecast passwords (state/icecast-secrets.env). Precedence: env override >
+# persisted file > freshly generated hex.
+#
+# The file is DATA, never sourced: only the three known keys are read, and
+# every value, whether it came from the env or the file, must pass
+# icecast_secret_valid before it is used. Each one is written back to the file,
+# spliced into icecast.xml by sed (where `|`, `&` and `\` are special, and `<`
+# and `&` are special again in XML) and read again by the controller's regex
+# (broadcast/listeners.ts), so a character any of those three would reinterpret
+# is refused, not escaped. A refused value is named in a warning and resolution
+# falls through to the next source: never fatal, same rule as the bootstrap.
+#
+# The file is trusted only when it is a regular file (not a symlink) owned by
+# the uid this script writes as. The state root is shared with containers that
+# run as other uids; anything else is ignored with a warning and replaced by
+# write_icecast_secrets.
+#
+# docker/aio/supervisor.sh carries the same functions and the same messages;
+# scripts/icecast-secrets.test.ts drives both from one table.
+ICECAST_SECRET_CHARS='A-Z a-z 0-9 . _ ~ + = @ ! % ^ * , : / ? # -'
+
+icecast_secret_valid() {
+    case "$1" in
+        ''|*[!A-Za-z0-9._~+=@!%^*,:/?#-]*) return 1 ;;
+    esac
+    return 0
+}
+
+# The uid this script's own files land as next to $1. Normally `id -u`, but a
+# root-squashed NFS export or a user-namespaced runtime maps it, and a file this
+# script wrote must still be recognised as its own. Falls back to `id -u` when
+# the dir cannot be written.
+icecast_secrets_owner() {
+    local probe uid=''
+    probe=$(mktemp "$1.XXXXXX" 2>/dev/null) || probe=''
+    if [ -n "$probe" ]; then
+        uid=$(stat -c %u "$probe" 2>/dev/null || true)
+        rm -f "$probe" 2>/dev/null || true
+    fi
+    [ -n "$uid" ] || uid=$(id -u)
+    echo "$uid"
+}
+
+# Reads $1 into _ICS_SOURCE / _ICS_ADMIN / _ICS_RELAY, each empty when absent
+# or refused.
+read_icecast_secrets_file() {
+    local file=$1 line key val owner want
+    _ICS_SOURCE='' _ICS_ADMIN='' _ICS_RELAY=''
+    if [ -L "$file" ]; then
+        state_warn "ignoring $file — it is a symlink, not a file this script wrote; the Icecast passwords will be regenerated unless ICECAST_*_PASSWORD is set"
+        return 0
+    fi
+    [ -e "$file" ] || return 0
+    if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+        state_warn "ignoring $file — not a readable regular file; the Icecast passwords will be regenerated unless ICECAST_*_PASSWORD is set"
+        return 0
+    fi
+    owner=$(stat -c %u "$file" 2>/dev/null || echo '?')
+    want=$(icecast_secrets_owner "$file")
+    if [ "$owner" != "$want" ]; then
+        state_warn "ignoring $file — owned by uid $owner, not uid $want which writes it; the Icecast passwords will be regenerated unless ICECAST_*_PASSWORD is set"
+        return 0
+    fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=${line%$'\r'}
+        key=${line%%=*}
+        [ "$key" != "$line" ] || continue
+        val=${line#*=}
+        case "$key" in
+            ICECAST_SOURCE_PASSWORD|ICECAST_ADMIN_PASSWORD|ICECAST_RELAY_PASSWORD) ;;
+            *) continue ;;
+        esac
+        # A hand edit may quote the value; the controller strips one pair too.
+        case "$val" in
+            \"*\") val=${val#\"}; val=${val%\"} ;;
+            \'*\') val=${val#\'}; val=${val%\'} ;;
+        esac
+        if ! icecast_secret_valid "$val"; then
+            state_warn "ignoring $key in $file — it holds a character outside [$ICECAST_SECRET_CHARS]; it will be replaced"
+            continue
+        fi
+        case "$key" in
+            ICECAST_SOURCE_PASSWORD) _ICS_SOURCE=$val ;;
+            ICECAST_ADMIN_PASSWORD) _ICS_ADMIN=$val ;;
+            ICECAST_RELAY_PASSWORD) _ICS_RELAY=$val ;;
+        esac
+    done < "$file" || true
+    return 0
+}
+
+# Sets and exports ICECAST_SOURCE/ADMIN/RELAY_PASSWORD from the env, then $1,
+# then openssl.
+resolve_icecast_secrets() {
+    local file=$1 part name fileval val
+    read_icecast_secrets_file "$file"
+    for part in SOURCE ADMIN RELAY; do
+        name=ICECAST_${part}_PASSWORD
+        fileval=_ICS_$part
+        val=${!name:-}
+        if [ -n "$val" ] && ! icecast_secret_valid "$val"; then
+            state_warn "ignoring $name from the environment — it holds a character outside [$ICECAST_SECRET_CHARS], which icecast.xml cannot carry safely; using the persisted or a generated password instead"
+            val=''
+        fi
+        [ -n "$val" ] || val=${!fileval}
+        [ -n "$val" ] || val=$(openssl rand -hex 16)
+        printf -v "$name" '%s' "$val"
+        export "${name?}"
+    done
+    return 0
+}
+
+# Written back for operator visibility + the documented "delete + restart to
+# rotate" path. Through a fresh mktemp file and a rename, so the write never
+# follows whatever sits at $1 (the rename replaces a symlink, it does not write
+# through it). 0600: only root reads it (this script, and the controller off the
+# shared mount in broadcast/listeners.ts). A failed write warns, never aborts.
+write_icecast_secrets() {
+    local file=$1 tmp
+    tmp=$(mktemp "$file.XXXXXX" 2>/dev/null) || tmp=''
+    if [ -n "$tmp" ] \
+        && printf 'ICECAST_SOURCE_PASSWORD=%s\nICECAST_ADMIN_PASSWORD=%s\nICECAST_RELAY_PASSWORD=%s\n' \
+            "$ICECAST_SOURCE_PASSWORD" "$ICECAST_ADMIN_PASSWORD" "$ICECAST_RELAY_PASSWORD" > "$tmp" 2>/dev/null \
+        && chmod 600 "$tmp" 2>/dev/null \
+        && mv -fT "$tmp" "$file" 2>/dev/null; then
+        return 0
+    fi
+    [ -z "$tmp" ] || rm -f "$tmp" 2>/dev/null || true
+    state_warn "could not write $file — the station runs on these Icecast passwords, but they will change on the next restart"
+    return 0
+}
+
+# Escapes $1 for an XML attribute value. The replacements are quoted so bash
+# 5.2's patsub_replacement does not read `&` as "the matched text".
+xml_escape() {
+    local s=$1
+    s=${s//'&'/'&amp;'}
+    s=${s//'<'/'&lt;'}
+    s=${s//'>'/'&gt;'}
+    s=${s//'"'/'&quot;'}
+    printf '%s' "$s"
 }
 
 # Sourcing with SUBWAVE_BROADCAST_LIB=1 defines the helpers above WITHOUT
@@ -91,11 +616,10 @@ if [ "${SUBWAVE_BROADCAST_LIB:-}" = "1" ]; then
     return 0 2>/dev/null || exit 0
 fi
 
-# ---- Multi-station pointer resolution ---------------------------------------
-# state/stations/active.json ({"activeId":"<slug>"}) picks the station dir this
-# boot serves; install-level files (icecast secrets) stay at $STATE_ROOT. No jq
-# in this image — the sed matches the controller's canonical output and the
-# slug charset [a-z0-9-]; a hand-mangled file falls back to the root.
+# Multi-station pointer: state/stations/active.json ({"activeId":"<slug>"}) picks
+# the station dir this boot serves; install-level files (icecast secrets) stay at
+# $STATE_ROOT. No jq in this image — the sed matches the controller's canonical
+# output and the slug charset [a-z0-9-]; a hand-mangled file falls back to root.
 STATE_ROOT=/var/sub-wave
 STATE_DIR="$STATE_ROOT"
 ACTIVE_FILE="$STATE_ROOT/stations/active.json"
@@ -113,6 +637,7 @@ export SUBWAVE_STATE_DIR="$STATE_DIR"
 SECRETS=$STATE_ROOT/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
+RADIO_LIQ=/etc/liquidsoap/radio.liq
 
 bootstrap_state_dirs "$STATE_ROOT" "$STATE_DIR"
 
@@ -130,187 +655,68 @@ if [ -f "$RADIO_LOG" ] && [ "$(stat -c %s "$RADIO_LOG" 2>/dev/null || echo 0)" -
     echo "broadcast: rotated oversized radio.log to radio.log.old" >&2
 fi
 
-# ---- Resolve passwords ------------------------------------------------------
-# Precedence: env override > persisted secrets file > freshly generated.
-# Capture env values FIRST so sourcing the secrets file can't clobber them.
-
-ENV_SRC="${ICECAST_SOURCE_PASSWORD:-}"
-ENV_ADM="${ICECAST_ADMIN_PASSWORD:-}"
-ENV_REL="${ICECAST_RELAY_PASSWORD:-}"
-
-if [ -f "$SECRETS" ]; then
-    # shellcheck disable=SC1090
-    . "$SECRETS"
-fi
-
-[ -n "$ENV_SRC" ] && ICECAST_SOURCE_PASSWORD="$ENV_SRC"
-[ -n "$ENV_ADM" ] && ICECAST_ADMIN_PASSWORD="$ENV_ADM"
-[ -n "$ENV_REL" ] && ICECAST_RELAY_PASSWORD="$ENV_REL"
-
-[ -z "${ICECAST_SOURCE_PASSWORD:-}" ] && ICECAST_SOURCE_PASSWORD="$(openssl rand -hex 16)"
-[ -z "${ICECAST_ADMIN_PASSWORD:-}"  ] && ICECAST_ADMIN_PASSWORD="$(openssl rand -hex 16)"
-[ -z "${ICECAST_RELAY_PASSWORD:-}"  ] && ICECAST_RELAY_PASSWORD="$(openssl rand -hex 16)"
-
-# Written back for operator visibility + the documented "delete + restart to
-# rotate" path.
-cat > "$SECRETS" <<EOF
-ICECAST_SOURCE_PASSWORD=$ICECAST_SOURCE_PASSWORD
-ICECAST_ADMIN_PASSWORD=$ICECAST_ADMIN_PASSWORD
-ICECAST_RELAY_PASSWORD=$ICECAST_RELAY_PASSWORD
-EOF
-# 0600 — only root reads it (this entrypoint, and the controller container off
-# the shared mount in broadcast/listeners.ts).
-chmod 600 "$SECRETS"
-
-export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
+# Icecast passwords: env override > persisted secrets file > freshly generated,
+# read as data and validated (see resolve_icecast_secrets above).
+resolve_icecast_secrets "$SECRETS"
+write_icecast_secrets "$SECRETS"
 # Liquidsoap connects over loopback inside this container; radio.liq reads
 # ICECAST_HOST (default "icecast").
 export ICECAST_HOST=localhost
 
-# ---- Render icecast.xml -----------------------------------------------------
-# Substitution is plain sed with `|` delimiters — the secrets are hex and every
-# other value numeric, so there's no escaping risk.
-
-# Concurrent-listener ceiling. A non-numeric value would render invalid XML and
-# fail icecast at boot, so fall back to 100 with a warning instead.
-ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
-case "$ICECAST_MAX_CLIENTS" in
-    *[!0-9]*|'')
-        echo "broadcast: ICECAST_MAX_CLIENTS='$ICECAST_MAX_CLIENTS' is not a number — using 100" >&2
-        ICECAST_MAX_CLIENTS=100
-        ;;
-esac
-
-# Listener buffer depth (<burst-size>, #993/#1114). Sized in SECONDS and
-# converted per bitrate here, because burst-size is a byte count — a fixed one
-# means wildly different depths per mount (512 KB is ~22s at 192k, ~66s at
-# 64k). Env override > controller-written settings files > default; read from
-# state so a settings change applies on the next bounce.
-read_state_num() {
-    # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
-    _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
-    case "$_v" in
-        ''|*[!0-9]*) echo "$2" ;;
-        *) echo "$_v" ;;
-    esac
-}
-
-STREAM_BITRATE="${ICECAST_STREAM_BITRATE:-$(read_state_num liquidsoap_stream_bitrate.txt 192)}"
-BUFFER_SECONDS="${ICECAST_BUFFER_SECONDS:-$(read_state_num liquidsoap_stream_buffer_seconds.txt 22)}"
-case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
-case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
-[ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60
-
-# FLAC is VBR with no bitrate setting — ~900 kbps is a typical average for
-# 44.1/16 stereo, close enough for a buffer depth.
-OPUS_BITRATE="${ICECAST_OPUS_BITRATE:-$(read_state_num liquidsoap_opus_bitrate.txt 96)}"
-AAC_BITRATE="${ICECAST_AAC_BITRATE:-$(read_state_num liquidsoap_aac_bitrate.txt 192)}"
-case "$OPUS_BITRATE" in *[!0-9]*|'') OPUS_BITRATE=96 ;; esac
-case "$AAC_BITRATE" in *[!0-9]*|'') AAC_BITRATE=192 ;; esac
-FLAC_BITRATE_EST=900
-
-# kbps → bytes/sec is bitrate * 1000 / 8 = bitrate * 125.
-ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
-
-# queue-size is the per-client backlog before Icecast drops a lagging listener.
-# It must comfortably exceed burst-size or a client is evicted the moment it
-# falls behind its own primed buffer; 4x (floored at the historical 2 MB)
-# preserves #993's ~minute of rope while scaling with a deeper buffer.
-ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
-[ "$ICECAST_QUEUE_SIZE" -lt 2097152 ] && ICECAST_QUEUE_SIZE=2097152
-
-echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps" \
-     "/ opus ${OPUS_BITRATE}kbps / aac ${AAC_BITRATE}kbps / flac ~${FLAC_BITRATE_EST}kbps" >&2
+# Render icecast.xml. Substitution is plain sed with `|` delimiters. That is safe
+# only because resolve_icecast_secrets refuses any password holding a character
+# sed or XML would reinterpret, and every other value is numeric.
+MAX_CLIENTS_LINE="$(resolve_max_clients)"
+ICECAST_MAX_CLIENTS="${MAX_CLIENTS_LINE%% *}"
+echo "broadcast: max listeners $ICECAST_MAX_CLIENTS (from ${MAX_CLIENTS_LINE#* })" >&2
 
 # Listener auth (#478): only a literal 'true' in the controller-written flag
-# enables (missing/garbled → public). Each stream mount then gets an
-# <authentication type="url"> block; icecast POSTs listener connects to the
-# controller. The password lives ONLY in settings.json — changes apply live;
-# this render only matters when the toggle flips (which rides restart-mixer).
+# enables it (missing/garbled -> public). Each stream mount then gets an
+# <authentication type="url"> block and icecast POSTs listener connects to the
+# controller. The password lives ONLY in settings.json and applies live; this
+# render matters only when the toggle flips.
 LISTENER_AUTH_FLAG=$STATE_DIR/icecast_listener_auth.txt
 LISTENER_AUTH_URL="${LISTENER_AUTH_URL:-http://controller:7701/listener-auth}"
-LISTENER_AUTH=false
+# Escaped once: it lands inside an XML attribute, and a query string's `&` is
+# legitimate in a URL but not in icecast.xml. Empty renders no auth blocks.
+MOUNT_AUTH_URL_XML=''
 if [ "$(cat "$LISTENER_AUTH_FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
-    LISTENER_AUTH=true
+    MOUNT_AUTH_URL_XML=$(xml_escape "$LISTENER_AUTH_URL")
     echo "broadcast: listener auth ON — mounts require credentials via $LISTENER_AUTH_URL" >&2
 fi
 
-# One <mount> block per stream mount, ALWAYS rendered (not just under auth):
-# burst-size is a byte count, so the global <limits> value — sized for MP3 —
-# lands wildly wrong on the other mounts (22s of mp3-192k is ~43s of opus-96k
-# and ~6s of FLAC). Per-mount queue-size scales for the same reason.
+# One <mount> block per stream mount, each burst sized for its own bitrate, and
+# the bitrates handed to liquidsoap (see render_stream_mounts above).
 MOUNTS_XML=/etc/icecast2/stream-mounts.xml
-: > "$MOUNTS_XML"
-emit_mount() {
-    # $1 = mount path, $2 = kbps used to size this mount's burst
-    _burst=$(( BUFFER_SECONDS * $2 * 125 ))
-    _queue=$(( _burst * 4 ))
-    [ "$_queue" -lt 2097152 ] && _queue=2097152
-    echo "broadcast:   $1 @ ${2}kbps → burst-size ${_burst}B, queue-size ${_queue}B" >&2
-    {
-        echo '    <mount type="normal">'
-        echo "        <mount-name>$1</mount-name>"
-        echo "        <burst-size>$_burst</burst-size>"
-        echo "        <queue-size>$_queue</queue-size>"
-        if [ "$LISTENER_AUTH" = true ]; then
-            echo '        <authentication type="url">'
-            echo "            <option name=\"listener_add\" value=\"$LISTENER_AUTH_URL\"/>"
-            echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
-            echo '        </authentication>'
-        fi
-        echo '    </mount>'
-    } >> "$MOUNTS_XML"
-}
-emit_mount /stream.mp3  "$STREAM_BITRATE"
-emit_mount /stream.opus "$OPUS_BITRATE"
-emit_mount /stream.flac "$FLAC_BITRATE_EST"
-emit_mount /stream.aac  "$AAC_BITRATE"
+render_stream_mounts "$MOUNTS_XML" "$MOUNT_AUTH_URL_XML" "$RADIO_LIQ"
 
-# Trusted reverse proxies — real listener IPs in admin → Listeners instead of
-# the edge's container address. icecast-KH matches an EXACT IP only (a CIDR is
-# accepted and then silently never matches), so the address must be resolved.
 # ICECAST_TRUSTED_PROXY_IPS (explicit) wins over DNS for
 # ICECAST_TRUSTED_PROXY_HOSTS (default 'caddy', the bundled edge).
 #
-# The DNS path is deliberately best-effort and misses the first cold boot:
-# caddy depends_on this container being healthy, so the name cannot resolve
-# yet — every later restart picks it up. A miss degrades to the old behaviour
-# (proxy IP shown), never to a wrong IP. For first-boot accuracy, pin the edge
-# and set ICECAST_TRUSTED_PROXY_IPS (docs/deployment.md).
+# The DNS path is best-effort and misses the first cold boot (caddy depends_on
+# this container being healthy, so the name cannot resolve yet) and misses
+# forever on docker-compose.byo.yml, where there is no caddy service at all —
+# which is why the marker records the source tried, not just the count (#1613).
+# A miss degrades to the connecting peer's address, never to a wrong IP. Pin the
+# edge with ICECAST_TRUSTED_PROXY_IPS (docs/reverse-proxy.md).
 TRUSTED_XML=/etc/icecast2/trusted-proxies.xml
-: > "$TRUSTED_XML"
 TRUSTED_LIST=""
+TRUSTED_SOURCE=ICECAST_TRUSTED_PROXY_IPS
 if [ -n "${ICECAST_TRUSTED_PROXY_IPS:-}" ]; then
     TRUSTED_LIST=$(echo "$ICECAST_TRUSTED_PROXY_IPS" | tr ',' ' ')
 else
+    TRUSTED_SOURCE=ICECAST_TRUSTED_PROXY_HOSTS
     for _host in $(echo "${ICECAST_TRUSTED_PROXY_HOSTS:-caddy}" | tr ',' ' '); do
         # ahosts, not hosts: `getent hosts` returns ONE address family, so on a
-        # dual-stack network it can hand back only the IPv6 while Caddy dials
-        # icecast over IPv4 — and the exact-IP match then never fires.
+        # dual-stack network it can return only the IPv6 while Caddy dials over
+        # IPv4, and the exact-IP match never fires.
         _found=$(getent ahosts "$_host" 2>/dev/null | awk '{print $1}' | sort -u || true)
         [ -n "$_found" ] && TRUSTED_LIST="$TRUSTED_LIST $_found"
     done
 fi
-
-# Only hex/dot/colon runs are addresses. A malformed entry is dropped rather
-# than interpolated — invalid XML here would turn a cosmetic setting into a
-# station that won't boot.
-TRUSTED_COUNT=0
-for _ip in $TRUSTED_LIST; do
-    case "$_ip" in
-        ''|*[!0-9a-fA-F.:]*)
-            echo "broadcast: WARNING ignoring malformed trusted proxy '$_ip'" >&2
-            continue
-            ;;
-    esac
-    echo "        <x-forwarded-for>$_ip</x-forwarded-for>" >> "$TRUSTED_XML"
-    TRUSTED_COUNT=$(( TRUSTED_COUNT + 1 ))
-done
-if [ "$TRUSTED_COUNT" -gt 0 ]; then
-    echo "broadcast: trusting X-Forwarded-For from$(sed 's/.*<x-forwarded-for>/ /;s|</x-forwarded-for>||' "$TRUSTED_XML" | tr '\n' ' ')" >&2
-else
-    echo "broadcast: no trusted proxy resolved — listener IPs will show the connecting peer" >&2
-fi
+# Unquoted on purpose — the list is space-separated candidates.
+# shellcheck disable=SC2086
+render_trusted_proxies "$TRUSTED_XML" "$TRUSTED_SOURCE" $TRUSTED_LIST
 
 # `r` splices the generated blocks (empty file = nothing) where each marker
 # sits, then the marker line itself is deleted.
@@ -328,8 +734,7 @@ sed \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 
-# ---- Launch the pair, then wait for either to die ---------------------------
-
+# Launch the pair, then wait for either to die.
 echo "broadcast: starting icecast2" >&2
 sudo -E -u icecast2 icecast2 -n -c "$RENDERED" &
 ICECAST_PID=$!
@@ -345,13 +750,11 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
 done
 
 echo "broadcast: starting liquidsoap" >&2
-# TEMPORARY (re-harden later): run liquidsoap as root instead of dropping to
-# the `liquidsoap` user. The savonet base bump 2.2.5 → 2.4.4 changed that
-# user's uid (10000 → 100), making state files persisted by the old image
-# unwritable — every on_meta write EACCES'd and the UI froze one song behind.
-# Restore the privilege drop once the state files are chowned to the new uid
-# (needs settings.init.allow_root reverted in radio.liq too).
-liquidsoap /etc/liquidsoap/radio.liq &
+# TEMPORARY (re-harden later): run liquidsoap as root instead of dropping to the
+# `liquidsoap` user. The savonet bump 2.2.5 -> 2.4.4 changed that user's uid
+# (10000 -> 100), making persisted state files unwritable. Restore the privilege
+# drop once they are chowned (also revert settings.init.allow_root in radio.liq).
+liquidsoap "$RADIO_LIQ" &
 LIQ_PID=$!
 
 trap 'kill -TERM "$ICECAST_PID" "$LIQ_PID" 2>/dev/null || true' INT TERM

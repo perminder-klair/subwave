@@ -1,3 +1,4 @@
+import { loadedCapabilities as readCapabilities, replaceLoadedCapabilities } from './registry.js';
 // Skill loader — the single source of truth for the DJ's between-track segment
 // capabilities. Every skill, shipped or operator-added, is a self-contained
 // directory under ONE runtime load root, ${STATE_DIR}/skills/<slug>/:
@@ -29,6 +30,14 @@
 //     operator-editable knobs (skills/config-fields.ts). Values live in this
 //     skill's OWN frontmatter and arrive as `config`, so a copied/renamed skill
 //     keeps its settings form — see issue #1300 (bug 11)
+//
+// A skill with NO tool.mjs is not necessarily prompt-only: a `feed:` line in its
+// own frontmatter earns it the generic feed tool (skills/feed.ts), the same
+// `skill_<name>` fetch + dedupe the built-in news skill used to hand-roll. That
+// is the whole of issue #1616 — the field validated, saved and read back
+// everywhere while reaching the model as nothing at all. News ships no tool.mjs
+// any more; it takes this path like every other feed skill.
+//
 // `services` (station-services.ts) is the curated facade onto search, the
 // library, the play log, feeds and durable recall — the one way a tool reaches
 // the world. Every tool runs behind a timeout + try/catch at the call site
@@ -40,6 +49,11 @@
 //   - operator (non-seeded) skills are DISCOVERED-BUT-DISABLED — they appear in
 //     /admin/skills toggled off and cannot air until the operator enables them
 //   - every tool.mjs runs behind a timeout + try/catch (llm/segment-tools.js)
+//   - code that ARRIVED from elsewhere (zip import, backup restore) sits beside
+//     SKILL.md as tool.mjs.pending, which this loader never imports. Being
+//     disabled is not enough on its own: a scan imports every tool.mjs, enabled
+//     or not, and the catalog calls each one's ready(). Only the operator's
+//     explicit trust (skills/install.ts) renames it into place.
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
@@ -49,6 +63,7 @@ import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
 import { parseConfigFields, type SkillConfigField } from './config-fields.js';
+import { FEED_CONFIG_FIELDS, makeFeedTool, resolveFeedConfig, unreadFeedKeys } from './feed.js';
 import { declaredBool } from './abstain-policy.js';
 import {
   SKILL_SLUG_RE,
@@ -56,6 +71,7 @@ import {
   TAGS_PER_SKILL_LIMIT,
   normalizeSkillTags,
 } from '../schemas/skill.js';
+import { normalizeSkillVoice } from '../schemas/skill-server.js';
 
 // Shipped built-in TEMPLATE store, resolved relative to this module so it works
 // under both dev (tsx on bind-mounted src) and prod (tsx on the COPYd src). This
@@ -68,6 +84,10 @@ export const BUILTINS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'bu
 // consumer is unchanged.
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 
+// The data tool the loader imports, and the quarantined spelling it never does.
+export const TOOL_FILE = 'tool.mjs';
+export const PENDING_TOOL_FILE = 'tool.mjs.pending';
+
 // Custom-skill slug: lowercase, starts alphanumeric, then alphanumeric/hyphen,
 // ≤49 chars. Anchored, so it can't contain '/', '.', or whitespace — the routes
 // rely on that to keep a slug from escaping state/skills/. Now homed in the
@@ -76,8 +96,10 @@ const SKILLS_DIR = resolve(STATE_DIR, 'skills');
 export const SLUG_RE = SKILL_SLUG_RE;
 
 // Kinds the queue reserves for its own voice channels — a custom skill may not
-// shadow these (seeded kinds are added below, once discovered).
-const QUEUE_INTERNAL_KINDS = ['link', 'dj-speak', 'announcement', 'station-id', 'hourly', 'hourly-check'];
+// shadow these (seeded kinds are added below, once discovered). 'jingle' and
+// 'default' are the station-voice kinds in audio/tts.ts: a skill announcing
+// under one would speak outside the persona rules every other skill gets.
+const QUEUE_INTERNAL_KINDS = ['link', 'dj-speak', 'announcement', 'station-id', 'hourly', 'hourly-check', 'jingle', 'default'];
 
 // Derived at boot from the template directories. Exported as live sets that
 // callers (.has()) read after boot. `SEEDED_KINDS` is the set of shipped kinds;
@@ -85,12 +107,11 @@ const QUEUE_INTERNAL_KINDS = ['link', 'dj-speak', 'announcement', 'station-id', 
 export const SEEDED_KINDS = new Set<string>();
 export const RESERVED_KINDS = new Set<string>(QUEUE_INTERNAL_KINDS);
 
-let loadedSkills: any[] = []; // the single live capability set (seeded + custom)
 let importCounter = 0;        // cache-buster for re-importing edited tool.mjs
 
 // The full live capability set — seeded built-ins and operator skills, loaded on
 // identical footing. Read live so a rescan takes effect without a restart.
-export function loadedCapabilities(): any[] { return loadedSkills; }
+export function loadedCapabilities(): any[] { return readCapabilities(); }
 
 // Frontmatter parsing. SKILL.md is operator-authored — by hand on disk as much
 // as through /admin/skills — so the block is parsed as REAL YAML rather than by
@@ -266,7 +287,7 @@ function sanitizeToolInputs(raw: any): Record<string, string> | undefined {
 // its optional `description` / `ready` / `inputs` / `configFields` exports, or
 // null when there's no tool.
 async function loadToolModule(dir: string): Promise<{ fn: any; description?: string; ready?: any; inputs?: Record<string, string>; configFields?: SkillConfigField[]; requiresData?: boolean } | null> {
-  const file = join(dir, 'tool.mjs');
+  const file = join(dir, TOOL_FILE);
   try {
     await stat(file);
   } catch {
@@ -293,6 +314,17 @@ async function loadToolModule(dir: string): Promise<{ fn: any; description?: str
     requiresData: declaredBool(mod.requiresData),
   };
 }
+
+// The agent-facing tool name for a skill. One spelling, shared by the tool.mjs
+// path and the generic feed path.
+function toolNameFor(name: string): string {
+  return `skill_${name.replace(/-/g, '_')}`;
+}
+
+// The generic feed knobs, sanitised once through the same parser a tool.mjs
+// declaration goes through — the built-in path and the operator path must not
+// disagree about what a config field may say.
+const FEED_FIELDS = parseConfigFields(FEED_CONFIG_FIELDS);
 
 // Build a full capability from a skill directory. `seeded` controls the
 // first-party affordances (enabled-by-default, can't-delete, reset) — NOT the
@@ -331,6 +363,9 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     queue.log('error', `[skills] "${slug}" tool.mjs failed to load — running prompt-only: ${err.message}`);
     toolMod = null;
   }
+  // Quarantined code is only ever stat'ed here, never imported.
+  let toolPending = false;
+  try { await stat(join(dir, PENDING_TOOL_FILE)); toolPending = true; } catch { /* none waiting */ }
 
   const label = (data.label || titleCase(name)).trim();
   const cap: any = {
@@ -348,6 +383,11 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     contextFields: parseContextFields(data.context ?? data.contextFields),
     // Freeform organisation tags for the admin skill list.
     tags: parseTags(data.tags),
+    // The skill's own TTS voice override, or null for the on-air DJ's voice.
+    // Lenient by design (normalizeSkillVoice): a hand-edited bad engine reads
+    // as no override and a voice the engine can't use is repaired, while the
+    // admin form refuses both.
+    voice: normalizeSkillVoice(data as Record<string, unknown>),
     // The skill's own frontmatter, handed to the tool as its 4th arg so a skill
     // can read its own knobs (e.g. news' feed / feedMaxItems).
     config: data,
@@ -361,23 +401,45 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // a skill that later loses its cron line doesn't silently start firing at
     // random again without the operator noticing the coupled field too.
     cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
+    // Disk loading stays lenient: only the literal YAML/string true opts in.
+    // False, absent and malformed values preserve the historical solo path.
+    cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
     // Operator-editable knobs this skill declares for itself (tool.mjs
-    // `configFields`). Drives the admin editor's settings section — see
-    // config-fields.ts. Empty for a prompt-only or undeclared skill.
+    // `configFields`, or the generic feed knobs for a skill without a tool.mjs).
+    // Drives the admin editor's settings section — see config-fields.ts. Empty
+    // only for a skill whose tool.mjs declares none.
     configFields: [] as SkillConfigField[],
+    // A tool.mjs.pending waits for the operator's review (skills/install.ts).
+    toolPending,
   };
 
   // Readiness: a tool module's `ready(services)` wins; else a keyed skill is
-  // ready only when its env var is set; else always ready.
-  if (toolMod?.ready) {
+  // ready only when its env var is set; else always ready. A skill whose ONLY
+  // data tool is still awaiting review is not ready: it was written to speak
+  // from that tool's data, and airing it from the brief alone would have the
+  // DJ invent what the tool was meant to fetch.
+  if (toolPending && !toolMod) {
+    cap.ready = () => false;
+  } else if (toolMod?.ready) {
     cap.ready = () => toolMod.ready(buildStationServices());
+    // ready() can't say why it's false, and a refused search key needs different
+    // advice from a missing one, so watch whether it asks searchReady(). That
+    // covers web-search, now-playing-dig and any custom skill copying the manual's
+    // example, which a list of kinds wouldn't. The services object is one shared
+    // instance, so wrap it, never patch it.
+    cap.asksSearchReady = () => {
+      const services = buildStationServices();
+      let asked = false;
+      toolMod.ready({ ...services, searchReady: () => { asked = true; return services.searchReady(); } });
+      return asked;
+    };
   } else if (requiresKey) {
     cap.ready = () => !!process.env[requiresKey];
   }
 
   if (toolMod?.fn) {
     cap.toolFn = toolMod.fn;
-    cap.toolName = `skill_${name.replace(/-/g, '_')}`;
+    cap.toolName = toolNameFor(name);
     cap.toolDesc = (toolMod.description || data.toolDescription || '').trim()
       || `Fetch live data for the ${label} segment before speaking. Returns { available: false } when there is nothing fresh worth airing.`;
     // Optional agent-steerable parameters ({ name: description }, strings
@@ -388,11 +450,40 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // Operator knobs travel with the tool, not the kind — a duplicated skill
     // copies tool.mjs and keeps its settings form (#1300).
     cap.configFields = toolMod.configFields || [];
+    // The case that bites: a station seeded before #1616 still runs news' old
+    // tool.mjs, so these keys would validate, save and do nothing, unsaid.
+    const unread = unreadFeedKeys(data, cap.configFields);
+    if (unread.length) {
+      queue.log('warn', `[skills] "${slug}" ${unread.join(', ')}: set, but this skill's own tool.mjs replaces the generated feed tool that reads them`);
+    }
     // Whether a forced run may stand down when this tool returns nothing usable
     // (issue #1412). Tri-state on purpose: undefined means the skill didn't say,
     // and abstain-policy.ts decides. `cap.config` already carries the operator's
     // own `requiresData:` frontmatter line, which outranks this.
     cap.requiresData = toolMod.requiresData;
+  } else if (toolPending) {
+    // Nothing to offer until the code is trusted: its configFields are declared
+    // by the module itself, and the generic feed tool would stand in for code
+    // the operator has not read yet. SKILL.md knobs survive a save regardless
+    // (preservedFrontmatter in scaffold.ts).
+  } else {
+    // No tool.mjs — but a declared `feed:` is a fetch, not a decoration (#1616).
+    // Every knob the generic tool reads is offered to a skill in this branch
+    // whether or not it has set one, because the edit sheet is where an operator
+    // sets the first feed: fields that appear only once a value exists are a
+    // form you cannot use to create the value.
+    cap.configFields = FEED_FIELDS;
+    const { feed, warnings } = resolveFeedConfig(data);
+    for (const warning of warnings) queue.log('warn', `[skills] "${slug}" ${warning}`);
+    if (feed) {
+      cap.toolFn = makeFeedTool(name, feed, (message) => queue.log('warn', `[skills] "${slug}" ${message}`));
+      cap.toolName = toolNameFor(name);
+      cap.toolDesc = (data.toolDescription || '').trim()
+        || `Fetch the latest items from the ${label} feed before speaking. Returns only items not already used on air, or { available: false } when none are left.`;
+      // requiresData is left undeclared, so abstain-policy.ts applies its
+      // default: a skill speaking from a feed stands down when the fetch fails
+      // or nothing fresh is left on it.
+    }
   }
 
   return cap;
@@ -408,9 +499,9 @@ export async function loadSkills(): Promise<any[]> {
     const dirents = await readdir(SKILLS_DIR, { withFileTypes: true });
     entries = dirents.filter(d => d.isDirectory()).map(d => d.name);
   } catch {
-    loadedSkills = []; // no state/skills dir yet → nothing to load
+    replaceLoadedCapabilities([]); // no state/skills dir yet → nothing to load
     registerSkillKinds([]);
-    return loadedSkills;
+    return loadedCapabilities();
   }
 
   const out: any[] = [];
@@ -436,12 +527,12 @@ export async function loadSkills(): Promise<any[]> {
     }
   }
 
-  loadedSkills = out;
+  replaceLoadedCapabilities(out);
   // Register every loaded kind as a recap voice/dedupe kind, so the DJ's
   // anti-repeat memory covers them without a hand-maintained list.
   registerSkillKinds(out.map(c => c.kind));
   const seededN = out.filter(c => c.seeded).length;
   const customN = out.length - seededN;
   queue.log('scheduler', `[skills] loaded ${out.length} skill(s): ${seededN} built-in, ${customN} custom`);
-  return loadedSkills;
+  return loadedCapabilities();
 }

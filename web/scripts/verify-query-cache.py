@@ -12,7 +12,10 @@ verify-library.py's docstring. Run it the same way:
 """
 import base64
 import json
+import pathlib
+import subprocess
 import sys
+import textwrap
 import traceback
 import urllib.error
 import urllib.request
@@ -255,7 +258,10 @@ def signed_out_does_not_retry_storm(page):
     a 401 into a sign-out, and a retrying query would fire three more
     unauthenticated calls per key and race the token wipe.
     """
-    page.goto(f"{WEB}/admin/library", wait_until="domcontentloaded", timeout=60_000)
+    # Browse is library.db-backed on the isolated stack. The default Tracks
+    # view may be Recent, which depends on the deliberately unreachable fake
+    # Navidrome and can be empty before this check reaches its 401 assertion.
+    page.goto(f"{WEB}/admin/library?tab=browse", wait_until="domcontentloaded", timeout=60_000)
     page.wait_for_selector(ROW, timeout=60_000)
     page.evaluate("() => localStorage.removeItem('subwave_admin_auth')")
 
@@ -277,6 +283,66 @@ def signed_out_does_not_retry_storm(page):
     assert per_path, "no library queries fired at all — the check proved nothing"
     worst = max(per_path.values())
     assert worst <= 2, f"signed-out page retried a library query: {per_path}"
+
+
+@check
+def row_mutations_patch_all_cache_shapes(_page):
+    """Block and tag writes patch bare, paged, and infinite Track caches."""
+    web_root = pathlib.Path(__file__).resolve().parents[1]
+    program = textwrap.dedent("""
+        import { QueryClient } from '@tanstack/react-query';
+        import {
+          applyBlockMarks, applyTagEvent, libraryKeys, rowsOf,
+        } from './components/admin/library/queries.ts';
+
+        const client = new QueryClient();
+        const track = {
+          id: 'shape-track', title: 'Shape Track', artist: 'SUB/WAVE',
+          album: 'Cache Contract', moods: [], energy: null, source: null,
+        };
+        const filters = {
+          moods: [], energy: '', vocal: '', genre: '', yearFrom: '', yearTo: '',
+          q: '', sort: 'recent', page: 1,
+        };
+        const keys = [
+          libraryKeys.recent(),
+          libraryKeys.browse(filters),
+          libraryKeys.search('shape', 'metadata'),
+        ];
+        client.setQueryData(keys[0], [track]);
+        client.setQueryData(keys[1], { rows: [track], total: 1 });
+        client.setQueryData(keys[2], {
+          pages: [{ rows: [track], nextCursor: null }], pageParams: [null],
+        });
+
+        applyBlockMarks(client, { 'shape-track': { kind: 'track', id: 'shape-track' } });
+        for (const key of keys) {
+          const rows = rowsOf(client.getQueryData(key));
+          if (rows.length !== 1 || rows[0].blockedBy?.id !== 'shape-track') {
+            throw new Error(`block mark missed cache shape ${JSON.stringify(key)}`);
+          }
+        }
+
+        applyTagEvent(client, {
+          track, moods: ['night'], energy: 'low', source: 'manual',
+          cleared: false, applyToAlbum: false,
+        });
+        for (const key of keys) {
+          const rows = rowsOf(client.getQueryData(key));
+          if (rows.length !== 1 || rows[0].moods?.[0] !== 'night' || rows[0].energy !== 'low') {
+            throw new Error(`tag event missed cache shape ${JSON.stringify(key)}`);
+          }
+        }
+        client.clear();
+    """)
+    result = subprocess.run(
+        [str(web_root.parent / "controller/node_modules/.bin/tsx"), "--eval", program],
+        cwd=web_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 # ---------------------------------------------------------------------------

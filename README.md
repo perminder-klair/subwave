@@ -21,6 +21,14 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 </tr>
 </table>
 
+## Hosted, or bring your own station
+
+Don't want to run a language model? **[SUB/WAVE DJ Brain](https://my.getsubwave.com/brain)**
+is a metered brain (and optional cloud voice) for the station you already self-host: one
+key, pasted once, from £5/month. **[SUB/WAVE Hosted](https://my.getsubwave.com/)** runs the
+whole station for you at `yourname.getsubwave.com`. Both fund the project; the software
+here stays complete and free either way.
+
 ## Live demo
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
@@ -74,8 +82,8 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks — and the mood vocabulary itself is yours to edit on a dedicated admin page (words, "sounds like" descriptions, and which mood each moment of the day leans into).
 - **Ending-aware transitions.** The bundled analyzer measures BPM, key, loudness, and how every track actually ends, so crossfades size themselves to the material: a real fade rides out long, a cold ending cuts tight. Vocal detection keeps the DJ from talking over a sung intro, and opt-in stem blends mix the outgoing tail into the incoming head for a produced-sounding seam. DJ speech ducks the music and lifts it back up.
 - **Playlist builder.** Describe a playlist in plain language at `/admin/playlists` and the builder turns it into a recipe, resolves it against your library, and keeps recipe-backed playlists topped up as new music lands.
-- **Station imaging.** Jingles, SFX stingers, and instrumental talk-over beds on one admin page — render them through the DJ's voice, generate them from a text prompt, or upload your own audio.
-- **Player skins + themes.** Six player faces — Classic, Unit SW-9, Platter, Drift, Subamp, and TTY — with a station default and a per-listener override, plus a theme editor with live preview for colours and type.
+- **Station imaging.** Jingles, SFX stingers, and instrumental talk-over beds on one admin page — render them through the DJ's voice, generate them from a text prompt, or upload your own audio. See [jingle import formats and existing-file recovery](docs/jingle-audio.md).
+- **Player skins + themes.** Eight player faces — Classic, Unit SW-9, Platter, Drift, Subamp, TTY, AXO-1 and Cipher-3 — with a station default and a per-listener override, plus a theme editor with live preview for colours and type.
 - **Private station mode.** Two independent locks over one station password: hide the web player behind a prompt, and/or require listener auth on every stream mount.
 - **Multi-station profiles.** Keep several stations in one install — each with its own library pool, DJ roster, schedule, and settings — and switch which one is live from the admin.
 - **Hourly archives (opt-in).** Save every hour as MP3 for later replay.
@@ -182,18 +190,38 @@ That repoints the `analyzer` service at `subwave-analyzer-heavy` (CLAP + Demucs,
 also offers it, and Unraid one-click users pull the `subwave-aio-heavy` image
 instead. Only the expressive *voices* above need the separate `tts-heavy` sidecar.
 
-Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead — layer the
-`docker-compose.analyzer-gpu.yml` overlay, which swaps the service to the
-`subwave-analyzer-cuda` image and reserves the GPU (needs the NVIDIA driver +
-Container Toolkit, nothing else):
+If analysis already runs somewhere else — a GPU box you point `ANALYZE_URL` at —
+you can drop the redundant local container entirely with one more line:
+
+```bash
+# in your root .env — 0 or 1 only; unset means 1 (the default-on station)
+ANALYZER_REPLICAS=0
+```
+
+The next `docker compose up -d` removes it and it stays gone. This is a Compose
+setting, so it does nothing on the all-in-one image, which runs the analyzer
+in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
+
+Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. The
+split-stack CUDA analyzer uses torch/torchaudio 2.7.1 with CUDA 12.8 wheels,
+which cover Turing (RTX 20-series) through RTX 50-series Blackwell GPUs; older
+cards have no split-stack CUDA build. For a one-off run, layer the
+`docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
 ```
 
+To keep the overlay across normal rebuilds and restarts, set `COMPOSE_FILE` in
+`.env` to `docker-compose.yml:docker-compose.analyzer-gpu.yml`.
+
 All-in-one installs have no `analyzer` service to swap, so they take the GPU on
-the image instead: pull `subwave-aio-cuda` and hand the container the card
-(`--gpus all`, or the Unraid steps in [`docs/unraid.md`](docs/unraid.md)).
+the image instead: pull `subwave-aio-cuda` at the tag named for your card's
+architecture (`:pascal` for a GTX 10-series, `:ampere` for an RTX 30-series;
+[every tag](docs/internals/infrastructure.md#aio-cuda-tags)) and hand the
+container the card (`--gpus all`, or the Unraid steps in
+[`docs/unraid.md`](docs/unraid.md)). `:latest` needs Turing (RTX 20-series) or
+newer.
 
 ### Local dev (contributors)
 
@@ -253,8 +281,10 @@ docker compose -f docker-compose.byo.yml up -d
 
 That exposes the web UI on `:7700`, the controller API on `:7701`, and the
 Icecast stream on `:7702` (all configurable). Point your proxy at those three.
-`docker/Caddyfile` is a working reference for the route table you need to
-replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
+`docker/Caddyfile` is the canonical route table. Copy-paste nginx, Nginx Proxy
+Manager, Traefik, and Cloudflare Tunnel configurations are in
+[`docs/reverse-proxy.md`](docs/reverse-proxy.md); deployment context remains in
+[`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
 **Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, the default-on `subwave-analyzer` (lean, multi-arch acoustic analysis) sidecar, and the opt-in `subwave-tts-heavy` (expressive voices) sidecar. Heavy-analysis variants — `subwave-analyzer-heavy` and `subwave-aio-heavy` (CLAP + Demucs, amd64) — are published for operators who enable "sounds-like"/vocals, plus the NVIDIA CUDA builds of that heavy stack (amd64) — `subwave-analyzer-cuda` for split-stack hosts via the `docker-compose.analyzer-gpu.yml` overlay, and `subwave-aio-cuda` for one-click all-in-one hosts.
 All compose files pull `:latest` by default; pin a version with
@@ -270,7 +300,7 @@ controller/        Node.js controller, the AI DJ brain
   src/llm/         LLM layer (AI SDK): provider registry, prompts, tools
   src/broadcast/   queue, session, DJ agent, scheduler, jingles
   src/music/       Subsonic client, pool picker, library tagging
-  src/audio/       TTS engines: Piper, Kokoro, Chatterbox, PocketTTS, cloud
+  src/audio/       TTS engines: Piper, Kokoro, Chatterbox, PocketTTS, cloud, Remote
   src/routes/      HTTP API split by surface (public, request, onboarding, settings, …)
 liquidsoap/        radio.liq, the Liquidsoap mixing pipeline
 web/               Next.js 15 web UI (player, landing, admin, setup)
@@ -316,16 +346,22 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 ## Documentation
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
+- **[`docs/updating.md`](docs/updating.md):** updating on every install shape, and the half people need at 2am — how to roll back to a previous version, and how to recover a broken login, a silent stream or a restart-looping controller.
+- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, Track Shortlist vs Agentic Tools, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
+- **[`docs/reverse-proxy.md`](docs/reverse-proxy.md):** complete nginx, Nginx Proxy Manager, Traefik, and Cloudflare Tunnel route recipes — including [public stream, LAN-only admin](docs/reverse-proxy.md#public-stream-lan-only-admin).
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them, including [running analysis on another machine](docs/tts-heavy.md#running-the-analyzer-on-another-machine) (a GPU box elsewhere on the network).
 - **[`docs/custom-tts.md`](docs/custom-tts.md):** bring your own TTS server — point the DJ at any HTTP endpoint you run (your GPU box, a bridge in front of a vendor API), the same way the LLM side takes a custom base URL.
 - **[`docs/gpu-tts.md`](docs/gpu-tts.md):** running Chatterbox on an NVIDIA GPU — via the OpenAI layer, or by GPU-enabling the bundled sidecar.
 - **[`docs/private-station.md`](docs/private-station.md):** locking the player and the stream behind a password — and how to tune in from apps, VLC and hardware once it's on, including a station behind reverse-proxy HTTP Basic Auth.
 - **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
-- **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
-  non-obvious constraints behind each subsystem.
+- **[`docs/navidrome-traffic.md`](docs/navidrome-traffic.md):** DNS counts versus HTTP requests, the two empty-room controls, and how to identify catalogue, analysis and playback traffic.
+- **[`CLAUDE.md`](CLAUDE.md):** the architecture map and one line per
+  non-obvious constraint, each pointing at its reasoning in
+  [`docs/internals/`](docs/internals/).
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
 - **[`docs/community.md`](docs/community.md):** the community catalog — sharing and installing DJ skills, personas, and shows, plus the public station map. The content itself lives in [`getsubwave/community`](https://github.com/getsubwave/community).
+- **[`getsubwave/audiomuse-import`](https://github.com/getsubwave/audiomuse-import):** already analysed your library in AudioMuse-AI? Copy its moods, BPM, key, energy and genre into SUB/WAVE instead of tagging everything again.
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
 - **[`docs/api.md`](docs/api.md):** the HTTP API, the in-app **Connect** explorer + playground, OpenAPI export, and Home Assistant / Music Assistant recipes.
@@ -356,6 +392,12 @@ public-domain recordings.
 
 This is general information, not legal advice. If you run a public station,
 talk to a media/IP lawyer in your jurisdiction.
+
+## Credits
+
+SUB/WAVE is built on Liquidsoap, Icecast, Navidrome, and many other open-source
+projects, models, and services. [CREDITS.md](CREDITS.md) lists them all, with
+their licences.
 
 ## License
 

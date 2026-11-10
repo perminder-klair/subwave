@@ -1,17 +1,9 @@
 'use client';
 
-// The player chrome every skin gets for free: the headless core provider
-// (feed poll, audio engine, signal probe, OS media session), the <audio>
-// element skins tap for the Web Audio visualiser, the contained-embedding
-// portal plumbing, the toaster — and the skin resolution itself.
-//
-// Skin precedence mirrors the theme system: listener override (localStorage)
-// beats the station default (ui.skin on GET /state) beats the built-in
-// fallback. The last-seen station skin is cached so a returning visitor
-// boots straight into the right skin; contained showcases follow the remote
-// station strictly (no override, no cache poisoning).
+// Skin precedence: listener override, station default, built-in fallback. Contained showcases
+// follow the remote station.
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useThemeSwitcher } from '@/components/ThemeProvider';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -22,6 +14,7 @@ import {
   loadSkinOverride,
   saveSkinOverride,
 } from '@/lib/skin';
+import { skinLocked } from '@/lib/skinLock';
 import {
   DEFAULT_SKIN_COMPONENT,
   DEFAULT_SKIN_ID,
@@ -38,8 +31,8 @@ export interface PlayerShellProps {
   /** Explicit skin — bypasses registry resolution (previews, tests). */
   skin?: SkinComponent;
   /** Rendered inside a showcase frame (landing page) rather than full-page:
-   *  absolute instead of fixed positioning, dialogs portal into the frame,
-   *  no toaster. */
+   *  absolute instead of fixed positioning, and dialogs portal into the
+   *  frame. */
   contained?: boolean;
 }
 
@@ -51,10 +44,28 @@ export default function PlayerShell({ skin, contained = false }: PlayerShellProp
   );
 }
 
-/** True when the keypress landed inside an open modal (see the cycling
- *  shortcuts below for why the shell stands down there). */
+/** Drop SKIN_INIT_SCRIPT's pre-paint hide. */
+function revealShell(): void {
+  if (typeof document !== 'undefined') document.documentElement.removeAttribute('data-skin-pending');
+}
+
+/** Rendered beside the skin inside its Suspense boundary, so its effect runs
+ *  only once the resolved skin has committed. Revealing on hydration instead
+ *  uncovered an empty stage while a non-default skin's chunk was still loading. */
+function RevealWhenMounted({ ready }: { ready: boolean }) {
+  useEffect(() => { if (ready) revealShell(); }, [ready]);
+  return null;
+}
+
+/** True when the keypress landed inside an open modal. */
 function targetInsideDialog(e?: KeyboardEvent): boolean {
   return e?.target instanceof HTMLElement && e.target.closest('[role="dialog"]') != null;
+}
+
+/** True when the keypress landed in the shell or on nothing in particular. A drawer portaled to
+ *  <body> and a showcase's host page keep their own keys. */
+function targetInsideShell(e: KeyboardEvent, root: HTMLElement | null): boolean {
+  return e.target === document.body || (e.target instanceof Node && root?.contains(e.target) === true);
 }
 
 function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boolean }) {
@@ -62,12 +73,8 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   const { state } = usePlayerFeed();
   const stationSkinRaw = typeof state.ui?.skin === 'string' && state.ui.skin ? state.ui.skin : null;
 
-  // localStorage is effect-only (SSR renders the default), so a listener with
-  // an override or a cached non-default station skin swaps one tick after
-  // hydration. SKIN_INIT_SCRIPT hides the shell pre-paint in that case
-  // (data-skin-pending on <html>), so the swap shows as a quiet blank
-  // instead of a flash of the default face; `hydrated` lifts the curtain
-  // after the resolved skin is in the tree.
+  // Hide the shell with SKIN_INIT_SCRIPT until hydration resolves browser skin preferences,
+  // avoiding a flash of the default skin.
   const [overrideId, setOverrideId] = useState<string | null>(null);
   const [cachedStation, setCachedStation] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -78,24 +85,22 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
     setHydrated(true);
   }, [contained]);
   useEffect(() => {
-    if (!hydrated || typeof document === 'undefined') return;
-    document.documentElement.removeAttribute('data-skin-pending');
-  }, [hydrated]);
-  useEffect(() => {
     if (contained || !stationSkinRaw) return;
-    // Cache the RESOLVED id, not the raw one: a station skin this build
-    // doesn't ship (newer controller, API-set slug) resolves to the default,
-    // and caching the raw id would make SKIN_INIT_SCRIPT pre-paint-hide the
-    // shell on every future load only to render the default anyway.
+    // Cache the RESOLVED id: a skin this build doesn't ship falls back to the
+    // default, and caching the raw id would pre-paint-hide the shell forever.
     cacheStationSkin(resolveSkinId(stationSkinRaw, null));
   }, [contained, stationSkinRaw]);
 
   const stationSkinId = stationSkinRaw ?? cachedStation ?? DEFAULT_SKIN_ID;
   const effectiveId = resolveSkinId(stationSkinId, contained ? null : overrideId);
 
+  // A transition, so the outgoing skin stays painted while the incoming one's
+  // chunk loads and its lazy wrapper suspends (it does so once even when the
+  // chunk is warm). An urgent update swapped in the empty Suspense fallback,
+  // and the stage sat blank through React's ~300 ms reveal throttle.
   const setOverride = useCallback((id: string | null) => {
     saveSkinOverride(id);
-    setOverrideId(id);
+    startTransition(() => setOverrideId(id));
   }, []);
 
   const selection = useMemo<SkinSelection>(
@@ -109,17 +114,7 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
     [stationSkinId, overrideId, effectiveId, setOverride],
   );
 
-  // Shell-level cycling shortcuts — they must work in EVERY skin (a skin
-  // without a visible switcher must never strand the listener): `s` cycles
-  // the skin override, `t` cycles the theme override. Toasts name the pick
-  // so a rapid cycle stays legible. Bare keys are already suppressed while
-  // a text field has focus (useKeyboardShortcuts); on top of that, cycling
-  // stands down while a skin-owned modal (drawer, shortcuts dialog) has
-  // focus — swapping the skin would tear the open modal down mid-use. Radix
-  // traps focus inside role="dialog", so the event target is the tell. The
-  // skin's OWN shortcut maps deliberately keep working inside drawers
-  // (classic switches drawers with 1–4), so this check lives here, not in
-  // useKeyboardShortcuts.
+  // Skip skin/theme cycling inside dialogs so shortcuts do not unmount an active modal.
   const themeCtx = useThemeSwitcher();
   const cycleSkin = useCallback((e?: KeyboardEvent) => {
     if (contained || targetInsideDialog(e)) return;
@@ -145,17 +140,42 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   const [portalNode, setPortalNode] = useState<HTMLElement | null>(null);
   useEffect(() => { if (contained) setPortalNode(rootRef.current); }, [contained]);
 
-  // A skin swap remounts the skin subtree, but the <audio> element lives
-  // here in the shell — playback never hiccups when the face changes.
+  // The <audio> element lives in the shell, so a skin swap never interrupts
+  // playback.
   const Skin = skin ?? SKIN_COMPONENTS[effectiveId] ?? DEFAULT_SKIN_COMPONENT;
 
-  // Private-station gate (#478). `hideFace` stays true until the password is
-  // accepted, so a private station never mounts the skin or the <audio>
-  // element for someone who hasn't unlocked it. 'checking' counts as hidden:
-  // revealing the player while a stored token is still being validated would
-  // flash the whole face at a locked-out visitor.
+  // Private-station gate (#478): no skin and no <audio> element until the
+  // password is accepted. 'checking' counts as hidden, so a stored token
+  // still being validated can't flash the face at a locked-out visitor.
   const auth = useStationAuth();
   const hideFace = state.privacy?.privatePlayer === true && auth.phase !== 'ok';
+  // The password gate renders no skin, so nothing inside the boundary would
+  // ever reveal the shell around it.
+  useEffect(() => { if (hydrated && hideFace) revealShell(); }, [hydrated, hideFace]);
+
+  // inert stops taps and focus but not a key handler on window, and TTY's takes keys out of the
+  // password field itself. A layout effect, so this listener is registered ahead of every skin's
+  // effect: Cipher listens in the capture phase as well, and the first one registered wins.
+  const locked = !hideFace && skinLocked(auth.required, auth.phase);
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
+  useLayoutEffect(() => {
+    const swallow = (e: KeyboardEvent) => {
+      // In a showcase a drawer portals into the shell, and it stays usable there too.
+      if (lockedRef.current && targetInsideShell(e, rootRef.current) && !targetInsideDialog(e)) e.stopImmediatePropagation();
+    };
+    // A key left to a drawer or a host page ends at the document: all that lies past it is the
+    // window, and a skin's listener there would tune in on it.
+    const stopShortOfWindow = (e: KeyboardEvent) => {
+      if (lockedRef.current) e.stopPropagation();
+    };
+    window.addEventListener('keydown', swallow, true);
+    document.addEventListener('keydown', stopShortOfWindow);
+    return () => {
+      window.removeEventListener('keydown', swallow, true);
+      document.removeEventListener('keydown', stopShortOfWindow);
+    };
+  }, []);
 
   return (
     <SkinSelectionProvider value={selection}>
@@ -165,38 +185,29 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
           // sw-player-shell is the pre-paint hide hook (SKIN_INIT_SCRIPT) —
           // full-page shells only; showcase embeds never set/clear the attr.
           contained ? 'absolute' : 'sw-player-shell fixed',
-          'inset-0 overflow-hidden bg-bg text-ink',
+          // sw-theme-stage carries the theme's --texture overlay and --finish
+          // filter (globals.css), in a showcase embed too.
+          'sw-theme-stage inset-0 overflow-hidden bg-bg text-ink',
         )}
       >
         {hideFace ? (
-          // Private station (#478): the whole face stands down — no skin, no
-          // audio element, just the password prompt. Live-flipped by the
-          // /state poll like themes/skins. Unlocking (or an already-valid
-          // stored token) drops straight through to the branch below.
-          <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid />
+          // Live-flipped by the /state poll, like themes and skins.
+          <StationPasswordGate phase={auth.phase} unlock={auth.unlock} savedRejected={auth.savedRejected} solid />
         ) : (
           <>
             <audio ref={attachAudio} crossOrigin="anonymous" preload="auto" />
-            {/* Skins are next/dynamic chunks with no boundary of their own, so
-                a face this build hasn't fetched yet SUSPENDS on first render.
-                Without this boundary the suspension escapes to the nearest one
-                up the tree — on the landing page that's the whole page, which
-                React then hides and re-reveals: every motion element in the
-                broadsheet gets its `initial` re-applied without its mount
-                animation re-running, and the page stays at opacity 0 for good
-                (tabbing to a station whose ui.skin isn't the loaded one blanked
-                the entire landing page). Keeping it here also means the swap
-                never disturbs the <audio> element above it — playback rides
-                through a skin change. */}
-            <Suspense fallback={null}>
-              <Skin contained={contained} portalNode={portalNode} />
-            </Suspense>
-            {/* Same prompt, overlaid, when only the stream is locked —
-                shell-level so every skin gets it without changes. */}
-            <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid={false} />
+            {/* No box of its own until the prompt is drawn, so a skin renders as if this weren't here.
+                Under the prompt it holds every z-index the skin uses below the gate's. */}
+            <div className={auth.phase === 'prompt' ? 'absolute inset-0 isolate' : 'contents'} inert={locked}>
+              {/* Contain skin suspension here so the landing page does not replay its reveal and remain at opacity 0. */}
+              <Suspense fallback={null}>
+                <Skin contained={contained} portalNode={portalNode} />
+                <RevealWhenMounted ready={hydrated} />
+              </Suspense>
+            </div>
+            <StationPasswordGate phase={auth.phase} unlock={auth.unlock} savedRejected={auth.savedRejected} solid={false} />
           </>
         )}
-        {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
       </div>
     </SkinSelectionProvider>
   );

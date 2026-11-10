@@ -1,13 +1,10 @@
 import { ImageResponse } from 'next/og';
 
 // The social share card, served at /og. 1200x630 is the canonical Open Graph
-// size honoured by X, Slack, iMessage, Discord, LinkedIn, Facebook.
-//
-// A plain route handler, NOT the `opengraph-image` file convention: that
-// auto-injects an <meta og:image> whose URL Next rebuilds from `metadataBase`,
-// and Next drops metadataBase on the force-dynamic homepage, pinning it to a
-// localhost origin. From a normal route, app/layout.js can emit an absolute
-// <meta og:image> itself and it survives untouched.
+// size. A plain route handler, NOT the `opengraph-image` file convention: that
+// rebuilds the URL from `metadataBase`, which Next drops on the force-dynamic
+// homepage and pins to localhost. From a normal route app/layout.js emits its
+// own absolute <meta og:image>.
 
 export const contentType = 'image/png';
 export const dynamic = 'force-static';

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Render station idents into ${STATE_DIR}/jingles via the controller's Piper.
-# Liquidsoap's playlist reloads automatically (no restart needed) once the
-# M3U is rewritten.
+# Once the M3U is rewritten the mixer is told to reload it, so no restart is
+# needed.
 #
 # Edit the JINGLES array below and re-run any time you want to refresh idents.
 
@@ -13,8 +13,14 @@ cd "$(dirname "$0")/.."
 [[ -z "${STATE_DIR:-}" && -f .env ]] && \
   STATE_DIR=$(grep -E '^STATE_DIR=' .env | cut -d= -f2-)
 STATE_DIR="${STATE_DIR:-$(pwd)/state}"
+if [[ -z "${COMPOSE_FILE:-}" && -f .env ]]; then
+  COMPOSE_FILE=$(grep -E "^COMPOSE_FILE=" .env | cut -d= -f2- | tail -n1)
+fi
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
-COMPOSE="docker compose -f ${COMPOSE_FILE}"
+IFS=: read -r -a COMPOSE_FILES <<< "$COMPOSE_FILE"
+COMPOSE_ARGS=()
+for compose_file in "${COMPOSE_FILES[@]}"; do COMPOSE_ARGS+=(-f "$compose_file"); done
+COMPOSE=(docker compose "${COMPOSE_ARGS[@]}")
 
 # Multi-station: jingles live in the ACTIVE station's dir, not the state root.
 CTR_STATE=/var/sub-wave
@@ -40,9 +46,9 @@ M3U_HOST="${STATE_DIR}/jingles.m3u"
 
 mkdir -p "$JINGLE_DIR_HOST"
 
-if ! $COMPOSE ps --status running --services 2>/dev/null | grep -q '^controller$'; then
+if ! "${COMPOSE[@]}" ps --status running --services 2>/dev/null | grep -q '^controller$'; then
   echo "Controller container is not running. Bring the stack up first:" >&2
-  echo "  $COMPOSE up -d" >&2
+  echo "  ${COMPOSE[*]} up -d" >&2
   exit 1
 fi
 
@@ -54,7 +60,7 @@ for i in "${!JINGLES[@]}"; do
   num=$(printf '%02d' "$i")
   out_ctr="${JINGLE_DIR_CTR}/jingle-${num}.wav"
   echo "→ jingle-${num}: ${text}"
-  printf '%s' "$text" | $COMPOSE exec -T controller piper \
+  printf '%s' "$text" | "${COMPOSE[@]}" exec -T controller piper \
     --model /opt/piper/voices/en_GB-alan-medium.onnx \
     --config /opt/piper/voices/en_GB-alan-medium.onnx.json \
     --output_file "$out_ctr"
@@ -71,3 +77,21 @@ done
 
 echo "✓ Rendered ${#JINGLES[@]} jingles to ${JINGLE_DIR_HOST}"
 echo "✓ Wrote playlist ${M3U_HOST}"
+
+# The playlist's file watch cannot be trusted with this write: on Liquidsoap
+# 2.4.5 it follows the inode the controller's atomic rewrites replace, so it is
+# deaf once the controller has written the file (#2008). The renders are
+# written by now, so a failed reload only warns.
+reload_reply=$("${COMPOSE[@]}" exec -T broadcast timeout 5 bash -c \
+  'exec 3<>/dev/tcp/127.0.0.1/1234 && printf "jingles.reload\nquit\n" >&3 && cat <&3' \
+  2>/dev/null || true)
+if grep -q '^OK' <<< "$reload_reply"; then
+  echo "✓ Mixer reloaded the playlist"
+elif grep -q 'unknown command' <<< "$reload_reply"; then
+  # jingleRatio 0, or jingleRotate 'controller', whose rotate draws from
+  # jingles.json, which this script never writes.
+  echo "! The mixer runs no jingle rotate of its own, so this playlist does not air" >&2
+else
+  echo "! Could not reach the mixer to reload the playlist. If the new idents do not air, restart it:" >&2
+  echo "  ${COMPOSE[*]} restart broadcast" >&2
+fi

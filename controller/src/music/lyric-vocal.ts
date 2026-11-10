@@ -1,19 +1,19 @@
-// Lyric-derived vocal activity (issue #1125). Navidrome already indexes timed
-// (synced) lyrics — the plain `subsonic.getLyrics()` flattens them to text for
-// embeddings and throws the per-line timings away. `getStructuredLyrics()`
-// preserves the timings, and this pure module turns them into the same
-// {startMs,endMs} vocal ranges the Demucs detector emits.
+// Lyric-derived vocal activity (#1125): synced lyric timings turned into the same
+// {startMs,endMs} ranges the Demucs detector emits. Usable timed lyrics outrank
+// Demucs; anything inconclusive returns null and the caller falls back to it.
 //
-// Why this is worth it: Demucs never separates cleanly, so an instrumental's
-// "vocal" stem carries residual bleed (pad swells, cymbals, guitar harmonics)
-// that a self-relative energy gate mistakes for singing (the mass false-positive
-// in #1125). A synced lyric line is ground truth — the vocal starts exactly when
-// the line does. So when a track has usable timed lyrics we skip the detector
-// entirely; an explicit "instrumental" marker tags it instrumental for free; and
-// anything inconclusive (no lyrics, or unsynced text with no timing) returns
-// null so the caller falls back to Demucs (now with the mix-anchored floor).
-//
-// Pure + side-effect-free: unit-pinned by scripts/lyric-vocal.test.ts.
+// Also the one instrumental verdict. Vocal activity is measured over two windows:
+// the opening ANALYZE_SECONDS (tracks.vocal_ranges_json) and the outro (outro_json's
+// vocalRanges, absolute ms). A track is instrumental when EACH measured window holds
+// under INSTRUMENTAL_VOCAL_TOLERANCE_MS of singing: max(head, tail) < tolerance. A
+// max, never a sum or a union: #1655 measured ~3s of bleed in one window, so two
+// windows added together would flip real instrumentals, and the windows overlap
+// anyway (lyric-derived head ranges span the track and the tail is clipped from
+// them; a short track's windows meet). The tail can only move a verdict toward
+// vocal, because singing it saw is evidence and silence it saw says nothing about
+// the head. Only this classification reads both: timing rules keep their own spans.
+
+import { z } from 'zod';
 
 interface LyricLine {
   startMs: number; // milliseconds from track start; NaN when unsynced
@@ -31,42 +31,146 @@ export interface Section {
 }
 
 export interface LyricVocalResult {
-  instrumental: boolean; // true → vocalRanges is []
-  vocalRanges: Section[]; // [] for an instrumental
-  introMs: number | null; // first vocal onset, or null for an instrumental
+  instrumental: boolean; // duration classification; short spans remain below
+  vocalRanges: Section[];
+  introMs: number | null; // first measured vocal onset, or null for no spans
 }
 
-// A lyric "body" that is really a no-lyrics/instrumental marker, not sung words.
-// Covers the LRC `[au: instrumental]` metadata tag some players surface as a
-// line and the common single-line "Instrumental" placeholder. Anchored to the
-// whole string so a song that merely SINGS the word "instrumental" isn't caught.
+// #1655: Roman Twilight has 2,961ms of Demucs bleed; 1,881 tracks in the
+// reported library have <5s total. Use a fixed tolerance because the measured
+// windows need not cover the whole track. Equality remains vocal.
+export const INSTRUMENTAL_VOCAL_TOLERANCE_MS = 5_000;
+const vocalSection = z.object({
+  startMs: z.number().finite().nonnegative(),
+  endMs: z.number().finite(),
+  kind: z.unknown().optional(),
+}).refine((r) => r.endMs > r.startMs);
+const vocalSections = z.array(vocalSection);
+
+// What a row carries for the verdict: each window's clean spans and whether any
+// stored span was bad. An absent tail is simply a row with no tail evidence.
+export interface VocalEvidence {
+  vocalRanges?: unknown[] | null;
+  vocalRangesInvalid?: boolean;
+  tailVocalRanges?: unknown[] | null;
+  tailVocalRangesInvalid?: boolean;
+}
+
+// Whether a row already holds the evidence for its own verdict, so a reader
+// that would otherwise look the track up should not (#2235). Every library-row
+// mapper carries both windows, an unmeasured one as null, and the lookup reads
+// the same columns, so re-reading such a row returns the same answer from a
+// full-row read. A shape without the fields (a raw Subsonic child, a mood-pool
+// row) carries none, and only it is worth the lookup. A head array alone counts
+// too, as it always has.
+export function carriesVocalEvidence(track: VocalEvidence | null | undefined): boolean {
+  return Array.isArray(track?.vocalRanges)
+    || (track?.vocalRanges === null && track?.tailVocalRanges !== undefined);
+}
+
+// Sung ms in one window. null = not measured; malformed non-empty ranges read as
+// Infinity, which keeps them vocal rather than granting instrumental eligibility.
+function sungMs(ranges: unknown[] | null | undefined, invalid: boolean | undefined): number | null {
+  if (invalid) return Infinity;
+  if (ranges == null) return null;
+  const parsed = vocalSections.safeParse(ranges);
+  if (!parsed.success) return Infinity;
+  return parsed.data.reduce((ms, r) => ms + r.endMs - r.startMs, 0);
+}
+
+// The one track classification rule (header). Equality stays vocal. An unmeasured
+// head stays unknown unless the tail proves singing: nothing measured the rest of
+// the track. Timing rules still inspect the original spans, including a short
+// phrase below this tolerance.
+export function isInstrumental(track: VocalEvidence | null | undefined): boolean | null {
+  const head = sungMs(track?.vocalRanges, track?.vocalRangesInvalid);
+  const tail = sungMs(track?.tailVocalRanges, track?.tailVocalRangesInvalid);
+  if (Math.max(head ?? 0, tail ?? 0) >= INSTRUMENTAL_VOCAL_TOLERANCE_MS) return false;
+  return head == null ? null : true;
+}
+
+// Keep bad-span evidence beside clean timing spans; dropping it would let a
+// partial measurement earn instrumental eligibility after a normal row read.
+function readVocalRanges(ranges: unknown): {
+  vocalRanges: Array<Section & { kind?: string }> | null;
+  vocalRangesInvalid: boolean;
+} {
+  if (!Array.isArray(ranges)) return { vocalRanges: null, vocalRangesInvalid: false };
+  const vocalRanges: Array<Section & { kind?: string }> = [];
+  let vocalRangesInvalid = false;
+  for (const range of ranges) {
+    const parsed = vocalSection.safeParse(range);
+    if (!parsed.success) { vocalRangesInvalid = true; continue; }
+    const { startMs, endMs, kind } = parsed.data;
+    vocalRanges.push(typeof kind === 'string' ? { startMs, endMs, kind } : { startMs, endMs });
+  }
+  return { vocalRanges, vocalRangesInvalid };
+}
+
+export function parseVocalRangesJson(json: string | null | undefined): ReturnType<typeof readVocalRanges> {
+  try {
+    return readVocalRanges(json == null ? null : JSON.parse(json));
+  } catch { /* unreadable measurements stay unknown */ }
+  return readVocalRanges(null);
+}
+
+function asTailEvidence({ vocalRanges, vocalRangesInvalid }: ReturnType<typeof readVocalRanges>) {
+  return { tailVocalRanges: vocalRanges, tailVocalRangesInvalid: vocalRangesInvalid };
+}
+
+// The tail's spans alone, as a bulk read projects them (library-db's
+// SQL_TAIL_VOCAL_RANGES) so no beat grid crosses into JS.
+export function parseTailVocalRangesJson(json: string | null | undefined) {
+  return asTailEvidence(parseVocalRangesJson(json));
+}
+
+// The same evidence off the whole outro_json, for a row that already read it.
+// Reads the raw key, not parseOutroJson's result: that rejects an outro for its
+// other fields and drops bad spans, and either would part JS from the SQL scalar.
+export function parseOutroVocalJson(outroJson: string | null | undefined) {
+  try {
+    const outro = (outroJson == null ? null : JSON.parse(outroJson)) as { vocalRanges?: unknown } | null;
+    return asTailEvidence(readVocalRanges(outro?.vocalRanges));
+  } catch { /* an unreadable outro is no tail evidence */ }
+  return asTailEvidence(readVocalRanges(null));
+}
+
+// Registered as a deterministic SQLite scalar so SQL filters use the JS rule.
+export function instrumentalFromJson(json: string | null, tailJson: string | null = null): number | null {
+  const instrumental = isInstrumental({ ...parseVocalRangesJson(json), ...parseTailVocalRangesJson(tailJson) });
+  return instrumental == null ? null : Number(instrumental);
+}
+
+// LRC `[au: instrumental]` / "Instrumental" placeholder. Anchored, so a song that
+// merely sings the word isn't caught.
 const INSTRUMENTAL_RE = /^\s*[[(]?\s*(?:au\s*:\s*)?instrumental\s*[)\]]?\s*$/i;
 
-// Consecutive sung lines closer than this merge into one vocal range; a wider
-// gap (a solo, an instrumental bridge) splits them so the ranges expose real
-// vocal-free stretches. 8s keeps a verse together but still surfaces breaks.
+// Exported so the public lyrics payload (`music/lyrics-public.ts`) screens the
+// same markers off the same `getStructuredLyrics()` shape. One owner for the
+// pattern — a second copy would drift the moment a new marker spelling shows up.
+export function isInstrumentalMarker(text: string): boolean {
+  return INSTRUMENTAL_RE.test(text);
+}
+
+// Consecutive sung lines closer than this merge into one range; a wider gap
+// splits them so the ranges expose real vocal-free stretches.
 const MERGE_GAP_MS = 8_000;
-// A line extends until the next line, capped so a long trailing gap before the
-// next line reads as an instrumental break rather than sustained singing.
+// A line extends to the next line, capped so a long trailing gap reads as an
+// instrumental break rather than sustained singing.
 const MAX_LINE_MS = 8_000;
 // The final line has no successor to bound it — give it a nominal sung tail.
 const LAST_LINE_TAIL_MS = 4_000;
 
-// Turn structured lyrics into vocal ranges + an intro cue, or null when the
-// input can't decide (caller falls back to Demucs). `null` in / no usable timing
-// → null out; an all-marker body → instrumental ([]); synced timed lines →
-// merged ranges with the first onset as the intro.
+// Structured lyrics → vocal ranges + intro cue, or null when inconclusive.
 export function deriveVocalFromLyrics(lyrics: StructuredLyrics | null): LyricVocalResult | null {
   if (!lyrics) return null;
   const lines = lyrics.lines.filter((l) => l.text.trim().length > 0);
 
-  // Explicit instrumental marker: every non-empty line is the marker text.
-  if (lines.length > 0 && lines.every((l) => INSTRUMENTAL_RE.test(l.text))) {
+  if (lines.length > 0 && lines.every((l) => isInstrumentalMarker(l.text))) {
     return { instrumental: true, vocalRanges: [], introMs: null };
   }
 
-  // Placing vocals in time needs real timestamps; unsynced text or a body with
-  // no timed lines is inconclusive — let Demucs handle it.
+  // Unsynced text, or a body with no timed lines, is inconclusive.
   if (!lyrics.synced) return null;
   const timed = lines
     .filter((l) => Number.isFinite(l.startMs) && l.startMs >= 0)
@@ -86,15 +190,12 @@ export function deriveVocalFromLyrics(lyrics: StructuredLyrics | null): LyricVoc
     }
   }
 
-  return { instrumental: false, vocalRanges: ranges, introMs: ranges[0].startMs };
+  return { instrumental: isInstrumental({ vocalRanges: ranges }) === true, vocalRanges: ranges, introMs: ranges[0].startMs };
 }
 
-// Clip whole-track vocal ranges into a track's outro window — the lyric
-// counterpart of the worker's tail Demucs pass (feature: vocal-aware
-// transitions). Spans are trimmed to the window (and to the track end when
-// known, since the nominal last-line tail can outrun it); [] = no sung line
-// reaches the window, i.e. an instrumental tail, mirroring the worker's
-// tri-state semantics.
+// Clip whole-track ranges into the outro window, the lyric counterpart of the
+// worker's tail Demucs pass. Trimmed to the track end when known (the nominal
+// last-line tail can outrun it); [] means an instrumental tail.
 export function clipRangesToTail(
   ranges: Section[],
   windowStartMs: number,

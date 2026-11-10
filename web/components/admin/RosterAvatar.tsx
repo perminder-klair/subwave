@@ -1,7 +1,5 @@
 'use client';
 
-// Initials sit behind the <img> so a broken or absent avatar still reads. Takes
-// a resolved src rather than a Persona, so shows and DJs can both feed it.
 
 import { cn } from '../../lib/cn';
 

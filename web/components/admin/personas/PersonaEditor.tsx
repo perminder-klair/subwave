@@ -1,8 +1,5 @@
 'use client';
-// Full-screen editor for the focused persona. `control`+`index` thread straight
-// down to the cards that bind real fields; `persona` stays as a read-only live
-// snapshot for display-only reads (title, share link, on-air/default pills).
-import type { RefObject } from 'react';
+import { useState, type RefObject } from 'react';
 import type { Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse, SkillCatalogEntry } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
@@ -33,6 +30,8 @@ interface PersonaEditorProps {
   defaultEngine: string;
   cloudIssueText: string | null;
   skillCatalog: SkillCatalogEntry[];
+  // Tags already used across the roster, offered as one-click adds.
+  tagSuggestions: string[];
   editorRef: RefObject<HTMLDivElement | null>;
   open: boolean;
   isNew: boolean;
@@ -45,6 +44,15 @@ interface PersonaEditorProps {
   onClearAvatar: (id: string) => void;
   onSetActive: () => void;
   onRemove: () => void;
+  // Persona bundle (#1620) — downloads the zip. Distinct from the community
+  // share above it: that one opens a GitHub form carrying only the portable
+  // knobs, this one hands the operator a file with the audio in it.
+  exporting: boolean;
+  // Unsaved edits are still local; the export reads the SAVED persona, so
+  // offering it here would hand out a zip that quietly disagrees with what is
+  // on screen.
+  exportStale: boolean;
+  onExportBundle: () => void;
   canSave: boolean;
   focusedOk: boolean;
   allPersonasOk: boolean;
@@ -56,12 +64,15 @@ interface PersonaEditorProps {
 
 export function PersonaEditor({
   persona, index, position, control, personaCount, activePersonaId, onAirPersonaId, data, adminFetch, avatarTick, uploadingId,
-  defaultEngine, cloudIssueText, skillCatalog, editorRef, open, isNew, onClose,
+  defaultEngine, cloudIssueText, skillCatalog, tagSuggestions, editorRef, open, isNew, onClose,
   onUpdate,
   onUploadAvatar, onGenerateAvatar, onClearAvatar, onSetActive, onRemove,
+  exporting, exportStale, onExportBundle,
   canSave, focusedOk, allPersonasOk, promptOk, busy, onSave, onDiscard,
 }: PersonaEditorProps) {
   const update = (patch: Partial<Persona>) => onUpdate(index, patch);
+  const [tagDraftBlocked, setTagDraftBlocked] = useState(false);
+  const editorCanSave = canSave && !tagDraftBlocked;
 
   // Opens the prefilled add-persona Issue Form on GitHub. Only the portable fields
   // travel — voice and avatar stay station-side.
@@ -76,6 +87,7 @@ export function PersonaEditor({
       frequency: persona.frequency,
       'script-length': persona.scriptLength,
       'dj-mode': persona.djMode ? 'on' : '',
+      'link-style': persona.linkStyle,
       humour: persona.humour !== DIAL_NEUTRAL ? String(persona.humour) : '',
       'local-colour': persona.localColour !== DIAL_NEUTRAL ? String(persona.localColour) : '',
       warmth: persona.warmth !== DIAL_NEUTRAL ? String(persona.warmth) : '',
@@ -104,11 +116,13 @@ export function PersonaEditor({
               <span
                 className={cn(
                   'size-1.5 flex-none rounded-full',
-                  canSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
+                  editorCanSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
                 )}
               />
               <span className="min-w-0">
-                {!canSave && !focusedOk
+                {tagDraftBlocked
+                  ? <span className="text-[var(--danger)]">finish or correct the pending tag</span>
+                  : !canSave && !focusedOk
                   ? <span className="text-[var(--danger)]">this persona has a missing or invalid field</span>
                   : !canSave && !allPersonasOk
                     ? <span className="text-[var(--danger)]">another persona in the roster is incomplete</span>
@@ -116,8 +130,6 @@ export function PersonaEditor({
                       ? <span className="text-[var(--danger)]">fix the system-prompt library</span>
                       : 'changes apply on the next spoken line · no mixer restart'}
               </span>
-              {/* Standing state, not an action — rides the status row so the
-                  transport stays a row of verbs. */}
               {persona.id === onAirPersonaId && <Pill tone="accent" className="text-[8px]">on air</Pill>}
               {persona.id === activePersonaId && <Pill className="text-[8px]">default</Pill>}
             </>
@@ -134,8 +146,18 @@ export function PersonaEditor({
               label: 'Remove',
               tone: 'danger',
               onClick: onRemove,
-              disabled: personaCount <= 1,
+              // Deletes persist at once (#1950); never two in flight.
+              disabled: busy || personaCount <= 1,
               title: personaCount > 1 ? 'Remove this persona' : 'At least one persona is required',
+            },
+            {
+              id: 'export',
+              label: exporting ? 'Preparing…' : 'Export bundle',
+              onClick: onExportBundle,
+              disabled: exporting || isNew || exportStale,
+              title: isNew || exportStale
+                ? 'Save this persona first — the export is built from what the station has stored'
+                : 'Download a zip of this persona — its cloned voice sample and any jingles that name it travel with it',
             },
             {
               id: 'share',
@@ -151,8 +173,8 @@ export function PersonaEditor({
               id: 'save',
               label: busy ? 'Saving…' : 'Save persona',
               tone: 'accent',
-              onClick: onSave,
-              disabled: busy || !canSave,
+              onClick: () => { if (!tagDraftBlocked) onSave(); },
+              disabled: busy || !editorCanSave,
             },
           ]}
         />
@@ -166,6 +188,8 @@ export function PersonaEditor({
           isNew={isNew}
           adminFetch={adminFetch}
           avatarTick={avatarTick}
+          tagSuggestions={tagSuggestions}
+          onTagDraftBlockedChange={setTagDraftBlocked}
           uploading={uploadingId === persona.id}
           onUpdate={update}
           onPickAvatar={(file) => onUploadAvatar(persona.id, file)}

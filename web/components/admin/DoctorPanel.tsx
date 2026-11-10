@@ -1,72 +1,46 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCopyToClipboard } from 'usehooks-ts';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill } from './ui';
 import { ErrorState } from '@/components/ui/error-state';
-import BoothBuddy, { type BuddyMood } from '../BoothBuddy';
-import { ChevronDownIcon } from 'lucide-react';
+import BoothBuddy from '../BoothBuddy';
+import { ChevronDownIcon, Copy, RefreshCw, Send } from 'lucide-react';
 import { Task, TaskContent, TaskItem, TaskTrigger } from '../ai-elements/task';
 import { Shimmer } from '../ai-elements/shimmer';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '../ai-elements/reasoning';
 import { MessageResponse } from '../ai-elements/message';
+import { adminResponse } from '../../lib/admin-query';
+import DoctorRig from './DoctorRig';
+import { EXPECTED_SECTIONS, sectionAnchor } from './doctor-rig';
+import { doctorPageMood } from './doctor-mood';
+import {
+  doctorKeys,
+  finishReport,
+  useDoctorFixMutation,
+  useDoctorLastQuery,
+  useDoctorReviewMutation,
+  type DoctorFixAction,
+  type DoctorFixId,
+  type DoctorLast,
+  type DoctorReport,
+  type DoctorReview,
+  type DoctorSection,
+  type DoctorStatus,
+} from './doctor-queries';
 
 // Shapes mirror controller/src/doctor.ts.
 
-type Status = 'ok' | 'warn' | 'fail' | 'skip';
-type FixId = 'refresh-playlist' | 'restart-mixer' | 'generate-jingles' | 'tag-library' | 'subsonic-reset';
-
-interface FixAction {
-  id: FixId;
-  label: string;
-}
-interface Finding {
-  label: string;
-  status: Status;
-  detail?: string;
-  hint?: string;
-  fix?: FixAction;
-}
-interface DoctorSection {
-  name: string;
-  findings: Finding[];
-}
-interface DoctorReport {
-  t: string;
-  sections: DoctorSection[];
-  counts: { ok: number; warn: number; fail: number; skip: number };
-}
-interface ReviewPriority {
-  title: string;
-  severity: 'low' | 'med' | 'high';
-  why: string;
-  suggestedFix: string;
-  // Only rendered as a button when the id appears in the report's findings.
-  fixId?: FixId | null;
-}
-interface DoctorReview {
-  available: boolean;
-  reason?: string;
-  overall?: 'healthy' | 'attention' | 'critical';
-  summary?: string;
-  priorities?: ReviewPriority[];
-}
-
 // All are admin-gated POSTs that accept an empty body.
-const FIX_ENDPOINTS: Record<FixId, string> = {
+const FIX_ENDPOINTS: Record<DoctorFixId, string> = {
   'refresh-playlist': '/dj/refresh-playlist',
   'restart-mixer': '/restart-mixer',
   'generate-jingles': '/onboarding/generate-jingles',
   'tag-library': '/tag-library',
   'subsonic-reset': '/debug/subsonic/reset',
-};
-
-const MOOD_BY_OVERALL: Record<NonNullable<DoctorReview['overall']>, BuddyMood> = {
-  healthy: 'content',
-  attention: 'curious',
-  critical: 'spooked',
 };
 
 // Deliberately the upstream project repo, not a per-station setting: bug
@@ -75,22 +49,6 @@ const HQ_ISSUES_NEW = 'https://github.com/perminder-klair/subwave/issues/new';
 // GitHub's prefilled-issue form is a GET, and past ~8KB the request 414s or
 // silently truncates — stay well under and fall back to the clipboard.
 const HQ_URL_LIMIT = 7000;
-
-// Mirrors SECTION_CHECKS in controller/src/doctor.ts. Only the in-flight
-// shimmer rows key off it, so drift just shimmers the wrong names for a few
-// seconds; the finished report renders whatever actually arrived.
-const EXPECTED_SECTIONS = [
-  'LLM',
-  'Navidrome & library',
-  'Broadcast',
-  'Voice (TTS)',
-  'Capabilities',
-  'Content',
-  'Resources',
-  'Tuning',
-  'Storage',
-  'Setup',
-];
 
 function tallyCounts(sections: DoctorSection[]): DoctorReport['counts'] {
   const c = { ok: 0, warn: 0, fail: 0, skip: 0 };
@@ -114,48 +72,28 @@ function parseSseFrame(frame: string): { event: string | null; data: unknown } {
 
 export default function DoctorPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+  const queryClient = useQueryClient();
   const [, copyToClipboard] = useCopyToClipboard();
-  const [report, setReport] = useState<DoctorReport | null>(null);
-  const [review, setReview] = useState<DoctorReview | null>(null);
   const [running, setRunning] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [busyFix, setBusyFix] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // Suppresses the intro hero flashing before a cached report loads in.
-  const [hydrating, setHydrating] = useState(true);
 
   const ready = hydrated && !needsAuth;
-
-  const hydratedRef = useRef(false);
-  useEffect(() => {
-    if (!ready || hydratedRef.current) return;
-    hydratedRef.current = true;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/doctor/last');
-        const j = (await r.json().catch(() => null)) as
-          | { report?: DoctorReport | null; review?: DoctorReview | null }
-          | null;
-        if (!cancelled && j?.report) {
-          setReport(j.report);
-          if (j.review) setReview(j.review);
-        }
-      } catch {
-        /* no cached run — the intro hero shows instead */
-      } finally {
-        if (!cancelled) setHydrating(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [ready, adminFetch]);
+  const lastQuery = useDoctorLastQuery(adminFetch, ready);
+  const reviewMutation = useDoctorReviewMutation(adminFetch);
+  const fixMutation = useDoctorFixMutation(adminFetch);
+  const cached = lastQuery.data ?? { report: null, review: null };
+  const [inFlightReport, setInFlightReport] = useState<DoctorReport | null>(null);
+  const report = inFlightReport ?? cached.report;
+  const review = cached.review;
+  // Suppresses the intro hero flashing before a cached report loads in.
+  const hydrating = lastQuery.isPending;
 
   // Fix actions present in the current report. A fixId not in this map is never
   // surfaced as a button.
   const fixById = useMemo(() => {
-    const m = new Map<FixId, FixAction>();
+    const m = new Map<DoctorFixId, DoctorFixAction>();
     report?.sections.forEach((s) =>
       s.findings.forEach((f) => {
         if (f.fix && !m.has(f.fix.id)) m.set(f.fix.id, f.fix);
@@ -172,12 +110,14 @@ export default function DoctorPanel() {
 
   // One-shot batch run — the fallback when SSE streaming isn't available.
   const runBatch = async (): Promise<DoctorReport | null> => {
-    const r = await adminFetch('/doctor');
+    // admin-query-imperative: diagnosis-command
+    const r = await adminResponse(adminFetch, '/doctor');
     const j = (await r.json().catch(() => null)) as DoctorReport | { error?: string } | null;
-    if (!r.ok || !j || !('sections' in j)) {
-      throw new Error((j as { error?: string })?.error || `failed (${r.status})`);
+    if (!j || !('sections' in j)) {
+      throw new Error((j as { error?: string })?.error || 'doctor returned no report');
     }
-    setReport(j);
+    finishReport(queryClient, j, null);
+    setInFlightReport(null);
     return j;
   };
 
@@ -185,17 +125,23 @@ export default function DoctorPanel() {
     setRunning(true);
     setErr(null);
     // A fresh run invalidates the previous review (it described the old report).
-    setReview(null);
+    queryClient.setQueryData<DoctorLast>(doctorKeys.last(), previous => ({
+      report: previous?.report ?? null,
+      review: null,
+    }));
     try {
-      const r = await adminFetch('/doctor/stream', { headers: { Accept: 'text/event-stream' } });
-      if (!r.ok || !r.body) throw new Error(`stream unavailable (${r.status})`);
+      // admin-query-imperative: diagnosis-stream
+      const r = await adminResponse(adminFetch, '/doctor/stream', {
+        headers: { Accept: 'text/event-stream' },
+      });
+      if (!r.body) throw new Error('stream unavailable (empty body)');
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
       const sections: DoctorSection[] = [];
       let final: DoctorReport | null = null;
       // Empty shell first so the intro hero yields to the progressive report.
-      setReport({ t: new Date().toISOString(), sections: [], counts: tallyCounts([]) });
+      setInFlightReport({ t: new Date().toISOString(), sections: [], counts: tallyCounts([]) });
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -206,21 +152,35 @@ export default function DoctorPanel() {
           buf = buf.slice(idx + 2);
           if (event === 'section' && data) {
             sections.push(data as DoctorSection);
-            setReport({ t: new Date().toISOString(), sections: [...sections], counts: tallyCounts(sections) });
+            setInFlightReport({ t: new Date().toISOString(), sections: [...sections], counts: tallyCounts(sections) });
           } else if (event === 'done' && data) {
             final = data as DoctorReport;
-            setReport(final);
+            setInFlightReport(final);
           } else if (event === 'error') {
             throw new Error((data as { error?: string })?.error || 'doctor failed');
           }
         }
       }
-      return final ?? (sections.length ? { t: new Date().toISOString(), sections, counts: tallyCounts(sections) } : null);
+      if (!final) {
+        if (!sections.length) throw new Error('doctor stream ended before completion');
+        const partial = {
+          t: new Date().toISOString(),
+          sections,
+          counts: tallyCounts(sections),
+        };
+        finishReport(queryClient, partial, null);
+        setInFlightReport(null);
+        return partial;
+      }
+      finishReport(queryClient, final, null);
+      setInFlightReport(null);
+      return final;
     } catch {
       // Streaming failed (proxy, older controller, aborted body).
       try {
         return await runBatch();
       } catch (e2) {
+        setInFlightReport(null);
         setErr(errorMessage(e2));
         return null;
       }
@@ -236,16 +196,9 @@ export default function DoctorPanel() {
     if (!target) return;
     setReviewing(true);
     try {
-      const r = await adminFetch('/doctor/review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ report: target }),
-      });
-      const j = (await r.json().catch(() => null)) as DoctorReview | { error?: string } | null;
-      if (!r.ok || !j) throw new Error((j as { error?: string })?.error || `failed (${r.status})`);
-      setReview(j as DoctorReview);
-      if (!(j as DoctorReview).available) {
-        notify.info((j as DoctorReview).reason || 'review unavailable');
+      const nextReview = await reviewMutation.mutateAsync(target);
+      if (!nextReview.available) {
+        notify.info(nextReview.reason || 'review unavailable');
       }
     } catch (e) {
       notify.err(`buddy review: ${errorMessage(e)}`);
@@ -259,16 +212,10 @@ export default function DoctorPanel() {
     if (rep) await askReview(rep);
   };
 
-  const runFix = async (fix: FixAction) => {
+  const runFix = async (fix: DoctorFixAction) => {
     setBusyFix(fix.id);
     try {
-      const r = await adminFetch(FIX_ENDPOINTS[fix.id], {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await fixMutation.mutateAsync({ id: fix.id, path: FIX_ENDPOINTS[fix.id] });
       notify.ok(`${fix.label} done`);
       await run(); // re-assess so the finding clears (or shows what's left)
     } catch (e) {
@@ -315,63 +262,75 @@ export default function DoctorPanel() {
     window.open(full, '_blank', 'noopener,noreferrer');
   };
 
-  const buddyMood: BuddyMood = review?.available && review.overall ? MOOD_BY_OVERALL[review.overall] : 'content';
+  // The page's one DJ Doc. The intro and the health card never render together,
+  // so whichever is up carries it through the run, the review and the verdict.
+  const mood = doctorPageMood({
+    running,
+    reviewing,
+    fixing: busyFix !== null,
+    failed: err !== null,
+    report,
+    review,
+  });
 
   return (
     <div className="mx-auto max-w-[1100px] px-0 py-8 sm:px-7">
       {ready && !hydrating && !report && (
         <Card title="DJ Doc" sub="booth's open">
-          <div className="flex items-start gap-4">
-            <BoothBuddy mood="curious" size={52} />
-            <div className="min-w-0 flex-1">
-              <p className="text-[15px] leading-[1.65]">
-                Yo — DJ Doc here, resident engineer for this station. I sit in the booth and listen to
-                the whole rig like it&apos;s a record: is the low end clean, is anything clipping, is the
-                mix on air or dropping out?
-              </p>
-              <p className="mt-3 text-[13px] tracking-[0.14em] text-muted uppercase">Here&apos;s what I run the levels on</p>
-              <ul className="mt-2 flex flex-col gap-2 text-[14px] leading-[1.5]">
-                <li>
-                  <span className="font-bold">The brain</span>{' '}
-                  <span className="text-muted">— your LLM DJ: reachable, quick enough, dialed to the right settings.</span>
-                </li>
-                <li>
-                  <span className="font-bold">The crate</span>{' '}
-                  <span className="text-muted">— Navidrome + your mood tags: connected, and stocked so the picks aren&apos;t blind.</span>
-                </li>
-                <li>
-                  <span className="font-bold">The mix</span>{' '}
-                  <span className="text-muted">— Liquidsoap &amp; Icecast: on air, clean signal, listeners served.</span>
-                </li>
-                <li>
-                  <span className="font-bold">The voice</span>{' '}
-                  <span className="text-muted">— your TTS engine, and whether it actually fits the machine you&apos;re running on.</span>
-                </li>
-                <li>
-                  <span className="font-bold">The extras</span>{' '}
-                  <span className="text-muted">— web search for artist news, your hardware&apos;s muscle, and your backups.</span>
-                </li>
-              </ul>
-              <p className="mt-4 text-[14px] leading-[1.6]">
-                Hit <span className="font-bold">Let&apos;s go</span> and I&apos;ll run the levels on all of it,
-                then tell you straight what&apos;s clean, what&apos;s muddy, and the one thing to fix first. No fluff.
-              </p>
-              <div className="mt-5 flex flex-wrap items-center gap-3">
-                <Btn
-                  tone="accent"
-                  lg
-                  onClick={letsGo}
-                  disabled={running || reviewing}
-                  className="px-9 py-3.5 text-[13px]"
-                >
-                  {running ? 'Running the levels…' : reviewing ? 'DJ Doc is listening…' : "Let's go"}
-                </Btn>
-                <span className="text-[12px] leading-[1.5] text-muted">
-                  Runs the full check and gets DJ Doc&apos;s read in one go.
-                </span>
+          <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)]">
+            <div className="flex items-start gap-4">
+              <BoothBuddy mood={mood} size={64} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[15px] leading-[1.65]">
+                  Yo — DJ Doc here, resident engineer for this station. I sit in the booth and listen to
+                  the whole rig like it&apos;s a record: is the low end clean, is anything clipping, is the
+                  mix on air or dropping out?
+                </p>
+                <p className="mt-3 text-[13px] tracking-[0.14em] text-muted uppercase">Here&apos;s what I run the levels on</p>
+                <ul className="mt-2 flex flex-col gap-2 text-[14px] leading-[1.5]">
+                  <li>
+                    <span className="font-bold">The brain</span>{' '}
+                    <span className="text-muted">— your LLM DJ: reachable, quick enough, dialed to the right settings.</span>
+                  </li>
+                  <li>
+                    <span className="font-bold">The crate</span>{' '}
+                    <span className="text-muted">— Navidrome + your mood tags: connected, and stocked so the picks aren&apos;t blind.</span>
+                  </li>
+                  <li>
+                    <span className="font-bold">The mix</span>{' '}
+                    <span className="text-muted">— Liquidsoap &amp; Icecast: on air, clean signal, listeners served.</span>
+                  </li>
+                  <li>
+                    <span className="font-bold">The voice</span>{' '}
+                    <span className="text-muted">— your TTS engine, and whether it actually fits the machine you&apos;re running on.</span>
+                  </li>
+                  <li>
+                    <span className="font-bold">The extras</span>{' '}
+                    <span className="text-muted">— web search for artist news, your hardware&apos;s muscle, and your backups.</span>
+                  </li>
+                </ul>
+                <p className="mt-4 text-[14px] leading-[1.6]">
+                  Hit <span className="font-bold">Let&apos;s go</span> and I&apos;ll run the levels on all of it,
+                  then tell you straight what&apos;s clean, what&apos;s muddy, and the one thing to fix first. No fluff.
+                </p>
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <Btn
+                    tone="accent"
+                    lg
+                    onClick={letsGo}
+                    disabled={running || reviewing}
+                    className="px-9 py-3.5 text-[13px]"
+                  >
+                    {running ? 'Running the levels…' : reviewing ? 'DJ Doc is listening…' : "Let's go"}
+                  </Btn>
+                  <span className="text-[12px] leading-[1.5] text-muted">
+                    Runs the full check and gets DJ Doc&apos;s read in one go.
+                  </span>
+                </div>
+                {err && <ErrorState error={err} onRetry={run} />}
               </div>
-              {err && <ErrorState error={err} onRetry={run} />}
             </div>
+            <DoctorRig report={null} review={null} running={false} className="mx-auto w-full max-w-[28rem] lg:mt-2" />
           </div>
         </Card>
       )}
@@ -393,23 +352,30 @@ export default function DoctorPanel() {
             </span>
           }
         >
-          <div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[14px] leading-[1.6] text-muted">
-                Full assessment of the station — the LLM, Navidrome &amp; library, the broadcast chain,
-                voices, capabilities, content, resources and storage. Where a safe fix exists you can
-                apply it in one click.
+          <div className="grid items-center gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)]">
+            <div className="min-w-0">
+              <BoothBuddy mood={mood} size={64} />
+              <p className="mt-3 text-[14px] leading-[1.6] text-muted">
+                DJ Doc checks the LLM, Navidrome and your library, the broadcast chain, the voices,
+                web search, CPU, memory and storage. Anything with a safe fix gets a one-click button.
               </p>
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <Btn tone="accent" onClick={letsGo} disabled={running || reviewing}>
+                  <RefreshCw
+                    size={13}
+                    aria-hidden="true"
+                    className={running || reviewing ? 'motion-safe:animate-spin' : undefined}
+                  />
                   {running ? 'Running…' : reviewing ? 'DJ Doc is listening…' : 'Re-run Doctor'}
                 </Btn>
-                <Btn onClick={copyMarkdown}>Copy report as Markdown</Btn>
+                <Btn onClick={copyMarkdown}>
+                  <Copy size={13} aria-hidden="true" /> Copy report as Markdown
+                </Btn>
                 <Btn
                   onClick={sendToHQ}
                   title="Open a prefilled GitHub issue with this report (you submit it)"
                 >
-                  Send report to Headquarters
+                  <Send size={13} aria-hidden="true" /> Send report to Headquarters
                 </Btn>
                 <span className="font-mono text-[11px] text-muted">
                   last run {new Date(report.t).toLocaleTimeString()}
@@ -417,36 +383,30 @@ export default function DoctorPanel() {
               </div>
               {err && <ErrorState error={err} onRetry={run} />}
             </div>
+            <DoctorRig report={report} review={review} running={running} className="mx-auto w-full max-w-[28rem]" />
           </div>
         </Card>
       )}
 
-      {/* The animated indicator carries the 20–60s LLM call: a button-label
-          change alone read as stalled. */}
       {reviewing ? (
         <div role="status" aria-live="polite">
           <Card className="is-spotlight mt-6" title="DJ Doc says" sub="running the levels…">
-            <div className="flex items-start gap-4">
-              <BoothBuddy mood="onair" size={40} />
-              <div className="min-w-0 flex-1">
-                <p className="text-[15px] leading-[1.65] font-bold">DJ Doc is listening…</p>
-                <p className="mt-1 text-[13px] leading-[1.55] text-muted">
-                  Playing your whole health report past the LLM and writing up what&apos;s clean,
-                  what&apos;s muddy, and the one thing to fix first. On a local model this can take
-                  20–60s — hang tight.
-                </p>
-                <div className="mt-4 flex flex-col gap-1.5" aria-hidden="true">
-                  <Shimmer className="text-[13px] leading-[1.55]" duration={2}>
-                    Spinning the report back like a rough mix…
-                  </Shimmer>
-                  <Shimmer className="text-[13px] leading-[1.55]" duration={2.4}>
-                    Listening for mud in the low end…
-                  </Shimmer>
-                  <Shimmer className="text-[13px] leading-[1.55]" duration={2.8}>
-                    Writing the verdict up straight. No fluff.
-                  </Shimmer>
-                </div>
-              </div>
+            <p className="text-[15px] leading-[1.65] font-bold">DJ Doc is listening…</p>
+            <p className="mt-1 text-[13px] leading-[1.55] text-muted">
+              Playing your whole health report past the LLM and writing up what&apos;s clean,
+              what&apos;s muddy, and the one thing to fix first. On a local model this can take
+              20–60s — hang tight.
+            </p>
+            <div className="mt-4 flex flex-col gap-1.5" aria-hidden="true">
+              <Shimmer className="text-[13px] leading-[1.55]" duration={2}>
+                Spinning the report back like a rough mix…
+              </Shimmer>
+              <Shimmer className="text-[13px] leading-[1.55]" duration={2.4}>
+                Listening for mud in the low end…
+              </Shimmer>
+              <Shimmer className="text-[13px] leading-[1.55]" duration={2.8}>
+                Writing the verdict up straight. No fluff.
+              </Shimmer>
             </div>
           </Card>
         </div>
@@ -466,58 +426,54 @@ export default function DoctorPanel() {
           }
         >
           {review.available ? (
-            <div className="flex items-start gap-4">
-              <BoothBuddy mood={buddyMood} size={40} />
-              <div className="min-w-0 flex-1">
-                {/* The LLM may hand back markdown — render it, don't print it. */}
-                {review.summary && (
-                  <MessageResponse className="text-[15px] leading-[1.65]">{review.summary}</MessageResponse>
-                )}
-                {review.priorities && review.priorities.length > 0 && (
-                  <ul className="mt-4 flex flex-col gap-3">
-                    {review.priorities.map((p, i) => {
-                      // Only offer the button when the tagged fix exists here.
-                      const fix = p.fixId ? fixById.get(p.fixId) : undefined;
-                      return (
-                        <li key={i} className="border-l-2 border-[color:var(--separator-strong)] pl-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Pill
-                              tone={p.severity === 'low' ? 'ink' : 'accent'}
-                              className={
-                                p.severity === 'high'
-                                  ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
-                                  : undefined
-                              }
-                            >
-                              {p.severity}
-                            </Pill>
-                            <span className="text-[14px] font-bold">{p.title}</span>
-                            {fix && (
-                              <span className="ml-auto">
-                                <Btn sm onClick={() => runFix(fix)} disabled={busyFix === fix.id}>
-                                  {busyFix === fix.id ? '…' : fix.label}
-                                </Btn>
-                              </span>
-                            )}
-                          </div>
-                          <Reasoning defaultOpen={false} className="mt-1.5 mb-0">
-                            <ReasoningTrigger className="group w-fit cursor-pointer text-[10px] font-bold tracking-[0.18em] text-muted uppercase hover:text-ink">
-                              <span>The why &amp; the fix</span>
-                              <ChevronDownIcon
-                                className="size-3.5 transition-transform group-data-[state=open]:rotate-180"
-                                aria-hidden="true"
-                              />
-                            </ReasoningTrigger>
-                            <ReasoningContent className="mt-2 text-[13px] leading-[1.55]">
-                              {`${p.why}\n\n**Fix:** ${p.suggestedFix}`}
-                            </ReasoningContent>
-                          </Reasoning>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
+            <div>
+              {review.summary && (
+                <MessageResponse className="text-[15px] leading-[1.65]">{review.summary}</MessageResponse>
+              )}
+              {review.priorities && review.priorities.length > 0 && (
+                <ul className="mt-4 flex flex-col gap-3">
+                  {review.priorities.map((p, i) => {
+                    // Only offer the button when the tagged fix exists here.
+                    const fix = p.fixId ? fixById.get(p.fixId) : undefined;
+                    return (
+                      <li key={i} className="border-l-2 border-[color:var(--separator-strong)] pl-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Pill
+                            tone={p.severity === 'low' ? 'ink' : 'accent'}
+                            className={
+                              p.severity === 'high'
+                                ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+                                : undefined
+                            }
+                          >
+                            {p.severity}
+                          </Pill>
+                          <span className="text-[14px] font-bold">{p.title}</span>
+                          {fix && (
+                            <span className="ml-auto">
+                              <Btn sm onClick={() => runFix(fix)} disabled={busyFix === fix.id}>
+                                {busyFix === fix.id ? '…' : fix.label}
+                              </Btn>
+                            </span>
+                          )}
+                        </div>
+                        <Reasoning defaultOpen={false} className="mt-1.5 mb-0">
+                          <ReasoningTrigger className="group w-fit cursor-pointer text-[10px] font-bold tracking-[0.18em] text-muted uppercase hover:text-ink">
+                            <span>The why &amp; the fix</span>
+                            <ChevronDownIcon
+                              className="size-3.5 transition-transform group-data-[state=open]:rotate-180"
+                              aria-hidden="true"
+                            />
+                          </ReasoningTrigger>
+                          <ReasoningContent className="mt-2 text-[13px] leading-[1.55]">
+                            {`${p.why}\n\n**Fix:** ${p.suggestedFix}`}
+                          </ReasoningContent>
+                        </Reasoning>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           ) : (
             <p className="text-[13px] text-muted">
@@ -535,7 +491,7 @@ export default function DoctorPanel() {
               const fails = sec.findings.filter((f) => f.status === 'fail').length;
               const warns = sec.findings.filter((f) => f.status === 'warn').length;
               return (
-                <Task key={sec.name} defaultOpen className="py-2.5 first:pt-0 last:pb-0">
+                <Task key={sec.name} id={sectionAnchor(sec.name)} defaultOpen className="scroll-mt-20 py-2.5 first:pt-0 last:pb-0">
                   <TaskTrigger title={sec.name}>
                     <div className="flex w-full cursor-pointer items-center gap-2">
                       <span className="text-[11px] font-bold tracking-[0.18em] text-ink uppercase">{sec.name}</span>
@@ -559,14 +515,12 @@ export default function DoctorPanel() {
                       >
                         <StatusPill status={f.status} />
                         <span className="font-bold">{f.label}</span>
-                        {/* Machine values (model ids, paths, URLs) have no break
-                            opportunity — wrap them or they run past the card edge. */}
                         {f.detail && (
                           <span className="min-w-0 font-mono text-[12px] break-words text-muted">{f.detail}</span>
                         )}
                         {f.fix && (
                           <span className="ml-auto">
-                            <Btn sm onClick={() => runFix(f.fix as FixAction)} disabled={busyFix === f.fix.id}>
+                            <Btn sm onClick={() => runFix(f.fix as DoctorFixAction)} disabled={busyFix === f.fix.id}>
                               {busyFix === f.fix.id ? '…' : f.fix.label}
                             </Btn>
                           </span>
@@ -596,7 +550,7 @@ export default function DoctorPanel() {
   );
 }
 
-function StatusPill({ status }: { status: Status }) {
+function StatusPill({ status }: { status: DoctorStatus }) {
   if (status === 'fail') {
     return (
       <Pill tone="accent" dot className="border-[var(--accent)] bg-[var(--accent)] text-white">

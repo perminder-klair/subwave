@@ -3,10 +3,16 @@
 import { requireDb } from './handle.js';
 import { rowToTrack } from './rows.js';
 import type { TrackRecord, TrackRow } from './types.js';
+import type { MixDropReason } from '../../schemas/transitions.js';
+import type { TransitionEffect } from '../../settings/vocab.js';
 
-// ---------------------------------------------------------------------------
-// Play history
-// ---------------------------------------------------------------------------
+// One armed gesture that did not reach air (broadcast/queue/types.ts MixDrop),
+// restated structurally so this module stays free of broadcast imports.
+export interface PlayMixDrop {
+  effect: TransitionEffect;
+  reason: MixDropReason;
+  auto?: true;
+}
 
 interface PlayRecord {
   id: number;
@@ -19,81 +25,97 @@ interface PlayRecord {
   requestedBy: string | null;
   showId: string | null;
   showName: string | null;
+  // The seam record (#1829) — all null on rows written before it existed.
+  transition: string | null;            // seam label into this play, as armed
+  transitionAsk: string | null;         // the DJ's ask on this pick, before any strip
+  transitionDrops: PlayMixDrop[] | null; // armed gestures a strip took back
 }
 
-export type PlayWrite = Omit<PlayRecord, 'id'>;
+// The seam fields are optional on write so a caller that predates them (or a
+// test) still records a play; absent is stored as NULL.
+export type PlayWrite = Omit<PlayRecord, 'id' | 'transition' | 'transitionAsk' | 'transitionDrops'>
+  & Partial<Pick<PlayRecord, 'transition' | 'transitionAsk' | 'transitionDrops'>>;
 
 export function recordPlay(p: PlayWrite): void {
   requireDb().prepare(`
-    INSERT INTO plays (track_id, title, artist, album, played_at, source, requested_by, show_id, show_name)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO plays (track_id, title, artist, album, played_at, source, requested_by, show_id, show_name,
+                       transition, transition_ask, transition_drops)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     p.trackId, p.title, p.artist, p.album, p.playedAt,
     p.source, p.requestedBy, p.showId, p.showName,
+    p.transition ?? null, p.transitionAsk ?? null,
+    p.transitionDrops?.length ? JSON.stringify(p.transitionDrops) : null,
   );
 }
 
-// Last time each track went to air, keyed by track id AND by the lowercased
-// "title|artist" key (the same shape music/recency.ts trackKey builds, so a
-// duplicate copy of an aired song shares its twin's airing history instead of
-// reading as never-aired). Timestamps are epoch ms. played_at is an ISO-8601
-// string with a fixed Z offset (queue stamps toISOString), so SQL MAX() —
-// lexicographic on that shape — is chronological.
+// A stored drops column back to its array. A malformed value (a hand edit, a
+// truncated write) reads as no drops rather than failing the whole listing.
+function parseDrops(raw: string | null): PlayMixDrop[] | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter(d => d && typeof d.effect === 'string' && typeof d.reason === 'string') : null;
+  } catch {
+    return null;
+  }
+}
+
+// Last air time per track, keyed by id AND by recency.trackKey's lowercased
+// "title|artist", so a duplicate shares its twin's history. Epoch ms. played_at
+// is ISO-8601 with a fixed Z offset, so a lexicographic SQL MAX() is chronological.
 export interface LastAiredIndex {
   byId: Map<string, number>;
   byKey: Map<string, number>;
+  playStatsById: Map<string, TrackPlayStats>;
+  playStatsByKey: Map<string, TrackPlayStats>;
 }
 
-// Two queries, not one GROUP BY over (track_id, title, artist): each half is
-// covered by its own index from schema v20 (idx_plays_track_played /
-// idx_plays_key_played), so SQLite walks each in key order and reads MAX() off
-// the last row of every group instead of sorting the entire play history into a
-// temp b-tree twice. The combined grouping the single query used could be
-// served by neither index. Both maps are bounded by DISTINCT tracks, not by
-// row count, so a year of history costs the same memory as a week of it.
+// Two queries, not one GROUP BY over (track_id, title, artist): each half has its
+// own covering index from schema v20 that a combined grouping could not use.
 export function lastAiredIndex(): LastAiredIndex {
   const d = requireDb();
   const byId = new Map<string, number>();
   const byKey = new Map<string, number>();
+  const playStatsById = new Map<string, TrackPlayStats>();
+  const playStatsByKey = new Map<string, TrackPlayStats>();
 
   for (const r of d.prepare(`
-    SELECT track_id, MAX(played_at) AS last_at
+    SELECT track_id, COUNT(*) AS n, MAX(played_at) AS last_at
     FROM plays WHERE track_id IS NOT NULL AND track_id != '' GROUP BY track_id
-  `).all() as Array<{ track_id: string; last_at: string }>) {
+  `).all() as Array<{ track_id: string; n: number; last_at: string }>) {
     const at = Date.parse(r.last_at);
-    if (Number.isFinite(at)) byId.set(r.track_id, at);
+    if (!Number.isFinite(at)) continue;
+    byId.set(r.track_id, at);
+    playStatsById.set(r.track_id, { count: r.n, lastPlayedAtMs: at });
   }
 
   for (const r of d.prepare(`
-    SELECT title, artist, MAX(played_at) AS last_at
+    SELECT title, artist, COUNT(*) AS n, MAX(played_at) AS last_at
     FROM plays WHERE title IS NOT NULL AND title != '' GROUP BY title, artist
-  `).all() as Array<{ title: string; artist: string | null; last_at: string }>) {
+  `).all() as Array<{ title: string; artist: string | null; n: number; last_at: string }>) {
     const at = Date.parse(r.last_at);
     if (!Number.isFinite(at)) continue;
-    // GROUP BY is on the RAW columns while the key is lowercased+trimmed, so
-    // two casings of one title collapse here and the later (max) wins.
+    // GROUP BY is on the raw columns while the key is lowercased+trimmed, so two
+    // casings of one title collapse here and the later wins.
     const key = `${r.title.toLowerCase().trim()}|${(r.artist || '').toLowerCase().trim()}`;
     const prev = byKey.get(key);
     if (prev == null || at > prev) byKey.set(key, at);
+    const prevStats = playStatsByKey.get(key);
+    playStatsByKey.set(key, {
+      count: (prevStats?.count ?? 0) + r.n,
+      lastPlayedAtMs: Math.max(prevStats?.lastPlayedAtMs ?? 0, at),
+    });
   }
 
-  return { byId, byKey };
+  return { byId, byKey, playStatsById, playStatsByKey };
 }
 
-// Random sample of tracks the station has never aired, or last aired before
-// the cutoff — the library's unexplored shelf. Id-level only: a duplicate copy
-// whose twin aired can appear, and the caller's recency key filters catch it.
-// Sampled in two steps, and the split is the point. `SELECT t.* … ORDER BY
-// RANDOM()` materialised EVERY track row — outro_json, pace_json,
-// structure_json, vocal_ranges_json, lyric_excerpt and all — to keep 60 of
-// them, on the synchronous better-sqlite3 handle that also serves listener
-// polls (the failure mode #723 documented for stats()). The id pass reads one
-// indexed column and the row pass touches only the survivors.
-//
-// NOT EXISTS rather than a LEFT JOIN onto a grouped subquery: "never aired, or
-// last aired before the cutoff" is exactly "has no play at or after the
-// cutoff", which idx_plays_track_played answers per track without grouping the
-// whole plays table first.
+// Random sample of tracks never aired, or last aired before the cutoff. Id-level
+// only; the caller's recency key filters catch a duplicate whose twin aired.
+// Two steps on purpose: sampling ids first avoids materialising every fat row on
+// the synchronous handle that also serves listener polls (#723). NOT EXISTS lets
+// idx_plays_track_played answer per track without grouping the whole table.
 export function deepCutTracks(cutoffIso: string, limit: number): TrackRecord[] {
   const d = requireDb();
   const ids = (d.prepare(`
@@ -107,10 +129,37 @@ export function deepCutTracks(cutoffIso: string, limit: number): TrackRecord[] {
   const rows = d.prepare(
     `SELECT * FROM tracks WHERE id IN (${ids.map(() => '?').join(',')})`,
   ).all(...ids) as TrackRow[];
-  // IN () answers in storage order; restore the sampled order so the caller's
-  // slice is the random draw it asked for.
+  // IN () answers in storage order, so restore the sampled order or the caller's
+  // slice isn't the random draw it asked for.
   const byId = new Map(rows.map((r) => [r.id, r]));
   return ids.map((id) => byId.get(id)).filter((r): r is TrackRow => !!r).map(rowToTrack);
+}
+
+export interface TrackPlayStats {
+  count: number;
+  lastPlayedAtMs: number;
+}
+
+// Lifetime plays per artist, keyed by lowercased+trimmed name (the fold
+// lastAiredIndex's key half uses); there is no artist id to group on.
+export interface ArtistPlayStats {
+  count: number;
+  lastPlayedAtMs: number;
+}
+
+export function artistPlayIndex(): Map<string, ArtistPlayStats> {
+  const d = requireDb();
+  const out = new Map<string, ArtistPlayStats>();
+  for (const r of d.prepare(`
+    SELECT LOWER(TRIM(artist)) AS artist, COUNT(*) AS n, MAX(played_at) AS last_at
+    FROM plays WHERE artist IS NOT NULL AND TRIM(artist) != ''
+    GROUP BY LOWER(TRIM(artist))
+  `).all() as Array<{ artist: string; n: number; last_at: string }>) {
+    const at = Date.parse(r.last_at);
+    if (!Number.isFinite(at)) continue;
+    out.set(r.artist, { count: r.n, lastPlayedAtMs: at });
+  }
+  return out;
 }
 
 export function listPlays(opts: { limit?: number; offset?: number } = {}): { total: number; rows: PlayRecord[] } {
@@ -119,12 +168,14 @@ export function listPlays(opts: { limit?: number; offset?: number } = {}): { tot
   const offset = Math.max(opts.offset ?? 0, 0);
   const total = (d.prepare('SELECT COUNT(*) AS n FROM plays').get() as { n: number }).n;
   const rows = (d.prepare(`
-    SELECT id, track_id, title, artist, album, played_at, source, requested_by, show_id, show_name
+    SELECT id, track_id, title, artist, album, played_at, source, requested_by, show_id, show_name,
+           transition, transition_ask, transition_drops
     FROM plays ORDER BY id DESC LIMIT ? OFFSET ?
   `).all(limit, offset) as Array<{
     id: number; track_id: string | null; title: string | null; artist: string | null;
     album: string | null; played_at: string; source: string | null;
     requested_by: string | null; show_id: string | null; show_name: string | null;
+    transition: string | null; transition_ask: string | null; transition_drops: string | null;
   }>).map((r) => ({
     id: r.id,
     trackId: r.track_id,
@@ -136,8 +187,108 @@ export function listPlays(opts: { limit?: number; offset?: number } = {}): { tot
     requestedBy: r.requested_by,
     showId: r.show_id,
     showName: r.show_name,
+    transition: r.transition,
+    transitionAsk: r.transition_ask,
+    transitionDrops: parseDrops(r.transition_drops),
   }));
   return { total, rows };
 }
 
+// The plays since `sinceIso`, oldest first, carrying only what the Stats page's
+// weekly recap and most-played lists count. Two weeks is a few thousand rows.
+export interface PlayTally {
+  playedAt: string;
+  title: string | null;
+  artist: string | null;
+  requestedBy: string | null;
+}
 
+export function playsSince(sinceIso: string): PlayTally[] {
+  return (requireDb().prepare(`
+    SELECT played_at, title, artist, requested_by FROM plays
+    WHERE played_at >= ? ORDER BY played_at
+  `).all(sinceIso) as Array<{ played_at: string; title: string | null; artist: string | null; requested_by: string | null }>)
+    .map(r => ({ playedAt: r.played_at, title: r.title, artist: r.artist, requestedBy: r.requested_by }));
+}
+
+// Durable rollup of the seam record over the last `days` (the Stats panel's
+// Transitions card). Counted in JS over the window's rows rather than in SQL:
+// the drops column is a JSON list, and a week of plays is a few thousand rows.
+export interface TransitionStats {
+  days: number;
+  since: string;
+  seams: number;
+  bySeam: Record<string, number>;
+  asked: number;
+  byAsk: Record<string, number>;
+  dropped: number;
+  byReason: Partial<Record<MixDropReason, number>>;
+  byEffect: Partial<Record<TransitionEffect, Partial<Record<MixDropReason, number>>>>;
+}
+
+export function transitionStats(days = 7, now = Date.now()): TransitionStats {
+  const since = new Date(now - days * 86_400_000).toISOString();
+  const rows = requireDb().prepare(`
+    SELECT transition, transition_ask, transition_drops FROM plays
+    WHERE played_at >= ? AND (transition IS NOT NULL OR transition_ask IS NOT NULL OR transition_drops IS NOT NULL)
+  `).all(since) as Array<{ transition: string | null; transition_ask: string | null; transition_drops: string | null }>;
+  const out: TransitionStats = {
+    days, since, seams: 0, bySeam: {}, asked: 0, byAsk: {}, dropped: 0, byReason: {}, byEffect: {},
+  };
+  for (const r of rows) {
+    if (r.transition) {
+      out.seams++;
+      out.bySeam[r.transition] = (out.bySeam[r.transition] ?? 0) + 1;
+    }
+    if (r.transition_ask) {
+      out.asked++;
+      out.byAsk[r.transition_ask] = (out.byAsk[r.transition_ask] ?? 0) + 1;
+    }
+    for (const d of parseDrops(r.transition_drops) ?? []) {
+      out.dropped++;
+      out.byReason[d.reason] = (out.byReason[d.reason] ?? 0) + 1;
+      const per = (out.byEffect[d.effect] ??= {});
+      per[d.reason] = (per[d.reason] ?? 0) + 1;
+    }
+  }
+  return out;
+}
+
+export interface StoredTrackName {
+  title: string;
+  artist?: string;
+  album?: string;
+  source: 'library' | 'plays';
+}
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** tracks-row hit (a dir whose id came back) then the `plays` air snapshot.
+ *  Db closed/unavailable → empty map; names are a courtesy, not a guarantee. */
+export function storedTrackNames(ids: readonly string[]): Map<string, StoredTrackName> {
+  const out = new Map<string, StoredTrackName>();
+  if (ids.length === 0) return out;
+  let db: ReturnType<typeof requireDb> | null = null;
+  try { db = requireDb(); } catch { return out; }
+  for (const part of chunk(ids, 500)) {
+    const ph = part.map(() => '?').join(',');
+    try {
+      for (const r of db.prepare(`SELECT id, title, artist, album FROM tracks WHERE id IN (${ph})`).all(...part) as Array<{ id: string; title: string | null; artist: string | null; album: string | null }>) {
+        if (r.title) out.set(r.id, { title: r.title, artist: r.artist ?? undefined, album: r.album ?? undefined, source: 'library' });
+      }
+    } catch { /* keep what we have */ }
+    try {
+      // Newest play per id wins; ORDER BY id DESC on the rowid-ish key first,
+      // so a later row only overwrites an id it has not already resolved.
+      const rows = db.prepare(`SELECT track_id, title, artist, album, MAX(played_at) AS played_at FROM plays WHERE track_id IN (${ph}) GROUP BY track_id`).all(...part) as Array<{ track_id: string; title: string | null; artist: string | null; album: string | null }>;
+      for (const r of rows) {
+        if (r.title && !out.has(r.track_id)) out.set(r.track_id, { title: r.title, artist: r.artist ?? undefined, album: r.album ?? undefined, source: 'plays' });
+      }
+    } catch { /* keep what we have */ }
+  }
+  return out;
+}

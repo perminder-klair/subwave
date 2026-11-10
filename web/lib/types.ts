@@ -4,6 +4,13 @@
 
 export type StationLocale = 'en-GB' | 'en-US';
 
+/** GET /state's `streamIdleWindow`: the latest idle pause, as ages in ms when
+ *  the server answered. `endedMsAgo` is null while it lasts. */
+export interface IdleWindow {
+  startedMsAgo: number;
+  endedMsAgo: number | null;
+}
+
 /** `subsonic_id` drives MediaSession artwork via the `/api/cover/:id` proxy;
  *  jingles and scanning have no id. */
 export interface NowPlayingTrack {
@@ -22,9 +29,11 @@ export interface NowPlayingTrack {
 }
 
 export interface WeatherContext {
+  /** Simplified WMO: clear | cloudy | foggy | rainy | snowy | stormy | unknown. */
   condition?: string;
   temp?: number;
   location?: string;
+  isDay?: boolean;
 }
 
 export interface FestivalContext {
@@ -33,6 +42,10 @@ export interface FestivalContext {
 }
 
 export interface TimeContext {
+  /** The controller's day period (context.ts PERIOD_TABLE): early-morning,
+   *  morning, midday, afternoon, drive-time, evening, late-evening,
+   *  after-hours. */
+  period?: string;
   show?: string;
   vibe?: string;
 }
@@ -147,14 +160,31 @@ export interface QueueEntry {
   album?: string;
   subsonic_id?: string;
   requestedBy?: string;
-  /** ISO timestamp present on history entries. */
+  /** ISO timestamp on older payloads; the live controller sends the three
+   *  below instead. All are live-edge. */
   t?: string;
+  /** When the track started airing; set once it reaches the air. */
+  startedAt?: string;
+  endedAt?: string;
+  /** When it joined the queue — earlier than it aired, often by minutes. */
+  queuedAt?: string;
   /** True once the controller has handed this item to Liquidsoap. */
   sent?: boolean;
   /** The track arrives via a pre-rendered stem blend rather than a plain
    *  crossfade. Stamped once the seam's clip is queued, so it's definitive,
    *  not a prediction (#1257). */
   stemSeam?: boolean;
+  /** The operator block this row was queued as part of (#1622 FR 4) — a whole
+   *  album, or a run of tracks for an artist show. Identity only: nothing on
+   *  the air path branches on it. `index`/`size` are stamped from the plan, so
+   *  a half-played block still reads "9 of 11". */
+  block?: { id: string; label: string; index: number; size: number };
+  /** Current and upcoming rows: playable seconds after silence trim and any
+   *  stamped cue, the same measure as /now-playing's. Absent when unmeasured. */
+  duration?: number;
+  /** Upcoming rows: the forecast start, live-edge like `startedAt`. Absent
+   *  when the on-air clock or any length ahead is unknown. */
+  airsAt?: string;
   [key: string]: unknown;
 }
 
@@ -171,6 +201,7 @@ export interface RequestTrack {
 export interface RequestResult {
   success: boolean;
   pending?: boolean;
+  outcome?: 'matched' | 'substituted' | 'cooldown' | 'already-queued' | 'chat' | 'no-match' | 'unsupported' | 'error';
   ack?: string;
   track?: RequestTrack;
   queuePosition?: number;
@@ -180,33 +211,43 @@ export interface RequestResult {
   status?: RequestStatus;
 }
 
-export interface DjLogEntry {
-  t?: string;
-  text?: string;
-  [key: string]: unknown;
-}
-
-/** `/state` response. */
+/** `/state` response. The booth log (`djLog`) is operator diagnostics and is
+ *  not part of this public read; older controllers still send it. */
 export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
-  djLog: DjLogEntry[];
   timezone?: string;
   locale?: StationLocale;
   /** Operator player defaults. `skin` indexes components/skins;
    *  `tuneInOverlay` gates the tap-to-tune gate (default on). */
   ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
+  /** Whether the operator has the Lyrics panel on. Absent on an older controller. */
+  lyrics?: { enabled?: boolean };
   /** Private-station flags (#478) — booleans only, never credentials.
    *  `privatePlayer` swaps the player pages for a "private station" screen;
    *  `listenerAuth` means the mounts demand the shared listener password
    *  before tune-in. Absent on older controllers = fully public. */
   privacy?: { privatePlayer?: boolean; listenerAuth?: boolean };
+  /** The programme is held by the idle gate (no listeners). */
+  streamIdle?: boolean;
+  /** The latest idle pause as ages in ms when the server answered; null
+   *  before the first since the controller started or once the mounts
+   *  restarted, absent on an older one (#2072, lib/idleSkip.ts). useStationFeed's copy drops it: the ages
+   *  change on every poll. */
+  streamIdleWindow?: IdleWindow | null;
 }
 
 /** `role` arrives as 'segment' for spoken bits and is reclassified to 'voice'
  *  by `turnClass()`. */
 export type SessionRole = 'segment' | 'dj' | 'track' | 'system' | string;
 
+/** After a hard roll, GET /session briefly leads with the previous show's
+ *  tail (`meta.carried: true`, `meta.carriedFrom`, `meta.personaName`) and
+ *  one `role: 'event'`, `kind: 'show-boundary'` separator whose
+ *  `meta.boundary` is `{ at, show, persona, fromShow, fromSessionId }` (#1690).
+ *  See isCarriedTurn / isShowBoundary in lib/sessionFeed.
+ *  Spoken turns also carry `meta.airedAt` (the live-edge moment the words
+ *  began, #1382) and `meta.durationMs` (the clip's length, #1848). */
 export interface SessionTurn {
   t?: string | number;
   role?: SessionRole;

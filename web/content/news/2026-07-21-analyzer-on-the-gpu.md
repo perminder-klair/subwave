@@ -30,6 +30,6 @@ Open the [Library page](/news/your-dj-knows-your-library) in admin. Next to the 
 
 ## Why it helps
 
-A big collection gets its fingerprints without a week of pegged cores, and the scan never steals cycles from the broadcast. Turn on quiet times, kick off a full rescan, and the station does the homework in its own gaps. It is the same trade [Chatterbox made a month ago](/news/chatterbox-on-the-gpu), this time for the analysis side.
+A big collection gets its model-heavy fingerprint and vocal work off the CPU. Decode and the baseline acoustic measurements still use CPU time, so quiet times remains the way to keep a full rescan from competing with the broadcast. Sounds-like-only backfills skip those already-current baseline measurements and feed each track's windows to CUDA together. It is the same trade [Chatterbox made a month ago](/news/chatterbox-on-the-gpu), this time for the analysis side.
 
 *Update: running the all-in-one image instead of the compose stack? It got [the same CUDA path](/news/one-click-on-the-gpu) a few days later.*

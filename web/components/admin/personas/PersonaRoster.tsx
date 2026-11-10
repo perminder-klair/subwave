@@ -1,20 +1,35 @@
 'use client';
-// One "broadcast slate" card per persona, matching the show cards on /admin/shows.
-// The whole card is the edit target; adding lives in the hero's "+ Add persona".
-import { Users } from 'lucide-react';
+import { useRef } from 'react';
+import { Upload, Users } from 'lucide-react';
 import { API_BASE, PERSONA_MAX } from './constants';
 import { initialsFor } from './helpers';
-import type { PersonaRosterEntry } from './roster-order';
+import { engineChipLabel, isInheritEngine } from '../tts/engineMeta';
+import type { PersonaRosterEntry, PersonaSort } from './roster-order';
+import { PERSONA_SORTS, PERSONA_SORT_LABELS } from './roster-order';
 import { cn } from '../../../lib/cn';
 import { useRosterView } from '../../../lib/adminView';
 import { Btn, Pill, MetaChip } from '../ui';
 import PersonaTable from './PersonaTable';
 import RosterViewToggle from '../RosterViewToggle';
+import RosterToolbar from '../RosterToolbar';
 
 interface PersonaRosterProps {
   // Already in display order — the panel owns the ordering so the editor's
   // "n of m" counter can name the same position the operator clicked.
   roster: PersonaRosterEntry[];
+  /** The roster BEFORE filtering — the "n of m" count and the cap read this,
+   *  so a filtered view never reports the station as having fewer DJs. */
+  total: number;
+  sort: PersonaSort;
+  onSortChange: (v: PersonaSort) => void;
+  query: string;
+  onQueryChange: (v: string) => void;
+  /** Every tag in use across the roster. */
+  tags: string[];
+  selectedTags: string[];
+  onTagsChange: (next: string[]) => void;
+  filtered: boolean;
+  onClearFilters: () => void;
   // The admin-selected default — gets the "default" pill.
   activePersonaId: string;
   // Equals activePersonaId unless a show overrides it.
@@ -30,25 +45,30 @@ interface PersonaRosterProps {
   // null = still loading, button disabled.
   communityCount: number | null;
   onCommunity: () => void;
+  // Persona bundle (#1620) — the upload half of the editor's Export bundle.
+  importing: boolean;
+  onImportBundle: (file: File) => void;
 }
 
 export function PersonaRoster({
-  roster, activePersonaId, onAirPersonaId, avatarTick, isPersonaInvalid,
+  roster, total, sort, onSortChange, query, onQueryChange,
+  tags, selectedTags, onTagsChange, filtered, onClearFilters,
+  activePersonaId, onAirPersonaId, avatarTick, isPersonaInvalid,
   onOpenPrompt, onAdd, onSelect, communityCount, onCommunity,
+  importing, onImportBundle,
 }: PersonaRosterProps) {
   // Cards (default) or a dense table. Remembered per surface in localStorage.
   const [view, setView] = useRosterView('personas');
+  const bundleRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <section className="grid gap-4">
-      {/* On phones the actions take a full row of their own under the count:
-          squeezed onto the count's line they run past the right edge. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="caption">
-          roster · {roster.length} / {PERSONA_MAX} · on air first · then A–Z
+          roster · {total} / {PERSONA_MAX} · on air first · then {PERSONA_SORT_LABELS[sort].toLowerCase()}
         </span>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-          <RosterViewToggle view={view} onChange={setView} />
+          {total <= 5 && <RosterViewToggle view={view} onChange={setView} />}
           <Btn
             className="min-h-9 sm:min-h-0"
             onClick={onCommunity}
@@ -60,12 +80,63 @@ export function PersonaRoster({
               <span className="ml-1 text-vermilion">{communityCount}</span>
             )}
           </Btn>
+          {/* Reset the file input so selecting the same file fires another change event. */}
+          <input
+            ref={bundleRef}
+            type="file"
+            accept=".zip,application/zip"
+            aria-label="Persona bundle zip"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) onImportBundle(file);
+            }}
+          />
+          <Btn
+            className="min-h-9 sm:min-h-0"
+            onClick={() => bundleRef.current?.click()}
+            disabled={importing || total >= PERSONA_MAX}
+            title={total >= PERSONA_MAX
+              ? 'The roster is full'
+              : 'Import a persona bundle zip — its voice sample and jingles come with it'}
+          >
+            <Upload size={14} /> {importing ? 'Importing…' : 'Import'}
+          </Btn>
           <Btn className="min-h-9 sm:min-h-0" onClick={onOpenPrompt}>System prompt</Btn>
-          <Btn className="min-h-9 sm:min-h-0" tone="accent" onClick={onAdd} disabled={roster.length >= PERSONA_MAX}>
+          <Btn className="min-h-9 sm:min-h-0" tone="accent" onClick={onAdd} disabled={total >= PERSONA_MAX}>
             + Add persona
           </Btn>
         </div>
       </div>
+      {total > 5 && (
+        <RosterToolbar<PersonaSort>
+          query={query}
+          onQueryChange={onQueryChange}
+          noun="DJs"
+          sort={sort}
+          onSortChange={onSortChange}
+          sortOptions={PERSONA_SORTS.map(k => [k, PERSONA_SORT_LABELS[k]] as const)}
+          tags={tags}
+          selectedTags={selectedTags}
+          onTagsChange={onTagsChange}
+          filtered={filtered}
+          onClear={onClearFilters}
+          view={view}
+          onViewChange={setView}
+          summary={filtered ? `${roster.length} of ${total}` : undefined}
+        />
+      )}
+
+      {total > 0 && roster.length === 0 && (
+        <div className="card card-body text-[13px] text-muted">
+          No DJs match the current filters.{' '}
+          <button type="button" className="font-bold text-vermilion underline" onClick={onClearFilters}>
+            Clear filters
+          </button>
+        </div>
+      )}
+
       {view === 'list' && roster.length > 0 && (
         <PersonaTable
           entries={roster}
@@ -115,8 +186,6 @@ export function PersonaRoster({
             />
 
             <div className="card-body flex gap-3.5">
-              {/* Initials sit behind the image so a broken avatar still shows a
-                  readable placeholder. */}
               <span className="relative grid size-12 flex-none place-items-center overflow-hidden border border-ink bg-[var(--ink-softer)]">
                 <span className="text-[13px] font-extrabold text-muted">{initialsFor(p.name)}</span>
                 {src && (
@@ -129,8 +198,6 @@ export function PersonaRoster({
                 )}
               </span>
 
-              {/* body — text stack + right rail as siblings, so the taller rail
-                  never inflates the name row and pushes the facets down */}
               <div className="flex min-w-0 flex-1 items-start gap-3">
                 <div className="grid min-w-0 flex-1 gap-2.5">
                   <div className="min-w-0">
@@ -146,10 +213,13 @@ export function PersonaRoster({
                   </div>
 
                   <div className="flex flex-wrap gap-1">
+                    {(p.tags || []).map(t => (
+                      <MetaChip key={`tag-${t}`} accent>#{t}</MetaChip>
+                    ))}
                     <MetaChip>{p.frequency}</MetaChip>
                     {p.scriptLength !== 'concise' && <MetaChip>{p.scriptLength}</MetaChip>}
-                    <MetaChip>{p.tts.engine}</MetaChip>
-                    {p.tts.engine !== 'piper' && p.tts.voice.trim() && (
+                    <MetaChip>{engineChipLabel(p.tts.engine)}</MetaChip>
+                    {p.tts.engine !== 'piper' && !isInheritEngine(p.tts.engine) && p.tts.voice.trim() && (
                       <MetaChip className="max-w-[140px] truncate">{p.tts.voice.trim()}</MetaChip>
                     )}
                   </div>
@@ -159,7 +229,6 @@ export function PersonaRoster({
                   </p>
                 </div>
 
-                {/* right rail — status, skill count, edit affordance */}
                 <div className="flex flex-none flex-col items-end gap-1.5 text-right">
                   {!valid && (
                     <Pill className="border-[var(--danger)] text-[var(--danger)]">incomplete</Pill>

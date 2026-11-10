@@ -1,9 +1,5 @@
-// Pure agent-strategy resolver — which structured-output path a leg takes,
-// given its provider capabilities, whether a schema is requested, and how many
-// discovery tools are available. Kept side-effect-free (only imports the pure
-// capabilities lookup) so the unit test can pin the routing table without
-// dragging in settings/config/ai — a wiring slip (e.g. Ollama routed to native
-// = 0/3 empty) fails an assert before it ever reaches a model.
+// Pure routing from capabilities, output schema and discovery tools. Keep settings
+// and SDK imports out so unit tests can detect wrong provider routing without a model.
 
 import { needsToolCallObject } from '../provider/capabilities.js';
 

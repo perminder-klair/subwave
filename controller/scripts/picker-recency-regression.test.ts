@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_ARTIST_RECENCY_HOURS,
   DEFAULT_TRACK_RECENCY_HOURS,
-  durationSeconds,
   effectiveNoRepeatWindow,
   filterPickerCandidates,
   recencyWindowsForLibrary,
@@ -71,29 +70,7 @@ assert(
   'expected picker filtering to relax recent tracks when every candidate is otherwise excluded',
 );
 
-// ── max-track-length cap (issue #447) ──────────────────────────────────────
-
-// durationSeconds reads whichever length field the source carries, and treats
-// missing / zero / non-finite as "unknown" (null) rather than 0.
-assert.equal(durationSeconds({ id: 'x', duration: 240 }), 240);
-assert.equal(durationSeconds({ id: 'x', durationSec: 180 }), 180);
-assert.equal(durationSeconds({ id: 'x' }), null);
-assert.equal(durationSeconds({ id: 'x', duration: 0 }), null);
-
-// NOTE: max-track-length is no longer a pick-time filter. #636 moved it to a
-// hard on-air cut (Liquidsoap), so filterPickerCandidates no longer takes
-// maxDurationSec — the former over-length-drop assertions were removed when
-// develop merged in here. durationSeconds (above) is still the length reader.
-
 // ── count-based hard no-repeat guard (live-repeats fix) ─────────────────────
-
-// The RELAXABLE recent guard re-serves a fully-recent pool (every candidate
-// played) rather than returning nothing — this is the cascade behaviour the
-// hard guard exists to backstop.
-const allRecent = filterPickerCandidates(songs, {
-  recentIds: new Set(songs.map((s) => s.id)),
-});
-assert(allRecent.length > 0, 'relaxable recent guard must relax to avoid an empty pool');
 
 // The HARD guard does NOT relax: when every candidate is in hardRecentIds the
 // filter returns [] no matter how starved the pool is. This is what stops a

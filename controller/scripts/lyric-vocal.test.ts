@@ -1,6 +1,6 @@
 // Unit tests for the lyric→vocal derivation (music/lyric-vocal.ts): the
 // deterministic vocal-activity path built from Navidrome timed lyrics (#1125).
-// Run: `tsx scripts/lyric-vocal.test.ts`.
+// Run: `npm test -- lyric-vocal`.
 //
 // node:assert-via-tsx style, matching scripts/bed-policy.test.ts.
 
@@ -36,12 +36,12 @@ for (const marker of ['Instrumental', '[au: instrumental]', '(instrumental)', 'I
 }
 
 // A song that merely SINGS the word must NOT be caught by the marker regex.
-assert.notEqual(
+assert.notDeepEqual(
   deriveVocalFromLyrics({
     synced: true,
     lines: [{ startMs: 5000, text: 'this is an instrumental kind of love' }],
-  })?.instrumental,
-  true,
+  })?.vocalRanges,
+  [],
 );
 
 // ── synced lyrics → ranges + intro cue ───────────────────────────────────────

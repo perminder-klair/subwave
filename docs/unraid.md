@@ -169,8 +169,20 @@ container, which **starts by default** (a lean, multi-arch image, so it also
 runs on arm64 Unraid boxes). On the split stack it comes up with the rest of the
 services; on the **all-in-one** image it's baked in-process. Nothing to enable —
 just run **admin → Library → Rescan** (tick *re-analyse*). If the **acoustic
-engine reads "off"**, the analyzer container was stopped — `Pull & Up` (split
-stack) or check its logs.
+engine reads "off"** on the split stack, first check whether you turned it off
+on purpose: `ANALYZER_REPLICAS=0` (below) keeps the container gone across every
+`Pull & Up`. If you did not, the container stopped on its own — `Pull & Up`
+brings it back, or check its logs.
+
+**Don't want it at all?** On the split stack, add `ANALYZER_REPLICAS=0` to your
+**.env**, **Save**, then **Pull & Up** — the container is removed and stays gone.
+That's the one to use if analysis runs on another machine (point `ANALYZE_URL` at
+it). **Only `0` and `1` are valid** — the service has a fixed `container_name`,
+so `2` fails every Compose command rather than scaling. On the **all-in-one**
+image the variable does nothing at all (there is no analyzer service; the
+supervisor logs a warning if you set `0`) — to stop analysis there, blank the
+`ANALYZE_PYTHON` variable instead. Full notes in
+[`tts-heavy.md`](tts-heavy.md#turning-the-analyzer-off).
 
 **"Sounds-like" + vocal ranges (the heavy dimensions)** need a CPU-torch stack
 that isn't in the lean image (the `-heavy` images are ~1.9 GB):
@@ -209,7 +221,11 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
      Driver*) and reboot if it asks. Note your GPU's UUID from
      **Settings → Nvidia Driver**.
   2. **Docker** tab → **subwave** → **Edit** (*Advanced View* on).
-  3. **Repository** → `ghcr.io/perminder-klair/subwave-aio-cuda:latest`.
+  3. **Repository** → `ghcr.io/perminder-klair/subwave-aio-cuda:<arch>`, with
+     the tag named for your card's GPU architecture: `:pascal` for a GTX
+     10-series, `:ampere` for an RTX 30-series, and so on
+     ([every tag](internals/infrastructure.md#aio-cuda-tags)). `:latest` works
+     only on Turing (RTX 20-series) and newer.
   4. **Extra Parameters** → append `--runtime=nvidia` (keep the existing
      `--add-host` value; the field takes both).
   5. Set the two variables the template already ships (both blank by default):
@@ -329,7 +345,7 @@ stack → edit `.env` and **Pull & Up**.
 
 ### ⚠️ The one gotcha: don't buffer the audio stream
 
-> ⚠️ **Turn response buffering OFF for `/stream.mp3`.** The bundled Caddy serves
+> ⚠️ **Turn response buffering OFF for `/stream*`.** The bundled Caddy serves
 > the stream unbuffered (`flush_interval -1`). A front proxy that buffers — and
 > **NPM buffers by default** — holds the live audio back, adding latency and
 > stutter or stalling playback outright. Exempt the stream path; leave everything
@@ -340,7 +356,7 @@ location block for the stream (the rest of the site keeps NPM's normal proxying
 from the main tab):
 
 ```nginx
-location /stream.mp3 {
+location ^~ /stream {
     proxy_pass http://YOUR-UNRAID-IP:7700;
     proxy_buffering off;
     proxy_cache off;
@@ -350,9 +366,9 @@ location /stream.mp3 {
 
 The same one knob in the other proxies:
 
-| Proxy | What to set on `/stream.mp3` |
+| Proxy | What to set on `/stream*` |
 |---|---|
-| **raw nginx** | `proxy_buffering off;` (+ a long `proxy_read_timeout`) in a `location /stream.mp3` block |
+| **raw nginx** | `proxy_buffering off;` (+ a long `proxy_read_timeout`) in a `location ^~ /stream` block |
 | **Caddy** | `reverse_proxy … { flush_interval -1 }` on the stream path |
 | **Traefik** | nothing — Traefik doesn't buffer responses by default |
 
@@ -364,10 +380,11 @@ AIO's internal Caddy, run the split-container stack (Option 2) with
 There `web` / `controller` / `broadcast` bind host ports themselves
 (`7700` / `7701` / `7702`) — but the web image is still baked for same-origin
 `/api` + `/stream.mp3`, so **your proxy then has to replicate the route table**
-(`/` → web, `/api/*` → controller, `/stream.mp3` → broadcast, unbuffered) on one
-hostname. That's more proxy config, not less — only worth it if you specifically
-want the bundled Caddy out of the path. For most people the single-upstream setup
-above is the easier win.
+(`/` → web, stripped `/api/*` plus `/listen.*` → controller, `/stream*` →
+broadcast unbuffered, and `/api/listener-auth` blocked) on one hostname. Use the
+complete [reverse-proxy recipes](reverse-proxy.md). That's more proxy config,
+not less — only worth it if you specifically want the bundled Caddy out of the
+path. For most people the single-upstream setup above is the easier win.
 
 ## Notes
 
@@ -377,7 +394,25 @@ above is the easier win.
   proxy](#putting-it-behind-your-own-reverse-proxy) above — one upstream, plus
   the one stream-buffering gotcha.
 - **Updates:** one-click → Unraid's normal **Check for Updates** / **Apply
-  Update**. Compose stack → stack menu → **Pull & Up**.
+  Update**. Compose stack → stack menu → **Pull & Up**. To pin or roll back to
+  a specific release, point the container's **Repository** field at a tag
+  (`ghcr.io/perminder-klair/subwave-aio:1.4.2`) instead of `:latest`.
+- **Max concurrent listeners:** **admin → Settings → Broadcast & mixer → Max
+  listeners**, then restart the container so Icecast re-renders its config.
+  This used to be reachable only through `ICECAST_MAX_CLIENTS`, which the
+  one-click template does not expose and the AIO image has no `.env` for —
+  so on Unraid it was unsettable. It is a station setting now. (Adding
+  `ICECAST_MAX_CLIENTS` as a custom container variable still overrides the
+  field; the broadcast log names which source it used on every boot.)
+- **Listener country in Stats:** **admin → Settings → Broadcast & mixer → Listener
+  country**. `CF-IPCountry` only exists behind Cloudflare, so a station reached
+  over the LAN or a plain reverse proxy shows sessions with no geography. Name
+  your proxy's own country header there, or point the same card at an offline
+  `.mmdb` database (put it under the appdata path — the container already sees
+  it). Both are settings rather than variables for the same reason max listeners
+  is: the AIO image has no `.env`. `GEOIP_DB_PATH` as a custom container
+  variable still overrides the field. Full recipe in
+  [`deployment.md`](deployment.md#listener-country-on-the-stats-page).
 - **Backups:** everything lives under the appdata path
   (`/mnt/user/appdata/subwave`) — settings, library cache, archives, voices.
   Back that path up (it's already on your pool/array).

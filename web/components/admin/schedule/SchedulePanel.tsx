@@ -1,16 +1,11 @@
 'use client';
 
-// The Rundown — /admin/shows/schedule. Renders the controller's 7×24 `schedule`
-// grid from GET /settings; every edit is local until PUT /schedule saves the week.
-//
-// Takeovers (#930) live on the dash, not here. This screen only READS the pin in
-// force: it outranks the grid in the controller's resolveActiveShow, so the On air
-// cell would otherwise name a show that is not on the air.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../../lib/admin-query';
 import { BOARD_HOUR_PX, useBoardDensity } from '../../../lib/adminView';
 import { notify, errorMessage } from '../../../lib/notify';
 import { fmtClock, normalizeStationLocale, zonedDayHour } from '../../../lib/format';
@@ -28,15 +23,27 @@ import SaveBar from './SaveBar';
 import EditorBand, { LineEditor } from './EditorBand';
 import type { EditorLine, Suggestion } from './EditorBand';
 import { ColorChip, Mu } from './bits';
-import type { Block, Schedule, ScheduleShow } from './lib';
+import type { Block, DragPlan, Schedule, ScheduleShow } from './lib';
 import {
-  DAYS, SHOW_COLORS, blockAhead, blockAt, bookedHours, cloneWeek, dayBlocks,
+  DAYS, SHOW_COLORS, applyRunDrag, blockAhead, blockAt, bookedHours, cloneWeek, dayBlocks,
   dayName, diffCells, diffRanges, emptyWeek, fillDayToggle, fillHourToggle,
   hhmm, resizeBlock, setRange, showHours, weekOrders,
 } from './lib';
+import { settingsKeys, useSettingsQuery } from '../settings/queries';
+import { scheduleKeys, useScheduleOverrideQuery } from './queries';
+import { isDefaultTakeover, takeoverShowId } from '@/lib/schemas.generated';
 
 /** The airtime-bar tick — hours a show "should" get in a week. */
 const WEEKLY_TARGET = 12;
+
+function scheduleWriteError(error: unknown): string {
+  if (error instanceof AdminResponseError) {
+    return typeof error.body.error === 'string' && error.body.error
+      ? error.body.error
+      : `failed (${error.status})`;
+  }
+  return errorMessage(error);
+}
 
 interface Persona {
   id: string;
@@ -54,15 +61,7 @@ interface SettingsResponse {
   serverTimezone?: string;
 }
 
-/** Timed takeover (#930): one show pinned over the grid until `expiresAt`. */
-interface ScheduleOverride {
-  showId: string;
-  startedAt: number;
-  expiresAt: number;
-}
-
-// Legacy singular fields still hydrate as one-element lists (same coercion as
-// ShowsPanel).
+// Legacy singular fields hydrate as one-element lists (same coercion as ShowsPanel).
 function hydrateShow(raw: Record<string, unknown>): ScheduleShow | null {
   const id = typeof raw.id === 'string' ? raw.id : '';
   if (!id) return null;
@@ -83,29 +82,33 @@ function hydrateShow(raw: Record<string, unknown>): ScheduleShow | null {
 export default function SchedulePanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const router = useRouter();
-  const [err, setErr] = useState<string | null>(null);
   const [shows, setShows] = useState<ScheduleShow[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [serverSchedule, setServerSchedule] = useState<Schedule | null>(null);
   const [tz, setTz] = useState<string | undefined>(undefined);
   const [locale, setLocale] = useState<StationLocale>(normalizeStationLocale(undefined));
-  const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
+  const queryEnabled = hydrated && !needsAuth;
+  const settingsQuery = useSettingsQuery<SettingsResponse>({
+    adminFetch,
+    enabled: queryEnabled,
+    refetchOnMount: 'always',
+  });
+  const overrideQuery = useScheduleOverrideQuery(adminFetch, queryEnabled);
+  const err = settingsQuery.error && !schedule ? errorMessage(settingsQuery.error) : null;
 
   // Board columns collapsed to rails, keyed by storage day (0=Sun..6=Sat).
   const [folded, setFolded] = useState<Record<number, boolean>>({});
-  // The line editor sits above the fold, so a pick from deep in the board has to
-  // scroll it into view.
+  // The line editor sits above the fold, so a pick has to scroll it into view.
   const bandRef = useRef<HTMLDivElement>(null);
 
   const [line, setLine] = useState<EditorLine>({ day: 6, start: 16, end: 18 });
   const [lineShowId, setLineShowId] = useState<string | null>(null);
   const [lineDays, setLineDays] = useState<number[]>([6]);
 
-  // The armed show — the shelf chip acting as a brush (#1204). Its own state, not
-  // `lineShowId`: that is set by every card click, so hanging the day/hour bulk
-  // fills off it would let a stray day-header click rewrite 24 hours.
+  // The armed show — the shelf chip acting as a brush (#1204). Deliberately not
+  // `lineShowId`, which every card click sets: bulk fills must not ride on that.
   const [armedShowId, setArmedShowId] = useState<string | null>(null);
   const [density, setDensity] = useBoardDensity();
 
@@ -113,19 +116,16 @@ export default function SchedulePanel() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
-  // The live takeover (#930), read-only here — pinning and cancelling live on the dash.
-  const [override, setOverride] = useState<ScheduleOverride | null>(null);
+  // The live takeover (#930), read-only here; pin/cancel live on the dash.
+  const override = overrideQuery.data?.override ?? null;
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
 
-  const load = async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as SettingsResponse;
+  const applySettings = (j: SettingsResponse) => {
+    if (!j.values) return;
       const week = emptyWeek();
       const sched = j.values?.schedule || {};
       for (let d = 0; d < 7; d++) {
@@ -141,35 +141,30 @@ export default function SchedulePanel() {
       setLocale(normalizeStationLocale(j.values?.locale));
       setSchedule(week);
       setServerSchedule(cloneWeek(week));
-      setErr(null);
       const { dow, hour } = zonedDayHour(new Date(), j.values?.timezone || j.serverTimezone);
       const b = blockAt(week, dow, hour);
       setLine({ day: b.day, start: b.start, end: b.start + b.span });
       setLineDays([b.day]);
       setLineShowId(b.showId ?? loaded[0]?.id ?? null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
   };
 
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    load();
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+  const load = async () => {
+    const result = await settingsQuery.refetch();
+    if (result.data && !result.error && !schedule) applySettings(result.data);
+  };
 
+  // A query refresh may update roster metadata but never this mount's unsaved week.
+  const settingsAppliedRef = useRef(false);
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/schedule');
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { override?: ScheduleOverride | null };
-        if (j.override) setOverride(j.override);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (
+      !settingsQuery.data
+      || settingsQuery.error
+      || settingsQuery.isFetching
+      || settingsAppliedRef.current
+    ) return;
+    settingsAppliedRef.current = true;
+    applySettings(settingsQuery.data);
+  }, [settingsQuery.data, settingsQuery.error, settingsQuery.isFetching]);
 
   const { dow: nowDay, hour: nowHour } = zonedDayHour(now, tz);
   const stationMinute = useMemo(() => {
@@ -201,15 +196,18 @@ export default function SchedulePanel() {
   const dirty = schedule && serverSchedule ? diffCells(schedule, serverSchedule) : 0;
 
   const liveOverride = override && override.expiresAt > now.getTime() ? override : null;
-  const pinnedShow = liveOverride ? showById(liveOverride.showId) : null;
+  const pinnedShowId = takeoverShowId(liveOverride);
+  const pinnedShow = pinnedShowId ? showById(pinnedShowId) : null;
+  const defaultTakeover = isDefaultTakeover(liveOverride);
+  // A takeover owns this header only when it resolves to a roster show or Default
+  // programming; anything else voids it, matching getScheduleOverride (#1507).
+  const airingTakeover = liveOverride && (pinnedShow || defaultTakeover) ? liveOverride : null;
 
-  // Resolve through the roster rather than trusting the id: a show deleted in
-  // another tab would leave a dangling brush that writes an unrenderable id.
+  // Resolve through the roster: a show deleted in another tab leaves a dangling brush.
   const armedShow = armedShowId ? showById(armedShowId) : null;
   const armedId = armedShow?.id ?? null;
 
-  /** The sentence editor follows the brush, so the two editing paths never
-   *  disagree about which show is in hand. */
+  /** The sentence editor follows the brush so the two editing paths agree. */
   const armShow = (id: string) => {
     setArmedShowId(cur => (cur === id ? null : id));
     setLineShowId(id);
@@ -218,9 +216,8 @@ export default function SchedulePanel() {
   useEffect(() => {
     if (!armedId) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      // A Radix layer that consumed this Escape preventDefaults it from a
-      // document-capture listener before this bubble listener runs — closing an
-      // overlay must not also drop the brush.
+      // Radix consumes Escape in a capture listener; closing an overlay must
+      // not also drop the brush.
       if (e.key === 'Escape' && !e.defaultPrevented) setArmedShowId(null);
     };
     window.addEventListener('keydown', onKeyDown);
@@ -264,12 +261,7 @@ export default function SchedulePanel() {
     setSchedule(setRange(schedule, days, line.start, line.end, value));
   };
 
-  // Booking was the one write on this board that confirmed nothing. Filling a
-  // day, filling an hour, resizing and removing all toast; the single most
-  // common action did not, so the brush — the only booking path a finger or a
-  // keyboard has — landed silently. Sonner's toast is also the live region, so
-  // that silence was a screen reader hearing nothing at all for the write it is
-  // most likely to make. Same sentence shape as its siblings, deliberately.
+  // Toasts here are the live region, so every booking must confirm like its siblings.
   const dropShow = (b: Block, showId: string) => {
     if (!schedule || !showById(showId)) return;
     setSchedule(setRange(schedule, [b.day], b.start, b.start + b.span, showId));
@@ -281,8 +273,7 @@ export default function SchedulePanel() {
     );
   };
 
-  // Vacated hours fall silent; gained ones overwrite whatever was there, so a run
-  // grown into its neighbour takes those hours rather than stopping short.
+  // Vacated hours fall silent; gained ones overwrite, so a run grows into its neighbour.
   const resizeRun = (b: Block, start: number, end: number) => {
     if (!schedule || !b.showId) return;
     setSchedule(resizeBlock(schedule, b, start, end));
@@ -294,8 +285,23 @@ export default function SchedulePanel() {
     );
   };
 
-  // The removed line lands in the order desk with the show preselected, so a
-  // mis-click is one "Add to schedule" away from restored.
+  const dragRun = (b: Block, plan: DragPlan) => {
+    if (!schedule || !b.showId) return null;
+    const r = applyRunDrag(schedule, b, plan);
+    if (r.week === schedule) return null;
+    setSchedule(r.week);
+    setLine({ day: b.day, start: r.start, end: r.end });
+    setLineDays([b.day]);
+    setLineShowId(b.showId);
+    notify.ok(
+      `“${showById(b.showId)?.name ?? 'show'}” now ${dayName(b.day)} ${hhmm(r.start)} – ${hhmm(r.end)}`
+      + (r.shifted ? ` (${r.shifted} other show${r.shifted === 1 ? '' : 's'} shifted)` : '')
+      + ' — unsaved until you save the week.',
+    );
+    return r;
+  };
+
+  // The removed line lands in the order desk preselected, so a mis-click is one undo away.
   const removeRun = (b: Block) => {
     if (!schedule || !b.showId) return;
     setSchedule(setRange(schedule, [b.day], b.start, b.start + b.span, null));
@@ -316,34 +322,51 @@ export default function SchedulePanel() {
     ).length + 1;
   }, [orders, line]);
 
+  const saveScheduleMutation = useAdminMutation<{
+    schedule: Schedule;
+    dropped?: number;
+  }, Schedule>({
+    adminFetch,
+    request: (week, fetcher) => adminJson(fetcher, '/schedule', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedule: week }),
+    }),
+    onDone: async (result, _week, client) => {
+      client.setQueryData<SettingsResponse>(settingsKeys.detail(), previous => {
+        if (!previous?.values) return previous;
+        return {
+          ...previous,
+          values: { ...previous.values, schedule: result.schedule },
+        };
+      });
+      await client.invalidateQueries({ queryKey: scheduleKeys.override(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const busy = saveScheduleMutation.isPending;
+
   const saveWeek = async (): Promise<boolean> => {
     if (!schedule) return false;
-    setBusy(true);
     try {
-      const r = await adminFetch('/schedule', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schedule }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; dropped?: number };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setServerSchedule(cloneWeek(schedule));
+      const j = await saveScheduleMutation.mutateAsync(cloneWeek(schedule));
+      setSchedule(cloneWeek(j.schedule));
+      setServerSchedule(cloneWeek(j.schedule));
       notify.ok(j.dropped
         ? `Week saved — ${j.dropped} slot(s) skipped (unsaved shows). The current hour applies on the next pick.`
         : 'Week saved — the current hour applies on the next pick.');
       return true;
     } catch (e) {
-      notify.err(errorMessage(e));
+      notify.err(scheduleWriteError(e));
       return false;
-    } finally { setBusy(false); }
+    }
   };
 
   const discardEdits = () => {
     if (serverSchedule) setSchedule(cloneWeek(serverSchedule));
   };
 
-  // ⌘S / Ctrl+S saves. Held in a ref so the listener registers once yet always
-  // sees the current week.
+  // ⌘S / Ctrl+S saves. Ref-held so the listener registers once but sees the current week.
   const chordSaveRef = useRef<() => boolean>(() => false);
   chordSaveRef.current = () => {
     if (dirty === 0 || busy) return false;
@@ -469,8 +492,10 @@ export default function SchedulePanel() {
     ? `${Math.floor(leftMin / 60)} h ${leftMin % 60} min left`
     : `${leftMin} min left`;
 
-  const onAirShow = pinnedShow ?? showById(curBlock.showId);
-  const onAirColor = pinnedShow ? colorOf(pinnedShow.id) : curBlock.showId ? colorOf(curBlock.showId) : null;
+  const onAirShow = defaultTakeover ? null : pinnedShow ?? showById(curBlock.showId);
+  const onAirColor = defaultTakeover
+    ? null
+    : pinnedShow ? colorOf(pinnedShow.id) : curBlock.showId ? colorOf(curBlock.showId) : null;
 
   const clockLabel = `${now.toLocaleDateString(locale, {
     weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
@@ -491,8 +516,6 @@ export default function SchedulePanel() {
             <span className="font-mono text-[11.5px] font-bold tracking-[0.06em] text-ink">{clockLabel}</span>
             <Mu className="text-[9px]">{zoneLabel}</Mu>
           </div>
-          {/* Phones get the status and Save from the sticky `SaveBar` alone —
-              repeating them here costs a row of a 24-hour screen. */}
           <div className="ml-auto flex flex-none flex-wrap items-center gap-3 sm:flex-nowrap">
             <span className="hidden flex-none items-center gap-2 sm:flex">
               {dirty > 0 && <span aria-hidden="true" className="size-1.5 bg-[var(--accent)]" />}
@@ -523,8 +546,6 @@ export default function SchedulePanel() {
             </Button>
           </div>
         </div>
-        {/* Headline is sr-only: every row of chrome above the 24-hour board costs
-            a row of the week, and the eyebrow already names the page. */}
         <h1 className="sr-only">The Rundown — programme the week, one hour at a time</h1>
         <Mu className="mt-1.5 block text-[9px] tracking-[0.1em]">
           Empty hours run autonomously · every change goes live on save
@@ -534,16 +555,20 @@ export default function SchedulePanel() {
       <div className="border-b border-ink bg-[var(--page-bg)]">
         <div className="grid grid-cols-1 sm:grid-cols-3">
           <NowCell
-            label={pinnedShow ? 'On air · takeover' : 'On air'}
+            label={airingTakeover ? 'On air · takeover' : 'On air'}
             live
-            time={liveOverride
-              ? `until ${fmtClock(liveOverride.expiresAt, tz, locale)}`
+            time={airingTakeover
+              ? `until ${fmtClock(airingTakeover.expiresAt, tz, locale)}`
               : `${hhmm(curBlock.start)} – ${hhmm(curBlock.start + curBlock.span)}`}
-            left={pinnedShow ? undefined : leftLabel}
-            name={onAirShow ? onAirShow.name : 'Nobody in the chair'}
+            left={airingTakeover ? undefined : leftLabel}
+            name={defaultTakeover
+              ? 'Default programming'
+              : onAirShow ? onAirShow.name : 'Nobody in the chair'}
             color={onAirColor}
-            meta={metaOf(pinnedShow ? pinnedShow.id : curBlock.showId)}
-            pct={pinnedShow ? undefined : Math.min(100, Math.round((elapsedMin / totalMin) * 100))}
+            meta={defaultTakeover
+              ? 'autonomous music · default DJ'
+              : metaOf(pinnedShow ? pinnedShow.id : curBlock.showId)}
+            pct={airingTakeover ? undefined : Math.min(100, Math.round((elapsedMin / totalMin) * 100))}
           />
           <NowCell
             label="Up next"
@@ -551,8 +576,8 @@ export default function SchedulePanel() {
             name={showById(nextBlock.showId)?.name ?? 'Nobody in the chair'}
             color={nextBlock.showId ? colorOf(nextBlock.showId) : null}
             meta={metaOf(nextBlock.showId)}
-            // With "After that" hidden this is a phone's last cell, so its own
-            // rule would double up against the band's bottom edge.
+            // Last cell on a phone when "After that" is hidden; its own rule would
+            // double up against the band's bottom edge.
             className="max-sm:border-b-0"
           />
           <NowCell
@@ -562,8 +587,7 @@ export default function SchedulePanel() {
             color={laterBlock.showId ? colorOf(laterBlock.showId) : null}
             meta={metaOf(laterBlock.showId)}
             last
-            // Three stacked cells cost ~190px of a phone screen before any of the
-            // week is visible, and this hour is already in the board below.
+            // Hidden on phones: three stacked cells cost ~190px before any of the week shows.
             className="hidden sm:block"
           />
         </div>
@@ -589,9 +613,8 @@ export default function SchedulePanel() {
                 ? (d === line.day ? cur : cur.filter(x => x !== d))
                 : [...cur, d],
             )}
-            // A preset replaces the set outright, so the sentence's own day has to
-            // move into it — otherwise `applyLine` re-adds the old one and
-            // "Weekdays" quietly writes Saturday too.
+            // A preset replaces the set outright, so the sentence's day must move into
+            // it or `applyLine` re-adds the old one.
             onSetLineDays={days => {
               setLineDays(days);
               if (!days.includes(line.day)) setLine(cur => ({ ...cur, day: days[0] ?? cur.day }));
@@ -609,12 +632,14 @@ export default function SchedulePanel() {
           folded={folded}
           onToggleFold={d => setFolded(f => ({ ...f, [d]: !f[d] }))}
           todayKey={nowDay}
+          nowMinute={nowHour * 60 + stationMinute}
           colorOf={colorOf}
           hoursOf={hoursOf}
           onPick={pick}
           onRemove={removeRun}
           onResize={resizeRun}
           onDropShow={dropShow}
+          onDragRun={dragRun}
           armedShowId={armedId}
           onArmShow={armShow}
           onFillDay={fillDay}
@@ -771,8 +796,7 @@ function NowCell({
     <div
       className={cn(
         'min-w-0 px-5 py-2 sm:px-[22px]',
-        // Stacked at grid-cols-1, so the divider runs along the bottom; the column
-        // rule comes back with the 3-up grid at sm.
+        // Stacked at grid-cols-1 the divider runs along the bottom; column rule returns at sm.
         !last && 'border-b border-separator-strong sm:border-r sm:border-b-0',
         className,
       )}

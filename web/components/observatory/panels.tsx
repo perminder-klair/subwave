@@ -1,14 +1,13 @@
-/* Library Observatory — right-rail panels. StatsView aggregates recompute
-   from the filtered set. The Dossier draws its header/strip from the in-hand
-   node (instant) and enrichment/embeddings/mix-next from the lazy detail
-   fetch. Fingerprints use the real learned vectors when the server returns
-   them, else a deterministic seed. */
+/* Library Observatory -- right-rail panels. StatsView aggregates recompute from
+   the filtered set. The Dossier draws its header/strip from the in-hand node and
+   enrichment/embeddings/mix-next from the lazy detail fetch. */
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import {
-  heat,
+  genreText,
   tally,
+  trackGenres,
   arcPath,
   embeddingVector,
   normaliseFingerprint,
@@ -20,7 +19,10 @@ import {
   type TrackDetail,
 } from './data';
 
-// small primitives
+// On the page, not the night sky: a quiet track is the muted ink, a hot one
+// the accent, so the dot flips with the theme like the bars beside it.
+const energyDot = (v: number) => `color-mix(in oklab, var(--accent) ${Math.round(v * 100)}%, var(--muted))`;
+
 function Bar({ label, value, max, accent }: { label: string; value: number; max: number; accent?: boolean }) {
   const pct = max ? Math.round((value / max) * 100) : 0;
   return (
@@ -59,7 +61,6 @@ export function Card({
   );
 }
 
-// Camelot key wheel
 function KeyWheel({ list }: { list: ObsTrack[] }) {
   const counts = useMemo(() => {
     const m: Record<string, number> = {};
@@ -128,7 +129,6 @@ function KeyWheel({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// BPM histogram (tempo river)
 function TempoRiver({ list }: { list: ObsTrack[] }) {
   const bins = useMemo(() => {
     const edges = [60, 80, 90, 100, 110, 120, 128, 140, 160, 200];
@@ -161,7 +161,6 @@ function TempoRiver({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// Loudness histogram (integrated LUFS)
 function LoudnessRiver({ list }: { list: ObsTrack[] }) {
   const bins = useMemo(() => {
     // Lower edges, in LUFS. Quieter masters on the left, hotter on the right.
@@ -196,9 +195,9 @@ function LoudnessRiver({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// Song shape — one shared time axis (0…duration) across three lanes: pace
-// curve, vocal presence, key bands. Positions are percent-based HTML so they
-// stay crisp at any panel width; only the pace curve is SVG.
+// Song shape -- one shared time axis (0..duration) across three lanes: pace
+// curve, vocal presence, key bands. Percent-based HTML so it stays crisp at any
+// panel width; only the pace curve is SVG.
 function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: number | null }) {
   const d = detail.track;
   const pace = d.pace ?? [];
@@ -318,7 +317,6 @@ function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: 
   );
 }
 
-// Embedding fingerprint
 function Fingerprint({
   vector,
   seed,
@@ -359,7 +357,6 @@ function Fingerprint({
   );
 }
 
-// Meter
 function Meter({ value, label, cells = 20, display }: { value: number; label: string; cells?: number; display?: string }) {
   const on = Math.round(value * cells);
   return (
@@ -378,7 +375,7 @@ function Meter({ value, label, cells = 20, display }: { value: number; label: st
 // STATS VIEW — library overview, recomputed from the filtered list.
 export function StatsView({ stats, list, filtered }: { stats: ObservatoryStats; list: ObsTrack[]; filtered: boolean }) {
   const moods = useMemo(() => tally(list, (t) => t.moods).slice(0, 8), [list]);
-  const genres = useMemo(() => tally(list, (t) => t.genre), [list]);
+  const genres = useMemo(() => tally(list, (t) => trackGenres(t)), [list]);
   const moodTagCount = useMemo(() => tally(list, (t) => t.moods).length, [list]);
   const energy = useMemo(() => {
     const o = { low: 0, medium: 0, high: 0 };
@@ -525,7 +522,7 @@ export function Dossier({
 
       <div className="dossier-title-block">
         <div className="t-caption ad-muted">
-          {(track.genre || 'UNFILED')}
+          {(genreText(track) || 'UNFILED')}
           {track.year ? ` · ${track.year}` : ''}
         </div>
         <h2 className="dossier-title">{track.title || 'Untitled'}</h2>
@@ -613,6 +610,24 @@ export function Dossier({
             </div>
           </>
         )}
+        {d?.audioDescriptors && d.audioDescriptors.length > 0 && (
+          <>
+            <div className="t-caption ad-muted" style={{ margin: '12px 0 8px' }}>
+              HEARD
+            </div>
+            <div className="pill-row">
+              {d.audioDescriptors.map((m) => (
+                <span
+                  key={m}
+                  className="ad-pill"
+                  title={d.audioDescriptorScores?.[m] != null ? `CLAP guess, cosine ${d.audioDescriptorScores[m]}` : 'CLAP guess'}
+                >
+                  {m}
+                </span>
+              ))}
+            </div>
+          </>
+        )}
         {lastfm && lastfm.length > 0 && (
           <>
             <div className="t-caption ad-muted" style={{ margin: '12px 0 8px' }}>
@@ -678,7 +693,7 @@ export function Dossier({
           <div className="mixlist">
             {mixNodes.map((n) => (
               <button key={n.idx} className="mix-row" onClick={() => onSelect(n)}>
-                <span className="mix-dot" style={{ background: heat(n.energyVal) }} />
+                <span className="mix-dot" style={{ background: energyDot(n.energyVal) }} />
                 <span className="mix-tt">
                   <span className="mix-title">{n.title || 'Untitled'}</span>
                   <span className="mix-artist">{n.artist || 'Unknown'}</span>

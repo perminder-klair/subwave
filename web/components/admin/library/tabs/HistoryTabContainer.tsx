@@ -13,7 +13,9 @@ import { PAGE_SIZE } from '../types';
 // the cross-list operations mean anything here. Do not "fix" the omission by
 // filing it under rows.
 export default function HistoryTabContainer() {
-  const { queuing, queueTrack } = useLibrary();
+  const {
+    queuing, queueTrack, likeIndex, liking, toggleLike, blocking, blockTrack,
+  } = useLibrary();
   const [page, setPage] = useState(0);
 
   const q = useAdminQuery<{ total: number; rows: PlayEntry[] }>({
@@ -38,6 +40,13 @@ export default function HistoryTabContainer() {
       queuing={queuing}
       onQueue={queueTrack}
       onRefresh={() => { void q.refetch(); }}
+      // Heart and never-play come straight off the provider, so a history row
+      // shares the Browse rows' optimistic updates and their one like index.
+      likeIndex={likeIndex}
+      liking={liking}
+      onToggleLike={toggleLike}
+      blocking={blocking}
+      onBlock={blockTrack}
     />
   );
 }

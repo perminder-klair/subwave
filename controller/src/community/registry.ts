@@ -23,6 +23,7 @@ import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { queue } from '../broadcast/queue.js';
 import {
   FREQUENCIES,
+  LINK_STYLES,
   SCRIPT_LENGTHS,
   SHOW_MOODS,
   SHOW_ENERGY,
@@ -36,6 +37,7 @@ import {
 // here silently diverged the moment SHOW_NAME_MAX became the one rule the
 // validator, the loader and the admin form all run.
 import { SHOW_NAME_MAX, SHOW_SEGMENT_SKILL_MAX, repairEraWindow } from '../schemas/show.js';
+import { FEED_MAX_ITEMS_KEY, FEED_MAX_ITEMS_LIMIT, FEED_URL_KEY, resolveFeedConfig } from '../skills/feed.js';
 
 // Slug rule shared by every community artifact — lowercase, starts alphanumeric,
 // then alphanumeric/hyphen, ≤49 chars. Anchored, so a slug can't carry a path
@@ -56,11 +58,30 @@ export interface CommunitySkill {
   // than dropped from the listing.
   cron?: string;
   cronOnly?: boolean;
+  cohosts?: boolean;
   window?: 'any' | 'commute';
   context?: string;
+  // A catalog skill can't ship a tool.mjs, but it can declare a feed: on install
+  // it lands as the skill's own `feed:` knob, and the loader generates the same
+  // fetch tool a hand-set feed gets (skills/feed.ts, #1616).
+  feed?: string;
+  feedMaxItems?: number;
   submittedBy?: string;
   dateAdded?: string;
   dateModified?: string;
+}
+
+// The knob values a catalog skill installs with, in writeSkillFile's
+// `config`/`configKeys` shape. Empty for a prompt-only entry, so its install
+// writes exactly the SKILL.md it always did.
+export function communitySkillConfig(cs: CommunitySkill): {
+  config: Record<string, string | number>;
+  configKeys: string[];
+} {
+  if (!cs.feed) return { config: {}, configKeys: [] };
+  const config: Record<string, string | number> = { [FEED_URL_KEY]: cs.feed };
+  if (cs.feedMaxItems) config[FEED_MAX_ITEMS_KEY] = cs.feedMaxItems;
+  return { config, configKeys: [FEED_URL_KEY, FEED_MAX_ITEMS_KEY] };
 }
 
 export interface CommunityPersona {
@@ -71,6 +92,7 @@ export interface CommunityPersona {
   frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
+  linkStyle?: 'natural' | 'announce';
   humour?: number;
   localColour?: number;
   warmth?: number;
@@ -98,7 +120,10 @@ export interface CommunityShow {
   banter: boolean;
   programme: boolean;
   segmentSkill: string;
+  preparationSkill: string;
   maxTrackSeconds: number | null;
+  /** Minimum track length in seconds (#1573). null = inherit the station. */
+  minTrackLengthSeconds: number | null;
   submittedBy?: string;
   dateAdded?: string;
   dateModified?: string;
@@ -174,6 +199,21 @@ function normalizeSkill(raw: any): CommunitySkill | null {
   if (!SLUG_RE.test(slug)) return null;
   const brief = str(raw?.brief);
   if (!brief) return null;
+  // The feed URL goes through the loader's own rule. A declared feed that rule
+  // refuses drops the ENTRY rather than just the feed: a brief written to speak
+  // from fetched items, installed with nothing to fetch, is a skill told to
+  // report news it was never given.
+  let feed: string | undefined;
+  if (raw?.feed != null && str(raw.feed)) {
+    feed = resolveFeedConfig({ [FEED_URL_KEY]: str(raw.feed) }).feed?.url;
+    if (!feed) return null;
+  }
+  // Lenient, like the loader's own count: a bad number has an obvious answer
+  // (the station default), so it is dropped rather than costing the entry.
+  const maxItems = raw?.feedMaxItems;
+  const feedMaxItems = feed && Number.isInteger(maxItems) && maxItems >= 1 && maxItems <= FEED_MAX_ITEMS_LIMIT
+    ? maxItems as number
+    : undefined;
   return {
     slug,
     label: str(raw?.label) || slug,
@@ -181,8 +221,11 @@ function normalizeSkill(raw: any): CommunitySkill | null {
     cooldown: optStr(raw?.cooldown, 16),
     cron: optStr(raw?.cron, 64),
     cronOnly: raw?.cronOnly === true ? true : undefined,
+    cohosts: raw?.cohosts === true ? true : undefined,
     window: raw?.window === 'commute' ? 'commute' : undefined,
     context: optStr(raw?.context, 200),
+    feed,
+    feedMaxItems,
     submittedBy: optStr(raw?.submittedBy, 80),
     dateAdded: optStr(raw?.dateAdded, 10),
     dateModified: optStr(raw?.dateModified, 10),
@@ -205,6 +248,7 @@ function normalizePersona(raw: any): CommunityPersona | null {
     frequency: (FREQUENCIES as string[]).includes(raw?.frequency) ? raw.frequency : 'moderate',
     scriptLength: (SCRIPT_LENGTHS as string[]).includes(raw?.scriptLength) ? raw.scriptLength : 'concise',
     djMode: raw?.djMode === true,
+    linkStyle: (LINK_STYLES as string[]).includes(raw?.linkStyle) ? raw.linkStyle : 'natural',
     humour: dial(raw?.humour),
     localColour: dial(raw?.localColour),
     warmth: dial(raw?.warmth),
@@ -235,6 +279,7 @@ function normalizeShow(raw: any): CommunityShow | null {
   const name = (str(raw?.name) || str(raw?.displayName)).slice(0, SHOW_NAME_MAX);
   if (!name) return null;
   const seconds = Number(raw?.maxTrackSeconds);
+  const floorSeconds = Number(raw?.minTrackLengthSeconds);
   return {
     slug,
     name,
@@ -253,7 +298,11 @@ function normalizeShow(raw: any): CommunityShow | null {
     banter: raw?.banter === true,
     programme: raw?.programme === true,
     segmentSkill: str(raw?.segmentSkill).slice(0, SHOW_SEGMENT_SKILL_MAX),
+    preparationSkill: str(raw?.preparationSkill).slice(0, SHOW_SEGMENT_SKILL_MAX),
     maxTrackSeconds: Number.isInteger(seconds) && seconds >= 0 ? seconds : null,
+    // Bounds are the show validator's, applied on install — a catalog value out
+    // of range is clamped there rather than dropped here, same as the cap.
+    minTrackLengthSeconds: Number.isInteger(floorSeconds) && floorSeconds >= 0 ? floorSeconds : null,
     submittedBy: optStr(raw?.submittedBy, 80),
     dateAdded: optStr(raw?.dateAdded, 10),
     dateModified: optStr(raw?.dateModified, 10),

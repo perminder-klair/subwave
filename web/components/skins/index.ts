@@ -46,7 +46,7 @@ export const SKINS: SkinManifest[] = [
     id: 'tty',
     name: 'TTY',
     description:
-      'The station as a live process — panes and a status line, everything tails.',
+      'The station as a live process — panes and a key bar; focus draws an ANSI landscape.',
     skinApiVersion: SKIN_API_VERSION,
     load: () => import('./tty/TtySkin'),
   },
@@ -57,6 +57,22 @@ export const SKINS: SkinManifest[] = [
       'The flagship vinyl face — a reference turntable is the interface, needle and all.',
     skinApiVersion: SKIN_API_VERSION,
     load: () => import('./platter/PlatterSkin'),
+  },
+  {
+    id: 'axo',
+    name: 'AXO-1',
+    description:
+      'A hi-fi stack drawn at 30° — the switch, knob and keys in the drawing are the controls.',
+    skinApiVersion: SKIN_API_VERSION,
+    load: () => import('./axo/AxoSkin'),
+  },
+  {
+    id: 'cipher',
+    name: 'Cipher-3',
+    description:
+      'A rotor cipher machine — the lampboard spells the song, and your request is typed on its keys.',
+    skinApiVersion: SKIN_API_VERSION,
+    load: () => import('./cipher/CipherSkin'),
   },
 ];
 

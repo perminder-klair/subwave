@@ -1,20 +1,8 @@
-// The player composition root — native analog of web PlayerApp. Wires the
-// station feed + RNTP player + signal meter + lock-screen metadata + cover-tint
-// wash, and lays the app out as an FM-dial swipe pager: a persistent TopBar and
-// FreqBand tuner above a horizontal pager whose five "stations" are
-// Shows / Timeline / LIVE / Booth / Request, with LIVE dead-centre as home.
-// Swipe (or tap a band stop) to tune across sections; the needle tracks the
-// scroll. The TransportBar is docked below the pager so the player stays
-// visible on every band stop, bottom-nav style. Themes open in a bottom sheet
-// from the palette icon, off-band.
-//
-// Render-path notes: the pager's scroll drives the FreqBand needle through a
-// native-driver Animated.Value (no per-frame React state), and the four
-// non-LIVE pages are memo'd so the 1s elapsed tick and 5s feed poll only
-// re-render the pages whose data actually changed (useStationFeed keeps
-// unchanged payloads reference-stable for exactly this reason).
+// The native scroll driver moves the needle without React renders.
+// Memoized pages rely on useStationFeed preserving unchanged payload identities.
 
 import { BlurView } from 'expo-blur';
+import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -26,23 +14,37 @@ import {
   Platform,
   type ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
+import { useAppActive } from '@/hooks/useAppActive';
 import { useCast } from '@/hooks/useCast';
 import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
+import { useLingeringPresence } from '@/hooks/useLingeringPresence';
+import { useLiveActivity } from '@/hooks/useLiveActivity';
+import { useLoginCheck } from '@/hooks/useLoginCheck';
+import { useLyricsPreference } from '@/hooks/useLyricsPreference';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
 import { useSleepTimer } from '@/hooks/useSleepTimer';
 import { useStationFeed } from '@/hooks/useStationFeed';
+import { useStationGate } from '@/hooks/useStationGate';
 import { useStreamFormat } from '@/hooks/useStreamFormat';
 import { useTrackLike } from '@/hooks/useTrackLike';
+import { useTrackLyrics } from '@/hooks/useTrackLyrics';
 import type { StationApi } from '@/lib/api';
 import type { StationLocale } from '@/lib/format';
+import {
+  LYRICS_LAYOUT_HOLD_MS,
+  LYRICS_MIN_SCREEN_HEIGHT,
+  plainLyricsReady,
+  syncedLyricsReady,
+} from '@/lib/lyrics';
 import { formatLabel } from '@/lib/streamFormat';
 import type {
   ActiveShow,
@@ -54,24 +56,27 @@ import type {
 import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
 import FreqBand, { type BandStop } from './FreqBand';
+import LoginRejected from './LoginRejected';
 import PagePanel from './PagePanel';
+import StageLyrics from './StageLyrics';
+import StationGate from './StationGate';
 import TopBar from './TopBar';
 import TransportBar from './TransportBar';
 import Waveform from './Waveform';
+import AboutDrawer from './drawers/AboutDrawer';
 import BackPanelDrawer from './drawers/BackPanelDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import FormatDrawer from './drawers/FormatDrawer';
+import LyricsDrawer from './drawers/LyricsDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
 import SleepDrawer from './drawers/SleepDrawer';
 import ThemesDrawer from './drawers/ThemesDrawer';
 import TimelineDrawer from './drawers/TimelineDrawer';
 
-// Stations this app run has already beaconed — remounts/station round-trips
-// must not double count (the controller additionally dedupes by IP).
+// Keep beacon deduplication across remounts and station round-trips.
 const beaconedBases = new Set<string>();
 
-// FM-dial band: the swipeable pager sections, LIVE in the centre.
 const PAGES: readonly BandStop[] = [
   { id: 'schedule', label: 'Shows', abbr: 'SHWS' },
   { id: 'timeline', label: 'Timeline', abbr: 'TML' },
@@ -83,8 +88,15 @@ const HOME_INDEX = PAGES.findIndex((p) => p.id === 'now');
 const BOOTH_INDEX = PAGES.findIndex((p) => p.id === 'booth');
 const TIMELINE_INDEX = PAGES.findIndex((p) => p.id === 'timeline');
 
-// Memo'd page bodies — props are reference-stable between polls (see
-// useStationFeed), so off-screen pages skip render on feed ticks entirely.
+type SheetId = 'panel' | 'sleep' | 'themes' | 'format' | 'about' | 'lyrics';
+const SHEET_TITLES: Record<SheetId, string> = {
+  panel: 'Back panel',
+  sleep: 'Sleep timer',
+  themes: 'Theme',
+  format: 'Stream format',
+  about: 'About SUB/WAVE',
+  lyrics: 'Lyrics',
+};
 
 const SchedulePage = memo(function SchedulePage({
   api,
@@ -177,16 +189,23 @@ const RequestPage = memo(function RequestPage({
 });
 
 export default function PlayerScreen() {
-  const { api } = useStation();
+  const {
+    api,
+    base,
+    name: savedStationName,
+    hasLogin,
+    stationPassword,
+    loginPassword,
+    rememberStationPassword,
+    forgetStationPassword,
+  } = useStation();
   const { colors, mode, themes, activeId } = useTheme();
 
   const { isConnected } = useConnectivity();
+  const appActive = useAppActive();
 
-  // The feed must be called before the player: the player tunes with the
-  // stream format, which useStreamFormat validates against the feed's
-  // streamInfo — but the feed's backgroundPoll winds down on the player's
-  // tunedIn. `bgPoll` mirrors tunedIn into state to break that cycle (one
-  // extra render per tune toggle, nothing per-poll).
+  // bgPoll bridges the feed/player cycle: streamInfo validates the player
+  // format, while tunedIn enables background feed polling.
   const [bgPoll, setBgPoll] = useState(false);
   const {
     nowPlaying,
@@ -199,19 +218,15 @@ export default function PlayerScreen() {
     llmTokens,
     state,
     session,
+    leadMs,
     elapsed,
     progress,
+    trackStartedAt,
     timezone,
     locale,
-    // While tuned in LOCALLY, keep a slow background poll alive so the lock
-    // screen (useNowPlayingInfo) tracks the broadcast; idle + backgrounded
-    // polls nothing at all. While casting there's no local audio session, so
-    // the OS suspends us in the background anyway — no point polling.
   } = useStationFeed(api, { backgroundPoll: bgPoll });
   const boothFeed = session.messages;
 
-  // Listener-picked stream format (MP3 floor / Opus / FLAC / AAC), per
-  // station, gated on platform decodability + the mounts the station serves.
   const streamFormat = useStreamFormat(api?.base ?? null, streamInfo);
   const localPlayer = usePlayer(api, 1, isConnected, streamFormat.format);
   useEffect(() => {
@@ -221,16 +236,11 @@ export default function PlayerScreen() {
   const stationName = typeof dj?.station === 'string' ? dj.station : undefined;
   const djName = typeof dj?.name === 'string' ? dj.name : undefined;
 
-  const coverSrc = useMemo(
-    () => (api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null),
-    [api, nowPlaying?.subsonic_id],
-  );
+  const coverSrc = api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null;
+  const coverHeaders = api && coverSrc ? api.imageHeaders(coverSrc) : undefined;
 
   const trackLike = useTrackLike(api, nowPlaying?.subsonic_id ?? null);
 
-  // Google Cast, merged over the local player: with no session this is
-  // localPlayer untouched; while connected, tune/stop/volume/status re-target
-  // the Cast device and local playback stays torn down (see useCast).
   const { player, cast } = useCast(api, localPlayer, {
     stationName,
     djName,
@@ -238,12 +248,50 @@ export default function PlayerScreen() {
   });
   const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = player;
 
+  // Private station (#478): the private player hides the whole face until the
+  // password is in ('checking' counts as hidden, so a saved password still
+  // being verified cannot flash it); stream-only auth prompts over the face.
+  const gate = useStationGate({
+    api,
+    privacy: state.privacy,
+    stationPassword,
+    loginPassword,
+    rememberStationPassword,
+    forgetStationPassword,
+    tunedIn,
+    status,
+    stop,
+    tune,
+  });
+  const hideFace = gate.solid && gate.phase !== 'ok';
+  // A refused Station login (#1873) stops the player and covers it, over
+  // either gate: a proxy that refuses the login refuses /station-auth too.
+  const login = useLoginCheck({ api, hasLogin, tunedIn, status, stop });
+
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
 
-  // Sleep timer: tune out when it lapses. An explicit tune-out (or a station
-  // switch tearing playback down) also disarms it — a timer armed for one
-  // listen must not ambush the next one.
+  // Lyrics take the Live page while the track has them, synced or not, and
+  // the track info shrinks to one row above them. Never asked for until a
+  // locked station's password is proven (gate.readsOpen): a refusal spends the
+  // household's station-read attempts, and the lyrics ask again once unlocked.
+  const lyricsOn = state.lyrics?.enabled === true;
+  const lyricsPref = useLyricsPreference();
+  const showLyrics = lyricsOn && lyricsPref.shown && !offline && gate.readsOpen;
+  const lyricsTrack = useTrackLyrics(api, showLyrics ? nowPlaying?.subsonic_id : null, appActive);
+  // The hold bridges two tracks that both have lyrics; hiding them (the
+  // switch, going offline, a lock) cuts at once, as on the web.
+  const lyricsLinger = useLingeringPresence(
+    syncedLyricsReady(lyricsTrack) || plainLyricsReady(lyricsTrack),
+    LYRICS_LAYOUT_HOLD_MS,
+  );
+  // A screen too short for the lyrics keeps the full track info, as the web
+  // does; the lyrics settings say why nothing shows.
+  const { height: windowHeight } = useWindowDimensions();
+  const lyricsFit = windowHeight >= LYRICS_MIN_SCREEN_HEIGHT;
+  const lyricsPresent = showLyrics && lyricsFit && lyricsLinger;
+
+  // Disarm on tune-out so the next listening session cannot inherit this timer.
   const sleep = useSleepTimer(stop);
   const cancelSleep = sleep.cancel;
   const prevTunedInRef = useRef(tunedIn);
@@ -253,10 +301,6 @@ export default function PlayerScreen() {
     if (was && !tunedIn) cancelSleep();
   }, [tunedIn, cancelSleep]);
 
-  // One-shot audience beacon per station per app run — the native analog of
-  // the web PlayerApp's referrer beacon. An app has no document.referrer or
-  // UTM query, so report the platform as the source; that's how native
-  // listeners become visible in the admin Stats audience rollup at all.
   useEffect(() => {
     if (!api || beaconedBases.has(api.base)) return;
     beaconedBases.add(api.base);
@@ -266,29 +310,43 @@ export default function PlayerScreen() {
   const listenerCount =
     listeners == null ? null : typeof listeners === 'number' ? listeners : listeners.current ?? null;
 
-  const coverColors = useCoverColors(coverSrc);
+  const coverColors = useCoverColors(coverSrc, coverHeaders);
 
-  // Push lock-screen / CarPlay metadata from the feed — keyed on LOCAL
-  // playback: while casting nothing plays through RNTP, so there's no media
-  // session to decorate (the Cast device shows its own metadata).
-  useNowPlayingInfo({ api, tunedIn: localPlayer.tunedIn, nowPlaying, boothFeed, activeShow });
+  // Cast has no local RNTP media session; update OS metadata only for local playback.
+  useNowPlayingInfo({
+    api,
+    tunedIn: localPlayer.tunedIn,
+    status: localPlayer.status,
+    nowPlaying,
+    boothFeed,
+    leadMs,
+    trackStartedAt,
+    activeShow,
+  });
 
-  // Tear down playback if the station drops off air mid-listen. `offline` is
-  // debounced upstream (useStationFeed needs OFFLINE_CONFIRM_POLLS consecutive
-  // offline polls) so a transient controller blip can't kill live audio
-  // (#463/#466).
+  useLiveActivity({
+    api,
+    tunedIn: localPlayer.tunedIn,
+    nowPlaying,
+    activeShow,
+    boothFeed,
+    leadMs,
+    trackStartedAt,
+    station: stationName || 'SUB/WAVE',
+    accent: colors.accent,
+    like: trackLike,
+  });
+
+  // Offline is debounced upstream so a transient failure cannot stop playback.
   useEffect(() => {
     if (offline && tunedIn) stop();
   }, [offline, tunedIn, stop]);
 
-  // --- swipe pager -------------------------------------------------------
-  // Animated.ScrollView forwards its ref to the inner ScrollView (RN ≥0.62),
-  // so scrollTo is available directly.
   const pagerRef = useRef<ScrollView>(null);
   const [pagerW, setPagerW] = useState(0);
   const [active, setActive] = useState(HOME_INDEX);
   const activeRef = useRef(HOME_INDEX);
-  const scrollX = useRef(new Animated.Value(0)).current;
+  const [scrollX] = useState(() => new Animated.Value(0));
   const didInit = useRef(false);
 
   const onPagerLayout = (e: LayoutChangeEvent) => {
@@ -296,8 +354,7 @@ export default function PlayerScreen() {
     if (w > 0 && w !== pagerW) setPagerW(w);
   };
 
-  // Land on LIVE without animating the first scroll (belt-and-suspenders for
-  // platforms that ignore the ScrollView's initial contentOffset).
+  // Some platforms ignore initial contentOffset; position the pager after layout.
   useEffect(() => {
     if (pagerW > 0 && !didInit.current) {
       didInit.current = true;
@@ -306,10 +363,10 @@ export default function PlayerScreen() {
     }
   }, [pagerW, scrollX]);
 
-  // The needle rides scrollX on the native driver; React state only changes
-  // when the snapped-to page does (one update per page change, not per frame).
   const onPagerScroll = useMemo(
     () =>
+      // Animated.event stores the listener; it reads refs only on scroll.
+      // eslint-disable-next-line react-hooks/refs
       Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
         useNativeDriver: true,
         listener: (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -342,26 +399,25 @@ export default function PlayerScreen() {
   const openTimeline = useCallback(() => goToPage(TIMELINE_INDEX), [goToPage]);
   const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
 
-  // One bottom sheet, content switched by the active drawer (the Sheet
-  // component's intended pattern): the masthead's single button opens the
-  // "back panel"; its TIMER/FASCIA rows swap content in place — no
-  // modal-dismissal race between stacked sheets.
-  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | 'format' | null>(
-    null,
+  // Share one sheet to avoid competing dismissal callbacks.
+  const [activeSheet, setActiveSheet] = useState<SheetId | null>(null);
+  const openLyrics = useCallback(() => setActiveSheet('lyrics'), []);
+  const stageLyrics = useMemo(
+    () => (lyricsOn ? { shown: lyricsPref.shown, onOpen: openLyrics } : null),
+    [lyricsOn, lyricsPref.shown, openLyrics],
   );
+  // The operator switching lyrics off takes their settings with them.
+  useEffect(() => {
+    if (!lyricsOn) setActiveSheet((open) => (open === 'lyrics' ? null : open));
+  }, [lyricsOn]);
   const themeName = useMemo(
     () => themes.find((t) => t.id === activeId)?.name ?? null,
     [themes, activeId],
   );
-  // Hide the SIGNAL row when there is nothing to choose (only the MP3 floor is
-  // pickable on this device for this station) — mirrors the web skin picker.
   const streamFormatLabel =
     streamFormat.options.length > 1 ? formatLabel(streamFormat.format) : null;
 
-  // Footprints of the two frosted overlays (masthead/dial header at the top,
-  // transport bar at the bottom). The pager fills the full height behind both,
-  // and each page pads its scroll top/bottom by these so content reads as
-  // flowing under the frosted glass yet still scrolls fully clear.
+  // Pad pages by measured overlay heights so content can scroll clear of both.
   const [barInset, setBarInset] = useState(120);
   const onBarLayout = useCallback((e: LayoutChangeEvent) => {
     const h = e.nativeEvent.layout.height;
@@ -374,15 +430,45 @@ export default function PlayerScreen() {
     if (h > 0) setHeaderInset((prev) => (Math.abs(prev - h) > 0.5 ? h : prev));
   }, []);
 
-  // Frosted-glass film shared by both overlays — soft white in light themes, a
-  // faint ink wash in dark — matching the transport bar's glass treatment.
+  // A sheet is a Modal, so it would sit above the prompt and stay usable.
+  useEffect(() => {
+    if (gate.phase === 'prompt' || login.rejected) setActiveSheet(null);
+  }, [gate.phase, login.rejected]);
+
+  // The pager unmounts behind a solid gate; bring it back on the home page.
+  useEffect(() => {
+    if (!hideFace) return;
+    activeRef.current = HOME_INDEX;
+    setActive(HOME_INDEX);
+    if (pagerW > 0) scrollX.setValue(HOME_INDEX * pagerW);
+  }, [hideFace, pagerW, scrollX]);
+
   const glassFilm = mode === 'light' ? 'rgba(255,255,255,0.22)' : `${colors.ink}12`;
 
   const tint = coverColors.vibrant;
+  const gateStationName = stationName || savedStationName;
+  const loginRejected =
+    login.rejected && base ? (
+      <LoginRejected base={base} stationName={gateStationName} recheck={login.recheck} />
+    ) : null;
+
+  if (hideFace) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <StationGate
+          checking={gate.phase !== 'prompt'}
+          solid
+          stationName={gateStationName}
+          savedRejected={gate.savedRejected}
+          unlock={gate.unlock}
+        />
+        {loginRejected}
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      {/* Art-derived ambient wash */}
       {tint ? (
         <LinearGradient
           colors={[tint, 'transparent']}
@@ -394,9 +480,6 @@ export default function PlayerScreen() {
       ) : null}
 
       <SafeAreaView style={{ flex: 1 }} edges={['left', 'right']}>
-        {/* The pager fills the full height; the masthead/dial header and the
-            transport bar float over it as frosted overlays (below), so content
-            scrolls under the glass at both ends. */}
         <View style={{ flex: 1 }} onLayout={onPagerLayout}>
           {pagerW > 0 ? (
             <Animated.ScrollView
@@ -433,6 +516,7 @@ export default function PlayerScreen() {
                   <CenterStage
                     nowPlaying={nowPlaying}
                     coverSrc={coverSrc}
+                    coverHeaders={coverHeaders}
                     elapsed={elapsed}
                     llmTokens={llmTokens}
                     trackLike={trackLike}
@@ -441,7 +525,16 @@ export default function PlayerScreen() {
                     live={tunedIn}
                     onOpenBooth={openBooth}
                     onOpenTimeline={openTimeline}
+                    lyrics={stageLyrics}
+                    compact={lyricsPresent}
                   />
+                  {lyricsPresent ? (
+                    <StageLyrics
+                      track={lyricsTrack}
+                      trackStartedAt={trackStartedAt}
+                      running={appActive && active === HOME_INDEX}
+                    />
+                  ) : null}
                   <Waveform tunedIn={tunedIn} progress={progress} visible={active === HOME_INDEX} />
                 </View>
               </View>
@@ -464,11 +557,6 @@ export default function PlayerScreen() {
           ) : null}
         </View>
 
-        {/* Frosted masthead + FM dial — floated as an absolute overlay at the
-            head of every band stop so page content scrolls under the glass,
-            mirroring the transport bar. The BlurView picks up the cover-art
-            ambient wash + scrolling content behind it; a thin mode-aware film
-            keeps the wordmark and dial legible. */}
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0 }} onLayout={onHeaderLayout}>
           <BlurView
             intensity={mode === 'light' ? 40 : 26}
@@ -486,11 +574,6 @@ export default function PlayerScreen() {
             onOpenPanel={() => setActiveSheet('panel')}
             panelActive={sleep.active || cast.connected}
           />
-          {/* No connection banner here — the transport deck already carries
-              connection state (power-ring spinner while connecting, the
-              Signal · Offline/Acquiring label, and the disabled power on
-              off-air), so a bar popping in and out of the masthead was
-              redundant motion. */}
           <FreqBand
             pages={PAGES}
             active={active}
@@ -500,9 +583,6 @@ export default function PlayerScreen() {
           />
         </View>
 
-        {/* Persistent transport — floated as an absolute overlay at the foot of
-            every band stop (bottom-nav style) so the pager fills the full height
-            behind it and content scrolls under the frosted glass. */}
         <View
           style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}
           onLayout={onBarLayout}
@@ -524,18 +604,21 @@ export default function PlayerScreen() {
         </View>
       </SafeAreaView>
 
+      {gate.phase === 'prompt' && !loginRejected ? (
+        <StationGate
+          checking={false}
+          solid={false}
+          stationName={gateStationName}
+          savedRejected={gate.savedRejected}
+          unlock={gate.unlock}
+        />
+      ) : null}
+      {loginRejected}
+
       <Sheet
         open={activeSheet !== null}
         onClose={() => setActiveSheet(null)}
-        title={
-          activeSheet === 'panel'
-            ? 'Back panel'
-            : activeSheet === 'sleep'
-              ? 'Sleep timer'
-              : activeSheet === 'format'
-                ? 'Stream format'
-                : 'Theme'
-        }
+        title={SHEET_TITLES[activeSheet ?? 'themes']}
       >
         {activeSheet === 'panel' ? (
           <BackPanelDrawer
@@ -548,6 +631,7 @@ export default function PlayerScreen() {
             onOpenSleep={() => setActiveSheet('sleep')}
             onOpenThemes={() => setActiveSheet('themes')}
             onOpenFormat={() => setActiveSheet('format')}
+            onOpenAbout={() => setActiveSheet('about')}
           />
         ) : null}
         {activeSheet === 'sleep' ? (
@@ -567,6 +651,22 @@ export default function PlayerScreen() {
           />
         ) : null}
         {activeSheet === 'themes' ? <ThemesDrawer /> : null}
+        {activeSheet === 'lyrics' ? (
+          <LyricsDrawer
+            shown={lyricsPref.shown}
+            onToggle={lyricsPref.toggle}
+            track={lyricsTrack}
+            fits={lyricsFit}
+          />
+        ) : null}
+        {activeSheet === 'about' ? (
+          <AboutDrawer
+            onAddStation={() => {
+              setActiveSheet(null);
+              router.push('/onboarding');
+            }}
+          />
+        ) : null}
       </Sheet>
     </View>
   );

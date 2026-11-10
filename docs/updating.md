@@ -1,0 +1,407 @@
+# Updating, rolling back, and recovering
+
+Updating SUB/WAVE takes at most three commands on any install shape. This page
+is mostly about the other half — what to do when an update lands badly, which is
+the part that was missing.
+
+> Just want the commands? Jump to [Update](#update). Something already broken?
+> Jump to [Recovery](#recovery-when-an-update-goes-wrong).
+
+---
+
+## Before you update
+
+Two minutes, once, and rollback stops being a research project.
+
+### 1. Take a backup
+
+**Admin → Settings → Backup → Export** downloads a zip containing
+`settings.json`, the
+show schedule, the library tag database (`library.db` — a consistent online
+copy, not a raw file grab), the never-play list (`blocklist.json`: blocked
+tracks, albums, artists and rules), your jingles, SFX, custom voices, themes,
+skills and persona avatars.
+
+Two things it deliberately does **not** contain:
+
+- **Secrets.** API keys and webhook auth are redacted before export, so a
+  backup zip is safe to store but is not a complete restore — you re-enter
+  cloud keys afterwards.
+- **Archives.** `state/archive/` (hourly stream recordings) is excluded because
+  it's enormous. Back that up separately, or accept losing it.
+
+`library.db` does hold each track's file path as Navidrome reports it, so a
+backup you share shows your folder layout.
+
+Restoring runs the archive through the same checks the dedicated imports
+use. `jingles.m3u` is never copied: it is rebuilt from the restored
+`jingles.json`, keeping only entries with an ordinary audio filename.
+`sfx.json` keeps only rows of the shape the effect library writes. The
+never-play list replaces the station's and takes effect at once, without a
+restart; a backup made before it was included leaves the current list alone.
+A skill's
+`tool.mjs` that isn't already live on this station is held for review rather
+than loaded — see [custom skills](custom-skills.md#restoring-a-backup). The
+restore reports anything it left out. Still: restore backups you made, or that
+come from someone you trust.
+
+The tag database is the expensive thing in there. It represents every LLM
+enrichment pass over your library; rebuilding it costs hours and tokens, not
+just a rescan.
+
+### Or let the station take them for you
+
+The export above is a button someone has to press. **Admin → Settings → Backup
+→ Schedule** turns it into a cadence — `daily`, `weekly` or `monthly` — and the
+station writes the same archive to its own `state/` directory, keeping the last
+N (default 7) and deleting the rest.
+
+**Off by default**, and off means off: a station that upgrades and changes
+nothing writes nothing and deletes nothing.
+
+A few things worth knowing before you turn it on:
+
+- **The cadence is elapsed time, not a nightly cron.** The check runs hourly and
+  fires when enough time has passed since the newest backup on disk, so a box
+  that is only powered on for a few hours a day still gets its daily backup.
+- **Retention only ever deletes files the schedule itself wrote.** Those are
+  named `subwave-auto-backup-YYYY-MM-DD-HHMMSS.zip`, and nothing else is
+  counted or considered — a zip you copied into `state/` by hand to restore
+  past a proxy's upload cap (see [Recovery](#recovery-when-an-update-goes-wrong))
+  is invisible to the sweep, as is a manual `subwave-backup-<date>.zip` export.
+- **The backups live in the directory they protect.** That is fine for a bad
+  upgrade and useless for a dead disk. Copy them somewhere else on a schedule of
+  your own; the point of this feature is that there is always something recent
+  to copy.
+- **Download one without rebuilding it.** The Backup panel lists what is on disk
+  and each row has a download button (`GET /backup/file/:name` behind it). This
+  is not the same as **Export**, which builds a *fresh* archive from the station
+  as it is right now — if you want the snapshot from 04:23 last Tuesday, take it
+  from the list, not from Export.
+- **A schedule that is off does not tidy up.** A run killed mid-write (a
+  container restart, an OOM kill) leaves a `subwave-auto-backup-….zip.<hex>.tmp`
+  behind. Every *scheduled run* sweeps those on its way in, including runs that
+  find nothing due — but with the cadence set to `off` no run happens at all, so
+  an orphan from before you switched it off stays until you switch it back on.
+  It is inert, and safe to delete by hand.
+
+### 2. Write down the version you're on
+
+```bash
+grep SUBWAVE_VERSION .env        # image installs
+git describe --tags              # clone installs
+```
+
+You cannot roll back to a version you can't name. On image installs, if
+`SUBWAVE_VERSION` is unset or `latest`, note the running image digest instead:
+
+```bash
+docker compose images
+```
+
+### 3. Read the release notes
+
+[`CHANGELOG.md`](../CHANGELOG.md), or the GitHub release for the tag. Anything
+touching settings, schemas or Icecast rendering is worth reading before rather
+than after.
+
+---
+
+## Update
+
+### Standalone CLI install (the default)
+
+```bash
+subwave self-update   # replace the `subwave` binary itself
+subwave sync          # refresh compose files that are behind the new binary
+subwave update        # pull new images, recreate what changed
+```
+
+Run them in that order:
+
+1. **`self-update`** goes first because `subwave update` pins the stack to **the
+   CLI binary's own release**, so if the binary is behind, so is the stack.
+2. **`sync`** goes next because new services and changed env wiring don't ride
+   an image bump, and only `sync` re-materialises the compose files. It backs up
+   the current ones first, and changes nothing if they're already current.
+3. **`update`** goes last, so the stack is recreated once, with the new compose
+   files and the new images together.
+
+`subwave update` moves the `SUBWAVE_VERSION` pin in `.env` forward to match the
+CLI's own release, then pulls and recreates. It only moves a **concrete**
+version pin — an install deliberately following `latest` stays on `latest`.
+
+`subwave update` exits non-zero when any step fails: the stack isn't running,
+`git pull` (clone installs), the image pull, the build, or `up`. A script or
+cron job can check `$?` to tell that an update didn't land. A failed image pull
+still recreates what it can, but ends with a warning that images may be stale
+instead of "update complete". Re-run once the registry is reachable.
+
+If `update` warns that your compose files are behind the CLI, `sync` was
+skipped: run it, then run `subwave update` again.
+
+### Images, no CLI
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Pin `SUBWAVE_VERSION` in `.env` first if you want a repeatable version rather
+than whatever `latest` resolves to today. Same flow with
+`-f docker-compose.byo.yml`.
+
+### Clone install
+
+```bash
+./scripts/update.sh
+```
+
+Which is `git pull --ff-only` → `docker compose pull --ignore-buildable` →
+`docker compose build --pull` → `up -d --remove-orphans` → image prune.
+
+Remember that **prod images `COPY` source at build time**. `docker compose
+restart controller` reruns the same baked-in code; a source change needs
+`up -d --build`.
+
+### AIO / Unraid
+
+- **One-click (Community Applications)** — Unraid's normal **Check for
+  Updates** → **Apply Update**.
+- **Compose stack** — stack menu → **Pull & Up**.
+
+---
+
+## Verify
+
+Do this every time. Ninety seconds now beats a "the station's been off for a
+day" discovery later.
+
+```bash
+./scripts/health-check.sh            # clone installs: containers + /api/health
+                                     # + /api/now-playing + a log scan
+curl -s http://localhost:7700/api/health     # anywhere: {"status":"on-air"}
+```
+
+Then:
+
+1. **Listen.** Open the player and confirm audio, not just a 200.
+2. **Admin → Monitor → DJ Doc** (`/admin/doctor`) — the full diagnostic sweep,
+   in the UI. `subwave doctor` is the same thing on the CLI.
+3. **Watch the logs for a minute**, especially after a broadcast rebuild:
+
+   ```bash
+   docker compose logs -f controller broadcast
+   ```
+
+A silent stream with healthy containers usually means Liquidsoap, not the
+controller — check `state/logs/radio.log`.
+
+---
+
+## Roll back
+
+Rollback is a version change plus a recreate. What that looks like depends on
+how you installed.
+
+### Image installs (CLI or plain compose)
+
+Move the pin backwards and recreate:
+
+```bash
+# .env
+SUBWAVE_VERSION=1.4.2
+```
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Published tags are bare semver (`1.4.2`), plus `latest`. The list is on the
+[GHCR package pages](https://github.com/perminder-klair?tab=packages&repo_name=subwave)
+and matches the repo's `v*` git tags.
+
+Every service references `${SUBWAVE_VERSION:-latest}`, so one line moves the
+whole stack together. Don't pin services individually — a controller and a
+broadcast image from different releases is a configuration nobody tests.
+
+### Clone installs
+
+```bash
+git log --oneline -10
+git checkout <previous-tag-or-sha>
+docker compose up -d --build
+```
+
+### AIO / Unraid
+
+Edit the container's **Repository** field to a specific tag instead of
+`latest`:
+
+```
+ghcr.io/perminder-klair/subwave-aio:1.4.2
+```
+
+Apply, and Unraid pulls that tag. Set it back to `:latest` when you want to
+resume following releases.
+
+### What rolling back does to your state
+
+`state/` is **not** versioned alongside the images, and it does not roll back
+with them. Two consequences worth knowing before you do it:
+
+- **Settings added by the newer version are dropped.** The controller loads
+  `settings.json` into a fully-normalised shape and writes that shape back, so
+  keys the older version doesn't know about disappear on its first save.
+  Rolling forward again leaves those settings at their defaults, not at what
+  you had configured. Usually harmless; occasionally surprising.
+- **The library database migrates forward only.** Schema steps are versioned
+  by `PRAGMA user_version` and applied in order on open; there are no down
+  migrations. An older build opening a newer database mostly just ignores the
+  extra columns, but a few historical steps rebuilt tables outright, and across
+  one of those a downgrade is not a supported path.
+
+So: rolling back **one release** is routine. Rolling back **several**, or
+across a release whose notes mention a schema change, is the case where you
+restore the backup you took first.
+
+Rolling back is a way to get back on air, not a fix. Open an issue with what
+broke — a version people have to pin away from is worth knowing about.
+
+---
+
+## Recovery: when an update goes wrong
+
+### The admin console won't accept your login
+
+Admin credentials come from the root `.env` — `ADMIN_USER` and `ADMIN_PASS` —
+and **only** from there. They are not in `settings.json`, so no backup, restore
+or settings edit can change them, and nothing an upgrade does to `state/` can
+lock you out.
+
+```bash
+grep -E '^(ADMIN_USER|ADMIN_PASS)=' .env
+docker compose logs controller | grep -i 'auth'
+```
+
+Four things to check:
+
+1. **Are they set at all?** In production the controller refuses to start
+   without both and says so:
+
+   ```
+   [auth] FATAL: NODE_ENV=production but ADMIN_USER and ADMIN_PASS are not set.
+   ```
+
+   If you see that, the controller isn't running — you're looking at a stale
+   page or a proxy error, not a login failure.
+
+2. **Did the container pick them up?** Compose reads `.env` at *recreate*, not
+   at restart:
+
+   ```bash
+   docker compose exec controller printenv ADMIN_USER
+   docker compose up -d --force-recreate controller   # if it's stale
+   ```
+
+3. **Are special characters mangling the value?** `.env` is not a shell:
+   quoting and escaping rules differ from what you'd expect, and `$` and `#`
+   are the usual culprits. Compare what the container actually received
+   (`printenv` above) against what you wrote. Set an alphanumeric password to
+   confirm the diagnosis, then pick a permanent one that survives the round
+   trip.
+
+4. **Is sign-in locked?** Ten different wrong passwords lock sign-in for 15
+   minutes. The sign-in form says so and counts down, and the right password is
+   refused until it lifts. It's a timed lock, not a ban: it's held in memory, it
+   lifts by itself, and restarting the controller clears it at once. The music
+   keeps playing while you do:
+
+   ```bash
+   docker compose restart controller
+   ```
+
+   A client re-sending one old password counts once, however often it tries, so
+   a forgotten tab or an integration still holding the old `ADMIN_PASS` can't
+   trip it.
+
+   The final say is yours. If the station can't be reached from the internet and
+   you'd rather not have the lock, add this to `.env` and recreate the controller:
+
+   ```bash
+   ADMIN_LOCKOUT=off
+   docker compose up -d --force-recreate controller
+   ```
+
+   Nothing then limits password guesses, so `ADMIN_PASS` alone guards the admin
+   API. The controller logs a warning at every boot while it's off. Don't use this
+   on a station exposed to the internet.
+
+On AIO/Unraid the same values are container environment variables in the
+template rather than lines in a `.env`, and restarting the container clears a
+lock, though that restarts the stream too.
+
+### The stream is silent but containers are healthy
+
+The controller and Icecast can both be fine while Liquidsoap is not.
+
+```bash
+docker compose logs --tail=100 broadcast
+tail -100 state/logs/radio.log
+```
+
+Then restart the pair — they're supervised together, so restarting `broadcast`
+bounces both:
+
+```bash
+docker compose restart broadcast
+```
+
+Remember that Icecast config is rendered **at broadcast boot** from `.env` and
+the controller-written state files. Settings that say *restart required* in
+admin (Opus/AAC/FLAC mounts, listener buffer, the stream password) genuinely
+need this bounce, not just a settings save.
+
+### The controller restart-loops
+
+```bash
+docker compose logs --tail=200 controller
+```
+
+Most boot failures name their cause in the first twenty lines. The two common
+shapes:
+
+- **A fatal config error** — missing admin credentials in production, an
+  unreadable state path. Fix the input and recreate.
+- **A state file the new version can't read.** Move the offending file aside
+  and let it regenerate:
+
+  ```bash
+  mv state/settings.json state/settings.json.bak
+  docker compose up -d --force-recreate controller
+  ```
+
+  You lose your configuration, not your library — then restore from the backup
+  zip via **Admin → Settings → Backup → Import**.
+
+### Everything else
+
+`state/` is the only thing that matters and it survives `docker compose down`
+(it's a bind mount, not a volume). So the nuclear option is cheap:
+
+```bash
+docker compose down
+docker compose up -d --force-recreate
+```
+
+If that doesn't do it, roll back to the previous version and open an issue.
+
+---
+
+## Related
+
+- [`DEPLOY.md`](../DEPLOY.md) — production deployment, Cloudflare, operations.
+- [`docs/deployment.md`](deployment.md) — the deploy matrix, state layout and
+  configuration precedence.
+- [`docs/unraid.md`](unraid.md) — Unraid specifics.

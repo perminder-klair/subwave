@@ -7,16 +7,10 @@ import { Button } from '@/components/ui/button';
 import { V3Alert } from '@/components/ui/alert';
 
 // Admin-scoped error boundary, nested inside app/admin/layout.tsx so a throwing
-// panel leaves AdminShell's chrome (nav, sign-in state) mounted. Without this
-// file the throw bubbles to app/error.tsx and takes the console down to the
-// marketing-styled page, losing the nav the operator needs.
-//
-// Panels handle their own fetch failures inline, so what reaches this boundary
-// is a render-time throw and the copy says so.
-//
-// `reset()` re-renders without re-fetching and is usually enough (panels fetch
-// on mount); `router.refresh()` is included so a stale RSC payload can't pin the
-// error in place.
+// panel leaves AdminShell's chrome mounted instead of bubbling to app/error.tsx.
+// Panels handle fetch failures inline, so what reaches here is a render throw.
+// `reset()` re-renders without re-fetching; `router.refresh()` is paired with it
+// so a stale RSC payload can't pin the error in place.
 
 export default function AdminError({
   error,

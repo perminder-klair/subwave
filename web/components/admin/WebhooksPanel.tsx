@@ -1,19 +1,17 @@
 'use client';
 
-// Webhooks. See controller/src/broadcast/webhooks.ts for the fan-out and the
-// documented payload shapes.
 
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { Controller, useFieldArray } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import {
   webhooksSchema,
   WEBHOOKS_LIMIT,
-  type Webhook,
   type WebhookEvent,
 } from '@/lib/schemas.generated';
 import { Input } from '../ui/input';
@@ -22,20 +20,20 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
+import {
+  patchWebhooks,
+  useSensitiveWebhooksMutation,
+  useWebhooksQuery,
+  type WebhooksResponse,
+} from './operations-queries';
 
 // The form owns the list; the patch shape the route accepts is wider.
 const formSchema = z.object({ webhooks: webhooksSchema });
 type FormValues = z.input<typeof formSchema>;
-// A row as the FORM sees it. This is z.input, so `enabled` and `authHeader`
-// are optional here — the schema .default()s them — even though blank() and
-// every server response populate both.
+type SavedWebhooks = z.output<typeof formSchema>['webhooks'];
+// A row as the FORM sees it: z.input, so `enabled` and `authHeader` are optional
+// here (the schema defaults them) though blank() and the server always set both.
 type WebhookRow = FormValues['webhooks'][number];
-
-interface WebhooksResponse {
-  events: WebhookEvent[];
-  webhooks: Webhook[];
-  trackPlayListenerGated?: boolean;
-}
 
 function clientMintId() {
   const b = crypto.getRandomValues(new Uint8Array(3));
@@ -277,14 +275,13 @@ function ExamplesSection() {
 
 export default function WebhooksPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [events, setEvents] = useState<WebhookEvent[] | null>(null);
+  const webhooksQuery = useWebhooksQuery(adminFetch, hydrated && !needsAuth, 'always');
+  const events = webhooksQuery.data?.events ?? null;
   const [trackPlayListenerGated, setTrackPlayListenerGated] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const form = useZodForm(formSchema, { webhooks: [] });
-  // keyName defaults to 'id' — which would CLOBBER our webhook's own `id`
-  // field. Renaming RHF's internal key is mandatory here, not cosmetic.
+  // keyName defaults to 'id', which would clobber the webhook's own `id`.
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: 'webhooks',
@@ -293,71 +290,59 @@ export default function WebhooksPanel() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/webhooks');
-        if (!r.ok) throw new Error(`failed (${r.status})`);
-        const j = (await r.json()) as WebhooksResponse;
-        if (cancelled) return;
-        setEvents(j.events);
-        form.reset({ webhooks: j.webhooks || [] });
-        setLoaded(true);
-        setTrackPlayListenerGated(!!j.trackPlayListenerGated);
-      } catch (e) {
-        if (cancelled) return;
-        setErr(errorMessage(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth, adminFetch, form]);
+    if (
+      loaded
+      || !webhooksQuery.data
+      || webhooksQuery.error
+      || webhooksQuery.isFetching
+    ) return;
+    form.reset({ webhooks: webhooksQuery.data.webhooks });
+    setTrackPlayListenerGated(!!webhooksQuery.data.trackPlayListenerGated);
+    setLoaded(true);
+  }, [
+    form,
+    loaded,
+    webhooksQuery.data,
+    webhooksQuery.error,
+    webhooksQuery.isFetching,
+  ]);
+
+  const saveMutation = useSensitiveWebhooksMutation<SavedWebhooks[number]>(adminFetch);
+  const gateMutation = useAdminMutation<Partial<WebhooksResponse>, boolean>({
+    adminFetch,
+    request: (next, fetcher) => adminJson<Partial<WebhooksResponse>>(fetcher, '/webhooks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trackPlayListenerGated: next }),
+    }),
+    onDone: (receipt, _next, client) => {
+      patchWebhooks(client, { trackPlayListenerGated: !!receipt.trackPlayListenerGated });
+    },
+    toastOnError: false,
+  });
 
   const save = form.handleSubmit(async (values) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/webhooks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ webhooks: values.webhooks }),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        webhooks?: Webhook[];
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // A rule only the server can check still lands on the right input.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      const j = await saveMutation.mutateAsync(values.webhooks);
       // Re-seed from the server response so redacted authHeaders come back as
       // the 'set' sentinel rather than the value we just sent.
       form.reset({ webhooks: j.webhooks || [] });
       notify.ok('Webhooks saved.');
     } catch (e) {
+      if (e instanceof AdminResponseError) applyServerFieldErrors(form, e.body.fieldErrors);
       notify.err(`Save failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
     }
   });
 
-  // The gate persists the moment it's flipped: it must not ride the hooks Save
-  // button, which an invalid draft row would disable. Doesn't touch `hooks`, so
-  // unsaved row edits survive a toggle.
+  // The gate persists on flip rather than riding the Save button, which an
+  // invalid draft row would disable. Leaves `hooks` alone, so edits survive.
   const saveGate = async (next: boolean) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/webhooks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trackPlayListenerGated: next }),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        trackPlayListenerGated?: boolean;
-        error?: string;
-      };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await gateMutation.mutateAsync(next);
       setTrackPlayListenerGated(!!j.trackPlayListenerGated);
       notify.ok(`track.play listener gate ${j.trackPlayListenerGated ? 'on' : 'off'}.`);
     } catch (e) {
@@ -369,18 +354,17 @@ export default function WebhooksPanel() {
 
   const fireTest = async (id: string) => {
     try {
-      const r = await adminFetch(`/webhooks/${id}/test`, { method: 'POST' });
-      if (!r.ok) throw new Error(`failed (${r.status})`);
+      await adminJson(adminFetch, `/webhooks/${id}/test`, { method: 'POST' });
       notify.ok('Test payload sent.');
     } catch (e) {
       notify.err(`Test failed: ${errorMessage(e)}`);
     }
   };
 
-  if (err) {
+  if (webhooksQuery.error && !loaded) {
     return (
       <div className="grid gap-4">
-        <Card title="Webhooks"><ErrorState error={err} /></Card>
+        <Card title="Webhooks"><ErrorState error={errorMessage(webhooksQuery.error)} /></Card>
       </div>
     );
   }
@@ -448,6 +432,7 @@ export default function WebhooksPanel() {
       {fields.length === 0 && (
         <Card title="No webhooks yet">
           <EmptyState
+            art="jack"
             title="No webhooks yet"
             description="Add one to push now-playing and station events out to other services."
             action={<Btn sm onClick={() => append(blank(events))}>Add webhook</Btn>}
@@ -458,13 +443,11 @@ export default function WebhooksPanel() {
       {fields.map((f, i) => {
         const row = form.watch(`webhooks.${i}`);
         const rowErrors = form.formState.errors.webhooks?.[i];
-        // `enabled` is optional in z.input because the schema defaults it to
-        // true; blank() and the server response always set it, so the ?? here
-        // just re-states that default rather than papering over a real gap.
+        // `enabled` is optional in z.input (schema defaults it true); blank()
+        // and the server always set it, so the ?? restates that default.
         const enabled = row.enabled ?? true;
-        // Keyed off _rhfKey, not the array index: reordering or removing a row
-        // must not hand a different row the ids a screen reader is already
-        // pointing at.
+        // Keyed off _rhfKey, not the array index, so removing a row cannot hand
+        // its ids to another row.
         const urlAria = fieldAria(`wh-url-${f._rhfKey}`, rowErrors?.url);
         const authAria = fieldAria(`wh-auth-${f._rhfKey}`, rowErrors?.authHeader, {
           hasDescription: true,
@@ -481,8 +464,7 @@ export default function WebhooksPanel() {
         return (
           <Card
             key={f._rhfKey}
-            /* A webhook URL is one long unbreakable token and `.card-head` is a
-               flex row that doesn't wrap, so break inside the title instead. */
+            /* `.card-head` is a non-wrapping flex row, so break inside the title. */
             title={
               row.url
                 ? <span className="break-all">{row.url}</span>
@@ -521,12 +503,7 @@ export default function WebhooksPanel() {
                 <FieldLabel className="caption" {...authAria.labelProps}>
                   Authorization header (optional)
                 </FieldLabel>
-                {/* Controller, not register: the 'set' sentinel must RENDER as
-                    blank while remaining the stored form value, so the display
-                    value diverges from the field value. Spreading register()
-                    and overriding value/onChange would strand RHF's own
-                    onChange and make this a controlled input inside an
-                    uncontrolled registration. */}
+                {/* Display the stored 'set' sentinel as an empty input. */}
                 <Controller
                   control={form.control}
                   name={`webhooks.${i}.authHeader`}
@@ -541,11 +518,9 @@ export default function WebhooksPanel() {
                       placeholder={field.value === 'set' ? '(stored, leave blank to keep)' : 'Bearer …'}
                       aria-label="Authorization header"
                       spellCheck={false}
-                      // Opaque secret, so `off` — the convention every other
-                      // credential box in admin/ follows. Left at the browser
-                      // default, a password manager reads this as the site's
-                      // own login: it offers to fill it, and offers to UPDATE
-                      // the saved password when the form submits.
+                      // Opaque secret, so `off` like every other credential box:
+                      // at the browser default a password manager treats it as
+                      // the site's own login and offers to overwrite it.
                       autoComplete="off"
                     />
                   )}
@@ -559,9 +534,7 @@ export default function WebhooksPanel() {
                 />
               </Field>
 
-              {/* No single labelable control here, so the Field itself is the
-                  named group (it already carries role="group") and each chip
-                  reports its own on/off via aria-pressed. */}
+              {/* Label the group; each chip exposes its state through aria-pressed. */}
               <Field data-invalid={eventsAria.invalid} {...eventsAria.groupProps}>
                 <FieldLabel asChild className="caption" {...eventsAria.labelledByProps}>
                   <span>Events</span>
@@ -576,8 +549,7 @@ export default function WebhooksPanel() {
                         dot={on}
                         onClick={() => toggleEvent(ev)}
                         pressed={on}
-                        // These pills are the event picker, so they need a
-                        // thumb-sized target on a phone.
+                        // Event picker: needs a thumb-sized target on a phone.
                         className="min-h-9 cursor-pointer sm:min-h-0"
                       >
                         {ev}

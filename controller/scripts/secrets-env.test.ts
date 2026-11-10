@@ -15,12 +15,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // STATE_DIR must be set before config.js resolves it at import time.
-const stateDir = mkdtempSync(join(tmpdir(), 'secrets-env-test-'));
+const stateDir = createTempDir(join(tmpdir(), 'secrets-env-test-'));
 process.env.STATE_DIR = stateDir;
 
 const { readSecretsFile, saveSecrets, SECRET_ENV_KEYS } = await import('../src/setup/secrets.js');

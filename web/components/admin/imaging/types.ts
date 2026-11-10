@@ -1,6 +1,3 @@
-// Asset shapes from the controller's /sfx and /beds routes. The generic
-// settings-save primitives (SettingsData, SaveSettings, SectionHeader,
-// PreviewButton) live in settings/shared.tsx, not here.
 
 export interface SfxEntry {
   name: string;

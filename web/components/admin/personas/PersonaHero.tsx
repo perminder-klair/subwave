@@ -1,5 +1,5 @@
 'use client';
-import type { Persona } from './types';
+import type { Persona, SettingsResponse } from './types';
 import { engineLabel } from './helpers';
 import { Eyebrow } from '../ui';
 
@@ -13,10 +13,12 @@ interface PersonaHeroProps {
   onAirShow: { id: string; name: string } | null;
   defaultEngine: string;
   onAirCloudIssue: string | null;
+  // Needed only so engineLabel can resolve a persona on the station default.
+  data: SettingsResponse | null;
 }
 
 export function PersonaHero({
-  onAirPersona, defaultPersona, onAirShow, defaultEngine, onAirCloudIssue,
+  onAirPersona, defaultPersona, onAirShow, defaultEngine, onAirCloudIssue, data,
 }: PersonaHeroProps) {
   const overridden = !!onAirShow && defaultPersona?.id !== onAirPersona?.id;
   return (
@@ -32,8 +34,6 @@ export function PersonaHero({
         </div>
       </div>
 
-      {/* Describes the persona actually broadcasting now, which
-          a scheduled show can make different from the default selection. */}
       <div className="flex flex-wrap items-center gap-3 bg-[var(--ink-softer)] p-3.5">
         <span className="caption text-vermilion">● on air</span>
         <span className="text-[13px] font-bold">
@@ -42,13 +42,10 @@ export function PersonaHero({
         {onAirPersona?.tagline.trim() && (
           <span className="text-[11px] text-muted">— {onAirPersona.tagline.trim()}</span>
         )}
-        {/* The extra gap is a desktop separator between the name block and the
-            settings block; on a phone this chip starts a wrapped line, where a
-            leading indent just reads as a misalignment. */}
         <span className="caption sm:ml-4">
           frequency · {onAirPersona ? onAirPersona.frequency : '—'}
         </span>
-        <span className="caption">voice · {onAirPersona ? engineLabel(onAirPersona) : '—'}</span>
+        <span className="caption">voice · {onAirPersona ? engineLabel(onAirPersona, data) : '—'}</span>
         {onAirCloudIssue && (
           <span className="caption text-[var(--danger)]">
             ⚠ cloud voice inactive, speaking via {defaultEngine}

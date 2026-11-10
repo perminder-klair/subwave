@@ -41,4 +41,17 @@ assert.deepEqual(
   'intra-list duplicates collapse',
 );
 
+// Duplicate rips have different Subsonic ids but are the same audible song.
+// Keep the first copy so a strict show cannot offer both to the picker or play
+// them consecutively after the scoped hard window relaxes.
+assert.deepEqual(
+  mergePlaylistTracks([[
+    { id: 'rip-a', title: ' Jolene ', artist: 'Dolly Parton' },
+    { id: 'rip-b', title: 'jolene', artist: ' dolly parton ' },
+    { id: 'other', title: '9 to 5', artist: 'Dolly Parton' },
+  ]]).map(t => t.id),
+  ['rip-a', 'other'],
+  'duplicate title/artist rips collapse onto the first playlist entry',
+);
+
 console.log('show-playlist merge checks passed');

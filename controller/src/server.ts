@@ -1,12 +1,11 @@
-// Controller HTTP API — thin entry point.
-// Wires middleware, mounts the route modules (see routes/), and starts the
-// background services. The Next.js web UI hits this for: now-playing, queue
-// state, request submission, and the admin surface.
+import { showPreparation } from './broadcast/show-preparation.js';
+// Controller HTTP API — thin entry point: wires middleware, mounts routes/ and
+// starts the background services.
 import express from 'express';
-import helmet from 'helmet';
 import { config } from './config.js';
 import { envIssues } from './util/env.js';
 import * as settings from './settings.js';
+import { logCompatDetection } from './routes/settings/core.js';
 import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
@@ -15,18 +14,26 @@ import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import * as remoteTts from './audio/remoteTts.js';
 import * as kokoro from './audio/kokoro.js';
+import { hostedMaxBitrate, isHosted } from './setup/hosted.js';
 import * as chatterbox from './audio/chatterbox.js';
 import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
-import { startScheduler } from './broadcast/scheduler.js';
+import { startScheduler, flushPendingAutoPlaylist, refreshAutoPlaylist } from './broadcast/scheduler.js';
+import { showKeyAt } from './broadcast/show-boundary.js';
+import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
+import { autoPlaylistReady, skipTrack } from './broadcast/liquidsoap-control.js';
+import * as geminiTts from './audio/gemini.js';
+import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
 import { startStreamIdleMonitor } from './broadcast/stream-idle.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
 import * as likes from './broadcast/likes.js';
-import { cors } from './middleware/cors.js';
+import { configureHttp, httpErrorHandler } from './middleware/http.js';
+import { createStartupGate } from './middleware/startup.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
+import { router as authRoutes } from './routes/auth.js';
 import { router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
@@ -44,10 +51,14 @@ import { router as listenersRoutes } from './routes/listeners.js';
 import { router as webhooksRoutes } from './routes/webhooks.js';
 import { router as scrobbleRoutes } from './routes/scrobble.js';
 import { router as likesRoutes } from './routes/likes.js';
+import { router as lyricsRoutes } from './routes/lyrics.js';
 import { router as personasRoutes } from './routes/personas.js';
 import { router as showsRoutes } from './routes/shows.js';
+import { router as steerRoutes } from './routes/steer.js';
 import { router as communityRoutes } from './routes/community.js';
 import { router as backupRoutes } from './routes/backup.js';
+import { router as stemsRoutes } from './routes/stems.js';
+import { router as stemCacheRoutes } from './routes/stem-cache.js';
 import { router as stationsRoutes } from './routes/stations.js';
 import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
@@ -55,35 +66,32 @@ import { router as generateRoutes } from './routes/generate.js';
 import { router as doctorRoutes } from './routes/doctor.js';
 import { router as connectRoutes } from './routes/connect.js';
 import { router as mcpRoutes } from './routes/mcp.js';
+import { router as nowPlayingFileRoutes } from './routes/now-playing-file.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
-import { loadSetupConfig } from './setup/config.js';
+import { loadNavidromeConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
 import * as library from './music/library.js';
 
 // Fail fast in production if the admin gate isn't configured.
 assertAdminConfigured();
 
-// Log-don't-die guard. Node's default since v15 is to CRASH the process on any
-// unhandled promise rejection — under the AIO supervisor (and compose's
-// restart policy) that showed up as random 502s while the controller bounced
-// (#786). A stray rejection from a background poll is never worth taking the
-// station's API down; log it loudly and keep serving.
+// Log-don't-die: Node crashes the process on an unhandled rejection since v15,
+// which under compose's restart policy is random 502s (#786). A stray rejection
+// from a background poll must never take the API down.
 process.on('unhandledRejection', (reason: any) => {
   console.error('[fatal-ish] unhandled promise rejection (continuing):', reason?.stack || reason);
 });
 
 // Graceful shutdown: fold the library DB's WAL back into library.db before the
-// process dies. Without this, `docker stop` (SIGTERM) left the -wal sidecar
-// behind on every restart, and it only ever grew (#786). Synchronous work only.
+// process dies, else the -wal sidecar survives every restart and only grows
+// (#786). Synchronous work only.
 let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal} — reaping TTS workers + closing library DB`);
   // Reap resident Python TTS workers so they don't outlive a bare-process
-  // shutdown (npm start / dev). Docker reaps the container's process group, so
-  // there this is belt-and-suspenders. Each guarded so a dead worker never
-  // blocks the rest of shutdown.
+  // shutdown. Each guarded so a dead worker never blocks the rest of shutdown.
   for (const stopWorker of [kokoro.stop, chatterbox.stop, pocketTts.stop]) {
     try {
       stopWorker();
@@ -103,44 +111,16 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 const app = express();
 
-// Security response headers. This is an API — it serves JSON, images, audio and
-// zips, never HTML — so most of helmet's document-level policies are inert here
-// and the three that matter are the ones configured below.
-//
-//   • crossOriginResourcePolicy MUST be 'cross-origin'. helmet's default is
-//     'same-origin', which tells the browser to refuse the response to any other
-//     origin — that would break /cover/:id artwork, persona avatars and the
-//     sfx/jingle/bed previews in every deployment where the player is not
-//     same-origin with the controller, which is exactly what middleware/cors.ts
-//     opens the door for. A default that silently blanks album art is not a
-//     default worth inheriting.
-//   • contentSecurityPolicy is off. A CSP on a JSON or image response is inert
-//     (it constrains a DOCUMENT, and no document is served from here); the web
-//     app ships its own. Leaving it on would only add ~100 bytes to every reply.
-//   • strictTransportSecurity is off because TLS is not this process's to
-//     assert. Cloudflare/Caddy terminate it (`auto_https off` in the bundled
-//     edge), and helmet's default carries includeSubDomains — an HSTS pin the
-//     controller cannot honour and the operator did not ask for.
-//
-// What is left is what an API wants: nosniff, no X-Powered-By, X-Frame-Options
-// SAMEORIGIN, a no-referrer policy, and the assorted legacy no-ops.
-app.use(
-  helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
-    crossOriginOpenerPolicy: false,
-    contentSecurityPolicy: false,
-    strictTransportSecurity: false,
-  }),
-);
+configureHttp(app);
 
-// Global cap covers small JSON payloads everywhere; the persona-avatar route
-// re-applies its own (slightly larger) cap on top via per-route json middleware.
-// The default 100 KB was below the 50–300 KB data URLs the avatar picker posts.
-app.use(express.json({ limit: '600kb' }));
-app.use(cors);
+// Keep health checks and every state consumer behind the same startup barrier.
+// CORS preflight stays available while the controller initializes.
+const startup = createStartupGate();
+app.use(startup.middleware);
 
 // Routes. `requireAdmin` is applied per-route inside the admin modules.
 app.use(publicRoutes);
+app.use(authRoutes);
 app.use(requestRoutes);
 app.use(settingsRoutes);
 app.use(jingleRoutes);
@@ -158,10 +138,14 @@ app.use(listenersRoutes);
 app.use(webhooksRoutes);
 app.use(scrobbleRoutes);
 app.use(likesRoutes);
+app.use(lyricsRoutes);
 app.use(personasRoutes);
 app.use(showsRoutes);
+app.use(steerRoutes);
 app.use(communityRoutes);
 app.use(backupRoutes);
+app.use(stemsRoutes);
+app.use(stemCacheRoutes);
 app.use(stationsRoutes);
 app.use(audienceRoutes);
 app.use(systemRoutes);
@@ -169,27 +153,35 @@ app.use(generateRoutes);
 app.use(doctorRoutes);
 app.use(connectRoutes);
 app.use(mcpRoutes);
+app.use(nowPlayingFileRoutes);
+app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
+app.use(httpErrorHandler);
 
-// (manual skip is not implemented in this build — Liquidsoap controls pacing)
+// There is no manual skip — Liquidsoap controls pacing.
 
-// ---------------------------------------------------------------------------
-// START
-// ---------------------------------------------------------------------------
-app.listen(config.server.port, async () => {
+app.listen(config.server.port, async (err?: Error) => {
+  if (err) {
+    console.error('[startup] HTTP listen failed:', err.message);
+    process.exit(1);
+  }
   console.log(`SUB/WAVE controller on :${config.server.port}`);
 
-  // Malformed env vars fell back to their defaults at import time and warned on
-  // stdout. Repeat them into the booth log too — that's the surface an operator
-  // actually reads, and a typo'd var otherwise presents only as the feature
-  // behind it quietly behaving as if it were never set.
+  // Hosted mode reads its env on use (setup/hosted.ts), so read it once here:
+  // a malformed SUBWAVE_HOSTED or SUBWAVE_MAX_BITRATE is then in envIssues for
+  // the booth-log repeat below, and the plan is on record at boot.
+  if (isHosted()) {
+    const ceiling = hostedMaxBitrate();
+    console.log(`[hosted] SUB/WAVE Cloud station${ceiling ? `; streams capped at ${ceiling} kbps` : ''}`);
+  }
+
+  // Malformed env vars already fell back and warned on stdout; repeat them into
+  // the booth log, which is the surface an operator actually reads.
   for (const issue of envIssues()) {
     queue.log('warn', `[env] ${issue.name}="${issue.value}" ${issue.problem} — using ${issue.usedInstead} instead`);
   }
 
-  // Source the wizard-managed secrets file (state/secrets.env) into process.env
-  // before anything else touches the AI SDK. Real env vars (from compose
-  // env_file) always win — secrets.env is the persistence layer for keys the
-  // operator typed into the first-run wizard.
+  // Source state/secrets.env into process.env before anything touches the AI SDK.
+  // Real env vars always win; this is the wizard's persistence layer.
   try {
     const { loaded, skipped, warnings } = await loadSecretsIntoEnv();
     if (loaded.length || skipped.length) {
@@ -197,9 +189,8 @@ app.listen(config.server.port, async () => {
         `[secrets] state/secrets.env: loaded=${loaded.length} skipped(env-already-set)=${skipped.length}`,
       );
     }
-    // A hand edit this file couldn't read the way the operator meant it. Both
-    // surfaces, for the same reason the env warnings take both: the mistake
-    // otherwise presents only as a provider 401, which points nowhere near here.
+    // Both surfaces: a misread hand edit otherwise presents only as a provider
+    // 401, which points nowhere near this file.
     for (const w of warnings) {
       console.warn(`[secrets] ${w}`);
       queue.log('warn', `[secrets] ${w}`);
@@ -208,16 +199,9 @@ app.listen(config.server.port, async () => {
     console.error('[secrets] load failed:', err.message);
   }
 
-  // Wizard overlay — Navidrome creds the operator typed in. Env wins; this
-  // only fills in fields that env didn't already provide.
+  // Load the active station connection using the shared precedence policy.
   try {
-    const sc = await loadSetupConfig();
-    if (sc.navidrome) {
-      if (!process.env.NAVIDROME_URL && sc.navidrome.url) config.navidrome.url = sc.navidrome.url;
-      if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
-      if (!process.env.NAVIDROME_PASS && sc.navidrome.pass)
-        config.navidrome.password = sc.navidrome.pass;
-    }
+    await loadNavidromeConfig();
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
   }
@@ -226,23 +210,67 @@ app.listen(config.server.port, async () => {
   try {
     await settings.load();
     const s = settings.get();
-    config.weather.lat = s.weather.lat;
-    config.weather.lng = s.weather.lng;
-    config.weather.locationName = s.weather.locationName;
-    config.weather.onAirLocation = s.weather.onAirLocation;
-    config.weather.units = s.weather.units;
-    await settings.ensureLiquidsoapSettingsFile();
+    const { rewroteMountFiles } = await settings.ensureLiquidsoapSettingsFile();
+    // A plan change (or a hand edit) reached the mount files at boot; the
+    // running mixer still has the old ones until it restarts.
+    if (rewroteMountFiles.length) {
+      const line = `[settings] stream mounts updated to match the saved settings${hostedMaxBitrate() ? ` and this plan's ${hostedMaxBitrate()} kbps ceiling` : ''} (${rewroteMountFiles.join(', ')}); they take effect when the mixer next restarts`;
+      console.log(line);
+      queue.log('scheduler', line);
+    }
     console.log(
       `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName} onAir=${settings.resolveOnAirLocation(s)}`,
     );
+    // The one upgrade that changes behaviour without being asked (#1687), so it
+    // is said where the operator reads, every boot until a save records it.
+    // Detect what an `auto` openai-compatible connection is talking to before
+    // the first pick, and say what was found where the operator reads.
+    void logCompatDetection();
+    if (settings.migratedFromCandidatePool()) {
+      queue.log('picker', 'Candidate Pool is retired: this station now selects tracks with Track Shortlist, its replacement. Review Settings → Music selection; saving any setting records the choice and retires this note.');
+    }
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }
 
-  // Never-play blocklist — must be in memory before the scheduler's first
-  // auto-playlist build and the first queue push. load() itself never throws
-  // (a corrupt file starts empty), so no try/catch needed.
+  // Must be in memory before the first auto-playlist build and queue push.
+  // load() never throws (a corrupt file starts empty).
   await blocklist.load();
+
+  // Warm the Gemini Extended Voice Library membership index OFF the boot path.
+  // usableVoice() trusts the index rather than a structural guess, so a
+  // controller that has never browsed the library would reject a persona's
+  // library voice and fall back to the station voice — the station would sound
+  // right until the first restart and wrong after it, which is the worst way to
+  // fail. Deliberately not awaited: boot must not block on Google, and a
+  // failure here just leaves the pre-existing graceful fallback in place.
+  if (geminiTts.isAvailable()) {
+    void geminiLibrary.prewarm().then(
+      (n) => { if (n) console.log(`[tts] gemini voice library: ${n} names indexed`); },
+      () => { /* never fatal — see above */ },
+    );
+  }
+
+  // Recover journaled Navidrome ID adoption before the first queue build or
+  // playlist sync. Works before library.load(); a failed/deferred apply leaves
+  // its recovery map for the next tagger run or boot.
+  try {
+    const { applyPendingRotation } = await import('./music/id-rotation.js');
+    await applyPendingRotation();
+  } catch (err: any) {
+    console.error('[id-rotation] boot apply failed (will retry next boot):', err.message);
+  }
+
+  // Hearts whose file came back under a new id (a re-import) follow it. Never
+  // fatal: a miss leaves the heart where it was, for the next boot or tag run.
+  // Not awaited: a planned move asks Navidrome first (music/heart-follow.ts), and
+  // a server still starting must not hold the boot behind its timeout. Nothing
+  // else in the boot depends on where a heart sits.
+  void import('./music/heart-follow.js')
+    .then(({ followMovedHearts }) => followMovedHearts())
+    .catch((err: unknown) => {
+      console.error('[likes] following moved hearts failed (will retry):', err instanceof Error ? err.message : err);
+    });
 
   // Start the remote-TTS /health probe loop now that settings are loaded — its
   // URL lives in settings (not env), so it can't self-start at import time the
@@ -252,11 +280,16 @@ app.listen(config.server.port, async () => {
   } catch (err: any) {
     console.error('[remote] tts probe start failed:', err.message);
   }
+  // The shared Kokoro server's probe (KOKORO_URL; no-op without it), so the
+  // first DJ link already knows whether it can render there.
+  try {
+    kokoro.start();
+  } catch (err: any) {
+    console.error('[kokoro] shared server probe start failed:', err.message);
+  }
 
-  // Seed today's LLM token tally from the durable event log so a mid-day
-  // restart resumes the daily budget count instead of resetting it. Must run
-  // once, before any new model call records (re-seeding would double-count).
-  // Best-effort: a missing log (fresh install) just leaves the tally at 0.
+  // Resume today's LLM token tally from the durable event log. Must run ONCE and
+  // before any new model call records, or it double-counts.
   try {
     const { seedDailyUsageFromLog } = await import('./llm/log.js');
     const seeded = await seedDailyUsageFromLog();
@@ -265,11 +298,9 @@ app.listen(config.server.port, async () => {
     console.error('[budget] seed failed:', err.message);
   }
 
-  // Seed the shipped built-ins (src/skills/builtins/<kind>/ templates) into
-  // state/skills/<kind>/ as full editable skills — SKILL.md + tool.mjs, idempotent
-  // (never clobbers operator edits) — then load state/skills as the single load
-  // root. Built-ins are no longer special at load time; the seeder just runs first
-  // so their files exist when the scan happens. None of this is fatal.
+  // Seed the shipped built-ins into state/skills/<kind>/ (idempotent, never
+  // clobbers operator edits), then scan state/skills as the single load root.
+  // Order matters only so the files exist when the scan happens. Never fatal.
   try {
     const { loadSkills } = await import('./skills/loader.js');
     const { seedBuiltinSkills } = await import('./skills/scaffold.js');
@@ -283,8 +314,7 @@ app.listen(config.server.port, async () => {
     console.error('[skills] load failed:', err.message);
   }
 
-  // First-run banner — operators glancing at `docker compose logs` should
-  // immediately see where to finish setup.
+  // First-run banner for operators glancing at `docker compose logs`.
   try {
     const status = await getSetupStatus();
     if (status.needsSetup) {
@@ -297,23 +327,23 @@ app.listen(config.server.port, async () => {
     }
   } catch {}
 
-  // Open (or resume) the DJ session before the watcher starts dispatching
-  // track changes — the queue and scheduler append turns into it.
+  // Open or resume the DJ session before the watcher dispatches track changes —
+  // the queue and scheduler append turns into it.
   try {
     const ctx = await getFullContext();
+    await showPreparation.recover();
     const s = await session.recover(ctx);
     console.log(`[session] ${s.id} (${s.kind}/${s.key})`);
   } catch (err) {
     console.error('[session] init failed:', err.message);
   }
 
-  // Reload the persisted queue before the watcher starts so tracks already
-  // handed to Liquidsoap stay tracked across a controller restart.
+  // Before the watcher starts, so tracks already handed to Liquidsoap stay
+  // tracked across a restart.
   queue.recover();
 
-  // Terminate any tagger/analyzer child orphaned by a controller restart — the
-  // child is detached and keeps running while our in-memory state resets, so a
-  // second Start would double-write the library DB. See broadcast/tagger.ts.
+  // Terminate a tagger/analyzer child orphaned by a restart: it is detached and
+  // keeps running, so a second Start would double-write the library DB.
   try {
     const { recoverFromRestart } = await import('./broadcast/tagger.js');
     recoverFromRestart();
@@ -321,8 +351,7 @@ app.listen(config.server.port, async () => {
     console.error('[tagger] restart recovery failed:', err.message);
   }
 
-  // Reload the durable curiosity dedup ledger so a restart doesn't re-air the
-  // same "on this day" fact (issue #577).
+  // So a restart doesn't re-air the same "on this day" fact (#577).
   try {
     const n = loadCuriosityLedger();
     console.log(`[curiosity] ledger loaded: ${n} entries`);
@@ -330,18 +359,24 @@ app.listen(config.server.port, async () => {
     console.error('[curiosity] ledger load failed:', err.message);
   }
 
-  // Take one listener reading BEFORE the watcher can dispatch a pick: an
-  // unknown count fails open, so a watcher that beats the first poll bought the
-  // DJ a free agent pick on every restart (#1256). Bounded internally — a slow
-  // or absent Icecast costs at most FIRST_POLL_WAIT_MS, never a boot hang, and
-  // the HTTP server is already listening by this point.
+  // One listener reading BEFORE the watcher can dispatch a pick: an unknown count
+  // fails open, so a watcher beating the first poll buys a free agent pick on
+  // every restart (#1256). Bounded internally, so never a boot hang.
   await startListenerMonitor();
   queue.startWatcher();
-  startStreamIdleMonitor();
+  await startStreamIdleMonitor(async ({ showChanged }) => {
+    if (!showChanged) return flushPendingAutoPlaylist();
+    await resumeIntoAnotherShow({
+      snapshot: () => queue.snapshotProgramme(showKeyAt(Date.now())),
+      rebuild: () => refreshAutoPlaylist({ automatic: true }),
+      ready: autoPlaylistReady,
+      drop: (stale, { skip }) => queue.dropProgrammeFromEarlierShow(stale, skip ? skipTrack : null),
+      log: line => queue.log('scheduler', line),
+    });
+  });
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
-  // Load likes up front so the sync readers (pickSystem's favourites lean, the
-  // pool picker's listener-liked source) see data from the first pick.
-  likes.load().catch(err => console.error('[likes] init failed:', err.message));
+  // Up front so the sync readers see data from the first pick.
+  await likes.load().catch(err => console.error('[likes] init failed:', err.message));
   startScheduler();
   jingles
     .ensureDefaultIdent()
@@ -349,12 +384,14 @@ app.listen(config.server.port, async () => {
   sfx.ensureDefaults().catch(err => console.error('[sfx] default generation failed:', err.message));
   beds.ensureDefaults().catch(err => console.error('[beds] default install failed:', err.message));
 
-  // Kick the Observatory sound-map projection when it's stale (library grew
-  // since the last one, or never ran). Spawns a child — never blocks this loop.
+  // Re-project the Observatory sound map when stale. Spawns a child; never
+  // blocks this loop.
   try {
     const { maybeProjectOnBoot } = await import('./music/map-projection.js');
     maybeProjectOnBoot();
   } catch (err: any) {
     console.error('[map-projection] boot hook failed:', err.message);
   }
+  startup.markReady();
+  console.log('[startup] Controller ready');
 });

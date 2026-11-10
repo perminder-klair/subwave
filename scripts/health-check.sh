@@ -16,7 +16,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO" || { echo "subwave repo not at $REPO"; exit 2; }
 
-# --- pick the live compose file ---------------------------------------------
 PROD="docker-compose.yml"
 BYO="docker-compose.byo.yml"
 DEV="docker-compose.dev.yml"
@@ -35,7 +34,6 @@ fi
 
 echo "Compose file: $COMPOSE"
 
-# --- find the edge port -----------------------------------------------------
 # In prod, Caddy fronts everything. In dev, no Caddy — fall back to controller.
 EDGE=""
 if docker compose -f "$COMPOSE" ps caddy 2>/dev/null | grep -q "Up"; then
@@ -63,12 +61,10 @@ echo "Edge:         $EDGE"
 echo "API base:     $API_BASE"
 echo
 
-# --- containers -------------------------------------------------------------
 echo "=== containers ==="
 docker compose -f "$COMPOSE" ps
 echo
 
-# --- health -----------------------------------------------------------------
 echo "=== $API_BASE/health ==="
 HEALTH=$(curl -sf --max-time 5 "$API_BASE/health" 2>&1)
 HEALTH_RC=$?
@@ -79,7 +75,6 @@ else
 fi
 echo
 
-# --- now-playing ------------------------------------------------------------
 echo "=== $API_BASE/now-playing ==="
 NP=$(curl -sf --max-time 5 "$API_BASE/now-playing" 2>&1)
 NP_RC=$?
@@ -99,7 +94,6 @@ else
 fi
 echo
 
-# --- recent errors ----------------------------------------------------------
 echo "=== errors in last 2m ==="
 ANY_ERRS=0
 SERVICES=$(docker compose -f "$COMPOSE" config --services 2>/dev/null)
@@ -119,7 +113,6 @@ if [ $ANY_ERRS -eq 0 ]; then
 fi
 
 echo
-# --- exit code summary ------------------------------------------------------
 if [ $HEALTH_RC -ne 0 ] || [ $NP_RC -ne 0 ] || [ $ANY_ERRS -ne 0 ]; then
   exit 1
 fi

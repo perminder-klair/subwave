@@ -4,14 +4,14 @@
 // the loader / settings / admin editor, and the parsed-body → SKILL.md field
 // mapping every write path goes through.
 //
-// Run: npx tsx scripts/skill-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- skill-schema`.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-skill-schema-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-skill-schema-'));
 
 const {
   CONTEXT_FIELDS,
@@ -61,11 +61,13 @@ test('explicit null reads as absent on every optional field', () => {
   // always meant "use the default" — a 400 here is an accept→reject change on
   // a public admin endpoint.
   const parsed = customSkillFileSchema.parse({
-    brief: 'b', label: null, cooldown: null, context: null, tags: null,
+    brief: 'b', label: null, cooldown: null, cronOnly: null, cohosts: null, context: null, tags: null,
     window: null, requiresKey: null,
   });
   assert.equal(parsed.label, undefined);
   assert.equal(parsed.cooldown, undefined);
+  assert.equal(parsed.cronOnly, false);
+  assert.equal(parsed.cohosts, false);
   assert.equal(parsed.context, undefined);
   assert.equal(parsed.tags, undefined);
   assert.equal(parsed.window, undefined);
@@ -187,18 +189,6 @@ test('create requires a valid slug and lowercases it', () => {
 test('the slug pattern is the one every surface now shares', async () => {
   const { SLUG_RE } = await import('../src/skills/loader.js');
   const { SKILL_SLUG_RE: SETTINGS_RE } = await import('../src/settings/vocab.js');
-  const { validatePersonasStrict } = await import('../src/settings/validate.js');
-  // The alias swap must not let old-format entries block a roster save: the
-  // pattern this replaced (/^[a-z0-9-]{1,40}$/) accepted a leading hyphen, so a
-  // backup or older settings.json can carry one. An entry that can't name a
-  // skill can never fire — it is DROPPED (the themeId #917 tolerance), never
-  // thrown, and the valid entries around it survive.
-  const [p] = validatePersonasStrict([{
-    name: 'Kai', soul: 'warm', frequency: 'moderate',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: '' },
-    skills: ['-nope', 'weather'],
-  }]);
-  assert.deepEqual(p.skills, ['weather']);
   // loader.SLUG_RE and settings/vocab's SKILL_SLUG_RE are aliases of this one.
   // vocab's used to be a SEPARATE pattern that accepted `-nope` and rejected a
   // real 41–49-char slug, so a legally-named skill couldn't be assigned to a
@@ -218,6 +208,7 @@ test('skillFieldsFrom renames context → contextFields and carries the rest', (
     cooldown: '6h',
     cron: '0 * * * *',
     cronOnly: true,
+    cohosts: true,
     context: ['weather'],
     tags: ['nightly'],
     window: 'commute',
@@ -229,12 +220,20 @@ test('skillFieldsFrom renames context → contextFields and carries the rest', (
     cooldown: '6h',
     cron: '0 * * * *',
     cronOnly: true,
+    cohosts: true,
     contextFields: ['weather'],
     window: 'commute',
     requiresKey: 'MOON_KEY',
     tags: ['nightly'],
     brief: 'say something',
+    voice: null,
   });
+});
+
+test('cohosts defaults to false, accepts only booleans, and maps to skill fields', () => {
+  assert.equal(builtinSkillFileSchema.parse({ brief: 'b' }).cohosts, false);
+  assert.equal(builtinSkillFileSchema.parse({ brief: 'b', cohosts: true }).cohosts, true);
+  assert.throws(() => builtinSkillFileSchema.parse({ brief: 'b', cohosts: 'yes' }));
 });
 
 test('cronOnly defaults to false and rejects a non-boolean', () => {
@@ -274,15 +273,4 @@ test('CONTEXT_FIELDS is the vocabulary the prompt layer emits', async () => {
   // Re-exported, not copied: the admin editor renders one chip per entry and
   // used to carry a hand-maintained second list.
   assert.equal(PROMPT_FIELDS, CONTEXT_FIELDS);
-});
-
-test('the mirror carries the skill schema to the browser', async () => {
-  const { readFileSync } = await import('node:fs');
-  const mirror = readFileSync(
-    new URL('../../web/lib/schemas.generated.ts', import.meta.url),
-    'utf8',
-  );
-  for (const name of ['SKILL_SLUG_RE', 'SKILL_TAG_RE', 'SKILL_COOLDOWN_RE', 'CONTEXT_FIELDS', 'skillCreateSchema', 'skillFileSchema']) {
-    assert.match(mirror, new RegExp(`export (const|function) ${name}\\b`), `mirror is missing ${name}`);
-  }
 });

@@ -23,9 +23,8 @@ export interface Station {
   submitted?: string;
 }
 
-// `url` must be the bare site origin: StationCard probes `‹url›/api/now-playing`
-// and originForStation appends `/api` + `/stream.mp3`, so a submitted path like
-// `https://radio.example.com/listen` 404s every consumer (#925 follow-up).
+// `url` must be the bare site origin: consumers append `/api/now-playing`,
+// `/api` and `/stream.mp3`, so a submitted path 404s all of them (#925).
 function toOrigin(url: string): string {
   try {
     return new URL(url).origin;
@@ -114,8 +113,8 @@ export async function getShowcaseStations(): Promise<ShowcaseStation[]> {
 }
 
 /** Pure, over an already-loaded list: /stations reads the directory once and
- *  streams it into several Suspense boundaries, so re-entering getAllStations()
- *  here would mean a second catalog fetch per render. */
+ *  streams it into several Suspense boundaries, so calling getAllStations()
+ *  here would cost a second catalog fetch per render. */
 export function stationStats(all: Station[]): { count: number; countries: number } {
   const countries = new Set(
     all.map((s) => (s.country || s.location || '').trim().toLowerCase()).filter(Boolean),

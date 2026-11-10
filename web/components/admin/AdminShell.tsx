@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import {
@@ -31,7 +31,6 @@ import {
   ChevronRight,
   MoreHorizontal,
   ListMusic,
-  Telescope,
   Clock,
   CalendarDays,
   Volume2,
@@ -39,16 +38,26 @@ import {
   AudioLines,
   Waves,
   Mic,
+  Braces,
+  Boxes,
+  Webhook,
+  Telescope,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
+import type { AdminFetch } from '../../lib/admin-query';
+import AdminQueryProvider from './AdminQueryProvider';
+import { AdminLoading } from './AdminLoading';
 import { useStationFeed } from '../../hooks/useStationFeed';
+import { useTalking } from '../../hooks/useTalking';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
 import MusicStarvedBanner from './MusicStarvedBanner';
 import StationSwitcher from './StationSwitcher';
 import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
+import { stationBuddy } from './doctor-mood';
+import { useDoctorSummaryQuery } from './doctor-queries';
 import ThemeSwitcher from '../ThemeSwitcher';
 import {
   CommandDialog,
@@ -98,6 +107,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { DiscMark } from '../../lib/discMark';
+import { fmtClock, fmtStationDateTime } from '../../lib/format';
 import { animate as motionAnimate } from 'motion/react';
 
 type NavIcon = ComponentType<{
@@ -112,9 +122,8 @@ interface NavSubItem {
   id: string;
   label: string;
   icon: NavIcon;
-  // `tab` is the ?tab= value this item selects; `defaultTab` marks the one
-  // shown when the URL carries no (or an unknown) tab. Route children leave
-  // both unset.
+  // `tab` is the ?tab= value this item selects; `defaultTab` marks the one shown
+  // when the URL carries no (or an unknown) tab. Route children leave both unset.
   tab?: string;
   defaultTab?: boolean;
 }
@@ -195,7 +204,20 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'System',
     items: [
-      { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
+      // Expanding /admin/connect's tabs as children puts the literal phrase
+      // "Stream URLs" in the sidebar (#1300, #1485).
+      {
+        href: '/admin/connect',
+        id: 'connect',
+        label: 'Connect',
+        icon: Plug,
+        children: [
+          { href: '/admin/connect?tab=integrations', id: 'connect-integrations', label: 'Stream URLs', icon: Radio, tab: 'integrations', defaultTab: true },
+          { href: '/admin/connect?tab=endpoints', id: 'connect-endpoints', label: 'API', icon: Braces, tab: 'endpoints' },
+          { href: '/admin/connect?tab=mcp', id: 'connect-mcp', label: 'MCP', icon: Boxes, tab: 'mcp' },
+          { href: '/admin/connect?tab=webhooks', id: 'connect-webhooks', label: 'Webhooks', icon: Webhook, tab: 'webhooks' },
+        ],
+      },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
@@ -227,7 +249,7 @@ const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }
   { href: 'https://discord.gg/vjVbVKnMBa', label: 'Discord', icon: MessageCircle, pill: '↗' },
 ];
 
-// Playlists, DJ Doc, and Stations aren't sidebar items, so they're resolved
+// Playlists, DJ Doc and Stations aren't sidebar items, so they're resolved
 // explicitly; their crumb sections mirror where the rail stays lit.
 function resolveCrumb(pathname: string | null): { section?: string; page: string } {
   if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
@@ -254,10 +276,11 @@ const FULL_BLEED_ROUTES = ['/admin/shows/schedule'];
 export default function AdminShell({ children, defaultOpen = true }: AdminShellProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
+  const { auth, needsAuth, hydrated, lockedUntil, signIn, signOut, adminFetch } = useAdminAuth();
   const fullBleed = !!pathname && FULL_BLEED_ROUTES.some(r => pathname.startsWith(r));
   // Navidrome down raises the starve banner too; show only the specific one.
   const [navidromeOk, setNavidromeOk] = useState(true);
+  const [musicStarved, setMusicStarved] = useState(false);
 
   const handleSignIn = useCallback(
     async (user: string, pass: string): Promise<SignInResult> => {
@@ -268,27 +291,12 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
     [signIn, pathname, router],
   );
 
-  // Probe an admin endpoint on first paint so a revoked token surfaces the
-  // sign-in form proactively.
-  useEffect(() => {
-    if (!hydrated || !auth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        await adminFetch('/settings');
-      } catch {}
-      if (cancelled) return;
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [hydrated, auth, adminFetch]);
-
   // First-run redirect into the wizard. Public endpoint, no auth needed.
   useEffect(() => {
     if (!hydrated) return;
     if (pathname?.startsWith('/onboarding')) return;
     const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
+    // admin-query-imperative: first-run-redirect
     fetch(`${API}/onboarding/status`)
       .then(r => (r.ok ? r.json() : null))
       .then((j: { needsSetup?: boolean } | null) => {
@@ -298,11 +306,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   }, [hydrated, pathname, router]);
 
   if (!hydrated) {
-    return (
-      <div className="admin-root paper flex min-h-screen items-center justify-center">
-        <span className="caption">loading…</span>
-      </div>
-    );
+    return <AdminLoading href={pathname || '/admin'} />;
   }
 
   if (!auth || needsAuth) {
@@ -310,52 +314,60 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
       <div className="admin-root paper min-h-screen">
         <SignedOutHeader />
         <div className="mx-auto max-w-[1440px] px-7 py-12">
-          <SignInForm onSubmit={handleSignIn} />
+          <SignInForm onSubmit={handleSignIn} lockedUntil={lockedUntil} />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="admin-root paper">
-      {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
-      <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
-        <AdminSidebar pathname={pathname} onSignOut={signOut} />
-        <SidebarInset className="min-w-0 bg-transparent">
-          <TopBar pathname={pathname} />
-          <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
-          <MusicStarvedBanner adminFetch={adminFetch} suppressed={!navidromeOk} />
-          <div
-            className={
-              fullBleed
-                ? 'flex w-full min-w-0 flex-1 flex-col'
-                : 'mx-auto w-full max-w-[1440px] min-w-0 px-6 py-6'
-            }
-          >
-            {/* No y translate — vertical drift feels twitchy on a list of panels. */}
-            <AnimatePresence mode="wait" initial={false}>
-              <m.div
-                key={pathname}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.12 }}
-                className={fullBleed ? 'flex min-h-full flex-1 flex-col' : undefined}
-              >
-                {children}
-              </m.div>
-            </AnimatePresence>
-          </div>
-        </SidebarInset>
-      </SidebarProvider>
-      <AdminCommandMenu />
-      {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
-    </div>
+    <AdminQueryProvider key={auth}>
+      <div className="admin-root paper admin-booth">
+        <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
+          <AdminSidebar pathname={pathname} onSignOut={signOut} adminFetch={adminFetch} />
+          <SidebarInset className="min-w-0 bg-transparent">
+            <TopBar
+              pathname={pathname}
+              adminFetch={adminFetch}
+              navidromeOk={navidromeOk}
+              musicStarved={musicStarved}
+            />
+            <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
+            <MusicStarvedBanner
+              adminFetch={adminFetch}
+              suppressed={!navidromeOk}
+              onStatus={setMusicStarved}
+            />
+            <div
+              className={
+                fullBleed
+                  ? 'flex w-full min-w-0 flex-1 flex-col'
+                  : 'mx-auto w-full max-w-[1440px] min-w-0 px-6 py-6'
+              }
+            >
+              <AnimatePresence mode="wait" initial={false}>
+                <m.div
+                  key={pathname}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className={fullBleed ? 'flex min-h-full flex-1 flex-col' : undefined}
+                >
+                  {children}
+                </m.div>
+              </AnimatePresence>
+            </div>
+          </SidebarInset>
+        </SidebarProvider>
+        <AdminCommandMenu />
+      </div>
+    </AdminQueryProvider>
   );
 }
 
-// ⌘K / Ctrl+K panel jump list. The chord is a modifier combo, so it is safe to
-// honour even while a field is focused (it never intercepts a bare keystroke).
+// Cmd/Ctrl+K panel jump list. A modifier combo, so it is safe to honour even
+// while a field is focused.
 function AdminCommandMenu() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -413,19 +425,21 @@ function AdminCommandMenu() {
 function AdminSidebar({
   pathname,
   onSignOut,
+  adminFetch,
 }: {
   pathname: string | null;
   onSignOut: () => void;
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }) {
   const { setOpenMobile, isMobile } = useSidebar();
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   // The shell lives in the persistent layout, so a client-side nav doesn't
-  // remount it — the mobile Sheet would stay open over the new page.
+  // remount it and the mobile Sheet would stay open over the new page.
   const closeOnMobileNav = () => {
     if (isMobile) setOpenMobile(false);
   };
   return (
-    <Sidebar collapsible="icon" className="border-sidebar-border">
+    <Sidebar collapsible="icon" className="admin-booth-rail border-sidebar-border">
       <SidebarHeader className="gap-1 px-2 py-3">
         <Link
           href="/admin/dash"
@@ -440,7 +454,7 @@ function AdminSidebar({
           </span>
         </Link>
         <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
-        <StationSwitcher onNavigate={closeOnMobileNav} />
+        <StationSwitcher adminFetch={adminFetch} onNavigate={closeOnMobileNav} />
       </SidebarHeader>
 
       <SidebarContent className="gap-4 px-2 py-1">
@@ -471,13 +485,9 @@ function AdminSidebar({
       </SidebarContent>
 
       <SidebarFooter className="gap-3 px-2 py-3">
-        {/* A dropdown rather than an inline collapsible so it stays reachable
-            when the rail is collapsed to icons. */}
         <SidebarMenu className="gap-1.5">
           <SidebarMenuItem>
-            {/* Non-modal: a modal Radix menu locks body scroll, and the lock's
-                15px scrollbar-compensation margin pulls the sticky top bar off
-                the right edge while the menu is open. */}
+            {/* Radix scroll locking shifts the sticky header with scrollbar compensation. */}
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton title="More">
@@ -537,7 +547,7 @@ function AdminSidebar({
         </SidebarMenu>
 
         {process.env.NEXT_PUBLIC_APP_VERSION ? (
-          <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-3 text-[10px] tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
+          <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-1.5 text-[10px] tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
             v{process.env.NEXT_PUBLIC_APP_VERSION}
           </div>
         ) : null}
@@ -557,13 +567,13 @@ function AdminSidebar({
   );
 }
 
-// Only ever ONE row may render this at a time (sub-items use their own
-// highlight), or the shared-layoutId animation doubles up.
+// Only ever ONE row may render this at a time, or the shared-layoutId animation
+// doubles up.
 function NavActiveBg() {
   return (
     <m.span
       layoutId="admin-nav-active"
-      className="absolute inset-0 z-0 bg-ink"
+      className="absolute inset-0 z-0 bg-[var(--accent)]"
       initial={false}
       transition={{ type: 'spring', stiffness: 380, damping: 32 }}
       aria-hidden="true"
@@ -596,8 +606,8 @@ function NavItemRow({
   );
 }
 
-// In the icon-collapsed rail both the chevron and the sub-list hide (built into
-// SidebarMenuAction / SidebarMenuSub), so the parent icon links straight through.
+// In the icon-collapsed rail both the chevron and the sub-list hide, so the
+// parent icon links straight through.
 function CollapsibleNavItem({
   item,
   pathname,
@@ -611,8 +621,7 @@ function CollapsibleNavItem({
   const searchParams = useSearchParams();
 
   // Tab-based groups share the parent page, so a child is active when the page
-  // matches and its tab is the effective one (falling back to the group's
-  // default). Route-based groups just prefix-match their child's own path.
+  // matches and its tab is the effective one. Route-based groups prefix-match.
   const tabChildren = children.filter(c => c.tab != null);
   const validTabs = tabChildren.map(c => c.tab as string);
   const rawTab = searchParams.get('tab');
@@ -627,13 +636,12 @@ function CollapsibleNavItem({
 
   const hasActiveChild = children.some(childActive);
   const onSection = (!!pathname && pathname.startsWith(item.href)) || hasActiveChild;
-  // Parent takes the pill only with no child selected; tab groups always have
-  // one, so there the pill moves to the child.
+  // Parent takes the pill only with no child selected.
   const parentActive = onSection && !hasActiveChild;
 
   const [open, setOpen] = useState(onSection);
-  // The shell is persistent, so open state survives route changes — re-reveal
-  // the group whenever a nav lands on one of its pages.
+  // The shell is persistent, so open state survives route changes: re-reveal the
+  // group whenever a nav lands on one of its pages.
   useEffect(() => {
     if (onSection) setOpen(true);
   }, [onSection]);
@@ -682,9 +690,32 @@ function CollapsibleNavItem({
   );
 }
 
-function TopBar({ pathname }: { pathname: string | null }) {
+function TopBar({
+  pathname,
+  adminFetch,
+  navidromeOk,
+  musicStarved,
+}: {
+  pathname: string | null;
+  adminFetch: AdminFetch;
+  navidromeOk: boolean;
+  musicStarved: boolean;
+}) {
   const { section, page } = resolveCrumb(pathname);
-  const { nowPlaying, listeners } = useStationFeed();
+  const { nowPlaying, listeners, timezone, locale, streamOnline, session } = useStationFeed();
+  // DJ Doc's badge reads the station live (an operator surface, so no listener
+  // buffer on the talking window) plus the last check's headline.
+  const talking = useTalking(session.messages, 0);
+  const summaryQuery = useDoctorSummaryQuery(adminFetch, true);
+  const buddy = stationBuddy({
+    musicStarved,
+    navidromeOk,
+    streamOnline,
+    talking,
+    summary: summaryQuery.data ?? null,
+  });
+  // On the doctor page the page's own buddy is DJ Doc; one is enough.
+  const onDoctorPage = !!pathname?.startsWith('/admin/doctor');
   const onAir = !!nowPlaying?.title;
   const listenersObj =
     listeners && typeof listeners === 'object'
@@ -703,7 +734,7 @@ function TopBar({ pathname }: { pathname: string | null }) {
       : 'none',
   });
 
-  // Pulse only on the false → true transition, not on steady-state polls.
+  // Pulse only on the false -> true transition, not on steady-state polls.
   const wasOnAirRef = useRef(onAir);
   useEffect(() => {
     if (onAir && !wasOnAirRef.current && dotRef.current) {
@@ -717,11 +748,9 @@ function TopBar({ pathname }: { pathname: string | null }) {
   }, [onAir]);
 
   return (
-    <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--line)] bg-[var(--sidebar)] px-4 py-2.5 sm:px-6">
-      {/* Roomier hit box on a phone, where this is the only way back to the nav. */}
+    <header className="admin-booth-bar sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:px-6">
       <SidebarTrigger className="-ml-1 size-9 shrink-0 sm:size-7" />
       <Separator orientation="vertical" className="hidden h-5 sm:block" />
-      {/* Hidden on mobile — space is tight next to the hamburger. */}
       <Breadcrumb className="hidden sm:block">
         <BreadcrumbList className="gap-1.5 text-[10px] tracking-[0.28em] uppercase sm:gap-2">
           {section && (
@@ -735,6 +764,8 @@ function TopBar({ pathname }: { pathname: string | null }) {
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
+
+      <StationClock tz={timezone} locale={locale} />
 
       <span className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2 text-[10px] tracking-[0.22em] text-ink uppercase">
         <span
@@ -760,14 +791,14 @@ function TopBar({ pathname }: { pathname: string | null }) {
         <Link
           href="/admin/doctor"
           className="inline-flex min-h-9 items-center gap-1.5 text-[var(--accent)] no-underline sm:min-h-0"
-          title="DJ Doc — run a station health check and get the producer's review"
+          title={`DJ Doc: ${buddy.note}. Run a station health check and get the producer's review`}
+          aria-label={`DJ Doc: ${buddy.note}`}
         >
-          <BoothBuddy mood="onair" size={16} />
+          {!onDoctorPage && <BoothBuddy mood={buddy.mood} size={18} />}
           <span className="caption">DJ Doc</span>
         </Link>
         <ThemeSwitcher variant="admin" />
-        {/* modal={false} for the same reason as the sidebar's More menu — no
-            body scroll lock, so no scrollbar-compensation margin shift. */}
+        {/* Disable Radix scroll locking to avoid shifting the sticky header. */}
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             className="caption inline-flex min-h-9 cursor-pointer items-center gap-1 text-muted focus:outline-none sm:min-h-0"
@@ -804,6 +835,72 @@ function TopBar({ pathname }: { pathname: string | null }) {
   );
 }
 
+// Wait for the station timezone before displaying its clock. Measure the available flex slot for
+// full date, time only, or hidden output; viewport breakpoints miss sidebar and breadcrumb widths.
+const CLOCK_PLACEHOLDER = '--:--:--';
+const CLOCK_TEXT_CLASS = 'text-[11px] font-normal whitespace-nowrap tabular-nums';
+
+type ClockFit = 'full' | 'short' | 'none';
+
+function StationClock({ tz, locale }: { tz: string | null; locale: Parameters<typeof fmtStationDateTime>[2] }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const ready = !!tz;
+  const full = ready ? fmtStationDateTime(now, tz, locale) : CLOCK_PLACEHOLDER;
+  const short = ready ? fmtClock(now, tz, locale) : CLOCK_PLACEHOLDER;
+
+  const slotRef = useRef<HTMLSpanElement>(null);
+  const fullRef = useRef<HTMLSpanElement>(null);
+  const shortRef = useRef<HTMLSpanElement>(null);
+  const [fit, setFit] = useState<ClockFit>('none');
+
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) return;
+    const measure = () => {
+      const avail = slot.clientWidth;
+      const fullW = fullRef.current?.offsetWidth ?? Infinity;
+      const shortW = shortRef.current?.offsetWidth ?? Infinity;
+      setFit(fullW <= avail ? 'full' : shortW <= avail ? 'short' : 'none');
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    // Observe the slot (sidebar toggle, window resize, neighbours growing)
+    // AND the two measuring copies (the text itself changing width — a new
+    // weekday, a font finishing loading).
+    const ro = new ResizeObserver(measure);
+    ro.observe(slot);
+    if (fullRef.current) ro.observe(fullRef.current);
+    if (shortRef.current) ro.observe(shortRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const shown = fit === 'full' ? full : fit === 'short' ? short : null;
+
+  return (
+    <span ref={slotRef} className="relative flex min-w-0 flex-1 items-center justify-end overflow-hidden">
+      <span ref={fullRef} aria-hidden="true" className={`invisible absolute top-0 left-0 ${CLOCK_TEXT_CLASS}`}>
+        {full}
+      </span>
+      <span ref={shortRef} aria-hidden="true" className={`invisible absolute top-0 left-0 ${CLOCK_TEXT_CLASS}`}>
+        {short}
+      </span>
+      {shown != null && (
+        <span
+          className={`${CLOCK_TEXT_CLASS} ${ready ? 'text-ink' : 'text-muted'}`}
+          title={ready ? `Station time (${tz})` : 'Waiting for the station timezone'}
+        >
+          {shown}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function SignedOutHeader() {
   return (
     <header className="flex items-center gap-3 border-b border-ink bg-[var(--card-bg)] px-4 py-2.5 sm:px-7">
@@ -827,4 +924,3 @@ function SignedOutHeader() {
     </header>
   );
 }
-

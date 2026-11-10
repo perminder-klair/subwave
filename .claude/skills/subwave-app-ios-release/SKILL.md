@@ -166,6 +166,15 @@ Decide which kind of release this is:
   `expo.version` in `app/app.json` first (e.g. `1.0.0` → `1.1.0`), commit, then
   release. The build number still auto-increments under it.
 
+A version bump is **four fields, not one**: `expo.version` in `app/app.json`,
+`version` in `app/package.json`, and **both** version fields in
+`app/package-lock.json` (top-level `.version` *and* `.packages[""].version` —
+npm writes the same number twice). `app` is deliberately outside
+`release-please-config.json`, since its marketing version tracks store
+submissions rather than the monorepo's release train, so nothing bumps these for
+you. Edit the lockfile's two lines by hand; do **not** run `npm install` to do
+it, which rewrites unrelated entries.
+
 **Live-app gotcha — once a marketing version is released on the App Store, you
 can't ship to the public store again under that same version.** `--auto-submit`
 (or `eas submit`) will fail at the submission step with:

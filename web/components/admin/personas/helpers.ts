@@ -4,6 +4,21 @@ import {
   CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE,
 } from './constants';
 import { CLOUD_PROVIDER_ENV_KEY, cloudProviderLabel } from '../tts/cloudProviderMeta';
+import { PERSONA_TTS_INHERIT, resolvePersonaVoiceSlot, takeoverShowId } from '../../../lib/schemas.generated';
+
+/**
+ * The slot a persona will actually be voiced by: the 'inherit' sentinel
+ * resolved against the station's TTS block, via the controller's own resolver
+ * (mirrored from schemas/persona.ts). Every admin surface answering "which
+ * engine is this persona on?" goes through here rather than reading
+ * `persona.tts.engine` raw, which reports stored intent and not the outcome.
+ */
+export function effectiveTts(
+  persona: { tts?: Partial<Persona['tts']> } | undefined,
+  data: SettingsResponse | null,
+) {
+  return resolvePersonaVoiceSlot(persona?.tts, data?.values?.tts ?? null);
+}
 
 // Client-minted opaque id ('p_' personas, 'dp_' prompt presets). The server
 // re-mints anything that fails its ID_RE, so these only need to be unique
@@ -13,10 +28,9 @@ export function clientMintId(prefix: string = 'p_') {
   return prefix + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
-// The single defaulting path — used by the initial load, community install and
-// Discard (which re-derives from the server response). A second, drifting copy is
-// how "discard" ends up reverting to something the server never said.
-// A persona with no stored `skills` (legacy / code default) runs them all.
+// The single defaulting path: initial load, community install and Discard all
+// come through here, so a second copy would let Discard revert to something
+// the server never said. A persona with no stored `skills` runs them all.
 export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: string[]): Persona {
   return {
     id: p?.id ?? clientMintId(),
@@ -25,11 +39,14 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
     frequency: p?.frequency ?? 'moderate',
     scriptLength: p?.scriptLength ?? 'concise',
     djMode: p?.djMode === true,
+    linkStyle: p?.linkStyle === 'announce' ? 'announce' : 'natural',
     humour: typeof p?.humour === 'number' ? p.humour : DIAL_NEUTRAL,
     localColour: typeof p?.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
     warmth: typeof p?.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
     soul: p?.soul ?? '',
+    musicLean: typeof p?.musicLean === 'string' ? p.musicLean : '',
     language: typeof p?.language === 'string' ? p.language : '',
+    voiceStyle: typeof p?.voiceStyle === 'string' ? p.voiceStyle : '',
     avatar: typeof p?.avatar === 'string' ? p.avatar : '',
     tts: {
       engine: p?.tts?.engine ?? 'piper',
@@ -39,6 +56,9 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
       speed: typeof p?.tts?.speed === 'number' ? p.tts.speed : 1,
     },
     skills: Array.isArray(p?.skills) ? p.skills : allSkills,
+    // Unlike `skills`, an absent value is not a stand-in for "everything":
+    // no tags means no tags.
+    tags: Array.isArray(p?.tags) ? p.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
   };
 }
 
@@ -83,14 +103,61 @@ export function formFromSettings(j: SettingsResponse | null): FormState | null {
   };
 }
 
-// Two normalisations: skills are a set, not a list (toggling one off and back on
-// reorders the array without changing meaning), and `avatar` is excluded because
-// avatar mutations POST to their own endpoint and are already durable.
+// Skills compare as a set, not a list (toggling one off and back on reorders
+// the array without changing meaning); `avatar` is excluded because avatar
+// mutations POST to their own endpoint and are already durable.
 export function personasEqual(a: Persona | undefined, b: Persona | undefined): boolean {
   if (!a || !b) return a === b;
   const canonical = (p: Persona) =>
     JSON.stringify({ ...p, avatar: '', skills: [...p.skills].sort() });
   return canonical(a) === canonical(b);
+}
+
+// What deleting this persona takes with it. The controller never refuses the
+// removal: the post-patch integrity sweep (`prepareUpdate` in
+// controller/src/settings.ts) deletes every show the persona hosts, along with
+// those shows' schedule hours and any takeover pinning one, and drops it from
+// guest line-ups. Reads the SAVED shows, the same list the sweep will see.
+//
+// `live` is the takeover as GET /schedule reports it (already null once expired
+// or dangling) plus the moment the operator asked; `now` re-checks expiry
+// because that read can be up to a cache lifetime old. A Default-programming
+// takeover pins no show, so it never ends with one.
+export function personaRemovalImpact(
+  personaId: string,
+  data: SettingsResponse | null,
+  live: { override: { showId?: string | null; expiresAt?: number } | null; now: number } | null = null,
+): { hosts: string[]; guestOn: string[]; endsTakeoverOf: string | null } {
+  const shows = Array.isArray(data?.values?.shows) ? data.values.shows : [];
+  const label = (s: { name?: string }) => (typeof s.name === 'string' && s.name.trim()) || 'Untitled show';
+  const hosted = shows.filter(s => s.personaId === personaId);
+  const pinnedId = takeoverShowId(live?.override);
+  const pinned = pinnedId && typeof live?.override?.expiresAt === 'number' && live.override.expiresAt > live.now
+    ? hosted.find(s => s.id === pinnedId)
+    : undefined;
+  return {
+    hosts: hosted.map(label),
+    guestOn: shows
+      .filter(s => s.personaId !== personaId && Array.isArray(s.guestPersonaIds) && s.guestPersonaIds.includes(personaId))
+      .map(label),
+    endsTakeoverOf: pinned ? label(pinned) : null,
+  };
+}
+
+// Which persona the local "default" points at once a delete has landed. An
+// unsaved "Set as default" survives unless it named the deleted persona;
+// otherwise the default follows the controller's re-point (or the baseline's,
+// for a persona that was never saved). Always lands on a surviving row.
+export function activeAfterDelete(o: {
+  current: string;
+  deletedId: string;
+  baselineActive: string | null;
+  serverActive: string | null;
+  remainingIds: string[];
+}): string {
+  const unsavedChoice = o.current !== o.deletedId && o.current !== o.baselineActive;
+  const candidates = unsavedChoice ? [o.current] : [o.serverActive, o.baselineActive];
+  return [...candidates, o.remainingIds[0]].find(id => !!id && o.remainingIds.includes(id)) ?? o.current;
 }
 
 export function initialsFor(name: string): string {
@@ -104,10 +171,11 @@ export function initialsFor(name: string): string {
 
 export async function fetchDicebearAvatar(): Promise<string> {
   const style = DICEBEAR_STYLES[Math.floor(Math.random() * DICEBEAR_STYLES.length)];
-  // Random seed so two clicks never produce the same face.
   const seed = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  const url = `https://api.dicebear.com/9.x/${style}/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_TARGET_PX}`;
-  const res = await fetch(url);
+  // admin-query-imperative: random-avatar-download
+  const res = await fetch(
+    `https://api.dicebear.com/9.x/${style}/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_TARGET_PX}`,
+  );
   if (!res.ok) throw new Error(`DiceBear fetch failed (${res.status})`);
   const blob = await res.blob();
   return await new Promise<string>((resolve, reject) => {
@@ -118,8 +186,8 @@ export async function fetchDicebearAvatar(): Promise<string> {
   });
 }
 
-// Resize + center-crop to a square client-side, so no server-side image library
-// is needed.
+// Resize + center-crop to a square client-side, so no server-side image
+// library is needed.
 export async function fileToAvatarDataUrl(file: File): Promise<string> {
   if (!/^image\/(png|jpe?g|webp)$/.test(file.type)) {
     throw new Error('please pick a PNG, JPEG, or WebP image');
@@ -140,10 +208,9 @@ export async function fileToAvatarDataUrl(file: File): Promise<string> {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(bitmap, sx, sy, side, side, 0, 0, AVATAR_TARGET_PX, AVATAR_TARGET_PX);
-    // An uncompressed 512×512 PNG is ~1.33 MB base64, past the controller's 600 KB
-    // JSON cap. WebP keeps a typical avatar in the tens of KB and preserves
-    // transparency; a browser whose canvas can't emit WebP silently returns a
-    // data:image/png URL, hence the JPEG fallback.
+    // A 512×512 PNG is ~1.33 MB base64, past the controller's 600 KB JSON cap.
+    // A canvas that can't emit WebP silently returns a data:image/png URL,
+    // hence the JPEG fallback.
     const webp = canvas.toDataURL('image/webp', 0.85);
     return webp.startsWith('data:image/webp')
       ? webp
@@ -153,13 +220,12 @@ export async function fileToAvatarDataUrl(file: File): Promise<string> {
   }
 }
 
-// `voice` is shared across engines, so switching engines can leave an incompatible
-// value behind (a Kokoro id after switching to Chatterbox). Runs regardless of UI
-// state — the last line of defence before the POST.
+// `voice` is shared across engines, so a switch can leave an incompatible value
+// behind. Runs regardless of UI state: the last check before the POST.
 export function voiceForSave(engine: string, voice: string): string {
   if (engine === 'kokoro') return voice || 'bf_isabella';
   if (engine === 'chatterbox') return CHATTERBOX_VOICE_RE.test(voice) ? voice : '';
-  // Built-in id or a .wav clone filename both pass through; anything else → default.
+  // Built-in id or a .wav clone filename pass through; anything else defaults.
   if (engine === 'pocket-tts') return (POCKET_TTS_VOICE_RE.test(voice) || CHATTERBOX_VOICE_RE.test(voice)) ? voice : 'alba';
   if (engine === 'remote') return voice; // free text, forwarded as-is
   return voice; // piper ignores voice; cloud carries its own
@@ -167,16 +233,17 @@ export function voiceForSave(engine: string, voice: string): string {
 
 // Why this persona's cloud voice won't play, or null when it will.
 //
-// The controller's readiness flag (`cloudByProvider`) folds TWO causes into one
+// The controller's readiness flag (`cloudByProvider`) folds two causes into one
 // boolean: no credentials, and the station-wide `tts.cloud.enabled` switch being
-// off. Reporting them with one sentence sent operators to hunt for a key they
-// had already set — visibly so next to the provider picker's own KEY SET badge,
-// which reads env presence directly. So credentials are checked first and the
-// readiness flag only speaks for what's left: the station switch.
+// off. So credentials are checked first and the readiness flag only speaks for
+// what's left, the station switch.
 export function cloudIssue(persona: Persona | undefined, data: SettingsResponse | null): string | null {
-  if (persona?.tts?.engine !== 'cloud') return null;
-  const provider = persona.tts.cloudProvider;
-  // openai-compatible has no env-key convention — its URL, model, and optional
+  // Resolved, not raw: a persona following the station default is voiced by the
+  // cloud whenever the station is.
+  const tts = effectiveTts(persona, data);
+  if (tts?.engine !== 'cloud') return null;
+  const provider = tts.cloudProvider;
+  // openai-compatible has no env-key convention: its URL, model and optional
   // bearer live in tts.cloud settings rather than state/secrets.env.
   if (provider === 'openai-compatible') return null;
   const readiness = data?.tts?.available?.cloudByProvider;
@@ -195,11 +262,25 @@ export function cloudIssue(persona: Persona | undefined, data: SettingsResponse 
   return null;
 }
 
-export function engineLabel(p: Persona): string {
-  if (p.tts.engine === 'kokoro') return `kokoro / ${p.tts.voice.trim() || '—'}`;
-  if (p.tts.engine === 'chatterbox') return `chatterbox / ${p.tts.voice.trim() || 'built-in'}`;
-  if (p.tts.engine === 'pocket-tts') return `pocket-tts / ${p.tts.voice.trim() || 'alba'}`;
-  if (p.tts.engine === 'cloud') return `cloud / ${p.tts.cloudProvider} / ${p.tts.voice.trim() || '—'}`;
-  if (p.tts.engine === 'remote') return `remote / ${p.tts.voice.trim() || '—'}`;
-  return `piper / ${p.tts.voice.trim() || 'built-in'}`;
+/**
+ * "engine / voice" for the on-air strip and the roster chips. Pass `data` or an
+ * inherit persona falls through to the piper branch and names an engine the
+ * station may not be on.
+ */
+export function engineLabel(p: Persona, data: SettingsResponse | null = null): string {
+  const inherits = p.tts.engine === PERSONA_TTS_INHERIT;
+  const t = inherits ? effectiveTts(p, data) : p.tts;
+  const voice = (t?.voice ?? '').trim();
+  const suffix = inherits ? ' (station default)' : '';
+  if (t?.engine === 'kokoro') return `kokoro / ${voice || '—'}${suffix}`;
+  if (t?.engine === 'chatterbox') return `chatterbox / ${voice || 'built-in'}${suffix}`;
+  if (t?.engine === 'pocket-tts') return `pocket-tts / ${voice || 'alba'}${suffix}`;
+  if (t?.engine === 'cloud') return `cloud / ${t.cloudProvider} / ${voice || '—'}${suffix}`;
+  if (t?.engine === 'remote') return `remote / ${voice || '—'}${suffix}`;
+  // Gemini had no branch here, so a persona on it fell through to the piper
+  // fallback and the hero banner reported "piper / Despina" — naming a local
+  // engine that never rendered it. A wrong engine name on screen sends the
+  // operator looking for a piper voice they never set.
+  if (t?.engine === 'gemini') return `gemini / ${voice || 'station default'}${suffix}`;
+  return `piper / ${voice || 'built-in'}${suffix}`;
 }

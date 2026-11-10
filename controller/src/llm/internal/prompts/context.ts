@@ -2,8 +2,11 @@
 // every generate* script, by matchRequest, and by the segment director
 // (skills/_agent.js) — so they all show the model the same picture of the moment.
 import { CONTEXT_FIELDS, type ContextField } from '../../../schemas/skill.js';
+import { steerClause } from '../../../schemas/steer.js';
+import { activeSteer } from '../../../settings/persona.js';
 
 import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
+import { spokenContext } from '../../../settings.js';
 
 // Narrative angles per call type. One is picked at random and injected into the
 // user prompt as "Tone for this segment:" so consecutive generations don't fall
@@ -37,7 +40,7 @@ export const ANGLES = {
     'Make one small, true observation that has nothing to do with music, then let the song pick it up.',
     'Name the artist only in passing, folded into a thought — never "this is X by Y".',
     'Pose a tiny question or thought and let the track be the answer.',
-    'Acknowledge a listener-shaped moment (commute, late shift, weekend, midweek lull) without naming anyone, then ease in.',
+    'Acknowledge what this point in the day might feel like for a listener, using only the supplied current context, then ease in.',
     'Say one honest sentence about how this track lands right now, and get out of the way.',
     'React to the shift in the room as it comes on — how it lifts, settles, darkens, or opens things up.',
   ],
@@ -51,6 +54,7 @@ export const ANGLES = {
     'Say it like a signature at the bottom of a letter — brief, warm, done.',
     'Fold the ident into a quiet promise of what the next stretch holds — more of this, whatever this is.',
   ],
+  // No light, dark, season or weather: HOURLY_NO_WEATHER_RULE bans them (#2056).
   hourly: [
     'State the time as a small fact, then anchor it with one observation about the day.',
     'Treat the hour mark like a quiet check-in, not a bulletin.',
@@ -61,27 +65,40 @@ export const ANGLES = {
     'Mark the hour as a small milestone in the day: one down, or one to go, or the halfway point.',
     'Mention the time as if answering someone who just asked — offhand, unbothered.',
     'Let the hour prompt a tiny aside about how fast or slow the day is moving, time folded in.',
-    // Grounded in fields the hourly context actually carries (season, the
-    // "after dark" tag) — the old wording ("what the sky is probably doing")
-    // asked the model to guess the weather, which #471 removed from these
-    // calls precisely so it couldn't be invented.
-    'Tie the hour to the season\'s light — how early the dark comes, how long the evening stretches — and slip the time in after.',
   ],
 };
 
-// Uniform random, but never the same angle twice running for a kind — on an
+// Uniform random, but never the same entry twice running for a key — on an
 // aggressive station (3 idents/hour) a ~20% consecutive-repeat chance made the
 // segment shape audibly settle. The opener blocklist only guards first words;
 // this guards the whole framing.
-const lastAngleIdx = new Map<string, number>();
+//
+// One picker for both callers rather than two copies of the same four lines:
+// the hourly time wording (#1602) needs exactly this rule, and the rule is the
+// interesting part — a plain random pick repeats often enough to be heard.
+const lastPickIdx = new Map<string, number>();
 
-export function pickAngle(kind: string) {
-  const list = (ANGLES as any)[kind];
+function pickVaried<T>(key: string, list: readonly T[] | null | undefined): T | null {
   if (!list || list.length === 0) return null;
   let idx = Math.floor(Math.random() * list.length);
-  if (list.length > 1 && idx === lastAngleIdx.get(kind)) idx = (idx + 1) % list.length;
-  lastAngleIdx.set(kind, idx);
+  if (list.length > 1 && idx === lastPickIdx.get(key)) idx = (idx + 1) % list.length;
+  lastPickIdx.set(key, idx);
   return list[idx];
+}
+
+export function pickAngle(kind: string): string | null {
+  return pickVaried<string>(`angle:${kind}`, (ANGLES as any)[kind]);
+}
+
+// Which wording of the rounded time the hourly check announces (#1602). The
+// time itself is the code's — `time.ts` builds the band, every form in it says
+// the same rounded time, and the prompt still dictates the ONE string this
+// returns. Picking here rather than listing the band in the prompt is
+// deliberate: a time clause that offers the model options is the latitude
+// #1282 removed, and a model handed a list leans on its first entry anyway,
+// which is the repetition being fixed.
+export function pickTimePhrase(options: readonly string[] | null | undefined) {
+  return pickVaried('time-phrase', options);
 }
 
 export function randomSeed() {
@@ -115,15 +132,37 @@ export function normalizeContextFields(spec?: string | readonly string[] | null)
   return out;
 }
 
+// The operator's steer as one prompt line, or ''. Read from settings at the
+// context's own instant and NEVER carried on the context object: GET
+// /now-playing returns that object to every listener.
+export function steerLine(context: any): string {
+  const at = Date.parse(context?.at ?? '');
+  return steerClause(activeSteer(Number.isFinite(at) ? at : Date.now())?.prompt).trim();
+}
+
 export function buildContextLines(
   context: any,
-  { recentTracks, contextFields }: { recentTracks?: any[]; contextFields?: string | readonly string[] | null } = {},
+  { recentTracks, contextFields, steer = false }: {
+    recentTracks?: any[];
+    contextFields?: string | readonly string[] | null;
+    // The operator's steer, opted into by the links and segments a steer leans
+    // (a song intro, a segment, banter, a programme feature) and by nothing
+    // else. Never a prompt built around a listener's own words, whose output
+    // goes straight back to that listener, nor anything whose output is kept
+    // past the steer (the programme plan, published as the episode angle).
+    steer?: boolean;
+  } = {},
 ) {
   // `allow === null` means no gating (every field) — the historical behaviour
   // for callers that don't pass contextFields.
   const allow = normalizeContextFields(contextFields);
   const on = (f: ContextField) => allow === null || allow.has(f);
   const lines: string[] = [];
+  if (typeof context?.episodeEditorial === 'string' && context.episodeEditorial) lines.push(context.episodeEditorial);
+  // Not behind a context field: an operator's steer is not something a skill
+  // opts out of.
+  const steerText = steer ? steerLine(context) : '';
+  if (steerText) lines.push(steerText);
   if (on('date') && context?.date) {
     lines.push(`Day: ${context.date.dayLabel}, ${context.date.dayOfMonth} ${context.date.monthLabel} (${context.date.season})`);
   }
@@ -163,13 +202,19 @@ export function buildContextLines(
       ? `Period: ${context.time.period}`
       : `Period: ${context.time.period} (${context.time.vibe})`);
   }
-  if (on('weather') && context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
+  // A place the operator withholds (#2099) leaves the reading unattributed.
+  const weather = spokenContext(context)?.weather;
+  if (on('weather') && weather && weather.condition && weather.condition !== 'unknown') {
     // Spoken form ("24 degrees Celsius"), not display form ("24°C") — the
     // model echoes whatever unit shape the prompt uses, and a °F/°C echo
     // reaches TTS as "seventy-six F" (issue #963). The speech-text normalizer
     // is the backstop; this stops the most common case at the source.
-    const unitWord = (context.weather.tempUnit || 'C') === 'F' ? 'Fahrenheit' : 'Celsius';
-    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp} degrees ${unitWord}` : ''}`);
+    const unitWord = (weather.tempUnit || 'C') === 'F' ? 'Fahrenheit' : 'Celsius';
+    const heading = 'location' in weather ? `Weather in ${weather.location}` : 'Weather';
+    // The forecast's own wording when known ("mainly clear"), else the coarse
+    // condition word.
+    const sky = typeof weather.detail === 'string' && weather.detail ? weather.detail : weather.condition;
+    lines.push(`${heading}: ${sky}${weather.temp != null ? `, ${weather.temp} degrees ${unitWord}` : ''}`);
   }
   if (on('festival') && context?.festival) {
     const note = context.festival.description ? ` — ${context.festival.description}` : '';

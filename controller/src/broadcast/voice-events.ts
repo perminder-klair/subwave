@@ -1,29 +1,7 @@
-// Outbound signalling for one spoken segment (#1382).
-//
-// ONE place decides what the world is told about a piece of DJ speech, because
-// there are four call sites that air one (announce, announceExchange,
-// airPendingVoice, airIntro) and they used to each inline their own
-// webhooks.notify — which is how they drifted into publishing three different
-// subsets of the same event.
-//
-// Timebase is the thing to get right here, and there are two of them:
-//
-//   * `airedAt` is the LIVE EDGE — the moment the words leave the mixer, taken
-//     from radio.liq's own clock via the voice marker. Operator surfaces want
-//     this one.
-//   * A listener is `streamBufferSeconds` behind that for their whole
-//     connection (Icecast bursts already-broadcast audio on connect, #1114), so
-//     anything syncing to what a LISTENER hears wants airedAt + that offset.
-//     It rides the payload precisely so a consumer doesn't have to go and fetch
-//     /now-playing to find it.
-//
-// When the air time can't be known — a mixer too old to write markers, or a
-// clip that never made it out of the queue — `estimated: true` says so and the
-// timestamps are omitted rather than guessed. An absent field is a consumer's
-// cue to fall back to `t`; a fabricated one is a consumer silently believing a
-// number nobody measured.
+// Publish actual mixer air time at the live edge with the listener buffer offset. Unknown air
+// time sets estimated: true and omits timestamps. #1382, #1114.
 
-import * as settings from '../settings.js';
+import { advertisedBufferSeconds } from './stream-mounts.js';
 import * as webhooks from './webhooks.js';
 
 export interface SpokenSegment {
@@ -31,11 +9,9 @@ export interface SpokenSegment {
   voiceId: string;
   /** The `announce` kind — 'link', 'station-id', 'hourly-check', 'banter', … */
   kind: string;
-  /** Which mixer channel carried it: 'intro' = light duck (the song stays up
-   *  under the voice), 'say' = heavy duck. Passed by the caller, never derived
-   *  from `kind` — a deferred ident is a 'station-id' that deliberately airs on
-   *  the INTRO channel because it lands at a track boundary
-   *  (announceAtNextTrack), so kind alone would report the wrong one. */
+  /** Mixer channel: 'intro' = light duck, 'say' = heavy duck. Passed by the
+   *  caller, never derived from `kind` — a boundary-deferred ident is a
+   *  'station-id' that airs on the INTRO channel. */
   channel: 'say' | 'intro';
   text: string;
   /** The clip's own length in ms (no lead-in/tail padding). */
@@ -45,17 +21,14 @@ export interface SpokenSegment {
   personaId?: string | null;
   personaName?: string | null;
   /** Whether to also fire the legacy dj.say/dj.link event. Off for a banter
-   *  line: that exchange fires ONE aggregate dj.say for the whole conversation
-   *  (five separate segments is not what a Discord relay wants), while
-   *  voice.start/voice.end stay per line — a ducking consumer needs each real
-   *  speech window, which is the entire point of the new pair. */
+   *  line: the exchange fires ONE aggregate dj.say, while voice.start/end stay
+   *  per line so a ducking consumer sees each real speech window. */
   legacy?: boolean;
 }
 
-// What is known BEFORE a segment airs: the identity it will carry, plus a
-// forecast of how long the wait is. Fired the moment the station commits to
-// speaking, so a consumer can prepare (close a reply gate, hand back from a
-// caller, start a duck ramp) rather than react after the first words are out.
+// What is known BEFORE a segment airs: its identity plus a forecast of the
+// wait. Fired when the station commits to speaking, so a consumer can prepare
+// rather than react after the first words are out.
 export interface QueuedSegment {
   /** The same id the eventual voice.start / voice.end carry. */
   voiceId: string;
@@ -69,38 +42,20 @@ export interface QueuedSegment {
   personaName?: string | null;
 }
 
-// A clip can't outrun the voice serialiser's own hold, so neither can the
-// voice.end timer. Guards against a mangled WAV header parking a timer hours out.
+// Bounds the voice.end timer so a mangled WAV header can't park one hours out.
 const MAX_SEGMENT_MS = 90_000;
 
-function bufferSeconds(): number {
-  try {
-    const s = settings.get() as { stream?: { bufferSeconds?: number } } | null;
-    const n = Number(s?.stream?.bufferSeconds);
-    return Number.isFinite(n) ? n : 22;
-  } catch {
-    return 22;
-  }
-}
-
-// The early half of the lifecycle: voice.queued → voice.start → voice.end, all
-// three paired by `voiceId`.
+// voice.queued → voice.start → voice.end, all three paired by `voiceId`.
 //
-// This one fires when the station COMMITS to a clip — the rendered WAV joins
-// the voice serialiser — which is before the queue wait, the mixer's poll and
-// the silent lead-in. That is the whole point: a consumer that only learns of
-// speech from voice.start learns at the moment the words are already audible,
-// which is too late to hand over gracefully or to start a duck ramp. Anything
-// syncing to the audio still keys off voice.start/voice.end; this is for
-// getting ready.
+// This fires when the station COMMITS to a clip, before the queue wait, the
+// mixer poll and the lead-in — voice.start alone arrives when the words are
+// already audible, too late to start a duck ramp. Anything syncing to the audio
+// still keys off voice.start/voice.end.
 //
-// `estimatedAirInMs` is a FORECAST and is never anything else. The wait it
-// measures is mostly the serialiser's own hold, which is known, but the mixer
-// poll and the handoff write are not, and a jingle can extend it. `expectedAirAt`
-// is the same figure as a timestamp, for convenience. `estimated: true` says the
-// same thing the other two events say when they can't measure: do not treat
-// these as observations. There is deliberately no `airedAt` here — a field
-// named for a measurement must never carry a guess.
+// `estimatedAirInMs` is a FORECAST (the mixer poll and handoff write are
+// unknown, and a jingle can extend it); `expectedAirAt` is the same figure as a
+// timestamp. There is deliberately no `airedAt` — a field named for a
+// measurement must never carry a guess.
 export function notifyQueued(seg: QueuedSegment): void {
   const durationMs = Math.max(0, Math.min(MAX_SEGMENT_MS, Math.round(seg.durationMs) || 0));
   const estimatedAirInMs = Math.max(0, Math.round(seg.estimatedAirInMs) || 0);
@@ -113,10 +68,10 @@ export function notifyQueued(seg: QueuedSegment): void {
     estimatedAirInMs,
     expectedAirAt: new Date(Date.now() + estimatedAirInMs).toISOString(),
     estimated: true,
-    // Same reason it rides voice.start: a consumer syncing to what LISTENERS
-    // hear (rather than to the live edge) needs the offset, and shouldn't have
-    // to go and fetch /now-playing for it (#1114).
-    streamBufferSeconds: bufferSeconds(),
+    // The listener's offset from the live edge, so a consumer syncing to what
+    // people HEAR doesn't have to look it up (#1114): the same figure
+    // /now-playing advertises, the burst the running mounts hold (#2142).
+    streamBufferSeconds: advertisedBufferSeconds(),
     ...(seg.personaId ? { personaId: seg.personaId } : {}),
     ...(seg.personaName ? { personaName: seg.personaName } : {}),
   });
@@ -151,17 +106,14 @@ export function notifySpoken(seg: SpokenSegment): void {
     ...identity,
     text: seg.text,
     ...(endsAtMs != null ? { endsAt: new Date(endsAtMs).toISOString() } : {}),
-    // The listener's own offset from the live edge, so a consumer syncing to
-    // what people HEAR doesn't have to go and look it up (#1114).
-    streamBufferSeconds: bufferSeconds(),
+    // The listener's offset from the live edge (#1114, #2142).
+    streamBufferSeconds: advertisedBufferSeconds(),
     ...(seg.personaId ? { personaId: seg.personaId } : {}),
     ...(seg.personaName ? { personaName: seg.personaName } : {}),
   });
 
-  // The original pair, kept for every relay already subscribed to them. `text`
-  // (and, on dj.say, `kind`) stay exactly where they were; everything else is
-  // additive, including `kind` now also riding dj.link — a field appearing is
-  // something a relay ignores, where a field moving is one that breaks.
+  // The original pair, kept for relays already subscribed. Existing fields stay
+  // exactly where they were; everything else is additive.
   if (seg.legacy !== false) {
     webhooks.notify(seg.kind === 'link' ? 'dj.link' : 'dj.say', { text: seg.text, ...identity });
   }

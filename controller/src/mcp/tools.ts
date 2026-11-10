@@ -2,7 +2,7 @@
  * The SUB/WAVE MCP tool set — the single source of truth for both transports
  * (the controller's HTTP mount in routes/mcp.ts, and the standalone stdio
  * server in mcp-subwave/src/index.ts). `registerSubwaveTools(server, client)`
- * registers all 17 tools on an McpServer; each tool is a thin wrapper over one
+ * registers all 20 tools on an McpServer; each tool is a thin wrapper over one
  * controller endpoint via the shared SubwaveClient.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -10,6 +10,7 @@ import { z } from "zod";
 import { SubwaveError, type RequestStatus, type SubwaveClient } from "./client.js";
 // Zod-only module, so it resolves in the standalone stdio server's build too.
 import { REQUEST_NAME_MAX, REQUEST_TEXT_MAX } from "../schemas/request.js";
+import { skipBodyShape } from "../schemas/dj.js";
 
 /** Render any value as a text content block. */
 function text(value: unknown): { type: "text"; text: string } {
@@ -51,6 +52,22 @@ const DEFAULT_REQUEST_POLL_BUDGET_MS = 45_000;
 export interface RegisterToolsOptions {
   /** Max time subwave_request_song blocks polling for an outcome. */
   requestPollBudgetMs?: number;
+}
+
+/**
+ * Wraps every tool's output shape. The SDK publishes a zod output schema with
+ * `$schema: draft-07` (its zod v4 path hard-codes that target), and an MCP
+ * client that validates structured output with a JSON Schema 2020-12-only
+ * validator refuses the whole tool over that one line ("unsupported
+ * dialect"). Clearing it through zod metadata publishes the schema with no
+ * dialect, so each client reads it in its own default, draft-07 or 2020-12.
+ * Declaring 2020-12 instead would break the draft-07 clients the same way.
+ * That is safe only while these shapes use nothing the two dialects read
+ * differently (tuples, `definitions`/`$defs`, `dependencies`);
+ * `scripts/mcp-output-schema.test.ts` pins both halves.
+ */
+function output<T extends z.ZodRawShape>(shape: T) {
+  return z.object(shape).meta({ $schema: undefined });
 }
 
 /** Shared output shape for the request tools — mirrors GET /request/:id. */
@@ -103,7 +120,7 @@ export function registerSubwaveTools(
         "Call this first when other tools fail — it separates 'stack is down' from " +
         "'endpoint-specific problem'.",
       inputSchema: {},
-      outputSchema: { onAir: z.boolean() },
+      outputSchema: output({ onAir: z.boolean() }),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     () =>
@@ -147,15 +164,18 @@ export function registerSubwaveTools(
       title: "SUB/WAVE queue & history",
       description:
         "Get the SUB/WAVE station state: the upcoming track queue, recently played " +
-        "history, and the DJ booth log. Use this to check whether a requested song " +
-        "already landed in the queue, or to review what the DJ has been doing.",
+        "history, and — when this connection has admin credentials — the DJ booth log. " +
+        "Use this to check whether a requested song already landed in the queue, or to " +
+        "review what the DJ has been doing.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     () =>
       run(async () => {
         const data = await client.state();
-        return { content: [text(data)] };
+        // The booth log is operator diagnostics, off the public /state read.
+        const djLog = await client.boothLog();
+        return { content: [text(djLog ? { ...data, djLog } : data)] };
       }),
   );
 
@@ -240,7 +260,7 @@ export function registerSubwaveTools(
           .optional()
           .describe("Name to credit the request to on-air. Defaults to 'anon'."),
       },
-      outputSchema: REQUEST_OUTPUT,
+      outputSchema: output(REQUEST_OUTPUT),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ request, requester }) =>
@@ -273,7 +293,7 @@ export function registerSubwaveTools(
       inputSchema: {
         requestId: z.string().min(1).describe("The requestId from subwave_request_song."),
       },
-      outputSchema: REQUEST_OUTPUT,
+      outputSchema: output(REQUEST_OUTPUT),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     ({ requestId }) =>
@@ -311,6 +331,55 @@ export function registerSubwaveTools(
   );
 
   // -------------------------------------------------------------------------
+  // subwave_similar_tracks — CLAP "sounds like this" neighbours (station gate)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_similar_tracks",
+    {
+      title: "Tracks that sound like this one",
+      description:
+        "Find tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy) is " +
+        "closest to a seed track — blind to tags and metadata, so it works for " +
+        "instrumentals and non-English tracks. Pass a track id (best; take it from " +
+        "subwave_now_playing or subwave_search_library) OR free text to resolve as a " +
+        "title/artist. Needs no admin credentials: it is gated by the STATION password " +
+        "and open on a public station. Never errors on a library without audio " +
+        "fingerprints — it returns an empty list plus a `reason` saying why " +
+        "('no-audio-index' = the station has no CLAP analysis at all, " +
+        "'seed-not-analysed' = this track specifically, 'seed-not-found' = nothing " +
+        "matched). Reading is all it does; pair it with subwave_queue_track (admin) or " +
+        "subwave_request_song to actually put one on air.",
+      inputSchema: {
+        id: z.string().min(1).optional().describe("Track id to seed from — preferred over q."),
+        q: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Free text resolved to a seed track, e.g. 'boards of canada roygbiv'. Used when id is " +
+              "absent, or when the id's track has no audio fingerprint of its own.",
+          ),
+        limit: z.number().int().min(1).max(50).optional().describe("Max results (default 12, cap 50)."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    ({ id, q, limit }) =>
+      run(async () => {
+        if (!id && !q) {
+          return { content: [text("Pass either `id` (a track id) or `q` (text to resolve to one).")], isError: true };
+        }
+        const data = await client.similarTracks({ id, q, limit });
+        // The reason is the whole point of an empty result here — surface it as
+        // prose so a model reading only the text block still learns whether to
+        // try a different seed or stop asking this station for sound matches.
+        if (!data.results?.length) {
+          return { content: [text(`No sound-alike tracks: ${data.reason}${data.message ? ` — ${data.message}` : ""}`)] };
+        }
+        return { content: [text(data)] };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
   // subwave_queue_track — queue an exact track (admin)
   // -------------------------------------------------------------------------
   server.registerTool(
@@ -330,11 +399,11 @@ export function registerSubwaveTools(
         year: z.number().optional(),
         genre: z.string().optional(),
       },
-      outputSchema: {
+      outputSchema: output({
         ok: z.boolean(),
         track: z.object({ title: z.string(), artist: z.string().nullable() }),
         queuePosition: z.number(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     (track) =>
@@ -353,6 +422,79 @@ export function registerSubwaveTools(
   );
 
   // -------------------------------------------------------------------------
+  // subwave_queue_block — queue a whole album / artist block (admin)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_queue_block",
+    {
+      title: "Queue an album or artist block",
+      description:
+        "Queue a whole album, or a run of tracks by one artist, in ONE action — the " +
+        "operator gesture behind an album show. ADMIN endpoint. Name the block with a " +
+        "trackId from any subwave_search_library result (the server resolves the " +
+        "album/artist off it), a pre-resolved album/artist id, or an artist name. " +
+        "An album is queued in its own disc/track order and can be neither shuffled " +
+        "nor limited — that ordering is the whole point of a block. Capped at 30 " +
+        "tracks; a longer record is truncated and says so. The never-play blocklist " +
+        "is NOT bypassed: blocked tracks are skipped and named in `skipped`, and the " +
+        "rest queue. `runsPastShowChange` warns when the block outlasts the current " +
+        "show — nothing is cut, it is the operator's call.",
+      inputSchema: {
+        kind: z.enum(["album", "artist"]).describe("What the block is a block of."),
+        trackId: z.string().optional().describe("Any track from the album, or by the artist."),
+        id: z.string().optional().describe("A pre-resolved album or artist id."),
+        artist: z.string().optional().describe("Artist by name. Artist blocks only."),
+        limit: z.number().int().optional().describe("Artist blocks only; default 10, max 30."),
+        order: z.enum(["natural", "shuffle"]).optional().describe("Albums are refused 'shuffle'."),
+      },
+      outputSchema: output({
+        ok: z.boolean(),
+        kind: z.enum(["album", "artist"]),
+        blockId: z.string(),
+        label: z.string(),
+        queued: z.number(),
+        queuePosition: z.number().nullable(),
+        truncated: z.number(),
+        skipped: z.array(
+          z.object({
+            title: z.string().nullable(),
+            artist: z.string().nullable(),
+            reason: z.string(),
+            blockedBy: z.unknown().nullable(),
+          }),
+        ),
+        runsPastShowChange: z
+          .object({ at: z.string(), show: z.string().nullable(), bySec: z.number() })
+          .nullable(),
+      }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    (body) =>
+      run(async () => {
+        const result = await client.queueBlock(body as Record<string, unknown>);
+        // Every caveat is stated in the text, not only in the structured
+        // payload: a model that queues an album and is not told two tracks were
+        // never-played will report a complete record on air.
+        const notes = [
+          result.skipped.length ? `${result.skipped.length} skipped (never-play blocklist)` : null,
+          result.truncated ? `${result.truncated} over the 30-track limit` : null,
+          result.runsPastShowChange
+            ? `runs ~${Math.round(result.runsPastShowChange.bySec / 60)}min past the next show change`
+            : null,
+        ].filter(Boolean);
+        return {
+          content: [
+            text(
+              `Queued ${result.queued} track${result.queued === 1 ? "" : "s"} from "${result.label}"` +
+                (notes.length ? ` — ${notes.join("; ")}.` : "."),
+            ),
+          ],
+          structuredContent: { ...result },
+        };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
   // subwave_skip_track — force-end the current track (admin)
   // -------------------------------------------------------------------------
   server.registerTool(
@@ -362,14 +504,38 @@ export function registerSubwaveTools(
       description:
         "Force-end the track playing right now and move to the next item — an operator " +
         "override, since every listener hears the same broadcast. ADMIN endpoint. Use " +
-        "sparingly and deliberately; there is intentionally no listener-facing skip.",
-      inputSchema: {},
-      outputSchema: { ok: z.boolean() },
+        "sparingly and deliberately; there is intentionally no listener-facing skip. " +
+        "Pass `expectId` to skip only a specific track: if it has already ended, or a " +
+        "jingle, bed or pause-and-talk break is on air instead, nothing is skipped.",
+      inputSchema: {
+        expectId: skipBodyShape.expectId.describe(
+          "Optional. The subsonic_id of the track you mean to skip, from subwave_now_playing. " +
+            "Omit it to end whatever is on air.",
+        ),
+      },
+      // Every field POST /dj/skip answers with. A client validates structured
+      // content against this with no additional properties allowed, so an
+      // undeclared `pending`/`committed` turned every skip — and every
+      // refusal — into a thrown -32602 after the skip had already run.
+      outputSchema: output({
+        ok: z.boolean(),
+        pending: z.boolean().optional(),
+        committed: z.boolean().optional(),
+        reason: z.string().optional(),
+        error: z.string().optional(),
+        onAirId: z.string().nullable().optional(),
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
-    () =>
+    ({ expectId }) =>
       run(async () => {
-        const result = await client.skipTrack();
+        const result = await client.skipTrack(expectId);
+        if (!result.ok) {
+          return {
+            content: [text(`Skip refused (${result.reason}): ${result.error ?? "nothing skipped"}.`)],
+            structuredContent: { ...result },
+          };
+        }
         return { content: [text("Track skipped — the next queue item is taking over.")], structuredContent: { ...result } };
       }),
   );
@@ -417,13 +583,13 @@ export function registerSubwaveTools(
               "whoosh, drum-roll). Omit for voice only.",
           ),
       },
-      outputSchema: {
+      outputSchema: output({
         ok: z.boolean(),
         mode: z.enum(["raw", "styled"]),
         kind: z.string(),
         spoken: z.string(),
         sfx: z.string().nullable().optional(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ message, mode, placement, sfx }) =>
@@ -467,7 +633,7 @@ export function registerSubwaveTools(
           ])
           .describe("Which scripted segment to fire."),
       },
-      outputSchema: { ok: z.boolean(), type: z.string(), spoken: z.string() },
+      outputSchema: output({ ok: z.boolean(), type: z.string(), spoken: z.string() }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ type }) =>
@@ -519,11 +685,11 @@ export function registerSubwaveTools(
       inputSchema: {
         name: z.string().min(1).describe("Skill name from subwave_list_skills, e.g. 'weather'."),
       },
-      outputSchema: {
+      outputSchema: output({
         ok: z.boolean(),
         name: z.string(),
         spoken: z.string().nullable(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ name }) =>
@@ -582,7 +748,7 @@ export function registerSubwaveTools(
           .min(1)
           .describe("Effect name, e.g. 'airhorn'. List valid names with subwave_list_sfx."),
       },
-      outputSchema: { ok: z.boolean(), name: z.string() },
+      outputSchema: output({ ok: z.boolean(), name: z.string() }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ name }) =>
@@ -590,6 +756,65 @@ export function registerSubwaveTools(
         const result = await client.playSfx(name);
         return {
           content: [text(`Sound effect '${result.name}' is going to air.`)],
+          structuredContent: { ...result },
+        };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
+  // subwave_list_jingles — the jingle library (admin)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_list_jingles",
+    {
+      title: "List jingles",
+      description:
+        "List the station's jingle library — full-level clips (idents, event " +
+        "announcements) that play as their own item in the programme rather than " +
+        "under it. Unlike sound effects these have no length cap. ADMIN endpoint. " +
+        "Use a returned filename with subwave_play_jingle.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    () =>
+      run(async () => {
+        const data = await client.listJingles();
+        return { content: [text(data)] };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
+  // subwave_play_jingle — air a jingle at the next safe boundary (admin)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_play_jingle",
+    {
+      title: "Air a jingle",
+      description:
+        "Queue a jingle from the station library to air at the next safe track boundary — " +
+        "at full level, with the programme yielding to it. ADMIN endpoint. This is the " +
+        "tool for anything longer than a stinger (an event announcement, a sponsor " +
+        "spot, a station ident): subwave_play_sfx mixes UNDER the music and is capped " +
+        "at 10 seconds. It is queued, not instant — the station never cuts a song off " +
+        "mid-play, and active speech or a bed/track pair defers it. DO NOT retry a call that " +
+        "succeeded: the queue behind this has no cancel, so a second push airs the " +
+        "announcement twice. Calling again before the first has aired is refused with " +
+        "\"already queued\" — that means your press landed. List valid filenames with " +
+        "subwave_list_jingles.",
+      inputSchema: {
+        filename: z
+          .string()
+          .min(1)
+          .describe("Jingle filename, e.g. 'jingle_a1b2c3d4.wav'. List valid ones with subwave_list_jingles."),
+      },
+      outputSchema: output({ ok: z.boolean(), filename: z.string() }),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    ({ filename }) =>
+      run(async () => {
+        const result = await client.playJingle(filename);
+        return {
+          content: [text(`Jingle '${result.filename}' is queued for the next safe boundary.`)],
           structuredContent: { ...result },
         };
       }),
@@ -608,7 +833,7 @@ export function registerSubwaveTools(
         "library changes or a mood shift; it does not affect the current track or the " +
         "request queue.",
       inputSchema: {},
-      outputSchema: { ok: z.boolean() },
+      outputSchema: output({ ok: z.boolean() }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     () =>

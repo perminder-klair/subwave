@@ -1,9 +1,5 @@
 'use client';
 
-// The "list" half of the cards/list toggle on /admin/skills, /admin/shows and
-// /admin/personas. Hand-rolled in the house table style (StatsPanel, DashPanel)
-// rather than pulling in a table dependency. The whole row is the edit target,
-// and any control inside it still acts in place.
 
 import type { ReactNode } from 'react';
 import { useRef } from 'react';

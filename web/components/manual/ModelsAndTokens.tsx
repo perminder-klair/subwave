@@ -44,10 +44,30 @@ export default function ModelsAndTokens() {
             </a>
           </li>
           <li>
-            <strong>OpenAI-compatible</strong> — any self-hosted server that speaks the
-            OpenAI API (llama.cpp, vLLM, LM Studio); you supply its URL.
+            <strong>OpenAI-compatible</strong> — any server that speaks the OpenAI
+            Chat Completions API. Local mode supports llama.cpp, vLLM and LM
+            Studio. Hosted mode uses native structured output and leaves local
+            sampling extensions off the request.
           </li>
         </ul>
+        <p>
+          For <strong>Atlas Cloud</strong>, choose OpenAI-compatible in Admin &rarr; LLM,
+          press <strong>Use Atlas Cloud</strong>, enter a Bearer token and choose a
+          model from its catalog. For <strong>Azure OpenAI v1</strong>, press
+          <strong> Use Azure OpenAI v1</strong>, enter your resource URL ending in
+          <code> /openai/v1</code>, add an <code>api-key</code> custom request header,
+          and enter your chat deployment name as the model. Azure embedding
+          deployments have their own names: set that name in Library tagger,
+          with an embedding URL and header if they use a different resource.
+          For <strong>Mistral</strong>, choose OpenAI-compatible, press
+          <strong> Use Mistral</strong> (Hosted service, <code>https://api.mistral.ai/v1</code>),
+          enter your Mistral API key in the Bearer token field and choose a model from
+          its catalog. Keep it on Hosted service: Local mode adds llama.cpp request
+          fields that Mistral rejects with &ldquo;Unprocessable Entity&rdquo;.
+          These presets use the same OpenAI-compatible provider; older Azure
+          deployment URLs with dated <code>api-version</code> paths are outside
+          this v1 setup.
+        </p>
         <p>
           <strong>The provider is part of the choice.</strong> The same model can behave
           differently through different routes, because each provider translates tools and
@@ -111,14 +131,16 @@ export default function ModelsAndTokens() {
         </p>
         <ul className="bs-list">
           <li>
-            <strong>Picker agent off</strong> (Admin &rarr; LLM) — the big one. With it off,
-            the station runs <em>everything</em> in one-call-per-moment style: track picks
-            come from a short pre-built shortlist, and the talk segments (weather, news,
-            curiosities) fetch their data first and make a single call too, instead of running
-            a tool-using agent. Far fewer tokens, and a task shape small models get right —
-            this is the setting that makes the 9B–12B class reliable. If you&rsquo;d
-            rather keep the agent on but cheaper, set <em>Discovery rounds per
-            pick</em> to 1 instead.
+            <strong>Track Shortlist</strong> (Admin &rarr; Settings &rarr; Music selection)
+            — the big one. SUB/WAVE searches the library itself and hands the model a
+            short list, so every pick is one bounded call instead of a tool-using agent. Pair
+            it with <em>Request matching: Direct</em> on the same page and{' '}
+            <em>Segments &amp; Skills runtime: Direct</em> (Admin &rarr; Settings &rarr; DJ
+            behaviour), so listener requests and talk segments (weather, news, curiosities)
+            fetch their data first and make a single call too. Far fewer tokens, and a task
+            shape small models get right — this is the combination that makes the 9B–12B
+            class reliable. If you&rsquo;d rather stay on Agentic Tools but cheaper, set{' '}
+            <em>Discovery rounds per pick</em> to 1 instead.
           </li>
           <li>
             <strong>Reasoning off</strong> (Admin &rarr; LLM) — stops &ldquo;thinking&rdquo;
@@ -169,9 +191,9 @@ export default function ModelsAndTokens() {
         </p>
         <ul className="bs-list">
           <li>
-            <strong>Picker agent on</strong> (Admin &rarr; LLM) — the full conversational
-            DJ: it remembers the session, reasons about what it has already played, and
-            uses tools to dig through the library. Richer and more coherent — but it&rsquo;s
+            <strong>Agentic Tools</strong> (Admin &rarr; Settings &rarr; Music selection) —
+            the full conversational DJ: it remembers the session, reasons about what it has
+            already played, and uses tools to dig through the library. Richer and more coherent — but it&rsquo;s
             a genuinely harder job, and the bench is blunt about who can do it:{' '}
             <strong>Gemma 4 31B</strong> (Ollama cloud), <strong>GPT-5.6 Luna</strong>{' '}
             (OpenRouter) and hosted models of GPT-5-Mini&rsquo;s class run it reliably;
@@ -179,8 +201,8 @@ export default function ModelsAndTokens() {
             agent miss falls back to the pool picker anyway.
           </li>
           <li>
-            <strong>Discovery rounds per pick</strong> (Admin &rarr; LLM) — how many
-            times the picker agent may search the library before it has to commit to a
+            <strong>Discovery rounds per pick</strong> (Admin &rarr; Settings &rarr; Music
+            selection, shown with Agentic Tools) — how many times the agent may search the library before it has to commit to a
             track. <em>0 = auto</em>: one round on self-hosted servers (the single
             cornered call is what keeps small models honest), three on hosted
             providers — enough to seed from the current track, refine on what came
@@ -211,10 +233,10 @@ export default function ModelsAndTokens() {
       <div className="bs-callout">
         <div className="bs-eyebrow">THE DJ NEVER GOES SILENT</div>
         <p>
-          The picker agent has a built-in safety net: if it ever fails or runs too slow,
-          the station quietly falls back to the simple pool picker for that track, the
-          same path you&rsquo;d get with the agent switched off. Turning it off just makes that
-          lighter path the default rather than the exception.
+          Both selection routes have a built-in safety net: if a pick ever fails or runs
+          too slow, the station quietly falls back to the simple pool picker for that
+          track. A Shortlist whose model call fails goes one step lighter still and plays
+          the best fit from its own list, with no further call.
         </p>
       </div>
 

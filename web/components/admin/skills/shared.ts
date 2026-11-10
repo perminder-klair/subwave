@@ -1,5 +1,3 @@
-// Shared skill-catalogue vocabulary, so the card list (SkillsPanel) and the table
-// list (SkillsTable) agree without one importing the other.
 
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -16,9 +14,16 @@ export interface Skill {
   ready?: boolean;
   requiresKey?: string;
   keyUrl?: string;
+  // Set when a key is on file and the search provider refuses it, which no
+  // env var fixes. Absent from an older controller.
+  keyProblem?: string | null;
   cooldownMs?: number;
   custom?: boolean;
   tags?: string[];
+  cohosts?: boolean;
+  // Imported/restored tool.mjs held for review; the skill can't air until it
+  // is trusted or discarded.
+  toolPending?: boolean;
 }
 
 export type StatusFilter = 'all' | 'enabled' | 'disabled' | 'needs-key' | 'custom' | 'builtin';

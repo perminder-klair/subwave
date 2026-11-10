@@ -1,21 +1,5 @@
-// Curiosity fetcher — the data layer behind the `curiosity` capability. The
-// segment-director agent (skills/_agent.ts) calls the `getCuriosityItem` tool
-// (llm/segment-tools.ts) for a single oddly-specific factoid to read on air.
-//
-// Internally rotates across three sources, picked deterministically per call:
-//   1. Wikipedia on-this-day events for today's date (filtered for non-violent
-//      cultural/scientific/sport entries since 1850 to keep the tone right);
-//   2. Opportunistic ISS overhead pass — only when the station knows an event
-//      is imminent in the operator's location (not implemented yet — returns
-//      `available: false` until a structured source is wired in);
-//   3. LLM-only "did you know" line — same prompt path the legacy random-facts
-//      capability used; the agent generates from `cap.desc` + persona on its
-//      own when the data sources return nothing.
-//
-// Source (3) is the implicit fallback: the tool returns `{ available: false }`
-// when no external item is available, which prompts the agent to fall through
-// to pure generation under `cap.desc`. So this file is "what extra context can
-// we put under the DJ's nose this minute?" — never "must we be silent?".
+// Rotate external sources; available:false permits generation from the skill
+// brief rather than requiring silence. ISS data remains unavailable until implemented.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';

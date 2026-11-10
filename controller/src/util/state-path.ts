@@ -1,41 +1,24 @@
-// The one place that answers "does this operator-supplied path point inside the
-// state dir?" — for the read-only state-dir tree behind GET /debug/state-tree.
-//
-// Never inline this rule at a call site. Same reasoning as util/request-guard.ts
-// and audio/voice-library.ts's resolve(): a second copy is a second opinion, and
-// the thing on the other side of a wrong answer here is a filesystem read
-// primitive over the whole host.
-//
-// The realpath containment check (rule 3) is what stops a symlink planted inside
-// the state dir from exposing /etc or the host's music library. It is deliberately
-// compatible with the documented way to relocate the stem cache, which is a BIND
-// MOUNT at <state>/stems: a bind mount realpaths INSIDE root, a symlink does not.
+// Use realpath containment for /debug/state-tree to block symlink escapes.
+// A bind mount under state/stems still resolves inside the state root.
 
-import { realpath } from 'node:fs/promises';
-import { isAbsolute, join, normalize, resolve, sep } from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 
-/** Entries returned per directory listing. Read the cap as a promise to the UI:
- *  it is told the real `total`, so a truncated listing is never silent. */
+/** Entries per directory listing; callers are also told the real `total`. */
 export const MAX_ENTRIES = 500;
 
-/**
- * Resolve a relative path against the state dir, or null if it escapes.
- *
- * `null` means the REQUEST was malformed (400), not that the path is missing —
- * a well-formed path that does not exist resolves fine and fails later at stat.
- */
+/** Resolve a relative path against the state dir, or null if it escapes. `null`
+ * means the REQUEST was malformed (400), not that the path is missing. */
 export function resolveStatePath(root: string, rel: string): string | null {
   if (typeof rel !== 'string') return null;
   // Empty / '.' / '/' all mean the root itself.
   const raw = rel.replace(/^\/+/, '').trim();
   if (raw === '' || raw === '.') return resolve(root);
-  // An absolute path is never a relative path into the tree, even after the
-  // leading-slash strip above (Windows-style 'C:\' and UNC paths).
+  // Absolute paths (Windows 'C:\', UNC) survive the leading-slash strip above.
   if (isAbsolute(raw)) return null;
   if (raw.includes('\0')) return null;
 
-  // Normalise FIRST, then refuse what is left. 'a/../b' normalises to 'b' and is
-  // a legitimate path; refusing every '..' outright would reject it.
+  // Normalise FIRST, then refuse what is left: 'a/../b' is legitimate.
   const norm = normalize(raw);
   if (norm === '..' || norm.startsWith(`..${sep}`) || norm.includes(`${sep}..${sep}`)) return null;
 
@@ -49,20 +32,55 @@ export function containedIn(root: string, abs: string): boolean {
 }
 
 /**
- * The realpath half of the guard — resolves symlinks and re-checks containment.
+ * The realpath half of the guard: resolves symlinks and re-checks containment.
+ * Split out so the lexical rule stays pure and synchronous.
  *
- * Split from `resolveStatePath` so the lexical rule stays pure and synchronous
- * (that is the part worth unit-testing exhaustively). A path that does not exist
- * yet cannot be realpath'd, so a missing target falls back to the lexical answer
- * and the caller's stat reports the real failure.
+ * A path that does not exist cannot be realpath'd, so its deepest EXISTING
+ * ancestor is resolved instead and the missing tail appended. Both sides of the
+ * comparison must be resolved: `abs` is built from the unresolved root, so on a
+ * symlinked state dir (macOS's /var -> /private/var, a symlinked checkout) a
+ * lexical fallback reads every missing path as an escape. Any other realpath
+ * failure, and an ancestor that exists but will not resolve (a dangling
+ * symlink), fails closed.
  */
 export async function realStatePath(root: string, abs: string): Promise<string | null> {
   const realRoot = await realpath(root).catch(() => resolve(root));
+  let real: string | null;
   try {
-    const real = await realpath(abs);
-    return containedIn(realRoot, real) ? real : null;
-  } catch {
-    // ENOENT (and friends): nothing to follow, so nothing can escape.
-    return containedIn(realRoot, abs) ? abs : null;
+    real = await realpath(abs);
+  } catch (err) {
+    if (!isMissing(err)) return null;
+    real = await realMissingPath(abs);
+  }
+  return real && containedIn(realRoot, real) ? real : null;
+}
+
+function isMissing(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/** Resolve the deepest existing ancestor of a missing path and append the
+ *  rest, or null when that cannot be done safely. */
+async function realMissingPath(abs: string): Promise<string | null> {
+  const tail: string[] = [];
+  let cur = abs;
+  for (;;) {
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    tail.unshift(basename(cur));
+    cur = parent;
+    let realParent: string;
+    try {
+      realParent = await realpath(cur);
+    } catch (err) {
+      if (isMissing(err)) continue;
+      return null;
+    }
+    // The first missing component must be truly absent. If lstat finds it,
+    // it is a link realpath could not follow, and its target is unknown.
+    const first = join(realParent, tail[0]);
+    const present = await lstat(first).then(() => true, (e) => !isMissing(e));
+    return present ? null : join(realParent, ...tail);
   }
 }

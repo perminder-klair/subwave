@@ -1,7 +1,5 @@
 'use client';
 
-// The enable/disable/backfill lifecycle for CLAP + Demucs deliberately lives on
-// the panel's coverage rows instead, next to the meters it changes.
 
 import { useEffect, useState } from 'react';
 import { Play, RefreshCw, Trash2, AlertTriangle } from 'lucide-react';
@@ -11,6 +9,7 @@ import { Btn } from './ui';
 import { cn } from '../../lib/cn';
 import type { Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 import { num } from './LibraryTaggingPanel';
+import ScheduledTaggingCard from './library/ScheduledTaggingCard';
 
 type Tab = 'run' | 'rescan' | 'reset';
 
@@ -69,6 +68,9 @@ export default function LibraryTaggingModal(p: Props) {
   // Does a Re-analyse-acoustics pass also redo the slow Demucs pass? Unticking
   // keeps existing vocal ranges.
   const [reAnalyzeVocal, setReAnalyzeVocal] = useState(true);
+  // Narrows Re-decide to the rows the model tagged before the track was
+  // measured, and only those measured since. Off: the stale prompt/model scope.
+  const [upgradeBlind, setUpgradeBlind] = useState(false);
   const [confirmRescan, setConfirmRescan] = useState(false);
   // Offered only when Re-embed is the ONLY selected pass — combining the
   // continuation with other re-* passes isn't well-defined.
@@ -82,7 +84,10 @@ export default function LibraryTaggingModal(p: Props) {
   const passAllSelected = !!(passes.reseed && passes.reEnrich && passes.reAnalyze && passes.upgrade);
   const anyPass = !!(passes.reseed || passes.reEnrich || passes.reAnalyze || passes.upgrade);
   const reseedOnly = !!passes.reseed && !passes.reEnrich && !passes.reAnalyze && !passes.upgrade;
-  const clearPasses = () => setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
+  const clearPasses = () => {
+    setPasses({ reseed: false, reEnrich: false, reAnalyze: false, upgrade: false });
+    setUpgradeBlind(false);
+  };
 
   useEffect(() => {
     if (!p.open) return;
@@ -140,6 +145,7 @@ export default function LibraryTaggingModal(p: Props) {
   const rescanPayload = (): RescanOpts => ({
     ...passes,
     vocal: passes.reAnalyze && p.vocalWanted ? reAnalyzeVocal : undefined,
+    upgradeBlind: passes.upgrade && upgradeBlind ? true : undefined,
     // Only carry the continuation when reseed is the sole pass and it's ticked.
     thenTag: reseedOnly && thenTag ? true : undefined,
   });
@@ -170,8 +176,6 @@ export default function LibraryTaggingModal(p: Props) {
         ))}
       </div>
 
-      {/* p-3 on phones: the Modal body already carries px-5, so the nested p-5
-          left ~275px of usable width inside a 358px dialog. */}
       <div className="flex flex-col gap-4 p-3 sm:p-5">
         {tab !== 'reset' && budgetWarn && (
           <div className="flex items-start gap-2 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
@@ -194,7 +198,7 @@ export default function LibraryTaggingModal(p: Props) {
             <div className="grid gap-2.5">
               <Pass on={steps.reconcile} onClick={() => toggleStep('reconcile')}
                 name="Reconcile with Navidrome" tag="quick"
-                hint="Find newly-added tracks and drop ones deleted from Navidrome. Fast — no AI, no model calls." />
+                hint="Find newly-added tracks, adopt IDs changed by a Navidrome upgrade, and drop deleted tracks. Fast — no AI, no model calls." />
               <Pass on={steps.enrich} onClick={() => toggleStep('enrich')}
                 name="Enrich metadata" tag="network"
                 hint="Fetch Last.fm tags + lyrics per track to sharpen the mood read. External API calls — slower on big batches." />
@@ -213,7 +217,7 @@ export default function LibraryTaggingModal(p: Props) {
               <Pass on={effSteps.analyze} onClick={() => toggleStep('analyze')} disabled={analyzeLocked}
                 name="Analyze acoustics" tag="slow"
                 hint={analyzeLocked
-                  ? 'No analysis engine running — start the analyzer or tts-heavy sidecar (or a local librosa venv).'
+                  ? 'No analysis engine running — start the analyzer sidecar (docker compose up -d analyzer), point ANALYZE_URL at one, or configure ANALYZE_PYTHON for an in-process backend.'
                   : p.soundsLikeActive
                     ? 'Tempo, key & intro, plus sounds-like fingerprints. The slow step; vocal separation is split out below.'
                     : 'Tempo, key & intro for every track — the slow step. Sounds-like fingerprints are off; enable them on the library page to include them.'} />
@@ -245,6 +249,8 @@ export default function LibraryTaggingModal(p: Props) {
                 </Btn>
               </div>
             </div>
+            {/* Scheduled tagging (#2282): the same steps and limit, once a day. */}
+            <ScheduledTaggingCard />
           </>
         )}
 
@@ -267,7 +273,6 @@ export default function LibraryTaggingModal(p: Props) {
                 {passAllSelected ? 'Clear all' : 'Select all'}
               </button>
             </div>
-            {/* ordered to mirror the Run pipeline: enrich → embed → tag → analyse */}
             <div className="grid gap-2.5">
               <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata" tag="network"
                 hint="Re-fetch Last.fm tags + lyrics for tracks you've already enriched. External API calls — slow on a big library." />
@@ -281,15 +286,24 @@ export default function LibraryTaggingModal(p: Props) {
                 </div>
               )}
               <Pass on={!!passes.upgrade} onClick={() => togglePass('upgrade')} name="Re-decide moods" tag="AI · billed"
-                hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). No model change → nothing to redo. Uses model calls." />
+                hint="Re-tag already-tagged rows whose prompt or model has gone stale (never your manual tags). A changed tagging prompt or model means a re-ask: after an upgrade that changes the prompt, the next run re-asks every LLM-tagged row once. Uses model calls." />
+              {passes.upgrade && (
+                <div className="pl-6">
+                  <Pass on={upgradeBlind} onClick={() => setUpgradeBlind(v => !v)}
+                    name="Only tracks tagged before they were measured" tag="AI · billed"
+                    hint="Instead of the stale rows, re-tag just the tracks the model tagged without their tempo, key or vocal reading, and only those that have been measured since — so the model now hears them. Never your manual tags." />
+                </div>
+              )}
               {passes.upgrade && (
                 <p className="-mt-1 pl-[26px] text-[11px] leading-[1.5] text-muted">
-                  Model calls only for rows with a stale prompt or model — often zero if nothing has changed.
+                  {upgradeBlind
+                    ? 'Model calls only for tracks that were tagged blind and have audio measurements now. The first run also counts every track tagged before this check existed, so on an analysed library it re-asks most LLM-tagged rows once.'
+                    : 'Model calls for every row with a stale prompt or model: every LLM-tagged row once after an upgrade that changed the prompt, then none until the prompt or model changes again.'}
                 </p>
               )}
               <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} disabled={p.analysisOff} name="Re-analyse acoustics" tag="slow"
                 hint={p.analysisOff
-                  ? 'No analysis engine running — start the analyzer or tts-heavy sidecar (or a local librosa venv).'
+                  ? 'No analysis engine running — start the analyzer sidecar (docker compose up -d analyzer), point ANALYZE_URL at one, or configure ANALYZE_PYTHON for an in-process backend.'
                   : p.soundsLikeActive
                     ? "Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it."
                     : "Redo bpm/key for tracks you've already analysed. Drops their acoustic data and rebuilds it. Sounds-like is off."} />

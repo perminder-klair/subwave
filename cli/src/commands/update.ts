@@ -1,14 +1,15 @@
-// `subwave update` — refresh the running stack. Two shapes behind one command:
-// a standalone install pulls fresh GHCR images and never builds (its compose
-// files came in with the binary), while a clone git-pulls and rebuilds locally,
-// mirroring scripts/update.sh. Replacing the CLI binary itself is a separate
-// command, `subwave self-update`.
+// `subwave update` — refresh the running stack. A standalone install pulls fresh
+// GHCR images and never builds; a clone git-pulls and rebuilds locally, mirroring
+// scripts/update.sh. Replacing the binary is `subwave self-update`.
+// Any failed step, a failed image pull included, exits 1 so scripts and cron
+// can tell the update didn't land (#2205).
 
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { detectCompose } from '../compose.ts';
+import { composeFileArgs } from '../docker.ts';
 import { resolveInstallMode, detectDrift, hasDrift } from '../compose-sync.ts';
 import { getSubwaveHome } from '../util.ts';
 import { isCloneMode } from '../home.ts';
@@ -22,6 +23,7 @@ export async function runUpdateCommand(): Promise<void> {
   if (compose.env === 'down' || !compose.file) {
     warn('stack is not running.');
     muted('Bring it up first with `subwave start`, then re-run `subwave update`.');
+    process.exitCode = 1;
     await pauseForEnter();
     return;
   }
@@ -37,22 +39,23 @@ export async function runUpdateCommand(): Promise<void> {
     if (pullCode !== 0) {
       err(`git pull exited ${pullCode}`);
       muted('Resolve conflicts or detached state, then re-run `subwave update`.');
+      process.exitCode = 1;
       await pauseForEnter();
       return;
     }
   }
 
-  // Must happen BEFORE the pull: a binary that was just self-updated has to
-  // fetch the images matching its frozen compose files, not whatever the old
-  // pin named. Clone installs track git, not image tags — leave their .env be.
+  // Before the pull: a just-self-updated binary must fetch images matching its
+  // frozen compose files. Clone installs track git, so leave their .env be.
   if (!cloneMode) moveVersionPin(home);
 
   // --ignore-buildable skips services that carry only a `build:` block.
   header('docker compose pull');
-  const pullArgs = ['compose', '-f', compose.file.file, 'pull'];
+  const pullArgs = ['compose', ...composeFileArgs(compose.file), 'pull'];
   if (cloneMode) pullArgs.push('--ignore-buildable');
   const pullCode = await run('docker', pullArgs, home);
-  if (pullCode !== 0) {
+  const pullFailed = pullCode !== 0;
+  if (pullFailed) {
     warn(`docker compose pull exited ${pullCode} — continuing anyway.`);
   }
 
@@ -60,56 +63,63 @@ export async function runUpdateCommand(): Promise<void> {
     header('docker compose build');
     const buildCode = await run(
       'docker',
-      ['compose', '-f', compose.file.file, 'build', '--pull'],
+      ['compose', ...composeFileArgs(compose.file), 'build', '--pull'],
       home,
     );
     if (buildCode !== 0) {
       err(`docker compose build exited ${buildCode}`);
+      process.exitCode = 1;
       await pauseForEnter();
       return;
     }
   }
 
-  // Recreates only what actually changed, so listeners hiccup only when the
-  // broadcast container itself restarts — rare on a pure image bump.
+  // Recreates only what changed, so listeners hiccup only when broadcast itself
+  // restarts.
   header('docker compose up -d');
   const upCode = await run(
     'docker',
-    ['compose', '-f', compose.file.file, 'up', '-d', '--remove-orphans'],
+    ['compose', ...composeFileArgs(compose.file), 'up', '-d', '--remove-orphans'],
     home,
   );
   if (upCode !== 0) {
     err(`docker compose up exited ${upCode}`);
+    process.exitCode = 1;
     await pauseForEnter();
     return;
   }
 
   console.log();
-  ok('update complete');
+  // Services were recreated, but on whatever images were already local.
+  if (pullFailed) {
+    warn('update finished, but `docker compose pull` failed — images may be stale.');
+    muted('  Re-run `subwave update` once the registry is reachable.');
+    process.exitCode = 1;
+  } else {
+    ok('update complete');
+  }
   muted('  `subwave status` to confirm services are healthy.');
   muted('  `subwave logs <service>` if anything looks off.');
   if (!cloneMode) {
-    muted('  `subwave self-update` to refresh the CLI binary itself.');
+    muted('  Next release: `subwave self-update`, `subwave sync`, then `subwave update`.');
   }
 
-  // New services and changed env wiring don't ride an image bump — only
-  // `subwave sync` re-materialises the compose files, so an install scaffolded
-  // before the analyzer sidecar existed would silently stay behind (#1043).
+  // New services and changed env wiring don't ride an image bump; only
+  // `subwave sync` re-materialises the compose files (#1043).
   if (!cloneMode) {
     const mode = resolveInstallMode(home);
     if (mode && hasDrift(detectDrift(home, mode))) {
       console.log();
       warn('your compose files are behind this CLI — new services / settings are missing.');
-      muted('  → run `subwave sync` to refresh them (backs up your current files first).');
+      muted('  → run `subwave sync` (backs up your current files first), then `subwave update` again.');
     }
   }
 
   await pauseForEnter();
 }
 
-// Silently a no-op on a dev build (no published tag), with no .env, or with no
-// concrete pin to move — a pre-pin install stays on :latest rather than being
-// surprised into a fixed version.
+// No-op on a dev build (no published tag), with no .env, or with no concrete
+// pin to move: a pre-pin install stays on :latest.
 function moveVersionPin(home: string): void {
   const target = cliImageTag();
   if (!target) return;
@@ -118,6 +128,10 @@ function moveVersionPin(home: string): void {
   const moved = movePinInEnv(readFileSync(envPath, 'utf8'), target);
   if (!moved) return;
   writeFileSync(envPath, moved.text);
+  // A compiled Bun binary loads the working directory's .env into process.env at
+  // boot, and compose prefers the environment over .env, so `pull` and `up` would
+  // get the old pin (#2196). A shell export of another version stays in charge.
+  if (process.env.SUBWAVE_VERSION === moved.from) process.env.SUBWAVE_VERSION = target;
   header('version pin');
   ok(`moved SUBWAVE_VERSION ${moved.from} → ${target} (matches this CLI)`);
   console.log();

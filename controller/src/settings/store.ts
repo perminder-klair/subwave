@@ -11,6 +11,7 @@ import { DEFAULTS } from './defaults.js';
 // The loaded settings. Null until load() has run. Only settings.ts writes it,
 // and only through setCache() — everything else reads via get()/peek().
 let cache: any = null;
+const cacheListeners = new Set<() => void>();
 
 // The raw cache, null included. Callers that must distinguish "not loaded yet"
 // from "loaded" want this; everyone else wants get(), which substitutes the
@@ -19,9 +20,24 @@ export function peek(): any {
   return cache;
 }
 
+// Subscribe to effective settings publication. Listeners run synchronously so
+// rapid A -> B -> A changes cannot collapse into one final-state observation.
+// A broken listener is isolated: publishing operator settings must still finish.
+export function onCacheChange(listener: () => void): () => void {
+  cacheListeners.add(listener);
+  return () => cacheListeners.delete(listener);
+}
+
 // The single writer, called by load() and update() in settings.ts.
 export function setCache(next: any): any {
   cache = next;
+  for (const listener of cacheListeners) {
+    try {
+      listener();
+    } catch (err) {
+      console.error('[settings] cache listener failed:', (err as Error).message);
+    }
+  }
   return cache;
 }
 
@@ -69,6 +85,16 @@ export function llmKeyFor(provider: string): string {
   return typeof v === 'string' ? v : '';
 }
 
+// One header map with every VALUE masked to the 'set' sentinel, names intact.
+function maskHeaderValues(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const name of Object.keys(raw as Record<string, unknown>)) {
+    out[name] = (raw as Record<string, unknown>)[name] ? 'set' : '';
+  }
+  return out;
+}
+
 // Settings with secret fields masked — for the admin /settings response.
 export function getRedacted() {
   const s = get();
@@ -92,18 +118,30 @@ export function getRedacted() {
     for (const p of Object.keys(s.llm?.keys || {})) {
       clone.llm.keys[p] = s.llm.keys[p] ? 'set' : '';
     }
+    // Custom request headers (#1618): NAMES stay visible — the operator has to
+    // see which headers a gateway is being sent — while every VALUE is masked
+    // to the same 'set' sentinel, because a routing header and a credential
+    // header are the same field and only the operator knows which they typed.
+    // This is `webhooks[].authHeader` in the other direction. applyLlmLegPatch
+    // reads 'set' back as "keep the stored value", so the redacted map
+    // round-trips through a save untouched.
+    clone.llm.headers = maskHeaderValues(s.llm?.headers);
   }
   // Same channel, same map — the fallback leg's key also lives in llm.keys,
   // under ITS provider (update() routes it there via applyInlineKey).
   if (clone.llm?.fallback) {
     clone.llm.fallback.apiKey = llmKeyFor(s.llm?.fallback?.provider ?? '') ? 'set' : '';
+    clone.llm.fallback.headers = maskHeaderValues(s.llm?.fallback?.headers);
   }
   if (clone.tts?.cloud) {
     clone.tts.cloud.apiKey = s.tts?.cloud?.apiKey ? 'set' : '';
     clone.tts.cloud.compatApiKey = s.tts?.cloud?.compatApiKey ? 'set' : '';
   }
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
-  if (clone.embedding) clone.embedding.apiKey = s.embedding?.apiKey ? 'set' : '';
+  if (clone.embedding) {
+    clone.embedding.apiKey = s.embedding?.apiKey ? 'set' : '';
+    clone.embedding.headers = maskHeaderValues(s.embedding?.headers);
+  }
   if (Array.isArray(clone.webhooks)) {
     for (let i = 0; i < clone.webhooks.length; i++) {
       clone.webhooks[i].authHeader = s.webhooks?.[i]?.authHeader ? 'set' : '';
@@ -143,4 +181,3 @@ export function minTrackSeconds(s: { crossfadeDuration?: unknown } | null | unde
   const cross = Number.isFinite(xf) && xf > 0 ? xf : DEFAULTS.crossfadeDuration;
   return Math.max(30, Math.ceil(2 * cross));
 }
-

@@ -1,32 +1,21 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { applyLite, loadLitePref, saveLitePref } from '@/lib/lite';
+import { useSyncExternalStore } from 'react';
+import { isLite, setLite, subscribeLite } from '@/lib/lite';
 
 export interface LiteModeState {
   /** Whether low-power mode is active (blur + animations dropped). */
   lite: boolean;
-  /** Set the mode explicitly and sync the <html> class + localStorage. */
+  /** Set the mode for this browser: saves it, flips the <html> class and
+   *  re-renders every reader, so skins still their JS motion at once. */
   setLite: (on: boolean) => void;
 }
 
-/** Listener-facing low-power toggle. LITE_INIT_SCRIPT already applies the `lite`
- *  class pre-paint, so this only surfaces the value and keeps the class +
- *  localStorage in sync when the listener flips it. */
+/** Low-power mode, for the Appearance menu's toggle and for skins that must
+ *  still their own motion. LITE_INIT_SCRIPT already applies the `lite` class
+ *  pre-paint, so this reads that class. The server snapshot is off; hydration
+ *  then picks up the class, so the one-render lag only touches JS-driven motion. */
 export function useLiteMode(): LiteModeState {
-  const [lite, setLiteState] = useState(false);
-
-  // localStorage is only safe to read in an effect. The pre-paint script already
-  // set the class, so the one-tick lag here is invisible (the menu starts closed).
-  useEffect(() => {
-    setLiteState(loadLitePref() === true);
-  }, []);
-
-  const setLite = useCallback((on: boolean) => {
-    saveLitePref(on);
-    applyLite(on);
-    setLiteState(on);
-  }, []);
-
+  const lite = useSyncExternalStore(subscribeLite, isLite, () => false);
   return { lite, setLite };
 }

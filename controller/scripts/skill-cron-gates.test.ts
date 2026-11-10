@@ -15,18 +15,25 @@
 // needing to fake real settings/listener/budget/programme state — the same
 // split as budgetMode({used, cap, softPct}) in dj-budget.ts.
 //
-// Run: `tsx scripts/skill-cron-gates.test.ts`.
+// The same split pins the boundary claim added with #2259: with every segment
+// placed between tracks, a cron fire has no slot-table row and therefore no
+// pending-clip hold, so it must stand down before generating rather than
+// displace a segment already waiting for the boundary.
+//
+// Run: `npm test -- skill-cron-gates`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // STATE_DIR must be set before config.js resolves it at import time — scheduler.ts
 // pulls in modules (settings, queue, …) that derive paths from it at module scope.
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'skill-cron-gates-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'skill-cron-gates-'));
 
-const { skillCronAllowed, skillCronStandDownReason } = await import('../src/broadcast/scheduler.js');
+const { skillCronAllowed, skillCronStandDownReason, skillCronEligibility, skillCronTalkStandDownReason } =
+  await import('../src/broadcast/scheduler.js');
+const { PENDING_VOICE_MAX_AGE_MS } = await import('../src/broadcast/queue/kinds.js');
 
 const ALL_OPEN = {
   voiceAllowed: true,
@@ -37,54 +44,73 @@ const ALL_OPEN = {
 
 assert.equal(skillCronAllowed(ALL_OPEN), true, 'every gate open → cron is allowed to fire');
 
-assert.equal(
-  skillCronAllowed({ ...ALL_OPEN, voiceAllowed: false }),
-  false,
-  'tts.enabled: false ("music only") must stand the cron down',
-);
-assert.equal(
-  skillCronAllowed({ ...ALL_OPEN, programmeOnAir: true }),
-  false,
-  'a programme episode owns its talk moments — the cron must stand down mid-episode',
-);
-assert.equal(
-  skillCronAllowed({ ...ALL_OPEN, djCallsAllowed: false }),
-  false,
-  'zero listeners must stand the cron down, same as every other autonomous tick',
-);
-assert.equal(
-  skillCronAllowed({ ...ALL_OPEN, optionalSegmentsAllowed: false }),
-  false,
-  'over the daily LLM token budget must stand the cron down — no model call past the hard cap',
-);
-
-// Any single closed gate is enough — this is a strict AND, not a majority vote.
-for (const key of Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>) {
+// Any single closed gate blocks the cron and names the operator's lever.
+assert.equal(skillCronStandDownReason(ALL_OPEN), null, 'all gates open means no reason');
+const gates: Array<[keyof typeof ALL_OPEN, string]> = [
+  ['voiceAllowed', 'tts.enabled: false must stand the cron down'],
+  ['programmeOnAir', 'a programme episode owns its talk moments'],
+  ['djCallsAllowed', 'zero listeners must stand the cron down'],
+  ['optionalSegmentsAllowed', 'the daily LLM hard cap must stand the cron down'],
+];
+const reasons = gates.map(([key, message]) => {
   const closed = { ...ALL_OPEN, [key]: key === 'programmeOnAir' };
-  assert.equal(skillCronAllowed(closed), false, `closing "${key}" alone must block the cron`);
-}
-
-// Every closed gate names itself for the booth log. A registered cron that
-// stands down silently is undiagnosable — verifying this PR, one sat mute for
-// four ticks and the only way to learn why was to read listeners.ts.
-assert.equal(skillCronStandDownReason(ALL_OPEN), null, 'all gates open → no reason');
-for (const key of Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>) {
-  const closed = { ...ALL_OPEN, [key]: key === 'programmeOnAir' };
+  assert.equal(skillCronAllowed(closed), false, message);
   const reason = skillCronStandDownReason(closed);
-  assert.ok(reason, `closing "${key}" must produce a reason`);
-  assert.ok(reason.length > 8, `the reason for "${key}" must be readable, got ${reason}`);
-}
-
-// The two stay in lockstep — allowed is defined as "no reason", so a gate added
-// to one can never be forgotten in the other.
-for (const key of Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>) {
-  const closed = { ...ALL_OPEN, [key]: key === 'programmeOnAir' };
-  assert.equal(skillCronAllowed(closed), skillCronStandDownReason(closed) === null);
-}
-
-// Reasons are distinct, so the log tells the operator WHICH lever to move.
-const reasons = (Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>)
-  .map((key) => skillCronStandDownReason({ ...ALL_OPEN, [key]: key === 'programmeOnAir' }));
+  assert.ok(reason && reason.length > 8, `the reason for ${key} must be readable`);
+  return reason;
+});
 assert.equal(new Set(reasons).size, reasons.length, 'each gate needs its own message');
+
+const cohosted = { seeded: true, skill: 'case-discussion', cohosts: true };
+const host = { skills: ['case-discussion'] };
+assert.deepEqual(
+  skillCronEligibility(cohosted, {}, host, [{}]),
+  { allowed: true },
+  'a co-hosted cron is eligible with a host-owned skill and an active guest',
+);
+assert.equal(
+  skillCronEligibility(cohosted, {}, host, []).reason,
+  'requires a co-hosted show',
+  'a co-hosted cron stands down clearly on a solo show',
+);
+assert.deepEqual(
+  skillCronEligibility({ ...cohosted, cohosts: false }, {}, host, []),
+  { allowed: true },
+  'ordinary skill crons keep working on solo shows',
+);
+
+// Between-tracks placement (#2259 review): a cron fire has no row, so the
+// queue would otherwise drop the clip already waiting.
+const now = 1_000_000_000;
+const waiting = { kind: 'station-id', queuedAt: now - 1_000 };
+assert.equal(
+  skillCronTalkStandDownReason('news', 'immediate', null, waiting, now), null,
+  'with the switch off, cron keeps its old immediate path — the pending slot is not involved',
+);
+assert.equal(
+  skillCronTalkStandDownReason('news', 'next-track', null, null, now), null,
+  'an empty boundary belongs to the fire',
+);
+assert.match(
+  skillCronTalkStandDownReason('news', 'next-track', 'weather', null, now) ?? '',
+  /weather/,
+  'a second fire stands down while another skill generates',
+);
+assert.match(
+  skillCronTalkStandDownReason('news', 'next-track', null, waiting, now) ?? '',
+  /station-id/,
+  'a waiting ident is not displaced by a skill',
+);
+assert.equal(
+  skillCronTalkStandDownReason('handoff', 'next-track', null, waiting, now), null,
+  'a handoff still takes the boundary by design',
+);
+assert.equal(
+  skillCronTalkStandDownReason(
+    'news', 'next-track', null, { ...waiting, queuedAt: now - PENDING_VOICE_MAX_AGE_MS - 1 }, now,
+  ),
+  null,
+  'a clip past its age limit no longer holds the boundary',
+);
 
 console.log('skill-cron-gates.test.ts — all assertions passed');

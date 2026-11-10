@@ -1,15 +1,31 @@
 // The admin library browse panel's filter query and the Observatory's
 // wide-row projection.
 
-import { SQL_HAS_MOODS, requireDb } from './handle.js';
+import { SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
+import { instrumentalFromJson } from '../lyric-vocal.js';
 import type { FilterOpts, TrackRecord, TrackRow } from './types.js';
 import { parsePaceSpans, rowToTrack, safeParseArray } from './rows.js';
+import { refreshSearchKeys } from './search-keys.js';
 
-// ---------------------------------------------------------------------------
-// Filter (admin UI library browse panel)
-// ---------------------------------------------------------------------------
+// SQL twin of show-filter's resolveEraYear (#842/#1418); the OR is
+// `yearUntrusted`'s composition and the two must move together.
+export const ERA_YEAR_SQL =
+  `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
 
-export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecord[] } {
+// The verdict for a WHERE scan, head first: the tail can only turn a verdict vocal,
+// so outro_json, which sits past the beat grids (#1937), is read only when it can
+// change the answer. A row the head calls vocal never reads it, and neither does the
+// instrumental filter on an unmeasured head, which is every row of a library with no
+// vocal analysis. CASE, because SQLite promises no evaluation order for AND.
+const TWO_WINDOW_VERDICT_SQL = `is_instrumental(vocal_ranges_json, ${SQL_TAIL_VOCAL_RANGES})`;
+const IS_INSTRUMENTAL_SQL = `CASE is_instrumental(vocal_ranges_json, NULL) WHEN 1
+  THEN ${TWO_WINDOW_VERDICT_SQL} END = 1`;
+const IS_VOCAL_SQL = `CASE is_instrumental(vocal_ranges_json, NULL) WHEN 0 THEN 0
+  ELSE ${TWO_WINDOW_VERDICT_SQL} END = 0`;
+
+// `reindexing` (set only for a query search): the stored search keys are still
+// being rebuilt after a bulk change, so the answer may be missing tracks.
+export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecord[]; reindexing?: boolean } {
   const moods = (opts.moods || []).filter(Boolean);
   const energy = opts.energy || null;
   const genre = opts.genre || null;
@@ -21,9 +37,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
   const offset = Math.max(0, opts.offset ?? 0);
 
-  // Base: the browseable index is tagged tracks only. Without this, every
-  // row the metadata/analysis walk inserted (moods NULL or '[]') would show
-  // up here as if it were tagged — including analysis-only tracks.
+  // Tagged tracks only, else rows the metadata/analysis walk inserted show up here.
   const where: string[] = [SQL_HAS_MOODS];
   const params: unknown[] = [];
   if (moods.length) {
@@ -34,22 +48,16 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     params.push(...moods);
   }
   if (energy) { where.push('energy = ?'); params.push(energy); }
-  // Any-of over the multi-genre array, so a track tagged Hip-Hop + Rap shows
-  // under either filter — matching the show-filter/picker semantics.
+  // Any-of over the multi-genre array, matching show-filter/picker semantics.
   if (genre) {
     where.push(`EXISTS (SELECT 1 FROM json_each(tracks.genres) WHERE value = ?)`);
     params.push(genre);
   }
   if (vocal === 'instrumental') {
-    where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) = 0');
+    where.push(IS_INSTRUMENTAL_SQL);
   } else if (vocal === 'vocal') {
-    where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) > 0');
+    where.push(IS_VOCAL_SQL);
   }
-  // Era-year semantics (issue #842): the resolved original year wins; a plain
-  // `year` only counts when the track is NOT on a compilation album, whose
-  // year is the compilation's own release date. Mirrors show-filter's
-  // trackEraYear so SQL-side and JS-side era filtering agree.
-  const ERA_YEAR_SQL = `COALESCE(original_year, CASE WHEN is_compilation = 1 THEN NULL ELSE year END)`;
   if (yearFrom != null) { where.push(`${ERA_YEAR_SQL} >= ?`); params.push(yearFrom); }
   if (yearTo != null) { where.push(`${ERA_YEAR_SQL} <= ?`); params.push(yearTo); }
   if (q) {
@@ -59,24 +67,26 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     const pat = `%${q}%`;
     params.push(pat, pat, pat);
   }
+  let reindexing: boolean | undefined;
+  if (opts.query) {
+    // The compiled query reads the stored search keys; bring them up to date.
+    // Bounded and never throws: a bulk re-key finishes in the background.
+    reindexing = !refreshSearchKeys();
+    // Matched in a subquery that reads only the covering search index, never the
+    // wide rows (#1937, search-keys.ts); the queries below read just the matches.
+    where.push(`rowid IN (SELECT rowid FROM tracks WHERE ${opts.query.sql})`);
+    params.push(...opts.query.params);
+  }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  // Mean of the pace curve, computed in SQL so the acoustic sorts page correctly
-  // (a JS sort would only reorder the current window). json_each over a NULL or
-  // empty column yields no rows → AVG is NULL, caught by the IS NULL guard below.
+  // Mean pace in SQL so acoustic sorts page correctly; json_each over a NULL
+  // column yields no rows, so AVG is NULL and the IS NULL guards below catch it.
   const PACE_MEAN_SQL =
     `(SELECT AVG(json_extract(je.value,'$.value')) FROM json_each(tracks.pace_json) je)`;
-  // Acoustic sorts surface analysed tracks first (NULLs sink to the bottom) and
-  // tie-break by artist for a stable order across un-analysed rows.
   const DEFAULT_ORDER =
     `ORDER BY LOWER(COALESCE(artist,'')) , LOWER(COALESCE(album,'')) , LOWER(COALESCE(title,''))`;
-  // Null-prototype so an unknown `sort` can only ever miss. `sort` reaches here
-  // from req.query.sort cast straight to a string union with no runtime check
-  // (routes/library.ts), and a plain object literal would resolve the reserved
-  // names — `sort=constructor`, `__proto__`, `toString` — to something truthy
-  // off Object.prototype, skipping the `??` fallback and interpolating it into
-  // the SQL below. Today that only yields invalid SQL and a 500 on an
-  // admin-gated read, but it is one refactor away from being a real sink.
+  // Null-prototype so an unknown `sort` can only miss: `sort` is unchecked query
+  // input, and `__proto__`/`toString` off a literal would reach the SQL.
   const ORDER_BY: Record<string, string> = Object.assign(Object.create(null), {
     artist: DEFAULT_ORDER,
     title: `ORDER BY LOWER(COALESCE(title,'')) , LOWER(COALESCE(artist,''))`,
@@ -92,19 +102,26 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const total = (
     d.prepare(`SELECT COUNT(*) AS n FROM tracks ${whereSql}`).get(...params) as { n: number }
   ).n;
-  const rows = d
-    .prepare(`SELECT * FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset) as TrackRow[];
-  return { total, rows: rows.map(rowToTrack) };
+  // Page the ids, then read only the page's wide rows (#1937). `SELECT *`
+  // straight into the ORDER BY puts every matching row's analysis JSON through
+  // the sorter, which on a 150k library read most of the file for one page.
+  // Same WHERE, ORDER BY and LIMIT/OFFSET, so the same ids in the same order.
+  const ids = (
+    d.prepare(`SELECT id FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
+      .all(...params, limit, offset) as Array<{ id: string }>
+  ).map(r => r.id);
+  if (ids.length === 0) return { total, rows: [], ...(reindexing !== undefined && { reindexing }) };
+  const byId = new Map(
+    (d.prepare(`SELECT * FROM tracks WHERE id IN (${ids.map(() => '?').join(', ')})`)
+      .all(...ids) as TrackRow[]).map(r => [r.id, r]),
+  );
+  const rows = ids.map(id => byId.get(id)).filter((r): r is TrackRow => r !== undefined);
+  return { total, rows: rows.map(rowToTrack), ...(reindexing !== undefined && { reindexing }) };
 }
 
-// Lean row shape for the Library Observatory bulk endpoint — exactly the
-// fields the map / tooltip / filters / stat panels consume, and nothing else.
-// The full TrackRecord parse (rowToTrack) JSON-parses every acoustic blob —
-// beats_json alone is hundreds of floats per analysed row — which at 200k
-// tracks turned the bulk read into a ~15 s synchronous event-loop stall for a
-// payload that only needs a pace MEAN and a vocal PRESENCE flag. Same lesson
-// as getTrackLite (#723), applied to the bulk path.
+// Lean row shape for the Observatory bulk endpoint. rowToTrack would JSON-parse
+// every acoustic blob (~15s synchronous at 200k tracks) for a payload needing only
+// a pace mean and a vocal flag (#723).
 interface ObservatoryTrackRow {
   id: string;
   title: string | null;
@@ -130,11 +147,18 @@ interface ObservatoryTrackRow {
 
 const OBSERVATORY_COLS = `id, title, artist, album, year, genres, genre, duration_sec,
   moods, energy, source, confidence, bpm, musical_key, analysis_confidence,
-  loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y`;
+  loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y,
+  ${SQL_TAIL_VOCAL_RANGES} AS tail_vocal_ranges_json`;
 
-export function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
-  // pace_json is a short array (~14 spans) — the mean is cheap. The fat blobs
-  // (beats/bars/structure/key ranges) are never selected, let alone parsed.
+type ObservatorySourceRow = TrackRow & { tail_vocal_ranges_json: string | null };
+
+function vocalModeFromJson(json: string | null, tailJson: string | null): ObservatoryTrackRow['vocal'] {
+  const instrumental = instrumentalFromJson(json, tailJson);
+  return instrumental == null ? null : instrumental === 1 ? 'instrumental' : 'vocal';
+}
+
+export function rowToObservatory(row: ObservatorySourceRow): ObservatoryTrackRow {
+  // ~14 spans, so the mean is cheap; the fat blobs are never selected.
   let paceMean: number | null = null;
   if (row.pace_json) {
     const spans = parsePaceSpans(row.pace_json);
@@ -158,41 +182,28 @@ export function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
     analysisConfidence: row.analysis_confidence ?? null,
     loudnessLufs: row.loudness_lufs ?? null,
     paceMean,
-    // Tri-state without parsing the spans: NULL column = vocals not analysed,
-    // '[]' = analysed instrumental, anything else = vocal ranges present.
-    vocal: row.vocal_ranges_json == null ? null : row.vocal_ranges_json === '[]' ? 'instrumental' : 'vocal',
+    vocal: vocalModeFromJson(row.vocal_ranges_json, row.tail_vocal_ranges_json),
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
   };
 }
 
-// Every tagged track, lean observatory row, in one read — the bulk source for
-// the Library Observatory map (which needs all nodes at once, not a paged
-// window like filter()). Ordered by id for a stable layout seed across loads.
-// `limit` caps a pathologically large library; the route stamps a `truncated`
-// flag when it's hit. Deliberately separate from filter() so the observatory's
-// "load everything" contract can't be confused with the admin browse pager's
-// 200 cap.
+// Every tagged track in one read: the Observatory map needs all nodes at once.
+// Ordered by id for a stable layout seed; `limit` caps a huge library and the
+// route stamps `truncated`. Separate from filter() so the 200-row browse cap
+// can't be confused with this contract.
 export function allTagged(limit?: number): ObservatoryTrackRow[] {
   const sql =
     `SELECT ${OBSERVATORY_COLS} FROM tracks WHERE ${SQL_HAS_MOODS} ORDER BY id` +
     (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
-  return (requireDb().prepare(sql).all() as TrackRow[]).map(rowToObservatory);
+  return (requireDb().prepare(sql).all() as ObservatorySourceRow[]).map(rowToObservatory);
 }
 
-// A *stratified* sample of the tagged library, ~`max` rows, proportional per
-// genre — so the Library Observatory shows the real shape of a huge library
-// instead of the first-N tracks by id (which over-represents whichever genres
-// happen to sort first). Each genre (NULL included as its own partition) gets a
-// quota of round(genreCount / totalTagged · max), min 1, and the first `quota`
-// rows of that genre by id are taken. Stable across loads (ordered by id), so
-// the map layout doesn't reshuffle on refresh. The +1-min-per-genre means the
-// total can drift a little over `max`; the caller slices to `max`.
-//
-// The window functions deliberately run over (id, genre) ONLY, with the full
-// rows joined back afterwards: windowing over `t.*` pushes every fat acoustic
-// blob through SQLite's partition sorter — at 200k tracks that was ~98 s of
-// synchronous scan for a 25k sample; the thin-window + join-back form is ~1 s.
+// Stratified sample of ~`max` rows, proportional per genre (NULL is its own
+// partition), each taking its first round(gc/total*max) rows by id, min 1 — so the
+// total can exceed `max` and the caller slices. Window functions run over
+// (id, genre) ONLY with rows joined back: windowing over `t.*` pushes every fat
+// acoustic blob through SQLite's partition sorter (~98s at 200k tracks vs ~1s).
 export function allTaggedSampled(max: number, totalTagged: number): ObservatoryTrackRow[] {
   const m = Math.floor(max);
   const total = Math.floor(totalTagged);
@@ -211,7 +222,7 @@ export function allTaggedSampled(max: number, totalTagged: number): ObservatoryT
     SELECT ${OBSERVATORY_COLS} FROM tracks JOIN picked USING (id)
     ORDER BY id
   `;
-  return (requireDb().prepare(sql).all(m, total) as TrackRow[]).map(rowToObservatory);
+  return (requireDb().prepare(sql).all(m, total) as ObservatorySourceRow[]).map(rowToObservatory);
 }
 
 

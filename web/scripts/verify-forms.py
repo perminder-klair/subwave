@@ -1,9 +1,9 @@
 """web/scripts/verify-forms.py
 
 Drives the isolated verify stack (controller :7791, web :7793) through every
-form converted to react-hook-form. Not part of CI — web/ has no test suite
-and the merge gate is lint. This is the evidence for a forms PR; run it
-after touching any converted form.
+form converted to react-hook-form. Not part of CI — the merge gate is lint,
+and `npm test` covers form logic but not the rendered wiring. This is the
+evidence for a forms PR; run it after touching any converted form.
 
 Usage: SUBWAVE_VERIFY_ALLOW_DESTRUCTIVE=1 python3 web/scripts/verify-forms.py [check ...]
 Every check in CHECKS runs with no args; name one or more to run a subset.
@@ -48,14 +48,19 @@ locator's OWN id (a plain field) or aria-labelledby (a group control —
 fieldAria's groupProps carries no id, see lib/form.ts).
 """
 import base64
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
+import wave
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -283,6 +288,113 @@ TAKEOVER_SHOW_NAME = "Verify Takeover Show"
 
 
 @check
+def music_selection(page):
+    """Selection saves and section Discard preserve independent LLM controls."""
+    original = json.loads(api("/settings"))["values"]["llm"]
+    keys = ["trackSelection", "shortlistPasses", "shortlistSearchPreparation", "requestMatching", "segmentRuntime"]
+    try:
+        api_write("POST", "/settings", {"llm": {
+            "trackSelection": "agentic", "shortlistPasses": 3, "shortlistSearchPreparation": False,
+            "requestMatching": "agentic", "segmentRuntime": "agentic",
+        }})
+        page.goto(f"{WEB}/admin/settings?section=selection")
+        shortlist = page.get_by_role("radio", name="Track Shortlist", exact=True)
+        shortlist.wait_for()
+        shortlist.click()
+        page.get_by_role("radio", name="5", exact=True).click()
+        preparation = page.locator(".field").filter(has=page.get_by_text("Prepare targeted searches", exact=True))
+        preparation.get_by_role("radio", name="On", exact=True).click()
+        with page.expect_response(
+            lambda r: r.url.endswith("/settings") and r.request.method == "POST"
+        ) as saved:
+            page.get_by_role("button", name="Save music selection", exact=True).click()
+        assert saved.value.status == 200
+        page.get_by_role("button", name="Discard", exact=True).wait_for(state="hidden")
+        llm = json.loads(api("/settings"))["values"]["llm"]
+        assert llm["trackSelection"] == "shortlist" and llm["shortlistPasses"] == 5
+        assert llm["pickerAgent"] is False
+        assert llm["shortlistSearchPreparation"] is True
+        assert llm["requestMatching"] == "agentic" and llm["segmentRuntime"] == "agentic"
+
+        page.reload()
+        shortlist.wait_for()
+        assert shortlist.get_attribute("aria-checked") == "true"
+        assert preparation.get_by_role("radio", name="On", exact=True).get_attribute("aria-checked") == "true"
+        preparation.get_by_role("radio", name="Off", exact=True).click()
+        page.get_by_role("radio", name="Agentic Tools", exact=True).click()
+        page.get_by_role("button", name=re.compile(r"DJ behaviour.*speech", re.I)).click()
+        direct = page.get_by_role("radio", name="Direct", exact=True)
+        direct.click()
+        page.get_by_role("button", name=re.compile(r"LLM provider.*model routing", re.I)).click()
+        assert page.get_by_role("button", name="Discard", exact=True).count() == 0
+        assert page.get_by_text("Next-track picker", exact=True).count() == 0
+
+        page.get_by_role("button", name=re.compile(r"Music selection.*agentic", re.I)).click()
+        page.get_by_role("button", name="Discard", exact=True).click()
+        assert shortlist.get_attribute("aria-checked") == "true"
+        assert preparation.get_by_role("radio", name="On", exact=True).get_attribute("aria-checked") == "true"
+        page.get_by_role("button", name=re.compile(r"DJ behaviour.*speech", re.I)).click()
+        assert direct.get_attribute("aria-checked") == "true"
+        page.get_by_role("button", name="Discard", exact=True).click()
+        assert page.get_by_role("radio", name="Agentic", exact=True).get_attribute("aria-checked") == "true"
+    finally:
+        api_write("POST", "/settings", {"llm": {key: original[key] for key in keys}})
+
+
+@check
+def stream_buffer(page):
+    """The listener buffer control round-trips the advertised Icecast depth.
+
+    This is the timing value that listener-facing titles and voice events use,
+    so the UI must save through the real /settings route and surface the
+    controller's existing 0-60 validation rather than applying a second rule.
+    """
+    original = json.loads(api("/settings"))["values"]["stream"]["bufferSeconds"]
+
+    try:
+        page.goto(f"{WEB}/admin/settings?section=danger")
+        page.wait_for_selector("text=Stream MP3 bitrate")
+
+        seconds = page.get_by_label("Listener buffer (seconds)")
+        assert seconds.input_value() == str(original), (
+            f"buffer field hydrated as {seconds.input_value()!r}, want {original!r}"
+        )
+
+        # The controller owns the range. Prove its fieldErrors response lands
+        # beside this input and the rejected value is not persisted.
+        seconds.fill("61")
+        with page.expect_response(
+            lambda r: r.url.endswith("/settings") and r.request.method == "POST"
+        ) as refused_info:
+            page.get_by_role("button", name="Save listener buffer").click()
+        assert refused_info.value.status == 400, (
+            f"out-of-range save returned HTTP {refused_info.value.status}, want 400"
+        )
+        field = seconds.locator(
+            "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' field ')][1]"
+        )
+        field.get_by_text("stream.bufferSeconds must be a number between 0 and 60").wait_for()
+        after_refusal = json.loads(api("/settings"))["values"]["stream"]["bufferSeconds"]
+        assert after_refusal == original, "rejected buffer value was persisted"
+
+        # A valid save persists the exact value and reports the broadcast
+        # restart the Icecast template needs before the new burst takes effect.
+        seconds.fill("17")
+        with page.expect_response(
+            lambda r: r.url.endswith("/settings") and r.request.method == "POST"
+        ) as saved_info:
+            page.get_by_role("button", name="Save listener buffer").click()
+        saved = saved_info.value
+        assert saved.status == 200, f"valid save returned HTTP {saved.status}, want 200"
+        assert saved.json().get("requiresRestart") is True, "save did not request a restart"
+        stored = json.loads(api("/settings"))["values"]["stream"]["bufferSeconds"]
+        assert stored == 17, f"buffer save stored {stored!r}, want 17"
+        page.get_by_text("Pending settings need a restart to apply.").wait_for()
+    finally:
+        api_write("POST", "/settings", {"stream": {"bufferSeconds": original}})
+
+
+@check
 def takeover(page):
     """TakeoverCard (Task 2) renders NOTHING to interact with — not "Pin a
     show", not "Takeover minutes" — when `shows.length === 0`
@@ -291,7 +403,7 @@ def takeover(page):
     check used to pass by silently riding a show shows() left behind before
     that check's own teardown was fixed (commit f94c0738); now that shows()
     cleans up after itself, a takeover() run against a freshly booted stack
-    (no shows at all) hung at `get_by_label("Pin a show")`. Seeded/torn down
+    (no shows at all) hung waiting for the takeover picker. Seeded/torn down
     the same try/finally pattern shows()/skills()/imaging() use, so this
     check is self-contained and order-independent within the file.
     """
@@ -330,25 +442,59 @@ def takeover(page):
         assert_field_error(page, minutes, "must be an integer between 15 and 720")
 
         # Save must be gated while invalid.
-        pin = page.get_by_role("button", name="Pin to air")
+        pin = page.get_by_role("button", name="Take over")
         assert pin.is_disabled(), "Save enabled with an out-of-range window"
 
-        # 3. Save — pick a real show, a valid window, confirm it persists.
+        # 3. Save — choose Default programming, confirm the explicit null
+        # target persists and presents as a live takeover.
         minutes.fill("60")
-        page.get_by_label("Pin a show").click()
-        page.locator("[role=menuitem], [role=option]").first.click()
+        page.get_by_label("Choose takeover programming").click()
+        page.get_by_role("menuitem", name="Default programming").click()
         pin.click()
-        page.wait_for_selector("text=on air")
-        assert '"expiresAt"' in api("/schedule"), "override did not persist"
+        page.get_by_text("Default programming", exact=True).wait_for()
+        page.get_by_text("autonomous music · default DJ", exact=False).wait_for()
+        stored = json.loads(api("/schedule")).get("override")
+        assert stored and stored.get("showId", "missing") is None, stored
 
         # 4. Poll safety — the 30s tick must not clobber a half-typed window.
         #    fast_forward past the real interval so the tick genuinely fires
         #    (see assert_survives_poll's docstring for why a dispatched focus
         #    event and a short sleep cannot prove this).
         page.get_by_role("button", name="Cancel takeover").click()
-        page.wait_for_selector("text=Pin a show")
+        page.wait_for_selector("text=Choose programming")
         minutes.fill("123")
         assert_survives_poll(page, minutes, "123")
+
+        # 5. "Til change" (#1601) — the window the CONTROLLER resolves from the
+        #    weekly grid rather than a duration typed here. Two things to see:
+        #    the minute box goes away (it is not what gets submitted, and a box
+        #    holding 123 beside a server-resolved window reads as if it were),
+        #    and the concrete end time is on screen BEFORE the pin, which is the
+        #    whole point of the option not being a black box.
+        page.get_by_text("til change", exact=True).click()
+        page.get_by_label("Takeover minutes").wait_for(state="detached")
+        resolved = page.wait_for_selector("text=/^ends .* min · /")
+        preview = json.loads(api("/schedule/next-change"))
+        assert preview["expiresAt"] > 0, preview
+        # Compared with a tolerance of 1, not for equality. `minutes` is
+        # round((expiresAt - now) / 60_000) with `now` taken per request, so it
+        # ticks down continuously and crosses a rounding half-point once a
+        # minute; the browser's fetch and this curl are a second or so apart, so
+        # roughly one run in sixty would straddle that point and read N vs N-1.
+        # An exact match here is a flake, not a stronger assertion.
+        shown = int(re.search(r"· (\d+) min ·", resolved.inner_text()).group(1))
+        assert abs(shown - preview["minutes"]) <= 1, (shown, preview)
+
+        page.get_by_label("Choose takeover programming").click()
+        page.get_by_role("menuitem", name="Default programming").click()
+        page.get_by_role("button", name="Take over").click()
+        page.get_by_text("autonomous music · default DJ", exact=False).wait_for()
+        stored = json.loads(api("/schedule")).get("override")
+        # The pin resolves the window again at its own startedAt, so the two
+        # answers agree on a grid boundary exactly and on a clamped one to
+        # within the seconds between the two calls.
+        assert stored and abs(stored["expiresAt"] - preview["expiresAt"]) < 10_000, (stored, preview)
+        page.get_by_role("button", name="Cancel takeover").click()
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave the fixture show behind to poison the NEXT run.
@@ -631,6 +777,14 @@ def skills(page):
         "brief": "Seeded by verify-forms.py's skills() check — collision fixture, torn down at the end of the same run.",
     })
 
+    skill_gets = []
+    page.on(
+        "request",
+        lambda request: skill_gets.append(request.url)
+        if request.method == "GET" and request.url.split("?", 1)[0].endswith("/dj/skills")
+        else None,
+    )
+
     try:
         page.goto(f"{WEB}/admin/skills")
         page.get_by_role("button", name="New skill").click()
@@ -658,6 +812,19 @@ def skills(page):
         # aria-describedby pointing at unrelated text — the associated node's own
         # text must be the "already exists" message.
         assert_field_error(page, slug, "already exists")
+
+        # A failed create is still a TanStack mutation, but it must leave the
+        # fresh installed-skills resource reusable. Closing the refused form,
+        # visiting another panel, and returning should neither evict nor refetch
+        # the roster inside the shared 30-second stale window.
+        dialog.get_by_text("Close", exact=True).click()
+        dialog.wait_for(state="detached")
+        page.get_by_role("link", name="Connect", exact=True).click()
+        page.wait_for_url("**/admin/connect**")
+        page.get_by_role("link", name="Skills", exact=True).click()
+        page.wait_for_url("**/admin/skills**")
+        page.get_by_text("Verify Dup Skill", exact=True).first.wait_for(state="visible")
+        assert len(skill_gets) == 1, f"failed create evicted/refetched /dj/skills: {skill_gets}"
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave the fixture behind to poison the NEXT run. 200 is
@@ -849,21 +1016,19 @@ def imaging(page):
     never an API prefix.
 
     The persistence round trip is proven through the IMPORT modal, not a real
-    generation — this verify stack's ElevenLabs key reports `generatorReady:
-    true` but has 0 credits remaining (confirmed by actually attempting a
-    create: POST /sfx answered 500 `quota_exceeded`), so a real create() call
-    cannot succeed here and would be a flaky, costed round trip even on a
-    stack that does have credit. Import needs no external API — a real WAV
-    upload through /sfx/upload — and shares the same imagingImportSchema
-    name/description fields.
+    generation. Verification runs with every TTS credential neutralised, so
+    the browser stubs only GET /sfx's `generatorReady` capability to expose
+    the create form's submit state; POSTs remain real and no costed provider
+    call is made. Import needs no external API — a real WAV upload through
+    /sfx/upload — and shares the same imagingImportSchema name/description
+    fields.
 
-    Also covers ImagingPanel's own 3s poll (`setInterval(…, 3000)` — ten times
-    faster than TakeoverCard's 30s, and the panel most likely to exhibit the
-    clobber bug `assert_survives_poll` exists to catch). The Jingle ratio
-    input is the right target: it's a real on-page control fed by the SAME
-    `data` state the poll refetches, guarded by `jingleRatio == null` in
-    ImagingPanel's hydrate-once effect so an in-progress edit is meant to
-    survive every tick. `seconds=3` matches THIS panel's real interval —
+    Also covers ImagingPanel's own 3s TanStack Query `refetchInterval` — ten
+    times faster than TakeoverCard's 30s, and the panel most likely to exhibit
+    the clobber bug `assert_survives_poll` exists to catch. The Jingle ratio
+    input is the right target: it's a real on-page control hydrated from the
+    shared settings query only while clean, so an in-progress edit must
+    survive every background revision. `seconds=3` matches THIS panel's real interval —
     `assert_survives_poll`'s `seconds=35` default is calibrated for
     TakeoverCard's 30s poll and would prove nothing here (it'd fast-forward
     past 11 ticks instead of exercising one real one).
@@ -876,8 +1041,22 @@ def imaging(page):
         api_write("DELETE", f"/sfx/{SFX_FIXTURE_NAME}", ok_statuses=(200, 400, 404))
 
     try:
-        # Installed BEFORE goto — like takeover()'s clock — so the poll's
-        # setInterval is one this test controls from the moment ImagingPanel
+        # The isolated stack deliberately has no ElevenLabs credential. Keep
+        # the real controller list but expose the create form's validation
+        # path without enabling or calling an external generator.
+        sfx_fixture = json.loads(api("/sfx"))
+        sfx_fixture["generatorReady"] = True
+        page.route(
+            f"{API}/sfx",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(sfx_fixture),
+            ) if route.request.method == "GET" else route.continue_(),
+        )
+
+        # Installed BEFORE goto — like takeover()'s clock — so the query's
+        # refetch timer is one this test controls from the moment ImagingPanel
         # mounts, not one already ticking on real wall-clock time.
         page.clock.install()
         page.goto(f"{WEB}/admin/imaging?tab=jingles")
@@ -1243,6 +1422,43 @@ def onboarding(page):
 PERSONA_VERIFY_NAME = "Verify Persona"
 
 
+def preview_wav(seconds=4, sample_rate=24000):
+    """A real, browser-decodable PCM WAV served by the fake Remote endpoint."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"\x00\x00" * (seconds * sample_rate))
+    return buf.getvalue()
+
+
+class PreviewRemoteTtsHandler(BaseHTTPRequestHandler):
+    audio = preview_wav()
+    speak_bodies = []
+
+    def do_GET(self):
+        body = b'{"ok":true}' if self.path == "/health" else b"not found"
+        self.send_response(200 if self.path == "/health" else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        size = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(size) or b"{}")
+        type(self).speak_bodies.append(body)
+        self.send_response(200 if self.path == "/speak" else 404)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(self.audio)))
+        self.end_headers()
+        self.wfile.write(self.audio)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
 @check
 def personas(page):
     """PersonasPanel (Task 9) — the roster + system-prompt library on
@@ -1421,6 +1637,185 @@ def personas(page):
         page.unroute("**/settings", mock_tts_refusal)
 
 
+@check
+def gemini_persona_style(page):
+    """Save/reload delivery style and audition unsaved edits through both controls."""
+    import copy
+    before = json.loads(api("/settings"))["values"]
+    personas = copy.deepcopy(before["personas"])
+    speaker = next(p for p in personas if p["name"] == "Wren")
+    speaker["tts"].update({"engine": "gemini", "voice": "Puck"})
+    speaker["voiceStyle"] = "Warm and unhurried."
+    previews = []
+
+    def sample(route):
+        previews.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type="audio/wav", body=preview_wav(seconds=1))
+
+    page.route("**/settings/tts/preview", sample)
+    try:
+        api_write("POST", "/settings", {"personas": personas})
+        page.goto(f"{WEB}/admin/personas")
+        page.get_by_role("button", name="Edit Wren").click()
+        dialog = page.get_by_role("dialog")
+        style = dialog.get_by_label("Delivery style")
+        assert style.input_value() == "Warm and unhurried."
+        assert style.get_attribute("maxlength") == "300"
+        style.evaluate("el => el.removeAttribute('maxlength')")
+        style.fill("x" * 301)
+        wait_for_invalid(page, style)
+        assert_aria(page, style)
+        assert dialog.get_by_role("button", name="Save persona").is_disabled()
+        style.fill("Dry and understated.")
+        with page.expect_response("**/settings/tts/preview"):
+            dialog.get_by_role("button", name="Play sample", exact=True).click()
+        assert previews[-1]["voiceStyle"] == "Dry and understated."
+        assert next(p for p in json.loads(api("/settings"))["values"]["personas"]
+                    if p["id"] == speaker["id"])["voiceStyle"] == "Warm and unhurried."
+
+        # The picker has its own preview path, which must carry the same edit.
+        dialog.get_by_role("button", name=re.compile("^Puck")).click()
+        with page.expect_response("**/settings/tts/preview"):
+            page.get_by_role("option", name=re.compile("Puck")).get_by_role("button", name="Play preview").click()
+        assert len(previews) == 2
+        assert previews[-1]["voiceStyle"] == "Dry and understated."
+        page.keyboard.press("Escape")
+        dialog.get_by_role("button", name="Save persona").click()
+        dialog.wait_for(state="detached")
+        saved = json.loads(api("/settings"))["values"]["personas"]
+        assert next(p for p in saved if p["id"] == speaker["id"])["voiceStyle"] == "Dry and understated."
+        page.reload()
+        page.get_by_role("button", name="Edit Wren").click()
+        assert page.get_by_label("Delivery style").input_value() == "Dry and understated."
+
+        # Inheritance must expose the style when the station resolves to Gemini.
+        inherited = next(p for p in saved if p["id"] == speaker["id"])
+        inherited["tts"].update({"engine": "inherit", "voice": ""})
+        api_write("POST", "/settings", {"personas": saved, "tts": {"defaultEngine": "gemini"}})
+        page.reload()
+        page.get_by_role("button", name="Edit Wren").click()
+        assert page.get_by_label("Delivery style").input_value() == "Dry and understated."
+    finally:
+        page.unroute("**/settings/tts/preview", sample)
+        api_write("POST", "/settings", {"personas": before["personas"],
+                  "tts": {"defaultEngine": before["tts"]["defaultEngine"]}})
+
+
+@check
+def persona_preview_rate(page):
+    """A persona preview auditions engine speed × persona speed.
+
+    The preview API accepts one final rate. This drives a real inherited Remote
+    persona through the browser, captures that request, and decodes the WAV the
+    isolated controller actually returns. Programme/daypart pacing is
+    intentionally absent: previews are stable auditions of the two saved
+    controls, while the live dispatcher applies the current programme factor.
+    """
+    before = json.loads(api("/settings"))["values"]
+    before_tts = before["tts"]
+    before_personas = before["personas"]
+    personas_for_preview = []
+    for persona in before_personas:
+        copy = json.loads(json.dumps(persona))
+        if copy.get("name") == "Wren":
+            copy["tts"]["engine"] = "inherit"
+            copy["tts"]["speed"] = 2
+        personas_for_preview.append(copy)
+
+    PreviewRemoteTtsHandler.speak_bodies = []
+    remote = ThreadingHTTPServer(("127.0.0.1", 0), PreviewRemoteTtsHandler)
+    remote_thread = threading.Thread(target=remote.serve_forever, daemon=True)
+    remote_thread.start()
+    remote_url = f"http://127.0.0.1:{remote.server_address[1]}"
+
+    try:
+        api_write("POST", "/settings", {
+            "tts": {
+                "defaultEngine": "remote",
+                "remote": {"url": remote_url},
+                "speed": {**before_tts["speed"], "remote": 0.5},
+            },
+            "personas": personas_for_preview,
+        })
+
+        def open_wren():
+            page.goto(f"{WEB}/admin/personas")
+            page.wait_for_selector("text=The voices on your station.")
+            page.get_by_role("button", name="Edit Wren").click()
+            dialog = page.get_by_role("dialog")
+            dialog.wait_for()
+            slider = dialog.get_by_label("Speech speed multiplier")
+            assert slider.is_enabled(), "inherited Remote persona speed is disabled"
+            assert slider.input_value() == "2", "persona speed did not hydrate at 2x"
+            return dialog
+
+        def assert_preview(dialog, expected_rate, min_duration, max_duration):
+            with page.expect_response(
+                lambda response: response.url.endswith("/settings/tts/preview")
+                and response.request.method == "POST"
+            ) as response_info:
+                dialog.get_by_role("button", name="Play sample").click()
+
+            response = response_info.value
+            assert response.status == 200, f"preview returned HTTP {response.status}"
+            preview_body = response.request.post_data_json
+            assert preview_body["speed"] == expected_rate, (
+                f"persona preview posted {preview_body['speed']!r}, expected {expected_rate}"
+            )
+            assert PreviewRemoteTtsHandler.speak_bodies, "fake Remote endpoint received no /speak call"
+            assert set(PreviewRemoteTtsHandler.speak_bodies[-1]) == {"text", "voice"}, (
+                "preview changed the Remote /speak wire contract"
+            )
+
+            audio = dialog.locator("audio")
+            # media-chrome keeps its slotted <audio> element visually hidden;
+            # the browser still decodes it and exposes duration metadata.
+            audio.wait_for(state="attached")
+            duration = audio.evaluate("""element => new Promise((resolve, reject) => {
+              const finish = () => Number.isFinite(element.duration)
+                ? resolve(element.duration)
+                : reject(new Error('preview duration is not finite'));
+              if (element.readyState >= 1) finish();
+              else {
+                element.addEventListener('loadedmetadata', finish, { once: true });
+                element.addEventListener('error', () => reject(new Error('preview audio failed to decode')), { once: true });
+              }
+            })""")
+            assert min_duration <= duration <= max_duration, (
+                f"preview duration {duration:.6f}s fell outside "
+                f"[{min_duration:.3f}, {max_duration:.3f}]s"
+            )
+            return preview_body["speed"], duration
+
+        # Saved 0.5x engine × 2x persona composes to unity, preserving all four
+        # seconds of the endpoint's WAV.
+        unity_rate, unity_duration = assert_preview(open_wren(), 1, 3.95, 4.05)
+
+        # Exercise the actual non-unity Remote path too: 0.75x × 2x = 1.5x,
+        # so the same 4s source decodes to about 2.667s in the browser.
+        api_write("POST", "/settings", {
+            "tts": {"speed": {**before_tts["speed"], "remote": 0.75}},
+        })
+        shaped_rate, shaped_duration = assert_preview(open_wren(), 1.5, 2.62, 2.72)
+        print(
+            "  persona preview evidence: "
+            f"posted {unity_rate}x -> {unity_duration:.6f}s; "
+            f"posted {shaped_rate}x -> {shaped_duration:.6f}s"
+        )
+    finally:
+        remote.shutdown()
+        remote.server_close()
+        remote_thread.join(timeout=5)
+        api_write("POST", "/settings", {
+            "tts": {
+                "defaultEngine": before_tts["defaultEngine"],
+                "remote": before_tts["remote"],
+                "speed": before_tts["speed"],
+            },
+            "personas": before_personas,
+        })
+
+
 SHOW_VERIFY_NAME = "Verify Show"
 GHOST_SHOW_NAME = "Verify Ghost Show"
 
@@ -1570,7 +1965,7 @@ def shows(page):
         dialog = page.get_by_role("dialog")
         dialog.wait_for()
 
-        host_field = dialog.get_by_label("persona owner")
+        host_field = dialog.get_by_role("combobox", name="Host", exact=True)
         wait_for_invalid(page, host_field)
         assert_aria(page, host_field)
         assert_field_error(page, host_field, "must reference an existing persona")
@@ -1587,10 +1982,10 @@ def shows(page):
     finally:
         page.unroute("**/settings", mock_settings_get)
 
-    # 2 & 3, and the final valid save — one continuous "Add show" session,
+    # 2, 3 & 4, and the final valid save — one continuous "Add show" session,
     # against the REAL (unmocked) controller. Wrapped in try/finally like
     # skills()/blockrules()/imaging()/personas() — a real, persisted show is
-    # created in step 4 below, and a run that fails partway through must not
+    # created in step 5 below, and a run that fails partway through must not
     # leave it behind to poison the next run.
     try:
         page.goto(f"{WEB}/admin/shows")
@@ -1607,7 +2002,7 @@ def shows(page):
 
         # Host defaults to the roster's first persona; pin it explicitly so the
         # guest-overlap scenario below is deterministic regardless of roster order.
-        host_field = dialog.get_by_label("persona owner")
+        host_field = dialog.get_by_role("combobox", name="Host", exact=True)
         host_field.click()
         page.get_by_role("option", name="Marlowe").click()
 
@@ -1655,11 +2050,68 @@ def shows(page):
 
         assert not save.is_disabled(), "Save show stayed disabled once the overlap was fixed"
 
-        # 4. Save — a genuinely valid show persists through a real POST /shows
+        # 4. Eras — a custom window beside a decade chip (#1599). Both year
+        #    boxes sit INSIDE the eras group (fieldAria's groupProps carries no
+        #    id), so they are found by their own aria-label and every assertion
+        #    stays scoped to the group, per this file's one convention.
+        eras_group = dialog.locator('[aria-labelledby$=".eras-label"]')
+        eras_group.wait_for()
+        eras_group.get_by_role("button", name="90s").click()
+
+        era_from = dialog.get_by_label("custom era start year")
+        era_to = dialog.get_by_label("custom era end year")
+        add_range = dialog.get_by_role("button", name="Add range")
+
+        # A range spelling out a decade already lit is refused rather than
+        # stacked beside its chip — the duplicate the schema would drop anyway.
+        era_from.fill("1990")
+        era_to.fill("1999")
+        add_range.click()
+        assert "already selected" in eras_group.get_by_role("alert").inner_text(), \
+            "adding a range equal to a lit decade chip was not refused"
+
+        # The window the chips cannot spell: one year.
+        era_from.fill("2026")
+        era_to.fill("2026")
+        add_range.click()
+        eras_group.get_by_role("button", name="2026–2026").wait_for()
+
+        # The OPEN-ENDED window — one bound left blank, which is a legal filter
+        # and the only shape eraLabelOf renders through its no-toYear branch.
+        # Driven separately because a closed range proves nothing about it: the
+        # blank side has to survive parse() as null rather than as a refusal.
+        era_from.fill("2030")
+        era_to.fill("")
+        add_range.click()
+        eras_group.get_by_role("button", name="2030+").wait_for()
+
+        # Acceptance criterion 2 of #1599 — toggling a decade chip must not
+        # disturb the custom windows sharing the array with it. Wait on the
+        # chip's own aria-pressed before counting, so the assertion reads
+        # settled state rather than racing the re-render.
+        eras_group.get_by_role("button", name="90s").click()
+        eras_group.get_by_role("button", name="90s", pressed=False).wait_for()
+        for label in ("2026–2026", "2030+"):
+            assert eras_group.get_by_role("button", name=label).count() == 1, \
+                f"untoggling a decade chip dropped the custom era window {label}"
+
+        # Re-light it for the save below. It lands at the END of the array now:
+        # untoggling REMOVED that window and toggling APPENDS a fresh one, which
+        # is exactly why the assertion spells the order out rather than sorting.
+        eras_group.get_by_role("button", name="90s").click()
+        eras_group.get_by_role("button", name="90s", pressed=True).wait_for()
+
+        # 5. Save — a genuinely valid show persists through a real POST /shows
         #    round trip.
         save.click()
         dialog.wait_for(state="detached")
-        assert SHOW_VERIFY_NAME in api("/settings"), "new show did not persist"
+        saved = find_show(SHOW_VERIFY_NAME)
+        assert saved, "new show did not persist"
+        assert saved.get("eras") == [
+            {"fromYear": 2026, "toYear": 2026},
+            {"fromYear": 2030, "toYear": None},
+            {"fromYear": 1990, "toYear": 1999},
+        ], f"chip + custom era windows did not all persist: {saved.get('eras')!r}"
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave "Verify Show" behind to poison the NEXT run, and a
@@ -1668,6 +2120,71 @@ def shows(page):
         leftover = find_show(SHOW_VERIFY_NAME)
         if leftover:
             api_write("DELETE", f"/shows/{leftover['id']}", ok_statuses=(200, 404))
+
+
+@check
+def schedule(page):
+    """Rundown board — local booking survives until one authoritative save.
+
+    The board is intentionally not an RHF form, but it is a programming
+    surface exercised beside Shows and Playlists.  Stub the controller edge so
+    the check can assert the exact PUT payload, the mounted live-schedule
+    refresh, and the shared settings-cache patch without altering the isolated
+    fixture's real week.
+    """
+    settings = json.loads(api("/settings"))
+    personas = settings.get("values", {}).get("personas", [])
+    assert personas, "verify stack needs a seeded persona"
+    show = {
+        "id": "s_verify_schedule", "name": "Verify Schedule Show",
+        "personaId": personas[0]["id"], "moods": [], "energies": [],
+    }
+    week = {str(day): [None] * 24 for day in range(7)}
+    settings["values"]["shows"] = [show]
+    settings["values"]["schedule"] = week
+    saved = {"schedule": None}
+
+    page.route(
+        f"{API}/settings",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(settings),
+        ) if route.request.method == "GET" else route.continue_(),
+    )
+
+    def schedule_route(route):
+        if route.request.method == "PUT":
+            saved["schedule"] = json.loads(route.request.post_data or "{}").get("schedule")
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps({"schedule": saved["schedule"], "dropped": 0}),
+            )
+            return
+        route.fulfill(
+            status=200, content_type="application/json",
+            body=json.dumps({"schedule": saved["schedule"] or week, "override": None}),
+        )
+
+    page.route(f"{API}/schedule", schedule_route)
+    page.goto(f"{WEB}/admin/shows/schedule")
+    brush = page.locator('button[title*="Click to arm"]').first
+    brush.wait_for(state="visible")
+    brush.click()
+    page.locator("button", has_text="+").filter(has_not_text="Add show").first.click()
+
+    save = page.get_by_role("button", name="Save the week").first
+    assert not save.is_disabled(), "Save the week stayed disabled after a booking"
+    save.click()
+    page.get_by_text("Week saved", exact=False).wait_for(state="visible")
+    assert saved["schedule"], "Rundown save sent no schedule"
+    booked = sum(1 for day in saved["schedule"].values() for show_id in day if show_id)
+    assert booked > 0, f"Rundown save carried no booked cells: {saved['schedule']}"
+
+    # The authoritative write patches settingsKeys.detail(), so navigation to
+    # the roster observes the saved hour count without another settings GET.
+    page.get_by_role("link", name="New show →").click()
+    page.wait_for_url("**/admin/shows")
+    metric = page.locator(".metric").filter(has_text="hours scheduled")
+    metric.locator(".n").get_by_text(str(booked), exact=True).wait_for(state="visible")
 
 
 PLAYLIST_NAME_MAX = 120  # controller/src/schemas/playlist.ts
@@ -1878,8 +2395,9 @@ def assert_throwaway_stack():
     So the load-bearing check is now a plain opt-in: the caller must set
     `SUBWAVE_VERIFY_ALLOW_DESTRUCTIVE=1` (or any other truthy-looking value —
     see `_env_truthy`) before running this file at all, which the product
-    never sets on its own. `.claude/skills/verify/SKILL.md`'s documented
-    isolated-controller boot is the one place that should ever export it.
+    never sets on its own. Export it by hand only in the shell that booted
+    the isolated stack from `.claude/skills/verify/SKILL.md`; the skill
+    itself does not set it.
 
     The old credential + roster checks are kept, but now purely as a
     SECONDARY sanity check that runs only once the opt-in has already been

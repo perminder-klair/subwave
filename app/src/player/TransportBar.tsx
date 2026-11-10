@@ -1,9 +1,3 @@
-// The control deck, rebuilt to match the web player's console: a bordered
-// three-cell box — Power (hollow ring that lights accent on air), the analog
-// Signal meter (label + listener/latency read, a 26-tick scale with a vermilion
-// grip, and a 0–250 latency ruler), and Volume (rotary knob + dot-grille mute).
-// Docked below the FM-dial pager, so it stays at the foot of every band stop.
-
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -25,9 +19,8 @@ export interface TransportBarProps {
   latencyMs: number | null;
   signalQuality: SignalQuality;
   listeners: number | null;
-  /** Cast device name while a Google Cast session is active, else null.
-   *  Swaps the Signal label for a "Cast · <device>" read so the deck says
-   *  where the audio actually is. */
+  /** Cast device name while a session is active, else null. Swaps the Signal
+   *  label for a "Cast · <device>" read. */
   castingTo?: string | null;
 }
 
@@ -90,10 +83,6 @@ export default function TransportBar({
 
   return (
     <View style={{ marginHorizontal: 16, marginBottom: insets.bottom + 12 }}>
-      {/* Frosted-glass console: a real backdrop blur picks up the cover-art
-          ambient wash behind the bar, with a thin translucent film over it and
-          a softened glass edge — so the deck reads as transparent glass rather
-          than a flat panel. The controls render on top, unblurred. */}
       <View style={{ borderWidth: 1, borderColor: `${colors.ink}59`, overflow: 'hidden' }}>
         <BlurView
           intensity={mode === 'light' ? 40 : 26}
@@ -109,7 +98,6 @@ export default function TransportBar({
           ]}
         />
         <View className="flex-row">
-        {/* Power */}
         <View style={{ alignItems: 'center', justifyContent: 'center', paddingHorizontal: 11, paddingVertical: 13 }}>
           <Pressable
             onPress={handleTune}
@@ -145,7 +133,6 @@ export default function TransportBar({
           </Pressable>
         </View>
 
-        {/* Signal */}
         <View
           style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 10, borderLeftWidth: 1, borderRightWidth: 1, borderColor: colors.softBorder }}
         >
@@ -166,7 +153,6 @@ export default function TransportBar({
             </Text>
           </View>
 
-          {/* 26-tick scale + grip */}
           <View style={{ height: 20, marginTop: 7 }}>
             <View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between' }}>
               {Array.from({ length: TICKS }).map((_, i) => (
@@ -196,7 +182,6 @@ export default function TransportBar({
             </View>
           </View>
 
-          {/* 0–250 ruler */}
           <View className="flex-row justify-between" style={{ marginTop: 4 }}>
             {RULER.map((n) => (
               <Text key={n} className="font-mono text-muted" style={{ fontSize: 8.5 }}>
@@ -206,7 +191,6 @@ export default function TransportBar({
           </View>
         </View>
 
-        {/* Volume */}
         <View className="flex-row items-center" style={{ gap: 9, paddingHorizontal: 11, paddingVertical: 13 }}>
           <RotaryKnob value={muted ? 0 : volume} onChange={(v) => { setVolume(v); if (muted) handleMute(); }} />
           <Pressable
@@ -233,8 +217,6 @@ export default function TransportBar({
   );
 }
 
-// Speaker-grille: a 4×4 grid of evenly-spaced dots filling the square, matching
-// the web player's radial-dot grille.
 function DotGrille({ color }: { color: string }) {
   return (
     <View style={{ width: 26, height: 26, justifyContent: 'space-between' }}>

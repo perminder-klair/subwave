@@ -1,8 +1,7 @@
 /** @type {import('tailwindcss').Config} */
-// Colors resolve to CSS variables so the station theme (fetched from /themes)
-// can override them at runtime via NativeWind's `vars()` applied at the root
-// (see ThemeProvider). Defaults live in global.css. Mirrors the 7 theme tokens
-// the web player uses (lib/theme.ts THEME_TOKEN_KEYS).
+// Colors resolve to CSS variables so ThemeProvider can override them at
+// runtime via NativeWind's `vars()`. Defaults live in global.css; the 7 tokens
+// mirror the web player's THEME_TOKEN_KEYS.
 module.exports = {
   content: ['./src/**/*.{js,jsx,ts,tsx}'],
   presets: [require('nativewind/preset')],

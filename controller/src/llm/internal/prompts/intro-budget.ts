@@ -5,32 +5,42 @@
 // never a precondition.
 
 import * as library from '../../../music/library.js';
+import { shiftOnsetMs } from '../../../music/silence-trim.js';
+// The band inside which a measured runway binds. Imported rather than restated
+// so the phrase, the backstop and the boundary-deferred segment's own timing
+// rule can never disagree about where "too early to talk" starts and where a
+// runway stops constraining at all (broadcast/vocal-runway.ts).
+import { VOCAL_RUNWAY_FLOOR_MS, VOCAL_RUNWAY_CEILING_MS, vocalRunwayMs } from '../../../broadcast/vocal-runway.js';
 
 // Intro runway (ms to where the track 'comes in') for a track, from the track
 // object or a library lookup. Null when un-analysed.
 export function introMsFor(track: any): number | null {
-  if (track?.introMs != null) return track.introMs;
-  const rec = track?.id ? library.get(track.id) : null;
-  return rec?.introMs ?? null;
+  const raw = track?.introMs != null ? track.introMs : (track?.id ? library.get(track.id)?.introMs ?? null : null);
+  // Onto the trimmed timeline: a leading blank the drain cut off is runway the
+  // DJ will never actually have (music/silence-trim.ts).
+  return shiftOnsetMs(track, raw);
 }
 
 // MEASURED first vocal entry (ms) from the track's Demucs vocal ranges, or
 // null when un-analysed / instrumental ([] — no vocal to clash with). The
 // single resolver behind the never-talk-over-a-singer rule (feature:
 // vocal-aware transitions) — both the budget phrase and the enforcement
-// funnel key off it.
+// funnel key off it. The onset itself is composed by vocal-runway.ts (fresh
+// track ranges before the library row, earliest start, trimmed timeline), the
+// one place it is; only its "instrumental" Infinity maps to null here.
 export function firstVocalMsFor(track: any): number | null {
-  const ranges = track?.id ? library.get(track.id)?.vocalRanges : null;
-  if (!Array.isArray(ranges) || ranges.length === 0) return null;
-  const first = Number(ranges[0]?.startMs);
-  return Number.isFinite(first) && first >= 0 ? first : null;
+  const runway = vocalRunwayMs(track);
+  return runway != null && Number.isFinite(runway) ? runway : null;
 }
 
-// Delegates to library.bpmKeyFor — the shared resolver that prefers the
-// analyzer's numbers and treats Navidrome's ID3-derived `bpm: 0` as unknown
-// rather than "carries analysis" (#862).
-export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
-  return library.bpmKeyFor(track);
+// The runway the phrase and the backstop both budget against: a measured first
+// vocal when there is one (finite, ≥ 0), else the energy-heuristic intro.
+// Resolved ONCE so the advice and the cut cannot describe different songs —
+// they did, when the phrase read introMs while the backstop cut at the vocal.
+function measuredVocalMs(firstVocalMs: number | null | undefined): number | null {
+  return typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs >= 0
+    ? firstVocalMs
+    : null;
 }
 
 // Advisory spoken-line budget (Stage A.3 phase 1). Returns '' when there's no
@@ -41,15 +51,19 @@ export function bpmKeyFor(track: any): { bpm: number | null; key: string | null 
 // unlike the energy-heuristic intro_ms, a measured start below the 2.5s
 // floor is trustworthy, so instead of staying silent about it the phrase
 // tells the model to skip the line the deterministic backstop would drop
-// anyway. Omitted/null (un-analysed or instrumental) changes nothing.
+// anyway; at or above the floor it IS the runway the advice is sized from,
+// exactly as enforceIntroBudget sizes its cut. Omitted/null (un-analysed or
+// instrumental) changes nothing.
 export function introBudgetPhrase(introMs: number | null | undefined, firstVocalMs?: number | null): string {
-  if (typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs < 2500) {
+  const measured = measuredVocalMs(firstVocalMs);
+  if (measured != null && measured < VOCAL_RUNWAY_FLOOR_MS) {
     return 'The vocals start almost immediately on this one — skip the spoken intro and let the track speak.';
   }
-  if (!introMs || introMs < 2500) return '';
-  if (introMs >= 18000) return '';
-  const sec = Math.floor(introMs / 1000);
-  if (introMs < 6000) {
+  const runway = measured ?? introMs;
+  if (!runway || runway < VOCAL_RUNWAY_FLOOR_MS) return '';
+  if (runway >= VOCAL_RUNWAY_CEILING_MS) return '';
+  const sec = Math.floor(runway / 1000);
+  if (runway < 6000) {
     return `The track's vocals come in around ${sec}s — keep this to a single short phrase that finishes before then; never run past it.`;
   }
   return `The track's vocals come in around ${sec}s — you have room for a sentence or two; use it, but land your last word before then rather than talking over the vocals.`;
@@ -59,7 +73,7 @@ export function introBudgetPhrase(introMs: number | null | undefined, firstVocal
 // above is advisory — a small model will still occasionally overrun. This
 // enforces it deterministically. Base speaking pace is ~2.5 words/sec, scaled
 // by `paceScale` — the live speech-rate multiplier from
-// audio/tts.speechPaceScale() (engine × persona × daypart) — so a persona
+// audio/tts.speechPaceScale() (engine × persona × current programme pace) — so a persona
 // speaking at 0.8× gets a proportionally smaller word ceiling; 1 (the
 // default) is the historical fixed-pace assumption.
 //
@@ -88,12 +102,10 @@ export function enforceIntroBudget(
 ): string {
   const t = (text || '').trim();
   if (!t) return t;
-  const measured = typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs >= 0
-    ? firstVocalMs
-    : null;
-  if (measured != null && measured < 2500) return '';
+  const measured = measuredVocalMs(firstVocalMs);
+  if (measured != null && measured < VOCAL_RUNWAY_FLOOR_MS) return '';
   const runway = measured ?? introMs;
-  if (!runway || runway < 2500 || runway >= 18000) return t;
+  if (!runway || runway < VOCAL_RUNWAY_FLOOR_MS || runway >= VOCAL_RUNWAY_CEILING_MS) return t;
   const BASE_WORDS_PER_SEC = 2.5;
   const pace = (Number.isFinite(paceScale) && paceScale > 0) ? paceScale : 1;
   const maxWords = Math.max(3, Math.floor((runway / 1000) * BASE_WORDS_PER_SEC * pace));

@@ -1,7 +1,5 @@
-// Pure transition logic for the stream idle monitor (stream-idle.ts) —
-// separate file so scripts/stream-idle.test.ts can pin it without dragging
-// in the monitor's heavy imports (queue.ts → llm/tts/subsonic), same split
-// as programme-pure.ts.
+// Pure transition logic for the stream idle monitor, split out so
+// scripts/stream-idle.test.ts can pin it without the monitor's heavy imports.
 
 type IdleAction = 'pause' | 'resume' | 'reassert' | null;
 
@@ -11,21 +9,14 @@ export interface IdleState {
   zeroSince: number | null;
 }
 
-// Pure transition: current state + (toggle, freshest count, clock) → next
-// state and the telnet action to fire. `count` is null when Icecast couldn't
-// be read — which the caller defines as SUSTAINED unreadability, not a single
-// failed poll (listeners.gatedListenerCount holds the last real reading through
-// a blip; #1256). The fail-open branches below are correct either way; what was
-// wrong was feeding them a null on every transient timeout. The caller only
-// commits the returned state once the action's telnet call succeeds, so a
-// dropped command self-heals on the next tick.
+// Current state + (toggle, freshest count, clock) → next state and the telnet
+// action to fire. `count` null means SUSTAINED unreadability, not one failed
+// poll (#1256). The caller commits the returned state only once the telnet call
+// succeeds, so a dropped command self-heals next tick.
 //
-// Regression-critical branches:
-//   • fail-open — an unknown count can never hold the station silent;
-//   • reassert — a mixer restart mid-pause always boots live, so the monitor
-//     re-sends idle_on (idempotent) while the room stays empty;
-//   • the empty clock resets the moment anyone (or "unknown") shows up, so a
-//     brief zero blip between listeners never accumulates toward a pause.
+// Regression-critical: fail-OPEN (an unknown count never holds the station
+// silent); re-assert idle_on after a mixer restart boots live; the empty clock
+// resets the moment anyone (or "unknown") shows up.
 export function nextIdleState(
   prev: IdleState,
   input: { enabled: boolean; count: number | null; now: number; idleAfterMs: number },
@@ -36,8 +27,7 @@ export function nextIdleState(
     return { state: { idle: false, zeroSince: null }, action: prev.idle ? 'resume' : null };
   }
   if (prev.idle) {
-    // Fail-open: an unknown count can't confirm the room is still empty —
-    // resume rather than hold a stream we can't observe.
+    // Fail-open: an unknown count can't confirm the room is still empty.
     if (count === null || count > 0) {
       return { state: { idle: false, zeroSince: null }, action: 'resume' };
     }

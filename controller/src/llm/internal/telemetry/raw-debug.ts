@@ -1,24 +1,7 @@
-// Rolling raw-LLM-request debug log.
-//
-// When capture is enabled, every outbound model request's exact body — the JSON
-// string as actually sent (no re-parse/re-stringify) — is kept in a small
-// in-memory ring AND mirrored to a bounded file in the shared state dir
-// (${STATE_DIR}/logs/llm-debug.log, last LLM_DEBUG_MAX, newest first), as well
-// as dumped to stderr. The file is the better primary UX for operators (esp.
-// Unraid, where state == appdata): they just open it instead of trawling
-// container logs. The capture point is a single fetch wrapper in the provider
-// registry (debugFetch), applied to every provider, so this is provider-agnostic.
-//
-// Gated two ways (either turns it on): the LLM_DEBUG_RAW env flag, or the
-// admin-toggleable settings.llm.debugRawRequests — so a one-click (no-CLI)
-// operator can flip it from the admin UI without editing env. Off by default:
-// when disabled nothing here runs (the registry never calls in), so there are
-// no file writes and no overhead.
-//
-// Best-effort throughout — mirrors recordPick()/PICKS_LOG in log.ts: a write
-// failure must never break (or block) a model call. Authorization/headers are
-// never recorded; only method + URL + body (and key-bearing URL query params
-// are masked, since e.g. Google carries the key as ?key=…).
+// Capture exact request bodies in a bounded ring, state/logs/llm-debug.log and stderr.
+// LLM_DEBUG_RAW or settings.llm.debugRawRequests enables capture; default off.
+// Writes are best-effort and cannot block model calls. Never record auth headers;
+// mask key-bearing URL parameters.
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { STATE_DIR } from '../../../config.js';

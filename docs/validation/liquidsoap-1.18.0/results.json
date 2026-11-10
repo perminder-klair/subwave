@@ -1,0 +1,354 @@
+{
+  "release": "v1.18.0",
+  "issue": "https://github.com/perminder-klair/subwave/issues/1806",
+  "overall_result": "partial validation; endurance comparison inconclusive",
+  "architecture": "amd64",
+  "host": {
+    "logical_cpus": 8,
+    "approximate_memory_gib": 12,
+    "shared_workstation": true
+  },
+  "published_identity": {
+    "liquidsoap_source": "d2bf3eb209391815e8d6a84b6cbf7ad4168d703d",
+    "upstream_patch": "de68528a87d0cd2137b6dd53abf0110d21974ad3",
+    "binary_sha256": "c082fee0936ee2e0944932a0273791bcb08c5740f658447685519e106a2ba320",
+    "images": {
+      "broadcast": {
+        "inspection_scope": "final amd64 filesystem",
+        "image_id": "sha256:2f33d23455b6a1ed2baabf2af83596064a7f510101ee26093a72c072170dfd42",
+        "repo_digests": [
+          "ghcr.io/perminder-klair/subwave-broadcast@sha256:b5690e2f103edcaf46175a05c4900ec762028cdeedf5bce19497e5bafe114121"
+        ],
+        "source_record": [
+          "Liquidsoap v2.4.5 (d2bf3eb209391815e8d6a84b6cbf7ad4168d703d)",
+          "Upstream patch: de68528a87d0cd2137b6dd53abf0110d21974ad3 (#5257)"
+        ]
+      },
+      "lean-aio": {
+        "inspection_scope": "final amd64 filesystem",
+        "image_id": "sha256:0ffb78adc8f08ae7a6f41eaf5f7672d6d87e051a2aacb62888275d29efd0bdc8",
+        "repo_digests": [
+          "ghcr.io/perminder-klair/subwave-aio@sha256:000130d063daaa5ed249e339be0d68d622a2420babd7d45f378cdcf0c352a7a5"
+        ],
+        "source_record": [
+          "Liquidsoap v2.4.5 (d2bf3eb209391815e8d6a84b6cbf7ad4168d703d)",
+          "Upstream patch: de68528a87d0cd2137b6dd53abf0110d21974ad3 (#5257)"
+        ]
+      },
+      "heavy-aio": {
+        "inspection_scope": "final amd64 filesystem",
+        "image_id": "sha256:04dbc19b6bb42d76f63d29950a039862807e6d6bb5cfb3ae57cdf7a64c629ca2",
+        "repo_digests": [
+          "ghcr.io/perminder-klair/subwave-aio-heavy@sha256:a49b37eb499f276f7c8317d8bbd6439c2d61a53bb0f3d235ac8b753efd54d49c"
+        ],
+        "source_record": [
+          "Liquidsoap v2.4.5 (d2bf3eb209391815e8d6a84b6cbf7ad4168d703d)",
+          "Upstream patch: de68528a87d0cd2137b6dd53abf0110d21974ad3 (#5257)"
+        ]
+      },
+      "cuda-aio": {
+        "inspection_scope": "published amd64 executable-copy and source-record layers only",
+        "tag_manifest_digest": "sha256:884c122e26ac5c8aa55418a76a503ce0cc9cd742de43064673ed887259e0a84b",
+        "amd64_manifest_digest": "sha256:c19552a00745f874079551451ddcaf648684a6594d276654f918b55f76823b65",
+        "source_record": [
+          "Liquidsoap v2.4.5 (d2bf3eb209391815e8d6a84b6cbf7ad4168d703d)",
+          "Upstream patch: de68528a87d0cd2137b6dd53abf0110d21974ad3 (#5257)"
+        ]
+      }
+    }
+  },
+  "smoke_checks": {
+    "fixed-broadcast": {
+      "phase": "passed",
+      "container": "subwave-liquidsoap-test-3f744873ea",
+      "image": "sha256:2f33d23455b6a1ed2baabf2af83596064a7f510101ee26093a72c072170dfd42",
+      "test_source_sha": "7f8b875b08f22a68ff6db5ec823ae29882790fe6",
+      "image_source_sha": "00879cdfe6c35cc4689bd32f27c7e4728cba6979",
+      "runner_sha256": "0be4f86a4fae7164550a08af3e5069e6f1fe24d158d50322b36a7eacec649f3d",
+      "started_at": "2026-10-06T23:17:51.006168+00:00",
+      "deadline": "2026-10-06T23:20:51.006168+00:00",
+      "seconds": 180,
+      "cpus": 2,
+      "memory": "512m",
+      "policy": {
+        "startup_seconds": 30,
+        "interval_seconds": 60,
+        "min_starts": 3,
+        "max_marker_age_seconds": 30
+      },
+      "image_id": "sha256:2f33d23455b6a1ed2baabf2af83596064a7f510101ee26093a72c072170dfd42",
+      "elapsed": 182.89977591199568,
+      "markers": [
+        "jingle",
+        "smoke-intro",
+        "smoke-say"
+      ],
+      "track_starts": 22,
+      "startup_latency_warnings": [
+        "2026/10/06 23:17:56 [clock.stream_mp3:2] Latency is too high: we must catchup 1.02 seconds! Check if your system can process your stream fast enough (CPU usage, disk access, etc) or if your stream should be self-sync (can happen when using `input.ffmpeg`). Refer to the latency control section of the documentation for more info."
+      ],
+      "container_removed": true,
+      "finished_at": "2026-10-06T23:20:53.905939+00:00",
+      "non_silent_decoded_codecs": [
+        "mp3",
+        "opus",
+        "aac",
+        "flac"
+      ]
+    },
+    "stock-broadcast": {
+      "phase": "passed",
+      "container": "subwave-liquidsoap-test-3b3133d3b4",
+      "image": "sha256:36088a24abb217edeca1c680bf92ed4f7d0bb58db4af2b79d01c10b9e6db7ef3",
+      "test_source_sha": "7f8b875b08f22a68ff6db5ec823ae29882790fe6",
+      "image_source_sha": "00879cdfe6c35cc4689bd32f27c7e4728cba6979",
+      "runner_sha256": "0be4f86a4fae7164550a08af3e5069e6f1fe24d158d50322b36a7eacec649f3d",
+      "started_at": "2026-10-07T02:39:08.769137+00:00",
+      "deadline": "2026-10-07T02:42:08.769137+00:00",
+      "seconds": 180,
+      "cpus": 2,
+      "memory": "512m",
+      "policy": {
+        "startup_seconds": 30,
+        "interval_seconds": 60,
+        "min_starts": 3,
+        "max_marker_age_seconds": 30
+      },
+      "image_id": "sha256:36088a24abb217edeca1c680bf92ed4f7d0bb58db4af2b79d01c10b9e6db7ef3",
+      "elapsed": 182.1890040639846,
+      "markers": [
+        "jingle",
+        "smoke-intro",
+        "smoke-say"
+      ],
+      "track_starts": 22,
+      "startup_latency_warnings": [
+        "2026/10/07 02:39:12 [clock.stream_mp3:2] Latency is too high: we must catchup 0.71 seconds! Check if your system can process your stream fast enough (CPU usage, disk access, etc) or if your stream should be self-sync (can happen when using `input.ffmpeg`). Refer to the latency control section of the documentation for more info."
+      ],
+      "container_removed": true,
+      "finished_at": "2026-10-07T02:42:10.958138+00:00",
+      "non_silent_decoded_codecs": [
+        "mp3",
+        "opus",
+        "aac",
+        "flac"
+      ]
+    },
+    "lean-aio": {
+      "phase": "passed",
+      "container": "subwave-1806-aio-ebc63018a5",
+      "image": "sha256:0ffb78adc8f08ae7a6f41eaf5f7672d6d87e051a2aacb62888275d29efd0bdc8",
+      "started_at": "2026-10-07T08:37:38.890965+00:00",
+      "scope": "AIO HTTP/runtime smoke with generated Subsonic fixture music; no real library or GPU inference",
+      "cpus": 2,
+      "memory": "1g",
+      "seconds": 180,
+      "image_id": "sha256:0ffb78adc8f08ae7a6f41eaf5f7672d6d87e051a2aacb62888275d29efd0bdc8",
+      "repo_digests": [
+        "ghcr.io/perminder-klair/subwave-aio@sha256:000130d063daaa5ed249e339be0d68d622a2420babd7d45f378cdcf0c352a7a5"
+      ],
+      "ready_after_seconds": 4.32822812901577,
+      "http_checks": "passed: player, admin, state, now-playing, tune-in file, admin auth, settings save/read",
+      "music_fixture": "Subsonic HTTP fixture serving two generated 60-second WAV tracks",
+      "track_starts": 3,
+      "elapsed": 126.34236259400495,
+      "health": "healthy",
+      "restarts": 0,
+      "container_removed": true,
+      "finished_at": "2026-10-07T08:40:45.829240+00:00",
+      "non_silent_decoded_codecs": [
+        "mp3",
+        "opus",
+        "aac",
+        "flac"
+      ],
+      "elapsed_field_note": "Last periodic status sample, not full run duration; use started_at and finished_at."
+    },
+    "heavy-aio": {
+      "phase": "passed",
+      "container": "subwave-1806-aio-33f84fab23",
+      "image": "sha256:04dbc19b6bb42d76f63d29950a039862807e6d6bb5cfb3ae57cdf7a64c629ca2",
+      "started_at": "2026-10-07T08:30:16.772187+00:00",
+      "scope": "AIO HTTP/runtime smoke with generated Subsonic fixture music; no real library or GPU inference",
+      "cpus": 2,
+      "memory": "1g",
+      "seconds": 180,
+      "image_id": "sha256:04dbc19b6bb42d76f63d29950a039862807e6d6bb5cfb3ae57cdf7a64c629ca2",
+      "repo_digests": [
+        "ghcr.io/perminder-klair/subwave-aio-heavy@sha256:a49b37eb499f276f7c8317d8bbd6439c2d61a53bb0f3d235ac8b753efd54d49c"
+      ],
+      "ready_after_seconds": 4.423412026022561,
+      "http_checks": "passed: player, admin, state, now-playing, tune-in file, admin auth, settings save/read",
+      "music_fixture": "Subsonic HTTP fixture serving two generated 60-second WAV tracks",
+      "track_starts": 3,
+      "elapsed": 126.67531798299751,
+      "health": "healthy",
+      "restarts": 0,
+      "container_removed": true,
+      "finished_at": "2026-10-07T08:33:23.674601+00:00",
+      "non_silent_decoded_codecs": [
+        "mp3",
+        "opus",
+        "aac",
+        "flac"
+      ],
+      "elapsed_field_note": "Last periodic status sample, not full run duration; use started_at and finished_at."
+    }
+  },
+  "shortened_comparison": {
+    "classification": "Stopped early at user request; partial evidence, not a qualification pass.",
+    "minimum_required_seconds": 86400,
+    "planned_seconds": 108000,
+    "required_track_starts": 12240,
+    "stopped_at_user_request": true,
+    "final_codec_checks_completed": false,
+    "runs": {
+      "fixed-soak-v2": {
+        "raw_runner_status": {
+          "phase": "failed",
+          "container": "subwave-liquidsoap-test-4501fec049",
+          "image": "sha256:2f33d23455b6a1ed2baabf2af83596064a7f510101ee26093a72c072170dfd42",
+          "test_source_sha": "7f8b875b08f22a68ff6db5ec823ae29882790fe6",
+          "image_source_sha": "00879cdfe6c35cc4689bd32f27c7e4728cba6979",
+          "runner_sha256": "743616daf642f63f6e71ea2697ffe2d24f0b017851a569c40c4689284de3d5da",
+          "started_at": "2026-10-07T08:46:08.525734+00:00",
+          "deadline": "2026-10-08T14:46:08.525734+00:00",
+          "seconds": 108000,
+          "cpus": 2,
+          "memory": "512m",
+          "memory_swap": "512m",
+          "memory_reservation": "256m",
+          "policy": {
+            "startup_seconds": 30,
+            "interval_seconds": 60,
+            "min_starts": 3,
+            "max_marker_age_seconds": 30
+          },
+          "image_id": "sha256:2f33d23455b6a1ed2baabf2af83596064a7f510101ee26093a72c072170dfd42",
+          "base_url": "http://127.0.0.1:32809",
+          "elapsed": 13732.957624206989,
+          "updated_at": "2026-10-07T12:34:11.502774+00:00",
+          "markers": [
+            "jingle",
+            "smoke-intro",
+            "smoke-say"
+          ],
+          "track_starts": 1712,
+          "latest_track_timestamp": 1791376497,
+          "marker_age_seconds": 4.483379602432251,
+          "startup_latency_warnings": [
+            "2026/10/07 08:46:12 [clock.stream_mp3:2] Latency is too high: we must catchup 0.98 seconds! Check if your system can process your stream fast enough (CPU usage, disk access, etc) or if your stream should be self-sync (can happen when using `input.ffmpeg`). Refer to the latency control section of the documentation for more info."
+          ],
+          "error": "Interrupted by signal 15",
+          "diagnostic_error": "Interrupted by signal 15",
+          "container_removed": true,
+          "finished_at": "2026-10-07T12:35:01.483352+00:00"
+        },
+        "restarts_before_stop": 0,
+        "health_before_stop": "healthy",
+        "container_removal_verified": true,
+        "retained_log_steady_state_latency_warnings": 0,
+        "cpu_observations": {
+          "sample_count": 228,
+          "first_30_mean_percent": 12.462,
+          "latest_30_mean_percent": 11.948666666666666,
+          "scope": "Single shortened run; no qualification or speedup claim."
+        },
+        "final_log_collection_interrupted": true,
+        "stats_file": "fixed-soak-stats.jsonl",
+        "stats_sha256": "d176636240b3f27c5655855b9d559d87f9a09c09d0cb1985ad591257b63dff3c"
+      },
+      "stock-soak-v2": {
+        "raw_runner_status": {
+          "phase": "failed",
+          "container": "subwave-liquidsoap-test-0bafc7e705",
+          "image": "sha256:36088a24abb217edeca1c680bf92ed4f7d0bb58db4af2b79d01c10b9e6db7ef3",
+          "test_source_sha": "7f8b875b08f22a68ff6db5ec823ae29882790fe6",
+          "image_source_sha": "00879cdfe6c35cc4689bd32f27c7e4728cba6979",
+          "runner_sha256": "743616daf642f63f6e71ea2697ffe2d24f0b017851a569c40c4689284de3d5da",
+          "started_at": "2026-10-07T08:46:08.541701+00:00",
+          "deadline": "2026-10-08T14:46:08.541701+00:00",
+          "seconds": 108000,
+          "cpus": 2,
+          "memory": "512m",
+          "memory_swap": "512m",
+          "memory_reservation": "256m",
+          "policy": {
+            "startup_seconds": 30,
+            "interval_seconds": 60,
+            "min_starts": 3,
+            "max_marker_age_seconds": 30
+          },
+          "image_id": "sha256:36088a24abb217edeca1c680bf92ed4f7d0bb58db4af2b79d01c10b9e6db7ef3",
+          "base_url": "http://127.0.0.1:32810",
+          "elapsed": 13733.050303697994,
+          "updated_at": "2026-10-07T12:34:10.500223+00:00",
+          "markers": [
+            "jingle",
+            "smoke-intro",
+            "smoke-say"
+          ],
+          "track_starts": 1712,
+          "latest_track_timestamp": 1791376498,
+          "marker_age_seconds": 3.592027187347412,
+          "startup_latency_warnings": [
+            "2026/10/07 08:46:12 [clock.stream_mp3:2] Latency is too high: we must catchup 0.80 seconds! Check if your system can process your stream fast enough (CPU usage, disk access, etc) or if your stream should be self-sync (can happen when using `input.ffmpeg`). Refer to the latency control section of the documentation for more info."
+          ],
+          "error": "Interrupted by signal 15",
+          "diagnostic_error": "Interrupted by signal 15",
+          "container_removed": true,
+          "finished_at": "2026-10-07T12:35:01.592002+00:00"
+        },
+        "restarts_before_stop": 0,
+        "health_before_stop": "healthy",
+        "container_removal_verified": true,
+        "retained_log_steady_state_latency_warnings": 0,
+        "cpu_observations": {
+          "sample_count": 228,
+          "first_30_mean_percent": 12.362666666666666,
+          "latest_30_mean_percent": 14.484666666666667,
+          "scope": "Single shortened run; no qualification or speedup claim."
+        },
+        "final_log_collection_interrupted": true,
+        "stats_file": "stock-soak-stats.jsonl",
+        "stats_sha256": "e548a00873a6b263c66904fc2683d9711ba9f48bd68465b7b434ebd012e47bbf"
+      }
+    }
+  },
+  "earlier_failed_comparison": {
+    "fixed-soak": {
+      "phase": "failed",
+      "started_at": "2026-10-07T02:44:39.018853+00:00",
+      "finished_at": "2026-10-07T08:28:41.164180+00:00",
+      "elapsed": 20642.145437619998,
+      "track_starts": 2573,
+      "error": "Stream clock fell behind outside startup allowance (see retained logs)",
+      "container_removed": true
+    },
+    "stock-soak": {
+      "phase": "failed",
+      "started_at": "2026-10-07T02:44:39.031705+00:00",
+      "finished_at": "2026-10-07T08:28:42.090664+00:00",
+      "elapsed": 20643.059067236987,
+      "track_starts": 2573,
+      "error": "Stream clock fell behind outside startup allowance (see retained logs)",
+      "container_removed": true
+    },
+    "interpretation": "Both sides logged clock warnings within one second during shared-host pressure while AIO probes overlapped. This failed run is not combined with the shortened comparison."
+  },
+  "unverified": [
+    "Published ARM64 executable identity",
+    "Complete CUDA filesystem and NVIDIA runtime",
+    "Real-library and interactive browser flows",
+    "Heavy model inference",
+    "24-hour uninterrupted comparison with 12240 transitions",
+    "Production image identity and observation beyond the original roughly nine-day onset"
+  ],
+  "raw_logs_and_fixture_scripts": "Retained on the test workstation; not included in this report.",
+  "fixture_script_sha256": {
+    "runner.py": "0be4f86a4fae7164550a08af3e5069e6f1fe24d158d50322b36a7eacec649f3d",
+    "runner-noswap.py": "743616daf642f63f6e71ea2697ffe2d24f0b017851a569c40c4689284de3d5da",
+    "aio-check-v4.py": "432351efed198d4121858e5d06faf85b1ca59b3acbcafe19ad683b80f729700f",
+    "fixture-subsonic.py": "182bcf70259567434e7d328a742495da87d663e84e2f06bbd4f8eea077f825b6"
+  }
+}

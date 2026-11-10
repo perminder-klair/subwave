@@ -22,11 +22,7 @@ export default function PlayerPageEffects() {
     });
   }, [router]);
 
-  // One-shot audience beacon: hand the controller the external referrer + any
-  // UTM tag on first load. The referrer is browser-only knowledge — by the time
-  // the API polls run, it's same-origin — so we report document.referrer here.
-  // Guarded by a per-tab sessionStorage flag so refreshes/remounts don't double
-  // count; the controller also dedupes by IP. Best-effort, never blocks.
+  // Report browser-only referrer and UTM data once per tab. The controller also deduplicates by IP.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {

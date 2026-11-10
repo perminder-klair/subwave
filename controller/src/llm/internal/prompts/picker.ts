@@ -4,8 +4,13 @@
 
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
+// Straight from settings/, not through the barrel: the barrel re-exports it,
+// but naming the module keeps the per-effect rule findable from the prompt.
+import { effectEnabled, enabledEffects } from '../../../settings/transition-effects.js';
+import { TRANSITION_EFFECTS } from '../../../settings/vocab.js';
 import { djObject } from '../strategy/object.js';
 import { instruction } from './instructions.js';
+import { steerClause } from '../../../schemas/steer.js';
 
 export const PICKER_CRITERIA = instruction('pick-criteria', 'criteria');
 
@@ -23,7 +28,34 @@ export const PICKER_CRITERIA = instruction('pick-criteria', 'criteria');
 // for each effect — trigger + counter-indication — not how the audio works.
 export function effectsGuidance(): string {
   if (!settings.effectsActive()) return '';
-  return `\n\n${instruction('pick-criteria', 'effects')}`;
+  // Per-effect operator switches (#1565). The catalogue in pick-criteria.md
+  // stays whole and a closing line names what is switched off, rather than the
+  // bullets being filtered out of the markdown: the coaching paragraphs are
+  // written as one piece (the pacing and variety rules read across all six),
+  // and dicing them by name would leave a different, worse prompt on every
+  // combination of switches. With nothing left on, the whole block goes —
+  // callers treat that exactly like DJ mode being off.
+  const off = TRANSITION_EFFECTS.filter(k => !effectEnabled(k));
+  if (off.length === TRANSITION_EFFECTS.length) return '';
+  const unavailable = off.length
+    ? `\nSwitched off on this station right now: ${off.map(k => `"${k}"`).join(', ')} — never choose ${off.length > 1 ? 'those' : 'that'}.`
+    : '';
+  return `\n\n${instruction('pick-criteria', 'effects')}${unavailable}`;
+}
+
+/**
+ * The `transition` enum offered to a pick call, narrowed to the effects an
+ * operator has left on. 'normal' is always available — it is the absence of an
+ * effect, not one of them.
+ *
+ * Only the ONE-SHOT pool path uses this. The agent's PICK_SCHEMA deliberately
+ * keeps the full enum whatever the switches say (see dj-agent/schemas.ts): its
+ * schema is session-anchored, so a shape that changed under a running
+ * conversation would contradict the history already in it. That path is
+ * gated by the guidance above plus the strip in queue.applyMixTransition.
+ */
+export function transitionEnumValues(): [string, ...string[]] {
+  return ['normal', ...enabledEffects()];
 }
 
 type ShowEra = { fromYear?: number | null; toYear?: number | null };
@@ -86,12 +118,14 @@ export function showMusicLean(show?: ShowMusic | null): string {
     : '';
 }
 
-function pickerSystem(show?: ShowMusic | null) {
+function pickerSystem(show?: ShowMusic | null, steer?: string | null) {
   const stationName = settings.get().station;
   const showLine = show?.topic
     ? `\n\n${instruction('pool-picker', 'show-brief', { topic: show.topic })}`
     : '';
-  return `${instruction('pool-picker', 'frame', { station: stationName })}${showLine}${showMusicLean(show)}
+  // The pool picker is a stateless one-shot, so the operator's steer sits in
+  // its system prompt. It can only re-rank the pool it is handed.
+  return `${instruction('pool-picker', 'frame', { station: stationName })}${showLine}${showMusicLean(show)}${steerClause(steer)}
 
 ${PICKER_CRITERIA}
 
@@ -100,15 +134,21 @@ ${instruction('pool-picker', 'source-tags')}
 ${instruction('pool-picker', 'recent-plays')}`;
 }
 
-export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [] }: {
+export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [], steer = null, count = 1, artistSpan = 1 }: {
   candidates: any[];
+  /** More than one asks for an ordered opening list (`ids`) instead of one pick. */
+  count?: number;
+  /** An opening list's artist spacing in places (music/steer.ts openingArtistSpan). */
+  artistSpan?: number;
+  /** The operator's steer text in force for this pick, or null. */
+  steer?: string | null;
   recentPlays: any;
   context: any;
   show?: ShowMusic | null;
-  // The track on air right now, with its measured facts when analysed
-  // ({ title, artist, bpm?, key?, pace? }). This is the anchor FLOW judges
-  // against — without it the criteria said "prefer a tempo near the current
-  // one" while the payload never stated the current tempo.
+  // The predecessor this selection is expected to follow, with its measured
+  // facts when analysed ({ title, artist, bpm?, key?, pace? }). This is the
+  // anchor FLOW judges against — without it the criteria said "prefer a tempo
+  // near the current one" while the payload never stated the anchor tempo.
   current?: any;
   // The model's recent transition asks (oldest first), for the same deliberate-
   // variety nudge the agent path gets — the queue's monoculture guard strips a
@@ -146,17 +186,37 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   // Transition effects on the pool path too: the queue's applyMixTransition
   // validates/strips whatever any pick strategy asks for, so a DJ-mode persona
   // keeps its craft even while picks run through this fallback (breaker open,
-  // soft budget tier, pickerAgent off). Unlike the agent's session-anchored
+  // soft budget tier, a failed or empty Shortlist/Agentic run). Unlike the agent's session-anchored
   // schema pair (PICK_SCHEMA / PICK_SCHEMA_NO_FX), this is a one-shot call with
   // no history to poison — when effects are off the field simply doesn't exist.
-  const fxActive = settings.effectsActive();
+  // Both halves must agree: with every effect switched off there is no
+  // guidance and no `transition` field either, which is the same prompt an
+  // effectsActive:false persona gets.
+  const fxActive = settings.effectsActive() && enabledEffects().length > 0;
   const fxGuidance = effectsGuidance();
   const fxHistory = fxActive && recentTransitions.length
     ? `\n\nYour recent transition choices, oldest first: ${recentTransitions.join(', ')} — the station strips a third repeat, so vary deliberately.`
     : '';
 
+  // A steer's opening list: several ids in play order, and no transition craft
+  // (those tracks are queued as plain picks).
+  if (count > 1) {
+    return djObject({
+      system: `${pickerSystem(show, steer)}\n\n${instruction('pool-picker', 'preview', { count, span: artistSpan })}`,
+      prompt: user,
+      schema: z.object({
+        // No `.max(count)`: a model that lists one too many should be trimmed
+        // by the caller, not refused.
+        ids: z.array(idSchema).min(1).describe(`up to ${count} candidate ids in the order they should play`),
+        reason: z.string().describe('one short sentence on the set as a whole'),
+      }),
+      temperature: 0.5,
+      kind: 'pickNextTrack',
+    });
+  }
+
   return djObject({
-    system: `${pickerSystem(show)}${fxGuidance}${fxHistory}`,
+    system: `${pickerSystem(show, steer)}${fxGuidance}${fxHistory}`,
     prompt: user,
     schema: z.object({
       id: idSchema,
@@ -164,7 +224,7 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
       ...(fxActive ? {
         // One-line pointer only — the full coaching lives in effectsGuidance()
         // in the system prompt; duplicating it here doubled the token bill.
-        transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable()
+        transition: z.enum(transitionEnumValues()).nullable()
           .describe('transition treatment per the TRANSITION EFFECTS guidance: "washout"/"loop" end THIS pick (loop needs measured tempo), "sweep"/"dissolve"/"chop" carry the previous track across a clash (chop only out of beat-driven material), "blend" only for an exceptionally locked pair; "normal" or null for a plain crossfade.'),
       } : {}),
     }),

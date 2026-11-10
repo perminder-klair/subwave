@@ -16,6 +16,7 @@ export interface CommunitySkill {
   cooldown?: string; // e.g. "6h" — the frontmatter value, verbatim
   window?: 'any' | 'commute';
   context?: string; // comma-separated "right now" fields
+  feed?: string; // RSS/Atom URL the skill reads before it speaks
   // Stamped by the submission workflow. Absent on hand-added or pre-provenance
   // entries, so consumers must degrade gracefully.
   submittedBy?: string; // GitHub login of the contributor who submitted it

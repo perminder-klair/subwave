@@ -1,9 +1,5 @@
-// The living model-results table on /manual/llm — rendered from
-// web/lib/llm-bench-results.json, which is regenerated from llm-bench report
-// files via `npm run llm-bench:publish` in controller/ (measured fields) plus
-// hand-curated verdict/notes (preserved across re-publishes). Server-rendered;
-// magnitude is encoded by bar length in a single ink hue (identity lives in
-// the row, never in bar colour), and every value is also present as text.
+// controller npm run llm-bench:publish updates the measured fields in lib/llm-bench-results.json
+// and preserves curated notes.
 
 import data from '../../lib/llm-bench-results.json';
 

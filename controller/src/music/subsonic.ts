@@ -1,12 +1,20 @@
-// Subsonic API client for Navidrome.
-// Uses the proper salt+token auth (not plaintext password).
+import { z } from 'zod';
+// Subsonic API client for Navidrome. Salt+token auth, never plaintext.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { extname, isAbsolute, resolve, sep } from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
 import * as blocklist from './blocklist.js';
+import * as sceneVocab from './scene-vocab.js';
+import { trackEraYear } from './show-filter.js';
+import { albumEraSuspect } from './era-suspect.js';
+import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
+import { libraryMountProven } from './library-mount.js';
+import { STALE_SOCKET_RETRY_MS } from '../util/fetch-timeout.js';
+import { fileTitle, MAX_REPORTED_TITLE_BYTES, normalizeTitle, titleVerdict } from './tag-title.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -28,41 +36,30 @@ function buildUrl(endpoint, params = {}) {
   url.searchParams.set('f', 'json');
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null) continue;
-    // Subsonic repeats some params (songId, songIdToAdd, songIndexToRemove) —
-    // arrays append one query param per element.
+    // Subsonic repeats some params (songId, songIdToAdd, songIndexToRemove).
     if (Array.isArray(v)) for (const item of v) url.searchParams.append(k, String(item));
     else url.searchParams.set(k, String(v));
   }
   return url.toString();
 }
 
-// Song-carrying response paths — hand-curated. Add an entry when a NEW
-// endpoint returns SONGS that should count toward the song-coverage map in
-// subsonic-log.js ("is the picker drawing from the whole library or a narrow
-// pool?"). Not auto-derived from response shape: only endpoints whose array
-// elements are individual tracks belong here.
+// Response paths whose elements are individual tracks — these feed
+// subsonic-log's song-coverage map. Add an entry for a new song endpoint.
 const SONG_PATHS = [
   ['searchResult3', 'song'], ['randomSongs', 'song'], ['songsByGenre', 'song'],
   ['similarSongs2', 'song'], ['starred2', 'song'], ['topSongs', 'song'],
   ['album', 'song'], ['playlist', 'entry'],
 ];
 
-// Non-song response paths — albums, artists, genres, playlists. Used only to
-// populate the log's `count` field so /debug reflects how many items every
-// endpoint actually returned (a getGenres call that returns 40 genres used to
-// log as count:0). These shapes do NOT feed song-coverage analytics.
+// Non-song paths — the log's `count` field only, never song coverage.
 const OTHER_PATHS = [
   ['albumList2', 'album'], ['searchResult3', 'album'],
   ['searchResult3', 'artist'], ['genres', 'genre'],
   ['playlists', 'playlist'], ['artist', 'album'],
 ];
 
-// The OpenSubsonic `sonicSimilarity` extension returns a different shape from
-// every other song endpoint: a `sonicMatch` array whose elements wrap the song
-// in `entry` alongside a `similarity` score, rather than a flat song array.
-// Some servers nest it under `sonicSimilarTracks`; tolerate both, and fall back
-// to the element itself for servers that inline the Child. Shared by the public
-// getter and the coverage-logging extractor so /debug analytics stay accurate.
+// `sonicSimilarity` wraps each song in a `sonicMatch` entry, sometimes nested
+// under `sonicSimilarTracks`. Tolerate both, and an inlined Child.
 function sonicSimilarSongs(sub: any): any[] {
   const matches = sub?.sonicMatch ?? sub?.sonicSimilarTracks?.sonicMatch ?? [];
   if (!Array.isArray(matches)) return [];
@@ -74,15 +71,11 @@ function extractSongs(sub) {
     const v = sub[a]?.[b];
     if (Array.isArray(v)) return v;
   }
-  // sonicSimilarity uses the `sonicMatch` wrapper shape, not a SONG_PATHS entry.
   const sonic = sonicSimilarSongs(sub);
   if (sonic.length) return sonic;
   return [];
 }
 
-// Total items in the response: songs if any, else the first non-song shape
-// that matches. Both paths are checked because search3 returns songs AND
-// artists in the same response — songs win when present.
 function extractCount(sub, songs) {
   if (songs.length > 0) return songs.length;
   for (const [a, b] of OTHER_PATHS) {
@@ -92,41 +85,108 @@ function extractCount(sub, songs) {
   return 0;
 }
 
-async function call(endpoint, params = {}) {
-  const started = Date.now();
-  try {
-    const url = buildUrl(endpoint, params);
-    // Bounded fetch: a hung Navidrome must fail fast, not pin the request
-    // (and every admin route queued behind it) forever (#786). The abort
-    // rejects with a TimeoutError, translated into a readable message.
-    let res;
+// A pooled keep-alive socket Navidrome has already closed fails the next request
+// on it instantly, before a byte is written, and undici reports the bare
+// `fetch failed`. ping() and pingWith() each already worked around it; this is
+// the same mechanism at the one chokepoint every call goes through, so a walk of
+// thousands of albums no longer dies on the first idle socket. A FAST failure is
+// characteristic of the stale-socket case, but cannot prove a request did not
+// reach Navidrome. Only explicitly safe operations may spend the retry. The
+// window (STALE_SOCKET_RETRY_MS) is all it shares with fetchWithTimeout's
+// retryStaleSocket; the rule differs. This one retries any fast transport
+// failure (ECONNREFUSED included) once, after STALE_SOCKET_BACKOFF_MS; that one
+// resends only UND_ERR_SOCKET/ECONNRESET/EPIPE, straight away, in up to
+// STALE_SOCKET_ATTEMPTS attempts.
+const STALE_SOCKET_BACKOFF_MS = 250;
+
+type CallOptions = {
+  retryFastTransport?: boolean;
+  // The caller's own deadline (a picker tool's abortSignal), on top of the
+  // per-request timeout. An abort ends the call; it is never retried.
+  signal?: AbortSignal;
+};
+
+// Reads and operations that are explicitly idempotent opt in at their call
+// site. An unknown/new endpoint gets no replay unless its safety is reviewed.
+const RETRY_FAST_TRANSPORT: Readonly<CallOptions> = { retryFastTransport: true };
+
+// undici collapses every connect/socket error into `TypeError: fetch failed`, so
+// name the endpoint, the origin and the underlying code. Never the URL — it
+// carries the auth token.
+export function transportDetail(err: any): string {
+  const cause = err?.cause;
+  const code = cause?.code || cause?.errno || null;
+  const detail = cause?.message && cause.message !== err?.message ? cause.message : null;
+  return `${err?.message || 'fetch failed'}${code ? ` (${code})` : ''}${detail ? ` — ${detail}` : ''}`;
+}
+
+function describeTransportError(endpoint: string, err: any, url: string = config.navidrome.url): Error {
+  let origin = url;
+  try { origin = new URL(url).origin; } catch { /* keep as configured */ }
+  return new Error(`Subsonic ${endpoint} could not reach ${origin}: ${transportDetail(err)}`);
+}
+
+// Bounded fetch: a hung Navidrome must not pin the admin routes behind it (#786).
+async function boundedFetch(
+  endpoint: string,
+  url: string,
+  { retryFastTransport = false, signal }: CallOptions = {},
+) {
+  for (let attempt = 0; ; attempt++) {
+    const started = Date.now();
     try {
-      res = await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
-    } catch (err) {
+      if (signal?.aborted) throw new Error(`Subsonic ${endpoint} cancelled`);
+      subLog.recordHttpAttempt(endpoint, 'api');
+      const timeout = AbortSignal.timeout(config.navidrome.timeoutMs);
+      return await fetch(url, { signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
+    } catch (err: any) {
+      if (signal?.aborted) throw new Error(`Subsonic ${endpoint} cancelled`);
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
         throw new Error(
           `Subsonic ${endpoint} timed out after ${config.navidrome.timeoutMs}ms — is Navidrome responding?`,
         );
       }
-      throw err;
+      if (retryFastTransport && attempt === 0 && Date.now() - started < STALE_SOCKET_RETRY_MS) {
+        console.warn(
+          `[subsonic] ${endpoint}: ${err?.message || err} — retrying once (stale pooled socket)`,
+        );
+        await new Promise(resolve => setTimeout(resolve, STALE_SOCKET_BACKOFF_MS));
+        continue;
+      }
+      throw describeTransportError(endpoint, err);
     }
+  }
+}
+
+async function call(endpoint, params = {}, options: CallOptions = {}) {
+  const started = Date.now();
+  try {
+    const url = buildUrl(endpoint, params);
+    const res = await boundedFetch(endpoint, url, options);
     if (!res.ok) {
-      // Capture the first 200 chars of the body so outage triage gets the
-      // actual server message (Cloudflare 522, Navidrome 5xx detail, etc.)
-      // instead of just a bare status code.
+      // First 200 chars of the body, so triage sees the real server message.
       let body = '';
       try { body = (await res.text()).slice(0, 200); } catch {}
-      throw new Error(`Subsonic ${endpoint} failed: ${res.status}${body ? ` — ${body}` : ''}`);
+      const err = new Error(`Subsonic ${endpoint} failed: ${res.status}${body ? ` — ${body}` : ''}`) as Error & {
+        httpStatus?: number;
+      };
+      err.httpStatus = res.status;
+      throw err;
     }
     const data = await res.json() as any;
     const sub = data['subsonic-response'];
-    if (sub.status !== 'ok') throw new Error(`Subsonic error: ${sub.error?.message || 'unknown'}`);
+    if (sub.status !== 'ok') {
+      const err = new Error(`Subsonic error: ${sub.error?.message || 'unknown'}`) as Error & {
+        subsonicCode?: number;
+      };
+      const code = Number(sub.error?.code);
+      if (Number.isFinite(code)) err.subsonicCode = code;
+      throw err;
+    }
     const songs = extractSongs(sub);
     subLog.record({
       t: new Date().toISOString(), endpoint, params, ms: Date.now() - started,
       ok: true, count: extractCount(sub, songs),
-      // Songs carry both id and title; non-song shapes (albums, artists,
-      // genres, playlists) are reflected in `count` above but not here.
       songIds: songs
         .filter((i: any) => i?.id && i?.title)
         .map((i: any) => ({ id: i.id, title: i.title, artist: i.artist })),
@@ -141,17 +201,10 @@ async function call(endpoint, params = {}) {
   }
 }
 
-// Lightweight connectivity + auth check for the admin Doctor. Hits the cheapest
-// Subsonic endpoint (`ping`) with the controller's own salt+token creds — mirrors
-// the CLI wizard's probeSubsonic but against config.navidrome. Never throws.
-//
-// A failure that lands instantly gets ONE retry: Node's pooled fetch sockets go
-// stale between the controller's bursty Subsonic calls, so a one-off
-// ECONNRESET / "fetch failed" on connection reuse is routine, not an outage —
-// and since the admin NavidromeBanner alarms on a single failed ping (cached
-// 20s), an un-retried blip reads as "Navidrome is down" to the operator. Slow
-// failures (the 30s timeout) don't retry: a second wait wouldn't change the
-// answer, just pin the caller for another timeoutMs.
+// Connectivity + auth check against config.navidrome. Never throws. ping owns
+// one retry across transport and HTTP/API failures instead of opting into the
+// shared transport retry and nesting the two budgets. One ping therefore never
+// sends more than two requests.
 const PING_RETRY_IF_FASTER_THAN_MS = 2_000;
 
 export async function ping(): Promise<{ ok: boolean; reason?: string }> {
@@ -174,25 +227,16 @@ export async function ping(): Promise<{ ok: boolean; reason?: string }> {
   }
 }
 
-// One-off connectivity + auth probe with ARBITRARY creds — the shared engine
-// behind the onboarding wizard's "Test connection" and the admin Settings
-// Music-source test/save flow. Unlike ping() it never touches config.navidrome
-// and never mutates anything; callers pass exactly what to try. Never throws.
-//
-// One retry on ANY first failure, broader than ping()'s fast-fail-only rule:
-// ping()'s 30s timeout makes a slow retry expensive, but this probe is
-// 5s-bounded, so the retry costs at most ~5.5s against a truly-dead server. It
-// covers both failure shapes of a warm-but-stale connection pool — the instant
-// reset on reusing a stale socket, and the full-timeout stall when Navidrome
-// restarts under pooled connections (the aborted attempt's teardown is what
-// un-wedges the pool). A Test button reporting either blip as "unreachable"
-// sends the operator chasing a config that actually works.
+// Probe with ARBITRARY creds — onboarding "Test connection" and the admin
+// Music-source save. Never touches config.navidrome, never throws.
+// Retries once on ANY first failure (broader than ping()): 5s-bounded, and the
+// aborted teardown of a stalled attempt is what un-wedges a stale socket pool.
 export async function pingWith(target: {
   url: string;
   user: string;
   pass: string;
   client?: string;
-}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; serverSoftwareVersion?: string; error?: string }> {
   const first = await pingWithOnce(target);
   if (first.ok) return first;
   await new Promise(resolve => setTimeout(resolve, 500));
@@ -209,7 +253,7 @@ async function pingWithOnce({
   user: string;
   pass: string;
   client?: string;
-}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; serverSoftwareVersion?: string; error?: string }> {
   try {
     const salt = crypto.randomBytes(8).toString('hex');
     const token = crypto.createHash('md5').update(pass + salt).digest('hex');
@@ -221,6 +265,7 @@ async function pingWithOnce({
     probeUrl.searchParams.set('c', client);
     probeUrl.searchParams.set('f', 'json');
 
+    subLog.recordHttpAttempt('ping', 'connection-test');
     const res = await fetch(probeUrl.toString(), { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return { ok: false, error: `Subsonic ping returned HTTP ${res.status}` };
 
@@ -229,30 +274,29 @@ async function pingWithOnce({
     if (sub?.status !== 'ok') {
       return { ok: false, error: sub?.error?.message || 'Subsonic responded but auth failed' };
     }
-    return { ok: true, serverVersion: sub.version, serverType: sub.type || 'unknown' };
+    // `serverVersion` here is the Subsonic API version, kept for the existing
+    // callers; OpenSubsonic servers also report their own release.
+    return {
+      ok: true,
+      serverVersion: sub.version,
+      serverType: sub.type || 'unknown',
+      ...(typeof sub.serverVersion === 'string' && sub.serverVersion ? { serverSoftwareVersion: sub.serverVersion } : {}),
+    };
   } catch (err: any) {
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
       return { ok: false, error: 'Navidrome did not respond within 5s' };
     }
-    return { ok: false, error: err?.message || 'Navidrome unreachable' };
+    return { ok: false, error: describeTransportError('ping', err, url).message };
   }
 }
 
-// ---------------------------------------------------------------------------
-// Station-archive guard
-// ---------------------------------------------------------------------------
-// SUB/WAVE's own hourly mixdowns are written by radio.liq to
-// `/var/sub-wave/archive/YYYY-MM-DD/HH-00.mp3`. If the operator's Navidrome music
-// folder overlaps that directory, Navidrome scans those MP3s and indexes them as
-// untagged songs whose filename ("02-00.mp3") becomes the title — they then leak
-// into the picker (DJ reads "02:00" as the time), the tagger, and the library UI
-// (issue #273). Every selection/enumeration path funnels through the song-returning
-// functions below, so filtering here keeps station recordings out of all of them.
-// `call()` logging is untouched, so /debug still shows the raw Subsonic responses.
+// Station-archive guard: the station's own hourly mixdowns
+// (`archive/YYYY-MM-DD/HH-00.mp3`) index as untagged songs when the Navidrome
+// folder overlaps that directory (#273). Every song-returning function below
+// filters through this; `call()` logging stays raw for /debug.
 export function isStationArchive(song: any): boolean {
   if (!song) return false;
   const path = String(song.path ?? '');
-  // Primary, tight signal: the archive path pattern radio.liq writes.
   if (/(^|\/)archive\/\d{4}-\d{2}-\d{2}\/\d{2}-\d{2}\.mp3$/i.test(path)) return true;
   // Fallback when Navidrome omits `path`: an HH-00 title with no real artist/album.
   const title = String(song.title ?? '').trim();
@@ -263,47 +307,49 @@ export function isStationArchive(song: any): boolean {
   return /^\d{2}-00$/.test(title) && blank(song.artist) && blank(song.album);
 }
 
-// The global never-play blocklist rides the same chokepoint: every
-// song-returning function below already filters through rejectArchive, so
-// blocked tracks/albums/artists drop out of search, random, genre, similar,
-// starred, top-songs, album and playlist results — i.e. every picker source,
-// agent tool, and request-resolution path — in one place.
+// The blocklist rides the same chokepoint, so blocked tracks drop out of every
+// picker source, agent tool and request path at once.
 const rejectArchive = (arr: any[]) =>
   blocklist.rejectBlocked((arr || []).filter((s) => !isStationArchive(s)));
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-// `includeBlocked` is for the ADMIN search surface only (/dj/search — the
-// library Search tab + studio queue picker): the operator must still be able
-// to find a blocked track to review it, and a manual queue attempt is refused
-// at the queue.push gate anyway. Every airing path (picker tools, request
-// resolution) uses the default and never sees blocked songs.
+// `includeBlocked` is for the admin search surface only (/dj/search), so the
+// operator can review a blocked track; queue.push still refuses it. Every
+// airing path takes the default and never sees blocked songs.
 export async function search(query, { songCount = 20, songOffset = 0, includeBlocked = false } = {}) {
-  const r = await call('search3', { query, songCount, songOffset, artistCount: 5, albumCount: 5 });
-  const songs = (r.searchResult3?.song || []).filter((s) => !isStationArchive(s));
-  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
+  return (await searchPage(query, { songCount, songOffset, includeBlocked })).songs;
+}
+
+// search() plus `rawCount`: how many songs the server returned for the page
+// BEFORE the archive and blocklist filters. A caller asking "was that a full
+// page?" must ask this — a 25-row page with one blocked track is still a full
+// page, not the end of a narrow result set.
+export async function searchPage(
+  query,
+  { songCount = 20, songOffset = 0, includeBlocked = false, signal }: { songCount?: number; songOffset?: number; includeBlocked?: boolean; signal?: AbortSignal } = {},
+): Promise<{ songs: any[]; rawCount: number }> {
+  const r = await call(
+    'search3',
+    { query, songCount, songOffset, artistCount: 5, albumCount: 5 },
+    { ...RETRY_FAST_TRANSPORT, signal },
+  );
+  const raw = r.searchResult3?.song || [];
+  const songs = raw.filter((s) => !isStationArchive(s));
+  return { songs: includeBlocked ? songs : blocklist.rejectBlocked(songs), rawCount: raw.length };
 }
 
 export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { size?: number; genre?: string; fromYear?: number; toYear?: number } = {}) {
-  const r = await call('getRandomSongs', { size, genre, fromYear, toYear });
+  const r = await call('getRandomSongs', { size, genre, fromYear, toYear }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.randomSongs?.song || []);
 }
 
 export async function getSongsByGenre(genre, { count = 20, offset = 0 } = {}) {
-  const r = await call('getSongsByGenre', { genre, count, offset });
+  const r = await call('getSongsByGenre', { genre, count, offset }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.songsByGenre?.song || []);
 }
 
-// A random page of a genre. Offset-less getSongsByGenre returns the same
-// server-ordered head of the genre on every call, which made every track past
-// the first `count` unreachable by ANY picking path — on a big genre that is
-// most of it (the repeated-songs research measured one genre queried 328 times
-// returning 64 distinct songs, ever). The offset is sized from the genre's own
-// songCount (getGenres, cached 5 min); an empty deep page (stale count after a
-// rescan, or the archive/blocklist filter thinning the tail) falls back to
-// page 0, so this can only widen, never starve.
+// A random page of a genre — offset-less getSongsByGenre returns the same head
+// every call. Offset is sized from the genre's songCount; an empty deep page
+// falls back to page 0, so this can only widen the reach, never starve it.
 export async function getSongsByGenreSampled(genre, { count = 20 } = {}) {
   let offset = 0;
   try {
@@ -318,52 +364,38 @@ export async function getSongsByGenreSampled(genre, { count = 20 } = {}) {
   return getSongsByGenre(genre, { count });
 }
 
-// Every genre tag on a song, deduped. OpenSubsonic servers (Navidrome ≥0.54)
-// send the multi-value `genres: [{name}]` array alongside the legacy scalar
-// `genre`; older Subsonic servers send only the scalar. The array is
-// authoritative (its first entry is normally the scalar); the scalar is the
-// fallback so a plain-Subsonic backend still yields a one-element array.
-// The single normaliser for per-track genre ingest — everything downstream
-// (library-db genres column, picker/show filters, annotate) goes through it.
+// Every genre tag on a song, deduped. OpenSubsonic `genres: [{name}]` is
+// authoritative, the legacy scalar `genre` the fallback. The single normaliser
+// for per-track genre ingest — everything downstream goes through it.
 export function songGenres(song: { genres?: unknown; genre?: unknown } | null | undefined): string[] {
-  const out: string[] = [];
-  const push = (v: unknown) => {
-    const s = String(v ?? '').trim();
-    if (s && !out.some((x) => x.toLowerCase() === s.toLowerCase())) out.push(s);
-  };
+  const raw: string[] = [];
   if (Array.isArray(song?.genres)) {
-    for (const g of song.genres) push(typeof g === 'string' ? g : (g as { name?: unknown })?.name);
+    for (const g of song.genres) {
+      raw.push(String((typeof g === 'string' ? g : (g as { name?: unknown })?.name) ?? ''));
+    }
   }
-  push(song?.genre);
-  return out;
+  raw.push(String(song?.genre ?? ''));
+  // Scene-consolidation applies here, at the one normaliser, so a merge
+  // survives the next Navidrome walk rewriting `tracks.genres` (#1577).
+  return sceneVocab.applyAliases(raw, sceneVocab.activeMap());
 }
 
 let genresCache: { genres: any[]; at: number } | null = null;
 const GENRES_TTL_MS = 5 * 60 * 1000;
 
-// All genre tags present in the library, each with { value, songCount,
-// albumCount }. Used to resolve a listener's free-text genre ("hip hop") to
-// the exact tag the library actually carries ("Hip-Hop").
-//
-// Cached 5 min because resolveGenreName is called ONCE PER VALUE, and a show
-// may now pin up to SHOW_FILTER_VALUES_MAX (15) genres — uncached, building one
-// pool meant 15 identical getGenres round trips in each of the three pool
-// builders (music/picker.ts, broadcast/scheduler.ts, broadcast/dj-agent.ts).
-// The tag set only moves when Navidrome rescans, so the staleness window costs
-// nothing but a brand-new genre being unresolvable for up to 5 minutes.
-// Failures are NOT cached — they propagate, and callers decide (see below).
+// All genre tags in the library, each { value, songCount, albumCount }. Cached
+// 5 min (resolveGenreName is called once per value, per pool builder); the set
+// only moves on a Navidrome rescan. Failures are NOT cached — they propagate.
 export async function getGenres() {
   if (genresCache && Date.now() - genresCache.at < GENRES_TTL_MS) return genresCache.genres;
-  const r = await call('getGenres');
+  const r = await call('getGenres', {}, RETRY_FAST_TRANSPORT);
   const genres = r.genres?.genre || [];
   genresCache = { genres, at: Date.now() };
   return genres;
 }
 
-// Fuzzy-match free text ("hip hop", "turkish") against the library's real
-// genre tags ("Hip-Hop", "Turkish Pop"). Exact normalised match wins, then
-// substring either way. Returns the exact tag value or null. getGenres
-// failures propagate — callers decide whether to log or fall through.
+// Fuzzy-match free text ("hip hop") against a real genre tag ("Hip-Hop"):
+// exact normalised match wins, then substring either way. null when no hit.
 export async function resolveGenreName(name) {
   if (!name) return null;
   const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -380,17 +412,8 @@ export async function resolveGenreName(name) {
   return hit?.value || null;
 }
 
-// ---------------------------------------------------------------------------
-// Fuzzy artist resolution
-// ---------------------------------------------------------------------------
-// Navidrome's search3 matches exact tokens/substrings only, so a one-letter
-// transliteration variance ("Sikandar" vs "Sikander") or a dropped accent
-// ("Beyonce" vs "Beyoncé") returns zero artists and a bare "play <artist>"
-// request falls through to mood filler. resolveArtist is to artists what
-// resolveGenreName is to genres: normalise, try an exact index hit, then relax
-// to per-token searches and fuzzy-rank candidates against the whole request.
-// Ranks against whatever artists THIS operator has, so it needs no per-library
-// data. Returns the best artist object or null.
+// Fuzzy artist resolution: search3 matches exact tokens/substrings only, so a
+// transliteration variance ("Sikandar"/"Sikander") returns zero artists.
 
 function normArtist(s: string): string {
   return String(s || '')
@@ -401,8 +424,7 @@ function normArtist(s: string): string {
     .trim();
 }
 
-// Classic Levenshtein edit distance. Inputs are short artist names, so the
-// O(m·n) two-row implementation is plenty.
+// Levenshtein, two-row. Inputs are short artist names.
 function editDistance(a: string, b: string): number {
   const m = a.length, n = b.length;
   if (m === 0) return n;
@@ -428,37 +450,43 @@ function similarity(a: string, b: string): number {
 }
 
 // Tuned so "Sikandar Kahlon" (0.93) clears it but "Drake"/"Blake" (0.60) does
-// not. Paired with a shared-token guard on multi-word names so an unrelated
-// surname collision can't sneak through on edit-distance alone.
+// not. Paired with the shared-token guard on multi-word names below.
 const ARTIST_MATCH_THRESHOLD = 0.82;
 
-export async function resolveArtist(name, { artistCount = 10 } = {}) {
+// Per-token searches in resolveArtist's relax step. One search3 per word is
+// sized for a NAME; a long query (free text, a whole sentence) would otherwise
+// fan out into one Navidrome round trip per word. A name longer than this
+// still gets its first words searched, and the fuzzy rank below compares
+// against the whole query either way.
+const RESOLVE_ARTIST_MAX_TOKEN_SEARCHES = 6;
+
+export async function resolveArtist(name, { artistCount = 10, signal }: { artistCount?: number; signal?: AbortSignal } = {}) {
   const query = normArtist(name);
   if (!query) return null;
 
-  // 1. Exact index search — fast path, the common correctly-spelled case.
-  const exact = await searchArtists(name, { artistCount });
+  // 1. Exact index search.
+  const exact = await searchArtists(name, { artistCount, signal });
   const direct = exact.find((a: any) => normArtist(a.name) === query);
   if (direct) return direct;
 
-  // 2. Relax — search the artist index by each token. A surname or rarest
-  //    token usually returns the right artist even when the full string did
-  //    not ("Kahlon" finds "Sikander Kahlon"). Union with the exact hits.
+  // 2. Relax — search per token ("Kahlon" finds "Sikander Kahlon"), unioned
+  //    with the exact hits. Distinct tokens only, capped, and stopped as soon as
+  //    the caller's deadline has passed.
   const tokens = query.split(' ').filter(t => t.length >= 2);
   const candidates = new Map<string, any>();
   for (const a of exact) candidates.set(a.id, a);
-  for (const token of tokens) {
+  for (const token of [...new Set(tokens)].slice(0, RESOLVE_ARTIST_MAX_TOKEN_SEARCHES)) {
+    if (signal?.aborted) break;
     try {
-      for (const a of await searchArtists(token, { artistCount })) {
+      for (const a of await searchArtists(token, { artistCount, signal })) {
         candidates.set(a.id, a);
       }
     } catch {}
   }
   if (candidates.size === 0) return null;
 
-  // 3. Fuzzy-rank against the full request. For multi-word names require at
-  //    least one shared token so a close-but-unrelated single name can't win;
-  //    single-token queries lean on the similarity threshold alone.
+  // 3. Fuzzy-rank against the full request. Multi-word names must share at
+  //    least one token; single-token queries lean on the threshold alone.
   const queryTokens = new Set(tokens);
   const requireShared = queryTokens.size >= 2;
   let best: any = null;
@@ -473,33 +501,26 @@ export async function resolveArtist(name, { artistCount = 10 } = {}) {
 }
 
 export async function getSimilarSongs(id, { count = 20 } = {}) {
-  const r = await call('getSimilarSongs2', { id, count });
+  const r = await call('getSimilarSongs2', { id, count }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.similarSongs2?.song || []);
 }
 
-// ---------------------------------------------------------------------------
-// OpenSubsonic `sonicSimilarity` extension (Navidrome ≥0.62 + plugin enabled)
-// ---------------------------------------------------------------------------
-// Audio-based neighbours computed from the actual audio by Navidrome's plugin
-// system — a third similarity signal alongside the Last.fm graph
-// (getSimilarSongs) and the controller's own embedding-KNN (library.tracksLikeThis).
-// Gated behind a capability probe because the extension is optional: when the
-// operator hasn't installed/enabled the plugin the endpoint 404s, so the picker
-// must check support first rather than eat a failing call every pick.
+// OpenSubsonic `sonicSimilarity` (Navidrome >=0.62 + plugin): audio-based
+// neighbours, a third similarity signal beside getSimilarSongs and the
+// embedding KNN. Optional, so the picker must probe support first — the
+// endpoint 404s when the plugin isn't installed.
 
 let sonicExtCache: { ok: boolean; at: number } | null = null;
 const EXT_PROBE_TTL_MS = 30 * 60 * 1000;
 
-// True if the server advertises the `sonicSimilarity` extension. Result cached
-// 30 min: a missing extension won't appear mid-session and a present one won't
-// vanish, but the TTL means a just-upgraded Navidrome is picked up without a
-// controller restart. Failures (old Navidrome, network) resolve to false and
-// are cached the same way — the probe is best-effort, never throws.
+// True if the server advertises the `sonicSimilarity` extension. Cached 30 min
+// so a just-upgraded Navidrome is picked up without a controller restart.
+// Failures resolve to false and are cached the same way; never throws.
 export async function supportsSonicSimilarity(): Promise<boolean> {
   if (sonicExtCache && Date.now() - sonicExtCache.at < EXT_PROBE_TTL_MS) return sonicExtCache.ok;
   let ok = false;
   try {
-    const r = await call('getOpenSubsonicExtensions');
+    const r = await call('getOpenSubsonicExtensions', {}, RETRY_FAST_TRANSPORT);
     const exts = r.openSubsonicExtensions || [];
     ok = exts.some((e: any) => (typeof e === 'string' ? e : e?.name) === 'sonicSimilarity');
   } catch {
@@ -510,63 +531,134 @@ export async function supportsSonicSimilarity(): Promise<boolean> {
 }
 
 export async function getSonicSimilarTracks(id, { count = 20 } = {}) {
-  const r = await call('getSonicSimilarTracks', { id, count });
+  const r = await call('getSonicSimilarTracks', { id, count }, RETRY_FAST_TRANSPORT);
   return rejectArchive(sonicSimilarSongs(r));
 }
 
 export async function getStarred() {
-  const r = await call('getStarred2');
+  const r = await call('getStarred2', {}, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.starred2?.song || []);
 }
 
-// Star write-back for the listener like feature (#991): mirrors the player
-// heart into Navidrome so any Subsonic client (Feishin, Symfonium, DSub, …)
-// sees the track under Starred immediately. Both are idempotent server-side.
+// Star write-back for the listener like feature (#991) — mirrors the player
+// heart into Navidrome. Idempotent server-side.
 export async function star(id) {
-  await call('star', { id });
+  await call('star', { id }, RETRY_FAST_TRANSPORT);
 }
 
 export async function unstar(id) {
-  await call('unstar', { id });
+  await call('unstar', { id }, RETRY_FAST_TRANSPORT);
 }
 
-export async function getAlbumList(offset = 0, size = 500) {
-  const r = await call('getAlbumList2', { type: 'alphabeticalByName', size, offset });
+// Play reporting for Navidrome (#1298). submission=false is the "now playing"
+// ping (leaves playCount/lastPlayed alone); submission=true is the real
+// scrobble that bumps them. `time` is MILLISECONDS since epoch (Subsonic's unit
+// here, unlike Last.fm/ListenBrainz) and names when the play STARTED; omitted
+// when unknown so the server stamps its own clock. Throws like every call();
+// broadcast/scrobble.ts is the only caller and swallows it.
+export async function scrobble(
+  id: string,
+  { submission = true, timeMs = null }: { submission?: boolean; timeMs?: number | null } = {},
+) {
+  await call('scrobble', {
+    id,
+    submission,
+    time: Number.isFinite(timeMs as number) ? Math.floor(timeMs as number) : null,
+  });
+}
+
+export async function getAlbumList(offset = 0, size = 500, { requireComplete = false } = {}) {
+  const r = await call(
+    'getAlbumList2',
+    { type: 'alphabeticalByName', size, offset },
+    RETRY_FAST_TRANSPORT,
+  );
+  if (requireComplete && (!r.albumList2 ||
+      (r.albumList2.album != null && !Array.isArray(r.albumList2.album)))) {
+    throw new Error('Incomplete Navidrome walk: malformed album listing');
+  }
   return r.albumList2?.album || [];
 }
 
-// Most-recently imported albums. Drives the "new in the crates" picker source.
-export async function getRecentlyAddedAlbums({ size = 20 } = {}) {
-  const r = await call('getAlbumList2', { type: 'newest', size });
+// Whether Navidrome is scanning its library right now (Subsonic getScanStatus).
+// null = unknown: the call failed or the server did not say.
+export async function getScanStatus(): Promise<boolean | null> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    return typeof r.scanStatus?.scanning === 'boolean' ? r.scanStatus.scanning : null;
+  } catch {
+    return null;
+  }
+}
+
+// The same call, read for its song count as well (Navidrome answers `count`,
+// the tracks in its library). One cheap request where counting otherwise means
+// walking every album. Each field is null when unknown.
+export async function getScanSummary(): Promise<{ scanning: boolean | null; count: number | null }> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    const s = r.scanStatus;
+    const count = Number(s?.count);
+    return {
+      scanning: typeof s?.scanning === 'boolean' ? s.scanning : null,
+      count: s?.count != null && Number.isSafeInteger(count) && count >= 0 ? count : null,
+    };
+  } catch {
+    return { scanning: null, count: null };
+  }
+}
+
+export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
 }
 
-// Albums sorted by play count — Navidrome's scrobble-backed "favourites".
-// `offset` lets callers rotate the window: the top-N list barely moves (and
-// the station's own plays feed the counts, a positive feedback loop), so an
-// offset-less read pins the same albums forever.
-export async function getFrequentAlbums({ size = 20, offset = 0 } = {}) {
-  const r = await call('getAlbumList2', { type: 'frequent', size, offset });
+/** getScanStatus with Navidrome's `lastScan`, the time its last scan ended. */
+export interface ScanState {
+  scanning: boolean;
+  /** null when the server does not report one (Gonic, plain Subsonic). */
+  lastScan: string | null;
+}
+
+// The same call as getScanStatus, keeping `lastScan` too: two reads with the
+// same `lastScan` prove no scan ended between them, which `scanning` alone
+// cannot (a watcher scan of a small folder is true for under 100 ms). For
+// heart-follow-policy.ts scanSettled. Navidrome (0.49 to 0.64 at least) moves
+// it on every scan, a no-op one included, and answers Go's zero time
+// ("0001-01-01T00:00:00Z") before its first. null = unknown, as getScanStatus.
+export async function getScanState(): Promise<ScanState | null> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    const s = r.scanStatus;
+    if (typeof s?.scanning !== 'boolean') return null;
+    return { scanning: s.scanning, lastScan: typeof s.lastScan === 'string' && s.lastScan ? s.lastScan : null };
+  } catch {
+    return null;
+  }
+}
+
+// Albums by play count. `offset` rotates the window — the top-N list barely
+// moves, so an offset-less read pins the same albums forever.
+export async function getFrequentAlbums({ size = 20, offset = 0, signal }: { size?: number; offset?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'frequent', size, offset }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
 }
 
-// Last.fm-backed artist info: bio, images, and (most usefully) similar artists.
-export async function getArtistInfo(id, { count = 10 } = {}) {
-  const r = await call('getArtistInfo2', { id, count });
+export async function getArtistInfo(id, { count = 10, signal }: { count?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getArtistInfo2', { id, count }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.artistInfo2 || null;
 }
 
-// Last.fm "top songs" for an artist, intersected with what's in the library.
-// Note: keyed by artist NAME, not id.
-export async function getTopSongs(artistName, { count = 10 } = {}) {
-  const r = await call('getTopSongs', { artist: artistName, count });
+// Last.fm "top songs" for an artist, intersected with the library. Keyed by
+// artist NAME, not id.
+export async function getTopSongs(artistName, { count = 10, signal }: { count?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getTopSongs', { artist: artistName, count }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.topSongs?.song || []);
 }
 
-// Sortable release timestamp for an album object, preferring the most precise
-// signal Navidrome offers: OpenSubsonic `originalReleaseDate` {year,month,day}
-// → `releaseDate` string → bare `year` → `created` (library-import time) as a
-// last resort. Returns a comparable number (higher = newer); 0 when undated.
+// Sortable release timestamp, most precise signal first: `originalReleaseDate`
+// → `releaseDate` → `year` → `created` (import time). Higher = newer, 0 when
+// undated.
 function albumReleaseRank(a: any): number {
   const ord = a?.originalReleaseDate;
   if (ord?.year) {
@@ -580,11 +672,9 @@ function albumReleaseRank(a: any): number {
   return 0;
 }
 
-// An artist's most recent releases, newest first — for "play their latest /
-// newest" asks that getTopSongs (popularity-ranked) can't answer. Resolves the
-// name to an artist id, pulls their albums, sorts by release date, and returns
-// the songs from the newest `albums` releases (singles are single-track albums,
-// so a brand-new single surfaces too). Empty when the artist isn't in the library.
+// Songs from an artist's newest `albums` releases — the "play their latest"
+// ask that popularity-ranked getTopSongs can't answer. Empty when the artist
+// isn't in the library.
 export async function getRecentSongsByArtist(
   artistName: string,
   { albums = 3, count = 20 }: { albums?: number; count?: number } = {},
@@ -604,34 +694,43 @@ export async function getRecentSongsByArtist(
   return songs.slice(0, count);
 }
 
-export async function getAlbum(id) {
-  const r = await call('getAlbum', { id });
+export async function getAlbum(id, { signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getAlbum', { id }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.album?.song || []);
 }
 
-// Single song lookup — the Child carries albumId, which is how manual album
-// tagging resolves a whole album from one track id (the UI never sees albumIds).
+// The album exactly as Navidrome answers it, with no archive or blocklist
+// filter, or null when the answer carries none. For heart-follow-policy.ts,
+// which asks whether an id is still listed: a blocked song is still on the
+// server. One attempt with the fast-transport retry, like getSong.
+export async function getAlbumListing(id: string): Promise<unknown> {
+  const r = await call('getAlbum', { id }, RETRY_FAST_TRANSPORT);
+  return r.album ?? null;
+}
+
+// Single song lookup. The Child carries albumId, which is how manual album
+// tagging resolves a whole album from one track id.
 export async function getSong(id) {
-  const r = await call('getSong', { id });
+  const r = await call('getSong', { id }, RETRY_FAST_TRANSPORT);
   return r.song || null;
 }
 
-// Returns { id, name, albumCount, album: [{ id, name, year, ... }] }
 export async function getArtist(id) {
-  const r = await call('getArtist', { id });
+  const r = await call('getArtist', { id }, RETRY_FAST_TRANSPORT);
   return r.artist || null;
 }
 
-// Search just the artist index and return matching artist objects.
-export async function searchArtists(query, { artistCount = 5 } = {}) {
-  const r = await call('search3', { query, artistCount, albumCount: 0, songCount: 0 });
+export async function searchArtists(query, { artistCount = 5, signal }: { artistCount?: number; signal?: AbortSignal } = {}) {
+  const r = await call(
+    'search3',
+    { query, artistCount, albumCount: 0, songCount: 0 },
+    { ...RETRY_FAST_TRANSPORT, signal },
+  );
   return r.searchResult3?.artist || [];
 }
 
-// Last.fm-backed crowd tags for an artist, normalised to lowercase trimmed
-// strings. Used by the embedding-propagated tagger to enrich the embedding
-// text — see music/embeddings.ts formatTrackText. Returns [] if the artist
-// has no Last.fm coverage (common for very obscure releases).
+// Last.fm crowd tags for an artist, lowercased and trimmed — enrichment for
+// the embedding text (music/embeddings.ts). [] when the artist has no coverage.
 export async function getArtistLastfmTags(id, { count = 20 } = {}) {
   try {
     const info = await getArtistInfo(id, { count: 0 });
@@ -647,14 +746,12 @@ export async function getArtistLastfmTags(id, { count = 20 } = {}) {
   }
 }
 
-// Track lyrics via Subsonic's getLyricsBySongId. Returns the plain-text
-// lyrics, or '' if no lyrics are indexed for this track. Navidrome v0.49+
-// supports this; older Navidromes return a `lyricsList` shape without a
-// match — both paths normalise to a string.
+// Plain-text lyrics, or '' when none are indexed. Both the modern and legacy
+// response shapes normalise to a string.
 export async function getLyrics(songId) {
   try {
-    const r = await call('getLyricsBySongId', { id: songId });
-    // Modern Navidrome: { lyricsList: { structuredLyrics: [{ line: [{ value: '...' }] }] } }
+    const r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
+    // Modern: { lyricsList: { structuredLyrics: [{ line: [{ value }] }] } }
     const structured = r.lyricsList?.structuredLyrics;
     if (Array.isArray(structured) && structured.length) {
       const lines: string[] = [];
@@ -666,7 +763,7 @@ export async function getLyrics(songId) {
       }
       return lines.join(' ');
     }
-    // Legacy getLyrics shape: { lyrics: { value: '...' } }
+    // Legacy: { lyrics: { value } }
     if (typeof r.lyrics?.value === 'string') return r.lyrics.value;
     return '';
   } catch {
@@ -674,65 +771,112 @@ export async function getLyrics(songId) {
   }
 }
 
-// Timed lyrics via the same getLyricsBySongId call, but PRESERVING the per-line
-// start offsets getLyrics() throws away (#1125). Returns { synced, lines } — the
-// raw material for lyric-derived vocal ranges (music/lyric-vocal.ts) — or null
-// when no lyrics are indexed. Line `start` is milliseconds from track start; the
-// entry-level `offset` (a global shift) is folded in — per OpenSubsonic
-// "positive means lyrics appear sooner", i.e. effective start = start − offset —
-// and negatives clamped to 0.
-// synced=false marks unsynced/plain-text lyrics whose line timings are absent.
+// Timed lyrics, preserving the per-line offsets getLyrics() drops (#1125) —
+// raw material for lyric-derived vocal ranges. null when none are indexed.
+// `startMs` is milliseconds from track start with the entry-level `offset`
+// folded in (positive offset means lyrics appear sooner: start − offset,
+// clamped at 0). synced=false means the line timings are absent.
+//
+// THROWS when the server could not answer (transport, HTTP or API failure),
+// so a caller can tell "this track has no lyrics" from "the server is down".
+// Three refusals are answers rather than failures: Subsonic's "data not found"
+// (70), and an HTTP 404 or 501 for the endpoint itself, which is a server
+// without the OpenSubsonic lyrics extension — it will never have lyrics, and
+// asking again would not change that. The listener lyrics route needs the
+// difference; the analyzer does not, and reads through getStructuredLyrics().
+export async function fetchStructuredLyrics(
+  songId,
+): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
+  let r;
+  try {
+    r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
+  } catch (err) {
+    const { subsonicCode, httpStatus } = (err ?? {}) as { subsonicCode?: number; httpStatus?: number };
+    if (subsonicCode === 70 || httpStatus === 404 || httpStatus === 501) return null;
+    throw err;
+  }
+  const structured = r.lyricsList?.structuredLyrics;
+  if (!Array.isArray(structured) || structured.length === 0) return null;
+  // Several versions may exist (languages, synced + unsynced); only a synced
+  // one carries timings.
+  const chosen = structured.find((s) => s?.synced === true) ?? structured[0];
+  const synced = chosen?.synced === true;
+  const offset = Number.isFinite(chosen?.offset) ? Number(chosen.offset) : 0;
+  const lineArr = Array.isArray(chosen?.line) ? chosen.line : [];
+  const lines = lineArr.map((l) => {
+    const text = typeof l?.value === 'string' ? l.value : '';
+    const rawStart = Number(l?.start);
+    const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
+    return { startMs, text };
+  });
+  return { synced, lines };
+}
+
+// fetchStructuredLyrics with every failure read as "none indexed". The
+// analyzer's vocal-range pass treats both the same way.
 export async function getStructuredLyrics(
   songId,
 ): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
   try {
-    const r = await call('getLyricsBySongId', { id: songId });
-    const structured = r.lyricsList?.structuredLyrics;
-    if (!Array.isArray(structured) || structured.length === 0) return null;
-    // A track may carry several versions (languages, synced + unsynced) — prefer
-    // a synced one, since only that has the timings we're after.
-    const chosen = structured.find((s) => s?.synced === true) ?? structured[0];
-    const synced = chosen?.synced === true;
-    const offset = Number.isFinite(chosen?.offset) ? Number(chosen.offset) : 0;
-    const lineArr = Array.isArray(chosen?.line) ? chosen.line : [];
-    const lines = lineArr.map((l) => {
-      const text = typeof l?.value === 'string' ? l.value : '';
-      const rawStart = Number(l?.start);
-      const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
-      return { startMs, text };
-    });
-    return { synced, lines };
+    return await fetchStructuredLyrics(songId);
   } catch {
     return null;
   }
 }
 
-// Async iterator over every song in the library. Walks albums in batches.
-// Each yielded song is annotated with the album-level era signals Navidrome
-// only exposes on the album record (issue #842): `albumIsCompilation`
-// (OpenSubsonic isCompilation) and `albumOriginalYear` (originalReleaseDate
-// .year — the album's TRUE first-release year on reissues, absent on most
-// rips). The walk (tag-library.walkNavidrome) turns these into per-track
-// original-year/compilation columns; the raw fields ride here so policy stays
-// out of the client.
-export async function* iterateAllSongs() {
+// Async iterator over every song in the library, album batch by album batch.
+// Each song carries the album-level era signals Navidrome only exposes on the
+// album record (#842): `albumIsCompilation` and `albumOriginalYear` (the true
+// first-release year on reissues). Raw fields only — tag-library.walkNavidrome
+// turns them into per-track columns, so policy stays out of the client.
+//
+// `albumEraUntrusted` (#1418) is the one judgement made here, because deciding
+// whether an album is a reissue anthology needs the album record AND its full
+// track list together, which exists only in this loop. era-suspect.ts still
+// owns the judgement; this only feeds it.
+export async function* iterateAllSongs({ requireComplete = false } = {}) {
   let offset = 0;
   const BATCH = 500;
   while (true) {
-    const albums = await getAlbumList(offset, BATCH);
+    const albums = await getAlbumList(offset, BATCH, { requireComplete });
     if (albums.length === 0) break;
     for (const album of albums) {
       try {
-        const r = await call('getAlbum', { id: album.id });
+        const r = await call('getAlbum', { id: album.id }, RETRY_FAST_TRANSPORT);
+        if (requireComplete && (!r.album || r.album.id !== album.id || !Array.isArray(r.album.song))) {
+          throw new Error('Malformed album response');
+        }
         const isCompilation = typeof r.album?.isCompilation === 'boolean' ? r.album.isCompilation : null;
         const ord = r.album?.originalReleaseDate?.year;
         const originalYear = Number.isFinite(ord) && ord > 0 ? ord : null;
-        // Same station-archive drop as getAlbum() (issue #273).
-        for (const s of rejectArchive(r.album?.song || [])) {
-          yield { ...s, albumIsCompilation: isCompilation, albumOriginalYear: originalYear };
+        const songs = rejectArchive(r.album?.song || []);
+        const suspicion = albumEraSuspect({
+          isCompilation,
+          albumArtist: r.album?.artist ?? album.artist ?? null,
+          title: r.album?.name ?? album.name ?? null,
+          year: Number.isFinite(r.album?.year) ? r.album.year : null,
+          // Raw strings, one per KEPT song: era-suspect owns the lead-artist
+          // normalisation, and counting the kept set stops a dropped
+          // station-archive entry inflating the album into a false anthology.
+          trackArtists: songs.map((s) => s.artist),
+        });
+        for (const s of songs) {
+          yield {
+            ...s,
+            // A Child's albumId is optional in the spec; the album being
+            // iterated is the authoritative fallback.
+            albumId: s.albumId ?? r.album?.id ?? album.id ?? null,
+            albumIsCompilation: isCompilation,
+            albumOriginalYear: originalYear,
+            albumEraUntrusted: suspicion.suspect,
+            albumEraReason: suspicion.reason,
+          };
         }
       } catch (err) {
         console.error(`[subsonic] getAlbum(${album.id}) failed: ${err.message}`);
+        // Counts and discovery may use a best-effort listing. A pruning walk
+        // must abort instead: an omitted album is not evidence of deletion.
+        if (requireComplete) throw new Error(`Incomplete Navidrome walk: album ${album.id} could not be read`, { cause: err });
       }
     }
     if (albums.length < BATCH) break;
@@ -740,20 +884,23 @@ export async function* iterateAllSongs() {
   }
 }
 
-export async function getPlaylists() {
-  const r = await call('getPlaylists');
+export async function getPlaylists({ signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getPlaylists', {}, { ...RETRY_FAST_TRANSPORT, signal });
   return r.playlists?.playlist || [];
 }
 
-export async function getPlaylist(id) {
-  const r = await call('getPlaylist', { id });
-  return rejectArchive(r.playlist?.entry || []);
+// `includeBlocked` is for the blocklist's OWN playlist-rule resolver: it builds
+// the member set that `rejectBlocked` consults, so reading through the filter
+// returned the playlist minus its own members on every refresh after the first
+// (0 tracks, rule inert, flipping back each TTL). Airing paths take the default.
+export async function getPlaylist(id, { signal, includeBlocked = false }: { signal?: AbortSignal; includeBlocked?: boolean } = {}) {
+  const r = await call('getPlaylist', { id }, { ...RETRY_FAST_TRANSPORT, signal });
+  const songs = (r.playlist?.entry || []).filter((s) => !isStationArchive(s));
+  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
 }
 
-// ---------------------------------------------------------------------------
-// Playlist mutations (admin library UI). Song-id lists ride the query string,
-// so they are chunked to keep URLs well under length limits.
-// ---------------------------------------------------------------------------
+// Playlist mutations: song-id lists ride the query string, so they are chunked
+// to keep URLs under length limits.
 const PLAYLIST_CHUNK = 100;
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -762,14 +909,10 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-// Creates a playlist and returns it. Extra ids beyond the first chunk are
-// appended via updatePlaylist; playlists are made public so the operator's
-// own Navidrome login sees them, not just the SUB/WAVE service account.
-//
-// Pass `opts.playlistId` to OVERWRITE an existing playlist's song list wholesale
-// (Subsonic `createPlaylist` with a playlistId replaces the songs) — this is how
-// the builder's "save over" does a clean full-replace instead of index-based
-// remove churn. When overwriting, the first chunk replaces; the rest append.
+// Creates a playlist and returns it. Ids past the first chunk are appended;
+// playlists are made public so the operator's own Navidrome login sees them.
+// `opts.playlistId` OVERWRITES an existing playlist's songs wholesale (Subsonic
+// createPlaylist with a playlistId replaces): first chunk replaces, rest append.
 export async function createPlaylist(
   name: string,
   songIds: string[] = [],
@@ -804,8 +947,8 @@ export async function removeFromPlaylist(playlistId: string, indexes: number[]) 
   await call('updatePlaylist', { playlistId, songIndexToRemove: indexes });
 }
 
-// Rename / visibility. Undefined fields are dropped by buildUrl, so callers
-// can patch a single attribute without touching the rest.
+// Rename / visibility. buildUrl drops undefined fields, so a caller can patch
+// one attribute without touching the rest.
 export async function updatePlaylistMeta(
   playlistId: string,
   meta: { name?: string; comment?: string; public?: boolean },
@@ -819,55 +962,193 @@ export async function deletePlaylist(id: string) {
   await call('deletePlaylist', { id });
 }
 
-// Authenticated cover-art URL for a given Subsonic song id. Returns the
-// `getCoverArt` REST endpoint with auth params baked in; bytes are JPEG (or
-// PNG/WebP depending on what Subsonic resampled). The controller proxies
-// this through /cover/:id so listener browsers never see Subsonic creds.
+// Authenticated `getCoverArt` URL. The controller proxies it through
+// /cover/:id so listener browsers never see Subsonic creds.
 export function getCoverArtUrl(id, size = 512) {
   return buildUrl('getCoverArt', { id, size });
 }
 
-// Returns a streamable URL for Liquidsoap to read. Wrapped in the `subhttp:`
-// protocol scheme so Liquidsoap's radio.liq routes the fetch through curl
-// instead of its built-in http.get.stream (which returns spurious 522s
-// against the Cloudflare-fronted Navidrome origin).
-//
-// format=raw asks Navidrome to stream the original file bytes (no transcode).
-// Library is AAC 256 kbps m4a from gamdl; without `raw`, Navidrome would
-// transcode to ~192 kbps MP3 on the way out, adding a lossy generation before
-// Liquidsoap's own MP3 re-encode. Liquidsoap decodes m4a/AAC via ffmpeg.
+// Streamable URL for Liquidsoap. The `subhttp:` scheme routes the fetch
+// through curl instead of Liquidsoap's http.get.stream, which returns spurious
+// 522s against a Cloudflare-fronted Navidrome. format=raw streams the original
+// bytes, avoiding a lossy transcode before Liquidsoap's own re-encode.
 export function getStreamUrl(songId, resolveProbeId: string | null = null) {
   const url = buildUrl('stream', { id: songId, format: 'raw' });
-  // The fragment reaches proto_subhttp but curl never sends it to Navidrome.
-  // It identifies this exact handoff, avoiding stale song-id outcomes.
+  // The fragment reaches proto_subhttp but curl never sends it on; it
+  // identifies this exact handoff, so a stale song-id outcome can't be read.
   const probe = resolveProbeId ? `#subwave_probe=${encodeURIComponent(resolveProbeId)}` : '';
   return `subhttp:${url}${probe}`;
 }
 
-// Plain HTTP stream URL (no `subhttp:` prefix) with auth baked into the query
-// string — for the analysis worker, which fetches the original bytes with
-// urllib and decodes the first chunk. `format=raw` avoids a transcode hop.
+// Plain HTTP stream URL (no `subhttp:` prefix), auth baked into the query
+// string — for the analysis worker. `format=raw` avoids a transcode hop.
 export function getRawStreamUrl(songId: string): string {
   return buildUrl('stream', { id: songId, format: 'raw' });
 }
 
-// Returns the local file path if Navidrome and the controller share the music
-// volume — much more efficient than streaming over HTTP for the radio.
-// Set MUSIC_LIBRARY_PATH to mount your library inside the controller container.
+// Where a song's `path` could be on the library mount. Three shapes reach here:
+// - relative: built from the tags, joined to the mount as it always was.
+// - absolute and inside the mount: Report Real Path on a Navidrome that sees the
+//   library at the same place. The path is the file.
+// - absolute and outside it: Navidrome's root differs from the mount, and no
+//   setting maps one to the other. So `mapped` holds guesses: the whole path
+//   under the mount, for a mount above Navidrome's root, then leading segments
+//   off one at a time, longest remainder first, stopping at three: artist, album
+//   and file. Fewer can match another record (`Greatest Hits/01 - Intro.flac`).
+// A path comes from the server, so any `..` segment rejects it outright, and
+// every candidate must stay under the mount. Lexical on purpose: a symlink the
+// operator put inside the library still plays.
+function localPathCandidates(libRoot: string, songPath: string): { direct: string[]; mapped: string[] } {
+  const segments = songPath.split('/');
+  if (segments.includes('..')) return { direct: [], mapped: [] };
+  const root = resolve(libRoot);
+  const prefix = root.endsWith(sep) ? root : root + sep;
+  const inside = (candidate: string) => resolve(candidate).startsWith(prefix);
+  if (!isAbsolute(songPath)) return { direct: [`${libRoot}/${songPath}`].filter(inside), mapped: [] };
+  if (inside(songPath)) return { direct: [songPath], mapped: [] };
+  const parts = segments.filter(Boolean);
+  return {
+    direct: [],
+    mapped: parts
+      .slice(0, -2)
+      .map((_, i) => `${libRoot}/${parts.slice(i).join('/')}`)
+      .filter(inside),
+  };
+}
+
+// The two ends of a file, where tags sit: ID3v2, FLAC's and Ogg's comments and a
+// fast-start M4A's `moov` at the head, a late `moov`, APEv2 and ID3v1 at the
+// tail. A title outside both is never read, so that track streams: cover art
+// ahead of it (a FLAC PICTURE block, an ID3v2 APIC frame, an Ogg picture
+// comment), or an M4A whose atoms leave both windows on the way to `ilst` (a
+// late `moov` over 64 KiB, a fast-start one whose sample tables push `udta` out).
+const TAG_WINDOW_BYTES = 64 * 1024;
+
+// The same `song.size` a Subsonic server reports: the file's bytes, tags included.
+function fileSizeOnDisk(file: string): number | null {
+  try {
+    const st = fs.statSync(file, { throwIfNoEntry: false });
+    return st?.isFile() ? st.size : null;
+  } catch {
+    return null;
+  }
+}
+
+// Does this file's title, as Navidrome reports it, equal the server's? tag-title.ts
+// reads the file's tags the way stock Navidrome and its TagLib do: the format by
+// the extension, one tag read whole, the subtitle appended, the 1,024-byte cut;
+// so the same words in another field, the cover art or the audio don't count.
+// `none` is a file whose tags give no title it can read in the two windows, or
+// none it can be sure Navidrome reports the same way. One open, the head read,
+// and the tail read only when the format keeps tags there and asks for it.
+function titleInTags(file: string, size: number, title: string): 'same' | 'other' | 'none' {
+  const length = Math.min(TAG_WINDOW_BYTES, size);
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const read = (from: number) => {
+        const window = Buffer.alloc(length);
+        return window.subarray(0, fs.readSync(fd, window, 0, length, from));
+      };
+      const head = read(0);
+      let tail: Buffer | null = null;
+      // A file that fits in the window has its tail in the head already.
+      const readTail = () => (tail ??= size <= length ? head : read(size - length));
+      return titleVerdict(fileTitle(extname(file).slice(1), head, readTail, size), title);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // Unreadable: not proved.
+    return 'none';
+  }
+}
+
+// What a server's song offers as proof: its byte count and its title, or null
+// when either is missing, which streams the right song: a server that sends no
+// `size`, a shape that dropped it. A title longer than MAX_REPORTED_TITLE_BYTES,
+// more than Navidrome can report, is no proof either, and is never normalised,
+// whatever the server sends. Checked before any stat, so all of that costs nothing.
+function proofOf(song): { size: number; title: string } | null {
+  const size = Number(song.size);
+  const raw = String(song.title ?? '');
+  if (raw.length > MAX_REPORTED_TITLE_BYTES || Buffer.byteLength(raw, 'utf8') > MAX_REPORTED_TITLE_BYTES) return null;
+  const title = normalizeTitle(raw);
+  return Number.isSafeInteger(size) && size > 0 && title ? { size, title } : null;
+}
+
+// Is this mapped guess the track the server means? A file existing proves
+// nothing: a second library, or a mount that holds part of the library, can have
+// another song at the same folder and file name, and it would air under this
+// song's title and id. So the file has to match two things the server read from
+// the real one: its size, and the title its tags give it as Navidrome reports it.
+// The size alone isn't enough: same-length CBR files with same-length tags come
+// out byte for byte the same size. What's left is a different recording at the
+// same folder and file name, with the same size and the same title as Navidrome
+// reports it: the same album in two editions, two compilations' `Intro`. Nothing
+// short of the audio tells those apart (tag-title.ts lists the narrower cases).
+function isRequestedFile(file: string, proof: { size: number; title: string }): boolean {
+  return fileSizeOnDisk(file) === proof.size && titleInTags(file, proof.size, proof.title) === 'same';
+}
+
+// The song's file as the CONTROLLER sees it on the MUSIC_LIBRARY_PATH mount, else
+// null, for a reader in this container (the cue probe's ffprobe). Navidrome's
+// `path` is usually synthetic (built from tags, not read off disk), so it
+// routinely disagrees with the real layout; an unchecked guess resolves to
+// nothing in Liquidsoap and kills the pick (#1405). A relative path or a real
+// path inside the mount is checked for existence, as the plain join always was.
+// A mapped guess has to prove it is this track. Anything else falls back to the
+// stream URL. Stateless on purpose: a Doctor run or any other read can't change
+// what the mixer gets next.
 //
-// The path is only ever a GUESS. Navidrome's Subsonic `path` is synthetic —
-// built from tags, not read off disk — so it routinely disagrees with the real
-// layout (the API says `Frank Zappa/Chunga's Revenge/…` while the folder is
-// `Frank Zappa/Chunga's Revenge (1970)/…`). A guess handed to Liquidsoap
-// resolves to nothing and takes the queued pick down with it (#1405), so the
-// guess is CHECKED here and a miss falls back to the stream URL: local-file
-// mode then speeds up the tracks whose paths do line up instead of breaking
-// every track whose paths don't.
-export function getLocalPath(song) {
+// Cost per call: one stat, or for a mapped path one stat per guess, which is
+// path depth - 2 on a miss, and one open and at most two 64 KiB reads for each
+// guess that matched the size. A `size` this can't use costs no stat at all. It
+// is synchronous and nothing is cached: the coast build pays it for every pool
+// track on every rebuild, and a push once (getLocalPath), twice when a stem
+// seam's cue probe reads the file.
+export function findLibraryFile(song) {
   const libRoot = process.env.MUSIC_LIBRARY_PATH;
   if (!libRoot || !song.path) return null;
-  const local = `${libRoot}/${song.path}`;
-  return fs.existsSync(local) ? local : null;
+  const { direct, mapped } = localPathCandidates(libRoot, String(song.path));
+  const found = direct.find(p => fs.existsSync(p));
+  if (found || !mapped.length) return found ?? null;
+  // Once for every guess: the server's title is normalised here, not per guess.
+  const proof = proofOf(song);
+  return proof ? mapped.find(p => isRequestedFile(p, proof)) ?? null : null;
+}
+
+// The file to hand LIQUIDSOAP, else null so the pick streams. It opens the file
+// in the broadcast container, which only a proof from the mixer speaks for
+// (library-mount.ts): this reads the cached answer and never waits on one. The
+// proof covers the mount, not this file, so the drain also asks about the file
+// itself before a pick goes out local (mixerReadablePath, #2222).
+export function getLocalPath(song) {
+  const libRoot = process.env.MUSIC_LIBRARY_PATH;
+  if (!libRoot || !libraryMountProven(libRoot)) return null;
+  return findLibraryFile(song);
+}
+
+// The Doctor's reading of a track, as the controller sees it: whether the mixer can
+// read the mount is the `library mount` line's to say. `proved` is the file
+// findLibraryFile() finds at the size the server holds for it; a mapped guess has
+// already passed the stricter test to get here. `unproved` plays anyway: a relative
+// path or a real path inside the mount needs no proof to play, so a stale or
+// different file there is not a miss. `unread` streams although a guess has the
+// track's size, because its tags hold no title the check can read, or none it
+// can be sure Navidrome reports the same way: the likely track, and a mount at
+// Navidrome's own path would play it with no proof. `none`
+// streams. The extra walk for `unread` is the Doctor's alone; the push path stops
+// at findLibraryFile().
+export function localFileState(song): 'proved' | 'unproved' | 'unread' | 'none' {
+  const local = findLibraryFile(song);
+  if (local) return fileSizeOnDisk(local) === Number(song.size) ? 'proved' : 'unproved';
+  const libRoot = process.env.MUSIC_LIBRARY_PATH;
+  const proof = proofOf(song);
+  if (!libRoot || !song.path || !proof) return 'none';
+  const { mapped } = localPathCandidates(libRoot, String(song.path));
+  const unread = mapped.some(p => fileSizeOnDisk(p) === proof.size && titleInTags(p, proof.size, proof.title) === 'none');
+  return unread ? 'unread' : 'none';
 }
 
 // Best URI for Liquidsoap — local file if available, otherwise stream URL
@@ -875,91 +1156,77 @@ export function getPlayableUri(song, resolveProbeId: string | null = null) {
   return getLocalPath(song) || getStreamUrl(song.id, resolveProbeId);
 }
 
-// Liquidsoap `annotate:` URI — embeds metadata up front so on_track_change
-// reports real artist/title/album rather than waiting on stream-level ID3.
-// Exported for broadcast/beds.ts, which builds its own annotate: URI for a bed
-// (a bed is a local file, not a Subsonic song, so it can't go through
-// getAnnotatedUri — but it must escape identically).
+// Liquidsoap `annotate:` URI — metadata up front, so on_track_change reports
+// real artist/title/album without waiting on stream-level ID3. escAnnotate is
+// exported for broadcast/beds.ts, which builds its own URI and must escape
+// identically.
 export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null; clipLeadSec?: number | null; clipCueLateSec?: number | null; localPath?: string | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
     `album="${escAnnotate(song.album)}"`,
     `subsonic_id="${escAnnotate(song.id)}"`,
   ];
-  if (song.year) fields.push(`year="${escAnnotate(song.year)}"`);
+  // Era year, never the raw `year` (#1418) — a reissue anthology carries the
+  // reissue's date and every downstream surface inherits it. Unknown emits NO
+  // year field rather than a wrong one.
+  const eraYear = trackEraYear(song);
+  if (eraYear) fields.push(`year="${escAnnotate(eraYear)}"`);
   const genres = songGenres(song);
   if (genres.length) fields.push(`genre="${escAnnotate(genres.join(', '))}"`);
-  // DJ-mode adaptive blend: the queue stashes a per-transition crossfade length
-  // (seconds) on the track when the persona is in DJ mode and both tracks are
-  // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the
-  // blend for this transition (radio.liq dj_transition reads the same key for
-  // its fades, keeping fade == buffer). Liquidsoap 2.4 runs cross with
-  // persist_override=true (the only mode where a stamp sizes its own
-  // transition — see radio.liq), which makes a stamp LINGER until the next
-  // one arrives; every annotated track therefore carries an explicit value,
-  // falling back to the operator's configured crossfade, so a washout's 12s
-  // canvas can never outlive its own transition.
+  // Per-transition crossfade length (seconds). radio.liq runs cross with
+  // persist_override=true, so a stamp LINGERS until the next one arrives —
+  // every annotated track must carry an explicit value (falling back to the
+  // configured crossfade) or a washout's 12s canvas outlives its transition.
   const crossSec = song.crossSec ?? settings.get()?.crossfadeDuration ?? null;
   if (crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(crossSec)}"`);
-  // Loudness normalisation: the queue stashes a per-track gain offset (dB,
-  // clamped) toward the loudness target when the track has a measured LUFS.
-  // Emitted in the "<n> dB" form Liquidsoap's amplify override parses natively
-  // (the same shape as replaygain_track_gain). radio.liq applies it via
-  // amplify(override="liq_amplify") before the ducking layers so quiet and loud
-  // tracks play at even perceived volume — masters untouched, no bus
-  // normaliser. Absent → no gain applied, i.e. unity / today's behaviour.
+  // The outgoing side of a stem-blend clip seam: how far its cue-out sits past
+  // the clip's start (broadcast/stem-seam.ts). radio.liq buffers past it and
+  // aligns the clip on it; an older mixer ignores the key.
+  if (opts.clipLeadSec != null) fields.push(`liq_clip_lead="${escAnnotate(opts.clipLeadSec)}"`);
+  // The incoming side of a stem-blend clip seam: how late Y's liq_cue_in will
+  // really land, negative when early (music/cue-landing.ts, #2003, #2077).
+  // radio.liq shifts Y by it at the clip -> Y seam only. Six decimals, NOT ms:
+  // rounding to ms would bring back up to 22 samples of the comb filter this
+  // removes. Bounded like the reader.
+  if (opts.clipCueLateSec != null && Number.isFinite(opts.clipCueLateSec) && opts.clipCueLateSec !== 0
+    && opts.clipCueLateSec > -CUE_EARLY_MAX_SEC && opts.clipCueLateSec < CUE_LATE_MAX_SEC) {
+    fields.push(`liq_clip_cue_late="${opts.clipCueLateSec.toFixed(6)}"`);
+  }
+  // Per-track loudness gain offset, in the "<n> dB" form Liquidsoap's amplify
+  // override parses. Applied before the ducking layers. Absent = unity.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
-  // DJ filter sweep: the DJ agent may flag a pick (transition:'sweep') for a
-  // gear-change; the queue validates and stamps `sweep` on the track.
-  // radio.liq's dj_transition reads `liq_sweep` on the INCOMING track and
-  // closes a lowpass over the OUTGOING branch across the blend — the track
-  // being left sinks away while this pick rises clean. Absent → normal cross.
+  // Transition gestures. sweep/dissolve/blend/chop ride the INCOMING pick and
+  // act on the outgoing branch across the cross; washout/loop ride the ENDING
+  // track and govern its own end. Absent = normal cross.
   if (song.sweep) fields.push('liq_sweep="true"');
-  // DJ dissolve (reverb wash): like the sweep it rides the INCOMING pick —
-  // radio.liq reads `liq_dissolve` off `b` and washes the OUTGOING branch
-  // into diffuse ambience under it.
   if (song.dissolve) fields.push('liq_dissolve="true"');
-  // DJ washout: the DJ agent may flag a pick (transition:'washout') to dissolve
-  // into an echo tail as that track ENDS; the queue validates and stamps
-  // `washout` (+ the tempo-synced comb tap below, and a long bar-snapped
-  // liq_cross_duration — this track's own stamp governs its own end, see
-  // mix.washoutCrossSecondsFor). radio.liq's dj_transition reads both off the
-  // OUTGOING track's metadata. Absent → normal cross.
   if (song.washout) fields.push('liq_washout="true"');
   if (song.washoutDelay != null) fields.push(`liq_washout_delay="${escAnnotate(song.washoutDelay)}"`);
-  // DJ exit loop: rides the ENDING track like the washout — its last bar is
-  // caught in a comb-cascade loop as the dry is hard-cut, repeating in
-  // tempo under whatever follows. liq_loop_bar is one bar of THIS track's
-  // own tempo (mix.loopBarFor); the canvas rides liq_cross_duration exactly
-  // like the washout's. radio.liq reads both off the OUTGOING track.
+  // liq_loop_bar is one bar of THIS track's tempo (mix.loopBarFor).
   if (song.loop) fields.push('liq_loop="true"');
   if (song.loopBar != null) fields.push(`liq_loop_bar="${escAnnotate(song.loopBar)}"`);
-  // DJ blend (spectral handover): validated same-lane picks trade the spectrum
-  // with their predecessor across the cross — dj_transition reads liq_blend on
-  // the INCOMING track, like the sweep.
+  // Show-boundary fade (#1574): the track is cued out at a show change, so
+  // radio.liq suppresses the exit gestures stamped for an ending that will not
+  // happen (washout, loop) and leaves a plain full-buffer fade.
+  if (song.showFade) fields.push('liq_show_fade="true"');
   if (song.blend) fields.push('liq_blend="true"');
-  // DJ chop (crossfader cut): rides the INCOMING pick like the sweep —
-  // radio.liq reads `liq_chop` off `b` and gates the OUTGOING branch on the
-  // beat. The gate period is one beat of the OUTGOING track (the queue stamps
-  // it here because the predecessor's own annotation is already sent).
+  // The chop gate period is one beat of the OUTGOING track, stamped here
+  // because the predecessor's own annotation has already been sent.
   if (song.chop) fields.push('liq_chop="true"');
   if (song.chopPeriod != null) fields.push(`liq_chop_period="${escAnnotate(song.chopPeriod)}"`);
-  // Hard track-length cap (#447): a positive cap stamps `liq_cue_out` so
-  // radio.liq's `cue_cut` stops the track at that offset — a real ceiling
-  // whatever path the track took to the stream, not a selection bias. Only the
-  // capped paths set it (autonomous picks + the auto.m3u fallback); listener
-  // requests pass null and play in full. A cue_out past a shorter track's end is
-  // a Liquidsoap no-op.
-  //
-  // Stem-blend cue points fold in here too: an explicit cueOutSec (the blend
-  // start in the OUTGOING track) competes with the cap and whichever cuts
-  // earlier wins, so a blend can never resurrect audio past the operator's cap.
-  // cueInSec skips the INCOMING track past the head its rendered clip already
-  // played. Liquidsoap 2.4 honours both labels at request resolution.
+  // Hard track-length cap (#447): a positive cap stamps `liq_cue_out` and
+  // Liquidsoap stops the track there (cues apply at request resolution). Only
+  // the capped paths set it (autonomous picks + auto.m3u); listener requests
+  // pass null and play in full. Callers pass the cap only for a track that runs past it
+  // (track-floor.capCueOutSec): a cue_out past the end is NOT a no-op when the
+  // decoder cannot measure the stream, it defeats the crossfade. An explicit cueOutSec (a
+  // stem blend's start in the OUTGOING track) competes with the cap and the
+  // earlier cut wins, so a blend can't resurrect audio past the cap. cueInSec
+  // skips the INCOMING track past the head its rendered clip already played.
   const cueOut = [opts.maxDurationSec, opts.cueOutSec]
     .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
   if (cueOut.length) {
@@ -968,16 +1235,20 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   if (opts.cueInSec != null && opts.cueInSec > 0) {
     fields.push(`liq_cue_in="${escAnnotate(opts.cueInSec)}"`);
   }
-  return `annotate:${fields.join(',')}:${getPlayableUri(song, opts.resolveProbeId ?? null)}`;
+  // The drain has already decided local or stream for its handoff (#2222), so
+  // its probe id and URI agree: it passes the file, or null to stream. Left out,
+  // the choice is made here from the cached proof (the coast).
+  const target = opts.localPath === undefined
+    ? getPlayableUri(song, opts.resolveProbeId ?? null)
+    : opts.localPath || getStreamUrl(song.id, opts.resolveProbeId ?? null);
+  return `annotate:${fields.join(',')}:${target}`;
 }
 
-// Annotate URI for a pre-rendered transition CLIP (stem-blend transitions).
-// The clip carries the INCOMING track's identity so now-playing flips to it
-// the moment the blend begins — a real DJ mix announces the next record as
-// it comes in — and the controller's lastSeenKey dedup swallows the second,
-// identical metadata fire when the real track takes over at its cue-in.
-// `subwave_clip="1"` marks the dj_queue entry so the telnet rid helpers
-// (liquidsoap-control.ts) never mistake the clip for the track itself.
+// Annotate URI for a pre-rendered stem-blend transition CLIP. It carries the
+// INCOMING track's identity, so now-playing flips the moment the blend begins
+// and the controller's lastSeenKey dedup swallows the identical second fire at
+// cue-in. `subwave_clip="1"` stops the telnet rid helpers
+// (liquidsoap-control.ts) mistaking the clip for the track itself.
 export function getClipUri(song, clipPath: string, crossSec: number) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
@@ -986,8 +1257,17 @@ export function getClipUri(song, clipPath: string, crossSec: number) {
     `subsonic_id="${escAnnotate(song.id)}"`,
     'subwave_clip="1"',
     `liq_cross_duration="${escAnnotate(crossSec)}"`,
+    // The cue lead both clip seams were cut with (broadcast/stem-seam.ts):
+    // radio.liq aligns the clip on it rather than on what `cross` buffered.
+    `liq_clip_lead="${escAnnotate(crossSec)}"`,
   ];
-  // No liq_amplify: the render already gain-matched both sources toward the
-  // station target — an amplify stamp here would double-apply.
+  // No liq_amplify: the render already gain-matched both sources, so a stamp
+  // here would double-apply.
   return `annotate:${fields.join(',')}:${clipPath}`;
+}
+
+export async function getLibraryArtists(): Promise<Array<{ id: string; name: string }>> {
+  const result = await call('getArtists', {}, RETRY_FAST_TRANSPORT);
+  const schema = z.object({ artists: z.object({ index: z.array(z.object({ artist: z.array(z.object({ id: z.string(), name: z.string() })) })).default([]) }) });
+  return schema.parse(result).artists.index.flatMap(index => index.artist);
 }

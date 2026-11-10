@@ -1,13 +1,4 @@
-// The FM-dial navigation band. Replaces the old DotRail tab row: the player's
-// sections live on a horizontal swipe pager, and this band is the tuner above
-// it — an FM frequency scale with evenly-spaced ticks, a vermilion needle that
-// tracks the pager's scroll position, and a labelled "stop" for each section
-// (SHWS · TML · LIVE · BTH · REQ). Tap a stop to tune straight to that section.
-// Ported from the web mock's FM-dial band; LIVE sits dead-centre as home.
-//
-// The needle is driven by the pager's native-driver scrollX (a translateX
-// interpolation), so sweeping it costs zero React renders — the band only
-// re-renders when the snapped-to page (`active`) changes.
+// The needle uses native-driver scrollX to avoid React renders during swipes.
 
 import { memo, useMemo, useState } from 'react';
 import { Animated, type LayoutChangeEvent, Pressable, Text, View } from 'react-native';
@@ -24,13 +15,13 @@ export interface FreqBandProps {
   active: number;
   /** Pager contentOffset.x, fed from Animated.event(useNativeDriver). */
   scrollX: Animated.Value;
-  /** pagerWidth * (pages - 1) — the scroll position of the last page. */
+  /** pagerWidth * (pages - 1): the scroll position of the last page. */
   maxScroll: number;
   onPick: (i: number) => void;
 }
 
 const TICKS = 41;
-// Stops + needle live within the 8%–92% inner band, matching the web mock.
+// Stops and needle live within the 8%-92% inner band.
 const stopPct = (i: number, n: number) => 8 + (i * 84) / (n - 1);
 
 function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) {
@@ -54,8 +45,6 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
   return (
     <View
       style={{
-        // Transparent so the frosted header glass shows through; the softened
-        // ink baseline reads as the bottom glass edge of the masthead overlay.
         backgroundColor: 'transparent',
         borderBottomWidth: 1,
         borderBottomColor: `${colors.ink}59`,
@@ -66,7 +55,6 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
       }}
     >
       <View style={{ position: 'relative', height: 30 }} onLayout={onLayout}>
-        {/* Tick scale — majors every fifth tick */}
         <View
           pointerEvents="none"
           style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 13, flexDirection: 'row', justifyContent: 'space-between' }}
@@ -87,7 +75,6 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
           })}
         </View>
 
-        {/* Needle — sweeps with the pager, off the React render path */}
         {needleX ? (
           <Animated.View
             pointerEvents="none"
@@ -108,7 +95,6 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
           </Animated.View>
         ) : null}
 
-        {/* Station stops */}
         {pages.map((p, i) => {
           const on = i === active;
           return (

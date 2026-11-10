@@ -18,14 +18,16 @@
 // capturing fetch.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chatCompletionResponse } from './test-utils/llm.js';
+import { coldLoadSettings } from './test-utils/settings.js';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 // STATE_DIR is redirected at a throwaway dir BEFORE the first import of
 // anything config-derived (same pattern as scripts/compat-tts-params.test.ts).
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-repeat-penalty-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-repeat-penalty-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');
@@ -35,7 +37,6 @@ const { openAICompatibleFetch, languageModel } = await import('../src/llm/intern
 const { generateText } = await import('ai');
 const { createOpenAI } = await import('@ai-sdk/openai');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
 const BASE_LLM = {
   provider: 'openai-compatible',
@@ -44,12 +45,7 @@ const BASE_LLM = {
 };
 
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ llm: { ...BASE_LLM, ...llm } }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
-}
+async function coldLoad(llm: Record<string, unknown>) { return (await coldLoadSettings({ llm: { ...BASE_LLM, ...llm } })).llm; }
 
 test('a configured repeat penalty survives a controller restart', async () => {
   const llm = await coldLoad({ repeatPenalty: 1.15 });
@@ -105,14 +101,9 @@ test('the configured penalty is what lands on the wire', async () => {
   let sent: any = null;
   const capture: any = async (_url: any, init: any) => {
     sent = JSON.parse(init.body);
-    return new Response(
-      JSON.stringify({
-        id: 'x', object: 'chat.completion', created: 1, model: cfg.model,
-        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    );
+    return chatCompletionResponse({ model: cfg.model,
+      message: { role: 'assistant', content: 'ok' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   };
   const provider = createOpenAI({
     baseURL: cfg.baseUrl,

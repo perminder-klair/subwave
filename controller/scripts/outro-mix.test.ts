@@ -2,7 +2,7 @@
 // endingCrossSecondsFor (a track's OWN exit canvas sized by its measured
 // ending — the stampable replacement for the un-applied pair-sized value,
 // #749) and the chop-over-fade veto in effectAllowedFor.
-// Run: `tsx scripts/outro-mix.test.ts`.
+// Run: `npm test -- outro-mix`.
 //
 // node:assert-via-tsx style, matching scripts/mix-fx.test.ts.
 

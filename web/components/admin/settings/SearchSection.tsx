@@ -3,33 +3,71 @@
 import type { ChangeEvent } from 'react';
 import { useState } from 'react';
 import { errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
+import {
+  SEARCH_PROVIDER_CATALOG, SEARCH_PROVIDER_GROUPS, SETTINGS_SEARCH_PROVIDERS, SETTINGS_SEARXNG_ENGINES_MAX,
+  searchProviderEntry, withIndefiniteArticle,
+  type SearchProviderGroup,
+} from '@/lib/schemas.generated';
 import { Card, Btn, Pill } from '../ui';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult,
   type SectionProps,
 } from './shared';
 
-const SEARCH_PROVIDER_LABELS: Record<string, string> = {
-  duckduckgo: 'DuckDuckGo (free, no key)',
-  tavily: 'Tavily (paid web search)',
-  brave: 'Brave Search (API key, free monthly credits)',
-  searxng: 'SearXNG (self-hosted)',
-};
-
-// Providers that authenticate with SEARCH_API_KEY. Both share the key slot —
-// the controller probes the right endpoint based on the provider we send along.
-const KEYED_PROVIDERS: Record<string, { name: string; placeholder: string; keyUrl: string }> = {
-  tavily: { name: 'Tavily', placeholder: 'tvly-…', keyUrl: 'https://app.tavily.com/home' },
-  brave: { name: 'Brave Search', placeholder: 'BSA…', keyUrl: 'https://api-dashboard.search.brave.com/app/keys' },
-};
+// Labels, hints and key fields come from the search catalogue
+// (controller/src/schemas/settings.ts, mirrored by gen:schemas), read through
+// its searchProviderEntry.
 
 const searchProviderLabel = (id: string | undefined): string =>
-  (id && SEARCH_PROVIDER_LABELS[id]) || id || '—';
+  searchProviderEntry(id)?.label || id || '—';
+
+const SEARCH_GROUP_LABELS: Record<SearchProviderGroup, string> = {
+  keyless: 'No key needed',
+  keyed: 'Needs an API key',
+  'self-hosted': 'Self-hosted',
+};
+
+// The server's providers under their Select groups, in SEARCH_PROVIDER_GROUPS
+// order, each keeping the server's order. An id the catalogue doesn't know
+// goes last, under "Other".
+export function groupSearchProviders(ids: readonly string[]): { label: string; ids: string[] }[] {
+  const known = new Set<string>(SEARCH_PROVIDER_CATALOG.map(p => p.id));
+  return [
+    ...SEARCH_PROVIDER_GROUPS.map(group => ({
+      label: SEARCH_GROUP_LABELS[group],
+      ids: ids.filter(id => searchProviderEntry(id)?.group === group),
+    })),
+    { label: 'Other', ids: ids.filter(id => !known.has(id)) },
+  ].filter(g => g.ids.length > 0);
+}
+
+// True when a key is on file but the picked provider's searches would refuse it,
+// because it is another provider's (a Firecrawl key under Tavily, a Tavily key
+// under Firecrawl). The key reaches this page redacted, so the controller decides,
+// through keyRefusedBy: the keyed providers that would refuse it. That covers the
+// picked provider before a save. `undefined` is a controller that doesn't send
+// the field, which says nothing about the key.
+export function searchKeyIsForeign(
+  provider: string,
+  keyOnFile: boolean,
+  refusedBy: string[] | undefined,
+): boolean {
+  return keyOnFile && !!refusedBy?.includes(provider);
+}
+
+// The banner's sentence when the key on file is another provider's. The article
+// comes from the catalogue's one rule, which the controller's messages share
+// ("an Outcrawl key", "a Tavily key").
+export function foreignSearchKeyDetail(keyName: string): string {
+  const key = `${withIndefiniteArticle(keyName)} key`;
+  return `The key on file is not ${key}, so searches won't run. Paste ${key} in the field above and save.`;
+}
 
 interface SearchSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -44,7 +82,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
     setTestingSearxng(true);
     setSearxngTestResult(null);
     try {
-      const res = await adminFetch('/settings/search/test-searxng', {
+      const res = await adminResponse(adminFetch, '/settings/search/test-searxng', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: form.search.baseUrl }),
@@ -67,23 +105,31 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         ? { apiKey: form.search.apiKey }
         : {}),
       ...(form.search.provider === 'searxng'
-        ? { baseUrl: form.search.baseUrl ?? '' }
+        ? {
+            baseUrl: form.search.baseUrl ?? '',
+            searxngEngines: form.search.searxngEngines ?? '',
+          }
         : {}),
     },
   });
 
   const savedSearch = data.values?.search || {};
-  const providers = data.search?.providers || ['duckduckgo', 'tavily', 'brave', 'searxng'];
+  const providers = data.search?.providers || [...SETTINGS_SEARCH_PROVIDERS];
   const provider = form.search.provider;
-  const keyed = KEYED_PROVIDERS[provider];
+  const entry = searchProviderEntry(provider);
+  // Keyed providers share the SEARCH_API_KEY slot; the controller probes the
+  // right endpoint based on the provider sent along with a key test.
+  const keyed = entry && entry.key !== 'none' ? entry : undefined;
   const searchDirty = provider !== savedSearch.provider
     || (!!keyed
         && form.search.apiKey
         && form.search.apiKey !== 'set'
         && form.search.apiKey !== (savedSearch.apiKey || ''))
     || (provider === 'searxng'
-        && (form.search.baseUrl ?? '') !== (savedSearch.baseUrl || ''));
+        && ((form.search.baseUrl ?? '') !== (savedSearch.baseUrl || '')
+            || (form.search.searxngEngines ?? '') !== (savedSearch.searxngEngines || '')));
   const apiKeySet = form.search.apiKey === 'set' || !!data.env?.SEARCH_API_KEY;
+  const foreignKey = searchKeyIsForeign(provider, apiKeySet, data.search?.keyRefusedBy);
 
   const testApiKey = async () => {
     const value = form.search.apiKey === 'set' ? '' : form.search.apiKey;
@@ -91,11 +137,11 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
     setKeyTesting(true);
     setKeyTest(null);
     try {
-      const r = await adminFetch('/settings/secrets/test', {
+      const r = await adminResponse(adminFetch, '/settings/secrets/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `provider` tells the controller which endpoint to probe — the same
-        // SEARCH_API_KEY slot holds a Tavily or a Brave key.
+        // SEARCH_API_KEY slot holds a Tavily, Brave, Keenable, Firecrawl or Outcrawl key.
         body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim(), provider }),
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
@@ -115,9 +161,9 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         sub={<>
           The segment director can air a single line of recent artist context between
           tracks, when the active backend returns something worth saying. DuckDuckGo
-          is free and keyless; Tavily and Brave are keyed but return full web results;
-          SearXNG is keyless if you self-host it. Switching here reroutes the next
-          call, no restart.
+          is free and keyless; Tavily, Brave, Firecrawl and Outcrawl are keyed but return full web results;
+          SearXNG is keyless if you self-host it; Keenable returns web results with no
+          key. Switching here reroutes the next call, no restart.
         </>}
         metrics={[{ n: String(providers.length), l: 'providers' }]}
       />
@@ -154,34 +200,29 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
             >
               <SelectTrigger className="max-w-[360px]" aria-label="Provider"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectGroup>
-                  {providers.map(p => (
-                    <SelectItem key={p} value={p}>{searchProviderLabel(p)}</SelectItem>
-                  ))}
-                </SelectGroup>
+                {groupSearchProviders(providers).map(g => (
+                  <SelectGroup key={g.label}>
+                    <SelectLabel>{g.label}</SelectLabel>
+                    {g.ids.map(p => (
+                      <SelectItem key={p} value={p}>{searchProviderLabel(p)}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
               </SelectContent>
             </Select>
-            <div className="field-hint">
-              {provider === 'duckduckgo'
-                ? 'DuckDuckGo Instant Answer, free and keyless. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.'
-                : provider === 'tavily'
-                ? 'Tavily, paid web search with full results and an answer summary. Needs an API key.'
-                : provider === 'brave'
-                ? 'Brave Search API: real web + news results for artist queries. Metered billing with $5/month in free credits (~1,000 queries; a card on file is required). SUB/WAVE caches every search for 30 minutes.'
-                : 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed, just a running SearXNG instance.'}
-            </div>
+            <div className="field-hint">{entry?.hint}</div>
           </div>
 
           {keyed && (
             <>
               <div className="field">
-                <Label>{keyed.name} API key</Label>
+                <Label>{keyed.keyName} API key{keyed.key === 'optional' ? ' (optional)' : ''}</Label>
                 <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   <Input
                     type="password"
                     autoComplete="off"
                     value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
-                    placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : keyed.placeholder}
+                    placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : keyed.keyPlaceholder}
                     onChange={(e: ChangeEvent<HTMLInputElement>) =>
                       setForm(f => ({ ...f, search: { ...f.search, apiKey: e.target.value } }))
                     }
@@ -199,13 +240,35 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                   </Btn>
                 </div>
                 <div className="field-hint">
-                  Get one at <a href={keyed.keyUrl} target="_blank" rel="noreferrer" className="underline">{keyed.keyUrl.replace(/^https:\/\//, '')}</a>.
+                  {keyed.key === 'optional' && <>Not needed to search; a key raises the rate limit. </>}
+                  {keyed.keyPrefix && <>Only a <code>{keyed.keyPrefix}…</code> key is used: any other key on file, such as one saved for Tavily or Brave, is ignored and searches run keyless. </>}
+                  Get one at <a href={keyed.keyUrl} target="_blank" rel="noreferrer" className="underline">{keyed.keyUrl?.replace(/^https:\/\//, '')}</a>.
                   Stored alongside the other admin settings. Falls back to
                   <code> SEARCH_API_KEY</code> in <code>.env</code> when blank. Set
                   one or the other, not both.
                 </div>
               </div>
-              <KeyStatus envVar="SEARCH_API_KEY" present={apiKeySet} />
+              {/* A keyless provider isn't "missing" anything, so skip the red banner.
+                  A key on file may be another provider's, which the picked provider
+                  refuses, so "ready to use" would overclaim and the banner names the
+                  wrong key. */}
+              {keyed.key !== 'optional' && (
+                <KeyStatus
+                  envVar="SEARCH_API_KEY"
+                  present={apiKeySet && !foreignKey}
+                  detail={foreignKey ? foreignSearchKeyDetail(keyed.keyName || provider) : undefined}
+                />
+              )}
+              {/* The controller knows whether the key Keenable would send is a keen_
+                  one. A saved key already shows in the field's placeholder, so only
+                  an env key needs saying. */}
+              {provider === 'keenable' && data.search?.keenableKeySource === 'env' && (
+                <KeyStatus
+                  envVar="SEARCH_API_KEY"
+                  present
+                  detail={<><code>SEARCH_API_KEY</code> holds a Keenable key, so searches use it and get the higher rate limit.</>}
+                />
+              )}
               {keyTest && <KeyTestResult result={keyTest} />}
             </>
           )}
@@ -238,6 +301,29 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 <div className="field-hint">
                   Self-hosted SearXNG instance. No API key required. Ensure JSON format is
                   enabled in your SearXNG <code>settings.yml</code>.
+                </div>
+              </div>
+
+              <div className="field">
+                <Label>Engines (optional)</Label>
+                <Input
+                  type="text"
+                  placeholder="google, duckduckgo web, wikipedia"
+                  maxLength={SETTINGS_SEARXNG_ENGINES_MAX}
+                  value={form.search.searxngEngines ?? ''}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, search: { ...f.search, searxngEngines: e.target.value } }))
+                  }
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Comma-separated list restricting which engines SearXNG queries for
+                  SUB/WAVE&apos;s calls only — your browser traffic keeps the instance
+                  defaults. Leave blank to use the full default engine set. Names must
+                  match the <code>name:</code> field in SearXNG&apos;s{' '}
+                  <code>settings.yml</code> exactly (e.g. <code>duckduckgo web</code>,
+                  not the internal <code>engine:</code> module id): SearXNG silently
+                  ignores a name it doesn&apos;t recognise rather than erroring.
                 </div>
               </div>
             </>

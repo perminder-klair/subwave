@@ -3,7 +3,7 @@
 //
 // Two properties are load-bearing:
 //
-//  - The label mirrors radio.liq's dj_transition precedence (:287-291, :381),
+//  - The label mirrors radio.liq's dj_transition precedence (its arming lines),
 //    which lives on BOTH sides of the pair: washout/loop ride the OUTGOING
 //    track, sweep/blend/dissolve/chop ride the INCOMING one. A label derived
 //    from one side alone is wrong roughly half the time.
@@ -13,7 +13,7 @@
 //    drain-time policy may add others. Anything unsent must read null, which
 //    the dashboard renders as an em dash.
 //
-// Run: npx tsx scripts/queue-transition-label.test.ts (auto-discovered by npm test).
+// Run: `npm test -- queue-transition-label`.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -66,8 +66,8 @@ test('a washout coexists with sweep and blend', () => {
 });
 
 test('a washout suppresses dissolve and chop', () => {
-  // radio.liq:289-291 — enforced there too, so the label must describe what
-  // actually airs rather than what the queue happens to hold.
+  // radio.liq's dissolve/chop arming lines carry `not washing` too, so the
+  // label must describe what actually airs rather than what the queue holds.
   assert.equal(
     nextTransitionLabel(item({ washout: true }), item({ dissolve: true, chop: true })),
     'Washout',
@@ -75,8 +75,8 @@ test('a washout suppresses dissolve and chop', () => {
 });
 
 test('a loop suppresses every entry gesture', () => {
-  // radio.liq:288 + :381 — the loop IS the transition; garnishing it chokes
-  // the gesture.
+  // radio.liq puts `not looping` on every entry gesture: the loop IS the
+  // transition, and garnishing it chokes the gesture.
   assert.equal(
     nextTransitionLabel(item({ loop: true }), item({ sweep: true, blend: true })),
     'Loop',
@@ -96,5 +96,19 @@ test('a rendered stem blend owns the whole seam', () => {
   assert.equal(
     nextTransitionLabel(item({ washout: true }), item({ sweep: true }, true)),
     'Stem blend',
+  );
+});
+
+test('a show-boundary cut on the outgoing track is a plain crossfade', () => {
+  // radio.liq reads liq_show_fade off the OUTGOING track and stands every
+  // gesture down on both sides of the seam (#1574) — an entry flag left on the
+  // successor must not read as the transition that airs.
+  assert.equal(
+    nextTransitionLabel(item({ showFade: true }), item({ sweep: true, chop: true })),
+    'Normal',
+  );
+  assert.equal(
+    nextTransitionLabel(item({ showFade: true, washout: true }), item({ blend: true })),
+    'Normal',
   );
 });

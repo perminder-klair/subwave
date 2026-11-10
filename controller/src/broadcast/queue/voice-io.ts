@@ -1,22 +1,17 @@
-// The handoff-file write path and the spoken-segment serialiser.
-//
-// Liquidsoap polls each handoff file (say.txt, intro.txt, sfx.txt, next.txt)
-// and deletes it after reading, so two writes inside one poll window silently
-// lose the first (issue #140). Every write goes through writeHandoff(), which
-// serialises per file and waits for the previous one to be consumed. On top of
-// that, airVoice() serialises the spoken segments themselves (issue #310) and
-// holds them past any jingle already on air (issue #997).
-//
-// Part of the queue/ split - see ../queue.ts, which owns the Queue class.
+// Serialize handoff writes per file until Liquidsoap consumes them. airVoice also serializes
+// playback across voice channels and waits for active jingles. #140, #310, #997.
 
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import { config } from '../../config.js';
-import { writeFileAtomic } from '../../util/atomic-file.js';
+import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
-import { sleep } from './pure.js';
-import { awaitVoiceAir } from './voice-marker.js';
+import { sleep, type Interposed } from './pure.js';
+import { awaitVoiceAir, markerFilePresent, VOICE_AIR_TIMEOUT_MS, VOICE_MARKER_POLL_MS } from './voice-marker.js';
+import { mpegLayer3Frame, mp3FrameOffset } from '../../audio/mp3-frames.js';
+import { levelledGainDb, voiceLevellingEnabled } from '../../audio/clip-level.js';
 
 const _handoffChains: Map<string, Promise<void>> = new Map();
 
@@ -33,7 +28,7 @@ async function waitForConsumed(path: string, maxWaitMs: number) {
   // Timed out — file still on disk. Caller proceeds anyway.
 }
 
-export async function writeHandoff(path: string, contents: string, { maxWaitMs = 1500 } = {}) {
+export async function writeHandoff(path: string, contents: string | (() => string), { maxWaitMs = 1500, beforeWrite = () => true, onWritten }: { maxWaitMs?: number; beforeWrite?: () => boolean; onWritten?: () => void } = {}) {
   const prev = _handoffChains.get(path) || Promise.resolve();
   const next = prev
     .catch(() => undefined)
@@ -47,45 +42,47 @@ export async function writeHandoff(path: string, contents: string, { maxWaitMs =
       // half-written (or truncated-but-empty) file — its poll handlers read,
       // DELETE, then check non-empty, so a poll landing mid-write would drop
       // this handoff silently. rename(2) is atomic on the same volume.
-      await writeFileAtomic(path, contents);
+      if (!beforeWrite()) return false;
+      writeFileAtomicSync(path, typeof contents === 'function' ? contents() : contents);
+      onWritten?.();
+      return true;
     });
   // Hold the slot until liquidsoap consumes THIS write too, so the next
   // queued writer waits for the audio to land, not just for the write call to
   // return. Errors don't break the chain — the .catch above ensures the next
   // writer still gets its turn.
   const release = next.then(() => waitForConsumed(path, maxWaitMs).catch(() => undefined));
-  _handoffChains.set(path, release);
+  // The caller owns `next` and must see a failed write. The internal tail is
+  // bookkeeping only: keep it fulfilled so a rejected write neither becomes
+  // an unhandled rejection nor poisons the next writer for this file.
+  _handoffChains.set(path, release.catch(() => undefined));
   return next;
 }
 
-// --- Spoken-segment serialiser (issue #310) -------------------------------
-//
-// writeHandoff above stops two writes to ONE file from clobbering each other,
-// but it releases the moment liquidsoap *reads* the path (~0.5s) — long before
-// the ~20s of speech has actually played. And say.txt and intro.txt are
-// separate chains, so nothing stopped a station ID / hourly check (say.txt)
-// from airing on top of a between-track link (intro.txt), or two scheduled
-// idents stacking when their cron handlers fired together.
-//
-// airVoice() chains EVERY spoken segment across BOTH channels through one lock
-// and holds it for the clip's actual playback duration, so the next voice waits
-// for silence instead of talking over the last one. The caller unblocks as soon
-// as its own clip is handed to liquidsoap (writeHandoff resolved); only the
-// *next* caller pays the duration wait.
+// Serialize spoken playback across both voice channels, holding for the clip duration. The
+// caller returns after its handoff; the next caller waits for playback to finish. #310.
 let _voiceChain: Promise<void> = Promise.resolve();
+// Actual ownership, including queued callers and the playback hold. Never infer
+// safety from the forecast-only _chainFreeAt or from a consumed handoff file.
+let _voiceHolders = 0;
+export function voiceBusy(): boolean { return _voiceHolders > 0; }
 
-export const VOICE_LEADIN_MS = 800;   // /sounds/leadin.wav pushed before each spoken clip
+// /sounds/leadin.wav, pushed before every spoken clip except a batched exchange's
+// continuation line (subwave_no_leadin, see airVoiceExchange).
+export const VOICE_LEADIN_MS = 800;
 const VOICE_TAIL_MS = 700;     // duck ramp-back + poll/scheduling slack
-// Handoff → first word, for the voice.queued forecast only (#1382 follow-up).
-// The mixer polls say.txt/intro.txt every 0.5s (so 0-500ms, ~250 on average)
-// and then pushes the silent lead-in ahead of the clip; the marker stamps the
-// first WORD, i.e. after that head. Never used to decide anything — the real
-// air time comes from the marker, and this is the number the forecast admits
-// it is guessing.
+// Forecast-only delay covers mixer polling and the silent lead-in. Actual air time comes
+// from the marker. #1382.
 export const HANDOFF_TO_AIR_MS = 250 + VOICE_LEADIN_MS;
 // Cap a single hold so a wildly-wrong duration estimate (or a clip that never
 // really aired) can't wedge the voice channel for minutes.
-const VOICE_HOLD_MAX_MS = 90_000;
+export const VOICE_HOLD_MAX_MS = 90_000;
+// How long an overlay ID's start marker may take after its handoff: the mixer's
+// 0.5 s poll, the lead-in, the marker poller's own 0.5 s, and slack for a busy
+// host. Past it the mixer has refused the ID. A start later than this only
+// releases the lock early, and the mixer still drops the ID the moment other
+// speech is queued.
+const OVERLAY_START_GRACE_MS = HANDOFF_TO_AIR_MS + 2_500;
 
 // What a caller gets back once its clip has been handed to Liquidsoap. The
 // handoff itself is still awaited (this resolves at the same moment airVoice
@@ -114,53 +111,68 @@ export interface QueuedVoice {
   estimatedAirInMs: number;
 }
 
-// When the voice chain is expected to be free again, in epoch ms. Tracked here
-// rather than derived from _voiceChain because a promise can't be asked how
-// much longer it has — and the forecast has to be available synchronously, at
-// the moment the clip joins the queue.
-//
-// It is an ESTIMATE of an estimate: each clip's hold is its own measured length
-// plus fixed padding, and the handoff write itself can wait up to 1.5s on a
-// file the mixer hasn't polled yet. Nothing decides anything on this value; it
-// only tells a consumer roughly how long it has to get ready.
+// Track estimated voice-chain availability synchronously for forecasts. Clip duration, fixed
+// padding, and handoff latency make this unsuitable for scheduling decisions.
 let _chainFreeAt = 0;
 
-// Pure so the arithmetic is testable without a mixer. Both inputs are epoch ms
-// deadlines the clip has to clear: the serialiser's current holder, and any
-// jingle still audible (airVoice sleeps out the same window below).
+// Pure so the arithmetic is testable without a mixer. Two of the inputs are
+// epoch ms deadlines the clip has to clear: the serialiser's current holder,
+// and any jingle still audible. `jingleWindowMs` is that jingle's own total
+// window — the SAME bound waitForJingleClear applies below, so the estimate a
+// consumer prepares against and the sleep it actually takes cannot diverge.
 export function airInEstimate(
-  { now, chainFreeAt, jingleClearAt }: { now: number; chainFreeAt: number; jingleClearAt: number },
+  { now, chainFreeAt, jingleClearAt, jingleWindowMs = JINGLE_WAIT_CEILING_MS }:
+    { now: number; chainFreeAt: number; jingleClearAt: number; jingleWindowMs?: number },
 ): { waitMs: number; estimatedAirInMs: number } {
-  const jingleWait = Math.min(JINGLE_WAIT_MAX_MS, Math.max(0, jingleClearAt - now));
+  const jingleWait = jingleWaitMs(now, jingleClearAt, jingleWindowMs);
   const chainWait = Math.max(0, chainFreeAt - now);
   const waitMs = Math.max(chainWait, jingleWait);
   return { waitMs, estimatedAirInMs: waitMs + HANDOFF_TO_AIR_MS };
 }
 
-export async function airVoice(
-  path: string,
-  wavPath: string,
-  text: string,
-  gainDb = 0,
+interface AirVoiceOptions {
   // Fired SYNCHRONOUSLY, before this clip joins the voice chain — the early
   // half of the lifecycle a consumer needs in order to prepare for speech
   // rather than react to it (#1382 follow-up). Everything it reports is known
   // by now; nothing here waits on anything.
-  { onQueued }: { onQueued?: (q: QueuedVoice) => void } = {},
-): Promise<VoiceHandoff> {
+  onQueued?: (q: QueuedVoice) => void;
+  voiceId?: string;
+  pauseDeliveryId?: string | null;
+  airMarkerPromise?: Promise<number | null>;
+  // Optional IDs must not join a busy chain or wait past their song's head.
+  skipIfBusy?: boolean;
+  beforeWrite?: () => boolean;
+  jingleOverlay?: boolean;
+  jingleOverlayTrackAt?: number;
+}
+
+export function airVoice(path: string, wavPath: string, text: string, gainDb: number,
+  options: AirVoiceOptions & { skipIfBusy: true }): Promise<VoiceHandoff | null>;
+export function airVoice(path: string, wavPath: string, text: string, gainDb?: number,
+  options?: AirVoiceOptions & { skipIfBusy?: false }): Promise<VoiceHandoff>;
+export async function airVoice(
+  path: string, wavPath: string, text: string, gainDb = 0,
+  { onQueued, voiceId: stableVoiceId, pauseDeliveryId = null, airMarkerPromise,
+    skipIfBusy = false, beforeWrite = () => true, jingleOverlay = false, jingleOverlayTrackAt }: AirVoiceOptions = {},
+): Promise<VoiceHandoff | null> {
+  if (skipIfBusy && (voiceBusy() || jingleWindow().clearAtMs > Date.now())) return null;
   // Duration is read from the bare WAV path (header parse), so compute it BEFORE
   // wrapping — the annotate URI isn't a real file. The wrapped URI is only what
   // gets written to the handoff file for Liquidsoap to consume.
   const clipMs = clipDurationMs(wavPath, text);
   const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + VOICE_LEADIN_MS + VOICE_TAIL_MS);
-  const voiceId = mintVoiceId();
-  const uri = voiceUri(wavPath, gainDb, voiceId);
+  const voiceId = stableVoiceId || mintVoiceId();
+  const gain = annotatedGainDb(wavPath, gainDb);
+  const uri = voiceUri(wavPath, gain, voiceId, pauseDeliveryId, { jingleOverlay, jingleOverlayTrackAt });
   const now = Date.now();
+  const jingle = jingleWindow();
   const { waitMs, estimatedAirInMs } = airInEstimate({
-    now, chainFreeAt: _chainFreeAt, jingleClearAt: jingleClearAtMs(),
+    now, chainFreeAt: _chainFreeAt,
+    jingleClearAt: jingle.clearAtMs, jingleWindowMs: jingle.windowMs,
   });
   // This clip's own turn, then its hold — what the NEXT caller will wait for.
   _chainFreeAt = now + waitMs + holdMs;
+  _voiceHolders++;
   if (onQueued) {
     // A misbehaving consumer must not take the air path down with it. The clip
     // still airs; only its early warning is lost.
@@ -172,16 +184,194 @@ export async function airVoice(
       // A jingle stinger may be on air (or inside the cross buffer) right now —
       // it plays outside this serialiser, so wait it out before handing over.
       await waitForJingleClear();
-      return writeHandoff(path, uri);
+      return writeHandoff(path, uri, { beforeWrite });
     });
-  // Extend the shared lock until this clip has (about) finished playing.
-  _voiceChain = turn.then(() => sleep(holdMs)).then(() => {}, () => {});
-  await turn;
-  // Registered AFTER the handoff resolves, so the timeout measures the wait for
+  // Registered when the handoff resolves, so the timeout measures the wait for
   // AIR and not the wait for this clip's turn on the shared voice chain (which
   // can legitimately be a whole segment long). The marker reader keeps a short
-  // buffer of ids it saw first, so losing this race costs nothing.
-  return { voiceId, clipMs, aired: awaitVoiceAir(voiceId) };
+  // buffer of ids it saw first, so losing this race costs nothing. One reader
+  // per clip: the hold below and the caller share it.
+  const aired: Promise<number | null> = turn
+    .then(written => written
+      ? airMarkerPromise ?? awaitVoiceAir(voiceId, undefined, { requireMarker: jingleOverlay })
+      : null)
+    .catch(() => null);
+  // Extend the shared lock until this clip has (about) finished playing. The
+  // mixer may refuse an optional overlay ID after consuming its handoff, and a
+  // refused ID never starts: hold until its start is overdue, then for the
+  // clip from its real start.
+  const hold = (written: boolean) => {
+    if (!written) return undefined;
+    if (!jingleOverlay) return sleep(holdMs);
+    return Promise.race([aired, sleep(OVERLAY_START_GRACE_MS).then(() => null)])
+      .then(at => at == null ? undefined
+        : sleep(Math.min(VOICE_HOLD_MAX_MS, Math.max(0, at + clipMs + VOICE_TAIL_MS - Date.now()))));
+  };
+  _voiceChain = turn.then(hold)
+    .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
+  if (!await turn) return null;
+  return { voiceId, clipMs, aired };
+}
+
+// One line of a prepared exchange: its own clip, gain and early warning, so
+// batching cannot merge two speakers into one indistinguishable segment.
+export interface ExchangeClip {
+  wavPath: string;
+  text: string;
+  gainDb: number;
+  onQueued?: (q: QueuedVoice) => void;
+}
+
+interface AirExchangeOptions {
+  // Consulted before each line, exactly as airVoice's is: a claimed show
+  // boundary stops the rest of the conversation.
+  beforeWrite?: () => boolean;
+  // Called once, when the opening line's handoff lands (not when the whole
+  // conversation is written) — the deferred path starts its stinger here.
+  onFirstWritten?: () => void;
+  // A write that throws stops the exchange at that line; the caller still gets
+  // the handoffs that did land, so it can log what aired.
+  onWriteError?: (err: unknown, index: number) => void;
+}
+
+// Whether a multi-voice exchange goes to the mixer as one batch
+// (airVoiceExchange) or one line at a time (airVoice per line, the established
+// delivery). Both exchange call sites ask here, so the rule lives once. The
+// batch is the operator's opt-in (`djBehaviour.holdDuckBetweenSpeakers`), and
+// it also needs a mixer that writes voice markers. With no voice-playing.json
+// (a mixer that has not spoken since it started, or one older than #1382),
+// every line's `aired` resolves null the moment it is handed over. A batch
+// hands every line over within a second, so all of their bookkeeping would run
+// together: a handoff settled and the incoming presenter announced while the
+// outgoing one is still in their lead-in. Per-line delivery spaces that
+// bookkeeping by each line's playback hold, as it always has, and the first
+// clip it airs writes the file, so the next exchange batches.
+export function batchExchangeDelivery(): boolean {
+  return settings.get().djBehaviour.holdDuckBetweenSpeakers === true && markerFilePresent();
+}
+
+// Air a prepared multi-voice exchange back-to-back on one voice channel.
+//
+// Every line keeps its own clip, gain, id and air marker. The one difference
+// from N airVoice calls is WHEN each handoff is written: as soon as Liquidsoap
+// consumes the previous one, not when the previous clip finishes playing. The
+// mixer's request queue therefore never empties, so smooth_add holds the music
+// ducked for the whole conversation; written any later it drains between every
+// line and the music ramps up and back down — the audible pump this exists to
+// remove. Continuation lines also skip the silent lead-in (subwave_no_leadin):
+// it exists only to complete the duck ramp before the FIRST word, and theirs is
+// already down, so the gap between two speakers is just the clips' own padding.
+//
+// One exception keeps a continuation's lead-in: a line after a SHORT one. With
+// no lead-in, line N's voice marker is on voice-playing.json only while N's own
+// WAV plays (line N+1's marker replaces it the moment N ends), and the reader
+// polls that one file every VOICE_MARKER_POLL_MS. A shorter window can fall
+// between two polls, and the line then waits out its whole air timeout and
+// appends its session turn after the speakers who followed it. The lead-in
+// keeps N's marker up for another VOICE_LEADIN_MS, which no poll can miss, so a
+// line skips it only when the line before it has a MEASURED length of at least
+// CONTINUATION_MIN_PREV_MS (two polls, one spare for a busy event loop). An
+// estimated length keeps the lead-in: the safe direction is 800 ms of air.
+const CONTINUATION_MIN_PREV_MS = 2 * VOICE_MARKER_POLL_MS;
+
+export async function airVoiceExchange(
+  path: string,
+  clips: readonly ExchangeClip[],
+  { beforeWrite = () => true, onFirstWritten, onWriteError }: AirExchangeOptions = {},
+): Promise<(VoiceHandoff | null)[]> {
+  const prepared = clips.map((clip, index) => {
+    const clipMs = clipDurationMs(clip.wavPath, clip.text);
+    const prevMeasuredMs = index > 0 ? measuredClipDurationMs(clips[index - 1].wavPath) : null;
+    const continuation = prevMeasuredMs != null && prevMeasuredMs >= CONTINUATION_MIN_PREV_MS;
+    const leadinMs = continuation ? 0 : VOICE_LEADIN_MS;
+    const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + leadinMs + VOICE_TAIL_MS);
+    const voiceId = mintVoiceId();
+    const gain = annotatedGainDb(clip.wavPath, clip.gainDb);
+    return {
+      clip, clipMs, leadinMs, holdMs, voiceId,
+      uri: voiceUri(clip.wavPath, gain, voiceId, null, { noLeadin: continuation }),
+      leadinUri: voiceUri(clip.wavPath, gain, voiceId),
+    };
+  });
+  const totalHoldMs = prepared.reduce((sum, p) => sum + p.holdMs, 0);
+  const now = Date.now();
+  const jingle = jingleWindow();
+  const { waitMs, estimatedAirInMs } = airInEstimate({
+    now, chainFreeAt: _chainFreeAt,
+    jingleClearAt: jingle.clearAtMs, jingleWindowMs: jingle.windowMs,
+  });
+  // One reservation for the whole conversation: the next caller waits for all
+  // of it, not for the first line's handoff.
+  _chainFreeAt = now + waitMs + totalHoldMs;
+  _voiceHolders++;
+  // Every line is announced up front on its own forecast. Preceding lines are
+  // queued rather than airing. The first line's lead-in is already in
+  // estimatedAirInMs; a continuation starts the moment the previous clip ends,
+  // because the queue never drains, and a line after a short one waits for its
+  // own lead-in too.
+  let precedingMs = 0;
+  for (const [index, p] of prepared.entries()) {
+    if (index > 0) precedingMs += p.leadinMs;
+    if (p.clip.onQueued) {
+      // A misbehaving consumer must not take the air path down with it.
+      try {
+        p.clip.onQueued({
+          voiceId: p.voiceId, clipMs: p.clipMs, estimatedAirInMs: estimatedAirInMs + precedingMs,
+        });
+      } catch { /* ignore */ }
+    }
+    precedingMs += p.clipMs;
+  }
+  const handoffs: (VoiceHandoff | null)[] = prepared.map(() => null);
+  // Only lines that reached the mixer hold the voice chain. A boundary that
+  // stops the conversation must not make the next segment — the handoff that
+  // claimed it — wait out speech that never existed.
+  let landedMs = 0;
+  const turn = _voiceChain
+    .catch(() => undefined)
+    .then(async () => {
+      await waitForJingleClear();
+      for (const [index, p] of prepared.entries()) {
+        let written: boolean;
+        let restoredLeadinMs = 0;
+        try {
+          // The gate rides writeHandoff so it is asked again after the wait for
+          // Liquidsoap to consume the previous line, where the boundary can be
+          // claimed. Checking it out here would leave that window open.
+          //
+          // The URI is chosen at write time, after that wait. A handoff file
+          // still on disk means the mixer never took the previous line and
+          // writeHandoff is about to replace it: this line then reaches an
+          // EMPTY voice queue with the music still up, so it must keep the
+          // lead-in that completes the duck before its first word.
+          written = await writeHandoff(path, () => {
+            if (p.leadinMs > 0 || !existsSync(path)) return p.uri;
+            restoredLeadinMs = VOICE_LEADIN_MS;
+            return p.leadinUri;
+          }, { beforeWrite });
+        } catch (err) {
+          onWriteError?.(err, index);
+          break;
+        }
+        if (!written) break;
+        landedMs += p.holdMs + restoredLeadinMs;
+        // Registered before this line can air: the mixer plays queued lines in
+        // order, so the last one may wait a whole conversation. A marker that
+        // still arrives early is buffered briefly by the reader.
+        const aired = awaitVoiceAir(p.voiceId, VOICE_AIR_TIMEOUT_MS + totalHoldMs);
+        handoffs[index] = { voiceId: p.voiceId, clipMs: p.clipMs, aired };
+        if (index === 0) {
+          try { onFirstWritten?.(); } catch { /* ignore */ }
+        }
+      }
+      return handoffs.some(Boolean);
+    });
+  // Same hold shape as airVoice, over the conversation that actually landed: the
+  // shared lock stays until the last written line's speech and duck tail are done.
+  _voiceChain = turn.then(anyWritten => anyWritten ? sleep(landedMs) : undefined)
+    .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
+  await turn;
+  return handoffs;
 }
 
 // Short, URI-safe, and unique per clip — the whole job is telling one segment's
@@ -190,25 +380,14 @@ function mintVoiceId(): string {
   return randomBytes(6).toString('hex');
 }
 
-// --- Jingle collision guard (issue #997) -----------------------------------
-//
-// Jingles rotate into the broadcast inside Liquidsoap (radio.liq's jingle
-// rotate), entirely outside the airVoice serialiser — and because music_meta
-// is captured ABOVE that rotate, the incoming track's on_metadata fires while
-// the stinger is still audible in the crossfade, so a boundary-aired link or
-// ident talked straight over it. radio.liq announces each jingle by writing
-// jingle-playing.json ({filename, startedAt}) the moment it starts feeding;
-// the clip stays audible for up to its own length plus the cross buffer.
-// Before any voice handoff, sleep out whatever remains of that window.
-//
-// The marker is never deleted — a stale one simply computes a window in the
-// past. If the jingle WAV can't be measured (non-WAV upload, path not visible
-// to a native-dev controller), a fixed fallback length keeps the guard useful
-// without wedging the chain.
+// Wait out the jingle marker's playback window before handing off speech. Keep the marker on
+// disk; stale timestamps require no wait. Prefer mixer-measured duration, then WAV duration,
+// then a bounded fallback. #997.
 
-const JINGLE_FALLBACK_MS = 15_000; // clip length when the WAV can't be parsed
-const JINGLE_TAIL_MS = 1_000;      // fade tail + poll slack
-const JINGLE_WAIT_MAX_MS = 60_000; // never wedge the voice chain on a bad marker
+const JINGLE_FALLBACK_MS = 15_000; // clip length when nothing can measure it
+const JINGLE_TAIL_MS = 1_000;      // Fade tail and polling slack.
+// Bound clock-skewed waits by the clip's own window; this ceiling catches implausibly long clips.
+const JINGLE_WAIT_CEILING_MS = 600_000;
 
 // How recent a bed-playing.json startedAt must be to count as a live edge in
 // onBedStarted. Detection latency is one 1.5s watcher tick; anything much
@@ -216,54 +395,166 @@ const JINGLE_WAIT_MAX_MS = 60_000; // never wedge the voice chain on a bad marke
 // is never deleted, and the in-memory dedupe baseline doesn't persist).
 export const BED_MARKER_FRESH_MS = 10_000;
 
-function jingleClearAtMs(): number {
+// The guard window as two numbers: when the clip clears, and how long the window
+// is in total. The second is what bounds the sleep — see jingleWaitMs. Exported
+// as the test seam for the marker's durationSec precedence. `crossSec` replaces
+// the station crossfade as the cross term, for a caller that has to cover the
+// longest tail the jingle can wait behind (the targeted skip, #2017).
+export function jingleWindow(crossSec?: number): { clearAtMs: number; windowMs: number } {
+  const none = { clearAtMs: 0, windowMs: 0 };
   try {
     const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
     const startedMs = Number(m?.startedAt) * 1000; // liquidsoap time() is unix seconds
-    if (!Number.isFinite(startedMs) || startedMs <= 0) return 0;
-    const clipMs = (typeof m?.filename === 'string' && wavDurationMs(m.filename)) || JINGLE_FALLBACK_MS;
-    const crossMs = (Number(settings.get()?.crossfadeDuration) || 10) * 1000;
-    return startedMs + clipMs + crossMs + JINGLE_TAIL_MS;
+    if (!Number.isFinite(startedMs) || startedMs <= 0) return none;
+    // Liquidsoap's own measurement first (any container), then the RIFF parse
+    // for markers from an older broadcast image, then the blind fallback.
+    const measuredSec = Number(m?.durationSec);
+    const clipMs = (Number.isFinite(measuredSec) && measuredSec > 0 ? measuredSec * 1000 : 0)
+      || (typeof m?.filename === 'string' && wavDurationMs(m.filename))
+      || JINGLE_FALLBACK_MS;
+    // Overlays are marked at the first word on the post-cross intro layer.
+    // Between-track jingles are marked at cross feed and still need its offset.
+    const crossMs = m.placement === 'over' ? 0 : (crossSec ?? (Number(settings.get()?.crossfadeDuration) || 10)) * 1000;
+    const windowMs = clipMs + crossMs + JINGLE_TAIL_MS;
+    // A jingle fed right behind another one in cross's read-ahead burst airs
+    // only once that one has ended; the mixer says how long it waits. Absent
+    // from an older broadcast image's marker, which keeps the old window.
+    const queuedSec = Number(m?.queuedSec);
+    const queuedMs = Number.isFinite(queuedSec) && queuedSec > 0 ? queuedSec * 1000 : 0;
+    return { clearAtMs: startedMs + queuedMs + windowMs, windowMs: queuedMs + windowMs };
   } catch {
-    return 0; // no marker (or unreadable) — nothing on air to avoid
+    return none; // no marker (or unreadable) — nothing on air to avoid
   }
 }
 
+// When the marker last reported THIS jingle starting, or 0. Used by
+// queue.playJingle to retire a pending press once it has been heard. Matched on
+// the basename because the marker carries Liquidsoap's resolved path while the
+// caller holds a library filename.
+export function jingleAiredAtMs(filename: string): number {
+  try {
+    const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
+    if (m?.placement === 'over') return 0;
+    if (typeof m?.filename !== 'string') return 0;
+    if (m.filename.split('/').pop() !== filename) return 0;
+    const startedMs = Number(m?.startedAt) * 1000;
+    return Number.isFinite(startedMs) && startedMs > 0 ? startedMs : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function lastAiredJingleFilename(): string | null {
+  try {
+    const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
+    return typeof m?.filename === 'string' ? m.filename.split('/').pop() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+// What the mixer placed between the previous song and the one starting now, if
+// anything: the latest jingle, bed or pause-and-talk marker stamped after the
+// previous song started. All three are written at cross-FEED time, a whole
+// song after `prevStartedMs` (itself a tick late), so the comparison has
+// minutes of margin. A marker from before the previous song — the files are
+// never deleted — is not after it and so never counts. Unreadable or absent
+// markers count as nothing interposed: this only labels a record. `kinds`
+// narrows the markers read; the targeted skip asks for beds and breaks only,
+// since a jingle's marker cannot be ordered against now-playing (#2017).
+export function interposedSince(
+  prevStartedMs: number,
+  now = Date.now(),
+  kinds: readonly Interposed[] = ['jingle', 'bed', 'break'],
+): Interposed | null {
+  if (!Number.isFinite(prevStartedMs) || prevStartedMs <= 0) return null;
+  const markers: Array<[Interposed, string]> = [
+    ['jingle', config.liquidsoap.jinglePlayingFile],
+    ['bed', config.liquidsoap.bedPlayingFile],
+    ['break', config.liquidsoap.pauseTalkPlayingFile],
+  ];
+  let found: Interposed | null = null;
+  let latest = 0;
+  for (const [kind, file] of markers) {
+    if (!kinds.includes(kind)) continue;
+    try {
+      const marker = JSON.parse(readFileSync(file, 'utf8'));
+      if (marker.placement === 'over') continue; // no item interposed on the music timeline
+      const startedMs = Number(marker?.startedAt) * 1000;
+      if (Number.isFinite(startedMs) && startedMs > prevStartedMs && startedMs <= now && startedMs > latest) {
+        found = kind;
+        latest = startedMs;
+      }
+    } catch {
+      // no marker — nothing of this kind has aired
+    }
+  }
+  return found;
+}
+
+// Bound a jingle hold by remaining time, its own window, and the absolute ceiling. Forecasts
+// and delivery share this calculation.
+export function jingleWaitMs(now: number, clearAtMs: number, windowMs: number): number {
+  return Math.max(0, Math.min(clearAtMs - now, windowMs, JINGLE_WAIT_CEILING_MS));
+}
+
 async function waitForJingleClear() {
-  const waitMs = Math.min(JINGLE_WAIT_MAX_MS, jingleClearAtMs() - Date.now());
+  const { clearAtMs, windowMs } = jingleWindow();
+  const waitMs = jingleWaitMs(Date.now(), clearAtMs, windowMs);
   if (waitMs > 0) await sleep(waitMs);
 }
 
-// Wrap a rendered voice-clip path in a Liquidsoap `annotate:` URI. Two keys ride
-// along: `liq_amplify` applies the per-engine/persona voice trim as the clip
-// plays (radio.liq wraps the voice queues in amplify(override="liq_amplify")),
-// mirroring subsonic.getAnnotatedUri's `liq_amplify="<n> dB"` form; and
-// `subwave_voice` is the id radio.liq echoes into voice-playing.json, which is
-// how an air-time marker is matched to the segment that produced it (#1382).
-//
-// Every clip is annotated now, where a 0 dB trim used to send the bare path —
-// the id has to reach the mixer somehow, and metadata is the channel this
-// codebase already uses for exactly that (subsonic_id, subwave_kind). The
-// annotate protocol is not new here: any station with a non-zero tts.gainDb has
-// been driving these same WAV paths through it all along. The silent lead-in is
-// deliberately NOT annotated: it is pushed as its own request, and the missing
-// id is what tells the mixer's hook to skip it and mark the real clip instead.
-export function voiceUri(wavPath: string, gainDb: number, voiceId: string): string {
+// The gain a voice clip's liq_amplify carries: the caller's, plus this take's
+// levelling trim only while the operator has levelling enabled. Every voice
+// handoff (airVoice, airVoiceExchange) takes its gain from here, so the
+// levelling decision is made once.
+function annotatedGainDb(wavPath: string, gainDb: number): number {
+  return voiceLevellingEnabled() ? levelledGainDb(wavPath, gainDb) : gainDb;
+}
+
+interface VoiceUriFlags {
+  jingleOverlay?: boolean;
+  jingleOverlayTrackAt?: number;
+  noLeadin?: boolean;
+}
+
+// Annotate every voice clip with liq_amplify for gain and subwave_voice for marker matching.
+// Leave the separate silent lead-in unannotated so it cannot produce the clip's air marker.
+// subwave_no_leadin tells the mixer to skip that lead-in: the clip queues behind another
+// whose duck is already down, so the pre-roll would be dead air. #1382.
+export function voiceUri(
+  wavPath: string,
+  gainDb: number,
+  voiceId: string,
+  pauseDeliveryId: string | null = null,
+  { jingleOverlay = false, jingleOverlayTrackAt, noLeadin = false }: VoiceUriFlags = {},
+): string {
   const meta = [`subwave_voice="${voiceId}"`];
+  if (noLeadin) meta.push('subwave_no_leadin="true"');
+  if (jingleOverlay) meta.push('subwave_jingle_overlay="true"');
+  if (jingleOverlayTrackAt != null) meta.push(`subwave_overlay_track_at="${Math.floor(jingleOverlayTrackAt / 1000)}"`);
+  if (pauseDeliveryId) meta.push(`subwave_pause_delivery="${pauseDeliveryId}"`);
   if (gainDb !== 0) meta.unshift(`liq_amplify="${gainDb} dB"`);
   return `annotate:${meta.join(',')}:${wavPath}`;
 }
 
 // Best-effort playback duration of the clip ITSELF. Reads the exact length from
-// a WAV header (the local engines), and estimates from word count for anything
-// else (cloud mp3). This is the figure published to consumers as `durationMs` —
-// the padding below belongs to the serialiser's hold, not to the speech.
+// a WAV header (the local engines) or measures an mp3 (the cloud engines), and
+// only estimates from word count when the file is neither. This is the figure
+// published to consumers as `durationMs` — the padding below belongs to the
+// serialiser's hold, not to the speech.
 export function clipDurationMs(wavPath: string, text: string): number {
-  return wavDurationMs(wavPath) ?? estimateSpeechMs(text);
+  return measuredClipDurationMs(wavPath) ?? estimateSpeechMs(text);
 }
 
-// The clip plus the lead-in and duck-tail padding: what the voice chain holds
-// its lock for, and what the drain budgets a segment at.
+export function measuredClipDurationMs(path: string): number | null {
+  return wavDurationMs(path) ?? mp3DurationMs(path);
+}
+
+// The clip plus the lead-in and duck-tail padding: what airVoice holds the voice
+// chain for, and what the drain budgets a segment at. A batched exchange's
+// continuation line skips its lead-in, so budgeting every line at this figure
+// over-estimates such an exchange, the safe direction.
 export function speechDurationMs(wavPath: string, text: string): number {
   return clipDurationMs(wavPath, text) + VOICE_LEADIN_MS + VOICE_TAIL_MS;
 }
@@ -276,9 +567,88 @@ function estimateSpeechMs(text: string): number {
   return Math.ceil((words / 2.3) * 1000);
 }
 
+// Keep trailer parsing bounded, but size alone is never evidence of metadata.
+const MP3_TRAILER_MAX_BYTES = 4096;
+
+function hasValidMp3Trailer(buf: Buffer, off: number): boolean {
+  let end = buf.length;
+  if (end - off > MP3_TRAILER_MAX_BYTES) return false;
+  // ID3v1/1.1 has no length field: its signature and fixed 128-byte extent
+  // must occupy the end of the file, with no junk between it and the audio.
+  if (end - off >= 128 && buf.toString('latin1', end - 128, end - 125) === 'TAG') end -= 128;
+  if (end === off) return true;
+  if (end - off < 32) return false;
+
+  const footer = end - 32;
+  if (buf.toString('latin1', footer, footer + 8) !== 'APETAGEX') return false;
+  const version = buf.readUInt32LE(footer + 8);
+  const size = buf.readUInt32LE(footer + 12);
+  const count = buf.readUInt32LE(footer + 16);
+  const flags = buf.readUInt32LE(footer + 20);
+  if ((version !== 1000 && version !== 2000) || size < 32 || size > end - off
+      || (flags !== 0 && flags !== 0x80000000)
+      || (version === 1000 && flags !== 0)
+      || buf.subarray(footer + 24, end).some(byte => byte !== 0)) return false;
+
+  // APE's size includes the footer and items, but excludes its optional
+  // header. Both records must agree, and every item must fit before the footer.
+  let item = end - size;
+  if (flags === 0x80000000) {
+    if (item - 32 !== off
+        || !buf.subarray(off, off + 20).equals(buf.subarray(footer, footer + 20))
+        || buf.readUInt32LE(off + 20) !== 0xa0000000
+        || buf.subarray(off + 24, off + 32).some(byte => byte !== 0)) return false;
+  } else if (item !== off) return false;
+  const keys = new Set<string>();
+  for (let i = 0; i < count; i++) {
+    if (item + 8 > footer) return false;
+    const valueSize = buf.readUInt32LE(item);
+    const itemFlags = buf.readUInt32LE(item + 4);
+    if ((itemFlags & ~7) !== 0 || (itemFlags & 6) === 6) return false;
+    item += 8;
+    const keyEnd = buf.indexOf(0, item);
+    if (keyEnd < item || keyEnd >= footer) return false;
+    const key = buf.toString('latin1', item, keyEnd);
+    if (!/^[\x20-\x7e]{2,255}$/.test(key) || ['OggS', 'TAG', 'ID3', 'MP+'].includes(key)) return false;
+    const folded = key.toLowerCase();
+    if (keys.has(folded)) return false;
+    keys.add(folded);
+    const valueStart = keyEnd + 1;
+    item = valueStart + valueSize;
+    if (item > footer || ((itemFlags & 6) !== 2 && !isUtf8(buf.subarray(valueStart, item)))) return false;
+  }
+  return item === footer;
+}
+
+// Duration of an mp3 clip (ElevenLabs, Fish, openai-compatible) without
+// decoding it: walk the frame headers and add up what each frame holds. That
+// stays exact on variable bitrate, where file size over bitrate can come out
+// seconds short, and short is the direction that lets the next line talk over
+// this one. Returns null, so the caller falls back to the estimate, for
+// anything that is not Layer III or that the walk cannot follow to the end.
+function mp3DurationMs(path: string): number | null {
+  try {
+    const buf = readFileSync(path);
+    let off = mp3FrameOffset(buf);
+    if (off == null) return null;
+    let seconds = 0;
+    let frames = 0;
+    for (let frame = mpegLayer3Frame(buf, off); frame && off + frame.length <= buf.length; frame = mpegLayer3Frame(buf, off)) {
+      seconds += frame.seconds;
+      frames += 1;
+      off += frame.length;
+    }
+    if (frames < 2 || !hasValidMp3Trailer(buf, off)) return null;
+    return Math.ceil(seconds * 1000);
+  } catch {
+    return null;
+  }
+}
+
 // Duration from a WAV header (byteRate from `fmt `, byte count from `data`).
-// Returns null for non-WAV or anything it can't parse, so the caller falls back
-// to the word-count estimate. Reads only the first 4KB — headers are tiny.
+// Returns null for non-WAV or anything it can't parse, so the caller tries the
+// mp3 reader and then the word-count estimate. Reads only the first 4KB —
+// headers are tiny.
 function wavDurationMs(path: string): number | null {
   let fd: number | null = null;
   try {
@@ -315,4 +685,3 @@ function wavDurationMs(path: string): number | null {
     if (fd != null) closeSync(fd);
   }
 }
-

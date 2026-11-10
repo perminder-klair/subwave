@@ -1,8 +1,3 @@
-// Sleep-timer sheet: arm a duration and playback tunes out when it lapses.
-// When armed, a live countdown heads the sheet with a cancel row; the duration
-// rows below re-arm (replace) the running timer. Follows the ThemesDrawer row
-// styling so the two bottom sheets read as one family.
-
 import { Check, MoonStar } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { Pressable, Text, View } from 'react-native';

@@ -11,7 +11,7 @@
 // allowlist went the same way — a skill assigned to one DJ fired under whoever
 // happened to be on air.
 //
-// Run: `tsx scripts/skill-eligibility.test.ts`.
+// Run: `npm test -- skill-eligibility`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -71,4 +71,36 @@ test('the disabled rule is reported first when both rules are closed', () => {
   const both = skillEligible({ seeded: false, skill: 'dabbers', enabled: {}, personaSkills: ['news'] });
   assert.equal(both.allowed, false);
   assert.match(both.reason || '', /disabled/);
+});
+
+
+test('a co-hosted skill requires an active guest roster after enable and persona checks', () => {
+  const base = {
+    seeded: true, skill: 'case-discussion', enabled: {}, personaSkills: ['case-discussion'],
+    requiresCohosts: true,
+  };
+  assert.deepEqual(skillEligible({ ...base, hasCohosts: true }), { allowed: true });
+  const solo = skillEligible({ ...base, hasCohosts: false });
+  assert.equal(solo.allowed, false);
+  assert.equal(solo.reason, 'requires a co-hosted show');
+
+  assert.deepEqual(
+    skillEligible({ ...base, requiresCohosts: false, hasCohosts: false }),
+    { allowed: true },
+    'ordinary one-persona skills are unchanged on solo shows',
+  );
+});
+
+test('co-host roster is checked after enable and persona ownership', () => {
+  const disabled = skillEligible({
+    seeded: false, skill: 'case-discussion', enabled: {}, personaSkills: ['case-discussion'],
+    requiresCohosts: true, hasCohosts: false,
+  });
+  assert.match(disabled.reason || '', /disabled/);
+
+  const notOwned = skillEligible({
+    seeded: true, skill: 'case-discussion', enabled: {}, personaSkills: ['weather'],
+    requiresCohosts: true, hasCohosts: false,
+  });
+  assert.match(notOwned.reason || '', /persona/);
 });

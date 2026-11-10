@@ -44,9 +44,8 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
     saveConfig(cfg);
   }
 
-  // Dev has no `image:` on the controller, so it must build locally. The prods
-  // reference published GHCR images, and `--pull always` keeps a stale
-  // locally-tagged image from masking the upstream release.
+  // Dev has no `image:` on the controller, so it builds locally. The prods use
+  // published GHCR images; `--pull always` stops a stale local tag masking them.
   const wantBuild = target.env === 'dev';
   const wantPull = target.env === 'dev' ? undefined : ('always' as const);
   header(`Starting ${target.env} stack`);
@@ -58,8 +57,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
   console.log();
   if (code !== 0) {
     err(`docker compose exited ${code}`);
-    // A user not in the `docker` group gets EACCES on docker.sock. Worth
-    // detecting: without the hint, #156's operator resorted to `sudo su`.
+    // A user not in the `docker` group gets EACCES on docker.sock (#156).
     if (dockerSocketPermissionDenied()) {
       console.log();
       warn(`can't talk to /var/run/docker.sock — your user isn't in the docker group`);
@@ -106,8 +104,8 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
     }
   }
 
-  // Otherwise a fresh install reads "stack ready" and misses that nothing will
-  // play until Navidrome + LLM are connected. Silent once setup is done.
+  // Otherwise a fresh install reads "stack ready" and misses that nothing plays
+  // until Navidrome + LLM are connected. Silent once setup is done.
   const needsSetup = healthy ? await checkNeedsSetup(target.env) : null;
   if (needsSetup === true) {
     console.log();
@@ -123,8 +121,7 @@ export async function runStartCommand(opts: StartOpts = {}): Promise<void> {
 }
 
 // Explicit arg → persisted preferredEnv → filesystem heuristic. An undecidable
-// install errors out rather than prompting; in practice that branch is
-// unreachable, since init writes preferredEnv and clones infer as dev.
+// install errors out rather than prompting.
 function resolveEnv(arg?: StartableEnv): ComposeFile | null {
   if (arg) {
     const match = getComposeFiles().find((f) => f.env === arg);
@@ -152,9 +149,8 @@ function resolveEnv(arg?: StartableEnv): ComposeFile | null {
   return null;
 }
 
-// Catches an old stack silently occupying the container names a fresh install
-// reuses — in v0.1.30 a 44-minute-old `:pocket` build masked a fresh scaffold
-// and read as the new one. Expected version: env → root .env → 'latest'.
+// Catches an old stack occupying the container names a fresh install reuses.
+// Expected version: env → root .env → 'latest'.
 function warnIfVersionMismatch(file: ComposeFile | null): void {
   if (!file) return;
   let expected = process.env.SUBWAVE_VERSION?.trim();

@@ -1,5 +1,6 @@
 import CatalogBrief from '@/components/ui/catalog-brief';
 import type { CommunitySkill } from '@/lib/communitySkills';
+import { feedHost } from '@/lib/feed-host';
 
 // One card in the /skills showcase grid. Browse-only: it presents a community
 // skill's brief and provenance — installation happens in a station's admin
@@ -10,6 +11,7 @@ export default function CommunitySkillCard({ skill }: { skill: CommunitySkill })
     .split(',')
     .map((c) => c.trim())
     .filter(Boolean);
+  const source = feedHost(skill.feed);
 
   return (
     <li className="bs-skill-card">
@@ -19,6 +21,8 @@ export default function CommunitySkillCard({ skill }: { skill: CommunitySkill })
       </div>
 
       <CatalogBrief text={skill.brief} />
+
+      {source && <p className="bs-skill-credit">reads {source} before it speaks</p>}
 
       {contexts.length > 0 && (
         <ul className="bs-skill-tags" aria-label="Uses live context">

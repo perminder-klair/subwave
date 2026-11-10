@@ -1,130 +1,86 @@
-// Admin-gated backup / restore of station config + the tag DB.
-//
-// Export bundles the station-defining state into a single downloadable zip:
-// settings (personas, DJ prompt, LLM/TTS config — written from the redacted
-// view so API keys never leave the box), the mood/tag database, and operator
-// media (jingles, SFX, reference voices, themes, skills). Host-specific and
-// secret files (Navidrome creds, icecast secrets, live session/queue/logs) are
-// deliberately excluded.
-//
-// Import reverses it: settings flow back through settings.update() (which keeps
-// existing API keys via the 'set' sentinel and regenerates the liquidsoap_*.txt
-// files), the tag DB is swapped in and reloaded live, and media folders are
-// extracted back under STATE_DIR. See discussion #404.
-//
-// Two restore entry points share one `applyBackupZip()` core:
-//   POST /backup/import       — the zip is the raw request body (browser upload)
-//   POST /backup/import-file  — restore a zip already sitting in STATE_DIR
-// The disk path exists because a big-library backup (29k tracks → a tag DB well
-// over 100 MB) can exceed an edge proxy's upload cap — Cloudflare 413s before
-// the request reaches the controller — and dropping the file into state/
-// bypasses that entirely. GET /backup/restorable lists candidates (#612).
+// Exports omit host secrets and live state, using redacted settings (#404).
+// Upload and disk restore share applyBackupZip; disk restore bypasses proxy caps (#612).
+// Scheduled exports share the assembly path (#1570).
 import express from 'express';
 import AdmZip from 'adm-zip';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm, readdir, stat, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
 import * as library from '../music/library.js';
 import * as libraryDb from '../music/library-db.js';
-import { clearUserThemeCache } from '../themes.js';
+import {
+  BACKUP_FORMAT,
+  BACKUP_VERSION,
+  INCLUDE_DIRS,
+  INCLUDE_FILES,
+  buildBackupZip,
+} from '../backup/zip.js';
+import { isScheduledBackupName } from '../backup/pure.js';
+import { clearUserThemeCache, themeIdsAfterImport } from '../themes.js';
+import { migrateImportedPersona } from '../personas/import-migration.js';
 import { requireAdmin } from '../middleware/auth.js';
+import * as jingles from '../broadcast/jingles.js';
+import * as sfx from '../broadcast/sfx.js';
+import * as blocklist from '../music/blocklist.js';
+import { clearWalk } from '../music/library-walk.js';
+import {
+  SKILL_BUNDLE_MAX_BYTES,
+  restoreSkillMembers,
+  skillMemberOf,
+  type SkillMember,
+} from '../skills/install.js';
+import { isSafeZipEntry, readZipEntryCapped } from '../util/zip-entry.js';
+import { stripManagedSettings } from '../setup/hosted.js';
 
 export const router = express.Router();
 
-const BACKUP_FORMAT = 'subwave-backup';
-const BACKUP_VERSION = 1;
-
-// Top-level state files copied verbatim (settings.json + library.db are handled
-// specially; manifest.json is generated).
-const INCLUDE_FILES = ['jingles.json', 'jingles.m3u', 'sfx.json'] as const;
-// Top-level state directories copied whole.
-const INCLUDE_DIRS = [
-  'persona-avatars',
-  'jingles',
-  'sfx',
-  'voices',
-  'themes',
-  'skills',
-] as const;
-// Everything an import is allowed to write under STATE_DIR (besides the
-// specially-handled settings.json / library.db).
+// Everything an import may write under STATE_DIR (settings.json / library.db
+// are handled separately).
 const RESTORABLE = new Set<string>([...INCLUDE_FILES, ...INCLUDE_DIRS]);
 
-const appVersion = (() => {
-  // Build-arg wins (set from `git describe` by scripts/update.sh and the
-  // publish-images CI) so an image built off `develop` reports its true version
-  // rather than the stale package.json number, which only bumps on `main`.
-  // Mirrors web/next.config.js.
-  const fromEnv = process.env.SUBWAVE_BUILD_VERSION;
-  if (fromEnv) return fromEnv.replace(/^v/, '');
-  try {
-    const p = fileURLToPath(new URL('../../package.json', import.meta.url));
-    return JSON.parse(readFileSync(p, 'utf8')).version || 'unknown';
-  } catch {
-    return 'unknown';
-  }
-})();
+// Members that are never extracted as-is. The sidecars go through the module
+// that owns them (jingles.restoreMeta / sfx.restoreMeta) — the same name rules
+// those modules apply to a bundled or uploaded file — and jingles.m3u is not
+// read at all: it is regenerated from the restored jingles.json. skills/** goes
+// through the skill import's guards, so any tool.mjs arrives quarantined.
+// blocklist.json goes through blocklist.restore (the boot parser, and the live
+// in-memory list, which a file copy would leave stale until a restart).
+const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json', 'blocklist.json']);
 
-// The top-level path segment of a zip entry ('jingles/foo.wav' -> 'jingles').
+// manifest.json, settings.json, a theme and a sidecar are read into memory, so
+// each is bounded by its DECLARED size before it is inflated. Generous: a
+// settings.json is tens of kilobytes.
+const JSON_MEMBER_MAX_BYTES = 16 * 1024 * 1024;
+
 function topSegment(entryName: string): string {
   return entryName.replace(/\\/g, '/').split('/')[0];
 }
 
-// Reject absolute paths and any '..' traversal so a malicious zip can't write
-// outside STATE_DIR.
-function isSafeEntry(entryName: string): boolean {
-  const n = entryName.replace(/\\/g, '/');
-  if (n.startsWith('/') || /^[a-zA-Z]:/.test(n)) return false;
-  return !n.split('/').includes('..');
+// Parse a JSON member, or say why it can't be. `null` data = absent.
+function readJsonMember(zip: AdmZip, name: string): { data: unknown } | { error: string } | null {
+  const entry = zip.getEntry(name);
+  if (!entry) return null;
+  const buf = readZipEntryCapped(entry, JSON_MEMBER_MAX_BYTES);
+  if (!buf) return { error: `${name} is too large` };
+  try {
+    return { data: JSON.parse(buf.toString('utf8')) };
+  } catch {
+    return { error: `corrupt ${name}` };
+  }
 }
 
-// ---------------------------------------------------------------------------
-// GET /backup/export — download a zip snapshot of station config + tag DB.
-// ---------------------------------------------------------------------------
+// A sidecar's one structural requirement, checked before anything is written.
+function isSidecar(data: unknown): boolean {
+  const items = (data as any)?.items;
+  return !!items && typeof items === 'object' && !Array.isArray(items);
+}
+
 router.get('/backup/export', requireAdmin, async (req, res) => {
-  let tmpDir: string | null = null;
   try {
-    await settings.load();
-    const zip = new AdmZip();
-
-    // Settings — redacted so API keys / webhook auth never leave the box. This
-    // object also carries shows + schedule, so they round-trip too.
-    zip.addFile(
-      'settings.json',
-      Buffer.from(JSON.stringify(settings.getRedacted(), null, 2)),
-    );
-
-    // Tag DB — consistent online backup (WAL-safe), not a raw file copy.
-    if (existsSync(join(STATE_DIR, 'library.db'))) {
-      tmpDir = await mkdtemp(join(tmpdir(), 'subwave-backup-'));
-      const dbTmp = join(tmpDir, 'library.db');
-      await library.load(); // ensure the DB handle is open before backing up
-      await libraryDb.backup(dbTmp);
-      zip.addLocalFile(dbTmp, '', 'library.db');
-    }
-
-    for (const f of INCLUDE_FILES) {
-      const p = join(STATE_DIR, f);
-      if (existsSync(p)) zip.addLocalFile(p, '', f);
-    }
-    for (const d of INCLUDE_DIRS) {
-      const p = join(STATE_DIR, d);
-      if (existsSync(p)) zip.addLocalFolder(p, d);
-    }
-
-    const manifest = {
-      format: BACKUP_FORMAT,
-      version: BACKUP_VERSION,
-      appVersion,
-      createdAt: new Date().toISOString(),
-      contents: zip.getEntries().map(e => e.entryName),
-    };
-    zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2)));
-
+    const zip = await buildBackupZip();
     const stamp = new Date().toISOString().slice(0, 10);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
@@ -134,21 +90,22 @@ router.get('/backup/export', requireAdmin, async (req, res) => {
     res.send(zip.toBuffer());
   } catch (err: any) {
     res.status(500).json({ error: err.message });
-  } finally {
-    if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
-// A restore outcome carries its own HTTP status so the validation failures
-// (bad zip / wrong manifest / corrupt member) surface as 400s and only genuine
-// surprises fall through to a 500. Both restore routes return it verbatim.
+// Carries its own HTTP status so validation failures surface as 400s and only
+// genuine surprises fall through to a 500. Both restore routes return it verbatim.
 type RestoreOutcome =
-  | { ok: true; status: 200; restored: string[]; requiresRestart: boolean }
+  | {
+    ok: true; status: 200; restored: string[]; requiresRestart: boolean;
+    // Members left out by a guard, and skills whose code waits for review.
+    skipped: string[]; skillsAwaitingReview: string[];
+    // Hosted: settings paths the box agent owns, left as they were (setup/hosted.ts).
+    managed: string[];
+  }
   | { ok: false; status: number; error: string };
 
-// Shared restore core for both the upload (POST /backup/import) and the disk
-// (POST /backup/import-file) routes. Validates the manifest before touching any
-// state, then restores settings → tag DB → media. Manages its own tmp dir.
+// Shared restore core. Validates the manifest before touching any state.
 async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
   if (!Buffer.isBuffer(body) || body.length === 0) {
     return { ok: false, status: 400, error: 'expected a zip file body' };
@@ -161,17 +118,12 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     return { ok: false, status: 400, error: 'not a valid zip file' };
   }
 
-  // Validate manifest before touching any state.
-  const manifestEntry = zip.getEntry('manifest.json');
-  if (!manifestEntry) {
+  const manifestRead = readJsonMember(zip, 'manifest.json');
+  if (!manifestRead) {
     return { ok: false, status: 400, error: 'missing manifest.json — not a SUB/WAVE backup' };
   }
-  let manifest: any;
-  try {
-    manifest = JSON.parse(manifestEntry.getData().toString('utf8'));
-  } catch {
-    return { ok: false, status: 400, error: 'corrupt manifest.json' };
-  }
+  if ('error' in manifestRead) return { ok: false, status: 400, error: manifestRead.error };
+  const manifest: any = manifestRead.data;
   if (manifest?.format !== BACKUP_FORMAT) {
     return { ok: false, status: 400, error: 'not a SUB/WAVE backup' };
   }
@@ -179,42 +131,130 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     return { ok: false, status: 400, error: `unsupported backup version: ${manifest?.version}` };
   }
 
+  const settingsRead = readJsonMember(zip, 'settings.json');
+  let settingsPatch: Record<string, unknown> | null = null;
+  let managed: string[] = [];
+  if (settingsRead) {
+    if ('error' in settingsRead) return { ok: false, status: 400, error: `${settingsRead.error} in backup` };
+    const parsed = settingsRead.data;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, status: 400, error: 'settings.json must be a settings object' };
+    }
+    settingsPatch = { ...parsed };
+    if (Array.isArray(settingsPatch.personas)) {
+      settingsPatch.personas = settingsPatch.personas.map(migrateImportedPersona);
+    }
+    // Hosted: a backup from a self-hosted station carries its own LLM route,
+    // voice engine, embedding route, persona engine pins and listener ceiling.
+    // Those are the box agent's, so they stay as they are, as on any other save.
+    ({ patch: settingsPatch, dropped: managed } = stripManagedSettings(settingsPatch, {
+      defaultEngine: settings.get()?.tts?.defaultEngine,
+    }));
+    const themes = new Map<string, string>();
+    for (const entry of zip.getEntries()) {
+      const name = entry.entryName.replace(/\\/g, '/');
+      if (!entry.isDirectory && name === `themes/${basename(name)}` && name.endsWith('.json')) {
+        const buf = readZipEntryCapped(entry, JSON_MEMBER_MAX_BYTES);
+        if (!buf) return { ok: false, status: 400, error: `${name} is too large` };
+        themes.set(basename(name), buf.toString('utf8'));
+      }
+    }
+    const themeIds = await themeIdsAfterImport(themes);
+    try {
+      await settings.prepareUpdate(settingsPatch, { themeIds });
+    } catch (err) {
+      return { ok: false, status: 400, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // The routed members, read and checked before anything is written, so a bad
+  // one refuses the restore rather than landing half of it.
+  const sidecars: { file: 'jingles.json' | 'sfx.json'; data: unknown }[] = [];
+  for (const file of ['jingles.json', 'sfx.json'] as const) {
+    const read = readJsonMember(zip, file);
+    if (!read) continue;
+    if ('error' in read) return { ok: false, status: 400, error: `${read.error} in backup` };
+    if (!isSidecar(read.data)) return { ok: false, status: 400, error: `${file} in backup is not a sidecar` };
+    sidecars.push({ file, data: read.data });
+  }
+  // The never-play list, checked here for the same reason. A backup made
+  // before it was included has none, and the station's list is left alone.
+  let blocklistDoc: unknown = undefined;
+  const blocklistRead = readJsonMember(zip, 'blocklist.json');
+  if (blocklistRead) {
+    if ('error' in blocklistRead) return { ok: false, status: 400, error: `${blocklistRead.error} in backup` };
+    if (!blocklist.isStoreDocument(blocklistRead.data)) {
+      return { ok: false, status: 400, error: 'blocklist.json in backup is not a never-play list' };
+    }
+    blocklistDoc = blocklistRead.data;
+  }
+  const skillMembers: SkillMember[] = [];
+  const skipped: string[] = [];
+  for (const entry of zip.getEntries()) {
+    if (entry.isDirectory || topSegment(entry.entryName) !== 'skills') continue;
+    if (!isSafeZipEntry(entry.entryName)) continue;
+    const member = skillMemberOf(entry.entryName);
+    if ('reason' in member) {
+      skipped.push(`${entry.entryName}: ${member.reason}`);
+      continue;
+    }
+    const data = readZipEntryCapped(entry, SKILL_BUNDLE_MAX_BYTES);
+    if (!data) return { ok: false, status: 400, error: `${entry.entryName} is too large for a skill file` };
+    skillMembers.push({ ...member, data });
+  }
+
   const restored: string[] = [];
   let requiresRestart = false;
   let tmpDir: string | null = null;
+  let blocklistRestored = false;
   try {
-    // 1) Media files + dirs — extract allow-listed entries back under STATE_DIR,
-    //    rejecting anything outside it. This MUST run before settings.update():
-    //    settings validation resolves theme.active + shows[].themeId against the
-    //    theme registry, which reads custom themes from state/themes/. Restore a
-    //    backup whose active theme is a custom one and, if the theme files aren't
-    //    on disk yet, update() throws `theme.active "<id>" is not a known theme
-    //    id` and aborts the whole restore (issue #917). Extract first, then drop
-    //    the 30s user-theme cache so update() sees the just-restored themes.
+    // 1) Media — must run BEFORE settings.update(): settings validation resolves
+    //    theme.active / shows[].themeId against themes read from state/themes/,
+    //    so a custom theme not yet on disk aborts the whole restore (#917).
+    //    Clear the user-theme cache after extracting.
     const touched = new Set<string>();
     for (const entry of zip.getEntries()) {
       if (entry.isDirectory) continue;
       const name = entry.entryName;
       if (name === 'manifest.json' || name === 'settings.json' || name === 'library.db') continue;
-      if (!isSafeEntry(name) || !RESTORABLE.has(topSegment(name))) continue;
+      if (!isSafeZipEntry(name) || !RESTORABLE.has(topSegment(name))) continue;
+      // Routed root files have no children; extraction collapses aliases like sfx.json/.
+      if (ROUTED_FILES.has(topSegment(name)) || topSegment(name) === 'skills') continue;
       zip.extractEntryTo(entry, STATE_DIR, true, true);
       touched.add(topSegment(name));
     }
     if (touched.has('themes')) clearUserThemeCache();
     for (const t of touched) restored.push(t);
 
-    // 2) Settings — back through update() so they validate, the 'set' apiKey
-    //    sentinel keeps existing keys, and the liquidsoap_*.txt files + the
-    //    schedule.json split are regenerated.
-    const settingsEntry = zip.getEntry('settings.json');
-    if (settingsEntry) {
-      let parsed: any;
-      try {
-        parsed = JSON.parse(settingsEntry.getData().toString('utf8'));
-      } catch {
-        return { ok: false, status: 400, error: 'corrupt settings.json in backup' };
-      }
-      const result = await settings.update(parsed);
+    // 1b) Sidecars through their owners; the playlist is rebuilt, never copied.
+    for (const { file, data } of sidecars) {
+      const { dropped } = file === 'jingles.json'
+        ? await jingles.restoreMeta(data)
+        : await sfx.restoreMeta(data);
+      for (const name of dropped) skipped.push(`${file}: "${name}" is not a usable entry`);
+      restored.push(file);
+    }
+    if (blocklistDoc !== undefined) {
+      const { dropped } = await blocklist.restore(blocklistDoc);
+      if (dropped) skipped.push(`blocklist.json: ${dropped} unusable record(s)`);
+      restored.push('blocklist.json');
+      blocklistRestored = true;
+    }
+
+    // 1c) Skills through the import's guards: any tool.mjs not already live
+    //     (or shipped in this image) waits as tool.mjs.pending for review.
+    let skillsAwaitingReview: string[] = [];
+    if (skillMembers.length) {
+      const result = await restoreSkillMembers(skillMembers);
+      skipped.push(...result.skipped);
+      skillsAwaitingReview = result.quarantined;
+      if (result.restored.length) restored.push('skills');
+    }
+
+    // 2) Settings — via update() so the 'set' apiKey sentinel keeps existing keys
+    //    and liquidsoap_*.txt + schedule.json are regenerated.
+    if (settingsPatch) {
+      const result = await settings.update(settingsPatch);
       requiresRestart = Boolean(result.requiresRestart);
       restored.push('settings.json');
     }
@@ -225,28 +265,33 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       tmpDir = await mkdtemp(join(tmpdir(), 'subwave-restore-'));
       const dbTmp = join(tmpDir, 'library.db');
       zip.extractEntryTo(dbEntry, tmpDir, false, true);
+      // The restored table is not the walk the stamp describes: hearts wait for
+      // the next clean walk (music/library-walk.ts). Cleared before the swap, so
+      // a swap that fails half-way still reads as unsettled.
+      clearWalk();
       await libraryDb.restoreFromFile(dbTmp);
       await library.reload();
       restored.push('library.db');
     }
 
-    return { ok: true, status: 200, restored, requiresRestart };
+    return { ok: true, status: 200, restored, requiresRestart, skipped, skillsAwaitingReview, managed };
   } finally {
+    // As after any list edit, the queue and the coast playlist drop what the
+    // restored list blocks. Last, so the coast rebuilds with the restored
+    // settings and library.db, and in `finally`, so a later step that throws
+    // cannot leave a restored list live with its blocked tracks still queued.
+    // Loaded here, not at the top: blocklist-effects reaches the queue and the
+    // scheduler, whose settings watcher rebuilds the coast on every policy
+    // change, and a process that only loads this route must not start it
+    // (scripts/backup-route-imports.test.ts). Boot loads both anyway.
+    if (blocklistRestored) (await import('../broadcast/blocklist-effects.js')).applyBlocklistChange();
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-// ---------------------------------------------------------------------------
-// POST /backup/import — restore a previously-exported zip. Body is the raw zip
-// (the global express.json parser caps at 600kb and can't carry it), so a
-// route-scoped raw parser buffers it instead.
-//
-// NOTE: a big backup can still be rejected upstream — Cloudflare and many
-// reverse proxies cap request bodies (Cloudflare's free/pro limit is 100 MB),
-// so the controller's 500mb cap here is not the only gate. When the upload is
-// too large, use POST /backup/import-file (the file is read off disk, never
-// uploaded through the proxy). See #612.
-// ---------------------------------------------------------------------------
+// Body is the raw zip; the global express.json parser caps at 600kb, hence the
+// route-scoped raw parser. The 500mb cap here is not the only gate — proxies cap
+// request bodies too, so oversized uploads go via /backup/import-file (#612).
 router.post(
   '/backup/import',
   requireAdmin,
@@ -255,38 +300,45 @@ router.post(
     try {
       const outcome = await applyBackupZip(req.body);
       if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.error });
-      res.json({ ok: true, restored: outcome.restored, requiresRestart: outcome.requiresRestart });
+      res.json({
+        ok: true,
+        restored: outcome.restored,
+        requiresRestart: outcome.requiresRestart,
+        skipped: outcome.skipped,
+        skillsAwaitingReview: outcome.skillsAwaitingReview,
+        ...(outcome.managed.length ? { managed: outcome.managed } : {}),
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   },
 );
 
-// Only top-level *.zip files are candidate backups. A name that doesn't survive
-// basename() unchanged (slashes, traversal) or isn't a .zip is rejected so the
-// disk-restore route can never read outside STATE_DIR.
+// Only top-level *.zip names, so the disk routes can never read outside STATE_DIR.
 function isSafeBackupName(name: string): boolean {
   if (typeof name !== 'string' || !name) return false;
   if (basename(name) !== name) return false;
   return name.toLowerCase().endsWith('.zip');
 }
 
-// ---------------------------------------------------------------------------
-// GET /backup/restorable — list backup zips sitting in STATE_DIR, newest first.
-// The escape hatch when a backup is too big to upload through an edge proxy:
-// the operator copies the zip into the station's state/ folder and restores it
-// from here without it ever traversing the proxy. See #612.
-// ---------------------------------------------------------------------------
+// Lists every top-level zip in STATE_DIR, newest first, including ones the
+// operator hand-copied there (#612). `auto` uses the same name grammar retention
+// prunes by (#1570) so the list can't disagree with the sweep.
 router.get('/backup/restorable', requireAdmin, async (_req, res) => {
   try {
     const names = await readdir(STATE_DIR).catch(() => [] as string[]);
-    const files: { name: string; size: number; mtime: string }[] = [];
+    const files: { name: string; size: number; mtime: string; auto: boolean }[] = [];
     for (const name of names) {
       if (!isSafeBackupName(name)) continue;
       try {
         const st = await stat(join(STATE_DIR, name));
         if (!st.isFile()) continue;
-        files.push({ name, size: st.size, mtime: st.mtime.toISOString() });
+        files.push({
+          name,
+          size: st.size,
+          mtime: st.mtime.toISOString(),
+          auto: isScheduledBackupName(name),
+        });
       } catch {
         /* vanished between readdir and stat — skip */
       }
@@ -298,12 +350,28 @@ router.get('/backup/restorable', requireAdmin, async (_req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /backup/import-file — restore a zip already present in STATE_DIR. Body is
-// a tiny JSON `{ file }` (handled by the global express.json parser), so the
-// large zip is read off disk instead of being uploaded — sidestepping any proxy
-// request-body cap. See #612.
-// ---------------------------------------------------------------------------
+// Downloads an EXISTING zip rather than building a fresh one, so a scheduled
+// backup can leave the disk it protects (#1570).
+router.get('/backup/file/:name', requireAdmin, async (req, res) => {
+  try {
+    const name = req.params.name;
+    if (!isSafeBackupName(name)) {
+      return res.status(400).json({ error: 'invalid backup file name' });
+    }
+    const path = join(STATE_DIR, name);
+    if (!existsSync(path)) {
+      return res.status(404).json({ error: `no such backup in state dir: ${name}` });
+    }
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(await readFile(path));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Body is a tiny JSON `{ file }`; the zip is read off disk, sidestepping proxy
+// request-body caps (#612).
 router.post('/backup/import-file', requireAdmin, async (req, res) => {
   try {
     const file = (req.body && (req.body as any).file) as unknown;
@@ -317,7 +385,14 @@ router.post('/backup/import-file', requireAdmin, async (req, res) => {
     const body = await readFile(path);
     const outcome = await applyBackupZip(body);
     if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.error });
-    res.json({ ok: true, restored: outcome.restored, requiresRestart: outcome.requiresRestart });
+    res.json({
+      ok: true,
+      restored: outcome.restored,
+      requiresRestart: outcome.requiresRestart,
+      skipped: outcome.skipped,
+      skillsAwaitingReview: outcome.skillsAwaitingReview,
+      ...(outcome.managed.length ? { managed: outcome.managed } : {}),
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

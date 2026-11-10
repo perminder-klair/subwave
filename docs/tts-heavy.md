@@ -44,8 +44,9 @@ start getting tempo/key/loudness.
   Demucs vocal ranges add a CPU-torch stack (the `-heavy` image is ~1.9 GB) that
   isn't in the lean image. Enable them with **one line in `.env`** —
   [see below](#enabling-sounds-like--vocals-the-heavy-tier).
-- **Turn it off.** If you don't want analysis at all, `docker compose stop
-  analyzer` (it won't come back until the next explicit `up`).
+- **Turn it off.** One line in `.env` — `ANALYZER_REPLICAS=0` — and the next
+  `docker compose up -d` removes the container for good.
+  [Full details](#turning-the-analyzer-off).
 - **AIO.** The all-in-one image bundles the analyzer *in-process* (a local
   `librosa` venv the controller drives directly), so the one-click container has
   analysis with no second service. (`subwave-aio` is lean; `subwave-aio-heavy`
@@ -57,6 +58,73 @@ start getting tempo/key/loudness.
 
 Everything under [What analysis adds](#what-analysis-adds) applies here. The rest
 of this page is about the **voices** — a separate opt-in.
+
+### Turning the analyzer off
+
+You may not want a local analyzer container at all — the usual reason is that
+analysis already runs **somewhere else**, on a GPU box you point at with
+`ANALYZE_URL` ([below](#running-the-analyzer-on-another-machine)), so the
+in-compose one just sits there idle holding ~1.1 GB of image. Or you simply
+don't want acoustic data and would rather have the RAM back.
+
+One line in the root `.env`:
+
+```ini
+# root .env — 0 removes the container; unset (or empty) = 1 = the default
+ANALYZER_REPLICAS=0
+```
+
+Then `docker compose up -d`. The container is **stopped and removed**, and stays
+gone across every subsequent `up`, `restart` and reboot. Set the line back to
+`1` (or delete it) and the next `up -d` recreates it.
+
+**`0` and `1` are the only valid values.** The service pins
+`container_name: sub-wave-analyzer` so the rest of the stack and the docs can
+name it, and Compose refuses a fixed container name for more than one replica —
+so `ANALYZER_REPLICAS=2` fails *every* Compose command with
+`can't set container_name and analyzer as container name must be unique`, not
+just `up`. A non-integer (`ANALYZER_REPLICAS=false`) is likewise a hard
+interpolation error rather than a silent fallback; the variable is named for a
+count, not a boolean, so that nobody reaches for `false` and then cannot boot.
+
+This replaces the old advice of `docker compose stop analyzer`, which had to be
+repeated after *every* `up -d` — `up` restarts a service you stopped by hand.
+
+**What happens with no analyzer.** Nothing breaks and nothing is lost. The
+controller probes `ANALYZE_URL`, gets no answer, falls back to a
+[local venv](#running-analysis-without-a-sidecar-dev--offline) if one is
+configured, and otherwise resolves **no backend at all**. An analysis pass then
+returns immediately with a single log line —
+
+```
+[analyze] no analysis backend (ANALYZE_URL sidecar / ANALYZE_PYTHON venv) — skipping
+```
+
+— rather than erroring per track. **Text tagging is untouched**: it runs on the
+LLM and never consults the analyzer, so a tagging pass works exactly as before.
+Existing bpm/key/loudness data stays in `state/library.db`; the admin Library
+panel's **Acoustic analysis · bpm / key** row simply reads `engine off` (and
+the sounds-like row with it) until a backend answers again.
+
+**It's Compose-only.** The AIO one-click image runs the analyzer **in-process**
+(a `librosa` venv the controller drives over stdio), not as a service, so there
+is no container for `ANALYZER_REPLICAS` to remove and the variable does nothing
+there. Setting it to `0` on an AIO is the trap: analysis keeps running and keeps
+its RAM, so the supervisor logs a warning at boot naming the variable that
+*does* work there. To actually stop an AIO analysing, blank the built-in
+`ANALYZE_PYTHON` variable (set it to an empty value) — the controller reads an
+empty path as "no local backend". To send an AIO's analysis elsewhere instead,
+set `ANALYZE_URL`: a reachable sidecar wins over the in-process venv.
+
+> **Why a replica count and not a Compose profile?** Profiles are strictly
+> opt-in: there is no way to spell "on unless you say otherwise". Gating the
+> analyzer behind one would mean every existing install had to add
+> `COMPOSE_PROFILES=analyzer` just to keep what it already has. Worse, the
+> obvious workaround — an interpolated profile that's empty by default — drops
+> the service for anyone who sets `COMPOSE_PROFILES` **at all**, which is
+> exactly what [the voices section](#environments-where-you-cant-pass---profile-unraid-portainer-etc)
+> tells Unraid and Portainer operators to do. `deploy.replicas` has neither
+> problem: unset means 1, and default-on installs render byte-identically.
 
 ### Enabling "sounds-like" + vocals (the heavy tier)
 
@@ -143,16 +211,28 @@ depends on your install, and the admin panel names the right one for yours:
 ### Heavy analysis on an NVIDIA GPU (CUDA)
 
 On a host with an NVIDIA card, the heavy stack can run CLAP + Demucs on the GPU
-instead of pinning your CPU cores — a big speed-up on deep library ingestion.
-It's a compose overlay, not an `.env` toggle (a GPU device reservation can't be
-switched from `.env`):
+— a big speed-up on deep library ingestion. Audio decode/resampling and the
+baseline bpm/key/loudness/structure pass remain CPU work; CUDA accelerates the
+model stages rather than replacing the whole analyzer. A sounds-like backfill
+over tracks whose baseline analysis is already current skips those baseline
+features, and batches each track's CLAP windows into one CUDA model call.
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
+By default the base `docker-compose.yml` selects the CPU analyzer. To keep the
+CUDA image and GPU reservation on every Compose command, set `COMPOSE_FILE` in
+`.env`:
+
+```dotenv
+COMPOSE_FILE=docker-compose.yml:docker-compose.analyzer-gpu.yml
 ```
 
+With that line present, normal rebuilds and restarts keep using the CUDA analyzer.
+Remove the line to return to the CPU analyzer. This remains opt-in because the
+GPU overlay must not be enabled by default on CPU-only hosts.
+
 That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
-cu124 torch wheels) and hands it the GPU. Requirements: the NVIDIA driver +
+torch/torchaudio 2.7.1 cu128 wheels, including RTX 50-series Blackwell support)
+and hands it the GPU. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
+Requirements: the NVIDIA driver +
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 — nothing else; the CUDA runtime rides inside the image. The worker picks the
 device itself (`ANALYZE_DEVICE=auto`): if the GPU isn't actually visible it logs
@@ -160,12 +240,19 @@ a warning and falls back to CPU rather than failing the pass. `ANALYZER_HEAVY`
 is irrelevant while the overlay is applied — the image is overridden outright.
 
 Running the **all-in-one** container instead? It has no `analyzer` service to
-swap, so there's no overlay: pull the `subwave-aio-cuda` tag (the heavy AIO built
-on the same cu124 wheels) and hand the container the GPU directly. Steps for
-Unraid, including the driver plugin and the extra parameters, are in
+swap, so there's no overlay: pull `subwave-aio-cuda` at the tag named for your
+card's architecture ([the tag table](internals/infrastructure.md#aio-cuda-tags);
+`:latest` needs Turing or newer) and hand the container the GPU directly. Steps
+for Unraid, including the driver plugin and extra parameters, are in
 [unraid.md](unraid.md#acoustic-analysis-default-on--expressive-voices-opt-in);
 anywhere else it's `--gpus all` on your `docker run`. Everything below about
 device selection and VRAM applies there unchanged.
+
+For in-container analyzer maintenance, `pip` now targets the analyzer venv in
+both images. For example, `docker exec subwave pip list` on an AIO container
+named `subwave`, or `docker exec sub-wave-analyzer pip list` on the split stack.
+The AIO keeps system `python3` first on PATH; to run Python with analyzer
+packages, use `/opt/analyzer/venv/bin/python` explicitly.
 
 Sharing the card with a local TTS or LLM? The worker plays nice: after ~5
 minutes with no CLAP/Demucs use it drops its models out of VRAM and reloads
@@ -200,13 +287,48 @@ answers, sends analysis there instead of to the local `analyzer` container. Use
 a LAN or Tailscale address — `localhost` is the *controller container's*
 loopback.
 
-**One requirement, and it is the whole reason network-share attempts fail:
-both machines must see the state directory at the same path.** The controller
-pre-fetches each track to `/var/sub-wave/analyze-tmp/` and hands the analyzer a
-*path*, not the audio (network fetch on the controller overlaps DSP on the
-analyzer — that's most of the throughput). If the analyzer can't open that path,
-every track fails. Stem-cache rendering (`state/stems/`) writes back through the
-same shared dir.
+The fast path still uses shared storage: the controller pre-fetches each track
+to `/var/sub-wave/analyze-tmp/` and hands that path to the analyzer. If the
+remote analyzer cannot read the path, it returns the typed `422
+path_unavailable` response and the controller retries that track by URL. That
+makes a share-less remote analyzer work without copying station state, though
+the remote service must then download each admitted track itself.
+
+Remote URL fetching is where bounded concurrency is useful: download/decode for
+some tracks can overlap inference on others. Set the same value on both hosts:
+
+```ini
+# root .env on the STATION host (controller's active-request limit)
+ANALYZE_CONCURRENCY=2
+```
+
+```yaml
+# GPU host analyzer service (number of independent worker processes)
+environment:
+  - ANALYZE_CONCURRENCY=2
+```
+
+The default is `1`, preserving the existing single-flight pass. Values `2`–`4`
+are sensible starting points for a remote GPU, with a supported maximum of `8`.
+Each sidecar worker is an independent Python process and may load its own CLAP
+and Demucs models, so raising the value increases CPU, RAM and VRAM use as well
+as network and Navidrome/source-server demand. For the analysis pass a mismatch
+is safe, and effective parallelism is limited by the smaller usable side. With
+pick-time stems on (Settings → Stems), the pool size also decides whether a
+stem-blend render may run while a separation holds a worker: at 2 or more it
+goes ahead, expecting a free member. The controller takes the smaller of its
+own value and the one the sidecar reports on `/health` (`analyze_concurrency`),
+so a controller set higher than its sidecar no longer sends a render to wait
+behind the separation. An analyzer image from before that field reports
+nothing, and there the controller's value stands alone: a controller set
+higher costs one render per separation that waits out its budget (up to 60 s,
+holding the track sender) and falls back to the plain crossfade, so keep the
+two equal, or update the analyzer. This is an operator tuning trade-off, not a
+guaranteed speedup.
+
+A same-path state mount is therefore **recommended for throughput, but required
+only for stem caching**. Stem rendering writes into `state/stems/`; a remote
+machine cannot send those files back through the URL fallback.
 
 So, on the GPU host:
 
@@ -220,10 +342,13 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+    environment:
+      - ANALYZE_CONCURRENCY=2  # match the station host; default 1
     volumes:
-      # MUST resolve to the same files the station's /var/sub-wave holds, at
-      # this exact mount point. An NFS/SMB export of the station's state dir is
-      # the usual way; the AIO's equivalent is the appdata share.
+      # Optional for ordinary analysis; recommended for the prefetch fast path
+      # and REQUIRED for stem caching. It must resolve to the station's state
+      # files at this exact path. NFS/SMB is the usual choice; the AIO's
+      # equivalent is the appdata share.
       - /mnt/subwave-state:/var/sub-wave
       - analyzer-cache:/opt/analyzer/hf-cache
     # CUDA image only — same reservation docker-compose.analyzer-gpu.yml applies
@@ -244,19 +369,24 @@ checks, in order:
 
 1. `curl http://<gpu-host>:8080/health` from the **station** host — expect
    `"ok": true` with `analyze` in `engines`.
-2. `docker compose exec analyzer ls /var/sub-wave/analyze-tmp` on the **GPU**
-   host while a scan runs — if that's empty or errors, the share is the problem,
-   not the URL.
-3. Watch the station's analyze log: path-open errors mean the mount point
-   differs. Timeouts are ambiguous — the per-track deadline is
+2. If you configured the shared-state fast path, run
+   `docker compose exec analyzer ls /var/sub-wave/analyze-tmp` on the **GPU**
+   host while a scan runs. Empty or unreadable means the controller will use
+   slower URL downloads; fix the mount before enabling stem caching.
+3. Watch the station's analyze log. A one-time `using URL downloads` warning
+   confirms the share-less fallback is active. Timeouts are ambiguous — the
+   per-track deadline is
    `ANALYZE_REQUEST_TIMEOUT_MS` (120s by default), and reading a long track
    across a slow share *plus* the DSP can outrun it on a link that is otherwise
    working. Raise it before concluding the URL is wrong.
 
-Keep the local `analyzer` service stopped (`docker compose stop analyzer` after
-each `up -d`, which restarts it) so you aren't paying for an idle image, and
-mind that the share needs write permission for the analyzer's user — it writes
-stems and reads temp audio.
+Turn the local `analyzer` service off so you aren't paying for a redundant idle
+image — add `ANALYZER_REPLICAS=0` to the station host's `.env`
+([details](#turning-the-analyzer-off)). That replaces the old advice of running
+`docker compose stop analyzer` after every `up -d`, which had to be repeated
+because `up` restarts a stopped service. And if you use the shared path, mind
+that it needs read permission for staged audio and write permission for stems
+under the analyzer's user.
 
 > **Not the same as sharing your music library.** Navidrome's music files aren't
 > involved here; the shared directory is SUB/WAVE's own `state/`.
@@ -333,9 +463,106 @@ load. If a persona is still pointed at the disabled engine, its `/speak` calls
 return a clean `503` and the DJ falls back to Piper — nothing goes silent.
 
 `GET /health` on the sidecar reports `enabled: [...]` (what it was told to load)
-alongside `engines: [...]` (what's currently ready), so you can confirm the
-selection took. An empty or all-typo value falls back to loading both, so a bad
-entry never silently disables all heavy TTS.
+alongside `engines: [...]` (what it can speak with right now), so you can
+confirm the selection took. An empty or all-typo value falls back to loading
+both, so a bad entry never silently disables all heavy TTS.
+
+### A house Chatterbox voice for personas that have none
+
+Chatterbox clones a voice from a reference WAV, and normally each persona
+carries its own (**Settings → Voices**, a filename in the voices directory).
+A persona with no voice set falls back to Chatterbox's built-in one. If you'd
+rather it fell back to a voice of yours, name that file once:
+
+```ini
+# root .env — a path INSIDE the container; /var/sub-wave is the shared state
+# mount, so state/voices/house.wav on the host is this:
+CHATTERBOX_REFERENCE_WAV=/var/sub-wave/voices/house.wav
+```
+
+Then `docker compose --profile tts-heavy up -d`. A persona's own voice always
+wins; this only fills the gap. An in-process Chatterbox (a controller image built
+with `WITH_CHATTERBOX=1`) reads the same variable — before #1591 the sidecar was the odd one out, and
+setting this with `--profile tts-heavy` did nothing.
+
+### Let an idle engine go (memory back while the station is quiet)
+
+`TTS_HEAVY_ENGINES` is the answer for an engine you *never* want. For one you
+want at 8pm and not at 4am, the sidecar releases it on its own.
+
+Chatterbox is around 4 GB resident — the weights, plus torch's CUDA context on
+a GPU host — and it used to hold that for the life of the container whether or
+not the station had said a word all day. The programme's idle pause
+(**Settings → Stream → pause when the room is empty**) stands the *music* down,
+but it has no reach into this container, so the engines stayed warm through the
+whole quiet stretch. Now each engine keeps its own idle clock: after
+`TTS_HEAVY_IDLE_UNLOAD_S` seconds without a spoken line, its worker is stopped
+and the memory goes back to the host.
+
+```ini
+# root .env — seconds; empty = 1800 on cuda, 3600 on cpu; 0 = always resident
+TTS_HEAVY_IDLE_UNLOAD_S=1800
+# CHATTERBOX_IDLE_UNLOAD_S=      # per-engine overrides win over the shared value
+# POCKET_TTS_IDLE_UNLOAD_S=0     # e.g. keep the small, fast engine loaded
+```
+
+Three things worth knowing:
+
+- **The reload is real, and it is paid by whoever speaks next** — 30–60 s for a
+  Chatterbox that has to come back from a warm cache. The defaults sit far
+  above any gap a talking station produces (the DJ can be offered a slot every
+  five minutes), so the release only fires when the station has genuinely gone
+  quiet. Shortening the window to a few minutes converts a memory problem into
+  a latency problem.
+- **How much of it you hear depends on the idle pause.** The controller warms
+  the sidecar from two places. The good one is the idle pause releasing
+  (**Settings → Stream → pause when the room is empty**): the reload starts as
+  the room fills up, minutes before the first link, and you hear nothing at
+  all. That switch is **off by default**, though — so on a stock station the
+  only warm is the second one, fired the minute the DJ decides to talk, where
+  the load merely overlaps writing and rendering the script. Expect part of a
+  cold Chatterbox reload to be audible as a longer-than-usual gap before the
+  first line after a quiet stretch. **If the idle unload matters to you, turn
+  the idle pause on as well** — the two features were built for the same quiet
+  station and they work best together.
+- **Nothing goes silent if the reload fails.** A load that doesn't arrive in
+  `TTS_HEAVY_LOAD_TIMEOUT_S` (90 s, settable in the root `.env`) returns a
+  `503`, and a load the sidecar abandons sooner than that — a missing venv, a
+  fatal model error — returns one straight away rather than holding the line
+  for the full ceiling. Either way the DJ falls through to its rescue voice
+  exactly as it would for a sidecar that was down, and the music never stops.
+
+The container log names each release and each wake, and `GET /health` carries
+the same state: `cold: [...]` is the engines currently unloaded (still listed in
+`engines`, because they are one on-demand load from speaking), `unloads` counts
+the releases per engine, and `chatterbox_loaded` / `pocket_loaded` say what is
+resident this second. That is the honest way to confirm the reclaim — watching
+`docker stats` alone can't tell a released model from a quiet one.
+
+```bash
+docker exec sub-wave-controller wget -qO- http://tts-heavy:8080/health
+# {"ok":true,"engines":["chatterbox"],"cold":["chatterbox"],"unloads":{"chatterbox":3},...}
+```
+
+The admin **Settings → Voice** engine badge says the same thing in one word:
+a released engine reads `idle · loads on demand` rather than `ready`. It stays
+selectable, because it is still a working voice.
+
+To force a reload by hand — before a show, say — `POST /warm`:
+
+```bash
+docker exec sub-wave-controller wget -qO- --post-data '{"engine":""}' \
+  --header 'Content-Type: application/json' http://tts-heavy:8080/warm
+# {"ok":true,"warming":["chatterbox"],"disabled":[],"loaded":[],"cold":[]}
+```
+
+It returns at once without waiting for the load. `warming` is what this call
+started — empty means there was nothing to do, which is the normal answer on a
+station that is already talking. `disabled` names an engine you asked for that
+`TTS_HEAVY_ENGINES` never loaded, so a typo'd profile doesn't read as "already
+warm". `loaded` is residency this second and `cold` is what is still released;
+note that `/health`'s `engines` means something different — everything the DJ
+may route to, cold engines included.
 
 ---
 
@@ -399,15 +626,15 @@ contributors on a dev machine; production should use a sidecar.
    a default service, so a plain `docker compose up -d` should start it — if
    nothing lists, it was stopped or scaled out. Bring it back with
    `docker compose up -d analyzer`. (On the AIO there's no separate container —
-   analysis runs in-process; skip to step 3.) If you only run the `tts-heavy`
-   sidecar for its analysis, check `docker ps --filter name=tts-heavy` instead.
+   analysis runs in-process; confirm `ANALYZE_PYTHON` is configured rather than
+   looking for a sidecar.)
 2. **Is it reachable?** `docker exec sub-wave-controller wget -qO- http://analyzer:8080/health`
-   (or `http://tts-heavy:8080/health`). No answer → check the logs:
-   `docker logs sub-wave-analyzer`.
+   No answer → check the logs: `docker logs sub-wave-analyzer`. If the analyzer
+   is hosted elsewhere, run the same `/health` check against `ANALYZE_URL`.
 3. **Did the model still warm up?** The first *sounds-like/vocals* run downloads
    CLAP/Demucs weights into the analyzer's HF cache; the `/health` probe may
    report not-ready for a minute or two on a cold start. Give it time, then
-   re-check the admin panel — the probe re-runs every ~30s, so it flips to
+   re-check the admin panel — the probe re-runs about once a minute, so it flips to
    available on its own. (Plain bpm/key/loudness needs no download.)
    If it never warms up, the download itself is the usual reason — see
    [the heavy image needs to reach huggingface.co once](#the-heavy-image-needs-to-reach-huggingfaceco-once).

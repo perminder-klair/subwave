@@ -1,25 +1,14 @@
-// Air-time signalling for spoken segments (#1382).
-//
-// The property under test is a TIMEBASE, not a feature: everything the station
-// says about DJ speech used to be stamped when the clip was handed to
-// Liquidsoap, which is a 0.5s poll plus a queue, a lead-in and a duck ramp
-// before anyone hears a word. These tests pin the three pieces that fix it and,
-// just as importantly, the way each one DEGRADES — a station whose mixer
-// predates the marker must behave byte-for-byte as it did before, not stall for
-// 20 seconds on every segment.
-//
-// Run: `npm test -- voice-air-events`.
+// Air-time signalling for spoken segments (#1382): the marker, the fan-out,
+// and how each degrades on a mixer that predates the marker.
 
 import assert from 'node:assert/strict';
-import test from 'node:test';
-import { createServer, type Server } from 'node:http';
-import { mkdtempSync, writeFileSync, rmSync, unlinkSync, existsSync } from 'node:fs';
+import { listen as listenHttp } from './test-utils/http.js';
+import test, { after } from 'node:test';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, unlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AddressInfo } from 'node:net';
 
-// config.ts resolves every state path at import time, so the temp dir has to be
-// in place before anything under src/ is loaded.
+// config.ts resolves state paths at import time, so STATE_DIR comes first.
 const STATE = mkdtempSync(join(tmpdir(), 'subwave-voice-'));
 process.env.STATE_DIR = STATE;
 
@@ -30,14 +19,25 @@ const {
   awaitVoiceAir,
   resetVoiceMarkers,
 } = await import('../src/broadcast/queue/voice-marker.js');
-const { voiceUri, clipDurationMs, speechDurationMs, VOICE_LEADIN_MS, HANDOFF_TO_AIR_MS, airInEstimate } =
+const { airVoice, voiceUri, clipDurationMs, speechDurationMs, VOICE_LEADIN_MS, HANDOFF_TO_AIR_MS, airInEstimate } =
   await import('../src/broadcast/queue/voice-io.js');
 const { notifySpoken, notifyQueued } = await import('../src/broadcast/voice-events.js');
-// The settings cache seam every other test uses — settings.js itself does not
-// re-export it.
+// settings.js does not re-export the cache seam.
 const { setCache } = await import('../src/settings/store.js');
 
 const MARKER = config.liquidsoap.voicePlayingFile;
+after(() => resetVoiceMarkers());
+
+// awaitVoiceAir unrefs its timeout, so a test awaiting only that timer needs a
+// referenced handle or Node ends the subprocess with the promise pending.
+async function keepProcessAliveUntil<T>(promise: Promise<T>): Promise<T> {
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    return await promise;
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
 
 function writeMarker(m: Record<string, unknown>) {
   writeFileSync(MARKER, JSON.stringify(m));
@@ -45,8 +45,6 @@ function writeMarker(m: Record<string, unknown>) {
 function clearMarker() {
   if (existsSync(MARKER)) unlinkSync(MARKER);
 }
-
-// --- the marker file ------------------------------------------------------
 
 test('parseVoiceMarker converts liquidsoap seconds to epoch ms', () => {
   const m = parseVoiceMarker(JSON.stringify({
@@ -64,15 +62,12 @@ test('parseVoiceMarker rejects what it cannot use', () => {
   assert.equal(parseVoiceMarker(JSON.stringify({ startedAt: 1770000000 })), null, 'no voiceId');
   assert.equal(parseVoiceMarker(JSON.stringify({ voiceId: 'a' })), null, 'no startedAt');
   assert.equal(parseVoiceMarker(JSON.stringify({ voiceId: 'a', startedAt: 0 })), null, 'zero clock');
-  // An unrecognised channel is dropped rather than failing the whole marker:
-  // the air TIME is the load-bearing half, and which duck layer carried it is
-  // reported by the caller anyway.
+  // An unrecognised channel is dropped rather than failing the whole marker;
+  // the air TIME is the load-bearing half.
   const m = parseVoiceMarker(JSON.stringify({ voiceId: 'a', startedAt: 1, channel: 'nope' }));
   assert.equal(m?.channel, null);
   assert.equal(m?.airedAt, 1000);
 });
-
-// --- the annotate URI, which is how the id reaches the mixer ---------------
 
 test('voiceUri always carries the id, and keeps the gain form it always had', () => {
   assert.equal(
@@ -85,9 +80,12 @@ test('voiceUri always carries the id, and keeps the gain form it always had', ()
     'annotate:liq_amplify="-3 dB",subwave_voice="deadbeef":/tmp/a.wav',
     'the gain keeps its exact `<n> dB` spelling and stays first',
   );
+  assert.equal(
+    voiceUri('/tmp/a.wav', 0, 'deadbeef', 'pause123'),
+    'annotate:subwave_voice="deadbeef",subwave_pause_delivery="pause123":/tmp/a.wav',
+    'a pause delivery carries the stable id the mixer acknowledges',
+  );
 });
-
-// --- duration: the clip vs the serialiser's hold --------------------------
 
 // 44-byte canonical WAV header: 8000 bytes of data at a byteRate of 8000 = 1s.
 function writeWav(path: string, dataBytes: number, byteRate: number) {
@@ -112,24 +110,215 @@ test('durationMs published to consumers is the clip, not the padded hold', () =>
   const wav = join(STATE, 'clip.wav');
   writeWav(wav, 8000, 8000);
   assert.equal(clipDurationMs(wav, 'ignored'), 1000, 'exact length from the WAV header');
-  // The lead-in and duck tail belong to the voice chain's lock, not to the
-  // speech — publishing the padded figure would overstate every segment by
-  // ~1.5s, which is most of a short ident.
+  // The lead-in and duck tail belong to the chain's lock, not to the speech.
   assert.equal(speechDurationMs(wav, 'ignored') - clipDurationMs(wav, 'ignored'), VOICE_LEADIN_MS + 700);
-  // Non-WAV (a cloud mp3) falls back to the word-count estimate, unchanged.
+  // A file that cannot be read at all falls back to the word-count estimate.
   assert.ok(clipDurationMs(join(STATE, 'missing.wav'), 'one two three four five') > 0);
 });
 
-// --- awaitVoiceAir: the resolve, and every way it degrades ----------------
+// Layer III frames as [header bytes, frame length, seconds of audio]. Lengths
+// follow from the header: 144 (MPEG-1) or 72 (MPEG-2) * bitrate / sample rate.
+const STEREO_128K = { header: [0xff, 0xfb, 0x90, 0x00], length: 417, seconds: 1152 / 44100 };
+const MONO_128K = { header: [0xff, 0xfb, 0x90, 0xc0], length: 417, seconds: 1152 / 44100 };   // what ElevenLabs sends
+const STEREO_320K = { header: [0xff, 0xfb, 0xe0, 0x00], length: 1044, seconds: 1152 / 44100 };
+const STEREO_32K = { header: [0xff, 0xfb, 0x10, 0x00], length: 104, seconds: 1152 / 44100 };
+const MPEG2_24KHZ_64K = { header: [0xff, 0xf3, 0x84, 0xc4], length: 192, seconds: 576 / 24000 };
+type Mp3Frame = typeof STEREO_128K;
+
+// Writes the frames back to back and returns the audio length in ms.
+function writeMp3(path: string, frames: Mp3Frame[], { id3Bytes = 0, tail = 0 }: { id3Bytes?: number; tail?: number | Buffer } = {}): number {
+  const id3 = Buffer.alloc(id3Bytes ? 10 + id3Bytes : 0);
+  if (id3Bytes) {
+    id3.write('ID3', 0, 'ascii');
+    id3[3] = 4;
+    // synchsafe size: 7 bits per byte
+    id3[6] = (id3Bytes >> 21) & 0x7f; id3[7] = (id3Bytes >> 14) & 0x7f;
+    id3[8] = (id3Bytes >> 7) & 0x7f; id3[9] = id3Bytes & 0x7f;
+  }
+  const body = frames.map(f => {
+    const b = Buffer.alloc(f.length);
+    b.set(f.header, 0);
+    return b;
+  });
+  writeFileSync(path, Buffer.concat([id3, ...body, typeof tail === 'number' ? Buffer.alloc(tail, 0x41) : tail]));
+  return Math.ceil(frames.reduce((sum, f) => sum + f.seconds, 0) * 1000);
+}
+
+const FIVE_WORDS = 'one two three four five';
+const ESTIMATE_MS = Math.ceil((5 / 2.3) * 1000);
+
+function id3v1Tag(): Buffer {
+  const tag = Buffer.alloc(128);
+  tag.write('TAG');
+  tag.write('Radio', 3);
+  tag[127] = 255;
+  return tag;
+}
+
+function apeTag(withHeader = false, key = 'Title', value = Buffer.from('Radio'), itemFlags = 0): Buffer {
+  const keyBytes = Buffer.from(`${key}\0`, 'latin1');
+  const entry = Buffer.alloc(8 + keyBytes.length + value.length);
+  entry.writeUInt32LE(value.length, 0);
+  entry.writeUInt32LE(itemFlags, 4);
+  keyBytes.copy(entry, 8);
+  value.copy(entry, 8 + keyBytes.length);
+  const footer = Buffer.alloc(32);
+  footer.write('APETAGEX');
+  footer.writeUInt32LE(2000, 8);
+  footer.writeUInt32LE(entry.length + 32, 12);
+  footer.writeUInt32LE(1, 16);
+  if (!withHeader) return Buffer.concat([entry, footer]);
+  footer.writeUInt32LE(0x80000000, 20);
+  const header = Buffer.from(footer);
+  header.writeUInt32LE(0xa0000000, 20);
+  return Buffer.concat([header, entry, footer]);
+}
+
+test('a cloud mp3 is measured, not guessed from its word count', () => {
+  const mp3 = join(STATE, 'clip.mp3');
+  // ~10s of audio behind five words: the estimate says 2.2s.
+  for (const [name, frame] of Object.entries({ stereo: STEREO_128K, mono: MONO_128K, 'mpeg-2 24kHz': MPEG2_24KHZ_64K })) {
+    const exact = writeMp3(mp3, Array(400).fill(frame));
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), exact, name);
+  }
+  const tagged = writeMp3(mp3, Array(383).fill(MONO_128K), { id3Bytes: 6000, tail: id3v1Tag() });
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), tagged, 'an ID3v2 tag and a complete trailing ID3v1 tag are skipped');
+});
+
+test('only complete trailing tags preserve the measured mp3 duration', () => {
+  const mp3 = join(STATE, 'tagged.mp3');
+  for (const tail of [
+    id3v1Tag(), apeTag(), apeTag(true), Buffer.concat([apeTag(true), id3v1Tag()]),
+    apeTag(false, 'A=B'), apeTag(false, 'Cover Art', Buffer.from([0xff, 0]), 3),
+  ]) {
+    const exact = writeMp3(mp3, Array(100).fill(MONO_128K), { tail });
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), exact);
+  }
+});
+
+test('a short unread suffix cannot hide corrupt or truncated mp3 audio', () => {
+  const mp3 = join(STATE, 'bad-tail.mp3');
+  writeMp3(mp3, Array(40).fill(MONO_128K));
+  const audio = readFileSync(mp3);
+  const broken = Buffer.from(audio);
+  broken[32 * MONO_128K.length] = 0;
+  const tails = [
+    Buffer.from([0]), Buffer.alloc(128, 0x41), Buffer.alloc(4096),
+    id3v1Tag().subarray(0, 127), Buffer.concat([id3v1Tag(), Buffer.from([0])]),
+    Buffer.concat([Buffer.from([0]), id3v1Tag()]),
+    Buffer.concat([id3v1Tag(), audio.subarray(0, MONO_128K.length)]),
+  ];
+  for (const tail of tails) {
+    writeFileSync(mp3, Buffer.concat([audio, tail]));
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS);
+  }
+  writeFileSync(mp3, broken);
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'corruption before playable final frames');
+  for (const missing of [1, MONO_128K.length - 3]) {
+    const partial = audio.subarray(0, audio.length - missing);
+    for (const tail of [Buffer.alloc(0), id3v1Tag()]) {
+      writeFileSync(mp3, Buffer.concat([partial, tail]));
+      assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'partial final frame');
+    }
+  }
+});
+
+test('an APE signature alone cannot turn unread audio into metadata', () => {
+  const mp3 = join(STATE, 'bad-ape.mp3');
+  const valid = apeTag(true);
+  const malformed = [valid.subarray(0, valid.length - 1), Buffer.concat([Buffer.from([0]), valid])];
+  for (const key of ['OggS', 'TAG', 'ID3', 'MP+', 'A', 'Bad\x80Key']) malformed.push(apeTag(false, key));
+  malformed.push(apeTag(false, 'Title', Buffer.from([0xff])));
+  const item = valid.subarray(32, valid.length - 32);
+  const duplicateFooter = Buffer.from(valid.subarray(valid.length - 32));
+  duplicateFooter.writeUInt32LE(item.length * 2 + 32, 12);
+  duplicateFooter.writeUInt32LE(2, 16);
+  duplicateFooter.writeUInt32LE(0, 20);
+  malformed.push(Buffer.concat([item, item, duplicateFooter]));
+  const footer = valid.length - 32;
+  for (const [offset, value] of [
+    [8, 1000], [12, 0], [16, 0], [20, 0], [24, 1], [32, 1000], [36, 6],
+    [footer + 8, 3000], [footer + 12, 32], [footer + 16, 2],
+    [footer + 20, 0xe0000000], [footer + 24, 1],
+  ]) {
+    const bad = Buffer.from(valid);
+    bad.writeUInt32LE(value, offset);
+    malformed.push(bad);
+  }
+  const extraAudio = Buffer.alloc(MONO_128K.length);
+  extraAudio.set(MONO_128K.header);
+  malformed.push(Buffer.concat([Buffer.from([0]), extraAudio, valid]));
+  for (const tail of malformed) {
+    writeMp3(mp3, Array(100).fill(MONO_128K), { tail });
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS);
+  }
+});
+
+test('lost sync near EOF cannot release the other voice channel during the first clip', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  clearMarker();
+  const mp3 = join(STATE, 'low-bitrate.mp3');
+  const lowRate = { header: [0xff, 0xf3, 0x10, 0xc0], length: 26, seconds: 576 / 22050 };
+  const fullMs = writeMp3(mp3, Array(383).fill(lowRate));
+  const audio = readFileSync(mp3);
+  // Almost four seconds of playable audio remain after a one-byte sync loss,
+  // but the old reader mistook that suffix for a tag and released at ~7.7s.
+  const breakAt = 240 * lowRate.length;
+  writeFileSync(mp3, Buffer.concat([audio.subarray(0, breakAt), Buffer.from([0]), audio.subarray(breakAt)]));
+  const text = Array(30).fill('word').join(' ');
+  const first = await airVoice(config.liquidsoap.sayFile, mp3, text);
+  unlinkSync(config.liquidsoap.sayFile);
+  const wav = join(STATE, 'next.wav');
+  writeWav(wav, 800, 8000);
+  let handedOver = false;
+  const second = airVoice(config.liquidsoap.introFile, wav, 'next').then(handoff => {
+    handedOver = true;
+    return handoff;
+  });
+  try {
+    t.mock.timers.tick(fullMs);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(handedOver, false, 'the intro channel is still excluded through the full audio window');
+    assert.equal(first.clipMs, Math.ceil((30 / 2.3) * 1000));
+  } finally {
+    t.mock.timers.tick(20_000);
+    await second;
+    unlinkSync(config.liquidsoap.introFile);
+    t.mock.timers.tick(2_000);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+});
+
+test('a variable-bitrate mp3 is never measured short', () => {
+  // File size over the first frame's bitrate reads this 10s clip as 1.3s: the
+  // next line would talk over nine seconds of this one.
+  const mp3 = join(STATE, 'vbr.mp3');
+  const exact = writeMp3(mp3, [STEREO_320K, ...Array(382).fill(STEREO_32K)]);
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), exact);
+});
+
+test('an mp3 the walk cannot follow falls back to the estimate', () => {
+  const mp3 = join(STATE, 'broken.mp3');
+  // Frames, then junk the walk cannot cross: a partial length would be short.
+  writeMp3(mp3, Array(40).fill(STEREO_128K), { tail: 50_000 });
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'lost sync mid-file');
+  writeMp3(mp3, [STEREO_128K]);
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'one frame is not evidence of mp3');
+  // Free-format (bitrate index 0) and the reserved index 15 carry no frame length.
+  for (const b2 of [0x00, 0xf0]) {
+    writeFileSync(mp3, Buffer.concat([Buffer.from([0xff, 0xfb, b2, 0x00]), Buffer.alloc(2000)]));
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, `bitrate bits ${b2.toString(16)}`);
+  }
+  writeFileSync(mp3, Buffer.alloc(5000, 0x41));
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'not audio at all');
+});
 
 test('no marker file at all resolves null immediately', async () => {
   resetVoiceMarkers();
   clearMarker();
   const t0 = Date.now();
-  // The load-bearing case: a controller upgraded ahead of its broadcast image.
-  // If this waited out the timeout, every booth-log line and webhook on that
-  // station would arrive 20s late — a far worse regression than the early
-  // stamp this feature exists to fix.
+  // A controller upgraded ahead of its broadcast image: waiting out the
+  // timeout would delay every booth-log line and webhook by 20s.
   assert.equal(await awaitVoiceAir('nobody', 5_000), null);
   assert.ok(Date.now() - t0 < 500, 'resolved without waiting');
 });
@@ -145,7 +334,7 @@ test('a marker resolves the segment that is waiting for it', async () => {
 test('a marker seen before its waiter registers is not lost', async () => {
   resetVoiceMarkers();
   // airVoice registers only after its handoff write resolves, so a fast mixer
-  // can beat it. The recent-marker buffer is what closes that race.
+  // can beat it; the recent-marker buffer closes that race.
   writeMarker({ voiceId: 'seg-2', channel: 'say', startedAt: 1770000200 });
   pollVoiceMarker();
   assert.equal(await awaitVoiceAir('seg-2', 5_000), 1770000200000);
@@ -155,26 +344,23 @@ test('a marker is an edge, not a level', () => {
   resetVoiceMarkers();
   writeMarker({ voiceId: 'seg-3', channel: 'say', startedAt: 1770000300 });
   assert.equal(pollVoiceMarker()?.voiceId, 'seg-3');
-  // The file is never deleted, so every subsequent tick re-reads the same clip.
-  // Dedup is on the id rather than on mtime or existence.
+  // The file is never deleted, so dedup is on the id, not mtime or existence.
   assert.equal(pollVoiceMarker(), null, 'same marker does not fire twice');
 });
 
 test('a clip whose marker never comes reports an unknown air time', async () => {
   resetVoiceMarkers();
   writeMarker({ voiceId: 'someone-else', channel: 'say', startedAt: 1770000400 });
-  // Marker support is present (the file exists), so this one really does wait —
-  // and then reports "unknown" rather than inventing a stamp.
-  assert.equal(await awaitVoiceAir('seg-4', 120), null);
+  // Marker support is present, so this waits and then reports unknown rather
+  // than inventing a stamp.
+  assert.equal(await keepProcessAliveUntil(awaitVoiceAir('seg-4', 120)), null);
 });
-
-// --- the fan-out ----------------------------------------------------------
 
 interface Received { event: string; body: Record<string, any> }
 
 async function withHookServer(fn: (received: Received[]) => Promise<void>) {
   const received: Received[] = [];
-  const server: Server = createServer((req, res) => {
+  const { server, port, close } = await listenHttp((req, res) => {
     let raw = '';
     req.on('data', c => { raw += c; });
     req.on('end', () => {
@@ -185,8 +371,6 @@ async function withHookServer(fn: (received: Received[]) => Promise<void>) {
       res.writeHead(200).end('ok');
     });
   });
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
-  const { port } = server.address() as AddressInfo;
   setCache({
     stream: { bufferSeconds: 22 },
     webhooks: [{
@@ -203,7 +387,7 @@ async function withHookServer(fn: (received: Received[]) => Promise<void>) {
     setCache(null);
     // undici keeps the connection alive, so close() alone never resolves.
     server.closeAllConnections();
-    await new Promise<void>(r => server.close(() => r()));
+    await close();
   }
 }
 
@@ -232,12 +416,11 @@ test('a measured segment publishes a real window, on both the new and old events
     assert.equal(start.body.estimated, false);
     assert.equal(start.body.airedAt, new Date(airedAt).toISOString());
     assert.equal(start.body.endsAt, new Date(airedAt + 300).toISOString());
-    // The listener offset rides along so a consumer syncing to what people HEAR
-    // doesn't have to fetch /now-playing to find it (#1114).
+    // The listener offset rides along so a consumer syncing to what people
+    // hear need not fetch /now-playing (#1114).
     assert.equal(start.body.streamBufferSeconds, 22);
 
-    // The pre-existing event still fires, still on the right channel, with the
-    // new fields added rather than the old ones moved.
+    // The pre-existing event still fires with new fields added, not moved.
     const link = await waitFor(received, 'dj.link');
     assert.equal(link.body.text, 'staying in the deep end');
     assert.equal(link.body.voiceId, 'v1');
@@ -259,15 +442,13 @@ test('an unmeasured segment omits the timestamps rather than guessing', async ()
     });
     const start = await waitFor(received, 'voice.start');
     assert.equal(start.body.estimated, true);
-    // Absent, not null and not 0: a consumer must be able to tell "not measured"
-    // from "aired at the epoch".
+    // Absent, not null and not 0: "not measured" must differ from "epoch".
     assert.ok(!('airedAt' in start.body));
     assert.ok(!('endsAt' in start.body));
     assert.ok(start.body.t, 't is still there as the best available approximation');
     const say = await waitFor(received, 'dj.say');
     assert.equal(say.body.kind, 'station-id');
-    // The window still closes — the duration is measured even when the air time
-    // is not, so a ducking consumer keeps working on an un-upgraded mixer.
+    // The window still closes: duration is measured even when air time is not.
     await waitFor(received, 'voice.end');
   });
 });
@@ -281,23 +462,16 @@ test('a banter line keeps voice.* per line while dj.say stays one per exchange',
     });
     await waitFor(received, 'voice.start');
     await waitFor(received, 'voice.end');
-    // announceExchange fires ONE aggregate dj.say for the whole conversation;
-    // per-line legacy events would read as five separate segments to a relay.
+    // announceExchange fires ONE aggregate dj.say for the whole conversation.
     assert.ok(!received.some(r => r.event === 'dj.say'), 'no per-line dj.say');
   });
 });
 
-// --- the early warning (voice.queued) --------------------------------------
-//
-// The air-time fix above traded away the ~1-2s of accidental warning that
-// firing at handoff used to give, which is what a consumer ducking live audio
-// against the station used to plan with. voice.queued gives it back honestly:
-// early, explicitly a forecast, and paired to the measured events by voiceId.
+// voice.queued: an explicit forecast, paired to the measured events by voiceId.
 
 test('the forecast is the wait plus the fixed handoff-to-air head', () => {
   const now = 1_770_000_000_000;
-  // Idle chain, no jingle: only the poll + lead-in stand between the handoff
-  // and the first word. This is the floor — the warning is short, not absent.
+  // Idle chain, no jingle: the floor is the poll + lead-in.
   assert.deepEqual(
     airInEstimate({ now, chainFreeAt: 0, jingleClearAt: 0 }),
     { waitMs: 0, estimatedAirInMs: HANDOFF_TO_AIR_MS },
@@ -307,14 +481,12 @@ test('the forecast is the wait plus the fixed handoff-to-air head', () => {
     airInEstimate({ now, chainFreeAt: now + 8_000, jingleClearAt: 0 }).estimatedAirInMs,
     8_000 + HANDOFF_TO_AIR_MS,
   );
-  // A jingle on air delays the handoff the same way (airVoice sleeps it out),
-  // and the two waits overlap rather than stack — whichever clears last wins.
+  // The two waits overlap rather than stack: whichever clears last wins.
   assert.equal(
     airInEstimate({ now, chainFreeAt: now + 3_000, jingleClearAt: now + 9_000 }).waitMs,
     9_000,
   );
-  // A stale marker computes a window in the past; it must not pull the forecast
-  // backwards into a negative wait.
+  // A stale marker must not pull the forecast into a negative wait.
   assert.equal(
     airInEstimate({ now, chainFreeAt: now - 60_000, jingleClearAt: now - 60_000 }).waitMs,
     0,
@@ -328,15 +500,12 @@ test('voice.queued lands before the words and admits it is a forecast', async ()
       text: 'staying in the deep end', durationMs: 6200, estimatedAirInMs: 1300,
     });
     const q = await waitFor(received, 'voice.queued');
-    // The id is the whole point: it pairs with the voice.start/voice.end that
-    // follow, so a consumer never has to guess which clip fired.
+    // The id pairs with the voice.start/voice.end that follow.
     assert.equal(q.body.voiceId, 'v4');
     assert.equal(q.body.channel, 'intro');
     assert.equal(q.body.durationMs, 6200);
     assert.equal(q.body.estimatedAirInMs, 1300);
     assert.ok(q.body.expectedAirAt, 'the same figure as a timestamp, for convenience');
-    // Always a forecast — the field says so rather than leaving a consumer to
-    // infer it from the event name.
     assert.equal(q.body.estimated, true);
     // A field named for a measurement must never carry a guess.
     assert.ok(!('airedAt' in q.body), 'no airedAt on a forecast');
@@ -349,8 +518,8 @@ test('voice.queued lands before the words and admits it is a forecast', async ()
 
 test('a hook subscribed only to the measured events never sees the forecast', async () => {
   await withHookServer(async received => {
-    // Same voiceId through the whole lifecycle, and voice.queued is opt-in like
-    // every other event — an existing hook's payload stream is unchanged.
+    // Same voiceId through the lifecycle; voice.queued is opt-in like every
+    // other event.
     notifyQueued({
       voiceId: 'v5', kind: 'station-id', channel: 'say',
       text: "you're locked into SUB/WAVE", durationMs: 120, estimatedAirInMs: 900,

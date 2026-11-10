@@ -1,8 +1,5 @@
 'use client';
 
-// The "list" half of the cards/list toggle on /admin/shows. Takes a prepared
-// view-model rather than the panel's `Show` type, so ShowsPanel stays the only
-// place that knows how a show's facets, airtime and validity are derived.
 
 import { useMemo } from 'react';
 import { Pill, MetaChip } from '../ui';
@@ -73,13 +70,11 @@ export function ShowsTable({ rows, onEdit }: ShowsTableProps) {
     {
       key: 'name',
       label: 'Show',
-      // Below md the Host column is hidden, so nothing else carries the
-      // `w-full max-w-0` pair that lets a cell truncate instead of widening the
-      // table; the show name takes that role until Host reappears.
+      // Below md the Host column is hidden, so the show name carries the
+      // `w-full max-w-0` pair that lets a cell truncate.
       className: 'whitespace-nowrap w-full max-w-0 md:w-auto md:max-w-none',
       render: (r) => (
-        // A chip or pill dropping to a second line would inflate the row height and
-        // undo the point of the list.
+        // A chip wrapping to a second line would inflate the row height.
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="truncate font-extrabold text-ink">{r.name || 'untitled'}</span>
           {r.programme && (

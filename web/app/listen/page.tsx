@@ -14,13 +14,8 @@ const GENERIC = pageMeta({
   scope: 'station',
 });
 
-// Personalised so a branded station's link preview isn't labelled with the
-// software it runs on (issue #1086). Deliberately NO persona-tagline fallback:
-// this route never had one, and inheriting it would import exactly the on-air
-// drift #1086 is about — it reads the station description or nothing.
-//
-// Force-dynamic, so this runs per-request; on any controller failure
-// fetchStationMeta() returns null and GENERIC is served.
+// Use the station description without an on-air persona fallback so link previews stay stable.
+// Controller failures use generic metadata.
 export async function generateMetadata(): Promise<Metadata> {
   const meta = await fetchStationMeta();
   if (!meta) return GENERIC;

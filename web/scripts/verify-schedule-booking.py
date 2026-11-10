@@ -28,10 +28,11 @@ TWO TRAPS, both hit while writing this:
     locator, or the check reads a neighbour's aria-pressed and fails a passing
     app.
 """
-import base64, os, re, sys
+import base64, json, os, re, sys
 from playwright.sync_api import sync_playwright
 
 WEB = os.environ.get("SUBWAVE_VERIFY_WEB", "http://localhost:7793")
+API = os.environ.get("SUBWAVE_VERIFY_API", "http://localhost:7791")
 AUTH = base64.b64encode(
     os.environ.get("SUBWAVE_VERIFY_AUTH", "test:test").encode()
 ).decode()
@@ -53,6 +54,32 @@ with sync_playwright() as p:
     browser = p.chromium.launch()
     pg = browser.new_page(viewport={"width": 1440, "height": 900})
     pg.add_init_script(f"localStorage.setItem('subwave_admin_auth','{AUTH}')")
+
+    # A fresh isolated controller has no shows or bookings. Keep this check
+    # safe and repeatable by supplying one browser-local programming fixture;
+    # the board never clicks Save, so no station state can be changed.
+    week = {str(day): [None] * 24 for day in range(7)}
+    week["0"][0] = "s_verify_booking"
+    week["0"][1] = "s_verify_booking"
+    settings = {
+        "values": {
+            "shows": [{
+                "id": "s_verify_booking", "name": "Verify Booking Show",
+                "personaId": "p_verify_booking", "moods": [], "energies": [],
+            }],
+            "schedule": week,
+            "personas": [{"id": "p_verify_booking", "name": "Verify DJ"}],
+            "timezone": "UTC", "locale": "en-GB",
+        },
+        "serverTimezone": "UTC",
+    }
+    pg.route(API + "/settings", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps(settings),
+    ))
+    pg.route(API + "/schedule", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"schedule": week, "override": None}),
+    ))
     pg.goto(f"{WEB}/admin/shows/schedule", wait_until="networkidle")
     pg.wait_for_timeout(3000)
 

@@ -1,15 +1,10 @@
 #!/bin/sh
-# Faithful repro of the curl|sh → exec subwave init </dev/tty path.
-#
-# `curl … | sh` leaves sh's stdin attached to the curl pipe (not a TTY).
-# We simulate that by running this whole script through a sh process whose
-# stdin we explicitly close, so the inner shell's stdin is non-TTY. Then we
-# exec the binary with `</dev/tty`, which is exactly what install.sh does.
+# Repro of the curl|sh → exec subwave init </dev/tty path: run through a sh
+# whose stdin is closed (mimicking the curl pipe), then exec the binary with
+# `</dev/tty`, as install.sh does.
 #
 # Usage: bash cli/scripts/repro-tty.sh
-#
-# Bails into init with `--home /tmp/sw-test` so it can't clobber your real
-# ~/subwave install while you're testing.
+# Uses `--home /tmp/sw-test` so it can't clobber a real ~/subwave install.
 
 set -eu
 
@@ -25,9 +20,8 @@ echo "==> repro: non-TTY parent → exec '$BIN init' </dev/tty"
 echo "==> using --home /tmp/sw-test (won't touch your real ~/subwave)"
 echo
 
-# Inner sh sees stdin closed (mimics the curl pipe that's done sending).
-# Then we redirect /dev/tty onto fd 0 and exec the binary — same handshake
-# install.sh does after the operator answers Y to "Run init now?".
+# Inner sh sees stdin closed; /dev/tty is then redirected onto fd 0 before exec,
+# the same handshake install.sh does.
 sh -c '
   exec </dev/tty
   exec "'"$BIN"'" --home /tmp/sw-test init

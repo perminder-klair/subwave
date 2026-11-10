@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
+import { load } from 'js-yaml';
 import { marked } from 'marked';
 
 export type NewsCategory =
@@ -31,7 +32,19 @@ export interface NewsArticle extends NewsMeta {
 
 const NEWS_DIR = path.join(process.cwd(), 'content', 'news');
 
-marked.setOptions({ gfm: true, breaks: false });
+const newsMatterOptions = {
+  engines: {
+    yaml: {
+      parse(source: string): object {
+        const data = load(source) ?? {};
+        if (typeof data !== 'object' || Array.isArray(data)) {
+          throw new Error('news front matter must be a YAML mapping');
+        }
+        return data;
+      },
+    },
+  },
+};
 
 // Strip an optional leading date prefix (2026-05-20-) so URLs read cleanly.
 function fileToSlug(file: string): string {
@@ -66,7 +79,7 @@ function readRaw(): { slug: string; raw: string }[] {
 }
 
 function parseMeta(slug: string, raw: string): NewsMeta {
-  const { data, content } = matter(raw);
+  const { data, content } = matter(raw, newsMatterOptions);
   const words = content.trim().split(/\s+/).filter(Boolean).length;
   return {
     slug: (data.slug as string) || slug,
@@ -97,9 +110,9 @@ export function getAllNews(): NewsMeta[] {
 export function getNewsArticle(slug: string): NewsArticle | null {
   const hit = readRaw().find((r) => r.slug === slug);
   if (!hit) return null;
-  const { content } = matter(hit.raw);
+  const { content } = matter(hit.raw, newsMatterOptions);
   const meta = parseMeta(slug, hit.raw);
-  return { ...meta, html: marked.parse(content) as string };
+  return { ...meta, html: marked.parse(content, { async: false, gfm: true, breaks: false }) };
 }
 
 /** "May 20, 2026". */

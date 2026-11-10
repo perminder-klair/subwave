@@ -1,14 +1,7 @@
 'use client';
 
-// The one place player code talks to a controller. Every fetch and every
-// controller-relative URL (covers, persona avatars) is built here from a
-// StationOrigin, so pointing the player at another station means swapping the
-// origin (stationOrigin.ts) — no call site hardcodes a path.
-//
-// Response handling is deliberately per-endpoint: feed endpoints parse JSON
-// without an ok-check, /schedule and /themes throw on non-OK, /request/:id maps
-// 404 to status 'unknown', the beacon is fire-and-forget. Keep it that way;
-// this module is plumbing, not policy.
+// Build controller URLs from StationOrigin. Preserve endpoint-specific error handling: feed JSON,
+// throwing schedule/themes reads, unknown request 404s, and best-effort beacons.
 
 import { useMemo } from 'react';
 import {
@@ -24,6 +17,8 @@ import type {
   SessionPayload,
   StationState,
 } from '@/lib/types';
+import { getStationAuthToken } from '@/lib/stationAuth';
+import { publicLyricsPayloadSchema, type PublicLyricsPayload } from '@/lib/schemas.generated';
 
 export interface ThemesPayload {
   /** The effective theme — what a client should actually paint. */
@@ -63,15 +58,28 @@ export interface LikeStatus {
   count?: number;
 }
 
+/** How `GET /lyrics/current` answered. `unavailable` is the only kind worth
+ *  asking again: the music server (or the network) did not answer. */
+export type LyricsResult =
+  | { kind: 'ok'; payload: PublicLyricsPayload }
+  /** The operator has the Lyrics panel switched off. */
+  | { kind: 'disabled' }
+  /** The track has left the station's recent-play window. */
+  | { kind: 'gone' }
+  /** A private station refused the stored password (or there is none). Not
+   *  retried: every refusal spends the address's station-read attempts. */
+  | { kind: 'locked' }
+  | { kind: 'unavailable'; retryAfterSec: number | null };
+
 export interface StationClient {
   origin: StationOrigin;
   /** Prefix a controller-relative path with the station's API base.
    *  Empty/nullish input stays '' so `<img>` fallbacks keep working. */
   resolve(path: string | null | undefined): string;
   coverUrl(subsonicId: string): string;
-  nowPlaying(): Promise<NowPlayingResponse>;
-  state(): Promise<StationState>;
-  session(): Promise<SessionPayload>;
+  nowPlaying(init?: { signal?: AbortSignal }): Promise<NowPlayingResponse>;
+  state(init?: { signal?: AbortSignal }): Promise<StationState>;
+  session(init?: { signal?: AbortSignal }): Promise<SessionPayload>;
   /** The caller owns timeout/abort. */
   health(init?: { signal?: AbortSignal }): Promise<Response>;
   schedule(): Promise<SchedulePayload>;
@@ -84,7 +92,10 @@ export interface StationClient {
   likeCurrent(songId: string): Promise<LikeResult | null>;
   /** null on network error. */
   likeStatus(): Promise<LikeStatus | null>;
-  /** Best-effort: never throws, never blocks. */
+  /** Lyrics for the track this listener is hearing (now-playing's
+   *  `subsonic_id`). Never throws. */
+  currentLyrics(songId: string): Promise<LyricsResult>;
+  /** One-shot audience beacon. Best-effort: never throws, never blocks. */
   beacon(payload: BeaconPayload): void;
   /** null on any failure; callers treat that as "configured" and stay put. */
   onboardingStatus(): Promise<{ needsSetup?: boolean } | null>;
@@ -97,9 +108,9 @@ export function createStationClient(origin: StationOrigin): StationClient {
     origin,
     resolve: path => (path ? `${api}${path}` : ''),
     coverUrl: subsonicId => `${api}/cover/${encodeURIComponent(subsonicId)}`,
-    nowPlaying: () => fetch(`${api}/now-playing`).then(r => json<NowPlayingResponse>(r)),
-    state: () => fetch(`${api}/state`).then(r => json<StationState>(r)),
-    session: () => fetch(`${api}/session`).then(r => json<SessionPayload>(r)),
+    nowPlaying: init => fetch(`${api}/now-playing`, { signal: init?.signal }).then(r => json<NowPlayingResponse>(r)),
+    state: init => fetch(`${api}/state`, { signal: init?.signal }).then(r => json<StationState>(r)),
+    session: init => fetch(`${api}/session`, { signal: init?.signal }).then(r => json<SessionPayload>(r)),
     health: init => fetch(`${api}/health`, { cache: 'no-store', signal: init?.signal }),
     schedule: async () => {
       const r = await fetch(`${api}/schedule`);
@@ -147,6 +158,28 @@ export function createStationClient(origin: StationOrigin): StationClient {
         return await json<LikeStatus>(r);
       } catch {
         return null;
+      }
+    },
+    currentLyrics: async (songId) => {
+      try {
+        // A private station gates this read on the station password, which the
+        // gate stored when the listener unlocked the player.
+        const token = getStationAuthToken();
+        const r = await fetch(`${api}/lyrics/current?songId=${encodeURIComponent(songId)}`, {
+          cache: 'no-store',
+          headers: token ? { 'x-station-auth': token } : undefined,
+        });
+        if (r.status === 403) return { kind: 'disabled' };
+        if (r.status === 409) return { kind: 'gone' };
+        if (r.status === 401) return { kind: 'locked' };
+        if (!r.ok) {
+          const retryAfter = Number(r.headers.get('Retry-After'));
+          return { kind: 'unavailable', retryAfterSec: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null };
+        }
+        const parsed = publicLyricsPayloadSchema.safeParse(await r.json());
+        return parsed.success ? { kind: 'ok', payload: parsed.data } : { kind: 'unavailable', retryAfterSec: null };
+      } catch {
+        return { kind: 'unavailable', retryAfterSec: null };
       }
     },
     beacon: payload => {

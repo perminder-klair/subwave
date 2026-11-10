@@ -1,13 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Trash2, Palette, Clock, CalendarDays, Volume2 } from 'lucide-react';
 import {
   useController, useFieldArray, useWatch, type Control,
 } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, SelectField, type Option } from '@/lib/form-fields';
@@ -33,6 +35,11 @@ import {
 import { VoicePreviewButton } from './tts/VoicePreviewButton';
 import { defaultEngineVoice } from './tts/defaultVoice';
 import { ENGINE_META } from './tts/engineMeta';
+import {
+  settingsKeys,
+  useSettingsMutation,
+  useSettingsQuery,
+} from './settings/queries';
 
 interface MoodEntry {
   name: string;
@@ -59,8 +66,25 @@ interface TestVoiceDefaults {
   lang?: string;
 }
 
-// The 8 fixed day-periods (controller context.ts getTimeContext) — only each
-// period's MOOD is editable here; the hour ranges + vibe/show names stay in code.
+interface MoodSettingsData {
+  values?: {
+    moods?: unknown;
+    moodSchedule?: unknown;
+    weatherMoods?: unknown;
+    tts?: {
+      corrections?: unknown;
+      defaultEngine?: string;
+      kokoro?: { voice?: string; lang?: string };
+      chatterbox?: { referenceVoice?: string };
+      pocketTts?: { voice?: string };
+      cloud?: { provider?: string; model?: string; voice?: string };
+      speed?: Record<string, number>;
+    };
+  };
+}
+
+// The 8 fixed day-periods (controller context.ts getTimeContext). Only each
+// period's MOOD is editable here; hour ranges and vibe/show names stay in code.
 const PERIODS: Array<{ id: string; label: string; hours: string }> = [
   { id: 'early-morning', label: 'Early morning', hours: '05–09' },
   { id: 'morning', label: 'Morning', hours: '09–12' },
@@ -72,7 +96,7 @@ const PERIODS: Array<{ id: string; label: string; hours: string }> = [
   { id: 'after-hours', label: 'After hours', hours: '01–05' },
 ];
 
-// The 6 fixed weather conditions (controller context.ts mapWeatherCode).
+// The 6 fixed weather conditions (controller weather-codes.ts conditionForCode).
 const CONDITIONS: Array<{ id: string; label: string }> = [
   { id: 'clear', label: 'Clear' },
   { id: 'cloudy', label: 'Cloudy' },
@@ -89,12 +113,10 @@ const NONE = '__none__';
 const MOODS_LIMIT = SETTINGS_MOODS_LIMIT;
 
 // A LOCAL shape guard, not a mirror of a server rule: `tts` is one of the
-// settings-patch-registry keys that deliberately has no zod schema (root
-// CLAUDE.md, "What deliberately did NOT convert"), so these caps are the UI's
-// own and there is nothing to mirror.
+// settings-patch-registry keys that deliberately has no zod schema.
 const CORRECTION_FROM_MAX = 80;
 const CORRECTION_TO_MAX = 160;
-const CORRECTIONS_LIMIT = 100;
+const CORRECTIONS_LIMIT = 500;
 const correctionsSchema = z
   .array(
     z.object({
@@ -107,8 +129,7 @@ const correctionsSchema = z
 type TabId = 'vocab' | 'moments' | 'festivals' | 'speech';
 const TAB_IDS: TabId[] = ['vocab', 'moments', 'festivals', 'speech'];
 
-// The one row control that can't be a plain TextField/SelectField off
-// arrayControl — see the note inside.
+// The one row control that can't be a plain TextField/SelectField.
 function WeatherMoodSelect({
   control,
   condition,
@@ -123,8 +144,7 @@ function WeatherMoodSelect({
   fieldId: string;
 }) {
   // Remapping the NONE sentinel in and out of field.onChange is onChange logic
-  // SelectField doesn't expose — the same carve-out FestivalsSection makes for
-  // month/day/windowDays.
+  // SelectField doesn't expose.
   const { field, fieldState } = useController({ control, name: `weather.${condition}` });
   const aria = fieldAria(`${fieldId}-weather-${condition}`, fieldState.error);
   return (
@@ -151,32 +171,36 @@ function WeatherMoodSelect({
 
 export default function MoodsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+  const queryClient = useQueryClient();
+  const settingsQuery = useSettingsQuery<MoodSettingsData>({
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+  });
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // which card is saving
   const fieldId = useId();
 
-  // Active tab lives in the URL (?tab=…) so SectionTabs and the sidebar submenu
-  // share one source of truth.
+  // Active tab lives in the URL (?tab=...) so SectionTabs and the sidebar
+  // submenu share one source of truth.
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab');
   const tab: TabId = (TAB_IDS as string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'vocab';
 
-  // The station's default voice, used to speak the "Test corrections" sample —
-  // resolved from settings.tts on load, never edited here.
+  // The station's default voice, used to speak the "Test corrections" sample.
   const [previewVoice, setPreviewVoice] = useState<TestVoiceDefaults>({ engine: 'piper', voice: '' });
   const [testText, setTestText] = useState('');
 
-  // The PERSISTED mood list, deliberately not the live Vocabulary tab value:
-  // it is both the vocabulary the schedule/weather cards validate against and
-  // the options their Selects offer. `saveSchedule`/`saveWeather` post their
-  // own key alone, so the server judges them against what is actually stored —
-  // validating against the live list would let an operator assign an unsaved
-  // mood name, pass client validation, and be rejected server-side. Advanced
-  // only at load and on a successful moods-card save.
+  // The PERSISTED mood list, deliberately not the live Vocabulary tab value.
+  // `saveSchedule`/`saveWeather` post their own key alone, so the server judges
+  // them against what is actually stored; validating against the live list would
+  // let an operator assign an unsaved mood name and be rejected server-side.
+  // Advanced only at load and on a successful moods-card save.
   const [savedMoodNames, setSavedMoodNames] = useState<string[]>([]);
+  const appliedRevisionRef = useRef(0);
+  const pendingSettingsRef = useRef<{ revision: number; data: MoodSettingsData } | null>(null);
   const moodOptions: Option[] = useMemo(
     () => savedMoodNames.map(m => ({ value: m, label: m })),
     [savedMoodNames],
@@ -193,11 +217,9 @@ export default function MoodsPanel() {
     [savedMoodNames],
   );
   const form = useZodForm(schema, { moods: [], schedule: {}, weather: {}, corrections: [] });
-  // The three mirrored schemas are z.unknown().superRefine().transform(), not
-  // structural z.object/z.array, so the form's declared field-values type
-  // collapses to `unknown` for them (see FestivalsSection's FESTIVALS_TYPE_SHAPE
-  // comment). These two casts widen it back to the real output shape at the
-  // type level only.
+  // The three mirrored schemas are z.unknown().superRefine().transform(), so the
+  // form's declared field-values type collapses to `unknown`. These casts widen
+  // it back to the real output shape at the type level only.
   const arrayControl = form.control as unknown as Control<MoodsFormValues>;
   const getFormValue = <K extends keyof MoodsFormValues>(key: K): MoodsFormValues[K] =>
     form.getValues(key as never) as unknown as MoodsFormValues[K];
@@ -212,89 +234,84 @@ export default function MoodsPanel() {
     name: 'corrections',
     keyName: '_rhfKey',
   });
-  // Live (unsaved-included) corrections for the "Test corrections" preview —
-  // watched rather than read once, so an edit to the list above updates the
-  // sample without a save round trip first.
+  // Live (unsaved-included) corrections for the "Test corrections" preview, so
+  // an edit updates the sample without a save round trip.
   const liveCorrections = useWatch({ control: arrayControl, name: 'corrections' }) ?? [];
 
+  const saveMutation = useSettingsMutation<MoodSettingsData>({ adminFetch });
+
   // Swapping the resolver doesn't re-run it against already-computed error
-  // state, so re-validate whenever the schema is rebuilt from a fresh
-  // `savedMoodNames`.
+  // state, so re-validate whenever the schema is rebuilt.
   useEffect(() => {
     void form.trigger();
   }, [schema, form]);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as {
-        values?: {
-          moods?: unknown;
-          moodSchedule?: unknown;
-          weatherMoods?: unknown;
-          tts?: {
-            corrections?: unknown;
-            defaultEngine?: string;
-            kokoro?: { voice?: string; lang?: string };
-            chatterbox?: { referenceVoice?: string };
-            pocketTts?: { voice?: string };
-            cloud?: { provider?: string; model?: string; voice?: string };
-            speed?: Record<string, number>;
-          };
-        };
-      } | null;
-      const v = j?.values || {};
-      const loadedMoods = Array.isArray(v.moods) ? (v.moods as MoodEntry[]) : [];
-      const rawSchedule = (v.moodSchedule && typeof v.moodSchedule === 'object'
-        ? v.moodSchedule : {}) as Record<string, string>;
-      const rawWeather = (v.weatherMoods && typeof v.weatherMoods === 'object'
-        ? v.weatherMoods : {}) as Record<string, string>;
-      const loadedCorr = Array.isArray(v.tts?.corrections)
-        ? (v.tts!.corrections as Correction[]) : [];
-      // A period with no stored value falls back to the first vocab entry.
-      const firstMood = loadedMoods[0]?.name ?? '';
-      const loadedSchedule = Object.fromEntries(
-        PERIODS.map(p => [p.id, rawSchedule[p.id] || firstMood]),
-      );
-      // Weather gets no such fallback — '' means "no mood steer".
-      const loadedWeather = Object.fromEntries(
-        CONDITIONS.map(c => [c.id, rawWeather[c.id] || '']),
-      );
-      const next: MoodsFormValues = {
-        moods: loadedMoods,
-        schedule: loadedSchedule,
-        weather: loadedWeather,
-        corrections: loadedCorr,
-      };
-      form.reset(next);
-      setSavedMoodNames(loadedMoods.map(m => m.name));
-      setLoaded(true);
+  const hydrateSettings = useCallback((j: MoodSettingsData | null | undefined) => {
+    if (!j) return;
+    const v = j?.values || {};
+    const loadedMoods = Array.isArray(v.moods) ? (v.moods as MoodEntry[]) : [];
+    const rawSchedule = (v.moodSchedule && typeof v.moodSchedule === 'object'
+      ? v.moodSchedule : {}) as Record<string, string>;
+    const rawWeather = (v.weatherMoods && typeof v.weatherMoods === 'object'
+      ? v.weatherMoods : {}) as Record<string, string>;
+    const loadedCorr = Array.isArray(v.tts?.corrections)
+      ? (v.tts!.corrections as Correction[]) : [];
+    // A period with no stored value falls back to the first vocab entry.
+    const firstMood = loadedMoods[0]?.name ?? '';
+    const loadedSchedule = Object.fromEntries(
+      PERIODS.map(p => [p.id, rawSchedule[p.id] || firstMood]),
+    );
+    // Weather gets no such fallback — '' means "no mood steer".
+    const loadedWeather = Object.fromEntries(
+      CONDITIONS.map(c => [c.id, rawWeather[c.id] || '']),
+    );
+    const next: MoodsFormValues = {
+      moods: loadedMoods,
+      schedule: loadedSchedule,
+      weather: loadedWeather,
+      corrections: loadedCorr,
+    };
+    form.reset(next);
+    setSavedMoodNames(loadedMoods.map(m => m.name));
+    setLoaded(true);
 
-      // Which voice the "Test corrections" sample uses — the station's
-      // configured default engine, resolved through the one shared ladder
-      // (admin/tts/defaultVoice.ts) the Settings → TTS preview also walks.
-      const rawTts = v.tts || {};
-      const previewEngine = rawTts.defaultEngine || 'piper';
-      setPreviewVoice({
-        engine: previewEngine,
-        voice: defaultEngineVoice(previewEngine, rawTts),
-        cloudProvider: rawTts.cloud?.provider,
-        cloudModel: previewEngine === 'cloud' ? rawTts.cloud?.model : undefined,
-        speed: rawTts.speed?.[previewEngine],
-        lang: rawTts.kokoro?.lang || undefined,
-      });
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
+    // Which voice the "Test corrections" sample uses, resolved through the one
+    // shared ladder (admin/tts/defaultVoice.ts).
+    const rawTts = v.tts || {};
+    const previewEngine = rawTts.defaultEngine || 'piper';
+    setPreviewVoice({
+      engine: previewEngine,
+      voice: defaultEngineVoice(previewEngine, rawTts),
+      cloudProvider: rawTts.cloud?.provider,
+      cloudModel: previewEngine === 'cloud' ? rawTts.cloud?.model : undefined,
+      speed: rawTts.speed?.[previewEngine],
+      lang: rawTts.kokoro?.lang || undefined,
+    });
+    setErr(null);
+    // `form` is stable and this callback only maps one accepted server revision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminFetch]);
+  }, []);
 
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    void load();
-  }, [hydrated, needsAuth, load]);
+    if (settingsQuery.error) {
+      setErr(errorMessage(settingsQuery.error));
+      return;
+    }
+    const revision = settingsQuery.dataUpdatedAt;
+    if (settingsQuery.data && revision && appliedRevisionRef.current !== revision) {
+      pendingSettingsRef.current = { revision, data: settingsQuery.data };
+    }
+    const pending = pendingSettingsRef.current;
+    if (!pending || (loaded && form.formState.isDirty)) return;
+    hydrateSettings(pending.data);
+    appliedRevisionRef.current = pending.revision;
+    pendingSettingsRef.current = null;
+  }, [
+    settingsQuery.data, settingsQuery.dataUpdatedAt, settingsQuery.error,
+    loaded, form.formState.isDirty, hydrateSettings,
+  ]);
+
+  const load = useCallback(async () => { await settingsQuery.refetch(); }, [settingsQuery]);
 
   // Routed through the Next router so a soft nav re-derives `tab`.
   const selectTab = useCallback(
@@ -306,15 +323,8 @@ export default function MoodsPanel() {
     [router, pathname, searchParams],
   );
 
-  // POST one settings slice, then re-baseline the WHOLE form with a plain
-  // `form.reset(values)`. `reset(next, {keepDirtyValues: true})` looks like the
-  // right tool but does NOT recompute dirtyFields/isValid against the new
-  // defaults, so the just-saved card's Save button stayed wrongly enabled.
-  //
-  // Tradeoff: adopting the live value for every key also clears the dirty flag
-  // of an unsaved edit on another card. The VALUE is untouched — only the
-  // "unsaved changes" signal resets — which is the safer failure direction, and
-  // RHF offers no option that recomputes one key's dirtiness alone.
+  // POST one settings slice, then advance only that top-level field's default,
+  // so other cards keep their live values and dirty comparison.
   const persistPatch = useCallback(
     async (
       card: string,
@@ -327,35 +337,23 @@ export default function MoodsPanel() {
     ) => {
       setBusy(card);
       try {
-        const r = await adminFetch('/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patch),
-        });
-        const j = (await r.json().catch(() => ({}))) as {
-          error?: string;
-          fieldErrors?: Record<string, string>;
-          saved?: Record<string, unknown>;
-        };
-        if (!r.ok) {
-          // Only carries field paths for a SHAPE-level failure (duplicate or
-          // over-long name), which the route catches with moodNames: null. A
-          // membership failure is judged inside update() and throws a plain
-          // Error with no path, so it surfaces via notify.err below instead.
-          applyServerFieldErrors(form, j.fieldErrors);
-          throw new Error(j.error || `failed (${r.status})`);
-        }
-        const current = form.getValues() as unknown as MoodsFormValues;
-        form.reset({ ...current, [key]: nextValue });
-        onSuccess?.(j.saved);
-        notify.ok(okMsg);
+        const receipt = await saveMutation.mutateAsync(patch);
+        form.resetField(key as never, { defaultValue: nextValue as never });
+        onSuccess?.(receipt.refreshError
+          ? patch
+          : queryClient.getQueryData<MoodSettingsData>(settingsKeys.detail())?.values);
+        if (receipt.refreshError) notify.err(`${okMsg}, but refresh failed: ${receipt.refreshError}`);
+        else notify.ok(okMsg);
       } catch (e) {
+        if (e instanceof AdminResponseError) {
+          applyServerFieldErrors(form, (e.body as { fieldErrors?: Record<string, string> }).fieldErrors);
+        }
         notify.err(`Save failed: ${errorMessage(e)}`);
       } finally {
         setBusy(null);
       }
     },
-    [adminFetch, form],
+    [form, queryClient, saveMutation],
   );
 
   const saveMoods = async () => {
@@ -364,18 +362,16 @@ export default function MoodsPanel() {
     const raw = getFormValue('moods');
     const payload = raw.map(m => ({ name: m.name, clapPrompt: m.clapPrompt }));
     // The one save that can hit the controller's in-use removal guard
-    // (assertNoOrphanMoods): renaming or removing a mood a time-of-day slot,
-    // weather slot, festival or show still points at. It's a whole-request
-    // rule with no field to attach to, so it surfaces as a toast.
+    // (assertNoOrphanMoods). A whole-request rule with no field to attach to, so
+    // it surfaces as a toast.
     await persistPatch(
       'moods',
       'moods',
       { moods: payload },
       raw,
       `${raw.length} mood${raw.length === 1 ? '' : 's'} saved`,
-      // The only place savedMoodNames advances. Prefer the server's own
-      // normalised names over the raw payload, so an id the operator typed
-      // un-normalised doesn't leak into the Moments dropdowns.
+      // The only place savedMoodNames advances. Prefer the server's normalised
+      // names so an un-normalised typed id doesn't leak into the dropdowns.
       saved => {
         const savedMoods = Array.isArray(saved?.moods) ? (saved.moods as MoodEntry[]) : payload;
         setSavedMoodNames(savedMoods.map(m => m.name));
@@ -407,10 +403,9 @@ export default function MoodsPanel() {
     await persistPatch('corrections', 'corrections', { tts: { corrections: effective } }, raw, 'Speech corrections saved');
   };
 
-  // Per-card Save gate, not `form.formState.isValid` — that's the whole form's
-  // validity, so an invalid vocab row would disable the moments/speech Save
-  // buttons too. The bare index only works for TOP-LEVEL keys; a card keyed on
-  // a nested path would need a `get(errors, path)` accessor.
+  // Per-card Save gate, not `form.formState.isValid`: that is the whole form's
+  // validity, so an invalid vocab row would disable the other Save buttons. The
+  // bare index only works for TOP-LEVEL keys.
   const cardState = (key: keyof MoodsFormValues) => {
     const errors = form.formState.errors as Record<string, unknown>;
     const dirty = form.formState.dirtyFields as Record<string, unknown>;
@@ -507,8 +502,8 @@ export default function MoodsPanel() {
                 disabled={moodFields.length >= MOODS_LIMIT}
                 onClick={() => {
                   appendMood({ name: '', clapPrompt: '' });
-                  // errors are populated lazily, so an untouched blank row
-                  // would leave the Save button enabled and its click a no-op.
+                  // errors are populated lazily, so an untouched blank row would
+                  // leave the Save button enabled and its click a no-op.
                   void form.trigger('moods');
                 }}
               >
@@ -591,21 +586,26 @@ export default function MoodsPanel() {
                 words the voice tends to get wrong (<em>GHz</em> →<em> gigahertz</em>, <em>Hozier</em>{' '}
                 → <em>Ho-zeer</em>). Case doesn’t matter, and it matches whole words and phrases;
                 leave the spoken form empty to drop a word entirely. New rules kick in from the next
-                line — no restart needed.
+                line — no restart needed. Up to {CORRECTIONS_LIMIT} rules.
               </div>
               <ScrollArea className="max-h-[360px]">
                 <div className="flex flex-col gap-3 pr-2">
                   {corrFields.map((field, idx) => (
+                    // From sm up the row is a grid whose two fields share its rows
+                    // (subgrid): label, input, hint, error. Only "Spoken form"
+                    // has a hint, so aligning the fields by their bottom edge
+                    // left its input a line above the other; on shared rows
+                    // both inputs and the remove button sit on one line.
                     <div
                       key={field._rhfKey}
-                      className="flex flex-col gap-2 border-b border-ink/10 pb-3 last:border-0 sm:flex-row sm:items-end sm:gap-3"
+                      className="flex flex-col gap-2 border-b border-ink/10 pb-3 last:border-0 sm:grid sm:grid-cols-[1fr_1fr_auto] sm:gap-x-3"
                     >
                       <TextField
                         control={arrayControl}
                         name={`corrections.${idx}.from`}
                         label="Text on air"
                         placeholder="text on air (e.g. GHz)"
-                        className="sm:flex-1"
+                        className="sm:row-span-4 sm:grid sm:grid-rows-subgrid sm:content-start"
                         maxLength={CORRECTION_FROM_MAX}
                       />
                       <TextField
@@ -615,12 +615,12 @@ export default function MoodsPanel() {
                         placeholder="spoken form (e.g. gigahertz)"
                         description="leave empty to drop the word"
                         maxLength={CORRECTION_TO_MAX}
-                        className="sm:flex-1"
+                        className="sm:row-span-4 sm:grid sm:grid-rows-subgrid sm:content-start"
                       />
                       <Btn
                         sm
                         title="Remove correction"
-                        className="size-9 shrink-0 self-start sm:self-end"
+                        className="size-9 shrink-0 self-start sm:col-start-3 sm:row-start-2 sm:self-center"
                         onClick={() => removeCorr(idx)}
                       >
                         <Trash2 size={12} />

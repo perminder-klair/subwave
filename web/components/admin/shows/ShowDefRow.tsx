@@ -1,6 +1,5 @@
 'use client';
 
-// One row in the show-definitions list.
 
 import { useRef } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
@@ -48,7 +47,6 @@ export function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, 
         'focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)]',
       )}
     >
-      {/* The same per-show colour the weekly grid paints with. */}
       <span
         ref={spineRef}
         aria-hidden="true"

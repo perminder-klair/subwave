@@ -5,10 +5,12 @@
 //
 // Part of the queue/ split - see ../queue.ts, which owns the Queue class.
 
-import * as library from '../../music/library.js';
+import { knownTrackLengthSeconds } from '../../music/track-duration.js';
 import * as settings from '../../settings.js';
-import { DRAIN_DEADLINE_SEC } from '../drain-policy.js';
-import type { Track } from './types.js';
+import { DRAIN_DEADLINE_SEC, playableDurationSec } from '../drain-policy.js';
+import type { QueueItem, Track } from './types.js';
+import type { HostSpeechStamp } from '../session.js';
+import type { TransitionEffect } from '../../settings/vocab.js';
 
 interface TransitionItem {
   track: Track;
@@ -23,13 +25,17 @@ interface TransitionItem {
 // admin honest until `sent` makes the pair authoritative. Exit gestures ride
 // the outgoing track while entry gestures ride the incoming track, so the
 // answer has to inspect both sides. Washout may combine with sweep/blend; stem
-// rendering owns the whole seam and therefore overrides every live effect.
+// rendering owns the whole seam and therefore overrides every live effect, and
+// a show-boundary cut on the outgoing track (#1574) stands every one down.
 export function nextTransitionLabel(
   outgoing: TransitionItem | null | undefined,
   incoming: TransitionItem | null | undefined,
 ): string | null {
   if (!incoming || incoming.sent !== true) return null;
   if (incoming.stemSeam) return 'Stem blend';
+  // radio.liq reads liq_show_fade off the OUTGOING track and disarms all six
+  // gestures, on both sides of the seam: what airs is the plain crossfade.
+  if (outgoing?.track.showFade) return 'Normal';
 
   const labels: string[] = [];
   const washing = outgoing?.track.washout === true;
@@ -46,6 +52,64 @@ export function nextTransitionLabel(
   if (!washing && !looping && incoming.track.chop) labels.push('Chop');
 
   return labels.length > 0 ? labels.join(' + ') : 'Normal';
+}
+
+// The gestures the INCOMING track carries for the seam into it (radio.liq arms
+// them off `b`); washout and loop ride the outgoing track's own exit instead.
+export const ENTRY_EFFECTS = ['sweep', 'blend', 'dissolve', 'chop'] as const;
+
+// Something the mixer placed BETWEEN two songs, read off its marker at play time.
+// None of these is a song — none reaches now-playing.json — so `outgoing` at a
+// track start is the song before it, and the seam actually aired was from this.
+export type Interposed = 'jingle' | 'bed' | 'break';
+const INTERPOSED_LABEL: Record<Interposed, string> = {
+  jingle: 'After jingle',
+  bed: 'After bed',
+  break: 'After break',
+};
+
+// The durable seam record for a track that just started: the label of the seam
+// INTO it, as armed, and any entry gesture that was armed yet could not air.
+// One precedence rule with the dashboard (nextTransitionLabel), so the two never
+// disagree about the same seam. Labels what the controller ARMED: a mixer older
+// than this controller can still differ, which a mixer-side marker would settle.
+//   * a jingle in between: radio.liq stands every entry gesture down on the
+//     jingle's seam, so the ones still armed here are stranded;
+//   * a bed or a pause-and-talk break in between: their own drain paths already
+//     stripped the entry gestures, so there is nothing left to strand;
+//   * the outgoing song's exit gesture went into whatever was interposed, never
+//     into this track, so it is not this seam's.
+// Null when the song before is unknown (the first track after a boot).
+export function seamRecordAtPlay(
+  outgoing: TransitionItem | null | undefined,
+  incoming: TransitionItem,
+  interposed: Interposed | null,
+): { label: string | null; stranded: Array<(typeof ENTRY_EFFECTS)[number]> } {
+  if (interposed) {
+    const stranded = interposed === 'jingle' ? ENTRY_EFFECTS.filter(k => incoming.track[k] === true) : [];
+    return { label: INTERPOSED_LABEL[interposed], stranded };
+  }
+  if (!outgoing) return { label: null, stranded: [] };
+  return { label: nextTransitionLabel(outgoing, { ...incoming, sent: true }), stranded: [] };
+}
+
+// How many transition asks the anti-streak ledger keeps, and so how many the
+// pick prompts are shown.
+export const TRANSITION_LEDGER_SIZE = 4;
+
+// The transition the model ASKED FOR on a pick, as the anti-streak ledger
+// counts it: entry gestures first, then the exits, else 'normal'. A length-cap
+// auto-washout is the controller's, not the model's, so it is no ask at all —
+// null keeps it invisible to the ledger in both directions. One rule for the
+// drain's ledger and the prompts' preview of picks it has not reached yet.
+export function transitionAskOf(track: Track): TransitionEffect | 'normal' | null {
+  if (track.sweep) return 'sweep';
+  if (track.blend) return 'blend';
+  if (track.dissolve) return 'dissolve';
+  if (track.chop) return 'chop';
+  if (track.loop) return 'loop';
+  if (track.washout && !track.washoutAuto) return 'washout';
+  return track.washoutAuto ? null : 'normal';
 }
 
 export function pickLinkInterval() {
@@ -86,6 +150,44 @@ export const BACKFILL_DEDUP_MAX_GAP_MS = 15 * 60_000;
 // symmetric cost — an on-format-for-the-NEXT-show track starting a minute or
 // two early — is how real radio tees up a changeover anyway.
 export const PICK_SHOW_LOOKAHEAD_SEC = 120;
+
+// Resolve picker policy a little beyond the expected start so a genuine
+// changeover track can belong to the show it mostly airs in. That attribution
+// window is not permission for a long remaining track (or a sequence of short
+// ones) to walk arbitrarily far through the next programme: once a known show
+// boundary is crossed, the forecast stops one attribution window beyond it.
+//
+// `boundaryMs` is optional because the schedule can have no change inside the
+// scan horizon. Invalid inputs fail open to the historical forecast rather
+// than inventing a boundary or suppressing a pick.
+export function pickShowDate(
+  nowMs: number,
+  leadSec: number | null,
+  boundaryMs: number | null,
+): Date | null {
+  if (!Number.isFinite(nowMs) || typeof leadSec !== 'number' || !Number.isFinite(leadSec)) return null;
+  const predicted = nowMs + (Math.max(0, leadSec) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+  if (typeof boundaryMs !== 'number' || !Number.isFinite(boundaryMs)) return new Date(predicted);
+  const latest = boundaryMs + PICK_SHOW_LOOKAHEAD_SEC * 1000;
+  return new Date(Math.min(predicted, latest));
+}
+
+// A final-track handoff belongs only to a track whose expected END reaches the
+// real boundary. `showAt` deliberately includes the attribution window above,
+// so using it here would arm a handoff for a track that actually finishes
+// before the change.
+export function handoffAnchorReachesBoundary(
+  nowMs: number,
+  leadSec: number | null,
+  boundaryMs: number | null,
+): boolean {
+  return Number.isFinite(nowMs)
+    && typeof leadSec === 'number'
+    && Number.isFinite(leadSec)
+    && typeof boundaryMs === 'number'
+    && Number.isFinite(boundaryMs)
+    && nowMs + Math.max(0, leadSec) * 1000 >= boundaryMs;
+}
 
 // The moment the pick — and its attached link — actually starts AIRING:
 // `showAt` minus the attribution padding above. `showAt` deliberately probes
@@ -220,6 +322,31 @@ export function pickLeadSec(remainingSec: number | null, heldSec: number | null 
   return rem + heldSec;
 }
 
+// The seconds a HELD (not yet drained) pick anchor will actually air, for
+// pickLeadSec's `heldSec`. The drain only stamps the #447 length cap and the
+// silence-trim tail when the item goes out, which is AFTER the pick that follows
+// it is chosen — so its raw tagged duration overstates the lead by everything
+// the cap will cut. A 2h35 continuous mix held behind the on-air track under a
+// 600s cap walked `showAt` from 18:00 to 20:39, resolved the 20:00 show, and
+// aired its handoff two hours early while /now-playing still showed the
+// outgoing show. Composes the same cues the drain will: the cap (null for
+// listener requests, which are exempt), the trim tail and any cue already
+// stamped, earliest wins; then the head trim. Unknown length → null.
+export function heldAnchorPlayableSec(input: {
+  durationSec: number | null | undefined;
+  maxTrackSec: number | null | undefined;
+  cueOutSecs?: (number | null | undefined)[];
+  cueInSec?: number | null;
+}): number | null {
+  const early = [input.maxTrackSec, ...(input.cueOutSecs ?? [])]
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  return playableDurationSec(
+    input.durationSec,
+    early.length ? Math.min(...early) : null,
+    input.cueInSec ?? null,
+  );
+}
+
 // Has this events-log play already been recorded by recordPlay? The old dedup
 // keyed on `${endedAt}|${title}` — an EXACT timestamp match — but recordPlay's
 // end-stamp never equals the event's start `t`, so it never fired and every
@@ -255,9 +382,7 @@ export function playAlreadyRecorded(
 // blend on an ending the cap never lets air (and strips the auto-washout
 // protecting the forced cut).
 export function knownDurationSec(track: Track): number {
-  const dur = Number(track.duration) || 0;
-  if (dur) return dur;
-  return track.id ? Number(library.get(track.id)?.durationSec) || 0 : 0;
+  return knownTrackLengthSeconds(track) ?? 0;
 }
 
 
@@ -315,6 +440,43 @@ export function shouldDropStaleLink(
   return mentionsTrack(item.introScript, item.linkPrev);     // wrong predecessor — only drop if it's actually named
 }
 
+// Ordinary speech explicitly owned by the live show's host becomes obsolete
+// when that host epoch changes. Legacy AI links have no revision stamp, so only
+// a known author mismatch within the same live show is safe to drop. Missing
+// legacy identity fails open and independent/manual speech never opts in.
+export function shouldDropObsoleteHostSpeech(
+  item: Pick<QueueItem, 'introHostSpeech' | 'aiPicked' | 'introKind' | 'requestedBy' | 'introPersona' | 'introSessionKey'> | null,
+  live: HostSpeechStamp | null,
+): boolean {
+  if (!item || !live) return false;
+  if (item.introHostSpeech) {
+    const stamp = item.introHostSpeech;
+    if (stamp.showKey !== live.showKey) return false;
+    return stamp.personaId !== live.personaId || stamp.revision !== live.revision;
+  }
+  const legacyOrdinaryLink = item.aiPicked === true
+    && item.introKind === 'link'
+    && !item.requestedBy;
+  if (!legacyOrdinaryLink || !item.introPersona?.id) return false;
+  if (item.introSessionKey && item.introSessionKey !== live.showKey) return false;
+  return item.introPersona.id !== live.personaId;
+}
+
+// A link is editorially written for one show session. Its audio may remain
+// queued until after the schedule rolls into another show, but it must not air
+// there: it could introduce the outgoing DJ, or carry the previous show's
+// context. Session keys, rather than persona IDs, matter here because adjacent
+// shows can deliberately share a host.
+export function shouldDropCrossSessionLink(
+  item: { introKind?: string | null; introSessionKey?: string | null } | null,
+  liveSessionKey: string | null | undefined,
+): boolean {
+  return item?.introKind === 'link'
+    && !!item.introSessionKey
+    && !!liveSessionKey
+    && item.introSessionKey !== liveSessionKey;
+}
+
 // Does the track now starting already bring its OWN spoken line to this
 // boundary — an auto-DJ link, or a listener request's intro? If so a
 // boundary-deferred wall-clock segment (the station ident) must NOT also air
@@ -370,8 +532,41 @@ export function boundaryCarriesTrackVoice(
   return !shouldDropStaleLink(item, predecessor);
 }
 
+// Which mixer channel a spoken clip takes: 'intro' → intro.txt → intro_queue →
+// LIGHT duck (p=0.30, the music stays audible under the voice), 'say' →
+// say.txt → voice_queue → HEAVY duck (p=0.22, the voice dominates).
+//
+// The rule is **what the clip plays OVER, not what kind it is**. A link talks
+// up the song that just started, so the song stays up. Everything else — idents,
+// the hourly clock, weather, a request intro — is meant to dominate.
+//
+// `overBed` is the #1465 case and it OVERRIDES the kind: a clip airing on an
+// instrumental bed has no song to talk over, and the heavy duck would push the
+// bed (put there for exactly this purpose) down to a hiss. It is the CALLER's
+// observation that a bed is on air — `queue.onBedStarted` saw the marker —
+// never `item.bedded`, which only means a bed URI reached next.txt. A pushed
+// item is handed over, never playable: an unresolvable URI is dropped in
+// silence and a marker missed by more than BED_MARKER_FRESH_MS never fires the
+// event, and in both cases the SONG starts and the line airs over its opening,
+// which is a song to talk over and takes the heavy duck like any other request
+// intro. Reading the flag would hand that failure — the one this feature exists
+// to prevent — a lighter duck than it had pre-#1465.
+//
+// Pure + exported so the rule is unit-pinned (scripts/voice-channel.test.ts)
+// and stated once: `announce` and `airIntro` both reach it, and each had its own
+// inline copy. `airPendingVoice` deliberately does NOT — a boundary-deferred
+// ident is a say-kind clip forced onto the intro channel (#1382), which is an
+// exception to this rule rather than an instance of it.
+export function voiceChannelFor(
+  kind: string | null | undefined,
+  { overBed = false }: { overBed?: boolean } = {},
+): 'intro' | 'say' {
+  return (overBed || kind === 'link') ? 'intro' : 'say';
+}
+
 // Per-target-file write chain. Liquidsoap polls each handoff file (say.txt,
-// intro.txt, sfx.txt, next.txt) on a 0.5-1.0s interval and DELETES the file
+// intro.txt, sfx.txt, next.txt, jingle-now.txt) on a 0.5-1.0s interval and
+// DELETES the file
 // after reading it (see liquidsoap/radio.liq poll_voice/poll_intro/poll_sfx/
 // poll_queue). Without serialisation, two writes inside one poll window
 // silently lose the first one — exactly the failure in issue #140 where a
@@ -391,4 +586,89 @@ export function formatAgo(ms: number) {
   return `${Math.floor(s / 86400)}d`;
 }
 
+// The attribution a multi-voice exchange line carries off the mic.
+//
+// A rotated line is spoken by whoever holds the mic for it — a guest co-host,
+// not the session's host — and TWO surfaces downstream depend on being told so.
+// `logText` prefixes the booth log with the speaker; `meta.personaId` is what
+// session.windowMessages() and broadcast/prompt-memory.ts both key off to name
+// the real speaker instead of handing a guest's words to the host as their own.
+// Lived inline in announceExchange, where the shape it owes those two readers
+// could drift without anything noticing.
+export function exchangeSegment(
+  line: { persona?: { id?: string; name?: string } | null; text: string },
+  kind: string,
+): {
+  kind: string; channel: 'say'; text: string;
+  persona: { id?: string; name?: string } | null;
+  logText: string;
+  meta: { personaId?: string; personaName?: string };
+  legacy: false;
+} {
+  const name = line.persona?.name;
+  return {
+    kind,
+    channel: 'say',
+    text: line.text,
+    persona: line.persona ?? null,
+    logText: `${name ? `${name}: ` : ''}${line.text}`,
+    meta: { personaId: line.persona?.id, personaName: name },
+    // The aggregate dj.say the exchange publishes covers the legacy channel for
+    // the whole conversation; voice.start/voice.end still fire per line.
+    legacy: false,
+  };
+}
 
+// Below this, "coming up" is already an honest acknowledgement and the clause
+// is noise. Five minutes is roughly one track: a request landing behind the
+// on-air song and nothing else does not need a number.
+export const REQUEST_WAIT_NOTICE_SEC = 5 * 60;
+
+// How long a wait reads as, for a listener.
+//
+// Minutes to the nearest minute up to an hour and a half, then hours and
+// minutes — because "about 95 minutes" is arithmetic rather than an answer,
+// while "about 40 minutes" is exactly what somebody wants to know. Rounded, and
+// hedged with "about", because it IS a forecast (queue.airForecastSec), but
+// never rounded into vagueness: the whole point is that a listener sitting
+// behind a queued album is told so in a number they can act on.
+export function formatWait(sec: number): string {
+  const mins = Math.max(1, Math.round(sec / 60));
+  if (mins < 90) return `${mins} minute${mins === 1 ? '' : 's'}`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h} hour${h === 1 ? '' : 's'} ${m} minute${m === 1 ? '' : 's'}` : `${h} hour${h === 1 ? '' : 's'}`;
+}
+
+// The sentence appended to a queued request's acknowledgement when it is a long
+// way down the queue (#1622 FR 4).
+//
+// An operator block is the reason this exists: before it, a request joined a
+// queue one or two picks deep and "coming up" was true within a track or two.
+// One press can now put a whole album in front of it, and FIFO is not
+// negotiable — `drain-policy.ts` states in as many words that a request IS the
+// successor arriving and that FIFO is never inverted, so letting a request jump
+// the block would both break that invariant and split the record, which is the
+// one thing the block feature exists to prevent. The listener is told instead.
+//
+// Two ways this stays honest. It NAMES the block when one is ahead, because
+// "there's an album playing first" is the difference between a wait that makes
+// sense and a station that looks broken. And it returns '' rather than a hedge
+// whenever the forecast is unknown or short — a caller with no answer says
+// nothing, which is exactly the pre-block behaviour.
+//
+// Pure and separate from the LLM's own `ack` copy: this is a fact appended to
+// whatever the DJ said, never something the model is asked to phrase.
+export function requestWaitClause(input: {
+  waitSec: number | null;
+  /** The label of the operator block ahead of this request, if any. */
+  blockLabel?: string | null;
+}): string {
+  const { waitSec, blockLabel } = input;
+  if (waitSec == null || !Number.isFinite(waitSec) || waitSec < REQUEST_WAIT_NOTICE_SEC) return '';
+  const wait = formatWait(waitSec);
+  const label = (blockLabel || '').trim();
+  return label
+    ? ` We're playing ${label} right through first, so yours is about ${wait} away.`
+    : ` There's a fair bit queued ahead of it — about ${wait} away.`;
+}

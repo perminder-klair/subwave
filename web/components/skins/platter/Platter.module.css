@@ -1,26 +1,20 @@
-/* Everything that moves is a co-located keyframe idling at `paused` until
-   `.playing` lands, so a tuned-out deck sits still and html.lite's global
-   keyframe kill stops the whole thing for free. */
 
 @keyframes platter-spin { to { transform: rotate(360deg); } }
-@keyframes platter-sheen { to { transform: rotate(360deg); } }
-@keyframes platter-rim { to { transform: rotate(360deg); } }
+@keyframes platter-sheen { from { transform: rotate(-5deg); } to { transform: rotate(5deg); } }
 @keyframes platter-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.28; } }
 
-.record,
-.sheen,
-.rim,
-.pulse {
-  animation-play-state: paused;
-}
-.playing {
-  animation-play-state: running;
-}
-
-.record { animation: platter-spin 8s linear infinite; }
+/* Each turns only while .playing. The pause rides in the shorthand itself: a
+   separate animation-play-state rule ahead of these was reset by them, so the
+   record went on spinning after STOP. */
+.record { animation: platter-spin 5.9s linear infinite paused; }
+/* Pure white laid over anything at some alpha: screen-blended, white over a
+   colour is white, so plain alpha paints the same, without making WebKit
+   blend one turning layer into another.
+   The light is the room's, so it stays where it is while the record turns
+   under it: it only sways, once a turn each way, as a record that isn't quite
+   flat throws it. Turning with the record, it read as paint on the vinyl. */
 .sheen {
-  animation: platter-sheen 16s linear infinite;
-  mix-blend-mode: screen;
+  animation: platter-sheen 5.9s ease-in-out infinite alternate paused;
   background: conic-gradient(
     from 210deg,
     rgba(255, 255, 255, 0) 0deg,
@@ -31,8 +25,16 @@
     rgba(255, 255, 255, 0) 344deg
   );
 }
-.rim { animation: platter-rim 8s linear infinite; }
-.pulse { animation: platter-pulse 2.4s ease-in-out infinite; }
+.pulse { animation: platter-pulse 2.4s ease-in-out infinite paused; }
+.playing { animation-play-state: running; }
+
+@media (prefers-reduced-motion: reduce) {
+  .record,
+  .sheen,
+  .pulse {
+    animation: none;
+  }
+}
 
 /* Deliberately off-token: a record is black in every theme. */
 .vinyl {
@@ -42,17 +44,14 @@
       rgba(255, 255, 255, 0.05) 0 1px,
       rgba(0, 0, 0, 0) 1px 3px
     ),
-    radial-gradient(circle at 50% 50%, #1c1815 0 32%, #0c0a09 33% 100%);
+    radial-gradient(circle at 50% 50%, #1c1815 0 35%, #0c0a09 36% 100%);
   box-shadow:
     inset 0 0 55px rgba(0, 0, 0, 0.85),
     0 16px 42px rgba(0, 0, 0, 0.35);
 }
 
-/* Tonearm rotates around the rear-right pivot; transform-origin MUST match the
-   pivot circle in PlatterSkin.tsx. --pf (0..1, same var as the progress bar)
-   sweeps -14deg (lead-in) to +8deg (run-out); it ticks once a second, so the
-   1.1s eased transition is what turns the steps into a creep. A transition
-   rather than a loop, so the parked angle holds under html.lite. */
+/* Match transform-origin to the pivot in PlatterSkin.tsx. Ease the one-second --pf updates over 1.1s
+   (unlike the iso deck's SVG arm, this one is a whole element, so the compositor runs the ease). */
 .arm {
   transform-origin: 86% 19%;
   transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1);
@@ -60,8 +59,18 @@
 .armRest { transform: rotate(-24deg); }
 .armLive { transform: rotate(calc(-14deg + var(--pf, 0) * 22deg)); }
 
-/* --pf (0..1) is set on the skin root via useDynamicStyle, so no inline style
-   attribute. */
+/* The arm's shadow, in the ink so it darkens a pale deck and a dark one. */
+.armShade { fill: var(--ink); stroke: var(--ink); opacity: 0.18; }
+
+/* Progress round the record (ProgressRing): lit ticks where the song has been. */
+.tick { fill: none; stroke: color-mix(in oklab, var(--ink) 26%, transparent); stroke-width: 0.3; stroke-linecap: round; }
+.tickLit { fill: none; stroke: var(--accent); stroke-width: 0.55; stroke-linecap: round; }
+
+/* The sleeve's wash gathers round the record and is gone by the table's
+   corners. The gradient's 100% is the corner, and the record's edge sits near
+   half of that, so the wash is held in full to just past the tick ring. */
+.wash { mask-image: radial-gradient(circle at 50% 50%, #000 62%, transparent 96%); }
+
 .progFill { width: calc(var(--pf, 0) * 100%); }
 .progHead { left: calc(var(--pf, 0) * 100%); }
 
@@ -69,7 +78,213 @@
 .faderFill { top: calc((1 - var(--vf, 0)) * 100%); }
 .faderThumb { top: calc((1 - var(--vf, 0)) * 100%); }
 
-/* Chips scroll in one lane on phones rather than wrapping mid-word ("92 BPM"
-   must not break across lines). The wide layout wraps (lg:flex-wrap) instead. */
 .chipRow { scrollbar-width: none; }
 .chipRow::-webkit-scrollbar { display: none; }
+
+/* ── Iso touches in the everyday face ──────────────────────────────────── */
+
+/* The deck sits on a drawing table: a dot on every 30° isometric grid point,
+   over the deck's own wash. */
+.deckTable {
+  background-image:
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 16%, transparent) 0.9px, transparent 1.4px),
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 16%, transparent) 0.9px, transparent 1.4px),
+    linear-gradient(to bottom right, var(--field), color-mix(in oklab, var(--field) 82%, var(--bg)));
+  background-size: 24px 13.856px, 24px 13.856px, auto;
+  background-position: 0 0, 12px 6.928px, 0 0;
+}
+
+/* A card as a slab seen from above and left at 30°: its right side and its
+   underside show, each a parallelogram, the underside in deeper shade — the
+   card's own surface toward black, so a side is darker than its face on a
+   dark theme too (toward the ink, it came out paler). Both start at the
+   card's outer edge, so its own border is their shared edge.
+   The card brings its own positioning (relative or absolute): set here, it
+   would beat the utility class, which loads first, and pull an absolutely
+   placed card back into the flow. */
+.slab {
+  --slab: 7px;
+}
+.slab::before,
+.slab::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid var(--ink);
+  transform-origin: 0 0;
+}
+.slab::before {
+  top: -1px;
+  left: calc(100% + 1px);
+  width: calc(var(--slab) * 0.866);
+  height: calc(100% + 2px);
+  border-left: 0;
+  background: color-mix(in oklab, var(--surface) 86%, #000);
+  transform: skewY(30deg);
+}
+.slab::after {
+  top: calc(100% + 1px);
+  left: -1px;
+  width: calc(100% + 2px);
+  height: calc(var(--slab) * 0.5);
+  border-top: 0;
+  background: color-mix(in oklab, var(--surface) 74%, #000);
+  transform: skewX(60deg);
+}
+
+/* Transport keys stand proud at the same 30°: their side is a stack of the
+   key's resting face (the paper) in shade, and a second stack, one pixel
+   wider in the ink, traces the whole extruded silhouette — so the side reads
+   against a pale deck and a dark one alike. Drawn in the ink alone, a dark
+   theme turned the side into a bright crescent that read as a highlight.
+   Pressing sinks a key to the deck, and a latched key (playing, muted, liked)
+   stays down. A press is an interaction, so lite keeps the short glide. */
+.isoKey {
+  --side: color-mix(in oklab, var(--bg) 52%, #000);
+  box-shadow:
+    0.87px 0.5px 0 var(--side), 1.73px 1px 0 var(--side), 2.6px 1.5px 0 var(--side),
+    3.46px 2px 0 var(--side), 4.33px 2.5px 0 var(--side),
+    0.87px 0.5px 0 1px var(--ink), 1.73px 1px 0 1px var(--ink), 2.6px 1.5px 0 1px var(--ink),
+    3.46px 2px 0 1px var(--ink), 4.33px 2.5px 0 1px var(--ink);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.isoKey:active:not(:disabled),
+.isoKeyDown {
+  transform: translate(3.46px, 2px);
+  box-shadow: 0.87px 0.5px 0 var(--side), 0.87px 0.5px 0 1px var(--ink);
+}
+
+/* ── Focus mode: the deck at 30° isometric (IsoDeck) ───────────────────── */
+
+/* The column folds away; in its place the deck spreads across the stage. */
+.stageIn { animation: platter-stage-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* The deck gives the lyrics the stage's left third and takes it back. */
+.stageSlides { transition: left 0.6s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes platter-stage-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Face shading as theme tokens: SVG presentation attributes don't reliably
+   resolve var(), and the strict lint forbids inline styles. */
+.iso {
+  --iso-t: var(--bg);
+  --iso-l: color-mix(in oklab, var(--ink) 6%, var(--bg));
+  --iso-r: color-mix(in oklab, var(--ink) 13%, var(--bg));
+  --iso-w: color-mix(in oklab, var(--ink) 20%, var(--bg));
+}
+.pen {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 0.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.fT { fill: var(--iso-t); }
+.fL { fill: var(--iso-l); }
+.fR { fill: var(--iso-r); }
+.fW { fill: var(--iso-w); }
+.fBg { fill: var(--bg); }
+.fInk { fill: var(--ink); }
+.fAcc { fill: var(--accent); }
+.fNone { fill: none; }
+.fSleeve { fill: var(--surface); }
+/* The platter's rubber mat: dark in every theme, but from the theme's ink. */
+.fMat { fill: color-mix(in oklab, var(--ink) 72%, var(--bg)); }
+.floorShadow { fill: color-mix(in oklab, var(--ink) 9%, transparent); stroke: none; }
+.ns { stroke: none; }
+.solid { stroke-dasharray: none; }
+.sAcc { stroke: var(--accent); }
+.sInk { stroke: var(--ink); }
+
+.tx { fill: var(--ink); stroke: none; }
+.txMuted { fill: var(--muted); stroke: none; }
+.txBg { fill: var(--bg); stroke: none; }
+/* The display's second reading: lit, but dimmer than the clock. */
+.txDim { fill: color-mix(in oklab, var(--bg) 62%, var(--ink)); stroke: none; }
+.txAcc { fill: var(--accent); stroke: none; }
+.txOn { fill: var(--primary-foreground); stroke: none; }
+.mono { font-family: var(--mono-font), ui-monospace, monospace; }
+.display { font-family: var(--display-font), Georgia, serif; font-style: italic; }
+
+/* Progress round the platter: lit ticks where the song has been. */
+.ringLit { stroke: var(--accent); stroke-width: 2.4; }
+.ringOff { stroke: color-mix(in oklab, var(--ink) 24%, transparent); stroke-width: 1.4; }
+
+/* Deliberately off-token, as .vinyl is: the record, its label and the arm's
+   metal are the same in every theme. */
+.vinylFill { fill: #0c0a09; }
+.groove { fill: none; stroke: rgba(255, 255, 255, 0.07); stroke-width: 0.45; }
+.grooveGap { fill: none; stroke: rgba(255, 255, 255, 0.16); stroke-width: 0.6; }
+.labelPaper { fill: #ece5d6; stroke: #0c0a09; }
+.labelInk { fill: #161412; stroke: none; }
+.labelMuted { fill: #7a736a; stroke: none; }
+.spindle { fill: #b9b1a1; stroke: #0c0a09; }
+.sTube { stroke: #e6e0d2; }
+.fHead { fill: #22201d; }
+.sheen0 { stop-color: #fff; stop-opacity: 0; }
+.sheen1 { stop-color: #fff; stop-opacity: 0.07; }
+.armShadow { fill: var(--ink); stroke: var(--ink); opacity: 0.16; }
+
+/* The label turns in the plinth's plane: the group's origin is the record's
+   centre. Paused in the shorthand itself, which would otherwise reset it. */
+.isoSpin { animation: platter-spin 5.9s linear infinite paused; }
+.isoSpin.playing { animation-play-state: running; }
+/* WebKit restyles and repaints a turning SVG group on the CPU, so on iOS (the
+   only browsers -webkit-touch-callout answers to) the label turns in 30 steps
+   a second, as AXO's loop runs there. */
+@supports (-webkit-touch-callout: none) {
+  .isoSpin { animation-timing-function: steps(177); }
+}
+/* The arm's angle rides --arm. It eases like the flat deck's only while
+   .armSwing is on (a change of pose, or a jump to a new song's lead-in), and
+   steps through the creep across a playing record. */
+.isoArm { transform: rotate(var(--arm, 98deg)); }
+.armSwing .isoArm { transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .isoSpin,
+  .stageIn { animation: none; }
+  .stageSlides { transition: none; }
+  .armSwing .isoArm { transition: none; }
+}
+
+/* ── Focus mode: the lyrics wheel (PlatterLyrics) ──────────────────────── */
+
+/* Every line is a spoke about one hub, two spokes' length off to the right
+   where the record is, so a notch of 5° spreads the lines' left ends about a
+   quarter of the wheel's width apart and their right ends two thirds of
+   that: far enough round to read as a wheel, near enough to parallel that a
+   three-line sung line clears its neighbours. The sung
+   line lies level; clockwise lifts a sung line up and away, anticlockwise
+   holds a coming one below. The outermost notch either way is invisible: a
+   line enters and leaves through it, so nothing ever mounts into view. */
+.spoke {
+  transform-origin: 300% 50%;
+  color: var(--ink);
+}
+.wheelTurns .spoke {
+  transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.7s ease-out;
+}
+.spokeM3 { transform: translateY(-50%) rotate(15deg); opacity: 0; }
+.spokeM2 { transform: translateY(-50%) rotate(10deg); opacity: 0.14; }
+.spokeM1 { transform: translateY(-50%) rotate(5deg); opacity: 0.36; }
+/* The anchor between songs' lines (a break): level, but as faint as sung. */
+.spoke0 { transform: translateY(-50%) rotate(0deg); opacity: 0.36; }
+.spokeP1 { transform: translateY(-50%) rotate(-5deg); opacity: 0.4; }
+.spokeP2 { transform: translateY(-50%) rotate(-10deg); opacity: 0.16; }
+.spokeP3 { transform: translateY(-50%) rotate(-15deg); opacity: 0; }
+.spokeSung { opacity: 1; }
+
+/* Words ink in as they are sung. */
+.word { opacity: 0.38; }
+.wordLit { opacity: 1; }
+.wheelTurns .word { transition: opacity 0.5s ease-out; }
+
+/* Untimed lines dissolve at the column's top and bottom rather than cut. */
+.plainLyrics {
+  padding-block: 1.4em;
+  scrollbar-width: none;
+  mask-image: linear-gradient(to bottom, transparent, #000 1.4em, #000 calc(100% - 1.4em), transparent);
+}
+.plainLyrics::-webkit-scrollbar { display: none; }

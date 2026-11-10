@@ -1,9 +1,12 @@
 'use client';
 import type { Control } from 'react-hook-form';
+import { useController } from 'react-hook-form';
 import type { Persona, PersonasFormValues } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
-import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX } from './constants';
+import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, MUSIC_LEAN_MAX, LANGUAGE_MAX, TAGS_MAX, TAG_MAX, TAG_RE } from './constants';
 import { Card } from '../ui';
+import { TagField } from '../TagField';
+import { Label } from '../../ui/label';
 import { TextField, TextareaField } from '@/lib/form-fields';
 import { AiFill } from '../AiFill';
 import { PersonaAvatarPicker } from './PersonaAvatarPicker';
@@ -19,16 +22,23 @@ interface PersonaIdentityCardProps {
   // The AI-draft "apply" is the one remaining multi-field bulk patch — every
   // keystroke field below is bound straight to `control` instead.
   onUpdate: (patch: Partial<Persona>) => void;
+  // Tags already used by the OTHER personas, offered as one-click adds so the
+  // roster converges on one vocabulary instead of near-duplicates.
+  tagSuggestions: string[];
+  onTagDraftBlockedChange: (blocked: boolean) => void;
   onPickAvatar: (file: File) => void;
   onGenerateAvatar: () => void;
   onClearAvatar: () => void;
 }
 
 export function PersonaIdentityCard({
-  persona, index, control, isNew, adminFetch, avatarTick, uploading,
+  persona, index, control, isNew, adminFetch, avatarTick, uploading, tagSuggestions,
+  onTagDraftBlockedChange,
   onUpdate, onPickAvatar, onGenerateAvatar, onClearAvatar,
 }: PersonaIdentityCardProps) {
   const soulLen = persona.soul.trim().length;
+  const musicLeanLen = persona.musicLean.trim().length;
+  const tagsCtl = useController({ control, name: `personas.${index}.tags` });
   return (
     <Card flat title="Identity">
       {isNew && (
@@ -100,6 +110,25 @@ export function PersonaIdentityCard({
               <span className="ml-2 text-muted">{persona.language.trim().length} / {LANGUAGE_MAX}</span>
             </div>
           </div>
+
+          <div>
+            <Label>Tags</Label>
+            <TagField
+              className="mt-1.5"
+              value={tagsCtl.field.value || []}
+              onChange={tagsCtl.field.onChange}
+              pattern={TAG_RE}
+              max={TAGS_MAX}
+              charMax={TAG_MAX}
+              suggestions={tagSuggestions}
+              noun="DJ"
+              onDraftBlockedChange={onTagDraftBlockedChange}
+            />
+            <div className="field-hint">
+              Freeform filing for the roster — by station, by shift, by whatever
+              you group on. Up to {TAGS_MAX}. Nothing on air reads them.
+            </div>
+          </div>
         </div>
 
         <div className="mt-4 lg:mt-0">
@@ -110,10 +139,28 @@ export function PersonaIdentityCard({
             rows={14}
             placeholder="e.g. warm and dry, never corny, observant, favours one good image over a list"
           />
-          <div className="field-hint">
-            One short personality sketch. Injected into the prompt as <code>{'{soul}'}</code>.
-            <span className="ml-2 text-muted">{soulLen} / {SOUL_MAX}</span>
-          </div>
+            <div className="field-hint">
+              One short personality sketch. Injected into the prompt as <code>{'{soul}'}</code>.
+              <span className="ml-2 text-muted">{soulLen} / {SOUL_MAX}</span>
+            </div>
+            <div className="mt-4">
+              <TextareaField
+                control={control}
+                name={`personas.${index}.musicLean`}
+                label="Musical Leanings"
+                rows={4}
+                placeholder="e.g. favour melodic post-punk, deep soul cuts and surprising cover versions"
+                maxLength={MUSIC_LEAN_MAX}
+              />
+              <div className="field-hint">
+                A private, soft tie-breaker for track selection. It applies to every picker, never changes the presenter&apos;s voice, overrides show rules, or goes on air.
+                Write only what this presenter favours: anything it says to avoid is ignored, so keep exclusions in a show&apos;s filters or a Library → Blocked (never play) rule.
+                <span className="ml-2 text-muted">{musicLeanLen} / {MUSIC_LEAN_MAX}</span>
+              </div>
+              <div className="field-hint mt-1.5">
+                <strong>Agentic Tools:</strong> setting Musical Leanings adds a second LLM review to each pick. In testing with a local 8B model this added around 4 seconds; actual time varies with the model and hardware.
+              </div>
+            </div>
         </div>
       </div>
     </Card>

@@ -3,7 +3,8 @@ name: Publish images
 # Builds and pushes the first-party SUB/WAVE images to GHCR.
 #
 # Triggers:
-#   - push of a tag like v1.2.3 → versioned release (also tagged :latest)
+#   - push of a tag like v1.2.3 → versioned release (each image's primary
+#                                   build is also tagged :latest)
 #   - manual workflow_dispatch    → ad-hoc rebuild from the chosen ref
 #
 # Images:
@@ -37,14 +38,34 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # Stagger the pushes. All 11 images push 4 tags each to ghcr.io, and when
-      # several finish their layer uploads in the same window GHCR answers the
+      # Stagger the pushes. A release pushes three tags per image to ghcr.io,
+      # except subwave-aio-cuda, whose two builds push 15 between them (their
+      # build, version and GPU-architecture names on top). When several finish
+      # their layer uploads in the same window GHCR answers the
       # manifest PUT with a 403 "secondary rate limit" (hit on the v1.7.0 run —
       # subwave-analyzer-heavy failed at `exporting to image` after the layers
       # were already up, and a re-run of that job alone passed unchanged). The
       # builds have very different durations, so capping concurrency spreads the
       # completions out. Costs wall-clock on a release run; tag pushes are rare.
       max-parallel: 4
+      # publish-cli.yml's `wait-for-images` job holds the CLI release until the
+      # images the CLI's compose files reference are on GHCR at this version.
+      # Adding or renaming one of those images here means updating its IMAGES
+      # list too (the aio images are deliberately not waited on).
+      #
+      # An image built by more than one entry (today only subwave-aio-cuda)
+      # names each build with `cuda_family`, which is also its torch wheel: the
+      # build step passes it to the Dockerfile as TORCH_CUDA. Every such entry
+      # sets `primary`, and exactly one is `true`; that one alone takes the
+      # image's plain tags (:latest, :<version>, :<major>.<minor>, sha-). An
+      # entry without `cuda_family` is its image's only build, so it is
+      # primary. `arch_tags` lists the GPU shortcuts a build owns, each on
+      # exactly one entry: the newest build that still supports that GPU (the
+      # tag table in docs/internals/infrastructure.md).
+      # A job sees only its own entry, so the tagplan step checks only that
+      # entry's shape. The rules across entries (one primary per image, each
+      # build or architecture tag on one entry) are lint.yml's
+      # `check:publish-matrix` step (controller/scripts/check-publish-matrix.ts).
       matrix:
         include:
           - image: subwave-caddy
@@ -87,16 +108,34 @@ jobs:
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1
-          # CUDA AIO — the heavy one-click container with CLAP + Demucs on cu124
+          # CUDA AIO — the heavy one-click container with CLAP + Demucs on CUDA
           # torch wheels, for a box with an NVIDIA card (#1186). The AIO analog of
-          # subwave-analyzer-cuda; the operator points the container at this tag
-          # and adds GPU passthrough to its extra parameters (docs/unraid.md).
-          # ~4GB compressed vs -heavy's ~1.3GB, hence its own tag rather than a
-          # default. Needs the disk reclaim below (see `big_build`).
+          # subwave-analyzer-cuda; the operator points the container at one of
+          # its tags and adds GPU passthrough to its extra parameters
+          # (docs/unraid.md). ~4GB compressed vs -heavy's ~1.3GB, hence its own
+          # image rather than a default. Needs the disk reclaim below (see
+          # `big_build`). Two builds, one per torch wheel: cu128 is primary and
+          # owns :latest.
           - image: subwave-aio-cuda
             dockerfile: docker/Dockerfile.aio
             platforms: linux/amd64
             big_build: true
+            cuda_family: cu128
+            primary: true
+            arch_tags: turing ampere ada hopper blackwell
+            build_args: |
+              WITH_CLAP=1
+              WITH_DEMUCS=1
+              WITH_CUDA=1
+          # torch 2.6.0+cu124 still ships SASS for sm_50, sm_60 and sm_70, which
+          # cu128 dropped: the build for Maxwell, Pascal and Volta cards.
+          - image: subwave-aio-cuda
+            dockerfile: docker/Dockerfile.aio
+            platforms: linux/amd64
+            big_build: true
+            cuda_family: cu124
+            primary: false
+            arch_tags: maxwell pascal volta
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1
@@ -128,7 +167,7 @@ jobs:
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1
-          # CUDA analyzer — the heavy stack on cu124 torch wheels for NVIDIA
+          # CUDA analyzer — the heavy stack on cu128 torch wheels for NVIDIA
           # hosts (#1099). amd64-only like heavy. Selected by the
           # docker-compose.analyzer-gpu.yml overlay (which also adds the GPU
           # device reservation), not by an .env var. onnxruntime stays the CPU
@@ -151,7 +190,7 @@ jobs:
       # Reclaim runner disk before the biggest builds. A GitHub-hosted
       # ubuntu-latest has ~14GB free on the root filesystem, which is where
       # /var/lib/docker lives — and subwave-aio-cuda is ~4GB compressed / ~11GB
-      # unpacked (the cu124 nvidia-*-cu12 wheels), enough to hit ENOSPC mid-build
+      # unpacked (the cu128 nvidia-*-cu12 wheels), enough to hit ENOSPC mid-build
       # once the buildx layer cache is added on top. These toolchains ship
       # preinstalled on the runner image and nothing in this workflow uses them;
       # dropping them frees ~20GB. Gated on the matrix flag so the small builds
@@ -183,20 +222,90 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Which tags this build may take, worked out once so the rules below stay
+      # plain (the matrix keys are described above the matrix). This step sees
+      # only its own entry, so it checks only that entry's shape: a cuda_family
+      # build must say primary: true or false, and arch_tags needs a
+      # cuda_family. One primary per image and one owner per tag are checked
+      # across the matrix by lint.yml.
+      #   primary     owns the image's plain tags.
+      #   sha_prefix  a non-primary build's commit tag carries its family, so
+      #               two builds can't overwrite one sha- tag.
+      #   floating    the build and GPU-architecture shortcuts (:cu124, :pascal,
+      #               …) as tag rules. They move on a stable release tag
+      #               (refs/tags/v* with no `-`), pushed or dispatched, and on a
+      #               dispatch from the default branch; never on a prerelease
+      #               tag or another branch. This is decided from the ref, not
+      #               the event, because metadata-action's semver rules
+      #               (:latest among them) also key on the ref: a dispatch on a
+      #               release tag moves the same tags the push did.
+      - id: tagplan
+        env:
+          CUDA_FAMILY: ${{ matrix.cuda_family }}
+          PRIMARY: ${{ matrix.primary }}
+          ARCH_TAGS: ${{ matrix.arch_tags }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          primary=true
+          if [ -n "$CUDA_FAMILY" ]; then
+            case "$PRIMARY" in
+              true | false) primary=$PRIMARY ;;
+              *) echo "::error::the $CUDA_FAMILY build must set primary: true or false"; exit 1 ;;
+            esac
+          elif [ -n "$ARCH_TAGS" ]; then
+            echo "::error::arch_tags needs a cuda_family"; exit 1
+          fi
+          sha_prefix=sha-
+          if [ "$primary" = false ]; then sha_prefix="sha-$CUDA_FAMILY-"; fi
+          moves=false
+          case "$REF" in
+            refs/tags/v*-*) ;;
+            refs/tags/v*) moves=true ;;
+            "refs/heads/$DEFAULT_BRANCH") moves=true ;;
+          esac
+          floating=
+          if [ -n "$CUDA_FAMILY" ] && [ "$moves" = true ]; then
+            floating=$(for tag in "$CUDA_FAMILY" $ARCH_TAGS; do printf 'type=raw,value=%s\n' "$tag"; done)
+          fi
+          {
+            echo "primary=$primary"
+            echo "sha_prefix=$sha_prefix"
+            echo "floating<<FLOATING_TAGS"
+            if [ -n "$floating" ]; then echo "$floating"; fi
+            echo "FLOATING_TAGS"
+          } >> "$GITHUB_OUTPUT"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          # metadata-action adds :latest by itself for any enabled stable
+          # type=semver rule (latest=auto), whatever that rule's own suffix, so
+          # a non-primary build turns auto off or it races the primary for
+          # :latest on every release.
+          flavor: |
+            latest=${{ steps.tagplan.outputs.primary == 'true' && 'auto' || 'false' }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            # The primary build owns the image's plain tags.
+            type=raw,value=latest,enable=${{ steps.tagplan.outputs.primary == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=semver,pattern={{version}},enable=${{ steps.tagplan.outputs.primary }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.tagplan.outputs.primary }}
             # Only on an ad-hoc dispatch, where the ref is a branch and nothing
             # else pins the commit. A tag push already has {{version}} pointing
-            # at exactly one commit, so the sha tag is a redundant fourth
-            # manifest push per image (11 of the 44 a release run makes).
-            type=sha,prefix=sha-,format=short,enable=${{ github.event_name == 'workflow_dispatch' }}
+            # at exactly one commit, so the sha tag is a redundant extra
+            # manifest push per image.
+            type=sha,prefix=${{ steps.tagplan.outputs.sha_prefix }},format=short,enable=${{ github.event_name == 'workflow_dispatch' }}
+            # Each CUDA build also pins every release under its own name
+            # (:1.2.3-cu124), prereleases included.
+            type=semver,pattern={{version}},suffix=-${{ matrix.cuda_family }},enable=${{ matrix.cuda_family && 'true' || 'false' }}
+            # The build and architecture shortcuts, when this run moves them.
+            ${{ steps.tagplan.outputs.floating }}
 
+      # A CUDA build's torch wheel is its cuda_family, named once per entry, so
+      # the wheel and its :cu124 / :pascal tags can't disagree. Dockerfile.aio
+      # fails on a family it has no index for. Other builds get an empty line.
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -204,6 +313,7 @@ jobs:
           platforms: ${{ matrix.platforms }}
           build-args: |
             ${{ matrix.build_args }}
+            ${{ matrix.cuda_family && format('TORCH_CUDA={0}', matrix.cuda_family) || '' }}
             SUBWAVE_BUILD_VERSION=${{ steps.version.outputs.version }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}

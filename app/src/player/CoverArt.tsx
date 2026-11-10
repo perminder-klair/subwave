@@ -1,20 +1,14 @@
-// Now-playing cover with the web player's flourishes: an accent scanline that
-// sweeps the art and concentric ripple rings animate while on air (`live`); on a
-// `burst` — a ~3s window opened by a track change or a new DJ turn — the art
-// glitches (chromatic-split ghosts + colour tears, the native analog of the web
-// `.v3-cover-live` CSS) and the corner registration ticks fade in. At rest the
-// ticks/glitch are hidden, matching the web player. expo-image handles the
-// cross-fade on track change.
-
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Animated, Easing, Pressable, View } from 'react-native';
 import { useAppActive } from '@/hooks/useAppActive';
 import { useTheme } from '@/theme/ThemeContext';
 
 export interface CoverArtProps {
   uri: string;
+  /** The Station login for this image (StationApi.imageHeaders). */
+  headers?: Record<string, string>;
   live: boolean;
   /** ~3s window after a track change or DJ turn — drives the glitch + ticks. */
   burst?: boolean;
@@ -22,9 +16,7 @@ export interface CoverArtProps {
   onPress?: () => void;
 }
 
-// Discrete glitch frames — stepped (not eased) for the authentic digital
-// stutter the web gets from `animation: … steps(1)`. dx* = chromatic ghost
-// offsets; the tear is a thin colour slice that jumps around the frame.
+// dx values offset the ghost copies; tear marks a jumping color slice.
 const GLITCH_FRAMES = [
   { dx1: -3, dx2: 3, tearY: 0.10, tearX: -5, tearH: 0.06 },
   { dx1: 2, dx2: -2, tearY: 0.46, tearX: 5, tearH: 0.05 },
@@ -34,11 +26,18 @@ const GLITCH_FRAMES = [
 ];
 const TEAL = '#16d6cf';
 
-// Chromatic-aberration glitch: two faint offset copies of the art (RGB-split
-// ghosts) plus jumping colour tears. Mounted only during a burst, so its
-// interval lives and dies with the effect. RN has no `mix-blend-mode: screen`,
-// so offset low-opacity copies stand in for the web's tinted channels.
-function CoverGlitch({ uri, size, accent }: { uri: string; size: number; accent: string }) {
+// RN lacks mix-blend-mode; faint offset copies approximate tinted channels.
+function CoverGlitch({
+  uri,
+  headers,
+  size,
+  accent,
+}: {
+  uri: string;
+  headers?: Record<string, string>;
+  size: number;
+  accent: string;
+}) {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setFrame((f) => (f + 1) % GLITCH_FRAMES.length), 90);
@@ -48,12 +47,12 @@ function CoverGlitch({ uri, size, accent }: { uri: string; size: number; accent:
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}>
       <Image
-        source={{ uri }}
+        source={{ uri, headers }}
         style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0.4, transform: [{ translateX: f.dx1 }] }}
         contentFit="cover"
       />
       <Image
-        source={{ uri }}
+        source={{ uri, headers }}
         style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0.4, transform: [{ translateX: f.dx2 }] }}
         contentFit="cover"
       />
@@ -80,18 +79,14 @@ function Tick({ corner, color, opacity }: { corner: 'tl' | 'tr' | 'bl' | 'br'; c
   );
 }
 
-export default function CoverArt({ uri, live, burst = false, size = 160, onPress }: CoverArtProps) {
+export default function CoverArt({ uri, headers, live, burst = false, size = 160, onPress }: CoverArtProps) {
   const { colors } = useTheme();
   const appActive = useAppActive();
-  const scan = useRef(new Animated.Value(0)).current;
-  const ripples = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
-  // Corner ticks fade in on burst (track change / DJ thinking), mirroring the
-  // web `.v3-cover-tick` opacity transition.
-  const tick = useRef(new Animated.Value(0)).current;
+  const [scan] = useState(() => new Animated.Value(0));
+  const [ripples] = useState(() => Array.from({ length: 3 }, () => new Animated.Value(0)));
+  const [tick] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
-    // Loops pause while backgrounded — native-driver or not, they keep the
-    // bridge scheduling work the listener can't see.
     if (!live || !appActive) return;
     const s = Animated.loop(Animated.timing(scan, { toValue: 1, duration: 5500, easing: Easing.linear, useNativeDriver: true }));
     s.start();
@@ -110,19 +105,16 @@ export default function CoverArt({ uri, live, burst = false, size = 160, onPress
       loops.forEach((l) => l.stop());
       ripples.forEach((r) => r.setValue(0));
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, appActive]);
+  }, [live, appActive, scan, ripples]);
 
   useEffect(() => {
     Animated.timing(tick, { toValue: burst ? 1 : 0, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [burst]);
+  }, [burst, tick]);
 
   const ringBase = size * 0.6;
 
   const body = (
     <View style={{ width: size, height: size }}>
-      {/* ripple rings (behind) */}
       {live
         ? ripples.map((r, i) => (
             <Animated.View
@@ -144,10 +136,9 @@ export default function CoverArt({ uri, live, burst = false, size = 160, onPress
           ))
         : null}
 
-      {/* cover + glitch + scanline (clipped) */}
       <View style={{ width: size, height: size, borderWidth: 1, borderColor: colors.muted, backgroundColor: colors.field, overflow: 'hidden' }}>
-        <Image source={{ uri }} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={280} />
-        {burst ? <CoverGlitch uri={uri} size={size} accent={colors.accent} /> : null}
+        <Image source={{ uri, headers }} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={280} />
+        {burst ? <CoverGlitch uri={uri} headers={headers} size={size} accent={colors.accent} /> : null}
         {live ? (
           <Animated.View
             pointerEvents="none"
@@ -169,7 +160,6 @@ export default function CoverArt({ uri, live, burst = false, size = 160, onPress
         ) : null}
       </View>
 
-      {/* corner ticks — fade in on burst */}
       <Tick corner="tl" color={colors.ink} opacity={tick} />
       <Tick corner="tr" color={colors.ink} opacity={tick} />
       <Tick corner="bl" color={colors.ink} opacity={tick} />

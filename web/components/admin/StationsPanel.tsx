@@ -1,14 +1,10 @@
 'use client';
 
-// Stations rack. Installs are capped at MAX_STATIONS=8 server-side (GET
-// /stations `limit`). Activating a station — or creating the SECOND station,
-// which converts a single-station install — restarts the controller, so both
-// flows funnel into one full-screen "re-tuning" state that hard-reloads once
-// /state reports the new station booted (boot-frozen station.id).
-// API: controller/src/routes/stations.ts.
+// Activation and creating a second station restart the controller. Wait for /state to report the new station ID before reloading.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { CONVERT_SENTINEL, useStationSwitchPoll } from '../../hooks/useStationSwitch';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
@@ -27,24 +23,20 @@ import { Field, FieldLabel, FieldDescription, FieldError } from '@/components/ui
 import { Modal } from '../ui/modal';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import styles from './StationsPanel.module.css';
+import {
+  operationKeys,
+  useStationsQuery,
+  type StationRow,
+} from './operations-queries';
 
-interface StationRow {
-  id: string | null;
-  name: string;
-  configured: boolean;
-  createdAt: string | null;
-  active: boolean;
+interface StationCreateReceipt {
+  switching?: boolean;
+  error?: string;
+  fieldErrors?: Record<string, string>;
 }
 
-interface StationsResponse {
-  multiStation: boolean;
-  activeId: string | null;
-  limit?: number;
-  stations: StationRow[];
-}
-
-// A stable pseudo-frequency on the 88–108 FM band, hashed from the station id
-// so it keeps its spot as the rack changes. Pure presentation.
+// Stable pseudo-frequency on the 88–108 FM band, hashed from the station id.
+// Pure presentation.
 function assignFrequencies(stations: StationRow[]): Map<string, number> {
   const taken = new Set<number>();
   const out = new Map<string, number>();
@@ -111,20 +103,19 @@ function OnAirChip() {
 
 export default function StationsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<StationsResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const stationsQuery = useStationsQuery(adminFetch, hydrated && !needsAuth);
+  const data = stationsQuery.data ?? null;
+  const err = stationsQuery.error ? errorMessage(stationsQuery.error) : null;
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<{ type: 'live' | 'del'; s: StationRow } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<StationRow | null>(null);
-  // Both dialogs validate against the SAME schemas the controller enforces, so
-  // an over-long or empty name is refused under the input before a request is
-  // sent — and the messages match the ones a 400 would carry.
+  // Both dialogs validate against the same schemas the controller enforces, so
+  // a bad name is refused before a request is sent, with the same message.
   const createForm = useZodForm(stationCreateSchema, { name: '', mode: 'fresh' });
   const renameForm = useZodForm(stationRenameSchema, { name: '' });
   const createName = createForm.watch('name');
-  // `mode` is optional in z.input because the schema defaults it — the ?? just
-  // restates that default, since every reset() below sets it explicitly.
+  // `mode` is optional in z.input (schema default); the ?? restates it.
   const createMode = createForm.watch('mode') ?? 'fresh';
   const setCreateMode = (mode: StationCreateMode) =>
     createForm.setValue('mode', mode, { shouldValidate: true, shouldDirty: true });
@@ -139,20 +130,44 @@ export default function StationsPanel() {
   const [switchingLabel, setSwitchingLabel] = useState('');
   useStationSwitchPoll(switching);
 
-  const load = useCallback(async () => {
-    setErr(null);
-    try {
-      const r = await adminFetch('/stations');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      setData((await r.json()) as StationsResponse);
-    } catch (e) {
-      setErr(errorMessage(e));
-    }
-  }, [adminFetch]);
-
-  useEffect(() => {
-    if (hydrated && !needsAuth) void load();
-  }, [hydrated, needsAuth, load]);
+  const createMutation = useAdminMutation<StationCreateReceipt, { name: string; mode: StationCreateMode }>({
+    adminFetch,
+    request: (values, fetcher) => adminJson<StationCreateReceipt>(fetcher, '/stations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(values),
+    }),
+    onDone: async (receipt, _values, client) => {
+      if (!receipt.switching) {
+        await client.invalidateQueries({ queryKey: operationKeys.stations(), exact: true });
+      }
+    },
+    toastOnError: false,
+  });
+  const deleteMutation = useAdminMutation<void, string>({
+    adminFetch,
+    request: async (id, fetcher) => {
+      await adminJson(fetcher, `/stations/${id}`, { method: 'DELETE' });
+    },
+    onDone: async (_receipt, _id, client) => {
+      await client.invalidateQueries({ queryKey: operationKeys.stations(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const renameMutation = useAdminMutation<void, { id: string; name: string }>({
+    adminFetch,
+    request: async ({ id, name }, fetcher) => {
+      await adminJson(fetcher, `/stations/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+    },
+    onDone: async (_receipt, _vars, client) => {
+      await client.invalidateQueries({ queryKey: operationKeys.stations(), exact: true });
+    },
+    toastOnError: false,
+  });
 
   const stations = useMemo(() => data?.stations ?? [], [data]);
   const freqs = useMemo(() => assignFrequencies(stations), [stations]);
@@ -164,34 +179,24 @@ export default function StationsPanel() {
   const create = createForm.handleSubmit(async (values) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/stations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(values),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        switching?: boolean;
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // Converted-but-create-failed wedge: the conversion is durable and the
-        // controller restarts regardless — enter the re-tuning state anyway.
+      const j = await createMutation.mutateAsync(values);
+      if (j.error) {
+        // The conversion is durable and the controller restarts regardless, so
+        // enter re-tuning even when the create failed.
         if (j.switching) {
           notify.err(
-            `Create failed: ${j.error || `failed (${r.status})`} — the controller is restarting anyway to finish converting to multi-station.`,
+            `Create failed: ${j.error} — the controller is restarting anyway to finish converting to multi-station.`,
           );
           setCreateOpen(false);
           setSwitchingLabel('converting install to multi-station');
           setSwitching(CONVERT_SENTINEL);
           return;
         }
-        // "no active station to duplicate from" is a rule only the server can
-        // check — it reads the live pointer off disk — so it comes back keyed
-        // to `mode` and lands under the Fresh/Duplicate picker, where the fix
-        // (choose Fresh) actually is.
+        // Only the server can check "no active station to duplicate from" (it
+        // reads the live pointer off disk), so it comes back keyed to `mode`
+        // and lands under the Fresh/Duplicate picker.
         applyServerFieldErrors(createForm, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
+        throw new Error(j.error);
       }
       setCreateOpen(false);
       createForm.reset({ name: '', mode: 'fresh' });
@@ -201,9 +206,19 @@ export default function StationsPanel() {
         setSwitching(CONVERT_SENTINEL);
       } else {
         notify.ok('Station racked — offline until you make it live.');
-        await load();
       }
     } catch (e) {
+      const body = e instanceof AdminResponseError ? e.body as StationCreateReceipt : null;
+      if (body?.switching) {
+        notify.err(
+          `Create failed: ${body.error || errorMessage(e)} — the controller is restarting anyway to finish converting to multi-station.`,
+        );
+        setCreateOpen(false);
+        setSwitchingLabel('converting install to multi-station');
+        setSwitching(CONVERT_SENTINEL);
+        return;
+      }
+      if (body?.fieldErrors) applyServerFieldErrors(createForm, body.fieldErrors);
       notify.err(`Create failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
@@ -214,9 +229,7 @@ export default function StationsPanel() {
     if (!s.id) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/stations/${s.id}/activate`, { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await adminJson(adminFetch, `/stations/${s.id}/activate`, { method: 'POST' });
       setSwitchingLabel(`tuning to ${s.name}`);
       setSwitching(s.id);
     } catch (e) {
@@ -229,11 +242,8 @@ export default function StationsPanel() {
     if (!s.id) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/stations/${s.id}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await deleteMutation.mutateAsync(s.id);
       notify.ok(`“${s.name}” deleted — data directory erased.`);
-      await load();
     } catch (e) {
       notify.err(`Delete failed: ${errorMessage(e)}`);
     } finally {
@@ -245,24 +255,14 @@ export default function StationsPanel() {
     if (!renaming?.id) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/stations/${renaming.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(values),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        applyServerFieldErrors(renameForm, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      await renameMutation.mutateAsync({ id: renaming.id, name: values.name });
       // The schema trimmed it, so this is the name the card actually carries.
       notify.ok(`Renamed to “${values.name}”.`);
       setRenaming(null);
-      await load();
     } catch (e) {
+      if (e instanceof AdminResponseError) {
+        applyServerFieldErrors(renameForm, e.body.fieldErrors);
+      }
       notify.err(`Rename failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
@@ -405,7 +405,7 @@ export default function StationsPanel() {
             — this is only the admin view failing to reach them.
           </p>
           <div className="mt-2.5">
-            <Btn tone="solid" onClick={() => void load()}>
+            <Btn tone="solid" onClick={() => void stationsQuery.refetch()}>
               Retry scan
             </Btn>
           </div>
@@ -417,9 +417,8 @@ export default function StationsPanel() {
           {stations.map((s, i) => (
             <div
               key={s.id ?? '__install'}
-              /* Phone: preset tile + identity, with the action cluster on its
-                 own row — a 96px tile, two 24px gaps and three buttons leave
-                 the name column barely 100px wide at 390. */
+              /* Phone: preset tile + identity, actions on their own row; a
+                 96px tile plus gaps and three buttons leave ~100px at 390. */
               className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-4 border-t border-separator-strong first:border-t-0 sm:grid-cols-[96px_1fr_auto] sm:gap-6"
             >
               <div
@@ -583,10 +582,6 @@ export default function StationsPanel() {
                 if (e.key === 'Enter' && !busy && !atCap) void create();
               }}
             />
-            {/* The exact function the server slugifies with, out of the shared
-                schema — this used to be a hand-copied reimplementation that had
-                already dropped the "nothing usable" fallback, so a name like
-                "!!!" previewed blank and then arrived as /station. */}
             <FieldDescription
               {...createNameAria.descriptionProps}
               className="font-mono text-[10px] tracking-[0.1em] text-muted lowercase"
@@ -599,10 +594,7 @@ export default function StationsPanel() {
             />
           </Field>
 
-          {/* No single labelable control, so the Field names the group itself
-              rather than pointing htmlFor at a <div>. The buttons are real
-              radios, so the group they belong to has to say so — role="radio"
-              outside a radiogroup is an orphan to a screen reader. */}
+          {/* The radio buttons need a named radiogroup. */}
           <Field data-invalid={createModeAria.invalid}>
             <FieldLabel asChild {...createModeAria.labelledByProps}>
               <span>Starting point</span>
@@ -622,7 +614,7 @@ export default function StationsPanel() {
                   {
                     id: 'duplicate' as const,
                     label: 'Duplicate current',
-                    desc: `Copies ${live?.name ?? 'the live station'}'s settings, DJ personas, schedule, library analysis, jingles, beds and voices. Play history starts clean.`,
+                    desc: `Copies ${live?.name ?? 'the live station'}'s settings, DJ personas, schedule, jingles, beds and voices. Requires its own Navidrome connection; library and play history start empty.`,
                   },
                 ] as const
               ).map(opt => (

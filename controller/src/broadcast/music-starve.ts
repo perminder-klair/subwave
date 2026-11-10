@@ -7,9 +7,8 @@ import { starveState, type StarveState } from './music-starve-pure.js';
 
 export type { StarveState };
 
-// A 2s memo, not util/ttl-cache.ts: that wraps an ASYNC producer, and this is a
-// synchronous readFileSync behind a synchronous /state handler. Same purpose —
-// bound the cost by the clock rather than by how many clients are polling.
+// A 2s memo rather than util/ttl-cache.ts, which wraps an ASYNC producer; this
+// is a sync readFileSync behind a sync /state handler.
 const MEMO_MS = 2_000;
 let memo: { at: number; value: StarveState } | null = null;
 

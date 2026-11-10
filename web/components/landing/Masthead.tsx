@@ -16,23 +16,12 @@ function issueNo(d: Date): number {
 // numeral so the masthead never renders a bare "VOL. ".
 const VERSION = (process.env.NEXT_PUBLIC_APP_VERSION || '').split('-')[0] || 'I';
 
-// Broadsheet-style header with proper landing-page navigation. Keeps the
-// big SUB/WAVE wordmark and the double rules, drops the dateline/location/
-// DJ-name strip that belonged on a newspaper but not a marketing site.
-//
-// No motion on the masthead — wordmark and meta row land static. The page's
-// reference frame should feel like print, not a performance. (The wordmark's
-// off-register ink plate settling on hover is the one exception: it only
-// fires on intent, never on load.)
 export default function Masthead() {
   const now = useClock();
 
   return (
-    // bs-masthead-lift: the Community panel hangs out of the header, and
-    // .bs-paper gives both this header and <main> position:relative;z-index:1,
-    // so main wins on DOM order and paints over the open dropdown. Must be a
-    // bs- rule, not a Tailwind z-* utility — globals.css is unlayered and so
-    // always beats Tailwind's @layer utilities.
+    // The dropdown needs an unlayered bs- rule to override .bs-paper stacking; Tailwind z-*
+    // utilities lose to globals.css.
     <header className="bs-paper bs-masthead-lift pt-7 !pb-4">
       <div className="bs-rule-double" />
 
@@ -72,12 +61,8 @@ export default function Masthead() {
         <span aria-hidden="true">✦</span>
       </div>
 
-      {/* Each item carries its own trailing "·" via .bs-masthead-item::after.
-          As sibling flex items the dots were independent, so a wrapped row
-          could START with one — which is what the six-item nav does on a phone.
-          The dot sits on the wrapper, not the <a>: AnimatedLink's hover
-          underline is a ::before sized to the full element, so a dot inside the
-          link would get underlined with the word. */}
+      {/* Attach separators to items so wrapped rows cannot start with a dot. Keep them outside
+          links to avoid underlining them. */}
       <nav aria-label="Primary" className="bs-masthead-nav">
         <span className="bs-masthead-item">
           <AnimatedLink href="/listen" className="bs-masthead-link">
@@ -94,9 +79,6 @@ export default function Masthead() {
             Setup
           </AnimatedLink>
         </span>
-        {/* Hidden on phones — six letterspaced items can't fit on one line.
-            Nothing is stranded: Skills, Personas, Shows and Apps each have a
-            panel in the Back Pages footer. */}
         <span className="bs-masthead-item bs-masthead-community">
           <CommunityMenu />
         </span>

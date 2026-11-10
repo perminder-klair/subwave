@@ -1,20 +1,28 @@
-// Kokoro TTS client — supervises a persistent Python worker over stdio.
+// Kokoro TTS client: supervises a persistent Python worker over stdio.
+// kokoro_worker.py loads the ONNX model once (2-5s) and stays resident, one
+// JSON request per line. Lifecycle here: lazy spawn on first speak(),
+// auto-restart on crash, request map keyed by monotonic id.
 //
-// kokoro_worker.py loads the ONNX model once (2-5s) and stays resident,
-// reading one JSON request per line and emitting one JSON response per line.
-// We manage the lifecycle here: lazy spawn on first speak(), auto-restart
-// on crash, and a small request map keyed by monotonic id.
+// Or, with KOKORO_URL set, render on a shared Kokoro server instead
+// (tts-light): same engine, same voices/language/speed, but no local child and
+// no resident model, so a box running many stations holds one model, not one
+// each. Versioned contract, so one server serves every controller version in a
+// rollout: POST {url}/v1/speak { text, voice, lang, speed } -> WAV bytes;
+// GET {url}/v1/health -> { ok: true }. It deliberately stays the `kokoro` engine (not `remote`):
+// persona voice ids, the admin voice picker and onboarding all keep working,
+// and an unreachable server rescues to Piper instead of loading the model.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { config } from '../config.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { cachedHealthProbe } from '../util/health-probe.js';
 import { resolveTtsOutPath } from './tts-out.js';
 
 const READY_TIMEOUT_MS = 60_000;        // first call may include model load
-// Generous because Kokoro on Apple Silicon runs under Rosetta (linux/amd64 image
-// on arm64 host) and ONNX inference can easily take 30-120s for a typical DJ
-// line. On a native Linux x86 host it completes in 1-2s — this ceiling is never
-// hit there. Override via KOKORO_REQUEST_TIMEOUT_MS if you want to clamp tighter.
+// Generous because Kokoro under Rosetta (amd64 image on an arm64 host) can take
+// 30-120s per line; native x86 is 1-2s. KOKORO_REQUEST_TIMEOUT_MS clamps it.
 const REQUEST_TIMEOUT_MS = parseInt(process.env.KOKORO_REQUEST_TIMEOUT_MS || '180000', 10);
 
 type PendingRequest = {
@@ -60,6 +68,19 @@ class KokoroWorker {
       this.failReady(new Error('kokoro worker ready timeout'));
     }, READY_TIMEOUT_MS);
 
+    // A spawn that never starts emits 'error', not 'exit', and an unhandled
+    // 'error' event takes the whole controller down. This engine's interpreter
+    // is absent whenever its venv install did not happen, and
+    // POST /settings/tts/preview bypasses isAvailable() on purpose. Route it
+    // into failReady() like every other boot failure: the caller's promise
+    // rejects, the dispatcher falls back, the station keeps making sound.
+    this.proc.on('error', (err: Error) => {
+      console.error(`[kokoro] worker spawn failed: ${err.message}`);
+      this.fatalError = err;
+      // No pending requests can exist yet: speak() awaits readyPromise first.
+      this.failReady(err);
+    });
+
     this.proc.stdout.on('data', (chunk: Buffer) => this.onStdout(chunk));
     this.proc.stderr.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf8').trimEnd();
@@ -102,9 +123,8 @@ class KokoroWorker {
     else pending.reject(new Error(msg.error || 'kokoro request failed'));
   }
 
-  // SIGTERM the child and drop the handle. Idempotent, and safe to call on a
-  // process that has already exited (kill() on a reaped child is a no-op, but
-  // guard anyway so a race can't throw out of an exit handler).
+  // SIGTERM the child and drop the handle. Idempotent and safe on an already
+  // exited process; guarded so a race can't throw out of an exit handler.
   reap() {
     const p = this.proc;
     this.proc = null;
@@ -120,17 +140,12 @@ class KokoroWorker {
     if (this.ready) return;
     if (this.readyTimer) clearTimeout(this.readyTimer);
     this.readyReject?.(err);
-    // Giving up on the boot has to kill the child too. Without this the ready
-    // timeout only rejected the promise: the Python process stayed alive,
-    // blocked forever on `for line in sys.stdin` (kokoro_worker.py) with the
-    // ONNX model resident, and since Node holds its stdin pipe open it never
-    // exited on its own. A later speak() would then replace `worker` and
-    // orphan it, leaking a few hundred MB per cycle.
-    //
-    // Model load is 2-5s (60s ceiling), so a worker that misses it is stuck,
-    // not merely slow — REQUEST_TIMEOUT_MS is the knob for slow *inference* on
-    // Rosetta, not this one. tts.ts falls back to Piper either way, so killing
-    // costs a caller nothing that the rejection above hadn't already cost.
+    // Giving up on the boot must kill the child too: rejecting alone leaves the
+    // Python process blocked on stdin with the ONNX model resident, and a later
+    // speak() replaces `worker` and orphans it, leaking a few hundred MB per
+    // cycle. Model load is 2-5s against a 60s ceiling, so a worker that misses
+    // it is stuck rather than slow (REQUEST_TIMEOUT_MS is the knob for slow
+    // inference). tts.ts falls back to Piper either way.
     this.reap();
   }
 
@@ -161,10 +176,9 @@ class KokoroWorker {
 async function ensureWorker(): Promise<KokoroWorker> {
   if (worker && worker.ready) return worker;
   if (bootingPromise) return bootingPromise;
-  // Belt-and-braces for the orphan above: bootingPromise is nulled in the
-  // finally below as soon as the first boot settles, so a failed boot leaves a
-  // non-ready `worker` that the next call would otherwise overwrite silently.
-  // Reap before replacing so at most one Python child is ever resident.
+  // bootingPromise is nulled as soon as the first boot settles, so a failed boot
+  // leaves a non-ready `worker` the next call would otherwise overwrite
+  // silently. Reap before replacing: at most one Python child is ever resident.
   if (worker && !worker.ready) {
     worker.reap();
     worker = null;
@@ -183,14 +197,65 @@ async function ensureWorker(): Promise<KokoroWorker> {
   }
 }
 
-// Reap the resident worker on shutdown. Docker tears down the container's whole
-// process group, so this only matters on the bare-process path (npm start / dev)
-// where the spawned Python child would otherwise be orphaned. Best-effort:
-// SIGTERM the proc if we hold one and drop the handle.
+// Reap the resident worker on shutdown. Only matters on the bare-process path
+// (npm start / dev); Docker tears down the whole process group. Best-effort.
 export function stop(): void {
   const w = worker;
   worker = null;
   w?.reap();
+}
+
+// --- shared server (KOKORO_URL) ---------------------------------------------
+
+const REMOTE_PROBE_MS = 30_000;
+
+async function probeRemote(): Promise<boolean> {
+  try {
+    const res = await fetchWithTimeout(`${config.kokoro.url}/v1/health`, { timeoutMs: 5_000, bodyDeadline: true });
+    if (!res.ok) return false;
+    return !!((await res.json()) as { ok?: boolean }).ok;
+  } catch {
+    return false;
+  }
+}
+
+const remote = cachedHealthProbe<boolean>({
+  probe: probeRemote,
+  intervalMs: REMOTE_PROBE_MS,
+  initial: false,
+  onChange: (up) => console.log(`[kokoro] shared server ${up ? 'available' : 'unavailable'} (${config.kokoro.url})`),
+});
+
+// Start the shared server's /health probe (idempotent; no-op without
+// KOKORO_URL). Called at boot; isAvailable() also starts it lazily.
+export function start(): void {
+  if (config.kokoro.url) remote.start();
+}
+
+// Probe the shared server now rather than on the next 30 s tick, as
+// remoteTts.refresh() does for the Remote engine. Resolves to whether it is
+// up; false, without a request, when KOKORO_URL is unset.
+export async function refresh(): Promise<boolean> {
+  return config.kokoro.url ? remote.refresh() : false;
+}
+
+async function speakRemote(text: string, outPath: string, payload: { voice: string; lang: string; speed: number }): Promise<string> {
+  const res = await fetchWithTimeout(`${config.kokoro.url}/v1/speak`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: text.trim(), ...payload }),
+    timeoutMs: REQUEST_TIMEOUT_MS,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`kokoro server ${res.status}: ${body || res.statusText}`);
+  }
+  // Same rule as the Remote engine: an empty body is a failure, so the
+  // dispatcher rescues instead of handing Liquidsoap a zero-byte file.
+  const audio = Buffer.from(await res.arrayBuffer());
+  if (audio.length === 0) throw new Error('kokoro server returned an empty response body');
+  await writeFile(outPath, audio);
+  return outPath;
 }
 
 export async function speak(
@@ -199,26 +264,38 @@ export async function speak(
 ): Promise<string> {
   const { id, outPath } = await resolveTtsOutPath(text, customPath);
 
+  if (config.kokoro.url) {
+    return speakRemote(text, outPath, {
+      voice: voice || config.kokoro.voice,
+      lang: lang || config.kokoro.lang,
+      speed: config.kokoro.speed * (speedScale != null ? speedScale : 1),
+    });
+  }
+
   const w = await ensureWorker();
   const msg = await w.send(id, {
     text: text.trim(),
     voice: voice || config.kokoro.voice,
     lang: lang || config.kokoro.lang,
-    // Per-call speedScale (daypart energy) composes on top of the config speed.
+    // Per-call speedScale (persona + current programme pacing) composes on top
+    // of the engine config speed.
     speed: config.kokoro.speed * (speedScale != null ? speedScale : 1),
     out: outPath,
   });
   return msg.path;
 }
 
-// Mirrors chatterbox/pocket-tts: existsSync the actual on-disk assets rather
-// than trusting the config paths (which always have env defaults). Kokoro's
-// model + voices files are downloaded at image build — if that wget failed
-// (transient GitHub 429/5xx) the worker would spawn and then die on load, so a
-// path-only check would report `kokoro: true` on the Debug page while every
-// segment silently falls back to Piper. Checking the files keeps availableEngines()
-// honest and lets the dispatcher skip the doomed spawn.
+// existsSync the on-disk assets, not the config paths (which always have env
+// defaults). The model + voices files are downloaded at image build, and a
+// failed download would otherwise report `kokoro: true` while every segment
+// silently fell back to Piper.
 export function isAvailable() {
+  // A shared server: available while its /health says so. Never falls back to
+  // the local model, which is exactly what KOKORO_URL exists to avoid.
+  if (config.kokoro.url) {
+    start();
+    return remote.get();
+  }
   return existsSync(config.kokoro.python)
     && existsSync(config.kokoro.workerScript)
     && existsSync(config.kokoro.model)

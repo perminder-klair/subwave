@@ -1,13 +1,6 @@
-// Rule entries for the never-play blocklist (#1300 FR 1, closes #752) — the
-// attribute/tag half of blocklist.json, beside the id entries. A rule blocks
-// every track matching its field + values, optionally only OUT of a seasonal
-// allow-window ("Christmas tracks only air Dec 1–26") and optionally only
-// while one of a set of shows is on air. Evaluation is synchronous so it can
-// sit inside blocklist.matchOf()'s hot chokepoints; everything here is pure —
-// blocklist.ts owns the state, the persistence, and the evaluation context
-// (clock parts, active show, playlist member sets).
-//
-// Pinned by scripts/blocklist-rules.test.ts.
+// Attribute/tag half of blocklist.json (#752). Pure and SYNCHRONOUS so it can sit
+// inside blocklist.matchOf()'s hot chokepoints; blocklist.ts owns the state and
+// the evaluation context (clock, active show, playlist members).
 
 import {
   normGenre,
@@ -16,11 +9,11 @@ import {
   trackMoods,
   type FilterTrack,
 } from './show-filter.js';
-// The rule's SHAPE — field vocabulary, caps, the season window and the
-// add/update validator — lives in the shared schema so the admin card runs the
-// same rules. Imported and re-exported here so no call site moved. This module
-// keeps the half a mirrored module cannot have: the MATCHING, which needs
-// show-filter's genre/tag normalisers.
+// The artist rule must fold through the same normaliser as the id list's name
+// fallback (#1603), hence its own compiled set rather than valueSet's normText.
+import { artistNameKey, artistParticipantKeys } from './recency.js';
+// Shape lives in the shared schema so the admin card runs the same rules;
+// re-exported here. This module keeps the half a mirrored module cannot: matching.
 import {
   RULES_MAX as RULES_MAX_VALUE,
   RULE_FIELDS as RULE_FIELD_VALUES,
@@ -51,18 +44,8 @@ export interface BlockRule {
   addedAt: string;
 }
 
-// ── Validation ───────────────────────────────────────────────────────────────
-
-/**
- * Validate an add/update payload into the persisted shape (minus id/addedAt,
- * which the store owns).
- *
- * A thin wrapper over the shared schema — the store's chokepoint, reached by
- * POST and PUT alike, so a rule that arrives any other way still meets the same
- * rules the route middleware applied. Throws a plain Error with the message
- * VERBATIM: every one already names its own `rule.<field>` path, so routing it
- * through firstMessage would double the location.
- */
+// Chokepoint for POST and PUT alike. Throws the schema message VERBATIM: each
+// already names its `rule.<field>` path, so firstMessage would double it.
 export function validateRulePatch(raw: unknown): Omit<BlockRule, 'id' | 'addedAt'> {
   if (!raw || typeof raw !== 'object') throw new Error('rule must be an object');
   const parsed = blockRuleSchema.safeParse(raw);
@@ -70,11 +53,7 @@ export function validateRulePatch(raw: unknown): Omit<BlockRule, 'id' | 'addedAt
   return parsed.data;
 }
 
-// ── Season / scope activity ──────────────────────────────────────────────────
-
-// Month/day key comparison handles the year-end wrap without real dates:
-// from <= to is a plain closed interval, from > to wraps (in-window means on
-// or after `from` OR on or before `to`).
+// from <= to is a closed interval; from > to wraps the year end.
 const mdKey = (month: number, day: number) => month * 100 + day;
 
 export function inSeason(season: SeasonWindow, parts: { month: number; day: number }): boolean {
@@ -84,31 +63,26 @@ export function inSeason(season: SeasonWindow, parts: { month: number; day: numb
   return f <= t ? k >= f && k <= t : k >= f || k <= t;
 }
 
-// Evaluation context — computed once per matchOf sweep by blocklist.ts, never
-// per track: station-zone clock parts (zonedParts) and the on-air show id.
+// Computed once per matchOf sweep by blocklist.ts, never per track.
 export interface RuleContext {
   month: number;
   day: number;
   activeShowId: string | null;
 }
 
-// Is this rule blocking anything right now? Out of season (or no season) AND
-// in scope. A show-scoped rule with no show on air — or another show — is
-// inert; a seasonal rule in season is inert.
+// Blocking now? Out of season (or seasonless) AND in scope. A show-scoped rule
+// with no show on air is inert.
 export function ruleActive(rule: BlockRule, ctx: RuleContext): boolean {
   if (rule.season && inSeason(rule.season, ctx)) return false;
   if (rule.showIds.length) return ctx.activeShowId != null && rule.showIds.includes(ctx.activeShowId);
   return true;
 }
 
-// ── Compilation + matching ───────────────────────────────────────────────────
-
-// Per-mutation compile: normalise values once so the per-track cost at the
-// chokepoints is set lookups + (for genre) the word-boundary walk — the same
-// order as the strict-lock filters already running in those paths.
+// Per-mutation compile: normalise once so the per-track cost is set lookups.
 export interface CompiledRule {
   rule: BlockRule;
   genreTargets: string[];  // field=genre — normGenre'd, for genreMatches
+  artistKeys: Set<string>; // field=artist — artistNameKey'd, matched per credited act
   valueSet: Set<string>;   // every other field — normText'd exact match
 }
 
@@ -116,31 +90,20 @@ export function compileRules(rules: BlockRule[]): CompiledRule[] {
   return rules.map((rule) => ({
     rule,
     genreTargets: rule.field === 'genre' ? rule.values.map(normGenre).filter(Boolean) : [],
+    artistKeys: rule.field === 'artist' ? new Set(rule.values.map(artistNameKey).filter(Boolean)) : new Set<string>(),
     valueSet: new Set(rule.values.map(normText).filter(Boolean)),
   }));
 }
 
-// The track shape rules read — FilterTrack's tag surface plus the name fields
-// the id blocklist already matches on.
+// FilterTrack's tag surface plus the name fields the id blocklist matches on.
 export type RuleTrack = FilterTrack & { artist?: string | null; album?: string | null; title?: string | null; name?: string | null };
 
-// Does this track match the rule's field + values? Activity (season/scope) is
-// the caller's job via ruleActive — split so listing surfaces can show "what
-// WOULD this rule block" independent of the clock.
-//
-// Semantics per field:
-//   genre  — genreMatches: exact-normalised or the track's tag REFINES the
-//            target on word boundaries (blocking "Punk" drops "Punk Rock";
-//            blocking "Pop Punk" keeps plain "Pop"; blocking "Rap" keeps
-//            "Trap") — the same direction the show filters use.
-//   tag    — normalised EXACT match across every tag namespace we ingest
-//            (trackAllTags: genres ∪ moods ∪ audioMoods ∪ Last.fm tags).
-//            Exact, not substring — Last.fm tags are noisy free text.
-//   mood   — normalised exact over trackMoods (editorial + audio union).
-//   artist/album/title — normalised exact on the row's own fields (the id
-//            blocklist's name-fallback semantics, minus the id).
-//   playlist — track id ∈ the pre-resolved member set for any listed playlist
-//            id; an unresolved playlist contributes nothing (stale ids inert).
+// Field/value match only; activity (season/scope) is the caller's job via
+// ruleActive, so listings can show what a rule WOULD block off the clock.
+//   genre    - genreMatches' refine direction ("Punk" drops "Punk Rock", not the reverse)
+//   tag/mood/album/title - normalised exact, never substring
+//   artist   - whole credit, then every act credited on the row
+//   playlist - track id in the pre-resolved member set; a stale id is inert
 export function ruleMatches(
   cr: CompiledRule,
   track: RuleTrack | null | undefined,
@@ -156,7 +119,11 @@ export function ruleMatches(
     case 'mood':
       return trackMoods(track).some((m) => cr.valueSet.has(normText(m)));
     case 'artist':
-      return !!track.artist && cr.valueSet.has(normText(track.artist));
+      return !!track.artist && (
+        // Whole credit first: a rule value can be a pasted composite (#1603).
+        cr.artistKeys.has(artistNameKey(track.artist))
+        || artistParticipantKeys(track.artist).some((k) => cr.artistKeys.has(k))
+      );
     case 'album':
       return !!track.album && cr.valueSet.has(normText(track.album));
     case 'title': {
@@ -175,11 +142,8 @@ export function ruleMatches(
   }
 }
 
-// ── Persistence coercion ─────────────────────────────────────────────────────
-
-// Coerce a raw persisted rule (blocklist.json is operator-visible state, so
-// treat it like any other state file: drop what doesn't parse rather than
-// refusing to boot). Returns null for an unusable record.
+// null for an unusable record: blocklist.json is operator-editable, so a bad
+// record is dropped rather than fatal at boot.
 export function coerceStoredRule(raw: unknown): BlockRule | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;

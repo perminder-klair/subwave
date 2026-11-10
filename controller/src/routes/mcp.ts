@@ -1,21 +1,5 @@
-// Built-in HTTP MCP endpoint. Lets any MCP client (Claude Code, Claude Desktop,
-// …) drive the station over the Model Context Protocol with just a URL — no
-// clone, no local process:
-//
-//   claude mcp add --transport http subwave https://your-station/api/mcp \
-//     --header "Authorization: Basic <base64 user:pass>"
-//
-// Transport: stateless Streamable HTTP. Each POST gets a fresh McpServer +
-// transport (sessionIdGenerator: undefined, enableJsonResponse: true), so there
-// are no sessions to store and no SSE stream — a plain JSON response the Caddy
-// /api/* proxy handles like any other. GET/DELETE are 405 (nothing to resume).
-//
-// Auth mirrors the REST API: the endpoint is open, but each tool call goes
-// through a loopback SubwaveClient — pointed at the controller's own port — that
-// FORWARDS the caller's Authorization header. Public tools work for anyone;
-// admin tools 401 without valid creds, matching the exact surface of the
-// endpoints they wrap. The tools reuse the live routes with no handler refactor,
-// and requireAdmin is untouched.
+// Use a fresh stateless MCP server/transport per POST; GET/DELETE return 405.
+// Forward caller Authorization through loopback REST so admin tools keep their gates.
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -27,33 +11,58 @@ import { queue } from '../broadcast/queue.js';
 
 export const router = express.Router();
 
-// The tools call back into this controller over HTTP. 127.0.0.1 stays inside
-// the container/host — never routed out — and the port is the controller's own.
+// Loopback back into this controller: 127.0.0.1 never leaves the container/host.
 const LOOPBACK_BASE = `http://127.0.0.1:${config.server.port}`;
 
-// JSON-RPC error body for the transport-level failures the SDK doesn't own
-// (e.g. our handler throwing before handleRequest). id null per JSON-RPC when
-// the request couldn't be parsed/associated.
+// Transport-level failures the SDK doesn't own. id null per JSON-RPC when the
+// request couldn't be parsed/associated.
 function rpcError(res: express.Response, code: number, message: string) {
   if (res.headersSent) return;
   res.status(500).json({ jsonrpc: '2.0', error: { code, message }, id: null });
 }
 
-// subwave_request_song blocks while it polls for the outcome. Over stdio the
-// full 45s budget is fine (one local caller); here every anonymous POST holds
-// an HTTP connection for the duration, so keep it short — the tool hands back
-// the requestId and the agent re-polls with subwave_request_status.
+// subwave_request_song polls for the outcome and holds the HTTP connection while
+// it does, so keep it well under the 45s stdio budget; the agent re-polls with
+// subwave_request_status.
 const HTTP_REQUEST_POLL_BUDGET_MS = 15_000;
 
+// A JSON-RPC batch fans out: every tools/call in it is its own loopback REST
+// request, so one POST at the edge became up to the SDK's 100 here. No client we
+// document batches — MCP 2025-06-18 dropped batching and the TypeScript SDK
+// client (Claude Code / Desktop) sends one message per POST — so cheap traffic
+// from an older client keeps a small batch, and the work-bearing method is
+// capped at one per POST, the same as an unbatched call.
+export const MCP_MAX_BATCH = 10;
+export const MCP_MAX_TOOL_CALLS_PER_POST = 1;
+
+export function mcpBatchRefusal(body: unknown): string | null {
+  if (!Array.isArray(body)) return null;
+  if (body.length > MCP_MAX_BATCH) {
+    return `Invalid Request: a batch must not exceed ${MCP_MAX_BATCH} messages`;
+  }
+  const calls = body.filter(m => m && typeof m === 'object' && (m as { method?: unknown }).method === 'tools/call').length;
+  if (calls > MCP_MAX_TOOL_CALLS_PER_POST) {
+    return `Invalid Request: a batch may carry at most ${MCP_MAX_TOOL_CALLS_PER_POST} tools/call`;
+  }
+  return null;
+}
+
 router.post('/mcp', async (req, res) => {
+  // Refused before any server, transport or loopback client exists.
+  const refusal = mcpBatchRefusal(req.body);
+  if (refusal) {
+    return res.status(400).json({ jsonrpc: '2.0', error: { code: -32600, message: refusal }, id: null });
+  }
+
   const client = new SubwaveClient({
     baseUrl: LOOPBACK_BASE,
-    // Forward the caller's credentials verbatim so admin tools are gated
-    // exactly as the REST endpoints they wrap.
     forwardAuth: typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined,
-    // Forward the caller's IP so POST /request's per-IP rate limit keys on the
-    // real caller — without this every MCP user shares one loopback bucket.
+    // Without this every MCP user shares one loopback rate-limit bucket.
     forwardIp: clientIp(req),
+    // Station password gates listener-facing reads: a different secret from the
+    // admin one, so it rides its own header. Absent on a public station.
+    forwardStationAuth:
+      typeof req.headers['x-station-auth'] === 'string' ? req.headers['x-station-auth'] : undefined,
   });
 
   const server = new McpServer({ name: 'subwave-mcp', version: process.env.SUBWAVE_VERSION || 'latest' });
@@ -64,8 +73,6 @@ router.post('/mcp', async (req, res) => {
     enableJsonResponse: true, // return JSON on the POST rather than an SSE stream
   });
 
-  // Tear the per-request server/transport down when the HTTP response closes,
-  // so nothing leaks across the (stateless) requests.
   res.on('close', () => {
     void transport.close();
     void server.close();

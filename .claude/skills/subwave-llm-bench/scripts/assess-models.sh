@@ -172,8 +172,11 @@ echo
 # host side of the container's /var/sub-wave mount, so read it on the host either
 # way — works whether the harness ran in the container or on the host.
 echo "============ failure reasons (recent pickerTest calls) ============"
+# The program rides fd 3, not stdin: `python3 - <<'PY'` after a pipe let the
+# heredoc replace the piped event log (SC2259), so sys.stdin was always empty
+# and this section always printed "no pickerTest failures".
 cat "$STATE_DIR"/logs/events-*.jsonl 2>/dev/null \
-  | python3 - "${MODELS[@]}" <<'PY'
+  | python3 /dev/fd/3 "${MODELS[@]}" 3<<'PY'
 import json, sys
 wanted = set(sys.argv[1:])
 counts = {}

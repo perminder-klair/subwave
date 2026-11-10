@@ -1,32 +1,14 @@
 // Regression tests for the AIO supervisor's liquidsoap log-path bootstrap
 // (docker/aio/supervisor.sh: link_liquidsoap_log).
 //
-// Why this is worth a test at all: radio.liq opens settings.log.file.path in
-// Dtools.Log.init, the first lifecycle step, so a path liquidsoap cannot open
-// is a FATAL start error rather than a missing log. #1196 pointed
-// /var/log/liquidsoap at <stateRoot>/logs with an unconditional `ln -s` guarded
-// on `[ ! -L /var/log/liquidsoap ]`. When <state>/logs was itself a symlink
-// back at /var/log/liquidsoap — the obvious host-side workaround for the
-// pre-#1196 "AIO writes no radio.log into the state dir" bug — the pair closed
-// a cycle and every liquidsoap start died with
+// radio.liq opens settings.log.file.path in Dtools.Log.init, so a path
+// liquidsoap cannot open is a FATAL start error, not a missing log. #1196's
+// unconditional `ln -s` could close a symlink cycle with a state-side
+// logs -> /var/log/liquidsoap link and crash-loop the install (ELOOP).
 //
-//   Fatal error: exception Sys_error("/var/log/liquidsoap/radio.log: Too many
-//   levels of symbolic links")
-//
-// The -L guard then skipped the bad link on every later boot, so the install
-// crash-looped forever with no route back: both Doctor broadcast checks red,
-// and its "Restart mixer" button dead because that speaks telnet to a port
-// liquidsoap never reached.
-//
-// The load-bearing property, asserted in every scenario below, is END STATE
-// OPENABILITY: whatever shape the two paths start in, a file must be creatable
-// at <LIQ_LOG_DIR>/radio.log when the function returns. Persistence into the
-// state dir is the goal, but it is explicitly subordinate — the fallback drops
-// persistence to keep the station on air.
-//
-// Run: `tsx scripts/aio-log-link.test.ts`.
-//
-// node:assert-via-tsx style, matching scripts/listener-auth.test.ts.
+// Every scenario asserts END STATE OPENABILITY: whatever shape the two paths
+// start in, a file must be creatable at <LIQ_LOG_DIR>/radio.log when the
+// function returns. Persistence into the state dir is subordinate to that.
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -96,7 +78,6 @@ function scratch(): Scratch {
   return { root, stateRoot, liqLogDir };
 }
 
-// --- 1. THE REPORTED BUG --------------------------------------------------
 // <state>/logs -> /var/log/liquidsoap, which #1196 then linked back at
 // <state>/logs. Pre-fix this produced the ELOOP crash loop; the linker must
 // now break the cycle and leave an openable path.
@@ -125,7 +106,6 @@ function scratch(): Scratch {
   assert.match(out, /broken symlink/, 'ELOOP cycle: the repair should be logged');
 }
 
-// --- 2. THE CYCLE IS ACTUALLY BROKEN, NOT JUST PAPERED OVER ---------------
 // Writing through the in-container path must land in the state dir, which is
 // the whole point of #1196 (routes/debug.ts tails <stateRoot>/logs/radio.log).
 {
@@ -143,7 +123,6 @@ function scratch(): Scratch {
   );
 }
 
-// --- 3. FRESH INSTALL -----------------------------------------------------
 // Neither path exists yet: link the container path at the state dir.
 {
   const { stateRoot, liqLogDir } = scratch();
@@ -162,7 +141,6 @@ function scratch(): Scratch {
   );
 }
 
-// --- 4. THE #1196 UPGRADE PATH -------------------------------------------
 // Pre-#1196 images left a plain directory at /var/log/liquidsoap, possibly
 // with a radio.log already in it. It gets replaced by the link.
 {
@@ -179,7 +157,6 @@ function scratch(): Scratch {
   );
 }
 
-// --- 5. IDEMPOTENCE -------------------------------------------------------
 // The supervisor calls this on every boot; repeat runs must not degrade the
 // result or nest a link inside the previous one (`ln -s` without -n plants
 // the new link INSIDE a link-to-directory).
@@ -195,7 +172,6 @@ function scratch(): Scratch {
   );
 }
 
-// --- 6. DANGLING STATE-SIDE LINK -----------------------------------------
 // <state>/logs pointing at nothing yields ENOENT rather than ELOOP, but it is
 // the same class of fault and heals the same way.
 {
@@ -211,7 +187,6 @@ function scratch(): Scratch {
   );
 }
 
-// --- 7. DELIBERATE OPERATOR SYMLINK IS PRESERVED -------------------------
 // A <state>/logs symlink that resolves to a real directory elsewhere is an
 // operator parking logs on another disk. Healing that would be destructive, so
 // only BROKEN links get replaced.
@@ -235,7 +210,6 @@ function scratch(): Scratch {
   );
 }
 
-// --- 8. FALLBACK KEEPS THE STATION ON AIR --------------------------------
 // If the state dir cannot host logs/ at all (here: a regular FILE sits where
 // the directory belongs, so mkdir fails), the linker must NOT leave liquidsoap
 // with an unopenable path. Persistence is sacrificed, the station is not.
@@ -256,7 +230,6 @@ function scratch(): Scratch {
   assert.match(out, /WARNING/, 'fallback: the degraded mode must be logged loudly');
 }
 
-// --- 9. BIND MOUNT AT THE CONTAINER PATH ----------------------------------
 // The split stack's `${STATE_DIR}/logs:/var/log/liquidsoap` mapping copied
 // into an AIO `docker run`. The mounted dir must be used as-is, and — the
 // part the first cut of this fix got wrong — its CONTENTS must survive:
@@ -298,7 +271,6 @@ function scratch(): Scratch {
   assert.match(out, /is a mountpoint — leaving it/, 'bind mount: the decision should be logged');
 }
 
-// --- 10. THE REPORTED OPERATOR'S POST-UPGRADE BOOT ------------------------
 // The reporter's state dir carries logs -> /var/log/liquidsoap (their
 // workaround for the pre-#1196 missing-radio.log bug), and a FRESH fixed
 // image has a plain real dir at the container path — so the state-side link

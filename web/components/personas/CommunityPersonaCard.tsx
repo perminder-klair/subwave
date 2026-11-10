@@ -12,6 +12,7 @@ export default function CommunityPersonaCard({ persona }: { persona: CommunityPe
   if (persona.frequency !== 'moderate') tags.push(persona.frequency);
   if (persona.scriptLength !== 'concise') tags.push(persona.scriptLength);
   if (persona.djMode) tags.push('dj mode');
+  if (persona.linkStyle === 'announce') tags.push('announce only');
   if (persona.language) tags.push(persona.language);
 
   return (

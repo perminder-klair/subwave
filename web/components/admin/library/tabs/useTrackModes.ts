@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useLibrary } from '../LibraryContext';
-import { libraryKeys, useQueryErrorToast } from '../queries';
+import { libraryKeys } from '../queries';
+import { adminJson, useQueryErrorToast } from '../../../../lib/admin-query';
 import { useAdminQuery } from '../useAdminQuery';
 import type { LikedResponse, LikedSort, Track, UntaggedResponse } from '../types';
 import { PAGE_SIZE } from '../types';
@@ -41,12 +42,12 @@ export function useUntaggedTracks(enabled: boolean) {
     queryKey: libraryKeys.untagged(),
     enabled: enabled && ready,
     initialPageParam: null as string | null,
-    queryFn: async ({ pageParam }) => {
+    queryFn: async ({ pageParam, signal }) => {
       const params = new URLSearchParams({ limit: '50' });
       if (pageParam) params.set('cursor', pageParam as string);
-      const r = await adminFetch(`/library/untagged?${params}`);
-      if (!r.ok) throw new Error(`untagged failed (${r.status})`);
-      return r.json() as Promise<UntaggedResponse>;
+      return adminJson<UntaggedResponse>(
+        adminFetch, `/library/untagged?${params}`, undefined, signal,
+      );
     },
     getNextPageParam: last => last.nextCursor ?? undefined,
   });

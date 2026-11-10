@@ -13,14 +13,15 @@
 // failure would look like "validation stopped working" and be invisible here
 // without this file.
 //
-// Run: npx tsx scripts/validate-wire-shape.test.ts (auto-discovered by npm test).
+// Run: `npm test -- validate-wire-shape`.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { runMiddlewareAsync } from './test-utils/middleware.js';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-validate-wire-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-validate-wire-'));
 
 const { validateBody, validateBodyAsync, validateSettingsBody } = await import(
   '../src/middleware/validate.js'
@@ -39,23 +40,8 @@ async function run(
   mw: (req: never, res: never, next: () => void) => unknown,
   body: unknown,
 ): Promise<Captured> {
-  const captured: Captured = { status: 200, body: null, nexted: false, reqBody: undefined };
-  const req = { body } as never;
-  const res = {
-    status(code: number) {
-      captured.status = code;
-      return this;
-    },
-    json(payload: unknown) {
-      captured.body = payload as Captured['body'];
-      return this;
-    },
-  } as never;
-  await mw(req, res, () => {
-    captured.nexted = true;
-  });
-  captured.reqBody = (req as { body: unknown }).body;
-  return captured;
+  const out = await runMiddlewareAsync(mw, { body });
+  return { status: out.status!, body: out.body as Captured['body'], nexted: out.nextCalled, reqBody: out.req.body };
 }
 
 // --- the envelope -----------------------------------------------------------
@@ -104,6 +90,7 @@ test("the 'verbatim' posture changes only the flat string, never fieldErrors", a
   const prefixed = await run(validateBody(blockRuleSchema), body);
   const verbatim = await run(validateBody(blockRuleSchema, { messages: 'verbatim' }), body);
   assert.equal(verbatim.body!.error, 'rule.label is required');
+  assert.equal(verbatim.body!.fieldErrors!.label, 'rule.label is required');
   assert.equal(prefixed.body!.error, 'label: rule.label is required');
   assert.deepEqual(verbatim.body!.fieldErrors, prefixed.body!.fieldErrors);
 });

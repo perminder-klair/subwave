@@ -104,13 +104,7 @@ export default async function NewsArticlePage({
 
       <div className="bs-rule" />
 
-      {/*
-        Trusted, first-party content: article.html is rendered from
-        web/content/news/*.md — committed repo source, same trust level as this
-        component. It is never user-submitted, so marked's raw-HTML passthrough
-        is not an XSS vector here. If news ever accepts external input, sanitise
-        (e.g. DOMPurify) before this point.
-      */}
+      {/* HTML comes from committed web/content/news/*.md. Sanitise it if external input is added. */}
       <div
         className="bs-prose"
         dangerouslySetInnerHTML={{ __html: article.html }}
