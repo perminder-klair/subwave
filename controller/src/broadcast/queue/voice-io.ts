@@ -287,7 +287,11 @@ export async function airVoiceExchange(
     const voiceId = mintVoiceId();
     // Add this take's trim only while the operator has levelling enabled.
     const gain = voiceLevellingEnabled() ? levelledGainDb(clip.wavPath, clip.gainDb) : clip.gainDb;
-    return { clip, clipMs, leadinMs, holdMs, voiceId, uri: voiceUri(clip.wavPath, gain, voiceId, null, false, undefined, continuation) };
+    return {
+      clip, clipMs, leadinMs, holdMs, voiceId,
+      uri: voiceUri(clip.wavPath, gain, voiceId, null, false, undefined, continuation),
+      leadinUri: voiceUri(clip.wavPath, gain, voiceId),
+    };
   });
   const totalHoldMs = prepared.reduce((sum, p) => sum + p.holdMs, 0);
   const now = Date.now();
@@ -329,17 +333,28 @@ export async function airVoiceExchange(
       await waitForJingleClear();
       for (const [index, p] of prepared.entries()) {
         let written: boolean;
+        let restoredLeadinMs = 0;
         try {
           // The gate rides writeHandoff so it is asked again after the wait for
           // Liquidsoap to consume the previous line, where the boundary can be
           // claimed. Checking it out here would leave that window open.
-          written = await writeHandoff(path, p.uri, { beforeWrite });
+          //
+          // The URI is chosen at write time, after that wait. A handoff file
+          // still on disk means the mixer never took the previous line and
+          // writeHandoff is about to replace it: this line then reaches an
+          // EMPTY voice queue with the music still up, so it must keep the
+          // lead-in that completes the duck before its first word.
+          written = await writeHandoff(path, () => {
+            if (p.leadinMs > 0 || !existsSync(path)) return p.uri;
+            restoredLeadinMs = VOICE_LEADIN_MS;
+            return p.leadinUri;
+          }, { beforeWrite });
         } catch (err) {
           onWriteError?.(err, index);
           break;
         }
         if (!written) break;
-        landedMs += p.holdMs;
+        landedMs += p.holdMs + restoredLeadinMs;
         // Registered before this line can air: the mixer plays queued lines in
         // order, so the last one may wait a whole conversation. A marker that
         // still arrives early is buffered briefly by the reader.

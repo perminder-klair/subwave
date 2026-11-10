@@ -11,6 +11,7 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempDir } from './test-utils/temp-dir.js';
@@ -29,8 +30,14 @@ after(async () => {
   await removeTempDir(STATE);
 });
 
+// The handoff path awaits real file I/O (waitForConsumed's stat), which runs on
+// libuv's threadpool and is not mock time. A round trip of our own through the
+// same pool lets an in-flight one finish, however busy the host is.
 async function flush() {
-  for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 5; i++) {
+    await new Promise(resolve => setImmediate(resolve));
+    await stat(STATE);
+  }
 }
 
 // 44-byte canonical WAV header: `dataBytes` of audio at `byteRate` = 1s.
@@ -244,6 +251,34 @@ test('only a line after a measured, long-enough line skips its lead-in', async t
     [false, true, false, true, false],
     'the opener, the line after a short one and the line after an unmeasured one keep their lead-in',
   );
+  t.mock.timers.tick(30_000);
+  await flush();
+});
+
+test('a line written over an unconsumed handoff keeps its lead-in', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  const first = join(STATE, 'stalled-first.wav');
+  const second = join(STATE, 'stalled-second.wav');
+  writeWav(first, 8000, 8000);
+  writeWav(second, 8000, 8000);
+  clearHandoff();
+  const exchange = airVoiceExchange(config.liquidsoap.sayFile, [
+    { wavPath: first, text: 'The host opens.', gainDb: 0 },
+    { wavPath: second, text: 'The guest answers.', gainDb: 0 },
+  ]);
+  await untilHandoff(t);
+  assert.match(readFileSync(config.liquidsoap.sayFile, 'utf8'), /stalled-first\.wav/);
+  // The mixer never takes the first line. writeHandoff waits out its
+  // consumption windows, then replaces the file with the second line.
+  for (let i = 0; i < 100 && !readFileSync(config.liquidsoap.sayFile, 'utf8').includes('stalled-second'); i++) {
+    t.mock.timers.tick(50);
+    await flush();
+  }
+  const uri = readFileSync(config.liquidsoap.sayFile, 'utf8');
+  assert.match(uri, /stalled-second\.wav/, 'the second line replaced the unconsumed first');
+  assert.doesNotMatch(uri, /subwave_no_leadin/, 'it reaches an empty queue, so it keeps the lead-in that ducks the music first');
+  await exchange;
+  unlinkSync(config.liquidsoap.sayFile);
   t.mock.timers.tick(30_000);
   await flush();
 });
