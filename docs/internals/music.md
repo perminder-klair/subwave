@@ -710,7 +710,10 @@ once edges exist. Six rules:
    `tail_start_ms` are the edges' own figures: the placed window holds no
    trailing silence by construction.
 2. **The answer says it was placed** (`tail_window: "edges"` in the tail data).
-   Only that stamps `tail_version = 2`; an analyzer that predates the field
+   Only that stamps `tail_version = 2`, and only with a tail measured on the
+   window (`upsertTrackAnalysis`: a placed answer that measured nothing still
+   settles an unmeasurable row, but stamps nothing, so the stored end-of-file
+   columns are never called placed). An analyzer that predates the field
    ignores it and its end-of-file answer stays v1. Edges measured in the same
    request place the tail too.
 3. **The version is read off the columns** (`tailVersionOf`): `tail_version`,
@@ -719,7 +722,11 @@ once edges exist. Six rules:
    so re-measuring changes nothing), else 1. Measuring edges promotes an
    existing tail the tolerance covers at once, not only on a whole-table
    re-derive, or every track whose edges arrive later would stay planned for a
-   tail re-read. An unmeasurable tail settles only when it was the PLACED
+   tail re-read. Re-measured edges that move where the music stops by more
+   than the tolerance re-plan a placed tail (`tailPlacementMoved`, stamp 1:
+   v1 whatever the new edges say, because the stored window is neither the old
+   placement nor the file's end); a tail placed in the same answer is not. An
+   unmeasurable tail settles only when it was the PLACED
    window's answer: one without edges, from an unplaced attempt
    (`tailUnplaced`), or explained as `capped-download` (a placed window is
    read from the stream, never refused for the cap) is stored one version
@@ -742,12 +749,21 @@ once edges exist. Six rules:
 5. **A placed tail is not overwritten by an end-of-file one**: a flat
    end-of-file analysis and a `--re-analyze` clear keep it, with its facet row
    (the loudness v2 rule); a flat answer that was placed replaces it. A facet
-   answer from the end-of-file window does replace it and drops the stamp. Tail vocal ranges are carried onto a new tail only when it sits
-   on the same window; a newly placed one leaves them to the vocal backfill.
+   answer from the end-of-file window does replace it and drops the stamp. A
+   `--re-analyze` with vocal detection on clears an end-of-file tail; with it
+   off (`keepVocal`) every tail stays with the vocal evidence it carries
+   (#2290). A replaced file (`clearTrackAudio`) drops the stamp with the tail.
+   **Tail vocal ranges stay on the window they were measured on**, by one rule
+   (`tracks.sameTailWindow`: both placed or both end-of-file): carried onto a
+   new tail, flat or facet, only when it sits on the same window, and a vocal
+   answer's ranges (the worker names a placed window, `tail_window: "edges"` in
+   the vocal data) merged into the stored outro only when it is on theirs.
+   Otherwise they are left to the vocal backfill, the row staying head-only.
 6. **Without edges the tail is today's end-of-file window, stamped v1**, so
    `npm run analyze -- --facets edges` first and then `--facets tail` re-reads
    exactly the tracks the tolerance does not cover. `tail_version` follows the
-   outro it describes through an id adoption.
+   outro it describes through an id adoption, and is added by name
+   (`schema.ts` `ensureNamedColumns`), with no migration step.
 
 Pinned by `scripts/analyzer_tail_placement_test.py` (placement, the marker,
 Demucs on the placed window, the seek side, a real ffmpeg window landing on the

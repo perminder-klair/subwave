@@ -4,7 +4,7 @@
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import {
   FACETS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows, deleteFacetRows,
-  isWholeFileLoudnessVersion, restampFacetRows, syncTrackFacets, type Facet, type FacetSource,
+  isWholeFileLoudnessVersion, restampFacetRows, syncTrackFacets, tailPlacementMoved, type Facet, type FacetSource,
 } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
@@ -321,7 +321,7 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
          structure_json = NULL, vocal_ranges_json = NULL, pace_json = NULL, beats_json = NULL,
          bars_json = NULL, key_ranges_json = NULL, audio_moods = NULL, audio_mood_scores_json = NULL,
          audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
-         outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, lead_silence_ms = NULL,
+         outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, tail_version = NULL, lead_silence_ms = NULL,
          edge_lead_ms = NULL, edge_tail_ms = NULL, decoded_duration_ms = NULL,
          stems_at = NULL, map_x = NULL, map_y = NULL,
          analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL
@@ -686,8 +686,26 @@ interface TrackAnalysisWrite {
   source?: FacetSource;
 }
 
-function preserveTailVocal(id: string, outro: TrackOutro): TrackOutro {
+// Tail vocal ranges describe one window. THE same-window rule, for every path
+// that carries them onto a new outro or merges them into the stored one: the
+// stored tail and the new evidence must both be placed from the edges
+// (tail_version >= 2) or both be the end-of-file window.
+function storedTailPlaced(id: string): boolean {
+  const row = requireDb().prepare('SELECT tail_version AS v FROM tracks WHERE id = ?').get(id) as
+    { v: number | null } | undefined;
+  return (row?.v ?? 1) >= 2;
+}
+export function sameTailWindow(storedPlaced: boolean, newPlaced: boolean): boolean {
+  return storedPlaced === newPlaced;
+}
+
+// A new outro without tail vocals keeps the stored ones, only when they were
+// measured on the same window (sameTailWindow). A tail newly placed from the
+// edges leaves them to be measured again (the vocal facet turns head-only, so
+// the vocal backfill takes it).
+function preserveTailVocal(id: string, outro: TrackOutro, newPlaced: boolean): TrackOutro {
   if (outro.vocalRanges != null) return outro;
+  if (!sameTailWindow(storedTailPlaced(id), newPlaced)) return outro;
   const prior = getTrack(id)?.outro?.vocalRanges;
   return prior != null ? { ...outro, vocalRanges: prior } : outro;
 }
@@ -698,11 +716,18 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
   const d = requireDb();
   d.transaction(() => {
   const wholeFileLoudness = hasWholeFileLoudness(id);
-  const placed = finite(a.tailVersion) != null && (a.tailVersion as number) >= 2 ? 1 : 0;
+  // `placedAnswer`: the analyzer used the placement, so even a tail it could
+  // not measure is a settled answer (tailUnplaced below). `placed`: the v2
+  // stamp, only with a tail measured on that window. Stamped over the stored
+  // columns that a null outro keeps (COALESCE below), it would call an
+  // end-of-file tail placed, and it would never be planned again.
+  const placedAnswer = finite(a.tailVersion) != null && (a.tailVersion as number) >= 2;
+  const tailMeasured = a.outro != null || finite(a.tailSilenceMs) != null;
+  const placed = placedAnswer && tailMeasured ? 1 : 0;
   let outro = a.outro;
   let carriedTailVocal = false;
   if (a.preserveTailVocal && outro) {
-    const kept = preserveTailVocal(id, outro);
+    const kept = preserveTailVocal(id, outro, placed === 1);
     carriedTailVocal = kept !== outro;
     outro = kept;
   }
@@ -736,7 +761,11 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         outro_json          = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN outro_json ELSE COALESCE(?, outro_json) END,
         tail_silence_ms     = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN tail_silence_ms ELSE COALESCE(?, tail_silence_ms) END,
         tail_start_ms       = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN tail_start_ms ELSE COALESCE(?, tail_start_ms) END,
-        tail_version        = CASE WHEN ? = 1 THEN 2 ELSE tail_version END,
+        -- An end-of-file outro written over a tail marked for re-planning (1)
+        -- is the end-of-file window again: back to NULL.
+        tail_version        = CASE WHEN ? = 1 THEN 2
+                                   WHEN COALESCE(tail_version, 1) < 2 AND ? IS NOT NULL THEN NULL
+                                   ELSE tail_version END,
         -- A pass with the stem cache off passes null and must not clear an
         -- earlier stem pass's stamp.
         stems_at            = COALESCE(?, stems_at),
@@ -765,7 +794,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       placed, outro != null ? JSON.stringify(outro) : null,
       placed, Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
       placed, Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
-      placed,
+      placed, outro != null ? 1 : null,
       a.stemsAttempted ? new Date().toISOString() : null,
       ANALYSIS_VERSION,
       id,
@@ -786,7 +815,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
     tried: ['tail'],
     source: a.source ?? 'unknown',
     tailReason: a.source === 'capped' ? 'capped-download' : undefined,
-    tailUnplaced: !placed,
+    tailUnplaced: !placedAnswer,
   });
   markTextVectorDirtyIfSoundChanged(id, ['measured']);
   })();
@@ -843,7 +872,11 @@ export interface FacetWrite {
   tail?: { outro: TrackOutro | null; tailSilenceMs: number | null; tailStartMs: number | null; version?: number | null }
     | { unmeasurable: string };
   clap?: number[];
-  vocal?: { vocalRanges: TrackSection[]; tailVocalRanges: TrackSection[] | null };
+  // `tailWindow` = where `tailVocalRanges` were measured: 'placed' (the
+  // analyzer's tail_window "edges"), 'end' (the file's last seconds; also an
+  // older analyzer, which says nothing) or 'stored' (read off the stored or
+  // new outro itself: the lyric path).
+  vocal?: { vocalRanges: TrackSection[]; tailVocalRanges: TrackSection[] | null; tailWindow?: 'placed' | 'end' | 'stored' };
   stems?: { attempted: true };
   // Silence at both ends (absolute floor) and the decoded length, ms.
   edges?: { leadMs: number; tailMs: number; durationMs: number };
@@ -918,15 +951,8 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
       } else {
         let outro = w.tail.outro;
         const tailVersion = finite(w.tail.version);
-        // Tail vocal ranges describe one window: carried over only when the
-        // new tail sits on the same one (both placed, or both end-of-file).
-        // A tail newly placed from the edges leaves them to be measured again
-        // (the vocal facet turns head-only, so the vocal backfill takes it).
-        const priorPlaced = ((d.prepare('SELECT tail_version AS v FROM tracks WHERE id = ?').get(id) as
-          { v: number | null } | undefined)?.v ?? 1) >= 2;
-        const samewindow = priorPlaced === (tailVersion != null && tailVersion >= 2);
-        if (outro && w.vocal?.tailVocalRanges == null && samewindow) {
-          const kept = preserveTailVocal(id, outro);
+        if (outro && w.vocal?.tailVocalRanges == null) {
+          const kept = preserveTailVocal(id, outro, tailVersion != null && tailVersion >= 2);
           carriedTailVocal = kept !== outro;
           outro = kept;
         }
@@ -949,7 +975,14 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
     }
     if (w.vocal) {
       d.prepare('UPDATE tracks SET vocal_ranges_json = ? WHERE id = ?').run(JSON.stringify(w.vocal.vocalRanges), id);
-      if (w.vocal.tailVocalRanges) {
+      // Merged only into an outro on the window they were measured on
+      // (sameTailWindow): a vocal-only answer measured on the placed window,
+      // over a stored end-of-file outro, would describe music the outro does
+      // not hold. Left out, the vocal row stays head-only and the tail backfill
+      // places the tail, which measures them again.
+      const vocalOnStored = w.vocal.tailWindow === 'stored' ||
+        sameTailWindow(storedTailPlaced(id), w.vocal.tailWindow === 'placed');
+      if (w.vocal.tailVocalRanges && vocalOnStored) {
         const row = d.prepare('SELECT outro_json FROM tracks WHERE id = ?').get(id) as { outro_json: string | null } | undefined;
         if (row?.outro_json) {
           try {
@@ -967,9 +1000,20 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
     }
     if (w.edges) {
       const ms = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.round(v)) : null);
+      const before = d.prepare('SELECT edge_tail_ms, decoded_duration_ms, tail_version FROM tracks WHERE id = ?').get(id) as
+        { edge_tail_ms: number | null; decoded_duration_ms: number | null; tail_version: number | null } | undefined;
       d.prepare('UPDATE tracks SET edge_lead_ms = ?, edge_tail_ms = ?, decoded_duration_ms = ? WHERE id = ?')
         .run(ms(w.edges.leadMs), ms(w.edges.tailMs), ms(w.edges.durationMs), id);
       fresh.push('edges');
+      // A tail placed for where the music stopped before: when the re-measured
+      // edges move that end by more than the placement tolerance, the stored
+      // tail sits on a window that no longer ends at the music, so it is due
+      // again (tail_version 1, tailPlacementMoved). A tail placed in this same
+      // answer was placed from these edges.
+      if (before && (before.tail_version ?? 1) >= 2 && !fresh.includes('tail') &&
+        tailPlacementMoved(before, { edge_tail_ms: ms(w.edges.tailMs), decoded_duration_ms: ms(w.edges.durationMs) })) {
+        d.prepare('UPDATE tracks SET tail_version = 1 WHERE id = ?').run(id);
+      }
     }
     if (w.failed) {
       d.prepare(
@@ -1115,7 +1159,7 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   // whole-file loudness: a flat analysis can only re-measure the end-of-file
   // window.
   const keepPlacedTail = (col: string) => ` ${col} = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN ${col} END,`;
-  const tailCols = opts.keepVocal ? '' : ['outro_json', 'tail_silence_ms', 'tail_start_ms'].map(keepPlacedTail).join('');
+  const tailCols = opts.keepVocal ? '' : ['outro_json', 'tail_silence_ms', 'tail_start_ms', 'tail_version'].map(keepPlacedTail).join('');
   const stemsCol = opts.clearStems ? ' stems_at = NULL,' : '';
   d.transaction(() => {
   d.prepare(

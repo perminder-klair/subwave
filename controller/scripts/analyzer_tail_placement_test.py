@@ -225,6 +225,21 @@ def t_placed_tail_vocals_and_stems_use_the_placed_window():
     assert out["vocal"]["data"]["tail_vocal_ranges"] == [
         {"startMs": shift + 1000, "endMs": shift + 3000}], out
     assert out["tail"]["data"]["tail_window"] == "edges", out
+    # The vocal answer names its window too: the controller merges tail vocals
+    # only into an outro on the same one.
+    assert out["vocal"]["data"]["tail_window"] == "edges", out
+
+
+def t_vocal_only_answer_names_its_window():
+    calls = []
+    with Patched(get_vocal_detector=lambda force=False: Detector(calls), measure_loudness=fixed_loudness,
+                 log=lambda *_a: None):
+        placed = aw.analyze_facets(FakeLibrosa, PlacedSource(tone(20.0)), ["vocal"],
+                                   tail_window={"end_ms": 180_000, "duration_ms": 200_000})
+        unplaced = aw.analyze_facets(FakeLibrosa, PlacedSource(tone(20.0)), ["vocal"])
+    assert placed["vocal"]["data"]["tail_window"] == "edges", placed
+    assert "tail_vocal_ranges" in unplaced["vocal"]["data"], unplaced
+    assert "tail_window" not in unplaced["vocal"]["data"], unplaced
 
 
 def t_tail_only_vocals_use_the_placed_window():
@@ -580,6 +595,7 @@ test("a placed tail ends at the music: cold ending, silence from the edges, mark
 test("an unplaced tail is not marked as placed", t_an_unplaced_tail_is_not_marked)
 test("Demucs tail vocals, stems and tail meta use the placed window",
      t_placed_tail_vocals_and_stems_use_the_placed_window)
+test("a vocal-only answer names the window its tail vocals describe", t_vocal_only_answer_names_its_window)
 test("a tail-only request's vocals use the placed window", t_tail_only_vocals_use_the_placed_window)
 test("edges measured in the same request place the tail", t_edges_measured_in_the_same_request_place_the_tail)
 test("input seek only for formats that seek exactly", t_input_seek_only_where_the_format_seeks_exactly)

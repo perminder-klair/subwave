@@ -3305,6 +3305,10 @@ def analyze(
     # (only ever fed a window proven to reach the end of the file) and lifted
     # out of the outro dict HERE so outro_json never carries it. Omitted when
     # not measured — absence means "no silence signal, behave as today".
+    # "edges" says the placement was used, measured or not: a placed window
+    # that reads silent is a settled answer (the tail row stops being due). It
+    # is not the v2 stamp: the controller stamps tail_version 2 only with a
+    # tail measured on that window (library-db upsertTrackAnalysis).
     if tail_span:
         result["tail_window"] = "edges"
     if outro is not None and "tail_silence_ms" in outro:
@@ -3668,6 +3672,10 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                     data = {"vocal_ranges": vocal_ranges}
                     if tail_vocals:
                         data["tail_vocal_ranges"] = outro["vocalRanges"]
+                        # Which window they describe: the controller merges
+                        # them only into an outro on the same one.
+                        if tail_span:
+                            data["tail_window"] = "edges"
                     out["vocal"] = _ok(data)
             if "stems" in wanted:
                 if not stems_dir:

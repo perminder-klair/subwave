@@ -733,7 +733,10 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         w.clap = r.audioEmbedding;
         wroteClap = true;
       } else if (f === 'vocal') {
-        w.vocal = { vocalRanges: r.vocalRanges ?? [], tailVocalRanges: a.tailVocalRanges };
+        // Where the tail vocals were measured: the analyzer says "edges" when it
+        // separated the placed window (tail_window), else the file's end.
+        w.vocal = { vocalRanges: r.vocalRanges ?? [], tailVocalRanges: a.tailVocalRanges,
+          tailWindow: r.tailPlaced ? 'placed' : 'end' };
       } else if (f === 'stems') {
         w.stems = { attempted: true };
       }
@@ -743,8 +746,9 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
       const tail = w.tail && !('unmeasurable' in w.tail) ? w.tail : null;
       const outro = tail?.outro ?? db.getTrack(id)?.outro;
       if (wantsVocal) {
+        // Read off the very outro they are merged into.
         w.vocal = { vocalRanges: lyricVocal.vocalRanges,
-          tailVocalRanges: outro ? lyricTailRanges(id, outro, lyricVocal) : null };
+          tailVocalRanges: outro ? lyricTailRanges(id, outro, lyricVocal) : null, tailWindow: 'stored' };
       } else if (tail?.outro) {
         tail.outro = { ...tail.outro, vocalRanges: lyricTailRanges(id, tail.outro, lyricVocal) };
       }
