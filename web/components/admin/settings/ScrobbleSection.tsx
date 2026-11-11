@@ -269,8 +269,9 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
               />
               <div className="field-hint">
                 When on, every track that plays with at least one listener tuned in is
-                scrobbled to your Last.fm profile. This switch is the only thing that sends
-                plays — the tags above need just the API key.
+                scrobbled to your Last.fm profile. This switch only sends plays: the API
+                key alone feeds Last.fm tags in Library tagger → Advanced → Enrichment,
+                whether this is on or off.
               </div>
             </div>
           </div>
