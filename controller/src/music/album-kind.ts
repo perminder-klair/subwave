@@ -12,11 +12,13 @@
 // `excludedAlbumKinds`, so a guess never hides a track on its own.
 
 import { ALBUM_KINDS, type AlbumKind } from '../schemas/show.js';
+import type { EraVerdict } from '../schemas/library.js';
 
 export { ALBUM_KINDS, type AlbumKind };
 
-/** The three ways out of the Era list (era_override.verdict). */
-export type EraDecision = 'trusted' | 'year' | 'suspect';
+/** The three ways out of the Era list (era_override.verdict), defined once in
+ *  schemas/library.ts (ERA_VERDICTS). */
+export type EraDecision = EraVerdict;
 
 export function isAlbumKind(v: unknown): v is AlbumKind {
   return typeof v === 'string' && (ALBUM_KINDS as readonly string[]).includes(v);

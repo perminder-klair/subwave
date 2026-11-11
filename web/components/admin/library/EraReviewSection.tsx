@@ -15,7 +15,7 @@ import { CalendarClock, ChevronDown, ChevronRight, Download, Search } from 'luci
 import { adminJson, adminResponse } from '../../../lib/admin-query';
 import { notify } from '../../../lib/notify';
 import { cn } from '../../../lib/cn';
-import { ALBUM_KINDS, ALBUM_KIND_LABELS, type AlbumKind } from '../../../lib/schemas.generated';
+import { ALBUM_KINDS, ALBUM_KIND_LABELS, type AlbumKind, type EraVerdict } from '../../../lib/schemas.generated';
 import { Btn, Pill } from '../ui';
 import { Input } from '../../ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../ui/select';
@@ -26,7 +26,8 @@ import { applyEraYearEvent, libraryKeys } from './queries';
 import { useLibrary } from './LibraryContext';
 import { useAdminMutation, useAdminQuery } from './useAdminQuery';
 
-type Verdict = 'trusted' | 'year' | 'suspect';
+// The decision list is the controller's (schemas/library.ts ERA_VERDICTS).
+type Verdict = EraVerdict;
 
 export interface EraAlbum {
   albumKey: string;

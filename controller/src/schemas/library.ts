@@ -206,6 +206,8 @@ export interface SceneReference {
 // is named as { album, albumArtist? } and checked by the route (which keys it
 // and refuses an unscanned album); this owns the decision and its year.
 export const ERA_VERDICTS = ['trusted', 'year', 'suspect'] as const;
+/** The three ways out of the Era list (era_override.verdict). */
+export type EraVerdict = (typeof ERA_VERDICTS)[number];
 
 export function eraOverrideSchema() {
   return z.object({
@@ -213,7 +215,7 @@ export function eraOverrideSchema() {
     albumArtist: z.unknown().optional(),
     verdict: z.unknown().transform((raw, c) => {
       if (raw === null || (typeof raw === 'string' && (ERA_VERDICTS as readonly string[]).includes(raw))) {
-        return raw as (typeof ERA_VERDICTS)[number] | null;
+        return raw as EraVerdict | null;
       }
       c.addIssue({ code: 'custom', message: "verdict must be 'trusted', 'year', 'suspect' or null" });
       return z.NEVER;
