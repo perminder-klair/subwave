@@ -812,8 +812,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div>
               <div className="text-[13px] font-bold">Last.fm tags</div>
               <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
-                With a Last.fm API key configured (Scrobbling), crowd tags come
-                straight from the Last.fm API and work on vanilla Navidrome.
+                With a Last.fm API key configured (Listeners → Last.fm), crowd
+                tags come straight from the Last.fm API and work on vanilla
+                Navidrome.
                 Auto fetches them when a key is set and skips them when none is.
                 On without a key falls back to Navidrome&apos;s{' '}
                 <code>getArtistInfo2</code>, which only surfaces tags on a custom
