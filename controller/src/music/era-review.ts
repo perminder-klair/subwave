@@ -65,14 +65,23 @@ const YEAR_STATE_SQL = `CASE
   ELSE 'unchecked'
 END`;
 
-export function loadEraOverrides(d: Database): Map<string, EraOverride> {
-  const rows = d.prepare(`SELECT album_key, verdict, forced_year, kind FROM era_override`).all() as
-    Array<{ album_key: string; verdict: EraVerdict | null; forced_year: number | null; kind: string | null }>;
-  return new Map(rows.map(r => [r.album_key, {
+/** One era_override row as stored. */
+interface EraOverrideRow { verdict: EraVerdict | null; forced_year: number | null; kind: string | null }
+
+// The one reading of a stored row: a year only on a 'year' decision, and a
+// kind only when it is still a known one.
+function toOverride(r: EraOverrideRow): EraOverride {
+  return {
     verdict: r.verdict ?? null,
     forcedYear: r.verdict === 'year' ? r.forced_year ?? null : null,
     kind: isAlbumKind(r.kind) ? r.kind : null,
-  }]));
+  };
+}
+
+export function loadEraOverrides(d: Database): Map<string, EraOverride> {
+  const rows = d.prepare(`SELECT album_key, verdict, forced_year, kind FROM era_override`).all() as
+    Array<EraOverrideRow & { album_key: string }>;
+  return new Map(rows.map(r => [r.album_key, toOverride(r)]));
 }
 
 /** Where a walk reads an album's record: a Map snapshot (tests, the listing)
@@ -93,18 +102,14 @@ export function liveEraOverrides(d: Database): EraOverrideLookup {
   const stmt = d.prepare(`SELECT verdict, forced_year, kind FROM era_override WHERE album_key = ?`);
   return {
     get(albumKey: string) {
-      const r = stmt.get(albumKey) as { verdict: EraVerdict | null; forced_year: number | null; kind: string | null } | undefined;
-      if (!r) return null;
-      return { verdict: r.verdict ?? null, forcedYear: r.verdict === 'year' ? r.forced_year ?? null : null, kind: isAlbumKind(r.kind) ? r.kind : null };
+      const r = stmt.get(albumKey) as EraOverrideRow | undefined;
+      return r ? toOverride(r) : null;
     },
   };
 }
 
 function loadOverrideRow(d: Database, albumKey: string): EraOverride | null {
-  const r = d.prepare(`SELECT verdict, forced_year, kind FROM era_override WHERE album_key = ?`).get(albumKey) as
-    { verdict: EraVerdict | null; forced_year: number | null; kind: string | null } | undefined;
-  if (!r) return null;
-  return { verdict: r.verdict ?? null, forcedYear: r.verdict === 'year' ? r.forced_year ?? null : null, kind: isAlbumKind(r.kind) ? r.kind : null };
+  return liveEraOverrides(d).get(albumKey);
 }
 
 // Write the record, or drop the row once it carries nothing.
