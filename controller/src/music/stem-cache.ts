@@ -513,6 +513,13 @@ export async function usageBase(): Promise<string | null> {
 //   settle walk;
 // - this process could not save the snapshot last time (snapshotUntrusted):
 //   another process may still trust the file, so it is marked stale there.
+// The compare-and-set is a read then a write, not one atomic step, and its
+// writers live in two processes (forgetStems in the tagger's, the purge, the
+// sweep and pick-time settles in the controller's): one that writes between
+// this read and this write is overwritten, or overwrites this, so one delta
+// or one walk's figure is lost while the result stays trusted. The window is
+// one small file read and one atomic write, the error is at most that one
+// change, and the full walk due every SNAPSHOT_MAX_AGE_MS ends it.
 export async function adjustUsage(
   delta: { bytes: number; dirs: number },
   { since }: { since?: string | null } = {},
