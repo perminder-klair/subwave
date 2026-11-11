@@ -4,7 +4,8 @@
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import {
   FACETS, FACET_VERSIONS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows,
-  isWholeFileLoudnessVersion, restampFacetRows, syncTrackFacets, tailPlacementMoved, type Facet, type FacetSource,
+  PLACED_TAIL_STAMP, SQL_PLACED_TAIL_STAMP, isPlacedTailStamp, isWholeFileLoudnessVersion, restampFacetRows,
+  syncTrackFacets, tailEndsAtMusic, tailPlacementMoved, type Facet, type FacetSource,
 } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
@@ -751,24 +752,34 @@ interface TrackAnalysisWrite {
 
 // Tail vocal ranges describe one window. THE same-window rule, for every path
 // that carries them onto a new outro or merges them into the stored one: the
-// stored tail and the new evidence must both be placed from the edges
-// (tail_version >= 2) or both be the end-of-file window.
-function storedTailPlaced(id: string): boolean {
-  const row = requireDb().prepare('SELECT tail_version AS v FROM tracks WHERE id = ?').get(id) as
-    { v: number | null } | undefined;
-  return (row?.v ?? 1) >= 2;
+// stored tail and the new evidence must both sit on the window that ends where
+// the music stops (placed, or an end-of-file window the edges show ended there:
+// facets.ts tailEndsAtMusic) or both on the file's last seconds.
+export function sameTailWindow(storedEndsAtMusic: boolean, newEndsAtMusic: boolean): boolean {
+  return storedEndsAtMusic === newEndsAtMusic;
 }
-export function sameTailWindow(storedPlaced: boolean, newPlaced: boolean): boolean {
-  return storedPlaced === newPlaced;
+
+// Does new tail evidence (stamped `newStamp`: PLACED_TAIL_STAMP for a placed
+// answer, null for an end-of-file one) sit on the stored tail's window? Both
+// sides are judged on the same edges: this write's own when it measured them,
+// else the stored ones.
+function onStoredTailWindow(id: string, newStamp: number | null, newEdges?: { tailMs: number } | null): boolean {
+  const row = requireDb().prepare(
+    'SELECT tail_version, decoded_duration_ms IS NOT NULL AS has_edges, edge_tail_ms FROM tracks WHERE id = ?',
+  ).get(id) as { tail_version: number | null; has_edges: number; edge_tail_ms: number | null } | undefined;
+  const edges = newEdges && Number.isFinite(newEdges.tailMs)
+    ? { has_edges: 1, edge_tail_ms: Math.max(0, Math.round(newEdges.tailMs)) }
+    : { has_edges: row?.has_edges ?? 0, edge_tail_ms: row?.edge_tail_ms ?? null };
+  return sameTailWindow(tailEndsAtMusic(row?.tail_version, edges), tailEndsAtMusic(newStamp, edges));
 }
 
 // A new outro without tail vocals keeps the stored ones, only when they were
 // measured on the same window (sameTailWindow). A tail newly placed from the
 // edges leaves them to be measured again (the vocal facet turns head-only, so
 // the vocal backfill takes it).
-function preserveTailVocal(id: string, outro: TrackOutro, newPlaced: boolean): TrackOutro {
+function preserveTailVocal(id: string, outro: TrackOutro, newStamp: number | null, newEdges?: { tailMs: number } | null): TrackOutro {
   if (outro.vocalRanges != null) return outro;
-  if (!sameTailWindow(storedTailPlaced(id), newPlaced)) return outro;
+  if (!onStoredTailWindow(id, newStamp, newEdges)) return outro;
   const prior = getTrack(id)?.outro?.vocalRanges;
   return prior != null ? { ...outro, vocalRanges: prior } : outro;
 }
@@ -784,13 +795,13 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
   // stamp, only with a tail measured on that window. Stamped over the stored
   // columns that a null outro keeps (COALESCE below), it would call an
   // end-of-file tail placed, and it would never be planned again.
-  const placedAnswer = finite(a.tailVersion) != null && (a.tailVersion as number) >= 2;
+  const placedAnswer = isPlacedTailStamp(finite(a.tailVersion) ?? null);
   const tailMeasured = a.outro != null || finite(a.tailSilenceMs) != null;
   const placed = placedAnswer && tailMeasured ? 1 : 0;
   let outro = a.outro;
   let carriedTailVocal = false;
   if (a.preserveTailVocal && outro) {
-    const kept = preserveTailVocal(id, outro, placed === 1);
+    const kept = preserveTailVocal(id, outro, placed === 1 ? PLACED_TAIL_STAMP : null);
     carriedTailVocal = kept !== outro;
     outro = kept;
   }
@@ -819,15 +830,17 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- Outro: only computable off a COMPLETE file, so a capped-download pass
         -- passes null and keeps what's there. The two tail columns ride the
         -- outro decode and share the rule. A tail placed from the edges
-        -- (tail_version >= 2) outranks an end-of-file window: kept, unless
-        -- this answer was placed too (then it replaces it).
-        outro_json          = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN outro_json ELSE COALESCE(?, outro_json) END,
-        tail_silence_ms     = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN tail_silence_ms ELSE COALESCE(?, tail_silence_ms) END,
-        tail_start_ms       = CASE WHEN COALESCE(tail_version, 1) >= 2 AND ? = 0 THEN tail_start_ms ELSE COALESCE(?, tail_start_ms) END,
+        -- (the raw stamp, SQL_PLACED_TAIL_STAMP) outranks an end-of-file
+        -- window: kept, unless this answer was placed too (then it replaces
+        -- it). A NULL stamp the tolerance covers is end-of-file columns, so an
+        -- end-of-file answer still replaces it.
+        outro_json          = CASE WHEN ${SQL_PLACED_TAIL_STAMP} AND ? = 0 THEN outro_json ELSE COALESCE(?, outro_json) END,
+        tail_silence_ms     = CASE WHEN ${SQL_PLACED_TAIL_STAMP} AND ? = 0 THEN tail_silence_ms ELSE COALESCE(?, tail_silence_ms) END,
+        tail_start_ms       = CASE WHEN ${SQL_PLACED_TAIL_STAMP} AND ? = 0 THEN tail_start_ms ELSE COALESCE(?, tail_start_ms) END,
         -- An end-of-file outro written over a tail marked for re-planning (1)
         -- is the end-of-file window again: back to NULL.
-        tail_version        = CASE WHEN ? = 1 THEN 2
-                                   WHEN COALESCE(tail_version, 1) < 2 AND ? IS NOT NULL THEN NULL
+        tail_version        = CASE WHEN ? = 1 THEN ${PLACED_TAIL_STAMP}
+                                   WHEN NOT ${SQL_PLACED_TAIL_STAMP} AND ? IS NOT NULL THEN NULL
                                    ELSE tail_version END,
         -- A pass with the stem cache off passes null and must not clear an
         -- earlier stem pass's stamp.
@@ -1015,7 +1028,7 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
         let outro = w.tail.outro;
         const tailVersion = finite(w.tail.version);
         if (outro && w.vocal?.tailVocalRanges == null) {
-          const kept = preserveTailVocal(id, outro, tailVersion != null && tailVersion >= 2);
+          const kept = preserveTailVocal(id, outro, isPlacedTailStamp(tailVersion) ? PLACED_TAIL_STAMP : null, w.edges);
           carriedTailVocal = kept !== outro;
           outro = kept;
         }
@@ -1024,7 +1037,7 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
           outro ? JSON.stringify(outro) : null,
           finite(w.tail.tailSilenceMs) != null ? Math.max(0, Math.round(w.tail.tailSilenceMs as number)) : null,
           finite(w.tail.tailStartMs) != null ? Math.max(0, Math.round(w.tail.tailStartMs as number)) : null,
-          tailVersion != null && tailVersion >= 2 ? Math.round(tailVersion) : null,
+          isPlacedTailStamp(tailVersion) ? Math.round(tailVersion) : null,
           id,
         );
         fresh.push('tail');
@@ -1047,9 +1060,13 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
       // (sameTailWindow): a vocal-only answer measured on the placed window,
       // over a stored end-of-file outro, would describe music the outro does
       // not hold. Left out, the vocal row stays head-only and the tail backfill
-      // places the tail, which measures them again.
+      // places the tail, which measures them again. A stored end-of-file
+      // outro the edges show already ended at the music (the tolerance) is
+      // the placed window's music, so they merge: otherwise its vocal row
+      // stayed head-only with no tail ever due, and every vocal run
+      // separated it again.
       const vocalOnStored = w.vocal.tailWindow === 'stored' ||
-        sameTailWindow(storedTailPlaced(id), w.vocal.tailWindow === 'placed');
+        onStoredTailWindow(id, w.vocal.tailWindow === 'placed' ? PLACED_TAIL_STAMP : null, w.edges);
       if (w.vocal.tailVocalRanges && vocalOnStored) {
         const row = d.prepare('SELECT outro_json FROM tracks WHERE id = ?').get(id) as { outro_json: string | null } | undefined;
         if (row?.outro_json) {
@@ -1078,7 +1095,10 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
       // tail sits on a window that no longer ends at the music, so it is due
       // again (tail_version 1, tailPlacementMoved). A tail placed in this same
       // answer was placed from these edges.
-      if (before && (before.tail_version ?? 1) >= 2 && !fresh.includes('tail') &&
+      // The raw stamp on purpose: only a tail the analyzer placed sits on a
+      // window these edges can move. A NULL stamp is re-judged from the new
+      // edges by tailVersionOf on its own.
+      if (before && isPlacedTailStamp(before.tail_version) && !fresh.includes('tail') &&
         tailPlacementMoved(before, { edge_tail_ms: ms(w.edges.tailMs), decoded_duration_ms: ms(w.edges.durationMs) })) {
         d.prepare('UPDATE tracks SET tail_version = 1 WHERE id = ?').run(id);
       }
@@ -1223,10 +1243,10 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   const d = requireDb();
   const vocalCol = opts.keepVocal ? '' : ' vocal_ranges_json = NULL,';
   // keepVocal keeps the tail with the vocal evidence it carries (#2255). A tail
-  // placed from the edges (tail_version >= 2) is kept either way, like
+  // placed from the edges (the raw stamp, SQL_PLACED_TAIL_STAMP) is kept either way, like
   // whole-file loudness: a flat analysis can only re-measure the end-of-file
   // window.
-  const keepPlacedTail = (col: string) => ` ${col} = CASE WHEN COALESCE(tail_version, 1) >= 2 THEN ${col} END,`;
+  const keepPlacedTail = (col: string) => ` ${col} = CASE WHEN ${SQL_PLACED_TAIL_STAMP} THEN ${col} END,`;
   const tailCols = opts.keepVocal ? '' : ['outro_json', 'tail_silence_ms', 'tail_start_ms', 'tail_version'].map(keepPlacedTail).join('');
   const stemsCol = opts.clearStems ? ' stems_at = NULL,' : '';
   d.transaction(() => {

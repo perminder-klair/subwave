@@ -90,16 +90,49 @@ export const FACET_VERSIONS: Readonly<Record<Facet, number>> = {
 // 21 Oct: re-measure only those).
 export const TAIL_PLACEMENT_TOLERANCE_MS = 3000;
 
+// The placed-tail stamp (`tracks.tail_version`), defined once. Two questions,
+// kept apart on purpose:
+//   - "did the analyzer place these stored columns?" is the raw stamp:
+//     isPlacedTailStamp / SQL_PLACED_TAIL_STAMP. The keep rules read it (an
+//     end-of-file write never replaces a placed tail; a --re-analyze clear
+//     keeps one), and so does the re-plan on moved edges. A NULL stamp the
+//     tolerance covers is still the end-of-file window's columns: an
+//     end-of-file answer may replace it, and a clear drops it as before.
+//   - "which window does the tail sit on?" is tailVersionOf, which adds the
+//     tolerance; the same-window rule for tail vocals reads it
+//     (tailEndsAtMusic), because that window held the same music.
+// A threshold, the FIRST placed version: it stays 2 when FACET_VERSIONS.tail
+// moves past it. What the analyzer's placed answer is stamped with is
+// FACET_VERSIONS.tail (PLACED_TAIL_STAMP).
+export const MIN_PLACED_TAIL_VERSION = 2;
+export const PLACED_TAIL_STAMP = FACET_VERSIONS.tail;
+export function isPlacedTailStamp(version: number | null | undefined): version is number {
+  return (version ?? 1) >= MIN_PLACED_TAIL_VERSION;
+}
+export const SQL_PLACED_TAIL_STAMP = `(COALESCE(tail_version, 1) >= ${MIN_PLACED_TAIL_VERSION})`;
+
 // Which window a stored tail was measured on: the analyzer's own stamp, else
 // v2 when the edges show the end-of-file window already ended at the music,
 // else v1. A stamp of 1 is a tail placed for an end the re-measured edges have
 // since moved (tailPlacementMoved): v1, due again, whatever the edges say now,
 // because the stored window is neither the old placement nor the file's end.
 export function tailVersionOf(row: Pick<FacetSourceRow, 'tail_version' | 'has_edges' | 'edge_tail_ms'>): number {
-  if (row.tail_version != null && row.tail_version >= 2) return row.tail_version;
+  if (isPlacedTailStamp(row.tail_version)) return row.tail_version;
   if (row.tail_version === 1) return 1;
-  if (row.has_edges && row.edge_tail_ms != null && row.edge_tail_ms <= TAIL_PLACEMENT_TOLERANCE_MS) return 2;
+  if (row.has_edges && row.edge_tail_ms != null && row.edge_tail_ms <= TAIL_PLACEMENT_TOLERANCE_MS) return MIN_PLACED_TAIL_VERSION;
   return 1;
+}
+
+// Does a tail with this stamp sit on the window that ends where the music
+// stops? Placed by the analyzer, or an end-of-file window the edges show
+// already ended there (the tolerance). The same-window rule for tail vocals
+// compares the stored tail and the new evidence with this, on the same edges.
+export function tailEndsAtMusic(
+  stamp: number | null | undefined,
+  edges: { has_edges: number | boolean; edge_tail_ms: number | null },
+): boolean {
+  return tailVersionOf({ tail_version: stamp ?? null, has_edges: edges.has_edges ? 1 : 0, edge_tail_ms: edges.edge_tail_ms })
+    >= MIN_PLACED_TAIL_VERSION;
 }
 
 // Did re-measured edges move where the music stops by more than the
@@ -648,10 +681,10 @@ export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean
     d.prepare(`DELETE FROM track_facet_status WHERE facet = 'tail' AND status <> 'ok'`).run();
   } else {
     // Without keepVocal the tail columns go, except a placed tail's
-    // (tail_version >= 2), which clearAnalysis keeps like whole-file loudness.
+    // (SQL_PLACED_TAIL_STAMP), which clearAnalysis keeps like whole-file loudness.
     d.prepare(
       `DELETE FROM track_facet_status
-        WHERE facet = 'tail' AND track_id NOT IN (SELECT id FROM tracks WHERE tail_version >= 2)`,
+        WHERE facet = 'tail' AND track_id NOT IN (SELECT id FROM tracks WHERE ${SQL_PLACED_TAIL_STAMP})`,
     ).run();
   }
   d.prepare(

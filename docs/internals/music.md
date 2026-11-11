@@ -757,8 +757,13 @@ once edges exist. Six rules:
    `--re-analyze` with vocal detection on clears an end-of-file tail; with it
    off (`keepVocal`) every tail stays with the vocal evidence it carries
    (#2290). A replaced file (`clearTrackAudio`) drops the stamp with the tail.
+   Which of these keep rules applies is the raw stamp
+   (`isPlacedTailStamp`/`SQL_PLACED_TAIL_STAMP`, `facets.ts`): an unstamped tail
+   the tolerance covers is still the end-of-file window's columns.
    **Tail vocal ranges stay on the window they were measured on**, by one rule
-   (`tracks.sameTailWindow`: both placed or both end-of-file): carried onto a
+   (`tracks.sameTailWindow` over `facets.tailEndsAtMusic`: both on the window
+   that ends where the music stops, which an unstamped end-of-file tail the
+   tolerance covers counts as, or both on the file's last seconds): carried onto a
    new tail, flat or facet, only when it sits on the same window, and a vocal
    answer's ranges (the worker names a placed window, `tail_window: "edges"` in
    the vocal data) merged into the stored outro only when it is on theirs.

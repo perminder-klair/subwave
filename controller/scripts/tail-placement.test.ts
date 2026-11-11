@@ -617,6 +617,69 @@ test('a vocal-only request sends the tail window too, so the tail vocals come ba
   consistent();
 });
 
+const vocalRowOf = (id: string) =>
+  sql(`SELECT status, version, reason FROM track_facet_status WHERE track_id = ? AND facet = 'vocal'`).get(id) as Row | undefined;
+
+test('placed tail vocals merge into an end-of-file outro the tolerance counts as placed, and settle on the first answer', () => {
+  // An unstamped end-of-file tail whose edges show 1 s of trailing silence is
+  // v2 (tailVersionOf): no tail is ever planned for it. The placed vocal
+  // answer used to be refused against it (the raw stamp said end-of-file), so
+  // the vocal row stayed head-only and every `--facets vocal` run separated
+  // the track again.
+  track('tol-voc');
+  writeEdges('tol-voc', 1_000);
+  writeTail('tol-voc');
+  assert.equal(tailVersionCol('tol-voc'), null);
+  assert.deepEqual([tailRow('tol-voc')?.status, tailRow('tol-voc')?.version], ['ok', 2], 'fixture: the tail is not due');
+  for (let i = 0; i < 3; i++) {
+    db.writeFacetResults('tol-voc', { source: 'full', vocal: {
+      vocalRanges: [], tailVocalRanges: [{ startMs: 205_000, endMs: 207_000 }], tailWindow: 'placed' } });
+    assert.deepEqual(db.getTrack('tol-voc')!.outro?.vocalRanges, [{ startMs: 205_000, endMs: 207_000 }], `answer ${i}`);
+    const v = vocalRowOf('tol-voc');
+    assert.deepEqual([v?.status, v?.version, v?.reason], ['ok', db.FACET_VERSIONS.vocal, null], `answer ${i}`);
+    assert.ok(!db.facetNeedsIds('vocal').includes('tol-voc'), `vocal due after answer ${i}`);
+    assert.ok(!db.facetNeedsIds('tail').includes('tol-voc'), `tail due after answer ${i}`);
+  }
+  consistent();
+});
+
+test('past the tolerance, placed tail vocals still stay out of an end-of-file outro', () => {
+  // The other half of the rule: 3.001 s of silence is a different window.
+  track('far-voc');
+  writeEdges('far-voc', 3_001);
+  writeTail('far-voc');
+  db.writeFacetResults('far-voc', { source: 'full', vocal: {
+    vocalRanges: [], tailVocalRanges: [{ startMs: 203_000, endMs: 205_000 }], tailWindow: 'placed' } });
+  assert.equal(db.getTrack('far-voc')!.outro?.vocalRanges ?? null, null);
+  assert.equal(vocalRowOf('far-voc')?.reason, 'head-only');
+  assert.ok(db.facetNeedsIds('tail').includes('far-voc'), 'the tail is due, so placing it measures them');
+  consistent();
+});
+
+test('a --facets vocal run settles a tolerance-covered track, and the next run plans no work for it', async () => {
+  track('tol-run');
+  writeEdges('tol-run', 1_000);
+  writeTail('tol-run');
+  db.writeFacetResults('tol-run', { source: 'full', vocal: { vocalRanges: [], tailVocalRanges: null } });
+  assert.equal(vocalRowOf('tol-run')?.reason, 'head-only', 'fixture: the stuck row');
+  const vocalPlan = () => P.planAcoustics({
+    ids: ['tol-run'], facets: P.parseFacets('vocal'), where: { kind: 'needs' }, state: db.loadFacetState(P.parseFacets('vocal')),
+    capabilities: { clap: false, demucs: true, tailVocal: true, wholeFile: true },
+  });
+  const first = vocalPlan();
+  assert.deepEqual(first.items.map(i => i.facets), [['vocal']]);
+  requests.length = 0;
+  await runAnalysisPass({ plan: first });
+  assert.equal(requests.length, 1);
+  assert.deepEqual(requests[0].tail_window, { end_ms: 213_000, duration_ms: 214_000 });
+  assert.deepEqual(db.getTrack('tol-run')!.outro?.vocalRanges, [{ startMs: 205_000, endMs: 207_000 }]);
+  for (let i = 0; i < 2; i++) {
+    const again = vocalPlan();
+    assert.equal(again.items.length, 0, `run ${i + 2} plans no work: ${JSON.stringify(again.items)}`);
+  }
+  consistent();
+});
+
 test('a regular run measures the edges first, so a NEW track\'s tail is placed on its one read', async () => {
   // A track the walk just added: no analysis, no edges. With the whole-file
   // backfill on, the run must measure its edges BEFORE the regular pass reads
