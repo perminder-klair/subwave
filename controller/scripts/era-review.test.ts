@@ -66,6 +66,8 @@ test('opening an older db adds era_reason, album_artist, album_kind and the era_
   const version = d().pragma('user_version', { simple: true }) as number;
   d().exec(`
     DROP TABLE era_override;
+    DROP INDEX idx_tracks_album_kind;
+    DROP INDEX idx_tracks_era_album_key;
     ALTER TABLE tracks DROP COLUMN era_reason;
     ALTER TABLE tracks DROP COLUMN album_artist;
     ALTER TABLE tracks DROP COLUMN album_kind;
@@ -85,6 +87,17 @@ test('opening an older db adds era_reason, album_artist, album_kind and the era_
     assert.throws(() => d().prepare(`INSERT INTO era_override (album_key, verdict, set_at) VALUES (?, 'maybe', 'now')`).run('k\u0000bad'));
     d().exec(`DELETE FROM era_override`);
   });
+});
+
+test('a show\'s excluded kinds and every per-album lookup read an index, never the wide rows', () => {
+  // The same SQL shapes as tracks.albumKindTrackIds and the era-review.ts
+  // per-album reads. An expression index serves only the identical expression,
+  // so the key lookup must use ERA_ALBUM_KEY_SQL itself.
+  const plan = (sql: string, ...args: unknown[]) =>
+    (d().prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>).map(r => r.detail).join(' | ');
+  assert.match(plan(`SELECT id FROM tracks WHERE album_kind IN (?, ?)`, 'dj-mix', 'live'), /USING INDEX idx_tracks_album_kind/);
+  assert.match(plan(`SELECT id FROM tracks WHERE ${era.ERA_ALBUM_KEY_SQL} = ?`, 'k'), /USING INDEX idx_tracks_era_album_key/);
+  assert.match(plan(`SELECT t.id FROM tracks t WHERE ${era.ERA_ALBUM_KEY_SQL} = ?`, 'k'), /USING INDEX idx_tracks_era_album_key/);
 });
 
 test('a db that already has its era columns and table keeps them and their rows', () => {

@@ -556,8 +556,9 @@ export function recordOriginalYearOutcome(id: string, outcome: OriginalYearOutco
 }
 
 /** Ids of every track whose album has one of these kinds (Library → Era), for
- *  a show's excludedAlbumKinds. A plain scan: the set is small and it runs once
- *  per pick, beside the excluded-playlist fetch it joins. */
+ *  a show's excludedAlbumKinds. It runs once per pick, beside the
+ *  excluded-playlist fetch it joins, so it reads idx_tracks_album_kind
+ *  (stats.ts), never the wide rows. */
 export function albumKindTrackIds(kinds: readonly string[]): Set<string> {
   if (!kinds.length) return new Set();
   const rows = requireDb()

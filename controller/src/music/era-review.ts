@@ -38,6 +38,7 @@ import { restoreDecisionOriginalYear, setDecisionOriginalYear, setStoredEraVerdi
 import { ORIGINAL_YEAR_MIN, isValidOriginalYear, originalYearMax } from '../schemas/library.js';
 import { isAlbumKind, labelOwner, ownerFolderOf, suggestAlbumKind, suggestedDecision, type AlbumKind, type EraDecision, type OwnerContext, type OwnerInput } from './album-kind.js';
 import { artistParticipantKeys } from './recency.js';
+import { ERA_ALBUM_KEY_SQL, albumEraKey } from './era-album-key.js';
 import { fileNameOf, folderOf, groupCopies, mainFolderOf, type CopyInput } from './era-copies.js';
 
 export type EraVerdict = EraDecision;
@@ -49,24 +50,8 @@ export interface EraOverride {
   kind: AlbumKind | null;
 }
 
-/** SQLite's own fold, reproduced: LOWER() changes only ASCII A-Z and TRIM()
- *  strips only spaces. JS toLowerCase()/trim() fold far more ('À' → 'à', tabs,
- *  NBSP), and a key folded differently on the two sides never matches: the
- *  override is refused as "not scanned" ('Volume 7 L'Homme À La Tête De Chou',
- *  'Erlend Øye'). */
-function sqliteFold(s: string | null | undefined): string {
-  return (s ?? '').replace(/^ +| +$/g, '').replace(/[A-Z]/g, c => c.toLowerCase());
-}
-
-/** The override table's primary key for an (album artist, album) pair. */
-export function albumEraKey(albumArtist: string | null | undefined, album: string | null | undefined): string {
-  return `${sqliteFold(albumArtist)}\u0000${sqliteFold(album)}`;
-}
-
-/** SQL twin of albumEraKey over the tracks columns. Keep the two in step
- *  (albumEraKey folds the way these SQLite built-ins do). */
-export const ERA_ALBUM_KEY_SQL =
-  "LOWER(TRIM(COALESCE(album_artist, ''))) || char(0) || LOWER(TRIM(COALESCE(album, '')))";
+// The album key lives in era-album-key.ts (one string shared with its index).
+export { albumEraKey, ERA_ALBUM_KEY_SQL };
 
 /** The selection both the listing and the CSV export answer over: tracks the
  *  walk marked untrusted, plus every track of an overridden album (a trusted
