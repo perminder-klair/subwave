@@ -1,6 +1,7 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
+import Link from 'next/link';
 import { useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { adminResponse } from '../../../lib/admin-query';
@@ -8,6 +9,7 @@ import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Card, Btn, Pill, Seg } from '../ui';
 import {
+  NowBanner,
   SaveBar,
   type FormState, type SettingsData, type SectionProps, type ScrobbleLastfmForm, type ScrobbleListenbrainzForm,
 } from './shared';
@@ -166,29 +168,25 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
     <>
       <Card title="Last.fm" sub={lfSubtitle}>
         <div className="grid gap-[18px]">
-          <div className="border border-l-[3px] border-[color-mix(in_oklab,var(--accent)_35%,transparent)] border-l-[var(--accent)] bg-[var(--accent-soft)] px-3.5 py-3 !normal-case">
-            <div className="text-[13px] font-bold text-ink">Tag your library with Last.fm</div>
-            <p className="mt-1 text-[13px] leading-[1.55] text-muted">
-              Paste your <strong className="text-ink">API key</strong> below and save. The tagger
-              folds Last.fm&apos;s crowd tags into your library as it tags your tracks.
-              Everything below the <strong className="text-ink">Scrobbling</strong> line is
-              only needed to scrobble.
-            </p>
-            <ol className="mt-2 grid list-decimal gap-1 pl-4 text-[13px] leading-[1.55] text-muted">
-              <li>
-                Paste the <strong className="text-ink">API key</strong> and save.
-              </li>
-              <li>
-                Then open{' '}
-                <strong className="text-ink">
-                  Settings → Library tagger → Advanced → Enrichment
-                </strong>{' '}
-                and leave <strong className="text-ink">Last.fm tags</strong> on{' '}
-                <strong className="text-ink">Auto</strong>: it follows the key, on when one
-                is set. Pick <strong className="text-ink">On</strong> instead to pin it on.
-              </li>
-            </ol>
-          </div>
+          <NowBanner label={<>Last.fm tags · {lfTagsOff ? 'off' : lfApiKeySet ? 'key set' : 'no key'}</>}>
+            Paste your <strong className="text-ink">API key</strong> below and click save to
+            only enable tagging. The tagger folds Last.fm&apos;s crowd tags into your library
+            as it tags your tracks. Everything below the{' '}
+            <strong className="text-ink">Scrobbling</strong> line is only needed if you also
+            wish to have <strong className="text-ink">SUB/WAVE</strong> scrobble your plays.
+            <span className="mt-1.5 block">
+              Then open Settings →{' '}
+              <strong className="text-ink">
+                <Link href="/admin/settings?section=library" className="underline">
+                  Library tagger
+                </Link>
+              </strong>{' '}
+              → Advanced → Enrichment and make sure{' '}
+              <strong className="text-ink">Last.fm tags</strong> is set to{' '}
+              <strong className="text-ink">Auto</strong>, or{' '}
+              <strong className="text-ink">On</strong> for tagging to occur.
+            </span>
+          </NowBanner>
 
           {lfTagsOff && (
             <div
@@ -203,11 +201,15 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
               </div>
               <p className="mt-2 text-[14px] leading-[1.55] text-muted">
                 The key is saved, but enrichment is told to skip Last.fm, so{' '}
-                <strong>no Last.fm tags will be fetched</strong>. Set{' '}
+                <strong>no Last.fm tags will be fetched</strong>. Set Settings →{' '}
                 <strong>
-                  Settings → Library tagger → Advanced → Enrichment → Last.fm tags
+                  <Link href="/admin/settings?section=library" className="underline">
+                    Library tagger
+                  </Link>
                 </strong>{' '}
-                to <strong>Auto</strong> or <strong>On</strong> to start using it.
+                → Advanced → Enrichment →{' '}
+                <strong>Last.fm tags</strong> to <strong>Auto</strong> or{' '}
+                <strong>On</strong> to start using it.
               </p>
             </div>
           )}
