@@ -3,7 +3,7 @@
 // The name sits in the next column, so the flag is hidden from screen readers
 // and the code moves to the hover. A code with no flag (no ISO alpha-2 letters,
 // e.g. Tor's T1) keeps the boxed code, so the row never shows an empty cell.
-// Windows ships no flag glyphs and draws the two letters instead, as the Dash.
+// Windows ships no flag glyphs and draws the two letters instead, as the Dash does.
 
 import { countryFlag, countryName } from '../dash/types';
 
