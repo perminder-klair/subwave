@@ -20,6 +20,7 @@ import {
   type ListenerSample,
 } from '../../../lib/audienceStats';
 import { countryName } from '../dash/types';
+import CountryMark from './CountryMark';
 import { Seg } from '../ui';
 import { ScrollArea } from '../../ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -262,7 +263,7 @@ function Countries({ rows, sessions }: { rows: { country: string; count: number 
               key={r.country}
               className="grid grid-cols-[28px_minmax(0,92px)_minmax(0,1fr)_40px_34px] items-center gap-2.5 text-[12px]"
             >
-              <span className="border border-ink py-px text-center font-mono text-[10px] font-bold">{r.country}</span>
+              <CountryMark code={r.country} />
               <span className="truncate">{countryName(r.country)}</span>
               <Bar frac={r.count / max} lead={i === 0} />
               <span className="text-right font-mono font-bold tabular-nums">{fmtInt(r.count)}</span>
