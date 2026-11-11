@@ -53,6 +53,19 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
   const placeholder = (v: string, fallback: string) =>
     v === 'set' ? '•••••• (on file)' : fallback;
   const { lfApiKeySet, lfApiSecretSet, lfReady, lbReady, ndReady } = scrobbleReadiness(form, data);
+  // The tagger's own switch (Library tagger → Advanced → Enrichment) can veto the
+  // key. Saved value only: undefined is Auto, which follows the key.
+  const lfTagsOff = lfApiKeySet && data.values?.embedding?.enrichment?.lastfmTags === false;
+  // Tags need only the key, so a key-only setup is working, not "not connected".
+  const lfSubtitle = lfReady
+    ? `scrobbling as ${savedLf.username || '(unknown)'}`
+    : lf.enabled
+      ? 'enabled, but missing credentials'
+      : lfTagsOff
+        ? 'key set, but Last.fm tags is off'
+        : lfApiKeySet
+          ? 'key set, tags only, not scrobbling'
+          : 'not set up';
 
   // Needs the API key + secret saved first (the backend reads them from settings/env).
   const canConnect = lfApiKeySet && lfApiSecretSet;
@@ -151,31 +164,53 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
 
   return (
     <>
-      <Card
-        title="Last.fm"
-        sub={lfReady ? `scrobbling as ${savedLf.username || '(unknown)'}` : 'not connected'}
-      >
+      <Card title="Last.fm" sub={lfSubtitle}>
         <div className="grid gap-[18px]">
-          <div className="field">
-            <div className="flex items-center gap-2">
-              <Label>Enabled</Label>
-              {lf.enabled !== !!savedLf.enabled && <Pill tone="accent" dot>unsaved</Pill>}
-            </div>
-            <Seg
-              value={lf.enabled ? 'on' : 'off'}
-              onChange={v =>
-                setForm(f => ({
-                  ...f,
-                  scrobble: { ...f.scrobble, lastfm: { ...f.scrobble.lastfm, enabled: v === 'on' } },
-                }))
-              }
-              options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
-            />
-            <div className="field-hint">
-              When on, every track that plays with at least one listener tuned in is
-              scrobbled to your Last.fm profile.
-            </div>
+          <div className="border border-l-[3px] border-[color-mix(in_oklab,var(--accent)_35%,transparent)] border-l-[var(--accent)] bg-[var(--accent-soft)] px-3.5 py-3 !normal-case">
+            <div className="text-[13px] font-bold text-ink">Tag your library with Last.fm</div>
+            <p className="mt-1 text-[13px] leading-[1.55] text-muted">
+              Paste your <strong className="text-ink">API key</strong> below and save. The tagger
+              folds Last.fm&apos;s crowd tags into your library as it tags your tracks.
+              Everything below the <strong className="text-ink">Scrobbling</strong> line is
+              only needed to scrobble.
+            </p>
+            <ol className="mt-2 grid list-decimal gap-1 pl-4 text-[13px] leading-[1.55] text-muted">
+              <li>
+                Paste the <strong className="text-ink">API key</strong> and save.
+              </li>
+              <li>
+                Then open{' '}
+                <strong className="text-ink">
+                  Settings → Library tagger → Advanced → Enrichment
+                </strong>{' '}
+                and leave <strong className="text-ink">Last.fm tags</strong> on{' '}
+                <strong className="text-ink">Auto</strong>: it follows the key, on when one
+                is set. Pick <strong className="text-ink">On</strong> instead to pin it on.
+              </li>
+            </ol>
           </div>
+
+          {lfTagsOff && (
+            <div
+              role="alert"
+              className="border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_7%,transparent)] p-3.5"
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] leading-none text-[var(--danger)]">⚠</span>
+                <span className="text-[11px] font-bold tracking-[0.14em] text-[var(--danger)] uppercase">
+                  Last.fm tags is off
+                </span>
+              </div>
+              <p className="mt-2 text-[14px] leading-[1.55] text-muted">
+                The key is saved, but enrichment is told to skip Last.fm, so{' '}
+                <strong>no Last.fm tags will be fetched</strong>. Set{' '}
+                <strong>
+                  Settings → Library tagger → Advanced → Enrichment → Last.fm tags
+                </strong>{' '}
+                to <strong>Auto</strong> or <strong>On</strong> to start using it.
+              </p>
+            </div>
+          )}
 
           <div className="field">
             <Label>API key</Label>
@@ -193,8 +228,48 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
               className="max-w-[360px]"
             />
             <div className="field-hint">
-              Get one at <code>last.fm/api/account/create</code>. Falls back to
-              <code> LASTFM_API_KEY</code> in <code>.env</code> when blank.
+              Get one at{' '}
+              <a
+                href="https://www.last.fm/api/account/create"
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                last.fm/api/account/create
+              </a>
+              . Falls back to <code>LASTFM_API_KEY</code> in <code>.env</code> when blank.
+            </div>
+          </div>
+
+          {/* The key is the only required field; everything below this line is
+              scrobbling-only, so the divider sits directly under it. */}
+          <div className="border-t border-[var(--separator-strong)] pt-4">
+            <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
+              <span className="text-[11px] font-bold tracking-[0.25em] text-[var(--accent)] uppercase">
+                Scrobbling
+              </span>
+              <span className="text-[11px] text-muted">sends plays to Last.fm</span>
+            </div>
+            <div className="field !mb-0">
+              <div className="flex items-center gap-2">
+                <Label>Enabled</Label>
+                {lf.enabled !== !!savedLf.enabled && <Pill tone="accent" dot>unsaved</Pill>}
+              </div>
+              <Seg
+                value={lf.enabled ? 'on' : 'off'}
+                onChange={v =>
+                  setForm(f => ({
+                    ...f,
+                    scrobble: { ...f.scrobble, lastfm: { ...f.scrobble.lastfm, enabled: v === 'on' } },
+                  }))
+                }
+                options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+              />
+              <div className="field-hint">
+                When on, every track that plays with at least one listener tuned in is
+                scrobbled to your Last.fm profile. This switch is the only thing that sends
+                plays — the tags above need just the API key.
+              </div>
             </div>
           </div>
 
@@ -214,7 +289,8 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
               className="max-w-[360px]"
             />
             <div className="field-hint">
-              Paired with the API key. Falls back to <code>LASTFM_API_SECRET</code>.
+              Paired with the API key. Only needed for scrobbling. Falls back to{' '}
+              <code>LASTFM_API_SECRET</code>.
             </div>
           </div>
 
@@ -243,7 +319,7 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
               {!canConnect
                 ? 'Enter your API key + secret above and Save first, then connect.'
                 : !authToken
-                  ? 'Opens Last.fm to grant access, then fills in your session key and switches scrobbling on, no terminal needed.'
+                  ? 'Opens Last.fm to grant access, then fills in your session key and switches scrobbling on, no terminal needed. Last.fm tags don’t need this — only the API key.'
                   : 'A Last.fm tab opened. Click “Yes, allow access” there, then finish here.'}
             </div>
           </div>
