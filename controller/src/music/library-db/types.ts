@@ -216,6 +216,17 @@ export interface TrackMeta {
   isCompilation?: boolean | null;
   /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
   eraUntrusted?: boolean | null;
+  /** Which marker produced that verdict ('compilation-flag', 'title-year-range',
+   *  ...). Walk-time audit truth; null when the walk flagged nothing. COALESCEd
+   *  like the ids, so a non-walk writer never clears it. */
+  eraReason?: string | null;
+  /** The album's effective kind (era-review.eraWalkFields): the operator's,
+   *  else the title's suggestion; null when the album is not flagged. Travels
+   *  with eraUntrusted like eraReason. */
+  albumKind?: string | null;
+  /** The ALBUM artist the era judgement keyed on (Navidrome's album record),
+   *  not the per-track `artist`. Walk only. */
+  albumArtist?: string | null;
   /** The walk's answer, normalised on write. Unlike the ids, null CLEARS: only
    *  a walk can see a tag was removed, and it always passes a value. A writer
    *  with no opinion leaves it undefined and the stored value stands. */

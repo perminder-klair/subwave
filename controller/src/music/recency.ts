@@ -391,9 +391,10 @@ export function isVariousArtistsName(raw: unknown): boolean {
 // Is a cooldown on this track's ALBUM the wrong question? (#1485 FR 3)
 // On a compilation it always is — a sampler is a container, not a record an
 // artist made. Reuses the era pipeline's composed signals, never a second
-// heuristic (#1418): `yearUntrusted` is the OR of Navidrome's `isCompilation`
-// and the walk's derived `era_untrusted`, so it also catches anthologies with
-// no COMPILATION tag. `isCompilation` is read beside it because a
+// heuristic (#1418): `yearUntrusted` is the stored verdict
+// (era-suspect.storedYearUntrusted: the walk's `era_untrusted` once it has one,
+// Navidrome's `isCompilation` before), so it also catches anthologies with no
+// COMPILATION tag. `isCompilation` is read beside it because a
 // Subsonic-sourced candidate can carry the raw flag with no walked row behind
 // it.
 export function albumCooldownExempt(song: CandidateLike): boolean {

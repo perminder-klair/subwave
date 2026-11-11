@@ -27,6 +27,10 @@ const WALK_OWNED = [
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
   'explicit_status',
   ...SEARCH_KEY_DDL.columns,
+  // The era reason and album artist ride the same verdict: the walk
+  // re-derives all three together, and an old id's pair is what its own walk
+  // said about a file that may have moved.
+  'era_reason', 'album_kind', 'album_artist',
   // The file as Navidrome reports it (walkFileInfo): the new id's own walk
   // writes them, and an old id's path may name a file that moved.
   'file_path', 'file_suffix', 'file_size', 'bit_rate',
@@ -68,7 +72,7 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
 
 // Columns whose value can't be decided by "is it null" alone. Each is handled
 // explicitly in mergeRow(); listed here so columnPlan() can account for them.
-const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty', 'text_vector_sound'];
+const SPECIAL = ['original_year', 'original_year_source', 'era_forced_from', 'text_vector_dirty', 'text_vector_sound'];
 
 // Default carried values to new ?? old. This list documents an explicit choice for columnPlan;
 // unlisted carried columns use the same behavior.
@@ -159,6 +163,9 @@ function mergeRow(plan: ColumnPlan, oldRow: Row, newRow: Row, movedTextVector: b
   const oldWins = resolved || newRow.original_year == null;
   merged.original_year = oldWins ? oldRow.original_year : newRow.original_year;
   merged.original_year_source = oldWins ? oldRow.original_year_source : newRow.original_year_source;
+  // An album decision's record (era_forced_from, tracks.setDecisionOriginalYear)
+  // describes the year beside it, so it goes wherever that year goes.
+  merged.era_forced_from = oldWins ? (oldRow.era_forced_from ?? null) : (newRow.era_forced_from ?? null);
 
   // text_vector_dirty is NOT NULL DEFAULT 0, so the null-anchor and COALESCE
   // rules both read a fresh row's 0 as a real answer and would drop the marker.

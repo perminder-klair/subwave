@@ -89,6 +89,10 @@ writeFileSync(join(oldStemsDir, 'head-drums.flac'), Buffer.alloc(16));
 
 db.upsertTrackMeta(OLD_NANO, { title: 'Nano', artist: 'C', album: 'D', duration: 100 });
 db.upsertTrackTags(OLD_NANO, { moods: ['stale'], energy: 'low', source: 'llm' });
+// An album's one-year decision (Library → Era) wrote over a looked-up year; its
+// record of that year (era_forced_from) must travel with the year it describes.
+db.setOriginalYear(OLD_NANO, 1960);
+db.setDecisionOriginalYear(OLD_NANO, 1975);
 
 db.upsertTrackMeta(KEEP, { title: 'Keeper', artist: 'E', album: 'F', duration: 90 });
 db.upsertTrackTags(KEEP, { moods: ['sunny'], energy: 'high', source: 'llm' });
@@ -189,6 +193,14 @@ await test('a carried MusicBrainz year outranks the walk-time album-tag year', (
   const row = sql.prepare('SELECT original_year, original_year_source FROM tracks WHERE id = ?').get(NEW_HEX) as Record<string, unknown>;
   assert.equal(row.original_year, 1978);
   assert.equal(row.original_year_source, 'musicbrainz');
+});
+
+await test('an album decision\'s record of a track\'s year moves with that year', () => {
+  const row = sql.prepare('SELECT original_year, original_year_source FROM tracks WHERE id = ?').get(NEW_NANO) as Record<string, unknown>;
+  assert.deepEqual({ ...row }, { original_year: 1975, original_year_source: 'manual' });
+  assert.equal(db.restoreDecisionOriginalYear(NEW_NANO), true, 'removing the decision on the new id');
+  const back = sql.prepare('SELECT original_year, original_year_source FROM tracks WHERE id = ?').get(NEW_NANO) as Record<string, unknown>;
+  assert.deepEqual({ ...back }, { original_year: 1960, original_year_source: 'musicbrainz' }, 'gives back the looked-up year');
 });
 
 await test('text and audio vectors move to the new id', () => {

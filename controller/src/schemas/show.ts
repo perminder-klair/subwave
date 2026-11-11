@@ -47,6 +47,31 @@ export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
 export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
 
+// What an era-suspect album IS, set (or confirmed) by the operator in Library →
+// Era and pre-filled from the title (music/album-kind.ts). Declared here, not
+// there, because a show can leave out whole kinds (`excludedAlbumKinds`) and
+// schema modules import only zod. Order is the admin dropdown's.
+export const ALBUM_KINDS = [
+  'best-of', 'themed', 'label', 'dj-mix', 'dj-choice', 'original-album', 'reissue',
+  'soundtrack', 'tribute', 'chart', 'live', 'box-set', 'sampler',
+] as const;
+export type AlbumKind = (typeof ALBUM_KINDS)[number];
+export const ALBUM_KIND_LABELS: Record<AlbumKind, string> = {
+  'best-of': 'Best Of',
+  themed: 'Themed Compilation',
+  label: 'Label Compilation',
+  'dj-mix': 'DJ Mix',
+  'dj-choice': 'DJ Choice',
+  'original-album': 'Original Album',
+  reissue: 'Reissue or Remaster',
+  soundtrack: 'Soundtrack',
+  tribute: 'Tribute or Covers',
+  chart: 'Chart or Dated Hits',
+  live: 'Live or Festival',
+  'box-set': 'Box Set',
+  sampler: 'Sampler or Promo',
+};
+
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
 /**
@@ -404,6 +429,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // A clean show: tracks tagged explicit stay off air (music/explicit-policy.ts).
       // Stands alone, not one of the filters filtersStrict governs.
       excludeExplicit: showBool(),
+      // Album kinds this show never plays (Library → Era sets a kind per album),
+      // e.g. 'dj-mix': a track cut out of a continuous mix starts and ends
+      // mid-blend. Hard-dropped with the excluded playlists
+      // (show-playlist.resolveExcludedPlaylistIds). [] = no constraint.
+      excludedAlbumKinds: showStringList({
+        max: ALBUM_KINDS.length,
+        values: ALBUM_KINDS,
+        overflowError: `must have at most ${ALBUM_KINDS.length} entries`,
+      }),
       // Organisation only, declared LAST so persisted key order is unchanged.
       // Unlike every other list here a bad entry is REFUSED rather than dropped:
       // a tag is typed by hand and must not vanish on save. The load twin
@@ -561,6 +595,12 @@ export function repairShowForLoad(
     // than failing the show. Non-array reads as absent (schema's [] default).
     tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
+    // An unknown kind is dropped, never fatal: a show that stops leaving one
+    // kind out beats a show that stops loading.
+    excludedAlbumKinds: repairShowStringList(raw.excludedAlbumKinds, {
+      max: ALBUM_KINDS.length,
+      values: ALBUM_KINDS,
+    }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,
     }),

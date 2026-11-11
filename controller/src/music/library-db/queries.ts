@@ -8,6 +8,7 @@ import { getTrack } from './tracks.js';
 import { SQL_HAS_MOODS, SQL_NO_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
 import type { EnergyValue, ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
 import { rowToMoodPool, rowToEnergyPool, safeParseArray } from './rows.js';
+import { eraSuspectSql, storedYearUntrusted } from '../era-suspect.js';
 
 // Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
 // rowToTrack: GET /library/blocklist runs this over the whole library per request.
@@ -207,7 +208,7 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
       `SELECT id, COALESCE(genre, '') AS g,
               CASE
                 WHEN original_year > 0 THEN (original_year / 10) * 10
-                WHEN is_compilation = 1 OR era_untrusted = 1 THEN 0
+                WHEN ${eraSuspectSql()} THEN 0
                 WHEN year > 0 THEN (year / 10) * 10
                 ELSE 0
               END AS decade
@@ -354,9 +355,7 @@ export function candidateFilterTracks(): Array<{
     year: row.year ?? null,
     originalYear: row.original_year ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
-    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
-      ? true
-      : (row.is_compilation == null && row.era_untrusted == null ? null : false),
+    yearUntrusted: storedYearUntrusted(row.is_compilation, row.era_untrusted),
     genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre ?? null,
     moods: row.moods ? safeParseArray(row.moods) : [],
