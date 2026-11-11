@@ -574,6 +574,42 @@ test('a one-year decision: a change of year keeps each track\'s own record, and 
   dropYearAlbum('YearTwo');
 });
 
+test('a one-year decision gives a failed lookup back its history: attempts, reason and retry delay', () => {
+  db.upsertTrackMeta('YearErr-1', {
+    title: 'err', artist: 'Y', album: 'YearErr', albumArtist: 'Y Artist', year: 2001,
+    eraUntrusted: true, eraReason: 'many-artists',
+  });
+  db.recordOriginalYearOutcome('YearErr-1', { kind: 'error', reason: 'timeout', source: 'musicbrainz' });
+  db.recordOriginalYearOutcome('YearErr-1', { kind: 'error', reason: 'timeout again', source: 'musicbrainz' });
+  const facetRow = () => ({ ...(d().prepare(
+    `SELECT status, reason, attempts, version, source, at FROM track_facet_status WHERE track_id = 'YearErr-1' AND facet = 'year'`,
+  ).get() as object) });
+  const before = facetRow();
+  assert.equal((before as { attempts: number }).attempts, 2);
+  assert.equal(db.yearLookupDueIds(Date.now()).includes('YearErr-1'), false, 'waiting out its retry delay');
+
+  const key = era.albumEraKey('Y Artist', 'YearErr');
+  era.setEraOverride(d(), key, 'year', { year: 1975 });
+  era.setEraOverride(d(), key, null);
+  assert.deepEqual(facetRow(), before, 'the failed row comes back as it stood');
+  assert.equal(db.yearLookupDueIds(Date.now()).includes('YearErr-1'), false, 'still waiting, not re-asked at once');
+  dropYearAlbum('YearErr');
+});
+
+test('removing a one-year decision leaves a track whose record cannot be read alone, and never throws', () => {
+  const key = yearAlbum('YearBad');
+  era.setEraOverride(d(), key, 'year', { year: 1975 });
+  d().prepare(`UPDATE tracks SET era_forced_from = 'not json{' WHERE id = 'YearBad-mb'`).run();
+  d().prepare(`UPDATE tracks SET era_forced_from = '{"year":"abc","source":null,"checkedAt":null}' WHERE id = 'YearBad-miss'`).run();
+  assert.doesNotThrow(() => era.setEraOverride(d(), key, null));
+  for (const s of ['mb', 'miss']) {
+    const st = yearState(`YearBad-${s}`);
+    assert.deepEqual([st.y, st.s, st.f], [1975, 'manual', null], `${s}: keeps the decision's year, no guessed one`);
+  }
+  assert.deepEqual([yearState('YearBad-none').y, yearState('YearBad-none').f], [null, null], 'a readable record is still restored');
+  dropYearAlbum('YearBad');
+});
+
 // ── (i) one stored verdict for every era reader ──────────────────────────────
 
 

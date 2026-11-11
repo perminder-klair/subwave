@@ -621,23 +621,44 @@ export function setStoredEraVerdict(id: string, untrusted: boolean): void {
 // An album's one-year decision (Library → Era, music/era-review.ts) is the
 // only writer of these two. It writes its year as the track's MANUAL original
 // year, so no lookup or walk overwrites it, and records in era_forced_from what
-// the track held before: its year, source and checked stamp, as JSON. Removing
-// the decision puts exactly that back, so a looked-up year (MusicBrainz,
-// Discogs), a settled "not found" or an album-tag year returns as it was, and a
-// track that had nothing is due for a lookup again.
+// the track held before: its year, source and checked stamp, and a failed
+// lookup's history (the year facet row's attempts, reason and time, a stored
+// fact no tracks column holds), as JSON. Removing the decision puts exactly
+// that back, so a looked-up year (MusicBrainz, Discogs), a settled "not
+// found", an album-tag year or a failed lookup waiting out its retry delay
+// returns as it was, and a track that had nothing is due for a lookup again.
 //
 // A year the operator typed (manual, with no record) is never the decision's:
 // it is skipped, and keeps reading as its own year while the decision stands.
 // A track whose own year already equals the decision's is written all the same
 // (its record holds that year), so removing the decision gives it back.
 // Returns whether the track was written.
+interface YearFailureRecord { attempts: number; reason: string | null; at: string; source: string | null; version: number }
+interface ForcedFromRecord {
+  year: number | null;
+  source: string | null;
+  checkedAt: string | null;
+  yearFailure: YearFailureRecord | null;
+}
+
 export function setDecisionOriginalYear(id: string, year: number): boolean {
+  const d = requireDb();
   const eraBefore = storedEra(id);
-  const changed = requireDb()
+  const own = d
+    .prepare(`SELECT original_year AS y, original_year_source AS s, original_year_checked_at AS c FROM tracks WHERE id = ?`)
+    .get(id) as { y: number | null; s: string | null; c: string | null } | undefined;
+  if (!own) return false;
+  const failed = d
+    .prepare(`SELECT attempts, reason, at, source, version FROM track_facet_status WHERE track_id = ? AND facet = 'year' AND status = 'failed'`)
+    .get(id) as YearFailureRecord | undefined;
+  const record: ForcedFromRecord = {
+    year: own.y, source: own.s, checkedAt: own.c,
+    yearFailure: failed && failed.attempts > 0 ? { ...failed } : null,
+  };
+  const changed = d
     .prepare(
       `UPDATE tracks SET
-         era_forced_from = COALESCE(era_forced_from, json_object(
-           'year', original_year, 'source', original_year_source, 'checkedAt', original_year_checked_at)),
+         era_forced_from          = COALESCE(era_forced_from, ?),
          original_year            = ?,
          original_year_source     = 'manual',
          original_year_checked_at = ?
@@ -645,29 +666,72 @@ export function setDecisionOriginalYear(id: string, year: number): boolean {
          AND (original_year_source IS NOT 'manual' OR era_forced_from IS NOT NULL)
          AND NOT (era_forced_from IS NOT NULL AND original_year IS ?)`,
     )
-    .run(year, new Date().toISOString(), id, year).changes > 0;
+    .run(JSON.stringify(record), year, new Date().toISOString(), id, year).changes > 0;
   if (!changed) return false;
   markTextVectorDirtyIfEraChanged(id, eraBefore);
   syncTrackFacets(id);
   return true;
 }
 
+// era_forced_from as stored, or null when it cannot be read as one (a
+// hand-edited or corrupt value): the restore then leaves the track alone.
+function readForcedFrom(raw: string | null): ForcedFromRecord | null {
+  if (raw == null) return null;
+  let v: unknown;
+  try { v = JSON.parse(raw); } catch { return null; }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = v as Record<string, unknown>;
+  const str = (x: unknown) => (x == null ? null : typeof x === 'string' ? x : undefined);
+  const year = r.year == null ? null : Number.isInteger(r.year) ? (r.year as number) : undefined;
+  const source = str(r.source);
+  const checkedAt = str(r.checkedAt);
+  if (year === undefined || source === undefined || checkedAt === undefined) return null;
+  const f = r.yearFailure as Record<string, unknown> | null | undefined;
+  const yearFailure = f && typeof f === 'object' && Number.isInteger(f.attempts) && (f.attempts as number) > 0
+    && typeof f.at === 'string' && Number.isInteger(f.version)
+    ? { attempts: f.attempts as number, reason: str(f.reason) ?? null, at: f.at, source: str(f.source) ?? null, version: f.version as number }
+    : null;
+  return { year, source, checkedAt, yearFailure };
+}
+
 // Undo setDecisionOriginalYear: the track's own year, source and checked stamp
-// come back from its record, and the record goes. A track the decision did not
-// write (no record) is left alone. Returns whether the track was restored.
+// come back from its record, with a failed lookup's history, and the record
+// goes. A track the decision did not write (no record) is left alone, and so
+// is one whose record cannot be read: it keeps the decision's year, which then
+// reads as set by hand, and never a guessed one. Returns whether the track was
+// restored.
 export function restoreDecisionOriginalYear(id: string): boolean {
+  const d = requireDb();
+  const raw = (d.prepare(`SELECT era_forced_from AS f FROM tracks WHERE id = ?`).get(id) as { f: string | null } | undefined)?.f ?? null;
+  if (raw == null) return false;
+  const rec = readForcedFrom(raw);
+  if (!rec) {
+    console.warn(`[library-db] track ${id}: unreadable era_forced_from, the album decision's year is kept`);
+    d.prepare(`UPDATE tracks SET era_forced_from = NULL WHERE id = ?`).run(id);
+    return false;
+  }
   const eraBefore = storedEra(id);
-  const changed = requireDb()
-    .prepare(
-      `UPDATE tracks SET
-         original_year            = json_extract(era_forced_from, '$.year'),
-         original_year_source     = json_extract(era_forced_from, '$.source'),
-         original_year_checked_at = json_extract(era_forced_from, '$.checkedAt'),
-         era_forced_from          = NULL
-       WHERE id = ? AND era_forced_from IS NOT NULL`,
-    )
-    .run(id).changes > 0;
-  if (!changed) return false;
+  d.prepare(
+    `UPDATE tracks SET
+       original_year            = ?,
+       original_year_source     = ?,
+       original_year_checked_at = ?,
+       era_forced_from          = NULL
+     WHERE id = ?`,
+  ).run(rec.year, rec.source, rec.checkedAt, id);
+  // The failed lookup's row, as it stood: the re-derive below carries a stored
+  // failure (facets.yearFailureFor), and drops it if the columns now answer.
+  if (rec.yearFailure) {
+    const f = rec.yearFailure;
+    d.prepare(
+      `INSERT INTO track_facet_status (track_id, facet, version, status, reason, attempts, source, at, unmeasurable_reason)
+       VALUES (?, 'year', ?, 'failed', ?, ?, ?, ?, NULL)
+       ON CONFLICT(track_id, facet) DO UPDATE SET
+         version = excluded.version, status = excluded.status, reason = excluded.reason,
+         attempts = excluded.attempts, source = excluded.source, at = excluded.at,
+         unmeasurable_reason = NULL`,
+    ).run(id, f.version, f.reason, f.attempts, f.source, f.at);
+  }
   markTextVectorDirtyIfEraChanged(id, eraBefore);
   syncTrackFacets(id);
   return true;
