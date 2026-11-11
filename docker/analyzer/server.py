@@ -809,6 +809,10 @@ class AnalyzeRequest(BaseModel):
     # (loudness v2, edges) read when `path` is a capped copy. Never fetched
     # here; the worker's ffmpeg streams it.
     stream_url: str | None = None
+    # Facet requests only: where the music stops ({end_ms, duration_ms}, from
+    # the stored edges), so the tail window ends there instead of at the end
+    # of the file. Passed through as is; the worker validates it.
+    tail_window: dict[str, Any] | None = None
     # Facet requests only: which windows the `stems` facet separates ("head",
     # "tail"). Absent = both. Pick-time stems asks for the tail alone when the
     # head is cached (#2253); a worker that predates the field separates both.
@@ -849,6 +853,12 @@ async def analyze(req: AnalyzeRequest):
         payload["stems_require_marker"] = req.stems_require_marker
     if req.embedding_only:
         payload["embedding_only"] = True
+    # A placed tail window (flat and facet requests alike) and the stream URL
+    # the worker reads it from when the staged copy cannot prove it reaches it.
+    if req.tail_window is not None:
+        payload["tail_window"] = req.tail_window
+        if req.stream_url and "url" not in payload:
+            payload["stream_url"] = req.stream_url
     facets = getattr(req, "facets", None)
     if facets is not None:
         payload["facets"] = facets
@@ -878,7 +888,7 @@ async def analyze(req: AnalyzeRequest):
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
         "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
-        "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
+        "lead_silence_ms", "tail_silence_ms", "tail_start_ms", "tail_window",
     ):
         if k in msg:
             out[k] = msg[k]

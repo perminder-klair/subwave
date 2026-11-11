@@ -164,7 +164,7 @@ test('usage() cleans the stored unevictable figure; every writer cleans it again
 
   // A writer that shrinks the total cleans the figure against the new one.
   writeSnap({ bytes: 10 * MB, dirs: 2, unevictableBytes: 8 * MB });
-  await stemCache.settleTrackWrite('shrink', 9 * MB); // the dir went from 9 MB to 5
+  await stemCache.settleTrackWrite('shrink', { bytes: 9 * MB, since: readSnap().measuredAt }); // the dir went from 9 MB to 5
   assert.deepEqual([readSnap().bytes, readSnap().unevictableBytes], [6 * MB, 6 * MB]);
   // A malformed figure is dropped, not carried.
   writeSnap({ bytes: 10 * MB, dirs: 2, unevictableBytes: 'x' });

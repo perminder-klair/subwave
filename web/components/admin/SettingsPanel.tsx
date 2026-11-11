@@ -120,12 +120,14 @@ const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 const JUMP_MAX_FRAMES = 60;
 
 export default function SettingsPanel({ djBrainEnabled = false, hosted = false }: { djBrainEnabled?: boolean; hosted?: boolean }) {
-  // Hosted: the plan's listener ceiling, shown instead of the editable field,
-  // and its bitrate ceiling: the stream pickers offer only what the plan
-  // allows (the controller drops anything higher on save) and FLAC is off.
-  const { listenerCap, maxBitrate } = useHosted();
+  // Hosted: the box agent owns max listeners (no editable field, and no number:
+  // the listener and bitrate ceilings are guards for the box's shared port,
+  // not published plan limits, so no copy presents them as one). The
+  // stream pickers offer only bitrates under the ceiling (the controller drops
+  // anything higher on save) and FLAC is off.
+  const { maxBitrate } = useHosted();
   const underCeiling = (values: readonly number[]) => (maxBitrate ? values.filter(br => br <= maxBitrate) : values);
-  const ceilingHint = maxBitrate ? <> Up to {maxBitrate} kbps on this station&apos;s plan · Managed by SUB/WAVE Cloud.</> : null;
+  const ceilingHint = maxBitrate ? <> Up to {maxBitrate} kbps, the highest quality available on this station · Managed by SUB/WAVE Cloud.</> : null;
   // Hosted (SUB/WAVE Cloud): the LLM provider page is the agent's, so it goes;
   // the voice page stays for what the operator still owns (see TtsSection).
   const sections = useMemo(
@@ -1525,8 +1527,8 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
             {form && maxBitrate && (
               <Card title="FLAC stream" sub="/stream.flac (Ogg FLAC, lossless)">
                 <NowBanner label={<>FLAC stream · Managed by SUB/WAVE Cloud</>}>
-                  The lossless mount runs near 1 Mbps a listener, so it isn&apos;t part of this
-                  station&apos;s plan (streams go up to {maxBitrate} kbps). MP3, Opus and AAC serve
+                  The lossless mount runs near 1 Mbps a listener, so it isn&apos;t available on
+                  this station (streams go up to {maxBitrate} kbps). MP3, Opus and AAC serve
                   everyone.
                 </NowBanner>
               </Card>
@@ -1765,9 +1767,7 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
             {form && hosted && (
               <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
                 <NowBanner label={<>Max listeners · Managed by SUB/WAVE Cloud</>}>
-                  {listenerCap
-                    ? <>Up to <strong>{listenerCap}</strong> people can listen at once on this station&apos;s plan.</>
-                    : <>Your plan sets how many people can listen at once.</>}
+                  SUB/WAVE Cloud manages this station&apos;s listener connections.
                 </NowBanner>
               </Card>
             )}

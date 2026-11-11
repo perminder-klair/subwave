@@ -365,6 +365,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
 - **[`docs/api.md`](docs/api.md):** the HTTP API, the in-app **Connect** explorer + playground, OpenAPI export, and Home Assistant / Music Assistant recipes.
+- **[`docs/homeassistant/`](docs/homeassistant/README.md):** request a song from Home Assistant, with a dashboard box and button or by voice through Assist, credited to the signed-in person.
 
 ## Music licensing
 
