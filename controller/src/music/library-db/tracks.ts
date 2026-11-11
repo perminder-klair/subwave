@@ -555,10 +555,6 @@ export function recordOriginalYearOutcome(id: string, outcome: OriginalYearOutco
   })();
 }
 
-// The operator's own original year (#1418), highest-precedence of the three
-// sources. `year: null` REMOVES the override rather than pinning "unknown": the
-// track re-enters the automatic pipeline. The old embedding stays in the KNN
-// index marked dirty, so the next tag pass replaces its stale `Era:` line.
 /** Ids of every track whose album has one of these kinds (Library → Era), for
  *  a show's excludedAlbumKinds. A plain scan: the set is small and it runs once
  *  per pick, beside the excluded-playlist fetch it joins. */
@@ -570,6 +566,10 @@ export function albumKindTrackIds(kinds: readonly string[]): Set<string> {
   return new Set(rows.map(r => r.id));
 }
 
+// The operator's own original year (#1418), highest-precedence of the three
+// sources. `year: null` REMOVES the override rather than pinning "unknown": the
+// track re-enters the automatic pipeline. The old embedding stays in the KNN
+// index marked dirty, so the next tag pass replaces its stale `Era:` line.
 export function setManualOriginalYear(id: string, year: number | null): void {
   const eraBefore = storedEra(id);
   if (year != null) {
