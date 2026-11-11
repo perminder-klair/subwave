@@ -264,9 +264,15 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // version bump) still runs after the regular pass, so it never holds a new
   // track's bpm/key back for hours. A failing slice costs its own figures,
   // never the regular pass.
-  const lead = await runWholeFileBackfill(opts.limit, db.needsAnalysisIds(opts.limit), 'for the tracks about to be analysed', false);
+  const lead = await runWholeFileBackfill({
+    limit: opts.limit, ids: db.needsAnalysisIds(opts.limit), label: 'for the tracks about to be analysed', noticeSkip: false,
+  });
   const stats = await runAnalysisPassOnce(opts);
-  const rest = stats.available ? await runWholeFileBackfill(opts.limit, undefined, '', true) : null;
+  // The rest of the library (ids: every track that needs the facets); the one
+  // slice that says when the analyzer cannot measure them.
+  const rest = stats.available
+    ? await runWholeFileBackfill({ limit: opts.limit, ids: undefined, label: '', noticeSkip: true })
+    : null;
   if (!lead && !rest) return stats;
   const wholeFile = {
     analyzed: (lead?.analyzed ?? 0) + (rest?.analyzed ?? 0),
@@ -276,12 +282,16 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   return { ...stats, wholeFile };
 }
 
-async function runWholeFileBackfill(
-  limit: number | undefined,
-  ids: readonly string[] | undefined,
-  what: string,
-  noticeSkip: boolean,
-): Promise<AnalyzeStats['wholeFile'] | null> {
+// One slice of the whole-file backfill. `ids` limits it to those tracks
+// (undefined: every track that needs the facets); `label` names the slice in
+// the log line; `noticeSkip` says the analyzer-cannot-measure notice, once per
+// run.
+async function runWholeFileBackfill({ limit, ids, label: what, noticeSkip }: {
+  limit: number | undefined;
+  ids: readonly string[] | undefined;
+  label: string;
+  noticeSkip: boolean;
+}): Promise<AnalyzeStats['wholeFile'] | null> {
   if (!config.analyzer.wholeFile) return null;
   if (ids && ids.length === 0) return null;
   try {

@@ -756,7 +756,7 @@ once edges exist. Six rules:
    answer from the end-of-file window does replace it and drops the stamp. A
    `--re-analyze` with vocal detection on clears an end-of-file tail; with it
    off (`keepVocal`) every tail stays with the vocal evidence it carries
-   (#2290). A replaced file (`clearTrackAudio`) drops the stamp with the tail.
+   (#2255). A replaced file (`clearTrackAudio`) drops the stamp with the tail.
    Which of these keep rules applies is the raw stamp
    (`isPlacedTailStamp`/`SQL_PLACED_TAIL_STAMP`, `facets.ts`): an unstamped tail
    the tolerance covers is still the end-of-file window's columns.

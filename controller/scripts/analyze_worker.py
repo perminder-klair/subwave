@@ -1342,8 +1342,6 @@ def placed_outro(window, placement, librosa):
     end_s = placement["end_ms"] / 1000.0
     outro = facet_tail(t_src, t_sr, t_off, end_s, librosa)
     if outro is not None:
-        outro.pop("tail_silence_ms", None)
-        outro.pop("tail_start_ms", None)
         outro["tail_silence_ms"] = placement["duration_ms"] - placement["end_ms"]
         outro["tail_start_ms"] = placement["end_ms"]
     return outro, (t_off, end_s - t_off)
