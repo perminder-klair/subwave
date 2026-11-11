@@ -1341,11 +1341,20 @@ SITE_URL=
 # chat key. OpenRouter embeddings also fall back to OPENROUTER_API_KEY above.
 # EMBEDDING_API_KEY=
 
+# ───────── Last.fm (optional — also configurable in admin UI) ─────────
+# Tags need only the API key. Paste it in Settings → Listeners → Last.fm, or
+# set it here; from there Last.fm tags are on by default (Library tagger →
+# Advanced → Enrichment is Auto). Scrobbling is separate and stays off until
+# you enable it in that card — only then are the secret and session key needed.
+# LASTFM_API_KEY=
+# LASTFM_API_SECRET=                # scrobbling only
+# LASTFM_SESSION_KEY=               # scrobbling only; or use Connect in the card
+
 # ───────── Scrobbling (optional — also configurable in admin UI) ─────────
 # LISTENBRAINZ_USER_TOKEN=          # ListenBrainz or LB-compatible scrobbler token
 # LISTENBRAINZ_API_URL=             # optional full submit-listens URL override
 #                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
-#                                   # otherwise set base URL in admin → Settings → Scrobbling
+#                                   # otherwise set base URL in admin → Settings → Listeners → ListenBrainz
 
 # ───────── Original years (optional — also configurable in admin UI) ─────────
 # Era-bounded shows ask MusicBrainz (keyless) for the original year of reissues
