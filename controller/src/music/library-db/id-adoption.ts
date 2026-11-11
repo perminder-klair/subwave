@@ -58,6 +58,9 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
   },
   // The whole-file edges facet: one measurement, carried as a set.
   { anchor: 'decoded_duration_ms', cols: ['edge_lead_ms', 'edge_tail_ms', 'decoded_duration_ms'] },
+  // Which window the outro was measured on: it follows the outro it describes
+  // (outro_json itself is carried new ?? old, so this takes the same side).
+  { anchor: 'outro_json', cols: ['tail_version'] },
   { anchor: 'audio_moods', cols: ['audio_moods', 'audio_mood_scores_json'] },
   { anchor: 'audio_descriptors', cols: ['audio_descriptors', 'audio_descriptor_scores_json'] },
   { anchor: 'map_x', cols: ['map_x', 'map_y'] },
