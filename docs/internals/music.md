@@ -763,11 +763,21 @@ once edges exist. Six rules:
    **Tail vocal ranges stay on the window they were measured on**, by one rule
    (`tracks.sameTailWindow` over `facets.tailEndsAtMusic`: both on the window
    that ends where the music stops, which an unstamped end-of-file tail the
-   tolerance covers counts as, or both on the file's last seconds): carried onto a
-   new tail, flat or facet, only when it sits on the same window, and a vocal
+   tolerance covers counts as, or both on the file's last seconds). A vocal
    answer's ranges (the worker names a placed window, `tail_window: "edges"` in
-   the vocal data) merged into the stored outro only when it is on theirs.
-   Otherwise they are left to the vocal backfill, the row staying head-only.
+   the vocal data) are merged into the stored outro only when it is on theirs;
+   otherwise the row stays head-only and placing the tail measures them. A new
+   tail measured **without** its vocals (vocal detection off, or a tail-only run
+   that did not ask) never drops the stored ones, flat or facet, because the
+   tail can only move the instrumental verdict toward vocal: on the same window
+   they are carried as they are; on another window only singing is carried,
+   its spans being absolute file times that stay true of the file
+   (`isInstrumental` sums them, `mix.vocalTailFor` asks whether one reaches the
+   wind-down). An instrumental `[]` from another window is not carried: it
+   proves nothing about this one, would read as a measured unsung ending, and
+   reads the same as no tail evidence in the verdict, so the row turns
+   head-only for the vocal backfill. A tail measured with its vocals replaces
+   whatever was kept.
 6. **Without edges the tail is today's end-of-file window, stamped v1**, so
    `npm run analyze -- --facets edges` first and then `--facets tail` re-reads
    exactly the tracks the tolerance does not cover. `tail_version` follows the

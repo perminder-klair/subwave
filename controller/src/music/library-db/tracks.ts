@@ -773,15 +773,44 @@ function onStoredTailWindow(id: string, newStamp: number | null, newEdges?: { ta
   return sameTailWindow(tailEndsAtMusic(row?.tail_version, edges), tailEndsAtMusic(newStamp, edges));
 }
 
-// A new outro without tail vocals keeps the stored ones, only when they were
-// measured on the same window (sameTailWindow). A tail newly placed from the
-// edges leaves them to be measured again (the vocal facet turns head-only, so
-// the vocal backfill takes it).
+// The stored outro's tail vocal ranges exactly as stored (SQL_TAIL_VOCAL_RANGES,
+// the instrumental verdict's own read), bad spans included: the parsed outro
+// drops a malformed span, which the verdict counts as singing.
+function storedTailVocalRanges(id: string): unknown[] | null {
+  const row = requireDb().prepare(`SELECT ${SQL_TAIL_VOCAL_RANGES} AS v FROM tracks WHERE id = ?`).get(id) as
+    { v: string | null } | undefined;
+  if (row?.v == null) return null;
+  try {
+    const v: unknown = JSON.parse(row.v);
+    return Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// A new outro measured without tail vocals keeps the stored ones, so a write
+// that did not listen for singing never moves the instrumental verdict toward
+// instrumental ("the tail can only move a verdict toward vocal",
+// lyric-vocal.ts). A tail measured with its vocals (outro.vocalRanges set)
+// replaces them.
+//   - Same window (sameTailWindow): carried as they are, `[]` included.
+//   - Another window (a tail newly placed from the edges, or one moved back to
+//     the file's end): only singing is carried. Its spans are absolute file
+//     times, so they stay true of the file, and every reader takes them that
+//     way: isInstrumental sums them, and mix.vocalTailFor asks whether one
+//     reaches the wind-down, which a span from the later end-of-file window
+//     does whenever the placed wind-down starts before it. An instrumental
+//     reading (`[]`) of another window proves nothing about this one, and
+//     carried it would read as a measured unsung ending: it is left out, the
+//     vocal row turns head-only, and with vocal detection on the vocal
+//     backfill measures this window. Leaving it out cannot move the verdict:
+//     an empty tail and an absent one read the same in isInstrumental.
 function preserveTailVocal(id: string, outro: TrackOutro, newStamp: number | null, newEdges?: { tailMs: number } | null): TrackOutro {
   if (outro.vocalRanges != null) return outro;
-  if (!onStoredTailWindow(id, newStamp, newEdges)) return outro;
-  const prior = getTrack(id)?.outro?.vocalRanges;
-  return prior != null ? { ...outro, vocalRanges: prior } : outro;
+  const prior = storedTailVocalRanges(id);
+  if (prior == null) return outro;
+  if (prior.length === 0 && !onStoredTailWindow(id, newStamp, newEdges)) return outro;
+  return { ...outro, vocalRanges: prior as TrackOutro['vocalRanges'] };
 }
 
 // Stamps ANALYSIS_VERSION so resumable runs skip analysed rows and a bump
