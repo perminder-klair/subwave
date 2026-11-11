@@ -763,7 +763,10 @@ once edges exist. Six rules:
    **Tail vocal ranges stay on the window they were measured on**, by one rule
    (`tracks.sameTailWindow` over `facets.tailEndsAtMusic`: both on the window
    that ends where the music stops, which an unstamped end-of-file tail the
-   tolerance covers counts as, or both on the file's last seconds). A vocal
+   tolerance covers counts as, or both on the file's last seconds), judged on
+   this write's own edges when it measured them; a placed tail those edges
+   move off the music's end (`facets.placedTailMovedBy`, the re-plan rule) is
+   on neither window. A vocal
    answer's ranges (the worker names a placed window, `tail_window: "edges"` in
    the vocal data) are merged into the stored outro only when it is on theirs;
    otherwise the row stays head-only and placing the tail measures them. A new

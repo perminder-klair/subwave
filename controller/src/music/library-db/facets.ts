@@ -150,6 +150,17 @@ export function tailPlacementMoved(
   return a != null && b != null && Math.abs(a - b) > TAIL_PLACEMENT_TOLERANCE_MS;
 }
 
+// Did re-measured edges move a tail the analyzer placed (the raw stamp) off
+// the music's end? Then the stored window is neither the new placement nor the
+// file's end: the edges write re-plans it (tail_version 1), and the
+// same-window rule for tail vocals reads it that way in the same write.
+export function placedTailMovedBy(
+  row: { tail_version: number | null; edge_tail_ms: number | null; decoded_duration_ms: number | null },
+  edges: { edge_tail_ms: number | null; decoded_duration_ms: number | null },
+): boolean {
+  return isPlacedTailStamp(row.tail_version) && tailPlacementMoved(row, edges);
+}
+
 // The facets read off one whole-file decode rather than the analysis windows.
 export const WHOLE_FILE_FACETS: readonly Facet[] = ['loudness', 'edges'];
 

@@ -690,6 +690,58 @@ test('past the tolerance, placed tail vocals still stay out of an end-of-file ou
   consistent();
 });
 
+test('edges that move a placed tail in the same answer judge it on neither window: [] is not carried, vocals not merged', () => {
+  // The stored tail was placed for music ending at 174 s; this answer's edges
+  // put the end at 213 s, so its placed window (and any vocals measured on it)
+  // is new music. Read by the raw stamp, the old placement counted as "the
+  // same window": its instrumental [] was carried onto the unmeasured new
+  // window, settling the vocal row, and vocals from the new window merged
+  // into the old window's outro.
+  const placedOld = (id: string, vocalRanges: TrackSectionLike[]) => {
+    track(id);
+    db.writeFacetResults(id, { source: 'full', vocal: { vocalRanges: [], tailVocalRanges: null } });
+    writeEdges(id, 40_000);
+    db.writeFacetResults(id, { source: 'full', tail: {
+      outro: { ...OUTRO, startMs: 168_000, vocalRanges }, tailSilenceMs: 40_000, tailStartMs: 174_000, version: 2 } });
+  };
+  const movedEdges = { leadMs: 0, tailMs: 1_000, durationMs: 214_000 };
+  const newTail = { outro: { ...OUTRO, startMs: 207_000 }, tailSilenceMs: 1_000, tailStartMs: 213_000, version: 2 };
+
+  placedOld('mv-inst', []);
+  db.writeFacetResults('mv-inst', { source: 'full', edges: movedEdges, tail: newTail });
+  assert.equal(tailVersionCol('mv-inst'), 2);
+  assert.equal(db.getTrack('mv-inst')!.outro?.vocalRanges ?? null, null, 'the old window\'s [] is not carried');
+  assert.equal(vocalRowOf('mv-inst')?.reason, 'head-only', 'the new window is measured again');
+
+  // Singing is still carried: absolute file times stay true of the file.
+  placedOld('mv-sung', [{ startMs: 160_000, endMs: 167_000 }]);
+  db.writeFacetResults('mv-sung', { source: 'full', edges: movedEdges, tail: newTail });
+  assert.deepEqual(db.getTrack('mv-sung')!.outro?.vocalRanges, [{ startMs: 160_000, endMs: 167_000 }]);
+
+  placedOld('mv-voc', []);
+  db.writeFacetResults('mv-voc', { source: 'full', edges: movedEdges,
+    vocal: { vocalRanges: [], tailVocalRanges: [{ startMs: 205_000, endMs: 211_000 }], tailWindow: 'placed' } });
+  assert.equal(tailVersionCol('mv-voc'), 1, 're-planned');
+  assert.deepEqual(db.getTrack('mv-voc')!.outro?.vocalRanges, [], 'the new window\'s vocals stay out of the old outro');
+  assert.equal(vocalRowOf('mv-voc')?.reason, null, 'its measured [] still stands until the tail is placed');
+  assert.ok(db.facetNeedsIds('tail').includes('mv-voc'));
+
+  // One answer that places the tail from its own new edges and measures its
+  // vocals still merges them: the stored tail is this answer's.
+  placedOld('mv-all', []);
+  db.writeFacetResults('mv-all', { source: 'full', edges: movedEdges, tail: newTail,
+    vocal: { vocalRanges: [], tailVocalRanges: [{ startMs: 205_000, endMs: 211_000 }], tailWindow: 'placed' } });
+  assert.deepEqual(db.getTrack('mv-all')!.outro?.vocalRanges, [{ startMs: 205_000, endMs: 211_000 }]);
+  assert.equal(vocalRowOf('mv-all')?.reason, null);
+  // Edges that move less than the tolerance keep the placement's window.
+  placedOld('mv-near', []);
+  db.writeFacetResults('mv-near', { source: 'full', edges: { leadMs: 0, tailMs: 38_000, durationMs: 214_000 },
+    tail: { ...newTail, outro: { ...OUTRO, startMs: 170_000 } } });
+  assert.deepEqual(db.getTrack('mv-near')!.outro?.vocalRanges, []);
+  consistent();
+});
+type TrackSectionLike = { startMs: number; endMs: number };
+
 test('a --facets vocal run settles a tolerance-covered track, and the next run plans no work for it', async () => {
   track('tol-run');
   writeEdges('tol-run', 1_000);

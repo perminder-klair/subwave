@@ -4,8 +4,8 @@
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import {
   FACETS, FACET_VERSIONS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows,
-  PLACED_TAIL_STAMP, SQL_PLACED_TAIL_STAMP, isPlacedTailStamp, isWholeFileLoudnessVersion, restampFacetRows,
-  syncTrackFacets, tailEndsAtMusic, tailPlacementMoved, type Facet, type FacetSource,
+  PLACED_TAIL_STAMP, SQL_PLACED_TAIL_STAMP, isPlacedTailStamp, isWholeFileLoudnessVersion, placedTailMovedBy,
+  restampFacetRows, syncTrackFacets, tailEndsAtMusic, type Facet, type FacetSource,
 } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseExplicitStatus, normaliseYear, rowToTrack, safeParseArray } from './rows.js';
@@ -762,15 +762,25 @@ export function sameTailWindow(storedEndsAtMusic: boolean, newEndsAtMusic: boole
 // Does new tail evidence (stamped `newStamp`: PLACED_TAIL_STAMP for a placed
 // answer, null for an end-of-file one) sit on the stored tail's window? Both
 // sides are judged on the same edges: this write's own when it measured them,
-// else the stored ones.
-function onStoredTailWindow(id: string, newStamp: number | null, newEdges?: { tailMs: number } | null): boolean {
+// else the stored ones. A placed tail those edges moved off the music's end
+// (placedTailMovedBy) reads as the re-plan stamps it, 1: on neither window.
+// `storedIsThisAnswer`: the stored tail was written by this same answer, so it
+// was placed from these edges (its edge columns are not written yet).
+function onStoredTailWindow(
+  id: string, newStamp: number | null, newEdges?: { tailMs: number; durationMs: number } | null, storedIsThisAnswer = false,
+): boolean {
   const row = requireDb().prepare(
-    'SELECT tail_version, decoded_duration_ms IS NOT NULL AS has_edges, edge_tail_ms FROM tracks WHERE id = ?',
-  ).get(id) as { tail_version: number | null; has_edges: number; edge_tail_ms: number | null } | undefined;
-  const edges = newEdges && Number.isFinite(newEdges.tailMs)
-    ? { has_edges: 1, edge_tail_ms: Math.max(0, Math.round(newEdges.tailMs)) }
+    `SELECT tail_version, decoded_duration_ms IS NOT NULL AS has_edges, edge_tail_ms, decoded_duration_ms
+       FROM tracks WHERE id = ?`,
+  ).get(id) as { tail_version: number | null; has_edges: number; edge_tail_ms: number | null; decoded_duration_ms: number | null } | undefined;
+  const measured = newEdges && Number.isFinite(newEdges.tailMs)
+    ? { edge_tail_ms: Math.max(0, Math.round(newEdges.tailMs)), decoded_duration_ms: finite(newEdges.durationMs) != null ? Math.max(0, Math.round(newEdges.durationMs)) : null }
+    : null;
+  const edges = measured
+    ? { has_edges: 1, edge_tail_ms: measured.edge_tail_ms }
     : { has_edges: row?.has_edges ?? 0, edge_tail_ms: row?.edge_tail_ms ?? null };
-  return sameTailWindow(tailEndsAtMusic(row?.tail_version, edges), tailEndsAtMusic(newStamp, edges));
+  const storedStamp = row && measured && !storedIsThisAnswer && placedTailMovedBy(row, measured) ? 1 : row?.tail_version;
+  return sameTailWindow(tailEndsAtMusic(storedStamp, edges), tailEndsAtMusic(newStamp, edges));
 }
 
 // The stored outro's tail vocal ranges exactly as stored (SQL_TAIL_VOCAL_RANGES,
@@ -805,7 +815,9 @@ function storedTailVocalRanges(id: string): unknown[] | null {
 //     vocal row turns head-only, and with vocal detection on the vocal
 //     backfill measures this window. Leaving it out cannot move the verdict:
 //     an empty tail and an absent one read the same in isInstrumental.
-function preserveTailVocal(id: string, outro: TrackOutro, newStamp: number | null, newEdges?: { tailMs: number } | null): TrackOutro {
+function preserveTailVocal(
+  id: string, outro: TrackOutro, newStamp: number | null, newEdges?: { tailMs: number; durationMs: number } | null,
+): TrackOutro {
   if (outro.vocalRanges != null) return outro;
   const prior = storedTailVocalRanges(id);
   if (prior == null) return outro;
@@ -1095,7 +1107,7 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
       // stayed head-only with no tail ever due, and every vocal run
       // separated it again.
       const vocalOnStored = w.vocal.tailWindow === 'stored' ||
-        onStoredTailWindow(id, w.vocal.tailWindow === 'placed' ? PLACED_TAIL_STAMP : null, w.edges);
+        onStoredTailWindow(id, w.vocal.tailWindow === 'placed' ? PLACED_TAIL_STAMP : null, w.edges, fresh.includes('tail'));
       if (w.vocal.tailVocalRanges && vocalOnStored) {
         const row = d.prepare('SELECT outro_json FROM tracks WHERE id = ?').get(id) as { outro_json: string | null } | undefined;
         if (row?.outro_json) {
@@ -1127,8 +1139,8 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
       // The raw stamp on purpose: only a tail the analyzer placed sits on a
       // window these edges can move. A NULL stamp is re-judged from the new
       // edges by tailVersionOf on its own.
-      if (before && isPlacedTailStamp(before.tail_version) && !fresh.includes('tail') &&
-        tailPlacementMoved(before, { edge_tail_ms: ms(w.edges.tailMs), decoded_duration_ms: ms(w.edges.durationMs) })) {
+      if (before && !fresh.includes('tail') &&
+        placedTailMovedBy(before, { edge_tail_ms: ms(w.edges.tailMs), decoded_duration_ms: ms(w.edges.durationMs) })) {
         d.prepare('UPDATE tracks SET tail_version = 1 WHERE id = ?').run(id);
       }
     }
