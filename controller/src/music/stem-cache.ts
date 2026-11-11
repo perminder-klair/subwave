@@ -312,7 +312,8 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 // - the analysis pass writes stem dirs in bulk: it marks the snapshot
 //   `pending` while it runs and adds the dirs it wrote when it ends;
 // - a pick-time separation (broadcast/pick-stems.ts) writes one dir at a
-//   time and adds what it grew at once (settleTrackWrite);
+//   time and adds what it grew at once (settleTrackWrite), against the
+//   measurement it read before writing (beginTrackWrite);
 // - evictions are made by sweep(), which rewrites the snapshot from its walk,
 //   and by forgetStems() (a replaced file's stems), which measures the dirs it
 //   drops and takes them off the totals (adjustUsage);
@@ -738,10 +739,18 @@ export async function settlePassWrites(
   return { bytes, dirs, withinBudget: bytes <= budget };
 }
 
-// Bytes under one track's dir, null when it has none. A pick-time separation
-// reads it before writing, to hand settleTrackWrite what it started from.
+// Bytes under one track's dir, null when it has none.
 export async function trackDirBytes(trackId: string): Promise<number | null> {
   return dirBytes(dirFor(trackId));
+}
+
+// What a pick-time separation starts from, read before it writes: the dir's
+// bytes, and the measurement the snapshot held (usageBase), which
+// settleTrackWrite counts the growth against.
+export interface TrackWriteBase { bytes: number | null; since: string | null }
+export async function beginTrackWrite(trackId: string): Promise<TrackWriteBase> {
+  const since = await usageBase();
+  return { bytes: await dirBytes(dirFor(trackId)), since };
 }
 
 // After a pick-time separation: add what the track's dir grew by to the
@@ -749,13 +758,16 @@ export async function trackDirBytes(trackId: string): Promise<number | null> {
 // one delta rule is adjustUsage's: a snapshot that can't take the addition (a
 // pass writing, whose settle owns the baseline, or totals this process could
 // not save) is marked stale, one the next read walks for anyway is left to
-// that walk.
-export async function settleTrackWrite(trackId: string, bytesBefore: number | null): Promise<void> {
+// that walk. The growth is counted against the measurement read before the
+// write began (beginTrackWrite): a walk that landed during the separation may
+// have counted part of the dir already, and the full growth on top of it
+// would count that part twice.
+export async function settleTrackWrite(trackId: string, base: TrackWriteBase): Promise<void> {
   const after = await dirBytes(dirFor(trackId));
-  const grew = (after ?? 0) - (bytesBefore ?? 0);
-  const newDir = bytesBefore === null && after !== null;
+  const grew = (after ?? 0) - (base.bytes ?? 0);
+  const newDir = base.bytes === null && after !== null;
   if (grew === 0 && !newDir) return;
-  await adjustUsage({ bytes: grew, dirs: newDir ? 1 : 0 });
+  await adjustUsage({ bytes: grew, dirs: newDir ? 1 : 0 }, { since: base.since });
 }
 
 // Track ids with a stem dir on disk: one readdir, no per-dir walk. The analysis

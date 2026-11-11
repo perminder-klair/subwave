@@ -308,7 +308,7 @@ async function main() {
     };
     // One pick-time separation, settled the way pick-stems.ts settles it.
     const pickTimeWrite = async (id: string) => {
-      const before = await stemCache.trackDirBytes(id);
+      const before = await stemCache.beginTrackWrite(id);
       sparseDir(id, 0);
       await stemCache.settleTrackWrite(id, before);
     };

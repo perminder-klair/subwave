@@ -17,6 +17,8 @@
 //   re-measures it rather than trusting it; adjustUsage never moves one;
 // - a walk in flight when stems are dropped never stores a trusted figure that
 //   counts them, whatever state the snapshot was in (the change token);
+// - a pick-time settle counts against the measurement it started from, so a
+//   walk mid-separation never has the dir's growth laid over it;
 // - no snapshot, another root, or a malformed one reports null;
 // - GET /stem-cache/usage carries it plus the budget in force.
 //
@@ -344,6 +346,45 @@ test('a walk that a drop of stems lands in never stores a trusted figure that co
     }
   } finally {
     stemCache._duringWalkForTests(null);
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+  }
+});
+
+// A pick-time separation writes its dir over seconds to minutes. A walk that
+// lands in that time (the hourly sweep) counts the part written so far and
+// stores it as a new measurement; the settle's full growth on top of that
+// counted the part twice and stayed trusted. The settle now counts against
+// the measurement read before the write began (beginTrackWrite).
+test('a pick-time settle never adds growth a walk mid-separation already counted', async () => {
+  try {
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+    for (const id of ['settled-0', 'settled-1']) {
+      mkdirSync(stemCache.dirFor(id), { recursive: true });
+      writeFileSync(join(stemCache.dirFor(id), 'head-drums.flac'), 'x'.repeat(1000));
+    }
+    rmSync(snapFile, { force: true });
+    await stemCache.usage(); // a trusted measurement of the two dirs
+    const base = await stemCache.beginTrackWrite('separating');
+    assert.equal(base.bytes, null);
+    // Half the set is written when the sweep's walk lands, and it stores what it found.
+    mkdirSync(stemCache.dirFor('separating'), { recursive: true });
+    writeFileSync(join(stemCache.dirFor('separating'), 'head-drums.flac'), 'x'.repeat(1000));
+    await new Promise(r => setTimeout(r, 5)); // a later measuredAt than the first walk's
+    await stemCache.sweep(100 * GB, { force: true });
+    assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).dirs, 3, 'the walk counted the half-written dir');
+    writeFileSync(join(stemCache.dirFor('separating'), 'head-vocals.flac'), 'x'.repeat(1000));
+    await stemCache.settleTrackWrite('separating', base);
+
+    const snap = JSON.parse(readFileSync(snapFile, 'utf8'));
+    if (stemCache.snapshotVerdict({ snap, root, nowMs: Date.now(), pendingAlive: false }) === 'use') {
+      assert.deepEqual([snap.bytes, snap.dirs], [4000, 3], 'a trusted figure must be the disk\'s');
+    }
+    const u = await stemCache.usage();
+    assert.deepEqual([u.bytes, u.dirs], [4000, 3], 'the next read');
+  } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(snapFile, { force: true });
   }

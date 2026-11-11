@@ -220,7 +220,7 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
     const again = gate(opts, false);
     if (again) return veto(again);
 
-    const before = await stemCache.trackDirBytes(id);
+    const before = await stemCache.beginTrackWrite(id);
     const what = policy.describeNeed(need);
     const t0 = Date.now();
     opts.log('mix', `pick-time stems: separating "${title}" (${what}) while it waits`);
