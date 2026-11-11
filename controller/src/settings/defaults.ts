@@ -634,6 +634,16 @@ export const DEFAULTS = {
     // signal for instrumentals and thin-metadata tracks, and CLAP neighbours don't
     // cluster by album. 0 = text-only; 1 = trust audio as much as text.
     audioFusionWeight: 0.5,
+    // Energy from the audio the analyzer heard (music/propagated-energy.ts),
+    // beyond the always-on correction of a propagated guess. Both opt-in.
+    // fillEmpty: a tagged track the LLM gave moods and no energy gets one from
+    //   its audio (the middle band is medium), so strict shows stop dropping it.
+    // overruleLlm: an LLM energy is replaced where the audio is strongly
+    //   decisive (ENERGY_OVERRULE_Z) and says otherwise. Never an operator's.
+    audioEnergy: {
+      fillEmpty: false,
+      overruleLlm: false,
+    },
     batchSize: 25,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never, null =

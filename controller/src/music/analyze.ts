@@ -12,7 +12,7 @@ import { config } from '../config.js';
 import { deriveVocalFromLyrics, clipRangesToTail, type LyricVocalResult } from './lyric-vocal.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
-import { runPropagatedEnergyPass } from './propagated-energy.js';
+import { audioEnergyOptions, runPropagatedEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { quietAfterMinutes, quietGateDecision, quietOnlyEnabled, type QuietState } from './analyze-quiet-pure.js';
 import { dispatchAnalysis, type DispatchOutcome } from './analyze-dispatch.js';
@@ -187,7 +187,7 @@ async function scoreAudioMoods(): Promise<void> {
   // Must run AFTER the mood pass, which writes the cosines it calibrates
   // against. Separately wrapped so a failure here doesn't cost the mood labels.
   try {
-    runPropagatedEnergyPass();
+    runPropagatedEnergyPass(audioEnergyOptions(settings.get()));
   } catch (err: any) {
     console.error(`[audio-energy] pass failed (non-fatal): ${err?.message || err}`);
   }

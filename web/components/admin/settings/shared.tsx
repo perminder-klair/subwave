@@ -203,6 +203,12 @@ export interface EmbeddingEnrichmentForm {
   lyrics: boolean;
 }
 
+/** Energy from the measured audio (music/propagated-energy.ts); both opt-in. */
+export interface AudioEnergyForm {
+  fillEmpty: boolean;
+  overruleLlm: boolean;
+}
+
 export interface EmbeddingForm {
   enabled: boolean;
   provider: string;          // empty → follow llm.provider
@@ -216,6 +222,7 @@ export interface EmbeddingForm {
   confidenceThreshold: string;
   maxActiveLearningRounds: string;
   audioFusionWeight: string; // '0' = text-only vote (fusion off)
+  audioEnergy: AudioEnergyForm;
   batchSize: string;         // '5', '10', or '25'
   enrichment: EmbeddingEnrichmentForm;
 }
@@ -546,6 +553,7 @@ export interface SettingsData {
       confidenceThreshold?: number;
       maxActiveLearningRounds?: number;
       audioFusionWeight?: number;
+      audioEnergy?: Partial<AudioEnergyForm>;
       batchSize?: number;
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };

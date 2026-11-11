@@ -108,6 +108,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         audioFusionWeight: Number.isFinite(parseFloat(e.audioFusionWeight))
           ? parseFloat(e.audioFusionWeight)
           : 0.5,
+        audioEnergy: { fillEmpty: e.audioEnergy.fillEmpty, overruleLlm: e.audioEnergy.overruleLlm },
         batchSize: parseInt(e.batchSize, 10) || 25,
         enrichment: {
           lastfmTags: e.enrichment.lastfmTags,
@@ -779,6 +780,67 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               trust audio similarity as much as text. Default <code>0.5</code>.
               Only applies where the acoustic analysis has produced audio vectors.
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Fill missing energy from the audio</div>
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                Some tagging models answer a track&apos;s moods but leave its energy
+                out, and a show with strict filters then drops that track. With this
+                on, a tagged track with no energy gets one from its measured sound:
+                high, medium or low. An energy that is already there is never
+                changed, and nor are your own tags. Runs at the end of every tagging
+                run and analysis pass.
+              </div>
+            </div>
+            <Seg
+              accent
+              value={e.audioEnergy.fillEmpty ? 'on' : 'off'}
+              options={[
+                { id: 'off', label: 'Off' },
+                { id: 'on', label: 'On' },
+              ]}
+              onChange={v =>
+                setForm(f => ({
+                  ...f,
+                  embedding: {
+                    ...f.embedding,
+                    audioEnergy: { ...f.embedding.audioEnergy, fillEmpty: v === 'on' },
+                  },
+                }))
+              }
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+            <div>
+              <div className="text-[13px] font-bold">Correct the AI’s energy where the audio is clear</div>
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                Replaces an energy the AI gave only where the measured sound
+                strongly says otherwise, for example a loud, driving track the AI
+                called low. Ambiguous tracks keep the AI’s answer, and your own tags
+                are never touched. Runs at the end of every tagging run and analysis
+                pass.
+              </div>
+            </div>
+            <Seg
+              accent
+              value={e.audioEnergy.overruleLlm ? 'on' : 'off'}
+              options={[
+                { id: 'off', label: 'Off' },
+                { id: 'on', label: 'On' },
+              ]}
+              onChange={v =>
+                setForm(f => ({
+                  ...f,
+                  embedding: {
+                    ...f.embedding,
+                    audioEnergy: { ...f.embedding.audioEnergy, overruleLlm: v === 'on' },
+                  },
+                }))
+              }
+            />
           </div>
 
           <div className="field">

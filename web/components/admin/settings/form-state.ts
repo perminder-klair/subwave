@@ -298,6 +298,10 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.35),
       maxActiveLearningRounds: String(v.embedding?.maxActiveLearningRounds ?? 3),
       audioFusionWeight: String(v.embedding?.audioFusionWeight ?? 0.5),
+      audioEnergy: {
+        fillEmpty: v.embedding?.audioEnergy?.fillEmpty === true,
+        overruleLlm: v.embedding?.audioEnergy?.overruleLlm === true,
+      },
       batchSize: String(v.embedding?.batchSize ?? 25),
       enrichment: {
         // Unset is auto, never off: loading it as false wrote false on the next

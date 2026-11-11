@@ -160,6 +160,41 @@ export function audioEnergy(
   return null;
 }
 
+// How far the arousal diff must clear zero (in sd) to overrule an energy the
+// LLM gave. Much stricter than the propagated correction's 0.35: an LLM energy
+// is a per-track answer, and only this band was checked by ear (on a 74k-track
+// library, the 20 strongest disagreements: audio 18, medium 2, LLM 0).
+export const ENERGY_OVERRULE_Z = 1.0;
+
+// The energy that replaces an LLM's, or null to keep it: only where the audio
+// is strongly decisive and says otherwise (an LLM 'medium' included).
+export function audioEnergyOverrule(
+  scores: Record<string, number>,
+  baselines: MoodBaselines | null,
+  current: string | null,
+): 'low' | 'high' | null {
+  const diff = arousalDiff(scores, baselines);
+  if (diff == null) return null;
+  const strong = diff >= ENERGY_OVERRULE_Z ? 'high' : diff <= -ENERGY_OVERRULE_Z ? 'low' : null;
+  return strong && strong !== current ? strong : null;
+}
+
+// The energy for a tagged track that has NONE. Three-way, unlike audioEnergy,
+// because there is no guess here to leave alone: the measured middle band is
+// what 'medium' means, and leaving the box empty drops the track from every
+// show with strict filters. null only when the audio cannot be scored at all.
+// Overruling an energy that IS there stays audioEnergy's two-sided job.
+export function audioEnergyFill(
+  scores: Record<string, number>,
+  baselines: MoodBaselines | null,
+): 'low' | 'medium' | 'high' | null {
+  const diff = arousalDiff(scores, baselines);
+  if (diff == null) return null;
+  if (diff >= ENERGY_HIGH_Z) return 'high';
+  if (diff <= ENERGY_LOW_Z) return 'low';
+  return 'medium';
+}
+
 // audio_embedding_meta.mood_vocab_hash is `<vocabHash>:<calibrationVersion>`.
 // The halves invalidate different work: vocabulary → full CLAP re-score,
 // calibration → relabel from the cosines on disk.
