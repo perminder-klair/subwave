@@ -140,6 +140,9 @@ export interface EraWalkSong {
   album?: string | null;
   albumEraUntrusted?: boolean | null;
   albumEraReason?: string | null;
+  /** The album record's originalReleaseDate year, and the file's own year. */
+  albumOriginalYear?: number | null;
+  year?: number | null;
   /** The walk's album-level inputs to album-kind.labelOwner(). */
   albumOwner?: OwnerInput | null;
 }
@@ -154,6 +157,31 @@ export interface EraWalkFields {
   /** A 'year' decision's year, for the walk to write as the track's manual
    *  original year when it does not hold one already. */
   forcedYear: number | null;
+  /** The album tag's year to record as the track's original year
+   *  ('album-tag'), or null (albumTagYear). */
+  originalYear: number | null;
+}
+
+/**
+ * The album tag's year (#842, #1418), but only when it says something, which
+ * needs both:
+ *  - the album is not era-suspect: on a reissue anthology that date is the
+ *    reissue's own, so recording it states the wrong year AND hides the track
+ *    from the MusicBrainz pass, which skips resolved rows. Suspect is the
+ *    detector's flag OR the operator's Suspect decision, which outranks a
+ *    detector that later stops flagging the album (operator curation outranks
+ *    the detector). A Trust decision does not release it: the operator
+ *    confirmed the file's year, which is what a trusted album resolves to with
+ *    no album-tag year;
+ *  - it differs from the file's `year` (equal tells us nothing).
+ * NULL is behaviour-neutral: resolveEraYear falls through to `year` for a
+ * trusted album, and it keeps the track eligible for a lookup.
+ */
+function albumTagYear(song: EraWalkSong, o: EraOverride | null | undefined): number | null {
+  if (song.albumEraUntrusted || o?.verdict === 'suspect') return null;
+  const ord = song.albumOriginalYear ?? null;
+  if (ord == null) return null;
+  return ord === (song.year ?? null) ? null : ord;
 }
 
 /** The walk's half of a one-year decision: a track of that album the
@@ -197,6 +225,7 @@ export function eraWalkFields(
       ? suggestAlbumKind({ album: song.album, reason, label: song.albumOwner ? labelOwner(song.albumOwner, ownerCtx) : null })
       : null),
     forcedYear: o?.forcedYear ?? null,
+    originalYear: albumTagYear(song, o),
   };
 }
 

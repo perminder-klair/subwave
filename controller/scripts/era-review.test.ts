@@ -53,6 +53,10 @@ const row = (id: string) => d()
   .prepare('SELECT era_untrusted, era_reason, album_artist, text_vector_dirty, year, original_year, original_year_checked_at FROM tracks WHERE id = ?')
   .get(id) as { era_untrusted: number | null; era_reason: string | null; album_artist: string | null; text_vector_dirty: number; year: number | null; original_year: number | null; original_year_checked_at: string | null } | undefined;
 
+const yearOf = (id: string) => d()
+  .prepare('SELECT original_year AS y, original_year_source AS s FROM tracks WHERE id = ?')
+  .get(id) as { y: number | null; s: string | null };
+
 // ── (a) the era columns and table, added by name ─────────────────────────────
 
 test('opening an older db adds era_reason, album_artist, album_kind and the era_override table, by name', () => {
@@ -127,7 +131,7 @@ test('a trusted override stores 0 while the walk reason survives', () => {
     albumArtist: 'Various Artists', album: 'Summer 1998',
     albumEraUntrusted: true, albumEraReason: 'various-artists',
   }, overrides);
-  assert.deepEqual(f, { eraUntrusted: false, eraReason: 'various-artists', albumArtist: 'Various Artists', albumKind: 'chart', forcedYear: null });
+  assert.deepEqual(f, { eraUntrusted: false, eraReason: 'various-artists', albumArtist: 'Various Artists', albumKind: 'chart', forcedYear: null, originalYear: null });
   db.upsertTrackMeta('w1', { title: 'Track One', artist: 'Band', album: 'Summer 1998', ...f });
   assert.equal(row('w1')!.era_untrusted, 0);
   assert.equal(row('w1')!.era_reason, 'various-artists', 'the walk reason is audit truth, the override never rewrites it');
@@ -141,6 +145,39 @@ test('a suspect override flips a walk verdict that was clear', () => {
   }, overrides);
   assert.equal(f.eraUntrusted, true);
   assert.equal(f.eraReason, null);
+});
+
+test('a Suspect decision outranks a detector that stops flagging the album: its tag year is never recorded, and the tracks stay due', () => {
+  const album = 'Anthology Unflagged';
+  // What the walk sees: the album tag says 1972, the files say 1999.
+  const walk = (id: string, flagged: boolean) => {
+    const f = era.eraWalkFields({
+      albumArtist: 'S Artist', album, albumOriginalYear: 1972, year: 1999,
+      albumEraUntrusted: flagged, albumEraReason: flagged ? 'many-artists' : null,
+    }, era.liveEraOverrides(d()));
+    db.upsertTrackMeta(id, { title: id, artist: 'S', album, year: 1999, ...f });
+    return f;
+  };
+  // Control: with no decision, an album the detector does not flag records it.
+  walk('sx0', false);
+  assert.deepEqual([yearOf('sx0').y, yearOf('sx0').s], [1972, 'album-tag']);
+  d().exec(`DELETE FROM tracks WHERE id = 'sx0'`);
+
+  walk('sx1', true);                     // flagged: withheld, as before
+  assert.equal(yearOf('sx1').y, null);
+  const key = era.albumEraKey('S Artist', album);
+  era.setEraOverride(d(), key, 'suspect');
+  assert.equal(walk('sx1', false).originalYear, null, 'the operator\'s Suspect withholds it');
+  assert.equal(yearOf('sx1').y, null, 'the detector stopped flagging: the tag year is still not written');
+  assert.equal(db.getTrack('sx1')!.yearUntrusted, true);
+  assert.ok(db.yearLookupDueIds(Date.now()).includes('sx1'), 'still due for a lookup');
+  assert.equal(era.listEraAlbums(d()).find(a => a.albumKey === key)!.done, false, 'and the album is not done');
+  // A tag year recorded before the decision is dropped by the next walk.
+  d().prepare(`UPDATE tracks SET original_year = 1972, original_year_source = 'album-tag' WHERE id = 'sx1'`).run();
+  walk('sx1', false);
+  assert.equal(yearOf('sx1').y, null, 'the earlier album-tag year goes');
+  era.setEraOverride(d(), key, null);
+  d().exec(`DELETE FROM tracks WHERE id = 'sx1'`);
 });
 
 // ── (d) the override survives repeated walks ─────────────────────────────────

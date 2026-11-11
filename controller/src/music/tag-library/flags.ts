@@ -94,18 +94,6 @@ export function parseFlags(): CliFlags {
   };
 }
 
-// The album tag's year, but only when it actually says something (#1418).
-function informativeAlbumYear(song: {
-  albumEraUntrusted?: boolean | null;
-  albumOriginalYear?: number | null;
-  year?: number | null;
-}): number | null {
-  if (song.albumEraUntrusted) return null;
-  const ord = song.albumOriginalYear ?? null;
-  if (ord == null) return null;
-  return ord === (song.year ?? null) ? null : ord;
-}
-
 // The file facts a Subsonic child carries, for the library status exports:
 // `path` is the real file path only when the client has "Report Real Path" on in
 // Navidrome (otherwise one built from the tags), `size` is bytes, `bitRate` kbps.
@@ -163,14 +151,10 @@ export async function walkNavidrome(
       artistId: song.artistId ?? null,
       year: song.year,
       // Album-level era signals (#842, #1418). The album's originalReleaseDate
-      // is a track's original year only when informative, which needs both:
-      //  - the album is not era-suspect (on a reissue anthology that date is
-      //    the reissue's own, so recording it states the wrong year AND hides
-      //    the track from the MusicBrainz pass, which skips resolved rows);
-      //  - it differs from the file's `year` (equal tells us nothing). NULL is
-      //    behaviour-neutral — resolveEraYear falls through to `year` for a
-      //    trusted album — and keeps the track eligible for a lookup.
-      originalYear: informativeAlbumYear(song),
+      // is a track's original year only when informative, and never on an
+      // album the detector or the operator holds suspect
+      // (era-review.albumTagYear, through eraWalkFields).
+      originalYear: eraFields.originalYear,
       isCompilation: song.albumIsCompilation ?? null,
       eraUntrusted: eraFields.eraUntrusted,
       // Why the walk flagged it (audit truth — never rewritten by an
