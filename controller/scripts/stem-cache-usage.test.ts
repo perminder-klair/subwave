@@ -389,3 +389,34 @@ test('a pick-time settle never adds growth a walk mid-separation already counted
     rmSync(snapFile, { force: true });
   }
 });
+
+// A full walk says why it walks, and the reason comes from the cascade that
+// decided to walk (judgeSnapshot), not a second reading of the file: the copy
+// that was here called another root's snapshot, or one dated ahead, "over a
+// day old".
+test('a walk logs the reason its snapshot was refused, from the same cascade', async () => {
+  const cases: Array<[Record<string, unknown> | null, string]> = [
+    [null, 'no stored size'],
+    [{ root: '/elsewhere' }, 'another cache root'],
+    [{ bytes: 'x' }, 'malformed'],
+    [{ stale: true }, 'marked stale'],
+    [{ measuredAt: new Date(Date.now() - 2 * 24 * HOUR).toISOString() }, 'over a day old'],
+    [{ measuredAt: new Date(Date.now() + 2 * HOUR).toISOString() }, 'dated in the future'],
+    [{ pending: { pid: 2 ** 22 + 12345, since: new Date().toISOString() } }, 'did not settle'],
+  ];
+  const logged: string[] = [];
+  const log = console.log;
+  console.log = (...args: unknown[]) => { logged.push(args.join(' ')); };
+  try {
+    for (const [over, reason] of cases) {
+      if (over) writeSnap(over); else rmSync(snapFile, { force: true });
+      logged.length = 0;
+      await stemCache.usage();
+      const line = logged.find(l => l.includes('measuring the stem cache')) ?? '';
+      assert.ok(line.includes(reason), `${JSON.stringify(over)}: "${line}" names "${reason}"`);
+    }
+  } finally {
+    console.log = log;
+    rmSync(snapFile, { force: true });
+  }
+});

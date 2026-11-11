@@ -410,13 +410,10 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     // walk measures (the quarantine is outside that total, so a delete from
     // it changes nothing there). A move that cannot be measured leaves the
     // stored size to a walk.
-    let movedBytes = 0;
-    let movedDirs = 0;
-    let movesExact = true;
-    // The snapshot the moves are counted against, read before the first one:
-    // a sweep or walk that lands during them rewrites the totals from what it
-    // found, which may already hold some of them (usageBase).
-    const usageSince = await stemCache.usageBase();
+    // Begun before the first move: a sweep or walk that lands during them
+    // rewrites the totals from what it found, which may already hold some of
+    // them (usageBase).
+    const usage = await stemCache.UsageTally.begin();
     // 1. Releases first: an id that is both known now and sitting in the
     //    quarantine gets its copy back rather than being re-quarantined below.
     for (const name of toRelease) {
@@ -426,9 +423,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
       // Back in the cache it is not quarantined: a stale stamp must not ride
       // along into a later quarantine.
       await rm(path.join(root, name, ORPHANED_AT), { force: true }).catch(() => {});
-      const back = await stemCache.measuredDirBytes(path.join(root, name));
-      if (back === null) movesExact = false;
-      else { movedBytes += back; movedDirs += 1; }
+      usage.count(+1, await stemCache.measuredDirBytes(path.join(root, name)));
       await stampReleasedStems(name);
       report.released.push(name);
     }
@@ -478,15 +473,11 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
           // the move and leave the dir in the cache for the next pass.
           const undone = await rename(to, from).then(() => true, () => false);
           // Stuck in the quarantine unstamped, it has left the cache total.
-          if (!undone) {
-            if (leaving === null) movesExact = false;
-            else { movedBytes -= leaving; movedDirs -= 1; }
-          }
+          if (!undone) usage.count(-1, leaving);
           report.failed += 1;
           continue;
         }
-        if (leaving === null) movesExact = false;
-        else { movedBytes -= leaving; movedDirs -= 1; }
+        usage.count(-1, leaving);
         await writeNameSidecar(to, names?.get(name), now);
         report.quarantined += 1;
       }
@@ -495,8 +486,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
     // so the totals move by exactly that and the next read needs no walk; only
     // a move that could not be measured marks them stale (stem-cache.ts,
     // usage snapshot). Deleting aged quarantines alone touches nothing.
-    if (!movesExact) await stemCache.markUsageStale();
-    else await stemCache.adjustUsage({ bytes: movedBytes, dirs: movedDirs }, { since: usageSince });
+    await usage.settle();
   } else {
     // Dry run: every count, zero mutations.
     report.quarantined = plan.quarantine.length;
