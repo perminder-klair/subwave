@@ -823,3 +823,37 @@ test('a vocal-off --re-analyze places the tail and keeps the track sung (#2255)'
   assert.deepEqual(verdicts('sung-flat'), { js: false, sql: 0 });
   consistent();
 });
+
+// Last as well (a --re-analyze over the whole database). Pins a known gap,
+// left as is: the edges slice that runs BEFORE a regular pass covers
+// needsAnalysisIds only. A track the pass reaches another way (a --re-analyze
+// scope, or the vocal/CLAP/stem widenings) and that has no edges yet gets an
+// end-of-file tail in that pass. It is stored v1, so it is not lost: the next
+// tail pass places it.
+test('a track the pass reaches without edges keeps an end-of-file tail at v1, and the next tail pass places it', async () => {
+  track('gap1');
+  assert.equal(db.getTrack('gap1')?.decodedDurationMs ?? null, null, 'fixture: analysed, no edges yet');
+  (config.analyzer as { wholeFile: boolean }).wholeFile = true;
+  try {
+    requests.length = 0;
+    await runAnalysisPass({ reAnalyze: true, vocalBackfill: false, audioBackfill: false });
+  } finally {
+    (config.analyzer as { wholeFile: boolean }).wholeFile = false;
+  }
+  const mine = (q: Record<string, unknown>) => JSON.stringify(q).includes('gap1');
+  const flatAt = requests.findIndex((q) => mine(q) && !q.facets);
+  const edgesAt = requests.findIndex((q) => mine(q) && Array.isArray(q.facets) && (q.facets as string[]).includes('edges'));
+  assert.ok(flatAt >= 0 && edgesAt > flatAt, `the tail read (${flatAt}) came before its edges (${edgesAt})`);
+  assert.equal(requests[flatAt].tail_window, undefined, 'read off the end of the file');
+  assert.equal(tailVersionCol('gap1'), null);
+  assert.deepEqual([tailRow('gap1')?.status, tailRow('gap1')?.version], ['ok', 1], 'stored one version below');
+  assert.ok(db.facetNeedsIds('tail').includes('gap1'), 'due for the next tail pass');
+  const p = plan(['gap1']);
+  assert.deepEqual(p.items.map(i => i.facets), [['tail']]);
+  requests.length = 0;
+  await runAnalysisPass({ plan: p, vocalBackfill: false });
+  assert.deepEqual(requests[0].tail_window, { end_ms: 194_000, duration_ms: 214_000 });
+  assert.equal(tailVersionCol('gap1'), 2);
+  assert.ok(!db.facetNeedsIds('tail').includes('gap1'));
+  consistent();
+});
