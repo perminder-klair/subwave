@@ -25,7 +25,7 @@ const compatibleMode = z.enum(['hosted', 'local', 'auto']).parse(option('--compa
 const credentialNames = [
   'OPENROUTER_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'DEEPSEEK_API_KEY',
   'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ELEVENLABS_API_KEY',
-  'AI_GATEWAY_API_KEY', 'REQUESTY_API_KEY',
+  'AI_GATEWAY_API_KEY', 'REQUESTY_API_KEY', 'ORCAROUTER_API_KEY',
   'OPENAI_COMPATIBLE_API_KEY',
 ];
 const reference = option('--env-dir');

@@ -104,7 +104,38 @@ export const LLM_PROVIDER_CATALOG = [
     "cliLabel": "Requesty — multi-vendor",
     "openaiCompatible": {
       "baseUrl": "https://router.requesty.ai/v1",
-      "reasoning": "minimalWhenOff"
+      "reasoning": "minimalWhenOff",
+      "keyCheckPath": "/models"
+    },
+    "embedding": {
+      "defaultModel": "openai/text-embedding-3-small",
+      "suggestions": [
+        {
+          "id": "openai/text-embedding-3-small",
+          "dim": 1536
+        },
+        {
+          "id": "openai/text-embedding-3-large",
+          "dim": 3072
+        }
+      ]
+    }
+  },
+  {
+    "id": "orcarouter",
+    "label": "OrcaRouter",
+    "longLabel": "OrcaRouter (multi-vendor aggregator)",
+    "blurb": "Multi-vendor aggregator",
+    "group": "gateway",
+    "kind": "cloud",
+    "envVar": "ORCAROUTER_API_KEY",
+    "keyPlaceholder": "sk-orca-...",
+    "exampleModel": "orcarouter/free",
+    "cliLabel": "OrcaRouter — multi-vendor",
+    "openaiCompatible": {
+      "baseUrl": "https://api.orcarouter.ai/v1",
+      "reasoning": "familyFloor",
+      "keyCheckPath": "/dashboard/billing/subscription"
     },
     "embedding": {
       "defaultModel": "openai/text-embedding-3-small",

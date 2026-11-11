@@ -12,9 +12,10 @@ interface ThinkingArgs {
 }
 
 // The subset of the SDK's reasoning levels SUB/WAVE emits: 'medium' is the
-// balanced "on", 'minimal' the floor for models that can't turn it off, 'none'
+// balanced "on", 'minimal' the floor for models that can't turn it off, 'low'
+// that floor on a gateway that refuses 'minimal' (familyFloor), 'none'
 // disables, undefined leaves the provider/model default alone.
-export type ReasoningLevel = 'none' | 'minimal' | 'medium';
+export type ReasoningLevel = 'none' | 'minimal' | 'low' | 'medium';
 
 export interface ProviderCapabilities {
   // Ollama-served models ignore JSON-schema constrained decoding and emit prose,
@@ -121,7 +122,34 @@ export const REASONING_RULES: Record<GatewayReasoningRule, ProviderCapabilities[
     if ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId)) return undefined;
     return thinkingMandatoryModel(modelId) ? 'minimal' : 'none';
   },
+  // A gateway that forwards a flat reasoning_effort to whatever the
+  // `vendor/model` id resolves to, from a set without 'minimal' (none, low,
+  // medium, high, xhigh). Off is each family's lowest accepted level: 'low' for
+  // a thinking-mandatory Claude and for OpenAI reasoning ids that cannot go to
+  // 'none', omitted where nothing can be turned off. A named router
+  // (`orcarouter/...`) may land on any of them, and omitting the field is the
+  // one value no downstream rejects; its thinking models then think at their
+  // default. OrcaRouter's.
+  familyFloor: ({ modelId, reasoning, forceNoThink }) => {
+    if (reasoning && !forceNoThink) return undefined;
+    const id = modelId.toLowerCase();
+    if (id.startsWith('orcarouter/') || /(^|\/)gemma-/.test(id)) return undefined;
+    if (thinkingMandatoryModel(id)) return 'low';
+    const openaiId = /^(?:openai\/)?((?:gpt-|o\d).*)$/.exec(id)?.[1];
+    return openaiId === undefined ? 'none' : openaiFloor(openaiId);
+  },
 };
+
+// The off level for an OpenAI id under familyFloor. Non-reasoning models
+// (gpt-3.5/4.x, the chat and search variants) take no effort at all, and the pro
+// models accept only their high levels, so both omit it. Dotted GPT-5 general
+// models accept 'none'; gpt-5 itself, the o-series, codex and gpt-6 floor at
+// 'low'.
+function openaiFloor(id: string): ReasoningLevel | undefined {
+  if (/^gpt-[34]|chat|search|-pro(-|$)/.test(id)) return undefined;
+  if (/^gpt-5\.\d/.test(id) && !id.includes('codex')) return 'none';
+  return 'low';
+}
 
 // The one descriptor every fixed-endpoint OpenAI-compatible gateway gets. Built
 // via createOpenAI, so it takes native objects and reasoning_effort; its key is

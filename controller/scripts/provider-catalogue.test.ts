@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-provider-catalogue-'));
@@ -25,6 +26,7 @@ const { SECRET_ENV_KEYS } = await import('../src/setup/secrets.js');
 const { capabilitiesFor, reasoningFor, REASONING_RULES, embeddingSharesChatCredential } =
   await import('../src/llm/internal/provider/capabilities.js');
 const { languageModel } = await import('../src/llm/internal/provider/registry.js');
+const { generateText } = await import('ai');
 
 const DEFAULT_CAPS = capabilitiesFor('no-such-provider');
 
@@ -92,6 +94,23 @@ const GATEWAY_REASONING: Record<string, Record<string, string | undefined>> = {
     'openai/gpt-5.4-mini|off': 'minimal', 'openai/gpt-5.4-mini|on': undefined, 'openai/gpt-5.4-mini|forced': 'minimal',
     'anthropic/claude-sonnet-5.5|off': 'minimal', 'gpt-4o-mini|off': 'minimal',
   },
+  // Ids from OrcaRouter's public GET /models. It refuses 'minimal', so a family
+  // that cannot go to 'none' floors at 'low'.
+  orcarouter: {
+    'anthropic/claude-sonnet-5.5|off': 'low', 'anthropic/claude-opus-5.5|forced': 'low',
+    'anthropic/claude-fable-5.2|off': 'low', 'anthropic/claude-sonnet-5.5|on': undefined,
+    'anthropic/claude-sonnet-4.6|off': 'none', 'anthropic/claude-opus-5|off': 'none',
+    'openai/gpt-5|off': 'low', 'openai/gpt-5-mini|forced': 'low', 'openai/gpt-5-nano-2025-08-07|off': 'low',
+    'openai/gpt-5.1-codex|off': 'low', 'openai/gpt-6-sol|off': 'low',
+    'openai/gpt-5.4-mini|off': 'none', 'openai/gpt-5.4-mini|forced': 'none', 'openai/gpt-5.4-mini|on': undefined,
+    'gpt-5.6-luna|off': 'none',
+    'openai/gpt-4o-mini|off': undefined, 'openai/gpt-4.1|forced': undefined, 'openai/gpt-3.5-turbo|off': undefined,
+    'openai/gpt-5-chat-latest|off': undefined, 'openai/gpt-5-search-api|off': undefined,
+    'openai/gpt-5-pro|off': undefined, 'openai/gpt-5.2-pro|forced': undefined,
+    'google/gemma-4-31b-it|off': undefined, 'obsidian/gemma-4-26B-A4B|off': undefined,
+    'google/gemini-2.5-flash|off': 'none', 'deepseek/deepseek-chat|forced': 'none', 'qwen/qwen3.6-plus|off': 'none',
+    'orcarouter/free|off': undefined, 'orcarouter/fusion|forced': undefined, 'orcarouter/auto|off': undefined,
+  },
 };
 
 test('each gateway reasoning rule is pinned', () => {
@@ -103,6 +122,65 @@ test('each gateway reasoning rule is pinned', () => {
         { forceNoThink: mode === 'forced' });
       assert.equal(got, want, `${id} ${key}`);
     }
+  }
+});
+
+// The pinned level has to survive the SDK: a level it filters for these ids
+// would never reach the gateway, and an omitted one must send no field at all.
+test('each gateway reasoning level reaches the wire as reasoning_effort', async (t) => {
+  let body: Record<string, unknown> = {};
+  t.mock.method(globalThis, 'fetch', (async (_url: unknown, init?: RequestInit) => {
+    body = JSON.parse(String(init?.body));
+    return chatCompletionResponse('ok');
+  }) as typeof fetch);
+  for (const [id, cases] of Object.entries(GATEWAY_REASONING)) {
+    for (const [key, want] of Object.entries(cases)) {
+      const [model, mode] = key.split('|');
+      const cfg = { provider: id, model, apiKey: 'test-key', reasoning: mode !== 'off' };
+      const forceNoThink = mode === 'forced';
+      body = {};
+      await generateText({
+        model: languageModel(cfg, { forceNoThink }), prompt: 'hi', maxRetries: 0,
+        reasoning: reasoningFor(cfg, { forceNoThink }),
+      });
+      assert.equal(body.model, model, `${id} ${key}`);
+      assert.equal(body.reasoning_effort, want, `${id} ${key}`);
+      assert.equal('reasoning_effort' in body, want !== undefined, `${id} ${key}`);
+    }
+  }
+});
+
+// Where the admin Test key and the CLI probe send each gateway's key. A public
+// model list can be answered from a CDN cache whatever the bearer: OrcaRouter's
+// /models sometimes gave a bad key the cached list as a 200, so it checks its
+// billing summary instead (#1427). A new gateway adds its row here.
+const KEY_CHECK_URL: Record<string, string> = {
+  requesty: 'https://router.requesty.ai/v1/models',
+  orcarouter: 'https://api.orcarouter.ai/v1/dashboard/billing/subscription',
+};
+
+test('each gateway key check URL is pinned, and the CLI probe sends the key there', async (t) => {
+  assert.deepEqual(Object.keys(KEY_CHECK_URL).sort(), OPENAI_COMPATIBLE_GATEWAYS.map(g => g.id).sort());
+  for (const gw of OPENAI_COMPATIBLE_GATEWAYS) {
+    assert.equal(`${gw.openaiCompatible.baseUrl}${gw.openaiCompatible.keyCheckPath}`, KEY_CHECK_URL[gw.id], gw.id);
+  }
+  // The CLI is its own package with no test runner, so its probe and its copy
+  // of the catalogue are loaded here. Computed specifiers keep the controller's
+  // tsc from type-checking the CLI's sources under this package's config.
+  const cliProbes = await import(String(new URL('../../cli/src/probes.ts', import.meta.url)));
+  const cliCatalog = (await import(String(new URL('../../cli/src/providers.generated.ts', import.meta.url)))).LLM_PROVIDER_CATALOG;
+  const seen: { url: string; auth: string }[] = [];
+  t.mock.method(globalThis, 'fetch', (async (url: unknown, init?: RequestInit) => {
+    seen.push({ url: String(url), auth: new Headers(init?.headers).get('authorization') || '' });
+    return Response.json({ object: 'billing_subscription' });
+  }) as typeof fetch);
+  const cliGateways = (cliCatalog as { id: string; openaiCompatible?: unknown }[]).filter(p => p.openaiCompatible);
+  assert.deepEqual(cliGateways.map(g => g.id).sort(), Object.keys(KEY_CHECK_URL).sort());
+  for (const gw of cliGateways) {
+    seen.length = 0;
+    const r = await cliProbes.probeGatewayKey({ apiKey: 'cli-key', gateway: gw.openaiCompatible });
+    assert.deepEqual(r, { ok: true, detail: 'key accepted' }, gw.id);
+    assert.deepEqual(seen, [{ url: KEY_CHECK_URL[gw.id], auth: 'Bearer cli-key' }], gw.id);
   }
 });
 

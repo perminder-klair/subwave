@@ -8,6 +8,8 @@
 // helpers below roll those rings (plus the DJ-log ring) into the shape the
 // /stats route returns.
 
+import { OPENAI_COMPATIBLE_GATEWAYS } from './schemas/providers.js';
+
 const MAX_TTS_CALLS = 120;
 export const ttsCalls: any[] = [];
 const MAX_SHORTLIST_PICKS = 40;
@@ -87,8 +89,10 @@ const PRICING = [
 
 // A gateway serves someone else's model, so it is priced as the family its
 // model id names. Only the model part is read: "openai-compatible" itself
-// names no family.
-const GATEWAYS = new Set(['openai-compatible', 'openrouter', 'requesty', 'gateway']);
+// names no family. Every fixed-endpoint gateway in the catalogue is one.
+const GATEWAYS = new Set([
+  'openai-compatible', 'openrouter', 'gateway', ...OPENAI_COMPATIBLE_GATEWAYS.map(gw => gw.id),
+]);
 
 function gatewayFamily(model: string): string | null {
   if (model.includes('claude')) return 'anthropic';

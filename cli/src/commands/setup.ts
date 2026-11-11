@@ -23,7 +23,7 @@ import {
   probeOpenAI,
   probeAnthropic,
   probeOpenRouter,
-  probeGatewayModels,
+  probeGatewayKey,
   type ProbeResult,
 } from '../probes.ts';
 import { LLM_PROVIDER_CATALOG, PROVIDER_GROUPS } from '../providers.generated.ts';
@@ -398,15 +398,15 @@ async function collectLlm(): Promise<LlmChoice> {
 }
 
 // google / deepseek / gateway have no probe; their key is first exercised on
-// the controller's first DJ call. A fixed-endpoint gateway lists its models.
+// the controller's first DJ call. A fixed-endpoint gateway checks the key at its
+// catalogue keyCheckPath.
 async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: string): Promise<void> {
   if (provider === 'openai') return reportProbe(label, () => probeOpenAI({ apiKey }));
   if (provider === 'anthropic') return reportProbe(label, () => probeAnthropic({ apiKey }));
   if (provider === 'openrouter') return reportProbe(label, () => probeOpenRouter({ apiKey }));
   const entry = LLM_PROVIDER_CATALOG.find((p) => p.id === provider);
   if (entry && 'openaiCompatible' in entry) {
-    const { baseUrl } = entry.openaiCompatible;
-    return reportProbe(label, () => probeGatewayModels({ apiKey, baseUrl }));
+    return reportProbe(label, () => probeGatewayKey({ apiKey, gateway: entry.openaiCompatible }));
   }
 }
 
