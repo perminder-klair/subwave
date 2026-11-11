@@ -175,6 +175,8 @@ def demucs_overlap():
 
 
 DEMUCS_OVERLAP = demucs_overlap()
+# apply_model's random time shift, off: see separate() (#2237).
+DEMUCS_SHIFTS = 0
 
 
 def _env_int(name, default, minimum=1):
@@ -222,7 +224,35 @@ ANALYZE_MAX_BYTES = _env_int("ANALYZE_MAX_BYTES", 12 * 1024 * 1024)
 # whole song's loudness fixes it — bleed sits far below the mix, real vocals
 # don't. Both tunable so operators can adapt to their masters' compression.
 VOCAL_STEM_REL = _env_float("VOCAL_STEM_REL", 0.15)  # x 90th-pct of vocal-stem RMS
-VOCAL_MIX_FLOOR = _env_float("VOCAL_MIX_FLOOR", 0.06)  # x 90th-pct of full-mix RMS
+# The mix floor is two values, one per window (#2237), each x 90th-pct of the
+# window's full-mix RMS.
+#
+# TAIL (the last OUTRO_SECONDS): 0.06, about -24 dB under the mix, read from
+# VOCAL_MIX_FLOOR as it always was. The tail also has TAIL_VOCAL_MIN_LOUD below.
+# It stays at 0.06 because at 0.15 one sung control's ending fell from 8.7 s
+# to 1.5 s, under the 5 s instrumental line, and no tail threshold has been
+# validated on real audio.
+#
+# HEAD (the first ANALYZE_SECONDS): 0.15, about -16.5 dB under the mix. At
+# 0.06 Demucs bleed on loud electronic and instrumental hip-hop masters, which
+# sits 8-14 dB under the mix, read as 13-27 s of singing on tracks labelled
+# instrumental. 0.15 comes from one 18-track sample (11 of those instrumentals,
+# 7 vocal controls) that NOBODY HAS LISTENED TO: unshifted, it brought the head
+# under 5 s on 4 of the 11 and kept the 6 controls that sing in their opening
+# sung, the quietest a rap vocal at 10.8 s (the 7th has no singing in its
+# first 40 s and reads instrumental before and after). Two of the 11 still sit just over the line (5.4, 5.7 s),
+# and a sung tail keeps one of the 4 vocal. A lead instrument
+# Demucs files as vocals at full level (a sax, a reed) sits where real voices
+# do, and no mix floor can tell the two apart.
+#
+# VOCAL_HEAD_MIX_FLOOR sets the head value. An operator who set VOCAL_MIX_FLOOR
+# before the split keeps that value on both windows unless they also set
+# VOCAL_HEAD_MIX_FLOOR, because it was their explicit choice for both.
+TAIL_VOCAL_MIX_FLOOR = _env_float("VOCAL_MIX_FLOOR", 0.06)
+HEAD_VOCAL_MIX_FLOOR = _env_float(
+    "VOCAL_HEAD_MIX_FLOOR",
+    TAIL_VOCAL_MIX_FLOOR if (os.environ.get("VOCAL_MIX_FLOOR") or "").strip() else 0.15,
+)
 # Absolute RMS floor for the TAIL detect() pass (feature: vocal-aware
 # transitions): a fading outro's separation bleed otherwise reads as artefact
 # "vocals". ~-40 dBFS — genuine sung tails sit well above it, bleed well
@@ -1474,7 +1504,9 @@ def get_embedder(force=False):
 # while real vocals — a genuine fraction of the mix — still cross. Frames that
 # sustain above threshold merge into ranges (gaps <0.4s bridged so a breath
 # doesn't split a phrase); sub-300ms blips are dropped as separation artefacts.
-def vocal_ranges_from_rms(rms, mix_rms, sr, hop):
+# `mix_floor` is the window's own fraction (HEAD_ or TAIL_VOCAL_MIX_FLOOR):
+# required, so no caller can fall back to the other window's value.
+def vocal_ranges_from_rms(rms, mix_rms, sr, hop, mix_floor):
     import numpy as np
 
     if rms.size == 0:
@@ -1483,7 +1515,7 @@ def vocal_ranges_from_rms(rms, mix_rms, sr, hop):
     if loud <= 0:
         return []
     mix_loud = float(np.percentile(mix_rms, 90)) if mix_rms.size else 0.0
-    thr = max(VOCAL_STEM_REL * loud, VOCAL_MIX_FLOOR * mix_loud)
+    thr = max(VOCAL_STEM_REL * loud, mix_floor * mix_loud)
     # frames → seconds; librosa.frames_to_time's default is frames * hop / sr.
     times = np.arange(rms.size) * (hop / float(sr))
     active = rms >= thr
@@ -1558,15 +1590,21 @@ class VocalActivityDetector:
         with torch.no_grad():
             # apply_model moves the model + chunks to the device itself (this
             # is how the demucs CLI's -d flag works), so no .to() here.
+            # shifts=0 (#2237): demucs defaults to shifts=1, ONE prediction at a
+            # random, unseeded offset of up to 0.5 s. It averages nothing, so it
+            # buys no quality, but it moves the chunk boundaries on every call:
+            # the same file read 2.9 to 7.0 s of singing over five runs, across
+            # the 5 s instrumental line. Unshifted, one file gives one answer.
             est = apply_model(
-                self.model, wav.unsqueeze(0), device=resolve_device(), overlap=DEMUCS_OVERLAP
+                self.model, wav.unsqueeze(0), device=resolve_device(), overlap=DEMUCS_OVERLAP,
+                shifts=DEMUCS_SHIFTS,
             )[0]
         return {
             name: est[i].cpu().numpy()
             for i, name in enumerate(self.sources)
         }
 
-    def detect(self, stereo, sr, librosa, min_loud=0.0, stems=None):
+    def detect(self, stereo, sr, librosa, *, mix_floor, min_loud=0.0, stems=None):
         """audio: float32 array shaped (channels, N) at DEMUCS_SR. Returns a list of
         {startMs,endMs} where the isolated vocal stem is active — possibly empty
         (an instrumental). Raises on failure; the caller degrades to None.
@@ -1576,6 +1614,8 @@ class VocalActivityDetector:
         bleed (a vocal-free fading outro) can still emit artefact ranges — the
         absolute floor turns those into a clean []. 0.0 = off (the head window
         keeps its historical behaviour).
+        `mix_floor` is the window's mix floor (HEAD_ or TAIL_VOCAL_MIX_FLOOR,
+        see their definition for why they differ), keyword-only and required.
         `stems` (optional): a pre-computed separate() result for this window,
         so a caller that also caches stems pays for one separation, not two."""
         import numpy as np
@@ -1595,7 +1635,7 @@ class VocalActivityDetector:
         if float(np.percentile(rms, 90)) <= min_loud:
             return []
         mix_rms = librosa.feature.rms(y=mix, frame_length=2048, hop_length=hop)[0]
-        return vocal_ranges_from_rms(rms, mix_rms, sr, hop)
+        return vocal_ranges_from_rms(rms, mix_rms, sr, hop, mix_floor)
 
 
 def estimate_pace(y, sr, librosa, window_s=5.0):
@@ -2280,7 +2320,9 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
         ys, _srs = load(sr=DEMUCS_SR, mono=False, duration=ANALYZE_SECONDS)
         if ys is not None and np.size(ys) > 0:
             head_stems = detector.separate(ys)
-            vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa, stems=head_stems)
+            vocal_ranges = detector.detect(
+                ys, DEMUCS_SR, librosa, mix_floor=HEAD_VOCAL_MIX_FLOOR, stems=head_stems
+            )
             stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
             if stems_dir:
                 try:
@@ -2319,7 +2361,8 @@ def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stem
             return False
         tail_stems = detector.separate(y_tail)
         tail_vocals = detector.detect(
-            y_tail, DEMUCS_SR, librosa, min_loud=TAIL_VOCAL_MIN_LOUD, stems=tail_stems
+            y_tail, DEMUCS_SR, librosa, mix_floor=TAIL_VOCAL_MIX_FLOOR,
+            min_loud=TAIL_VOCAL_MIN_LOUD, stems=tail_stems
         )
         stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
         if stems_dir:

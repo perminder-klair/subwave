@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # Unit test for the vocal gate (analyze_worker.vocal_ranges_from_rms) — the
-# mix-anchored floor that fixes the #1125 mass false-positive — plus the
-# DEMUCS_OVERLAP knob. Cases 1-5 are pure numpy: no torch, no demucs, no
+# mix-anchored floor that fixes the #1125 mass false-positive, split per window
+# in #2237 (case 7) — plus the DEMUCS_OVERLAP knob. Cases 1-5 are pure numpy: no torch, no demucs, no
 # audio, so they run anywhere. Feeds synthesized RMS envelopes (the exact
 # inputs the Demucs path produces) and asserts the floor behaves.
 # Run: `python3 scripts/vocal_gate_test.py` (exit 0 = pass).
 #
-# Case 6 is the exception: it checks separate() hands DEMUCS_OVERLAP to
-# apply_model, and that needs torch. It runs only where torch is installed,
+# Case 6 is the exception: it checks separate() hands DEMUCS_OVERLAP and
+# shifts=0 to apply_model (#2237: one file, one verdict), and that needs torch. It runs only where torch is installed,
 # i.e. inside the subwave-analyzer-heavy image, and skips everywhere else,
 # including `npm test` — so after touching separate(), run this file in that
 # image.
@@ -20,8 +20,12 @@ import sys
 
 import numpy as np
 
-# Import the worker with default thresholds (VOCAL_MIX_FLOOR=0.06, STEM_REL=0.15).
-# Heavy imports (torch/demucs/librosa) are lazy, so importing is stdlib-cheap.
+# Import the worker with default thresholds (tail mix floor 0.06, head 0.15,
+# STEM_REL 0.15): the env knobs are cleared first so a developer's shell can't
+# move them. Heavy imports (torch/demucs/librosa) are lazy, so importing is
+# stdlib-cheap.
+for _knob in ("VOCAL_MIX_FLOOR", "VOCAL_HEAD_MIX_FLOOR", "VOCAL_STEM_REL"):
+    os.environ.pop(_knob, None)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import analyze_worker as aw  # noqa: E402
 
@@ -38,7 +42,9 @@ def const(seconds, value):
     return np.full(frames(seconds), value, dtype=np.float32)
 
 
-assert aw.VOCAL_MIX_FLOOR == 0.06, "test assumes the shipped default floor"
+assert aw.TAIL_VOCAL_MIX_FLOOR == 0.06, "test assumes the shipped tail floor"
+assert aw.HEAD_VOCAL_MIX_FLOOR == 0.15, "test assumes the shipped head floor (#2237)"
+FLOOR = aw.TAIL_VOCAL_MIX_FLOOR  # cases 1-4 pin the mechanism at the #1125 value
 assert aw.VOCAL_STEM_REL == 0.15, "test assumes the shipped default self-rel"
 
 # ── Case 1: a pure instrumental (the #1125 bug) ──────────────────────────────
@@ -56,12 +62,12 @@ mix_loud = const(40, 0.5)
 
 # OLD behaviour (no mix floor) mass-flagged this as vocal: the self-relative gate
 # (0.15 * the bleed's OWN 90th-pct) scales right down to the bleed and trips.
-old = aw.vocal_ranges_from_rms(bleed, np.zeros_like(bleed), SR, HOP)
+old = aw.vocal_ranges_from_rms(bleed, np.zeros_like(bleed), SR, HOP, FLOOR)
 assert len(old) > 0, "sanity: without a mix floor the bleed DOES trip (the bug)"
 
 # NEW behaviour: the mix floor (0.06 * 0.5 = 0.03) sits above the bleed → no
 # vocal ranges → the track is correctly classed instrumental ([]).
-new = aw.vocal_ranges_from_rms(bleed, mix_loud, SR, HOP)
+new = aw.vocal_ranges_from_rms(bleed, mix_loud, SR, HOP, FLOOR)
 assert new == [], f"instrumental must read as [] with the mix floor, got {new}"
 
 # ── Case 2: a real vocal track ───────────────────────────────────────────────
@@ -71,27 +77,22 @@ assert new == [], f"instrumental must read as [] with the mix floor, got {new}"
 voc = np.abs(rng.normal(0.02, 0.008, frames(40))).astype(np.float32)
 voc[frames(27):frames(38)] = 0.3
 mix2 = const(40, 0.5)
-ranges = aw.vocal_ranges_from_rms(voc, mix2, SR, HOP)
+ranges = aw.vocal_ranges_from_rms(voc, mix2, SR, HOP, FLOOR)
 assert len(ranges) >= 1, "a real sustained vocal must be detected"
 onset_s = ranges[0]["startMs"] / 1000.0
 assert 26.5 <= onset_s <= 27.5, f"onset should be ~27s (the sung entry), got {onset_s:.1f}s"
 
-# ── Case 3: the floor is tunable (reporter's fix #2) ──────────────────────────
-# A borderline stem at 0.04 with mix loud 0.5: default floor 0.03 lets it
-# through; raising VOCAL_MIX_FLOOR to 0.10 (floor 0.05) gates it out.
+# ── Case 3: the floor is the caller's (reporter's fix #2) ─────────────────────
+# A borderline stem at 0.04 with mix loud 0.5: floor 0.06 (0.03) lets it
+# through; a floor of 0.10 (0.05) gates it out.
 border = const(10, 0.04)
 mix3 = const(10, 0.5)
-assert len(aw.vocal_ranges_from_rms(border, mix3, SR, HOP)) > 0
-saved = aw.VOCAL_MIX_FLOOR
-try:
-    aw.VOCAL_MIX_FLOOR = 0.10
-    assert aw.vocal_ranges_from_rms(border, mix3, SR, HOP) == [], "raising the floor gates it"
-finally:
-    aw.VOCAL_MIX_FLOOR = saved
+assert len(aw.vocal_ranges_from_rms(border, mix3, SR, HOP, FLOOR)) > 0
+assert aw.vocal_ranges_from_rms(border, mix3, SR, HOP, 0.10) == [], "raising the floor gates it"
 
 # ── Case 4: empty / silent inputs degrade cleanly ────────────────────────────
-assert aw.vocal_ranges_from_rms(np.array([], dtype=np.float32), np.array([]), SR, HOP) == []
-assert aw.vocal_ranges_from_rms(np.zeros(frames(5), dtype=np.float32), const(5, 0.5), SR, HOP) == []
+assert aw.vocal_ranges_from_rms(np.array([], dtype=np.float32), np.array([]), SR, HOP, FLOOR) == []
+assert aw.vocal_ranges_from_rms(np.zeros(frames(5), dtype=np.float32), const(5, 0.5), SR, HOP, FLOOR) == []
 
 # ── Case 5: DEMUCS_OVERLAP parses, or warns and falls back ───────────────────
 # Out of range is never clamped: 25 (a percent) or 0.95 would otherwise land on
@@ -149,8 +150,9 @@ else:
 
     seen = {}
 
-    def fake_apply_model(model, mix, device=None, overlap=None, **_kw):
+    def fake_apply_model(model, mix, device=None, overlap=None, **kw):
         seen["overlap"] = overlap
+        seen["shifts"] = kw.get("shifts", "unset (demucs default 1)")
         return torch.zeros(1, 4, *mix.shape[1:])
 
     stub = types.ModuleType("demucs.apply")
@@ -164,6 +166,9 @@ else:
         det.sources = ["drums", "bass", "other", "vocals"]
         stems = det.separate(np.zeros((2, 64), dtype=np.float32))
         assert seen["overlap"] == aw.DEMUCS_OVERLAP, f"apply_model got overlap={seen.get('overlap')}"
+        # #2237: demucs' default shifts=1 is one prediction at a random,
+        # unseeded offset, which moved one file across the 5 s line run to run.
+        assert seen["shifts"] == 0, f"apply_model got shifts={seen['shifts']}"
         assert set(stems) == set(det.sources)
     finally:
         for k, v in saved_mods.items():
@@ -171,5 +176,78 @@ else:
                 sys.modules.pop(k, None)
             else:
                 sys.modules[k] = v
+
+# ── Case 7: each window gates at its own mix floor (#2237) ──────────────────
+# The head reads HEAD_VOCAL_MIX_FLOOR with no absolute floor; the tail reads
+# TAIL_VOCAL_MIX_FLOOR plus TAIL_VOCAL_MIN_LOUD. A fake detector records what
+# each caller hands detect(), through the real demucs_head / demucs_tail.
+class RecordingDetector:
+    def __init__(self):
+        self.calls = []
+
+    def separate(self, y):
+        return {"vocals": y}
+
+    def detect(self, y, sr, librosa, *, mix_floor, min_loud=0.0, stems=None):
+        self.calls.append({"mix_floor": mix_floor, "min_loud": min_loud})
+        return []
+
+
+def fake_load(sr, mono, offset=0.0, duration=None):
+    return np.zeros((2, 64), dtype=np.float32), sr
+
+
+rec = RecordingDetector()
+saved_log = aw.log
+aw.log = lambda *_a: None
+try:
+    ranges, _cached = aw.demucs_head(rec, fake_load, None)
+    assert ranges == [], ranges
+    outro = {}
+    assert aw.demucs_tail(rec, fake_load, None, 200.0, outro) is True
+finally:
+    aw.log = saved_log
+assert rec.calls == [
+    {"mix_floor": aw.HEAD_VOCAL_MIX_FLOOR, "min_loud": 0.0},
+    {"mix_floor": aw.TAIL_VOCAL_MIX_FLOOR, "min_loud": aw.TAIL_VOCAL_MIN_LOUD},
+], rec.calls
+
+# What the split changes, on the real gate: steady Demucs bleed 20 dB under a
+# loud mix (0.05 of a 0.5 mix) clears the tail's floor (0.06 x 0.5 = 0.03) and
+# reads as 40 s sung there, but not the head's (0.15 x 0.5 = 0.075).
+bleed_loud = const(40, 0.05)
+mix_loud4 = const(40, 0.5)
+assert len(aw.vocal_ranges_from_rms(bleed_loud, mix_loud4, SR, HOP, aw.TAIL_VOCAL_MIX_FLOOR)) > 0
+assert aw.vocal_ranges_from_rms(bleed_loud, mix_loud4, SR, HOP, aw.HEAD_VOCAL_MIX_FLOOR) == []
+# A real vocal a few dB under the mix (0.3 of 0.5) is sung under both.
+sung = const(40, 0.3)
+assert len(aw.vocal_ranges_from_rms(sung, mix_loud4, SR, HOP, aw.HEAD_VOCAL_MIX_FLOOR)) > 0
+
+
+# ── Case 8: the two env knobs ────────────────────────────────────────────────
+# Read in a fresh interpreter: the values are module constants.
+import subprocess  # noqa: E402
+
+
+def floors_with(env):
+    code = (
+        "import sys; sys.path.insert(0, %r); import analyze_worker as aw; "
+        "print(aw.HEAD_VOCAL_MIX_FLOOR, aw.TAIL_VOCAL_MIX_FLOOR)" % os.path.dirname(os.path.abspath(__file__))
+    )
+    clean = {k: v for k, v in os.environ.items() if k not in ("VOCAL_MIX_FLOOR", "VOCAL_HEAD_MIX_FLOOR")}
+    out = subprocess.run([sys.executable, "-c", code], env={**clean, **env},
+                         capture_output=True, text=True, check=True)
+    head, tail = out.stdout.split()
+    return float(head), float(tail)
+
+
+assert floors_with({}) == (0.15, 0.06)
+# An operator's VOCAL_MIX_FLOOR from before the split still sets both windows.
+assert floors_with({"VOCAL_MIX_FLOOR": "0.1"}) == (0.1, 0.1)
+# ...unless the head has its own value.
+assert floors_with({"VOCAL_MIX_FLOOR": "0.1", "VOCAL_HEAD_MIX_FLOOR": "0.2"}) == (0.2, 0.1)
+assert floors_with({"VOCAL_HEAD_MIX_FLOOR": "0.2"}) == (0.2, 0.06)
+# A malformed VOCAL_MIX_FLOOR warns and reads as before the split: 0.06 on both.
+assert floors_with({"VOCAL_MIX_FLOOR": "junk"}) == (0.06, 0.06)
 
 print("✓ vocal_gate_test.py passed")

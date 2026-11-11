@@ -293,7 +293,7 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
   // Per-mount config vs live Icecast status. `configured` is operator intent
   // (mp3 is the mandatory floor), `live` is whether Icecast has a source on it;
   // configured-but-not-live means the encoder didn't connect. Both read the
-  // saved settings through a hosted plan's ceiling (setup/hosted.ts), the
+  // saved settings through a hosted station's ceiling (setup/hosted.ts), the
   // values the mixer files get, so a mount the ceiling switched off is not
   // "configured" and a capped bitrate is the one shown.
   {

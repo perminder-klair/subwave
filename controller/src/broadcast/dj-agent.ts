@@ -2206,20 +2206,29 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
   if (!isBoundaryHandoff) session.markHandoffAired();
 
   // Outgoing persona comes from the roll metadata — its clock slot is already
-  // over, so getEffectivePersona() no longer returns it. A final-track handoff
-  // has deliberately NOT rolled the session yet: use the incoming identity it
-  // captured at arm time, rather than reading the still-outgoing live session.
-  // A persona deleted mid-shift → nothing to voice; drop it.
+  // over, so getEffectivePersona() no longer returns it.
+  // A final-track handoff usually runs BEFORE the roll, while `cur` and the
+  // clock still belong to the outgoing show. It can also run after its record
+  // moved onto the incoming session (the wall-clock roll won the race, or a
+  // restart landed past the boundary: session.ts maybeRoll/recover). Either way
+  // its incoming persona and show are the ones captured at arm time, never a
+  // fallback to the live session, which before the roll is the outgoing host
+  // and the show that is ending. A persona deleted mid-shift → nothing to
+  // voice; drop it.
   const personaOut = settings.resolvePersonaById(pending.personaId);
   const cur = session.getSession();
-  const personaIn = (isBoundaryHandoff && settings.resolvePersonaById(pending.incomingPersonaId))
-    || settings.resolvePersonaById(cur?.persona?.id)
-    || settings.getEffectivePersona();
+  const personaIn = isBoundaryHandoff
+    ? settings.resolvePersonaById(pending.incomingPersonaId)
+    : (settings.resolvePersonaById(cur?.persona?.id) || settings.getEffectivePersona());
   if (!personaOut || !personaIn) {
     session.markHandoffAired();
     return;
   }
-  const showIn = (isBoundaryHandoff ? pending.incomingShowName : null) || cur?.show?.name || null;
+  // A null incomingShowName is meaningful (show → autonomous), so it is kept
+  // as null. The ordinary post-roll mic-pass reads the incoming session's show.
+  const showIn = isBoundaryHandoff
+    ? (pending.incomingShowName ?? null)
+    : (cur?.show?.name || null);
   const showOut = pending.showName || null;
   // The armed record keeps a future contextAt for incoming show identity, but
   // speech facts belong to the scheduled boundary. Unknown legacy/malformed

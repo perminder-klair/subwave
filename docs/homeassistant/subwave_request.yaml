@@ -1,0 +1,87 @@
+# Song requests from Home Assistant. Usage: docs/homeassistant/README.md
+# On-air name: first word of the Person linked to the logged-in user.
+# No linked Person → "home", plus a persistent notification.
+#
+# Home Assistant turns a template result that looks like a number into a
+# number, so a request for "1999" reaches a script as 1999. The payload and
+# the empty-text check force the text and the name back to strings.
+
+input_text:
+  subwave_request:
+    name: SUB/WAVE request
+    icon: mdi:music
+    max: 255
+
+rest_command:
+  subwave_request_song:
+    url: !secret subwave_request_url
+    method: POST
+    content_type: application/json
+    timeout: 10
+    payload: "{{ {'text': text | string, 'name': name | default('home') | string} | tojson }}"
+
+script:
+  # Shared by the dashboard button and Assist. A script called as an action
+  # runs with its caller's context, so context.user_id is the person who
+  # pressed the button or spoke. Returns the station's HTTP reply.
+  subwave_post_request:
+    alias: Post a SUB/WAVE request
+    mode: parallel
+    fields:
+      text:
+        description: The song, artist, or vibe.
+        required: true
+    sequence:
+      - variables:
+          names: >
+            {% set uid = context.user_id %}
+            {{ states.person | selectattr('attributes.user_id', 'equalto', uid) | map(attribute='name') | list if uid else [] }}
+          who: "{{ (names[0] | string).split() | first | default('home', true) if names else 'home' }}"
+      - if:
+          - condition: template
+            value_template: "{{ not names }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: subwave_request_name
+              title: SUB/WAVE credited this request as home
+              message: >
+                No Person is linked to the user who sent this, or the session had no user.
+                Settings → People → your person → Allow login.
+      - action: rest_command.subwave_request_song
+        response_variable: resp
+        data:
+          text: "{{ text }}"
+          name: "{{ who }}"
+      - stop: Sent
+        response_variable: resp
+
+  subwave_send_request:
+    alias: Send SUB/WAVE request
+    icon: mdi:send
+    mode: single
+    sequence:
+      - variables:
+          text: "{{ states('input_text.subwave_request') | trim }}"
+      - condition: template
+        value_template: "{{ text | string | length > 0 }}"
+      - action: script.subwave_post_request
+        response_variable: sent
+        data:
+          text: "{{ text }}"
+      - condition: template
+        value_template: "{{ sent.status == 202 }}"
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.subwave_request
+        data:
+          value: ""
+
+intent_script:
+  RequestSubwave:
+    action:
+      - action: script.subwave_post_request
+        data:
+          text: "{{ query }}"
+    speech:
+      text: "Asked SUB/WAVE for {{ query }}."

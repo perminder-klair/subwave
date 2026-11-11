@@ -3,7 +3,7 @@
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, SQL_TAIL_VOCAL_RANGES, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
 import {
-  FACETS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows,
+  FACETS, FACET_VERSIONS, SQL_WHOLE_FILE_LOUDNESS, WHOLE_FILE_LOUDNESS_EXTRAS, clearFacetFailures, clearFacetRows,
   isWholeFileLoudnessVersion, restampFacetRows, syncTrackFacets, tailPlacementMoved, type Facet, type FacetSource,
 } from './facets.js';
 import type { FileInfo, TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
@@ -1029,10 +1029,15 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
         );
         fresh.push('tail');
         if (w.tail.outro?.vocalRanges != null) {
-          const prior = d.prepare<[string], { reason: string | null }>(
-            "SELECT reason FROM track_facet_status WHERE track_id = ? AND facet = 'vocal'",
+          // Tail vocals complete a head-only row, which then counts as measured
+          // now only if its head was: a head-only row measured under the current
+          // vocal rule is stored one below current. An older one (#2237: a head
+          // judged at the old mix floor, with shifted separation) completes but
+          // keeps its older version, so it stays due for a re-measure.
+          const prior = d.prepare<[string], { reason: string | null; version: number }>(
+            "SELECT reason, version FROM track_facet_status WHERE track_id = ? AND facet = 'vocal'",
           ).get(id);
-          if (prior?.reason === 'head-only') fresh.push('vocal');
+          if (prior?.reason === 'head-only' && prior.version >= FACET_VERSIONS.vocal - 1) fresh.push('vocal');
         }
       }
     }

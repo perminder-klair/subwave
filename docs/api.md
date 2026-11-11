@@ -22,7 +22,8 @@ tabs:
   setup is offered as the local-only alternative.
 - **Integrations** — the stream URLs (with live on/off state per mount),
   now-playing feeds, and paste-ready recipes for **Music Assistant** and **Home
-  Assistant**.
+  Assistant**. To send listener requests from a Home Assistant dashboard or
+  from Assist, see [Request a song from Home Assistant](./homeassistant/README.md).
 - **Webhooks** — the push direction: register outbound HTTP POSTs that fire on
   station events (track changes, requests, on-air segments), with every payload
   shape documented.

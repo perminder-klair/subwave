@@ -57,7 +57,12 @@ export type FacetStatus = 'ok' | 'unmeasurable' | 'failed';
 
 // Bump ONE entry to re-target exactly that facet. Rows written by an older
 // version keep their version, so facetNeedsIds() picks them up again.
-// vocal v1 = head AND tail vocal ranges; a head-only row is stored at v0.
+// vocal v1 = head AND tail vocal ranges; a head-only row is stored one below
+// current. v2 (#2237) = the head measured with separation that is the same on
+// every run (Demucs shifts=0) and its own mix floor, 0.15 against v1's 0.06,
+// which read Demucs bleed on loud instrumentals as singing. Nothing re-measures
+// a v1 row on its own: `npm run analyze -- --facets vocal` does, one Demucs
+// pass per window per track, and marks the vector where the verdict moves.
 // loudness v2 = measured over the WHOLE file at its native rate (integrated
 // loudness, true peak, sample peak, LRA); v1 = the analysis window's figure,
 // which every head analysis still writes. The stored version is the
@@ -72,7 +77,7 @@ export const FACET_VERSIONS: Readonly<Record<Facet, number>> = {
   loudness: 2,
   tail: 2,
   clap: 1,
-  vocal: 1,
+  vocal: 2,
   stems: 1,
   edges: 1,
   year: 1,
