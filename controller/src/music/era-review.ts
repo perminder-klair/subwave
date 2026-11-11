@@ -9,7 +9,11 @@
 //   'trusted' — the album year is right: era_untrusted 0 on every track;
 //   'year'    — one year for every track: a MANUAL original year on each, which
 //               no lookup overwrites and the walk re-applies to tracks added
-//               later; the stored verdict goes back to the walk's own;
+//               later; the stored verdict goes back to the walk's own. A year
+//               the operator typed for a track is not the decision's: that
+//               track keeps (and reads as) its own. Each track the decision
+//               writes records what it held before, and removing the decision
+//               puts exactly that back (tracks.setDecisionOriginalYear);
 //   'suspect' — per-track years: era_untrusted 1, each track resolved by the
 //               lookups or by hand.
 // An album leaves "To review" once it is DONE: trusted, one year, or every
@@ -29,7 +33,7 @@
 
 import type Database from 'better-sqlite3';
 import { syncTrackFacets } from './library-db/facets.js';
-import { getTrack, setManualOriginalYear } from './library-db/tracks.js';
+import { restoreDecisionOriginalYear, setDecisionOriginalYear } from './library-db/tracks.js';
 import { ORIGINAL_YEAR_MIN, isValidOriginalYear, originalYearMax } from '../schemas/library.js';
 import { isAlbumKind, labelOwner, ownerFolderOf, suggestAlbumKind, suggestedDecision, type AlbumKind, type EraDecision, type OwnerContext, type OwnerInput } from './album-kind.js';
 import { artistParticipantKeys } from './recency.js';
@@ -151,15 +155,14 @@ export interface EraWalkFields {
   forcedYear: number | null;
 }
 
-/** The walk's half of a one-year decision: a track of that album that does not
- *  hold a manual year yet (added after the decision, or reset by hand) gets the
- *  album's year as its manual year. A track the operator set by hand keeps its
- *  own. Returns whether it wrote. */
+/** The walk's half of a one-year decision: a track of that album the
+ *  decision has not written yet (added after the decision, or cleared by hand)
+ *  gets the album's year, recorded as the decision's so removing it gives the
+ *  track back what it had. A track the operator set by hand keeps its own
+ *  (tracks.setDecisionOriginalYear skips it). Returns whether it wrote. */
 export function applyWalkForcedYear(id: string, forcedYear: number | null): boolean {
   if (forcedYear == null) return false;
-  if (getTrack(id)?.originalYearSource === 'manual') return false;
-  setManualOriginalYear(id, forcedYear);
-  return true;
+  return setDecisionOriginalYear(id, forcedYear);
 }
 
 // The stored verdict a decision implies: trusted 0, per-track 1, otherwise
@@ -267,9 +270,12 @@ function wantSql(verdict: EraVerdict | null): string {
  *    text_vector_dirty is set only where the embedding's `Era:` line really
  *    moves (step 22's rule): no resolved original year and a file year. A
  *    resolved track keeps its vector.
- *  - 'year' writes `year` as the MANUAL original year of every track
- *    (tracks.setManualOriginalYear, which sets the vector flag itself). Leaving 'year' clears the manual years it wrote
- *    (those still equal to it), so the lookups take those tracks back.
+ *  - 'year' writes `year` as the MANUAL original year of every track but one
+ *    the operator set by hand (tracks.setDecisionOriginalYear, which records
+ *    what the track held and sets the vector flag itself). Leaving 'year'
+ *    restores, on exactly the tracks it wrote, what each held before
+ *    (tracks.restoreDecisionOriginalYear); a hand-set track, or one whose own
+ *    year merely equals the decision's, is not the decision's to clear.
  *  - `null` (Reset) restores the walk's own verdict; unscanned rows are left to
  *    the walk.
  *
@@ -293,13 +299,13 @@ export function setEraOverride(
     });
     const changed = new Set<string>();
 
-    // Undo an earlier one-year decision that this one replaces.
-    if (before?.verdict === 'year' && before.forcedYear != null && !(verdict === 'year' && opts.year === before.forcedYear)) {
+    // Leaving a one-year decision gives each track it wrote back what it held.
+    // A change of year needs no undo: the record keeps the track's own year.
+    if (before?.verdict === 'year' && verdict !== 'year') {
       const ids = d.prepare(
-        `SELECT id FROM tracks WHERE ${ERA_ALBUM_KEY_SQL} = ?
-            AND original_year_source = 'manual' AND original_year = ?`,
-      ).all(albumKey, before.forcedYear) as Array<{ id: string }>;
-      for (const { id } of ids) { setManualOriginalYear(id, null); changed.add(id); }
+        `SELECT id FROM tracks WHERE ${ERA_ALBUM_KEY_SQL} = ? AND era_forced_from IS NOT NULL`,
+      ).all(albumKey) as Array<{ id: string }>;
+      for (const { id } of ids) if (restoreDecisionOriginalYear(id)) changed.add(id);
     }
 
     const want = wantSql(verdict);
@@ -325,11 +331,8 @@ export function setEraOverride(
     }
 
     if (verdict === 'year') {
-      const all = d.prepare(
-        `SELECT id FROM tracks WHERE ${ERA_ALBUM_KEY_SQL} = ?
-            AND (original_year_source IS NOT 'manual' OR original_year IS NOT ?)`,
-      ).all(albumKey, opts.year) as Array<{ id: string }>;
-      for (const { id } of all) { setManualOriginalYear(id, opts.year as number); changed.add(id); }
+      const all = d.prepare(`SELECT id FROM tracks WHERE ${ERA_ALBUM_KEY_SQL} = ?`).all(albumKey) as Array<{ id: string }>;
+      for (const { id } of all) if (setDecisionOriginalYear(id, opts.year as number)) changed.add(id);
     }
     return changed.size;
   })();

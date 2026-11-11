@@ -807,7 +807,11 @@ function vecCount(d: Database.Database): number {
 //     record per album, keyed the way era-review.albumEraKey folds (album
 //     artist, album), an optional decision (`verdict`: 'trusted' = the album
 //     year is right, 'year' = one year for every track in `forced_year`,
-//     'suspect' = per-track years) and/or the operator's `kind`.
+//     'suspect' = per-track years) and/or the operator's `kind`. A 'year'
+//     decision records on each track it writes what that track held before
+//     (`era_forced_from`: its original year, source and checked stamp, as
+//     JSON), so removing the decision puts exactly that back; NULL means the
+//     decision did not write this track's year (tracks.setDecisionOriginalYear).
 //
 // Several processes open this DB, and two can both find a column missing on the
 // first open after an upgrade, so the ALTERs re-read under the write lock. The
@@ -819,7 +823,7 @@ function ensureNamedColumns(d: Database.Database): void {
   const wanted: Array<[string, string]> = [
     ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
     ['untaggable_key', 'TEXT'], ['tagged_measured', 'INTEGER'],
-    ['era_reason', 'TEXT'], ['album_artist', 'TEXT'], ['album_kind', 'TEXT'],
+    ['era_reason', 'TEXT'], ['album_artist', 'TEXT'], ['album_kind', 'TEXT'], ['era_forced_from', 'TEXT'],
   ];
   const missing = () => {
     const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));

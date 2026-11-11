@@ -399,6 +399,116 @@ test('a walk reads each album record as it reaches it: a decision removed mid-ru
   assert.equal(f.forcedYear ?? null, null, 'no year is forced from a removed decision');
 });
 
+// ── (g2) a one-year decision and the years tracks already hold ───────────────
+//
+// The decision writes its year as each track's manual year, but a year the
+// operator typed is never the decision's, and removing the decision gives each
+// track back exactly what it held (tracks.era_forced_from).
+
+const yearState = (id: string) => {
+  const r = d().prepare(
+    `SELECT original_year AS y, original_year_source AS s, original_year_checked_at AS c, era_forced_from AS f
+       FROM tracks WHERE id = ?`,
+  ).get(id) as { y: number | null; s: string | null; c: string | null; f: string | null };
+  return { ...r };
+};
+const yearFacet = (id: string) => {
+  const r = d().prepare(`SELECT status, reason FROM track_facet_status WHERE track_id = ? AND facet = 'year'`).get(id) as
+    { status: string; reason: string | null } | undefined;
+  return r ? { ...r } : null;
+};
+const eraYearSql = (id: string) =>
+  (d().prepare(`SELECT ${ERA_YEAR_SQL} AS y FROM tracks WHERE id = ?`).get(id) as { y: number | null }).y;
+
+// A walked, flagged album with one track per starting state.
+function yearAlbum(album: string): string {
+  for (const id of ['hand', 'mb', 'miss', 'none', 'same', 'samemb']) {
+    db.upsertTrackMeta(`${album}-${id}`, {
+      title: `${album} ${id}`, artist: 'Y', album, albumArtist: 'Y Artist', year: 2001,
+      eraUntrusted: true, eraReason: 'many-artists',
+    });
+  }
+  db.setManualOriginalYear(`${album}-hand`, 1980);
+  db.setOriginalYear(`${album}-mb`, 1968, 'musicbrainz');
+  db.setOriginalYear(`${album}-miss`, null);
+  db.setManualOriginalYear(`${album}-same`, 1975);
+  db.setOriginalYear(`${album}-samemb`, 1975, 'discogs');
+  return era.albumEraKey('Y Artist', album);
+}
+// The listing fixtures below count their own albums only.
+function dropYearAlbum(album: string): void {
+  d().prepare(`DELETE FROM tracks WHERE album = ?`).run(album);
+  d().prepare(`DELETE FROM era_override WHERE album_key = ?`).run(era.albumEraKey('Y Artist', album));
+}
+
+test('a one-year decision never overwrites a year typed by hand, and removing it gives every track back what it had', () => {
+  const key = yearAlbum('YearOne');
+  const id = (s: string) => `YearOne-${s}`;
+  const before = new Map(['hand', 'mb', 'miss', 'none', 'same', 'samemb'].map(s => [s, yearState(id(s))]));
+  const facetBefore = new Map(['hand', 'mb', 'miss', 'none', 'same', 'samemb'].map(s => [s, yearFacet(id(s))]));
+  assert.ok(db.yearLookupDueIds(Date.now()).includes(id('none')), 'nothing yet: due');
+
+  era.setEraOverride(d(), key, 'year', { year: 1975 });
+  // The hand-set track keeps, and reads as, its own year everywhere.
+  assert.deepEqual(yearState(id('hand')), before.get('hand'), 'hand-set: untouched');
+  assert.equal(db.resolvedEraYearForTrack(id('hand')), 1980);
+  assert.equal(eraYearSql(id('hand')), 1980);
+  const listed = era.listEraAlbumTracks(d(), key).find(t => t.id === id('hand'))!;
+  assert.deepEqual([listed.originalYear, listed.originalYearSource], [1980, 'manual'], 'the Era tab shows the same year');
+  // Every other track reads the decision's year.
+  for (const s of ['mb', 'miss', 'none', 'samemb']) {
+    assert.deepEqual([yearState(id(s)).y, yearState(id(s)).s], [1975, 'manual'], s);
+    assert.equal(db.resolvedEraYearForTrack(id(s)), 1975, s);
+    assert.equal(eraYearSql(id(s)), 1975, s);
+  }
+  assert.equal(db.yearLookupDueIds(Date.now()).includes(id('none')), false, 'resolved while the decision stands');
+
+  era.setEraOverride(d(), key, null);
+  for (const s of ['hand', 'mb', 'miss', 'none', 'same', 'samemb']) {
+    assert.deepEqual(yearState(id(s)), before.get(s), `${s}: exactly what it held`);
+    assert.deepEqual(yearFacet(id(s)), facetBefore.get(s), `${s}: the year facet row too`);
+  }
+  assert.equal(yearState(id('hand')).y, 1980, 'hand-set 1980 is still 1980');
+  assert.deepEqual([yearState(id('mb')).y, yearState(id('mb')).s], [1968, 'musicbrainz'], 'the looked-up year is back');
+  assert.deepEqual(yearFacet(id('mb')), { status: 'ok', reason: 'musicbrainz' });
+  assert.deepEqual(yearFacet(id('miss')), { status: 'unmeasurable', reason: 'not-found' }, 'a settled miss stays settled');
+  assert.equal(yearState(id('none')).y, null, 'a track with no year loses the decision\'s');
+  assert.equal(yearFacet(id('none')), null, 'and has no year row: not done');
+  assert.ok(db.yearLookupDueIds(Date.now()).includes(id('none')), 'so it is due for a lookup again');
+  assert.equal(db.yearLookupDueIds(Date.now()).includes(id('mb')), false, 'a restored answer is not re-asked');
+  assert.deepEqual([yearState(id('same')).y, yearState(id('same')).s], [1975, 'manual'], 'its own 1975 is not the decision\'s to clear');
+  assert.deepEqual([yearState(id('samemb')).y, yearState(id('samemb')).s], [1975, 'discogs'], 'nor a looked-up 1975');
+  dropYearAlbum('YearOne');
+});
+
+test('a one-year decision: a change of year keeps each track\'s own record, and a year typed since is the operator\'s', () => {
+  const key = yearAlbum('YearTwo');
+  const id = (s: string) => `YearTwo-${s}`;
+  const mbBefore = yearState(id('mb'));
+  era.setEraOverride(d(), key, 'year', { year: 1975 });
+  era.setEraOverride(d(), key, 'year', { year: 1977 });
+  assert.equal(yearState(id('mb')).y, 1977);
+  // The operator types a year over one the decision wrote: it is theirs now.
+  db.setManualOriginalYear(id('none'), 1990);
+  assert.equal(yearState(id('none')).f, null, 'typing drops the decision\'s record');
+  // A track the walk brings in later gets the year, recorded as the decision's.
+  db.upsertTrackMeta(id('late'), {
+    title: 'late', artist: 'Y', album: 'YearTwo', albumArtist: 'Y Artist', year: 2001,
+    eraUntrusted: true, eraReason: 'many-artists',
+  });
+  const f = era.eraWalkFields({ album: 'YearTwo', albumArtist: 'Y Artist', albumEraUntrusted: true, albumEraReason: 'many-artists' }, era.liveEraOverrides(d()));
+  assert.equal(era.applyWalkForcedYear(id('late'), f.forcedYear), true);
+  assert.equal(yearState(id('late')).y, 1977);
+  assert.equal(era.applyWalkForcedYear(id('hand'), f.forcedYear), false, 'the walk never forces a hand-set year either');
+
+  era.setEraOverride(d(), key, 'trusted');
+  assert.deepEqual(yearState(id('mb')), mbBefore, 'back to the looked-up year, not the first decision\'s 1975');
+  assert.equal(yearState(id('none')).y, 1990, 'the year typed since stays');
+  assert.equal(yearState(id('late')).y, null, 'the late track had nothing, and has nothing again');
+  assert.equal(yearState(id('hand')).y, 1980);
+  dropYearAlbum('YearTwo');
+});
+
 // ── (i) one stored verdict for every era reader ──────────────────────────────
 
 

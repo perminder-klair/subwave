@@ -570,6 +570,9 @@ export function albumKindTrackIds(kinds: readonly string[]): Set<string> {
 // sources. `year: null` REMOVES the override rather than pinning "unknown": the
 // track re-enters the automatic pipeline. The old embedding stays in the KNN
 // index marked dirty, so the next tag pass replaces its stale `Era:` line.
+// A year the operator types is theirs, so it also drops any album decision's
+// record on the track (era_forced_from): removing the decision later must not
+// take back a year the operator set since.
 export function setManualOriginalYear(id: string, year: number | null): void {
   const eraBefore = storedEra(id);
   if (year != null) {
@@ -578,7 +581,8 @@ export function setManualOriginalYear(id: string, year: number | null): void {
         `UPDATE tracks SET
            original_year            = ?,
            original_year_source     = 'manual',
-           original_year_checked_at = ?
+           original_year_checked_at = ?,
+           era_forced_from          = NULL
          WHERE id = ?`,
       )
       .run(year, new Date().toISOString(), id);
@@ -591,13 +595,69 @@ export function setManualOriginalYear(id: string, year: number | null): void {
         `UPDATE tracks SET
            original_year            = NULL,
            original_year_source     = NULL,
-           original_year_checked_at = NULL
+           original_year_checked_at = NULL,
+           era_forced_from          = NULL
          WHERE id = ? AND original_year_source = 'manual'`,
       )
       .run(id);
   }
   markTextVectorDirtyIfEraChanged(id, eraBefore);
   syncTrackFacets(id);
+}
+
+// An album's one-year decision (Library → Era, music/era-review.ts) is the
+// only writer of these two. It writes its year as the track's MANUAL original
+// year, so no lookup or walk overwrites it, and records in era_forced_from what
+// the track held before: its year, source and checked stamp, as JSON. Removing
+// the decision puts exactly that back, so a looked-up year (MusicBrainz,
+// Discogs), a settled "not found" or an album-tag year returns as it was, and a
+// track that had nothing is due for a lookup again.
+//
+// A year the operator typed (manual, with no record) is never the decision's:
+// it is skipped, and keeps reading as its own year while the decision stands.
+// A track whose own year already equals the decision's is written all the same
+// (its record holds that year), so removing the decision gives it back.
+// Returns whether the track was written.
+export function setDecisionOriginalYear(id: string, year: number): boolean {
+  const eraBefore = storedEra(id);
+  const changed = requireDb()
+    .prepare(
+      `UPDATE tracks SET
+         era_forced_from = COALESCE(era_forced_from, json_object(
+           'year', original_year, 'source', original_year_source, 'checkedAt', original_year_checked_at)),
+         original_year            = ?,
+         original_year_source     = 'manual',
+         original_year_checked_at = ?
+       WHERE id = ?
+         AND (original_year_source IS NOT 'manual' OR era_forced_from IS NOT NULL)
+         AND NOT (era_forced_from IS NOT NULL AND original_year IS ?)`,
+    )
+    .run(year, new Date().toISOString(), id, year).changes > 0;
+  if (!changed) return false;
+  markTextVectorDirtyIfEraChanged(id, eraBefore);
+  syncTrackFacets(id);
+  return true;
+}
+
+// Undo setDecisionOriginalYear: the track's own year, source and checked stamp
+// come back from its record, and the record goes. A track the decision did not
+// write (no record) is left alone. Returns whether the track was restored.
+export function restoreDecisionOriginalYear(id: string): boolean {
+  const eraBefore = storedEra(id);
+  const changed = requireDb()
+    .prepare(
+      `UPDATE tracks SET
+         original_year            = json_extract(era_forced_from, '$.year'),
+         original_year_source     = json_extract(era_forced_from, '$.source'),
+         original_year_checked_at = json_extract(era_forced_from, '$.checkedAt'),
+         era_forced_from          = NULL
+       WHERE id = ? AND era_forced_from IS NOT NULL`,
+    )
+    .run(id).changes > 0;
+  if (!changed) return false;
+  markTextVectorDirtyIfEraChanged(id, eraBefore);
+  syncTrackFacets(id);
+  return true;
 }
 
 // The stamp describes the stored list, so a write that replaces the list clears

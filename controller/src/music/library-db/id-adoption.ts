@@ -69,7 +69,7 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
 
 // Columns whose value can't be decided by "is it null" alone. Each is handled
 // explicitly in mergeRow(); listed here so columnPlan() can account for them.
-const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty', 'text_vector_sound'];
+const SPECIAL = ['original_year', 'original_year_source', 'era_forced_from', 'text_vector_dirty', 'text_vector_sound'];
 
 // Default carried values to new ?? old. This list documents an explicit choice for columnPlan;
 // unlisted carried columns use the same behavior.
@@ -160,6 +160,9 @@ function mergeRow(plan: ColumnPlan, oldRow: Row, newRow: Row, movedTextVector: b
   const oldWins = resolved || newRow.original_year == null;
   merged.original_year = oldWins ? oldRow.original_year : newRow.original_year;
   merged.original_year_source = oldWins ? oldRow.original_year_source : newRow.original_year_source;
+  // An album decision's record (era_forced_from, tracks.setDecisionOriginalYear)
+  // describes the year beside it, so it goes wherever that year goes.
+  merged.era_forced_from = oldWins ? (oldRow.era_forced_from ?? null) : (newRow.era_forced_from ?? null);
 
   // text_vector_dirty is NOT NULL DEFAULT 0, so the null-anchor and COALESCE
   // rules both read a fresh row's 0 as a real answer and would drop the marker.

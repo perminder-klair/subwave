@@ -145,9 +145,12 @@ test('one year for every track: manual years, the album done, and undone cleanly
   db.setManualOriginalYear('sm3', 1987);
   walkAlbum('sm', 'Summer Selection', 'Some Label', 'various-artists', 4, 2011);
   assert.equal(track('sm3').original_year, 1987, 'a hand-set year is never re-forced');
-  // Replacing the decision clears only the years it wrote.
+  // Replacing the decision gives back what each track held before it.
   era.setEraOverride(d(), key, 'suspect');
-  assert.equal(track('sm1').original_year, null, 'the forced year is gone (the old lookup answer with it)');
+  assert.deepEqual({ y: track('sm1').original_year, s: track('sm1').original_year_source },
+    { y: 1999, s: 'musicbrainz' }, 'the looked-up answer comes back');
+  assert.equal(track('sm2').original_year, null, 'a track that had no year has none again');
+  assert.equal(track('sm4').original_year, null, 'nor does one the walk gave the year to');
   assert.equal(track('sm3').original_year, 1987, 'the hand-set one stays');
   assert.equal(track('sm2').era_untrusted, 1);
   assert.equal(era.listEraAlbums(d()).find(a => a.albumKey === key)!.done, false, 'per-track with years missing');
