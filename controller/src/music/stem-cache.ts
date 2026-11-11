@@ -11,6 +11,7 @@ import { evictQueuedLast, stemEvictionOrder, UNKNOWN_TRACK_PRIORITY } from './st
 import { mapPool } from '../util/async-pool.js';
 import type { StemScanOpts } from './library-db.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
+import { randomUUID } from 'node:crypto';
 
 export const STEM_NAMES = ['drums', 'bass', 'other', 'vocals'] as const;
 export type StemWindow = 'head' | 'tail';
@@ -442,10 +443,44 @@ async function writeSnapshot(snap: BuiltSnapshot): Promise<boolean> {
 // by none: with no figure the warning and the confirm both go. Totals that
 // cannot be marked must not outlive this, so a failed write removes them.
 export async function markUsageStale(): Promise<void> {
+  await noteUsageChange();
   const snap = await readSnapshot();
   if (!snap) return;
   const marked = await writeSnapshot(buildSnapshot({ ...snap, stale: true, updatedAt: new Date().toISOString() }, unevictableOf(snap)));
   if (!marked) await rm(snapshotPath(), { force: true }).catch(() => {});
+}
+
+// A walk takes minutes on a share, and a writer outside the pass and the sweep
+// may change dirs under it: the walk may then have counted some of those
+// changes and missed others. The snapshot file alone cannot tell the walk
+// that happened, because such a writer leaves the file as it found it when
+// there is none or when it is untrusted (adjustUsage). So every delta, applied
+// or refused, first replaces this token (one more file beside the snapshot,
+// shared across processes like it), and a walk that finds the token changed
+// between its start and its end stores nothing it would trust (walkUsage,
+// writeSweepSnapshot). A token that cannot be written is removed instead, which
+// a walk that started with one also sees.
+function usageChangesPath(): string {
+  return path.join(config.stateDir, 'stem-cache-usage.changes');
+}
+
+async function readUsageChanges(): Promise<string> {
+  return readFile(usageChangesPath(), 'utf8').catch(() => '');
+}
+
+async function noteUsageChange(): Promise<void> {
+  try {
+    await writeFileAtomic(usageChangesPath(), `${randomUUID()}\n`);
+  } catch {
+    await rm(usageChangesPath(), { force: true }).catch(() => {});
+  }
+}
+
+// Test seam: runs between a walk's scan and its decision to store what it
+// found, where a writer landing mid-walk would land.
+let duringWalk: (() => Promise<void>) | null = null;
+export function _duringWalkForTests(fn: (() => Promise<void>) | null): void {
+  duringWalk = fn;
 }
 
 // Where a delta is counted from: the `measuredAt` of the snapshot a writer
@@ -467,7 +502,8 @@ export async function usageBase(): Promise<string | null> {
 // purge, must not cost that. `measuredAt` is kept, so the daily full walk
 // still comes due on time. Each case that can't take the delta:
 // - no snapshot, or one the next read walks for anyway (stale, too old,
-//   another root): left to that walk, untouched;
+//   another root): left to that walk, untouched. A walk already in flight
+//   learns of the delta from the change token instead (noteUsageChange);
 // - `since` given and the snapshot is no longer that measurement (a walk ran
 //   during the change, see usageBase): which of the changes it saw is
 //   unknown, so it is marked stale;
@@ -481,6 +517,8 @@ export async function adjustUsage(
   { since }: { since?: string | null } = {},
 ): Promise<'adjusted' | 'stale' | 'unchanged'> {
   if (delta.bytes === 0 && delta.dirs === 0) return 'unchanged';
+  // Whatever becomes of the delta, a walk in flight may hold part of it.
+  await noteUsageChange();
   const snap = await readSnapshot();
   if (since !== undefined && (snap?.measuredAt ?? null) !== since) {
     if (!snap) return 'unchanged';
@@ -559,19 +597,25 @@ function walkReason(snap: UsageSnapshot | null): string {
 }
 
 async function walkUsage(): Promise<{ bytes: number; dirs: number }> {
+  const changesBefore = await readUsageChanges();
   const before = await snapshotState();
   // On a network share this is minutes with nothing else to show, and a caller
   // such as an import's stems step waits on it: say so before and after.
   const t0 = Date.now();
   console.log(`[stem-cache] measuring the stem cache (${walkReason(before.snap)}): walking every stem folder…`);
   const scanned = await scanDirs();
+  await duringWalk?.();
   const bytes = scanned.reduce((n, d) => n + d.bytes, 0);
   console.log(`[stem-cache] measured ${scanned.length} stem folders, ${(bytes / 1024 ** 3).toFixed(1)} GB, in ${Math.round((Date.now() - t0) / 1000)} s`);
   const after = await snapshotState();
   // A live pass owns the additive baseline. A read must not count its writes
-  // into that baseline, including when the pass starts during this walk.
+  // into that baseline, including when the pass starts during this walk. A
+  // writer that changed dirs during it (the snapshot moved, or the change
+  // token did) may be half in this figure: nothing is stored, and the next
+  // read walks again.
   if (before.verdict !== 'pass-running' && after.verdict !== 'pass-running'
-    && JSON.stringify(before.snap) === JSON.stringify(after.snap)) {
+    && JSON.stringify(before.snap) === JSON.stringify(after.snap)
+    && (await readUsageChanges()) === changesBefore) {
     await writeSnapshot(snapshotFromWalk(bytes, scanned.length, 0));
   }
   return { bytes, dirs: scanned.length };
@@ -857,10 +901,13 @@ export async function sweep(
   if (!force && before.verdict === 'use' && before.snap && before.snap.bytes <= budget) {
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0, skipped: 'snapshot' };
   }
+  const changesBefore = await readUsageChanges();
   const dirs = await scanDirs();
+  await duringWalk?.();
+  const walkedFrom = { snap: before.snap, changes: changesBefore };
   let total = dirs.reduce((n, d) => n + d.bytes, 0);
   if (total <= budget) {
-    await writeSweepSnapshot(before.snap, snapshotFromWalk(total, dirs.length, 0));
+    await writeSweepSnapshot(walkedFrom, snapshotFromWalk(total, dirs.length, 0));
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 };
   }
 
@@ -888,18 +935,23 @@ export async function sweep(
   }
   // The stuck bytes go in the snapshot beside the total, so pick-time stems
   // (budgetVeto) can judge the part this sweep can evict, as it did above.
-  await writeSweepSnapshot(before.snap, snapshotFromWalk(total, dirs.length - removed, unevictable));
+  await writeSweepSnapshot(walkedFrom, snapshotFromWalk(total, dirs.length - removed, unevictable));
   return { removed, freedBytes, failedDirs, overBudgetBytes: Math.max(0, total - budget) };
 }
 
 // The sweep's walk is minutes on a share. If another writer moved the stored
 // snapshot meanwhile (the orphan purge or forgetStems adjusting it, a pick-time
-// settle, a pass's pending mark), the walk may or may not have seen that
-// writer's dirs, so its total is written for the budget field but marked
-// stale: the next read walks again rather than trust a figure that may count
-// a change twice or miss it.
-async function writeSweepSnapshot(before: UsageSnapshot | null, walked: BuiltSnapshot): Promise<void> {
+// settle, a pass's pending mark), or noted a delta it left the snapshot
+// without (the change token, noteUsageChange), the walk may or may not have
+// seen that writer's dirs, so its total is written for the budget field but
+// marked stale: the next read walks again rather than trust a figure that may
+// count a change twice or miss it.
+async function writeSweepSnapshot(
+  from: { snap: UsageSnapshot | null; changes: string },
+  walked: BuiltSnapshot,
+): Promise<void> {
   const now = await readSnapshot();
-  const overlapped = JSON.stringify(now) !== JSON.stringify(before);
+  const overlapped = JSON.stringify(now) !== JSON.stringify(from.snap)
+    || (await readUsageChanges()) !== from.changes;
   await writeSnapshot(overlapped ? buildSnapshot({ ...walked, stale: true }, unevictableOf(walked)) : walked);
 }

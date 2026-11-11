@@ -15,6 +15,8 @@
 //   (refused part-way) marks it stale instead;
 // - a stale snapshot still reports, flagged (`stale: true`), and the sweep
 //   re-measures it rather than trusting it; adjustUsage never moves one;
+// - a walk in flight when stems are dropped never stores a trusted figure that
+//   counts them, whatever state the snapshot was in (the change token);
 // - no snapshot, another root, or a malformed one reports null;
 // - GET /stem-cache/usage carries it plus the budget in force.
 //
@@ -289,4 +291,60 @@ test('GET /stem-cache/usage carries the stale flag to the budget field', async (
   assert.equal(body.usage.bytes, 80 * GB);
   assert.equal(body.usage.stale, true);
   await new Promise(r => server.close(r));
+});
+
+// A walk in flight while stems are dropped (forgetStems, or the orphan purge's
+// moves) may have counted some of them. When the snapshot the walk started on
+// was untrusted or absent, the drop leaves the file as it found it, so the
+// file alone cannot tell the walk: the change token does. Whatever the
+// snapshot's state, the walk must end with a figure that is either untrusted
+// or right, never trusted and wrong.
+test('a walk that a drop of stems lands in never stores a trusted figure that counts them', async () => {
+  const states: Array<[string, () => void]> = [
+    ['stale', () => writeSnap({ bytes: 80 * GB, dirs: 4000, stale: true })],
+    ['over a day old', () => writeSnap({ bytes: 80 * GB, dirs: 4000, measuredAt: new Date(Date.now() - 2 * 24 * HOUR).toISOString() })],
+    ['absent', () => rmSync(snapFile, { force: true })],
+  ];
+  const walkers: Array<[string, () => Promise<unknown>]> = [
+    ['a read', () => stemCache.usage()],
+    ['the sweep', () => stemCache.sweep(100 * GB, { force: true })],
+  ];
+  try {
+    for (const [stateName, setState] of states) {
+      for (const [walkerName, walk] of walkers) {
+        const label = `${walkerName} on a snapshot ${stateName}`;
+        rmSync(root, { recursive: true, force: true });
+        mkdirSync(root, { recursive: true });
+        writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+        for (const id of ['mid-0', 'mid-1', 'mid-2']) {
+          mkdirSync(stemCache.dirFor(id), { recursive: true });
+          writeFileSync(join(stemCache.dirFor(id), 'head-drums.flac'), 'x'.repeat(1000));
+        }
+        setState();
+        let landed = false;
+        // The walk has listed and measured all three dirs; the drop lands now.
+        stemCache._duringWalkForTests(async () => {
+          if (landed) return;
+          landed = true;
+          assert.equal((await stemCache.forgetStems(['mid-1'])).removed, 1);
+        });
+        await walk();
+        stemCache._duringWalkForTests(null);
+        assert.equal(landed, true, `${label}: the drop landed mid-walk`);
+        let snap: Parameters<typeof stemCache.snapshotVerdict>[0]['snap'] = null;
+        try { snap = JSON.parse(readFileSync(snapFile, 'utf8')); } catch { /* none stored */ }
+        const verdict = stemCache.snapshotVerdict({ snap, root, nowMs: Date.now(), pendingAlive: false });
+        if (verdict === 'use') {
+          assert.deepEqual([snap?.bytes, snap?.dirs], [2000, 2], `${label}: a trusted figure must be the disk's`);
+        }
+        // And the next read gets the disk right.
+        const u = await stemCache.usage();
+        assert.deepEqual([u.bytes, u.dirs], [2000, 2], `${label}: the next read`);
+      }
+    }
+  } finally {
+    stemCache._duringWalkForTests(null);
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+  }
 });

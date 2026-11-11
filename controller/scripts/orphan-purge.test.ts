@@ -282,6 +282,55 @@ test('a walk that lands during the moves is never adjusted again: the figure is 
   rmSync(SNAP, { force: true });
 });
 
+test('a walk already under way when the moves land never stores a trusted figure that counts them', async () => {
+  // The other order of the race above: the walk started first (the snapshot
+  // was stale, over a day old, or absent, so a read walks) and is still
+  // measuring when the purge moves dirs and settles its delta. With the
+  // snapshot untrusted or absent the purge leaves the file as it found it, so
+  // only the change token can tell the walk; without it the walk stored its
+  // pre-move figure as trusted (#2273 review).
+  const states: Array<[string, () => void]> = [
+    ['stale', () => {
+      const at = new Date().toISOString();
+      writeFileSync(SNAP, JSON.stringify({ version: 1, root: ROOT, bytes: 1, dirs: 1, measuredAt: at, updatedAt: at, stale: true }));
+    }],
+    ['over a day old', () => {
+      const at = new Date(Date.now() - 2 * DAY).toISOString();
+      writeFileSync(SNAP, JSON.stringify({ version: 1, root: ROOT, bytes: 1, dirs: 1, measuredAt: at, updatedAt: at }));
+    }],
+    ['absent', () => rmSync(SNAP, { force: true })],
+  ];
+  let day = 960;
+  try {
+    for (const [stateName, setState] of states) {
+      const N = NOW_BASE + day++ * DAY;
+      await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: N });
+      const gone = seedStem();
+      const live = () => readdirSync(ROOT).filter(n => !n.startsWith('.'));
+      setState();
+      let moved = 0;
+      cache._duringWalkForTests(async () => {
+        if (moved) return;
+        const rep = await purge.runOrphanPurge({ knownIds: [...live().filter(n => n !== gone), '_sentinel'], confirm: true, now: N + DAY });
+        moved = rep.quarantined;
+      });
+      await cache.usage();
+      cache._duringWalkForTests(null);
+      assert.ok(moved >= 1 && existsSync(join(QU, gone)), `${stateName}: the moves landed mid-walk`);
+      let snap: Parameters<typeof cache.snapshotVerdict>[0]['snap'] = null;
+      try { snap = JSON.parse(readFileSync(SNAP, 'utf8')); } catch { /* none stored */ }
+      const trusted = cache.snapshotVerdict({ snap, root: ROOT, nowMs: Date.now(), pendingAlive: false }) === 'use';
+      rmSync(SNAP, { force: true });
+      const disk = await cache.usage();
+      if (trusted) {
+        assert.deepEqual([snap?.bytes, snap?.dirs], [disk.bytes, disk.dirs], `${stateName}: a trusted figure must be the disk's`);
+      }
+    }
+  } finally {
+    cache._duringWalkForTests(null);
+  }
+});
+
 test('deleting aged quarantines alone leaves the stored size exactly as it was', async () => {
   // The quarantine is outside the cache total, so its deletes change nothing there.
   const N = NOW_BASE + 920 * DAY;
