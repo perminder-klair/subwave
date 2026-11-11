@@ -601,7 +601,7 @@ test('a stale compilation flag reads as trusted once a walk judges the row witho
   // Navidrome stops sending isCompilation at all; the walk, judging without
   // it, finds nothing. The stored flag is kept (a field left out is not cleared).
   db.upsertTrackMeta('sf1', { ...base, eraUntrusted: false, eraReason: null });
-  const r = d().prepare(`SELECT is_compilation, era_untrusted FROM tracks WHERE id = 'sf1'`).get() as any;
+  const r = d().prepare(`SELECT is_compilation, era_untrusted FROM tracks WHERE id = 'sf1'`).get() as { is_compilation: number; era_untrusted: number };
   assert.deepEqual({ ...r }, { is_compilation: 1, era_untrusted: 0 });
   assert.equal(db.getTrack('sf1')!.yearUntrusted, false, 'the old OR read this as suspect');
   assert.equal(era.listEraAlbums(d()).some(a => a.album === 'Stale Comp'), false, 'and it leaves the Era tab');

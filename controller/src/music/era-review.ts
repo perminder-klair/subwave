@@ -109,7 +109,7 @@ export function liveEraOverrides(d: Database): EraOverrideLookup {
 }
 
 function loadOverrideRow(d: Database, albumKey: string): EraOverride | null {
-  return liveEraOverrides(d).get(albumKey);
+  return liveEraOverrides(d).get(albumKey) ?? null;
 }
 
 // Write the record, or drop the row once it carries nothing.
