@@ -146,7 +146,10 @@ class Detector:
         self.calls.append("separate")
         return {"vocals": y}
 
-    def detect(self, y, sr, librosa, min_loud=None, stems=None):
+    # `mix_floor` is keyword-only and required, as in the worker (#2312): the
+    # tail is judged at the tail's own floor. Recorded so a test can check it.
+    def detect(self, y, sr, librosa, *, mix_floor, min_loud=None, stems=None):
+        self.calls.append(("floor", mix_floor))
         return [{"startMs": 1000, "endMs": 3000}]
 
 
@@ -221,6 +224,8 @@ def t_placed_tail_vocals_and_stems_use_the_placed_window():
     # Demucs read the placed window through the tail loader, not the file end.
     assert ("tail", aw.DEMUCS_SR, start, aw.OUTRO_SECONDS) in src.loads, src.loads
     assert ("meta", start, 200.0) in written, written
+    # The placed tail is judged at the tail's own mix floor, not the head's.
+    assert ("floor", aw.TAIL_VOCAL_MIX_FLOOR) in calls, calls
     shift = int(start * 1000)
     assert out["vocal"]["data"]["tail_vocal_ranges"] == [
         {"startMs": shift + 1000, "endMs": shift + 3000}], out
