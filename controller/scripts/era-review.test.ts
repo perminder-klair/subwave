@@ -581,7 +581,7 @@ test('storedYearUntrusted: the walk verdict wins once known, the raw flag only b
   const cases: Array<[number | null, number | null, boolean | null]> = [
     // [is_compilation, era_untrusted, expected]
     [null, null, null], [0, null, false], [1, null, true],
-    [null, 0, false],   [0, 0, false],    [1, 0, false],   // [1, 0] only via a Trust override
+    [null, 0, false],   [0, 0, false],    [1, 0, false],   // [1, 0]: a Trust override, or a stale flag (music.md)
     [null, 1, true],    [0, 1, true],     [1, 1, true],
   ];
   d().exec(`CREATE TEMP TABLE era_cases (id INTEGER, is_compilation INTEGER, era_untrusted INTEGER)`);
@@ -593,6 +593,19 @@ test('storedYearUntrusted: the walk verdict wins once known, the raw flag only b
     assert.equal(sql[i].s == null ? null : sql[i].s === 1, want, `SQL comp=${c} era=${e}`);
   });
   d().exec(`DROP TABLE era_cases`);
+});
+
+test('a stale compilation flag reads as trusted once a walk judges the row without it (a stated behaviour change)', () => {
+  const base = { title: 'Stale', artist: 'A', album: 'Stale Comp', albumArtist: 'Various Artists', year: 1991 };
+  db.upsertTrackMeta('sf1', { ...base, isCompilation: true, eraUntrusted: true, eraReason: 'compilation-flag' });
+  // Navidrome stops sending isCompilation at all; the walk, judging without
+  // it, finds nothing. The stored flag is kept (a field left out is not cleared).
+  db.upsertTrackMeta('sf1', { ...base, eraUntrusted: false, eraReason: null });
+  const r = d().prepare(`SELECT is_compilation, era_untrusted FROM tracks WHERE id = 'sf1'`).get() as any;
+  assert.deepEqual({ ...r }, { is_compilation: 1, era_untrusted: 0 });
+  assert.equal(db.getTrack('sf1')!.yearUntrusted, false, 'the old OR read this as suspect');
+  assert.equal(era.listEraAlbums(d()).some(a => a.album === 'Stale Comp'), false, 'and it leaves the Era tab');
+  d().exec(`DELETE FROM tracks WHERE id = 'sf1'`);
 });
 
 test('Trust on a Navidrome compilation reaches every era reader: track, resolver, era filter, year lookups', () => {

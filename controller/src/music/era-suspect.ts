@@ -10,9 +10,12 @@ import { artistRootKey, isVariousArtistsName } from './recency.js';
 // `era_untrusted` wins once known, and Navidrome's raw `is_compilation` decides
 // only for a row the walk has not judged yet. The walk's verdict already
 // includes the compilation flag (albumEraSuspect's first marker), so on a walked
-// row this answers exactly what the old `is_compilation = 1 OR era_untrusted = 1`
-// did; the one case it changes is an operator's Trust override
-// (music/era-review.ts), which stores 0 on a flagged compilation. Readers in JS
+// row this answers what the old `is_compilation = 1 OR era_untrusted = 1` did,
+// except in two cases that now read as trusted: an operator's Trust override
+// (music/era-review.ts), which stores 0 on a flagged compilation, and a row
+// whose stored is_compilation = 1 outlived a walk that saw no isCompilation
+// field at all (upsertTrackMeta keeps a field the server leaves out), whose
+// verdict, judged without the flag, is 0 (docs/internals/music.md). Readers in JS
 // call storedYearUntrusted, SQL readers eraSuspectSql; never re-compose the two
 // columns by hand, and keep these two in agreement.
 export function storedYearUntrusted(
