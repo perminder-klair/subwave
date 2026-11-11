@@ -55,9 +55,14 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
   const placeholder = (v: string, fallback: string) =>
     v === 'set' ? '•••••• (on file)' : fallback;
   const { lfApiKeySet, lfApiSecretSet, lfReady, lbReady, ndReady } = scrobbleReadiness(form, data);
+  // Status lines describe what is SAVED, not the draft: typing a replacement
+  // key does not take effect until Save, so it must not hide the off warning
+  // while the stored key still drives the tagger.
+  const env = (data.env || {}) as Record<string, unknown>;
+  const savedApiKeySet = savedLf.apiKey === 'set' || !!env.LASTFM_API_KEY;
   // The tagger's own switch (Library tagger → Advanced → Enrichment) can veto the
   // key. Saved value only: undefined is Auto, which follows the key.
-  const lfTagsOff = lfApiKeySet && data.values?.embedding?.enrichment?.lastfmTags === false;
+  const lfTagsOff = savedApiKeySet && data.values?.embedding?.enrichment?.lastfmTags === false;
   // Tags need only the key, so a key-only setup is working, not "not connected".
   const lfSubtitle = lfReady
     ? `scrobbling as ${savedLf.username || '(unknown)'}`
@@ -65,7 +70,7 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
       ? 'enabled, but missing credentials'
       : lfTagsOff
         ? 'key set, but Last.fm tags is off'
-        : lfApiKeySet
+        : savedApiKeySet
           ? 'key set, tags only, not scrobbling'
           : 'not set up';
 
@@ -168,7 +173,7 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
     <>
       <Card title="Last.fm" sub={lfSubtitle}>
         <div className="grid gap-[18px]">
-          <NowBanner label={<>Last.fm tags · {lfTagsOff ? 'off' : lfApiKeySet ? 'key set' : 'no key'}</>}>
+          <NowBanner label={<>Last.fm tags · {lfTagsOff ? 'off' : savedApiKeySet ? 'key set' : 'no key'}</>}>
             Paste your <strong className="text-ink">API key</strong> below and click save to
             only enable tagging. The tagger folds Last.fm&apos;s crowd tags into your library
             as it tags your tracks. Everything below the{' '}
