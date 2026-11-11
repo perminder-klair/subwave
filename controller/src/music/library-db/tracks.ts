@@ -605,6 +605,18 @@ export function setManualOriginalYear(id: string, year: number | null): void {
   syncTrackFacets(id);
 }
 
+// An album decision (Library → Era, music/era-review.ts) moves a track's
+// stored verdict at once, without a walk. The text vector and the year facet
+// follow it as they follow any era write: the vector is marked only where its
+// `Era:` line really moves (markTextVectorDirtyIfEraChanged, which also leaves
+// a track with no vector alone), never by a second copy of that rule.
+export function setStoredEraVerdict(id: string, untrusted: boolean): void {
+  const eraBefore = storedEra(id);
+  requireDb().prepare(`UPDATE tracks SET era_untrusted = ? WHERE id = ?`).run(untrusted ? 1 : 0, id);
+  markTextVectorDirtyIfEraChanged(id, eraBefore);
+  syncTrackFacets(id);
+}
+
 // An album's one-year decision (Library → Era, music/era-review.ts) is the
 // only writer of these two. It writes its year as the track's MANUAL original
 // year, so no lookup or walk overwrites it, and records in era_forced_from what

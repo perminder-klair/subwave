@@ -27,13 +27,14 @@
 // a hand-rolled join.
 //
 // Functions take the better-sqlite3 handle explicitly rather than reaching
-// through library-db, so the routes and tests share one code path. The one
-// exception is the year facet re-derive after an override, which goes through
-// facets.syncTrackFacets on the library's own (same) handle.
+// through library-db, so the routes and tests share one code path. The
+// exception is a decision's per-track writes (the stored verdict, a one-year
+// decision's year), which go through library-db/tracks.ts on the library's own
+// (same) handle, so the text vector and the year facet follow them by the
+// rules every other era write uses.
 
 import type Database from 'better-sqlite3';
-import { syncTrackFacets } from './library-db/facets.js';
-import { restoreDecisionOriginalYear, setDecisionOriginalYear } from './library-db/tracks.js';
+import { restoreDecisionOriginalYear, setDecisionOriginalYear, setStoredEraVerdict } from './library-db/tracks.js';
 import { ORIGINAL_YEAR_MIN, isValidOriginalYear, originalYearMax } from '../schemas/library.js';
 import { isAlbumKind, labelOwner, ownerFolderOf, suggestAlbumKind, suggestedDecision, type AlbumKind, type EraDecision, type OwnerContext, type OwnerInput } from './album-kind.js';
 import { artistParticipantKeys } from './recency.js';
@@ -266,10 +267,10 @@ function wantSql(verdict: EraVerdict | null): string {
  * it to the existing rows at once — no walk needed for a click to take effect.
  * The album's kind is kept.
  *
- *  - The stored verdict moves only on rows whose value changes, and
- *    text_vector_dirty is set only where the embedding's `Era:` line really
- *    moves (step 22's rule): no resolved original year and a file year. A
- *    resolved track keeps its vector.
+ *  - The stored verdict moves only on rows whose value changes
+ *    (tracks.setStoredEraVerdict), and the text vector is marked only where
+ *    the embedding's `Era:` line really moves (markTextVectorDirtyIfEraChanged,
+ *    the one rule for it). A resolved track keeps its vector.
  *  - 'year' writes `year` as the MANUAL original year of every track but one
  *    the operator set by hand (tracks.setDecisionOriginalYear, which records
  *    what the track held and sets the vector flag itself). Leaving 'year'
@@ -310,23 +311,15 @@ export function setEraOverride(
 
     const want = wantSql(verdict);
     const scope = verdict === 'trusted' || verdict === 'suspect' ? '' : `AND ${SCANNED_SQL}`;
-    const ids = (d.prepare(
-      `SELECT id FROM tracks
+    const flips = d.prepare(
+      `SELECT id, ${want} AS want FROM tracks
         WHERE ${ERA_ALBUM_KEY_SQL} = ? ${scope}
           AND era_untrusted IS NOT ${want}`,
-    ).all(albumKey) as Array<{ id: string }>).map(r => r.id);
-    const flip = d.prepare(
-      `UPDATE tracks
-          SET era_untrusted = ${want},
-              text_vector_dirty = CASE WHEN COALESCE(original_year, 0) <= 0 AND year > 0
-                                       THEN 1 ELSE text_vector_dirty END
-        WHERE id = ?`,
-    );
-    for (const id of ids) {
-      flip.run(id);
+    ).all(albumKey) as Array<{ id: string; want: number }>;
+    for (const { id, want: untrusted } of flips) {
       // The year facet reads the verdict (a trusted album needs no lookup), so
       // its row is re-derived like any walk that changes the era columns.
-      syncTrackFacets(id);
+      setStoredEraVerdict(id, untrusted === 1);
       changed.add(id);
     }
 

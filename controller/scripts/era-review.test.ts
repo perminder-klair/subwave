@@ -169,6 +169,12 @@ test('trusted override survives a second walk and a third', () => {
 
 // ── (e) setEraOverride applies immediately ───────────────────────────────────
 
+// A text vector built from the era the row resolves to now, so it starts clean.
+function embed(...ids: string[]): void {
+  for (const id of ids) db.upsertTrackVector(id, new Array(8).fill(0.1), db.resolvedEraYearForTrack(id));
+  d().exec(`UPDATE tracks SET text_vector_dirty = 0 WHERE id IN (${ids.map(i => `'${i}'`).join(',')})`);
+}
+
 test('setEraOverride flips existing rows at once and marks text_vector_dirty only where the value actually changes', () => {
   // Four tracks on one album key, in each stored state, all clean to start.
   d().exec(`
@@ -179,6 +185,7 @@ test('setEraOverride flips existing rows at once and marks text_vector_dirty onl
       ('x3', 'Three', 'QA', 'QA Album', 'QA Artist', 0,    NULL,               0, 1994),
       ('x4', 'Four',  'QA', 'QA Album', 'QA Artist', NULL, NULL,               0, 1994);
   `);
+  embed('x1', 'x2', 'x3', 'x4');
   const key = era.albumEraKey('QA Artist', 'QA Album');
   const affected = era.setEraOverride(d(), key, 'trusted');
   // x3 was already 0: not flipped, not dirty. x1, x2, x4 all change value.
@@ -188,7 +195,7 @@ test('setEraOverride flips existing rows at once and marks text_vector_dirty onl
   assert.equal(row('x2')!.text_vector_dirty, 1);
   assert.equal(row('x3')!.text_vector_dirty, 0, 'already trusted: untouched');
   assert.equal(row('x4')!.era_untrusted, 0, 'NULL means no evidence, trusted normalizes it to 0');
-  assert.equal(row('x4')!.text_vector_dirty, 1);
+  assert.equal(row('x4')!.text_vector_dirty, 0, 'its era was 1994 before and after: the vector is still right');
   // And the override itself is recorded, so the next walk agrees.
   assert.equal(era.loadEraOverrides(d()).get(key)!.verdict, 'trusted');
 
@@ -247,21 +254,29 @@ test('the walk writes its reason with its verdict, so an album it no longer flag
   assert.equal(row('r1')!.era_untrusted, 0);
 });
 
-test('an override re-embeds only tracks whose Era: line moves: no resolved year, and a file year', () => {
+test('an override re-embeds only tracks whose Era: line moves, and only tracks that have a vector', () => {
   d().exec(`
     INSERT INTO tracks (id, title, artist, album, album_artist, era_untrusted, era_reason, text_vector_dirty, year, original_year)
     VALUES
-      ('v1', 'Open',     'V', 'V Album', 'V Artist', 1, 'many-artists', 0, 1988, NULL),
-      ('v2', 'Resolved', 'V', 'V Album', 'V Artist', 1, 'many-artists', 0, 1988, 1969),
-      ('v3', 'No year',  'V', 'V Album', 'V Artist', 1, 'many-artists', 0, NULL, NULL);
+      ('v1', 'Open',      'V', 'V Album', 'V Artist', 1, 'many-artists', 0, 1988, NULL),
+      ('v2', 'Resolved',  'V', 'V Album', 'V Artist', 1, 'many-artists', 0, 1988, 1969),
+      ('v3', 'No year',   'V', 'V Album', 'V Artist', 1, 'many-artists', 0, NULL, NULL),
+      ('v4', 'No vector', 'V', 'V Album', 'V Artist', 1, 'many-artists', 0, 1988, NULL);
   `);
+  embed('v1', 'v2', 'v3');
   const key = era.albumEraKey('V Artist', 'V Album');
-  assert.equal(era.setEraOverride(d(), key, 'trusted'), 3, 'all three verdicts change');
+  assert.equal(era.setEraOverride(d(), key, 'trusted'), 4, 'all four verdicts change');
   assert.equal(row('v1')!.text_vector_dirty, 1, 'its era goes from unknown to 1988');
   assert.equal(row('v2')!.text_vector_dirty, 0, 'the resolved 1969 wins either way: vector kept');
   assert.equal(row('v3')!.text_vector_dirty, 0, 'no year either way: vector kept');
+  assert.equal(row('v4')!.text_vector_dirty, 0, 'its era moves, but there is no vector to mark');
+  // And back: Reset moves v1's era again, and only v1's.
+  embed('v1');
   era.setEraOverride(d(), key, null);
-  d().exec(`DELETE FROM tracks WHERE id IN ('v1','v2','v3')`);
+  assert.equal(row('v1')!.text_vector_dirty, 1);
+  assert.equal(row('v2')!.text_vector_dirty, 0);
+  assert.equal(row('v4')!.text_vector_dirty, 0);
+  d().exec(`DELETE FROM tracks WHERE id IN ('v1','v2','v3','v4')`);
 });
 
 test('albumEraKey folds the way SQLite does, so non-ASCII names key the same on both sides', () => {
