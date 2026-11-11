@@ -50,6 +50,8 @@ const requests: Array<Record<string, unknown>> = [];
 let placedAnswer = true;
 // The placed window cannot be read (a damaged file even ffmpeg gives up on).
 let placedMiss = false;
+// How long the stub takes over a flat answer (the request deadline tests).
+let flatDelayMs = 0;
 
 function handler(req: IncomingMessage, res: ServerResponse) {
   if (req.url?.startsWith('/health')) {
@@ -70,13 +72,15 @@ function handler(req: IncomingMessage, res: ServerResponse) {
       if (!r.facets) {
         // A regular (flat) analysis: the whole flat answer.
         const end = tw && placedAnswer ? tw.end_ms : 214_000;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({
-          ok: true, bpm: 120, key: 'Am', intro_ms: 0, confidence: 0.9, loudness_lufs: -10, peak_db: -1,
-          outro: { startMs: end - 5000, ending: 'cold', bpm: 120, beats: [end - 1000] },
-          ...(tw && placedAnswer ? { tail_window: 'edges', tail_silence_ms: tw.duration_ms - tw.end_ms, tail_start_ms: tw.end_ms }
-            : { tail_silence_ms: 300, tail_start_ms: 213_700 }),
-        }));
+        setTimeout(() => {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            ok: true, bpm: 120, key: 'Am', intro_ms: 0, confidence: 0.9, loudness_lufs: -10, peak_db: -1,
+            outro: { startMs: end - 5000, ending: 'cold', bpm: 120, beats: [end - 1000] },
+            ...(tw && placedAnswer ? { tail_window: 'edges', tail_silence_ms: tw.duration_ms - tw.end_ms, tail_start_ms: tw.end_ms }
+              : { tail_silence_ms: 300, tail_start_ms: 213_700 }),
+          }));
+        }, flatDelayMs);
         return;
       }
       const facets: Record<string, unknown> = {};
@@ -738,6 +742,39 @@ test('a regular run measures the edges first, so a NEW track\'s tail is placed o
   assert.equal(tailVersionCol('fresh1'), 2);
   assert.deepEqual([tailRow('fresh1')?.status, tailRow('fresh1')?.version], ['ok', 2]);
   consistent();
+});
+
+test('one deadline rule for every analyze request: a placed window or a whole-file facet gets the long one', () => {
+  const { requestTimeoutMs: pass, wholeFileTimeoutMs: whole } = config.analyzer;
+  const long = Math.max(pass, whole);
+  const tw = { end_ms: 194_000, duration_ms: 214_000 };
+  // Flat requests (the worker and the sidecar alike).
+  assert.equal(analyzer.analyzeRequestTimeoutMs({ path: '/x.flac' }), pass);
+  assert.equal(analyzer.analyzeRequestTimeoutMs({ path: '/x.flac', complete: true, tail_window: tw }), long,
+    'a complete copy read in place can still fall back to a decode from the start');
+  // Facet requests: the caller's deadline stands unless the request may read the stream.
+  assert.equal(analyzer.analyzeRequestTimeoutMs({ facets: ['head'] }), pass);
+  assert.equal(analyzer.analyzeRequestTimeoutMs({ facets: ['head'] }, 5_000), 5_000);
+  assert.equal(analyzer.analyzeRequestTimeoutMs({ facets: ['edges'] }, 5_000), long);
+  assert.equal(analyzer.analyzeRequestTimeoutMs({ facets: ['vocal'], tail_window: tw }, 5_000), long);
+  assert.equal(analyzer.analyzeRequestTimeoutMs({ facets: ['tail'], tail_window: tw }, long + 1), long + 1, 'a longer caller deadline wins');
+});
+
+test('a flat request with a placed window waits for the long deadline; one without keeps the pass deadline', async () => {
+  const cfg = config.analyzer as { requestTimeoutMs: number; wholeFileTimeoutMs: number };
+  const saved = { ...cfg };
+  cfg.requestTimeoutMs = 150;
+  cfg.wholeFileTimeoutMs = 5_000;
+  flatDelayMs = 600;
+  try {
+    const placed = await analyzer.analyze('dl1', { tail_window: { end_ms: 194_000, duration_ms: 214_000 } });
+    assert.equal(placed.tailPlaced, true, 'answered inside the whole-file deadline');
+    await assert.rejects(analyzer.analyze('dl2', {}), 'an unplaced flat request keeps the short pass deadline');
+  } finally {
+    flatDelayMs = 0;
+    cfg.requestTimeoutMs = saved.requestTimeoutMs;
+    cfg.wholeFileTimeoutMs = saved.wholeFileTimeoutMs;
+  }
 });
 
 // ── Tail vocal evidence is never dropped by a write that did not measure it ──

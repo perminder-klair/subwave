@@ -486,10 +486,7 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
 
 // Carries either `url` (worker downloads) or `path` (already-local).
 function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
-  const timeoutMs = req.tail_window
-    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs)
-    : config.analyzer.requestTimeoutMs;
-  return localRequestRaw(req, timeoutMs).then(toAnalysisResult);
+  return localRequestRaw(req, analyzeRequestTimeoutMs(req)).then(toAnalysisResult);
 }
 
 // The worker's raw answer (flat or facet shape), for the facet protocol.
@@ -667,10 +664,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    // A placed tail window may be decoded from the stream URL.
-    timeoutMs: body.tail_window
-      ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs)
-      : config.analyzer.requestTimeoutMs,
+    timeoutMs: analyzeRequestTimeoutMs(body),
     bodyDeadline: true,
     retryStaleSocket: true,
   });
@@ -1203,6 +1197,21 @@ const readsWholeFile = (body: Record<string, unknown>) =>
 // A placed tail window may be decoded from the stream URL (a capped copy cannot
 // reach it), so it needs the URL and the whole-file timeout too.
 const readsStream = (body: Record<string, unknown>) => readsWholeFile(body) || body.tail_window != null;
+
+// THE deadline of an analyze request, flat or facet, local worker or sidecar.
+// One that may decode from the stream URL (readsStream: the whole-file facets,
+// or a placed tail window) gets the whole-file deadline, which a caller's own
+// deadline can only lengthen. That includes a complete local copy read in
+// place: a damaged file's placed window falls back to an ffmpeg decode that
+// counts samples from the start (analyze_worker.py _placed_tail). Any other
+// request keeps the caller's deadline as given, shorter than the pass's
+// included (a pick-time separation's own budget, and the tests that shorten
+// it), else the pass's.
+export function analyzeRequestTimeoutMs(body: object, callerDeadlineMs?: number): number {
+  return readsStream(body as Record<string, unknown>)
+    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs, callerDeadlineMs ?? 0)
+    : callerDeadlineMs ?? config.analyzer.requestTimeoutMs;
+}
 export type FacetAnswerStatus = 'ok' | 'unmeasurable' | 'unavailable' | 'failed';
 
 export interface FacetAnswer {
@@ -1318,13 +1327,7 @@ async function facetRequest(
 ): Promise<FacetAnalysis> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
-  // A request that reads the whole file (or the placed tail from it) gets the whole-file deadline, which
-  // a caller's own deadline can only lengthen. Any other request keeps the
-  // caller's deadline as given, shorter than the pass's included (a pick-time
-  // separation's own budget, and the tests that shorten it), else the pass's.
-  const timeoutMs = readsStream(body)
-    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs, deadlineMs ?? 0)
-    : deadlineMs ?? config.analyzer.requestTimeoutMs;
+  const timeoutMs = analyzeRequestTimeoutMs(body, deadlineMs);
   let msg: WorkerMessage;
   if (backend === 'sidecar') {
     const res = await fetchWithTimeout(`${_sidecarBase}/analyze`, {
