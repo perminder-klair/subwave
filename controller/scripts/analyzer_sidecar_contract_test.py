@@ -436,6 +436,17 @@ async def test_facet_contract():
     assert worker_calls[0].get("tail_window") == {"end_ms": 180000, "duration_ms": 200000}, worker_calls
     assert worker_calls[0].get("stream_url") == "http://navi/stream", worker_calls
     assert flat.get("tail_window") == "edges" and flat.get("tail_start_ms") == 180000, flat
+    # The stem outcome passes through, tail_stems_landed included (#2238): the
+    # controller's stems_at decision reads it.
+    async def stems_request(payload):
+        return {"ok": True, "bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0,
+                "stems_cached": True, "tail_stems_landed": False}
+
+    server.analyzer_pool.request = stems_request
+    with tempfile.NamedTemporaryFile() as audio:
+        flat = await server.analyze(server.AnalyzeRequest(path=audio.name, complete=True))
+    server.analyzer_pool.request = worker_request
+    assert flat.get("stems_cached") is True and flat.get("tail_stems_landed") is False, flat
 
     # Model bookkeeping follows the facets named, not the env defaults.
     assert server.StdioWorker._wants_models({"facets": ["head", "tail"]}) is False

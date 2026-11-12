@@ -69,6 +69,12 @@ export interface AnalysisResult {
   // true when head stems were written to the requested stems_dir. null = none
   // requested / backend predates the feature.
   stemsCached: boolean | null;
+  // Whether the tail stems (and their meta) landed (`tail_stems_landed`), said
+  // only when the tail was proven and asked for: false = a tail that could
+  // have landed did not (stem-stamp-policy.ts retries it). null/absent = no
+  // tail to cut, or an analyzer from before #2238. Not the facet's older
+  // `tail_stems`, which an older analyzer also sends false for an unproven tail.
+  tailStemsLanded?: boolean | null;
   // Dead-air gaps at the file's edges (ms), measured against an ABSOLUTE dBFS
   // floor — never the relative gates behind introMs / outro.startMs, which ask
   // where the MUSIC starts and would read a quiet intro as silence. The tail is
@@ -293,6 +299,7 @@ interface WorkerMessage {
   tail_silence_ms?: unknown;
   tail_start_ms?: unknown;
   stems_cached?: boolean;
+  tail_stems_landed?: boolean;
   text_embeddings?: unknown;
   // render_transition op fields
   path?: string;
@@ -470,6 +477,7 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
           tailStartMs: parseSilenceMs(msg.tail_start_ms),
           stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
+          tailStemsLanded: typeof msg.tail_stems_landed === 'boolean' ? msg.tail_stems_landed : null,
           loudnessVersion: parseFinite(msg.loudness_version),
           samplePeakDb: parseFinite(msg.sample_peak_db),
           loudnessRangeLu: parseFinite(msg.lra_lu),
@@ -690,6 +698,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
     tailStartMs: parseSilenceMs(resBody.tail_start_ms),
     stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
+    tailStemsLanded: typeof resBody.tail_stems_landed === 'boolean' ? resBody.tail_stems_landed : null,
     tailPlaced: resBody.tail_window === 'edges',
   };
 }

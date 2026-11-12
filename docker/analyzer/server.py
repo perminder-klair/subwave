@@ -888,6 +888,7 @@ async def analyze(req: AnalyzeRequest):
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
         "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
+        "tail_stems_landed",
         "lead_silence_ms", "tail_silence_ms", "tail_start_ms", "tail_window",
     ):
         if k in msg:

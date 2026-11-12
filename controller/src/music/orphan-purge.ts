@@ -501,7 +501,8 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
 // costs a backfill run, nothing worse.
 async function stampReleasedStems(id: string): Promise<void> {
   try {
-    const complete = (await stemCache.hasWindow(id, 'head')) && (await stemCache.hasWindow(id, 'tail'));
+    const expect = { fileSize: db.trackFileSize(id) };
+    const complete = (await stemCache.hasWindow(id, 'head', expect)) && (await stemCache.hasWindow(id, 'tail', expect));
     if (complete) db.stampStemsCached(id);
   } catch { /* library closed */ }
 }

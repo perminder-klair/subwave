@@ -216,7 +216,7 @@ def t_placed_tail_vocals_and_stems_use_the_placed_window():
     src = PlacedSource(y)
     with Patched(get_vocal_detector=lambda force=False: Detector(calls), measure_loudness=fixed_loudness,
                  write_stems=lambda stems, window, d: written.append(window),
-                 write_tail_meta=lambda d, off, dur: written.append(("meta", round(off, 3), round(dur, 3))),
+                 write_head_meta=lambda *_a: None, write_tail_meta=lambda d, off, dur, **_kw: written.append(("meta", round(off, 3), round(dur, 3))),
                  log=lambda *_a: None):
         out = aw.analyze_facets(FakeLibrosa, src, ["tail", "vocal", "stems"], stems_dir="/x",
                                 tail_window={"end_ms": 180_000, "duration_ms": 200_000})
@@ -539,7 +539,7 @@ def t_the_flat_analysis_places_the_tail_too():
                  measure_loudness=fixed_loudness, log=lambda *_a: None,
                  facet_head=lambda y, sr, librosa: {"bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0},
                  write_stems=lambda stems, window, d: written.append(window),
-                 write_tail_meta=lambda d, off, dur: written.append(("meta", round(off, 3), round(dur, 3))),
+                 write_head_meta=lambda *_a: None, write_tail_meta=lambda d, off, dur, **_kw: written.append(("meta", round(off, 3), round(dur, 3))),
                  stems_dir_to_write=lambda d, req=False: d):
         out = aw.analyze(Lib, path="/staged/x.flac", complete=True, vocal=True, stems_dir="/x",
                          tail_window={"end_ms": 180_000, "duration_ms": 200_000},
