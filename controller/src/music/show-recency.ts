@@ -1,7 +1,7 @@
 // No-repeat capacity for scheduled shows: the hard window clamped to the universe
 // a pick may draw from. One module so the agent and pool paths share one policy.
 
-import { effectiveNoRepeatWindow, exhaustiveNoRepeatWindow, trackKey } from './recency.js';
+import { effectiveNoRepeatWindow, episodeNoRepeatWindow, exhaustiveNoRepeatWindow, trackKey } from './recency.js';
 import { applyStrictLocks, type FilterTrack, type VocalMode, type YearRange } from './show-filter.js';
 import { excludesExplicit, withoutExplicit } from './explicit-policy.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
@@ -34,9 +34,10 @@ export type ShowNoRepeatGuard = {
   // The show's own full-rotation window (#1612) rather than a clamped N. The pool
   // picker samples its show-playlist source differently when set; never re-derive.
   exhaustive: boolean;
-  // The airable rotation itself, present exactly when `exhaustive` is. Its
-  // window is measured over THIS set's own air history (hardRecentFor), never
-  // the station's: other shows' plays must not push its tracks out (#1919).
+  // The airable rotation itself, present exactly when `exhaustive` is: the
+  // strict anchor playlist, or a prepared episode's tracks (#2320). Its window
+  // is measured over THIS set's own air history (hardRecentFor), never the
+  // station's: other shows' plays must not push its tracks out (#1919).
   rotation?: ShowTrack[];
 };
 
@@ -157,8 +158,24 @@ export function showNoRepeatGuard(
   },
 ): ShowNoRepeatGuard {
   if (episodeTracks) {
+    // The episode outranks the anchor playlist, so its own tracks are the
+    // universe here. resolveArtistEpisodeSource has already applied the show's
+    // airable rule to them (excluded playlists, clean show, locks, length), so
+    // they are counted as given.
     const identities = new Set(episodeTracks.map(track => track.title ? `key:${trackKey(track)}` : `id:${track.id}`));
-    return { window: effectiveNoRepeatWindow(configuredN, identities.size), exhaustive: false };
+    // Full rotation over the episode (#2320): the show's switch means "every
+    // track once before a repeat", and during an episode the episode is the set
+    // that can be true of. Gated exactly as the playlist branch below gates it,
+    // so the switch stays a no-op without playlistStrict. Measured over the
+    // episode's OWN airings through `rotation`, as #1919 measures a playlist's.
+    if (show?.playlistStrict && show.playlistExhaust === true) {
+      const window = exhaustiveNoRepeatWindow(identities.size);
+      return window > 0 ? { window, exhaustive: true, rotation: episodeTracks } : { window, exhaustive: false };
+    }
+    // Otherwise the configured N under the episode's own S-2 headroom, over
+    // the station's plays. effectiveNoRepeatWindow's ceiling and floor turned
+    // the guard off for any artist under 40 tracks (#2320).
+    return { window: episodeNoRepeatWindow(configuredN, identities.size), exhaustive: false };
   }
   // A soft anchor can leave the playlist, and an unresolved strict anchor has
   // no playlist lock at runtime. Both still need the library-wide window.

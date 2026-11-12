@@ -824,6 +824,23 @@ catalogue. Requests do not receive this scope. The auto-playlist build key carri
 the occurrence and prepared source identity, and publication checks the current
 show and settings epoch before replacing `auto.m3u`.
 
+**An episode is its own catalogue for the hard no-repeat window** (#2320).
+`showNoRepeatGuard` sizes the window from the episode's tracks, never the anchor
+playlist's or the library's, and never through `effectiveNoRepeatWindow`: that
+clamp's 37.5% ceiling and 15-track floor bound a number the operator typed against
+a whole library, and against one artist they turned the guard off below 40 tracks,
+so a 28-track episode aired one song three times in an hour. Without "Play the
+whole playlist before repeating" the window is `episodeNoRepeatWindow`, the
+configured N held under the S−2 headroom of a full rotation, over the station's
+plays as before (`0` configured stays off). With the switch, gated on
+`playlistStrict` exactly as the playlist rotation is, the episode is a full
+rotation over its own tracks' airings (`exhaustiveNoRepeatWindow`, `rotation` =
+the episode's tracks). Either way one identity always survives, so the guard
+cannot empty an episode: the auto-pick runs only with nothing queued, so the S−2
+window withholds at most the on-air track and S−2 played ones. The coast does not
+take the episode's rotation (`scheduler.ts` asks the guard only without an
+episode), since its coast is the episode source itself.
+
 ## Scheduled tagging (#2282)
 
 `settings.tagger.auto` starts a tagger run once a station day at a set time, so new music reaches the air without an operator pressing Start. It is off by default (an absent block reads as `mode: 'off'`, so an upgrade changes nothing), and an off schedule costs one settings read per tick and one read of its own record per process: no Navidrome call, no listener probe.

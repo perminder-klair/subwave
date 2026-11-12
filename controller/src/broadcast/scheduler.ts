@@ -293,11 +293,12 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Full rotation (#1612), decided by the same guard the pick paths read, so
   // the coast continues the rotation they are walking instead of sampling round
   // it (#1919). Only `rotation` is read here; the window sizes are the pickers'.
-  const rotation = strictPlaylist
+  // A prepared episode's coast is its own source (below), so the episode's
+  // rotation the pickers walk (#2320) never reaches it.
+  const rotation = strictPlaylist && !episodeSource
     ? showNoRepeatGuard(0, 0, {
         show,
         playlistTracks: playlistPool!.tracks,
-        episodeTracks: episodeSource?.tracks,
         excludedIds,
         resolvedGenres: genreNames,
         minTrackSec: minDurationSec,

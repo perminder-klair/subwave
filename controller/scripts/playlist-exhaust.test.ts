@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { hardRecentFor, rotationHardSet, showNoRepeatGuard, type AirTimeOf } from '../src/music/show-recency.js';
-import { exhaustiveNoRepeatWindow } from '../src/music/recency.js';
+import { episodeNoRepeatWindow, exhaustiveNoRepeatWindow } from '../src/music/recency.js';
 
 type Track = {
   id: string;
@@ -544,4 +544,70 @@ test('configured windows clamp to airable strict anchors', () => {
     'duplicate title/artist rips must count as one track for clamp capacity',
   );
 
+});
+
+// ---------------------------------------------------------------------------
+// Prepared artist episodes (#2320). The episode outranks the anchor playlist,
+// so its own tracks are the universe the hard window has to fit.
+// ---------------------------------------------------------------------------
+
+// One artist's catalogue, as resolveArtistEpisodeSource hands it over.
+const episodeTracks = (n: number): Track[] =>
+  Array.from({ length: n }, (_, i) => ({ id: `e${i + 1}`, title: `Episode ${i + 1}`, artist: 'The Artist', genres: ['Jazz'] }));
+
+const episodeGuard = (show: Record<string, unknown>, tracks: Track[], configured = 250) =>
+  showNoRepeatGuard(configured, LIBRARY, { show: show as never, playlistTracks: makeTracks(400), episodeTracks: tracks, excludedIds: null });
+
+test('an episode under 40 tracks keeps a hard window (#2320)', () => {
+  // The reported shape: noRepeatWindow 250, a 28-track artist. The library
+  // clamp's 37.5% ceiling gave 10, and its floor of 15 turned that into 0.
+  for (const n of [3, 10, 25, 28, 39]) {
+    const g = episodeGuard({ playlistStrict: true }, episodeTracks(n));
+    assert.equal(g.window, n - 2, `${n} tracks: the configured window, held under the S-2 headroom`);
+    assert.equal(g.exhaustive, false);
+    assert.equal(g.rotation, undefined, 'without the switch the window stays over the station\'s plays');
+  }
+  assert.equal(episodeGuard({}, episodeTracks(28), 10).window, 10, 'a configured window smaller than the episode stands as typed');
+  assert.equal(episodeGuard({}, episodeTracks(400)).window, 250, 'a large catalogue takes the configured window, uncapped by the library ceiling');
+  assert.equal(episodeGuard({}, episodeTracks(28), 0).window, 0, 'a station that turned the guard off keeps it off');
+  assert.equal(episodeGuard({}, episodeTracks(2)).window, 0, 'two tracks or fewer loop freely');
+  assert.equal(episodeNoRepeatWindow(250, 28), 26);
+  assert.equal(episodeNoRepeatWindow(null, 28), 0);
+});
+
+test('an episode honours "Play the whole playlist before repeating" over its own tracks (#2320)', () => {
+  const tracks = episodeTracks(28);
+  const g = episodeGuard({ playlistStrict: true, playlistExhaust: true }, tracks);
+  assert.deepEqual({ window: g.window, exhaustive: g.exhaustive }, { window: exhaustiveNoRepeatWindow(28), exhaustive: true });
+  assert.equal(g.rotation, tracks, 'the rotation is the episode, not the anchor playlist it outranks');
+  // The playlist branch's own gate: the switch is a no-op without playlistStrict.
+  const soft = episodeGuard({ playlistStrict: false, playlistExhaust: true }, tracks);
+  assert.deepEqual({ window: soft.window, exhaustive: soft.exhaustive }, { window: 26, exhaustive: false });
+  assert.equal(soft.rotation, undefined);
+  const tiny = episodeGuard({ playlistStrict: true, playlistExhaust: true }, episodeTracks(2));
+  assert.deepEqual({ window: tiny.window, exhaustive: tiny.exhaustive, rotation: tiny.rotation }, { window: 0, exhaustive: false, rotation: undefined });
+});
+
+// The reported hour, through the real hard set: a 28-track episode picked at
+// random among what the guard allows, both with the switch and without it.
+// Before #2320 the window was 0, so any track could air again a few minutes on.
+test('a 28-track episode never repeats a track while others wait, and never empties the pool (#2320)', () => {
+  const tracks = episodeTracks(28);
+  for (const show of [{ playlistStrict: true }, { playlistStrict: true, playlistExhaust: true }]) {
+    const s = station();
+    const random = prng(2320);
+    const aired: string[] = [];
+    for (let pick = 0; pick < 60; pick++) {
+      const { ids: blocked } = hardRecentFor(episodeGuard(show, tracks), {
+        recentlyPlayedByCount: (n: number) => ({ ids: blockedSet(s.ended, s.onAir(), n), keys: new Set<string>() }),
+        rotationAirTimes: () => s.airTimeOf,
+      });
+      const eligible = tracks.filter((t) => !blocked.has(t.id));
+      assert.ok(eligible.length > 0, `pick ${pick + 1}: the guard must never empty the episode`);
+      const chosen = eligible[Math.floor(random() * eligible.length)];
+      s.play(chosen.id);
+      aired.push(chosen.id);
+    }
+    assert.deepEqual(rotationBreaks(aired, 28), [], JSON.stringify(show));
+  }
 });

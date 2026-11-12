@@ -494,6 +494,22 @@ export function exhaustiveNoRepeatWindow(universeSize: number | null | undefined
   return Math.max(0, total - EXHAUSTIVE_WINDOW_HEADROOM);
 }
 
+// A prepared artist episode's window when its show has no full rotation
+// (#2320): the configured N, held under the same S-2 headroom, with neither
+// of effectiveNoRepeatWindow's library bounds. The episode IS the catalogue, and
+// both bounds switched the guard off below 40 artist tracks, so a 28-track
+// episode aired one song three times in an hour while it had tracks to spare.
+// The headroom alone keeps the longest-waiting identity available, which is
+// what the 37.5% ceiling was there to promise. 0 configured is still off.
+export function episodeNoRepeatWindow(
+  configuredN: number | null | undefined,
+  universeSize: number | null | undefined,
+): number {
+  const n = Math.floor(Number(configuredN) || 0);
+  if (n <= 0) return 0;
+  return Math.min(n, exhaustiveNoRepeatWindow(universeSize));
+}
+
 export function filterPickerCandidates<T extends CandidateLike>(
   list: T[],
   {
