@@ -5316,6 +5316,13 @@ html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"],
     overflow: hidden;
 }
 .observatory-root button { font-family: inherit; }
+/* The Observatory sits outside .admin-root, so it gets its own --danger (the
+   rail's "LAST RUN FAILED" line). The admin's #c5302a, lifted for dark. */
+.observatory-root { --danger: #c5302a; }
+:root[data-theme="dark"] .observatory-root { --danger: #ff6b5e; }
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .observatory-root { --danger: #ff6b5e; }
+}
 
 /* Landing-page embed. The box owns the aspect ratio; observatory-root fills it as
    two columns — the constellation stage and the right rail — stacked on phones. */
