@@ -772,8 +772,9 @@ once edges exist. Six rules:
    answer's ranges (the worker names a placed window, `tail_window: "edges"` in
    the vocal data) are merged into the stored outro only when it is on theirs;
    otherwise the row stays head-only and placing the tail measures them. A new
-   tail measured **without** its vocals (vocal detection off, or a tail-only run
-   that did not ask) never drops the stored ones, flat or facet, because the
+   tail measured **without** its vocals (vocal detection off, a tail-only run
+   that did not ask, or a vocal-on pass whose tail separation failed, #2318)
+   never drops the stored ones, flat or facet, because the
    tail can only move the instrumental verdict toward vocal: on the same window
    they are carried as they are; on another window only singing is carried,
    its spans being absolute file times that stay true of the file

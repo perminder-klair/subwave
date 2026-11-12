@@ -891,8 +891,9 @@ interface TrackAnalysisWrite {
   // null keeps the existing value (COALESCE): a pass that couldn't reach the
   // tail must not wipe a complete pass's measurement.
   outro?: TrackOutro | null;
-  // A targeted run that disables vocals must keep the outro's separate vocal
-  // measurement, just as COALESCE keeps the head vocal ranges.
+  // A new outro without vocalRanges (vocals off, or a tail separation that
+  // failed) keeps the outro's separate vocal measurement, just as COALESCE
+  // keeps the head vocal ranges. The flat analysis always sets it (#2318).
   preserveTailVocal?: boolean;
   // Edge dead air (ms). The head is measurable on every pass and overwrites;
   // the tail follows the outro's COALESCE rule.
