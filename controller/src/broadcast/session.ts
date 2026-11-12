@@ -62,6 +62,8 @@ interface ProgrammePlan {
 interface ProgrammeEpisode {
   status: 'pending' | 'ok' | 'fallback';
   preparationSubject?: string;
+  /** `preparationPlanStamp` (occurrence + subject) the plan was written under; the greeting uses its angle only while it matches (#2321). */
+  preparationStamp?: string;
   preparationOccurrence?: { id: string; endsAt: number };
   plan: ProgrammePlan | null;
   beats?: Record<string, boolean>;

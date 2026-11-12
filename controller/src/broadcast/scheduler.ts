@@ -195,7 +195,20 @@ const autoPlaylistPolicyKey = () => JSON.stringify({
 let publishedAutoPlaylistPolicy = autoPlaylistPolicyKey();
 onPreparationChange(() => {
   void refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Episode fallback refresh failed: ${err.message}`));
+  void replanAfterPreparation().catch(err => queue.log('error', `Programme replan after preparation failed: ${err.message}`));
 });
+
+// A preparation that turns ready after its episode was left pending (#2321)
+// plans now, not at the next pick: the live episode, and an incoming one already
+// armed on the boundary record (prepared at the record's look-ahead moment, as
+// the pick cycle does). Both are idempotent; an unchanged subject buys nothing.
+async function replanAfterPreparation() {
+  await programme.ensurePlan(await prepareEpisodeContext(await getFullContext()));
+  const pending = session.pendingHandoff();
+  const at = pending && 'incomingPersonaId' in pending ? session.boundaryHandoffContextAt() : null;
+  if (!at) return;
+  await programme.prepareBoundaryPlan(await prepareEpisodeContext(await getFullContext(at)));
+}
 onCacheChange(() => {
   const key = autoPlaylistPolicyKey();
   if (key === publishedAutoPlaylistPolicy) return;

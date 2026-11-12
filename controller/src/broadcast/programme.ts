@@ -1,4 +1,4 @@
-import { prepareEpisodeContext, preparationSkillAt, showPreparation } from './show-preparation.js';
+import { prepareEpisodeContext, preparationPlanStamp, preparationSettled, preparationSkillAt, showPreparation } from './show-preparation.js';
 import { skillEligible } from '../skills/eligibility.js';
 // Keep episode plans and aired beats on the session. Mark beats before generation to avoid
 // duplicate playback after failure. Inject the queue to avoid an import cycle.
@@ -165,18 +165,52 @@ async function fillPlan(
     prog.preparationOccurrence = { id: occurrence.id, endsAt: occurrence.endsAt };
     if (stampChanged) attach(prog);
   }
-  const preparation = showPreparation.read({ context: ctx }).status;
+  const view = showPreparation.read({ context: ctx });
+  const preparation = view.status;
   const subject = ctx.episodeEditorial && preparation.kind !== 'unconfigured' ? preparation.subject || '' : '';
   if ((prog.preparationSubject || '') !== subject) {
     prog.preparationSubject = subject;
     prog.status = 'pending';
     prog.plan = null;
+    delete prog.preparationStamp;
     attach(prog);
   }
   if (prog.status !== 'pending') return;
+  // A preparation still waiting on a retry has no subject to give the plan, and
+  // a plan written now invents one (#2321). Stay pending: the beats fall back,
+  // the greeting goes without an angle, and onPreparationChange replans at ready.
+  if (!preparationSettled(view)) return;
   if (!autoVoiceAllowed()) return;  // station voice is off — no beat will air, so don't buy a plan
   if (!optionalSegmentsAllowed()) return;  // over budget — stay pending, retry later
+  // One generation per episode at a time. The pick cycle and the preparation
+  // listener both land here when a preparation turns ready; the second caller
+  // waits for the first plan instead of buying another. A plan dropped as stale
+  // leaves the episode pending, and the caller holding the current subject plans.
+  for (let running = planning.get(prog); running; running = planning.get(prog)) {
+    await running;
+    if (prog.status !== 'pending' || !programmeIsOwned(prog) || (prog.preparationSubject || '') !== subject) return;
+  }
+  const generation = generatePlan(show, ctx, now, prog, attach, subject, generateProgrammePlan);
+  planning.set(prog, generation);
+  try {
+    await generation;
+  } finally {
+    planning.delete(prog);
+  }
+}
 
+const planning = new WeakMap<session.ProgrammeState, Promise<void>>();
+
+async function generatePlan(
+  show: ProgrammeShow,
+  ctx: SessionContext,
+  now: Date,
+  prog: session.ProgrammeState,
+  attach: (next: session.ProgrammeState) => void,
+  subject: string,
+  generateProgrammePlan: typeof dj.generateProgrammePlan,
+): Promise<void> {
+  const stamp = preparationPlanStamp(ctx);
   const span = episodeSpan(now);
   // Span is measured from the show's FIRST hour; the plan covers what's left.
   const hoursLeft = Math.max(1, span.total - span.index);
@@ -198,12 +232,16 @@ async function fillPlan(
     // A cap keeps the same object, including in-flight work. A later airing
     // owns a new object: a delayed producer must not replace its plan/beats.
     if (!programmeIsOwned(prog)) return;
+    // The preparation moved on while the model was writing: this plan was
+    // grounded on the old subject, so leave the episode pending for the new one.
+    if ((prog.preparationSubject || '') !== subject) return;
     prog.status = 'ok';
     prog.plan = plan;
+    prog.preparationStamp = stamp;
     attach(prog);
     logEvent('programme.plan', { show: show.name, angle: plan?.angle || null });
   } catch (err) {
-    if (!programmeIsOwned(prog)) return;
+    if (!programmeIsOwned(prog) || (prog.preparationSubject || '') !== subject) return;
     prog.status = 'fallback';
     attach(prog);
     logEvent('programme.plan', { show: show.name, error: (err as Error).message });

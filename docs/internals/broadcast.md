@@ -204,6 +204,27 @@ while retaining every aired beat stamp. A new occurrence starts with fresh beats
 even if its subject name repeats. Legacy programme state infers its occurrence
 from the session's original context before a same-show takeover can overwrite it.
 
+The plan waits for the preparation to settle (`preparationSettled`, #2321). A
+skill or catalogue step that failed with an automatic retry still due (the
+catalogue's twelve-second cap is the usual cause: a cold smart playlist, a slow
+pool read) leaves a view with the subject chosen but no editorial. A plan bought
+then sees only the show's name and topic, and the model invents a subject: a show
+called "Dizzy Spells" got a Dizzy Gillespie angle. So `fillPlan` stays pending
+until the view is ready, keeps grounding from a ready record, or has no retry
+left; the beats fall back as they do for any pending plan. When the retry lands,
+`onPreparationChange` replans the live episode and an armed incoming one at once
+rather than at the next pick. One generation runs per episode object, and a plan
+finished after the subject moved on is dropped, not attached. Each plan is stamped
+with the occurrence and grounded subject it was written from
+(`preparationPlanStamp`), and the handoff greeting uses its angle only while that
+still matches (`preparedPlanAngle`); a plan with no stamp predates it and keeps
+its angle. The stamp leaves out the preparation's status and music on purpose: a
+ready preparation whose catalogue refresh later fails keeps its subject and
+grounding, so its plan's angle is still right. A greeting with no angle is the
+accepted cost of a preparation that is not ready at the boundary: the boundary
+does not wait for it. Speech that already aired an invented subject stays in the
+session's prompt memory; this does not withdraw it.
+
 Unexpired interrupted episodes are stored with the programme, capped at sixteen.
 A session roll or fresh-session recovery with no owned incoming programme carries
 these snapshots into a fresh pending object. `fillPlan` restores a matching occurrence before buying a

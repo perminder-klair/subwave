@@ -26,8 +26,21 @@ export interface EpisodeView {
   status: PreparationStatus;
   music: ArtistEpisodeSource | null;
   editorial: string;
+  /** Another automatic attempt is still due for this occurrence (#2321). */
+  retryPending: boolean;
 }
-const ordinary = (): EpisodeView => ({ status: { kind: 'unconfigured' }, music: null, editorial: '' });
+const ordinary = (): EpisodeView => ({ status: { kind: 'unconfigured' }, music: null, editorial: '', retryPending: false });
+
+// Whether this occurrence's preparation has the grounding it is going to get.
+// A configured preparation whose skill or catalogue step failed with a retry
+// still due has no editorial yet: anything written from it now (the programme
+// plan, and through the plan the handoff greeting's angle) is written without
+// the subject, and a model given only the show's name invents one (#2321).
+// Ready, unconfigured, and a degraded or failed one with no retry left are
+// settled; so is a degraded view that kept its grounding from a ready record.
+export function preparationSettled(view: EpisodeView): boolean {
+  return !!view.editorial || !view.retryPending;
+}
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const capabilityReady = (cap: LoadedCapability | undefined): boolean => {
   try { return cap?.ready ? !!cap.ready() : true; }
@@ -96,6 +109,9 @@ export function createShowPreparation(deps: PreparationDeps) {
       status: { kind: record.kind === 'selected' && record.reason !== null ? 'degraded' : record.kind === 'ready' ? 'selected' : record.kind, occurrence: record.occurrence, skill: record.skill,
         subject: record.kind === 'failed' ? null : record.result.subject, reason: record.kind === 'ready' ? null : record.reason },
       music: null, editorial: '',
+      // An uncached ready record is sourced again on the next ensure.
+      retryPending: record.kind === 'failed' ? record.retryAt != null && record.attempts < 2
+        : record.kind === 'selected' ? record.attempts < 2 : true,
     };
   };
   const current = (snapshot: PreparationSnapshot, context: SessionContext, committed: boolean) => {
@@ -124,7 +140,7 @@ export function createShowPreparation(deps: PreparationDeps) {
         const reason = errorMessage(error);
         record = { ...snapshot, kind: 'failed', reason, attempts, retryAt: attempts < 2 ? now() + 60_000 : null };
         await save(record);
-        const view: EpisodeView = { status: { kind: 'failed', occurrence: snapshot.occurrence, skill: snapshot.skill, subject: null, reason }, music: null, editorial: '' };
+        const view: EpisodeView = { status: { kind: 'failed', occurrence: snapshot.occurrence, skill: snapshot.skill, subject: null, reason }, music: null, editorial: '', retryPending: attempts < 2 };
         views.set(snapshot.occurrence.id, view);
         logEvent('show.preparation', { show: snapshot.occurrence.showId, skill: snapshot.skill, reason });
         return view;
@@ -141,7 +157,7 @@ export function createShowPreparation(deps: PreparationDeps) {
       }
       const view: EpisodeView = {
         status: { kind: 'ready', occurrence: snapshot.occurrence, skill: snapshot.skill, subject: result.subject, reason: null },
-        music, editorial: preparationGrounding(result, music ? 'restricted' : 'ordinary', music?.tracks),
+        music, editorial: preparationGrounding(result, music ? 'restricted' : 'ordinary', music?.tracks), retryPending: false,
       };
       const previous = views.get(snapshot.occurrence.id);
       views.set(snapshot.occurrence.id, view);
@@ -155,6 +171,7 @@ export function createShowPreparation(deps: PreparationDeps) {
       const view: EpisodeView = {
         status: { kind: 'degraded', occurrence: snapshot.occurrence, skill: snapshot.skill, subject: record.result.subject, reason },
         music: null, editorial: record.kind === 'ready' ? preparationGrounding(record.result, 'degraded') : '',
+        retryPending: record.kind === 'selected' && record.attempts + 1 < 2,
       };
       const previous = views.get(snapshot.occurrence.id);
       views.set(snapshot.occurrence.id, view);
@@ -246,6 +263,31 @@ export function preparationIdentity(context: SessionContext): string {
   const view = showPreparation.read({ context });
   return view.status.kind === 'unconfigured' ? snapshot(context)?.occurrence.id ?? ''
     : `${view.status.occurrence.id}:${view.status.kind}:${view.music?.identity ?? ''}`;
+}
+
+// What a programme plan is stamped with: the occurrence and the grounded
+// subject it was written from (#2321). Not the preparation's status or music:
+// a ready preparation whose catalogue refresh later fails keeps its subject and
+// grounding, and the plan written from it is still right.
+export function preparationPlanStamp(context: SessionContext): string {
+  const view = showPreparation.read({ context });
+  if (view.status.kind === 'unconfigured') return `${snapshot(context)?.occurrence.id ?? ''}:`;
+  return `${view.status.occurrence.id}:${view.editorial ? view.status.subject || '' : ''}`;
+}
+
+// The programme plan's angle, only while the occurrence and subject it was
+// written from are still the ones in `context` (#2321). A plan written before
+// the catalogue was ready names no subject, or an invented one; the greeting
+// then goes without an angle, which it already handles. A plan with no stamp
+// predates the stamp and keeps its angle, so an upgrade reads the old session
+// unchanged.
+export function preparedPlanAngle(
+  programme: { plan?: { angle?: string | null } | null; preparationStamp?: string } | null | undefined,
+  context: SessionContext,
+): string | null {
+  const angle = programme?.plan?.angle || null;
+  if (!angle || programme?.preparationStamp === undefined) return angle;
+  return programme.preparationStamp === preparationPlanStamp(context) ? angle : null;
 }
 
 export async function prepareEpisodeContext(context: SessionContext): Promise<SessionContext> {

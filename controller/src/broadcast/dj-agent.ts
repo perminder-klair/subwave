@@ -44,7 +44,7 @@ import {
 } from './dj-agent/breaker.js';
 import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, notePickShow, runActive } from './dj-agent/runs.js';
-import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
+import { prepareEpisodeContext, preparedPlanAngle, showPreparation } from './show-preparation.js';
 import { prepareShortlistSearches } from './shortlist-search-preparation.js';
 import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, transitionChoiceNudge, type EditorialLeaningsContext } from './dj-agent/schemas.js';
 import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, plainAgenticSelectionReason, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
@@ -2274,14 +2274,17 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
     //    On a programme show the greeting doubles as the episode's intro, so
     //    the producer's angle (planned before this runs — see the call sites)
     //    rides along; the standalone intro is then skipped (programme.ts).
+    //    Only while the plan was written from the preparation now in `ctx`: a
+    //    plan from before the episode's catalogue was ready invents its
+    //    subject, so that greeting goes without an angle (#2321).
     let greeting: string | null = null;
     try {
       greeting = await generateHandoffGreeting({
         personaIn, personaOut, showIn,
         sameHost: isSameHostAcknowledgement,
-        episodeAngle: (isBoundaryHandoff
+        episodeAngle: preparedPlanAngle(isBoundaryHandoff
           ? session.getBoundaryProgramme()
-          : session.getProgramme())?.plan?.angle || null,
+          : session.getProgramme(), ctx),
         context: promptContext, recap: incomingRecap, recentOpeners,
       });
     } catch (err: any) {
