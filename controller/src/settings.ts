@@ -1211,6 +1211,16 @@ export async function load() {
         Number.isFinite(stored.embedding?.audioFusionWeight)
           ? clamp01(stored.embedding.audioFusionWeight)
           : DEFAULTS.embedding.audioFusionWeight,
+      audioEnergy: {
+        fillEmpty:
+          typeof stored.embedding?.audioEnergy?.fillEmpty === 'boolean'
+            ? stored.embedding.audioEnergy.fillEmpty
+            : DEFAULTS.embedding.audioEnergy.fillEmpty,
+        overruleLlm:
+          typeof stored.embedding?.audioEnergy?.overruleLlm === 'boolean'
+            ? stored.embedding.audioEnergy.overruleLlm
+            : DEFAULTS.embedding.audioEnergy.overruleLlm,
+      },
       batchSize:
         Number.isFinite(stored.embedding?.batchSize) && stored.embedding.batchSize >= 1
           ? Math.max(1, Math.min(50, Math.floor(stored.embedding.batchSize)))
@@ -2430,6 +2440,17 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
         throw new Error('embedding.audioFusionWeight must be between 0 and 1');
       }
       next.embedding.audioFusionWeight = v;
+    }
+    if (e.audioEnergy !== undefined) {
+      const ae = e.audioEnergy;
+      if (!ae || typeof ae !== 'object' || Array.isArray(ae)) {
+        throw new Error('embedding.audioEnergy must be an object');
+      }
+      for (const key of ['fillEmpty', 'overruleLlm'] as const) {
+        if (ae[key] === undefined) continue;
+        if (typeof ae[key] !== 'boolean') throw new Error(`embedding.audioEnergy.${key} must be true or false`);
+        next.embedding.audioEnergy = { ...next.embedding.audioEnergy, [key]: ae[key] };
+      }
     }
     // LLM tag batch size — how many tracks per tagging call. Weaker models
     // truncate/error on large batches, so operators can drop this. Clamp kept in

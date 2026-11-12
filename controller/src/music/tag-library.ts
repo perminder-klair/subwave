@@ -56,7 +56,7 @@ import {
 } from './tag-library/flags.js';
 import { llmTagInBatches, resolveTagConsumers } from './tag-library/tag.js';
 import { rememberedUntaggable, tagPromptStamp } from './tag-library/tag-input.js';
-import { runPropagatedEnergyPass } from './propagated-energy.js';
+import { audioEnergyOptions, runPropagatedEnergyPass } from './propagated-energy.js';
 
 
 // Close (TRUNCATE-checkpoints the WAL) on every exit path; this CLI bails via
@@ -528,7 +528,7 @@ async function main() {
     // analysis pass (a library can gain audio scores long after tagging).
     // Best-effort: never fails the run.
     try {
-      runPropagatedEnergyPass();
+      runPropagatedEnergyPass(audioEnergyOptions(settings.get()));
     } catch (err: any) {
       console.log(`[tag] audio energy pass failed: ${err?.message || err}`);
     }
