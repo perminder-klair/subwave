@@ -173,7 +173,9 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
             />
             <div className="field-hint">
               When on, every track that plays with at least one listener tuned in is
-              scrobbled to your Last.fm profile.
+              scrobbled to your Last.fm profile. Leave this off to use the authenticated
+              player&apos;s <strong>Scrobble my listening</strong> option without recording
+              anonymous listeners.
             </div>
           </div>
 
@@ -336,7 +338,8 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
             />
             <div className="field-hint">
               ListenBrainz is the open-source alternative to Last.fm, with the same listener gate
-              and eligibility rules.
+              and eligibility rules. Leave this off to use the authenticated player&apos;s{' '}
+              <strong>Scrobble my listening</strong> option instead.
             </div>
           </div>
 
