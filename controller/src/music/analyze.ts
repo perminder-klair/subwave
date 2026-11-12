@@ -868,10 +868,13 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
           keyRanges: a.keyRanges,
           vocalRanges,
           outro,
-          // A pass not measuring vocals here carries the stored tail ranges
-          // forward, planned or not, so a plain vocal-off --re-analyze keeps
-          // the tail half of the instrumental verdict (#2255).
-          preserveTailVocal: !vocalWantedHere,
+          // Every pass carries the stored tail ranges forward when its outro
+          // came back without them: a vocal-off pass (planned or a plain
+          // --re-analyze, #2255) never measured them, and a vocal-on pass
+          // whose tail separation failed lost them (#2318). Either way the
+          // tail half of the instrumental verdict holds. A tail measured with
+          // its vocals (Demucs or lyrics) still replaces them.
+          preserveTailVocal: true,
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
           tailStartMs: a.tailStartMs,
