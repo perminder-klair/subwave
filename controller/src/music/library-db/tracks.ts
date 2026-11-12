@@ -13,6 +13,7 @@ import { SQL_KEPT_YEAR_SOURCES, type OriginalYearOutcome, type YearSource } from
 import { runDdl } from './schema.js';
 import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
+import { ERA_ALBUM_KEY_SQL } from '../era-album-key.js';
 import { keepStoredTags } from '../lastfm-tag-policy.js';
 import { eraSuspectSql, storedYearUntrusted } from '../era-suspect.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
@@ -191,6 +192,31 @@ function markTextVectorDirtyIfEraChanged(id: string, before: StoredEra | null): 
   if (!after || resolvedStoredEra(before) === resolvedStoredEra(after)) return;
   markTextVectorDirty(id);
 }
+
+// A write made of several era steps (an album decision: verdict flip, year
+// write or restore) compares the track's era once, across all of them: each
+// step judged alone reads the state between two steps, which can be unknown,
+// and marks a vector whose `Era:` line reads the same before and after (#2319).
+// The steps take `{ markVector: false }`, and the caller snapshots before them
+// and marks after them through the one rule above.
+export type EraSnapshot = Map<string, StoredEra>;
+
+export function eraSnapshot(ids: Iterable<string>): EraSnapshot {
+  const snap: EraSnapshot = new Map();
+  for (const id of ids) {
+    const row = storedEra(id);
+    if (row) snap.set(id, row);
+  }
+  return snap;
+}
+
+export function markTextVectorDirtyIfEraMoved(snap: EraSnapshot): void {
+  for (const [id, before] of snap) markTextVectorDirtyIfEraChanged(id, before);
+}
+
+/** The text vector option of the era writers below: `false` leaves the mark to
+ *  a caller holding an eraSnapshot. */
+export interface EraWriteOpts { markVector?: boolean }
 
 // text_vector_sound, the Sound: words the vector was built from (migration 36),
 // by part. A null part is one a relabel-all forgot (forgetVectorSoundIfMoved).
@@ -612,10 +638,10 @@ export function setManualOriginalYear(id: string, year: number | null): void {
 // follow it as they follow any era write: the vector is marked only where its
 // `Era:` line really moves (markTextVectorDirtyIfEraChanged, which also leaves
 // a track with no vector alone), never by a second copy of that rule.
-export function setStoredEraVerdict(id: string, untrusted: boolean): void {
+export function setStoredEraVerdict(id: string, untrusted: boolean, { markVector = true }: EraWriteOpts = {}): void {
   const eraBefore = storedEra(id);
   requireDb().prepare(`UPDATE tracks SET era_untrusted = ? WHERE id = ?`).run(untrusted ? 1 : 0, id);
-  markTextVectorDirtyIfEraChanged(id, eraBefore);
+  if (markVector) markTextVectorDirtyIfEraChanged(id, eraBefore);
   syncTrackFacets(id);
 }
 
@@ -633,45 +659,86 @@ export function setStoredEraVerdict(id: string, untrusted: boolean): void {
 // it is skipped, and keeps reading as its own year while the decision stands.
 // A track whose own year already equals the decision's is written all the same
 // (its record holds that year), so removing the decision gives it back.
-// Returns whether the track was written.
+//
+// The record names the album whose decision wrote it (`albumKey`, the
+// era-review.albumEraKey it was written under), so a track that has since left
+// that album can be told apart from one still on it (#2319): the walk restores
+// a track that left for an album with no year decision
+// (era-review.applyWalkForcedYear). A track that reaches another album's year
+// decision keeps its first record, which still holds its own year, and the
+// record now names that album. A record written before the key was stored has
+// none, and is left as it is.
+// Returns whether the track's year was written.
 interface YearFailureRecord { attempts: number; reason: string | null; at: string; source: string | null; version: number }
 interface ForcedFromRecord {
   year: number | null;
   source: string | null;
   checkedAt: string | null;
   yearFailure: YearFailureRecord | null;
+  /** The album key of the decision that holds the track; absent on a record
+   *  written before #2319. */
+  albumKey?: string;
 }
 
-export function setDecisionOriginalYear(id: string, year: number): boolean {
+export function setDecisionOriginalYear(id: string, year: number, albumKey: string, { markVector = true }: EraWriteOpts = {}): boolean {
   const d = requireDb();
   const eraBefore = storedEra(id);
   const own = d
-    .prepare(`SELECT original_year AS y, original_year_source AS s, original_year_checked_at AS c FROM tracks WHERE id = ?`)
-    .get(id) as { y: number | null; s: string | null; c: string | null } | undefined;
+    .prepare(`SELECT original_year AS y, original_year_source AS s, original_year_checked_at AS c, era_forced_from AS f FROM tracks WHERE id = ?`)
+    .get(id) as { y: number | null; s: string | null; c: string | null; f: string | null } | undefined;
   if (!own) return false;
-  const failed = d
-    .prepare(`SELECT attempts, reason, at, source, version FROM track_facet_status WHERE track_id = ? AND facet = 'year' AND status = 'failed'`)
-    .get(id) as YearFailureRecord | undefined;
-  const record: ForcedFromRecord = {
-    year: own.y, source: own.s, checkedAt: own.c,
-    yearFailure: failed && failed.attempts > 0 ? { ...failed } : null,
-  };
-  const changed = d
-    .prepare(
+  const now = new Date().toISOString();
+  if (own.f != null) {
+    // The decision's already: keep the record (it holds the track's own year)
+    // and let it name this album.
+    rekeyForcedFrom(id, own.f, albumKey);
+    if (own.y === year) return false;
+    d.prepare(
+      `UPDATE tracks SET original_year = ?, original_year_source = 'manual', original_year_checked_at = ? WHERE id = ?`,
+    ).run(year, now, id);
+  } else {
+    if (own.s === 'manual') return false;
+    const failed = d
+      .prepare(`SELECT attempts, reason, at, source, version FROM track_facet_status WHERE track_id = ? AND facet = 'year' AND status = 'failed'`)
+      .get(id) as YearFailureRecord | undefined;
+    const record: ForcedFromRecord = {
+      year: own.y, source: own.s, checkedAt: own.c,
+      yearFailure: failed && failed.attempts > 0 ? { ...failed } : null,
+      albumKey,
+    };
+    d.prepare(
       `UPDATE tracks SET
-         era_forced_from          = COALESCE(era_forced_from, ?),
+         era_forced_from          = ?,
          original_year            = ?,
          original_year_source     = 'manual',
          original_year_checked_at = ?
-       WHERE id = ?
-         AND (original_year_source IS NOT 'manual' OR era_forced_from IS NOT NULL)
-         AND NOT (era_forced_from IS NOT NULL AND original_year IS ?)`,
-    )
-    .run(JSON.stringify(record), year, new Date().toISOString(), id, year).changes > 0;
-  if (!changed) return false;
-  markTextVectorDirtyIfEraChanged(id, eraBefore);
+       WHERE id = ?`,
+    ).run(JSON.stringify(record), year, now, id);
+  }
+  if (markVector) markTextVectorDirtyIfEraChanged(id, eraBefore);
   syncTrackFacets(id);
   return true;
+}
+
+// Point a keyed record at another album. A record with no key (written before
+// #2319) or one that cannot be read is left exactly as stored.
+function rekeyForcedFrom(id: string, raw: string, albumKey: string): void {
+  const rec = readForcedFrom(raw);
+  if (!rec || rec.albumKey === undefined || rec.albumKey === albumKey) return;
+  requireDb().prepare(`UPDATE tracks SET era_forced_from = ? WHERE id = ?`).run(JSON.stringify({ ...rec, albumKey }), id);
+}
+
+/** Which album a track's decision record names (`heldBy`), beside the album
+ *  key its row holds now (`current`, ERA_ALBUM_KEY_SQL: what a decision's
+ *  removal looks the track up by). `heldBy` is null when the track holds no
+ *  record, the record has no key (written before #2319), or it cannot be read;
+ *  the whole answer is null for an unknown id. */
+export function decisionRecordKeys(id: string): { heldBy: string | null; current: string } | null {
+  const row = requireDb()
+    .prepare(`SELECT era_forced_from AS f, ${ERA_ALBUM_KEY_SQL} AS k FROM tracks WHERE id = ?`)
+    .get(id) as { f: string | null; k: string } | undefined;
+  if (!row) return null;
+  return { heldBy: readForcedFrom(row.f)?.albumKey ?? null, current: row.k };
 }
 
 // era_forced_from as stored, or null when it cannot be read as one (a
@@ -692,7 +759,9 @@ function readForcedFrom(raw: string | null): ForcedFromRecord | null {
     && typeof f.at === 'string' && Number.isInteger(f.version)
     ? { attempts: f.attempts as number, reason: str(f.reason) ?? null, at: f.at, source: str(f.source) ?? null, version: f.version as number }
     : null;
-  return { year, source, checkedAt, yearFailure };
+  const rec: ForcedFromRecord = { year, source, checkedAt, yearFailure };
+  if (typeof r.albumKey === 'string') rec.albumKey = r.albumKey;
+  return rec;
 }
 
 // Undo setDecisionOriginalYear: the track's own year, source and checked stamp
@@ -701,7 +770,7 @@ function readForcedFrom(raw: string | null): ForcedFromRecord | null {
 // is one whose record cannot be read: it keeps the decision's year, which then
 // reads as set by hand, and never a guessed one. Returns whether the track was
 // restored.
-export function restoreDecisionOriginalYear(id: string): boolean {
+export function restoreDecisionOriginalYear(id: string, { markVector = true }: EraWriteOpts = {}): boolean {
   const d = requireDb();
   const raw = (d.prepare(`SELECT era_forced_from AS f FROM tracks WHERE id = ?`).get(id) as { f: string | null } | undefined)?.f ?? null;
   if (raw == null) return false;
@@ -733,7 +802,7 @@ export function restoreDecisionOriginalYear(id: string): boolean {
          unmeasurable_reason = NULL`,
     ).run(id, f.version, f.reason, f.attempts, f.source, f.at);
   }
-  markTextVectorDirtyIfEraChanged(id, eraBefore);
+  if (markVector) markTextVectorDirtyIfEraChanged(id, eraBefore);
   syncTrackFacets(id);
   return true;
 }
