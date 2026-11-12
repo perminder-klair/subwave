@@ -1873,18 +1873,26 @@ def _positive_float(v):
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
 
 
-def source_stamp(src_path, complete, duration_s):
+def source_stamp(src_path, complete, duration_s, source_size=None):
     """What a window records of the audio it was cut from: the source file's
-    size in bytes and its decoded duration. Only a file proven whole says
-    either: a capped download's size is the cap's and its duration the
+    size in bytes and its decoded duration.
+
+    `source_size` is the library's size for the file (the controller's
+    tracks.file_size, sent with stems_dir), and it is the stamp's size whenever
+    it is known: the raw stream's bytes are the file, so it holds for a capped
+    prefix and a tail cut from the stream, and it is the very figure the
+    controller checks a window against. Without it only a file proven whole
+    says either: a capped download's size is the cap's and its duration the
     prefix's, so it stamps both unknown (None), which matches anything."""
+    row_size = _positive_int(source_size)
     if complete is not True:
-        return {"file_size": None, "duration_sec": None}
-    size = None
-    try:
-        size = _positive_int(os.path.getsize(src_path)) if src_path else None
-    except OSError:
-        size = None
+        return {"file_size": row_size, "duration_sec": None}
+    size = row_size
+    if size is None:
+        try:
+            size = _positive_int(os.path.getsize(src_path)) if src_path else None
+        except OSError:
+            size = None
     dur = _positive_float(duration_s)
     return {"file_size": size, "duration_sec": round(dur, 3) if dur else None}
 
@@ -3324,7 +3332,7 @@ _RESULT_ORDER = (
 def analyze(
     librosa, url=None, path=None, embed=None, vocal=None, complete=None,
     stems_dir=None, embedding_only=False, stems_require_marker=False,
-    tail_window=None, stream_url=None,
+    tail_window=None, stream_url=None, source_size=None,
 ):
     import numpy as np
 
@@ -3438,7 +3446,7 @@ def analyze(
         load = _path_loader(librosa, path)
         # Provenance of the stems this request writes (#2238): the source as
         # downloaded or handed over, never the fast-decode WAV.
-        stamp = source_stamp(src_path, complete, duration_s) if stems_dir else None
+        stamp = source_stamp(src_path, complete, duration_s, source_size) if stems_dir else None
         if detector is not None:
             vocal_ranges, stems_cached = demucs_head(
                 detector, load, librosa, stems_dir, stems_require_marker, stamp=stamp
@@ -3737,7 +3745,7 @@ def parse_stems_windows(raw):
 
 
 def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False,
-                   whole_input=None, tail_window=None, stems_windows=None):
+                   whole_input=None, tail_window=None, stems_windows=None, source_size=None):
     """Compute exactly `facets` from an opened source. Each facet answers on
     its own: ok + data, unmeasurable + reason (this file can't give it at this
     version), unavailable + reason (this engine can't: no CLAP / no Demucs), or
@@ -3845,7 +3853,7 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
             stems_cached = None
             # Provenance of the stems written here (#2238, source_stamp).
             stamp = source_stamp(getattr(source, "src_path", None), getattr(source, "complete", None),
-                                 getattr(source, "duration_s", None))
+                                 getattr(source, "duration_s", None), source_size)
             tail_report = {}
             if "vocal" in wanted or not skip_head_stems:
                 vocal_ranges, stems_cached = demucs_head(
@@ -3991,6 +3999,7 @@ def analyze_facet_request(librosa, req):
             whole_input=whole_input,
             tail_window=req.get("tail_window"),
             stems_windows=parse_stems_windows(req.get("stems_windows")),
+            source_size=req.get("source_size"),
         )
         return {"facets": result, "source": source.describe()}
     finally:
@@ -4159,6 +4168,7 @@ def main():
                     embedding_only=req.get("embedding_only") is True,
                     stems_require_marker=req.get("stems_require_marker") is True,
                     tail_window=req.get("tail_window"), stream_url=req.get("stream_url"),
+                    source_size=req.get("source_size"),
                 )
                 # If a getter stamped the clock, this request DID use a model —
                 # re-stamp so the countdown starts from the end of the work, not

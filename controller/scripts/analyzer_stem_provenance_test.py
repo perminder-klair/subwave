@@ -153,6 +153,13 @@ def t_source_stamp():
     assert aw.source_stamp(p, False, 200.0) == {"file_size": None, "duration_sec": None}
     assert aw.source_stamp(p, None, 200.0) == {"file_size": None, "duration_sec": None}
     assert aw.source_stamp(os.path.join(root, "missing"), True, 0.0) == {"file_size": None, "duration_sec": None}
+    # The library's size (sent with stems_dir) is the size whenever it is known:
+    # a capped prefix and a stream-cut tail are stamped with it, and it is the
+    # figure the controller checks against (a transcoded copy's bytes are not).
+    assert aw.source_stamp(p, False, 200.0, 5_000_000) == {"file_size": 5_000_000, "duration_sec": None}
+    assert aw.source_stamp(None, None, None, 5_000_000) == {"file_size": 5_000_000, "duration_sec": None}
+    assert aw.source_stamp(p, True, 200.0, 5_000_000) == {"file_size": 5_000_000, "duration_sec": 200.0}
+    assert aw.source_stamp(p, False, 200.0, "junk") == {"file_size": None, "duration_sec": None}
 
 
 def t_head_rewrite_drops_another_recordings_tail():
@@ -278,7 +285,7 @@ def t_tail_separation_failure_reports_not_landed():
     assert report == {}, report
 
 
-def _flat(outro, tail_fails=False):
+def _flat(outro, tail_fails=False, complete=True, source_size=None):
     librosa = types.SimpleNamespace(
         get_duration=lambda **_kwargs: 260,
         to_mono=lambda audio: audio,
@@ -299,7 +306,8 @@ def _flat(outro, tail_fails=False):
         measure_loudness=lambda *_args: (None, None),
         log=lambda *_a: None,
     ):
-        result = aw.analyze(librosa, path=src, complete=True, vocal=True, stems_dir=d)
+        result = aw.analyze(librosa, path=src, complete=complete, vocal=True, stems_dir=d,
+                            source_size=source_size)
     return result, d
 
 
@@ -321,9 +329,24 @@ def t_flat_reports_tail_stems():
     assert window_tags(d, "tail") == {None}  # another recording's: dropped
 
 
+
+def t_capped_head_stamped_with_the_row_size():
+    # The review's repro (#2328): a file over the analysis cap is staged as a
+    # capped prefix, so the worker cannot measure its size. The controller's
+    # row size stamps the head, and another recording's tail goes.
+    result, d = _flat(None, complete=False, source_size=NEW["file_size"])
+    assert result["stems_cached"] is True, result
+    assert meta(d, "head") == {"file_size": NEW["file_size"], "duration_sec": None}, meta(d, "head")
+    assert window_tags(d, "tail") == {None}, window_tags(d, "tail")
+    # Without a row size it still cannot tell, and keeps (unknown = match).
+    result, d = _flat(None, complete=False)
+    assert meta(d, "head") == {"file_size": None, "duration_sec": None}, meta(d, "head")
+    assert window_tags(d, "tail") == {"OLD:tail"}
+
+
 print("analyzer stem provenance")
 test("same_recording: sizes, then durations, then unknown matches", t_same_recording_rule)
-test("source_stamp: only a whole file states size and duration", t_source_stamp)
+test("source_stamp: the library's size, else only a whole file states either", t_source_stamp)
 test("head rewrite drops another recording's tail (#2238)", t_head_rewrite_drops_another_recordings_tail)
 test("head rewrite keeps the same recording's tail", t_head_rewrite_keeps_the_same_recordings_tail)
 test("an unstamped tail-meta is judged by duration", t_head_rewrite_judges_an_old_tail_meta_by_duration)
@@ -336,6 +359,7 @@ test("tail rewrite drops a stale stamped head", t_tail_rewrite_drops_a_stale_hea
 test("tail rewrite keeps an unstamped head", t_tail_rewrite_keeps_an_unstamped_head)
 test("tail separation failure reports not landed", t_tail_separation_failure_reports_not_landed)
 test("flat analyze reports tail_stems_landed only for a proven tail", t_flat_reports_tail_stems)
+test("a capped head is stamped with the library's size (#2328 review)", t_capped_head_stamped_with_the_row_size)
 
 if failures:
     print(f"\n{failures} analyzer stem provenance test(s) failed")

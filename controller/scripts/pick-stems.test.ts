@@ -286,11 +286,12 @@ test('a head cut from another file than the row\'s is missing: both windows are 
   const dir = stemCache.dirFor('stale-head-1');
   writeStems(dir, 'head');
   writeFileSync(path.join(dir, 'head-meta.json'), JSON.stringify({ file_size: 5_000_000, duration_sec: 200 }));
-  assert.equal(await stemCache.hasWindow('stale-head-1', 'head'), true, 'on its own the head looks cached');
+  assert.equal(await stemCache.hasWindow('stale-head-1', 'head', { fileSize: null }), true, 'judged without the row, the head looks cached');
+  assert.equal(await stemCache.hasWindow('stale-head-1', 'head'), false, 'hasWindow reads the row itself');
   const result = await run('stale-head-1').outcome;
   assert.equal(result.ran && result.ok, true);
   assert.equal(seen.analyze.at(-1)?.stems_windows, undefined, 'not the tail alone: the stale head is redone');
-  assert.equal(await stemCache.hasWindow('stale-head-1', 'head', { fileSize: 6_000_000 }), true);
+  assert.equal(await stemCache.hasWindow('stale-head-1', 'head'), true);
 });
 
 test('a truncated download still separates a missing head, and asks for no tail', async () => {

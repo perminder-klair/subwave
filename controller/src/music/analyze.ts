@@ -865,7 +865,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         const stemStamp = stemStampDecision({
           stemsCached: a.stemsCached,
           tailStems: a.tailStemsLanded ?? null,
-          priorTailMisses: a.stemsCached !== null ? db.trackStemTailMisses(id) : null,
+          priorTailMisses: db.trackStemTailMisses(id),
         });
         db.upsertTrackAnalysis(id, {
           bpm: a.bpm,

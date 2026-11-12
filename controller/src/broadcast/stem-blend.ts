@@ -75,8 +75,8 @@ export async function maybeRenderBlend(
   if (mix.bpmCompat(out.outro.bpm ?? out.bpm, inn.bpm) < BPM_COMPAT_MIN) return null;
   // Cache-hit-only: both windows must already be separated.
   const [haveTail, haveHead] = await Promise.all([
-    stemCache.hasWindow(outTrack.id, 'tail', { fileSize: db.trackFileSize(outTrack.id) }),
-    stemCache.hasWindow(inTrack.id, 'head', { fileSize: db.trackFileSize(inTrack.id) }),
+    stemCache.hasWindow(outTrack.id, 'tail'),
+    stemCache.hasWindow(inTrack.id, 'head'),
   ]);
   if (!haveTail || !haveHead) return null;
   // A pick-time separation (broadcast/pick-stems.ts) holds a worker for a

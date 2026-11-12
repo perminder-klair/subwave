@@ -176,11 +176,11 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
   const row = db.isOpen() ? db.getTrack(id) : null;
   if (!row) return veto('no-grid');
   // A window cut from another recording than the row's file is missing, not
-  // cached (#2238): a stale head is separated again with the tail.
-  const expect = { fileSize: db.trackFileSize(id) };
+  // cached (#2238, stem-cache.hasWindow): a stale head is separated again
+  // with the tail.
   const [hasHead, hasTail] = await Promise.all([
-    stemCache.hasWindow(id, 'head', expect),
-    stemCache.hasWindow(id, 'tail', expect),
+    stemCache.hasWindow(id, 'head'),
+    stemCache.hasWindow(id, 'tail'),
   ]);
   const need = policy.trackNeed({
     hasHeadGrid: !!row.bars?.length,
@@ -280,8 +280,8 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
       ...(stemStamp.tailMisses !== undefined ? { stemsTailMisses: stemStamp.tailMisses } : {}),
     });
     const [head, tail] = await Promise.all([
-      stemCache.hasWindow(id, 'head', expect),
-      stemCache.hasWindow(id, 'tail', expect),
+      stemCache.hasWindow(id, 'head'),
+      stemCache.hasWindow(id, 'tail'),
     ]);
     const cached = [head && 'head', tail && 'tail'].filter(Boolean).join(' + ') || 'nothing';
     opts.log('mix', `pick-time stems: "${title}" done in ${secs}s (${cached} cached)`);

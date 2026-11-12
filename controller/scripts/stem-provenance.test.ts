@@ -5,7 +5,8 @@
 // - the rule: sizes decide when both are known, else durations within 2 s,
 //   else unknown matches; it mirrors analyze_worker.py same_recording;
 // - hasWindow is a miss for a window whose stamp disagrees with the other
-//   window's, or with the row's file size, and never deletes anything;
+//   window's, or with the row's file size (which it reads itself), and never
+//   deletes anything;
 // - a dir from before the stamps (no head-meta.json, a tail-meta.json with no
 //   file_size) reads exactly as it did: an upgrade changes nothing;
 // - the orphan purge still reads a dir holding head-meta.json as stems.
@@ -134,6 +135,27 @@ test('hasWindow: an unreadable meta', async () => {
   const badHead = trackDir({ head: 'bad', tail: tailMeta(5_000_000) });
   assert.equal(await stemCache.hasWindow(badHead, 'head'), false);
   assert.equal(await stemCache.hasWindow(badHead, 'tail'), true);
+});
+
+test('hasWindow reads the row\'s file size itself: a caller cannot leave the check out', async () => {
+  const db = await import('../src/music/library-db.js');
+  await db.open({ embeddingDim: 768, adoptStoredDim: true });
+  try {
+    const id = trackDir({ head: headMeta(5_000_000), tail: tailMeta(5_000_000) });
+    db.upsertTrackMeta(id, { title: 'T', artist: 'A', album: 'B', duration: 200, fileSize: 5_000_000 });
+    assert.equal(await stemCache.hasWindow(id, 'head'), true);
+    assert.equal(await stemCache.hasWindow(id, 'tail'), true);
+    // The row now records another file (an accepted replacement, #2328 review).
+    db.acceptReplacedFiles(new Map([[id, 6_000_000]]));
+    assert.equal(await stemCache.hasWindow(id, 'head'), false);
+    assert.equal(await stemCache.hasWindow(id, 'tail'), false);
+    // A row with no known size judges nothing.
+    const unsized = trackDir({ head: headMeta(5_000_000), tail: tailMeta(5_000_000) });
+    db.upsertTrackMeta(unsized, { title: 'U', artist: 'A', album: 'B', duration: 200 });
+    assert.equal(await stemCache.hasWindow(unsized, 'head'), true);
+  } finally {
+    db.close();
+  }
 });
 
 test('the orphan purge reads a dir with head-meta.json as stems', () => {

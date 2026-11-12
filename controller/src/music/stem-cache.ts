@@ -61,15 +61,17 @@ export function stemPath(trackId: string, window: StemWindow, stem: string): str
 // also needs its alignment sidecar (tail-meta.json: decoded duration + the exact
 // tail offset the stems were cut at), without which the bar grid misaligns.
 // And the window must be cut from the recording the row measured (#2238,
-// stem-provenance.ts): its stamp agrees with the other window's and with
-// `expect.fileSize` (the row's tracks.file_size, where the caller has it).
-// A mismatch is a plain miss: nothing is evicted here.
+// stem-provenance.ts): its stamp agrees with the other window's and with the
+// row's tracks.file_size, read here so no caller can leave the check out
+// (`expect.fileSize` overrides it, for tests; no library open reads unknown,
+// which judges nothing). A mismatch is a plain miss: nothing is evicted here.
 export async function hasWindow(
   trackId: string,
   window: StemWindow,
   expect: { fileSize?: number | null } = {},
 ): Promise<boolean> {
   try {
+    const expectedFileSize = 'fileSize' in expect ? expect.fileSize : rowFileSize(trackId);
     const files = STEM_NAMES.map(s => stemPath(trackId, window, s));
     if (window === 'tail') files.push(path.join(dirFor(trackId), TAIL_META));
     const checks = await Promise.all(
@@ -87,11 +89,15 @@ export async function hasWindow(
     return windowUsable({
       own: own ?? UNKNOWN_STAMP,
       other: other === 'unreadable' ? null : other,
-      expectedFileSize: expect.fileSize,
+      expectedFileSize,
     });
   } catch {
     return false;
   }
+}
+
+function rowFileSize(trackId: string): number | null {
+  return db.getDb() ? db.trackFileSize(trackId) : null;
 }
 
 // A window's provenance stamp: null when its meta file is absent (a head from
