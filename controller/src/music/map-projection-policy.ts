@@ -9,6 +9,8 @@
 // the vector count passes the stale threshold measured from the failed attempt.
 // An operator's manual run is never held.
 
+import { SAMPLE_CAP } from './map-placement.js';
+
 export const MIN_VECTORS = 50; // below this a projection is noise
 export const STALE_FRACTION = 0.05;
 export const STALE_ABS = 50;
@@ -40,6 +42,22 @@ export function isStale(vectors: number, meta: ProjectionMeta | null, algo: stri
   if (vectors < MIN_VECTORS) return false; // nothing worth projecting
   if (!meta || meta.algo !== algo || meta.space !== space) return true;
   return drifted(vectors, meta.count);
+}
+
+// Heap one fitted vector needs, judged at the fit's peak (the projection forest
+// built and then flattened alongside itself). Measured with the limit really
+// applied: 24k fitted in a 1,216 MB heap and 28.3k did not; 40k fitted in
+// 1,728 MB and not in 1,216 MB. 52 KB keeps every measured point on the safe
+// side: 1,216 MB gives 23.9k and 1,728 MB gives 34k.
+export const BYTES_PER_FIT_VECTOR = 52 * 1024;
+export const MIN_SAMPLE = 5_000;
+
+// How many vectors the child may fit in the heap it was given, at most
+// SAMPLE_CAP. Node's default heap shrinks with the host's memory, so a fixed
+// 40k could still run a small NAS out of heap (#2314 review).
+export function fitSampleCap(heapLimitBytes: number): number {
+  if (!(heapLimitBytes > 0)) return MIN_SAMPLE;
+  return Math.max(MIN_SAMPLE, Math.min(SAMPLE_CAP, Math.floor(heapLimitBytes / BYTES_PER_FIT_VECTOR)));
 }
 
 // True while a failed attempt should keep the automatic boot run from starting.

@@ -177,6 +177,108 @@ await test('weightedPlace: an exact duplicate lands on its twin; otherwise a 1/d
   assert.equal(y, 0);
 });
 
+// --- sample cap from the heap ---------------------------------------------
+
+await test('the fit cap follows the heap: every measured point stays on the safe side', () => {
+  const MB = 1024 * 1024;
+  assert.equal(policy.fitSampleCap(4144 * MB), 40_000, "the reporter's ~4 GB default keeps the 40k ceiling");
+  assert.equal(policy.fitSampleCap(2240 * MB), 40_000, '40k fitted in a 2,240 MB heap');
+  const at1728 = policy.fitSampleCap(1728 * MB);
+  assert.ok(at1728 <= 40_000 && at1728 >= 30_000, `1,728 MB (40k fitted there) → ${at1728}`);
+  assert.ok(policy.fitSampleCap(1216 * MB) <= 24_000, '1,216 MB fitted 24k and failed at 28.3k');
+  assert.equal(policy.fitSampleCap(64 * MB), policy.MIN_SAMPLE);
+  assert.equal(policy.fitSampleCap(Number.NaN), policy.MIN_SAMPLE);
+});
+
+await test("runProjection's default cap is sized from the child's own heap limit", async () => {
+  // A real process with a small heap, as a small host's default would give the
+  // child: the cap must come down to the floor, not stay at the 40k ceiling.
+  const { spawnSync } = await import('node:child_process');
+  const mod = new URL('../src/music/map-projection.ts', import.meta.url).href;
+  const r = spawnSync(
+    process.execPath,
+    ['--import', 'tsx', '--input-type=module', '-e', `const v8 = await import('node:v8'); const m = await import(${JSON.stringify(mod)}); ` +
+      `console.log(v8.getHeapStatistics().heap_size_limit, m.defaultSampleCap());`],
+    { env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=200' }, encoding: 'utf8', timeout: 60_000 },
+  );
+  assert.equal(r.status, 0, r.stderr);
+  const [limit, cap] = r.stdout.trim().split('\n').pop()!.split(' ').map(Number);
+  assert.ok(cap! < 10_000, `a ~400 MB heap must not fit the 40k ceiling (got ${cap})`);
+  assert.equal(cap, policy.fitSampleCap(limit!));
+});
+
+// --- the child's run end -----------------------------------------------------
+
+function tracker(closeGraceMs = 10_000) {
+  const records: import('../src/music/map-projection-policy.js').ProjectionExit[] = [];
+  let settled = 0;
+  const log: string[] = [];
+  const run = projection.createRunTracker({
+    vectors: 232_350,
+    log,
+    record: (e) => records.push(e),
+    settled: () => settled++,
+    closeGraceMs,
+  });
+  return { run, records, log, settled: () => settled };
+}
+
+const OOM_TAIL = [
+  '<--- Last few GCs --->\n',
+  '[53:0x1ca61000]   110164 ms: Mark-Compact 4048.0 (4143.0) -> 4035.5 (4144.1) MB\n',
+  'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n',
+];
+
+await test("the outcome is recorded on 'close', after output that drained past 'exit'", () => {
+  const t = tracker();
+  t.run.stdout('[map] projecting 232350 audio vectors (dim=512)…\n');
+  t.run.exited(134, null);
+  // The V8 report lands after 'exit' fired.
+  for (const chunk of OOM_TAIL) t.run.stderr(chunk);
+  assert.equal(t.records.length, 0, 'nothing recorded before close');
+  assert.equal(t.settled(), 0, 'the slot stays taken until the outcome is on disk');
+  t.run.closed();
+  assert.equal(t.records.length, 1);
+  assert.match(t.records[0]!.error ?? '', /out of memory/);
+  assert.equal(t.records[0]!.code, 134);
+  assert.equal(t.records[0]!.vectors, 232_350);
+  assert.equal(t.settled(), 1);
+  t.run.closed();
+  t.run.exited(0, null);
+  assert.equal(t.records.length, 1, 'recorded once');
+});
+
+await test('a line split across chunks is matched whole, and an unterminated last line is kept', () => {
+  const t = tracker();
+  t.run.stderr('FATAL ERROR: Reached heap limit Allocation failed - JavaScript he');
+  t.run.stderr('ap out of memory\n[53] trailing');
+  t.run.exited(134, null);
+  t.run.closed();
+  assert.ok(t.log.includes('FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory'));
+  assert.ok(t.log.includes('[53] trailing'));
+  assert.match(t.records[0]!.error ?? '', /out of memory/);
+});
+
+await test("an exit with no 'close' is recorded after the grace; a spawn failure at once; success has no error", async () => {
+  const late = tracker(20);
+  late.run.exited(1, null);
+  assert.equal(late.records.length, 0);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(late.records.length, 1);
+  assert.equal(late.records[0]!.error, 'exited with code 1');
+
+  const spawnFail = tracker();
+  spawnFail.run.failed('spawn npx ENOENT');
+  assert.equal(spawnFail.records[0]!.error, 'spawn failed: spawn npx ENOENT');
+  assert.equal(spawnFail.settled(), 1);
+
+  const ok = tracker();
+  ok.run.exited(0, null);
+  ok.run.closed();
+  assert.equal(ok.records[0]!.ok, true);
+  assert.equal(ok.records[0]!.error, null);
+});
+
 // --- end to end ------------------------------------------------------------
 
 const N = 300;
@@ -201,7 +303,7 @@ await test('above the cap, a sample is fitted and every other track is placed', 
   const lines: string[] = [];
   const res = await projection.runProjection((l) => lines.push(l), { sampleCap: 120 });
   assert.equal(res.count, N);
-  assert.ok(lines.some((l) => /fitting a sample of 120, placing the rest/.test(l)), lines.join('\n'));
+  assert.ok(lines.some((l) => /fitting a sample of 120 \(cap for a \d+ MB heap\), placing the rest/.test(l)), lines.join('\n'));
   assert.ok(lines.some((l) => /placed 180 tracks/.test(l)), lines.join('\n'));
   const first = coords();
   for (const [id, [x, y]] of first) {
@@ -220,7 +322,7 @@ await test('at or under the cap, every track is fitted', async () => {
   assert.equal(db.getMapProjectionMeta()?.count, N);
 });
 
-await test('a recorded failure surfaces in the status and holds the boot retry', () => {
+await test('a recorded failure surfaces in the status; the boot hold shows only on a stale map', () => {
   projection.clearLastExit();
   assert.equal(projection.projectionStatus().lastExit, null);
   assert.equal(projection.projectionStatus().lastError, null);
@@ -232,16 +334,63 @@ await test('a recorded failure surfaces in the status and holds the boot retry',
     vectors: N,
     error: 'ran out of memory (JavaScript heap); raise SUBWAVE_MAP_HEAP_MB',
   });
-  const s = projection.projectionStatus();
-  assert.equal(s.lastExit?.code, 134);
-  assert.match(s.lastError ?? '', /out of memory/);
-  assert.equal(s.bootRetryHeld, true);
+  // The map from the runs above is current: a failed manual re-project has no
+  // boot run to hold, so the rail must not claim one.
+  const fresh = projection.projectionStatus();
+  assert.equal(fresh.stale, false);
+  assert.equal(fresh.lastExit?.code, 134);
+  assert.match(fresh.lastError ?? '', /out of memory/);
+  assert.equal(fresh.bootRetryHeld, false);
+  // A stale map (an older algo stored) is what the boot run would retry.
+  db.setMapProjectionMeta('umap-0', 'audio', N);
+  const stale = projection.projectionStatus();
+  assert.equal(stale.stale, true);
+  assert.equal(stale.bootRetryHeld, true);
   // A success clears the error and the hold.
   projection.recordExit({ ok: true, code: 0, signal: null, at: 'y', vectors: N, error: null });
   const ok = projection.projectionStatus();
   assert.equal(ok.lastError, null);
   assert.equal(ok.bootRetryHeld, false);
+  db.setMapProjectionMeta('umap-1', 'audio', N);
   projection.clearLastExit();
+});
+
+await test('a failed run that wrote nothing to library.db still changes the Observatory ETag', async () => {
+  const express = (await import('express')).default;
+  const { createServer } = await import('node:http');
+  const { router } = await import('../src/routes/library.js');
+  const app = express();
+  app.use(router);
+  const server = createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as import('node:net').AddressInfo;
+  const url = `http://127.0.0.1:${port}/library/observatory`;
+  try {
+    projection.clearLastExit();
+    const before = await fetch(url);
+    assert.equal(before.status, 200);
+    const etag = before.headers.get('etag')!;
+    await before.arrayBuffer();
+    // Unchanged state: the browser's revalidation is a 304.
+    const same = await fetch(url, { headers: { 'If-None-Match': etag } });
+    assert.equal(same.status, 304);
+    // The child failed: only the state file moved, never library.db.
+    projection.recordExit({
+      ok: false,
+      code: 134,
+      signal: null,
+      at: '2026-11-12T01:00:00.000Z',
+      vectors: N,
+      error: 'ran out of memory (JavaScript heap); raise SUBWAVE_MAP_HEAP_MB',
+    });
+    const after = await fetch(url, { headers: { 'If-None-Match': etag } });
+    assert.equal(after.status, 200, 'a 304 here puts the pre-run status back and erases the error');
+    const body = (await after.json()) as { mapProjection: { lastError: string | null } };
+    assert.match(body.mapProjection.lastError ?? '', /out of memory/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    projection.clearLastExit();
+  }
 });
 
 // Cleanup runs here, not in after(): the root can look finished between two

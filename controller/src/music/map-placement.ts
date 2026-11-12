@@ -25,9 +25,10 @@
 //
 // Everything here is pure and deterministic: no Math.random, no DB.
 
-// Fit size above which the rest of the library is placed, not fitted. With
-// Float32Array rows a 40k fit ran inside a 1.5 GB heap (2.7 GB peak RSS), under
-// Node's default limit on small hosts; 50k with number[] rows failed at 2 GB.
+// The most the child ever fits; above it the rest of the library is placed. A
+// 40k fit with Float32Array rows ran with a 1,728 MB heap limit and not with
+// 1,216 MB, so a smaller heap fits fewer (map-projection-policy.ts
+// fitSampleCap); 50k with number[] rows failed at 2 GB.
 export const SAMPLE_CAP = 40_000;
 // Neighbours averaged per placed point.
 export const PLACE_K = 10;

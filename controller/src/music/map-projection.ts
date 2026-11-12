@@ -1,13 +1,15 @@
 // Run UMAP projection in the CLI child, never the controller event loop. Its final transaction
 // updates data_version to invalidate the map ETag.
 //
-// Above SAMPLE_CAP vectors UMAP is fitted on a seeded sample and the rest are
-// placed by map-placement.ts: umap-js's fit memory grows faster than the
-// library, and a 232k library ran the child out of heap on every boot (#2314).
+// Above the sample cap (40k, or less in a heap too small for that) UMAP is
+// fitted on a seeded sample and the rest are placed by map-placement.ts:
+// umap-js's fit memory grows faster than the library, and a 232k library ran
+// the child out of heap on every boot (#2314).
 // A failed child is recorded (map-projection-last.json) and holds the boot
 // retry until the library moves; map-projection-policy.ts decides.
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import v8 from 'node:v8';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { UMAP } from 'umap-js';
@@ -15,11 +17,12 @@ import { STATE_DIR } from '../config.js';
 import { writeFileAtomicSync } from '../util/atomic-file.js';
 import { envInt } from '../util/env.js';
 import * as db from './library-db.js';
-import { SAMPLE_CAP, buildSampleGraph, placeAll, sampleIndices, seededRandom } from './map-placement.js';
+import { buildSampleGraph, placeAll, sampleIndices, seededRandom } from './map-placement.js';
 import {
   MIN_VECTORS,
   childEnv,
   describeFailure,
+  fitSampleCap,
   holdBootRetry,
   isStale as staleBy,
   type ProjectionExit,
@@ -45,10 +48,15 @@ export interface ProjectionResult {
   ms: number;
 }
 
+// The fit size this process's heap can take (map-projection-policy.ts).
+export function defaultSampleCap(): number {
+  return fitSampleCap(v8.getHeapStatistics().heap_size_limit);
+}
+
 // Synchronous heavy lifting — ONLY call from the standalone CLI child.
 export async function runProjection(
   log: (line: string) => void = console.log,
-  { sampleCap = SAMPLE_CAP }: { sampleCap?: number } = {},
+  { sampleCap = defaultSampleCap() }: { sampleCap?: number } = {},
 ): Promise<ProjectionResult> {
   const t0 = Date.now();
   // Sorted, so the seeded sample does not depend on SQLite's row order.
@@ -61,7 +69,10 @@ export async function runProjection(
   const sampled = fitIdx.length < all.length;
   log(
     `[map] projecting ${all.length} audio vectors (dim=${all[0]!.vector.length})` +
-      (sampled ? ` · fitting a sample of ${fitIdx.length}, placing the rest` : '') +
+      (sampled
+        ? ` · fitting a sample of ${fitIdx.length} (cap for a ` +
+          `${Math.round(v8.getHeapStatistics().heap_size_limit / 1048576)} MB heap), placing the rest`
+        : '') +
       '…',
   );
 
@@ -204,16 +215,112 @@ export function projectionStatus(): ProjectionStatus {
   const meta = db.getMapProjectionMeta();
   const audioVectors = db.audioVectorCount();
   const lastExit = readLastExit();
+  const stale = isStale(audioVectors, meta);
   return {
     running: child != null,
     startedAt,
     lastLog: lastLog.slice(-12),
     meta,
     audioVectors,
-    stale: isStale(audioVectors, meta),
+    stale,
     lastExit,
     lastError: lastExit && !lastExit.ok ? lastExit.error : null,
-    bootRetryHeld: holdBootRetry(audioVectors, lastExit),
+    // Only a stale map has a boot run to hold.
+    bootRetryHeld: stale && holdBootRetry(audioVectors, lastExit),
+  };
+}
+
+// How long a run's end waits for 'close' after 'exit' before it is recorded
+// with the output it has. 'close' comes once the pipes drain, normally within
+// milliseconds; something still holding a pipe open must not wedge the slot.
+export const RUN_END_CLOSE_GRACE_MS = 10_000;
+const LOG_LINES = 40;
+
+/**
+ * One child run's output and end, recorded once. The failure reason is read
+ * from the child's output, and 'exit' can fire while its last lines (the V8
+ * out-of-memory report among them) are still in the pipe, so an exit is
+ * recorded on 'close', when every line is in, as the tagger does
+ * (broadcast/tagger.ts createRunEndReporter); a spawn that failed has no
+ * output coming and is recorded at once. A data chunk can end mid-line, so
+ * each stream keeps its own remainder. `settled` runs after the record is
+ * written, so whoever frees the run's slot there never shows a finished run
+ * without its outcome.
+ */
+export function createRunTracker({
+  vectors,
+  log,
+  record,
+  settled,
+  onLine = () => {},
+  closeGraceMs = RUN_END_CLOSE_GRACE_MS,
+}: {
+  vectors: number;
+  log: string[];
+  record: (exit: ProjectionExit) => void;
+  settled: () => void;
+  onLine?: (line: string) => void;
+  closeGraceMs?: number;
+}) {
+  const push = (raw: string) => {
+    const line = raw.trim();
+    if (!line) return;
+    log.push(line);
+    if (log.length > LOG_LINES) log.shift();
+    onLine(line);
+  };
+  const makeStream = () => {
+    let remainder = '';
+    return {
+      data(chunk: Buffer | string) {
+        remainder += chunk.toString();
+        const lines = remainder.split('\n');
+        remainder = lines.pop() ?? '';
+        for (const l of lines) push(l);
+      },
+      flush() {
+        push(remainder);
+        remainder = '';
+      },
+    };
+  };
+  const out = makeStream();
+  const err = makeStream();
+  let exited: { code: number | null; signal: string | null } | null = null;
+  let done = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const finish = (code: number | null, signal: string | null, spawnError?: string) => {
+    if (done) return;
+    done = true;
+    if (timer) clearTimeout(timer);
+    out.flush();
+    err.flush();
+    const ok = spawnError == null && code === 0;
+    const error = spawnError != null ? `spawn failed: ${spawnError}` : ok ? null : describeFailure(code, signal, log);
+    try {
+      record({ ok, code, signal, at: new Date().toISOString(), vectors, error });
+    } finally {
+      settled();
+    }
+  };
+  return {
+    stdout: out.data,
+    stderr: err.data,
+    /** 'exit': the process is gone, but output may still be in the pipes. */
+    exited(code: number | null, signal: string | null) {
+      if (done || exited) return;
+      exited = { code, signal };
+      timer = setTimeout(() => finish(code, signal), closeGraceMs);
+      timer.unref?.();
+    },
+    /** 'close': every line of output is in. */
+    closed() {
+      if (exited) finish(exited.code, exited.signal);
+    },
+    /** 'error' with no process: nothing more is coming. */
+    failed(message: string) {
+      finish(null, null, message);
+    },
   };
 }
 
@@ -230,35 +337,30 @@ export function startProjection(): boolean {
   child = proc;
   startedAt = new Date().toISOString();
   lastLog = [];
-  const capture = (chunk: Buffer) => {
-    for (const raw of chunk.toString().split('\n')) {
-      const line = raw.trim();
-      if (!line) continue;
-      lastLog.push(line);
-      if (lastLog.length > 40) lastLog.shift();
-      console.log(`[map-projection] ${line}`);
-    }
-  };
-  proc.stdout?.on('data', capture);
-  proc.stderr?.on('data', capture);
-  // 'error' and 'exit' can both fire for one child; record the first.
-  let settled = false;
-  const settle = (exit: ProjectionExit) => {
-    if (child === proc) child = null;
-    if (settled) return;
-    settled = true;
-    recordExit(exit);
-  };
+  const run = createRunTracker({
+    vectors,
+    log: lastLog,
+    onLine: (line) => console.log(`[map-projection] ${line}`),
+    record: (exit) => {
+      if (exit.error) console.error(`[map-projection] sound map not stored: ${exit.error}`);
+      recordExit(exit);
+    },
+    // The slot frees only once the outcome is on disk, so the Observatory's
+    // poll never sees a finished run whose error isn't readable yet.
+    settled: () => {
+      if (child === proc) child = null;
+    },
+  });
+  proc.stdout?.on('data', run.stdout);
+  proc.stderr?.on('data', run.stderr);
   proc.on('exit', (code, signal) => {
     console.log(`[map-projection] child exited (code=${code}${signal ? `, signal=${signal}` : ''})`);
-    const ok = code === 0;
-    const error = ok ? null : describeFailure(code, signal, lastLog);
-    if (error) console.error(`[map-projection] sound map not stored: ${error}`);
-    settle({ ok, code, signal, at: new Date().toISOString(), vectors, error });
+    run.exited(code, signal);
   });
+  proc.on('close', () => run.closed());
   proc.on('error', (err) => {
     console.error('[map-projection] spawn failed:', err.message);
-    settle({ ok: false, code: null, signal: null, at: new Date().toISOString(), vectors, error: `spawn failed: ${err.message}` });
+    run.failed(err.message);
   });
   return true;
 }
