@@ -812,6 +812,9 @@ function vecCount(d: Database.Database): number {
 //     (`era_forced_from`: its original year, source and checked stamp, as
 //     JSON), so removing the decision puts exactly that back; NULL means the
 //     decision did not write this track's year (tracks.setDecisionOriginalYear).
+//   - `stems_tail_misses`: stem passes in a row whose proven tail did not land
+//     (#2238, music/stem-stamp-policy.ts). Such a pass leaves stems_at unset so
+//     the backfill tries again, up to a bound. NULL = none; reset with stems_at.
 //
 // Several processes open this DB, and two can both find a column missing on the
 // first open after an upgrade, so the ALTERs re-read under the write lock. The
@@ -829,6 +832,7 @@ function ensureNamedColumns(d: Database.Database): void {
     ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
     ['untaggable_key', 'TEXT'], ['tagged_measured', 'INTEGER'],
     ['era_reason', 'TEXT'], ['album_artist', 'TEXT'], ['album_kind', 'TEXT'], ['era_forced_from', 'TEXT'],
+    ['stems_tail_misses', 'INTEGER'],
   ];
   const missing = () => {
     const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));

@@ -1823,18 +1823,143 @@ def write_stems(stems, window, dest_dir):
             sf.write(tmp, data.T, DEMUCS_SR, subtype="PCM_16", format="FLAC")
 
 
-def write_tail_meta(dest_dir, tail_start_s, duration_s):
+def write_tail_meta(dest_dir, tail_start_s, duration_s, file_size=None):
     """Alignment sidecar for the cached tail stems. The tail window was cut at
     DECODED duration - OUTRO_SECONDS; render_transition must slice the bar
     grid against that exact offset. Re-deriving it from the library's tagged
     duration (an integer from Subsonic) disagrees by up to ~1s, which shifts
     the borrowed drum loop off the downbeat — so the true offset rides with
-    the stems and a render without it is a clean cache miss."""
-    path = os.path.join(dest_dir, "tail-meta.json")
+    the stems and a render without it is a clean cache miss.
+    It is also the tail window's provenance stamp (#2238, see source_stamp):
+    `duration_sec` and, when known, the source's `file_size`."""
+    path = os.path.join(dest_dir, TAIL_META)
     with shared_output(path) as tmp, open(tmp, "w") as f:
         json.dump({
             "tail_start_sec": round(float(tail_start_s), 3),
             "duration_sec": round(float(duration_s), 3),
+            "file_size": _positive_int(file_size),
+        }, f)
+
+
+# Stem provenance (#2238). A track's stem dir is keyed by its id, and the id
+# outlives a change of audio (a file replaced in place, a dir handed back by
+# the orphan purge), while the two windows are written at different times: a
+# head-only pass, a tail-only pick-time pass, a tail that cannot be proven this
+# time. Each window therefore records the recording it was cut from, in its
+# own meta file, written LAST, after all of the window's stems:
+#   head-meta.json  {"file_size", "duration_sec"}
+#   tail-meta.json  {"tail_start_sec", "duration_sec", "file_size"}
+# Before a window is rewritten its own meta goes first (a write that dies part
+# way leaves no stamp vouching for a mixed set, and a failed write drops the
+# window outright), and the other window goes with it when its stamp names a
+# different recording. The controller judges with the same rule
+# (music/stem-provenance.ts sameRecording), keep the two in step. A dir from
+# before the stamps has no head-meta.json and a tail-meta.json without
+# file_size: unknown, which matches, so an upgrade changes nothing.
+HEAD_META = "head-meta.json"
+TAIL_META = "tail-meta.json"
+WINDOW_META = {"head": HEAD_META, "tail": TAIL_META}
+# Two readings of one file's decoded duration (a header probe, the placed
+# tail's whole-file decode) agree well inside this; the orphan purge's
+# SAME_AUDIO_TOLERANCE_SEC is the same 2 s.
+STAMP_DURATION_TOLERANCE_SEC = 2.0
+
+
+def _positive_int(v):
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+
+
+def _positive_float(v):
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+
+
+def source_stamp(src_path, complete, duration_s, source_size=None):
+    """What a window records of the audio it was cut from: the source file's
+    size in bytes and its decoded duration.
+
+    `source_size` is the library's size for the file (the controller's
+    tracks.file_size, sent with stems_dir), and it is the stamp's size whenever
+    it is known: the raw stream's bytes are the file, so it holds for a capped
+    prefix and a tail cut from the stream, and it is the very figure the
+    controller checks a window against. Without it only a file proven whole
+    says either: a capped download's size is the cap's and its duration the
+    prefix's, so it stamps both unknown (None), which matches anything."""
+    row_size = _positive_int(source_size)
+    if complete is not True:
+        return {"file_size": row_size, "duration_sec": None}
+    size = row_size
+    if size is None:
+        try:
+            size = _positive_int(os.path.getsize(src_path)) if src_path else None
+        except OSError:
+            size = None
+    dur = _positive_float(duration_s)
+    return {"file_size": size, "duration_sec": round(dur, 3) if dur else None}
+
+
+def same_recording(a, b):
+    """Do two stamps name the same recording? Sizes decide when both are known
+    (byte-exact); else durations, within the tolerance; else nothing is known
+    and they match. Mirrors controller music/stem-provenance.ts sameRecording."""
+    sa, sb = _positive_int(a.get("file_size")), _positive_int(b.get("file_size"))
+    if sa is not None and sb is not None:
+        return sa == sb
+    da, db_ = _positive_float(a.get("duration_sec")), _positive_float(b.get("duration_sec"))
+    if da is not None and db_ is not None:
+        return abs(da - db_) <= STAMP_DURATION_TOLERANCE_SEC
+    return True
+
+
+def read_window_meta(dest_dir, window):
+    """A window's stamp: a dict, None when the file is absent, or "unreadable"."""
+    try:
+        with open(os.path.join(dest_dir, WINDOW_META[window])) as f:
+            meta = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return "unreadable"
+    return meta if isinstance(meta, dict) else "unreadable"
+
+
+def drop_window(dest_dir, window):
+    """Best-effort: remove a window's stems (any stem name: a non-default
+    DEMUCS_MODEL writes guitar and piano too) and its meta."""
+    prefix = f"{window}-"
+    try:
+        names = os.listdir(dest_dir)
+    except OSError:
+        return
+    for name in names:
+        if name == WINDOW_META[window] or (name.startswith(prefix) and name.endswith(".flac")):
+            with contextlib.suppress(OSError):
+                os.remove(os.path.join(dest_dir, name))
+
+
+def begin_window(dest_dir, window, stamp):
+    """Before `window` is rewritten: its own meta goes first (raises if it
+    cannot, so the write does not go ahead under an old stamp), and the other
+    window is dropped when its stamp is unreadable or names another recording.
+    A dir not made yet has nothing to clear."""
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(os.path.join(dest_dir, WINDOW_META[window]))
+    other = "tail" if window == "head" else "head"
+    meta = read_window_meta(dest_dir, other)
+    if meta is None:
+        return
+    if meta == "unreadable" or not same_recording(stamp, meta):
+        log(f"stem cache: {other} stems in {os.path.basename(os.path.normpath(dest_dir))} "
+            f"were cut from another recording; dropped before the {window} rewrite")
+        drop_window(dest_dir, other)
+
+
+def write_head_meta(dest_dir, stamp):
+    """The head window's provenance stamp, written after its stems."""
+    path = os.path.join(dest_dir, HEAD_META)
+    with shared_output(path) as tmp, open(tmp, "w") as f:
+        json.dump({
+            "file_size": _positive_int(stamp.get("file_size")),
+            "duration_sec": _positive_float(stamp.get("duration_sec")),
         }, f)
 
 
@@ -2300,7 +2425,8 @@ def _path_loader(librosa, path):
     return load
 
 
-def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=False, *, cache_errors=None):
+def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=False, *, cache_errors=None,
+                stamp=None):
     """Demucs over the head window: vocal ranges (+ head stems when
     `stems_dir`). Returns (vocal_ranges | None, stems_cached | None).
     Best-effort exactly like the code it was lifted from: a failure logs and
@@ -2309,7 +2435,11 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
     write (the share can drop out during a long separation): no marker, no
     write and stems_cached stays None, so the track is not stamped.
     Facet callers may collect cache_errors without losing successful vocals
-    or changing the flat caller's best-effort return values."""
+    or changing the flat caller's best-effort return values.
+    `stamp` (source_stamp) is the recording's provenance: a tail cut from
+    another recording is dropped before the head is written, and head-meta.json
+    goes in after the stems. A failed write drops the head window, so no mix of
+    two writes is left behind."""
     import numpy as np
 
     vocal_ranges = None
@@ -2323,11 +2453,16 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
             )
             stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
             if stems_dir:
+                stamp = stamp or source_stamp(None, None, None)
                 try:
+                    begin_window(stems_dir, "head", stamp)
                     write_stems(head_stems, "head", stems_dir)
+                    if stems_dir_to_write(stems_dir, stems_require_marker):
+                        write_head_meta(stems_dir, stamp)
                     stems_cached = True
                 except Exception as e:  # noqa: BLE001 — cache is best-effort
                     log(f"stem cache write (head) failed: {e}")
+                    drop_window(stems_dir, "head")
                     stems_cached = False
                     if cache_errors is not None:
                         cache_errors.append(e)
@@ -2338,7 +2473,7 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
 
 
 def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stems_require_marker=False, *, cache_errors=None,
-                window=None):
+                window=None, file_size=None, report=None):
     """Demucs over the outro window: writes ABSOLUTE `outro["vocalRanges"]`
     ([] = analysed instrumental tail) and the tail stems + tail-meta when
     `stems_dir`. Only call with an outro computed from a proven tail.
@@ -2349,9 +2484,16 @@ def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stem
     publication failures separately from the successful vocal measurement.
     `window` = (offset_s, length_s) of a tail placed from the edges; absent,
     the window is the file's last OUTRO_SECONDS. `duration_s` is the decoded
-    file length either way (the tail meta records it)."""
+    file length either way (the tail meta records it).
+    Provenance (#2238, see source_stamp): the old tail-meta.json goes before
+    the new tail stems, a head cut from another recording is dropped, and the
+    new meta (with `file_size`, when the source is proven whole) goes in last.
+    A failed write drops the tail window. With `stems_dir`, `report` (a dict)
+    gets "tail_stems_landed": whether the tail stems and their meta landed."""
     import numpy as np
 
+    if report is not None and stems_dir:
+        report["tail_stems_landed"] = False
     try:
         tail_offset, tail_len = window if window else (max(0.0, duration_s - OUTRO_SECONDS), OUTRO_SECONDS)
         y_tail, _srt = load(sr=DEMUCS_SR, mono=False, offset=tail_offset, duration=tail_len)
@@ -2364,13 +2506,17 @@ def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stem
         )
         stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
         if stems_dir:
+            target = stems_dir
             try:
-                write_stems(tail_stems, "tail", stems_dir)
-                stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
-                if stems_dir:
-                    write_tail_meta(stems_dir, tail_offset, duration_s)
+                begin_window(target, "tail", {"file_size": file_size, "duration_sec": duration_s})
+                write_stems(tail_stems, "tail", target)
+                if stems_dir_to_write(target, stems_require_marker):
+                    write_tail_meta(target, tail_offset, duration_s, file_size=file_size)
+                    if report is not None:
+                        report["tail_stems_landed"] = True
             except Exception as e:  # noqa: BLE001 — cache is best-effort
                 log(f"stem cache write (tail) failed: {e}")
+                drop_window(target, "tail")
                 if cache_errors is not None:
                     cache_errors.append(e)
         shift_ms = tail_offset * 1000.0
@@ -3179,14 +3325,14 @@ _RESULT_ORDER = (
     "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
     "loudness_lufs", "peak_db",
     "sections", "pace_curve", "beats", "bars", "key_ranges",
-    "outro", "vocal_ranges", "audio_embedding", "stems_cached",
+    "outro", "vocal_ranges", "audio_embedding", "stems_cached", "tail_stems_landed",
 )
 
 
 def analyze(
     librosa, url=None, path=None, embed=None, vocal=None, complete=None,
     stems_dir=None, embedding_only=False, stems_require_marker=False,
-    tail_window=None, stream_url=None,
+    tail_window=None, stream_url=None, source_size=None,
 ):
     import numpy as np
 
@@ -3208,6 +3354,7 @@ def analyze(
     audio_embedding = None
     vocal_ranges = None
     outro = None
+    tail_report = {}
     placement = placed_src = tail_span = None
     try:
         if owned:
@@ -3297,9 +3444,12 @@ def analyze(
         detector = None if vocal is False else get_vocal_detector(force=vocal is True or bool(stems_dir))
         stems_cached = None
         load = _path_loader(librosa, path)
+        # Provenance of the stems this request writes (#2238): the source as
+        # downloaded or handed over, never the fast-decode WAV.
+        stamp = source_stamp(src_path, complete, duration_s, source_size) if stems_dir else None
         if detector is not None:
             vocal_ranges, stems_cached = demucs_head(
-                detector, load, librosa, stems_dir, stems_require_marker
+                detector, load, librosa, stems_dir, stems_require_marker, stamp=stamp
             )
         # Tail vocal activity (feature: vocal-aware transitions) — the outro
         # window gets its own Demucs pass so transitions know whether the
@@ -3307,12 +3457,14 @@ def analyze(
         # outro non-None already proves the file is complete and long enough
         # for a distinct tail (see demucs_tail).
         if detector is not None and outro is not None and "startMs" in outro:
+            stem_size = stamp["file_size"] if stamp else None
             if tail_span:
                 demucs_tail(detector, lambda **kw: placed_src.load_tail(librosa, **kw), librosa,
                             placement["duration_ms"] / 1000.0, outro, stems_dir, stems_require_marker,
-                            window=tail_span)
+                            window=tail_span, file_size=stem_size, report=tail_report)
             else:
-                demucs_tail(detector, load, librosa, duration_s, outro, stems_dir, stems_require_marker)
+                demucs_tail(detector, load, librosa, duration_s, outro, stems_dir, stems_require_marker,
+                            file_size=stem_size, report=tail_report)
             # The share went away during the pass: report no stems_cached so
             # the controller does not stamp a track whose stems are incomplete.
             if stems_dir and stems_dir_to_write(stems_dir, stems_require_marker) is None:
@@ -3375,6 +3527,13 @@ def analyze(
     # stems written (tail rides along when the outro was computable).
     if stems_cached is not None:
         result["stems_cached"] = stems_cached
+        # Whether the tail stems landed, only when the tail was proven (it was
+        # separated): False tells the controller the set is head-only although
+        # it could have had a tail, so it may retry (stem-stamp-policy.ts). A
+        # key of its own: an older analyzer never sends it, so a controller
+        # reading it never mistakes "no tail to cut" for a miss.
+        if "tail_stems_landed" in tail_report:
+            result["tail_stems_landed"] = tail_report["tail_stems_landed"]
     ordered = {k: result[k] for k in _RESULT_ORDER if k in result}
     ordered.update((k, v) for k, v in result.items() if k not in ordered)
     return ordered
@@ -3586,7 +3745,7 @@ def parse_stems_windows(raw):
 
 
 def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False,
-                   whole_input=None, tail_window=None, stems_windows=None):
+                   whole_input=None, tail_window=None, stems_windows=None, source_size=None):
     """Compute exactly `facets` from an opened source. Each facet answers on
     its own: ok + data, unmeasurable + reason (this file can't give it at this
     version), unavailable + reason (this engine can't: no CLAP / no Demucs), or
@@ -3692,10 +3851,14 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
             skip_head_stems = "head" not in windows
             cache_errors = []
             stems_cached = None
+            # Provenance of the stems written here (#2238, source_stamp).
+            stamp = source_stamp(getattr(source, "src_path", None), getattr(source, "complete", None),
+                                 getattr(source, "duration_s", None), source_size)
+            tail_report = {}
             if "vocal" in wanted or not skip_head_stems:
                 vocal_ranges, stems_cached = demucs_head(
                     detector, load, librosa, None if skip_head_stems else stem_target,
-                    stems_require_marker, cache_errors=cache_errors,
+                    stems_require_marker, cache_errors=cache_errors, stamp=stamp,
                 )
             tail_vocals = False
             if outro is not None and "startMs" in outro and ("tail" in windows or "vocal" in wanted):
@@ -3703,6 +3866,7 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                     detector, tail_load, librosa, tail_dur, outro,
                     stem_target if "tail" in windows else None, stems_require_marker,
                     cache_errors=cache_errors, window=tail_span,
+                    file_size=stamp["file_size"], report=tail_report,
                 )
             if stem_target and stems_dir_to_write(stem_target, stems_require_marker) is None:
                 share_ok = False
@@ -3731,14 +3895,22 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                     # Tail alone: ok only once its stems are on the share.
                     if outro is None or "startMs" not in outro:
                         out["stems"] = _unmeasurable(tail_reason or "tail-not-measured")
-                    elif not tail_vocals:
+                    elif not tail_report.get("tail_stems_landed"):
                         out["stems"] = _failed("tail separation failed (see analyzer log)")
                     else:
-                        out["stems"] = _ok({"tail_stems": True})
+                        out["stems"] = _ok({"tail_stems": True, "tail_stems_landed": True})
                 elif stems_cached is None:
                     out["stems"] = _failed("separation failed (see analyzer log)")
                 else:
-                    out["stems"] = _ok({"stems_cached": stems_cached, "tail_stems": tail_vocals})
+                    # tail_stems_landed only when the tail was proven and asked
+                    # for: False = it could have landed and did not, which the
+                    # controller retries (stem-stamp-policy.ts); absent = no
+                    # tail to cut (an unproven tail), nothing to retry.
+                    # tail_stems keeps its old meaning (the tail separated).
+                    data = {"stems_cached": stems_cached, "tail_stems": tail_vocals}
+                    if "tail_stems_landed" in tail_report:
+                        data["tail_stems_landed"] = tail_report["tail_stems_landed"]
+                    out["stems"] = _ok(data)
 
     if "tail" in wanted and want_tail_vocals and outro is not None and "startMs" in outro \
             and not (wanted & {"vocal", "stems"}):
@@ -3827,6 +3999,7 @@ def analyze_facet_request(librosa, req):
             whole_input=whole_input,
             tail_window=req.get("tail_window"),
             stems_windows=parse_stems_windows(req.get("stems_windows")),
+            source_size=req.get("source_size"),
         )
         return {"facets": result, "source": source.describe()}
     finally:
@@ -3995,6 +4168,7 @@ def main():
                     embedding_only=req.get("embedding_only") is True,
                     stems_require_marker=req.get("stems_require_marker") is True,
                     tail_window=req.get("tail_window"), stream_url=req.get("stream_url"),
+                    source_size=req.get("source_size"),
                 )
                 # If a getter stamped the clock, this request DID use a model —
                 # re-stamp so the countdown starts from the end of the work, not

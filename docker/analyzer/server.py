@@ -819,6 +819,10 @@ class AnalyzeRequest(BaseModel):
     # Untyped here: the worker's parse_stems_windows judges it, and a malformed
     # value separates both windows there rather than a 422 refusing the request.
     stems_windows: Any = None
+    # With stems_dir: the library's size for the file, which the worker stamps
+    # on the stem windows it writes (#2238). Untyped like stems_windows: the
+    # worker judges it, and a bad value stamps unknown rather than a 422.
+    source_size: Any = None
 
 
 @app.post("/analyze")
@@ -851,6 +855,8 @@ async def analyze(req: AnalyzeRequest):
         payload["stems_dir"] = req.stems_dir
     if req.stems_require_marker is not None:
         payload["stems_require_marker"] = req.stems_require_marker
+    if req.stems_dir is not None and req.source_size is not None:
+        payload["source_size"] = req.source_size
     if req.embedding_only:
         payload["embedding_only"] = True
     # A placed tail window (flat and facet requests alike) and the stream URL
@@ -888,6 +894,7 @@ async def analyze(req: AnalyzeRequest):
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
         "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
+        "tail_stems_landed",
         "lead_silence_ms", "tail_silence_ms", "tail_start_ms", "tail_window",
     ):
         if k in msg:

@@ -8,6 +8,7 @@ import * as settings from '../settings.js';
 import * as db from './library-db.js';
 import * as likes from '../broadcast/likes.js';
 import { evictQueuedLast, stemEvictionOrder, UNKNOWN_TRACK_PRIORITY } from './stem-priority.js';
+import { HEAD_META, TAIL_META, UNKNOWN_STAMP, parseStemStamp, windowUsable, type StemStamp } from './stem-provenance.js';
 import { mapPool } from '../util/async-pool.js';
 import type { StemScanOpts } from './library-db.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
@@ -59,16 +60,59 @@ export function stemPath(trackId: string, window: StemWindow, stem: string): str
 // cache-hit-only, so "all four present" is the eligibility fact. The tail window
 // also needs its alignment sidecar (tail-meta.json: decoded duration + the exact
 // tail offset the stems were cut at), without which the bar grid misaligns.
-export async function hasWindow(trackId: string, window: StemWindow): Promise<boolean> {
+// And the window must be cut from the recording the row measured (#2238,
+// stem-provenance.ts): its stamp agrees with the other window's and with the
+// row's tracks.file_size, read here so no caller can leave the check out
+// (`expect.fileSize` overrides it, for tests; no library open reads unknown,
+// which judges nothing). A mismatch is a plain miss: nothing is evicted here.
+export async function hasWindow(
+  trackId: string,
+  window: StemWindow,
+  expect: { fileSize?: number | null } = {},
+): Promise<boolean> {
   try {
+    const expectedFileSize = 'fileSize' in expect ? expect.fileSize : rowFileSize(trackId);
     const files = STEM_NAMES.map(s => stemPath(trackId, window, s));
-    if (window === 'tail') files.push(path.join(dirFor(trackId), 'tail-meta.json'));
+    if (window === 'tail') files.push(path.join(dirFor(trackId), TAIL_META));
     const checks = await Promise.all(
       files.map(f => stat(f).then(st => st.size > 0, () => false)),
     );
-    return checks.every(Boolean);
+    if (!checks.every(Boolean)) return false;
+    const [own, other] = await Promise.all([
+      readStemStamp(trackId, window),
+      readStemStamp(trackId, window === 'head' ? 'tail' : 'head'),
+    ]);
+    // An unreadable stamp of its own is no evidence; the tail's sidecar is
+    // the render's alignment, so an unreadable one is a miss as it always was
+    // at render time. An unreadable other window is judged when it is read.
+    if (own === 'unreadable') return false;
+    return windowUsable({
+      own: own ?? UNKNOWN_STAMP,
+      other: other === 'unreadable' ? null : other,
+      expectedFileSize,
+    });
   } catch {
     return false;
+  }
+}
+
+function rowFileSize(trackId: string): number | null {
+  return db.getDb() ? db.trackFileSize(trackId) : null;
+}
+
+// A window's provenance stamp: null when its meta file is absent (a head from
+// before the stamps), 'unreadable' when it is there but does not parse.
+async function readStemStamp(trackId: string, window: StemWindow): Promise<StemStamp | null | 'unreadable'> {
+  let text: string;
+  try {
+    text = await readFile(path.join(dirFor(trackId), window === 'head' ? HEAD_META : TAIL_META), 'utf8');
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'ENOENT' ? null : 'unreadable';
+  }
+  try {
+    return parseStemStamp(JSON.parse(text)) ?? 'unreadable';
+  } catch {
+    return 'unreadable';
   }
 }
 

@@ -386,7 +386,7 @@ test('a stems facet request carries stems_require_marker with its stems_dir', as
   vocalCapable = true;
   analyzer._resetBackendCacheForTests();
   try {
-    db.upsertTrackMeta('t10', { title: 't10', artist: 'A', album: 'B', duration: 214 });
+    db.upsertTrackMeta('t10', { title: 't10', artist: 'A', album: 'B', duration: 214, fileSize: 7_654_321 });
     const p = P.planAcoustics({ ids: ['t10'], facets: ['stems'], where: { kind: 'all' },
       state: db.loadFacetState(['stems']), capabilities: { clap: true, demucs: true, tailVocal: true } });
     assert.equal(p.items.length, 1);
@@ -397,6 +397,19 @@ test('a stems facet request carries stems_require_marker with its stems_dir', as
     assert.deepEqual(r.facets, ['stems']);
     assert.ok(typeof r.stems_dir === 'string', JSON.stringify(r));
     assert.equal(r.stems_require_marker, true, 'a remote analyzer must check the share before writing');
+    // The library's size rides with the stems_dir, for the worker to stamp on
+    // the windows it writes, capped download or not (#2238).
+    assert.equal(r.source_size, 7_654_321, JSON.stringify(r));
+
+    // Every flat request that writes stems carries it too; one that writes none,
+    // or a track with no known size, does not.
+    db.upsertTrackMeta('t11', { title: 't11', artist: 'A', album: 'B', duration: 214 });
+    requests.length = 0;
+    await analyzer.analyze('t10', { stems_dir: '/s/t10' });
+    await analyzer.analyze('t10', {});
+    await analyzer.analyze('t11', { stems_dir: '/s/t11' });
+    await analyzer.analyzePathWithUrlFallback('t10', path.join(stateDir, 'staged.flac'), { stems_dir: '/s/t10' });
+    assert.deepEqual(requests.map(q => q.source_size), [7_654_321, undefined, undefined, 7_654_321]);
   } finally {
     // Leave no stems stamp behind: with the root gone it would read offline.
     sql().prepare(`UPDATE tracks SET stems_at = NULL WHERE id = 't10'`).run();

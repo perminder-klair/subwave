@@ -375,7 +375,7 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
          audio_descriptors = NULL, audio_descriptor_scores_json = NULL,
          outro_json = NULL, tail_silence_ms = NULL, tail_start_ms = NULL, tail_version = NULL, lead_silence_ms = NULL,
          edge_lead_ms = NULL, edge_tail_ms = NULL, decoded_duration_ms = NULL,
-         stems_at = NULL, map_x = NULL, map_y = NULL,
+         stems_at = NULL, stems_tail_misses = NULL, map_x = NULL, map_y = NULL,
          analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL
        WHERE id = ?`,
     ).run(id);
@@ -394,19 +394,53 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
 // the walk's candidates: id -> the walked size, or null from the change-time
 // signal. `changedAt` is what Navidrome dated each, where it said (acceptedAt).
 // One transaction, so a walk that dies here asks again in full.
+// The stems are the exception (#2238): each window is stamped with the size of
+// the file it was cut from, and stem-cache.hasWindow rejects a window whose
+// size is not the row's. Storing a new walked size makes every stamped window
+// a miss, so for those ids stems_at (and its miss count) is cleared too and the
+// stem backfill separates the track again; left stamped, nothing would ever
+// redo it and the track would never blend. The stem files stay until that
+// rewrite replaces them (the worker drops a window stamped with another file).
+// A change-time candidate (no size) keeps its row size, so its stamps still
+// match and its stems stand: re-separating it would be wasted Demucs work, and
+// a restore that resets file dates would make that library-wide.
+// Returns how many tracks' stems were sent back to the backfill.
 export function acceptReplacedFiles(
   files: ReadonlyMap<string, number | null>,
   changedAt: ReadonlyMap<string, string> = new Map(),
-): void {
+): number {
   const d = requireDb();
   const setSize = d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?');
+  const clearStems = d.prepare('UPDATE tracks SET stems_at = NULL, stems_tail_misses = NULL WHERE id = ?');
+  let resent = 0;
   d.transaction(() => {
     for (const [id, fileSize] of files) {
       const size = positiveInt(fileSize);
-      if (size != null) setSize.run(size, id);
+      if (size != null) {
+        setSize.run(size, id);
+        clearStems.run(id);
+        resent++;
+      }
       restampFacetRows(id, acceptedAt(changedAt.get(id)));
+      if (size != null) syncTrackFacets(id);
     }
   })();
+  return resent;
+}
+
+// The file size the library records for a track: the size its analysis was
+// measured against, which the walk keeps until a replacement is cleared
+// (clearTrackAudio stores the new one). null = unknown. Stem provenance reads
+// it (stem-cache.hasWindow, #2238).
+export function trackFileSize(id: string): number | null {
+  const row = requireDb().prepare('SELECT file_size AS s FROM tracks WHERE id = ?').get(id) as { s: number | null } | undefined;
+  return positiveInt(row?.s ?? null);
+}
+
+// Stem passes in a row whose proven tail did not land (music/stem-stamp-policy.ts).
+export function trackStemTailMisses(id: string): number | null {
+  const row = requireDb().prepare('SELECT stems_tail_misses AS n FROM tracks WHERE id = ?').get(id) as { n: number | null } | undefined;
+  return positiveInt(row?.n ?? null);
 }
 
 // Returns true when the walk found the file replaced (replaced-file-policy
@@ -975,7 +1009,10 @@ interface TrackAnalysisWrite {
   tailVersion?: number | null;
   // true stamps stems_at so the backfill scope drops the track. Pass true for a
   // MISS too: the stamp records the attempt, not disk presence (migration 17).
+  // Whether to is music/stem-stamp-policy.ts's decision.
   stemsAttempted?: boolean;
+  // The policy's new tracks.stems_tail_misses (#2238); undefined = unchanged.
+  stemsTailMisses?: number | null;
   // Where the audio came from — recorded on the facet rows this write
   // measures, and how an unmeasured tail is explained. Omitted = 'unknown'.
   source?: FacetSource;
@@ -1117,6 +1154,8 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- A pass with the stem cache off passes null and must not clear an
         -- earlier stem pass's stamp.
         stems_at            = COALESCE(?, stems_at),
+        -- Set only when the stem-stamp policy decided (#2238).
+        stems_tail_misses   = CASE WHEN ? THEN ? ELSE stems_tail_misses END,
         -- Success wipes the failure history: analyze_fail_count counts
         -- CONSECUTIVE failures.
         analyze_error       = NULL,
@@ -1144,6 +1183,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       placed, Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
       placed, outro != null ? 1 : null,
       a.stemsAttempted ? new Date().toISOString() : null,
+      a.stemsTailMisses !== undefined ? 1 : 0, a.stemsTailMisses ?? null,
       ANALYSIS_VERSION,
       id,
     );
@@ -1226,6 +1266,9 @@ export interface FacetWrite {
   // new outro itself: the lyric path).
   vocal?: { vocalRanges: TrackSection[]; tailVocalRanges: TrackSection[] | null; tailWindow?: 'placed' | 'end' | 'stored' };
   stems?: { attempted: true };
+  // music/stem-stamp-policy.ts's new tracks.stems_tail_misses (#2238), written
+  // with or without the stamp; undefined = unchanged.
+  stemsTailMisses?: number | null;
   // Silence at both ends (absolute floor) and the decoded length, ms.
   edges?: { leadMs: number; tailMs: number; durationMs: number };
   unmeasurable?: Partial<Record<Facet, string>>;
@@ -1354,6 +1397,9 @@ export function writeFacetResults(id: string, w: FacetWrite): void {
     if (w.stems) {
       d.prepare('UPDATE tracks SET stems_at = ? WHERE id = ?').run(new Date().toISOString(), id);
       fresh.push('stems');
+    }
+    if (w.stemsTailMisses !== undefined) {
+      d.prepare('UPDATE tracks SET stems_tail_misses = ? WHERE id = ?').run(w.stemsTailMisses, id);
     }
     if (w.edges) {
       const ms = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.round(v)) : null);
@@ -1520,7 +1566,7 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   // window.
   const keepPlacedTail = (col: string) => ` ${col} = CASE WHEN ${SQL_PLACED_TAIL_STAMP} THEN ${col} END,`;
   const tailCols = opts.keepVocal ? '' : ['outro_json', 'tail_silence_ms', 'tail_start_ms', 'tail_version'].map(keepPlacedTail).join('');
-  const stemsCol = opts.clearStems ? ' stems_at = NULL,' : '';
+  const stemsCol = opts.clearStems ? ' stems_at = NULL, stems_tail_misses = NULL,' : '';
   d.transaction(() => {
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
