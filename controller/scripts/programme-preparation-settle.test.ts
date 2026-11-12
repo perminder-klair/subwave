@@ -20,20 +20,26 @@ const { showPreparation, preparationPlanStamp, preparedPlanAngle } = await impor
 const { runPersonaHandoff } = await import('../src/broadcast/dj-agent.js');
 const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
+const { handoffGreetingPrompt } = await import('../src/llm/internal/prompts/scripts.js');
 after(() => removeTempDir(root));
 
 type PlanDeps = NonNullable<Parameters<typeof programme.prepareBoundaryPlan>[1]>;
 type Plan = Awaited<ReturnType<NonNullable<PlanDeps['generateProgrammePlan']>>>;
 const plan = (angle: string): Plan => ({ angle, features: [], introNote: null, outroNote: null });
 
-async function greetingAngle(ctx: Parameters<typeof runPersonaHandoff>[1]) {
-  let angle: string | null | undefined;
+async function greeting(ctx: Parameters<typeof runPersonaHandoff>[1]) {
+  let seen: { angle: string | null; subject: string | null; prompt: string } | undefined;
   await runPersonaHandoff({ getDjRecap: () => '', getRecentOpeners: () => [], announceExchange: async () => true }, ctx, {
     generateSignoff: async () => 'Goodbye.',
-    generateHandoffGreeting: async (args) => { angle = args.episodeAngle; return 'Welcome.'; },
+    generateHandoffGreeting: async (args) => {
+      seen = { angle: args.episodeAngle ?? null, subject: args.episodeSubject ?? null, prompt: handoffGreetingPrompt(args) };
+      return 'Welcome.';
+    },
   });
-  return angle;
+  assert.ok(seen, 'the greeting was generated');
+  return seen;
 }
+const greetingAngle = async (ctx: Parameters<typeof runPersonaHandoff>[1]) => (await greeting(ctx)).angle;
 
 async function armBoundary(t: { mock: { method: typeof import('node:test').mock.method } }, showId: string, showName: string) {
   const week: Record<number, string[]> = {};
@@ -48,7 +54,7 @@ async function armBoundary(t: { mock: { method: typeof import('node:test').mock.
   return { incoming, fetchMock };
 }
 
-test('an unready preparation holds the plan and the greeting goes without an invented angle', async (t) => {
+test('an unready preparation holds the plan; the greeting names the chosen subject without an angle', async (t) => {
   await settings.load();
   const host = settings.get().personas[0];
   const outgoing = { ...host, id: 'p_outgoing', name: 'Outgoing host' };
@@ -57,12 +63,16 @@ test('an unready preparation holds the plan and the greeting goes without an inv
     shows: [
       { id: 's_dizzy', name: 'Dizzy Spells', personaId: host.id, programme: true, preparationSkill: 'prepare' },
       { id: 's_plain', name: 'Plain hour', personaId: host.id, programme: true },
+      { id: 's_unchosen', name: 'Unchosen hour', personaId: host.id, programme: true, preparationSkill: 'prepare_fails' },
     ],
-    schedule: {}, skills: { enabled: { prepare: true } }, tts: { enabled: true },
+    schedule: {}, skills: { enabled: { prepare: true, prepare_fails: true } }, tts: { enabled: true },
   });
   registry.replaceLoadedCapabilities([{
     skill: 'prepare', kind: 'prepare', seeded: false,
     toolFn: async () => ({ available: true, subject: 'Prepared artist', music: { type: 'artist', artistId: 'ar-1' }, data: {} }),
+  }, {
+    skill: 'prepare_fails', kind: 'prepare_fails', seeded: false,
+    toolFn: async () => { throw new Error('research source down'); },
   }]);
   // Every fetch fails, so the artist catalogue step rejects as a pool read past
   // the twelve-second cap does: the subject is chosen, a retry is a minute away.
@@ -80,7 +90,26 @@ test('an unready preparation holds the plan and the greeting goes without an inv
   await programme.prepareBoundaryPlan(incoming, deps);
   assert.equal(plans, 0);
 
-  assert.equal(await greetingAngle(incoming), null, 'the greeting does not wait for the plan and has no angle');
+  // The skill has chosen its subject, so the greeting names it, with no angle.
+  const chosen = await greeting(incoming);
+  assert.equal(chosen.angle, null, 'the greeting does not wait for the plan and has no angle');
+  assert.equal(chosen.subject, 'Prepared artist');
+  assert.match(chosen.prompt, /hour of "Prepared artist"/);
+  assert.match(chosen.prompt, /state no facts/);
+  assert.doesNotMatch(chosen.prompt, /angle/i);
+});
+
+test('an unready preparation with no chosen subject gives the greeting neither subject nor angle', async (t) => {
+  const { incoming } = await armBoundary(t, 's_unchosen', 'Unchosen hour');
+  let plans = 0;
+  await programme.prepareBoundaryPlan(incoming, { generateProgrammePlan: async () => { plans++; return plan('Invented angle'); } });
+  const view = showPreparation.read({ context: incoming });
+  assert.equal(view.status.kind, 'failed');
+  assert.equal(plans, 0, 'the tool retry is still due');
+  const none = await greeting(incoming);
+  assert.equal(none.angle, null);
+  assert.equal(none.subject, null);
+  assert.doesNotMatch(none.prompt, /hour of|angle/i);
 });
 
 test('one generation per episode, stamped with its occurrence and subject; a stale one is dropped', async (t) => {

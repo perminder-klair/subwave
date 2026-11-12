@@ -12,7 +12,7 @@ globalThis.fetch = async () => new Response('{}', { headers: { 'content-type': '
 const { getFullContext } = await import('../src/context.js');
 const context = await getFullContext();
 globalThis.fetch = realFetch;
-const { createShowPreparation, preparationGrounding, preparationSettled } = await import('../src/broadcast/show-preparation.js');
+const { createShowPreparation, preparationGrounding, preparationSettled, preparationGreetingSubject } = await import('../src/broadcast/show-preparation.js');
 const { preparationStoreSchema, preparationResultSchema } = await import('../src/schemas/show-preparation.js');
 const { skillEligible } = await import('../src/skills/eligibility.js');
 after(async () => { await rm(root, { recursive: true, force: true }); });
@@ -114,6 +114,7 @@ test('a preparation is unsettled only while a retry is still due without groundi
   assert.equal(first.status.kind, 'degraded');
   assert.equal(first.editorial, '');
   assert.equal(preparationSettled(first), false, 'a catalogue retry is still due, so nothing should be planned from this view');
+  assert.equal(preparationGreetingSubject(first), 'Artist', 'the skill already chose the subject, so the greeting may name it');
   assert.equal(preparationSettled(owner.read({ context })), false);
   const restarted = createShowPreparation(f.options);
   await restarted.recover();
@@ -122,6 +123,7 @@ test('a preparation is unsettled only while a retry is still due without groundi
   const exhausted = await owner.ensure({ context });
   assert.equal(exhausted.status.kind, 'degraded');
   assert.equal(preparationSettled(exhausted), true, 'no retry left: the plan goes ahead without the subject');
+  assert.equal(preparationGreetingSubject(exhausted), null, 'a settled view speaks through its plan, not the bare subject');
 
   const g = fixture('settled-ready');
   g.catalogue(true);
@@ -131,6 +133,7 @@ test('a preparation is unsettled only while a retry is still due without groundi
   const ready = await late.ensure({ context });
   assert.equal(ready.status.kind, 'ready');
   assert.equal(preparationSettled(ready), true);
+  assert.equal(preparationGreetingSubject(ready), null, 'a ready view gives the greeting its editorial instead');
   g.catalogue(true);
   const kept = await late.ensure({ context });
   assert.equal(kept.status.kind, 'degraded');
@@ -142,6 +145,7 @@ test('a preparation is unsettled only while a retry is still due without groundi
   const failed = await tool.ensure({ context });
   assert.equal(failed.status.kind, 'failed');
   assert.equal(preparationSettled(failed), false, 'the tool is retried once after a minute');
+  assert.equal(preparationGreetingSubject(failed), null, 'no subject chosen yet: the greeting names none');
   t.move(60_001);
   const failedTwice = await tool.ensure({ context });
   assert.equal(failedTwice.status.kind, 'failed');

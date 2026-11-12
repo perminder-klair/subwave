@@ -222,7 +222,10 @@ its angle. The stamp leaves out the preparation's status and music on purpose: a
 ready preparation whose catalogue refresh later fails keeps its subject and
 grounding, so its plan's angle is still right. A greeting with no angle is the
 accepted cost of a preparation that is not ready at the boundary: the boundary
-does not wait for it. Speech that already aired an invented subject stays in the
+does not wait for it. When the skill has already chosen its subject, though, the
+greeting still names it, with no angle and no facts about it
+(`preparationGreetingSubject`), so it reads a known subject or nothing, never an
+invented one. Speech that already aired an invented subject stays in the
 session's prompt memory; this does not withdraw it.
 
 Unexpired interrupted episodes are stored with the programme, capped at sixteen.

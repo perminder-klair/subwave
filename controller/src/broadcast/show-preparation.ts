@@ -281,6 +281,19 @@ export function preparationPlanStamp(context: SessionContext): string {
 // then goes without an angle, which it already handles. A plan with no stamp
 // predates the stamp and keeps its angle, so an upgrade reads the old session
 // unchanged.
+// The subject a handoff greeting may name while the preparation is unsettled:
+// the skill has chosen it (a `selected` record whose catalogue step is waiting
+// on a retry), but the plan stays pending and there is no grounding yet. The
+// greeting then names this subject without a plan angle. A settled view gives
+// the greeting its editorial instead, and a view with no chosen subject gives
+// nothing, so the greeting reads a known subject or none, never an invented one.
+// It is the incoming show's own preparation data, not outgoing speech.
+export function preparationGreetingSubject(view: EpisodeView): string | null {
+  if (preparationSettled(view) || view.status.kind === 'unconfigured') return null;
+  const subject = String(view.status.subject || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  return subject || null;
+}
+
 export function preparedPlanAngle(
   programme: { plan?: { angle?: string | null } | null; preparationStamp?: string } | null | undefined,
   context: SessionContext,
