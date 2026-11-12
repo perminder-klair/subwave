@@ -32,5 +32,11 @@ assert.equal(
   'Björk and Rosalía — unchanged.',
   'Latin-script names and accents remain untouched',
 );
+assert.equal(cjkUnsafeForSpokenLanguage('', ['English (UK)']), true, 'an all-English mix is still protected');
+assert.equal(
+  scrubCjkForSpeech('Next up, ウルフルズ — やばい tune, ね。', 'English', ['Japanese']),
+  'Next up, ウルフルズ — やばい tune, ね。',
+  'a multilingual persona keeps the script it mixes in',
+);
 
 console.log('spoken-script-policy.test.ts: all assertions passed');

@@ -240,6 +240,24 @@ test('skillVoiceFor: override replaces the voice, keeping speaker identity, gain
   assert.equal(r.persona.tts.speed, 1.1);
 });
 
+// The mix was declared for the speaker's own voice. On a pinned one, speak()
+// must judge the script by the primary language alone, as it does for a rescue.
+test('skillVoiceFor: an override drops the speaker\'s language mix, and only an override does', async () => {
+  const { personaLanguages } = await import('../src/settings.js');
+  const { scrubCjkForSpeech } = await import('../src/audio/spoken-script-policy.js');
+  const speaker = { id: 'p_x', language: 'English', alsoSpeaks: 'Japanese', tts: { engine: 'cloud', voice: 'v', cloudProvider: 'elevenlabs' } };
+  const line = 'Good evening, こんばんは, here is the news.';
+  const spoken = (p: unknown) => {
+    const { primary, mix } = personaLanguages(p);
+    return scrubCjkForSpeech(line, primary, mix);
+  };
+  const pinned = skillVoiceFor({ kind: 'news', voice: { engine: 'piper', voice: '', cloudProvider: 'openai' } }, speaker).persona;
+  assert.equal(pinned.language, 'English');
+  assert.doesNotMatch(spoken(pinned), /こんばんは/, 'a pinned voice never receives the second script');
+  const own = skillVoiceFor({ kind: 'news', voice: null }, speaker).persona;
+  assert.equal(spoken(own), line, "the speaker's own voice keeps the mix");
+});
+
 test('skillVoiceFor: a missing speaker does not throw', () => {
   const r = skillVoiceFor(
     { kind: 'bulletin', voice: { engine: 'kokoro', voice: 'bf_isabella', cloudProvider: 'openai' } },

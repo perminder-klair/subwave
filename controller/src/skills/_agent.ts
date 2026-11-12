@@ -238,6 +238,12 @@ function frequencyFloorMs(freq: string) {
 // `cap.voice` is the loader's normalizeSkillVoice output, so all three of its
 // fields are set. Co-hosted skills never reach here: each line speaks in its
 // own roster persona's voice. Exported for scripts/skill-voice.test.ts.
+//
+// The speaker's language MIX (`alsoSpeaks`) does not ride along: it was declared
+// for the speaker's own voice, and the pinned one may be an English-only local
+// voice that reads kana as character names. Dropping it here puts tts.speak()'s
+// CJK scrub and single-language cloud hint back on the primary language alone,
+// the same rule a rescue voice gets (audio/tts.ts).
 export function skillVoiceFor(cap, speaker) {
   const v = cap?.voice;
   if (!v?.engine) return { persona: speaker, overridden: false };
@@ -246,6 +252,7 @@ export function skillVoiceFor(cap, speaker) {
   return {
     persona: {
       ...base,
+      alsoSpeaks: '',
       tts: {
         ...baseTts,
         engine: v.engine,

@@ -19,6 +19,7 @@ const persona: Persona = {
   soul: 'Calm and observant.',
   musicLean: '',
   language: '',
+  alsoSpeaks: '',
   avatar: '',
   tts: {
     engine: 'piper',
