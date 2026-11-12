@@ -562,9 +562,9 @@ test('a one-year decision: a change of year keeps each track\'s own record, and 
     eraUntrusted: true, eraReason: 'many-artists',
   });
   const f = era.eraWalkFields({ album: 'YearTwo', albumArtist: 'Y Artist', albumEraUntrusted: true, albumEraReason: 'many-artists' }, era.liveEraOverrides(d()));
-  assert.equal(era.applyWalkForcedYear(id('late'), f.forcedYear), true);
+  assert.equal(era.applyWalkForcedYear(id('late'), key, f.forcedYear), true);
   assert.equal(yearState(id('late')).y, 1977);
-  assert.equal(era.applyWalkForcedYear(id('hand'), f.forcedYear), false, 'the walk never forces a hand-set year either');
+  assert.equal(era.applyWalkForcedYear(id('hand'), key, f.forcedYear), false, 'the walk never forces a hand-set year either');
 
   era.setEraOverride(d(), key, 'trusted');
   assert.deepEqual(yearState(id('mb')), mbBefore, 'back to the looked-up year, not the first decision\'s 1975');
@@ -572,6 +572,129 @@ test('a one-year decision: a change of year keeps each track\'s own record, and 
   assert.equal(yearState(id('late')).y, null, 'the late track had nothing, and has nothing again');
   assert.equal(yearState(id('hand')).y, 1980);
   dropYearAlbum('YearTwo');
+});
+
+// The walk's own steps for one song: the row takes the album it read, then the
+// album's one-year decision (or its absence) is applied (tag-library/flags.ts).
+function walkTo(id: string, album: string, albumArtist = 'Y Artist'): boolean {
+  db.upsertTrackMeta(id, { album, albumArtist });
+  const f = era.eraWalkFields({ album, albumArtist, albumEraUntrusted: true, albumEraReason: 'many-artists' }, era.liveEraOverrides(d()));
+  return era.applyWalkForcedYear(id, era.albumEraKey(albumArtist, album), f.forcedYear);
+}
+const recordKey = (id: string) => {
+  const f = yearState(id).f;
+  return f == null ? null : (JSON.parse(f) as { albumKey?: string }).albumKey;
+};
+
+test('a track that leaves a one-year album for one without a decision gets its own year back (#2319)', () => {
+  const key = yearAlbum('YearMove');
+  const id = (s: string) => `YearMove-${s}`;
+  const before = new Map(['hand', 'mb', 'none'].map(s => [s, yearState(id(s))]));
+  era.setEraOverride(d(), key, 'year', { year: 1975 });
+  assert.equal(recordKey(id('mb')), key, 'the record names the album whose decision wrote it');
+
+  // Retagged to another album: restored at once, exactly as removing the decision would.
+  assert.equal(walkTo(id('mb'), 'Elsewhere'), true);
+  assert.deepEqual(yearState(id('mb')), before.get('mb'), 'the looked-up 1968 is back');
+  assert.equal(walkTo(id('none'), 'Elsewhere'), true);
+  assert.deepEqual(yearState(id('none')), before.get('none'), 'a track that had nothing has nothing');
+  // A hand-set year was never the decision's: it moves with the track untouched.
+  assert.equal(walkTo(id('hand'), 'Elsewhere'), false);
+  assert.deepEqual(yearState(id('hand')), before.get('hand'));
+  // A track still on the album keeps the decision's year.
+  assert.equal(walkTo(id('miss'), 'YearMove'), false);
+  assert.deepEqual([yearState(id('miss')).y, yearState(id('miss')).s], [1975, 'manual']);
+  // A second walk over the moved track does nothing more.
+  assert.equal(walkTo(id('mb'), 'Elsewhere'), false);
+
+  // The album renamed: treated as a move, so the year comes back and the album
+  // (whose key the decision no longer matches) returns to review.
+  assert.equal(walkTo(id('miss'), 'YearMove (Remastered)'), true);
+  assert.deepEqual([yearState(id('miss')).y, yearState(id('miss')).f], [null, null]);
+  dropYearAlbum('YearMove'); dropYearAlbum('Elsewhere'); dropYearAlbum('YearMove (Remastered)');
+});
+
+test('a track that moves between two one-year albums keeps its own year in its record, which now names the new album (#2319)', () => {
+  const keyA = yearAlbum('YearFrom');
+  const keyB = era.albumEraKey('Y Artist', 'YearTo');
+  db.upsertTrackMeta('YearTo-1', { title: 'to', artist: 'Y', album: 'YearTo', albumArtist: 'Y Artist', year: 2001, eraUntrusted: true, eraReason: 'many-artists' });
+  era.setEraOverride(d(), keyA, 'year', { year: 1975 });
+  era.setEraOverride(d(), keyB, 'year', { year: 1983 });
+  const id = 'YearFrom-mb';
+  const own = JSON.parse(yearState(id).f!) as { year: number; source: string };
+
+  assert.equal(walkTo(id, 'YearTo'), true, 'takes the new album\'s year');
+  assert.equal(yearState(id).y, 1983);
+  assert.equal(recordKey(id), keyB);
+  assert.deepEqual((({ year, source }) => ({ year, source }))(JSON.parse(yearState(id).f!)), { year: own.year, source: own.source }, 'still its own 1968, not 1975');
+
+  // Same year on both albums: nothing to write, but the record still follows.
+  era.setEraOverride(d(), keyA, 'year', { year: 1983 });
+  assert.equal(walkTo(id, 'YearFrom'), false);
+  assert.equal(recordKey(id), keyA);
+  assert.equal(walkTo(id, 'YearTo'), false);
+  assert.equal(recordKey(id), keyB);
+
+  // Removing the new album's decision now finds it and restores its own year.
+  era.setEraOverride(d(), keyB, null);
+  assert.deepEqual([yearState(id).y, yearState(id).s, yearState(id).f], [1968, 'musicbrainz', null]);
+  dropYearAlbum('YearFrom'); dropYearAlbum('YearTo');
+});
+
+test('a decision record with no album key (written before #2319) is left as it is when its track moves', () => {
+  const key = yearAlbum('YearOld');
+  era.setEraOverride(d(), key, 'year', { year: 1975 });
+  const id = 'YearOld-mb';
+  const legacy = JSON.parse(yearState(id).f!) as Record<string, unknown>;
+  delete legacy.albumKey;
+  d().prepare('UPDATE tracks SET era_forced_from = ? WHERE id = ?').run(JSON.stringify(legacy), id);
+  const held = yearState(id);
+
+  assert.equal(walkTo(id, 'Elsewhere Old'), false);
+  assert.deepEqual(yearState(id), held, 'kept, record and all');
+  // Nor is it given a key by reaching another year decision.
+  const keyB = era.albumEraKey('Y Artist', 'YearOldTo');
+  db.upsertTrackMeta('YearOldTo-1', { title: 'to', artist: 'Y', album: 'YearOldTo', albumArtist: 'Y Artist', year: 2001, eraUntrusted: true, eraReason: 'many-artists' });
+  era.setEraOverride(d(), keyB, 'year', { year: 1990 });
+  assert.equal(walkTo(id, 'YearOldTo'), true);
+  assert.equal(recordKey(id), undefined);
+  dropYearAlbum('YearOld'); dropYearAlbum('Elsewhere Old'); dropYearAlbum('YearOldTo');
+});
+
+test('a walk whose server leaves out the album artist does not read the track as leaving its album (#2319)', () => {
+  const key = yearAlbum('YearNoAA');
+  era.setEraOverride(d(), key, 'year', { year: 1975 });
+  const id = 'YearNoAA-mb';
+  // The upsert keeps the stored album artist; only the walk's own key differs.
+  db.upsertTrackMeta(id, { album: 'YearNoAA', albumArtist: null });
+  const f = era.eraWalkFields({ album: 'YearNoAA', albumArtist: null }, era.liveEraOverrides(d()));
+  assert.equal(era.applyWalkForcedYear(id, era.albumEraKey(null, 'YearNoAA'), f.forcedYear), false);
+  assert.deepEqual([yearState(id).y, yearState(id).s], [1975, 'manual'], 'the decision\'s year stays');
+  dropYearAlbum('YearNoAA');
+});
+
+test('Trust <-> one year of the file\'s own year leaves the vector clean: the Era: line never moves (#2319)', () => {
+  d().exec(`
+    INSERT INTO tracks (id, title, artist, album, album_artist, era_untrusted, era_reason, text_vector_dirty, year)
+    VALUES
+      ('ty1', 'Same',  'T', 'TY Album', 'TY Artist', 1, 'many-artists', 0, 1975),
+      ('ty2', 'Other', 'T', 'TY Album', 'TY Artist', 1, 'many-artists', 0, 1990);
+  `);
+  const key = era.albumEraKey('TY Artist', 'TY Album');
+  era.setEraOverride(d(), key, 'trusted');
+  embed('ty1', 'ty2');
+  assert.ok(era.setEraOverride(d(), key, 'year', { year: 1975 }) > 0);
+  assert.equal(row('ty1')!.text_vector_dirty, 0, 'trusted 1975 -> decided 1975');
+  assert.equal(row('ty2')!.text_vector_dirty, 1, 'trusted 1990 -> decided 1975 moves');
+  embed('ty1', 'ty2');
+  era.setEraOverride(d(), key, 'trusted');
+  assert.equal(row('ty1')!.text_vector_dirty, 0, 'decided 1975 -> trusted 1975');
+  assert.equal(row('ty2')!.text_vector_dirty, 1, 'decided 1975 -> trusted 1990 moves');
+  embed('ty1', 'ty2');
+  era.setEraOverride(d(), key, null);
+  assert.equal(row('ty1')!.text_vector_dirty, 1, 'reset: back to the walk\'s suspect verdict, era unknown');
+  d().exec(`DELETE FROM tracks WHERE album = 'TY Album'`);
+  d().prepare('DELETE FROM era_override WHERE album_key = ?').run(key);
 });
 
 test('a one-year decision gives a failed lookup back its history: attempts, reason and retry delay', () => {

@@ -6,7 +6,7 @@ import * as subsonic from '../subsonic.js';
 import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
 import { adoptAndPrune } from '../id-rotation.js';
-import { applyWalkForcedYear, eraWalkFields, libraryOwnerContext, liveEraOverrides, type EraOverride, type EraOverrideLookup } from '../era-review.js';
+import { albumEraKey, applyWalkForcedYear, eraWalkFields, libraryOwnerContext, liveEraOverrides, type EraOverride, type EraOverrideLookup } from '../era-review.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
 import { loadNavidromeConfig } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
@@ -172,8 +172,11 @@ export async function walkNavidrome(
     if (fileReplaced) candidates.set(song.id, fileInfo.fileSize);
     // A one-year decision (Library → Era) on this album: a track that arrived
     // after it, or lost its year, gets it as its manual year. A track that
-    // already holds a manual year keeps it (the operator set that one).
-    applyWalkForcedYear(song.id, eraFields.forcedYear);
+    // already holds a manual year keeps it (the operator set that one). A
+    // track that left an album's one-year decision for an album without one
+    // gets its own year back (#2319). After the upsert, so the row holds the
+    // album this key names.
+    applyWalkForcedYear(song.id, albumEraKey(eraFields.albumArtist, song.album), eraFields.forcedYear);
     liveIds.add(song.id);
     if (song.albumEraUntrusted && song.albumEraReason) {
       eraReasons.set(song.albumEraReason, (eraReasons.get(song.albumEraReason) ?? 0) + 1);
