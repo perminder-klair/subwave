@@ -44,20 +44,40 @@ export function isStale(vectors: number, meta: ProjectionMeta | null, algo: stri
   return drifted(vectors, meta.count);
 }
 
-// Heap one fitted vector needs, judged at the fit's peak (the projection forest
-// built and then flattened alongside itself). Measured with the limit really
-// applied: 24k fitted in a 1,216 MB heap and 28.3k did not; 40k fitted in
-// 1,728 MB and not in 1,216 MB. 52 KB keeps every measured point on the safe
-// side: 1,216 MB gives 23.9k and 1,728 MB gives 34k.
+// Old-generation heap one fitted vector needs, judged at the fit's peak (the
+// projection forest built and then flattened alongside itself). Measured with
+// the limit really applied (--max-old-space-size): 24k fitted in 1,024 MB of
+// old generation and 28.3k did not; 40k fitted in 1,536 MB and not in 1,024
+// MB. 52 KB keeps every point on the safe side: 1,024 MB gives 20.1k and
+// 1,536 MB gives 30.2k.
 export const BYTES_PER_FIT_VECTOR = 52 * 1024;
 export const MIN_SAMPLE = 5_000;
+// v8's heap_size_limit is the old generation plus the young generation's
+// reserve, 3 x the max semi-space, 64 MB by default on Node 24: the flag's
+// 512 reads back as 704, 1,024 as 1,216, the default 4,096 as 4,288. The fit's
+// long-lived forest lives in the old generation, so the young reserve is taken
+// off before dividing. A host that sets --max-semi-space-size moves this; an
+// over-estimate only makes the sample smaller.
+export const YOUNG_GEN_BYTES = 192 * 1024 * 1024;
+// SUBWAVE_MAP_HEAP_MB is raised to this. Below it even the minimum sample plus
+// loading every vector would not fit: 512 MB fits a 10k sample, and measured,
+// placed a 60k library (#2314 review).
+export const MIN_HEAP_MB = 512;
 
 // How many vectors the child may fit in the heap it was given, at most
 // SAMPLE_CAP. Node's default heap shrinks with the host's memory, so a fixed
 // 40k could still run a small NAS out of heap (#2314 review).
 export function fitSampleCap(heapLimitBytes: number): number {
-  if (!(heapLimitBytes > 0)) return MIN_SAMPLE;
-  return Math.max(MIN_SAMPLE, Math.min(SAMPLE_CAP, Math.floor(heapLimitBytes / BYTES_PER_FIT_VECTOR)));
+  const oldGen = heapLimitBytes - YOUNG_GEN_BYTES;
+  if (!(oldGen > 0)) return MIN_SAMPLE;
+  return Math.max(MIN_SAMPLE, Math.min(SAMPLE_CAP, Math.floor(oldGen / BYTES_PER_FIT_VECTOR)));
+}
+
+// The heap the child is given, in MB: 0 (unset) keeps Node's default, and
+// anything set is at least MIN_HEAP_MB.
+export function childHeapMb(setting: number): number {
+  if (!(setting > 0)) return 0;
+  return Math.max(MIN_HEAP_MB, Math.floor(setting));
 }
 
 // True while a failed attempt should keep the automatic boot run from starting.

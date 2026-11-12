@@ -21,6 +21,7 @@ import { buildSampleGraph, placeAll, sampleIndices, seededRandom } from './map-p
 import {
   MIN_VECTORS,
   childEnv,
+  childHeapMb,
   describeFailure,
   fitSampleCap,
   holdBootRetry,
@@ -68,11 +69,9 @@ export async function runProjection(
   const fitIdx = sampleIndices(all.length, sampleCap, random);
   const sampled = fitIdx.length < all.length;
   log(
-    `[map] projecting ${all.length} audio vectors (dim=${all[0]!.vector.length})` +
-      (sampled
-        ? ` · fitting a sample of ${fitIdx.length} (cap for a ` +
-          `${Math.round(v8.getHeapStatistics().heap_size_limit / 1048576)} MB heap), placing the rest`
-        : '') +
+    `[map] projecting ${all.length} audio vectors (dim=${all[0]!.vector.length}) · sample cap ${sampleCap} ` +
+      `for a ${Math.round(v8.getHeapStatistics().heap_size_limit / 1048576)} MB heap` +
+      (sampled ? ` · fitting ${fitIdx.length}, placing the rest` : '') +
       '…',
   );
 
@@ -331,8 +330,8 @@ export function startProjection(): boolean {
   const vectors = db.audioVectorCount();
   const proc = spawn('npx', ['tsx', 'src/music/project-map.ts'], {
     cwd: '/app',
-    // 0 (unset) keeps Node's default heap limit.
-    env: childEnv(process.env, envInt('SUBWAVE_MAP_HEAP_MB', 0, { min: 0 })),
+    // 0 (unset) keeps Node's default heap limit; a set value is at least MIN_HEAP_MB.
+    env: childEnv(process.env, childHeapMb(envInt('SUBWAVE_MAP_HEAP_MB', 0, { min: 0 }))),
   });
   child = proc;
   startedAt = new Date().toISOString();

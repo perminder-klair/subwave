@@ -179,32 +179,28 @@ await test('weightedPlace: an exact duplicate lands on its twin; otherwise a 1/d
 
 // --- sample cap from the heap ---------------------------------------------
 
-await test('the fit cap follows the heap: every measured point stays on the safe side', () => {
+await test('the fit cap follows the old-generation heap: every measured point stays on the safe side', () => {
+  // heap_size_limit as Node 24 reports it: --max-old-space-size plus 192 MB of young generation.
   const MB = 1024 * 1024;
-  assert.equal(policy.fitSampleCap(4144 * MB), 40_000, "the reporter's ~4 GB default keeps the 40k ceiling");
-  assert.equal(policy.fitSampleCap(2240 * MB), 40_000, '40k fitted in a 2,240 MB heap');
-  const at1728 = policy.fitSampleCap(1728 * MB);
-  assert.ok(at1728 <= 40_000 && at1728 >= 30_000, `1,728 MB (40k fitted there) → ${at1728}`);
-  assert.ok(policy.fitSampleCap(1216 * MB) <= 24_000, '1,216 MB fitted 24k and failed at 28.3k');
-  assert.equal(policy.fitSampleCap(64 * MB), policy.MIN_SAMPLE);
+  assert.equal(policy.fitSampleCap(4288 * MB), 40_000, 'the default ~4 GB heap keeps the 40k ceiling');
+  assert.equal(policy.fitSampleCap(2240 * MB), 40_000, '2,048 MB old: 40k fitted');
+  const at1536 = policy.fitSampleCap(1728 * MB);
+  assert.ok(at1536 <= 40_000 && at1536 >= 28_000, `1,536 MB old (40k fitted there) → ${at1536}`);
+  assert.ok(policy.fitSampleCap(1216 * MB) <= 24_000, '1,024 MB old fitted 24k and failed at 28.3k');
+  // The young reserve is not fit space: --max-old-space-size=256 must not be
+  // sized as if 448 MB were usable (that ran out of heap, #2331 delta check).
+  assert.ok(policy.fitSampleCap(448 * MB) <= 5_100, '256 MB old');
+  assert.ok(policy.fitSampleCap(704 * MB) <= 10_100, '512 MB old');
+  assert.equal(policy.fitSampleCap(100 * MB), policy.MIN_SAMPLE);
   assert.equal(policy.fitSampleCap(Number.NaN), policy.MIN_SAMPLE);
 });
 
-await test("runProjection's default cap is sized from the child's own heap limit", async () => {
-  // A real process with a small heap, as a small host's default would give the
-  // child: the cap must come down to the floor, not stay at the 40k ceiling.
-  const { spawnSync } = await import('node:child_process');
-  const mod = new URL('../src/music/map-projection.ts', import.meta.url).href;
-  const r = spawnSync(
-    process.execPath,
-    ['--import', 'tsx', '--input-type=module', '-e', `const v8 = await import('node:v8'); const m = await import(${JSON.stringify(mod)}); ` +
-      `console.log(v8.getHeapStatistics().heap_size_limit, m.defaultSampleCap());`],
-    { env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=200' }, encoding: 'utf8', timeout: 60_000 },
-  );
-  assert.equal(r.status, 0, r.stderr);
-  const [limit, cap] = r.stdout.trim().split('\n').pop()!.split(' ').map(Number);
-  assert.ok(cap! < 10_000, `a ~400 MB heap must not fit the 40k ceiling (got ${cap})`);
-  assert.equal(cap, policy.fitSampleCap(limit!));
+await test('SUBWAVE_MAP_HEAP_MB is floored at MIN_HEAP_MB; unset keeps the default', () => {
+  assert.equal(policy.childHeapMb(0), 0);
+  assert.equal(policy.childHeapMb(256), policy.MIN_HEAP_MB);
+  assert.equal(policy.childHeapMb(1), policy.MIN_HEAP_MB);
+  assert.equal(policy.childHeapMb(4096), 4096);
+  assert.equal(policy.childEnv({}, policy.childHeapMb(256)).NODE_OPTIONS, '--max-old-space-size=512');
 });
 
 // --- the child's run end -----------------------------------------------------
@@ -303,7 +299,7 @@ await test('above the cap, a sample is fitted and every other track is placed', 
   const lines: string[] = [];
   const res = await projection.runProjection((l) => lines.push(l), { sampleCap: 120 });
   assert.equal(res.count, N);
-  assert.ok(lines.some((l) => /fitting a sample of 120 \(cap for a \d+ MB heap\), placing the rest/.test(l)), lines.join('\n'));
+  assert.ok(lines.some((l) => /sample cap 120 for a \d+ MB heap · fitting 120, placing the rest/.test(l)), lines.join('\n'));
   assert.ok(lines.some((l) => /placed 180 tracks/.test(l)), lines.join('\n'));
   const first = coords();
   for (const [id, [x, y]] of first) {
@@ -320,6 +316,35 @@ await test('at or under the cap, every track is fitted', async () => {
   await projection.runProjection((l) => lines.push(l), { sampleCap: N });
   assert.ok(!lines.some((l) => /placing the rest|placed \d+ tracks/.test(l)), lines.join('\n'));
   assert.equal(db.getMapProjectionMeta()?.count, N);
+});
+
+await test("runProjection, given no cap, sizes it from its own process's heap", async () => {
+  // A real child with a small old generation, as a small host's default would
+  // give the projection: the cap it actually used must come from that heap,
+  // not the 40k ceiling.
+  const { spawnSync } = await import('node:child_process');
+  const dbMod = new URL('../src/music/library-db.ts', import.meta.url).href;
+  const projMod = new URL('../src/music/map-projection.ts', import.meta.url).href;
+  const code = [
+    "const v8 = await import('node:v8');",
+    `const db = await import(${JSON.stringify(dbMod)});`,
+    `const p = await import(${JSON.stringify(projMod)});`,
+    'await db.open({ embeddingDim: 768, adoptStoredDim: true });',
+    'await p.runProjection((l) => console.log(l));',
+    "console.log('LIMIT', v8.getHeapStatistics().heap_size_limit);",
+    'db.close();',
+  ].join(' ');
+  const r = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
+    env: { ...process.env, STATE_DIR: stateDir, NODE_OPTIONS: '--max-old-space-size=256' },
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const limit = Number(/LIMIT (\d+)/.exec(r.stdout)?.[1]);
+  const cap = Number(/sample cap (\d+)/.exec(r.stdout)?.[1]);
+  assert.ok(limit > 0 && cap > 0, r.stdout);
+  assert.equal(cap, policy.fitSampleCap(limit));
+  assert.ok(cap < 6_000, `a 256 MB old generation must not be sized as 448 MB or 40k (got ${cap})`);
 });
 
 await test('a recorded failure surfaces in the status; the boot hold shows only on a stale map', () => {
