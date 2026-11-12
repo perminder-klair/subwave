@@ -386,6 +386,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
       show: activeShow,
       playlistTracks,
       episodeTracks: episodeSource?.tracks,
+      episodeAiringStartedAt: episodeSource?.airingStartedAt,
       excludedIds,
       resolvedGenres: genreLock ?? [],
       minTrackSec,

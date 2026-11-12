@@ -229,10 +229,11 @@ export const showPreparation = createShowPreparation({
     if (!show) throw new Error('The prepared show has ended');
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
+      const source = await Promise.race([
         resolveArtistEpisodeSource(result.music.artistId, show, `${snap.occurrence.id}:${result.music.artistId}`),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Artist catalogue lookup timed out')), 12_000); }),
       ]);
+      return { ...source, airingStartedAt: snap.occurrence.startsAt };
     } finally { clearTimeout(timer); }
   },
   changed: () => { for (const fn of changed) { try { fn(); } catch { /* observers cannot change the saved choice */ } } },

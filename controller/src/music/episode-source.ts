@@ -19,6 +19,10 @@ export interface ArtistEpisodeSource {
   artist: { id: string; name: string };
   tracks: PreparationTrack[];
   ids: Set<string>;
+  // When this airing of the episode began (the preparation occurrence's
+  // startsAt, epoch ms). The hard no-repeat guard holds what the airing has
+  // played since then (#2320); absent = unknown.
+  airingStartedAt?: number;
 }
 const catalogues = new Map<string, { at: number; artist: ArtistEpisodeSource['artist']; tracks: PreparationTrack[] }>();
 type EpisodeShow = NonNullable<ReturnType<typeof settings.resolveActiveShow>>;
