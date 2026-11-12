@@ -1578,9 +1578,11 @@ SITE_URL=
 # TTS_HEAVY_MEM_LIMIT=10g
 #
 # JavaScript heap, in MB, for the Observatory's sound-map projection child.
-# Unset uses Node's default. The projection fits a sample of at most 40,000
-# tracks and places the rest, so the default is enough for any library size;
-# raise this only if the Observatory reports the run ran out of memory.
+# Unset uses Node's default, which scales with the host's memory. The child
+# fits as many tracks as that heap holds (at most 40,000, about 52 KB each)
+# and places the rest, so a smaller heap gives a coarser map rather than a
+# crash. Raise this for a finer map on a small host, or if the Observatory
+# reports the run ran out of memory.
 # SUBWAVE_MAP_HEAP_MB=4096
 #
 # HuggingFace token — lets the tts-heavy sidecar lazily download gated model
