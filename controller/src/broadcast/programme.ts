@@ -1,4 +1,4 @@
-import { prepareEpisodeContext, preparationPlanStamp, preparationSettled, preparationSkillAt, showPreparation } from './show-preparation.js';
+import { prepareEpisodeContext, preparationPlanStamp, preparationPlanSubject, preparationSettled, preparationSkillAt, showPreparation } from './show-preparation.js';
 import { skillEligible } from '../skills/eligibility.js';
 // Keep episode plans and aired beats on the session. Mark beats before generation to avoid
 // duplicate playback after failure. Inject the queue to avoid an import cycle.
@@ -166,9 +166,14 @@ async function fillPlan(
     if (stampChanged) attach(prog);
   }
   const view = showPreparation.read({ context: ctx });
-  const preparation = view.status;
-  const subject = ctx.episodeEditorial && preparation.kind !== 'unconfigured' ? preparation.subject || '' : '';
-  if ((prog.preparationSubject || '') !== subject) {
+  const planned = preparationPlanSubject(view);
+  const subject = planned.grounded && !ctx.episodeEditorial ? '' : planned.subject;
+  // A plan stamped under other grounding (a bare subject that the catalogue
+  // has since grounded) is replanned, so the greeting's stamp check and the
+  // plan agree. An unstamped legacy plan is left alone.
+  const stale = prog.status === 'ok' && prog.preparationStamp !== undefined
+    && prog.preparationStamp !== preparationPlanStamp(ctx);
+  if ((prog.preparationSubject || '') !== subject || stale) {
     prog.preparationSubject = subject;
     prog.status = 'pending';
     prog.plan = null;
@@ -190,7 +195,9 @@ async function fillPlan(
     await running;
     if (prog.status !== 'pending' || !programmeIsOwned(prog) || (prog.preparationSubject || '') !== subject) return;
   }
-  const generation = generatePlan(show, ctx, now, prog, attach, subject, generateProgrammePlan);
+  // A bare subject reaches the plan as a "name it, state no facts" brief.
+  const planCtx = planned.grounded ? ctx : { ...ctx, episodeEditorial: planned.editorial };
+  const generation = generatePlan(show, ctx, planCtx, now, prog, attach, subject, generateProgrammePlan);
   planning.set(prog, generation);
   try {
     await generation;
@@ -204,6 +211,7 @@ const planning = new WeakMap<session.ProgrammeState, Promise<void>>();
 async function generatePlan(
   show: ProgrammeShow,
   ctx: SessionContext,
+  planCtx: SessionContext,
   now: Date,
   prog: session.ProgrammeState,
   attach: (next: session.ProgrammeState) => void,
@@ -224,7 +232,7 @@ async function generatePlan(
         spanHours: hoursLeft,
         host: roster.host,
         guests: roster.guests,
-        context: ctx,
+        context: planCtx,
         previousAngle: prevAngle,
         skillKinds: pinned ? [] : featureKindMenu(roster.host, roster.guests.length > 0, preparationSkillAt(ctx)),
         pinnedKind: pinned,

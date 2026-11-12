@@ -211,14 +211,21 @@ pool read) leaves a view with the subject chosen but no editorial. A plan bought
 then sees only the show's name and topic, and the model invents a subject: a show
 called "Dizzy Spells" got a Dizzy Gillespie angle. So `fillPlan` stays pending
 until the view is ready, keeps grounding from a ready record, or has no retry
-left; the beats fall back as they do for any pending plan. When the retry lands,
+left; the beats fall back as they do for any pending plan. When no retry is left
+and there is still no editorial (both catalogue attempts spent) but the skill
+chose a subject, the plan is written from that subject alone
+(`preparationPlanSubject`): it reaches the prompt as a brief to name it and state
+no facts about it, with no catalogue records or research, and the subject is the
+episode's `preparationSubject`. When the retry lands,
 `onPreparationChange` replans the live episode and an armed incoming one at once
 rather than at the next pick. One generation runs per episode object, and a plan
 finished after the subject moved on is dropped, not attached. Each plan is stamped
-with the occurrence and grounded subject it was written from
-(`preparationPlanStamp`), and the handoff greeting uses its angle only while that
-still matches (`preparedPlanAngle`); a plan with no stamp predates it and keeps
-its angle. The stamp leaves out the preparation's status and music on purpose: a
+with the occurrence, the subject it was written from and whether that subject was
+grounded (`preparationPlanStamp`), and the handoff greeting uses its angle only
+while that still matches (`preparedPlanAngle`); a plan with no stamp predates it
+and keeps its angle. A stamped plan whose stamp no longer matches (a bare subject
+the catalogue has since grounded, through an operator's Retry catalogue) is
+replanned, so the greeting's check and the plan agree. The stamp leaves out the preparation's status and music on purpose: a
 ready preparation whose catalogue refresh later fails keeps its subject and
 grounding, so its plan's angle is still right. A greeting with no angle is the
 accepted cost of a preparation that is not ready at the boundary: the boundary

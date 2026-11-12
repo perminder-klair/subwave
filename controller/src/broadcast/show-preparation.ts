@@ -70,7 +70,7 @@ interface PreparationDeps {
 }
 
 export function createShowPreparation(deps: PreparationDeps) {
-  const now = deps.now ?? Date.now;
+  const now = deps.now ?? (() => Date.now());  // read at call time, so a test can move the clock
   let records = new Map<string, PreparationRecord>();
   const views = new Map<string, EpisodeView>();
   const pending = new Map<string, Promise<EpisodeView>>();
@@ -265,14 +265,47 @@ export function preparationIdentity(context: SessionContext): string {
     : `${view.status.occurrence.id}:${view.status.kind}:${view.music?.identity ?? ''}`;
 }
 
-// What a programme plan is stamped with: the occurrence and the grounded
-// subject it was written from (#2321). Not the preparation's status or music:
-// a ready preparation whose catalogue refresh later fails keeps its subject and
-// grounding, and the plan written from it is still right.
+// The subject the skill chose for this occurrence when the view carries no
+// grounding for it: the one source of the bare subject the greeting and the
+// plan may name (#2321). A failed tool chose nothing.
+function chosenUngroundedSubject(view: EpisodeView): string | null {
+  if (view.editorial || view.status.kind === 'unconfigured') return null;
+  const subject = String(view.status.subject || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  return subject || null;
+}
+
+// The brief a plan gets for a chosen but ungrounded subject: the same "name it,
+// state no facts" framing as the greeting's, and nothing the catalogue would
+// have supplied.
+function ungroundedSubjectBrief(subject: string): string {
+  return `\n\nEpisode subject: ${JSON.stringify(subject)}\n`
+    + "The show's preparation chose this subject, but its catalogue and research are unavailable. "
+    + 'Name the subject, but state no facts about it: no releases, biography, chronology, influences or credits. '
+    + 'Automatic music is not restricted to it, so do not claim the hour plays only this subject.';
+}
+
+// What the programme plan is written from (#2321). Grounded: the view's
+// subject and editorial. Settled but ungrounded (both catalogue attempts spent,
+// no editorial) with a subject the skill chose: that subject, named with no
+// facts. Otherwise no subject. An unsettled view never reaches the plan.
+export function preparationPlanSubject(view: EpisodeView): { subject: string; editorial: string; grounded: boolean } {
+  if (view.editorial) {
+    return { subject: view.status.kind === 'unconfigured' ? '' : view.status.subject || '', editorial: view.editorial, grounded: true };
+  }
+  const chosen = preparationSettled(view) ? chosenUngroundedSubject(view) : null;
+  return chosen ? { subject: chosen, editorial: ungroundedSubjectBrief(chosen), grounded: false } : { subject: '', editorial: '', grounded: false };
+}
+
+// What a programme plan is stamped with: the occurrence, the subject it was
+// written from and whether that subject was grounded (#2321). Not the
+// preparation's status or music: a ready preparation whose catalogue refresh
+// later fails keeps its subject and grounding, and the plan written from it is
+// still right.
 export function preparationPlanStamp(context: SessionContext): string {
   const view = showPreparation.read({ context });
-  if (view.status.kind === 'unconfigured') return `${snapshot(context)?.occurrence.id ?? ''}:`;
-  return `${view.status.occurrence.id}:${view.editorial ? view.status.subject || '' : ''}`;
+  const occurrence = view.status.kind === 'unconfigured' ? snapshot(context)?.occurrence.id ?? '' : view.status.occurrence.id;
+  const planned = preparationPlanSubject(view);
+  return JSON.stringify([occurrence, planned.subject, planned.subject ? planned.grounded : null]);
 }
 
 // The programme plan's angle, only while the occurrence and subject it was
@@ -289,9 +322,7 @@ export function preparationPlanStamp(context: SessionContext): string {
 // nothing, so the greeting reads a known subject or none, never an invented one.
 // It is the incoming show's own preparation data, not outgoing speech.
 export function preparationGreetingSubject(view: EpisodeView): string | null {
-  if (preparationSettled(view) || view.status.kind === 'unconfigured') return null;
-  const subject = String(view.status.subject || '').replace(/\s+/g, ' ').trim().slice(0, 160);
-  return subject || null;
+  return preparationSettled(view) ? null : chosenUngroundedSubject(view);
 }
 
 export function preparedPlanAngle(

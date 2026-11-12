@@ -21,6 +21,7 @@ const { runPersonaHandoff } = await import('../src/broadcast/dj-agent.js');
 const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
 const { handoffGreetingPrompt } = await import('../src/llm/internal/prompts/scripts.js');
+const { buildContextLines } = await import('../src/llm/internal/prompts/context.js');
 after(() => removeTempDir(root));
 
 type PlanDeps = NonNullable<Parameters<typeof programme.prepareBoundaryPlan>[1]>;
@@ -64,6 +65,7 @@ test('an unready preparation holds the plan; the greeting names the chosen subje
       { id: 's_dizzy', name: 'Dizzy Spells', personaId: host.id, programme: true, preparationSkill: 'prepare' },
       { id: 's_plain', name: 'Plain hour', personaId: host.id, programme: true },
       { id: 's_unchosen', name: 'Unchosen hour', personaId: host.id, programme: true, preparationSkill: 'prepare_fails' },
+      { id: 's_exhausted', name: 'Spent hour', personaId: host.id, programme: true, preparationSkill: 'prepare' },
     ],
     schedule: {}, skills: { enabled: { prepare: true, prepare_fails: true } }, tts: { enabled: true },
   });
@@ -112,6 +114,37 @@ test('an unready preparation with no chosen subject gives the greeting neither s
   assert.doesNotMatch(none.prompt, /hour of|angle/i);
 });
 
+test('both catalogue attempts spent: the plan names the chosen subject with no facts, and the greeting takes its angle', async (t) => {
+  const { incoming } = await armBoundary(t, 's_exhausted', 'Spent hour');
+  const seen: string[] = [];
+  const deps: PlanDeps = { generateProgrammePlan: async (args) => {
+    seen.push(buildContextLines(args.context, { steer: false }).join('\n'));
+    return plan('An hour named for Prepared artist');
+  } };
+  await programme.prepareBoundaryPlan(incoming, deps);
+  assert.equal(seen.length, 0, 'first catalogue failure: a retry is still due');
+
+  // A minute on, the retry fails too: the preparation is settled, ungrounded.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 61_000 });
+  await programme.prepareBoundaryPlan(incoming, deps);
+  const view = showPreparation.read({ context: incoming });
+  assert.equal(view.status.kind, 'degraded');
+  assert.equal(view.editorial, '');
+  assert.equal(seen.length, 1, 'no retry left: the plan goes ahead');
+  assert.match(seen[0], /Episode subject: "Prepared artist"/);
+  assert.match(seen[0], /state no facts about it/);
+  assert.doesNotMatch(seen[0], /episode-source-data|Verified episode subject/, 'no catalogue facts or invented grounding');
+  const prog = session.getBoundaryProgramme();
+  assert.equal(prog?.preparationSubject, 'Prepared artist');
+  assert.equal(prog?.preparationStamp, preparationPlanStamp(incoming));
+
+  const spoken = await greeting(incoming);
+  assert.equal(spoken.angle, 'An hour named for Prepared artist', 'the greeting takes the angle of the plan grounded in the chosen subject');
+  assert.equal(spoken.subject, null);
+  await programme.prepareBoundaryPlan(incoming, deps);
+  assert.equal(seen.length, 1, 'an unchanged subject and stamp buy no second plan');
+});
+
 test('one generation per episode, stamped with its occurrence and subject; a stale one is dropped', async (t) => {
   const { incoming, fetchMock } = await armBoundary(t, 's_plain', 'Plain hour');
   fetchMock.mock.restore();
@@ -147,10 +180,16 @@ test('the greeting angle follows the plan stamp; an unstamped legacy plan keeps 
   const current = preparationPlanStamp(incoming);
   const stamped = (preparationStamp?: string) => ({ status: 'ok' as const, plan: plan('Angle'), beats: {}, introAiredAt: null, preparationStamp });
   assert.equal(preparedPlanAngle(stamped(current), incoming), 'Angle');
-  assert.equal(preparedPlanAngle(stamped(`${current}Invented artist`), incoming), null, 'a plan written for another subject loses its angle');
+  assert.equal(preparedPlanAngle(stamped(JSON.stringify([...JSON.parse(current).slice(0, 1), 'Invented artist', false])), incoming), null, 'a plan written for another subject loses its angle');
   assert.equal(preparedPlanAngle(stamped(undefined), incoming), 'Angle', 'a plan from before the stamp reads unchanged');
   assert.equal(preparedPlanAngle(null, incoming), null);
 
+  // A plan whose stamp no longer matches is replanned, so plan and greeting agree.
   session.attachBoundaryProgramme(stamped('another-occurrence:'));
-  assert.equal(await greetingAngle(incoming), null);
+  assert.equal(preparedPlanAngle(session.getBoundaryProgramme(), incoming), null);
+  let plans = 0;
+  await programme.prepareBoundaryPlan(incoming, { generateProgrammePlan: async () => { plans++; return plan('Replanned'); } });
+  assert.equal(plans, 1);
+  assert.equal(session.getBoundaryProgramme()?.preparationStamp, current);
+  assert.equal(await greetingAngle(incoming), 'Replanned');
 });
