@@ -50,7 +50,7 @@ function walkAlbum(prefix: string, album: string, albumArtist: string, reason: s
   for (let i = 1; i <= n; i++) {
     const f = era.eraWalkFields({ album, albumArtist, albumEraUntrusted: true, albumEraReason: reason }, ov);
     db.upsertTrackMeta(`${prefix}${i}`, { title: `${album} ${i}`, artist: `A${i}`, album, year, ...f });
-    era.applyWalkForcedYear(`${prefix}${i}`, f.forcedYear);
+    era.applyWalkForcedYear(`${prefix}${i}`, era.albumEraKey(albumArtist, album), f.forcedYear);
   }
   return era.albumEraKey(albumArtist, album);
 }

@@ -62,6 +62,8 @@ interface ProgrammePlan {
 interface ProgrammeEpisode {
   status: 'pending' | 'ok' | 'fallback';
   preparationSubject?: string;
+  /** `preparationPlanStamp` (occurrence, subject, grounded) the plan was written under; the opening uses its angle only while it is current (#2321). */
+  preparationStamp?: string;
   preparationOccurrence?: { id: string; endsAt: number };
   plan: ProgrammePlan | null;
   beats?: Record<string, boolean>;

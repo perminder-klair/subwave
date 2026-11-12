@@ -69,6 +69,12 @@ interface CandidateFilterState {
   // picker passes recentArtists, so it is inert on the agent path, whose
   // artist variety is enforced at the point of choice instead (#618, #1124).
   allowArtistRelaxation?: boolean;
+  // Whether a starved result may relax the recent-TRACK guard. Default true.
+  // The picker tools' collect() passes false once its shortlist already holds
+  // a fresh candidate (#2320): "starved" is one source's answer there, and a
+  // source left only with seen or just-played tracks must not bring those back
+  // when the list as a whole has something fresh. The hard window holds either way.
+  allowTrackRelaxation?: boolean;
   // Artists that may NEVER be returned, checked outside the mode loop like
   // hardRecentIds — unlike recentArtists, which the cascade may drop (#1187).
   // Empty on every pick but the agent's artist-guard rescue. Keys are
@@ -494,6 +500,22 @@ export function exhaustiveNoRepeatWindow(universeSize: number | null | undefined
   return Math.max(0, total - EXHAUSTIVE_WINDOW_HEADROOM);
 }
 
+// A prepared artist episode's window when its show has no full rotation
+// (#2320): the configured N, held under the same S-2 headroom, with neither
+// of effectiveNoRepeatWindow's library bounds. The episode IS the catalogue, and
+// both bounds switched the guard off below 40 artist tracks, so a 28-track
+// episode aired one song three times in an hour while it had tracks to spare.
+// The headroom alone keeps the longest-waiting identity available, which is
+// what the 37.5% ceiling was there to promise. 0 configured is still off.
+export function episodeNoRepeatWindow(
+  configuredN: number | null | undefined,
+  universeSize: number | null | undefined,
+): number {
+  const n = Math.floor(Number(configuredN) || 0);
+  if (n <= 0) return 0;
+  return Math.min(n, exhaustiveNoRepeatWindow(universeSize));
+}
+
 export function filterPickerCandidates<T extends CandidateLike>(
   list: T[],
   {
@@ -510,6 +532,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
     maxPerArtist = Infinity,
     cap = Infinity,
     allowArtistRelaxation = true,
+    allowTrackRelaxation = true,
     blockedArtists = new Set<string>(),
   }: CandidateFilterState = {},
 ): T[] {
@@ -534,9 +557,10 @@ export function filterPickerCandidates<T extends CandidateLike>(
         { recentTracks: true, recentArtists: true, recentAlbums: false },
         { recentTracks: false, recentArtists: true, recentAlbums: false },
       ];
+  const tracked = allowTrackRelaxation ? base : base.filter(mode => mode.recentTracks);
   const modes = recentAlbums.size
-    ? [{ recentTracks: true, recentArtists: true, recentAlbums: true }, ...base]
-    : base;
+    ? [{ recentTracks: true, recentArtists: true, recentAlbums: true }, ...tracked]
+    : tracked;
 
   for (const mode of modes) {
     const nextSeen = new Set(seenIds);

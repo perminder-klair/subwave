@@ -10,6 +10,7 @@ import * as subsonic from './subsonic.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { deriveVocalFromLyrics, clipRangesToTail, type LyricVocalResult } from './lyric-vocal.js';
+import { stemStampDecision } from './stem-stamp-policy.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
@@ -748,7 +749,14 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         w.vocal = { vocalRanges: r.vocalRanges ?? [], tailVocalRanges: a.tailVocalRanges,
           tailWindow: r.tailPlaced ? 'placed' : 'end' };
       } else if (f === 'stems') {
-        w.stems = { attempted: true };
+        const stemStamp = stemStampDecision({
+          stemsCached: r.stemsCached,
+          tailStems: r.tailStemsLanded ?? null,
+          priorTailMisses: db.trackStemTailMisses(id),
+          okAnswer: true,
+        });
+        if (stemStamp.stamp) w.stems = { attempted: true };
+        if (stemStamp.tailMisses !== undefined) w.stemsTailMisses = stemStamp.tailMisses;
       }
     }
     if (lyricVocal) {
@@ -854,6 +862,11 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         if (lyricVocal && outro) {
           outro = { ...outro, vocalRanges: lyricTailRanges(id, outro, lyricVocal) };
         }
+        const stemStamp = stemStampDecision({
+          stemsCached: a.stemsCached,
+          tailStems: a.tailStemsLanded ?? null,
+          priorTailMisses: db.trackStemTailMisses(id),
+        });
         db.upsertTrackAnalysis(id, {
           bpm: a.bpm,
           musicalKey: a.musicalKey,
@@ -868,15 +881,19 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
           keyRanges: a.keyRanges,
           vocalRanges,
           outro,
-          // A pass not measuring vocals here carries the stored tail ranges
-          // forward, planned or not, so a plain vocal-off --re-analyze keeps
-          // the tail half of the instrumental verdict (#2255).
-          preserveTailVocal: !vocalWantedHere,
+          // Every pass carries the stored tail ranges forward when its outro
+          // came back without them: a vocal-off pass (planned or a plain
+          // --re-analyze, #2255) never measured them, and a vocal-on pass
+          // whose tail separation failed lost them (#2318). Either way the
+          // tail half of the instrumental verdict holds. A tail measured with
+          // its vocals (Demucs or lyrics) still replaces them.
+          preserveTailVocal: true,
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
           tailStartMs: a.tailStartMs,
           tailVersion: a.tailPlaced ? db.PLACED_TAIL_STAMP : null,
-          stemsAttempted: a.stemsCached !== null,
+          stemsAttempted: stemStamp.stamp,
+          stemsTailMisses: stemStamp.tailMisses,
           // Recorded on the facet rows; 'capped' explains a missing tail.
           source: viaUrl
             ? 'url'

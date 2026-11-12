@@ -92,7 +92,7 @@ db.upsertTrackTags(OLD_NANO, { moods: ['stale'], energy: 'low', source: 'llm' })
 // An album's one-year decision (Library → Era) wrote over a looked-up year; its
 // record of that year (era_forced_from) must travel with the year it describes.
 db.setOriginalYear(OLD_NANO, 1960);
-db.setDecisionOriginalYear(OLD_NANO, 1975);
+db.setDecisionOriginalYear(OLD_NANO, 1975, '\u0000d');
 
 db.upsertTrackMeta(KEEP, { title: 'Keeper', artist: 'E', album: 'F', duration: 90 });
 db.upsertTrackTags(KEEP, { moods: ['sunny'], energy: 'high', source: 'llm' });

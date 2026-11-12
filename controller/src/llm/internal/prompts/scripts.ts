@@ -19,6 +19,7 @@ import { announceLine, nextAnnounceForm } from '../../../broadcast/announce-line
 import * as library from '../../../music/library.js';
 import { contextSleeveNotesFor, releaseYearMentionEligible, selectSleeveNotes, stationHistoryNoteFor } from './sleeve-notes.js';
 import { stripRecapSpokenTags, stripSpokenTags } from './recent-speech.js';
+import { namedSubjectLine } from '../../../broadcast/preparation-subject-wording.js';
 
 // The feel note appended to a track line (track-feel.ts) is a STEER, not copy.
 // Without this the model reads the label out — "high-energy" spoken flat is
@@ -286,14 +287,18 @@ export async function generateSignoff(args: any) {
   });
 }
 
-export function handoffGreetingPrompt({ personaIn, personaOut, showIn = null, episodeAngle = null, sameHost = false, context = null, recap = null, recentOpeners = null }: any) {
+export function handoffGreetingPrompt({ personaIn, personaOut, showIn = null, episodeAngle = null, episodeSubject = null, sameHost = false, context = null, recap = null, recentOpeners = null }: any) {
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
   const inName = personaIn?.name || 'your host';
   const outName = personaOut?.name || 'the previous host';
   // Programme shows: this greeting doubles as the episode's intro, so the
   // producer's angle rides in (broadcast/programme.ts skips the standalone
   // intro when a handoff opened the show).
-  const angleClause = showIn && episodeAngle ? ` Today's episode angle: ${episodeAngle} — set it up as you open.` : '';
+  // Before the episode's preparation has settled there is no angle, only the
+  // subject its skill chose (show-preparation.ts preparationOpening): name it,
+  // and add nothing about it or the music, because nothing verified backs it.
+  const angleClause = showIn && episodeAngle ? ` Today's episode angle: ${episodeAngle} — set it up as you open.`
+    : showIn && episodeSubject ? ` ${namedSubjectLine(String(episodeSubject))}` : '';
   const showClause = showIn ? ` You're kicking off "${showIn}".${angleClause}` : '';
   const handoffTask = sameHost
     ? `Task: you're ${inName}, continuing with listeners as the station moves into a new show. Give one short, natural acknowledgement of the change${showIn ? ` into "${showIn}"` : ''}. Do not thank, introduce, or refer to yourself as another DJ; this is one continuous voice, not a handover.`
