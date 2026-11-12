@@ -5650,6 +5650,7 @@ html.lite .observatory-root .cmap-galaxy { --gx-glass: var(--bg); }
 .observatory-root .rail-proj { display: flex; flex-direction: column; gap: 6px; }
 .observatory-root .rail-proj-live { display: flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 700; }
 .observatory-root .rail-proj-log { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: 0.04em; }
+.observatory-root .rail-proj-error { color: var(--danger); text-transform: none; letter-spacing: 0.04em; overflow-wrap: anywhere; }
 
 /* dossier queue-on-air */
 .observatory-root .dossier-queue { margin-top: 12px; width: 100%; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; padding: 9px 0; cursor: pointer; transition: background 0.12s, color 0.12s; }
