@@ -136,6 +136,16 @@ while that intro is pending, the old runner yields to the newer track.
   starts with clean prompt memory. If the incoming show is a programme, its plan
   is prepared onto the boundary record and transferred at the real roll so the
   greeting carries the incoming angle and durably replaces the standalone intro.
+  That plan waits for the incoming show's preparation to settle, and the
+  greeting takes its angle only while the occurrence and subject the plan was
+  written from still match; otherwise it greets without one rather than hold
+  the boundary (`broadcast.md`, Episode preparation research, #2321). While the
+  preparation is unsettled but its skill has already chosen a subject, the
+  greeting names that subject with no angle and no facts
+  (`preparationOpening`, which the standalone intro also reads); with no
+  subject chosen it names neither. This
+  is the incoming show's own preparation data, not outgoing speech, so the
+  clean-memory rule for the incoming half holds.
 - Episode research for the outgoing half is saved on the session and copied into
   the handoff record. Both ordinary post-roll and armed handoffs recover that
   source snapshot after restart. Preparing an incoming occurrence cannot replace
