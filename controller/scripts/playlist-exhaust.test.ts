@@ -229,6 +229,8 @@ function station() {
     ended,
     airTimeOf,
     onAir: () => onAir,
+    // The stamp the next play will carry: an airing that starts now.
+    nextStamp: () => clock + 1,
     play(id: string) {
       if (onAir) ended.unshift(onAir);
       onAir = id;
@@ -555,10 +557,30 @@ test('configured windows clamp to airable strict anchors', () => {
 const episodeTracks = (n: number): Track[] =>
   Array.from({ length: n }, (_, i) => ({ id: `e${i + 1}`, title: `Episode ${i + 1}`, artist: 'The Artist', genres: ['Jazz'] }));
 
-const episodeGuard = (show: Record<string, unknown>, tracks: Track[], configured = 250) =>
-  showNoRepeatGuard(configured, LIBRARY, { show: show as never, playlistTracks: makeTracks(400), episodeTracks: tracks, excludedIds: null });
+const episodeGuard = (show: Record<string, unknown>, tracks: Track[], configured = 250, episodeAiringStartedAt: number | null = null) =>
+  showNoRepeatGuard(configured, LIBRARY, { show: show as never, playlistTracks: makeTracks(400), episodeTracks: tracks, episodeAiringStartedAt, excludedIds: null });
 
-test('an episode under 40 tracks keeps a hard window (#2320)', () => {
+test('an episode holds everything its current airing has played (#2320)', () => {
+  for (const n of [3, 28, 57, 400]) {
+    const g = episodeGuard({ playlistStrict: true }, episodeTracks(n), 250, 1_000);
+    assert.deepEqual({ window: g.window, exhaustive: g.exhaustive, airedSince: g.airedSince }, { window: n - 2, exhaustive: false, airedSince: 1_000 },
+      `${n} tracks: S-2, so the on-air track and at most S-2 more are held and one always survives`);
+    assert.equal(g.rotation?.length, n, 'counted over the episode\'s own airings');
+  }
+  assert.equal(episodeGuard({}, episodeTracks(28), 250, 1_000).airedSince, 1_000, 'strict or not, without full rotation');
+  assert.equal(episodeGuard({}, episodeTracks(28), 0, 1_000).window, 0, 'a station that turned the guard off keeps it off');
+  assert.equal(episodeGuard({}, episodeTracks(2), 250, 1_000).rotation, undefined, 'two tracks or fewer loop freely');
+  // The airing's own history: older plays of the same tracks do not count.
+  const tracks = episodeTracks(5);
+  const at = new Map([['e1', 500], ['e2', 1_200], ['e3', Infinity]]);
+  const { ids } = hardRecentFor(episodeGuard({}, tracks, 250, 1_000), {
+    recentlyPlayedByCount: () => { throw new Error('an airing is counted over its own plays, not the station\'s'); },
+    rotationAirTimes: () => (t) => at.get(t.id!) ?? null,
+  });
+  assert.deepEqual([...ids].sort(), ['e2', 'e3'], 'e1 aired before this airing began; e3 is on air');
+});
+
+test('an episode with no known airing start keeps a hard window under 40 tracks (#2320)', () => {
   // The reported shape: noRepeatWindow 250, a 28-track artist. The library
   // clamp's 37.5% ceiling gave 10, and its floor of 15 turned that into 0.
   for (const n of [3, 10, 25, 28, 39]) {
@@ -593,12 +615,19 @@ test('an episode honours "Play the whole playlist before repeating" over its own
 // Before #2320 the window was 0, so any track could air again a few minutes on.
 test('a 28-track episode never repeats a track while others wait, and never empties the pool (#2320)', () => {
   const tracks = episodeTracks(28);
-  for (const show of [{ playlistStrict: true }, { playlistStrict: true, playlistExhaust: true }]) {
+  const cases = [
+    { show: { playlistStrict: true }, airing: true },
+    { show: { playlistStrict: true }, airing: false },
+    { show: { playlistStrict: true, playlistExhaust: true }, airing: true },
+  ];
+  for (const { show, airing } of cases) {
     const s = station();
     const random = prng(2320);
     const aired: string[] = [];
+    // All 60 picks are one airing, which began before the first.
+    const startedAt = airing ? s.nextStamp() : null;
     for (let pick = 0; pick < 60; pick++) {
-      const { ids: blocked } = hardRecentFor(episodeGuard(show, tracks), {
+      const { ids: blocked } = hardRecentFor(episodeGuard(show, tracks, 250, startedAt), {
         recentlyPlayedByCount: (n: number) => ({ ids: blockedSet(s.ended, s.onAir(), n), keys: new Set<string>() }),
         rotationAirTimes: () => s.airTimeOf,
       });
@@ -608,6 +637,34 @@ test('a 28-track episode never repeats a track while others wait, and never empt
       s.play(chosen.id);
       aired.push(chosen.id);
     }
-    assert.deepEqual(rotationBreaks(aired, 28), [], JSON.stringify(show));
+    assert.deepEqual(rotationBreaks(aired, 28), [], JSON.stringify({ show, airing }));
+  }
+});
+
+// Across airings the two settings part: without full rotation the next airing
+// may open with last airing's tracks (the soft recency weighs them, the hard
+// guard does not); with it, those wait until the rest have aired.
+test('a second airing can replay the last one\'s tracks without full rotation, and cannot with it (#2320)', () => {
+  const tracks = episodeTracks(28);
+  for (const exhaust of [false, true]) {
+    const show = { playlistStrict: true, playlistExhaust: exhaust };
+    const s = station();
+    const history = {
+      recentlyPlayedByCount: () => { throw new Error('a known airing is counted over the episode\'s own plays'); },
+      rotationAirTimes: () => s.airTimeOf,
+    };
+    const first = s.nextStamp();
+    const lastWeek = tracks.slice(0, 12).map(t => t.id);
+    for (const id of lastWeek) s.play(id);
+    // The week between: other shows' tracks, then the next airing begins.
+    for (let i = 0; i < 40; i++) s.play(`other${i}`);
+    const second = s.nextStamp();
+    assert.ok(second > first);
+    const { ids: blocked } = hardRecentFor(episodeGuard(show, tracks, 250, second), history);
+    if (exhaust) assert.deepEqual(lastWeek.filter(id => !blocked.has(id)), [], 'full rotation: last airing\'s tracks wait their turn');
+    else assert.deepEqual([...blocked], [], 'a fresh airing holds nothing it has not played');
+    // And within the second airing, what it plays is held either way.
+    s.play('e20');
+    assert.ok(hardRecentFor(episodeGuard(show, tracks, 250, second), history).ids.has('e20'));
   }
 });

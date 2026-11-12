@@ -829,17 +829,26 @@ show and settings epoch before replacing `auto.m3u`.
 playlist's or the library's, and never through `effectiveNoRepeatWindow`: that
 clamp's 37.5% ceiling and 15-track floor bound a number the operator typed against
 a whole library, and against one artist they turned the guard off below 40 tracks,
-so a 28-track episode aired one song three times in an hour. Without "Play the
-whole playlist before repeating" the window is `episodeNoRepeatWindow`, the
-configured N held under the S−2 headroom of a full rotation, over the station's
-plays as before (`0` configured stays off). With the switch, gated on
-`playlistStrict` exactly as the playlist rotation is, the episode is a full
-rotation over its own tracks' airings (`exhaustiveNoRepeatWindow`, `rotation` =
-the episode's tracks). Either way one identity always survives, so the guard
-cannot empty an episode: the auto-pick runs only with nothing queued, so the S−2
-window withholds at most the on-air track and S−2 played ones. The coast does not
-take the episode's rotation (`scheduler.ts` asks the guard only without an
-episode), since its coast is the episode source itself.
+so a 28-track episode aired one song three times in an hour.
+
+Without "Play the whole playlist before repeating" (or without `playlistStrict`,
+which gates the switch exactly as it gates the playlist rotation), the guard is
+one airing deep: every episode track the current airing has played is held,
+counted over those tracks' own airings since the airing began (`airedSince`, the
+preparation occurrence's `startsAt`, carried as `ArtistEpisodeSource.airingStartedAt`).
+A repeat across airings is left to the soft recency, so next week's episode may
+open with a track this week's played; the hard guard is there to stop one song
+twice in an hour, not to ration an artist across weeks. An episode with no known
+airing start falls back to `episodeNoRepeatWindow`, the configured N held under
+the S−2 headroom, over the station's plays. With the switch on, the episode is a
+full rotation across airings (`exhaustiveNoRepeatWindow` over its own tracks' whole
+air history, `exhaustive: true`). `noRepeatWindow: 0` keeps the guard off either way.
+
+All three use at most the S−2 window, which `rotationHardSet` turns into at most
+S−1 held identities counting the on-air and queued tracks, so one always survives
+and the guard cannot empty an episode; the never-starve fallback is unchanged.
+The coast does not take the episode's rotation (`scheduler.ts` asks the guard only
+without an episode), since its coast is the episode source itself.
 
 ## Scheduled tagging (#2282)
 
