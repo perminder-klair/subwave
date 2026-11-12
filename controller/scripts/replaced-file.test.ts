@@ -175,6 +175,7 @@ test('a failed attempt measures nothing: a kept measurement keeps its date, and 
 test('an accepted file keeps its analysis, stores its size, and is not found again', () => {
   measured('accepted');
   measured('dated');
+  sql(`UPDATE tracks SET stems_tail_misses = 2 WHERE id = 'accepted'`).run();
   sql(`UPDATE track_facet_status SET at = '2026-10-01T00:00:00Z' WHERE track_id IN ('accepted', 'dated')`).run();
   const changed = '2026-10-28T15:01:20Z';
   assert.equal(db.upsertTrackMeta('accepted', meta(4_000)), true);
@@ -186,7 +187,13 @@ test('an accepted file keeps its analysis, stores its size, and is not found aga
   const t = sql(`SELECT file_size, bpm, stems_at FROM tracks WHERE id = 'accepted'`).get() as Record<string, unknown>;
   assert.equal(t.file_size, 4_000);
   assert.equal(t.bpm, 100);
-  assert.equal(t.stems_at, '2026-10-01T00:00:00Z');
+  // Its stems were stamped with the old size, so they are separated again
+  // (#2238): left stamped, no backfill would ever redo them.
+  assert.equal(t.stems_at, null);
+  assert.equal(db.trackStemTailMisses('accepted'), null);
+  assert.ok(!rows('accepted').some(r => r.startsWith('stems:')), 'the stems facet is due again');
+  assert.ok(db.needsStemsIds().includes('accepted'), 'back in the stem backfill');
+  assert.ok(db.needsStemsIds().includes('dated'));
   assert.equal(sql(`SELECT file_size FROM tracks WHERE id = 'dated'`).get()!.file_size, 1_000, 'no size to store: the old one stands');
   assert.equal(db.upsertTrackMeta('accepted', meta(4_000)), false, 'the size signal is answered');
   for (const id of ['accepted', 'dated']) {

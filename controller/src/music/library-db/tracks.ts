@@ -368,17 +368,27 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
 // the walk's candidates: id -> the walked size, or null from the change-time
 // signal. `changedAt` is what Navidrome dated each, where it said (acceptedAt).
 // One transaction, so a walk that dies here asks again in full.
+// The stems are the exception (#2238): each window is stamped with the size of
+// the file it was cut from, and stem-cache.hasWindow rejects a window whose
+// size is not the row's. Storing the walked size makes every stamped window a
+// miss, so stems_at (and its miss count) is cleared too and the stem backfill
+// separates the track again; left stamped, nothing would ever redo it and the
+// track would never blend. The stem files stay until that rewrite replaces
+// them (the worker drops a window stamped with another file).
 export function acceptReplacedFiles(
   files: ReadonlyMap<string, number | null>,
   changedAt: ReadonlyMap<string, string> = new Map(),
 ): void {
   const d = requireDb();
   const setSize = d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?');
+  const clearStems = d.prepare('UPDATE tracks SET stems_at = NULL, stems_tail_misses = NULL WHERE id = ?');
   d.transaction(() => {
     for (const [id, fileSize] of files) {
       const size = positiveInt(fileSize);
       if (size != null) setSize.run(size, id);
+      clearStems.run(id);
       restampFacetRows(id, acceptedAt(changedAt.get(id)));
+      syncTrackFacets(id);
     }
   })();
 }
