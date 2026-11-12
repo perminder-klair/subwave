@@ -43,7 +43,7 @@ import { adoptAndPrune } from './id-rotation.js';
 import * as analyzer from './analyzer.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { readFileSync } from 'node:fs';
-import { analysisPart, formatPlan, parseFacets, parseWhere, planAcoustics, yearPart, type AcousticsPlan } from './acoustics-plan.js';
+import { analysisPart, formatPlan, parseFacets, parseWhere, planAcoustics, planStateFacets, yearPart, type AcousticsPlan } from './acoustics-plan.js';
 import { runYearLookups } from './original-year.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
 import { walkFileInfo } from './tag-library/flags.js';
@@ -121,7 +121,8 @@ async function buildFacetPlan(args: string[], limit: number | undefined): Promis
     ids,
     facets,
     where,
-    state: db.loadFacetState(facets),
+    // A vocal plan also reads tail and edges (planStateFacets).
+    state: db.loadFacetState(planStateFacets(facets)),
     capabilities: {
       clap: available ? analyzer.audioEmbeddingAvailable() : null,
       demucs: available ? analyzer.vocalActivityAvailable() : null,

@@ -654,6 +654,53 @@ test('a vocal-only request sends the tail window too, so the tail vocals come ba
   consistent();
 });
 
+test('a vocal-only plan also places a due tail, so one separation settles both (#2318)', async () => {
+  // An end-of-file tail past the tolerance is due, and a placed vocal answer
+  // is refused against it (the window rule above). Planned for vocal alone,
+  // the row stayed head-only and every `--facets vocal` run separated it
+  // again; the planner now adds the tail to that item.
+  const vocalFacets = P.parseFacets('vocal');
+  const vocalPlanFor = (ids: string[], where: 'needs' | 'all' = 'needs') => P.planAcoustics({
+    ids, facets: vocalFacets, where: { kind: where }, state: db.loadFacetState(P.planStateFacets(vocalFacets)),
+    capabilities: { clap: false, demucs: true, tailVocal: true, wholeFile: true },
+  });
+  assert.deepEqual(P.planStateFacets(vocalFacets), ['tail', 'vocal', 'edges']);
+  assert.deepEqual(P.planStateFacets(P.parseFacets('clap')), ['clap'], 'only a vocal plan reads more');
+
+  track('due-voc');
+  writeEdges('due-voc', 20_000);
+  writeTail('due-voc');
+  db.writeFacetResults('due-voc', { source: 'full', vocal: { vocalRanges: [], tailVocalRanges: null } });
+  assert.equal(tailRow('due-voc')?.version, 1, 'fixture: the tail is due');
+  assert.equal(vocalRowOf('due-voc')?.reason, 'head-only', 'fixture: the vocal row is owed its tail');
+  // Without edges the tail cannot be placed: nothing is added.
+  track('due-noedge');
+  writeTail('due-noedge');
+  db.writeFacetResults('due-noedge', { source: 'full', vocal: { vocalRanges: [], tailVocalRanges: null } });
+
+  const p = vocalPlanFor(['due-voc', 'due-noedge']);
+  assert.deepEqual(p.items.map((i) => [i.id, i.facets]), [['due-voc', ['tail', 'vocal']], ['due-noedge', ['vocal']]]);
+  assert.deepEqual(p.facets, ['vocal'], 'the plan still names what was asked');
+  assert.deepEqual(p.byFacet.find((c) => c.facet === 'tail'), { facet: 'tail', matched: 1, planned: 1, skipped: {}, addedWith: 'vocal' });
+  assert.ok(P.formatPlan(p).some((l) => /^ {2}tail .*\(added to vocal items\)$/.test(l)), P.formatPlan(p).join('\n'));
+  assert.ok(p.warnings.some((w) => w.startsWith('tail: 1 vocal item also places a due tail')), p.warnings.join('\n'));
+
+  requests.length = 0;
+  await runAnalysisPass({ plan: vocalPlanFor(['due-voc']) });
+  assert.equal(requests.length, 1, 'one request for both');
+  assert.deepEqual(requests[0].facets, ['tail', 'vocal']);
+  assert.equal(requests[0].tail_vocals, undefined, 'the vocal facet separates the tail; no second tail pass');
+  assert.deepEqual(requests[0].tail_window, { end_ms: 194_000, duration_ms: 214_000 });
+  assert.equal(tailVersionCol('due-voc'), 2, 'the tail is placed');
+  assert.deepEqual(db.getTrack('due-voc')!.outro?.vocalRanges, [{ startMs: 186_000, endMs: 188_000 }], 'its vocals merged');
+  const v = vocalRowOf('due-voc');
+  assert.deepEqual([v?.status, v?.version, v?.reason], ['ok', db.FACET_VERSIONS.vocal, null]);
+  assert.deepEqual(vocalPlanFor(['due-voc']).items, [], 'the next vocal run has nothing to separate');
+  // A settled tail is not forced by a forced vocal redo.
+  assert.deepEqual(vocalPlanFor(['due-voc'], 'all').items.map((i) => i.facets), [['vocal']]);
+  consistent();
+});
+
 test('placed tail vocals merge into an end-of-file outro the tolerance counts as placed, and settle on the first answer', () => {
   // An unstamped end-of-file tail whose edges show 1 s of trailing silence is
   // v2 (tailVersionOf): no tail is ever planned for it. The placed vocal

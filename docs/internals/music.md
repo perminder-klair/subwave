@@ -771,7 +771,12 @@ once edges exist. Six rules:
    on neither window. A vocal
    answer's ranges (the worker names a placed window, `tail_window: "edges"` in
    the vocal data) are merged into the stored outro only when it is on theirs;
-   otherwise the row stays head-only and placing the tail measures them. A new
+   otherwise the row stays head-only and placing the tail measures them. So a
+   `--facets vocal` plan adds `tail` to any vocal item whose tail is due and
+   placeable (an edges row measured ok), counted as a `tail` row "added to
+   vocal items": one request, one Demucs pass, and both settle, where a
+   vocal-only run separated the track again every time (#2318,
+   `acoustics-plan.ts` `tailWithVocal`). A new
    tail measured **without** its vocals (vocal detection off, or a tail-only run
    that did not ask) never drops the stored ones, flat or facet, because the
    tail can only move the instrumental verdict toward vocal: on the same window
