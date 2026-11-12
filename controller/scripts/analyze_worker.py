@@ -1179,8 +1179,10 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
     a ranged read). `offset` is the window's absolute start in seconds and
     `duration_s` the file's duration. Returns
       {startMs, ending: 'fade'|'cold', lufs?, bpm?, beats?, bars?,
-       tail_silence_ms?, tail_start_ms?}
+       loudnessCurve?, tail_silence_ms?, tail_start_ms?}
     with all timestamps ABSOLUTE, or None when nothing is measurable.
+    `loudnessCurve` (loudness_curve) is the window's short-term loudness, for
+    the controller's audible-end cut of a fade; omitted without pyloudnorm.
 
     A track too short for a distinct outro returns only the edge-silence
     fields. Pure librosa (+ optional pyloudnorm), so this runs on the LEAN tier
@@ -1239,6 +1241,9 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
     # Tail loudness — comparable to the track's loudness_lufs, so consumers can
     # judge how hot the material under the next intro will actually be.
     lufs, _peak = measure_loudness(y_src, sr)
+    # Short-term loudness over the same window (tail v3), so the controller can
+    # cut a fade where it stops being audible. Omitted without pyloudnorm.
+    curve = loudness_curve(y_src, sr, offset)
 
     # Tail tempo + grid (absolute ms) — the truer anchor for bar-aligning the
     # exit than the leading window's tempo (outros drift/ritard).
@@ -1278,6 +1283,8 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
         out["beats"] = beats_ms
     if bars_ms:
         out["bars"] = bars_ms
+    if curve is not None:
+        out["loudnessCurve"] = curve
     return out
 
 
@@ -2410,6 +2417,69 @@ def measure_loudness(y, sr):
     except Exception as e:  # noqa: BLE001 — loudness is best-effort
         log(f"loudness measurement failed: {e}")
         return None, None
+
+
+# Short-term loudness curve of the tail window (tail v3). On a FADE ending the
+# silence trim cuts at the ABSOLUTE floor (SILENCE_DBFS), seconds after the
+# music stopped being audible; the controller cuts such an ending where the
+# curve last reaches a level RELATIVE to the track's own loudness instead
+# (music/silence-trim.ts). EBU R128 short-term: K-weighted mean square over a
+# 3 s window, channels summed (BS.1770 weights), -0.691 + 10*log10. One point
+# every 0.5 s, stamped at the END of the window it measures, absolute ms.
+LOUDNESS_CURVE_WINDOW_S = 3.0
+LOUDNESS_CURVE_STEP_MS = 500
+# Stored in tenths of a dB as ints (a tail of ~35 small ints per track, held
+# parsed for the whole library in the controller). Silence has no finite
+# loudness; it is stored at this floor (-100 LUFS), far under any audible end.
+LOUDNESS_CURVE_FLOOR_TENTHS = -1000
+
+
+def loudness_curve(y, sr, offset):
+    """{startMs, stepMs, lufs: [int tenths]} for a decoded window `y` (mono (n,)
+    or librosa's (channels, n)) starting at `offset` seconds into the file, or
+    None when pyloudnorm is unavailable or the meter fails (the caller then
+    omits it). A window shorter than 3 s gives an empty `lufs`."""
+    import numpy as np
+
+    try:
+        import pyloudnorm as pyln
+    except Exception as e:  # noqa: BLE001 — optional dependency
+        log(f"pyloudnorm unavailable, skipping the tail loudness curve: {e}")
+        return None
+    try:
+        data = np.asarray(y, dtype=np.float64)
+        data = data.T.copy() if data.ndim > 1 else data.reshape(-1, 1).copy()
+        n, channels = data.shape
+        # The meter's own K-weighting stages (high shelf + high pass at `sr`),
+        # the same filters integrated_loudness() applies.
+        meter = pyln.Meter(sr)
+        for stage in meter._filters.values():
+            for ch in range(channels):
+                data[:, ch] = stage.apply_filter(data[:, ch])
+        gains = [1.0, 1.0, 1.0, 1.41, 1.41]
+        win = int(round(LOUDNESS_CURVE_WINDOW_S * sr))
+        energy = np.zeros(n + 1, dtype=np.float64)
+        for ch in range(channels):
+            g = gains[ch] if ch < len(gains) else 1.0
+            energy[1:] += g * np.cumsum(data[:, ch] ** 2)
+        start_ms = int(round(offset * 1000.0 + LOUDNESS_CURVE_WINDOW_S * 1000.0))
+        lufs = []
+        i = 0
+        while True:
+            end = int(round((LOUDNESS_CURVE_WINDOW_S + i * LOUDNESS_CURVE_STEP_MS / 1000.0) * sr))
+            if end > n or end < win:
+                break
+            z = (energy[end] - energy[end - win]) / win
+            if z > 0 and np.isfinite(z):
+                v = int(round((-0.691 + 10.0 * float(np.log10(z))) * 10.0))
+                lufs.append(max(LOUDNESS_CURVE_FLOOR_TENTHS, v))
+            else:
+                lufs.append(LOUDNESS_CURVE_FLOOR_TENTHS)
+            i += 1
+        return {"startMs": start_ms, "stepMs": LOUDNESS_CURVE_STEP_MS, "lufs": lufs}
+    except Exception as e:  # noqa: BLE001 — the curve is best-effort
+        log(f"tail loudness curve failed: {e}")
+        return None
 
 
 def _path_loader(librosa, path):

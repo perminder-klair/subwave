@@ -1581,7 +1581,12 @@ class Queue {
         // decay into silence reads as a fade), so an untrimmed durSec counts
         // the silence we are about to cut as part of the ramp and sizes the
         // exit canvas longer than the track has left.
+        // A fade cut at its AUDIBLE end (transitions.fadeAudibleEnd) arrives
+        // here as that cueOutSec, so the wind-down already ends at the cut;
+        // resolveAudibleEnd (decided once, in silence-trim) only tells
+        // endingCrossSecondsFor to size it by its own rule.
         const trimEndSec = silenceTrim.resolveSilenceTrim(item.track).cueOutSec;
+        const audibleEnd = silenceTrim.resolveAudibleEnd(item.track);
         const endSec = trimEndSec != null && durSec > 0
           ? Math.min(durSec, trimEndSec)
           : (trimEndSec ?? durSec);
@@ -1596,12 +1601,13 @@ class Queue {
         const exitSecs = mix.endingCrossSecondsFor(
           { bpm: outro.bpm ?? next.bpm, key: next.key, ending: outro.ending },
           windDownSec,
-          { maxSec, tailLufs: outro.lufs ?? null, bodyLufs, vocalTail: next.vocalTail },
+          { maxSec, tailLufs: outro.lufs ?? null, bodyLufs, vocalTail: next.vocalTail, audibleEnd },
         );
         if (exitSecs != null) {
           item.track.crossSec = exitSecs;
           const sung = next.vocalTail === true ? ', vocal tail' : '';
-          this.log('mix', `exit canvas ${exitSecs}s (${outro.ending} ending${sung}) → ${item.track.title}`);
+          const cut = audibleEnd != null && outro.ending === 'fade' ? `, cut at audible end ${audibleEnd.endSec}s` : '';
+          this.log('mix', `exit canvas ${exitSecs}s (${outro.ending} ending${sung}${cut}) → ${item.track.title}`);
         }
       }
     }

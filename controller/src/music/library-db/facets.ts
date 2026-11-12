@@ -12,7 +12,8 @@
 // Facets (what each one writes on `tracks`):
 //   head      bpm, key, key ranges, intro, lead silence, sections, pace, grid
 //   loudness  loudness_lufs, peak_db (+ sample_peak_db, loudness_range_lu at v2)
-//   tail      outro_json, tail_silence_ms, tail_start_ms (+ tail_version at v2)
+//   tail      outro_json, tail_silence_ms, tail_start_ms (+ tail_version from v2;
+//             outro_json carries the loudness curve from v3)
 //   clap      the CLAP audio vector (track_audio_vectors)
 //   vocal     vocal_ranges_json (+ the outro's tail vocal ranges)
 //   stems     stems_at (the stem-cache attempt stamp)
@@ -43,6 +44,7 @@ import { ANALYSIS_VERSION, requireDb } from './handle.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 import { YEAR_MAX_ATTEMPTS, yearRetryDue } from '../original-year-policy.js';
 import { eraSuspectSql } from '../era-suspect.js';
+import { parseLoudnessCurve } from '../loudness-curve.js';
 
 export const FACETS = ['head', 'loudness', 'tail', 'clap', 'vocal', 'stems', 'edges', 'year'] as const;
 export type Facet = (typeof FACETS)[number];
@@ -70,13 +72,16 @@ export type FacetStatus = 'ok' | 'unmeasurable' | 'failed';
 // measurement's own (`loudness_version`, NULL = 1), never assumed.
 // edges = silence at both ends against the absolute floor + the decoded length,
 // from the same whole-file decode.
-// tail v2 = a window ending where the music stops (placed from the stored
-// edges); v1 = the file's last ANALYZE_OUTRO_SECONDS. Read off the columns
-// (tailVersionOf), never assumed.
+// tail v3 = a placed window (v2) whose outro carries the short-term loudness
+// curve the audible-end cut of a fade reads (music/loudness-curve.ts); v2 = a
+// window ending where the music stops (placed from the stored edges), without
+// the curve; v1 = the file's last ANALYZE_OUTRO_SECONDS. Read off the columns
+// (tailVersionOf), never assumed: `tail_version` holds the analyzer-confirmed
+// 2 or 3 (placedTailVersion). Rows at v2 are due again for `--facets tail`.
 export const FACET_VERSIONS: Readonly<Record<Facet, number>> = {
   head: 1,
   loudness: 2,
-  tail: 2,
+  tail: 3,
   clap: 1,
   vocal: 2,
   stems: 1,
@@ -105,6 +110,9 @@ export const TAIL_PLACEMENT_TOLERANCE_MS = 3000;
 // A threshold, the FIRST placed version: it stays 2 when FACET_VERSIONS.tail
 // moves past it. What the analyzer's placed answer is stamped with is
 // FACET_VERSIONS.tail (PLACED_TAIL_STAMP).
+// The stamp a placed answer actually stores is placedTailVersion (3 when its
+// outro carries the loudness curve, else 2, due again); PLACED_TAIL_STAMP is
+// the "placed" marker the same-window rule for tail vocals passes along.
 export const MIN_PLACED_TAIL_VERSION = 2;
 export const PLACED_TAIL_STAMP = FACET_VERSIONS.tail;
 export function isPlacedTailStamp(version: number | null | undefined): version is number {
@@ -112,9 +120,10 @@ export function isPlacedTailStamp(version: number | null | undefined): version i
 }
 export const SQL_PLACED_TAIL_STAMP = `(COALESCE(tail_version, 1) >= ${MIN_PLACED_TAIL_VERSION})`;
 
-// Which window a stored tail was measured on: the analyzer's own stamp, else
-// v2 when the edges show the end-of-file window already ended at the music,
-// else v1. A stamp of 1 is a tail placed for an end the re-measured edges have
+// Which window a stored tail was measured on: the analyzer's own stamp (2, or
+// 3 with the loudness curve), else v2 when the edges show the end-of-file
+// window already ended at the music (that window carries no curve stamp, so
+// it is re-read once for v3), else v1. A stamp of 1 is a tail placed for an end the re-measured edges have
 // since moved (tailPlacementMoved): v1, due again, whatever the edges say now,
 // because the stored window is neither the old placement nor the file's end.
 export function tailVersionOf(row: Pick<FacetSourceRow, 'tail_version' | 'has_edges' | 'edge_tail_ms'>): number {
@@ -122,6 +131,16 @@ export function tailVersionOf(row: Pick<FacetSourceRow, 'tail_version' | 'has_ed
   if (row.tail_version === 1) return 1;
   if (row.has_edges && row.edge_tail_ms != null && row.edge_tail_ms <= TAIL_PLACEMENT_TOLERANCE_MS) return MIN_PLACED_TAIL_VERSION;
   return 1;
+}
+
+// The `tail_version` stamp for a tail the analyzer confirmed it PLACED: 3 when
+// its outro carries a valid loudness curve (an analyzer with pyloudnorm), else
+// 2 (an older analyzer, or one without pyloudnorm: due again). A placed answer
+// with no outro has no curve to carry, so it is complete at 3. Mark the
+// answer, not the request: an unplaced tail gets no stamp at all.
+export function placedTailVersion(outro: { loudnessCurve?: unknown } | null | undefined): number {
+  if (outro == null) return 3;
+  return parseLoudnessCurve(outro.loudnessCurve) ? 3 : 2;
 }
 
 // Does a tail with this stamp sit on the window that ends where the music
@@ -203,7 +222,7 @@ export interface FacetSourceRow {
   has_loudness_curve?: number; // loudness_curve_json IS NOT NULL (the whole-file pass's curve, or its unavailable marker)
   has_edges: number;         // decoded_duration_ms IS NOT NULL
   edge_tail_ms: number | null;
-  tail_version: number | null; // 2 = a tail window the analyzer placed from the edges; 1 = placed for an end that has moved
+  tail_version: number | null; // 2 = a tail window the analyzer placed from the edges, 3 = with the loudness curve; 1 = placed for an end that has moved
   analyze_fail_count: number | null;
   analyze_error: string | null;
   year_suspect: number;      // era-suspect.eraSuspectSql
