@@ -370,27 +370,36 @@ export function clearTrackAudio(id: string, fileSize?: number | null): void {
 // One transaction, so a walk that dies here asks again in full.
 // The stems are the exception (#2238): each window is stamped with the size of
 // the file it was cut from, and stem-cache.hasWindow rejects a window whose
-// size is not the row's. Storing the walked size makes every stamped window a
-// miss, so stems_at (and its miss count) is cleared too and the stem backfill
-// separates the track again; left stamped, nothing would ever redo it and the
-// track would never blend. The stem files stay until that rewrite replaces
-// them (the worker drops a window stamped with another file).
+// size is not the row's. Storing a new walked size makes every stamped window
+// a miss, so for those ids stems_at (and its miss count) is cleared too and the
+// stem backfill separates the track again; left stamped, nothing would ever
+// redo it and the track would never blend. The stem files stay until that
+// rewrite replaces them (the worker drops a window stamped with another file).
+// A change-time candidate (no size) keeps its row size, so its stamps still
+// match and its stems stand: re-separating it would be wasted Demucs work, and
+// a restore that resets file dates would make that library-wide.
+// Returns how many tracks' stems were sent back to the backfill.
 export function acceptReplacedFiles(
   files: ReadonlyMap<string, number | null>,
   changedAt: ReadonlyMap<string, string> = new Map(),
-): void {
+): number {
   const d = requireDb();
   const setSize = d.prepare('UPDATE tracks SET file_size = ? WHERE id = ?');
   const clearStems = d.prepare('UPDATE tracks SET stems_at = NULL, stems_tail_misses = NULL WHERE id = ?');
+  let resent = 0;
   d.transaction(() => {
     for (const [id, fileSize] of files) {
       const size = positiveInt(fileSize);
-      if (size != null) setSize.run(size, id);
-      clearStems.run(id);
+      if (size != null) {
+        setSize.run(size, id);
+        clearStems.run(id);
+        resent++;
+      }
       restampFacetRows(id, acceptedAt(changedAt.get(id)));
-      syncTrackFacets(id);
+      if (size != null) syncTrackFacets(id);
     }
   })();
+  return resent;
 }
 
 // The file size the library records for a track: the size its analysis was
