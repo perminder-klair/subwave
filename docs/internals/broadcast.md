@@ -211,29 +211,39 @@ pool read) leaves a view with the subject chosen but no editorial. A plan bought
 then sees only the show's name and topic, and the model invents a subject: a show
 called "Dizzy Spells" got a Dizzy Gillespie angle. So `fillPlan` stays pending
 until the view is ready, keeps grounding from a ready record, or has no retry
-left; the beats fall back as they do for any pending plan. When no retry is left
-and there is still no editorial (both catalogue attempts spent) but the skill
-chose a subject, the plan is written from that subject alone
-(`preparationPlanSubject`): it reaches the prompt as a brief to name it and state
-no facts about it, with no catalogue records or research, and the subject is the
-episode's `preparationSubject`. When the retry lands,
-`onPreparationChange` replans the live episode and an armed incoming one at once
-rather than at the next pick. One generation runs per episode object, and a plan
-finished after the subject moved on is dropped, not attached. Each plan is stamped
-with the occurrence, the subject it was written from and whether that subject was
-grounded (`preparationPlanStamp`), and the handoff greeting uses its angle only
-while that still matches (`preparedPlanAngle`); a plan with no stamp predates it
-and keeps its angle. A stamped plan whose stamp no longer matches (a bare subject
-the catalogue has since grounded, through an operator's Retry catalogue) is
-replanned, so the greeting's check and the plan agree. The stamp leaves out the preparation's status and music on purpose: a
-ready preparation whose catalogue refresh later fails keeps its subject and
-grounding, so its plan's angle is still right. A greeting with no angle is the
-accepted cost of a preparation that is not ready at the boundary: the boundary
-does not wait for it. When the skill has already chosen its subject, though, the
-greeting still names it, with no angle and no facts about it
-(`preparationGreetingSubject`), so it reads a known subject or nothing, never an
-invented one. Speech that already aired an invented subject stays in the
-session's prompt memory; this does not withdraw it.
+left (`AUTOMATIC_ATTEMPTS` per step); the beats fall back as they do for any
+pending plan. What a settled plan is written from is `preparationPlanSubject`:
+the grounded subject and editorial; with both catalogue attempts spent and no
+editorial, the subject the skill chose, as a brief to name it and state no facts
+about it or about what will play; with the tool failed for good on a show that
+has a preparation skill, a brief that no subject was chosen and none is to be
+named. Both briefs come from `preparation-subject-wording.ts`, the same wording
+the opening uses.
+
+A view that stops waiting on a retry, whether the retry succeeded or ran out,
+fires `onPreparationChange`, which replans the live episode and an armed
+incoming one then rather than at the next pick (`scheduler.replanAfterPreparation`).
+One generation runs per episode object, and a plan finished after the subject
+moved on is dropped, not attached. Each plan is stamped with the occurrence, the
+subject it was written from and whether that subject was grounded
+(`preparationPlanStamp`). `planStampCurrent` is the one check behind both the
+replan of a stale plan (a bare subject an operator's Retry catalogue has since
+grounded) and the opening's angle, so they agree; a plan with no stamp predates
+it and counts as current. The stamp leaves out the preparation's status and
+music on purpose: a ready preparation whose catalogue refresh later fails keeps
+its subject and grounding, so its plan's angle is still right. A stamped plan
+with no subject on a show with a preparation skill gives no angle.
+
+The episode's opening, the handoff greeting or the standalone intro, reads one
+helper (`preparationOpening`). While the preparation is unsettled but its skill
+has chosen a subject, the opening names that subject with no angle and no facts;
+otherwise it takes a current plan's angle, or nothing. So it reads a known
+subject or nothing, never an invented one. A greeting or intro with no angle is
+the accepted cost of a preparation that is not ready at the boundary: the
+boundary does not wait for it. An occurrence whose preparation skill is cleared
+before any subject was accepted reads as ordinary at once, dropping the cached
+view of an earlier failed attempt. Speech that already aired an invented subject
+stays in the session's prompt memory; this does not withdraw it.
 
 Unexpired interrupted episodes are stored with the programme, capped at sixteen.
 A session roll or fresh-session recovery with no owned incoming programme carries

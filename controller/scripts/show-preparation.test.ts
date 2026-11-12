@@ -37,6 +37,7 @@ function fixture(name: string) {
   };
   return { options, counts: () => ({ calls, sourceCalls }), move: (ms: number) => { clock += ms; },
     change: () => { snapshot = { ...snapshot, skill: 'replacement', configuration: 'changed' }; },
+    clearSkill: () => { snapshot = { ...snapshot, skill: '', configuration: 'cleared' }; },
     next: () => { snapshot = { ...snapshot, occurrence: { ...snapshot.occurrence, id: `${name}-next` } }; },
     catalogue: (fails: boolean) => { unavailable = fails; }, tool: (fails: boolean) => { invalid = fails; } };
 }
@@ -160,6 +161,45 @@ test('a preparation is unsettled only while a retry is still due without groundi
   assert.equal(preparationPlanSubject(failedTwice).subject, '', 'a failed tool chose nothing for the plan either');
 
   assert.equal(preparationSettled({ status: { kind: 'unconfigured' }, music: null, editorial: '', retryPending: false }), true);
+});
+
+test('a view that stops waiting on a retry tells observers, whether the retry worked or ran out (#2321)', async () => {
+  const f = fixture('settle-notify-catalogue');
+  f.catalogue(true);
+  let changes = 0;
+  const owner = createShowPreparation({ ...f.options, changed: () => { changes++; } });
+  await owner.ensure({ context });
+  assert.equal(changes, 0, 'a first failure with a retry due settles nothing');
+  f.move(60_001);
+  const spent = await owner.ensure({ context });
+  assert.equal(preparationSettled(spent), true);
+  assert.equal(changes, 1, 'the last catalogue retry failing settles the view: the held plan can go ahead');
+  await owner.ensure({ context });
+  assert.equal(changes, 1, 'once settled, repeat reads stay quiet');
+
+  const g = fixture('settle-notify-tool');
+  g.tool(true);
+  let toolChanges = 0;
+  const tool = createShowPreparation({ ...g.options, changed: () => { toolChanges++; } });
+  await tool.ensure({ context });
+  assert.equal(toolChanges, 0);
+  g.move(60_001);
+  await tool.ensure({ context });
+  assert.equal(toolChanges, 1, 'the tool failing for good settles the view too');
+});
+
+test('clearing the preparation skill after a failed attempt reads as ordinary at once (#2321)', async () => {
+  const f = fixture('cleared-skill');
+  f.tool(true);
+  const owner = createShowPreparation(f.options);
+  const failed = await owner.ensure({ context });
+  assert.equal(failed.status.kind, 'failed');
+  assert.equal(preparationSettled(failed), false);
+  f.clearSkill();
+  assert.equal((await owner.ensure({ context })).status.kind, 'unconfigured');
+  const view = owner.read({ context });
+  assert.equal(view.status.kind, 'unconfigured', 'the cached failed view must not outlive the cleared skill');
+  assert.equal(preparationSettled(view), true, 'nothing holds the plan pending any more');
 });
 
 test('invalid data fails open with bounded retries and permits explicit retry before acceptance', async () => {

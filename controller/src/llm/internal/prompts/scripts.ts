@@ -19,6 +19,7 @@ import { announceLine, nextAnnounceForm } from '../../../broadcast/announce-line
 import * as library from '../../../music/library.js';
 import { contextSleeveNotesFor, releaseYearMentionEligible, selectSleeveNotes, stationHistoryNoteFor } from './sleeve-notes.js';
 import { stripRecapSpokenTags, stripSpokenTags } from './recent-speech.js';
+import { namedSubjectLine } from '../../../broadcast/preparation-subject-wording.js';
 
 // The feel note appended to a track line (track-feel.ts) is a STEER, not copy.
 // Without this the model reads the label out — "high-energy" spoken flat is
@@ -294,10 +295,10 @@ export function handoffGreetingPrompt({ personaIn, personaOut, showIn = null, ep
   // producer's angle rides in (broadcast/programme.ts skips the standalone
   // intro when a handoff opened the show).
   // Before the episode's preparation has settled there is no angle, only the
-  // subject its skill chose (show-preparation.ts preparationGreetingSubject):
-  // name it, and add nothing about it, because nothing verified backs it yet.
+  // subject its skill chose (show-preparation.ts preparationOpening): name it,
+  // and add nothing about it or the music, because nothing verified backs it.
   const angleClause = showIn && episodeAngle ? ` Today's episode angle: ${episodeAngle} — set it up as you open.`
-    : showIn && episodeSubject ? ` This episode is an hour of ${JSON.stringify(String(episodeSubject))}: name it as you open, but state no facts about it.` : '';
+    : showIn && episodeSubject ? ` ${namedSubjectLine(String(episodeSubject))}` : '';
   const showClause = showIn ? ` You're kicking off "${showIn}".${angleClause}` : '';
   const handoffTask = sameHost
     ? `Task: you're ${inName}, continuing with listeners as the station moves into a new show. Give one short, natural acknowledgement of the change${showIn ? ` into "${showIn}"` : ''}. Do not thank, introduce, or refer to yourself as another DJ; this is one continuous voice, not a handover.`

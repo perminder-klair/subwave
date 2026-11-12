@@ -22,6 +22,8 @@ const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
 const { handoffGreetingPrompt } = await import('../src/llm/internal/prompts/scripts.js');
 const { buildContextLines } = await import('../src/llm/internal/prompts/context.js');
+const { introTask } = await import('../src/llm/internal/prompts/programme.js');
+const { NO_SUBJECT_LINE, namedSubjectLine } = await import('../src/broadcast/preparation-subject-wording.js');
 after(() => removeTempDir(root));
 
 type PlanDeps = NonNullable<Parameters<typeof programme.prepareBoundaryPlan>[1]>;
@@ -96,9 +98,24 @@ test('an unready preparation holds the plan; the greeting names the chosen subje
   const chosen = await greeting(incoming);
   assert.equal(chosen.angle, null, 'the greeting does not wait for the plan and has no angle');
   assert.equal(chosen.subject, 'Prepared artist');
-  assert.match(chosen.prompt, /hour of "Prepared artist"/);
-  assert.match(chosen.prompt, /state no facts/);
-  assert.doesNotMatch(chosen.prompt, /angle/i);
+  assert.ok(chosen.prompt.includes(namedSubjectLine('Prepared artist')), 'the shared wording reaches the greeting');
+  assert.match(chosen.prompt, /This episode's subject is "Prepared artist": name it, but state no facts about it or about what will play/);
+  assert.doesNotMatch(chosen.prompt, /angle|an hour of/i, 'no angle, and no promise of an hour of the subject');
+
+  // A same-host boundary opens with the standalone intro instead: it reads the
+  // same helper, so it names the chosen subject too, with no angle.
+  let intro: { subject: string | null; task: string } | undefined;
+  await programme.runIntro({
+    getDjRecap: () => '', getRecentOpeners: () => [], announce: async () => ({ accepted: true }),
+  } as unknown as Parameters<typeof programme.runIntro>[0], incoming, new Date(String(incoming.at)), {}, {
+    generateProgrammeIntro: async (args) => {
+      intro = { subject: args.episodeSubject ?? null, task: introTask(args) };
+      return 'Welcome to the show.';
+    },
+  });
+  assert.equal(intro?.subject, 'Prepared artist');
+  assert.ok(intro?.task.includes(namedSubjectLine('Prepared artist')));
+  assert.doesNotMatch(intro?.task ?? '', /angle/i);
 });
 
 test('an unready preparation with no chosen subject gives the greeting neither subject nor angle', async (t) => {
@@ -111,7 +128,30 @@ test('an unready preparation with no chosen subject gives the greeting neither s
   const none = await greeting(incoming);
   assert.equal(none.angle, null);
   assert.equal(none.subject, null);
-  assert.doesNotMatch(none.prompt, /hour of|angle/i);
+  assert.doesNotMatch(none.prompt, /subject is|angle/i);
+});
+
+test('the tool fails twice: the plan is told no subject was chosen, and the opening gets no angle from it', async (t) => {
+  // The same occurrence as above: its first tool failure is on record, the
+  // retry a minute away.
+  const { incoming } = await armBoundary(t, 's_unchosen', 'Unchosen hour');
+  const seen: string[] = [];
+  const deps: PlanDeps = { generateProgrammePlan: async (args) => {
+    seen.push(buildContextLines(args.context, { steer: false }).join('\n'));
+    return plan('An hour of Somebody Invented');
+  } };
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 61_000 });
+  await programme.prepareBoundaryPlan(incoming, deps);
+  const view = showPreparation.read({ context: incoming });
+  assert.equal(view.status.kind, 'failed');
+  assert.equal(seen.length, 1, 'no retry left: the plan goes ahead');
+  assert.ok(seen[0].includes(NO_SUBJECT_LINE), 'the plan is told no subject was chosen');
+  assert.equal(session.getBoundaryProgramme()?.plan?.angle, 'An hour of Somebody Invented');
+  assert.equal(preparedPlanAngle(session.getBoundaryProgramme(), incoming), null,
+    'a stamped plan with no subject, on a show with a preparation skill, gives no angle');
+  const none = await greeting(incoming);
+  assert.equal(none.angle, null);
+  assert.equal(none.subject, null);
 });
 
 test('both catalogue attempts spent: the plan names the chosen subject with no facts, and the greeting takes its angle', async (t) => {
@@ -131,8 +171,7 @@ test('both catalogue attempts spent: the plan names the chosen subject with no f
   assert.equal(view.status.kind, 'degraded');
   assert.equal(view.editorial, '');
   assert.equal(seen.length, 1, 'no retry left: the plan goes ahead');
-  assert.match(seen[0], /Episode subject: "Prepared artist"/);
-  assert.match(seen[0], /state no facts about it/);
+  assert.ok(seen[0].includes(namedSubjectLine('Prepared artist')), 'the plan gets the same wording as the opening');
   assert.doesNotMatch(seen[0], /episode-source-data|Verified episode subject/, 'no catalogue facts or invented grounding');
   const prog = session.getBoundaryProgramme();
   assert.equal(prog?.preparationSubject, 'Prepared artist');

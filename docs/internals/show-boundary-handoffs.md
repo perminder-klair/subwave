@@ -142,7 +142,8 @@ while that intro is pending, the old runner yields to the newer track.
   the boundary (`broadcast.md`, Episode preparation research, #2321). While the
   preparation is unsettled but its skill has already chosen a subject, the
   greeting names that subject with no angle and no facts
-  (`preparationGreetingSubject`); with no subject chosen it names neither. This
+  (`preparationOpening`, which the standalone intro also reads); with no
+  subject chosen it names neither. This
   is the incoming show's own preparation data, not outgoing speech, so the
   clean-memory rule for the incoming half holds.
 - Episode research for the outgoing half is saved on the session and copied into

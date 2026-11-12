@@ -44,7 +44,7 @@ import {
 } from './dj-agent/breaker.js';
 import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, notePickShow, runActive } from './dj-agent/runs.js';
-import { prepareEpisodeContext, preparationGreetingSubject, preparedPlanAngle, showPreparation } from './show-preparation.js';
+import { prepareEpisodeContext, preparationOpening, showPreparation } from './show-preparation.js';
 import { prepareShortlistSearches } from './shortlist-search-preparation.js';
 import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, transitionChoiceNudge, type EditorialLeaningsContext } from './dj-agent/schemas.js';
 import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, plainAgenticSelectionReason, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
@@ -2235,11 +2235,11 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
   // boundaries fail silent for every temporal field rather than leaking the
   // look-ahead clock into either half of the handoff.
   const speechContext = isBoundaryHandoff ? boundarySpeechContext(ctx, pending.boundaryAt) : ctx;
-  const incomingView = showPreparation.read({ context: ctx });
-  const incomingEditorial = incomingView.editorial;
+  const incomingEditorial = showPreparation.read({ context: ctx }).editorial;
   // Unsettled but already chosen: the greeting names the subject, with no plan
-  // angle (the plan is still pending). Nothing chosen: neither (#2321).
-  const incomingSubject = preparationGreetingSubject(incomingView);
+  // angle (the plan is still pending). Otherwise a current plan's angle, or
+  // nothing (#2321). The standalone intro reads the same helper.
+  const opening = preparationOpening(isBoundaryHandoff ? session.getBoundaryProgramme() : session.getProgramme(), ctx);
   const promptContext = incomingEditorial
     ? { ...speechContext, episodeEditorial: incomingEditorial }
     : speechContext;
@@ -2286,10 +2286,8 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
       greeting = await generateHandoffGreeting({
         personaIn, personaOut, showIn,
         sameHost: isSameHostAcknowledgement,
-        episodeAngle: incomingSubject ? null : preparedPlanAngle(isBoundaryHandoff
-          ? session.getBoundaryProgramme()
-          : session.getProgramme(), ctx),
-        episodeSubject: incomingSubject,
+        episodeAngle: opening.angle,
+        episodeSubject: opening.subject,
         context: promptContext, recap: incomingRecap, recentOpeners,
       });
     } catch (err: any) {

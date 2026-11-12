@@ -1,4 +1,4 @@
-import { prepareEpisodeContext, preparationPlanStamp, preparationPlanSubject, preparationSettled, preparationSkillAt, showPreparation } from './show-preparation.js';
+import { planStampCurrent, prepareEpisodeContext, preparationOpening, preparationPlanStamp, preparationPlanSubject, preparationSettled, preparationSkillAt, showPreparation } from './show-preparation.js';
 import { skillEligible } from '../skills/eligibility.js';
 // Keep episode plans and aired beats on the session. Mark beats before generation to avoid
 // duplicate playback after failure. Inject the queue to avoid an import cycle.
@@ -168,11 +168,10 @@ async function fillPlan(
   const view = showPreparation.read({ context: ctx });
   const planned = preparationPlanSubject(view);
   const subject = planned.grounded && !ctx.episodeEditorial ? '' : planned.subject;
-  // A plan stamped under other grounding (a bare subject that the catalogue
-  // has since grounded) is replanned, so the greeting's stamp check and the
-  // plan agree. An unstamped legacy plan is left alone.
-  const stale = prog.status === 'ok' && prog.preparationStamp !== undefined
-    && prog.preparationStamp !== preparationPlanStamp(ctx);
+  // A plan whose stamp is no longer current (a bare subject the catalogue has
+  // since grounded) is replanned. The opening reads its angle through the same
+  // check (planStampCurrent), so the two can't disagree.
+  const stale = prog.status === 'ok' && !planStampCurrent(prog, ctx);
   if ((prog.preparationSubject || '') !== subject || stale) {
     prog.preparationSubject = subject;
     prog.status = 'pending';
@@ -367,21 +366,34 @@ function exchangeText(lines: { persona: { name: string }; text: string }[], cast
 
 // Gate-free intro core — also the manual /dj/segment runner (via scheduler's
 // wrapper, which re-marks the beat so the autonomous path never repeats it).
-export async function runIntro(queue: QueueApi, ctx: SessionContext, now = new Date(), { automaticHostSpeech = false }: { automaticHostSpeech?: boolean } = {}): Promise<string | null> {
+// `deps` is the generator seam for tests, as PlanDeps is for the plan.
+export interface IntroDeps {
+  generateProgrammeIntro?: typeof dj.generateProgrammeIntro;
+  generateProgrammeExchange?: typeof dj.generateProgrammeExchange;
+}
+
+export async function runIntro(
+  queue: QueueApi, ctx: SessionContext, now = new Date(),
+  { automaticHostSpeech = false }: { automaticHostSpeech?: boolean } = {},
+  { generateProgrammeIntro = dj.generateProgrammeIntro, generateProgrammeExchange = dj.generateProgrammeExchange }: IntroDeps = {},
+): Promise<string | null> {
   ctx = await prepareEpisodeContext(ctx);
   const show = settings.resolveActiveShow(now);
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
-  const plan = prog?.plan || null;
+  // The same read as the handoff greeting (#2321): a chosen subject with no
+  // angle while the preparation is unsettled, else a current plan's angle.
+  const opening = preparationOpening(prog, ctx);
+  const plan = prog?.plan ? { ...prog.plan, angle: opening.angle } : null;
   return withTrace({ kind: 'programme-intro', show: show.name }, async () => {
     const roster = settings.getOnAirRoster(now);
     const common = {
-      show, plan, context: ctx,
+      show, plan, context: ctx, episodeSubject: opening.subject,
       recap: queue.getDjRecap(), recentOpeners: queue.getRecentOpeners(),
     };
     if (roster.guests.length && roster.host) {
       try {
-        const lines = await dj.generateProgrammeExchange({ beat: 'intro', host: roster.host, guests: roster.guests, ...common });
+        const lines = await generateProgrammeExchange({ beat: 'intro', host: roster.host, guests: roster.guests, ...common });
         const castNames = [roster.host, ...roster.guests].map(p => p.name);
         if (lines && await queue.announceExchange(lines, 'programme-intro', { castNames })) {
           return exchangeText(lines, castNames);
@@ -394,7 +406,7 @@ export async function runIntro(queue: QueueApi, ctx: SessionContext, now = new D
     const speechOwner = automaticHostSpeech
       ? session.captureAutomaticHostSpeech(soloHost, now)
       : { persona: soloHost, hostSpeech: null };
-    const script = await dj.generateProgrammeIntro({ persona: speechOwner.persona, ...common });
+    const script = await generateProgrammeIntro({ persona: speechOwner.persona, ...common });
     const outcome = await queue.announce(script, 'programme-intro', {
       persona: speechOwner.persona,
       meta: { personaId: speechOwner.persona?.id, personaName: speechOwner.persona?.name },
