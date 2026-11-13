@@ -5,9 +5,8 @@
 // whether the library has moved far enough since a failed attempt to try again
 // on boot. Before #2314 a crashed child wrote nothing, so the map stayed stale
 // and every boot launched the same doomed run (a 232k library ran out of heap
-// two minutes in, on every restart). A failure now holds the boot retry until
-// the vector count passes the stale threshold measured from the failed attempt.
-// An operator's manual run is never held.
+// two minutes in, on every restart). Which failures hold the boot retry is
+// holdBootRetry's, below. An operator's manual run is never held.
 
 import { SAMPLE_CAP } from './map-placement.js';
 
@@ -30,6 +29,13 @@ export interface ProjectionExit {
   at: string;
   vectors: number; // audio vectors when the attempt started
   error: string | null; // null when ok
+  // The child ran out of JavaScript heap. False when ok.
+  oom: boolean;
+  // The heap the child was given (childHeapMb: 0 = Node's default). null in a
+  // record from before it was stored.
+  heapMb: number | null;
+  // Failed runs in a row, this one included; 0 when ok.
+  failures: number;
 }
 
 // Both counts are measured; drift must clear the absolute AND the fractional bar.
@@ -80,17 +86,38 @@ export function childHeapMb(setting: number): number {
   return Math.max(MIN_HEAP_MB, Math.floor(setting));
 }
 
-// True while a failed attempt should keep the automatic boot run from starting.
-export function holdBootRetry(vectors: number, last: ProjectionExit | null): boolean {
+// True while a failed attempt should keep the automatic boot run from starting
+// (#2314 follow-up). `heapMb` is the heap the next child would get.
+// - The library moving past the stale threshold since the attempt, or a
+//   changed SUBWAVE_MAP_HEAP_MB, is a new attempt: never held. A record with
+//   no heap stored predates it, so it gets one retry too.
+// - Running out of heap holds: the same run in the same heap fails the same
+//   way, and before the hold every boot relaunched it.
+// - Any other failure may be one-off (a SQLITE_BUSY on the final write), so
+//   the next boot retries it once; a second failure in a row holds, so a
+//   persistent one cannot run on every boot either.
+export function holdBootRetry(vectors: number, heapMb: number, last: ProjectionExit | null): boolean {
   if (!last || last.ok) return false;
-  return !drifted(vectors, last.vectors);
+  if (drifted(vectors, last.vectors)) return false;
+  if (last.heapMb !== heapMb) return false;
+  return last.oom || last.failures >= 2;
 }
+
+// Failed runs in a row once this run's outcome is known.
+export function failureStreak(previous: ProjectionExit | null, ok: boolean): number {
+  if (ok) return 0;
+  return previous && !previous.ok ? Math.max(1, previous.failures) + 1 : 1;
+}
+
+export function isOutOfMemory(log: readonly string[]): boolean {
+  return log.some((l) => /heap out of memory|Reached heap limit/i.test(l));
+}
+
+export const OOM_REASON = 'ran out of memory (JavaScript heap); raise SUBWAVE_MAP_HEAP_MB';
 
 // One line an operator can act on, from the child's exit and its log tail.
 export function describeFailure(code: number | null, signal: string | null, log: readonly string[]): string {
-  if (log.some((l) => /heap out of memory|Reached heap limit/i.test(l))) {
-    return 'ran out of memory (JavaScript heap); raise SUBWAVE_MAP_HEAP_MB';
-  }
+  if (isOutOfMemory(log)) return OOM_REASON;
   for (let i = log.length - 1; i >= 0; i--) {
     const m = /^projection failed:\s*(.+)$/.exec(log[i]!);
     if (m) return m[1]!;

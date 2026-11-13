@@ -5,8 +5,8 @@
 // fitted on a seeded sample and the rest are placed by map-placement.ts:
 // umap-js's fit memory grows faster than the library, and a 232k library ran
 // the child out of heap on every boot (#2314).
-// A failed child is recorded (map-projection-last.json) and holds the boot
-// retry until the library moves; map-projection-policy.ts decides.
+// A failed child is recorded (map-projection-last.json); whether it holds the
+// boot retry is map-projection-policy.ts holdBootRetry's.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import v8 from 'node:v8';
@@ -23,8 +23,11 @@ import {
   childEnv,
   childHeapMb,
   describeFailure,
+  failureStreak,
   fitSampleCap,
   holdBootRetry,
+  isOutOfMemory,
+  OOM_REASON,
   isStale as staleBy,
   type ProjectionExit,
   type ProjectionMeta,
@@ -47,6 +50,30 @@ interface UmapInternals {
 export interface ProjectionResult {
   count: number;
   ms: number;
+}
+
+// The fitted sample's kNN graph, which umap-js keeps in a private field. Read
+// through here so an upgrade that renames or reshapes it fails the run with a
+// reason: an empty or wrong graph leaves every sampled point its own
+// component, and placement would walk from each one, for hours, silently.
+export function fitKnnIndices(umap: unknown, n: number): number[][] {
+  const knn = (umap as UmapInternals | null)?.knnIndices;
+  const fail = (why: string): never => {
+    throw new Error(`umap-js's knnIndices ${why}; the sample's neighbour graph is unreadable (umap-js upgraded?)`);
+  };
+  if (!Array.isArray(knn)) fail('is missing');
+  if (knn!.length !== n) fail(`has ${knn!.length} rows for ${n} fitted vectors`);
+  for (const row of knn!) {
+    if (!Array.isArray(row) || row.length === 0 || !row.every((v) => Number.isInteger(v))) {
+      fail('holds a row that is not a list of indices');
+    }
+  }
+  return knn!;
+}
+
+// The heap the child is given, in MB (0 = Node's default).
+export function childHeapSetting(): number {
+  return childHeapMb(envInt('SUBWAVE_MAP_HEAP_MB', 0, { min: 0 }));
 }
 
 // The fit size this process's heap can take (map-projection-policy.ts).
@@ -100,7 +127,7 @@ export async function runProjection(
   if (!sampled) {
     raw = fitted;
   } else {
-    const graph = buildSampleGraph(vecs, internals.knnIndices ?? []);
+    const graph = buildSampleGraph(vecs, fitKnnIndices(umap, vecs.length));
     raw = new Array(all.length);
     const rest: number[] = [];
     let f = 0;
@@ -184,13 +211,19 @@ export function readLastExit(): ProjectionExit | null {
   try {
     const v = JSON.parse(readFileSync(lastExitPath(), 'utf8')) as ProjectionExit;
     if (typeof v?.ok !== 'boolean' || typeof v.vectors !== 'number') return null;
+    const error = v.ok ? null : typeof v.error === 'string' ? v.error : 'failed';
     return {
       ok: v.ok,
       code: typeof v.code === 'number' ? v.code : null,
       signal: typeof v.signal === 'string' ? v.signal : null,
       at: typeof v.at === 'string' ? v.at : '',
       vectors: v.vectors,
-      error: v.ok ? null : typeof v.error === 'string' ? v.error : 'failed',
+      error,
+      // A record from before these were stored: its reason says whether it ran
+      // out of heap, it counts as one failure, and its heap is unknown.
+      oom: v.ok ? false : typeof v.oom === 'boolean' ? v.oom : error === OOM_REASON,
+      heapMb: typeof v.heapMb === 'number' ? v.heapMb : null,
+      failures: v.ok ? 0 : typeof v.failures === 'number' && v.failures >= 1 ? Math.floor(v.failures) : 1,
     };
   } catch {
     return null;
@@ -225,7 +258,7 @@ export function projectionStatus(): ProjectionStatus {
     lastExit,
     lastError: lastExit && !lastExit.ok ? lastExit.error : null,
     // Only a stale map has a boot run to hold.
-    bootRetryHeld: stale && holdBootRetry(audioVectors, lastExit),
+    bootRetryHeld: stale && holdBootRetry(audioVectors, childHeapSetting(), lastExit),
   };
 }
 
@@ -248,6 +281,8 @@ const LOG_LINES = 40;
  */
 export function createRunTracker({
   vectors,
+  heapMb,
+  previous,
   log,
   record,
   settled,
@@ -255,6 +290,9 @@ export function createRunTracker({
   closeGraceMs = RUN_END_CLOSE_GRACE_MS,
 }: {
   vectors: number;
+  heapMb: number;
+  // The record before this run, for the failure streak.
+  previous: ProjectionExit | null;
   log: string[];
   record: (exit: ProjectionExit) => void;
   settled: () => void;
@@ -297,7 +335,17 @@ export function createRunTracker({
     const ok = spawnError == null && code === 0;
     const error = spawnError != null ? `spawn failed: ${spawnError}` : ok ? null : describeFailure(code, signal, log);
     try {
-      record({ ok, code, signal, at: new Date().toISOString(), vectors, error });
+      record({
+        ok,
+        code,
+        signal,
+        at: new Date().toISOString(),
+        vectors,
+        error,
+        oom: !ok && spawnError == null && isOutOfMemory(log),
+        heapMb,
+        failures: failureStreak(previous, ok),
+      });
     } finally {
       settled();
     }
@@ -328,16 +376,19 @@ export function createRunTracker({
 export function startProjection(): boolean {
   if (child) return false;
   const vectors = db.audioVectorCount();
+  // 0 (unset) keeps Node's default heap limit; a set value is at least MIN_HEAP_MB.
+  const heapMb = childHeapSetting();
   const proc = spawn('npx', ['tsx', 'src/music/project-map.ts'], {
     cwd: '/app',
-    // 0 (unset) keeps Node's default heap limit; a set value is at least MIN_HEAP_MB.
-    env: childEnv(process.env, childHeapMb(envInt('SUBWAVE_MAP_HEAP_MB', 0, { min: 0 }))),
+    env: childEnv(process.env, heapMb),
   });
   child = proc;
   startedAt = new Date().toISOString();
   lastLog = [];
   const run = createRunTracker({
     vectors,
+    heapMb,
+    previous: readLastExit(),
     log: lastLog,
     onLine: (line) => console.log(`[map-projection] ${line}`),
     record: (exit) => {
@@ -371,10 +422,12 @@ export function maybeProjectOnBoot(delayMs = 30_000): void {
       const vectors = db.audioVectorCount();
       if (vectors < MIN_VECTORS || !isStale(vectors, db.getMapProjectionMeta())) return;
       const last = readLastExit();
-      if (holdBootRetry(vectors, last)) {
+      if (holdBootRetry(vectors, childHeapSetting(), last)) {
+        const why = last!.oom ? 'ran out of memory' : `failed ${last!.failures} times in a row`;
         console.log(
-          `[map-projection] sound map stale, but the last run failed at ${last!.vectors} vectors ` +
-            `(${last!.error}); not retrying until the library changes. Re-project from the Observatory to force.`,
+          `[map-projection] sound map stale, but the last run ${why} at ${last!.vectors} vectors ` +
+            `(${last!.error}); not retrying on boot until the library or SUBWAVE_MAP_HEAP_MB changes. ` +
+            'Re-project from the Observatory to force.',
         );
         return;
       }
