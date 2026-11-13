@@ -4589,7 +4589,7 @@ export const preparationStatusSchema = z.discriminatedUnion('kind', [
 ]);
 export type PreparationStatus = z.output<typeof preparationStatusSchema>;
 
-export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional() })).default([]) });
+export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional(), artistId: z.string().nullish().catch(null) })).default([]) });
 export const preparationArtistCreditSchema = z.object({ id: z.string().min(1), name: z.string().optional() });
 export const preparationTrackSchema = z.object({
   id: z.string().min(1), artistId: z.string().nullable().optional(),

@@ -175,6 +175,10 @@ const STATS_INDEXES: Array<[name: string, sql: string]> = [
   // is built on the very string every lookup uses (era-album-key.ts).
   ['idx_tracks_album_kind', 'CREATE INDEX IF NOT EXISTS idx_tracks_album_kind ON tracks(album_kind)'],
   ['idx_tracks_era_album_key', `CREATE INDEX IF NOT EXISTS idx_tracks_era_album_key ON tracks(${ERA_ALBUM_KEY_SQL})`],
+  // A prepared artist episode's mirror read (queries.artistCatalogue, #2333):
+  // `artist_id = ? OR album_artist_id = ?` runs as two index lookups only with
+  // this beside idx_tracks_artist_id; without it, the OR scans the table.
+  ['idx_tracks_album_artist_id', 'CREATE INDEX IF NOT EXISTS idx_tracks_album_artist_id ON tracks(album_artist_id)'],
 ];
 
 export function ensureStatsIndexes(): void {
