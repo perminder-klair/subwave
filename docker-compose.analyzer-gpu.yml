@@ -9,18 +9,28 @@
 #
 # Requirements: NVIDIA driver + Container Toolkit only (cu128 wheels vendor the
 # CUDA runtime). The worker picks the device itself (ANALYZE_DEVICE=auto: cuda
-# when torch sees a GPU, else cpu with a warning — a misconfigured host
-# degrades, not fails). ANALYZE_DEVICE=cpu in .env forces CPU without dropping
-# the overlay.
+# when torch sees a GPU and a test op runs on it, else cpu with a warning — a
+# misconfigured host, or a card this build has no kernels for, degrades, not
+# fails). An explicit ANALYZE_DEVICE=cuda falls back the same way, and
+# ANALYZE_DEVICE=cpu in .env forces CPU without dropping the overlay.
 #
 # After ~5 idle minutes the worker drops its models out of VRAM so a
 # co-resident TTS/LLM gets the card back (ANALYZE_IDLE_UNLOAD_S tunes it;
 # 0 keeps them resident). A few hundred MB of CUDA context remain until the
 # container stops.
+#
+# The image is built once per torch wheel (#2280). Unset, ANALYZER_CUDA_TAG
+# follows SUBWAVE_VERSION like every other image: the cu128 build, for Turing
+# (RTX 20-series, GTX 16-series) and newer. An older card needs the cu124
+# build: set ANALYZER_CUDA_TAG in .env to its architecture tag (maxwell,
+# pascal or volta), or to <version>-cu124 to pin a release. The tag table is in
+# docs/internals/infrastructure.md (#aio-cuda-tags).
 services:
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:${SUBWAVE_VERSION:-latest}
-    # Local build with this overlay applied mirrors the published cuda image.
+    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:${ANALYZER_CUDA_TAG:-${SUBWAVE_VERSION:-latest}}
+    # Local build with this overlay applied mirrors the published cu128 image,
+    # whatever ANALYZER_CUDA_TAG says; for the cu124 one, build with
+    # --build-arg TORCH_CUDA=cu124.
     build:
       args:
         WITH_CLAP: 1

@@ -207,7 +207,10 @@ newgrp docker`}</CodeBlock>
             <strong>NVIDIA card?</strong> The heavy analysis stack has a CUDA
             flavour — layer{' '}
             <code className="bs-code-inline">docker-compose.analyzer-gpu.yml</code>{' '}
-            over the default compose file.
+            over the default compose file. On a card older than an RTX 20-series,
+            also set <code className="bs-code-inline">ANALYZER_CUDA_TAG=pascal</code>{' '}
+            (or your card&rsquo;s architecture) in{' '}
+            <code className="bs-code-inline">.env</code>.
           </li>
         </ul>
         <div className="bs-callout">

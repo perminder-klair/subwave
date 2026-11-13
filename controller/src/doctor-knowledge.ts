@@ -186,8 +186,13 @@ regular cadence — it's cheap insurance.
     (\`docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d\`;
     \`ANALYZER_HEAVY\` is irrelevant while it's applied), or on non-compose installs
     point the container at \`ghcr.io/perminder-klair/subwave-analyzer-cuda\` with GPU
-    passthrough (\`--gpus all\`). Needs the NVIDIA driver + Container Toolkit; without
-    a visible GPU the worker logs a warning and runs on CPU.
+    passthrough (\`--gpus all\`). Its default build needs Turing / RTX 20-series or
+    newer; an older card takes the tag named for its architecture (\`:pascal\` for a
+    GTX 10-series), which on compose is \`ANALYZER_CUDA_TAG=pascal\` in .env.
+    Needs the NVIDIA driver + Container Toolkit; without
+    a visible GPU, or on a card the image has no kernels for (a "CUDA self-test
+    failed" log line naming the card and its image tag), the worker logs a warning
+    and runs on CPU.
   - **All-in-one image** (\`analyzer local\` — the AIO bundles the analyzer
     in-process): switch the single container's image to
     \`ghcr.io/perminder-klair/subwave-aio-heavy\`, or on an NVIDIA host

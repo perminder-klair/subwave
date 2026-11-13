@@ -161,9 +161,18 @@ ANALYZER_HEAVY=1`}</CodeBlock>
           <code className="bs-code-inline">-heavy</code> does, on CUDA), so{' '}
           <code className="bs-code-inline">ANALYZER_HEAVY</code> is unnecessary while the
           overlay is applied. Requirements: the NVIDIA driver + Container Toolkit on the
-          host, nothing else (the CUDA runtime rides inside the image). If the GPU
-          isn&rsquo;t actually visible, the worker logs a warning and falls back to CPU;
-          analysis never fails over device selection.
+          host, nothing else (the CUDA runtime rides inside the image). The default
+          build covers Turing (RTX 20-series) and newer; for an older card, add the tag
+          named for its architecture to <code className="bs-code-inline">.env</code>,
+          such as <code className="bs-code-inline">ANALYZER_CUDA_TAG=pascal</code> for a
+          GTX 10-series, and the overlay pulls the build that still supports it. The
+          worker runs
+          one small test op on the card first: if the GPU isn&rsquo;t visible, or the
+          image has no kernels for it, it logs a warning naming the card and the image
+          tag that suits it, then falls back to CPU (even with{' '}
+          <code className="bs-code-inline">ANALYZE_DEVICE=cuda</code>); analysis never
+          fails over device selection. Demucs on CPU is slow, so treat that warning as
+          something to fix.
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">NON-COMPOSE INSTALLS</div>
@@ -171,7 +180,9 @@ ANALYZER_HEAVY=1`}</CodeBlock>
             Point the analyzer container&rsquo;s image at{' '}
             <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-analyzer-cuda</code>{' '}
             and pass the GPU through (<code className="bs-code-inline">--gpus all</code> or
-            your platform&rsquo;s equivalent).
+            your platform&rsquo;s equivalent). Its tags match the all-in-one&rsquo;s
+            below: <code className="bs-code-inline">:pascal</code> for a GTX 10-series,
+            and <code className="bs-code-inline">:latest</code> needs Turing or newer.
           </p>
         </div>
         <div className="bs-callout">

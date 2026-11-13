@@ -231,12 +231,27 @@ GPU overlay must not be enabled by default on CPU-only hosts.
 
 That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
 torch/torchaudio 2.7.1 cu128 wheels, including RTX 50-series Blackwell support)
-and hands it the GPU. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
+and hands it the GPU. Those wheels start at Turing (RTX 20-series, GTX
+16-series). For an older card, a GTX 10-series for example, add the tag named
+for its architecture to `.env`, which picks the cu124 build (torch 2.6.0):
+
+```dotenv
+ANALYZER_CUDA_TAG=pascal
+```
+
+[The tag table](internals/infrastructure.md#aio-cuda-tags) lists every card's
+tag. Leave it unset on a newer card: the overlay then follows
+`SUBWAVE_VERSION` like every other image. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
 Requirements: the NVIDIA driver +
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 — nothing else; the CUDA runtime rides inside the image. The worker picks the
-device itself (`ANALYZE_DEVICE=auto`): if the GPU isn't actually visible it logs
-a warning and falls back to CPU rather than failing the pass. `ANALYZER_HEAVY`
+device itself (`ANALYZE_DEVICE=auto`): it runs one small test op on the card
+first, and if the GPU isn't visible, or the image has no kernels for it (a
+GTX 10-series card on the cu128 build reports "no kernel image"), it logs a
+warning naming the card and the image tag that suits it, then falls back to
+CPU rather than failing the pass. An explicit `ANALYZE_DEVICE=cuda` falls back
+the same way. CPU still runs CLAP and Demucs, but Demucs on CPU is slow (tens of
+seconds a track), so treat that warning as something to fix. `ANALYZER_HEAVY`
 is irrelevant while the overlay is applied — the image is overridden outright.
 
 Running the **all-in-one** container instead? It has no `analyzer` service to

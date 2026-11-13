@@ -203,10 +203,12 @@ setting, so it does nothing on the all-in-one image, which runs the analyzer
 in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
 
 Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. The
-split-stack CUDA analyzer uses torch/torchaudio 2.7.1 with CUDA 12.8 wheels,
-which cover Turing (RTX 20-series) through RTX 50-series Blackwell GPUs; older
-cards have no split-stack CUDA build. For a one-off run, layer the
-`docker-compose.analyzer-gpu.yml` overlay:
+split-stack CUDA analyzer's default build uses torch/torchaudio 2.7.1 with
+CUDA 12.8 wheels, which cover Turing (RTX 20-series) through RTX 50-series
+Blackwell GPUs. An older card (a GTX 10-series, say) needs the cu124 build:
+add `ANALYZER_CUDA_TAG=pascal` to `.env`, or the tag named for your card's
+architecture ([every tag](docs/internals/infrastructure.md#aio-cuda-tags)).
+For a one-off run, layer the `docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d

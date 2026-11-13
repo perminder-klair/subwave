@@ -489,13 +489,119 @@ def capability_loss():
 
 # --- Torch device for the heavy models (CLAP / Demucs) ----------------------
 # ANALYZE_DEVICE ∈ auto (default) | cpu | cuda. `auto` picks cuda when torch
-# actually sees a GPU (the subwave-analyzer-cuda flavour on an NVIDIA host)
-# and cpu everywhere else — on the cpu-wheel images torch.cuda.is_available()
-# is always False, so existing installs behave exactly as before. A cuda
-# request without a visible GPU warns and falls back to cpu: device selection
-# must never fail an analysis pass. The torch import stays lazy — only the
-# heavy code paths call this, so the librosa-only venv never needs torch.
+# sees a GPU AND can run a kernel on it (the subwave-analyzer-cuda flavour on
+# an NVIDIA host), and cpu everywhere else — on the cpu-wheel images
+# torch.cuda.is_available() is always False, so existing installs behave
+# exactly as before. Device selection must never fail an analysis pass, so
+# both `auto` and an explicit `cuda` warn and fall back to cpu when the GPU is
+# not visible OR fails the self-test below.
+#
+# The self-test is the half `is_available()` cannot answer (#2280): it is True
+# for a card the wheel has no kernels for (a Pascal GTX 1060 under the cu128
+# build, which starts at sm_75), and loading CLAP or Demucs onto that card
+# succeeds too, because moving weights runs no kernel. The first real op then
+# fails with "no kernel image is available", once per track, inside handlers
+# that log and carry on — so a tag run reported ok while every embedding and
+# vocal pass failed. One tiny op, synchronised, finds it here instead, where
+# falling back costs nothing. The torch import stays lazy — only the heavy
+# code paths call this, so the librosa-only venv never needs torch.
 _DEVICE = None
+
+# Compute capability → the CUDA image's architecture tag for that card. The
+# tag table in docs/internals/infrastructure.md (#aio-cuda-tags) is the one
+# place that maps a tag to a build; this only names the card's row in it.
+_ARCH_TAGS = (
+    ((5, 0), "maxwell"),
+    ((6, 0), "pascal"),
+    ((7, 0), "volta"),
+    ((7, 5), "turing"),
+    ((8, 0), "ampere"),
+    ((8, 9), "ada"),
+    ((9, 0), "hopper"),
+    ((10, 0), "blackwell"),
+)
+
+
+def cuda_arch_tag(capability):
+    """The architecture tag for a (major, minor) compute capability, or None
+    for a card older than any build supports."""
+    tag = None
+    for floor, name in _ARCH_TAGS:
+        if tuple(capability) >= floor:
+            tag = name
+    return tag
+
+
+def cuda_arch_covered(capability, arch_list):
+    """Whether the wheel's arch list can run on this card: SASS for the same
+    major at or below its minor (sm_60 runs on sm_61), or PTX at or below its
+    capability, which the driver compiles. Advisory only — it picks the
+    wording of the fallback warning; the self-test is what decides."""
+    major, minor = capability
+    for arch in arch_list or ():
+        m = re.fullmatch(r"(sm|compute)_(\d+)(\d)[a-z]?", arch)
+        if not m:
+            continue
+        a_major, a_minor = int(m.group(2)), int(m.group(3))
+        if m.group(1) == "sm" and a_major == major and a_minor <= minor:
+            return True
+        if m.group(1) == "compute" and (a_major, a_minor) <= (major, minor):
+            return True
+    return False
+
+
+def cuda_self_test(torch):
+    """Run one tiny real op on the card. Returns None when it works, else the
+    exception. `is_available()` only says a device is visible; this says the
+    wheel has a kernel image the card can execute."""
+    try:
+        x = torch.ones(8, device="cuda")
+        x.mul_(2)
+        torch.cuda.synchronize()
+        if float(x.sum().item()) != 16.0:
+            raise RuntimeError("CUDA self-test returned a wrong result")
+        return None
+    except Exception as ex:  # noqa: BLE001 — any failure means "not usable"
+        return ex
+
+
+def _cuda_fallback_warning(torch, error):
+    """One warning naming the card, what the wheel was built for, and what to
+    do about it. Every probe is guarded: a broken CUDA stack must not turn the
+    fallback into the failure."""
+    try:
+        name = torch.cuda.get_device_name(0)
+    except Exception:  # noqa: BLE001
+        name = "unknown GPU"
+    try:
+        cap = tuple(torch.cuda.get_device_capability(0))
+    except Exception:  # noqa: BLE001
+        cap = None
+    try:
+        arch_list = list(torch.cuda.get_arch_list())
+    except Exception:  # noqa: BLE001
+        arch_list = []
+    sm = f"sm_{cap[0]}{cap[1]}" if cap else "sm_unknown"
+    detail = f"{name}, capability {sm}; this torch is built for {arch_list or 'an unknown arch list'}"
+    if cap and not cuda_arch_covered(cap, arch_list):
+        tag = cuda_arch_tag(cap)
+        advice = (
+            f"this image has no kernels for {sm}: use the CUDA image's :{tag} tag "
+            f"(ANALYZER_CUDA_TAG={tag} in .env on the split stack; "
+            "docs/internals/infrastructure.md#aio-cuda-tags)"
+            if tag
+            else f"no published CUDA build supports {sm}"
+        )
+    else:
+        advice = (
+            "the build covers this card, so check the NVIDIA driver supports "
+            "this image's CUDA runtime"
+        )
+    return (
+        f"CUDA self-test failed on {detail}: {error}. {advice}. Falling back to "
+        "cpu; CLAP and Demucs still run, but Demucs on cpu is slow (tens of "
+        "seconds a track). Set ANALYZE_DEVICE=cpu to skip this check."
+    )
 
 
 def resolve_device():
@@ -508,18 +614,23 @@ def resolve_device():
     if want not in ("auto", "cpu", "cuda"):
         log(f"ANALYZE_DEVICE={want} not recognised (auto|cpu|cuda); using auto")
         want = "auto"
+    failed = None
     if want != "cpu" and torch.cuda.is_available():
-        _DEVICE = "cuda"
-        log(f"analysis device: cuda ({torch.cuda.get_device_name(0)})")
-    else:
-        if want == "cuda":
-            log(
-                "ANALYZE_DEVICE=cuda but torch sees no CUDA device "
-                "(cpu-only wheels, no GPU exposed to the container, or missing "
-                "nvidia-container-toolkit); falling back to cpu"
-            )
-        _DEVICE = "cpu"
-        log("analysis device: cpu")
+        failed = cuda_self_test(torch)
+        if failed is None:
+            _DEVICE = "cuda"
+            log(f"analysis device: cuda ({torch.cuda.get_device_name(0)})")
+            return _DEVICE
+    if failed is not None:
+        log(_cuda_fallback_warning(torch, failed))
+    elif want == "cuda":
+        log(
+            "ANALYZE_DEVICE=cuda but torch sees no CUDA device "
+            "(cpu-only wheels, no GPU exposed to the container, or missing "
+            "nvidia-container-toolkit); falling back to cpu"
+        )
+    _DEVICE = "cpu"
+    log("analysis device: cpu")
     return _DEVICE
 
 

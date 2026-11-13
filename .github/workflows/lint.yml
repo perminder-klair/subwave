@@ -108,8 +108,9 @@ jobs:
             console.log(`zod ${c} on both sides`);
           '
 
-      # publish-images.yml builds subwave-aio-cuda once per torch wheel, and
-      # each of its jobs sees only its own matrix entry. The rules across
+      # publish-images.yml builds subwave-aio-cuda and subwave-analyzer-cuda
+      # once per torch wheel, and each of its jobs sees only its own matrix
+      # entry. The rules across
       # entries are checked here instead: each image has exactly one primary
       # build, and each build or architecture tag sits on exactly one entry.
       # Break either and two jobs race for one tag (:latest, :pascal) on every
