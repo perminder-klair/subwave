@@ -26,10 +26,15 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       Math.max(500, Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : OBSERVATORY_DEFAULT_MAX),
     );
 
-    // The payload is a pure function of library rows + max, so a token changing on
-    // any library write is a sound ETag; the projection-running flag rides in it
-    // too. Checked BEFORE stats(), which is itself a long scan.
-    const etag = `W/"obs-${db.changeToken()}-${max}-${mapProjection.projectionStatus().running ? 1 : 0}"`;
+    // The payload is library rows + max, plus the sound-map job's status. A token
+    // changing on any library write covers the rows; the status rides in
+    // separately, because a failed run writes nothing to library.db and its
+    // outcome (state/map-projection-last.json) would otherwise come back as a
+    // 304 of the pre-run body, erasing the error the poll just showed (#2314).
+    // Checked BEFORE stats(), which is itself a long scan.
+    const proj = mapProjection.projectionStatus();
+    const last = proj.lastExit ? `${proj.lastExit.at}-${proj.lastExit.ok ? 1 : 0}` : 'none';
+    const etag = `W/"obs-${db.changeToken()}-${max}-${proj.running ? 1 : 0}-${last}"`;
     res.set('ETag', etag);
     res.set('Cache-Control', 'private, no-cache');
     const inm = req.headers['if-none-match'];

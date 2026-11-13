@@ -203,6 +203,17 @@ export interface MapProjectionStatus {
   meta: { algo: string; space: string; count: number; setAt: string } | null;
   audioVectors: number;
   stale: boolean;
+  // Absent from controllers older than #2314.
+  lastExit?: {
+    ok: boolean;
+    code: number | null;
+    signal: string | null;
+    at: string;
+    vectors: number;
+    error: string | null;
+  } | null;
+  lastError?: string | null;
+  bootRetryHeld?: boolean;
 }
 
 export interface LibraryData {
