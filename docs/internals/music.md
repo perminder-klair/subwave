@@ -815,8 +815,22 @@ transactional.
 complete mirror or bounded album fetches, and applies show safety filters. The
 live album path accepts an exact track artist ID or the first explicit track or
 album artist ID, never a name match. The album artist matters for collaboration
-tracks whose combined track credit has its own Navidrome ID. Random preparation
-intersects mirrored candidates with the artist index so track-only combined
+tracks whose combined track credit has its own Navidrome ID. That path also
+merges in the mirror's rows for the artist ID, deduplicated by track ID (#2333):
+`getArtist` lists only the albums the artist is an album artist on, so a track
+credited first to them on someone else's record (a sideman date under the
+leader's name) is in the mirror alone, and without the merge it aired through
+the mirror path but never the albums path.
+
+The two paths still differ the other way: the mirror keys on the track artist
+only, so an album-artist-first track whose credit has its own ID (a group name)
+airs only through the albums path, and the completeness check compares mirror
+rows against the albums' total song counts, which include other artists' songs
+on shared records. A strict playlist that holds none of the catalogue is
+reported as that ("None of this artist's tracks are in the show's playlists"),
+judged on the whole catalogue, before the station-archive filter, exclusions
+and the blocklist, so it never blames the playlist for what they removed. Random
+preparation intersects mirrored candidates with the artist index so track-only combined
 credits cannot masquerade as an indexed artist with albums. Catalogue retries
 reuse the durable result; the admin retry can recheck a failed source without
 re-executing its tool.
