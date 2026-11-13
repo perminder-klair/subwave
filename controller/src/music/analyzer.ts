@@ -12,6 +12,7 @@ import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
+import { parseBeatGridProvenance, type BeatGridProvenance } from '../schemas/beat-grid.js';
 
 // A structural span over the track, in ms. Contiguous over the analysed
 // window; the first is the intro/leading section.
@@ -54,6 +55,7 @@ export interface AnalysisResult {
   // Beat and downbeat (bar) timestamps in ms.
   beats: number[] | null;
   bars: number[] | null;
+  gridProvenance?: BeatGridProvenance | null;
   // Per-region key; the scalar musicalKey stays the back-compat dominant key.
   keyRanges: KeyRange[] | null;
   // Integrated loudness (LUFS, BS.1770) + peak (dBFS); needs pyloudnorm. null
@@ -87,6 +89,7 @@ export interface OutroInfo {
   bpm: number | null;          // tail tempo (outros drift/ritard vs the lead)
   beats: number[] | null;
   bars: number[] | null;
+  gridProvenance?: BeatGridProvenance | null;
   // Tail vocal spans. [] = analysed instrumental tail; the key must be OMITTED
   // (not null) when detection didn't run — outro_json is the JSON.stringify of
   // this object and the vocal backfill probes the raw text for '"vocalRanges"'.
@@ -178,6 +181,7 @@ function parseOutro(v: unknown): OutroInfo | null {
   // Omit the key when not computed, so outro_json never carries a bare
   // "vocalRanges" for the backfill probe.
   const vocalRanges = parseVocalRanges(o?.vocalRanges);
+  const gridProvenance = parseBeatGridProvenance(o?.gridProvenance);
   return {
     startMs: Math.round(startMs),
     ending,
@@ -186,6 +190,7 @@ function parseOutro(v: unknown): OutroInfo | null {
     beats: parseMsList(o?.beats),
     bars: parseMsList(o?.bars),
     ...(vocalRanges !== null ? { vocalRanges } : {}),
+    ...(gridProvenance ? { gridProvenance } : {}),
   };
 }
 
@@ -249,6 +254,7 @@ interface WorkerMessage {
   pace_curve?: unknown;
   beats?: unknown;
   bars?: unknown;
+  grid_provenance?: unknown;
   key_ranges?: unknown;
   audio_embedding?: unknown;
   outro?: unknown;
@@ -409,6 +415,7 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           paceCurve: parsePaceCurve(msg.pace_curve),
           beats: parseMsList(msg.beats),
           bars: parseMsList(msg.bars),
+          gridProvenance: parseBeatGridProvenance(msg.grid_provenance),
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
           outro: parseOutro(msg.outro),
@@ -589,26 +596,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
   if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
   if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
-  return {
-    bpm: resBody.bpm ?? null,
-    musicalKey: resBody.key ?? null,
-    introMs: resBody.intro_ms ?? null,
-    confidence: resBody.confidence ?? null,
-    loudnessLufs: parseFinite(resBody.loudness_lufs),
-    peakDb: parseFinite(resBody.peak_db),
-    sections: parseSections(resBody.sections),
-    vocalRanges: parseVocalRanges(resBody.vocal_ranges),
-    paceCurve: parsePaceCurve(resBody.pace_curve),
-    beats: parseMsList(resBody.beats),
-    bars: parseMsList(resBody.bars),
-    keyRanges: parseKeyRanges(resBody.key_ranges),
-    audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
-    outro: parseOutro(resBody.outro),
-    leadSilenceMs: parseSilenceMs(resBody.lead_silence_ms),
-    tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
-    tailStartMs: parseSilenceMs(resBody.tail_start_ms),
-    stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
-  };
+  return toAnalysisResult(resBody);
 }
 
 function analyzeViaSidecar(url: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {

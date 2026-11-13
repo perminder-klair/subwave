@@ -579,7 +579,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       if (f === 'head') {
         w.head = {
           bpm: r.bpm, musicalKey: r.musicalKey, introMs: r.introMs, confidence: r.confidence,
-          sections: r.sections, pace: r.paceCurve, beats: r.beats, bars: r.bars, keyRanges: r.keyRanges,
+          sections: r.sections, pace: r.paceCurve, beats: r.beats, bars: r.bars, gridProvenance: r.gridProvenance, keyRanges: r.keyRanges,
           leadSilenceMs: r.leadSilenceMs,
         };
       } else if (f === 'loudness') {
@@ -703,6 +703,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           pace: a.paceCurve,
           beats: a.beats,
           bars: a.bars,
+          gridProvenance: a.gridProvenance,
           keyRanges: a.keyRanges,
           vocalRanges,
           outro,

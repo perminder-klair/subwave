@@ -27,8 +27,10 @@ import io
 import math
 import os
 import sys
+import tempfile
 import types
 from contextlib import redirect_stderr
+from unittest.mock import patch
 
 try:
     import numpy as np
@@ -40,6 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 os.environ.pop("ANALYZE_DOWNBEATS", None)
 import analyze_worker as aw  # noqa: E402
+import beat_this_grid as grid  # noqa: E402
 
 failures = 0
 
@@ -240,13 +243,13 @@ def t_tracker_grid_with_offset():
 def t_chunk_starts():
     # A 20 s tail (1001 frames) is one short chunk; a 30 s window (1501) is two
     # full chunks with the last pulled back; a 40 s head (2001) likewise.
-    assert aw.bt_chunk_starts(1001) == [-6]
-    assert aw.bt_chunk_starts(1488) == [-6]
-    assert aw.bt_chunk_starts(1501) == [-6, 7]
-    assert aw.bt_chunk_starts(2001) == [-6, 507]
-    assert aw.bt_chunk_starts(3000) == [-6, 1482, 1506]
-    assert len(aw.bt_chunk(np.zeros((1001, 128), np.float32), -6)) == 1013
-    assert len(aw.bt_chunk(np.zeros((1501, 128), np.float32), 7)) == 1500
+    assert grid.bt_chunk_starts(1001) == [-6]
+    assert grid.bt_chunk_starts(1488) == [-6]
+    assert grid.bt_chunk_starts(1501) == [-6, 7]
+    assert grid.bt_chunk_starts(2001) == [-6, 507]
+    assert grid.bt_chunk_starts(3000) == [-6, 1482, 1506]
+    assert len(grid.bt_chunk(np.zeros((1001, 128), np.float32), -6)) == 1013
+    assert len(grid.bt_chunk(np.zeros((1501, 128), np.float32), 7)) == 1500
 
 
 def t_frame_logits_cover_every_frame_once():
@@ -255,7 +258,7 @@ def t_frame_logits_cover_every_frame_once():
     rng = np.random.default_rng(7)
     for n in (40, 1001, 1501, 2001, 4321):
         spect = rng.standard_normal((n, 128)).astype(np.float32)
-        beat, down = aw.bt_frame_logits(spect, lambda c: (c[:, 0].copy(), c[:, 1].copy()))
+        beat, down = grid.bt_frame_logits(spect, lambda c: (c[:, 0].copy(), c[:, 1].copy()))
         assert np.array_equal(beat, spect[:, 0]) and np.array_equal(down, spect[:, 1]), n
 
 
@@ -265,11 +268,11 @@ def t_peaks_and_snapping():
     x[30] = 1.0
     x[33] = 0.5             # within 3 frames of a bigger peak: not a peak
     x[50] = -0.1            # a local max below zero: not a beat
-    assert list(aw.bt_peak_frames(x)) == [10.5, 12.0, 30.0], list(aw.bt_peak_frames(x))
+    assert list(grid.bt_peak_frames(x)) == [10.5, 12.0, 30.0], list(grid.bt_peak_frames(x))
     d = np.full(60, -5.0, np.float32)
     d[29] = 3.0             # snaps to the beat at frame 30
     d[13] = 3.0             # snaps to frame 12
-    beats, downs = aw.bt_beats_downbeats(x, d)
+    beats, downs = grid.bt_beats_downbeats(x, d)
     assert list(downs) == [12.0 / 50, 30.0 / 50], list(downs)
     assert set(downs) <= set(beats)
 
@@ -347,6 +350,139 @@ def t_real_model_finds_band_downbeats():
     with_state(run, "beat-this", model=model)
 
 
+
+def t_tail_grid_survives_librosa_failure():
+    class TailLibrosa(_FakeLibrosa):
+        to_mono = staticmethod(lambda y: y)
+        feature = types.SimpleNamespace(rms=lambda **_kw: np.array([[0.5] * 40]))
+        beat = types.SimpleNamespace(beat_track=lambda **_kw: (_ for _ in ()).throw(ZeroDivisionError("tempo failed")))
+
+    class Fixed:
+        model_sha256 = grid.SMALL0_SHA256
+
+        def track(self, *_a):
+            return np.array([0.12, 0.62, 1.12, 1.62]), np.array([0.62])
+
+    def run(logs):
+        with patch.object(aw, "measure_loudness", return_value=(None, None)):
+            out = aw.facet_tail(np.ones(20000), 1000, 180.0, 200.0, TailLibrosa)
+        assert out["beats"] == [180120, 180620, 181120, 181620], out
+        assert out["bars"] == [180620], out
+        assert "bpm" not in out, out
+        provenance = out["gridProvenance"]
+        assert provenance["windowStartMs"] == 180000
+        assert provenance["windowEndMs"] == 200000
+        assert provenance["evidence"]["librosaBeatSupport"] is None
+        assert any("tempo tracking failed" in m for m in logs)
+
+    with_state(run, "beat-this", tracker=Fixed())
+
+    def legacy(_logs):
+        with patch.object(aw, "measure_loudness", return_value=(None, None)):
+            out = aw.facet_tail(np.ones(20000), 1000, 180.0, 200.0, TailLibrosa)
+        assert "beats" not in out and "bars" not in out and "gridProvenance" not in out, out
+        assert out["ending"] == "cold", out
+
+    with_state(legacy, None)
+
+
+def t_evidence_never_vetoes_and_fallback_is_unlabelled():
+    class Fixed:
+        model_sha256 = "a" * 64
+
+        def track(self, *_a):
+            return np.array([0.25, 0.75, 1.25, 1.75]), np.array([0.75])
+
+    def run(_logs):
+        beats, bars, provenance = aw.measure_bar_grid(np.ones(5000), 1000, _FakeLibrosa, FRAMES)
+        assert beats == [250, 750, 1250, 1750] and bars == [750]
+        assert provenance["model"] == "custom"
+        assert provenance["evidence"]["librosaBeatSupport"] == 0
+        assert provenance["evidence"]["intervalSupport"] == 1
+        assert provenance["evidence"]["medianBpm"] == 120
+        # An unavailable comparison still cannot replace the learned grid.
+        with patch.object(_FakeLibrosa, "frames_to_time", side_effect=RuntimeError("reference failed")):
+            beats2, bars2, provenance2 = aw.measure_bar_grid(np.ones(5000), 1000, _FakeLibrosa, FRAMES)
+        assert (beats2, bars2) == (beats, bars)
+        assert provenance2["evidence"]["librosaBeatSupport"] is None
+
+    with_state(run, "beat-this", tracker=Fixed())
+
+    def unlabelled(_logs):
+        assert_unlabelled(aw.measure_bar_grid(None, 22050, _FakeLibrosa, FRAMES))
+    with_state(unlabelled, None)
+    with_state(unlabelled, "beat-this", failed=True)
+
+
+def assert_unlabelled(result):
+    assert result[:2] == todays_grid(), result
+    assert result[2] is None, result
+
+
+def t_invalid_output_and_missing_evidence():
+    for beats, bars in (([0.1, float("nan")], []), ([0.2, 0.1], []),
+                        ([-0.1], []), ([6.0], []), ([0.1], [0.2]), ([], [0.2])):
+        try:
+            grid.validate_grid(np.array(beats), np.array(bars), 5.0)
+        except ValueError:
+            continue
+        raise AssertionError((beats, bars))
+    grid.validate_grid(np.array([]), np.array([]), 5.0)
+    assert grid.grid_evidence([], []) == {
+        "medianBpm": None, "intervalSupport": None, "librosaBeatSupport": None}
+
+
+def t_facet_provenance_binds_source_once():
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "input.audio")
+        with open(path, "wb") as audio:
+            audio.write(b"staged source")
+        for complete in (True, False, None):
+            source = aw.FileSource(path, complete=complete)
+            source.duration_s = 200
+            y = np.ones(5000)
+            source.load = lambda *_a, **_kw: (y, 1000)
+            source.tail = lambda *_a: (y, 1000, 195)
+            with patch.multiple(aw,
+                    facet_head=lambda *_a: {"grid_provenance": {"backend": "beat-this-onnx"}},
+                    facet_tail=lambda *_a: {"startMs": 195000, "ending": "cold", "gridProvenance": {"backend": "beat-this-onnx"}}), \
+                    patch.object(aw, "source_fingerprint", wraps=aw.source_fingerprint) as fingerprint:
+                out = aw.analyze_facets(types.SimpleNamespace(to_mono=lambda y: y), source, ["head", "tail"])
+            assert fingerprint.call_count == 1
+            head = out["head"]["data"]["grid_provenance"]
+            tail = out["tail"]["data"]["outro"]["gridProvenance"]
+            assert head["source"] == tail["source"] == aw.source_fingerprint(path, complete)
+            assert head["source"]["complete"] is complete
+
+
+def t_source_fingerprint_survives_owned_cleanup():
+    y = np.ones(5000)
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "source.audio")
+        with open(path, "wb") as audio:
+            audio.write(b"original encoded bytes")
+        expected = aw.source_fingerprint(path, True)
+        head = {"grid_provenance": {"backend": "beat-this-onnx"}}
+        tail = {"startMs": 4000, "ending": "cold", "gridProvenance": {"backend": "beat-this-onnx"}}
+        librosa = types.SimpleNamespace(get_duration=lambda **_kw: 10, to_mono=lambda data: data)
+
+        def run(_logs):
+            with patch.multiple(aw,
+                    fetch_audio=lambda _url: (path, True),
+                    ensure_fast_decode=lambda src, **_kw: (src, None),
+                    get_embedder=lambda **_kw: None, get_vocal_detector=lambda **_kw: None,
+                    load_audio=lambda *_a, **_kw: (y, 1000),
+                    analyze_outro=lambda *_a: tail,
+                    facet_head=lambda *_a: head, facet_loudness=lambda *_a: {}):
+                result = aw.analyze(librosa, url="https://example.invalid/audio", embed=False, vocal=False)
+            assert not os.path.exists(path), "owned input must be cleaned up"
+            assert result["grid_provenance"]["source"] == expected
+            assert result["outro"]["gridProvenance"]["source"] == expected
+            assert expected["bytes"] == len(b"original encoded bytes")
+            assert aw.source_fingerprint(None, True) is None
+
+        with_state(run, "beat-this", tracker=object())
+
 test("flag values: unset/empty/off are off, beat-this is on, silently", t_flag_values)
 test("an unknown ANALYZE_DOWNBEATS value is off and says so", t_unknown_value_is_off_and_says_so)
 test("flag off: today's grid exactly, no tracker constructed", t_off_is_todays_grid_and_loads_nothing)
@@ -358,6 +494,11 @@ test("tracker on: beats and bars from it, bars ⊂ beats, offset applied", t_tra
 test("chunk starts and padding follow upstream's split_piece", t_chunk_starts)
 test("aggregation writes every frame from the earliest chunk", t_frame_logits_cover_every_frame_once)
 test("peak picking, plateau dedup and downbeat snapping", t_peaks_and_snapping)
+test("tail learned grid survives librosa tempo failure; legacy tail still degrades", t_tail_grid_survives_librosa_failure)
+test("hybrid evidence never vetoes; legacy/fallback grids have no learned label", t_evidence_never_vetoes_and_fallback_is_unlabelled)
+test("invalid timestamp output is rejected; absent evidence stays unknown", t_invalid_output_and_missing_evidence)
+test("facet windows share one source fingerprint and preserve unknown/capped identity", t_facet_provenance_binds_source_once)
+test("source fingerprint is captured before an owned download is deleted", t_source_fingerprint_survives_owned_cleanup)
 test("real model: bars land on a synthetic band's downbeats", t_real_model_finds_band_downbeats)
 
 if failures:
