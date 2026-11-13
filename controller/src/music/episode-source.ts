@@ -38,17 +38,20 @@ export async function resolveArtistEpisodeSource(artistId: string, show: Episode
   if (!catalogue || Date.now() - catalogue.at > 60_000) {
     const artist = preparationArtistSchema.parse(await subsonic.getArtist(artistId));
     if (artist.id !== artistId) throw new Error('The preparation artist is not in this library');
-    // Like with like: the rows the mirror holds on the artist's albums against
-    // the songs Navidrome counts there. A row not walked since album_artist_id
-    // arrived cannot be judged, so any one sends the catalogue to the albums.
     const mirror = db.artistCatalogue(artistId, artist.album.map(album => album.id));
     const mirrored = mirror.tracks;
     const expected = artist.album.reduce((n, album) => n + (album.songCount ?? 0), 0);
+    // Walked rows: like with like, the rows the mirror holds on the artist's
+    // albums against the songs Navidrome counts there. Any row it needs without
+    // album_artist_id (not walked since the column arrived) cannot be judged,
+    // so the rule before it stands, the artist's own rows against that count,
+    // and an upgraded station never does worse than before its next walk.
+    const covers = mirror.unwalked === 0 ? mirror.onAlbums >= expected : mirrored.length >= expected;
     let tracks: PreparationTrack[];
-    if (expected > 0 && artist.album.every(a => a.songCount != null) && mirror.unwalked === 0 && mirror.onAlbums >= expected) {
+    if (expected > 0 && artist.album.every(a => a.songCount != null) && covers) {
       tracks = mirrored;
     } else {
-      if (artist.album.length > 128) throw new Error('Artist catalogue is too large to fetch before playback; sync the library first');
+      if (artist.album.length > 128) throw new Error('Artist catalogue is too large to fetch before playback; run Library → Reconcile so the library mirror can answer it');
       const albums = await mapPool(artist.album, 4, async album => {
         const songs = z.array(preparationTrackSchema).parse(await subsonic.getAlbum(album.id));
         return songs.filter(song => creditsArtist(songCredit(song, album), artistId));

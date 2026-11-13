@@ -814,8 +814,10 @@ function vecCount(d: Database.Database): number {
 //     decision did not write this track's year (tracks.setDecisionOriginalYear).
 //   - `album_artist_id`: the first album artist's Subsonic id, written by the
 //     walks beside artist_id (#2333, music/artist-credit.ts). It lets the
-//     mirror answer an artist episode's group-credited records, and NULL tells
-//     episode-source the row has not been walked since, so it fetches albums.
+//     mirror answer an artist episode's group-credited records. NULL = not
+//     walked since, or a server that reported no album artist id; either way
+//     episode-source cannot judge the row's credit and keeps the pre-column
+//     rule. Its index is a read accelerator (stats.ts STATS_INDEXES).
 //   - `stems_tail_misses`: stem passes in a row whose proven tail did not land
 //     (#2238, music/stem-stamp-policy.ts). Such a pass leaves stems_at unset so
 //     the backfill tries again, up to a bound. NULL = none; reset with stems_at.
@@ -849,12 +851,7 @@ function ensureNamedColumns(d: Database.Database): void {
   ensureEraOverrideTable(d);
   if (missing().length === 0) return;
   d.transaction(() => {
-    for (const [name, type] of missing()) {
-      runDdl(d, `ALTER TABLE tracks ADD COLUMN ${name} ${type}`);
-      // Read with artist_id in one OR (queries.artistCatalogue), so it needs
-      // its own index for SQLite to answer that from two index lookups.
-      if (name === 'album_artist_id') runDdl(d, 'CREATE INDEX IF NOT EXISTS idx_tracks_album_artist_id ON tracks(album_artist_id)');
-    }
+    for (const [name, type] of missing()) runDdl(d, `ALTER TABLE tracks ADD COLUMN ${name} ${type}`);
   }).immediate();
 }
 

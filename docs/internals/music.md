@@ -829,13 +829,22 @@ tracks whose combined track credit has its own Navidrome ID.
   agrees with itself). The mirror has no separate first-artist ID: Navidrome's
   `artistId` is the first track artist wherever it lists `artists`, and older
   servers list none. `db.artistCatalogue` reads the rows credited to the artist
-  (`artist_id` or `album_artist_id`) through the same rule.
-- The mirror path runs only when it covers the artist's albums, counted like
-  with like: the mirror's rows on `getArtist`'s albums (every artist's) against
-  the songs Navidrome counts there. A row on those albums or credited to the
-  artist with no `album_artist_id` (not walked since the column arrived) sends
-  the catalogue to the merged albums path, which never needs the column, until
-  the next library walk fills it.
+  (`artist_id` or `album_artist_id`) through the same rule, from two indexes:
+  `idx_tracks_album_artist_id` is one of `ensureStatsIndexes`' read
+  accelerators, so a failed build never fails `open()` and the next open
+  repairs a missing one.
+- Once walked, the mirror path runs only when it covers the artist's albums,
+  counted like with like: the mirror's rows on `getArtist`'s albums (every
+  artist's) against the songs Navidrome counts there.
+- Until then, the rule from before the column stands. Any row on those albums
+  or credited to the artist with no `album_artist_id` (not walked since the
+  column arrived, or a server that gave no album artist id) means the mirror's
+  coverage cannot be judged, so it is trusted when the artist's own rows reach
+  that count, exactly as before. An upgraded station therefore never does worse
+  than before its next Reconcile or tag run: a populated catalogue is not
+  re-walked on its own (`analyze-library.ts` skips the walk, and scheduled
+  tagging is off by default), and the albums path stops at 128 albums, so
+  requiring the column would have cost large artists their episode.
 - The albums path also merges in the mirror's rows, deduplicated by track ID:
   `getArtist` lists only the albums the artist is an album artist on, so a first
   credit on someone else's record is in the mirror alone.

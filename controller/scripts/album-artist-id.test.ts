@@ -55,11 +55,37 @@ after(async () => {
 
 const stored = (id: string) => (db.getDb()!.prepare('SELECT album_artist_id AS id FROM tracks WHERE id = ?').get(id) as { id: string | null } | undefined)?.id;
 
-test('the column and its index exist after open', () => {
+const hasIndex = () => !!db.getDb()!.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_tracks_album_artist_id'`).get();
+
+test('the column and its index exist after open, and the mirror read uses both id indexes', () => {
   const cols = (db.getDb()!.pragma('table_info(tracks)') as Array<{ name: string; type: string }>).filter(c => c.name === 'album_artist_id');
   assert.deepEqual(cols.map(c => c.type), ['TEXT']);
-  const index = db.getDb()!.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_tracks_album_artist_id'`).get();
-  assert.ok(index, 'the OR read in artistCatalogue needs its own index');
+  assert.ok(hasIndex());
+  const plan = (db.getDb()!.prepare('EXPLAIN QUERY PLAN SELECT id FROM tracks WHERE artist_id = ? OR album_artist_id = ?').all('a', 'a') as Array<{ detail: string }>)
+    .map(r => r.detail).join(' | ');
+  assert.match(plan, /idx_tracks_artist_id/);
+  assert.match(plan, /idx_tracks_album_artist_id/);
+});
+
+test('the index is a read accelerator: a missing one is rebuilt by the next open, a locked build never fails it', (t) => {
+  db.getDb()!.exec('DROP INDEX idx_tracks_album_artist_id');
+  const warn = t.mock.method(console, 'warn', () => {});
+  t.mock.method(console, 'log', () => {});
+  const rival = new Database(join(dir, 'library.db'));
+  db.getDb()!.pragma('busy_timeout = 50');
+  try {
+    rival.exec('BEGIN IMMEDIATE');
+    assert.doesNotThrow(() => db.ensureStatsIndexes());
+    assert.equal(hasIndex(), false);
+    assert.equal(warn.mock.callCount(), 1);
+  } finally {
+    if (rival.inTransaction) rival.exec('ROLLBACK');
+    rival.close();
+    db.getDb()!.pragma('busy_timeout = 5000');
+  }
+  // What open() runs last (lifecycle.ts): the repair.
+  db.ensureStatsIndexes();
+  assert.equal(hasIndex(), true);
 });
 
 test('the id is the first album artist, else the album record\'s, and the credit rule reads it', () => {
@@ -70,6 +96,8 @@ test('the id is the first album artist, else the album record\'s, and the credit
   // else's, and a second album artist (not the artist's).
   assert.equal(creditsArtist(songCredit({ artistId: 'trio', albumArtists: [{ id: 'bill' }] }), 'bill'), true);
   assert.equal(creditsArtist(songCredit({ artistId: 'bill', albumArtists: [{ id: 'konitz' }] }), 'bill'), true);
+  // Albums path only: the mirror stores no first-track-artist id, and stock
+  // Navidrome 0.55+ never sends a combined artistId beside an artists list.
   assert.equal(creditsArtist(songCredit({ artistId: 'combined', artists: [{ id: 'bill' }, { id: 'tony' }] }), 'bill'), true);
   assert.equal(creditsArtist(songCredit({ artistId: 'tony', albumArtists: [{ id: 'tony' }, { id: 'bill' }] }), 'bill'), false);
 });
