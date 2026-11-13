@@ -4201,6 +4201,58 @@ html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"],
     background: var(--accent);
     transition: width 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
+/* counts line (LibraryCounts.tsx): six equal tiles, one theme colour each */
+.admin-root .lib-counts {
+    display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+    margin-top: 12px; border: 1px solid var(--line);
+}
+@media (max-width: 1100px) { .admin-root .lib-counts { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .admin-root .lib-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.admin-root .lib-count {
+    --c: var(--ink);
+    display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0;
+    padding: 10px 12px; border-left: 3px solid var(--c); box-shadow: inset 1px 0 0 var(--line);
+    text-align: left; cursor: help; background: transparent; color: var(--ink);
+}
+.admin-root .lib-count.lib-count-link { cursor: pointer; }
+.admin-root a.lib-count { text-decoration: none; }
+.admin-root .lib-count.lib-count-link:hover, .admin-root .lib-count:focus-visible { background: color-mix(in oklab, var(--c) 8%, transparent); outline: none; }
+.admin-root .lib-count--library { --c: var(--ink); }
+.admin-root .lib-count--air { --c: var(--accent); }
+.admin-root .lib-count--never { --c: var(--accent-2); }
+.admin-root .lib-count--aired { --c: color-mix(in oklab, var(--accent) 55%, var(--ink)); }
+.admin-root .lib-count--needs { --c: var(--danger); }
+.admin-root .lib-count--needs-clear { --c: var(--muted); }
+.admin-root .lib-count--server { --c: var(--ink-faint); }
+.admin-root .lib-count-k {
+    display: flex; align-items: center; gap: 6px; max-width: 100%;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c);
+}
+.admin-root .lib-count-k svg { flex: none; }
+.admin-root .lib-count-k span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-root .lib-count-n { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; line-height: 1; color: var(--c); }
+.admin-root .lib-count-s { font-size: 11px; line-height: 1.4; color: var(--muted); }
+.admin-root .lib-count-s b { color: var(--ink); }
+/* portalled out of .admin-root by Radix, so not scoped under it */
+.lib-count-tip {
+    max-width: 300px; border-radius: 0; border: 1px solid var(--ink); background: var(--surface);
+    color: var(--ink); box-shadow: 2px 2px 0 var(--ink); font-size: 11.5px; line-height: 1.5; padding: 8px 10px;
+}
+.admin-root .lib-counts-bar {
+    display: flex; height: 8px; margin-top: 12px; background: var(--field); border: 1px solid var(--separator-strong); overflow: hidden;
+}
+.admin-root .lib-counts-bar > span { display: block; height: 100%; transition: width 0.5s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.admin-root .lib-counts-bar .seg-never { min-width: 3px; }
+.admin-root .seg-aired { background: var(--accent); }
+.admin-root .seg-rest { background: color-mix(in oklab, var(--accent) 35%, transparent); }
+.admin-root .seg-never { background: var(--accent-2); }
+.admin-root .lib-counts-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.admin-root .lib-counts-legend b { color: var(--ink); }
+.admin-root .lib-counts-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; }
+.admin-root .lib-counts-check {
+    margin-top: 10px; padding: 6px 10px; font-size: 11.5px; color: var(--ink);
+    border-left: 3px solid var(--accent); background: color-mix(in oklab, var(--accent) 7%, transparent);
+}
 /* indeterminate run progress (e.g. library walk — no total known yet) */
 .admin-root .lib-bar.indet > span {
     width: 30% !important;

@@ -19,6 +19,7 @@ import type {
   TagSteps,
 } from '../LibraryTaggingPanel';
 import type { SettingsResponse } from './types';
+import { musicServerLink } from './music-server-link';
 
 // The tagging/analysis half of the library page: the slow /settings poll and
 // every operator action the Tagging panel fires. The tagger snapshot's fast
@@ -78,6 +79,7 @@ export function useTaggerControls() {
   const failures = failuresQuery.data?.failures ?? null;
 
   const libStats: LibraryStatsLite | null = settings?.libraryStats ?? null;
+  const musicServerUrl = musicServerLink(settings?.navidrome?.url);
   const audio = settings?.values?.audio;
   // null until the first poll lands — the toggles render disabled until then.
   const audioEnabled = audio ? !!audio.embeddings : null;
@@ -298,7 +300,7 @@ export function useTaggerControls() {
     coverage, remaining, tagger, libStats, failures,
     batch, setBatch, busy, logOpen, setLogOpen,
     audioEnabled, vocalEnabled, quietEnabled, quietMins, budgetMode,
-    llmLabel, embedLabel,
+    llmLabel, embedLabel, musicServerUrl,
     startTagger: (steps?: TagSteps) => { startM.mutate(steps); },
     stopTagger: () => { stopM.mutate(); },
     rescanTagger: (opts: RescanOpts) => { rescanM.mutate(opts); },

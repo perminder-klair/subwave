@@ -11,6 +11,7 @@ import * as analyzer from './analyzer.js';
 import { vocalActivityWanted, audioEmbeddingWanted } from './analyze.js';
 import { activeModelLabel, EMBED_TEXT_VERSION } from './embeddings.js';
 import { dimensionStatus } from './coverage-status.js';
+import { getOverview, refreshOverview } from './library-overview.js';
 
 // analyzer.isAvailable() can do a 5s sidecar probe and caches no negative
 // result, so memoise it rather than re-probe on every poll.
@@ -158,7 +159,10 @@ async function doScan() {
   cache.scanError = null;
   try {
     let count = 0;
-    for await (const _song of subsonic.iterateAllSongs()) count++;
+    // Blocked songs included: this is what the server holds, compared with
+    // the library mirror, which keeps blocked rows. Only the station archive
+    // is left out, as it is never part of the library.
+    for await (const _song of subsonic.iterateAllSongs({ includeBlocked: true })) count++;
     cache.total = count;
     cache.scannedAt = new Date().toISOString();
     persistCount();
@@ -171,6 +175,8 @@ async function doScan() {
 // Non-blocking; callers poll get() until `scanning` flips false. A failure lands
 // on `scanError` and leaves the previous total and scannedAt in place.
 export function refresh() {
+  // The operator's Recount also recounts the counts line, in the background.
+  void refreshOverview();
   if (!inflight) inflight = doScan().catch(err => {
     cache.scanError = err?.message || String(err);
     console.error('[library-coverage] scan failed:', cache.scanError);
@@ -275,5 +281,8 @@ export async function get() {
     labelOnlyVectors,
     audioStatus,
     vocalStatus,
+    // The Library page's counts line (library-overview.ts); null when the
+    // library cannot be read, and the line then hides.
+    overview: getOverview(`${tagged}.${analysed}`),
   };
 }

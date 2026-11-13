@@ -294,6 +294,26 @@ test('a later successful count clears the error', async () => {
 
 // --- the admin gate still applies -----------------------------------------
 
+test('the count includes never-play tracks: it is what the server holds', async () => {
+  const blocklist = await import('../src/music/blocklist.js');
+  await blocklist.load();
+  await blocklist.add({ type: 'track', id: 'al0-s0' });
+  await blocklist.add({ type: 'album', id: 'al1' });
+  try {
+    await req('/library/coverage/refresh', { method: 'POST' });
+    const done = await waitForScan();
+    assert.equal(done.total, TOTAL_SONGS, 'blocked songs are counted, not dropped');
+    // The walks that tag and analyse still never see them.
+    const subsonicMod = await import('../src/music/subsonic.js');
+    let walked = 0;
+    for await (const _s of subsonicMod.iterateAllSongs()) walked++;
+    assert.equal(walked, TOTAL_SONGS - 1 - SONGS_PER_ALBUM);
+  } finally {
+    await blocklist.remove('track', 'al0-s0');
+    await blocklist.remove('album', 'al1');
+  }
+});
+
 test('the count command is behind requireAdmin', async () => {
   const res = await fetch(`${api}/library/coverage/refresh`, { method: 'POST' });
   assert.equal(res.status, 401, 'counting is an expensive command — it must stay gated');
