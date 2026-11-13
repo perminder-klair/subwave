@@ -12,11 +12,18 @@
 // Facets (what each one writes on `tracks`):
 //   head      bpm, key, key ranges, intro, lead silence, sections, pace, grid
 //   loudness  loudness_lufs, peak_db (+ sample_peak_db, loudness_range_lu at v2)
-//   tail      outro_json, tail_silence_ms, tail_start_ms
+//   tail      outro_json, tail_silence_ms, tail_start_ms (+ tail_version at v2)
 //   clap      the CLAP audio vector (track_audio_vectors)
 //   vocal     vocal_ranges_json (+ the outro's tail vocal ranges)
 //   stems     stems_at (the stem-cache attempt stamp)
 //   edges     edge_lead_ms, edge_tail_ms, decoded_duration_ms
+//   year      original_year from MusicBrainz, for era-suspect tracks only. Not
+//             an analyzer facet: no audio, one MusicBrainz lookup per track
+//             (music/original-year-policy.ts). A trusted year needs no lookup
+//             and reads 'ok / not-needed'; a miss is 'unmeasurable / not-found';
+//             a failed lookup is 'failed' with its own attempt count, which is
+//             a stored fact (nothing on `tracks` records it) and so survives
+//             every re-derive, like an explicit unmeasurable answer.
 //
 // Status: 'ok' = measured; 'unmeasurable' = attempted, and this version can't
 // measure it for this file (terminal until the version is bumped); 'failed' =
@@ -34,29 +41,126 @@
 import type Database from 'better-sqlite3';
 import { ANALYSIS_VERSION, requireDb } from './handle.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
+import { YEAR_MAX_ATTEMPTS, yearRetryDue } from '../original-year-policy.js';
+import { eraSuspectSql } from '../era-suspect.js';
 
-export const FACETS = ['head', 'loudness', 'tail', 'clap', 'vocal', 'stems', 'edges'] as const;
+export const FACETS = ['head', 'loudness', 'tail', 'clap', 'vocal', 'stems', 'edges', 'year'] as const;
 export type Facet = (typeof FACETS)[number];
+// The facets the audio analyzer produces. An analysis failure (analyze_fail_count,
+// analyze_error) counts against these only: it says nothing about a MusicBrainz
+// lookup, and a lookup failure says nothing about the audio.
+export type AnalysisFacet = Exclude<Facet, 'year'>;
+export const ANALYSIS_FACETS = FACETS.filter((f): f is AnalysisFacet => f !== 'year');
+export function isAnalysisFacet(f: Facet): f is AnalysisFacet {
+  return f !== 'year';
+}
 export type FacetStatus = 'ok' | 'unmeasurable' | 'failed';
 
 // Bump ONE entry to re-target exactly that facet. Rows written by an older
 // version keep their version, so facetNeedsIds() picks them up again.
-// vocal v1 = head AND tail vocal ranges; a head-only row is stored at v0.
+// vocal v1 = head AND tail vocal ranges; a head-only row is stored one below
+// current. v2 (#2237) = the head measured with separation that is the same on
+// every run (Demucs shifts=0) and its own mix floor, 0.15 against v1's 0.06,
+// which read Demucs bleed on loud instrumentals as singing. Nothing re-measures
+// a v1 row on its own: `npm run analyze -- --facets vocal` does, one Demucs
+// pass per window per track, and marks the vector where the verdict moves.
 // loudness v2 = measured over the WHOLE file at its native rate (integrated
 // loudness, true peak, sample peak, LRA); v1 = the analysis window's figure,
 // which every head analysis still writes. The stored version is the
 // measurement's own (`loudness_version`, NULL = 1), never assumed.
 // edges = silence at both ends against the absolute floor + the decoded length,
 // from the same whole-file decode.
+// tail v2 = a window ending where the music stops (placed from the stored
+// edges); v1 = the file's last ANALYZE_OUTRO_SECONDS. Read off the columns
+// (tailVersionOf), never assumed.
 export const FACET_VERSIONS: Readonly<Record<Facet, number>> = {
   head: 1,
   loudness: 2,
-  tail: 1,
+  tail: 2,
   clap: 1,
-  vocal: 1,
+  vocal: 2,
   stems: 1,
   edges: 1,
+  year: 1,
 };
+
+// An end-of-file tail window counts as placed (v2) when the stored edges show
+// at most this much trailing silence: the window then held the same music,
+// give or take this, and re-measuring it would change nothing a transition
+// uses. Past it the silence starts to read as a fade (the operator's choice,
+// 21 Oct: re-measure only those).
+export const TAIL_PLACEMENT_TOLERANCE_MS = 3000;
+
+// The placed-tail stamp (`tracks.tail_version`), defined once. Two questions,
+// kept apart on purpose:
+//   - "did the analyzer place these stored columns?" is the raw stamp:
+//     isPlacedTailStamp / SQL_PLACED_TAIL_STAMP. The keep rules read it (an
+//     end-of-file write never replaces a placed tail; a --re-analyze clear
+//     keeps one), and so does the re-plan on moved edges. A NULL stamp the
+//     tolerance covers is still the end-of-file window's columns: an
+//     end-of-file answer may replace it, and a clear drops it as before.
+//   - "which window does the tail sit on?" is tailVersionOf, which adds the
+//     tolerance; the same-window rule for tail vocals reads it
+//     (tailEndsAtMusic), because that window held the same music.
+// A threshold, the FIRST placed version: it stays 2 when FACET_VERSIONS.tail
+// moves past it. What the analyzer's placed answer is stamped with is
+// FACET_VERSIONS.tail (PLACED_TAIL_STAMP).
+export const MIN_PLACED_TAIL_VERSION = 2;
+export const PLACED_TAIL_STAMP = FACET_VERSIONS.tail;
+export function isPlacedTailStamp(version: number | null | undefined): version is number {
+  return (version ?? 1) >= MIN_PLACED_TAIL_VERSION;
+}
+export const SQL_PLACED_TAIL_STAMP = `(COALESCE(tail_version, 1) >= ${MIN_PLACED_TAIL_VERSION})`;
+
+// Which window a stored tail was measured on: the analyzer's own stamp, else
+// v2 when the edges show the end-of-file window already ended at the music,
+// else v1. A stamp of 1 is a tail placed for an end the re-measured edges have
+// since moved (tailPlacementMoved): v1, due again, whatever the edges say now,
+// because the stored window is neither the old placement nor the file's end.
+export function tailVersionOf(row: Pick<FacetSourceRow, 'tail_version' | 'has_edges' | 'edge_tail_ms'>): number {
+  if (isPlacedTailStamp(row.tail_version)) return row.tail_version;
+  if (row.tail_version === 1) return 1;
+  if (row.has_edges && row.edge_tail_ms != null && row.edge_tail_ms <= TAIL_PLACEMENT_TOLERANCE_MS) return MIN_PLACED_TAIL_VERSION;
+  return 1;
+}
+
+// Does a tail with this stamp sit on the window that ends where the music
+// stops? Placed by the analyzer, or an end-of-file window the edges show
+// already ended there (the tolerance). The same-window rule for tail vocals
+// compares the stored tail and the new evidence with this, on the same edges.
+export function tailEndsAtMusic(
+  stamp: number | null | undefined,
+  edges: { has_edges: number | boolean; edge_tail_ms: number | null },
+): boolean {
+  return tailVersionOf({ tail_version: stamp ?? null, has_edges: edges.has_edges ? 1 : 0, edge_tail_ms: edges.edge_tail_ms })
+    >= MIN_PLACED_TAIL_VERSION;
+}
+
+// Did re-measured edges move where the music stops by more than the
+// placement tolerance? Compared on the end (decoded length minus trailing
+// silence), which is what a placed tail window ends at. Unknown on either side
+// is no move: there is nothing to compare.
+export function tailPlacementMoved(
+  before: { edge_tail_ms: number | null; decoded_duration_ms: number | null },
+  after: { edge_tail_ms: number | null; decoded_duration_ms: number | null },
+): boolean {
+  const end = (e: typeof before) =>
+    e.edge_tail_ms != null && e.decoded_duration_ms != null ? e.decoded_duration_ms - e.edge_tail_ms : null;
+  const a = end(before);
+  const b = end(after);
+  return a != null && b != null && Math.abs(a - b) > TAIL_PLACEMENT_TOLERANCE_MS;
+}
+
+// Did re-measured edges move a tail the analyzer placed (the raw stamp) off
+// the music's end? Then the stored window is neither the new placement nor the
+// file's end: the edges write re-plans it (tail_version 1), and the
+// same-window rule for tail vocals reads it that way in the same write.
+export function placedTailMovedBy(
+  row: { tail_version: number | null; edge_tail_ms: number | null; decoded_duration_ms: number | null },
+  edges: { edge_tail_ms: number | null; decoded_duration_ms: number | null },
+): boolean {
+  return isPlacedTailStamp(row.tail_version) && tailPlacementMoved(row, edges);
+}
 
 // The facets read off one whole-file decode rather than the analysis windows.
 export const WHOLE_FILE_FACETS: readonly Facet[] = ['loudness', 'edges'];
@@ -81,8 +185,9 @@ export const WHOLE_FILE_LOUDNESS_EXTRAS = ['loudness_version', 'sample_peak_db',
 
 export const FACET_MAX_ATTEMPTS = MAX_ANALYSIS_FAILURES;
 
-// Where the analysed audio came from, as far as the controller knows.
-export type FacetSource = 'seed' | 'full' | 'capped' | 'unknown' | 'url' | 'analyzer';
+// Where the analysed audio came from, as far as the controller knows; or, for
+// the year row, which lookup host gave the answer (original-year-policy.ts).
+export type FacetSource = 'seed' | 'full' | 'capped' | 'unknown' | 'url' | 'analyzer' | 'musicbrainz' | 'discogs';
 
 // What a facet status is derived from: the `tracks` columns, reduced to flags
 // in SQL (FACET_SOURCE_SELECT) so the seed never loads the JSON payloads.
@@ -97,8 +202,14 @@ export interface FacetSourceRow {
   loudness_version: number;  // COALESCE(loudness_version, 1): which measurement loudness_lufs is
   has_loudness_curve?: number; // loudness_curve_json IS NOT NULL (the whole-file pass's curve, or its unavailable marker)
   has_edges: number;         // decoded_duration_ms IS NOT NULL
+  edge_tail_ms: number | null;
+  tail_version: number | null; // 2 = a tail window the analyzer placed from the edges; 1 = placed for an end that has moved
   analyze_fail_count: number | null;
   analyze_error: string | null;
+  year_suspect: number;      // era-suspect.eraSuspectSql
+  has_original_year: number; // original_year IS NOT NULL
+  original_year_source: string | null;
+  year_checked: number;      // original_year_checked_at IS NOT NULL
 }
 
 export const FACET_SOURCE_SELECT =
@@ -112,7 +223,12 @@ export const FACET_SOURCE_SELECT =
    COALESCE(loudness_version, 1)                      AS loudness_version,
    loudness_curve_json IS NOT NULL                    AS has_loudness_curve,
    decoded_duration_ms IS NOT NULL                    AS has_edges,
-   analyze_fail_count, analyze_error`;
+   edge_tail_ms, tail_version,
+   analyze_fail_count, analyze_error,
+   COALESCE(${eraSuspectSql()}, 0) AS year_suspect,
+   original_year IS NOT NULL                          AS has_original_year,
+   original_year_source,
+   original_year_checked_at IS NOT NULL               AS year_checked`;
 
 export interface DerivedFacet {
   facet: Facet;
@@ -130,6 +246,13 @@ export interface DeriveOpts {
   tailReason?: string;
   // A facet-only attempt need not have a head-analysis stamp to explain it.
   unmeasurable?: Partial<Record<Facet, string>>;
+  // This write's tail attempt read the end-of-file window (no placement was
+  // sent, or the analyzer did not place it): an unmeasurable answer from it
+  // says nothing about the placed window, so it stays one version below.
+  tailUnplaced?: boolean;
+  // The year lookup's own failure history: no column holds it, so the caller
+  // passes the stored row's (or the new failure's) attempts and reason.
+  yearFailure?: { attempts: number; reason: string } | null;
 }
 
 // The one place a facet status is decided. Pure: same row in, same rows out —
@@ -145,8 +268,18 @@ export function deriveFacetRows(
   const fails = row.analyze_fail_count ?? 0;
   const ok = (facet: Facet, reason: string | null = null, version = FACET_VERSIONS[facet]) =>
     out.push({ facet, status: 'ok', version, reason, attempts: fails });
+  // An unmeasurable tail settles only when it was the PLACED window's answer.
+  // Without edges, from an unplaced attempt, or 'capped-download' (a placed
+  // window is read from the stream, never refused for the cap) it was the
+  // end-of-file window's: one version below, so it is retried once placed.
+  // A file the edges scan found silent has no music end to place a window
+  // at: whatever the end-of-file window gave is final.
+  const silentFile = opts.unmeasurable?.edges === 'silent-file';
+  const unmeasurableVersion = (facet: Facet, reason: string) =>
+    facet === 'tail' && !silentFile && (!row.has_edges || opts.tailUnplaced || reason === 'capped-download')
+      ? FACET_VERSIONS.tail - 1 : FACET_VERSIONS[facet];
   const unmeasurable = (facet: Facet, reason: string) =>
-    out.push({ facet, status: 'unmeasurable', version: FACET_VERSIONS[facet], reason, attempts: fails });
+    out.push({ facet, status: 'unmeasurable', version: unmeasurableVersion(facet, reason), reason, attempts: fails });
 
   // The head pass is what stamps analysis_version; an older stamp means the
   // head features predate the current shape and are due again.
@@ -170,7 +303,10 @@ export function deriveFacetRows(
 
   // An outro proves the tail was decoded, even when its window held no
   // silence edge (tail_silence_ms is then NULL by design).
-  if (row.has_tail_silence || row.has_outro) ok('tail');
+  if (row.has_tail_silence || row.has_outro) {
+    ok('tail', null, silentFile ? FACET_VERSIONS.tail : tailVersionOf(row));
+    out[out.length - 1]!.measuredVersion = true;
+  }
   else if (analysed) unmeasurable('tail', opts.tailReason ?? 'tail-not-measured');
 
   if (hasClap) ok('clap');
@@ -187,12 +323,34 @@ export function deriveFacetRows(
 
   if (row.has_edges) ok('edges');
 
-  for (const facet of FACETS) {
+  // Year. Its rows never take the analysis failure count.
+  if (!row.year_suspect) {
+    out.push({ facet: 'year', status: 'ok', version: FACET_VERSIONS.year, reason: 'not-needed', attempts: 0 });
+  } else if (row.has_original_year) {
+    out.push({ facet: 'year', status: 'ok', version: FACET_VERSIONS.year, reason: row.original_year_source ?? null, attempts: 0 });
+  } else if (row.year_checked) {
+    out.push({ facet: 'year', status: 'unmeasurable', version: FACET_VERSIONS.year, reason: 'not-found', attempts: 0 });
+  } else if (opts.yearFailure && opts.yearFailure.attempts > 0) {
+    out.push({
+      facet: 'year',
+      status: 'failed',
+      version: FACET_VERSIONS.year,
+      reason: opts.yearFailure.reason.slice(0, 500),
+      attempts: opts.yearFailure.attempts,
+    });
+  }
+
+  for (const facet of ANALYSIS_FACETS) {
     const reason = opts.unmeasurable?.[facet];
     if (reason == null) continue;
     const prior = out.find(r => r.facet === facet);
     if (!prior) unmeasurable(facet, reason);
-    else if (prior.status === 'unmeasurable') prior.reason = reason;
+    else if (prior.status === 'unmeasurable') {
+      prior.reason = reason;
+      if (facet === 'tail') prior.version = unmeasurableVersion(facet, reason);
+    }
+    // A settled-by-silence tail is re-decided by the edges, like a placed one.
+    if (facet === 'tail' && silentFile) out.find(r => r.facet === 'tail')!.measuredVersion = true;
   }
 
   // A failed analysis counts against every facet it would have produced.
@@ -214,7 +372,7 @@ export function deriveFacetRows(
       if (out[i].status === 'unmeasurable' && named.has(out[i].facet)) out[i] = failed(out[i].facet);
     }
     const have = new Set(out.map(r => r.facet));
-    for (const facet of FACETS) {
+    for (const facet of ANALYSIS_FACETS) {
       if (!have.has(facet)) out.push(failed(facet));
     }
   }
@@ -251,6 +409,9 @@ interface StoredFacet {
 }
 
 export interface SyncOpts extends DeriveOpts {
+  // A year lookup that failed in this write: one more attempt on top of the
+  // stored failure count. (DeriveOpts.yearFailure is the resolved history.)
+  yearFailed?: string;
   // Facets this write actually (re)measured: they take the current version.
   // Any other facet keeps the version it was measured at, so a re-sync never
   // promotes old data past a version bump.
@@ -299,7 +460,8 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
   Object.assign(unmeasurable, opts.unmeasurable);
   if (opts.tailReason != null) unmeasurable.tail = opts.tailReason;
   for (const facet of opts.fresh ?? []) delete unmeasurable[facet];
-  const derived = deriveFacetRows(row, hasClap, { ...opts, unmeasurable });
+  const yearFailure = yearFailureFor(stored.get('year'), opts);
+  const derived = deriveFacetRows(row, hasClap, { ...opts, unmeasurable, yearFailure });
   const fresh = new Set(opts.fresh ?? []);
   const tried = new Set(opts.tried ?? []);
   const now = new Date().toISOString();
@@ -321,10 +483,16 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
     // columns instead, so a previously lost tail cannot retain a stale null
     // reason. A failure's reason is the latest error.
     // An ok loudness row's reason (`no-curve`) describes the columns too.
-    if (!isFresh && prev && prev.status === r.status && r.status !== 'failed' && r.facet !== 'vocal' &&
+    if (!isFresh && prev && prev.status === r.status && r.status !== 'failed' && r.facet !== 'vocal' && r.facet !== 'year' &&
       !(r.facet === 'loudness' && r.status === 'ok')) r.reason = prev.reason;
+    // Measuring edges re-decides which window a stored tail sits on (the
+    // tolerance in tailVersionOf), so that is taken as is too: otherwise every
+    // track whose edges arrive after this table was derived stays planned for
+    // a tail re-read it does not need.
+    const promoted = r.measuredVersion &&
+      (opts.rederive || (r.facet === 'tail' && (fresh.has('edges') || tried.has('edges'))));
     const version =
-      isFresh || (opts.rederive && r.measuredVersion) || !prev || (prev.status !== r.status && unmeasurable[r.facet] == null)
+      isFresh || promoted || !prev || (prev.status !== r.status && unmeasurable[r.facet] == null)
         ? r.version : Math.min(prev.version, r.version);
     // 'seed' is reserved for rows the seed wrote; a live write that creates a
     // row without measuring it (a failure, a re-derive) records what it knows.
@@ -349,6 +517,19 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
   for (const facet of stored.keys()) del.run(id, facet);
 }
 
+// The failure history the year row is derived with: a new failure adds one
+// attempt to it, otherwise the stored failed row is carried as it is. An answer
+// (found / not found) ends it by itself: the stamped columns outrank a failure
+// in deriveFacetRows.
+export function yearFailureFor(
+  prev: { status: string; attempts: number; reason: string | null } | undefined,
+  opts: { yearFailed?: string } = {},
+): { attempts: number; reason: string } | null {
+  const before = prev?.status === 'failed' ? prev.attempts : 0;
+  if (opts.yearFailed != null) return { attempts: before + 1, reason: opts.yearFailed };
+  return before > 0 ? { attempts: before, reason: prev?.reason ?? 'lookup failed' } : null;
+}
+
 // The versions the stored rows were derived under. A change to either one
 // re-derives the table on the next open.
 export function facetDerivationStamp(): string {
@@ -356,8 +537,13 @@ export function facetDerivationStamp(): string {
   // reasons from the columns. Re-derive earlier tables once, without promoting
   // their measurement versions. Revision 2 takes a version read from the
   // measurement's own column (loudness_version) as is, so a whole-file figure
-  // stored before its facet row knew about it is promoted once.
-  return JSON.stringify({ revision: 2, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
+  // stored before its facet row knew about it is promoted once. Revision 3
+  // reads the tail's version off its columns (tailVersionOf). Revision 4
+  // re-opens a 'capped-download' tail an earlier derivation had settled.
+  // Revision 5 settles the tail of a file the edges scan found silent.
+  // Adding a facet changes FACET_VERSIONS, so the year facet's rows were
+  // derived for every track on the first open after it landed.
+  return JSON.stringify({ revision: 5, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
 }
 
 function readFacetStamp(d: Database.Database): string | null {
@@ -480,8 +666,10 @@ export function deleteFacetRows(id: string): void {
 
 // The measurements stand for the file as it is now (tracks.acceptReplacedFiles):
 // they date from `at`, or the next walk would find the same file stale again.
+// The year row is no measurement of the file: its `at` is the last lookup,
+// which the retry schedule counts from, so a restamp leaves it alone.
 export function restampFacetRows(id: string, at: string): void {
-  requireDb().prepare('UPDATE track_facet_status SET at = ? WHERE track_id = ?').run(at, id);
+  requireDb().prepare(`UPDATE track_facet_status SET at = ? WHERE track_id = ? AND facet <> 'year'`).run(at, id);
 }
 
 // Mirror of clearAnalysis(): drop what it clears, plus every failure. The
@@ -490,9 +678,11 @@ export function restampFacetRows(id: string, at: string): void {
 // survives with the vocal rows, because its columns do (#2255), and a head-only
 // vocal row still describes an outro without tail vocal ranges, so it stays due.
 // An unmeasured tail's row goes: only the analysis it explained is cleared.
+// Without keepVocal a placed tail (v2) survives too, its columns kept by
+// clearAnalysis; an end-of-file one goes with its columns.
 export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean } = {}): void {
   const facets: Facet[] = ['head', 'clap'];
-  if (!opts.keepVocal) facets.push('tail', 'vocal');
+  if (!opts.keepVocal) facets.push('vocal');
   if (opts.clearStems) facets.push('stems');
   const d = requireDb();
   d.prepare(
@@ -501,6 +691,13 @@ export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean
   ).run(...facets);
   if (opts.keepVocal) {
     d.prepare(`DELETE FROM track_facet_status WHERE facet = 'tail' AND status <> 'ok'`).run();
+  } else {
+    // Without keepVocal the tail columns go, except a placed tail's
+    // (SQL_PLACED_TAIL_STAMP), which clearAnalysis keeps like whole-file loudness.
+    d.prepare(
+      `DELETE FROM track_facet_status
+        WHERE facet = 'tail' AND track_id NOT IN (SELECT id FROM tracks WHERE ${SQL_PLACED_TAIL_STAMP})`,
+    ).run();
   }
   d.prepare(
     `DELETE FROM track_facet_status
@@ -530,7 +727,9 @@ export function clearFacetFailures(id?: string): void {
 
 // Tracks with work for `facet`: never attempted, measured by an older version,
 // or failed fewer than FACET_MAX_ATTEMPTS times. Ordered for stable resumption.
+// The year facet has its own retry rule (yearLookupDueIds).
 export function facetNeedsIds(facet: Facet, limit?: number): string[] {
+  if (facet === 'year') return yearLookupDueIds(Date.now(), limit);
   const sql =
     `SELECT t.id FROM tracks t
        LEFT JOIN track_facet_status s ON s.track_id = t.id AND s.facet = ?
@@ -542,6 +741,32 @@ export function facetNeedsIds(facet: Facet, limit?: number): string[] {
   return (
     requireDb().prepare(sql).all(facet, FACET_VERSIONS[facet]) as Array<{ id: string }>
   ).map(r => r.id);
+}
+
+// Era-suspect tracks owed a MusicBrainz lookup at `now`: never asked (no row,
+// which the walk leaves for a track it has just found suspect), outdated, or
+// failed and past its retry delay (original-year-policy.yearRetryDue). A
+// not-found answer is settled; it is asked again only by an explicit run.
+// A manual year is resolved, so it never appears here.
+export function yearLookupDueIds(now: number, limit?: number): string[] {
+  const rows = requireDb()
+    .prepare(
+      `SELECT t.id, s.version, s.status, s.attempts, s.at FROM tracks t
+         LEFT JOIN track_facet_status s ON s.track_id = t.id AND s.facet = 'year'
+        WHERE ${eraSuspectSql('t.')}
+          AND t.original_year IS NULL
+          AND (s.track_id IS NULL OR s.version < ? OR s.status = 'failed')
+        ORDER BY t.id`,
+    )
+    .all(FACET_VERSIONS.year) as Array<{ id: string; version: number | null; status: string | null; attempts: number | null; at: string | null }>;
+  const out: string[] = [];
+  const cap = limit && limit > 0 ? Math.floor(limit) : Infinity;
+  for (const r of rows) {
+    if (out.length >= cap) break;
+    if (r.status === 'failed' && (r.version ?? 0) >= FACET_VERSIONS.year && !yearRetryDue(r.attempts ?? 0, r.at, now)) continue;
+    out.push(r.id);
+  }
+  return out;
 }
 
 export interface FacetCount {
@@ -571,7 +796,7 @@ export function facetCounts(): FacetCount[] {
   );
   return FACETS.map((facet) => {
     const v = FACET_VERSIONS[facet];
-    const r = stmt.get(v, FACET_MAX_ATTEMPTS, v, facet) as Record<string, number | null>;
+    const r = stmt.get(v, facet === 'year' ? YEAR_MAX_ATTEMPTS : FACET_MAX_ATTEMPTS, v, facet) as Record<string, number | null>;
     const rows = r.rows ?? 0;
     const missing = total - rows;
     return {
@@ -593,6 +818,8 @@ export interface FacetCell {
   version: number;
   attempts: number;
   reason: string | null;
+  // When the row last changed; the year facet's retry delay counts from it.
+  at?: string | null;
 }
 
 // Stored rows for `facets`, keyed by track then facet. Tracks with no row for
@@ -602,14 +829,14 @@ export function loadFacetState(facets: readonly Facet[]): Map<string, Map<Facet,
   if (facets.length === 0) return out;
   const rows = requireDb()
     .prepare(
-      `SELECT track_id, facet, status, version, attempts, reason FROM track_facet_status
+      `SELECT track_id, facet, status, version, attempts, reason, at FROM track_facet_status
         WHERE facet IN (${facets.map(() => '?').join(',')})`,
     )
     .all(...facets) as Array<FacetCell & { track_id: string; facet: Facet }>;
   for (const r of rows) {
     let m = out.get(r.track_id);
     if (!m) out.set(r.track_id, (m = new Map()));
-    m.set(r.facet, { status: r.status, version: r.version, attempts: r.attempts, reason: r.reason });
+    m.set(r.facet, { status: r.status, version: r.version, attempts: r.attempts, reason: r.reason, at: r.at ?? null });
   }
   return out;
 }

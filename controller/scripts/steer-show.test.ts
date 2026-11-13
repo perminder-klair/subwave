@@ -185,7 +185,8 @@ test('the steered show rotates the whole playlist before a repeat, but an artist
   const guard = showNoRepeatGuard(100, 20_000, anchor);
   assert.deepEqual({ window: guard.window, exhaustive: guard.exhaustive }, { window: 8, exhaustive: true });
   // Which is why both pick paths set the episode aside under a playlist steer.
-  assert.equal(showNoRepeatGuard(100, 20_000, { ...anchor, episodeTracks: tracks(4) }).exhaustive, false);
+  // The episode takes the rotation over as its own (#2320): four tracks, not the playlist's ten.
+  assert.equal(showNoRepeatGuard(100, 20_000, { ...anchor, episodeTracks: tracks(4) }).rotation?.length, 4);
   const thin = showNoRepeatGuard(100, 20_000, { ...anchor, playlistTracks: tracks(2) });
   assert.deepEqual({ window: thin.window, exhaustive: thin.exhaustive }, { window: 0, exhaustive: false },
     'two tracks or fewer loop freely');

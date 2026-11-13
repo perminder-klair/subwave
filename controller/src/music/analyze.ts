@@ -10,6 +10,7 @@ import * as subsonic from './subsonic.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { deriveVocalFromLyrics, clipRangesToTail, type LyricVocalResult } from './lyric-vocal.js';
+import { stemStampDecision } from './stem-stamp-policy.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
@@ -26,7 +27,6 @@ import {
 import { probeListenerCount } from '../broadcast/listeners.js';
 import { sweepKeepLastFromDisk } from '../broadcast/pick-stems.js';
 import { planAcoustics, type AcousticsPlan, type WorkRequest } from './acoustics-plan.js';
-import type { Facet } from './library-db/facets.js';
 
 // Status events for the panel, mirrored to the `[analyze] …` console line.
 const logEvent = makeEventLogger('analyze');
@@ -210,10 +210,11 @@ function lyricTailRanges(id: string, outro: Pick<analyzer.OutroInfo, 'startMs'>,
 }
 
 // The opt-in whole-file backfill (ANALYZE_WHOLE_FILE): a facet plan for
-// loudness v2 + edges over every track that needs either, exactly what
-// `--facets loudness,edges` would plan. null when the switch is off; an
-// analyzer known to lack the facets gets nothing planned (skipped, counted).
-export async function wholeFileBackfillPlan(limit?: number): Promise<AcousticsPlan | null> {
+// loudness v2 + edges over every track that needs either (or over `ids`),
+// exactly what `--facets loudness,edges` would plan. null when the switch is
+// off; an analyzer known to lack the facets gets nothing planned (skipped,
+// counted).
+export async function wholeFileBackfillPlan(limit?: number, ids?: readonly string[]): Promise<AcousticsPlan | null> {
   if (!config.analyzer.wholeFile) return null;
   const facets = [...db.WHOLE_FILE_FACETS];
   const available = await analyzer.isAvailable().catch(() => false);
@@ -225,7 +226,7 @@ export async function wholeFileBackfillPlan(limit?: number): Promise<AcousticsPl
   // fails every request. An explicit `--facets` run still plans on unknown.
   const capable = available && analyzer.wholeFileAvailable() === true;
   return planAcoustics({
-    ids: db.allTrackIdsOrdered(),
+    ids: ids ? [...ids] : db.allTrackIdsOrdered(),
     facets,
     where: { kind: 'needs' },
     state: db.loadFacetState(facets),
@@ -245,22 +246,73 @@ export function wholeFileSkipNotice(capability: boolean | null): string {
       '(rebuild the analyzer), or one whose workers were still starting; skipped this run, asked again next run';
 }
 
+// A tail measurement is stored (outro or trailing silence), whichever window
+// it came from.
+function hasMeasuredTail(t: { outro?: unknown; tailSilenceMs?: number | null } | null): boolean {
+  return !!t && (t.outro != null || t.tailSilenceMs != null);
+}
+
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
-  const stats = await runAnalysisPassOnce(opts);
+  if (opts.plan) return runAnalysisPassOnce(opts);
   // The whole-file facets ride a regular run only when the operator opted in,
-  // as one more facet plan after it (same quiet gate, same failure rules).
-  if (opts.plan || !stats.available) return stats;
-  const plan = await wholeFileBackfillPlan(opts.limit);
-  if (!plan) return stats;
-  const skipped = plan.byFacet.reduce((n, c) => n + (c.skipped['no-whole-file'] ?? 0), 0);
-  if (skipped > 0 && plan.items.length === 0) {
-    logEvent('warning', wholeFileSkipNotice(analyzer.wholeFileAvailable()));
-    return stats;
+  // as facet plans (same quiet gate, same failure rules). The regular pass
+  // places each track's tail window from its stored edges
+  // (analyzer.tailWindowFor), so the tracks it is about to analyse get theirs
+  // FIRST: measured after it, a new track's edges arrive too late, its tail is
+  // read off the end of the file, stored one version below, and nothing in the
+  // run goes back to it. Only those tracks go first: the rest of the backfill
+  // (library-wide when the lane is first switched on, or after a loudness
+  // version bump) still runs after the regular pass, so it never holds a new
+  // track's bpm/key back for hours. A failing slice costs its own figures,
+  // never the regular pass.
+  const lead = await runWholeFileBackfill({
+    limit: opts.limit, ids: db.needsAnalysisIds(opts.limit), label: 'for the tracks about to be analysed', noticeSkip: false,
+  });
+  const stats = await runAnalysisPassOnce(opts);
+  // The rest of the library (ids: every track that needs the facets); the one
+  // slice that says when the analyzer cannot measure them.
+  const rest = stats.available
+    ? await runWholeFileBackfill({ limit: opts.limit, ids: undefined, label: '', noticeSkip: true })
+    : null;
+  if (!lead && !rest) return stats;
+  const wholeFile = {
+    analyzed: (lead?.analyzed ?? 0) + (rest?.analyzed ?? 0),
+    failed: (lead?.failed ?? 0) + (rest?.failed ?? 0),
+    scope: (lead?.scope ?? 0) + (rest?.scope ?? 0),
+  };
+  return { ...stats, wholeFile };
+}
+
+// One slice of the whole-file backfill. `ids` limits it to those tracks
+// (undefined: every track that needs the facets); `label` names the slice in
+// the log line; `noticeSkip` says the analyzer-cannot-measure notice, once per
+// run.
+async function runWholeFileBackfill({ limit, ids, label: what, noticeSkip }: {
+  limit: number | undefined;
+  ids: readonly string[] | undefined;
+  label: string;
+  noticeSkip: boolean;
+}): Promise<AnalyzeStats['wholeFile'] | null> {
+  if (!config.analyzer.wholeFile) return null;
+  if (ids && ids.length === 0) return null;
+  try {
+    if (!(await analyzer.isAvailable().catch(() => false))) return null;
+    const plan = await wholeFileBackfillPlan(limit, ids);
+    if (!plan) return null;
+    const skipped = plan.byFacet.reduce((n, c) => n + (c.skipped['no-whole-file'] ?? 0), 0);
+    if (skipped > 0 && plan.items.length === 0) {
+      // Said once per run, by the slice after the regular pass.
+      if (noticeSkip) logEvent('warning', wholeFileSkipNotice(analyzer.wholeFileAvailable()));
+      return null;
+    }
+    if (plan.items.length === 0) return null;
+    logEvent('info', `Whole-file loudness + edges${what ? ` ${what}` : ''}: ${plan.items.length.toLocaleString('en-GB')} tracks to measure`);
+    const whole = await runAnalysisPassOnce({ plan });
+    return { analyzed: whole.analyzed, failed: whole.failed, scope: whole.scope };
+  } catch (err) {
+    logEvent('warning', `Whole-file loudness + edges failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    return null;
   }
-  if (plan.items.length === 0) return stats;
-  logEvent('info', `Whole-file loudness + edges: ${plan.items.length.toLocaleString('en-GB')} tracks to measure`);
-  const whole = await runAnalysisPassOnce({ plan });
-  return { ...stats, wholeFile: { analyzed: whole.analyzed, failed: whole.failed, scope: whole.scope } };
 }
 
 async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
@@ -446,11 +498,12 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
   // tracks, in the plan's order, each with its own request flags.
   const planned = new Map<string, WorkRequest>();
   let planStemsOffline = false;
-  const plannedFacets = new Map<string, Facet[]>();
+  const plannedFacets = new Map<string, db.AnalysisFacet[]>();
   if (plan) {
     for (const item of plan.items) {
       planned.set(item.id, item.request);
-      plannedFacets.set(item.id, item.facets);
+      // The year facet is not the analyzer's (analyze-library runs it apart).
+      plannedFacets.set(item.id, item.facets.filter(db.isAnalysisFacet));
     }
     ids = plan.items.map(i => i.id);
     logEvent(
@@ -613,11 +666,17 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
     const wantsVocal = facets.includes('vocal');
     const tailVocals = facets.includes('tail') && !wantsVocal && vocalBackfill;
     const lyricVocal = await lyricVocalFor(id, wantsVocal || tailVocals);
+    // The tail window ends where the music stops, when the edges are known
+    // (also for the Demucs tail pass behind vocal and stems: TAIL_WINDOW_FACETS).
+    const tailWindow = analyzer.usesTailWindow(facets) ? analyzer.tailWindowFor(db.getTrack(id)) : null;
     const requestedFacets = facets.filter(f =>
       !(f === 'vocal' && lyricVocal) && !(f === 'stems' && !stems_dir));
     const res = requestedFacets.length ? await analyzer.analyzeFacets(
       id,
-      { facets: requestedFacets, tailVocals: tailVocals && !lyricVocal, stems_dir, complete: localComplete },
+      {
+        facets: requestedFacets, tailVocals: tailVocals && !lyricVocal, stems_dir, complete: localComplete,
+        tailWindow,
+      },
       localPath ?? undefined,
     ) : null;
     const source: db.FacetSource =
@@ -626,14 +685,27 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         : res?.source.kind === 'whole-file' ? 'url'
         : localComplete === true ? 'full' : localComplete === false ? 'capped' : 'unknown';
 
-    const w: db.FacetWrite = { source };
+    const w: db.FacetWrite = { source, tailUnplaced: facets.includes('tail') && !tailWindow };
     const failures: string[] = [];
+    // Facets whose answer counts as a failure although the backend said
+    // 'unmeasurable' (see below): not "answered".
+    const missed = new Set<db.Facet>();
     let wroteClap = false;
     for (const f of requestedFacets) {
       const a = res?.facets[f];
       if (!a) continue;
       if (a.status === 'failed') { failures.push(db.facetFailure(f, a.reason)); continue; }
       if (a.status === 'unavailable') continue;
+      // A placed window the backend could not read, over a tail already
+      // measured: the stored tail outranks 'unmeasurable', so recording it
+      // would change nothing and the track would stay due, counted ok, on
+      // every pass. It is a failure of this track instead: named in
+      // analyze_error, and bounded by MAX_ANALYSIS_FAILURES.
+      if (a.status === 'unmeasurable' && f === 'tail' && tailWindow && hasMeasuredTail(db.getTrack(id))) {
+        failures.push(db.facetFailure(f, `placed window ${a.reason ?? 'not measured'}`));
+        missed.add(f);
+        continue;
+      }
       if (a.status === 'unmeasurable') {
         (w.unmeasurable ??= {})[f] = a.reason ?? 'not-measured';
         continue;
@@ -666,14 +738,25 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         }
         w.edges = { leadMs: r.edgeLeadMs, tailMs: r.edgeTailMs, durationMs: r.decodedDurationMs };
       } else if (f === 'tail') {
-        w.tail = { outro: r.outro, tailSilenceMs: r.tailSilenceMs, tailStartMs: r.tailStartMs };
+        w.tail = { outro: r.outro, tailSilenceMs: r.tailSilenceMs, tailStartMs: r.tailStartMs,
+          version: r.tailPlaced ? db.PLACED_TAIL_STAMP : null };
       } else if (f === 'clap' && r.audioEmbedding?.length === db.AUDIO_EMBEDDING_DIM) {
         w.clap = r.audioEmbedding;
         wroteClap = true;
       } else if (f === 'vocal') {
-        w.vocal = { vocalRanges: r.vocalRanges ?? [], tailVocalRanges: a.tailVocalRanges };
+        // Where the tail vocals were measured: the analyzer says "edges" when it
+        // separated the placed window (tail_window), else the file's end.
+        w.vocal = { vocalRanges: r.vocalRanges ?? [], tailVocalRanges: a.tailVocalRanges,
+          tailWindow: r.tailPlaced ? 'placed' : 'end' };
       } else if (f === 'stems') {
-        w.stems = { attempted: true };
+        const stemStamp = stemStampDecision({
+          stemsCached: r.stemsCached,
+          tailStems: r.tailStemsLanded ?? null,
+          priorTailMisses: db.trackStemTailMisses(id),
+          okAnswer: true,
+        });
+        if (stemStamp.stamp) w.stems = { attempted: true };
+        if (stemStamp.tailMisses !== undefined) w.stemsTailMisses = stemStamp.tailMisses;
       }
     }
     if (lyricVocal) {
@@ -681,14 +764,16 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
       const tail = w.tail && !('unmeasurable' in w.tail) ? w.tail : null;
       const outro = tail?.outro ?? db.getTrack(id)?.outro;
       if (wantsVocal) {
+        // Read off the very outro they are merged into.
         w.vocal = { vocalRanges: lyricVocal.vocalRanges,
-          tailVocalRanges: outro ? lyricTailRanges(id, outro, lyricVocal) : null };
+          tailVocalRanges: outro ? lyricTailRanges(id, outro, lyricVocal) : null, tailWindow: 'stored' };
       } else if (tail?.outro) {
         tail.outro = { ...tail.outro, vocalRanges: lyricTailRanges(id, tail.outro, lyricVocal) };
       }
     }
     const answered = facets.filter((f) => {
       if (f === 'vocal' && lyricVocal) return true;
+      if (missed.has(f)) return false;
       const a = res?.facets[f];
       return a && a.status !== 'failed' && a.status !== 'unavailable';
     });
@@ -748,6 +833,8 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         ? (want.vocal ? (lyricVocal && !stems_dir ? false : true) : (stems_dir ? undefined : false))
         : vocalBackfill ? (lyricVocal && !stems_dir ? false : true) : undefined;
       let viaUrl = !localPath;
+      // The tail window ends where the music stops, when the edges are known.
+      const placement = embeddingOnly ? {} : analyzer.flatTailOpts(id, analyzer.tailWindowFor(db.getTrack(id)));
       const a = localPath
         ? await analyzer.analyzePathWithUrlFallback(id, localPath, {
             embed,
@@ -756,6 +843,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
             stems_dir,
             stems_require_marker: stems_dir ? true : undefined,
             embedding_only: embeddingOnly || undefined,
+            ...placement,
           }, () => { viaUrl = true; })
         : await analyzer.analyze(id, {
             embed,
@@ -763,6 +851,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
             stems_dir,
             stems_require_marker: stems_dir ? true : undefined,
             embedding_only: embeddingOnly || undefined,
+            ...(placement.tail_window ? { tail_window: placement.tail_window } : {}),
           });
       let storedVocal = false;
       if (!embeddingOnly) {
@@ -773,6 +862,11 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         if (lyricVocal && outro) {
           outro = { ...outro, vocalRanges: lyricTailRanges(id, outro, lyricVocal) };
         }
+        const stemStamp = stemStampDecision({
+          stemsCached: a.stemsCached,
+          tailStems: a.tailStemsLanded ?? null,
+          priorTailMisses: db.trackStemTailMisses(id),
+        });
         db.upsertTrackAnalysis(id, {
           bpm: a.bpm,
           musicalKey: a.musicalKey,
@@ -787,14 +881,19 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
           keyRanges: a.keyRanges,
           vocalRanges,
           outro,
-          // A pass not measuring vocals here carries the stored tail ranges
-          // forward, planned or not, so a plain vocal-off --re-analyze keeps
-          // the tail half of the instrumental verdict (#2255).
-          preserveTailVocal: !vocalWantedHere,
+          // Every pass carries the stored tail ranges forward when its outro
+          // came back without them: a vocal-off pass (planned or a plain
+          // --re-analyze, #2255) never measured them, and a vocal-on pass
+          // whose tail separation failed lost them (#2318). Either way the
+          // tail half of the instrumental verdict holds. A tail measured with
+          // its vocals (Demucs or lyrics) still replaces them.
+          preserveTailVocal: true,
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
           tailStartMs: a.tailStartMs,
-          stemsAttempted: a.stemsCached !== null,
+          tailVersion: a.tailPlaced ? db.PLACED_TAIL_STAMP : null,
+          stemsAttempted: stemStamp.stamp,
+          stemsTailMisses: stemStamp.tailMisses,
           // Recorded on the facet rows; 'capped' explains a missing tail.
           source: viaUrl
             ? 'url'

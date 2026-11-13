@@ -1347,6 +1347,13 @@ SITE_URL=
 #                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
 #                                   # otherwise set base URL in admin → Settings → Scrobbling
 
+# ───────── Original years (optional — also configurable in admin UI) ─────────
+# Era-bounded shows ask MusicBrainz (keyless) for the original year of reissues
+# and compilations. With a Discogs personal access token (Discogs → Settings →
+# Developers, free), Discogs is asked when MusicBrainz has no year: one search
+# per track, sending its artist and title. Admin → Settings → Library → Enrichment.
+# DISCOGS_TOKEN=
+
 # ───────── Lyrics (optional) ─────────
 # The LRCLIB fallback (admin → Settings → Listeners → Lyrics panel, on by
 # default) asks lrclib.net for synced lyrics the music server lacks, sending each
@@ -1455,13 +1462,15 @@ SITE_URL=
 # Building from source instead of pulling? \`docker compose build analyzer\` with
 # ANALYZER_HEAVY=1 bakes the stack (or pass WITH_CLAP=1 / WITH_DEMUCS=1 directly).
 #
-# Vocal-gate tuning (#1125). The Demucs vocal stem is thresholded against BOTH
-# its own loud level AND a fraction of the FULL-MIX loud level — the mix floor
-# stops separation bleed on instrumentals from reading as vocals. Raise the
-# floor if instrumentals still slip through (over-compressed masters leak more);
+# Vocal-gate tuning (#1125, #2237). The Demucs vocal stem is thresholded against
+# BOTH its own loud level AND a fraction of the FULL-MIX loud level — the mix
+# floor stops separation bleed on instrumentals from reading as vocals. Each
+# window has its own floor: the opening's was raised on real audio (#2237), the
+# ending's is unchanged. Raise a floor if instrumentals still slip through;
 # lower it if quiet vocals get dropped. Defaults shown.
-# VOCAL_MIX_FLOOR=0.06     # vocal stem must reach >=6% of the full-mix loud level
-# VOCAL_STEM_REL=0.15      # ...OR >=15% of the vocal stem's own loud level
+# VOCAL_HEAD_MIX_FLOOR=0.15  # opening: stem must reach >=15% of the mix's loud level
+# VOCAL_MIX_FLOOR=0.06       # ending: >=6%. Set alone, it sets the opening too
+# VOCAL_STEM_REL=0.15        # ...OR >=15% of the vocal stem's own loud level
 #
 # Optional model overrides (sensible defaults shown):
 # CLAP_MODEL=laion-clap
@@ -1567,6 +1576,15 @@ SITE_URL=
 # constrained host. TTS_HEAVY_MEM_LIMIT only matters with --profile tts-heavy.
 # ANALYZER_MEM_LIMIT=6g
 # TTS_HEAVY_MEM_LIMIT=10g
+#
+# JavaScript heap, in MB, for the Observatory's sound-map projection child.
+# Unset uses Node's default, which scales with the host's memory. The child
+# fits as many tracks as that heap holds (at most 40,000, about 52 KB each)
+# and places the rest, so a smaller heap fits a coarser map instead of running
+# out during the fit; loading and placing a very large library still need
+# room. Values below 512 are raised to 512. Raise this for a finer map on a
+# small host, or if the Observatory reports the run ran out of memory.
+# SUBWAVE_MAP_HEAP_MB=4096
 #
 # HuggingFace token — lets the tts-heavy sidecar lazily download gated model
 # weights at runtime (PocketTTS cloning weights; some CLAP/Demucs checkpoints).

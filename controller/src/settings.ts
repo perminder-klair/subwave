@@ -680,6 +680,8 @@ export async function load() {
       sameHostAcknowledgement: typeof stored.djBehaviour?.sameHostAcknowledgement === 'boolean'
         ? stored.djBehaviour.sameHostAcknowledgement
         : DEFAULTS.djBehaviour.sameHostAcknowledgement,
+      holdDuckBetweenSpeakers: typeof stored.djBehaviour?.holdDuckBetweenSpeakers === 'boolean'
+        ? stored.djBehaviour.holdDuckBetweenSpeakers : DEFAULTS.djBehaviour.holdDuckBetweenSpeakers,
       extendedSleeveNotes: typeof stored.djBehaviour?.extendedSleeveNotes === 'boolean'
         ? stored.djBehaviour.extendedSleeveNotes : DEFAULTS.djBehaviour.extendedSleeveNotes,
       releaseYearMentions: ['regular', 'occasional', 'rare'].includes(stored.djBehaviour?.releaseYearMentions)
@@ -1783,6 +1785,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       showWelcome?: boolean;
       previewNextShow?: boolean;
       sameHostAcknowledgement?: boolean;
+      holdDuckBetweenSpeakers?: boolean;
       extendedSleeveNotes?: boolean;
       releaseYearMentions?: string;
       recapLimit?: number;
@@ -1791,7 +1794,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     }>(
       'djBehaviour', patch.djBehaviour,
     );
-    for (const key of ['showWelcome', 'previewNextShow', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
+    for (const key of ['showWelcome', 'previewNextShow', 'sameHostAcknowledgement', 'holdDuckBetweenSpeakers', 'extendedSleeveNotes'] as const) {
       if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
     }
     if (behaviour.releaseYearMentions !== undefined) {
@@ -2829,7 +2832,7 @@ export async function update(patch) {
 // them on its next start. Idempotent. A missing file writes them all; files
 // already there keep what they say (the jingle ratio's reason is in
 // broadcast/jingle-rotate.ts), except the six listener-mount files, which are
-// reconciled with the saved stream settings under a hosted plan's ceiling
+// reconciled with the saved stream settings under a hosted station's ceiling
 // (settings/liquidsoap.ts reconcileStreamMountFiles). Returns the mount files
 // that boot rewrote, so the caller can say the mixer needs a restart.
 export async function ensureLiquidsoapSettingsFile(): Promise<{ rewroteMountFiles: string[] }> {

@@ -30,6 +30,7 @@ import * as settings from '../settings.js';
 import * as analyzer from '../music/analyzer.js';
 import * as db from '../music/library-db.js';
 import * as stemCache from '../music/stem-cache.js';
+import { stemStampDecision } from '../music/stem-stamp-policy.js';
 import { bulkPassRunning } from '../music/tagger-lock.js';
 import { quietOnlyEnabled } from '../music/analyze-quiet-pure.js';
 import * as policy from './pick-stems-policy.js';
@@ -174,6 +175,9 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
 
   const row = db.isOpen() ? db.getTrack(id) : null;
   if (!row) return veto('no-grid');
+  // A window cut from another recording than the row's file is missing, not
+  // cached (#2238, stem-cache.hasWindow): a stale head is separated again
+  // with the tail.
   const [hasHead, hasTail] = await Promise.all([
     stemCache.hasWindow(id, 'head'),
     stemCache.hasWindow(id, 'tail'),
@@ -220,7 +224,7 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
     const again = gate(opts, false);
     if (again) return veto(again);
 
-    const before = await stemCache.trackDirBytes(id);
+    const before = await stemCache.beginTrackWrite(id);
     const what = policy.describeNeed(need);
     const t0 = Date.now();
     opts.log('mix', `pick-time stems: separating "${title}" (${what}) while it waits`);
@@ -260,12 +264,20 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
       return { ran: true, ok: false, ms };
     }
     // The stamp records the attempt, as the pass's does (stems_at), so the
-    // backfill doesn't separate this track again.
+    // backfill doesn't separate this track again; a proven tail that did not
+    // land leaves it for the backfill, up to a bound (stem-stamp-policy.ts).
+    const stemStamp = stemStampDecision({
+      stemsCached: answer.result.stemsCached,
+      tailStems: answer.result.tailStemsLanded ?? null,
+      priorTailMisses: db.trackStemTailMisses(id),
+      okAnswer: true,
+    });
     db.writeFacetResults(id, {
       source: res.source.kind === 'capped-download'
         ? (res.source.complete === false ? 'capped' : 'url')
         : staged.complete ? 'full' : 'capped',
-      stems: { attempted: true },
+      ...(stemStamp.stamp ? { stems: { attempted: true as const } } : {}),
+      ...(stemStamp.tailMisses !== undefined ? { stemsTailMisses: stemStamp.tailMisses } : {}),
     });
     const [head, tail] = await Promise.all([
       stemCache.hasWindow(id, 'head'),

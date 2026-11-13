@@ -17,7 +17,7 @@ export interface TrackRecord {
   // True first-release year when it differs from the file tag (#842). null =
   // unresolved; era filtering then falls back to `year`.
   originalYear: number | null;
-  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz' | 'manual'
+  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz' | 'discogs' | 'manual'
   originalYearCheckedAt: string | null;   // last lookup attempt, hit or miss
   isCompilation: boolean | null;          // Navidrome album FLAG; null = unknown
   // Derived era suspicion (#1418). Separate from isCompilation, which is false on
@@ -211,11 +211,25 @@ export interface TrackMeta {
   duration?: number | null;
   // The album's originalReleaseDate.year, source 'album-tag' (#842/#1418). Passed
   // only when informative: not on an era-suspect album, and not when it echoes the
-  // release year. Never overwrites a 'musicbrainz' or 'manual' value.
+  // release year. Never overwrites a 'musicbrainz', 'discogs' or 'manual' value.
   originalYear?: number | null;
   isCompilation?: boolean | null;
   /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
   eraUntrusted?: boolean | null;
+  /** Which marker produced that verdict ('compilation-flag', 'title-year-range',
+   *  ...). Walk-time audit truth; null when the walk flagged nothing. COALESCEd
+   *  like the ids, so a non-walk writer never clears it. */
+  eraReason?: string | null;
+  /** The album's effective kind (era-review.eraWalkFields): the operator's,
+   *  else the title's suggestion; null when the album is not flagged. Travels
+   *  with eraUntrusted like eraReason. */
+  albumKind?: string | null;
+  /** The ALBUM artist the era judgement keyed on (Navidrome's album record),
+   *  not the per-track `artist`. Walk only. */
+  albumArtist?: string | null;
+  /** The first album artist's Subsonic id (artist-credit.firstAlbumArtistId).
+   *  COALESCEd like the other ids: the walks are its only writers. */
+  albumArtistId?: string | null;
   /** The walk's answer, normalised on write. Unlike the ids, null CLEARS: only
    *  a walk can see a tag was removed, and it always passes a value. A writer
    *  with no opinion leaves it undefined and the stored value stands. */

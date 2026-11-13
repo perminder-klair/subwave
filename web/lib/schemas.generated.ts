@@ -354,14 +354,22 @@ export const hostedFlagSchema = z
   .transform((v) => (HOSTED_FLAG_ON as readonly string[]).includes(v));
 
 /**
- * The lowest stream ceiling a plan can have. MP3 is always served and its
+ * The lowest stream ceiling a station can have. MP3 is always served and its
  * lowest bitrate is 64 (SETTINGS_MP3_BITRATES, pinned by hosted-mode.test.ts),
  * so a ceiling under it could not be honoured: the MP3 mount would air above it.
  */
 export const HOSTED_MIN_BITRATE = 64;
 const HOSTED_MAX_BITRATE_LIMIT = 10_000;
 
-/** SUBWAVE_MAX_BITRATE: the plan's stream ceiling, whole kbps. */
+/**
+ * SUBWAVE_MAX_BITRATE: this station's stream ceiling, whole kbps. An
+ * unpublished hosting ceiling the box agent sets to guard the box's shared
+ * port, not a plan limit (plans sell listening hours).
+ *
+ * The box's listener ceiling (SUBWAVE_LISTENER_CAP) has no parser here on
+ * purpose: Icecast enforces it through the ICECAST_MAX_CLIENTS the box agent
+ * sets, and nothing in the controller or the admin reads or shows it.
+ */
 export const hostedMaxBitrateSchema = z
   .string()
   .transform((v) => v.trim())
@@ -372,16 +380,6 @@ export const hostedMaxBitrateSchema = z
     .int()
     .min(HOSTED_MIN_BITRATE, `must be at least ${HOSTED_MIN_BITRATE} kbps, MP3's lowest bitrate`)
     .max(HOSTED_MAX_BITRATE_LIMIT, `must be at most ${HOSTED_MAX_BITRATE_LIMIT} kbps`));
-
-const HOSTED_LISTENER_CAP_LIMIT = 10_000;
-
-/** SUBWAVE_LISTENER_CAP: the plan's concurrent-listener ceiling. */
-export const hostedListenerCapSchema = z
-  .string()
-  .transform((v) => v.trim())
-  .pipe(z.string().regex(/^\d+$/, 'is not a whole number'))
-  .transform(Number)
-  .pipe(z.number().int().min(1, 'must be at least 1').max(HOSTED_LISTENER_CAP_LIMIT, `must be at most ${HOSTED_LISTENER_CAP_LIMIT}`));
 
 /**
  * SUBWAVE_MUSIC_UPLOAD_URL / SUBWAVE_MUSIC_LIBRARY_URL: https only, so a stray
@@ -608,10 +606,23 @@ export function manualTagSchema(ctx: ManualTagContext) {
 /** Floor for a plausible recording year. Mirrors musicbrainz.ts MIN_YEAR. */
 export const ORIGINAL_YEAR_MIN = 1900;
 
+/** The latest plausible recording year: next year (a pre-release), in UTC.
+ *  Read per call, not at module load, so it moves with the calendar. One window
+ *  for every year an operator types: the per-track override below, the Era
+ *  tab's one-year decision (eraOverrideSchema) and its web inputs. */
+export function originalYearMax(now: Date = new Date()): number {
+  return now.getUTCFullYear() + 1;
+}
+
+/** A whole year inside [ORIGINAL_YEAR_MIN, originalYearMax()]. */
+export function isValidOriginalYear(n: unknown, now: Date = new Date()): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= ORIGINAL_YEAR_MIN && n <= originalYearMax(now);
+}
+
 export function originalYearSchema() {
   // Per request, not at module load: a schema frozen at boot starts refusing
   // next January.
-  const max = new Date().getUTCFullYear() + 1;
+  const max = originalYearMax();
   return z.object({
     // Same wording and blank-string refusal as manualTagSchema: one editor
     // posts to both routes.
@@ -722,6 +733,39 @@ export interface SceneReference {
   /** The REST of this filter's own list. Empty means the orphaned values were
    *  all it had — NOT a claim that the filter now matches no tracks. */
   remaining: string[];
+}
+
+// POST /library/era/override: the Era tab's decision for one album. The album
+// is named as { album, albumArtist? } and checked by the route (which keys it
+// and refuses an unscanned album); this owns the decision and its year.
+export const ERA_VERDICTS = ['trusted', 'year', 'suspect'] as const;
+/** The three ways out of the Era list (era_override.verdict). */
+export type EraVerdict = (typeof ERA_VERDICTS)[number];
+
+export function eraOverrideSchema() {
+  return z.object({
+    album: z.unknown(),
+    albumArtist: z.unknown().optional(),
+    verdict: z.unknown().transform((raw, c) => {
+      if (raw === null || (typeof raw === 'string' && (ERA_VERDICTS as readonly string[]).includes(raw))) {
+        return raw as EraVerdict | null;
+      }
+      c.addIssue({ code: 'custom', message: "verdict must be 'trusted', 'year', 'suspect' or null" });
+      return z.NEVER;
+    }),
+    year: z.unknown().optional(),
+  }).transform((b, c) => {
+    if (b.verdict !== 'year') return { ...b, year: null };
+    if (!isValidOriginalYear(b.year)) {
+      c.addIssue({
+        code: 'custom',
+        path: ['year'],
+        message: `year must be a whole year between ${ORIGINAL_YEAR_MIN} and ${originalYearMax()}`,
+      });
+      return z.NEVER;
+    }
+    return { ...b, year: b.year };
+  });
 }
 
 // ─── from controller/src/schemas/lyrics.ts ───────────────────────────────
@@ -3763,6 +3807,7 @@ export const djBehaviourPatchSchema = settingsBlockOf({
   showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
   previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
   sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  holdDuckBetweenSpeakers: z.boolean({ error: 'djBehaviour.holdDuckBetweenSpeakers must be a boolean' }),
   extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
   releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
     error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
@@ -4544,7 +4589,7 @@ export const preparationStatusSchema = z.discriminatedUnion('kind', [
 ]);
 export type PreparationStatus = z.output<typeof preparationStatusSchema>;
 
-export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional() })).default([]) });
+export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional(), artistId: z.string().nullish().catch(null) })).default([]) });
 export const preparationArtistCreditSchema = z.object({ id: z.string().min(1), name: z.string().optional() });
 export const preparationTrackSchema = z.object({
   id: z.string().min(1), artistId: z.string().nullable().optional(),
@@ -4606,6 +4651,31 @@ export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
 export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
+
+// What an era-suspect album IS, set (or confirmed) by the operator in Library →
+// Era and pre-filled from the title (music/album-kind.ts). Declared here, not
+// there, because a show can leave out whole kinds (`excludedAlbumKinds`) and
+// schema modules import only zod. Order is the admin dropdown's.
+export const ALBUM_KINDS = [
+  'best-of', 'themed', 'label', 'dj-mix', 'dj-choice', 'original-album', 'reissue',
+  'soundtrack', 'tribute', 'chart', 'live', 'box-set', 'sampler',
+] as const;
+export type AlbumKind = (typeof ALBUM_KINDS)[number];
+export const ALBUM_KIND_LABELS: Record<AlbumKind, string> = {
+  'best-of': 'Best Of',
+  themed: 'Themed Compilation',
+  label: 'Label Compilation',
+  'dj-mix': 'DJ Mix',
+  'dj-choice': 'DJ Choice',
+  'original-album': 'Original Album',
+  reissue: 'Reissue or Remaster',
+  soundtrack: 'Soundtrack',
+  tribute: 'Tribute or Covers',
+  chart: 'Chart or Dated Hits',
+  live: 'Live or Festival',
+  'box-set': 'Box Set',
+  sampler: 'Sampler or Promo',
+};
 
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
@@ -4964,6 +5034,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // A clean show: tracks tagged explicit stay off air (music/explicit-policy.ts).
       // Stands alone, not one of the filters filtersStrict governs.
       excludeExplicit: showBool(),
+      // Album kinds this show never plays (Library → Era sets a kind per album),
+      // e.g. 'dj-mix': a track cut out of a continuous mix starts and ends
+      // mid-blend. Hard-dropped with the excluded playlists
+      // (show-playlist.resolveExcludedPlaylistIds). [] = no constraint.
+      excludedAlbumKinds: showStringList({
+        max: ALBUM_KINDS.length,
+        values: ALBUM_KINDS,
+        overflowError: `must have at most ${ALBUM_KINDS.length} entries`,
+      }),
       // Organisation only, declared LAST so persisted key order is unchanged.
       // Unlike every other list here a bad entry is REFUSED rather than dropped:
       // a tag is typed by hand and must not vanish on save. The load twin
@@ -5121,6 +5200,12 @@ export function repairShowForLoad(
     // than failing the show. Non-array reads as absent (schema's [] default).
     tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
+    // An unknown kind is dropped, never fatal: a show that stops leaving one
+    // kind out beats a show that stops loading.
+    excludedAlbumKinds: repairShowStringList(raw.excludedAlbumKinds, {
+      max: ALBUM_KINDS.length,
+      values: ALBUM_KINDS,
+    }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,
     }),

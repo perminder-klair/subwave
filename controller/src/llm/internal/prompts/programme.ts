@@ -10,6 +10,7 @@ import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
 import { clipText } from '../core/pure.js';
 import { onAirLocationGrounding } from './grounding.js';
+import { namedSubjectLine } from '../../../broadcast/preparation-subject-wording.js';
 
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471); the dedicated weather skill owns that beat.
@@ -211,16 +212,18 @@ function planClause(plan: any, note: string | null) {
 // test can assert the rule actually reaches each rendered prompt, rather than
 // merely that the constant exists — a constant nothing appends is the exact
 // regression this guards against.
-export function introTask({ show, plan = null, speaker = null }: any): string {
+export function introTask({ show, plan = null, speaker = null, episodeSubject = null }: any): string {
   const brief = show?.topic ? ` The show's brief: ${show.topic}.` : '';
-  return `Task: open your show "${show.name}" on air — this is the top of the programme.${brief}${planClause(plan, plan?.introNote)}\n` +
+  // A chosen but ungrounded subject, while the plan is still pending (#2321).
+  const subject = episodeSubject && !plan?.angle ? `\n${namedSubjectLine(String(episodeSubject))}` : '';
+  return `Task: open your show "${show.name}" on air — this is the top of the programme.${brief}${planClause(plan, plan?.introNote)}${subject}\n` +
     `Welcome listeners in, set up what this hour is about, and tease what's coming without over-promising. ${lengthPhrase('link', speaker)}. Warm and in character — a host starting their show, not a announcer reading a rundown. You may nod to the time of day loosely, never exact minutes. ${PROGRAMME_GROUNDING_RULE}`;
 }
 
-export async function generateProgrammeIntro({ show, plan = null, persona = null, context = null, recap = null, recentOpeners = null }: any) {
+export async function generateProgrammeIntro({ show, plan = null, persona = null, context = null, recap = null, recentOpeners = null, episodeSubject = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
   const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
-  ctxLines.push(introTask({ show, plan, speaker }));
+  ctxLines.push(introTask({ show, plan, speaker, episodeSubject }));
   return djText({
     system: djSystem(speaker),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'programme-intro', recap, recentOpeners }),
@@ -311,9 +314,40 @@ Rules:
 - ${PROGRAMME_GROUNDING_RULE}${langClause}${settings.castHouseRulesBlock()}`;
 }
 
+// The guest exchange's prompt lines, a pure builder for the same reason as
+// introTask: the test renders what the model is actually sent. The intro is
+// given the chosen subject while the plan is pending (#2321), and its producer
+// note only alongside an angle, as the solo intro's planClause does.
+export interface ExchangeContextArgs {
+  beat: 'intro' | 'outro';
+  show?: { name?: string; topic?: string | null } | null;
+  plan?: { angle?: string | null; introNote?: string | null; outroNote?: string | null } | null;
+  context?: Parameters<typeof buildContextLines>[0];
+  recap?: string | null;
+  recentOpeners?: string[] | null;
+  episodeSubject?: string | null;
+}
+
+export function exchangeContextLines({
+  beat, show, plan = null, context = null, recap = null, recentOpeners = null, episodeSubject = null,
+}: ExchangeContextArgs): string[] {
+  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
+  if (show?.topic) ctxLines.push(`The show's brief: ${show.topic}`);
+  if (plan?.angle) ctxLines.push(`Today's episode angle: ${plan.angle}`);
+  else if (beat !== 'outro' && episodeSubject) ctxLines.push(namedSubjectLine(String(episodeSubject)));
+  // The intro's producer note rides with the angle, as in the solo intro's
+  // planClause: an opening that withheld the angle (preparationOpening) gets no
+  // note written alongside it either.
+  const note = beat === 'outro' ? plan?.outroNote : plan?.angle ? plan?.introNote : null;
+  if (note) ctxLines.push(`Producer's note for this beat: ${note}`);
+  if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
+  if (recentOpeners?.length) ctxLines.push(`Recent opening words (start the first line differently): ${recentOpeners.join(' | ')}`);
+  return ctxLines;
+}
+
 export async function generateProgrammeExchange({
   beat, show, plan = null, host, guests,
-  context = null, recap = null, recentOpeners = null, nextShowName = null,
+  context = null, recap = null, recentOpeners = null, nextShowName = null, episodeSubject = null,
 }: any) {
   const cast = [host, ...guests];
   const ids = cast.map((p: any) => p.id);
@@ -338,13 +372,7 @@ export async function generateProgrammeExchange({
 
   const system = exchangeSystem({ host, show, castBlock, beatTask });
 
-  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
-  if (show?.topic) ctxLines.push(`The show's brief: ${show.topic}`);
-  if (plan?.angle) ctxLines.push(`Today's episode angle: ${plan.angle}`);
-  const note = beat === 'outro' ? plan?.outroNote : plan?.introNote;
-  if (note) ctxLines.push(`Producer's note for this beat: ${note}`);
-  if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
-  if (recentOpeners?.length) ctxLines.push(`Recent opening words (start the first line differently): ${recentOpeners.join(' | ')}`);
+  const ctxLines = exchangeContextLines({ beat, show, plan, context, recap, recentOpeners, episodeSubject });
 
   const out = await djObject({
     system,

@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { chatCompletionResponse } from './test-utils/llm.js';
 import { after, beforeEach, test, type TestContext } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,6 +30,7 @@ const { withTalkAir } = await import('../src/broadcast/talk-air.js');
 
 const realSpeak = (queue as any)._speak;
 const realAirVoice = (queue as any)._airVoice;
+const realAirExchange = (queue as any)._airExchange;
 
 const template = settings.get().personas[0];
 const IRIS = { ...template, id: 'p_iris', name: 'Iris' };
@@ -70,18 +71,26 @@ beforeEach(async () => {
     return wav;
   };
   (queue as any)._airVoice = async () => true;
+  (queue as any)._airExchange = async (_channel: string,
+    clips: { wavPath: string; text: string; gainDb: number }[]) =>
+    clips.map((_clip, index) => ({ voiceId: `line-${index}`, clipMs: 100, aired: Promise.resolve(null) }));
   await settings.update({
     personas: [IRIS], activePersonaId: IRIS.id,
     shows: [{ id: SHOW, name: 'Label Show', topic: 'tests', personaId: IRIS.id, energies: ['medium'] }],
     schedule: week(), scheduleOverride: null,
+    djBehaviour: { holdDuckBetweenSpeakers: true },
     tts: { enabled: true },
   } as never);
+  // A mixer that has spoken since it started: the held duck batches an
+  // exchange only once voice markers exist (batchExchangeDelivery).
+  writeFileSync(config.liquidsoap.voicePlayingFile, JSON.stringify({ voiceId: 'earlier', startedAt: Date.now() / 1000 }));
   session.start(ctx());
 });
 
 after(async () => {
   (queue as any)._speak = realSpeak;
   (queue as any)._airVoice = realAirVoice;
+  (queue as any)._airExchange = realAirExchange;
   queue.senderBusy = false;
   await new Promise(resolve => setTimeout(resolve, 1_100));
   rmSync(root, { recursive: true, force: true });
@@ -242,10 +251,11 @@ for (const placement of ['immediate', 'next-track'] as const) {
   test(`Gemini lines receive once-cleaned cast labels and retain each speaker (${placement})`, async (t) => {
     const lines = await geminiExchange(t);
     const aired: { text: string; gain: number }[] = [];
-    (queue as any)._airVoice = async (_channel: string, _path: string, text: string, gain: number) => {
-      aired.push({ text, gain });
-      return { voiceId: `line-${aired.length}`, clipMs: 100, aired: Promise.resolve(null) };
-    };
+    (queue as any)._airExchange = async (_channel: string,
+      clips: { wavPath: string; text: string; gainDb: number }[]) => clips.map(clip => {
+        aired.push({ text: clip.text, gain: clip.gainDb });
+        return { voiceId: `line-${aired.length}`, clipMs: 100, aired: Promise.resolve(null) };
+      });
     const kind = placement === 'next-track' ? 'handoff' : 'banter';
     assert.equal(await withTalkAir(placement, () => queue.announceExchange(lines, kind, { castNames: [SOLENE.name] })), true);
     assert.deepEqual(spoken, cleanedExchange);

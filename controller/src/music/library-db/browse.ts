@@ -6,11 +6,13 @@ import { instrumentalFromJson } from '../lyric-vocal.js';
 import type { FilterOpts, TrackRecord, TrackRow } from './types.js';
 import { parsePaceSpans, rowToTrack, safeParseArray } from './rows.js';
 import { refreshSearchKeys } from './search-keys.js';
+import { eraSuspectSql } from '../era-suspect.js';
 
-// SQL twin of show-filter's resolveEraYear (#842/#1418); the OR is
-// `yearUntrusted`'s composition and the two must move together.
+// SQL twin of show-filter's resolveEraYear (#842/#1418); the suspect test is
+// `yearUntrusted`'s composition (era-suspect.eraSuspectSql) and the two must
+// move together.
 export const ERA_YEAR_SQL =
-  `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
+  `COALESCE(original_year, CASE WHEN ${eraSuspectSql()} THEN NULL ELSE year END)`;
 
 // The verdict for a WHERE scan, head first: the tail can only turn a verdict vocal,
 // so outro_json, which sits past the beat grids (#1937), is read only when it can

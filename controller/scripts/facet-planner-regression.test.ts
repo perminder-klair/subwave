@@ -164,7 +164,8 @@ test('head-only and outdated vocal work obey the retry ceiling, with deliberate 
     } finally { failAnalysis = false; }
     const cell = db.loadFacetState(['vocal']).get(id)?.get('vocal');
     assert.equal(cell?.status, 'ok', 'kept measurements are still ok');
-    assert.equal(cell?.version, 0, 'a failure cannot promote the measurement');
+    // Head-only rows are stored one below current; the outdated one was set to 0.
+    assert.equal(cell?.version, complete ? 0 : db.FACET_VERSIONS.vocal - 1, 'a failure cannot promote the measurement');
     assert.equal(cell?.attempts, db.MAX_ANALYSIS_FAILURES);
     assert.equal(db.facetNeedsIds('vocal').includes(id), false);
     assert.equal(plan(id, 'vocal').items.length, 0);
@@ -192,7 +193,7 @@ test('reopening upgrades retry bookkeeping without promoting kept versions', asy
   db.close();
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
   assert.equal(db.loadFacetState(['vocal']).get('upgrade')?.get('vocal')?.attempts, 3);
-  assert.equal(db.loadFacetState(['vocal']).get('upgrade')?.get('vocal')?.version, 0);
+  assert.equal(db.loadFacetState(['vocal']).get('upgrade')?.get('vocal')?.version, db.FACET_VERSIONS.vocal - 1);
   assert.equal(plan('upgrade', 'vocal').items.length, 0);
 });
 
@@ -200,7 +201,7 @@ test('reopening repairs a legacy null head-only reason while retaining tail prov
   seed('upgrade-null-reason', false);
   db.requireDb().prepare("UPDATE track_facet_status SET reason = NULL WHERE track_id = 'upgrade-null-reason' AND facet = 'vocal'").run();
   const before = db.loadFacetState(['vocal']).get('upgrade-null-reason')?.get('vocal');
-  assert.equal(before?.version, 0);
+  assert.equal(before?.version, db.FACET_VERSIONS.vocal - 1);
   assert.equal(before?.reason, null);
   db.upsertTrackMeta('upgrade-capped', { title: 'capped', artist: 'A', duration: 240 });
   db.upsertTrackAnalysis('upgrade-capped', { bpm: 120, source: 'capped' });
@@ -209,7 +210,7 @@ test('reopening repairs a legacy null head-only reason while retaining tail prov
   db.close();
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
   const vocal = db.loadFacetState(['vocal']).get('upgrade-null-reason')?.get('vocal');
-  assert.equal(vocal?.version, 0, 'repair must not promote a partial measurement');
+  assert.equal(vocal?.version, db.FACET_VERSIONS.vocal - 1, 'repair must not promote a partial measurement');
   assert.equal(vocal?.reason, 'head-only');
   const capped = db.loadFacetState(['tail']).get('upgrade-capped')?.get('tail');
   assert.equal(capped?.reason, 'capped-download');
@@ -322,4 +323,71 @@ test('clearing analysis resets failure history on kept vocal and stems measureme
   assert.equal(kept?.get('vocal')?.attempts, 0);
   assert.equal(kept?.get('stems')?.attempts, 0);
   assert.equal(checkFacets().driftCount, 0);
+});
+
+// #2237 bumped the vocal facet to v2 for a changed head rule. A complete row
+// measured at v1 is due again, but only through the facet planner: the legacy
+// query reads filled columns and can't see a rule change, so the consistency
+// check treats that difference as expected, not as drift.
+test('a complete vocal row from an older version is due, and the check calls it consistent', () => {
+  seed('rule-bump', true);
+  db.requireDb().prepare("UPDATE track_facet_status SET version = ? WHERE track_id = 'rule-bump' AND facet = 'vocal'")
+    .run(db.FACET_VERSIONS.vocal - 1);
+  assert.ok(db.facetNeedsIds('vocal').includes('rule-bump'));
+  assert.equal(plan('rule-bump', 'vocal').items.length, 1);
+  assert.equal(plan('rule-bump', 'vocal', 'outdated').items.length, 1);
+  assert.ok(!db.needsVocalIds(undefined, true).includes('rule-bump'), 'the legacy query cannot see it');
+  const r = checkFacets();
+  const vocal = r.scopes.find(s => s.facet === 'vocal');
+  assert.ok(!vocal?.onlyFacet.includes('rule-bump'), JSON.stringify(vocal));
+  assert.equal(r.driftCount, 0);
+  // A head-only row is still compared as before: due in both scopes.
+  seed('rule-bump-head-only', false);
+  const again = checkFacets().scopes.find(s => s.facet === 'vocal');
+  assert.ok(!again?.onlyFacet.includes('rule-bump-head-only'));
+  assert.ok(!again?.onlyLegacy.includes('rule-bump-head-only'));
+});
+
+// #2237: a tail that lands its vocal ranges completes a head-only row, and the
+// row counts as measured now only if its head was measured under the current
+// rule (stored one below current). An older head-only row (the head judged by
+// the v1 rule) completes but keeps its version, so it stays due and the next
+// vocal plan re-measures the head instead of keeping its old verdict.
+test('a tail completes a head-only row: promoted under the current rule, still due under an older one', async () => {
+  const tailWrite = {
+    source: 'full' as const,
+    tail: { outro: { startMs: 220000, ending: 'cold', vocalRanges: [] } as never, tailSilenceMs: 0, tailStartMs: 240000 },
+  };
+  seed('head-only-new', false);
+  seed('head-only-old', false);
+  db.requireDb().prepare("UPDATE track_facet_status SET version = ? WHERE track_id = 'head-only-old' AND facet = 'vocal'")
+    .run(db.FACET_VERSIONS.vocal - 2);
+  const cell = (id: string) => db.loadFacetState(['vocal']).get(id)?.get('vocal');
+  assert.equal(cell('head-only-new')?.version, db.FACET_VERSIONS.vocal - 1);
+  assert.equal(cell('head-only-new')?.reason, 'head-only');
+
+  db.writeFacetResults('head-only-new', tailWrite);
+  db.writeFacetResults('head-only-old', tailWrite);
+
+  assert.equal(cell('head-only-new')?.version, db.FACET_VERSIONS.vocal, 'a current-rule head is promoted');
+  assert.equal(plan('head-only-new', 'vocal').items.length, 0);
+
+  const old = cell('head-only-old');
+  assert.equal(old?.status, 'ok');
+  assert.equal(old?.reason, null, 'complete now');
+  assert.equal(old?.version, db.FACET_VERSIONS.vocal - 2, 'the old head keeps its version');
+  assert.ok(db.facetNeedsIds('vocal').includes('head-only-old'));
+  assert.equal(plan('head-only-old', 'vocal').items.length, 1);
+  assert.equal(checkFacets().driftCount, 0);
+  assert.ok(!checkFacets().scopes.find(s => s.facet === 'vocal')?.onlyFacet.includes('head-only-old'));
+
+  // The plan measures the head again, through the vocal facet, and settles it.
+  facetsCapable = true;
+  analyzer._resetBackendCacheForTests();
+  try {
+    await runAnalysisPass({ plan: plan('head-only-old', 'vocal') });
+    assert.ok((requests.at(-1)?.facets as string[] | undefined)?.includes('vocal'), JSON.stringify(requests.at(-1)));
+    assert.equal(cell('head-only-old')?.version, db.FACET_VERSIONS.vocal);
+    assert.equal(plan('head-only-old', 'vocal').items.length, 0);
+  } finally { facetsCapable = false; analyzer._resetBackendCacheForTests(); }
 });

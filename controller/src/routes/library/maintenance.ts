@@ -7,7 +7,9 @@ import * as db from '../../music/library-db.js';
 import * as coverage from '../../music/library-coverage.js';
 import * as subsonic from '../../music/subsonic.js';
 import * as lastfm from '../../music/lastfm.js';
+import { listAfterArtistLookup } from '../../music/lastfm-tag-policy.js';
 import * as musicbrainz from '../../music/musicbrainz.js';
+import { lookupOriginalYearAnySource } from '../../music/original-year.js';
 import * as settings from '../../settings.js';
 import * as embeddings from '../../music/embeddings.js';
 import { resolveEraYear } from '../../music/show-filter.js';
@@ -282,7 +284,11 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       genres: subsonic.songGenres(song),
     });
 
-    let lastfmTags: string[] | null = null;
+    // Seed from the row: a retag that fetches nothing, or is answered with
+    // nothing, leaves the stored list alone. Only tags replace it, by the bulk
+    // pass's rules: recordLastfmTrackTags with track tags on, listAfterArtistLookup
+    // with them off (#2295).
+    let lastfmTags: string[] | null = db.getTrack(id)?.lastfmTags ?? null;
     let lyricExcerpt: string | null = null;
     if (lastfmEnabled && song.artist) {
       try {
@@ -290,9 +296,11 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         // else Navidrome's getArtistInfo2 (#532). With track tags on, the same
         // merge and the same write as its track pass: the upsert below then sees
         // an unchanged list and leaves the stamp alone.
-        lastfmTags = trackTagsOn
-          ? db.recordLastfmTrackTags(id, await lastfm.getMergedTags(song.artist, song.title, { count: 10 }))
-          : await lastfm.getArtistTags(song.artist, { count: 10 });
+        if (trackTagsOn) {
+          lastfmTags = db.recordLastfmTrackTags(id, await lastfm.getMergedTags(song.artist, song.title, { count: 10 }));
+        } else {
+          lastfmTags = listAfterArtistLookup(lastfmTags, await lastfm.getArtistTags(song.artist, { count: 10 }));
+        }
       } catch (err) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
       }
@@ -306,10 +314,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       }
     }
     if (lastfmEnabled || lyricsEnabled) {
-      db.upsertTrackEnrichment(id, {
-        lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
-        lyricExcerpt,
-      });
+      db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
     }
 
     // 2b. Refresh the original-year resolution (best-effort, #842). Retag counts as
@@ -318,13 +323,14 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       try {
         const t = db.getTrack(id);
         if (t && musicbrainz.needsOriginalYearLookup(t, true)) {
-          const year = await musicbrainz.lookupOriginalYear({
+          const outcome = await lookupOriginalYearAnySource({
             title: song.title,
             artist: song.artist,
             mbid: song.musicBrainzId || null,
             year: Number(song.year) || null,
           });
-          db.setOriginalYear(id, year);
+          db.recordOriginalYearOutcome(id, outcome);
+          if (outcome.kind === 'error') queue.log('warn', `/library/retag enrich(originalYear) ${id}: ${outcome.reason}`);
         }
       } catch (err) {
         queue.log('warn', `/library/retag enrich(originalYear) ${id}: ${err.message}`);

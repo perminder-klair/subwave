@@ -15,15 +15,65 @@ const liveTracks = [
   { id: 'live-collaboration', artistId: 'combined', artist: 'Live & Guest', title: 'Collaboration', duration: 180, albumArtists: [{ id: 'live', name: 'Live' }] },
   { id: 'guest-credit', artistId: 'another', artist: 'Another & Live', title: 'Guest', duration: 180, artists: [{ id: 'another' }, { id: 'live' }], albumArtists: [{ id: 'another' }, { id: 'live' }] },
 ];
+// getArtist's song total for the guest-* artists: above any mirror count they
+// seed, so their catalogue always takes the albums fallback.
+const GUEST_ALBUM_SONGS = 9;
+// #2333, the issue's Bill Evans layout. getArtist lists his own record, a Trio
+// record (album artist Bill, track credit the group's own id) and a duet record
+// filed first under Tony Bennett; the Konitz record, where Bill is the first
+// track artist, is not listed. His tracks are the own, Trio and Konitz songs:
+// seven, below the eight songs Navidrome counts on his albums, as in the issue.
+const billSong = (id: string, album: string, artistId: string, albumArtists: string[], artists = [artistId]) => ({
+  id, title: id, artist: artistId, artistId, album, albumId: album, duration: 180,
+  artists: artists.map(a => ({ id: a })), albumArtists: albumArtists.map(a => ({ id: a })),
+});
+const BILL_ALBUMS: Record<string, Array<ReturnType<typeof billSong>>> = {
+  'bill-own': ['own-1', 'own-2', 'own-3'].map(id => billSong(id, 'bill-own', 'bill', ['bill'])),
+  'bill-trio': ['trio-1', 'trio-2'].map(id => billSong(id, 'bill-trio', 'bill-trio-group', ['bill'])),
+  'bill-duets': ['duet-1', 'duet-2', 'duet-3'].map(id => billSong(id, 'bill-duets', 'tony', ['tony', 'bill'])),
+};
+const KONITZ = ['konitz-1', 'konitz-2'].map(id => billSong(id, 'konitz-record', 'bill', ['konitz', 'giuffre'], ['bill', 'konitz']));
+// Navidrome before 0.55: songs list no artists or albumArtists, and a track
+// whose artist is not a library artist carries no artistId at all. Only the
+// album record names the artist, through its own artistId.
+const OLD_SERVER_SONGS = [
+  { id: 'old-own', title: 'Own', artist: 'Old Leader', artistId: 'old-leader', duration: 180 },
+  { id: 'old-trio', title: 'Trio', artist: 'Old Leader Trio', duration: 180 },
+];
+// A 129-album artist (over the fan-out cap), one song an album.
+const BIG_ALBUMS = Array.from({ length: 129 }, (_, i) => ({ id: `big-${i}`, songCount: 1, artistId: 'big' }));
+// A partly walked mirror: an own record of three (one never reached by the
+// mirror), a group-credited Trio record and a duet record filed first under
+// someone else, plus a guest record getArtist does not list.
+const PART_ALBUMS: Record<string, Array<ReturnType<typeof billSong>>> = {
+  'part-own': ['po-1', 'po-2', 'po-3'].map(id => billSong(id, 'part-own', 'part', ['part'])),
+  'part-trio': ['pt-1', 'pt-2'].map(id => billSong(id, 'part-trio', 'part-group', ['part'])),
+  'part-duets': ['pd-1', 'pd-2'].map(id => billSong(id, 'part-duets', 'tony', ['tony', 'part'])),
+};
+const BILL_TRACKS = ['konitz-1', 'konitz-2', 'own-1', 'own-2', 'own-3', 'trio-1', 'trio-2'];
 const server = createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
   const id = url.searchParams.get('id');
   let body: Record<string, unknown> = {};
-  if (url.pathname.endsWith('/getArtist')) body = { artist: { id, name: id === 'live' ? 'Live' : 'Artist', album: [{ id: 'album', songCount: id === 'live' ? 5 : 4 }] } };
+  if (url.pathname.endsWith('/getArtist') && id === 'old-leader') {
+    body = { artist: { id, name: 'Old Leader', album: [{ id: 'old-album', songCount: OLD_SERVER_SONGS.length, artistId: 'old-leader' }] } };
+  } else if (url.pathname.endsWith('/getArtist') && id === 'big') {
+    body = { artist: { id, name: 'Big', album: BIG_ALBUMS } };
+  } else if (url.pathname.endsWith('/getArtist') && id === 'part') {
+    body = { artist: { id, name: 'Part', album: Object.entries(PART_ALBUMS).map(([album, songs]) => ({ id: album, songCount: songs.length, artistId: album === 'part-duets' ? 'tony' : 'part' })) } };
+  } else if (url.pathname.endsWith('/getArtist') && id?.startsWith('bill')) {
+    body = { artist: { id, name: 'Bill Evans', album: Object.entries(BILL_ALBUMS).map(([album, songs]) => ({ id: album, songCount: songs.length, artistId: album === 'bill-duets' ? 'tony' : 'bill' })) } };
+  } else if (url.pathname.endsWith('/getArtist')) body = { artist: { id, name: id === 'live' ? 'Live' : 'Artist', album: [{ id: 'album', songCount: id === 'live' ? 5 : id?.startsWith('guest-') ? GUEST_ALBUM_SONGS : 4 }] } };
+  if (url.pathname.endsWith('/getGenres')) body = { genres: { genre: [{ value: 'Jazz' }] } };
   if (url.pathname.endsWith('/getArtists')) body = { artists: { index: [{ artist: [{ id: 'artist', name: 'Artist' }, { id: 'live', name: 'Live' }] }] } };
-  if (url.pathname.endsWith('/getAlbum')) { albumCalls++; body = { album: { song: liveTracks } }; }
-  if (url.pathname.endsWith('/getPlaylists')) body = { playlists: { playlist: [{ id: 'pin', name: 'Pinned' }, { id: 'exclude', name: 'Excluded' }] } };
-  if (url.pathname.endsWith('/getPlaylist')) body = { playlist: { entry: id === 'pin' ? [{ id: 'one', title: 'One', artist: 'Artist' }, { id: 'two', title: 'Two', artist: 'Artist' }] : [{ id: 'two', title: 'Two', artist: 'Artist' }] } };
+  if (url.pathname.endsWith('/getAlbum')) { albumCalls++; body = { album: { id, song: id === 'old-album' ? OLD_SERVER_SONGS : (id && (BILL_ALBUMS[id] ?? PART_ALBUMS[id])) || liveTracks } }; }
+  if (url.pathname.endsWith('/getPlaylists')) body = { playlists: { playlist: [{ id: 'pin', name: 'Pinned' }, { id: 'exclude', name: 'Excluded' }, { id: 'guest', name: 'Guest' }] } };
+  if (url.pathname.endsWith('/getPlaylist')) {
+    const entry = id === 'pin' ? [{ id: 'one', title: 'One', artist: 'Artist' }, { id: 'two', title: 'Two', artist: 'Artist' }]
+      : id === 'guest' ? [{ id: 'guest-konitz', title: 'Konitz', artist: 'Guest, Leader' }]
+        : [{ id: 'two', title: 'Two', artist: 'Artist' }];
+    body = { playlist: { entry } };
+  }
   res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ 'subsonic-response': { status: 'ok', ...body } }));
 });
 await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -43,7 +93,7 @@ const { showSchema } = await import('../src/schemas/show.js');
 await settings.load(); await library.load(); await blocklist.load();
 after(async () => { db.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await removeTempDir(root); });
 for (const [id, title] of [['one', 'One'], ['two', 'Two'], ['duplicate', 'One'], ['short', 'Short']]) {
-  db.upsertTrackMeta(id, { title, artist: 'Artist', artistId: 'artist', album: 'Album', albumId: 'album', duration: id === 'short' ? 10 : 180 });
+  db.upsertTrackMeta(id, { title, artist: 'Artist', artistId: 'artist', albumArtistId: 'artist', album: 'Album', albumId: 'album', duration: id === 'short' ? 10 : 180 });
 }
 db.upsertTrackMeta('outsider', { title: 'Other', artist: 'Artist Junior', artistId: 'other', duration: 180 });
 function show(fields: Record<string, unknown> = {}) {
@@ -54,8 +104,9 @@ function show(fields: Record<string, unknown> = {}) {
 }
 
 test('the complete untagged mirror uses exact artist ids and deduplicates audible identities', async () => {
+  const calls = albumCalls;
   const source = await resolveArtistEpisodeSource('artist', show(), 'episode-one');
-  assert.equal(albumCalls, 0, 'a complete mirror needs no album fan-out');
+  assert.equal(albumCalls - calls, 0, 'a complete mirror needs no album fan-out');
   assert.deepEqual([...source.ids], ['one', 'two']);
   assert.deepEqual(db.artistIdentities(3), [{ id: 'artist', name: 'Artist' }]);
   assert.deepEqual(await randomLibraryArtist({ minDistinctTracks: 3 }), { id: 'artist', name: 'Artist' });
@@ -96,9 +147,155 @@ test('a clean episode drops tagged tracks before the strict locks; nothing clean
 });
 
 test('an incomplete mirror falls back to targeted albums and rejects another artist in the same album', async () => {
+  const calls = albumCalls;
   const source = await resolveArtistEpisodeSource('live', show(), 'episode-live');
   assert.deepEqual([...source.ids], ['live-one', 'live-two', 'live-collaboration']);
-  assert.equal(albumCalls, 1);
+  assert.equal(albumCalls - calls, 1);
+});
+
+// #2333: getArtist lists only the albums the artist is an album artist on, so a
+// track credited first to them on someone else's record is in the mirror alone.
+// Each test seeds its own artist id, below GUEST_ALBUM_SONGS, so the albums path
+// runs and no test reads another's rows or cached catalogue.
+const removeArtistRows = (artistId: string) => db.getDb()!.prepare('DELETE FROM tracks WHERE artist_id = ?').run(artistId);
+
+test('the albums fallback keeps a first credit on another artist\'s album from the mirror', async () => {
+  db.upsertTrackMeta('guest-konitz', { title: 'Konitz', artist: 'Guest, Leader', artistId: 'guest-lead', album: "Leader's Record", albumId: 'elsewhere', duration: 180 });
+  try {
+    const source = await resolveArtistEpisodeSource('guest-lead', show(), 'episode-guest');
+    assert.deepEqual([...source.ids], ['guest-konitz']);
+    const strict = await resolveArtistEpisodeSource('guest-lead', show({ playlistIds: ['guest'], playlistStrict: true }), 'episode-guest');
+    assert.deepEqual([...strict.ids], ['guest-konitz'], 'the strict playlist holding only that record airs it');
+  } finally {
+    removeArtistRows('guest-lead');
+  }
+});
+
+test('a catalogue with none of its tracks in the strict playlist names the playlist as the cause', async () => {
+  db.upsertTrackMeta('guest-sideman', { title: 'Sideman', artist: 'Guest, Leader', artistId: 'guest-sideman', album: "Leader's Record", albumId: 'elsewhere', duration: 180 });
+  try {
+    await assert.rejects(
+      resolveArtistEpisodeSource('guest-sideman', show({ playlistIds: ['pin'], playlistStrict: true }), 'episode-sideman'),
+      /None of this artist's tracks are in the show's playlists/,
+    );
+  } finally {
+    removeArtistRows('guest-sideman');
+  }
+});
+
+test('mirror-only rows on the albums path go through the explicit, strict-lock and length filters', async () => {
+  const seed = (id: string, fields: Record<string, unknown>) => db.upsertTrackMeta(id, {
+    title: id, artist: 'Guest', artistId: 'guest-filters', album: 'Other Record', albumId: 'elsewhere', duration: 180, genres: ['Jazz'], ...fields,
+  });
+  seed('gf-explicit', { explicitStatus: 'explicit' });
+  seed('gf-clean', { explicitStatus: 'clean' });
+  seed('gf-short', { duration: 10 });
+  seed('gf-rock', { genres: ['Rock'] });
+  try {
+    const open = await resolveArtistEpisodeSource('guest-filters', show(), 'episode-gf');
+    assert.deepEqual([...open.ids].sort(), ['gf-clean', 'gf-explicit', 'gf-rock'], 'the length floor drops the short row');
+    const filtered = await resolveArtistEpisodeSource('guest-filters', show({ excludeExplicit: true, filtersStrict: true, genres: ['Jazz'] }), 'episode-gf');
+    assert.deepEqual([...filtered.ids], ['gf-clean']);
+  } finally {
+    removeArtistRows('guest-filters');
+  }
+});
+
+test('both paths return one set for the issue layout: own, group-credited and guest records, never a second album artist', async () => {
+  // The mirror as the walk stores it (album_artist_id = the song's first album
+  // artist); getAlbum answers the same songs.
+  for (const song of [...Object.values(BILL_ALBUMS).flat(), ...KONITZ]) {
+    db.upsertTrackMeta(song.id, {
+      title: song.title, artist: song.artist, artistId: song.artistId, album: song.album, albumId: song.albumId,
+      albumArtistId: song.albumArtists[0].id, duration: 180,
+    });
+  }
+  try {
+    const before = albumCalls;
+    const mirrorPath = await resolveArtistEpisodeSource('bill', show(), 'episode-bill-same');
+    assert.equal(albumCalls - before, 0, 'walked and covering the albums\' song count: the mirror path, no fan-out');
+    assert.deepEqual([...mirrorPath.ids].sort(), BILL_TRACKS, 'the Trio record survives the mirror path; the duets do not');
+    // One row not walked since the column arrived: the mirror is not trusted,
+    // so the merged albums fallback builds the catalogue instead.
+    // The Trio rows, so only the albums path's credit rule can bring them back.
+    db.getDb()!.prepare(`UPDATE tracks SET album_artist_id = NULL WHERE album_id = 'bill-trio'`).run();
+    const realNow = Date.now;
+    Date.now = () => realNow() + 61_000; // past the minute catalogue cache
+    try {
+      const calls = albumCalls;
+      const albumsPath = await resolveArtistEpisodeSource('bill', show(), 'episode-bill-same');
+      assert.equal(albumCalls - calls, 3, 'an un-walked row sends the catalogue to the albums');
+      assert.deepEqual([...albumsPath.ids].sort(), [...mirrorPath.ids].sort());
+      assert.deepEqual([...albumsPath.ids].sort(), BILL_TRACKS);
+    } finally {
+      Date.now = realNow;
+    }
+  } finally {
+    db.getDb()!.prepare('DELETE FROM tracks WHERE album_id IN (?, ?, ?, ?)').run('bill-own', 'bill-trio', 'bill-duets', 'konitz-record');
+  }
+});
+
+test('an un-walked mirror short of the count falls back to the merged albums, as before', async () => {
+  // Rows from before album_artist_id (NULL), fewer than getArtist counts (4).
+  for (const id of ['uw-1', 'uw-2', 'uw-3']) {
+    db.upsertTrackMeta(id, { title: id, artist: 'Unwalked', artistId: 'unwalked', album: 'Album', albumId: 'album', duration: 180 });
+  }
+  try {
+    const calls = albumCalls;
+    const source = await resolveArtistEpisodeSource('unwalked', show(), 'episode-unwalked');
+    assert.equal(albumCalls - calls, 1);
+    // The fallback keeps the mirror's own rows (the #2334 merge).
+    assert.deepEqual([...source.ids].sort(), ['uw-1', 'uw-2', 'uw-3']);
+  } finally {
+    removeArtistRows('unwalked');
+  }
+});
+
+test('before its next walk, an upgraded mirror is trusted as before: a 129-album artist answers from it, not the cap', async () => {
+  // Rows a pre-column walk wrote (album_artist_id NULL), one per album: the
+  // artist's own rows reach getArtist's count, which is what trusted it before.
+  BIG_ALBUMS.forEach(({ id }, i) => db.upsertTrackMeta(`big-track-${i}`, {
+    title: `Big ${i}`, artist: 'Big', artistId: 'big', album: id, albumId: id, duration: 180,
+  }));
+  try {
+    const calls = albumCalls;
+    const source = await resolveArtistEpisodeSource('big', show(), 'episode-big');
+    assert.equal(albumCalls - calls, 0, 'no album fan-out, so no cap to hit');
+    assert.equal(source.ids.size, 129);
+  } finally {
+    removeArtistRows('big');
+  }
+});
+
+test('a partly walked mirror counts only the artist\'s own rows, so a walked group record never hides a missing song', async () => {
+  // Own rows po-1 (walked) and po-2 (not yet); po-3 never reached the mirror.
+  // Three guest rows on another record, and the walked Trio rows, which the
+  // mirror credits only through album_artist_id. Own rows: 5, below getArtist's
+  // 7 songs, so the albums path runs, as it did before the column. Counting
+  // the Trio rows too would reach 7 and trust a mirror without po-3.
+  const seed = (id: string, artistId: string, albumId: string, albumArtistId?: string) =>
+    db.upsertTrackMeta(id, { title: id, artist: artistId, artistId, album: albumId, albumId, albumArtistId, duration: 180 });
+  seed('po-1', 'part', 'part-own', 'part');
+  seed('po-2', 'part', 'part-own');
+  for (const id of ['pg-1', 'pg-2', 'pg-3']) seed(id, 'part', 'part-guest', 'leader');
+  seed('pt-1', 'part-group', 'part-trio', 'part');
+  seed('pt-2', 'part-group', 'part-trio', 'part');
+  try {
+    const calls = albumCalls;
+    const source = await resolveArtistEpisodeSource('part', show(), 'episode-part');
+    assert.equal(albumCalls - calls, 3, 'short on its own rows: the albums path');
+    assert.deepEqual([...source.ids].sort(), ['pg-1', 'pg-2', 'pg-3', 'po-1', 'po-2', 'po-3', 'pt-1', 'pt-2']);
+  } finally {
+    for (const artistId of ['part', 'part-group']) removeArtistRows(artistId);
+  }
+});
+
+test('a server without albumArtists credits the artist through the album record\'s artistId', async () => {
+  const calls = albumCalls;
+  const source = await resolveArtistEpisodeSource('old-leader', show(), 'episode-old');
+  assert.equal(albumCalls - calls, 1);
+  // The Trio song names no artist id of its own: its record is filed under the artist.
+  assert.deepEqual([...source.ids].sort(), ['old-own', 'old-trio']);
 });
 
 test('every picker discovery result intersects the artist source before seen; artist caps yield and track recency holds', async () => {

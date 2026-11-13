@@ -7,11 +7,13 @@
 //
 // API etiquette (https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting):
 // keyless, but strictly 1 req/s per client with a descriptive User-Agent, so
-// every call funnels through the module-level throttle chain below. Failures
-// return null with no retry — the enrichment loop is resumable and a miss is
-// stamped so it isn't re-queried every pass.
+// every call funnels through the module-level throttle chain below. A lookup
+// answers found / not-found / error (music/original-year-policy.ts): only a
+// real answer is stamped on the track, so a timeout or an HTTP error is retried
+// later instead of becoming a permanent miss.
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { retryWaitMs, yearErrorReason, type OriginalYearOutcome } from './original-year-policy.js';
 
 const MB_API = 'https://musicbrainz.org/ws/2';
 // MB asks for app + contact in the UA; version stays coarse so it can't drift
@@ -100,8 +102,9 @@ export function earliestOriginalYear(
 //
 // The gate is era SUSPICION, not Navidrome's compilation flag (#1418) — the
 // reissue anthologies it exists for arrive as `isCompilation: false`.
-// `yearUntrusted` is composed once in the row mapper (flag OR derived
-// judgement); passing the raw flag would silently reopen the gap.
+// `yearUntrusted` is composed once in the row mapper (era-suspect
+// storedYearUntrusted: the walk's stored verdict once it has one, the raw flag
+// only before); passing the raw flag would silently reopen the gap.
 //
 // Any resolved year means there is nothing to ask. A checked-but-missed stamp
 // skips the track unless the operator asked for a re-enrich; a MANUAL answer is
@@ -126,11 +129,23 @@ async function searchRecordings(query: string): Promise<MbRecording[]> {
   // a heavily re-released track's original often falls outside the top 25 and
   // the earliest-year fold wants the widest set one request can carry.
   const url = `${MB_API}/recording?query=${encodeURIComponent(query)}&fmt=json&limit=100`;
-  const res = await fetchWithTimeout(url, {
+  const get = () => fetchWithTimeout(url, {
     timeoutMs: TIMEOUT_MS,
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
   });
-  if (!res.ok) return [];
+  let res = await get();
+  // A busy MusicBrainz answers 503: asked once more after its Retry-After,
+  // still inside the caller's throttle slot. The retry is a request too, so
+  // the throttle's clock moves to it and the next request keeps the 1 req/s gap.
+  const wait = retryWaitMs(res.status, res.headers.get('retry-after'));
+  if (wait != null) {
+    await new Promise((r) => setTimeout(r, wait));
+    lastStart = Date.now();
+    res = await get();
+  }
+  // Any non-2xx is a question MusicBrainz did not answer (a 503 is its rate
+  // limit), never an empty result: thrown, so the lookup reports an error.
+  if (!res.ok) throw new Error(`MusicBrainz HTTP ${res.status}`);
   const body = (await res.json()) as { recordings?: MbRecording[] };
   return Array.isArray(body.recordings) ? body.recordings : [];
 }
@@ -164,14 +179,15 @@ export function primaryArtist(artist: string): string {
 
 // Resolve the original release year for one track: MBID first (exact), then a
 // title+artist phrase search, then a retry with suffixes stripped and the
-// primary artist only. `year` (the file's own) caps every candidate. Returns
-// null on no confident match or any request failure; never throws.
+// primary artist only. `year` (the file's own) caps every candidate. `found`
+// on a confident match, `not-found` when every search was answered without
+// one, `error` when any request failed (the answer is unknown). Never throws.
 export async function lookupOriginalYear(track: {
   title?: string | null;
   artist?: string | null;
   mbid?: string | null;
   year?: number | null;
-}): Promise<number | null> {
+}): Promise<OriginalYearOutcome> {
   const title = (track.title ?? '').trim();
   const artist = (track.artist ?? '').trim();
   const mbid = (track.mbid ?? '').trim();
@@ -180,9 +196,9 @@ export async function lookupOriginalYear(track: {
     if (mbid) {
       const recs = await throttled(() => searchRecordings(`rid:${mbid}`));
       const y = earliestOriginalYear(recs, { title, artist, trusted: true, maxYear });
-      if (y != null) return y;
+      if (y != null) return { kind: 'found', year: y };
     }
-    if (!title || !artist) return null;
+    if (!title || !artist) return { kind: 'not-found' };
     const attempts: Array<{ t: string; a: string }> = [{ t: title, a: artist }];
     const stripped = stripTitleNoise(title);
     const primary = primaryArtist(artist);
@@ -194,10 +210,10 @@ export async function lookupOriginalYear(track: {
       // Match the ATTEMPT's title (stripped-to-stripped on the retry) but always
       // the full artist string.
       const y = earliestOriginalYear(recs, { title: at.t, artist, maxYear });
-      if (y != null) return y;
+      if (y != null) return { kind: 'found', year: y };
     }
-    return null;
-  } catch {
-    return null;
+    return { kind: 'not-found' };
+  } catch (err) {
+    return { kind: 'error', reason: yearErrorReason(err) };
   }
 }

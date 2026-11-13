@@ -56,12 +56,14 @@ const realDirectorRun = directorAgent.run;
 const realForcedRun = forcedDirectorAgent.run;
 const realSpeak = (queue as any)._speak;
 const realAirVoice = (queue as any)._airVoice;
+const realAirExchange = (queue as any)._airExchange;
 
 beforeEach(async () => {
   directorAgent.run = realDirectorRun;
   forcedDirectorAgent.run = realForcedRun;
   (queue as any)._speak = async () => '/tmp/scheduled-skill.wav';
   (queue as any)._airVoice = realAirVoice;
+  (queue as any)._airExchange = realAirExchange;
   queue.senderBusy = true;
   queue.upcoming = [];
   queue.current = null;
@@ -74,6 +76,7 @@ beforeEach(async () => {
     skills: { enabled: { 'host-race': true } },
     llm: { pickerAgent: true },
     sfx: { enabled: false },
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   session.start(ctx());
   await loadSkills();
@@ -84,6 +87,7 @@ after(async () => {
   forcedDirectorAgent.run = realForcedRun;
   (queue as any)._speak = realSpeak;
   (queue as any)._airVoice = realAirVoice;
+  (queue as any)._airExchange = realAirExchange;
   queue.senderBusy = false;
   await new Promise(resolve => setTimeout(resolve, 1_100));
   rmSync(root, { recursive: true, force: true });
@@ -159,6 +163,13 @@ test('an eligible guest skill and a co-host exchange survive a host edit', async
     opts?.onQueued?.({ voiceId: `voice-${accepted}`, clipMs: 1_000, estimatedAirInMs: 0 });
     return { voiceId: `voice-${accepted}`, clipMs: 1_000, aired: Promise.resolve(null) };
   };
+  (queue as any)._airExchange = async (_file: string, clips: { onQueued?: (q: any) => void }[]) =>
+    clips.map(clip => {
+      accepted += 1;
+      const voiceId = `voice-${accepted}`;
+      clip.onQueued?.({ voiceId, clipMs: 1_000, estimatedAirInMs: 0 });
+      return { voiceId, clipMs: 1_000, aired: Promise.resolve(null) };
+    });
 
   const guestModel = deferred<any>();
   let guestStarted = false;

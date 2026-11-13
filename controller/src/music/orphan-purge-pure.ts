@@ -42,11 +42,12 @@ export const ORPHANED_AT = '.orphaned-at';
  *  existing walk that filters dot-entries keeps ignoring it. */
 export const NAME_SIDECAR = '.track-meta.json';
 
-// What the analyzer writes into a track's dir (write_stems, write_tail_meta):
-// <window>-<stem>.flac and tail-meta.json, each through a .tmp a crash can leave
-// behind. The stem is the model's own source name, not a fixed four: a
+// What the analyzer writes into a track's dir (write_stems, write_tail_meta,
+// write_head_meta): <window>-<stem>.flac, tail-meta.json and head-meta.json
+// (the windows' provenance stamps, #2238), each through a .tmp a crash can
+// leave behind. The stem is the model's own source name, not a fixed four: a
 // non-default DEMUCS_MODEL writes guitar and piano too.
-const STEM_FILE = /^(?:(?:head|tail)-[a-z0-9_]+\.flac|tail-meta\.json)(?:\.tmp)?$/;
+const STEM_FILE = /^(?:(?:head|tail)-[a-z0-9_]+\.flac|(?:head|tail)-meta\.json)(?:\.tmp)?$/;
 
 /**
  * Pure: do these directory entries read as a track's stem dir? "Not a known id"

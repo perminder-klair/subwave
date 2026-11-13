@@ -12,6 +12,7 @@ import {
   classifyTopTagsResponse,
   dropNameEchoes,
   keepStoredTags,
+  listAfterArtistLookup,
   mergeCrowdTags,
 } from '../src/music/lastfm-tag-policy.js';
 import { compileRules, ruleMatches, type BlockRule } from '../src/music/blocklist-rules.js';
@@ -149,4 +150,14 @@ test('with no track tags the artist list passes through unchanged', () => {
   const artist = Array.from({ length: 10 }, (_, i) => `a${i}`);
   assert.deepEqual(mergeCrowdTags([], artist), artist);
   assert.deepEqual(mergeCrowdTags([], []), []);
+});
+
+// The artist-only lookup can't tell an outage from an act with no tags (#2295).
+test('only an artist answer with tags on it replaces a stored list, and replaces it whole', () => {
+  assert.deepEqual(listAfterArtistLookup(['rock', 'indie'], ['pop']), ['pop']);
+  assert.deepEqual(listAfterArtistLookup(['rock', 'indie'], []), ['rock', 'indie']);
+  assert.deepEqual(listAfterArtistLookup(['rock', 'indie'], null), ['rock', 'indie']);
+  assert.deepEqual(listAfterArtistLookup(['rock', 'indie'], undefined), ['rock', 'indie']);
+  assert.deepEqual(listAfterArtistLookup(null, ['pop']), ['pop']);
+  assert.equal(listAfterArtistLookup(null, []), null);
 });
