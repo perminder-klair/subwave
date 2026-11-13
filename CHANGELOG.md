@@ -12,6 +12,47 @@
   independent. Operators who already reconfigured profiles under #1777 must
   mark those profiles before upgrading. See [upgrade and recovery steps](docs/multi-station.md#upgrading-existing-profiles).
 
+## [1.32.0](https://github.com/perminder-klair/subwave/compare/v1.31.0...v1.32.0) (2026-11-13)
+
+
+### Features
+
+* **analysis:** place the tail window where the music stops (tail v2) ([#2284](https://github.com/perminder-klair/subwave/issues/2284)) ([14ebf49](https://github.com/perminder-klair/subwave/commit/14ebf494f99b0aa0c1bac5ecc39ec081e37c531b))
+* **library:** era review: why an album's year is distrusted, a decision per album, and an export ([#2274](https://github.com/perminder-klair/subwave/issues/2274)) ([089509e](https://github.com/perminder-klair/subwave/commit/089509e21ef1df2dabeb8ad0eccaf9943b211ce0))
+* **library:** the original year is a facet, with found / not found / error kept apart, and Discogs as its fallback ([#2288](https://github.com/perminder-klair/subwave/issues/2288)) ([47dcbeb](https://github.com/perminder-klair/subwave/commit/47dcbebc17976829a37743b0ab21b9ab37938a7a))
+* **platter:** turn the song's lyrics as a wheel in focus mode, and hold the record's sheen still ([#2303](https://github.com/perminder-klair/subwave/issues/2303)) ([eb39db5](https://github.com/perminder-klair/subwave/commit/eb39db522253e5d49d1c69798a1cfef183ae6b97))
+* **stats:** show each country's flag in Who's listening's Top countries ([#2309](https://github.com/perminder-klair/subwave/issues/2309)) ([8afd325](https://github.com/perminder-klair/subwave/commit/8afd325b97aa1cb0726d673a165b803b23485afd))
+* **talk:** hold the music duck between presenters (opt-in) ([#2300](https://github.com/perminder-klair/subwave/issues/2300)) ([558ece2](https://github.com/perminder-klair/subwave/commit/558ece2129b01414bc6fd91fd976d847a838f847))
+
+
+### Bug Fixes
+
+* **admin:** stop presenting hosted ceilings as plan limits ([#2277](https://github.com/perminder-klair/subwave/issues/2277)) ([e8cf2ad](https://github.com/perminder-klair/subwave/commit/e8cf2ad1b432d10ecf1ee0f581d16ee234b744b6))
+* **analysis:** a vocal-only plan also places a due tail, so one separation settles both ([#2329](https://github.com/perminder-klair/subwave/issues/2329)) ([4389f95](https://github.com/perminder-klair/subwave/commit/4389f954982109b2268b44931310b517aed16084))
+* **analysis:** keep stored tail vocals when a vocal-on pass's tail separation fails ([#2324](https://github.com/perminder-klair/subwave/issues/2324)) ([89833ed](https://github.com/perminder-klair/subwave/commit/89833ed094f0f478b575b909b93dbd45ad88323c))
+* **analyzer:** resend a request that dies on a stale keep-alive socket ([#2271](https://github.com/perminder-klair/subwave/issues/2271)) ([d54e632](https://github.com/perminder-klair/subwave/commit/d54e6324f8dcf003de600877b636b248a2b0b5e8))
+* **analyzer:** stop the opening vocal check reading bleed as singing ([#2312](https://github.com/perminder-klair/subwave/issues/2312)) ([a1924d9](https://github.com/perminder-klair/subwave/commit/a1924d97bb08dde2ed5958d670b153307a80e653)), closes [#2237](https://github.com/perminder-klair/subwave/issues/2237)
+* **episodes:** one set of an artist's tracks, whichever path builds the catalogue ([#2337](https://github.com/perminder-klair/subwave/issues/2337)) ([5a8b386](https://github.com/perminder-klair/subwave/commit/5a8b3863457ac85816d0d0ffcc8a2550c0afca4c)), closes [#2333](https://github.com/perminder-klair/subwave/issues/2333)
+* **episodes:** the albums fallback keeps an artist's first credits on other records ([#2334](https://github.com/perminder-klair/subwave/issues/2334)) ([7eb0bef](https://github.com/perminder-klair/subwave/commit/7eb0bef4e81e2e7f4bcf485ba9f295c4431e1c67)), closes [#2333](https://github.com/perminder-klair/subwave/issues/2333)
+* **handoff:** don't reopen the ending show on a show-to-autonomous mic-pass ([#2307](https://github.com/perminder-klair/subwave/issues/2307)) ([e2a77ec](https://github.com/perminder-klair/subwave/commit/e2a77ec89b21ee398fd5838c4aa5a103502c65e7))
+* **library:** a blocked track and a heart follow their file; the never-play list is backed up ([#2272](https://github.com/perminder-klair/subwave/issues/2272)) ([0125249](https://github.com/perminder-klair/subwave/commit/012524903fb1463c291958ecaacba6cd8af24fae))
+* **library:** a track that leaves a one-year album gets its own year back ([#2327](https://github.com/perminder-klair/subwave/issues/2327)) ([916ac3c](https://github.com/perminder-klair/subwave/commit/916ac3c8851091ad7b1d5ceea1efdcdc0cf2ff89)), closes [#2319](https://github.com/perminder-klair/subwave/issues/2319)
+* **library:** keep Last.fm tags through a Retag that fetches nothing ([#2298](https://github.com/perminder-klair/subwave/issues/2298)) ([0d72340](https://github.com/perminder-klair/subwave/commit/0d723403506a535232e053132e88948a3aa0c7f1))
+* **observatory:** fit the sound map on a sample so large libraries stop running out of heap ([#2331](https://github.com/perminder-klair/subwave/issues/2331)) ([103386b](https://github.com/perminder-klair/subwave/commit/103386b210866bdaafc88be0bea9c36a9420a8b5))
+* **observatory:** hold the sound-map boot retry only after running out of memory ([#2335](https://github.com/perminder-klair/subwave/issues/2335)) ([dd124b0](https://github.com/perminder-klair/subwave/commit/dd124b0bffc074abf030ce975046ca01eef827bd))
+* **picker:** relax track recency for the discovery list, not per source ([#2326](https://github.com/perminder-klair/subwave/issues/2326)) ([b54b910](https://github.com/perminder-klair/subwave/commit/b54b9107c0a3bb754984d8bd58b000f1c8f27917))
+* **programme:** one rule for a no-subject plan's angle across every beat ([#2336](https://github.com/perminder-klair/subwave/issues/2336)) ([8c2b57c](https://github.com/perminder-klair/subwave/commit/8c2b57c176e28d5d7334516781031be0de98f8bf))
+* **programme:** wait for the episode preparation before planning or greeting with its angle ([#2330](https://github.com/perminder-klair/subwave/issues/2330)) ([2f74fc5](https://github.com/perminder-klair/subwave/commit/2f74fc5e3a54a51c05da4b1ea7bb3c65852d57ea)), closes [#2321](https://github.com/perminder-klair/subwave/issues/2321)
+* **recency:** an artist episode never repeats a track within an airing, and honours full rotation ([#2325](https://github.com/perminder-klair/subwave/issues/2325)) ([b87e47c](https://github.com/perminder-klair/subwave/commit/b87e47c1e894a0a4691607d004b57ec1b321185c))
+* **skills:** honour talk-only-between-tracks for cron skills ([#2299](https://github.com/perminder-klair/subwave/issues/2299)) ([fff29ab](https://github.com/perminder-klair/subwave/commit/fff29ab36673320d6c8fe1f6322324b4f3dd1dd6))
+* **stems:** a dropped or moved stem dir comes off the stored cache size ([#2273](https://github.com/perminder-klair/subwave/issues/2273)) ([7ae57b3](https://github.com/perminder-klair/subwave/commit/7ae57b3492ad60b62481782f772fc6ef9cedc3ad))
+* **stems:** stamp each stem window with its recording so a rewrite never mixes two ([#2328](https://github.com/perminder-klair/subwave/issues/2328)) ([2518733](https://github.com/perminder-klair/subwave/commit/251873382f0f3e5679e93d1afd18397b18413539))
+
+
+### Documentation
+
+* **homeassistant:** request a song from Assist or a dashboard ([#2306](https://github.com/perminder-klair/subwave/issues/2306)) ([16ab4e6](https://github.com/perminder-klair/subwave/commit/16ab4e638614087d0d860d8dbb2088b74a7b2462))
+
 ## [1.31.0](https://github.com/perminder-klair/subwave/compare/v1.30.0...v1.31.0) (2026-11-09)
 
 
