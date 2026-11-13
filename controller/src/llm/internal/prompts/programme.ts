@@ -314,6 +314,37 @@ Rules:
 - ${PROGRAMME_GROUNDING_RULE}${langClause}${settings.castHouseRulesBlock()}`;
 }
 
+// The guest exchange's prompt lines, a pure builder for the same reason as
+// introTask: the test renders what the model is actually sent. The intro is
+// given the chosen subject while the plan is pending (#2321), and its producer
+// note only alongside an angle, as the solo intro's planClause does.
+export interface ExchangeContextArgs {
+  beat: 'intro' | 'outro';
+  show?: { name?: string; topic?: string | null } | null;
+  plan?: { angle?: string | null; introNote?: string | null; outroNote?: string | null } | null;
+  context?: Parameters<typeof buildContextLines>[0];
+  recap?: string | null;
+  recentOpeners?: string[] | null;
+  episodeSubject?: string | null;
+}
+
+export function exchangeContextLines({
+  beat, show, plan = null, context = null, recap = null, recentOpeners = null, episodeSubject = null,
+}: ExchangeContextArgs): string[] {
+  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
+  if (show?.topic) ctxLines.push(`The show's brief: ${show.topic}`);
+  if (plan?.angle) ctxLines.push(`Today's episode angle: ${plan.angle}`);
+  else if (beat !== 'outro' && episodeSubject) ctxLines.push(namedSubjectLine(String(episodeSubject)));
+  // The intro's producer note rides with the angle, as in the solo intro's
+  // planClause: an opening that withheld the angle (preparationOpening) gets no
+  // note written alongside it either.
+  const note = beat === 'outro' ? plan?.outroNote : plan?.angle ? plan?.introNote : null;
+  if (note) ctxLines.push(`Producer's note for this beat: ${note}`);
+  if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
+  if (recentOpeners?.length) ctxLines.push(`Recent opening words (start the first line differently): ${recentOpeners.join(' | ')}`);
+  return ctxLines;
+}
+
 export async function generateProgrammeExchange({
   beat, show, plan = null, host, guests,
   context = null, recap = null, recentOpeners = null, nextShowName = null, episodeSubject = null,
@@ -341,14 +372,7 @@ export async function generateProgrammeExchange({
 
   const system = exchangeSystem({ host, show, castBlock, beatTask });
 
-  const ctxLines = buildContextLines(context, { contextFields: PROGRAMME_CONTEXT_FIELDS });
-  if (show?.topic) ctxLines.push(`The show's brief: ${show.topic}`);
-  if (plan?.angle) ctxLines.push(`Today's episode angle: ${plan.angle}`);
-  else if (beat !== 'outro' && episodeSubject) ctxLines.push(namedSubjectLine(String(episodeSubject)));
-  const note = beat === 'outro' ? plan?.outroNote : plan?.introNote;
-  if (note) ctxLines.push(`Producer's note for this beat: ${note}`);
-  if (recap) ctxLines.push(`Already said on air recently (do not repeat these topics or phrasing):\n${recap}`);
-  if (recentOpeners?.length) ctxLines.push(`Recent opening words (start the first line differently): ${recentOpeners.join(' | ')}`);
+  const ctxLines = exchangeContextLines({ beat, show, plan, context, recap, recentOpeners, episodeSubject });
 
   const out = await djObject({
     system,

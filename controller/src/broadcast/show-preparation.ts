@@ -339,19 +339,16 @@ export function planStampCurrent(programme: { preparationStamp?: string } | null
 
 // The programme plan's angle, only while its stamp is current (#2321). A plan
 // written before the catalogue was ready names no subject, or an invented one;
-// the opening then goes without an angle, which it already handles. A stamped
-// plan written with no subject for a show that has a preparation skill (the
-// tool failed for good) gives no angle either: an angle there is the model
-// guessing at a subject.
+// the opening then goes without an angle, which it already handles. A current
+// plan's angle is trusted here exactly as the feature and outro beats trust it:
+// a plan written after the tool failed for good was briefed that no subject was
+// chosen (`NO_SUBJECT_LINE`), and that brief is what keeps it honest.
 export function preparedPlanAngle(
   programme: { plan?: { angle?: string | null } | null; preparationStamp?: string } | null | undefined,
   context: SessionContext,
 ): string | null {
   const angle = programme?.plan?.angle || null;
-  if (!angle || !planStampCurrent(programme, context)) return null;
-  if (programme?.preparationStamp !== undefined && preparationSkillAt(context)
-      && !preparationPlanSubject(showPreparation.read({ context })).subject) return null;
-  return angle;
+  return angle && planStampCurrent(programme, context) ? angle : null;
 }
 
 // What an episode's opening (the handoff greeting, or the standalone intro) may

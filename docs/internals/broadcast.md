@@ -232,14 +232,23 @@ replan of a stale plan (a bare subject an operator's Retry catalogue has since
 grounded) and the opening's angle, so they agree; a plan with no stamp predates
 it and counts as current. The stamp leaves out the preparation's status and
 music on purpose: a ready preparation whose catalogue refresh later fails keeps
-its subject and grounding, so its plan's angle is still right. A stamped plan
-with no subject on a show with a preparation skill gives no angle.
+its subject and grounding, so its plan's angle is still right.
+
+Every beat trusts a current plan's angle by the same rule: the opening, the
+feature and the outro. A plan written after the tool failed for good was told no
+subject was chosen and none is to be named (`NO_SUBJECT_LINE`), and that brief is
+what keeps its angle honest. An earlier version withheld that plan's angle from
+the opening alone while the feature and outro still read it, so one part of the
+hour distrusted a plan the rest aired.
 
 The episode's opening, the handoff greeting or the standalone intro, reads one
 helper (`preparationOpening`). While the preparation is unsettled but its skill
 has chosen a subject, the opening names that subject with no angle and no facts;
 otherwise it takes a current plan's angle, or nothing. So it reads a known
-subject or nothing, never an invented one. A greeting or intro with no angle is
+subject or nothing, never an invented one. A co-host intro (an exchange with the
+show's guests) gets the same subject line, and its producer note only alongside
+an angle, as the solo intro's does: an opening that withheld a stale plan's angle
+does not air the note written with it. A greeting or intro with no angle is
 the accepted cost of a preparation that is not ready at the boundary: the
 boundary does not wait for it. An occurrence whose preparation skill is cleared
 before any subject was accepted reads as ordinary at once, dropping the cached
