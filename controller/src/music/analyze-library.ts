@@ -247,6 +247,7 @@ async function main() {
           // analyzer-only catalogue.
           albumId: song.albumId ?? null,
           artistId: song.artistId ?? null,
+          albumArtistId: song.albumArtistId ?? null,
           year: song.year,
           genres: subsonic.songGenres(song),
           duration: song.duration,

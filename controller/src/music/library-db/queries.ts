@@ -3,6 +3,7 @@ import { parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.j
 import { hasTaggerSoundWords } from '../sound-line.js';
 import { preparationTrackSchema } from '../../schemas/show-preparation.js';
 import { getTrack } from './tracks.js';
+import { creditsArtist } from '../artist-credit.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
 import { SQL_HAS_MOODS, SQL_NO_MOODS, SQL_TAIL_VOCAL_RANGES, requireDb } from './handle.js';
@@ -368,14 +369,35 @@ export function candidateFilterTracks(): Array<{
   }));
 }
 
-export function tracksByArtistId(artistId: string) {
-  const ids = z.array(z.object({ id: z.string() })).parse(requireDb().prepare('SELECT id FROM tracks WHERE artist_id = ?').all(artistId));
-  return ids.flatMap(({ id }) => {
-    const track = getTrack(id);
-    if (!track) return [];
-    const parsed = preparationTrackSchema.safeParse(track);
-    return parsed.success ? [parsed.data] : [];
-  });
+// A prepared artist episode's catalogue as the mirror holds it (#2333): every
+// row artist-credit.creditsArtist keeps (the track artist, or the first album
+// artist), and how much of the artist's albums the mirror covers, so
+// episode-source can tell a complete mirror from one it must not trust.
+//   onAlbums: rows on `albumIds` (getArtist's albums), every artist's: the same
+//     set Navidrome's songCount totals.
+//   unwalked: rows on those albums or credited to the artist that carry no
+//     album_artist_id yet, so the mirror cannot judge their credit.
+export function artistCatalogue(artistId: string, albumIds: string[]) {
+  const d = requireDb();
+  const rows = z.array(z.object({ id: z.string(), artist_id: z.string().nullable(), album_artist_id: z.string().nullable() }))
+    .parse(d.prepare('SELECT id, artist_id, album_artist_id FROM tracks WHERE artist_id = ? OR album_artist_id = ?').all(artistId, artistId));
+  const coverage = z.object({ n: z.number(), unwalked: z.number() }).parse(d.prepare(`
+    SELECT COUNT(*) AS n, COUNT(*) - COUNT(album_artist_id) AS unwalked
+    FROM tracks WHERE album_id IN (SELECT value FROM json_each(?))
+  `).get(JSON.stringify(albumIds)));
+  const tracks = rows
+    .filter(row => creditsArtist({ artistId: row.artist_id, albumArtistId: row.album_artist_id }, artistId))
+    .flatMap(({ id }) => {
+      const track = getTrack(id);
+      if (!track) return [];
+      const parsed = preparationTrackSchema.safeParse(track);
+      return parsed.success ? [parsed.data] : [];
+    });
+  return {
+    tracks,
+    onAlbums: coverage.n,
+    unwalked: coverage.unwalked + rows.filter(row => row.album_artist_id == null).length,
+  };
 }
 
 export function artistIdentities(minTracks: number) {

@@ -459,8 +459,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
     .prepare(
       `
       INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, era_reason, album_kind, album_artist, genres, duration_sec,
-                          file_path, file_suffix, file_size, bit_rate, explicit_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          file_path, file_suffix, file_size, bit_rate, explicit_status, album_artist_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
@@ -507,6 +507,7 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
         album_kind     = CASE WHEN excluded.era_untrusted IS NULL THEN tracks.album_kind
                               ELSE excluded.album_kind END,
         album_artist   = COALESCE(excluded.album_artist, tracks.album_artist),
+        album_artist_id = COALESCE(excluded.album_artist_id, tracks.album_artist_id),
         genres       = COALESCE(excluded.genres, tracks.genres),
         duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec),
         -- File facts: only the library walks pass them; any other writer passes NULL.
@@ -541,6 +542,7 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): boolean {
       replaced ? storedSize : walkedSize,
       file.bitRate,
       normaliseExplicitStatus(meta.explicitStatus),
+      meta.albumArtistId ?? null,
       meta.explicitStatus === undefined ? 0 : 1,
     );
   markTextVectorDirtyIfEraChanged(id, eraBefore);

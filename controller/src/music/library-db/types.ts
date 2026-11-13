@@ -227,6 +227,9 @@ export interface TrackMeta {
   /** The ALBUM artist the era judgement keyed on (Navidrome's album record),
    *  not the per-track `artist`. Walk only. */
   albumArtist?: string | null;
+  /** The first album artist's Subsonic id (artist-credit.firstAlbumArtistId).
+   *  COALESCEd like the other ids: the walks are its only writers. */
+  albumArtistId?: string | null;
   /** The walk's answer, normalised on write. Unlike the ids, null CLEARS: only
    *  a walk can see a tag was removed, and it always passes a value. A writer
    *  with no opinion leaves it undefined and the stored value stands. */

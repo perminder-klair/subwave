@@ -812,22 +812,36 @@ subject was accepted. Arbitrary tool side effects before that save are not
 transactional.
 
 `music/episode-source.ts` validates the artist ID through Navidrome, reads the
-complete mirror or bounded album fetches, and applies show safety filters. The
-live album path accepts an exact track artist ID or the first explicit track or
-album artist ID, never a name match. The album artist matters for collaboration
-tracks whose combined track credit has its own Navidrome ID. That path also
-merges in the mirror's rows for the artist ID, deduplicated by track ID (#2333):
-`getArtist` lists only the albums the artist is an album artist on, so a track
-credited first to them on someone else's record (a sideman date under the
-leader's name) is in the mirror alone, and without the merge it aired through
-the mirror path but never the albums path.
+complete mirror or bounded album fetches, and applies show safety filters.
 
-The two paths still differ the other way: the mirror keys on the track artist
-only, so an album-artist-first track whose credit has its own ID (a group name)
-airs only through the albums path, and the completeness check compares mirror
-rows against the albums' total song counts, which include other artists' songs
-on shared records. A strict playlist that holds none of the catalogue is
-reported as that ("None of this artist's tracks are in the show's playlists"),
+**An artist's tracks are one set, whichever path builds it** (#2333). Both paths
+ask `music/artist-credit.ts` `creditsArtist`: a track is the artist's when its
+track artist ID, its first listed track artist or its first album artist is the
+artist, never a name match. A group-credited record ("Bill Evans Trio", album
+artist Bill Evans) counts, as does a first credit on someone else's record (a
+sideman date under the leader's name); a second album artist on a shared record
+(the Tony Bennett duets) does not. The album artist matters for collaboration
+tracks whose combined track credit has its own Navidrome ID.
+- The mirror holds the first album artist's ID in `tracks.album_artist_id`,
+  written by both walks beside `artist_id` (`firstAlbumArtistId`: the song's
+  first `albumArtists` entry, else the album record's `artistId`, which is what
+  the albums path judges too, so a server without OpenSubsonic `albumArtists`
+  agrees with itself). The mirror has no separate first-artist ID: Navidrome's
+  `artistId` is the first track artist wherever it lists `artists`, and older
+  servers list none. `db.artistCatalogue` reads the rows credited to the artist
+  (`artist_id` or `album_artist_id`) through the same rule.
+- The mirror path runs only when it covers the artist's albums, counted like
+  with like: the mirror's rows on `getArtist`'s albums (every artist's) against
+  the songs Navidrome counts there. A row on those albums or credited to the
+  artist with no `album_artist_id` (not walked since the column arrived) sends
+  the catalogue to the merged albums path, which never needs the column, until
+  the next library walk fills it.
+- The albums path also merges in the mirror's rows, deduplicated by track ID:
+  `getArtist` lists only the albums the artist is an album artist on, so a first
+  credit on someone else's record is in the mirror alone.
+
+A strict playlist that holds none of the catalogue is reported as that
+("None of this artist's tracks are in the show's playlists"),
 judged on the whole catalogue, before the station-archive filter, exclusions
 and the blocklist, so it never blames the playlist for what they removed. Random
 preparation intersects mirrored candidates with the artist index so track-only combined

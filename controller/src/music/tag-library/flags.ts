@@ -149,6 +149,7 @@ export async function walkNavidrome(
       // an ALBUM/ARTIST blocklist entry match by id rather than by name.
       albumId: song.albumId ?? null,
       artistId: song.artistId ?? null,
+      albumArtistId: song.albumArtistId ?? null,
       year: song.year,
       // Album-level era signals (#842, #1418). The album's originalReleaseDate
       // is a track's original year only when informative, and never on an
