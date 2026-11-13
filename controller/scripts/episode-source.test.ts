@@ -42,6 +42,14 @@ const OLD_SERVER_SONGS = [
 ];
 // A 129-album artist (over the fan-out cap), one song an album.
 const BIG_ALBUMS = Array.from({ length: 129 }, (_, i) => ({ id: `big-${i}`, songCount: 1, artistId: 'big' }));
+// A partly walked mirror: an own record of three (one never reached by the
+// mirror), a group-credited Trio record and a duet record filed first under
+// someone else, plus a guest record getArtist does not list.
+const PART_ALBUMS: Record<string, Array<ReturnType<typeof billSong>>> = {
+  'part-own': ['po-1', 'po-2', 'po-3'].map(id => billSong(id, 'part-own', 'part', ['part'])),
+  'part-trio': ['pt-1', 'pt-2'].map(id => billSong(id, 'part-trio', 'part-group', ['part'])),
+  'part-duets': ['pd-1', 'pd-2'].map(id => billSong(id, 'part-duets', 'tony', ['tony', 'part'])),
+};
 const BILL_TRACKS = ['konitz-1', 'konitz-2', 'own-1', 'own-2', 'own-3', 'trio-1', 'trio-2'];
 const server = createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
@@ -51,12 +59,14 @@ const server = createServer((req, res) => {
     body = { artist: { id, name: 'Old Leader', album: [{ id: 'old-album', songCount: OLD_SERVER_SONGS.length, artistId: 'old-leader' }] } };
   } else if (url.pathname.endsWith('/getArtist') && id === 'big') {
     body = { artist: { id, name: 'Big', album: BIG_ALBUMS } };
+  } else if (url.pathname.endsWith('/getArtist') && id === 'part') {
+    body = { artist: { id, name: 'Part', album: Object.entries(PART_ALBUMS).map(([album, songs]) => ({ id: album, songCount: songs.length, artistId: album === 'part-duets' ? 'tony' : 'part' })) } };
   } else if (url.pathname.endsWith('/getArtist') && id?.startsWith('bill')) {
     body = { artist: { id, name: 'Bill Evans', album: Object.entries(BILL_ALBUMS).map(([album, songs]) => ({ id: album, songCount: songs.length, artistId: album === 'bill-duets' ? 'tony' : 'bill' })) } };
   } else if (url.pathname.endsWith('/getArtist')) body = { artist: { id, name: id === 'live' ? 'Live' : 'Artist', album: [{ id: 'album', songCount: id === 'live' ? 5 : id?.startsWith('guest-') ? GUEST_ALBUM_SONGS : 4 }] } };
   if (url.pathname.endsWith('/getGenres')) body = { genres: { genre: [{ value: 'Jazz' }] } };
   if (url.pathname.endsWith('/getArtists')) body = { artists: { index: [{ artist: [{ id: 'artist', name: 'Artist' }, { id: 'live', name: 'Live' }] }] } };
-  if (url.pathname.endsWith('/getAlbum')) { albumCalls++; body = { album: { id, song: id === 'old-album' ? OLD_SERVER_SONGS : (id && BILL_ALBUMS[id]) || liveTracks } }; }
+  if (url.pathname.endsWith('/getAlbum')) { albumCalls++; body = { album: { id, song: id === 'old-album' ? OLD_SERVER_SONGS : (id && (BILL_ALBUMS[id] ?? PART_ALBUMS[id])) || liveTracks } }; }
   if (url.pathname.endsWith('/getPlaylists')) body = { playlists: { playlist: [{ id: 'pin', name: 'Pinned' }, { id: 'exclude', name: 'Excluded' }, { id: 'guest', name: 'Guest' }] } };
   if (url.pathname.endsWith('/getPlaylist')) {
     const entry = id === 'pin' ? [{ id: 'one', title: 'One', artist: 'Artist' }, { id: 'two', title: 'Two', artist: 'Artist' }]
@@ -254,6 +264,29 @@ test('before its next walk, an upgraded mirror is trusted as before: a 129-album
     assert.equal(source.ids.size, 129);
   } finally {
     removeArtistRows('big');
+  }
+});
+
+test('a partly walked mirror counts only the artist\'s own rows, so a walked group record never hides a missing song', async () => {
+  // Own rows po-1 (walked) and po-2 (not yet); po-3 never reached the mirror.
+  // Three guest rows on another record, and the walked Trio rows, which the
+  // mirror credits only through album_artist_id. Own rows: 5, below getArtist's
+  // 7 songs, so the albums path runs, as it did before the column. Counting
+  // the Trio rows too would reach 7 and trust a mirror without po-3.
+  const seed = (id: string, artistId: string, albumId: string, albumArtistId?: string) =>
+    db.upsertTrackMeta(id, { title: id, artist: artistId, artistId, album: albumId, albumId, albumArtistId, duration: 180 });
+  seed('po-1', 'part', 'part-own', 'part');
+  seed('po-2', 'part', 'part-own');
+  for (const id of ['pg-1', 'pg-2', 'pg-3']) seed(id, 'part', 'part-guest', 'leader');
+  seed('pt-1', 'part-group', 'part-trio', 'part');
+  seed('pt-2', 'part-group', 'part-trio', 'part');
+  try {
+    const calls = albumCalls;
+    const source = await resolveArtistEpisodeSource('part', show(), 'episode-part');
+    assert.equal(albumCalls - calls, 3, 'short on its own rows: the albums path');
+    assert.deepEqual([...source.ids].sort(), ['pg-1', 'pg-2', 'pg-3', 'po-1', 'po-2', 'po-3', 'pt-1', 'pt-2']);
+  } finally {
+    for (const artistId of ['part', 'part-group']) removeArtistRows(artistId);
   }
 });
 

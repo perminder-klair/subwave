@@ -46,7 +46,11 @@ export async function resolveArtistEpisodeSource(artistId: string, show: Episode
     // album_artist_id (not walked since the column arrived) cannot be judged,
     // so the rule before it stands, the artist's own rows against that count,
     // and an upgraded station never does worse than before its next walk.
-    const covers = mirror.unwalked === 0 ? mirror.onAlbums >= expected : mirrored.length >= expected;
+    // Before the walk, only the artist's own rows count, as they did: a row the
+    // mirror holds only through a walked album_artist_id (a Trio record) must
+    // not make up for an own song the mirror never reached.
+    const covers = mirror.unwalked === 0 ? mirror.onAlbums >= expected
+      : mirrored.filter(track => track.artistId === artistId).length >= expected;
     let tracks: PreparationTrack[];
     if (expected > 0 && artist.album.every(a => a.songCount != null) && covers) {
       tracks = mirrored;
