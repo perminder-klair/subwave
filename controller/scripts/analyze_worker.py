@@ -38,6 +38,7 @@ the stored audio vectors possible.
 
 import contextlib
 import ctypes
+import hashlib
 import importlib.util
 import json
 import math
@@ -51,6 +52,8 @@ import threading
 import time
 import urllib.request
 import warnings
+
+from beat_this_grid import DownbeatTracker, PREPROCESSING_VERSION, SMALL0_SHA256, grid_evidence
 
 # 40s is enough for stable BPM (beat_track) / key (chroma); intro detection
 # only needs the first ~20-30s. Env-overridable; the window is shared by
@@ -1259,11 +1262,17 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
     bpm_t = None
     beats_ms = []
     bars_ms = []
+    beat_frames = []
+    provenance = None
     try:
-        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+        tempo, tracked_frames = librosa.beat.beat_track(y=y, sr=sr)
         t = float(np.atleast_1d(tempo)[0])
         bpm_t = round(t, 1) if 30 <= t <= 300 else None
-        beats_ms, bars_ms = bar_grid(y, sr, librosa, beat_frames, offset_s=offset)
+        beat_frames = tracked_frames
+    except Exception as e:  # noqa: BLE001 — tempo does not gate the learned grid
+        log(f"outro tempo tracking failed: {e}")
+    try:
+        beats_ms, bars_ms, provenance = measure_bar_grid(y, sr, librosa, beat_frames, offset_s=offset)
     except Exception as e:  # noqa: BLE001 — the grid is garnish, never a gate
         log(f"outro beat grid failed: {e}")
 
@@ -1290,6 +1299,8 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
         out["beats"] = beats_ms
     if bars_ms:
         out["bars"] = bars_ms
+    if provenance is not None:
+        out["gridProvenance"] = provenance
     return out
 
 
@@ -1552,153 +1563,6 @@ def get_vocal_detector(force=False):
 # Same degrade-never-crash contract as the CLAP embedder: a missing
 # onnxruntime, a missing model or a failed inference is today's grid.
 # ---------------------------------------------------------------------------
-BT_SR = 22050
-BT_N_FFT = 1024
-BT_HOP = 441        # 50 frames per second
-BT_FPS = 50
-BT_CHUNK = 1500     # frames per model call: upstream's training excerpt, 30 s
-BT_BORDER = 6       # frames dropped from each chunk edge, overlapped instead
-
-
-def bt_chunk_starts(n):
-    """Chunk start frames for an n-frame spectrogram (split_piece with
-    avoid_short_end): consecutive chunks overlap by the border, and the last
-    one is pulled back to end at the piece's end."""
-    import numpy as np
-
-    starts = np.arange(-BT_BORDER, n - BT_BORDER, BT_CHUNK - 2 * BT_BORDER)
-    if n > BT_CHUNK - 2 * BT_BORDER:
-        starts[-1] = n - (BT_CHUNK - BT_BORDER)
-    return [int(s) for s in starts]
-
-
-def bt_chunk(spect, start):
-    """The chunk at `start`, zero-padded as split_piece pads it: a start before
-    zero pads the left, and the right edge gets at most one border."""
-    import numpy as np
-
-    n = len(spect)
-    chunk = spect[max(start, 0):min(start + BT_CHUNK, n)]
-    left = max(0, -start)
-    right = max(0, min(BT_BORDER, start + BT_CHUNK - n))
-    if left or right:
-        chunk = np.pad(chunk, ((left, right), (0, 0)))
-    return chunk
-
-
-def bt_frame_logits(spect, run_chunk):
-    """Framewise (beat, downbeat) logits for the whole spectrogram.
-    `run_chunk(chunk)` maps one (T, 128) chunk to two (T,) logit arrays. Where
-    chunks overlap the earlier one wins (upstream's keep_first)."""
-    import numpy as np
-
-    n = len(spect)
-    beat = np.full(n, -1000.0, np.float32)
-    down = np.full(n, -1000.0, np.float32)
-    preds = [(s, *run_chunk(bt_chunk(spect, s))) for s in bt_chunk_starts(n)]
-    for start, b, d in reversed(preds):
-        lo = start + BT_BORDER
-        hi = min(start + BT_CHUNK - BT_BORDER, n)
-        beat[lo:hi] = b[BT_BORDER:-BT_BORDER][: hi - lo]
-        down[lo:hi] = d[BT_BORDER:-BT_BORDER][: hi - lo]
-    return beat, down
-
-
-def bt_peak_frames(logits):
-    """Frames whose logit is positive and the maximum within ±3 frames (70 ms),
-    with each run of adjacent peaks collapsed to its running mean exactly as
-    upstream's deduplicate_peaks does it (the mean, not the first frame)."""
-    import numpy as np
-
-    padded = np.pad(logits, 3, constant_values=-np.inf)
-    window_max = np.lib.stride_tricks.sliding_window_view(padded, 7).max(axis=1)
-    peaks = np.flatnonzero((logits == window_max) & (logits > 0))
-    out = []
-    p = None
-    count = 0
-    for p2 in (int(x) for x in peaks):
-        if p is not None and p2 - p <= 1:
-            count += 1
-            p += (p2 - p) / count
-        else:
-            if p is not None:
-                out.append(p)
-            p = p2
-            count = 1
-    if p is not None:
-        out.append(p)
-    return np.asarray(out, dtype=np.float64)
-
-
-def bt_beats_downbeats(beat_logits, down_logits):
-    """(beats_s, downbeats_s): upstream's minimal postprocessing. Every
-    downbeat is moved onto its nearest beat, so the bars are a subset of the
-    beats, then duplicates are dropped."""
-    import numpy as np
-
-    beats = bt_peak_frames(beat_logits) / BT_FPS
-    downs = bt_peak_frames(down_logits) / BT_FPS
-    if len(beats) > 0:
-        downs = np.asarray([beats[int(np.argmin(np.abs(beats - d)))] for d in downs])
-    return beats, np.unique(downs)
-
-
-class DownbeatTracker:
-    def __init__(self, model_path, threads):
-        self.model_path = model_path
-        self.threads = threads
-        self.session = None
-        self.input_name = None
-        self._fb = None
-
-    def load(self):
-        import onnxruntime as ort
-
-        if not os.path.isfile(self.model_path):
-            raise FileNotFoundError(f"no Beat This model at {self.model_path}")
-        so = ort.SessionOptions()
-        so.intra_op_num_threads = self.threads
-        so.inter_op_num_threads = 1
-        self.session = ort.InferenceSession(
-            self.model_path, so, providers=["CPUExecutionProvider"]
-        )
-        self.input_name = self.session.get_inputs()[0].name
-
-    def logmel(self, y, librosa):
-        """Upstream's LogMelSpect in numpy: |STFT| / sqrt(n_fft) through a
-        128-band slaney-scale mel bank WITHOUT area normalisation (torchaudio's
-        norm=None), then log1p(1000·x). Frames × bands."""
-        import numpy as np
-
-        if self._fb is None:
-            self._fb = librosa.filters.mel(
-                sr=BT_SR, n_fft=BT_N_FFT, n_mels=128, fmin=30.0, fmax=11000.0,
-                htk=False, norm=None, dtype=np.float32,
-            ).T.copy()
-        mag = np.abs(librosa.stft(
-            np.asarray(y, dtype=np.float32), n_fft=BT_N_FFT, hop_length=BT_HOP,
-            window="hann", center=True, pad_mode="reflect",
-        )) / np.float32(math.sqrt(BT_N_FFT))
-        return np.log1p(np.float32(1000.0) * (mag.T @ self._fb)).astype(np.float32)
-
-    def _run_chunk(self, chunk):
-        import numpy as np
-
-        beat, down = self.session.run(
-            ["beat", "downbeat"], {self.input_name: np.ascontiguousarray(chunk[None], dtype=np.float32)}
-        )
-        return beat[0], down[0]
-
-    def track(self, y, sr, librosa):
-        """(beats_s, downbeats_s) for a mono window, times relative to its start."""
-        if sr != BT_SR:
-            y = librosa.resample(y, orig_sr=sr, target_sr=BT_SR)
-        spect = self.logmel(y, librosa)
-        if len(spect) == 0:
-            raise ValueError("empty window")
-        return bt_beats_downbeats(*bt_frame_logits(spect, self._run_chunk))
-
-
 # Lazily loaded, at most once — None means today's grid. A load failure is
 # logged once and never retried (one missing model must not cost every track
 # a load attempt). Its own clock, NOT the heavy one: this runs on every
@@ -1796,9 +1660,9 @@ def _maybe_start_downbeat_release():
     ).start()
 
 
-def bar_grid(y, sr, librosa, beat_frames, offset_s=0.0):
+def measure_bar_grid(y, sr, librosa, beat_frames, offset_s=0.0):
     """The ONE place the beat and bar grid is chosen, for the head window and
-    the tail window alike: `(beats_ms, bars_ms)`, absolute ms (`offset_s` is
+    the tail window alike: `(beats_ms, bars_ms, provenance)`, absolute ms (`offset_s` is
     the window's start in the file).
 
     With ANALYZE_DOWNBEATS=beat-this and the tracker loaded, both lists come
@@ -1816,14 +1680,60 @@ def bar_grid(y, sr, librosa, beat_frames, offset_s=0.0):
             beats_s, downs_s = tracker.track(y, sr, librosa)
             beats_ms = [int(round((offset_s + float(t)) * 1000.0)) for t in beats_s]
             bars_ms = [int(round((offset_s + float(t)) * 1000.0)) for t in downs_s]
-            return beats_ms, bars_ms
+            provenance = None
+            if getattr(tracker, "model_sha256", None):
+                try:
+                    reference = librosa.frames_to_time(beat_frames, sr=sr)
+                except Exception:  # evidence must not veto a successful learned grid
+                    reference = []
+                provenance = {
+                    "version": 1, "backend": "beat-this-onnx",
+                    "model": "small0" if tracker.model_sha256 == SMALL0_SHA256 else "custom",
+                    "modelSha256": tracker.model_sha256,
+                    "preprocessingVersion": PREPROCESSING_VERSION,
+                    "windowStartMs": int(round(offset_s * 1000)),
+                    "windowEndMs": int(round((offset_s + len(y) / sr) * 1000)),
+                    "evidence": grid_evidence(beats_s, reference),
+                }
+            return beats_ms, bars_ms, provenance
         except Exception as e:  # noqa: BLE001 — the grid is garnish, never a gate
             if not _downbeat_infer_logged:
                 _downbeat_infer_logged = True
                 log(f"Beat This inference failed ({e}); using librosa's bar grid (logged once)")
     bt = librosa.frames_to_time(beat_frames, sr=sr)
     beats_ms = [int(round((offset_s + float(t)) * 1000.0)) for t in bt]
-    return beats_ms, beats_ms[::4]
+    return beats_ms, beats_ms[::4], None
+
+
+def bar_grid(y, sr, librosa, beat_frames, offset_s=0.0):
+    """Back-compatible array-only API for tools and older callers."""
+    beats, bars, _provenance = measure_bar_grid(y, sr, librosa, beat_frames, offset_s)
+    return beats, bars
+
+
+def source_fingerprint(path, complete):
+    """Bind learned grids to the staged encoded bytes, not a file path.
+
+    A capped/unknown source remains explicitly so. No proof of the current
+    recording, or of full-track Sub/Beats coverage, follows from this alone.
+    """
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as source:
+            size = os.fstat(source.fileno()).st_size
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        return {"sha256": digest, "bytes": size, "complete": complete}
+    except OSError as e:
+        log(f"grid source fingerprint unavailable: {e}")
+        return None
+
+
+def bind_grid_source(head, outro, source):
+    if source is not None:
+        for data, key in ((head, "grid_provenance"), (outro, "gridProvenance")):
+            if data and data.get(key):
+                data[key]["source"] = source
 
 
 # Marker file at the stem cache root (controller music/stem-cache.ts). A stems
@@ -2494,15 +2404,16 @@ def facet_head(y, sr, librosa):
     except Exception as e:  # noqa: BLE001 — tempo/grid are garnish, never a gate
         log(f"main beat tracking failed: {e}")
 
-    # Per-beat and per-bar timestamps (ms). bar_grid decides where they come
+    # Per-beat and per-bar timestamps (ms). measure_bar_grid decides where they come
     # from: by default librosa's beats above and every 4th one as a bar (a 4/4
     # guess with arbitrary phase: librosa finds no downbeat), or Beat This's
     # real downbeats with ANALYZE_DOWNBEATS=beat-this. Best-effort: an
     # empty/odd grid simply yields fewer/no bars.
     beats_ms = []
     bars_ms = []
+    provenance = None
     try:
-        beats_ms, bars_ms = bar_grid(y, sr, librosa, beat_frames)
+        beats_ms, bars_ms, provenance = measure_bar_grid(y, sr, librosa, beat_frames)
     except Exception as e:  # noqa: BLE001 — beat grid is best-effort
         log(f"beat grid failed: {e}")
         beats_ms = []
@@ -2556,6 +2467,8 @@ def facet_head(y, sr, librosa):
         out["bars"] = bars_ms
     if key_ranges:
         out["key_ranges"] = key_ranges
+    if provenance is not None:
+        out["grid_provenance"] = provenance
     return out
 
 
@@ -2605,6 +2518,7 @@ def analyze(
     # decode-length validation; False = definitively truncated → skipped.
     owned = path is None
     src_path = None
+    fingerprint = None
     decoded_tmp = None
     audio_embedding = None
     vocal_ranges = None
@@ -2656,6 +2570,8 @@ def analyze(
             librosa, path, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS
         )
         y = librosa.to_mono(y_src)
+        if DOWNBEATS and get_downbeat_tracker() is not None:
+            fingerprint = source_fingerprint(src_path, complete)
         # Outro (tail) features — only meaningful off a complete file; a
         # byte-capped download's "tail" is mid-song. Best-effort like the rest.
         # With an UNKNOWN completeness (old caller) the original path's
@@ -2712,6 +2628,7 @@ def analyze(
         raise RuntimeError("decoded empty audio")
 
     result = facet_head(y, sr, librosa)
+    bind_grid_source(result, outro, fingerprint)
     # When vocal activity was measured, the start of the first vocal range is a
     # truer intro than the energy heuristic (an instrumental intro is exactly
     # the vocal-free leading region). Prefer it; fall back to the heuristic for
@@ -3023,6 +2940,11 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
             except Exception as e:  # noqa: BLE001
                 out["clap"] = _failed(e)
 
+    head = out.get("head", {}).get("data", {})
+    outro = out.get("tail", {}).get("data", {}).get("outro")
+    if head.get("grid_provenance") or (outro and outro.get("gridProvenance")):
+        bind_grid_source(head, outro, source_fingerprint(
+            getattr(source, "src_path", None), getattr(source, "complete", None)))
     return {name: out[name] for name in FACET_NAMES if name in out}
 
 

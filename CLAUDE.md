@@ -113,7 +113,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Write `genres`, never `genre` (a generated column); `subsonic.songGenres()` is the one ingest normaliser. Genre matching is one-directional.
 - Judge era with `resolveEraYear` and `yearUntrusted`, never raw `year`, and keep the JS and SQL era filters in agreement.
 - Silence trim measures against an absolute floor, and `music/silence-trim.ts` owns every onset shift.
-- The bar grid is chosen once, in `analyze_worker.bar_grid()`: off is librosa's beats with every 4th as a bar, and `ANALYZE_DOWNBEATS=beat-this` takes beats and bars together from the ONNX model that only the heavy (`WITH_DEMUCS=1`) builds of both Dockerfiles fetch, sha256-pinned, from a `beat-this-*` prerelease, which only `tools/beat-this/export.py` may produce (`infrastructure.md`).
+- The bar grid is chosen once, in `analyze_worker.measure_bar_grid()` (`bar_grid()` is the array-only compatibility wrapper): off is librosa's beats with every 4th as a bar, and `ANALYZE_DOWNBEATS=beat-this` takes beats and bars together from the ONNX model that only the heavy (`WITH_DEMUCS=1`) builds of both Dockerfiles fetch, sha256-pinned, from a `beat-this-*` prerelease, which only `tools/beat-this/export.py` may produce (`infrastructure.md`).
 - A track's instrumental verdict is `isInstrumental` over both measured windows, each judged alone (`music/lyric-vocal.ts`). A row carrying `vocalRanges` carries the tail evidence too, and SQL reads it through `SQL_TAIL_VOCAL_RANGES`, never the whole `outro_json`.
 - Library coverage never counts on the read path; only `refresh()` counts it.
 - Anything going to Liquidsoap uses `getAnnotatedUri`.

@@ -1,6 +1,8 @@
 // Record shapes library-db reads and writes. TrackRow is the raw SQLite row;
 // the rest are the consumer-facing shapes rows.ts maps it to.
 
+import type { BeatGridProvenance } from '../../schemas/beat-grid.js';
+
 export type EnergyValue = 'low' | 'medium' | 'high' | null;
 export type TagSource = 'llm' | 'propagated' | 'uncertain-llm' | 'legacy-v1' | 'manual';
 
@@ -59,6 +61,7 @@ export interface TrackRecord {
   pace: TrackPaceSpan[] | null;     // perceptual energy curve (0..1 per span)
   beats: number[] | null;           // per-beat timestamps (ms)
   bars: number[] | null;            // downbeat (bar) timestamps (ms)
+  gridProvenance?: BeatGridProvenance | null; // absent/null = unknown origin
   keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
   // Zero-shot audio moods; [] until scored. Complement the LLM `moods`.
   audioMoods: string[];
@@ -94,6 +97,7 @@ export interface TrackOutro {
   bpm: number | null;        // tail tempo (outros drift/ritard vs the lead)
   beats: number[] | null;    // tail beat grid (ms)
   bars: number[] | null;     // tail downbeat grid (ms)
+  gridProvenance?: BeatGridProvenance | null;
   // Tail vocal-activity spans, absolute ms. [] = no detected tail vocals,
   // null/absent = not computed. Optional because the analyzer OMITS the key when
   // not computed (the backfill probes the raw JSON for it); parseOutroJson
@@ -171,6 +175,7 @@ export interface TrackRow {
   pace_json: string | null;
   beats_json: string | null;
   bars_json: string | null;
+  grid_provenance_json?: string | null;
   key_ranges_json: string | null;
   audio_moods: string | null;
   audio_descriptors: string | null;

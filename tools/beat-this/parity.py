@@ -3,7 +3,7 @@
 
 For each audio file, compares the beat and downbeat times of
   upstream   beat_this.inference.File2Beats(<ckpt>, dbn=False)   (PyTorch)
-  ours       analyze_worker.DownbeatTracker(<onnx>)               (numpy + onnxruntime)
+  ours       beat_this_grid.DownbeatTracker(<onnx>)               (numpy + onnxruntime)
 and reports, per file, whether the two lists are identical, equal within one
 50 fps frame (20 ms), or differ in length. Runs in the export venv (it needs
 torch for the upstream side); see README.md.
@@ -24,9 +24,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "controller", "scripts"))
-import analyze_worker as aw  # noqa: E402
+import beat_this_grid as grid  # noqa: E402
 
-FRAME_S = 1.0 / aw.BT_FPS
+FRAME_S = 1.0 / grid.BT_FPS
 
 
 def compare(ref, got):
@@ -55,13 +55,13 @@ def main():
     import librosa
     from beat_this.inference import File2Beats
 
-    tracker = aw.DownbeatTracker(args.onnx, args.threads)
+    tracker = grid.DownbeatTracker(args.onnx, args.threads)
     tracker.load()
     upstream = File2Beats(checkpoint_path=args.ckpt, device="cpu", dbn=False)
     rows = []
     for path in args.audio:
         ref_b, ref_d = upstream(path)
-        y, sr = librosa.load(path, sr=aw.BT_SR, mono=True)
+        y, sr = librosa.load(path, sr=grid.BT_SR, mono=True)
         got_b, got_d = tracker.track(y, sr, librosa)
         rb = compare(ref_b, got_b)
         rd = compare(ref_d, got_d)

@@ -737,9 +737,9 @@ function vecCount(d: Database.Database): number {
 }
 
 // The file as Navidrome reports it, kept by the library walks: path, format,
-// size in bytes and bitrate in kbps. Added by name when missing rather than as
-// a numbered migration, so it can't collide with a user_version a parallel
-// change claims; idempotent, and a few MB on a 76k-track library.
+// size in bytes and bitrate in kbps, plus optional learned-grid provenance.
+// Added by name when missing rather than as a numbered migration, so it can't collide with a user_version a parallel
+// change claims. Existing rows keep NULL provenance until a learned grid is measured.
 //
 // Several processes open this DB, and two can both find a column missing on the
 // first open after an upgrade, so the ALTERs re-read under the write lock. The
@@ -749,6 +749,7 @@ function vecCount(d: Database.Database): number {
 function ensureFileInfoColumns(d: Database.Database): void {
   const wanted: Array<[string, string]> = [
     ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
+    ['grid_provenance_json', 'TEXT'],
   ];
   const missing = () => {
     const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));

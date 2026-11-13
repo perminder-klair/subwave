@@ -38,6 +38,7 @@ import time
 from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "controller", "scripts"))
 WORKER = os.path.join(HERE, "..", "..", "controller", "scripts", "analyze_worker.py")
 
 TOL = 0.07
