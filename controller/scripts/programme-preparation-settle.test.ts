@@ -22,7 +22,7 @@ const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
 const { handoffGreetingPrompt } = await import('../src/llm/internal/prompts/scripts.js');
 const { buildContextLines } = await import('../src/llm/internal/prompts/context.js');
-const { introTask } = await import('../src/llm/internal/prompts/programme.js');
+const { introTask, exchangeContextLines } = await import('../src/llm/internal/prompts/programme.js');
 const { NO_SUBJECT_LINE, namedSubjectLine } = await import('../src/broadcast/preparation-subject-wording.js');
 after(() => removeTempDir(root));
 
@@ -116,6 +116,36 @@ test('an unready preparation holds the plan; the greeting names the chosen subje
   assert.equal(intro?.subject, 'Prepared artist');
   assert.ok(intro?.task.includes(namedSubjectLine('Prepared artist')));
   assert.doesNotMatch(intro?.task ?? '', /angle/i);
+
+  // With a guest in the studio the intro is a co-host exchange: its prompt
+  // names the chosen subject the same way, with no angle.
+  const shows = settings.get().shows;
+  await settings.update({ shows: shows.map(s => (s.id === 's_dizzy' ? { ...s, guestPersonaIds: [outgoing.id] } : s)) });
+  t.after(() => settings.update({ shows }));
+  let exchange: string | undefined;
+  await programme.runIntro({
+    getDjRecap: () => '', getRecentOpeners: () => [], announceExchange: async () => true,
+  } as unknown as Parameters<typeof programme.runIntro>[0], incoming, new Date(String(incoming.at)), {}, {
+    generateProgrammeExchange: async (args) => {
+      exchange = exchangeContextLines(args).join('\n');
+      return [{ persona: host, text: 'Welcome in.' }, { persona: outgoing, text: 'Glad to be here.' }];
+    },
+    generateProgrammeIntro: async () => { throw new Error('the exchange should have aired'); },
+  });
+  assert.ok(exchange?.includes(namedSubjectLine('Prepared artist')), 'the co-host intro names the chosen subject');
+  assert.doesNotMatch(exchange ?? '', /angle/i);
+});
+
+test("the co-host intro's producer note rides with the angle, as the solo intro's does", () => {
+  const show = { name: 'Dizzy Spells' };
+  const withheld = { angle: null, introNote: 'Open on the invented artist', outroNote: 'Close on it', features: [] };
+  assert.doesNotMatch(introTask({ show, plan: withheld }), /invented artist/);
+  assert.doesNotMatch(exchangeContextLines({ beat: 'intro', show, plan: withheld }).join('\n'), /invented artist/,
+    'a withheld angle takes its intro note with it');
+  const current = { ...withheld, angle: 'Current angle', introNote: 'Open warm' };
+  assert.match(exchangeContextLines({ beat: 'intro', show, plan: current }).join('\n'), /Producer's note for this beat: Open warm/);
+  assert.match(exchangeContextLines({ beat: 'outro', show, plan: withheld }).join('\n'), /Producer's note for this beat: Close on it/,
+    'the outro keeps its note as before');
 });
 
 test('an unready preparation with no chosen subject gives the greeting neither subject nor angle', async (t) => {
@@ -131,14 +161,14 @@ test('an unready preparation with no chosen subject gives the greeting neither s
   assert.doesNotMatch(none.prompt, /subject is|angle/i);
 });
 
-test('the tool fails twice: the plan is told no subject was chosen, and the opening gets no angle from it', async (t) => {
+test('the tool fails twice: the plan is told no subject was chosen, and the opening trusts its angle like every beat', async (t) => {
   // The same occurrence as above: its first tool failure is on record, the
   // retry a minute away.
   const { incoming } = await armBoundary(t, 's_unchosen', 'Unchosen hour');
   const seen: string[] = [];
   const deps: PlanDeps = { generateProgrammePlan: async (args) => {
     seen.push(buildContextLines(args.context, { steer: false }).join('\n'));
-    return plan('An hour of Somebody Invented');
+    return plan('An hour of whatever the night brings');
   } };
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 61_000 });
   await programme.prepareBoundaryPlan(incoming, deps);
@@ -146,12 +176,13 @@ test('the tool fails twice: the plan is told no subject was chosen, and the open
   assert.equal(view.status.kind, 'failed');
   assert.equal(seen.length, 1, 'no retry left: the plan goes ahead');
   assert.ok(seen[0].includes(NO_SUBJECT_LINE), 'the plan is told no subject was chosen');
-  assert.equal(session.getBoundaryProgramme()?.plan?.angle, 'An hour of Somebody Invented');
-  assert.equal(preparedPlanAngle(session.getBoundaryProgramme(), incoming), null,
-    'a stamped plan with no subject, on a show with a preparation skill, gives no angle');
-  const none = await greeting(incoming);
-  assert.equal(none.angle, null);
-  assert.equal(none.subject, null);
+  assert.equal(session.getBoundaryProgramme()?.plan?.angle, 'An hour of whatever the night brings');
+  // The no-subject brief is what keeps that plan honest, so the greeting uses
+  // its angle as the feature and outro beats do (one rule for the hour).
+  assert.equal(preparedPlanAngle(session.getBoundaryProgramme(), incoming), 'An hour of whatever the night brings');
+  const spoken = await greeting(incoming);
+  assert.equal(spoken.angle, 'An hour of whatever the night brings');
+  assert.equal(spoken.subject, null);
 });
 
 test('both catalogue attempts spent: the plan names the chosen subject with no facts, and the greeting takes its angle', async (t) => {
