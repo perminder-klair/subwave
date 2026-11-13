@@ -51,6 +51,9 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       stemBlends: v.transitions?.stemBlends ?? false,
       pickTimeStems: v.transitions?.pickTimeStems === true,
       equalPowerCrossfade: v.transitions?.equalPowerCrossfade === true,
+      fadeAudibleEnd: v.transitions?.fadeAudibleEnd === true,
+      fadeAudibleEndDb: String(v.transitions?.fadeAudibleEndDb ?? 20),
+      tailFromCurve: v.transitions?.tailFromCurve === true,
       // Absent reads as ON, matching the controller's resolver
       // (settings/transition-effects.ts) — a station that has never saved
       // this block has the whole kit.

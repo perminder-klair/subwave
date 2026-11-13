@@ -1267,6 +1267,15 @@ export async function load() {
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
       pickTimeStems: typeof stored.transitions?.pickTimeStems === 'boolean' ? stored.transitions.pickTimeStems : DEFAULTS.transitions.pickTimeStems,
       equalPowerCrossfade: typeof stored.transitions?.equalPowerCrossfade === 'boolean' ? stored.transitions.equalPowerCrossfade : DEFAULTS.transitions.equalPowerCrossfade,
+      fadeAudibleEnd: typeof stored.transitions?.fadeAudibleEnd === 'boolean' ? stored.transitions.fadeAudibleEnd : DEFAULTS.transitions.fadeAudibleEnd,
+      // A hand edit out of range (or not a number) repairs to the default.
+      fadeAudibleEndDb:
+        typeof stored.transitions?.fadeAudibleEndDb === 'number' &&
+        stored.transitions.fadeAudibleEndDb >= BOUNDS.fadeAudibleEndDb.min &&
+        stored.transitions.fadeAudibleEndDb <= BOUNDS.fadeAudibleEndDb.max
+          ? stored.transitions.fadeAudibleEndDb
+          : DEFAULTS.transitions.fadeAudibleEndDb,
+      tailFromCurve: typeof stored.transitions?.tailFromCurve === 'boolean' ? stored.transitions.tailFromCurve : DEFAULTS.transitions.tailFromCurve,
       // Per-effect kill switches (#1565) — same absent-means-default repair as
       // every sibling, and the default is `true`, so a stored block missing a
       // field (or missing entirely) normalises to the whole kit on.
@@ -2516,7 +2525,10 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   }
   if ('transitions' in patch) {
     const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
-    for (const k of ['pairDrain', 'stemBlends', 'pickTimeStems'] as const) {
+    // fadeAudibleEnd(Db) are controller-side cue points read per queued track
+    // (music/silence-trim.ts), and tailFromCurve picks which measurement the
+    // queue reads (music/tail-levels.ts), so they need no mixer restart.
+    for (const k of ['pairDrain', 'stemBlends', 'pickTimeStems', 'fadeAudibleEnd', 'fadeAudibleEndDb', 'tailFromCurve'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
     }
     // Read once by the mixer at startup (liquidsoap_equal_power_crossfade.txt),

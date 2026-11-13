@@ -39,7 +39,7 @@ await settings.load();
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
-const { resolveSilenceTrim, shiftOnsetMs, playableSpanSec } = await import('../src/music/silence-trim.js');
+const { resolveSilenceTrim, shiftOnsetMs, playableSpanSec, resolveAudibleEnd } = await import('../src/music/silence-trim.js');
 
 await library.load();
 
@@ -159,5 +159,34 @@ test('with the trim off, the playable span still ends on the decoded length', as
     assert.equal(playableSpanSec({ id: 'edged', duration: 200 }), 201);
   } finally {
     await settings.update({ silenceTrim: { enabled: true, minGapMs: 1_500 } } as never);
+  }
+});
+
+// The audible-end cut of a fade (transitions.fadeAudibleEnd) reads the outro's
+// loudness curve and the body loudness off the same projection: a curve that
+// does not survive the write → outro_json → library.get round trip disables
+// the cut silently, exactly like a missing silence column.
+db.upsertTrackMeta('faded', { title: 'Faded', artist: 'A', album: 'Al', duration: 220 } as never);
+db.upsertTrackAnalysis('faded', {
+  bpm: 120, musicalKey: 'C', introMs: 8_000, confidence: 1, loudnessLufs: -10,
+  leadSilenceMs: 0, tailSilenceMs: 2_730, tailStartMs: 217_270,
+  outro: {
+    startMs: 205_300, ending: 'fade', lufs: -20, bpm: 120, beats: null, bars: null,
+    // -12 LUFS from 210.0 s, -30 at 211.0 s (body - 20), then gone.
+    loudnessCurve: { startMs: 210_000, stepMs: 500, lufs: [-120, -250, -300, -400, -500] },
+  },
+});
+
+test('the audible-end cut resolves through the library: curve and body loudness', async () => {
+  assert.deepEqual(library.get('faded')?.outro?.loudnessCurve,
+    { startMs: 210_000, stepMs: 500, lufs: [-120, -250, -300, -400, -500] });
+  assert.equal(resolveSilenceTrim({ id: 'faded', duration: 220 }).cueOutSec, 217.52, 'off: the trim alone');
+  await settings.update({ transitions: { fadeAudibleEnd: true, fadeAudibleEndDb: 20 } } as never);
+  try {
+    assert.equal(resolveSilenceTrim({ id: 'faded', duration: 220 }).cueOutSec, 211);
+    assert.deepEqual(resolveAudibleEnd({ id: 'faded', duration: 220 }), { endSec: 211, cueInSec: null });
+    assert.equal(playableSpanSec({ id: 'faded', duration: 220 }), 211);
+  } finally {
+    await settings.update({ transitions: { fadeAudibleEnd: false } } as never);
   }
 });

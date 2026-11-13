@@ -833,7 +833,8 @@ function ensureNamedColumns(d: Database.Database): void {
     // Which window outro_json/tail_silence_ms/tail_start_ms were measured on:
     // NULL = the file's last ANALYZE_OUTRO_SECONDS, 2 = a window ending where
     // the music stops, placed from the stored edges and confirmed by the
-    // analyzer (library-db/facets.ts tailVersionOf).
+    // analyzer, 3 = placed with the loudness curve (library-db/facets.ts
+    // tailVersionOf, placedTailVersion).
     ['tail_version', 'INTEGER'],
     ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
     ['untaggable_key', 'TEXT'], ['tagged_measured', 'INTEGER'],

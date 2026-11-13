@@ -293,15 +293,42 @@ export function vocalTailFor(
   return vocalRanges.some(r => r.endMs >= windDownStartMs);
 }
 
+// The audible-end path (`opts.audibleEnd`, from silence-trim.resolveAudibleEnd:
+// the fade is cut where it stops being audible, transitions.fadeAudibleEnd).
+// The canvas then spans the wind-down up to that cut, clamped 6..12, under the
+// operator's ceiling and never longer than the track's playable span minus 1 s
+// (endSec - cueIn - 1). NO sung-tail 8 s floor, NO tail-drop shaping and NO
+// bar snap: those sized the overlap over a tail the cut has now removed, and
+// pulling it longer would put the overlap back over the near-silent end the
+// cut exists to drop (the operator's offline A/B approved exactly this).
+export const AUDIBLE_END_CROSS_MIN_SECONDS = 6;
+export const AUDIBLE_END_CROSS_MAX_SECONDS = 12;
+
 export function endingCrossSecondsFor(
   a: Analysis,
   windDownSec: number | null,
-  opts: { maxSec?: number | null; tailLufs?: number | null; bodyLufs?: number | null; vocalTail?: boolean | null } = {},
+  opts: {
+    maxSec?: number | null;
+    tailLufs?: number | null;
+    bodyLufs?: number | null;
+    vocalTail?: boolean | null;
+    audibleEnd?: { endSec: number; cueInSec: number | null } | null;
+  } = {},
 ): number | null {
   const ending = a.ending;
   if (ending !== 'fade' && ending !== 'cold') return null;
   const maxSec = opts.maxSec;
   const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
+  const ae = opts.audibleEnd;
+  if (ending === 'fade' && ae != null && Number.isFinite(ae.endSec)) {
+    let d = windDownSec != null && Number.isFinite(windDownSec) ? windDownSec : 10;
+    d = Math.max(AUDIBLE_END_CROSS_MIN_SECONDS, Math.min(AUDIBLE_END_CROSS_MAX_SECONDS, d));
+    const bound = ae.endSec - (ae.cueInSec ?? 0) - 1;
+    d = Math.min(ceil, bound, d);
+    const rounded = Math.round(d * 10) / 10;
+    // Quantised to 0.1 s like every canvas, but never rounded up past the bound.
+    return rounded > bound ? Math.floor(d * 10) / 10 : rounded;
+  }
   let secs: number;
   if (ending === 'fade') {
     secs = windDownSec != null && windDownSec > 0 ? windDownSec : 10;

@@ -1,4 +1,5 @@
-// Tests for the tail facet placed from the stored edges (tail v2).
+// Tests for the tail facet placed from the stored edges (tail v2), and its
+// loudness curve (tail v3).
 //
 // The tail window used to be the file's last ANALYZE_OUTRO_SECONDS, which on a
 // track ending in dead air is partly or wholly silence: production showed the
@@ -9,11 +10,13 @@
 // there.
 //
 // The contracts pinned here:
-//   - the tail facet is at v2; a tail's version is read off the columns:
-//     `tail_version` (2 = a window the analyzer confirmed it placed), else 2
+//   - the tail facet is at v3 (a placed window whose outro carries the
+//     short-term loudness curve the audible-end cut of a fade reads); a tail's
+//     version is read off the columns: `tail_version` (3 = placed with the
+//     curve, 2 = placed without it — an analyzer without pyloudnorm), else 2
 //     when the stored edges show at most TAIL_PLACEMENT_TOLERANCE_MS of
-//     trailing silence (the old window then held the same music, so it is not
-//     re-measured), else 1 — due again once edges exist;
+//     trailing silence (the old window then held the same music), else 1.
+//     Everything below v3 is due again for `--facets tail`;
 //   - an unmeasurable tail without edges stays one version below, so it is
 //     retried once edges can place it;
 //   - measuring edges promotes an existing tail the tolerance covers, live
@@ -21,19 +24,12 @@
 //     does not plan every short-silence track for a tail re-read;
 //   - a planned tail request carries `tail_window` (+ the stream URL for a
 //     capped copy) when edges are stored, and only an answer marked
-//     `tail_window: "edges"` stamps v2 (an older analyzer ignores the field);
+//     `tail_window: "edges"` stamps v2/v3 (an older analyzer ignores the
+//     field), v3 only when the answer carries a valid curve;
 //   - a flat analysis and a --re-analyze clear never overwrite a placed tail
 //     with an end-of-file one (the loudness v2 rule);
-//   - `tail_version` is added by name (schema.ts ensureNamedColumns, no
-//     migration step), and the derivation stamp moved so production's table
-//     re-derives once;
-//   - a replaced file drops the stamp; a placement whose tail could not be
-//     measured never stamps v2; a vocal answer merges only into an outro on
-//     its window (an end-of-file one the tolerance covers counts as placed);
-//     a tail written without its vocals keeps the stored ones (singing on any
-//     window, [] only on its own), so the instrumental verdict never moves
-//     toward instrumental unmeasured; re-measured edges that move the end
-//     re-plan a placed tail.
+//   - schema step 31 adds `tail_version`, safely re-run, and the derivation
+//     stamp moved so production's table re-derives once.
 //
 // Real better-sqlite3 in a temp STATE_DIR; the analyzer and Navidrome are a
 // local HTTP stub. Run: `npm test -- tail-placement`.
@@ -50,6 +46,9 @@ const requests: Array<Record<string, unknown>> = [];
 let placedAnswer = true;
 // The placed window cannot be read (a damaged file even ffmpeg gives up on).
 let placedMiss = false;
+// The analyzer measures the tail's loudness curve (it has pyloudnorm).
+let curveAnswer = true;
+const CURVE = { startMs: 190_000, stepMs: 500, lufs: [-120, -150, -300] };
 // How long the stub takes over a flat answer (the request deadline tests).
 let flatDelayMs = 0;
 
@@ -76,7 +75,7 @@ function handler(req: IncomingMessage, res: ServerResponse) {
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({
             ok: true, bpm: 120, key: 'Am', intro_ms: 0, confidence: 0.9, loudness_lufs: -10, peak_db: -1,
-            outro: { startMs: end - 5000, ending: 'cold', bpm: 120, beats: [end - 1000] },
+            outro: { startMs: end - 5000, ending: 'cold', bpm: 120, beats: [end - 1000], ...(curveAnswer ? { loudnessCurve: CURVE } : {}) },
             ...(tw && placedAnswer ? { tail_window: 'edges', tail_silence_ms: tw.duration_ms - tw.end_ms, tail_start_ms: tw.end_ms }
               : { tail_silence_ms: 300, tail_start_ms: 213_700 }),
           }));
@@ -103,7 +102,7 @@ function handler(req: IncomingMessage, res: ServerResponse) {
           data: {
             ...(tw && placedAnswer ? { tail_window: 'edges', tail_silence_ms: tw.duration_ms - tw.end_ms, tail_start_ms: tw.end_ms }
               : { tail_silence_ms: 400, tail_start_ms: 213_600 }),
-            outro: { startMs: end - 6000, ending: 'cold', bpm: 120, beats: [end - 2000, end - 1500] },
+            outro: { startMs: end - 6000, ending: 'cold', bpm: 120, beats: [end - 2000, end - 1500], ...(curveAnswer ? { loudnessCurve: CURVE } : {}) },
           },
         };
       }
@@ -163,8 +162,11 @@ const track = (id: string) => {
   db.upsertTrackMeta(id, { title: id, artist: 'A', album: 'B', duration: 214 });
   db.upsertTrackAnalysis(id, { bpm: 100, musicalKey: 'C', loudnessLufs: -9, peakDb: -1, source: 'full' });
 };
+// A v3 answer carries the curve (that is what makes it v3: placedTailVersion).
 const writeTail = (id: string, version?: number) =>
-  db.writeFacetResults(id, { source: 'full', tail: { outro: OUTRO, tailSilenceMs: 500, tailStartMs: 213_500, ...(version ? { version } : {}) } });
+  db.writeFacetResults(id, { source: 'full', tail: {
+    outro: version === 3 ? { ...OUTRO, loudnessCurve: CURVE } : OUTRO,
+    tailSilenceMs: 500, tailStartMs: 213_500, ...(version ? { version } : {}) } });
 const writeEdges = (id: string, tailMs: number) =>
   db.writeFacetResults(id, { source: 'url', edges: { leadMs: 0, tailMs, durationMs: 214_000 } });
 const plan = (ids: string[]) => {
@@ -175,38 +177,52 @@ const plan = (ids: string[]) => {
   });
 };
 
-const hasTailVersionCol = () => (sql(`SELECT name FROM pragma_table_info('tracks') WHERE name = 'tail_version'`).all()).length === 1;
-
-test('the tail facet is at v2, and tail_version is added by name, with no migration step', () => {
-  assert.equal(db.FACET_VERSIONS.tail, 2);
-  assert.ok(hasTailVersionCol());
-  // No user_version of its own to collide with another change's step.
-  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 37);
+test('the tail facet is at v3, and step 31 adds tail_version', () => {
+  assert.equal(db.FACET_VERSIONS.tail, 3);
+  assert.ok((db.requireDb().pragma('user_version', { simple: true }) as number) >= 31);
+  assert.ok((sql(`SELECT name FROM pragma_table_info('tracks') WHERE name = 'tail_version'`).all()).length === 1);
 });
 
-test('an older database gets the column on open, and one that has it keeps it', async () => {
-  db.requireDb().exec('ALTER TABLE tracks DROP COLUMN tail_version');
-  assert.ok(!hasTailVersionCol());
+test('step 31 re-runs safely on a database that already has the column', async () => {
+  db.requireDb().pragma('user_version = 30');
   db.close();
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
-  assert.ok(hasTailVersionCol());
-  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 37, 'no step claimed');
-  db.close();
-  await db.open({ embeddingDim: 8, adoptStoredDim: true });
-  assert.ok(hasTailVersionCol());
+  assert.ok((db.requireDb().pragma('user_version', { simple: true }) as number) >= 31);
 });
 
-test('a tail the analyzer placed is stamped v2 and settles', () => {
+test('a tail the analyzer placed with its curve is stamped v3 and settles', () => {
   track('placed');
   writeEdges('placed', 12_000);
-  writeTail('placed', 2);
-  assert.equal(tailVersionCol('placed'), 2);
-  assert.deepEqual([tailRow('placed')?.status, tailRow('placed')?.version], ['ok', 2]);
+  writeTail('placed', 3);
+  assert.equal(tailVersionCol('placed'), 3);
+  assert.deepEqual([tailRow('placed')?.status, tailRow('placed')?.version], ['ok', 3]);
   assert.ok(!db.facetNeedsIds('tail').includes('placed'));
   consistent();
 });
 
-test('an end-of-file tail is v1 unless the edges show the window held the same music', () => {
+test('a placed tail without the curve (v2) is re-planned for v3', () => {
+  track('placed2');
+  writeEdges('placed2', 12_000);
+  writeTail('placed2', 2);
+  assert.equal(tailVersionCol('placed2'), 2);
+  assert.deepEqual([tailRow('placed2')?.status, tailRow('placed2')?.version], ['ok', 2]);
+  assert.ok(db.facetNeedsIds('tail').includes('placed2'));
+  // …and a v2 row a whole-table re-derive meets stays v2, i.e. due.
+  db.resyncAllFacets(db.requireDb());
+  assert.equal(tailRow('placed2')?.version, 2);
+  assert.ok(plan(['placed2']).items.some((i) => i.id === 'placed2'), 'planned by --facets tail');
+  consistent();
+});
+
+test('placedTailVersion: v3 only with a valid curve', () => {
+  assert.equal(db.placedTailVersion({ loudnessCurve: CURVE }), 3);
+  assert.equal(db.placedTailVersion({ loudnessCurve: { ...CURVE, lufs: [] } }), 3, 'measured, too short for a point');
+  assert.equal(db.placedTailVersion({}), 2, 'no curve: an analyzer without pyloudnorm');
+  assert.equal(db.placedTailVersion({ loudnessCurve: { ...CURVE, lufs: [1, 'x'] } }), 2, 'malformed');
+  assert.equal(db.placedTailVersion(null), 3, 'no outro: nothing to carry a curve');
+});
+
+test('an end-of-file tail is v1 unless the edges show the window held the same music (v2, still due for v3)', () => {
   for (const [id, silence, version] of [['short', 2_500, 2], ['edge', 3_000, 2], ['long', 3_001, 1]] as const) {
     track(id);
     writeEdges(id, silence);
@@ -217,16 +233,17 @@ test('an end-of-file tail is v1 unless the edges show the window held the same m
   track('noedges');
   writeTail('noedges');
   assert.deepEqual([tailRow('noedges')?.status, tailRow('noedges')?.version], ['ok', 1]);
+  // Below v3 all of them are due: the tolerance only spares the v1 → v2 step,
+  // the end-of-file window has no curve.
   const due = db.facetNeedsIds('tail');
-  assert.ok(due.includes('long') && due.includes('noedges'), due.join(','));
-  assert.ok(!due.includes('short') && !due.includes('edge'), due.join(','));
+  for (const id of ['long', 'noedges', 'short', 'edge']) assert.ok(due.includes(id), `${id}: ${due.join(',')}`);
   consistent();
 });
 
 test('an end-of-file answer replaces a placed tail, and drops its stamp', () => {
   track('replaced');
   writeEdges('replaced', 9_000);
-  writeTail('replaced', 2);
+  writeTail('replaced', 3);
   writeTail('replaced');
   assert.equal(tailVersionCol('replaced'), null);
   assert.equal(tailRow('replaced')?.version, 1);
@@ -346,12 +363,13 @@ test('a replaced file drops the tail stamp with the tail', () => {
 });
 
 test('re-measured edges that move the end re-plan a placed tail', () => {
+  // A placed tail is stamped 3 when its outro carries the loudness curve.
   track('moved');
   writeEdges('moved', 20_000);
-  writeTail('moved', 2);
+  writeTail('moved', 3);
   // Within the tolerance: the placed window still ends at the music.
   writeEdges('moved', 21_000);
-  assert.equal(tailVersionCol('moved'), 2);
+  assert.equal(tailVersionCol('moved'), 3);
   assert.ok(!db.facetNeedsIds('tail').includes('moved'));
   // Past it: the stored window no longer ends where the music stops.
   writeEdges('moved', 30_000);
@@ -362,13 +380,13 @@ test('re-measured edges that move the end re-plan a placed tail', () => {
   writeEdges('moved', 500);
   assert.equal(tailRow('moved')?.version, 1);
   // Placing it again settles it.
-  writeTail('moved', 2);
-  assert.equal(tailVersionCol('moved'), 2);
+  writeTail('moved', 3);
+  assert.equal(tailVersionCol('moved'), 3);
   assert.ok(!db.facetNeedsIds('tail').includes('moved'));
   // A tail placed in the same answer as the edges is not re-planned by them.
   db.writeFacetResults('moved', { source: 'url', edges: { leadMs: 0, tailMs: 9_000, durationMs: 214_000 },
-    tail: { outro: OUTRO, tailSilenceMs: 9_000, tailStartMs: 205_000, version: 2 } });
-  assert.equal(tailVersionCol('moved'), 2);
+    tail: { outro: { ...OUTRO, loudnessCurve: CURVE }, tailSilenceMs: 9_000, tailStartMs: 205_000, version: 3 } });
+  assert.equal(tailVersionCol('moved'), 3);
   consistent();
 });
 
@@ -388,17 +406,17 @@ test('measuring edges promotes a tail the tolerance covers, live', () => {
 test('an unmeasurable tail without edges stays due until edges can place it', () => {
   track('capped');
   db.writeFacetResults('capped', { source: 'capped', tail: { unmeasurable: 'capped-download' } });
-  assert.deepEqual([tailRow('capped')?.status, tailRow('capped')?.version], ['unmeasurable', 1]);
+  assert.deepEqual([tailRow('capped')?.status, tailRow('capped')?.version], ['unmeasurable', 2]);
   assert.ok(db.facetNeedsIds('tail').includes('capped'));
   // Edges arriving do not settle it: the tail was never measured.
   writeEdges('capped', 500);
-  assert.equal(tailRow('capped')?.version, 1);
+  assert.equal(tailRow('capped')?.version, 2);
   assert.ok(db.facetNeedsIds('tail').includes('capped'));
   // With edges, an unmeasurable answer is the placed attempt's: it settles.
   track('capped2');
   writeEdges('capped2', 500);
   db.writeFacetResults('capped2', { source: 'capped', tail: { unmeasurable: 'tail-not-reached' } });
-  assert.deepEqual([tailRow('capped2')?.status, tailRow('capped2')?.version], ['unmeasurable', 2]);
+  assert.deepEqual([tailRow('capped2')?.status, tailRow('capped2')?.version], ['unmeasurable', 3]);
   consistent();
 });
 
@@ -408,23 +426,23 @@ test('a capped-download tail stays due even with edges: the window was not place
   track('cap-edged');
   writeEdges('cap-edged', 500);
   db.writeFacetResults('cap-edged', { source: 'capped', tail: { unmeasurable: 'capped-download' } });
-  assert.deepEqual([tailRow('cap-edged')?.status, tailRow('cap-edged')?.version], ['unmeasurable', 1]);
+  assert.deepEqual([tailRow('cap-edged')?.status, tailRow('cap-edged')?.version], ['unmeasurable', 2]);
   assert.ok(db.facetNeedsIds('tail').includes('cap-edged'));
   // Same through the flat path, which explains a missing tail the same way.
   track('cap-flat');
   writeEdges('cap-flat', 500);
   db.upsertTrackAnalysis('cap-flat', { bpm: 100, musicalKey: 'C', loudnessLufs: -9, peakDb: -1, source: 'capped' });
-  assert.deepEqual([tailRow('cap-flat')?.status, tailRow('cap-flat')?.version], ['unmeasurable', 1]);
+  assert.deepEqual([tailRow('cap-flat')?.status, tailRow('cap-flat')?.version], ['unmeasurable', 2]);
   // A complete copy whose end-of-file window gave nothing: unplaced, so due.
   track('flat-none');
   writeEdges('flat-none', 500);
   db.upsertTrackAnalysis('flat-none', { bpm: 100, musicalKey: 'C', loudnessLufs: -9, peakDb: -1, source: 'full' });
-  assert.deepEqual([tailRow('flat-none')?.status, tailRow('flat-none')?.version], ['unmeasurable', 1]);
+  assert.deepEqual([tailRow('flat-none')?.status, tailRow('flat-none')?.version], ['unmeasurable', 2]);
   // A stored row settled that way by an earlier controller is re-opened on the
   // next re-derive.
-  sql(`UPDATE track_facet_status SET version = 2 WHERE track_id = 'cap-edged' AND facet = 'tail'`).run();
+  sql(`UPDATE track_facet_status SET version = 3 WHERE track_id = 'cap-edged' AND facet = 'tail'`).run();
   db.resyncAllFacets(db.requireDb());
-  assert.equal(tailRow('cap-edged')?.version, 1);
+  assert.equal(tailRow('cap-edged')?.version, 2);
   consistent();
 });
 
@@ -432,12 +450,12 @@ test('an unplaced unmeasurable answer stays due; a placed one settles', () => {
   track('unpl');
   writeEdges('unpl', 500);
   db.writeFacetResults('unpl', { source: 'full', tailUnplaced: true, tail: { unmeasurable: 'silent-tail-window' } });
-  assert.deepEqual([tailRow('unpl')?.status, tailRow('unpl')?.version], ['unmeasurable', 1]);
-  db.writeFacetResults('unpl', { source: 'full', tail: { unmeasurable: 'silent-tail-window' } });
   assert.deepEqual([tailRow('unpl')?.status, tailRow('unpl')?.version], ['unmeasurable', 2]);
+  db.writeFacetResults('unpl', { source: 'full', tail: { unmeasurable: 'silent-tail-window' } });
+  assert.deepEqual([tailRow('unpl')?.status, tailRow('unpl')?.version], ['unmeasurable', 3]);
   // A later write that does not re-measure the tail keeps the settled version.
   db.upsertTrackAudioVector('unpl', Array.from({ length: db.AUDIO_EMBEDDING_DIM }, (_, i) => (i === 0 ? 1 : 0)));
-  assert.equal(tailRow('unpl')?.version, 2);
+  assert.equal(tailRow('unpl')?.version, 3);
   consistent();
 });
 
@@ -448,31 +466,31 @@ test('a silent file settles its tail: there is no music end to place a window at
   track('sil-ok');
   silent('sil-ok');
   writeTail('sil-ok');
-  assert.deepEqual([tailRow('sil-ok')?.status, tailRow('sil-ok')?.version], ['ok', 2]);
+  assert.deepEqual([tailRow('sil-ok')?.status, tailRow('sil-ok')?.version], ['ok', 3]);
   // An unmeasurable answer from the unplaced window settles too.
   track('sil-um');
   silent('sil-um');
   db.writeFacetResults('sil-um', { source: 'full', tailUnplaced: true, tail: { unmeasurable: 'silent-tail-window' } });
-  assert.deepEqual([tailRow('sil-um')?.status, tailRow('sil-um')?.version], ['unmeasurable', 2]);
+  assert.deepEqual([tailRow('sil-um')?.status, tailRow('sil-um')?.version], ['unmeasurable', 3]);
   // Tail stored first, then the edges scan finds the file silent: promoted.
   track('sil-late');
   writeTail('sil-late');
   assert.equal(tailRow('sil-late')?.version, 1);
   silent('sil-late');
-  assert.equal(tailRow('sil-late')?.version, 2);
+  assert.equal(tailRow('sil-late')?.version, 3);
   track('sil-late-um');
   db.writeFacetResults('sil-late-um', { source: 'full', tailUnplaced: true, tail: { unmeasurable: 'silent-tail-window' } });
-  assert.equal(tailRow('sil-late-um')?.version, 1);
-  silent('sil-late-um');
   assert.equal(tailRow('sil-late-um')?.version, 2);
+  silent('sil-late-um');
+  assert.equal(tailRow('sil-late-um')?.version, 3);
   // None of them is planned again.
   const due = db.facetNeedsIds('tail');
   for (const id of ['sil-ok', 'sil-um', 'sil-late', 'sil-late-um']) assert.ok(!due.includes(id), id);
   // Rows an earlier derivation left at v1 are settled by the next re-derive.
   sql(`UPDATE track_facet_status SET version = 1 WHERE track_id IN ('sil-ok', 'sil-um') AND facet = 'tail'`).run();
   db.resyncAllFacets(db.requireDb());
-  assert.deepEqual([tailRow('sil-ok')?.version, tailRow('sil-um')?.version], [2, 2]);
-  assert.equal(JSON.parse(db.facetDerivationStamp()).revision, 5);
+  assert.deepEqual([tailRow('sil-ok')?.version, tailRow('sil-um')?.version], [3, 3]);
+  assert.ok(JSON.parse(db.facetDerivationStamp()).revision >= 5);
   consistent();
   // A later edges scan that finds music brings the normal rule back.
   writeEdges('sil-ok', 9_000);
@@ -487,14 +505,14 @@ test('a whole-table re-derive applies the same rule to existing rows', () => {
   sql(`UPDATE track_facet_status SET version = 1 WHERE track_id = 'legacy' AND facet = 'tail'`).run();
   db.resyncAllFacets(db.requireDb());
   assert.equal(tailRow('legacy')?.version, 2);
-  assert.equal(JSON.parse(db.facetDerivationStamp()).revision, 5);
+  assert.ok(JSON.parse(db.facetDerivationStamp()).revision >= 5);
   consistent();
 });
 
 test('a flat analysis and a --re-analyze clear keep a placed tail', () => {
   track('kept');
   writeEdges('kept', 9_000);
-  writeTail('kept', 2);
+  writeTail('kept', 3);
   db.upsertTrackAnalysis('kept', {
     bpm: 101, musicalKey: 'D', loudnessLufs: -9, peakDb: -1, source: 'full',
     outro: { ...OUTRO, startMs: 1 }, tailSilenceMs: 9_100, tailStartMs: 204_900,
@@ -502,18 +520,19 @@ test('a flat analysis and a --re-analyze clear keep a placed tail', () => {
   let t = db.getTrack('kept')!;
   assert.equal(t.outro?.startMs, 200_000);
   assert.equal(t.tailStartMs, 213_500);
-  assert.equal(tailVersionCol('kept'), 2);
+  assert.equal(tailVersionCol('kept'), 3);
   db.clearAnalysis();
   t = db.getTrack('kept')!;
   assert.equal(t.outro?.startMs, 200_000);
-  assert.equal(tailVersionCol('kept'), 2);
-  assert.equal(tailRow('kept')?.version, 2);
+  assert.deepEqual(t.outro?.loudnessCurve, CURVE, 'the curve is kept with its tail');
+  assert.equal(tailVersionCol('kept'), 3);
+  assert.equal(tailRow('kept')?.version, 3);
   // An end-of-file tail is the analysis being redone: cleared.
   assert.equal(db.getTrack('long')!.outro, null);
   consistent();
 });
 
-test('a planned tail sends the placement from the stored edges and stores v2', async () => {
+test('a planned tail sends the placement from the stored edges and stores v3 with the curve', async () => {
   track('p1');
   writeEdges('p1', 20_000);
   requests.length = 0;
@@ -526,8 +545,24 @@ test('a planned tail sends the placement from the stored edges and stores v2', a
   assert.equal(t.outro?.startMs, 188_000);
   assert.equal(t.tailStartMs, 194_000);
   assert.equal(t.tailSilenceMs, 20_000);
-  assert.equal(tailVersionCol('p1'), 2);
-  assert.deepEqual([tailRow('p1')?.status, tailRow('p1')?.version], ['ok', 2]);
+  assert.deepEqual(t.outro?.loudnessCurve, CURVE, 'the curve survives the answer → outro_json → read');
+  assert.equal(tailVersionCol('p1'), 3);
+  assert.deepEqual([tailRow('p1')?.status, tailRow('p1')?.version], ['ok', 3]);
+});
+
+test('a placed answer without the curve (no pyloudnorm) stores v2 and stays due', async () => {
+  track('p1b');
+  writeEdges('p1b', 20_000);
+  curveAnswer = false;
+  try {
+    await runAnalysisPass({ plan: plan(['p1b']) });
+  } finally {
+    curveAnswer = true;
+  }
+  assert.equal(db.getTrack('p1b')!.outro?.loudnessCurve, undefined);
+  assert.equal(tailVersionCol('p1b'), 2);
+  assert.deepEqual([tailRow('p1b')?.status, tailRow('p1b')?.version], ['ok', 2]);
+  assert.ok(db.facetNeedsIds('tail').includes('p1b'));
 });
 
 test('without edges, or from an analyzer that ignores the placement, the tail stays v1', async () => {
@@ -587,14 +622,14 @@ test('a placed window that cannot be read with no tail stored is recorded as unm
     placedMiss = false;
   }
   assert.deepEqual([tailRow('miss2')?.status, tailRow('miss2')?.reason, tailRow('miss2')?.version],
-    ['unmeasurable', 'tail-not-reached', 2]);
+    ['unmeasurable', 'tail-not-reached', 3]);
   consistent();
 });
 
-test('a flat analysis that placed its tail replaces the stored one and stamps v2', () => {
+test('a flat analysis that placed its tail replaces the stored one and stamps its version', () => {
   track('flatv2');
   writeEdges('flatv2', 9_000);
-  writeTail('flatv2', 2);
+  writeTail('flatv2', 3);
   db.upsertTrackAnalysis('flatv2', {
     bpm: 101, musicalKey: 'D', loudnessLufs: -9, peakDb: -1, source: 'full',
     outro: { ...OUTRO, startMs: 199_000 }, tailSilenceMs: 9_000, tailStartMs: 205_000, tailVersion: 2,
@@ -603,10 +638,16 @@ test('a flat analysis that placed its tail replaces the stored one and stamps v2
   assert.equal(db.getTrack('flatv2')!.tailStartMs, 205_000);
   assert.equal(tailVersionCol('flatv2'), 2);
   assert.equal(tailRow('flatv2')?.version, 2);
+  db.upsertTrackAnalysis('flatv2', {
+    bpm: 101, musicalKey: 'D', loudnessLufs: -9, peakDb: -1, source: 'full',
+    outro: { ...OUTRO, startMs: 198_000, loudnessCurve: CURVE }, tailSilenceMs: 9_000, tailStartMs: 205_000, tailVersion: 3,
+  });
+  assert.equal(tailVersionCol('flatv2'), 3);
+  assert.equal(tailRow('flatv2')?.version, 3);
   consistent();
 });
 
-test('the regular analysis pass sends the placement too, and stores v2', async () => {
+test('the regular analysis pass sends the placement too, and stores v3', async () => {
   db.upsertTrackMeta('flat1', { title: 'flat1', artist: 'A', album: 'B', duration: 214 });
   writeEdges('flat1', 20_000);
   requests.length = 0;
@@ -618,8 +659,9 @@ test('the regular analysis pass sends the placement too, and stores v2', async (
   const t = db.getTrack('flat1')!;
   assert.equal(t.outro?.startMs, 189_000);
   assert.equal(t.tailStartMs, 194_000);
-  assert.equal(tailVersionCol('flat1'), 2);
-  assert.deepEqual([tailRow('flat1')?.status, tailRow('flat1')?.version], ['ok', 2]);
+  assert.deepEqual(t.outro?.loudnessCurve, CURVE);
+  assert.equal(tailVersionCol('flat1'), 3);
+  assert.deepEqual([tailRow('flat1')?.status, tailRow('flat1')?.version], ['ok', 3]);
 });
 
 test('the planner explains where the tail window comes from', () => {
@@ -691,7 +733,9 @@ test('a vocal-only plan also places a due tail, so one separation settles both (
   assert.deepEqual(requests[0].facets, ['tail', 'vocal']);
   assert.equal(requests[0].tail_vocals, undefined, 'the vocal facet separates the tail; no second tail pass');
   assert.deepEqual(requests[0].tail_window, { end_ms: 194_000, duration_ms: 214_000 });
-  assert.equal(tailVersionCol('due-voc'), 2, 'the tail is placed');
+  // The answer carries a loudness curve, so the placed tail is stamped with
+  // the current tail version (placedTailVersion), not the curve-less 2.
+  assert.equal(tailVersionCol('due-voc'), db.FACET_VERSIONS.tail, 'the tail is placed');
   assert.deepEqual(db.getTrack('due-voc')!.outro?.vocalRanges, [{ startMs: 186_000, endMs: 188_000 }], 'its vocals merged');
   const v = vocalRowOf('due-voc');
   assert.deepEqual([v?.status, v?.version, v?.reason], ['ok', db.FACET_VERSIONS.vocal, null]);
@@ -711,7 +755,11 @@ test('placed tail vocals merge into an end-of-file outro the tolerance counts as
   writeEdges('tol-voc', 1_000);
   writeTail('tol-voc');
   assert.equal(tailVersionCol('tol-voc'), null);
-  assert.deepEqual([tailRow('tol-voc')?.status, tailRow('tol-voc')?.version], ['ok', 2], 'fixture: the tail is not due');
+  // v2 is one below the v3 tail (the loudness curve), so this window is
+  // read once more for its curve; the vocal answers below must not change that.
+  assert.deepEqual([tailRow('tol-voc')?.status, tailRow('tol-voc')?.version], ['ok', 2], 'fixture: an end-of-file window the tolerance covers');
+  const tailDueBefore = db.facetNeedsIds('tail').includes('tol-voc');
+  assert.equal(tailDueBefore, db.FACET_VERSIONS.tail > 2, 'fixture: due only for the curve');
   for (let i = 0; i < 3; i++) {
     db.writeFacetResults('tol-voc', { source: 'full', vocal: {
       vocalRanges: [], tailVocalRanges: [{ startMs: 205_000, endMs: 207_000 }], tailWindow: 'placed' } });
@@ -719,7 +767,7 @@ test('placed tail vocals merge into an end-of-file outro the tolerance counts as
     const v = vocalRowOf('tol-voc');
     assert.deepEqual([v?.status, v?.version, v?.reason], ['ok', db.FACET_VERSIONS.vocal, null], `answer ${i}`);
     assert.ok(!db.facetNeedsIds('vocal').includes('tol-voc'), `vocal due after answer ${i}`);
-    assert.ok(!db.facetNeedsIds('tail').includes('tol-voc'), `tail due after answer ${i}`);
+    assert.equal(db.facetNeedsIds('tail').includes('tol-voc'), tailDueBefore, `tail due after answer ${i}`);
   }
   consistent();
 });
@@ -838,8 +886,8 @@ test('a regular run measures the edges first, so a NEW track\'s tail is placed o
   const oldEdgesAt = requests.findIndex((q) => JSON.stringify(q).includes('old1') && Array.isArray(q.facets) && (q.facets as string[]).includes('edges'));
   assert.ok(oldEdgesAt > flatAt, `the library backfill (old1 at ${oldEdgesAt}) runs after the regular pass (${flatAt})`);
   assert.deepEqual(requests[flatAt].tail_window, { end_ms: 194_000, duration_ms: 214_000 });
-  assert.equal(tailVersionCol('fresh1'), 2);
-  assert.deepEqual([tailRow('fresh1')?.status, tailRow('fresh1')?.version], ['ok', 2]);
+  assert.equal(tailVersionCol('fresh1'), 3);
+  assert.deepEqual([tailRow('fresh1')?.status, tailRow('fresh1')?.version], ['ok', 3]);
   consistent();
 });
 
@@ -911,7 +959,7 @@ test('a --facets tail run with vocal detection off places the tail and keeps the
   assert.equal(requests.length, 1);
   assert.deepEqual(requests[0].tail_window, { end_ms: 194_000, duration_ms: 214_000 });
   assert.notEqual(requests[0].tail_vocals, true, 'no vocal re-measure was asked for');
-  assert.equal(tailVersionCol('sung-run'), 2, 'the tail was placed');
+  assert.equal(tailVersionCol('sung-run'), 3, 'the tail was placed (v3: the stub answers with the curve)');
   const outro = db.getTrack('sung-run')!.outro!;
   assert.deepEqual(outro.vocalRanges, SUNG, 'the sung spans are kept');
   assert.deepEqual(verdicts('sung-run'), { js: false, sql: 0 }, 'still sung');
@@ -954,7 +1002,7 @@ test('a vocal-off --re-analyze places the tail and keeps the track sung (#2255)'
   const mine = requests.find((q) => JSON.stringify(q).includes('sung-flat') && !q.facets);
   assert.ok(mine, 'the flat request was sent');
   assert.deepEqual(mine.tail_window, { end_ms: 194_000, duration_ms: 214_000 });
-  assert.equal(tailVersionCol('sung-flat'), 2, 'the flat answer placed the tail');
+  assert.equal(tailVersionCol('sung-flat'), 3, 'the flat answer placed the tail (v3, with the curve)');
   assert.deepEqual(db.getTrack('sung-flat')!.outro?.vocalRanges, SUNG);
   assert.deepEqual(verdicts('sung-flat'), { js: false, sql: 0 });
   consistent();
@@ -989,7 +1037,7 @@ test('a track the pass reaches without edges keeps an end-of-file tail at v1, an
   requests.length = 0;
   await runAnalysisPass({ plan: p, vocalBackfill: false });
   assert.deepEqual(requests[0].tail_window, { end_ms: 194_000, duration_ms: 214_000 });
-  assert.equal(tailVersionCol('gap1'), 2);
+  assert.equal(tailVersionCol('gap1'), 3);
   assert.ok(!db.facetNeedsIds('tail').includes('gap1'));
   consistent();
 });

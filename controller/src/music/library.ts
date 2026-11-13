@@ -9,6 +9,7 @@ import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
 import { artistRootKey, setKnownActsProvider, trackKey, type CandidateLike } from './recency.js';
 import { isInstrumental } from './lyric-vocal.js';
+import { curveOutro, tailFromCurveOn } from './tail-levels.js';
 import { clearWalk } from './library-walk.js';
 
 let loaded = false;
@@ -122,8 +123,12 @@ export function get(songId: string): any {
     // Boundary keys for bpmKeyFor / queue.mixAnalysisFor.
     keyRanges: t.keyRanges,
     // Measured ending (fade vs cold, tail loudness/tempo/grid) for the queue's
-    // exit canvas + effect gating. null = no signal.
-    outro: t.outro,
+    // exit canvas + effect gating. null = no signal. With
+    // transitions.tailFromCurve on, its level readings come from the
+    // whole-file loudness curve (music/tail-levels.ts, the one place).
+    outro: tailFromCurveOn()
+      ? curveOutro(t.outro, db.getLoudnessCurveJson(songId), { decodedDurationMs: t.decodedDurationMs, edgeTailMs: t.edgeTailMs })
+      : t.outro,
     // Edge dead air: music/silence-trim.ts resolves EVERY caller through this
     // projection, so dropping one disables the trim silently. null = no signal.
     leadSilenceMs: t.leadSilenceMs,

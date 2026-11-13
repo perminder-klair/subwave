@@ -151,9 +151,15 @@ export const SECTIONS = [
     // list is what drives the dirty-check that decides whether the save bar
     // shows at all. Without it, toggling "Fade out at a show change" alone
     // never registers as a change and the save prompt never appears.
-    // The stem fields of 'transitions' moved to the Stems section with their
-    // card; the crossfade curve and the effects stay here with theirs.
-    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'transitions.equalPowerCrossfade', 'transitions.effects', 'stream', 'loudness'],
+    // 'transitions' is split at the leaf: its stem fields moved to the Stems
+    // section with their card; the Crossfade card's own fields and the DJ
+    // transition effects stay here by path, or editing them alone never shows
+    // this section's save bar.
+    formKeys: [
+      'crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'stream', 'loudness',
+      'transitions.equalPowerCrossfade', 'transitions.fadeAudibleEnd', 'transitions.fadeAudibleEndDb',
+      'transitions.tailFromCurve', 'transitions.effects',
+    ],
   },
 ] as const satisfies readonly SectionSpec[];
 
@@ -374,6 +380,8 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Stem-blend seams', section: 'stems', card: 'Stem transitions', keywords: 'drums carry under intro blend' },
   { label: 'Orphan stems cleanup', section: 'stems', card: 'Orphan stems cleanup', keywords: 'quarantine purge deleted tracks left library reclaim disk daily pass' },
   { label: 'Crossfade curve', section: 'broadcast', card: 'Crossfade', keywords: 'equal power linear dip fade shape' },
+  { label: 'Cut fade endings at their audible end', section: 'broadcast', card: 'Crossfade', keywords: 'fade out ending tail silence quiet inaudible cue out exit overlap' },
+  { label: 'Audible end (dB under the track\'s loudness)', section: 'broadcast', card: 'Crossfade', keywords: 'fade ending threshold db lufs quiet inaudible cut earlier' },
   { label: 'Sweep', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect filter gear change clash dj mode' },
   { label: 'Washout', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect echo tail dub exit length cap dj mode' },
   { label: 'Blend', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect spectral handover locked pair dj mode' },

@@ -309,6 +309,9 @@ export interface TransitionsForm {
   stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
   pickTimeStems: boolean;  // separate a held pick's missing stems while it waits (#2197)
   equalPowerCrossfade: boolean;  // plain crossfade curve: false = linear, true = equal-power (mixer restart)
+  fadeAudibleEnd: boolean;  // cut a fade ending at its audible end (controller cue point, no restart)
+  fadeAudibleEndDb: string; // dB under the track's loudness where a fade stops being audible (15..35)
+  tailFromCurve: boolean;   // read the ending's levels off the whole-file loudness curve (no restart)
   stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
   stemCacheGb: string;  // settings.audio.stemCacheGb — byte budget the LRU sweep enforces
   /** settings.transitions.effects — which gestures the DJ may reach for. Always
@@ -454,6 +457,9 @@ export interface SettingsData {
       stemBlends?: boolean;
       pickTimeStems?: boolean;
       equalPowerCrossfade?: boolean;
+      fadeAudibleEnd?: boolean;
+      fadeAudibleEndDb?: number;
+      tailFromCurve?: boolean;
       effects?: Partial<Record<TransitionEffect, boolean>>;
     };
     audio?: {

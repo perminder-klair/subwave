@@ -21,6 +21,7 @@ import {
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
+  FADE_AUDIBLE_END_DB_BOUNDS,
   normalizeGeminiSafety,
   type JingleRotateOwner,
   type JinglePlacement,
@@ -724,6 +725,19 @@ export const DEFAULTS = {
     // and beds keep their own curves. Read once by the mixer at startup, so a
     // change needs a restart.
     equalPowerCrossfade: false,
+    // Cut a FADE ending where it stops being audible instead of at the silence
+    // trim's absolute floor (-50 dBFS), which on a fade lands seconds after the
+    // music did: the tail's loudness curve (tail v3) is read for the last point
+    // within fadeAudibleEndDb of the track's own loudness (music/silence-trim.ts).
+    // Off = today's cut. A controller-side cue point, so no mixer restart: it
+    // applies from the next queued track; tracks without a curve keep today's cut.
+    fadeAudibleEnd: false,
+    fadeAudibleEndDb: 20,
+    // Read the tail's level readings (fade or cold, wind-down start, tail
+    // loudness, the audible-end curve) off the whole-file loudness curve
+    // instead of the librosa tail facet (music/tail-levels.ts). Off = today's
+    // readings. Controller-side, so no mixer restart.
+    tailFromCurve: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
     // and lose all six. Resolved through settings/transition-effects.ts, which
@@ -895,6 +909,7 @@ export const BOUNDS = {
   // reason. Far lower than the cap's — see SHOW_MIN_TRACK_LENGTH_MAX.
   minTrackLengthSeconds: { min: 0, max: SHOW_MIN_TRACK_LENGTH_MAX, type: 'int' },
   silenceTrimMinGapMs: { ...SILENCE_TRIM_MIN_GAP_MS_BOUNDS, type: 'int' },
+  fadeAudibleEndDb: { ...FADE_AUDIBLE_END_DB_BOUNDS, type: 'float' },
   backupsKeep: { ...BACKUP_KEEP_BOUNDS, type: 'int' },
   loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
   loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },
