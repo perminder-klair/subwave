@@ -48,7 +48,12 @@ export async function resolveArtistEpisodeSource(artistId: string, show: Episode
         const songs = z.array(preparationTrackSchema).parse(await subsonic.getAlbum(album.id));
         return songs.filter(song => song.artistId === artistId || song.artists?.[0]?.id === artistId || song.albumArtists?.[0]?.id === artistId);
       });
-      tracks = albums.flat();
+      // The albums cover the records the artist is an album artist on; the
+      // mirror adds the tracks credited first to them on someone else's record,
+      // which getArtist does not list, so those survive either path (#2333).
+      const byId = new Map<string, PreparationTrack>();
+      for (const track of [...albums.flat(), ...mirrored]) if (!byId.has(track.id)) byId.set(track.id, track);
+      tracks = [...byId.values()];
     }
     catalogue = { at: Date.now(), artist: { id: artist.id, name: artist.name }, tracks };
     catalogues.set(artistId, catalogue);
@@ -60,6 +65,11 @@ export async function resolveArtistEpisodeSource(artistId: string, show: Episode
   if (show.playlistStrict && show.playlistIds.length) {
     const playlist = await resolveShowPlaylistPool(show);
     if (!playlist) throw new Error('The strict playlist could not be resolved for this artist episode');
+    // Judged on the whole catalogue, so the reason names the playlist only when
+    // it is the cause, not an exclusion or the blocklist that emptied it.
+    if (catalogue.tracks.length && !catalogue.tracks.some(t => playlist.ids.has(t.id))) {
+      throw new Error("None of this artist's tracks are in the show's playlists");
+    }
     tracks = tracks.filter(t => playlist.ids.has(t.id));
   }
   // Before the never-starve locks, so a lock that found only tagged tracks is

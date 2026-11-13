@@ -19,11 +19,17 @@ const server = createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
   const id = url.searchParams.get('id');
   let body: Record<string, unknown> = {};
-  if (url.pathname.endsWith('/getArtist')) body = { artist: { id, name: id === 'live' ? 'Live' : 'Artist', album: [{ id: 'album', songCount: id === 'live' ? 5 : 4 }] } };
+  if (url.pathname.endsWith('/getArtist')) body = { artist: { id, name: id === 'live' ? 'Live' : 'Artist', album: [{ id: 'album', songCount: id === 'live' ? 5 : id?.startsWith('guest-') ? 9 : 4 }] } };
+  if (url.pathname.endsWith('/getGenres')) body = { genres: { genre: [{ value: 'Jazz' }] } };
   if (url.pathname.endsWith('/getArtists')) body = { artists: { index: [{ artist: [{ id: 'artist', name: 'Artist' }, { id: 'live', name: 'Live' }] }] } };
   if (url.pathname.endsWith('/getAlbum')) { albumCalls++; body = { album: { song: liveTracks } }; }
-  if (url.pathname.endsWith('/getPlaylists')) body = { playlists: { playlist: [{ id: 'pin', name: 'Pinned' }, { id: 'exclude', name: 'Excluded' }] } };
-  if (url.pathname.endsWith('/getPlaylist')) body = { playlist: { entry: id === 'pin' ? [{ id: 'one', title: 'One', artist: 'Artist' }, { id: 'two', title: 'Two', artist: 'Artist' }] : [{ id: 'two', title: 'Two', artist: 'Artist' }] } };
+  if (url.pathname.endsWith('/getPlaylists')) body = { playlists: { playlist: [{ id: 'pin', name: 'Pinned' }, { id: 'exclude', name: 'Excluded' }, { id: 'guest', name: 'Guest' }] } };
+  if (url.pathname.endsWith('/getPlaylist')) {
+    const entry = id === 'pin' ? [{ id: 'one', title: 'One', artist: 'Artist' }, { id: 'two', title: 'Two', artist: 'Artist' }]
+      : id === 'guest' ? [{ id: 'guest-konitz', title: 'Konitz', artist: 'Guest, Leader' }]
+        : [{ id: 'two', title: 'Two', artist: 'Artist' }];
+    body = { playlist: { entry } };
+  }
   res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ 'subsonic-response': { status: 'ok', ...body } }));
 });
 await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -99,6 +105,38 @@ test('an incomplete mirror falls back to targeted albums and rejects another art
   const source = await resolveArtistEpisodeSource('live', show(), 'episode-live');
   assert.deepEqual([...source.ids], ['live-one', 'live-two', 'live-collaboration']);
   assert.equal(albumCalls, 1);
+});
+
+// #2333: getArtist lists only the albums the artist is an album artist on, so a
+// track credited first to them on someone else's record is in the mirror alone.
+// The mirror (one row) is below getArtist's song count (9), so the albums path runs.
+test('the albums fallback keeps a first credit on another artist\'s album from the mirror', async () => {
+  db.upsertTrackMeta('guest-konitz', { title: 'Konitz', artist: 'Guest, Leader', artistId: 'guest-lead', album: "Leader's Record", albumId: 'elsewhere', duration: 180 });
+  const source = await resolveArtistEpisodeSource('guest-lead', show(), 'episode-guest');
+  assert.deepEqual([...source.ids], ['guest-konitz']);
+  const strict = await resolveArtistEpisodeSource('guest-lead', show({ playlistIds: ['guest'], playlistStrict: true }), 'episode-guest');
+  assert.deepEqual([...strict.ids], ['guest-konitz'], 'the strict playlist holding only that record airs it');
+});
+
+test('a catalogue with none of its tracks in the strict playlist names the playlist as the cause', async () => {
+  await assert.rejects(
+    resolveArtistEpisodeSource('guest-lead', show({ playlistIds: ['pin'], playlistStrict: true }), 'episode-guest'),
+    /None of this artist's tracks are in the show's playlists/,
+  );
+});
+
+test('mirror-only rows on the albums path go through the explicit, strict-lock and length filters', async () => {
+  const seed = (id: string, fields: Record<string, unknown>) => db.upsertTrackMeta(id, {
+    title: id, artist: 'Guest', artistId: 'guest-filters', album: 'Other Record', albumId: 'elsewhere', duration: 180, genres: ['Jazz'], ...fields,
+  });
+  seed('gf-explicit', { explicitStatus: 'explicit' });
+  seed('gf-clean', { explicitStatus: 'clean' });
+  seed('gf-short', { duration: 10 });
+  seed('gf-rock', { genres: ['Rock'] });
+  const open = await resolveArtistEpisodeSource('guest-filters', show(), 'episode-gf');
+  assert.deepEqual([...open.ids].sort(), ['gf-clean', 'gf-explicit', 'gf-rock'], 'the length floor drops the short row');
+  const filtered = await resolveArtistEpisodeSource('guest-filters', show({ excludeExplicit: true, filtersStrict: true, genres: ['Jazz'] }), 'episode-gf');
+  assert.deepEqual([...filtered.ids], ['gf-clean']);
 });
 
 test('every picker discovery result intersects the artist source before seen; artist caps yield and track recency holds', async () => {
