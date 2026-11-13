@@ -95,6 +95,8 @@ export interface FacetPlanCount {
   matched: number;
   planned: number;
   skipped: Partial<Record<SkipReason, number>>;
+  // Not asked for: planned onto another facet's items (tailWithVocal).
+  addedWith?: Facet;
 }
 
 export interface AcousticsPlan {
@@ -163,6 +165,31 @@ function yearMatchesWhere(cell: FacetCell | undefined, where: Where, now: number
 
 const FULL_PASS: readonly Facet[] = ['head', 'loudness', 'tail'];
 
+// A vocal item also takes its tail when the tail is due and the stored edges
+// can place it (#2318). The vocal answer's tail ranges describe the placed
+// window, and they merge only into an outro on that window (tracks.ts
+// sameTailWindow): over a due tail on another window (an end-of-file one past
+// the placement tolerance, or a placed one the edges moved) they were refused,
+// the row stayed head-only, and every `--facets vocal` run paid for Demucs
+// again. With the tail in the same request the worker separates once
+// (demucs_tail), the tail facet carries those ranges onto the new outro, and
+// both settle. 'needs' semantics whatever the run's --where: a forced vocal
+// redo does not force a tail, and a tail out of retries is left alone.
+// Placeable = an edges row measured ok; without one the window is the file's
+// end, the tail stays due, and adding it would buy nothing.
+function tailWithVocal(state: TrackFacets, now: number): boolean {
+  if (state.get('edges')?.status !== 'ok') return false;
+  return matchesWhere(state.get('tail'), 'tail', { kind: 'needs' }, now);
+}
+
+// The facet rows planAcoustics reads for `facets`: a vocal plan also judges
+// each track's tail and edges (tailWithVocal). Callers load the state with it.
+export function planStateFacets(facets: readonly Facet[]): Facet[] {
+  return facets.includes('vocal')
+    ? FACETS.filter((f) => facets.includes(f) || f === 'tail' || f === 'edges')
+    : FACETS.filter((f) => facets.includes(f));
+}
+
 export function requestFor(facets: readonly Facet[]): WorkRequest {
   const has = (f: Facet) => facets.includes(f);
   const clap = has('clap');
@@ -201,6 +228,7 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
   const now = input.now ?? Date.now();
 
   const items: WorkItem[] = [];
+  let addedTail = 0;
   const limit = input.limit && input.limit > 0 ? Math.floor(input.limit) : Infinity;
   const empty: TrackFacets = new Map();
   for (const id of input.ids) {
@@ -222,6 +250,10 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
       continue;
     }
     for (const f of picked) counts.get(f)!.planned += 1;
+    if (!facets.includes('tail') && picked.includes('vocal') && tailWithVocal(state, now)) {
+      picked.splice(picked.findIndex((f) => FACETS.indexOf(f) > FACETS.indexOf('tail')), 0, 'tail');
+      addedTail += 1;
+    }
     items.push({ id, facets: picked, request: requestFor(picked.filter(isAnalysisFacet)) });
   }
 
@@ -230,6 +262,12 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
   const rideAlong = anyFull ? FULL_PASS.filter((f) => !facets.includes(f)) : [];
 
   const warnings: string[] = [];
+  if (addedTail) {
+    warnings.push(
+      `tail: ${addedTail} vocal item${addedTail === 1 ? '' : 's'} also place${addedTail === 1 ? 's' : ''} a due tail from the stored edges, ` +
+        'so one separation settles both',
+    );
+  }
   if (facets.includes('clap') && input.capabilities.clap === null) {
     warnings.push('CLAP capability unknown (analyzer not probed) — clap items are planned but may produce no vector');
   }
@@ -265,7 +303,10 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
     facets,
     inScope: input.ids.length,
     items,
-    byFacet: facets.map((f) => counts.get(f)!),
+    byFacet: [
+      ...facets.map((f) => counts.get(f)!),
+      ...(addedTail ? [{ facet: 'tail' as const, matched: addedTail, planned: addedTail, skipped: {}, addedWith: 'vocal' as const }] : []),
+    ],
     rideAlong,
     warnings,
   };
@@ -319,7 +360,8 @@ export function formatPlan(plan: AcousticsPlan, sample = 10): string[] {
   out.push(`  facet      matched  planned  skipped`);
   for (const c of plan.byFacet) {
     const skipped = Object.entries(c.skipped).map(([k, v]) => `${k} ${v}`).join(', ') || '-';
-    out.push(`  ${c.facet.padEnd(9)} ${String(c.matched).padStart(8)} ${String(c.planned).padStart(8)}  ${skipped}`);
+    const added = c.addedWith ? `  (added to ${c.addedWith} items)` : '';
+    out.push(`  ${c.facet.padEnd(9)} ${String(c.matched).padStart(8)} ${String(c.planned).padStart(8)}  ${skipped}${added}`);
   }
   const analysis = plan.items.filter((i) => i.facets.some(isAnalysisFacet));
   if (analysis.length) {
