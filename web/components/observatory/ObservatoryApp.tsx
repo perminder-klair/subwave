@@ -657,7 +657,10 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
                     <span className="t-caption rail-proj-error" role="status">
                       LAST RUN FAILED: {proj.lastError}
                       {proj.bootRetryHeld && (
-                        <span className="ad-muted"> · not retried on boot until the library changes</span>
+                        <span className="ad-muted">
+                          {' '}
+                          · not retried on boot until the library or SUBWAVE_MAP_HEAP_MB changes
+                        </span>
                       )}
                     </span>
                   )}

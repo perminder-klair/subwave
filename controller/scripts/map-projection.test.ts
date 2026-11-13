@@ -3,8 +3,9 @@
 // umap-js's fit memory grows faster than the library, and a 232k library ran
 // the projection child out of heap two minutes in, on every boot, silently.
 // Pins: the seeded sample + neighbour placement (every track still gets a
-// point, deterministically), the failure record that holds the boot retry
-// until the library moves, and the SUBWAVE_MAP_HEAP_MB child env.
+// point, deterministically), the failure record and which failures hold the
+// boot retry (out of heap, or twice in a row, until the library or the heap
+// setting changes), and the SUBWAVE_MAP_HEAP_MB child env.
 //
 // Runs a REAL better-sqlite3 DB against a temp STATE_DIR, set before
 // library-db is imported (same shape as analysis-failure.test.ts).
@@ -51,18 +52,58 @@ function clustered(n: number, clusters: number, seed: number): { vecs: Float32Ar
 
 // --- policy ----------------------------------------------------------------
 
-await test('a failure holds the boot retry until the library passes the stale threshold', () => {
-  const failed = { ok: false, code: 134, signal: null, at: 'x', vectors: 232_350, error: 'oom' };
-  assert.equal(policy.holdBootRetry(232_350, failed), true);
-  assert.equal(policy.holdBootRetry(232_350 + 1_000, failed), true, '0.4% growth is not enough');
-  assert.equal(policy.holdBootRetry(232_350 + 20_000, failed), false, '8% growth retries');
-  assert.equal(policy.holdBootRetry(232_350 - 20_000, failed), false, 'shrinking past it retries too');
-  assert.equal(policy.holdBootRetry(232_350, { ...failed, ok: true, error: null }), false);
-  assert.equal(policy.holdBootRetry(232_350, null), false);
+const OOM_EXIT = {
+  ok: false,
+  code: 134,
+  signal: null,
+  at: 'x',
+  vectors: 232_350,
+  error: 'ran out of memory (JavaScript heap); raise SUBWAVE_MAP_HEAP_MB',
+  oom: true,
+  heapMb: 0,
+  failures: 1,
+};
+
+await test('running out of heap holds the boot retry until the library passes the stale threshold', () => {
+  const failed = OOM_EXIT;
+  assert.equal(policy.holdBootRetry(232_350, 0, failed), true);
+  assert.equal(policy.holdBootRetry(232_350 + 1_000, 0, failed), true, '0.4% growth is not enough');
+  assert.equal(policy.holdBootRetry(232_350 + 20_000, 0, failed), false, '8% growth retries');
+  assert.equal(policy.holdBootRetry(232_350 - 20_000, 0, failed), false, 'shrinking past it retries too');
+  assert.equal(policy.holdBootRetry(232_350, 0, { ...failed, ok: true, error: null, oom: false, failures: 0 }), false);
+  assert.equal(policy.holdBootRetry(232_350, 0, null), false);
   // Small libraries: the absolute floor still applies.
   const small = { ...failed, vectors: 200 };
-  assert.equal(policy.holdBootRetry(240, small), true, '40 vectors is under STALE_ABS');
-  assert.equal(policy.holdBootRetry(260, small), false);
+  assert.equal(policy.holdBootRetry(240, 0, small), true, '40 vectors is under STALE_ABS');
+  assert.equal(policy.holdBootRetry(260, 0, small), false);
+});
+
+await test('a changed SUBWAVE_MAP_HEAP_MB releases the hold; the same heap keeps it', () => {
+  const at8g = { ...OOM_EXIT, heapMb: 8192 };
+  assert.equal(policy.holdBootRetry(232_350, 8192, at8g), true);
+  assert.equal(policy.holdBootRetry(232_350, 16384, at8g), false, 'raised, as the hint says');
+  assert.equal(policy.holdBootRetry(232_350, 0, at8g), false, 'unset again is a change too');
+  assert.equal(policy.holdBootRetry(232_350, 0, { ...OOM_EXIT, heapMb: null }), false, 'a record without a heap retries');
+  // Held again only once the raised heap ran out too.
+  assert.equal(policy.holdBootRetry(232_350, 16384, { ...at8g, heapMb: 16384, failures: 2 }), true);
+});
+
+await test('any other failure is retried on the next boot once, then held', () => {
+  const busy = { ...OOM_EXIT, code: 1, error: 'SQLITE_BUSY: database is locked', oom: false };
+  assert.equal(policy.holdBootRetry(232_350, 0, busy), false, 'the first failure retries');
+  assert.equal(policy.holdBootRetry(232_350, 0, { ...busy, failures: 2 }), true, 'the second in a row holds');
+  assert.equal(policy.holdBootRetry(232_350, 0, { ...busy, failures: 5 }), true);
+  assert.equal(policy.holdBootRetry(232_350 + 20_000, 0, { ...busy, failures: 2 }), false, 'the library moved');
+  assert.equal(policy.holdBootRetry(232_350, 4096, { ...busy, failures: 2 }), false, 'the heap changed');
+});
+
+await test('the failure streak counts failed runs in a row and a success resets it', () => {
+  assert.equal(policy.failureStreak(null, false), 1);
+  assert.equal(policy.failureStreak(null, true), 0);
+  assert.equal(policy.failureStreak({ ...OOM_EXIT, ok: true, error: null, oom: false, failures: 0 }, false), 1);
+  assert.equal(policy.failureStreak(OOM_EXIT, false), 2);
+  assert.equal(policy.failureStreak({ ...OOM_EXIT, failures: 2 }, false), 3);
+  assert.equal(policy.failureStreak({ ...OOM_EXIT, failures: 2 }, true), 0);
 });
 
 await test('the stale rule is unchanged', () => {
@@ -205,12 +246,16 @@ await test('SUBWAVE_MAP_HEAP_MB is floored at MIN_HEAP_MB; unset keeps the defau
 
 // --- the child's run end -----------------------------------------------------
 
-function tracker(closeGraceMs = 10_000) {
-  const records: import('../src/music/map-projection-policy.js').ProjectionExit[] = [];
+type Exit = import('../src/music/map-projection-policy.js').ProjectionExit;
+
+function tracker(closeGraceMs = 10_000, { heapMb = 0, previous = null }: { heapMb?: number; previous?: Exit | null } = {}) {
+  const records: Exit[] = [];
   let settled = 0;
   const log: string[] = [];
   const run = projection.createRunTracker({
     vectors: 232_350,
+    heapMb,
+    previous,
     log,
     record: (e) => records.push(e),
     settled: () => settled++,
@@ -238,6 +283,9 @@ await test("the outcome is recorded on 'close', after output that drained past '
   assert.match(t.records[0]!.error ?? '', /out of memory/);
   assert.equal(t.records[0]!.code, 134);
   assert.equal(t.records[0]!.vectors, 232_350);
+  assert.equal(t.records[0]!.oom, true);
+  assert.equal(t.records[0]!.heapMb, 0);
+  assert.equal(t.records[0]!.failures, 1);
   assert.equal(t.settled(), 1);
   t.run.closed();
   t.run.exited(0, null);
@@ -275,6 +323,55 @@ await test("an exit with no 'close' is recorded after the grace; a spawn failure
   assert.equal(ok.records[0]!.error, null);
 });
 
+await test('the record carries the heap the run had, whether it ran out, and the failure streak', () => {
+  const busy = tracker(10_000, { heapMb: 8192, previous: { ...OOM_EXIT, failures: 1 } });
+  busy.run.stderr('projection failed: SQLITE_BUSY: database is locked\n');
+  busy.run.exited(1, null);
+  busy.run.closed();
+  assert.deepEqual(
+    { oom: busy.records[0]!.oom, heapMb: busy.records[0]!.heapMb, failures: busy.records[0]!.failures },
+    { oom: false, heapMb: 8192, failures: 2 },
+  );
+  assert.equal(busy.records[0]!.error, 'SQLITE_BUSY: database is locked');
+
+  const ok = tracker(10_000, { heapMb: 8192, previous: { ...OOM_EXIT, failures: 3 } });
+  ok.run.exited(0, null);
+  ok.run.closed();
+  assert.equal(ok.records[0]!.failures, 0);
+  assert.equal(ok.records[0]!.oom, false);
+
+  const spawnFail = tracker();
+  spawnFail.run.failed('spawn npx ENOENT');
+  assert.equal(spawnFail.records[0]!.oom, false);
+  assert.equal(spawnFail.records[0]!.failures, 1);
+});
+
+await test('a record from before the heap and streak were stored reads with one retry left', async () => {
+  const { writeFileSync } = await import('node:fs');
+  const file = join(stateDir, 'map-projection-last.json');
+  const legacy = { ok: false, code: 134, signal: null, at: 'x', vectors: 232_350 };
+  writeFileSync(file, JSON.stringify({ ...legacy, error: OOM_EXIT.error }));
+  const oom = projection.readLastExit()!;
+  assert.deepEqual({ oom: oom.oom, heapMb: oom.heapMb, failures: oom.failures }, { oom: true, heapMb: null, failures: 1 });
+  assert.equal(policy.holdBootRetry(232_350, 0, oom), false, 'unknown heap: one retry, which then records it');
+  writeFileSync(file, JSON.stringify({ ...legacy, code: 1, error: 'exited with code 1' }));
+  assert.equal(projection.readLastExit()!.oom, false);
+  projection.clearLastExit();
+});
+
+// --- umap-js's private neighbour graph ----------------------------------------
+
+await test('a missing or reshaped knnIndices fails the run with a reason, never silently', () => {
+  const good = [[0, 1], [1, 0], [2, 1]];
+  assert.equal(projection.fitKnnIndices({ knnIndices: good }, 3), good);
+  assert.throws(() => projection.fitKnnIndices({}, 3), /knnIndices is missing/);
+  assert.throws(() => projection.fitKnnIndices({ knnIndices: 'x' }, 3), /knnIndices is missing/);
+  assert.throws(() => projection.fitKnnIndices({ knnIndices: good }, 4), /3 rows for 4 fitted vectors/);
+  assert.throws(() => projection.fitKnnIndices({ knnIndices: [[0], [], [2]] }, 3), /not a list of indices/);
+  assert.throws(() => projection.fitKnnIndices({ knnIndices: [[0], [1], new Float32Array([2])] }, 3), /not a list/);
+  assert.throws(() => projection.fitKnnIndices({ knnIndices: [[0], [1], [0.5]] }, 3), /not a list/);
+});
+
 // --- end to end ------------------------------------------------------------
 
 const N = 300;
@@ -309,6 +406,24 @@ await test('above the cap, a sample is fitted and every other track is placed', 
   // Seeded end to end: a second run gives the same map.
   await projection.runProjection(() => {}, { sampleCap: 120 });
   assert.deepEqual(coords(), first);
+});
+
+await test('a sampled run whose fit lost knnIndices fails, and stores nothing', async () => {
+  const { UMAP } = await import('umap-js');
+  const proto = UMAP.prototype as unknown as { initializeFit: (...a: unknown[]) => number };
+  const real = proto.initializeFit;
+  const before = coords();
+  proto.initializeFit = function (this: { knnIndices?: unknown }, ...args: unknown[]) {
+    const n = real.apply(this, args);
+    delete this.knnIndices;
+    return n;
+  };
+  try {
+    await assert.rejects(projection.runProjection(() => {}, { sampleCap: 120 }), /knnIndices is missing/);
+  } finally {
+    proto.initializeFit = real;
+  }
+  assert.deepEqual(coords(), before);
 });
 
 await test('at or under the cap, every track is fitted', async () => {
@@ -358,6 +473,9 @@ await test('a recorded failure surfaces in the status; the boot hold shows only 
     at: '2026-11-12T00:00:00.000Z',
     vectors: N,
     error: 'ran out of memory (JavaScript heap); raise SUBWAVE_MAP_HEAP_MB',
+    oom: true,
+    heapMb: 0,
+    failures: 1,
   });
   // The map from the runs above is current: a failed manual re-project has no
   // boot run to hold, so the rail must not claim one.
@@ -371,8 +489,25 @@ await test('a recorded failure surfaces in the status; the boot hold shows only 
   const stale = projection.projectionStatus();
   assert.equal(stale.stale, true);
   assert.equal(stale.bootRetryHeld, true);
+  // Raising the heap, as the error says, releases it.
+  process.env.SUBWAVE_MAP_HEAP_MB = '8192';
+  try {
+    assert.equal(projection.projectionStatus().bootRetryHeld, false);
+  } finally {
+    delete process.env.SUBWAVE_MAP_HEAP_MB;
+  }
   // A success clears the error and the hold.
-  projection.recordExit({ ok: true, code: 0, signal: null, at: 'y', vectors: N, error: null });
+  projection.recordExit({
+    ok: true,
+    code: 0,
+    signal: null,
+    at: 'y',
+    vectors: N,
+    error: null,
+    oom: false,
+    heapMb: 0,
+    failures: 0,
+  });
   const ok = projection.projectionStatus();
   assert.equal(ok.lastError, null);
   assert.equal(ok.bootRetryHeld, false);
@@ -407,6 +542,9 @@ await test('a failed run that wrote nothing to library.db still changes the Obse
       at: '2026-11-12T01:00:00.000Z',
       vectors: N,
       error: 'ran out of memory (JavaScript heap); raise SUBWAVE_MAP_HEAP_MB',
+      oom: true,
+      heapMb: 0,
+      failures: 1,
     });
     const after = await fetch(url, { headers: { 'If-None-Match': etag } });
     assert.equal(after.status, 200, 'a 304 here puts the pre-run status back and erases the error');

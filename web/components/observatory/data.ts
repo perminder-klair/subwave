@@ -211,6 +211,10 @@ export interface MapProjectionStatus {
     at: string;
     vectors: number;
     error: string | null;
+    // Absent from controllers before the boot hold followed them.
+    oom?: boolean;
+    heapMb?: number | null;
+    failures?: number;
   } | null;
   lastError?: string | null;
   bootRetryHeld?: boolean;
