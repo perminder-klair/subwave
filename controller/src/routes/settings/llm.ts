@@ -12,7 +12,7 @@ import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway } from '../../schem
 import { applyCustomHeadersPatch } from '../../settings/vocab.js';
 import type { EmbeddingCfg } from '../../llm/provider.js';
 import { listenbrainzApiBase } from '../../broadcast/scrobble.js';
-import { buildOutcrawlRequest, isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
+import { buildOutcrawlRequest, buildSpecStreamRequest, isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
 import { searchKeyMismatch } from '../../skills/search-key-policy.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
@@ -53,7 +53,7 @@ function briefLlmError(err: unknown): string {
 
 // Non-mutating probe of one secret; builds a one-off client and never writes
 // process.env or secrets.env. `hint` disambiguates a key shared by several
-// providers (SEARCH_API_KEY is Tavily, Brave, Keenable, Firecrawl or Outcrawl) because the UI tests before
+// providers (SEARCH_API_KEY is Tavily, Brave, Keenable, Firecrawl, Outcrawl or SpecStream) because the UI tests before
 // saving, so the stored provider can't be trusted mid-edit; it falls back to
 // the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
 // Responses API rejects anything below 16.
@@ -228,6 +228,24 @@ async function probeKey(
           return { ok: false, message: `Request failed (${r.status})` };
         }
         return { ok: true, message: '✓ Outcrawl key valid' };
+      }
+      if (provider === 'specstream') {
+        // SpecStream searches refuse anything but an ss_ key, so the probe does too.
+        const refusal = refused('specstream');
+        if (refusal) return refusal;
+        // A one-result search, the cheapest call that proves the key.
+        const { url, init } = buildSpecStreamRequest({ query: 'test', apiKey: value, limit: 1 });
+        const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10000) });
+        if (!r.ok) {
+          // SpecStream answers a missing or unknown key with 401, an empty
+          // balance or a reached monthly limit with 402, and a key that may not
+          // spend (no finds:spend scope, or over its own limit) with 403.
+          if (r.status === 401) return { ok: false, message: 'Key rejected — check it\'s correct and active' };
+          if (r.status === 402) return { ok: false, message: 'SpecStream key valid, but the account has no balance left or is at its monthly limit' };
+          if (r.status === 403) return { ok: false, message: 'SpecStream key valid, but it may not spend: it needs the finds:spend scope and room under its spending limit' };
+          return { ok: false, message: `Request failed (${r.status})` };
+        }
+        return { ok: true, message: '✓ SpecStream key valid' };
       }
       const refusal = refused('tavily');
       if (refusal) return refusal;

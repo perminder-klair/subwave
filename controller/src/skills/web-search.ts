@@ -1,7 +1,7 @@
 // All providers return { answer, results: [{ title, content }] } behind a 30-minute memo.
 // DDG instant answers may be empty; Tavily/Brave need keys; SearXNG needs a base URL;
-// Keenable is keyless, with an optional key that raises its rate limit; Firecrawl and
-// Outcrawl need a key.
+// Keenable is keyless, with an optional key that raises its rate limit; Firecrawl,
+// Outcrawl and SpecStream need a key.
 // Brave supports artist-name queries (#623); searxngEngines pins only these calls (#1353).
 
 import { config } from '../config.js';
@@ -18,6 +18,7 @@ const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const KEENABLE_ENDPOINT = 'https://api.keenable.ai/v1/search';
 const FIRECRAWL_ENDPOINT = 'https://api.firecrawl.dev/v2/search';
 const OUTCRAWL_ENDPOINT = 'https://api.outcrawl.ai/v1/search';
+const SPECSTREAM_ENDPOINT = 'https://api.specstream.ai/v1/web-search';
 
 type SearchResult = { title: string; content: string };
 type SearchResponse = { answer: string; results: SearchResult[] };
@@ -584,6 +585,68 @@ export function parseOutcrawlResponse(data: unknown): SearchResponse {
   return { answer: '', results };
 }
 
+// SpecStream backend. Keyed via the shared settings.search.apiKey /
+// SEARCH_API_KEY slot, like Outcrawl. Anything but an `ss_` key is refused
+// here and reads as not ready in searchReady(). recency is not sent.
+export async function specstreamSearch(query: string): Promise<SearchResponse> {
+  const apiKey = searchKeySlot().key;
+  if (!apiKey) throw new Error('SpecStream API key not configured');
+  const refusal = keyOnFileRefusal('specstream', apiKey);
+  if (refusal) throw new Error(refusal);
+  const { url, init } = buildSpecStreamRequest({ query, apiKey });
+  const res = await fetchWithTimeout(url, { ...init, timeoutMs: 30_000 });
+  if (!res.ok) throw new Error(`SpecStream HTTP ${res.status}`);
+  const data = await res.json();
+  return parseSpecStreamResponse(data);
+}
+
+// Pure request builder for a SpecStream search, exported so endpoint, headers
+// and query can be pinned without mocking fetch. Keys are `ss_live_…` or
+// `ss_test_…` (search-key-policy.ts holds the rule). speed=fast returns the
+// ranked results with their snippets and no generated answer. A search asks for
+// 5 results; the admin "Test key" probe asks for 1.
+export function buildSpecStreamRequest(opts: {
+  query: string;
+  apiKey: string;
+  limit?: number;
+}): { url: string; init: RequestInit } {
+  const url = new URL(SPECSTREAM_ENDPOINT);
+  url.searchParams.set('q', opts.query);
+  url.searchParams.set('num', String(opts.limit ?? 5));
+  url.searchParams.set('speed', 'fast');
+  return {
+    url: url.toString(),
+    init: {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${opts.apiKey.trim()}` },
+    },
+  };
+}
+
+// Pure parser for SpecStream's search JSON (data.sources[] of url/title/
+// snippet). Snippets go through the same cleanup as Outcrawl's, then whitespace
+// is collapsed before the 300-char cap. speed=fast has no answer. Any shape
+// mismatch yields { answer: '', results: [] }.
+export function parseSpecStreamResponse(data: unknown): SearchResponse {
+  if (!data || typeof data !== 'object') return { answer: '', results: [] };
+  const inner = (data as Record<string, unknown>).data;
+  const raw = inner && typeof inner === 'object' ? (inner as Record<string, unknown>).sources : undefined;
+
+  const text = (v: unknown): string => cleanSnippet(v).replace(/\s+/g, ' ').trim();
+  const results: SearchResult[] = [];
+  for (const r of Array.isArray(raw) ? raw : []) {
+    if (!r || typeof r !== 'object') continue;
+    const rec = r as Record<string, unknown>;
+    const title = text(rec.title);
+    const content = text(rec.snippet).slice(0, 300);
+    if (!title || !content) continue;
+    results.push({ title, content });
+    if (results.length >= 5) break;
+  }
+
+  return { answer: '', results };
+}
+
 // Provider dispatcher — reads the active provider from live settings on every
 // call so admin-UI changes take effect immediately. Wraps the backend in a
 // 30-min memo. Cache key includes recency so two callsites with different
@@ -602,6 +665,7 @@ export async function searchWeb(
     if (provider === 'keenable') return keenableSearch(query, recency);
     if (provider === 'firecrawl') return firecrawlSearch(query, recency);
     if (provider === 'outcrawl') return outcrawlSearch(query);
+    if (provider === 'specstream') return specstreamSearch(query);
     return duckduckgoSearch(query);
   });
 }
@@ -613,12 +677,13 @@ export async function searchWeb(
 //                 isn't another provider's (search-key-policy.ts)
 //   firecrawl:    the same, and it has to be an fc- key
 //   outcrawl:     the same, and it has to be an ock_ key
+//   specstream:   the same, and it has to be an ss_ key
 //   searxng:      needs settings.search.baseUrl (no env fallback by design)
 export function searchReady(): boolean {
   const s = settings.get().search;
   const provider = s?.provider || 'duckduckgo';
   if (provider === 'duckduckgo' || provider === 'keenable') return true;
   if (provider === 'searxng') return !!(s?.baseUrl && s.baseUrl.trim());
-  // tavily / brave / firecrawl / outcrawl (and any future keyed provider)
+  // tavily / brave / firecrawl / outcrawl / specstream (and any future keyed provider)
   return searchKeyFits(provider, searchKeySlot().key);
 }

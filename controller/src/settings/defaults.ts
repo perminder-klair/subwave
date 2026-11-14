@@ -661,7 +661,7 @@ export const DEFAULTS = {
   // Web-search backend for the segment director's web-search capability.
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
   // override here); `keenable` needs no key but uses a `keen_` one if set;
-  // `firecrawl` and `outcrawl` read SEARCH_API_KEY like Tavily and Brave.
+  // `firecrawl`, `outcrawl` and `specstream` read SEARCH_API_KEY like Tavily and Brave.
   search: {
     provider: 'duckduckgo',
     apiKey: '',

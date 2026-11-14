@@ -109,6 +109,7 @@ test('a key with a control character is refused before any probe, without echoin
     { key: 'SEARCH_API_KEY', provider: 'keenable' },
     { key: 'SEARCH_API_KEY', provider: 'firecrawl' },
     { key: 'SEARCH_API_KEY', provider: 'outcrawl' },
+    { key: 'SEARCH_API_KEY', provider: 'specstream' },
     { key: 'ELEVENLABS_API_KEY' },
     { key: 'LISTENBRAINZ_USER_TOKEN' },
     { key: 'EMBEDDING_API_KEY' },
@@ -202,6 +203,8 @@ test("Tavily and Brave: another provider's key is refused without a request", as
     ['brave', 'keen_left-over', 'A Keenable key, not a Brave Search key'],
     ['tavily', 'ock_left.over', 'An Outcrawl key, not a Tavily key'],
     ['brave', 'ock_left.over', 'An Outcrawl key, not a Brave Search key'],
+    ['tavily', 'ss_live_left-over', 'A SpecStream key, not a Tavily key'],
+    ['brave', 'ss_live_left-over', 'A SpecStream key, not a Brave Search key'],
   ];
   for (const [provider, value, message] of cases) {
     const outbound = stubProvider(t, 200);
@@ -315,6 +318,42 @@ test("Outcrawl: another provider's key is refused without a request", async (t) 
   const r = await testKey({ key: 'SEARCH_API_KEY', value: 'fc-left-over', provider: 'outcrawl' });
   assert.equal(r.ok, false);
   assert.equal(r.message, 'Not an Outcrawl key (they start with ock_)');
+  assert.equal(outbound.length, 0);
+});
+
+test('SpecStream: a key is probed with a one-result search; 401 reads as rejected, 402 and 403 name the account', async (t) => {
+  const outbound = stubProvider(t, 200, { data: { sources: [] } });
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'ss_live_good', provider: 'specstream' });
+  assert.equal(r.ok, true);
+  assert.equal(r.message, '✓ SpecStream key valid');
+  assert.equal(outbound.length, 1);
+  const sent = new URL(outbound[0].url);
+  assert.equal(sent.origin + sent.pathname, 'https://api.specstream.ai/v1/web-search');
+  assert.equal(sent.searchParams.get('num'), '1');
+  assert.equal(outbound[0].method, 'GET');
+  assert.equal(outbound[0].headers.get('authorization'), 'Bearer ss_live_good');
+  t.mock.restoreAll();
+
+  const cases: Array<[number, string]> = [
+    [401, 'Key rejected — check it\'s correct and active'],
+    [402, 'SpecStream key valid, but the account has no balance left or is at its monthly limit'],
+    [403, 'SpecStream key valid, but it may not spend: it needs the finds:spend scope and room under its spending limit'],
+    [500, 'Request failed (500)'],
+  ];
+  for (const [status, message] of cases) {
+    stubProvider(t, status, { error: { code: 'unavailable', message: 'no' } });
+    const res = await testKey({ key: 'SEARCH_API_KEY', value: 'ss_live_any', provider: 'specstream' });
+    assert.equal(res.ok, false, `${status}`);
+    assert.equal(res.message, message, `${status}`);
+    t.mock.restoreAll();
+  }
+});
+
+test("SpecStream: another provider's key is refused without a request", async (t) => {
+  const outbound = stubProvider(t, 200);
+  const r = await testKey({ key: 'SEARCH_API_KEY', value: 'ock_left.over', provider: 'specstream' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, 'Not a SpecStream key (they start with ss_)');
   assert.equal(outbound.length, 0);
 });
 
