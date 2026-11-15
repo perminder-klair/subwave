@@ -34,7 +34,7 @@ test('a URL without a usable card asks for no jump', () => {
   assert.equal(settingsJumpFromQuery('library', 'Enrichment'), null);
 });
 
-test('the Last.fm card links straight to the Enrichment card', () => {
+test('the Last.fm card links straight to the Enrichment card, once', () => {
   for (const lastfmTags of [null, false]) {
     const values = { scrobble: { lastfm: { apiKey: 'set' } }, embedding: { enrichment: { lastfmTags } } } as NonNullable<SettingsData['values']>;
     const html = renderToStaticMarkup(createElement(ScrobbleCards, {
@@ -43,7 +43,25 @@ test('the Last.fm card links straight to the Enrichment card', () => {
       adminFetch: async () => new Response(), refresh: () => {},
     } as Parameters<typeof ScrobbleCards>[0]));
     const hrefs = [...html.matchAll(/href="(\/admin\/settings[^"]*)"/g)].map(m => m[1]);
-    assert.ok(hrefs.length > 0, `no settings link (tags=${lastfmTags})`);
+    // The Library tagger breadcrumb appears once: in the banner, or in the
+    // red warning when tags are off.
+    assert.equal(hrefs.length, 1, `settings links (tags=${lastfmTags}): ${hrefs.length}`);
     for (const h of hrefs) assert.equal(h, '/admin/settings?section=library&amp;card=enrichment');
+  }
+});
+
+test('the Last.fm card copy has no em dashes and no stale Advanced breadcrumb', () => {
+  for (const lastfmTags of [null, false]) {
+    const values = { scrobble: { lastfm: { apiKey: 'set', apiSecret: 'set' } }, embedding: { enrichment: { lastfmTags } } } as NonNullable<SettingsData['values']>;
+    const html = renderToStaticMarkup(createElement(ScrobbleCards, {
+      data: { values, env: {} } as SettingsData, form: settingsForm(values),
+      setForm: () => {}, busy: false, saveSettings: () => {}, fieldErrors: {},
+      adminFetch: async () => new Response(), refresh: () => {},
+    } as Parameters<typeof ScrobbleCards>[0]));
+    // Only the Last.fm card, up to the ListenBrainz card.
+    const card = html.slice(0, html.indexOf('ListenBrainz'));
+    assert.doesNotMatch(card, /\u2014/, `em dash (tags=${lastfmTags})`);
+    assert.doesNotMatch(card, /Advanced → Enrichment/, `breadcrumb (tags=${lastfmTags})`);
+    assert.doesNotMatch(card, /to only enable tagging/);
   }
 });

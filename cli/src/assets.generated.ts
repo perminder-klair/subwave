@@ -1345,7 +1345,7 @@ SITE_URL=
 # Tags need only the API key. Paste it in Settings → Listeners → Last.fm, or
 # set it here; from there Last.fm tags are on by default (Library tagger →
 # Advanced → Enrichment is Auto). Scrobbling is separate and stays off until
-# you enable it in that card — only then are the secret and session key needed.
+# you enable it in that card; only then are the secret and session key needed.
 # LASTFM_API_KEY=
 # LASTFM_API_SECRET=                # scrobbling only
 # LASTFM_SESSION_KEY=               # scrobbling only; or use Connect in the card
