@@ -27,7 +27,7 @@
 
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listen } from './test-utils/http.js';
@@ -299,6 +299,53 @@ test('a pass refused its mark still keeps a walk from trusting what it finds mid
   const u = await stemCache.usage();
   assert.deepEqual([u.bytes, u.dirs], [2000, 2]);
   assert.equal((await stemCache.storedUsage())?.fresh, true);
+  rmSync(root, { recursive: true, force: true });
+  rmSync(snapFile, { force: true });
+});
+
+// An upgrade finds the build-before-#2317 files: the snapshot (no journal
+// position) and its change token, and no journal. The first sweep must be no
+// worse than before: it reuses the snapshot with no walk.
+test('an upgrade from the change token: the first sweep reuses the stored size, and the token goes', async () => {
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  writeSnap({ bytes: 5 * GB, dirs: 400 });
+  const token = join(stateDir, 'stem-cache-usage.changes');
+  writeFileSync(token, 'a1b2c3d4-0000-4000-8000-000000000000\n');
+  const walks = stemCache._cacheWalksForTests();
+  const swept = await stemCache.sweep(100 * GB);
+  assert.equal(swept.skipped, 'snapshot', 'inside its budget: no walk');
+  assert.equal(stemCache._cacheWalksForTests(), walks);
+  assert.equal(existsSync(token), false, 'the old token is removed');
+  assert.ok(existsSync(journalFile), 'the journal is created');
+  assert.equal((await stemCache.storedUsage())?.fresh, true);
+  // And a writer after it counts as before.
+  seedDir('up-0', 1000);
+  assert.equal(await dropOne('up-0'), 'adjusted');
+  assert.equal((await stemCache.storedUsage())?.bytes, 5 * GB - 1000);
+  rmSync(root, { recursive: true, force: true });
+  rmSync(snapFile, { force: true });
+});
+
+// A journal that cannot be read for what it is vouches for nothing: no
+// trusted figure, whatever the snapshot says, and a walk stores stale, as a
+// walk overlapped by a change did before the journal.
+test('a journal that is not a journal: nothing is trusted, and the sweep stores stale', async () => {
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  seedDir('nj-0', 1000);
+  rmSync(snapFile, { force: true });
+  await stemCache.usage(); // a trusted figure at a journal position
+  assert.equal((await stemCache.storedUsage())?.fresh, true);
+  writeFileSync(journalFile, 'not a journal\n');
+  assert.equal((await stemCache.storedUsage())?.fresh, false);
+  assert.equal((await stemCache.storedUsage())?.stale, true);
+  const walks = stemCache._cacheWalksForTests();
+  await stemCache.headroomTracks(100 * GB);
+  assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the read walks');
+  await stemCache.sweep(100 * GB);
+  assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).stale, true, 'stored, flagged stale');
+  rmSync(journalFile, { force: true });
   rmSync(root, { recursive: true, force: true });
   rmSync(snapFile, { force: true });
 });
