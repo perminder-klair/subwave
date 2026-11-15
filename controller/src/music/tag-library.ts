@@ -338,6 +338,9 @@ async function main() {
   // when tagging is skipped.
   let llmCalls = 0;
   let llmTagged = 0;
+  // The rows phases 3-4 propagated in this run, for the re-vote after the
+  // trailing re-embed below.
+  const propagatedThisRun = new Set<string>();
   if (plan.forwardTag) {
     await phaseEmbed(targetUntagged, tagBatchSize, textMode);
     lap('embed');
@@ -419,6 +422,7 @@ async function main() {
           promptHash,
           model: modelLabel,
         });
+        propagatedThisRun.add(id);
         propagated += 1;
       } else if (!noLlm.has(id)) {
         // An untaggable track may still take its neighbours' vote above, but
@@ -467,7 +471,8 @@ async function main() {
             promptHash,
             model: modelLabel,
           });
-            extra += 1;
+          propagatedThisRun.add(id);
+          extra += 1;
         } else if (!noLlm.has(id)) {
           stillUncertain.push(id);
         }
@@ -586,12 +591,44 @@ async function main() {
   // marked rows now, so a new track gets its Sound: line in the run that
   // analysed it. Best-effort: a failure leaves the marks for the next run.
   if (plan.forwardTag && plan.analyze) {
+    let rebuilt: string[] = [];
     try {
-      await phaseEmbed([], tagBatchSize, textMode);
+      rebuilt = await phaseEmbed([], tagBatchSize, textMode);
     } catch (err) {
       logEvent('warning', `Re-embedding analysed tracks failed (non-fatal; the next run retries): ${err?.message || err}`);
     }
     lap('embed');
+
+    // Phases 3-4 voted this run's new tracks over their first vectors, which had
+    // no Sound: line yet. Vote again for the ones that took a propagated tag in
+    // this run and whose vectors were just rebuilt, over the vectors they will
+    // keep (#2313). Never an llm or manual row, never one tagged in an earlier
+    // run, and a vote that no longer clears the bar keeps the first one.
+    const revote = rebuilt.filter(id => propagatedThisRun.has(id) && db.getTrack(id)?.source === 'propagated');
+    if (revote.length > 0) {
+      try {
+        let changed = 0;
+        for (const id of revote) {
+          const result = voteForTrack(id);
+          if (result.votingNeighbours < 1 || result.confidence < confidenceThreshold || result.moods.length === 0) continue;
+          db.upsertTrackTags(id, {
+            moods: result.moods,
+            energy: result.energy,
+            source: 'propagated',
+            confidence: result.confidence,
+            promptHash,
+            model: modelLabel,
+          });
+          changed += 1;
+        }
+        console.log(`[tag] re-voted ${changed}/${revote.length} propagated tracks over their analysed vectors`);
+        // The vote rewrote their energy, so the audio correction runs over it again.
+        if (changed > 0) runPropagatedEnergyPass();
+      } catch (err: any) {
+        logEvent('warning', `Re-voting analysed tracks failed (non-fatal): ${err?.message || err}`);
+      }
+      lap('propagate');
+    }
   }
 
   finish(startedAt, llmCalls, llmTagged, byLeg, timings);

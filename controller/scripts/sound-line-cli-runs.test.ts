@@ -3,6 +3,8 @@
 //
 // - a forward tag run re-embeds the vectors its phase 5 marked (#2236), so a new
 //   track ends the run with its Sound: line;
+// - it then votes again for the tracks it propagated, over the vectors they keep,
+//   and never for an llm row or one propagated in an earlier run;
 // - a standalone Analyse run re-embeds what it marked, only with the index's own
 //   model, and a run that marked nothing, or that has no provider, sends nothing.
 //
@@ -222,8 +224,9 @@ const tag = (id: string, mood: string, source: 'llm' | 'propagated') =>
   });
 const dirty = () => db.textVectorDirtyIds().sort();
 const documents = () => embedded.splice(0).filter(t => t !== PROBE);
+const moodsOf = (id: string) => db.getTrack(id)!.moods;
 
-test('a tag run re-embeds what phase 5 marked', async () => {
+test('a tag run re-embeds what phase 5 marked, then re-votes only this run\'s propagated tracks', async () => {
   // The station before the run: measured, decided and embedded.
   for (const id of calm) { addTrack(id); measure(id); tag(id, 'calm', 'llm'); embedRow(id, CALM); }
   for (const id of upbeat) { addTrack(id); measure(id); tag(id, 'energetic', 'llm'); embedRow(id, UPBEAT); }
@@ -241,9 +244,19 @@ test('a tag run re-embeds what phase 5 marked', async () => {
   assert.equal(texts.filter(t => /\nSound: upbeat tempo, minor key$/m.test(t)).length, fresh.length + 1, 'then the analysed one');
   assert.deepEqual(dirty(), [], 'nothing left marked');
 
-  // A run with nothing new marks nothing and embeds nothing.
-  await tagRun();
+  // Phase 3 voted them calm over their thin vectors; over the vectors they keep
+  // they sit by the energetic tracks.
+  for (const id of fresh) {
+    assert.deepEqual(moodsOf(id), ['energetic'], id);
+    assert.equal(db.getTrack(id)!.source, 'propagated');
+  }
+  assert.deepEqual(moodsOf('old-prop'), ['calm'], 'an earlier run\'s propagated tag is left alone');
+  for (const id of calm) assert.deepEqual(moodsOf(id), ['calm'], 'an llm row is never re-voted');
+
+  // A run with nothing new marks nothing, embeds nothing and votes nothing.
+  const out = await tagRun();
   assert.deepEqual(documents(), []);
+  assert.doesNotMatch(out, /re-voted/);
 });
 
 test('an Analyse run re-embeds the vectors it marked', async () => {
