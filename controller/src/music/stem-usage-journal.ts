@@ -22,7 +22,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { link, open, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { link, open, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import { headerLine, parseJournal, trimmedBody, type Journal, type OpenWrite } from './stem-usage-policy.js';
