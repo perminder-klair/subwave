@@ -37,6 +37,8 @@ export const LLM_LEG_FIELDS = [
   'ollamaUrl',
   'providerBaseUrls',
   'headers',
+  'bodyParams',
+  'toolCallBodyParams',
   'compatibleMode',
   'reasoning',
   'toolChoice',

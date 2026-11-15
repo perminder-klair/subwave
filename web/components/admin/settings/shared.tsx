@@ -139,6 +139,9 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  // Extra request-body fields (#2296), per leg like headers.
+  bodyParams: { key: string; value: string }[];
+  toolCallBodyParams: { key: string; value: string }[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
   // Per-leg, like the primary's: a swap moves it between the legs.
@@ -161,6 +164,8 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  bodyParams: { key: string; value: string }[];
+  toolCallBodyParams: { key: string; value: string }[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
   toolChoice: string;

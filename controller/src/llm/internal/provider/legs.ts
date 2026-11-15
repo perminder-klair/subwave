@@ -11,8 +11,9 @@ export interface Leg {
   model: any;     // AI SDK LanguageModel — honours the operator reasoning toggle
   // Reasoning-disabled variant for forced-tool / structured legs (picker, done-
   // tool, objectViaToolCall). Identical to `model` for every provider that can
-  // suppress thinking per-call; a separate instance only for OpenRouter, whose
-  // reasoning is fixed at construction. Lets the DJ's free-text keep reasoning
+  // suppress thinking per-call; a separate instance where the no-think body is
+  // bound at construction (OpenRouter, local openai-compatible/locca, and a leg
+  // with tool-call overrides, #2296). Lets the DJ's free-text keep reasoning
   // while the picker runs no-think — no operator knowledge required.
   noThinkModel: any;
   label: string;  // `provider:modelId` for /debug records
