@@ -12,6 +12,16 @@ import { settingsHref, settingsJumpFromQuery } from './settings-link';
 import { cardAnchor } from '../ui';
 import type { SettingsData } from './shared';
 
+// The Listeners cards, rendered from saved settings with no unsaved edits.
+function renderLastfmCard(lastfm: Record<string, unknown>, lastfmTags: boolean | null): string {
+  const values = { scrobble: { lastfm }, embedding: { enrichment: { lastfmTags } } } as NonNullable<SettingsData['values']>;
+  return renderToStaticMarkup(createElement(ScrobbleCards, {
+    data: { values, env: {} } as SettingsData, form: settingsForm(values),
+    setForm: () => {}, busy: false, saveSettings: async () => true, fieldErrors: {},
+    adminFetch: async () => new Response(), refresh: () => {},
+  }));
+}
+
 test('a card link names the section and the card', () => {
   assert.equal(settingsHref('library'), '/admin/settings?section=library');
   assert.equal(settingsHref('library', 'enrichment'), '/admin/settings?section=library&card=enrichment');
@@ -36,12 +46,7 @@ test('a URL without a usable card asks for no jump', () => {
 
 test('the Last.fm card links straight to the Enrichment card, once', () => {
   for (const lastfmTags of [null, false]) {
-    const values = { scrobble: { lastfm: { apiKey: 'set' } }, embedding: { enrichment: { lastfmTags } } } as NonNullable<SettingsData['values']>;
-    const html = renderToStaticMarkup(createElement(ScrobbleCards, {
-      data: { values, env: {} } as SettingsData, form: settingsForm(values),
-      setForm: () => {}, busy: false, saveSettings: () => {}, fieldErrors: {},
-      adminFetch: async () => new Response(), refresh: () => {},
-    } as Parameters<typeof ScrobbleCards>[0]));
+    const html = renderLastfmCard({ apiKey: 'set' }, lastfmTags);
     const hrefs = [...html.matchAll(/href="(\/admin\/settings[^"]*)"/g)].map(m => m[1]);
     // The Library tagger breadcrumb appears once: in the banner, or in the
     // red warning when tags are off.
@@ -52,12 +57,7 @@ test('the Last.fm card links straight to the Enrichment card, once', () => {
 
 test('the Last.fm card copy has no em dashes and no stale Advanced breadcrumb', () => {
   for (const lastfmTags of [null, false]) {
-    const values = { scrobble: { lastfm: { apiKey: 'set', apiSecret: 'set' } }, embedding: { enrichment: { lastfmTags } } } as NonNullable<SettingsData['values']>;
-    const html = renderToStaticMarkup(createElement(ScrobbleCards, {
-      data: { values, env: {} } as SettingsData, form: settingsForm(values),
-      setForm: () => {}, busy: false, saveSettings: () => {}, fieldErrors: {},
-      adminFetch: async () => new Response(), refresh: () => {},
-    } as Parameters<typeof ScrobbleCards>[0]));
+    const html = renderLastfmCard({ apiKey: 'set', apiSecret: 'set' }, lastfmTags);
     // Only the Last.fm card, up to the ListenBrainz card.
     const card = html.slice(0, html.indexOf('ListenBrainz'));
     assert.doesNotMatch(card, /\u2014/, `em dash (tags=${lastfmTags})`);

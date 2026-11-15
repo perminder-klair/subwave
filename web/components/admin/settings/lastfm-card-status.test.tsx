@@ -46,9 +46,9 @@ function render(lf: SavedLf, lastfmTags: boolean | null, draft?: (lf: ScrobbleLa
     ? { ...base, scrobble: { ...base.scrobble, lastfm: draft(base.scrobble.lastfm) } }
     : base;
   const html = renderToStaticMarkup(createElement(ScrobbleCards, {
-    data, form, setForm: noop, busy: false, saveSettings: noop, fieldErrors: {},
+    data, form, setForm: noop, busy: false, saveSettings: async () => true, fieldErrors: {},
     adminFetch: async () => new Response(), refresh: noop,
-  } as Parameters<typeof ScrobbleCards>[0]));
+  }));
   // The Last.fm card is the first card, so the first subtitle is its own.
   const subtitle = /<span class="sub">([^<]*)<\/span>/.exec(html)?.[1];
   const banner = /Last\.fm tags · ([^<]*)</.exec(html)?.[1];
