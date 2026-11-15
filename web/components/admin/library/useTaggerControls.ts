@@ -143,6 +143,20 @@ export function useTaggerControls() {
     },
   });
 
+  // The stale-vector notice's action (#2313): marks only the vectors still built
+  // from moods a relabel-all moved, for the next run to rebuild. Nothing is
+  // embedded here, so it is cheap and needs no confirmation.
+  const markStaleSoundM = useAdminMutation<{ marked?: number; coverage?: Coverage }, void>({
+    request: (_v, fetcher) => adminJson<{ marked?: number; coverage?: Coverage }>(
+      fetcher, '/library/vectors/mark-stale-sound', { method: 'POST' },
+    ),
+    onDone: (data, _v, client) => {
+      if (data.coverage) client.setQueryData(libraryKeys.coverage(), data.coverage);
+      else void client.invalidateQueries({ queryKey: libraryKeys.coverage() });
+      notify.ok(`${(data.marked ?? 0).toLocaleString('en-GB')} vectors queued for re-embed`);
+    },
+  });
+
   // Each run opens the log and refreshes the tagger snapshot; failures toast
   // through useAdminMutation's shared onError.
 
@@ -314,6 +328,8 @@ export function useTaggerControls() {
     saveQuietMinutes: (minutes: number) => { saveQuietMinutesM.mutate(minutes); },
     countLibrary: () => { countLibraryM.mutate(); },
     countingLibrary: countLibraryM.isPending,
+    markStaleSound: () => { markStaleSoundM.mutate(); },
+    markingStaleSound: markStaleSoundM.isPending,
     loadFailures, clearFailures,
   };
 }

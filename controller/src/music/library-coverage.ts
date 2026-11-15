@@ -27,6 +27,10 @@ interface CoverageCache {
 const cache: CoverageCache = {
   total: 0, scannedAt: null, scanning: false, scanError: null,
 };
+// The vector freshness figures (#2313): one scan of every vector-carrying row,
+// so counted where the library is (refresh(), and the operator's mark), never
+// on the read path. null = not counted yet.
+let vectorCounts: (db.VectorFreshnessCounts & { countedAt: string }) | null = null;
 let inflight: Promise<void> | null = null;
 
 // Only total + scannedAt persist; scanning/scanError describe this process.
@@ -36,6 +40,15 @@ interface StoredCount {
   version: 1;
   total: number;
   scannedAt: string;
+  // Absent on a file from before #2313, and until the first count.
+  vectors?: db.VectorFreshnessCounts & { countedAt: string };
+}
+
+const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0;
+function parseVectorCounts(v: any): StoredCount['vectors'] | null {
+  if (!v || !isCount(v.forgottenSound) || !isCount(v.forgottenSoundQueued) || !isCount(v.dirty)) return null;
+  if (typeof v.countedAt !== 'string' || Number.isNaN(new Date(v.countedAt).getTime())) return null;
+  return { forgottenSound: v.forgottenSound, forgottenSoundQueued: v.forgottenSoundQueued, dirty: v.dirty, countedAt: v.countedAt };
 }
 
 // A missing, corrupt or nonsensical file reads as "never counted"; never throws.
@@ -43,6 +56,7 @@ function loadStoredCount(): void {
   try {
     if (!existsSync(COUNT_FILE)) return;
     const parsed = JSON.parse(readFileSync(COUNT_FILE, 'utf8')) as Partial<StoredCount>;
+    vectorCounts = parseVectorCounts(parsed?.vectors) ?? null;
     const total = parsed?.total;
     const scannedAt = parsed?.scannedAt;
     if (typeof total !== 'number' || !Number.isFinite(total) || total < 0) return;
@@ -57,7 +71,10 @@ function loadStoredCount(): void {
 function persistCount(): void {
   if (!cache.scannedAt) return;
   try {
-    const store: StoredCount = { version: 1, total: cache.total, scannedAt: cache.scannedAt };
+    const store: StoredCount = {
+      version: 1, total: cache.total, scannedAt: cache.scannedAt,
+      ...(vectorCounts ? { vectors: vectorCounts } : {}),
+    };
     const tmp = `${COUNT_FILE}.tmp`;
     writeFileSync(tmp, JSON.stringify(store, null, 2));
     renameSync(tmp, COUNT_FILE);
@@ -153,9 +170,21 @@ function readDbCounts(): DbCounts {
   return value;
 }
 
+// Recount the vector freshness figures. Synchronous SQL over library.db; never
+// throws, since a failed count must not fail the Navidrome count beside it.
+export function countVectors(): void {
+  try {
+    vectorCounts = { ...db.vectorFreshnessCounts(), countedAt: new Date().toISOString() };
+    persistCount();
+  } catch (err: any) {
+    console.warn(`[library-coverage] could not count vectors: ${err?.message || err}`);
+  }
+}
+
 async function doScan() {
   cache.scanning = true;
   cache.scanError = null;
+  countVectors();
   try {
     let count = 0;
     for await (const _song of subsonic.iterateAllSongs()) count++;
@@ -273,6 +302,14 @@ export async function get() {
     currentTextFormat: EMBED_TEXT_VERSION,
     embeddedVectors,
     labelOnlyVectors,
+    // Vectors whose Sound: line still carries mood words a relabel-all (a
+    // vocabulary or calibration change) moved, how many of those are already
+    // marked, and every marked vector (#2313). As of `vectorsCountedAt`, the last
+    // refresh() or mark: null until counted.
+    forgottenSoundVectors: vectorCounts?.forgottenSound ?? null,
+    forgottenSoundQueued: vectorCounts?.forgottenSoundQueued ?? null,
+    dirtyVectors: vectorCounts?.dirty ?? null,
+    vectorsCountedAt: vectorCounts?.countedAt ?? null,
     audioStatus,
     vocalStatus,
   };

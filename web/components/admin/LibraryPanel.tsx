@@ -113,6 +113,8 @@ function LibraryBody() {
         onReconcile={tag.reconcile}
         onCountLibrary={tag.countLibrary}
         countingLibrary={tag.countingLibrary}
+        onMarkStaleSound={tag.markStaleSound}
+        markingStaleSound={tag.markingStaleSound}
         onReset={tag.resetLibrary}
         audioEnabled={tag.audioEnabled}
         onToggleAudio={tag.toggleAudio}
