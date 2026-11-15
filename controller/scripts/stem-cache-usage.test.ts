@@ -356,6 +356,101 @@ test('a journal that is not a journal: nothing is trusted until the next walk, w
   rmSync(snapFile, { force: true });
 });
 
+// The other process can lose the journal at any moment (an append that fails
+// drops it) and a writer there create a new one and log a whole change in it.
+// A walk that trims must then not take the new file for its own:
+// - lost before the trim opens it, the new file is not the one the walk read,
+//   though it can be given that one's inode number: the trim copied only its
+//   lines past the old end and dropped the rest, the change among them;
+// - lost after the trim renamed its own into place, the position the trim
+//   returns was taken in a file it never wrote, past the change.
+// Either way the walk stored a trusted figure that missed the change. The trim
+// now checks each file by its id, and stands down; the walk's figure, at the
+// old journal's position, then vouches for nothing.
+test('a walk whose journal is lost and created again around its trim stores nothing trusted', async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  // `pad`: openings logged after the change, so the new file reaches past the
+  // trim's position (it carries three openings) and a reader would trust it.
+  for (const [point, pad] of [['walk:store', 0], ['trim:renamed', 2]] as const) {
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+    seedDir('tj-b', 1000);
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
+    await stemCache.usage();
+    // Writers still running at the store: the trim carries their openings.
+    const running = ['tj-y1', 'tj-y2', 'tj-y3'].map(() => new stemCache.StemDirWrites());
+    for (const [i, w] of running.entries()) {
+      seedDir(`tj-y${i + 1}`, 500);
+      await w.touch(`tj-y${i + 1}`);
+    }
+    let replaced = false;
+    journal._trimAboveBytesForTests(0);
+    stemCache._usageStepsForTests(async (step) => {
+      if (step !== point || replaced) return;
+      replaced = true;
+      assert.equal(await journal.dropJournal(), true);
+      const s = journal.newSessionId();
+      assert.equal(await journal.appendLines([policy.openLine(s, 'tj-b', Date.now(), process.pid)]), true);
+      rmSync(stemCache.dirFor('tj-b'), { recursive: true, force: true });
+      assert.equal(await journal.appendLines([policy.closeLine(s, 'tj-b')]), true);
+      for (let i = 0; i < pad; i += 1) {
+        assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), `tj-z${i}`, Date.now(), process.pid)]), true);
+      }
+    });
+    try {
+      await stemCache.sweep(100 * GB, { force: true });
+      stemCache._usageStepsForTests(null);
+      assert.equal(replaced, true, `${point}: the journal was replaced`);
+      const stored = await stemCache.storedUsage();
+      const truth = await freshTotals();
+      if (stored?.fresh) {
+        assert.deepEqual([stored.bytes, stored.dirs], [truth.bytes, truth.dirs], `${point}: a trusted figure must be the disk's`);
+      }
+      const u = await stemCache.usage();
+      assert.deepEqual([u.bytes, u.dirs], [truth.bytes, truth.dirs], `${point}: the next read`);
+    } finally {
+      stemCache._usageStepsForTests(null);
+      journal._trimAboveBytesForTests(null);
+      for (const w of running) await w.abandon();
+      rmSync(journalFile, { force: true });
+      rmSync(root, { recursive: true, force: true });
+      rmSync(snapFile, { force: true });
+    }
+  }
+});
+
+// An append checks that the path still names the file it wrote to, and goes
+// again if not. Checked after closing that file, the check could pass on a
+// new journal given the gone one's inode number (the other process dropped it
+// and created another), and the line was lost while the writer counted it
+// written. It is checked with the file still open now.
+test('an append whose journal is lost and created again before its check still lands', async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  rmSync(journalFile, { force: true });
+  assert.ok(await journal.ensureJournal());
+  const line = policy.closeLine(journal.newSessionId(), 'ap-0');
+  let replaced = false;
+  journal._journalStepsForTests(async (step) => {
+    if (step !== 'append:written' || replaced) return;
+    replaced = true;
+    assert.equal(await journal.dropJournal(), true);
+    assert.ok(await journal.ensureJournal());
+  });
+  try {
+    assert.equal(await journal.appendLines([line]), true);
+    assert.equal(replaced, true);
+    const j = await journal.readJournal();
+    assert.ok(j?.entries.some(e => e.line === line), 'a line reported written is in the journal');
+  } finally {
+    journal._journalStepsForTests(null);
+    rmSync(journalFile, { force: true });
+  }
+});
+
 test('a stale snapshot is still reported, flagged, and never walked for', async () => {
   writeSnap({ bytes: 80 * GB, dirs: 4000 });
   await stemCache.markUsageStale();

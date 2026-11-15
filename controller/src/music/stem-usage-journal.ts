@@ -13,7 +13,10 @@
 // - only a walk that has just stored a trusted figure trims it (trimJournal),
 //   and only one at a time across processes (an exclusive lock file). The
 //   trim carries the openings still running into the new file, and after the
-//   rename copies whatever reached the old file since its last read;
+//   rename copies whatever reached the old file since its last read. It knows
+//   each file by its id, not only its inode number, which a file created
+//   after another is gone can be given: the other process can lose the
+//   journal and create it again at any moment;
 // - anything that fails here returns null or false, and the caller treats the
 //   stored size as untrusted: a missing or unreadable journal never vouches
 //   for a figure (#2317);
@@ -25,7 +28,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { constants } from 'node:fs';
-import { link, open, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { link, open, rename, rm, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import { headerLine, parseJournal, trimmedBody, type Journal, type OpenWrite } from './stem-usage-policy.js';
@@ -169,9 +172,15 @@ export async function appendLines(lines: readonly string[]): Promise<boolean> {
       await fh.close().catch(() => {});
       return false;
     }
-    await fh.close().catch(() => {});
-    await journalStep?.('append:written');
-    const now = await stat(journalPath()).then(s => s.ino, () => null);
+    // Checked with the file still open: until it is closed its inode number
+    // cannot pass to a new file at the path.
+    let now: number | null;
+    try {
+      await journalStep?.('append:written');
+      now = await stat(journalPath()).then(s => s.ino, () => null);
+    } finally {
+      await fh.close().catch(() => {});
+    }
     if (now === written) return true;
     // Replaced after this write (a trim): the trim copies what reached the
     // old file before it read its tail, but not what landed after; go again.
@@ -227,40 +236,67 @@ export async function trimJournal(
   const target = journalPath();
   const tmp = `${target}.${randomBytes(4).toString('hex')}.tmp`;
   let old;
+  let mine;
   try {
-    old = await openForTail(target, read.ino);
+    old = await openForTail(target, read);
     if (!old) return null;
-    const head = headerLine(newSessionId(), read.createdMs) + trimmedBody(carried);
+    const id = newSessionId();
+    const head = headerLine(id, read.createdMs) + trimmedBody(carried);
     await writeFile(tmp, head, { flag: 'wx' });
+    // Held open across the rename: the tail goes into this file whatever the
+    // path names by then.
+    mine = await open(tmp, constants.O_WRONLY | constants.O_APPEND);
     if ((await stat(target)).ino !== read.ino) return null;
     await rename(tmp, target);
     await journalStep?.('trim:renamed');
     // Lines that reached the old file after `read`, read after the rename: a
     // writer whose line landed later sees the path moved and appends again.
-    const after = completeLinesAfter(await old.readFile(), read.end);
-    if (after) {
-      const fh = await open(target, constants.O_WRONLY | constants.O_APPEND);
-      try { await fh.write(after); } finally { await fh.close().catch(() => {}); }
-    }
+    const after = completeLinesAfter(await readWhole(old), read.end);
+    if (after) await mine.write(after);
+    // The position returned is in the file renamed here, so the path must
+    // still name it (by its id: an inode number is reused once a file is
+    // gone). The other process may have lost the journal since (an append
+    // that failed drops it) and created a new one, whose lines this position
+    // knows nothing of. Then no trim was made, and the caller's figure, stored
+    // at the old file's position, vouches for nothing.
     const now = await readJournal();
-    if (!now) return null;
+    if (!now || now.id !== id) return null;
     return { journal: now, upTo: Buffer.byteLength(head) };
   } catch {
     return null;
   } finally {
+    await mine?.close().catch(() => {});
     await old?.close().catch(() => {});
     await unlink(tmp).catch(() => {});
     await rm(lockPath(), { force: true }).catch(() => {});
   }
 }
 
-async function openForTail(file: string, ino: number) {
+// The journal `read` came from, opened (held open, so its inode number stays
+// its own while the trim compares it): the same inode and the same id, since
+// a journal lost and created again can be given the number of the one gone.
+async function openForTail(file: string, read: JournalRead) {
   const fh = await open(file, 'r');
-  if ((await fh.stat()).ino !== ino) {
-    await fh.close().catch(() => {});
-    return null;
+  try {
+    if ((await fh.stat()).ino === read.ino && parseJournal((await readWhole(fh)).toString('utf8'))?.id === read.id) return fh;
+  } catch {
+    /* not it */
   }
-  return fh;
+  await fh.close().catch(() => {});
+  return null;
+}
+
+// The whole file from its start, whatever the handle has read before.
+async function readWhole(fh: FileHandle): Promise<Buffer> {
+  const { size } = await fh.stat();
+  const buf = Buffer.alloc(size);
+  let got = 0;
+  while (got < size) {
+    const { bytesRead } = await fh.read(buf, got, size - got, got);
+    if (bytesRead === 0) break;
+    got += bytesRead;
+  }
+  return buf.subarray(0, got);
 }
 
 function completeLinesAfter(whole: Buffer, from: number): string {
