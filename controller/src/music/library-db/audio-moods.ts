@@ -14,7 +14,12 @@ import {
 } from './audio-scores.js';
 // Every backfill scope must keep this exclusion, or an unanalysable file is
 // re-attempted forever (#1300).
-import { analysisFailureExclusion, forgetVectorSoundIfMoved, markTextVectorDirtyIfSoundChanged } from './tracks.js';
+import {
+  analysisFailureExclusion,
+  forgetVectorSoundIfMoved,
+  markTextVectorDirtyIfSoundChanged,
+  markVectorIfMoodsLandedElseForget,
+} from './tracks.js';
 import { deleteFacetRows } from './facets.js';
 import { touchGenreInputs } from './genre-inputs.js';
 
@@ -93,6 +98,19 @@ export function setRelabelledTrackAudioMoodLabelsBulk(
   requireDb().transaction(() => {
     setTrackAudioMoodLabelsBulk(rows);
     for (const { id } of rows) forgetVectorSoundIfMoved(id, 'moods');
+  })();
+}
+
+// The relabel-all's write for the rows that had no labels before the pass: a new
+// track's moods mark the vector built without them (#2313), and anything else
+// forgets as above (tracks.ts markVectorIfMoodsLandedElseForget).
+export function setRelabelledNewTrackAudioMoodLabelsBulk(
+  rows: Array<{ id: string; moods: string[] }>,
+): void {
+  if (rows.length === 0) return;
+  requireDb().transaction(() => {
+    setTrackAudioMoodLabelsBulk(rows);
+    for (const { id } of rows) markVectorIfMoodsLandedElseForget(id);
   })();
 }
 

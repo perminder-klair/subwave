@@ -132,6 +132,9 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -218,6 +221,8 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -517,6 +522,9 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -596,6 +604,8 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -851,6 +861,9 @@ services:
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -1341,11 +1354,20 @@ SITE_URL=
 # chat key. OpenRouter embeddings also fall back to OPENROUTER_API_KEY above.
 # EMBEDDING_API_KEY=
 
+# ───────── Last.fm (optional — also configurable in admin UI) ─────────
+# Tags need only the API key. Paste it in Settings → Listeners → Last.fm, or
+# set it here; from there Last.fm tags are on by default (Library tagger →
+# Advanced → Enrichment is Auto). Scrobbling is separate and stays off until
+# you enable it in that card; only then are the secret and session key needed.
+# LASTFM_API_KEY=
+# LASTFM_API_SECRET=                # scrobbling only
+# LASTFM_SESSION_KEY=               # scrobbling only; or use Connect in the card
+
 # ───────── Scrobbling (optional — also configurable in admin UI) ─────────
 # LISTENBRAINZ_USER_TOKEN=          # ListenBrainz or LB-compatible scrobbler token
 # LISTENBRAINZ_API_URL=             # optional full submit-listens URL override
 #                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
-#                                   # otherwise set base URL in admin → Settings → Scrobbling
+#                                   # otherwise set base URL in admin → Settings → Listeners → ListenBrainz
 
 # ───────── Original years (optional — also configurable in admin UI) ─────────
 # Era-bounded shows ask MusicBrainz (keyless) for the original year of reissues
