@@ -35,7 +35,7 @@ export function withStreamAuth(url: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}auth=${encodeURIComponent(token)}`;
 }
 
-// POST /station-auth outcomes, the web twin of app/src/lib/station-password.ts: no package here
+// POST /station-auth outcomes, the web twin of getsubwave/app:src/lib/station-password.ts: no package here
 // imports another, so the rules are mirrored, and a change to them goes in both. That route fails
 // CLOSED (401) whenever a lock is on and the password is wrong; 429 is its rate limit. Anything
 // else says nothing about the password.
