@@ -52,8 +52,9 @@ export function newSessionId(): string {
 }
 
 // Test seam (scripts/stem-usage-orderings.test.ts): named points inside an
-// append (between its write and its check that the path still names that
-// file) and a trim (between its rename and its copy of the old file's tail),
+// append (between its open and its write, where a trim can move the path from
+// under the open file; and between its write and its check that the path
+// still names that file) and a trim (between its rename and its copy of the old file's tail),
 // where a test running two writers at once decides which goes next.
 let journalStep: ((step: string) => Promise<void>) | null = null;
 export function _journalStepsForTests(fn: ((step: string) => Promise<void>) | null): void {
@@ -161,6 +162,7 @@ export async function appendLines(lines: readonly string[]): Promise<boolean> {
     }
     let written: number;
     try {
+      await journalStep?.('append:opened');
       await fh.write(text);
       written = (await fh.stat()).ino;
     } catch {

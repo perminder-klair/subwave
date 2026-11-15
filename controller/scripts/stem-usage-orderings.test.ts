@@ -10,8 +10,9 @@
 // expose (_usageStepsForTests): the walk's start, the end of its scan, its
 // re-measure, its store, the trim's rename and its end; the writer's open,
 // its base measure, its writes, its close, its read of the snapshot, and each
-// journal append's inode check. A driver picks which parked actor goes next,
-// and a depth-first odometer over those picks runs every schedule once.
+// journal append's open and its inode check. A driver picks which parked
+// actor goes next, and a depth-first odometer over those picks runs every
+// schedule once.
 // - With the in-process lock off, any point interleaves with any other, which
 //   is what two processes (the controller and the tagger child) can do.
 // - With it on, the points inside a locked section are not decision points:
@@ -88,14 +89,17 @@ const parked = new Map<string, () => void>();
 const INSIDE_LOCK = new Set(['walk:remeasured', 'walk:store', 'trim:renamed', 'walk:trimmed', 'walk:stored', 'write:read']);
 let lockOn = false;
 let useAppendPoints = false;
+// Points a scenario passes through without deciding (see the trim scenario).
+let skipPoints: ReadonlySet<string> = new Set();
 const trace: string[] = [];
 
 async function gate(label: string): Promise<void> {
   const actor = als.getStore();
   if (!actor) return;
   if (label === 'walk:stored') return; // nothing of this actor follows it
-  if (label === 'append:written' && !useAppendPoints) return;
+  if (label.startsWith('append:') && !useAppendPoints) return;
   if (lockOn && INSIDE_LOCK.has(label)) return;
+  if (skipPoints.has(label)) return;
   await new Promise<void>(resume => parked.set(actor, () => { trace.push(`${actor}:${label}`); resume(); }));
 }
 
@@ -151,7 +155,7 @@ interface Outcome { schedules: number; trusted: number; stale: number }
 
 async function enumerate(
   name: string,
-  opts: { lock: boolean; trim: boolean; appendPoints?: boolean; staleFirst?: boolean },
+  opts: { lock: boolean; trim: boolean; appendPoints?: boolean; staleFirst?: boolean; skip?: string[] },
   actors: () => Actors,
 ): Promise<Outcome> {
   const out: Outcome = { schedules: 0, trusted: 0, stale: 0 };
@@ -162,6 +166,7 @@ async function enumerate(
     if (opts.staleFirst) await stemCache.markUsageStale();
     lockOn = opts.lock;
     useAppendPoints = opts.appendPoints === true;
+    skipPoints = new Set(opts.skip ?? []);
     journal._trimAboveBytesForTests(opts.trim ? 0 : null);
     stemCache._usageStepsForTests(gate, { lock: opts.lock });
     let branching: number[];
@@ -261,13 +266,18 @@ test('two processes: two writers settling on one snapshot, and two writers in on
 // The trim replaces the journal. A line a writer appends between the walk's
 // last read and the trim, or after the trim's rename, must reach the new
 // file: copied from the old one's tail, or appended again by its writer when
-// its inode check finds the path moved. Every append's check is a decision
-// point here, so every such landing is run.
+// its inode check finds the path moved. Each append's open, write and check
+// are decision points here, so a write into the old file after the trim
+// copied its tail is run too. Points that order nothing against a trim (the
+// walk before its scan ends, the writer's base measure) pass through: they
+// made this scenario five times longer and caught nothing more. Undo either
+// the copy or the second append and a schedule here ends trusted and wrong.
+// A drop is the writer: its lines are an opening and a close, like every
+// other writer's, and the trim never looks at what a dir holds.
 test('two processes: a trimming walk never loses a line a writer appended around it', async () => {
-  await enumerate('sweep (trims) × separation, every append', { lock: false, trim: true, appendPoints: true },
-    () => ({ walk: sweep, write: separate('p', 1) }));
-  await enumerate('sweep (trims) × drop, every append', { lock: false, trim: true, appendPoints: true },
-    () => ({ walk: sweep, write: drop('b') }));
+  await enumerate('sweep (trims) × drop, every append', {
+    lock: false, trim: true, appendPoints: true, skip: ['walk:start', 'walk:listed', 'write:based'],
+  }, () => ({ walk: sweep, write: drop('b') }));
 });
 
 test('two processes: two walks, each trimming at its store', async () => {
