@@ -41,6 +41,7 @@ export const LLM_LEG_FIELDS = [
   'toolCallBodyParams',
   'compatibleMode',
   'reasoning',
+  'reasoningEffort',
   'toolChoice',
   'discoverySteps',
   'numCtx',

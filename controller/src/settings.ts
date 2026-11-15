@@ -97,6 +97,7 @@ import {
   rawMaxTrackSec,
 } from './settings/defaults.js';
 import { validateCompatParams, normalizeLlmBodyParams } from './settings/compat-params.js';
+import { normalizeReasoningEffort } from './schemas/reasoning.js';
 // A bound on the engine's composed prompt, not a validated vocabulary — it lives
 // beside the engine that enforces it (web/lib/geminiLimits.ts mirrors it for the
 // admin field, pinned by scripts/gemini-tts-settings.test.ts).
@@ -1034,6 +1035,8 @@ export async function load() {
       compatibleMode: storedCompatibleMode(stored.llm?.compatibleMode, !!stored.llm, DEFAULTS.llm.compatibleMode),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      // Absent or unknown → 'default', today's "On" (#2296).
+      reasoningEffort: normalizeReasoningEffort(stored.llm?.reasoningEffort),
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
       // pre-field settings.json) lands on the 'required' default. See issue #570.
       toolChoice: stored.llm?.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.toolChoice,
@@ -1145,6 +1148,7 @@ export async function load() {
           compatibleMode: storedCompatibleMode(fb.compatibleMode, !!stored.llm?.fallback, DEFAULTS.llm.fallback.compatibleMode),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
+          reasoningEffort: normalizeReasoningEffort(fb.reasoningEffort),
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
           repeatPenalty: clampRepeatPenalty(fb.repeatPenalty, DEFAULTS.llm.fallback.repeatPenalty),
