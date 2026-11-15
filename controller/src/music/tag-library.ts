@@ -44,7 +44,7 @@ import { adoptAndPrune } from './id-rotation.js';
 import { reportProgress, reportCatalogueReady, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
 import { planRun } from './rescan-scope.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
-import { phaseEmbed } from './tag-library/embed.js';
+import { embeddingPreflight, indexTextMode, phaseEmbed } from './tag-library/embed.js';
 import { logEvent } from './tag-library/log.js';
 import { phaseEnrich } from './tag-library/enrich.js';
 import {
@@ -103,32 +103,22 @@ async function main() {
     return;
   }
 
-  if (!embeddings.isAvailable()) {
-    logEvent('error', 'Embeddings not available — set settings.embedding.enabled / provider');
+  // Preflight before opening the DB or walking Navidrome (#174, #319), the same
+  // one a standalone Analyse run makes before its re-embed (tag-library/embed.ts).
+  const preflight = await embeddingPreflight();
+  if (!preflight.ok) {
+    logEvent('error', preflight.message);
     process.exit(1);
   }
-
-  // Preflight before opening the DB or walking Navidrome (#174, #319). The probe
-  // reports the dimension measured from a real vector, which beats the name→dim
-  // guess, so an arbitrarily-named embedding model works.
-  const probe = await embeddings.ensureReady();
-  if (probe.code !== 'ok') {
-    logEvent('error', `Embedding preflight failed (${probe.code}): ${probe.message}`);
-    process.exit(1);
-  }
-  const embeddingDim = probe.dim ?? embeddings.resolveEmbeddingDim();
+  const embeddingDim = preflight.dim;
 
   // reseed lets open() recover from a model/dim swap instead of throwing the
   // dim-mismatch before the --reseed logic below runs (#307). Same-dim: no-op.
   await db.open({ embeddingDim, reseed: flags.reseed });
 
-  // Task-prefix mode this run embeds documents in. A reseed re-embeds
-  // everything so it adopts the active model's preferred mode; otherwise stay
-  // consistent with the stored vectors, since query embeds must match the
-  // documents (a legacy meta row with no mode = embedded bare).
-  const textMode = flags.reseed
-    ? embeddings.preferredTextMode()
-    : embeddings.resolveIndexTextMode(db.getEmbeddingMeta()?.textMode, db.vectorCount());
+  // Task-prefix mode this run embeds documents in (tag-library/embed.ts, the one
+  // rule both CLIs use).
+  const textMode = indexTextMode(flags.reseed);
   // Embed-text shape the index carries (#1246), same "describe what's stored"
   // rule as textMode: stays at the older format until a reseed rebuilds it.
   const textFormat = embeddings.resolveIndexTextFormat(
@@ -477,7 +467,7 @@ async function main() {
             promptHash,
             model: modelLabel,
           });
-          extra += 1;
+            extra += 1;
         } else if (!noLlm.has(id)) {
           stillUncertain.push(id);
         }
