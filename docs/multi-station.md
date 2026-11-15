@@ -49,7 +49,8 @@ stations…" screen and reloads on its own once the new station has booted.
 
 A few things stay install-level, not per-station, because they're
 infrastructure rather than station identity: the Icecast secrets file, the
-Hugging Face model cache, and the analyzer's tmp directory. Everything else —
+Hugging Face model cache, the analyzer's tmp directory, and `state/logs`
+(Liquidsoap's own log). Everything else —
 including things you might not expect, like `library.db` — is per-station.
 
 ## Caveats
@@ -80,7 +81,9 @@ including things you might not expect, like `library.db` — is per-station.
 - **Liquidsoap's own log stays install-level.** The compose files bind-mount
   `state/logs` over `/var/log/liquidsoap`, so `radio.log` is shared across
   stations regardless of which one is live. Only the controller's event logs
-  (`logs/events-*.jsonl`) live inside each station's directory.
+  (`logs/events-*.jsonl`) live inside each station's directory. Converting to
+  multi-station leaves `state/logs` where it is, so the original station's
+  earlier event logs stay there, and new ones go to `stations/main/logs/`.
 
 ## Upgrading existing profiles
 

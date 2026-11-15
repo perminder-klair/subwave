@@ -45,8 +45,16 @@ export function duplicateAction(entry: string): 'copy' | 'skip' {
 
 // Conversion moves the legacy root's contents into stations/main/. Only
 // install-level entries stay at the root (spec §2).
+//
+// `logs` stays because liquidsoap's radio.log lives in the ROOT's logs/ for
+// every station: the compose files bind-mount it over /var/log/liquidsoap, the
+// AIO symlinks /var/log/liquidsoap at it, and routes/debug.ts tails it there.
+// Moving it left the AIO's link dangling, and radio.liq opens its log path
+// first, so the mixer crash-looped on `Log directory … does not exist` (#2349).
+// The converted station's earlier controller logs (events, requests, picks)
+// stay at the root with it; each station writes new ones in its own logs/.
 const INSTALL_LEVEL = new Set([
-  'stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found',
+  'stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found', 'logs',
 ]);
 
 export function conversionAction(entry: string): 'move' | 'keep' {

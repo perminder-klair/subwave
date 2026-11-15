@@ -20,6 +20,8 @@ try {
   writeFileSync(join(root, 'icecast-secrets.env'), 'SECRET=1');
   mkdirSync(join(root, 'jingles'));
   writeFileSync(join(root, 'jingles', 'a.wav'), 'x');
+  mkdirSync(join(root, 'logs'));
+  writeFileSync(join(root, 'logs', 'radio.log'), 'mixer log\n');
 
   // Single-station listing: one synthetic root entry.
   const single = manager.listStations(root, 'Legacy FM');
@@ -34,6 +36,10 @@ try {
   assert.ok(existsSync(join(root, 'stations', 'main', 'settings.json')));
   assert.ok(existsSync(join(root, 'stations', 'main', 'jingles', 'a.wav')));
   assert.ok(existsSync(join(root, 'icecast-secrets.env'))); // stayed
+  // logs/ stays at the root: the AIO links /var/log/liquidsoap at it and compose
+  // bind-mounts it, so moving it left the mixer unable to open radio.log (#2349).
+  assert.equal(readFileSync(join(root, 'logs', 'radio.log'), 'utf8'), 'mixer log\n');
+  assert.ok(!existsSync(join(root, 'stations', 'main', 'logs')));
   assert.ok(!existsSync(join(root, 'settings.json')));      // moved
   assert.equal(manager.activeIdOnDisk(root), 'main');
   assert.equal(

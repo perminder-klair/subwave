@@ -65,9 +65,11 @@ for (const f of [
 ]) assert.equal(duplicateAction(f), 'skip', f);
 
 // --- conversion classification (spec §6) --------------------------------------
-for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found'])
+// `logs` holds liquidsoap's radio.log, which the AIO links and compose mounts at
+// the root: moving it crash-looped the AIO mixer (#2349).
+for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found', 'logs'])
   assert.equal(conversionAction(f), 'keep', f);
-for (const f of ['settings.json', 'library.db', 'jingles', 'logs', 'archive', 'session.json', 'show-preparations.json'])
+for (const f of ['settings.json', 'library.db', 'jingles', 'archive', 'session.json', 'show-preparations.json'])
   assert.equal(conversionAction(f), 'move', f);
 
 console.log('stations-pure.test: OK');
