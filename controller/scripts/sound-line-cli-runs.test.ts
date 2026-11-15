@@ -286,8 +286,12 @@ test('an Analyse run leaves its marks for the tag run on another model, or with 
 
   await settings.update({ embedding: { ...EMBEDDING, model: 'another-model' } } as never);
   embedded.splice(0);
+  embedRequests = 0;
   const other = await analyseRun();
   assert.deepEqual(documents(), [], 'nothing embedded into an index built with another model');
+  // Not even the probe: a probe of a missing Ollama model pulls it, for a run
+  // that would then refuse it.
+  assert.equal(embedRequests, 0, 'no request on another model');
   assert.match(other, /left for the next tag run: the embedding model changed/);
   assert.deepEqual(dirty(), ['late-2'], 'the mark is kept');
 

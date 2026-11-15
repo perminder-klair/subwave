@@ -52,13 +52,22 @@ export async function reembedNewlyMarked(
   if (!marked.some(id => !before.has(id))) return [];
   const meta = db.getEmbeddingMeta();
   if (!meta) return [];
+  const modelChanged = () =>
+    log('info', `${marked.length} similarity vectors left for the next tag run: the embedding model ` +
+      `changed since the index was built (${meta.model}, dim=${meta.dim})`);
   try {
+    // The model is compared before the probe, so a run on another model sends
+    // nothing, and never has ensureReady() pull a model it would then refuse.
+    if (embeddings.isAvailable() && embeddings.activeModelLabel() !== meta.model) {
+      modelChanged();
+      return [];
+    }
     const pre = await embeddingPreflight();
     if (!pre.ok) {
       log('info', `${marked.length} similarity vectors left for the next tag run: ${pre.message}`);
       return [];
     }
-    if (pre.dim !== meta.dim || embeddings.activeModelLabel() !== meta.model) {
+    if (pre.dim !== meta.dim) {
       log('info', `${marked.length} similarity vectors left for the next tag run: the embedding model ` +
         `changed since the index was built (${meta.model}, dim=${meta.dim})`);
       return [];
