@@ -718,12 +718,13 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
               <span>
                 <b>Some similarity vectors carry old audio moods.</b>{' '}
-                <b className="mono-num">{num(staleSound)}</b> tracks were embedded with mood words
-                that a change to the mood vocabulary or calibration has since moved, so similarity
-                still compares them on the old ones.{' '}
+                <b className="mono-num">{num(staleSound)}</b> tracks were embedded before their
+                audio moods last changed (an edit to the mood vocabulary or calibration, or a
+                library still under 200 tracks), so similarity still compares them on the old
+                moods.{' '}
                 {staleSoundUnqueued > 0
-                  ? 'Queue them and the next tagging run re-embeds just those tracks.'
-                  : 'They are queued, and the next tagging run re-embeds them.'}
+                  ? 'Queue them and the next tagging run, or an Analyse run that measures new tracks, re-embeds just those.'
+                  : 'They are queued for the next tagging run, or an Analyse run that measures new tracks.'}
               </span>
               {staleSoundUnqueued > 0 && (
                 <button

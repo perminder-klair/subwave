@@ -153,7 +153,7 @@ export function useTaggerControls() {
     onDone: (data, _v, client) => {
       if (data.coverage) client.setQueryData(libraryKeys.coverage(), data.coverage);
       else void client.invalidateQueries({ queryKey: libraryKeys.coverage() });
-      notify.ok(`${(data.marked ?? 0).toLocaleString('en-GB')} vectors queued for the next tagging run`);
+      notify.ok(`${(data.marked ?? 0).toLocaleString('en-GB')} vectors queued for re-embed`);
     },
   });
 
