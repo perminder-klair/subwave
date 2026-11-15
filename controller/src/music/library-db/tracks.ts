@@ -285,11 +285,31 @@ export function markTextVectorDirtyIfSoundChanged(id: string, parts: readonly So
 // later. So the relabel forgets the part where it moved the vector's words, and
 // that part stays unknown until the vector is rebuilt.
 export function forgetVectorSoundIfMoved(id: string, part: SoundPart): void {
-  const s = soundAgainstVector(id);
+  forgetMoved(id, soundAgainstVector(id), part);
+}
+
+function forgetMoved(id: string, s: ReturnType<typeof soundAgainstVector>, part: SoundPart): void {
   if (!s || s.built[part] == null || sameWords(s.now[part], s.built[part])) return;
   requireDb()
     .prepare(`UPDATE tracks SET text_vector_sound = ? WHERE id = ?`)
     .run(JSON.stringify({ ...s.built, [part]: null }), id);
+}
+
+// A relabel-all's write for a row that had no mood labels before the pass (#2313):
+// a new track scored for the first time by a pass that relabels the library (a
+// first pass, a vocabulary edit, crossing the floor, or any pass below it). Its
+// vector was built before it had moods, so they landed late, exactly as on the
+// incremental branch, and mark it. Only a vector built with no mood words counts:
+// one that carries some (labels cleared by a re-analyze or a replaced file) holds
+// words the relabel moved like any other row's, and forgets, or a vocabulary edit
+// followed by a re-analyze would mark the whole library.
+export function markVectorIfMoodsLandedElseForget(id: string): void {
+  const s = soundAgainstVector(id);
+  if (s?.built.moods?.length === 0) {
+    if (s.now.moods.length > 0) markTextVectorDirty(id);
+    return;
+  }
+  forgetMoved(id, s, 'moods');
 }
 
 // Existing vectors whose source text changed: an era edit, (opt-in) the track's
