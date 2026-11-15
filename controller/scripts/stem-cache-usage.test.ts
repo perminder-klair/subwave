@@ -270,6 +270,39 @@ async function freshTotals(): Promise<{ bytes: number; dirs: number }> {
   return { bytes, dirs };
 }
 
+// An analysis pass refused its pending mark (the snapshot was untrusted
+// already) writes with no mark to hold off a walk in the other process, so
+// that walk stored what it found mid-pass as trusted, short of what the pass
+// went on to write. The pass's journal opening now holds it off either way.
+test('a pass refused its mark still keeps a walk from trusting what it finds mid-pass (#2317)', async () => {
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  seedDir('pass-0', 1000);
+  writeSnap({ bytes: 80 * GB, dirs: 4000, stale: true });
+  assert.equal(await stemCache.markPassPending(), false, 'refused: the snapshot was not trusted');
+  let wrote = false;
+  stemCache._duringWalkForTests(async () => {
+    if (wrote) return;
+    wrote = true;
+    seedDir('pass-1', 1000); // the pass goes on writing while the walk runs
+  });
+  try {
+    await stemCache.usage();
+  } finally {
+    stemCache._duringWalkForTests(null);
+  }
+  assert.equal(wrote, true);
+  assert.notEqual((await stemCache.storedUsage())?.fresh, true, 'no trusted figure while the pass writes');
+  // Settled, the next read walks and trusts what it finds.
+  assert.equal(await stemCache.settlePassWrites([]), null);
+  const u = await stemCache.usage();
+  assert.deepEqual([u.bytes, u.dirs], [2000, 2]);
+  assert.equal((await stemCache.storedUsage())?.fresh, true);
+  rmSync(root, { recursive: true, force: true });
+  rmSync(snapFile, { force: true });
+});
+
 test('a stale snapshot is still reported, flagged, and never walked for', async () => {
   writeSnap({ bytes: 80 * GB, dirs: 4000 });
   await stemCache.markUsageStale();

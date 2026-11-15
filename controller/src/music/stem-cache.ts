@@ -920,26 +920,24 @@ export async function storedUsage(): Promise<StoredUsage | null> {
   };
 }
 
-// The pass that marked the snapshot in this process: its journal opening,
-// closed when it settles.
+// The pass that marked the snapshot in this process, or that was refused the
+// mark: its journal opening, closed when it settles.
 let passSession: string | null = null;
 
 // The analysis pass marks the snapshot while it may write stem dirs. Called
 // after its headroom read, so that read could still use the snapshot. The
-// journal records the pass too (an opening of dirs it does not name), so that
-// a walk running in the other process while it starts or settles does not
-// store a trusted figure across it.
+// journal records the pass either way (an opening of dirs it does not name),
+// so that no walk in the other process stores a trusted figure while it
+// writes: with the mark refused (the snapshot was not trusted already), there
+// is no pending mark to stop one, and a walk would store a partial figure.
 export async function markPassPending(): Promise<boolean> {
+  passSession = newSessionId();
+  const recorded = await appendLines([passOpenLine(passSession, Date.now(), process.pid)]);
   return underUsageLock(async () => {
     const { snap, verdict } = await readUsageState();
-    if (verdict !== 'use' || !snap) {
+    if (!recorded || verdict !== 'use' || !snap) {
       snapshotUntrusted = true;
-      return false;
-    }
-    passSession = newSessionId();
-    if (!(await appendLines([passOpenLine(passSession, Date.now(), process.pid)]))) {
-      snapshotUntrusted = true;
-      await journalLost();
+      if (!recorded) await journalLost();
       return false;
     }
     return writeSnapshot(buildSnapshot(
