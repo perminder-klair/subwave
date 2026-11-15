@@ -63,6 +63,7 @@ import {
   stripSecretControlChars,
 } from '../schemas/settings.js';
 import { EMBEDDING_PROVIDER_IDS, LLM_PROVIDER_IDS } from '../schemas/providers.js';
+import { validateLlmBodyParams } from './compat-params.js';
 
 export { normalizeGeminiSafety } from '../schemas/settings.js';
 
@@ -403,6 +404,14 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   // server, so they follow the leg's inline API key instead.
   if (l.headers !== undefined) {
     target.headers = applyCustomHeadersPatch(target.headers, l.headers, label);
+  }
+  // Extra request-body fields (#2296). Whole-list REPLACE, like headers: the
+  // editor always sends the full set. Reserved keys are refused in both.
+  if (l.bodyParams !== undefined) {
+    target.bodyParams = validateLlmBodyParams(l.bodyParams, `${label}.bodyParams`);
+  }
+  if (l.toolCallBodyParams !== undefined) {
+    target.toolCallBodyParams = validateLlmBodyParams(l.toolCallBodyParams, `${label}.toolCallBodyParams`);
   }
   if (l.reasoning !== undefined) {
     target.reasoning = !!l.reasoning;

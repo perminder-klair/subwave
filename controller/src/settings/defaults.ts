@@ -439,6 +439,13 @@ export const DEFAULTS = {
     // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
     // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
+    // Extra request-body fields for an openai-compatible / locca leg (#2296),
+    // `{ key, value }` rows like tts.cloud.compatParams. `bodyParams` go on
+    // every call; `toolCallBodyParams` are laid over them on forced-tool and
+    // structured calls only, where a `null` value removes a key. Empty by
+    // default, so an untouched station sends exactly what it did before.
+    bodyParams: [] as { key: string; value: string }[],
+    toolCallBodyParams: [] as { key: string; value: string }[],
     // How an openai-compatible connection is driven: 'local' for a self-hosted
     // server (llama.cpp, LM Studio, vLLM, Ollama /v1), 'hosted' for a cloud API
     // or proxy, 'auto' to detect it (llm/internal/provider/compat-detect.ts).
@@ -585,6 +592,9 @@ export const DEFAULTS = {
       // Per-leg like providerBaseUrls: the backup may be a different gateway
       // with its own routing header.
       headers: {} as Record<string, string>,
+      // Per-leg too: the backup's server has its own dialect (#2296).
+      bodyParams: [] as { key: string; value: string }[],
+      toolCallBodyParams: [] as { key: string; value: string }[],
       compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
       reasoning: false,
       toolChoice: 'required',
