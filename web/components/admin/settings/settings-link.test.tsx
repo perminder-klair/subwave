@@ -68,21 +68,54 @@ test('the Last.fm card copy has no em dashes and no stale Advanced breadcrumb', 
 
 // SettingsPanel renders no card until the first settings read lands, and jumpTo
 // gives up after about a second, so a jump fired on mount was lost on a cold
-// load with a slow read. And the rail never writes ?section back, so a second
-// click on the same link is a new navigation with the same URL string: keyed on
-// the string, it switched tabs without scrolling to the card.
-test('a deep link waits for the cards and jumps once per navigation', () => {
+// load with a slow read.
+test('a deep link waits for the cards, then jumps once and drops the card', () => {
   const known = (id: string) => id === 'library' || id === 'listeners';
   const first = new URLSearchParams('section=library&card=enrichment');
   const enrichment = { section: 'library', anchor: 'enrichment', advanced: true };
 
   assert.equal(deepLinkJump(first, false, known, null), null, 'no cards yet: wait');
-  assert.deepEqual(deepLinkJump(first, true, known, null), enrichment);
-  assert.equal(deepLinkJump(first, true, known, first), null, 'a re-render of the same navigation');
-
-  const again = new URLSearchParams(first.toString());
-  assert.deepEqual(deepLinkJump(again, true, known, first), enrichment, 'a second click on the same link');
+  assert.deepEqual(deepLinkJump(first, true, known, null), { jump: enrichment, search: '?section=library' });
+  assert.equal(deepLinkJump(first, true, known, first), null, 'a re-render, or Strict Mode running the effect twice');
+  // Other params survive; only the card goes.
+  assert.equal(deepLinkJump(new URLSearchParams('card=enrichment&section=library&x=1'), true, known, null)?.search,
+    '?section=library&x=1');
 
   assert.equal(deepLinkJump(new URLSearchParams('section=brain&card=enrichment'), true, known, null), null);
   assert.equal(deepLinkJump(new URLSearchParams('section=library'), true, known, null), null);
+});
+
+// Next's useSearchParams, as a production build behaves: the object is memoised
+// on the URL string (app-router.js, `useMemo(..., [canonicalUrl])`), so a
+// navigation to the URL already in the address bar hands back the same object.
+// The rail never writes ?section, so without the panel dropping the card after
+// a jump, a second click on the link would find the same object and do nothing.
+test('a second click on the link jumps again in a production build', () => {
+  const known = (id: string) => id === 'library' || id === 'listeners';
+  // useMemo keeps one slot: the object for the last URL it saw.
+  let memo: { search: string; params: URLSearchParams } | null = null;
+  const paramsFor = (search: string) => {
+    if (memo?.search !== search) memo = { search, params: new URLSearchParams(search) };
+    return memo.params;
+  };
+  const link = settingsHref('library', 'enrichment').slice('/admin/settings'.length);
+  let address = link;
+  let last: URLSearchParams | null = null;
+  // What SettingsPanel's effect does with a step: remember it, replace the URL.
+  const effect = () => {
+    const query = paramsFor(address);
+    const step = deepLinkJump(query, true, known, last);
+    if (!step) return false;
+    last = query;
+    address = step.search;
+    return true;
+  };
+
+  assert.equal(effect(), true, 'the first click jumps');
+  assert.equal(effect(), false, 'the URL replace re-runs the effect and finds no card');
+  assert.equal(effect(), false, 'a refetch or refresh does not scroll again');
+  // The operator goes back to Listeners through the rail (no URL change), then
+  // clicks the same link.
+  address = link;
+  assert.equal(effect(), true, 'a second click on the same link');
 });

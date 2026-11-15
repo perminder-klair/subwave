@@ -29,6 +29,14 @@ export function settingsJumpFromQuery(section: string | null, card: string | nul
 /** The part of useSearchParams' result the deep link reads. */
 export interface SettingsQuery {
   get(name: string): string | null;
+  toString(): string;
+}
+
+/** A jump to run, and the URL search to replace the address with once it has. */
+export interface DeepLinkStep {
+  jump: SettingsJump;
+  /** The query without `card` (`?section=library`), or '' when nothing is left. */
+  search: string;
 }
 
 /**
@@ -37,18 +45,29 @@ export interface SettingsQuery {
  * Only once the cards can exist: the panel renders no card before the first
  * settings read lands, and jumpTo gives up after about a second, so a jump
  * fired on mount is lost on a cold load whose read is slower than that (a
- * refresh, a new tab, a slow controller). And once per navigation, not once
- * per URL string: `query` is useSearchParams' object, new on every navigation
- * and stable across re-renders, so a second click on the same link jumps again
- * while a settings refetch never scrolls the page.
+ * refresh, a new tab, a slow controller).
+ *
+ * Once it has jumped, the panel replaces the address with `search`, the same
+ * query minus `card`. In a production build useSearchParams' object is
+ * memoised on the URL string, so a second click on a link to the URL already
+ * in the address bar returns the same object and nothing re-runs: stripping
+ * the card makes the next click a different URL. It also leaves nothing for a
+ * refetch, a router refresh or a dev-mode tree change (which mints a new object
+ * for the same URL) to jump on, so the operator is never scrolled mid-edit.
+ * `lastJumped` covers the moment before the replace lands (Strict Mode's
+ * second effect run).
  */
 export function deepLinkJump(
   query: SettingsQuery,
   cardsReady: boolean,
   hasSection: (id: string) => boolean,
   lastJumped: SettingsQuery | null,
-): SettingsJump | null {
+): DeepLinkStep | null {
   if (!cardsReady || query === lastJumped) return null;
   const jump = settingsJumpFromQuery(query.get('section'), query.get('card'));
-  return jump && hasSection(jump.section) ? jump : null;
+  if (!jump || !hasSection(jump.section)) return null;
+  const rest = new URLSearchParams(query.toString());
+  rest.delete('card');
+  const search = rest.toString();
+  return { jump, search: search ? `?${search}` : '' };
 }
