@@ -347,10 +347,12 @@ export const BODY_PARAM_VALUE_MAX = 400;
  * Chat body fields the station sets on every request, refused in both LLM
  * lists at save time and skipped at send time: overriding any of them could
  * break a forced tool call, the output cap or the hosted #1693 pairing.
+ * `max_completion_tokens` is the output cap's other spelling: the SDK sends it
+ * only for OpenAI reasoning ids, and vLLM reads it ahead of `max_tokens`.
  */
 export const LLM_BODY_PARAM_RESERVED_KEYS = [
   'model', 'messages', 'tools', 'tool_choice', 'stream',
-  'max_tokens', 'response_format', 'stream_options',
+  'max_tokens', 'max_completion_tokens', 'response_format', 'stream_options',
 ];
 
 // Native Google safety flags are independent per LLM leg. Only a literal true

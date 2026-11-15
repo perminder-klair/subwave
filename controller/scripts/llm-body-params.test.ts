@@ -164,6 +164,24 @@ test('rule 1: the normal client adds request fields and never overwrites one the
   assert.equal(body.model, HOSTED.model);
 });
 
+// The SDK sends `max_completion_tokens` in place of `max_tokens` only for an
+// OpenAI reasoning id, so on a Qwen leg it is unset and no-clobber would let
+// it through beside the station's `max_tokens` — and vLLM reads it first, so
+// the 64-token link fallback would run under the operator's cap instead.
+test('max_completion_tokens is reserved: refused at save, skipped on the wire', async () => {
+  await coldLoad({ ...HOSTED, fallback: { enabled: false } });
+  for (const list of ['bodyParams', 'toolCallBodyParams']) {
+    await assert.rejects(settings.update({ llm: { [list]: [{ key: 'max_completion_tokens', value: '99999' }] } } as never),
+      new RegExp(`llm\\.${list} cannot override "max_completion_tokens"`));
+  }
+  const cfg = { ...HOSTED, bodyParams: [{ key: 'max_completion_tokens', value: '99999' }], toolCallBodyParams: [{ key: 'max_completion_tokens', value: '99999' }] };
+  for (const forceNoThink of [false, true]) {
+    const [body] = await captureBodies(() => generateText({ model: languageModel(cfg, { forceNoThink }), prompt: 'hi', maxOutputTokens: 64, maxRetries: 0 }));
+    assert.equal(body.max_tokens, 64);
+    assert.equal('max_completion_tokens' in body, false, `forceNoThink=${forceNoThink}: no second output cap`);
+  }
+});
+
 test('rule 2: the no-think client overlays the overrides, and null removes a key', async () => {
   for (const leg of [HOSTED, LOCAL]) {
     const cfg = { ...leg, bodyParams: REQUEST, toolCallBodyParams: OVERRIDES };
