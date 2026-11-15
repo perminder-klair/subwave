@@ -207,6 +207,13 @@ test('a released dir drops its quarantine stamp', async () => {
 });
 
 const SNAP = join(stateDir, 'stem-cache-usage.json');
+// A snapshot written by hand is one from before the usage journal, as an
+// upgrade finds it: the journal goes too, and the next read stamps it.
+const JOURNAL = join(stateDir, 'stem-cache-usage.journal');
+function writeLegacySnap(snap: Record<string, unknown>): void {
+  rmSync(JOURNAL, { force: true });
+  writeFileSync(SNAP, JSON.stringify(snap));
+}
 // A real walk's totals, stored as the snapshot: what a purge must keep true.
 async function storeMeasuredSnapshot(): Promise<void> {
   rmSync(SNAP, { force: true });
@@ -353,9 +360,7 @@ test('with a pass writing stems, a pass\'s moves keep the figure, flagged stale'
   await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: N });
   seedStem();
   const measuredAt = new Date().toISOString();
-  writeFileSync(SNAP, JSON.stringify({
-    version: 1, root: ROOT, bytes: 5_000_000_000, dirs: 400, measuredAt, updatedAt: measuredAt,
-  }));
+  writeLegacySnap({ version: 1, root: ROOT, bytes: 5_000_000_000, dirs: 400, measuredAt, updatedAt: measuredAt });
   assert.equal(await cache.markPassPending(), true);
   const rep = await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: true, now: N + DAY });
   assert.ok(rep.quarantined >= 1);
@@ -368,9 +373,7 @@ test('with a pass writing stems, a pass\'s moves keep the figure, flagged stale'
 test('a dry run leaves the usage figure as it found it', async () => {
   seedStem();
   const measuredAt = new Date().toISOString();
-  writeFileSync(join(stateDir, 'stem-cache-usage.json'), JSON.stringify({
-    version: 1, root: ROOT, bytes: 5_000_000_000, dirs: 400, measuredAt, updatedAt: measuredAt,
-  }));
+  writeLegacySnap({ version: 1, root: ROOT, bytes: 5_000_000_000, dirs: 400, measuredAt, updatedAt: measuredAt });
   await purge.runOrphanPurge({ knownIds: ['_sentinel'], confirm: false, now: NOW_BASE + 2 * DAY });
   assert.equal((await cache.storedUsage())?.fresh, true);
 });

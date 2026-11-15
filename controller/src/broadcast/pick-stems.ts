@@ -249,7 +249,7 @@ async function separate(id: string, title: string, opts: PickStemsOpts): Promise
         : `pick-time stems: "${title}" failed after ${secs}s: ${(err as Error).message}`);
       // A request that timed out may still be separating on the worker, so
       // the dir can grow after any measure taken now: let the next read walk.
-      await stemCache.markUsageStale();
+      await stemCache.abandonTrackWrite(before);
       return { ran: true, ok: false, ms: Date.now() - t0 };
     } finally {
       separating = false;

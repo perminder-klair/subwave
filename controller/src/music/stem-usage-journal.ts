@@ -1,0 +1,228 @@
+// The stem cache's usage journal on disk: <stateDir>/stem-cache-usage.journal,
+// beside the snapshot it vouches for (stem-cache-usage.json). What its lines
+// mean is music/stem-usage-policy.ts; who writes them is music/stem-cache.ts.
+// Two processes append to it (the controller's pick-time separations, purge
+// and sweep; the tagger child's forgetStems and id rotation), so:
+// - it is created whole or not at all: the header goes in a temp file that is
+//   hard-linked into place, which fails if another process got there first;
+// - an append opens the file without O_CREAT, so a lost journal is never
+//   recreated without its header, and writes each batch of lines in one
+//   O_APPEND write. If the path no longer names the inode it wrote to, a trim
+//   replaced the file, and the lines go again into the new one: a duplicate
+//   means nothing to a reader, a lost line would;
+// - only a walk that has just stored a trusted figure trims it (trimJournal),
+//   and only one at a time across processes (an exclusive lock file). The
+//   trim carries the openings still running into the new file, and after the
+//   rename copies whatever reached the old file since its last read;
+// - anything that fails here returns null or false, and the caller treats the
+//   stored size as untrusted: a missing or unreadable journal never vouches
+//   for a figure (#2317).
+// The old single-UUID change token (stem-cache-usage.changes, before #2317)
+// is removed when the journal is first created; nothing reads it any more.
+
+import { randomBytes } from 'node:crypto';
+import { constants } from 'node:fs';
+import { link, open, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { config } from '../config.js';
+import { headerLine, parseJournal, trimmedBody, type Journal, type OpenWrite } from './stem-usage-policy.js';
+
+export interface JournalRead extends Journal {
+  /** The inode read, so a trim can tell the file it read is still the one in place. */
+  ino: number;
+}
+
+export function journalPath(): string {
+  return path.join(config.stateDir, 'stem-cache-usage.journal');
+}
+
+function lockPath(): string {
+  return `${journalPath()}.lock`;
+}
+
+function legacyTokenPath(): string {
+  return path.join(config.stateDir, 'stem-cache-usage.changes');
+}
+
+export function newSessionId(): string {
+  return randomBytes(9).toString('base64url');
+}
+
+// Test seam (scripts/stem-usage-orderings.test.ts): named points inside an
+// append (between its write and its check that the path still names that
+// file) and a trim (between its rename and its copy of the old file's tail),
+// where a test running two writers at once decides which goes next.
+let journalStep: ((step: string) => Promise<void>) | null = null;
+export function _journalStepsForTests(fn: ((step: string) => Promise<void>) | null): void {
+  journalStep = fn;
+}
+
+/** The journal as it is now; null when it is absent or not a journal. */
+export async function readJournal(): Promise<JournalRead | null> {
+  let fh;
+  try {
+    fh = await open(journalPath(), 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const st = await fh.stat();
+    const j = parseJournal(await fh.readFile('utf8'));
+    return j ? { ...j, ino: st.ino } : null;
+  } catch {
+    return null;
+  } finally {
+    await fh.close().catch(() => {});
+  }
+}
+
+// Creates the journal when there is none, dated now (a snapshot written
+// before that predates it: stem-cache.ts stamps one from an upgrade). Null
+// when it can neither be read nor created.
+export async function ensureJournal(): Promise<JournalRead | null> {
+  const there = await readJournal();
+  if (there) return there;
+  const target = journalPath();
+  const tmp = `${target}.${randomBytes(4).toString('hex')}.tmp`;
+  let created = false;
+  try {
+    await writeFile(tmp, headerLine(newSessionId(), Date.now()), { flag: 'wx' });
+    try {
+      await link(tmp, target);
+      created = true;
+    } catch (err) {
+      // EEXIST: another process created it first, or a file that is not a
+      // journal sits there; either way it is read below.
+      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+    }
+  } catch {
+    /* unwritable: read below, and null if nothing is there */
+  } finally {
+    await unlink(tmp).catch(() => {});
+  }
+  if (created) await rm(legacyTokenPath(), { force: true }).catch(() => {});
+  return readJournal();
+}
+
+// Appends whole lines, creating the journal first if there is none. False
+// when they could not be written: the caller must then make the stored size
+// untrusted (dropJournal).
+export async function appendLines(lines: readonly string[]): Promise<boolean> {
+  if (lines.length === 0) return true;
+  const text = lines.join('');
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let fh;
+    try {
+      fh = await open(journalPath(), constants.O_WRONLY | constants.O_APPEND);
+    } catch {
+      // None yet (or gone): create it with its header, then append.
+      if (!(await ensureJournal())) return false;
+      continue;
+    }
+    let written: number;
+    try {
+      await fh.write(text);
+      written = (await fh.stat()).ino;
+    } catch {
+      await fh.close().catch(() => {});
+      return false;
+    }
+    await fh.close().catch(() => {});
+    await journalStep?.('append:written');
+    const now = await stat(journalPath()).then(s => s.ino, () => null);
+    if (now === written) return true;
+    // Replaced after this write (a trim): the trim copies what reached the
+    // old file before it read its tail, but not what landed after; go again.
+  }
+  return false;
+}
+
+// For a writer that could not record its change: remove the journal, so no
+// snapshot that names it is trusted again until a walk (a new journal has a
+// new id). The caller marks the snapshot stale as well (stem-cache.ts
+// journalLost), so a snapshot from before the journal is not stamped into
+// trust by the next one. False when it could not be removed.
+export async function dropJournal(): Promise<boolean> {
+  return rm(journalPath(), { force: true }).then(() => true, () => false);
+}
+
+// Above this size a walk that stored a trusted figure trims the journal.
+// Below it, the journal is left to grow: a trim changes the file's id, which
+// a walk running elsewhere at that moment reads as stale.
+let trimAboveBytes = 16 * 1024;
+export function _trimAboveBytesForTests(n: number | null): void {
+  trimAboveBytes = n ?? 16 * 1024;
+}
+
+// A lock left by a process that died mid-trim. A trim takes milliseconds, so
+// a lock this old has no holder; until it is this old, nobody trims (the
+// journal just grows).
+const LOCK_MAX_AGE_MS = 24 * 3600_000;
+
+async function takeTrimLock(): Promise<boolean> {
+  try {
+    await writeFile(lockPath(), `${process.pid} ${Date.now()}\n`, { flag: 'wx' });
+    return true;
+  } catch {
+    const st = await stat(lockPath()).catch(() => null);
+    if (st && Date.now() - st.mtimeMs > LOCK_MAX_AGE_MS) await rm(lockPath(), { force: true }).catch(() => {});
+    return false;
+  }
+}
+
+// Replace the journal read as `read` with a new one holding only `carried` (the
+// openings the snapshot about to be stored keeps in flight), then whatever
+// reached the old file after `read`. Returns the new journal and the position
+// the snapshot should stand at, or null when no trim was made (another trim
+// holds the lock, the file changed, or a step failed), in which case the
+// caller stores its figure at `read`'s own position.
+export async function trimJournal(
+  read: JournalRead,
+  carried: readonly OpenWrite[],
+): Promise<{ journal: JournalRead; upTo: number } | null> {
+  if (read.end < trimAboveBytes) return null;
+  if (!(await takeTrimLock())) return null;
+  const target = journalPath();
+  const tmp = `${target}.${randomBytes(4).toString('hex')}.tmp`;
+  let old;
+  try {
+    old = await openForTail(target, read.ino);
+    if (!old) return null;
+    const head = headerLine(newSessionId(), read.createdMs) + trimmedBody(carried);
+    await writeFile(tmp, head, { flag: 'wx' });
+    if ((await stat(target)).ino !== read.ino) return null;
+    await rename(tmp, target);
+    await journalStep?.('trim:renamed');
+    // Lines that reached the old file after `read`, read after the rename: a
+    // writer whose line landed later sees the path moved and appends again.
+    const after = completeLinesAfter(await old.readFile(), read.end);
+    if (after) {
+      const fh = await open(target, constants.O_WRONLY | constants.O_APPEND);
+      try { await fh.write(after); } finally { await fh.close().catch(() => {}); }
+    }
+    const now = await readJournal();
+    if (!now) return null;
+    return { journal: now, upTo: Buffer.byteLength(head) };
+  } catch {
+    return null;
+  } finally {
+    await old?.close().catch(() => {});
+    await unlink(tmp).catch(() => {});
+    await rm(lockPath(), { force: true }).catch(() => {});
+  }
+}
+
+async function openForTail(file: string, ino: number) {
+  const fh = await open(file, 'r');
+  if ((await fh.stat()).ino !== ino) {
+    await fh.close().catch(() => {});
+    return null;
+  }
+  return fh;
+}
+
+function completeLinesAfter(whole: Buffer, from: number): string {
+  const rest = whole.subarray(from).toString('utf8');
+  const last = rest.lastIndexOf('\n');
+  return last < 0 ? '' : rest.slice(0, last + 1);
+}
