@@ -8,7 +8,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ScrobbleCards } from './ScrobbleSection';
 import { settingsForm } from './form-state';
-import { settingsHref, settingsJumpFromQuery } from './settings-link';
+import { deepLinkJump, settingsHref, settingsJumpFromQuery } from './settings-link';
 import { cardAnchor } from '../ui';
 import type { SettingsData } from './shared';
 
@@ -64,4 +64,25 @@ test('the Last.fm card copy has no em dashes and no stale Advanced breadcrumb', 
     assert.doesNotMatch(card, /Advanced → Enrichment/, `breadcrumb (tags=${lastfmTags})`);
     assert.doesNotMatch(card, /to only enable tagging/);
   }
+});
+
+// SettingsPanel renders no card until the first settings read lands, and jumpTo
+// gives up after about a second, so a jump fired on mount was lost on a cold
+// load with a slow read. And the rail never writes ?section back, so a second
+// click on the same link is a new navigation with the same URL string: keyed on
+// the string, it switched tabs without scrolling to the card.
+test('a deep link waits for the cards and jumps once per navigation', () => {
+  const known = (id: string) => id === 'library' || id === 'listeners';
+  const first = new URLSearchParams('section=library&card=enrichment');
+  const enrichment = { section: 'library', anchor: 'enrichment', advanced: true };
+
+  assert.equal(deepLinkJump(first, false, known, null), null, 'no cards yet: wait');
+  assert.deepEqual(deepLinkJump(first, true, known, null), enrichment);
+  assert.equal(deepLinkJump(first, true, known, first), null, 'a re-render of the same navigation');
+
+  const again = new URLSearchParams(first.toString());
+  assert.deepEqual(deepLinkJump(again, true, known, first), enrichment, 'a second click on the same link');
+
+  assert.equal(deepLinkJump(new URLSearchParams('section=brain&card=enrichment'), true, known, null), null);
+  assert.equal(deepLinkJump(new URLSearchParams('section=library'), true, known, null), null);
 });

@@ -25,3 +25,30 @@ export function settingsJumpFromQuery(section: string | null, card: string | nul
   const id = section as SectionId;
   return { section: id, anchor: card, advanced: isAdvancedCard(id, card) };
 }
+
+/** The part of useSearchParams' result the deep link reads. */
+export interface SettingsQuery {
+  get(name: string): string | null;
+}
+
+/**
+ * The deep-link jump SettingsPanel should run now, or null.
+ *
+ * Only once the cards can exist: the panel renders no card before the first
+ * settings read lands, and jumpTo gives up after about a second, so a jump
+ * fired on mount is lost on a cold load whose read is slower than that (a
+ * refresh, a new tab, a slow controller). And once per navigation, not once
+ * per URL string: `query` is useSearchParams' object, new on every navigation
+ * and stable across re-renders, so a second click on the same link jumps again
+ * while a settings refetch never scrolls the page.
+ */
+export function deepLinkJump(
+  query: SettingsQuery,
+  cardsReady: boolean,
+  hasSection: (id: string) => boolean,
+  lastJumped: SettingsQuery | null,
+): SettingsJump | null {
+  if (!cardsReady || query === lastJumped) return null;
+  const jump = settingsJumpFromQuery(query.get('section'), query.get('card'));
+  return jump && hasSection(jump.section) ? jump : null;
+}
