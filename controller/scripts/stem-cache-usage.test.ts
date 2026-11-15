@@ -330,21 +330,27 @@ test('an upgrade from the change token: the first sweep reuses the stored size, 
 // A journal that cannot be read for what it is vouches for nothing: no
 // trusted figure, whatever the snapshot says, and a walk stores stale, as a
 // walk overlapped by a change did before the journal.
-test('a journal that is not a journal: nothing is trusted, and the sweep stores stale', async () => {
+test('a journal that is not a journal: nothing is trusted until the next walk, which replaces it', async () => {
   mkdirSync(root, { recursive: true });
   writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
   seedDir('nj-0', 1000);
   rmSync(snapFile, { force: true });
   await stemCache.usage(); // a trusted figure at a journal position
   assert.equal((await stemCache.storedUsage())?.fresh, true);
-  writeFileSync(journalFile, 'not a journal\n');
-  assert.equal((await stemCache.storedUsage())?.fresh, false);
-  assert.equal((await stemCache.storedUsage())?.stale, true);
-  const walks = stemCache._cacheWalksForTests();
-  await stemCache.headroomTracks(100 * GB);
-  assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the read walks');
-  await stemCache.sweep(100 * GB);
-  assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).stale, true, 'stored, flagged stale');
+  // What a crash can leave of it (an empty file), or another version's.
+  for (const bad of ['', 'not a journal\n']) {
+    writeFileSync(journalFile, bad);
+    assert.equal((await stemCache.storedUsage())?.fresh, false);
+    assert.equal((await stemCache.storedUsage())?.stale, true);
+    const walks = stemCache._cacheWalksForTests();
+    await stemCache.headroomTracks(100 * GB);
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the read walks');
+    // Left in place, it would vouch for nothing ever again: every read a walk.
+    assert.equal((await stemCache.storedUsage())?.fresh, true, 'the walk stored a trusted figure in a new journal');
+    await stemCache.headroomTracks(100 * GB);
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'and the next read needs no walk');
+    assert.match(readFileSync(journalFile, 'utf8'), /^subwave-stem-journal 1 \S+ 0\n/, 'dated 0: no snapshot stamps into trust');
+  }
   rmSync(journalFile, { force: true });
   rmSync(root, { recursive: true, force: true });
   rmSync(snapFile, { force: true });

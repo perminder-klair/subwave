@@ -16,7 +16,10 @@
 //   rename copies whatever reached the old file since its last read;
 // - anything that fails here returns null or false, and the caller treats the
 //   stored size as untrusted: a missing or unreadable journal never vouches
-//   for a figure (#2317).
+//   for a figure (#2317);
+// - a file there that is not a journal (empty or cut short by a crash, or
+//   another version's) is replaced by the next ensureJournal, dated 0, so it
+//   costs one walk rather than every read walking for good.
 // The old single-UUID change token (stem-cache-usage.changes, before #2317)
 // is removed when the journal is first created; nothing reads it any more.
 
@@ -59,29 +62,66 @@ export function _journalStepsForTests(fn: ((step: string) => Promise<void>) | nu
 
 /** The journal as it is now; null when it is absent or not a journal. */
 export async function readJournal(): Promise<JournalRead | null> {
+  const r = await inspectJournal();
+  return r.kind === 'ok' ? r.journal : null;
+}
+
+// What sits at the journal's path: a journal, nothing (or nothing this process
+// can read), or a file read whole that is not a journal (`bad`, with its inode).
+type Inspected = { kind: 'ok'; journal: JournalRead } | { kind: 'absent' } | { kind: 'bad'; ino: number };
+async function inspectJournal(): Promise<Inspected> {
   let fh;
   try {
     fh = await open(journalPath(), 'r');
   } catch {
-    return null;
+    return { kind: 'absent' };
   }
   try {
     const st = await fh.stat();
     const j = parseJournal(await fh.readFile('utf8'));
-    return j ? { ...j, ino: st.ino } : null;
+    return j ? { kind: 'ok', journal: { ...j, ino: st.ino } } : { kind: 'bad', ino: st.ino };
   } catch {
-    return null;
+    return { kind: 'absent' };
   } finally {
     await fh.close().catch(() => {});
   }
 }
 
+// A file at the journal's path that is not a journal: one a crash left empty
+// or cut short (it is only ever put in place whole, by a link or a rename), or
+// another version's. Nothing it holds vouches for a figure, and left there it
+// never would again: every read would walk, forever. So it is replaced, under
+// the trim lock (one replacer at a time, and never across a trim), with a new
+// journal dated 0, so no snapshot is stamped as predating it (that is only
+// for an upgrade): every snapshot is untrusted until the next walk stores one.
+async function replaceBadJournal(ino: number): Promise<void> {
+  if (!(await takeTrimLock())) return;
+  const target = journalPath();
+  const tmp = `${target}.${randomBytes(4).toString('hex')}.tmp`;
+  try {
+    const now = await inspectJournal();
+    if (now.kind !== 'bad' || now.ino !== ino) return;
+    await writeFile(tmp, headerLine(newSessionId(), 0), { flag: 'wx' });
+    await rename(tmp, target);
+  } catch {
+    /* left as it is: nothing is trusted, as before */
+  } finally {
+    await unlink(tmp).catch(() => {});
+    await rm(lockPath(), { force: true }).catch(() => {});
+  }
+}
+
 // Creates the journal when there is none, dated now (a snapshot written
-// before that predates it: stem-cache.ts stamps one from an upgrade). Null
-// when it can neither be read nor created.
+// before that predates it: stem-cache.ts stamps one from an upgrade), and
+// replaces a file there that is not a journal. Null when it can neither be
+// read nor created.
 export async function ensureJournal(): Promise<JournalRead | null> {
-  const there = await readJournal();
-  if (there) return there;
+  const there = await inspectJournal();
+  if (there.kind === 'ok') return there.journal;
+  if (there.kind === 'bad') {
+    await replaceBadJournal(there.ino);
+    return readJournal();
+  }
   const target = journalPath();
   const tmp = `${target}.${randomBytes(4).toString('hex')}.tmp`;
   let created = false;
