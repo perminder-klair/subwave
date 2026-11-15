@@ -27,6 +27,10 @@ import {
   type LlmBodyParamRow, type LlmLegId,
 } from './llmBodyParams';
 import {
+  REASONING_EFFORT_OPTIONS, hostedReasoningHint, reasoningEffortHiddenHint, reasoningEffortHint,
+  reasoningEffortShown, setReasoningEffort, type ReasoningEffort, type ReasoningLegView,
+} from './reasoningEffort';
+import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS, NowBanner,
   headerMap,
   type SectionProps, type LlmHeaderRow,
@@ -211,6 +215,38 @@ function BodyParamRowsEditor({ rows, onChange, idPrefix, keyPlaceholder, valuePl
 
 // Both request-body lists for one leg, shown for the openai-compatible
 // transport (openai-compatible, local or hosted, and locca) only.
+// The Default / Low / Medium / High control under a leg's Reasoning switch
+// (#2296). Shown only while reasoning is On, and only where the leg can
+// express a level (reasoningEffort.ts); elsewhere a hint points at Request
+// parameters when the leg has them.
+function ReasoningEffortField({ leg, view, on, value, setForm }: {
+  leg: LlmLegId;
+  view: ReasoningLegView;
+  on: boolean;
+  value: ReasoningEffort;
+  setForm: SectionProps['setForm'];
+}) {
+  if (!on) return null;
+  if (!reasoningEffortShown(view)) {
+    const hint = reasoningEffortHiddenHint(view);
+    return hint ? <div className="field-hint mt-2 max-w-[480px]">{hint}</div> : null;
+  }
+  return (
+    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+      <div>
+        <div className="text-[13px] font-bold">{leg === 'primary' ? 'Reasoning level' : 'Backup reasoning level'}</div>
+        <div className="field-hint mt-1 max-w-[440px]">{reasoningEffortHint(view)}</div>
+      </div>
+      <Seg
+        accent
+        value={value}
+        options={REASONING_EFFORT_OPTIONS.map(o => ({ id: o.id, label: o.label }))}
+        onChange={v => setForm(setReasoningEffort(leg, v as ReasoningEffort))}
+      />
+    </div>
+  );
+}
+
 function BodyParamsFields({ leg, bodyParams, toolCallBodyParams, setForm }: {
   leg: LlmLegId;
   bodyParams: LlmBodyParamRow[];
@@ -522,6 +558,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         toolCallBodyParams: bodyParamsPayload(form.llm.toolCallBodyParams),
         compatibleMode: form.llm.compatibleMode,
         reasoning: form.llm.reasoning,
+        reasoningEffort: form.llm.reasoningEffort,
         toolChoice: form.llm.toolChoice,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
         dailyTokenCap: form.llm.dailyTokenCap,
@@ -547,6 +584,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           toolCallBodyParams: bodyParamsPayload(form.llm.fallback.toolCallBodyParams),
           compatibleMode: form.llm.fallback.compatibleMode,
           reasoning: form.llm.fallback.reasoning,
+          reasoningEffort: form.llm.fallback.reasoningEffort,
           toolChoice: form.llm.fallback.toolChoice,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
@@ -1345,7 +1383,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
                   <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                     {form.llm.fallback.provider === 'openai-compatible' && effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) === 'hosted'
-                      ? 'Hosted compatible services control their own reasoning; this switch is ignored for this backup.'
+                      ? hostedReasoningHint(form.llm.fallback.model, true)
                       : 'Whether the backup model may emit a reasoning step. Off by default, like the primary.'}
                   </div>
                 </div>
@@ -1361,6 +1399,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   }
                 />
               </div>
+              <ReasoningEffortField
+                leg="fallback"
+                view={{ provider: form.llm.fallback.provider, model: form.llm.fallback.model, compatibleMode: effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) }}
+                on={form.llm.fallback.reasoning}
+                value={form.llm.fallback.reasoningEffort}
+                setForm={setForm}
+              />
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
                 <div>
@@ -1391,7 +1436,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="text-[13px] font-bold">Chain-of-thought</div>
             <div className="field-hint mt-1 max-w-[440px]">
               {form.llm.provider === 'openai-compatible' && effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) === 'hosted'
-                ? 'Hosted compatible services control their own reasoning; this switch is ignored for this connection. To turn a hosted model\'s thinking off, use Request parameters above.'
+                ? hostedReasoningHint(form.llm.model, false)
                 : <>When off, thinking-capable models skip their internal reasoning
               step (Ollama, Qwen3, Gemini, OpenAI o-series/gpt-5, Claude,
               DeepSeek). DJ scripts and structured picks are short, so thinking
@@ -1410,6 +1455,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, reasoning: v === 'on' } }))}
           />
         </div>
+        <ReasoningEffortField
+          leg="primary"
+          view={{ provider: form.llm.provider, model: form.llm.model, compatibleMode: effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) }}
+          on={form.llm.reasoning}
+          value={form.llm.reasoningEffort}
+          setForm={setForm}
+        />
 
         <div className="field mt-4">
           <Label>Max response size (tokens)</Label>
