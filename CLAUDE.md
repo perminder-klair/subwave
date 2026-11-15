@@ -41,7 +41,7 @@ The compose files sit at the repo root: `docker-compose.yml` (prod, with Caddy a
 
 ## Pull requests target `develop`
 
-Use `gh pr create --base develop`. `main` is the release branch, and `enforce-main-source.yml` fails any PR into it from anything but `develop` or release-please. Ignore the session preamble's "Main branch: main" line: it is computed locally and is wrong for this repo. The release PR (`develop` → `main`) follows `.claude/skills/subwave-release-pr/SKILL.md`.
+Use `gh pr create --base develop`. `main` is the release branch, and `enforce-main-source.yml` fails any PR into it from anything but `develop` or release-please. Ignore the session preamble's "Main branch: main" line: it is computed locally and is wrong for this repo. The release PR (`develop` → `main`) is merged with a merge commit, never squashed (CONTRIBUTING.md explains), and is cut with the `subwave-release-pr` skill, which now lives in the maintainers' shared skills repo.
 
 ## Architecture
 
