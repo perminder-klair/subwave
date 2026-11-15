@@ -144,6 +144,19 @@ router.post('/library/coverage/refresh', requireAdmin, async (_req, res) => {
   }
 });
 
+// The stale-vector notice's action (#2313): mark the vectors whose Sound: line
+// carries mood words a relabel-all moved, so the next tag run (or an Analyse run
+// that re-embeds) rebuilds just those. Marking only: nothing is embedded here.
+router.post('/library/vectors/mark-stale-sound', requireAdmin, async (_req, res) => {
+  try {
+    const marked = db.markForgottenSoundVectorsDirty();
+    coverage.countVectors();
+    res.json({ ok: true, marked, coverage: await coverage.get() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Tracks acoustic analysis threw on, worst and most recent first. `excluded`
 // counts the ones that have left every analysis scope (#1300).
 router.get('/library/analysis-failures', requireAdmin, (req, res) => {

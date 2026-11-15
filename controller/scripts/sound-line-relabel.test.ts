@@ -3,7 +3,8 @@
 // forgets the mood words it moves rather than marking the whole library. A new
 // track's first moods are not a move, though: its vector was built before it had
 // any, so they mark it, as the incremental branch does. A row whose vector does
-// carry moods still forgets.
+// carry moods still forgets, and the forgotten ones are counted for the operator's
+// stale-vector notice, whose action marks just those.
 //
 // A station under the 200-track calibration floor, where every mood pass is a
 // relabel-all. A real SQLite database and the real analysis pass, mood pass and
@@ -93,8 +94,13 @@ process.env.NAVIDROME_USER = 'test';
 process.env.NAVIDROME_PASS = 'test';
 delete process.env.ANALYZE_AUDIO_EMBEDDING;
 delete process.env.ANALYZE_VOCAL_ACTIVITY;
+// requireAdmin reads these at import time.
+process.env.ADMIN_USER = 'relabel-admin';
+process.env.ADMIN_PASS = 'relabel-pass';
+
 const db = await import('../src/music/library-db.js');
 const settings = await import('../src/settings.js');
+const coverage = await import('../src/music/library-coverage.js');
 const { phaseEmbed } = await import('../src/music/tag-library/embed.js');
 const { runAnalysisPass } = await import('../src/music/analyze.js');
 const { MIN_BASELINE_TRACKS } = await import('../src/music/audio-calibration.js');
@@ -102,6 +108,17 @@ const { MIN_BASELINE_TRACKS } = await import('../src/music/audio-calibration.js'
 await settings.load();
 await db.open({ embeddingDim: DIM, adoptStoredDim: true });
 
+const express = (await import('express')).default;
+const { listen: listenHttp } = await import('./test-utils/http.js');
+const { router: maintenance } = await import('../src/routes/library/maintenance.js');
+const app = express();
+app.use(express.json());
+app.use(maintenance);
+const { server: routes, url: routesUrl } = await listenHttp(app);
+routes.unref();
+const auth = `Basic ${Buffer.from('relabel-admin:relabel-pass').toString('base64')}`;
+const markStale = (headers: Record<string, string> = { authorization: auth }) =>
+  fetch(`${routesUrl}/library/vectors/mark-stale-sound`, { method: 'POST', headers });
 
 before(async () => {
   await settings.update({
@@ -177,3 +194,44 @@ test('a vocabulary edit followed by a re-analyze still marks nothing', async () 
   await settings.update({ moods: vocab } as never);
 });
 
+test('the stale-vector notice counts the forgotten vectors only when asked, and its action marks just those', async () => {
+  const forgotten = db.analysedIds().filter(id => builtMoods(id) === null).sort();
+  assert.ok(forgotten.length > 0);
+  // A vector from before migration 36 is unknown, not forgotten: never counted.
+  addTrack('legacy');
+  db.upsertTrackVector('legacy', textVector, 1999);
+  assert.equal(builtMoods('legacy'), undefined);
+
+  assert.equal((await coverage.get()).forgottenSoundVectors, null, 'the read path never counts');
+  // The library count recounts them first, so even a walk that fails (this fake
+  // is no Navidrome) leaves fresh figures.
+  await coverage.refresh();
+  const counted = await coverage.get();
+  assert.equal(counted.forgottenSoundVectors, forgotten.length);
+  assert.equal(counted.forgottenSoundQueued, 0);
+  assert.equal(counted.dirtyVectors, 0);
+  assert.ok(counted.vectorsCountedAt);
+
+  // An unrelated mark is counted as dirty and left alone by the action.
+  db.requireDb().prepare('UPDATE tracks SET text_vector_dirty = 1 WHERE id = ?').run('legacy');
+  assert.equal((await markStale({})).status, 401, 'admin only');
+  assert.deepEqual(dirty(), ['legacy']);
+  const res = await markStale();
+  assert.equal(res.status, 200);
+  const body = await res.json() as { marked: number; coverage: { forgottenSoundQueued: number; dirtyVectors: number } };
+  assert.equal(body.marked, forgotten.length);
+  assert.equal(body.coverage.forgottenSoundQueued, forgotten.length, 'the answer carries the recount');
+  assert.equal(body.coverage.dirtyVectors, forgotten.length + 1);
+  assert.deepEqual(dirty(), [...forgotten, 'legacy'].sort());
+  assert.equal(db.markForgottenSoundVectorsDirty(), 0, 'a second press marks nothing');
+  assert.deepEqual(db.vectorFreshnessCounts(), {
+    forgottenSound: forgotten.length, forgottenSoundQueued: forgotten.length, dirty: forgotten.length + 1,
+  });
+
+  await reembedMarked();
+  assert.equal(drain().length, forgotten.length + 1);
+  coverage.countVectors();
+  const after = await coverage.get();
+  assert.equal(after.forgottenSoundVectors, 0, 'rebuilt vectors carry their words again');
+  assert.equal(after.dirtyVectors, 0);
+});

@@ -312,6 +312,50 @@ export function markVectorIfMoodsLandedElseForget(id: string): void {
   forgetMoved(id, s, 'moods');
 }
 
+// A vector with a forgotten Sound: part (forgetVectorSoundIfMoved): a relabel-all
+// moved words it was built from, so its Sound: line carries the old ones (#2313).
+// NULL (a vector from before migration 36) is not counted: that is every vector on
+// an upgraded station, and the upgrade must not raise a notice. CASE, so an
+// unreadable value never reaches json_type.
+const FORGOTTEN_SOUND_SQL = `CASE WHEN json_valid(t.text_vector_sound)
+  THEN json_type(t.text_vector_sound, '$.moods') = 'null' OR json_type(t.text_vector_sound, '$.measured') = 'null'
+  ELSE 0 END`;
+
+export interface VectorFreshnessCounts {
+  // Vectors with a forgotten Sound: part, and how many of them are already marked.
+  forgottenSound: number;
+  forgottenSoundQueued: number;
+  // Every vector marked for the next phaseEmbed, for whatever reason.
+  dirty: number;
+}
+
+// One scan of the vector-carrying rows. Library coverage counts this only in
+// refresh(), never on the read path (#1570).
+export function vectorFreshnessCounts(): VectorFreshnessCounts {
+  const row = requireDb()
+    .prepare(
+      `SELECT COALESCE(SUM(${FORGOTTEN_SOUND_SQL}), 0) AS forgotten,
+              COALESCE(SUM((${FORGOTTEN_SOUND_SQL}) AND t.text_vector_dirty = 1), 0) AS queued,
+              COALESCE(SUM(t.text_vector_dirty = 1), 0) AS dirty
+         FROM tracks t JOIN track_vectors v ON v.id = t.id`,
+    )
+    .get() as { forgotten: number; queued: number; dirty: number };
+  return { forgottenSound: row.forgotten, forgottenSoundQueued: row.queued, dirty: row.dirty };
+}
+
+// The operator's answer to that notice: mark just those vectors, so the next
+// phaseEmbed (a tag run, or an Analyse run that re-embeds) rebuilds them from the
+// row's words now. Returns how many it marked.
+export function markForgottenSoundVectorsDirty(): number {
+  return requireDb()
+    .prepare(
+      `UPDATE tracks AS t SET text_vector_dirty = 1
+        WHERE t.text_vector_dirty = 0 AND (${FORGOTTEN_SOUND_SQL})
+          AND EXISTS (SELECT 1 FROM track_vectors WHERE id = t.id)`,
+    )
+    .run().changes;
+}
+
 // Existing vectors whose source text changed: an era edit, (opt-in) the track's
 // Last.fm tags, a measurement that moved its Sound: words, or migration 32's tail
 // verdict. They remain in the KNN index until phaseEmbed successfully replaces them.
