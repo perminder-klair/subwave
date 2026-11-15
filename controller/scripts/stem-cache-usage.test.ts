@@ -451,6 +451,60 @@ test('an append whose journal is lost and created again before its check still l
   }
 });
 
+// A state dir on a filesystem without hard links (FAT/exFAT, some FUSE and SMB
+// mounts) could never create the journal, which is put in place by a link: no
+// figure was ever trusted again, and every read walked the cache, for good.
+// It is renamed into place there instead, under the trim lock, so two
+// processes creating it at once end with one journal holding both's lines.
+test('a filesystem without hard links still gets a journal, and reads trust it after one walk', async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  journal._linkForTests(async () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); });
+  try {
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+    seedDir('nl-0', 1000);
+    seedDir('nl-1', 1000);
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
+    const walks = stemCache._cacheWalksForTests();
+    await stemCache.headroomTracks(100 * GB);
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'one walk');
+    assert.ok(existsSync(journalFile), 'the journal is created');
+    assert.equal((await stemCache.storedUsage())?.fresh, true);
+    await stemCache.headroomTracks(100 * GB);
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'and the next read needs none');
+    assert.equal(await dropOne('nl-0'), 'adjusted');
+    assert.equal((await stemCache.storedUsage())?.bytes, 1000);
+    // Two writers creating it at once: the first is held at its link while the
+    // second creates the journal and writes to it. The first must then find
+    // that journal, not put its own over it and lose the second's line.
+    let release!: () => void;
+    const held = new Promise<void>(r => { release = r; });
+    let links = 0;
+    journal._linkForTests(async () => {
+      links += 1;
+      if (links === 1) await held;
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+    });
+    rmSync(journalFile, { force: true });
+    const [first, second] = [0, 1].map(() => policy.closeLine(journal.newSessionId(), 'nl-1'));
+    const firstDone = journal.appendLines([first]);
+    while (links === 0) await new Promise(r => setImmediate(r));
+    assert.equal(await journal.appendLines([second]), true);
+    release();
+    assert.equal(await firstDone, true);
+    const j = await journal.readJournal();
+    for (const l of [first, second]) assert.ok(j?.entries.some(e => e.line === l), 'a line reported written is in the journal');
+  } finally {
+    journal._linkForTests(null);
+    rmSync(journalFile, { force: true });
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+  }
+});
+
 test('a stale snapshot is still reported, flagged, and never walked for', async () => {
   writeSnap({ bytes: 80 * GB, dirs: 4000 });
   await stemCache.markUsageStale();

@@ -4,7 +4,8 @@
 // Two processes append to it (the controller's pick-time separations, purge
 // and sweep; the tagger child's forgetStems and id rotation), so:
 // - it is created whole or not at all: the header goes in a temp file that is
-//   hard-linked into place, which fails if another process got there first;
+//   hard-linked into place, which fails if another process got there first
+//   (where hard links fail, it is renamed into place under the trim lock);
 // - an append opens the file without O_CREAT, so a lost journal is never
 //   recreated without its header, and writes each batch of lines in one
 //   O_APPEND write. If the path no longer names the inode it wrote to, a trim
@@ -132,12 +133,13 @@ export async function ensureJournal(): Promise<JournalRead | null> {
   try {
     await writeFile(tmp, headerLine(newSessionId(), Date.now()), { flag: 'wx' });
     try {
-      await link(tmp, target);
+      await linkFile(tmp, target);
       created = true;
     } catch (err) {
       // EEXIST: another process created it first, or a file that is not a
-      // journal sits there; either way it is read below.
-      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+      // journal sits there; either way it is read below. Anything else is a
+      // filesystem without hard links (FAT/exFAT, some FUSE and SMB mounts).
+      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') created = await renameIntoPlace(tmp, target);
     }
   } catch {
     /* unwritable: read below, and null if nothing is there */
@@ -146,6 +148,37 @@ export async function ensureJournal(): Promise<JournalRead | null> {
   }
   if (created) await rm(legacyTokenPath(), { force: true }).catch(() => {});
   return readJournal();
+}
+
+// Where hard links fail, the journal is renamed into place instead, which
+// replaces whatever is there, so only while nothing is, and under the trim
+// lock: of two processes creating it at once, the second finds the first's.
+// Every holder of that lock checks what is at the path before replacing it,
+// so no journal in use is replaced this way. Waits a moment for a holder
+// (a trim takes milliseconds) rather than leave its caller with none.
+async function renameIntoPlace(tmp: string, target: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await takeTrimLock()) {
+      try {
+        if ((await inspectJournal()).kind !== 'absent') return false;
+        await rename(tmp, target);
+        return true;
+      } catch {
+        return false;
+      } finally {
+        await rm(lockPath(), { force: true }).catch(() => {});
+      }
+    }
+    await new Promise(r => setTimeout(r, 20));
+    if ((await inspectJournal()).kind !== 'absent') return false;
+  }
+  return false;
+}
+
+// Test seam: a filesystem without hard links.
+let linkFile: (from: string, to: string) => Promise<void> = link;
+export function _linkForTests(fn: ((from: string, to: string) => Promise<void>) | null): void {
+  linkFile = fn ?? link;
 }
 
 // Appends whole lines, creating the journal first if there is none. False
