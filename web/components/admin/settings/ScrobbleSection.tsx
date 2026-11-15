@@ -14,6 +14,10 @@ import {
   type FormState, type SettingsData, type SectionProps, type ScrobbleLastfmForm, type ScrobbleListenbrainzForm,
 } from './shared';
 import { lastfmCardStatus } from './lastfm-card-status';
+import { settingsHref } from './settings-link';
+
+// Library tagger → Enrichment, opened past its Advanced disclosure.
+const ENRICHMENT_HREF = settingsHref('library', 'enrichment');
 
 interface ScrobbleCardsProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -173,7 +177,7 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
             <span className="mt-1.5 block">
               Then open Settings →{' '}
               <strong className="text-ink">
-                <Link href="/admin/settings?section=library" className="underline">
+                <Link href={ENRICHMENT_HREF} className="underline">
                   Library tagger
                 </Link>
               </strong>{' '}
@@ -199,7 +203,7 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
                 The key is saved, but enrichment is told to skip Last.fm, so{' '}
                 <strong>no Last.fm tags will be fetched</strong>. Set Settings →{' '}
                 <strong>
-                  <Link href="/admin/settings?section=library" className="underline">
+                  <Link href={ENRICHMENT_HREF} className="underline">
                     Library tagger
                   </Link>
                 </strong>{' '}

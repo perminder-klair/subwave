@@ -43,6 +43,7 @@ import {
 } from './settings/registry';
 import { Advanced, SectionChromeProvider } from './settings/section-chrome';
 import { SettingsSearch, type SettingsJump } from './settings/SettingsSearch';
+import { settingsJumpFromQuery } from './settings/settings-link';
 import { TtsSection } from './settings/TtsSection';
 import { DjBehaviourSection } from './settings/DjBehaviourSection';
 import { LlmSection } from './settings/LlmSection';
@@ -459,6 +460,19 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
     };
     window.requestAnimationFrame(settle);
   }, [sections]);
+
+  // `?section=…&card=…` deep-links to one card (settings-link.ts), opening the
+  // section's Advanced disclosure when the card sits behind it. Once per URL:
+  // `sections` settling after the first render must not scroll the page again.
+  const jumpedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    const jump = settingsJumpFromQuery(searchParams.get('section'), searchParams.get('card'));
+    if (!jump || !sections.some(s => s.id === jump.section)) return;
+    const key = searchParams.toString();
+    if (jumpedForRef.current === key) return;
+    jumpedForRef.current = key;
+    jumpTo(jump);
+  }, [searchParams, sections, jumpTo]);
 
   const chrome = useMemo(() => ({
     saveSlot,
