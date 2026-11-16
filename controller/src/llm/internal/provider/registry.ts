@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel } from './capabilities.js';
+import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel, openRouterReasoningEffort } from './capabilities.js';
 import { openaiCompatibleGateway } from '../../../schemas/providers.js';
 import { resolveCompatibleMode } from './compat-detect.js';
 import { llmBodyParamsBody, llmToolCallOverrides } from '../../../settings/compat-params.js';
@@ -387,7 +387,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   // repeat_penalty and num_ctx are captured at construction, so both key the
   // cache or an edit reads as ignored until the controller restarts (#1327).
   const apiKey = pinnedApiKey(cfg);
-  const sig = `${cfg.provider}|${id}|k${credentialSig(apiKey)}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink || overrideNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}|bp${bodyParamsSig(cfg)}`;
+  const sig = `${cfg.provider}|${id}|k${credentialSig(apiKey)}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink || overrideNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}|bp${bodyParamsSig(cfg)}|re${openRouterReasoningEffort(cfg) ?? ''}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -438,9 +438,13 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // for the reasoning-mandatory families — see reasoningMandatoryModel. A
       // model outside that list that rejects `enabled:false` is retried at the
       // floor by openRouterFetch.
+      // An operator's level (llm.reasoningEffort, #2296) is construction-time
+      // too, so it keys the cache sig (`re…`); 'default' builds exactly the
+      // instance it always did.
+      const effort = openRouterReasoningEffort(cfg);
       model = suppressReasoning
         ? provider(id, { extraBody: { reasoning: reasoningMandatoryModel(id) ? mandatoryReasoningFloor() : { enabled: false } } })
-        : provider(id);
+        : effort ? provider(id, { extraBody: { reasoning: { effort } } }) : provider(id);
       break;
     }
     case 'gateway': {

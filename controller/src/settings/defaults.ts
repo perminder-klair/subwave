@@ -26,6 +26,7 @@ import {
   type JinglePlacement,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
+import type { ReasoningEffort } from '../schemas/reasoning.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
 import {
   AAC_BITRATES,
@@ -456,6 +457,10 @@ export const DEFAULTS = {
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
     reasoning: false,
+    // The level "On" asks for, where the leg can express one
+    // (schemas/reasoning.ts). 'default' is the provider's own "on", exactly as
+    // before the field existed (#2296).
+    reasoningEffort: 'default' as ReasoningEffort,
     // How the structured-output paths force a tool call. 'required' is the
     // reliable path for local models that ignore JSON mode. Switch to 'auto' ONLY
     // if your server crashes on tool_choice:"required" — recent vLLM implements it
@@ -597,6 +602,7 @@ export const DEFAULTS = {
       toolCallBodyParams: [] as { key: string; value: string }[],
       compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
       reasoning: false,
+      reasoningEffort: 'default' as ReasoningEffort,
       toolChoice: 'required',
       numCtx: 16384,
       repeatPenalty: 1.15,

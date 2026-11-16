@@ -144,6 +144,8 @@ export interface LlmFallbackForm {
   toolCallBodyParams: { key: string; value: string }[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // The level On asks for, per leg (#2296); read only where the leg can express one.
+  reasoningEffort: 'default' | 'low' | 'medium' | 'high';
   // Per-leg, like the primary's: a swap moves it between the legs.
   toolChoice: string;
   discoverySteps: number;
@@ -168,6 +170,8 @@ export interface LlmForm {
   toolCallBodyParams: { key: string; value: string }[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // The level On asks for, per leg (#2296); read only where the leg can express one.
+  reasoningEffort: 'default' | 'low' | 'medium' | 'high';
   toolChoice: string;
   pickerAgent: boolean;
   trackSelection: 'agentic' | 'shortlist';

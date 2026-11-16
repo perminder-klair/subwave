@@ -1,5 +1,5 @@
 import { normalizeStationLocale } from '../../../lib/format';
-import { normalizeGeminiSafety, SHORTLIST_PASSES_DEFAULT, TRANSITION_EFFECTS, ttsVoiceLevellingSchema, type TransitionEffect } from '../../../lib/schemas.generated';
+import { normalizeGeminiSafety, normalizeReasoningEffort, SHORTLIST_PASSES_DEFAULT, TRANSITION_EFFECTS, ttsVoiceLevellingSchema, type TransitionEffect } from '../../../lib/schemas.generated';
 import type { FormState, SettingsData, LlmHeaderRow } from './shared';
 import { bodyParamRows } from './llmBodyParams';
 
@@ -225,6 +225,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       toolCallBodyParams: bodyParamRows(v.llm?.toolCallBodyParams),
       compatibleMode: compatibleModeOf(v.llm?.compatibleMode),
       reasoning: !!v.llm?.reasoning,
+      reasoningEffort: normalizeReasoningEffort(v.llm?.reasoningEffort),
       toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
       pickerAgent: !!v.llm?.pickerAgent,
       trackSelection: v.llm?.trackSelection === 'shortlist' ? 'shortlist' : 'agentic',
@@ -271,6 +272,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
         toolCallBodyParams: bodyParamRows(v.llm?.fallback?.toolCallBodyParams),
         compatibleMode: compatibleModeOf(v.llm?.fallback?.compatibleMode),
         reasoning: !!v.llm?.fallback?.reasoning,
+        reasoningEffort: normalizeReasoningEffort(v.llm?.fallback?.reasoningEffort),
         toolChoice: v.llm?.fallback?.toolChoice === 'auto' ? 'auto' : 'required',
       },
     },
