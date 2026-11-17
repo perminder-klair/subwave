@@ -587,7 +587,10 @@ export function parseOutcrawlResponse(data: unknown): SearchResponse {
 
 // SpecStream backend. Keyed via the shared settings.search.apiKey /
 // SEARCH_API_KEY slot, like Outcrawl. Anything but an `ss_` key is refused
-// here and reads as not ready in searchReady(). recency is not sent.
+// here and reads as not ready in searchReady(). recency is not sent:
+// /v1/web-search takes no time-window parameter, only after:/before: date
+// operators written into the query itself, and rewriting the caller's query
+// would change what it asked for.
 export async function specstreamSearch(query: string): Promise<SearchResponse> {
   const apiKey = searchKeySlot().key;
   if (!apiKey) throw new Error('SpecStream API key not configured');
