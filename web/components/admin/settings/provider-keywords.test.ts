@@ -33,7 +33,7 @@ test('the hand-written provider lists name every web-search backend', () => {
   const manualItem = manual.match(/<strong>Web search<\/strong>[\s\S]*?<\/li>/)?.[0] ?? '';
   assert.ok(header && manualItem, 'both passages located');
   for (const p of SEARCH_PROVIDER_CATALOG) {
-    const name = p.label.split(' ')[0];
+    const name = p.label.split(' ')[0] ?? p.label;
     assert.ok(header.includes(name), `Settings → Web search header names ${name}`);
     assert.ok(manualItem.includes(name), `manual Admin Settings page names ${name}`);
   }
