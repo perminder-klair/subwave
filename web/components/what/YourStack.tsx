@@ -29,6 +29,7 @@ const SEAMS = [
       'Every pick, every intro, every weather read goes through one provider-agnostic seam. The default is a local Ollama box: private, no API key, nothing leaves the house. Prefer a hosted model, an aggregator with one key for every vendor, or your own OpenAI-compatible server (llama.cpp, vLLM, LM Studio)? The call sites never name a provider, so switching is a single dropdown. A daily token budget caps what a hosted model can spend; hit it, and the music keeps playing without the chatter.',
     fits: [
       'Ollama',
+      'locca',
       'Anthropic',
       'OpenAI',
       'Google',

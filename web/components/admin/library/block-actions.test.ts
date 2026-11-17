@@ -81,6 +81,10 @@ test('restamp: cached rows are re-marked from one check, never invalidated', asy
   assert.equal(s.calls.length, 1);
   assert.equal(s.calls[0]?.path, '/library/blocklist/check');
   assert.deepEqual(JSON.parse(String(s.calls[0]?.init?.body)).tracks.map((t: { id: string }) => t.id), ['a', 'b']);
+  // The title rides along, so an entry that followed its file to a new id
+  // still marks the row (the controller's track name tier needs all three).
+  assert.deepEqual(JSON.parse(String(s.calls[0]?.init?.body)).tracks[0],
+    { id: 'a', title: 'Blindspot', artist: 'Bomb the Bass', album: 'Unknown Territory' });
   const rows = rowsOf(qc.getQueryData(libraryKeys.recent()));
   assert.deepEqual(rows.find(r => r.id === 'a')?.blockedBy, mark);
   assert.equal(rows.find(r => r.id === 'b')?.blockedBy, null);

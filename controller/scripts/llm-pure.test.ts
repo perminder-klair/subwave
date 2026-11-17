@@ -288,6 +288,46 @@ async function main() {
     assert.equal(isModelUnavailable({ message: 'unknown model: mistral-tiny' }), true);
     assert.equal(isModelUnavailable({ message: 'this model has been deprecated' }), true);
   });
+  // The APICallError @ai-sdk/google builds: Google's message, the raw body, and
+  // the parsed body whose `error.code` is the numeric HTTP status.
+  const geminiError = (message: string, code = 404, status = 'NOT_FOUND') => {
+    const body = { error: { code, message, status } };
+    return { statusCode: code, message, responseBody: JSON.stringify(body), data: body, isRetryable: false };
+  };
+  await test('Gemini names the model as a resource: "models/<id> is not found" (#2101)', () => {
+    for (const message of [
+      'models/gemini-test-bad is not found for API version v1beta, or is not supported for generateContent.',
+      'models/gemini-test-bad is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.',
+      // An id that exists but cannot generate (an embedding model) gets the same sentence.
+      'models/text-embedding-004 is not found for API version v1beta, or is not supported for streamGenerateContent.',
+    ]) {
+      const e = geminiError(message);
+      for (const error of [e, { lastError: e }, { cause: { message } }]) {
+        assert.equal(isModelUnavailable(error), true, message);
+        assert.equal(isTransient(error), false, message);
+      }
+      assert.equal(isUnreachable(e), false);
+      assert.equal(isQuotaOrAuthError(e), false);
+    }
+    // The resource form takes the branch's other verdicts, and the spaced form "is not found".
+    assert.equal(isModelUnavailable({ message: 'models/gemini-1.5-pro has been deprecated' }), true);
+    assert.equal(isModelUnavailable({ message: 'model gpt-x is not found' }), true);
+  });
+  await test('a Gemini NOT_FOUND or a 400 naming models/<id> without a gone verdict does NOT classify', () => {
+    for (const message of [
+      // Google's generic NOT_FOUND: the bare 404 by another name.
+      'Requested entity was not found.',
+      'cachedContents/abc123 is not found', 'File files/abc123 is not found',
+      'the models/ directory is not found',
+      'model gemini-2.5-flash: cached content cachedContents/abc is not found',
+    ]) assert.equal(isModelUnavailable(geminiError(message)), false, message);
+    // Gemma on the Gemini API: a feature this call asked for, not a missing model.
+    for (const message of [
+      'Developer instruction is not enabled for models/gemma-3-27b-it',
+      'Function calling is not enabled for models/gemma-3-27b-it',
+      'JSON mode is not enabled for models/gemma-3-27b-it',
+    ]) assert.equal(isModelUnavailable(geminiError(message, 400, 'INVALID_ARGUMENT')), false, message);
+  });
   await test('retirement/removal wording requires model context, not another missing resource', () => {
     for (const message of [
       'The requested API endpoint has been removed',

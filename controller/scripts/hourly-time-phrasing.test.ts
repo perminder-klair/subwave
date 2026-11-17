@@ -18,6 +18,7 @@ const { getClockContext } = await import('../src/context.js');
 const { nextHourlyTimeClause } = await import('../src/llm/internal/prompts/scripts.js');
 const settings = await import('../src/settings.js');
 const { generateHourlyTime, buildContextLines } = await import('../src/llm/dj.js');
+const { ANGLES } = await import('../src/llm/internal/prompts/context.js');
 
 const clockAt = (hour: number, minute: number) => ({
   spokenHour: 'six in the evening',
@@ -137,6 +138,13 @@ test('production hourly checks override weather-inviting persona instructions', 
   assert.match(system, /For this hourly time check, do not mention weather or outdoor conditions/);
   assert.ok(system.includes("Reads the weather like he's looked out the window"));
   assert.ok(system.indexOf('For this hourly time check') > system.indexOf("Reads the weather like he's looked out the window"));
+});
+
+// The ban above overrides tone, but a tone that asks for the dark wins anyway
+// (#2056), so no hourly tone may ask for light, dark or weather.
+test('no hourly tone mentions light, dark, night, sky, seasons, weather or the outdoors', () => {
+  const banned = /\b(dark\w*|daylight|twilight|starlight|lights?|sun(light|shine|ny|sets?|rises?|down)?|sky|skies|weather|seasons?|seasonal|(mid|to|over)?night\w*|dusk|dawn|spring|summer|autumn|winter|rain\w*|snow\w*|frost\w*|fog\w*|storm\w*|cloud\w*|windy|moon\w*|outside|outdoors?)\b/i;
+  assert.deepEqual(ANGLES.hourly.filter((tone) => banned.test(tone)), []);
 });
 
 // The same ban applies whether weather is known, unavailable, or missing entirely.

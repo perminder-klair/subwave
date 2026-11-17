@@ -197,7 +197,8 @@ export function SystemPromptModal({
               <code>{'{name}'}</code> · <code>{'{soul}'}</code> · <code>{'{station}'}</code> ·{' '}
               <code>{'{location}'}</code> · <code>{'{language}'}</code>. <code>{'{location}'}</code> is the
               station&rsquo;s on-air location, not the weather coordinates; drop it if you never
-              want the DJ to name a place. Most stations stay on the built-in default.
+              want the DJ to say where the station is, and the agents and guest exchanges stop
+              naming it too. Most stations stay on the built-in default.
             </p>
             <div className="grid gap-2">
               {row({

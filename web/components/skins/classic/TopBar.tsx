@@ -15,6 +15,8 @@ export interface TopBarProps {
   /** Optional — when provided, the show + host line becomes a button that
    *  opens the Schedule drawer. Omitted on Landing where there's no player. */
   onOpenSchedule?: () => void;
+  /** The stage is split for lyrics (AmbientLyrics); the bar says so from lg. */
+  lyricsLive?: boolean;
 }
 
 export default memo(function TopBar({
@@ -24,6 +26,7 @@ export default memo(function TopBar({
   djName,
   activeShow,
   onOpenSchedule,
+  lyricsLive = false,
 }: TopBarProps) {
   const tagline = buildTagline(context);
   const showName = activeShow?.name || null;
@@ -33,7 +36,7 @@ export default memo(function TopBar({
       // viewport-fit=cover lets the header extend under the iPhone notch. The
       // left/right max() against the baseline gutter stops landscape on a
       // notched phone clipping the wordmark.
-      className="player-topbar absolute top-0 right-0 left-0 z-30 flex flex-col gap-1 border-b border-ink bg-bg/55 pt-[calc(env(safe-area-inset-top)_+_0.625rem)] pr-[max(1rem,env(safe-area-inset-right))]
+      className="player-topbar absolute top-0 right-0 left-0 z-30 flex flex-col gap-1 border-b border-ink bg-[var(--topbar-fill)] pt-[calc(env(safe-area-inset-top)_+_0.625rem)] pr-[max(1rem,env(safe-area-inset-right))]
         pb-2.5 pl-[max(1rem,env(safe-area-inset-left))]
         backdrop-blur-xl backdrop-saturate-150
         sm:pt-[calc(env(safe-area-inset-top)_+_0.875rem)] sm:pr-[max(2rem,env(safe-area-inset-right))]
@@ -91,6 +94,12 @@ export default memo(function TopBar({
           )}
         </div>
         <div className="flex shrink-0 items-center">
+          {lyricsLive && (
+            <span className="v3-caption mr-5 hidden items-center gap-1.5 font-bold text-vermilion lg:inline-flex">
+              <span aria-hidden="true" className="size-1.5 bg-vermilion" />
+              Lyrics
+            </span>
+          )}
           <ThemeSwitcher variant="player" />
         </div>
       </div>

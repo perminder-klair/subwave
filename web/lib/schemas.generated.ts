@@ -317,6 +317,90 @@ export const skipBodySchema = z.preprocess(
 
 export type SkipBody = z.infer<typeof skipBodySchema>;
 
+// ─── from controller/src/schemas/file-format.ts ──────────────────────────
+
+// The playing file's own format on the Dash (GET /now-playing/file).
+//
+// Constants only. The controller backs a failed Navidrome lookup off for this
+// long, and the Dash waits the same minute before it asks again, so the one
+// number lives here and reaches the web through the schema mirror rather than
+// as a copy that can drift.
+
+/** A failed lookup is not retried before this: a Dash polling a down
+ *  Navidrome must cost one call a minute, not twenty. */
+export const FILE_FORMAT_RETRY_MS = 60_000;
+
+// ─── from controller/src/schemas/hosted.ts ───────────────────────────────
+
+// Hosted mode (SUBWAVE_HOSTED): the rules a SUB/WAVE Cloud station shares
+// between the controller and the web admin. The controller reads the env
+// through util/env.ts with these parsers and enforces the rules on every save
+// (setup/hosted.ts); the web's server pages read the same env through the
+// generated mirror (web/lib/hosted.ts) to decide what to show. One parser per
+// variable, so the two sides can never read one value two ways.
+//
+// Each parser takes the raw, non-empty env string; an unset or empty variable
+// never reaches it (util/env.ts and web/lib/hosted.ts treat that as "unset").
+
+
+const HOSTED_FLAG_ON = ['1', 'true', 'yes', 'on'] as const;
+const HOSTED_FLAG_OFF = ['0', 'false', 'no', 'off'] as const;
+
+/** SUBWAVE_HOSTED: on or off. Any other word is malformed, never "on". */
+export const hostedFlagSchema = z
+  .string()
+  .transform((v) => v.trim().toLowerCase())
+  .pipe(z.enum([...HOSTED_FLAG_ON, ...HOSTED_FLAG_OFF], { error: 'is not one of 1/true/yes/on or 0/false/no/off' }))
+  .transform((v) => (HOSTED_FLAG_ON as readonly string[]).includes(v));
+
+/**
+ * The lowest stream ceiling a station can have. MP3 is always served and its
+ * lowest bitrate is 64 (SETTINGS_MP3_BITRATES, pinned by hosted-mode.test.ts),
+ * so a ceiling under it could not be honoured: the MP3 mount would air above it.
+ */
+export const HOSTED_MIN_BITRATE = 64;
+const HOSTED_MAX_BITRATE_LIMIT = 10_000;
+
+/**
+ * SUBWAVE_MAX_BITRATE: this station's stream ceiling, whole kbps. An
+ * unpublished hosting ceiling the box agent sets to guard the box's shared
+ * port, not a plan limit (plans sell listening hours).
+ *
+ * The box's listener ceiling (SUBWAVE_LISTENER_CAP) has no parser here on
+ * purpose: Icecast enforces it through the ICECAST_MAX_CLIENTS the box agent
+ * sets, and nothing in the controller or the admin reads or shows it.
+ */
+export const hostedMaxBitrateSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^\d+$/, 'is not a whole number of kbps'))
+  .transform(Number)
+  .pipe(z
+    .number()
+    .int()
+    .min(HOSTED_MIN_BITRATE, `must be at least ${HOSTED_MIN_BITRATE} kbps, MP3's lowest bitrate`)
+    .max(HOSTED_MAX_BITRATE_LIMIT, `must be at most ${HOSTED_MAX_BITRATE_LIMIT} kbps`));
+
+/**
+ * SUBWAVE_MUSIC_UPLOAD_URL / SUBWAVE_MUSIC_LIBRARY_URL: https only, so a stray
+ * value can't become a javascript: link on the music source page.
+ */
+export const hostedHttpsUrlSchema = z
+  .string()
+  .transform((v) => v.trim())
+  .pipe(z.string().regex(/^https:\/\/[^\s"'<>]+$/, 'is not an https URL'));
+
+/**
+ * The engines a persona or jingle voice slot may pin on a hosted station: the
+ * station default (`inherit`) and the two local engines the box runs, plus the
+ * brain's cloud voice when the station itself speaks through it (premium).
+ * Heavy engines aren't on hosted boxes, and a cloud pin on a base station would
+ * need a key of the owner's own, which hosted mode doesn't store.
+ */
+export function hostedPersonaEngines(defaultEngine: unknown): string[] {
+  return ['inherit', 'kokoro', 'piper', ...(defaultEngine === 'cloud' ? ['cloud'] : [])];
+}
+
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 
 // Shared imaging schemas — sfx, beds, jingles and clone voices, one contract in
@@ -522,10 +606,23 @@ export function manualTagSchema(ctx: ManualTagContext) {
 /** Floor for a plausible recording year. Mirrors musicbrainz.ts MIN_YEAR. */
 export const ORIGINAL_YEAR_MIN = 1900;
 
+/** The latest plausible recording year: next year (a pre-release), in UTC.
+ *  Read per call, not at module load, so it moves with the calendar. One window
+ *  for every year an operator types: the per-track override below, the Era
+ *  tab's one-year decision (eraOverrideSchema) and its web inputs. */
+export function originalYearMax(now: Date = new Date()): number {
+  return now.getUTCFullYear() + 1;
+}
+
+/** A whole year inside [ORIGINAL_YEAR_MIN, originalYearMax()]. */
+export function isValidOriginalYear(n: unknown, now: Date = new Date()): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= ORIGINAL_YEAR_MIN && n <= originalYearMax(now);
+}
+
 export function originalYearSchema() {
   // Per request, not at module load: a schema frozen at boot starts refusing
   // next January.
-  const max = new Date().getUTCFullYear() + 1;
+  const max = originalYearMax();
   return z.object({
     // Same wording and blank-string refusal as manualTagSchema: one editor
     // posts to both routes.
@@ -637,6 +734,105 @@ export interface SceneReference {
    *  all it had — NOT a claim that the filter now matches no tracks. */
   remaining: string[];
 }
+
+// POST /library/era/override: the Era tab's decision for one album. The album
+// is named as { album, albumArtist? } and checked by the route (which keys it
+// and refuses an unscanned album); this owns the decision and its year.
+export const ERA_VERDICTS = ['trusted', 'year', 'suspect'] as const;
+/** The three ways out of the Era list (era_override.verdict). */
+export type EraVerdict = (typeof ERA_VERDICTS)[number];
+
+export function eraOverrideSchema() {
+  return z.object({
+    album: z.unknown(),
+    albumArtist: z.unknown().optional(),
+    verdict: z.unknown().transform((raw, c) => {
+      if (raw === null || (typeof raw === 'string' && (ERA_VERDICTS as readonly string[]).includes(raw))) {
+        return raw as EraVerdict | null;
+      }
+      c.addIssue({ code: 'custom', message: "verdict must be 'trusted', 'year', 'suspect' or null" });
+      return z.NEVER;
+    }),
+    year: z.unknown().optional(),
+  }).transform((b, c) => {
+    if (b.verdict !== 'year') return { ...b, year: null };
+    if (!isValidOriginalYear(b.year)) {
+      c.addIssue({
+        code: 'custom',
+        path: ['year'],
+        message: `year must be a whole year between ${ORIGINAL_YEAR_MIN} and ${originalYearMax()}`,
+      });
+      return z.NEVER;
+    }
+    return { ...b, year: b.year };
+  });
+}
+
+// ─── from controller/src/schemas/lyrics.ts ───────────────────────────────
+
+// Shared lyrics shapes: the public `GET /lyrics/current` payload, its query,
+// and the operator's per-track timing offset (`PUT /lyrics/offsets/:trackId`).
+// Mirrored into the web bundle, so the player and the controller read one
+// definition of each and one set of offset bounds.
+
+// The offset is a correction for a lyric file that is out of step with its
+// audio. Thirty seconds either way covers a mistimed LRC; anything past that is
+// a wrong file, not a timing fault.
+export const LYRIC_OFFSET_MIN_MS = -30_000;
+export const LYRIC_OFFSET_MAX_MS = 30_000;
+
+// Positive advances the highlighting (lines appear sooner), negative delays it.
+export const lyricOffsetMsSchema = z
+  .number({ error: 'offsetMs must be a number' })
+  .int('offsetMs must be a whole number of milliseconds')
+  .min(LYRIC_OFFSET_MIN_MS, `offsetMs must be ${LYRIC_OFFSET_MIN_MS} to ${LYRIC_OFFSET_MAX_MS}`)
+  .max(LYRIC_OFFSET_MAX_MS, `offsetMs must be ${LYRIC_OFFSET_MIN_MS} to ${LYRIC_OFFSET_MAX_MS}`);
+
+export const lyricOffsetBodySchema = z.strictObject({ offsetMs: lyricOffsetMsSchema });
+
+// A Subsonic id is opaque; the bound only keeps a query from carrying a novel.
+export const LYRICS_TRACK_ID_MAX = 200;
+
+export const lyricsTrackIdSchema = z.string().trim().min(1).max(LYRICS_TRACK_ID_MAX);
+
+// `songId` names the track the LISTENER is hearing, which sits a stream buffer
+// behind the live edge. Absent means the on-air track.
+export const lyricsQuerySchema = z.object({
+  songId: lyricsTrackIdSchema.optional(),
+});
+
+export const publicLyricLineSchema = z.object({
+  // Milliseconds on the PLAYED timeline (a trimmed head already taken off), so
+  // a player compares it with elapsed time since the track started. Null on a
+  // plain, untimed line.
+  startMs: z.number().nullable(),
+  text: z.string(),
+});
+
+// Where the lines came from: the station's music server, or LRCLIB for a
+// track the music server has no timed lyrics for (music/lyrics-sources.ts).
+export const LYRICS_SOURCES = ['music-server', 'lrclib'] as const;
+
+export const publicLyricsPayloadSchema = z.object({
+  songId: z.string().nullable(),
+  synced: z.boolean(),
+  // The station's correction for this track: add it to elapsed time before
+  // choosing the active line. Kept out of `startMs` so the operator can see and
+  // adjust the value that is in force.
+  offsetMs: z.number(),
+  lines: z.array(publicLyricLineSchema),
+  // Both optional, so a player reads a station from before the fallback and a
+  // station answers a player that ignores them. null when there are no lines,
+  // and a source this player does not know reads as null rather than failing
+  // the whole payload, so a newer station's third source still shows its lines.
+  source: z.enum(LYRICS_SOURCES).nullable().optional().catch(null),
+  // True while the station is still looking this track up on LRCLIB: the
+  // answer may improve, so ask again shortly.
+  pending: z.boolean().optional(),
+});
+
+export type PublicLyricLine = z.infer<typeof publicLyricLineSchema>;
+export type PublicLyricsPayload = z.infer<typeof publicLyricsPayloadSchema>;
 
 // ─── from controller/src/schemas/onboarding.ts ───────────────────────────
 
@@ -2004,6 +2200,309 @@ export function normalizeRecipeRow(raw: unknown): {
   };
 }
 
+// ─── from controller/src/schemas/providers.ts ────────────────────────────
+
+// The LLM provider catalogue: one record per provider, data only. Everything
+// that lists providers derives from it: the controller's LLM_PROVIDERS and
+// EMBEDDING_PROVIDERS (so GET /settings, the pickers and every "must be one of"
+// error keep this order), the secrets allowlist and its env flags, a
+// fixed-endpoint gateway's apiKeyEnv, the web's labels, key hints and
+// embedding suggestions, and the CLI wizard's options (embedded at build time
+// by cli/scripts/embed-assets.ts, because the wizard runs before any controller
+// exists). Behaviour does NOT live here: a provider's quirks are a capability
+// descriptor in llm/internal/provider/capabilities.ts, and a fixed-endpoint
+// gateway names one of its shared reasoning rules rather than carrying code.
+//
+// Mirrored to web/lib/schemas.generated.ts by `npm run gen:schemas`, so it
+// imports nothing. Pinned by scripts/provider-catalogue.test.ts.
+
+// The picker's three groups, in display order.
+export const PROVIDER_GROUPS = ['network', 'vendor', 'gateway'] as const;
+export type ProviderGroup = (typeof PROVIDER_GROUPS)[number];
+
+// The reasoning rules in capabilities.ts a fixed-endpoint gateway can pick.
+export type GatewayReasoningRule = 'openaiModels' | 'minimalWhenOff' | 'vendorRouted';
+
+export interface LlmProviderEntry {
+  id: string;
+  // Short card name, and the longer descriptor for dropdowns and banners.
+  label: string;
+  longLabel: string;
+  // One line under the card name: what the operator is choosing.
+  blurb: string;
+  // network: runs on a box the operator owns. vendor: one model maker's own
+  // API. gateway: one key in front of many vendors.
+  group: ProviderGroup;
+  // The key-status badge: local needs no key, self-hosted takes an optional
+  // bearer, cloud needs envVar.
+  kind: 'local' | 'self-hosted' | 'cloud';
+  // Env var the key lives in (state/secrets.env); cloud providers only.
+  envVar?: string;
+  // Key-field placeholder in the admin UI.
+  keyPlaceholder?: string;
+  // A model id the CLI shows as a placeholder; never a default.
+  exampleModel?: string;
+  // The CLI wizard's option; a cloud option's hint is `needs <envVar>`.
+  cliLabel: string;
+  cliHint?: string;
+  // An OpenAI-compatible service at a fixed base URL, reached through
+  // createOpenAI like a self-hosted server. Such a gateway takes the one
+  // generic path through the registry, the embedding builder, the model
+  // lister, the onboarding test and the admin key probe, and its key is read at
+  // construction (capabilities apiKeyEnv), so envVar is required.
+  openaiCompatible?: { baseUrl: string; reasoning: GatewayReasoningRule };
+  // Present when the provider serves text embeddings. defaultModel is what an
+  // empty model field resolves to; suggestions fill the admin model picker.
+  embedding?: { defaultModel: string; suggestions?: readonly { id: string; dim: number }[] };
+}
+
+const OPENAI_EMBEDDING_MODELS = [
+  { id: 'text-embedding-3-small', dim: 1536 },
+  { id: 'text-embedding-3-large', dim: 3072 },
+] as const;
+
+const VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS = [
+  { id: 'openai/text-embedding-3-small', dim: 1536 },
+  { id: 'openai/text-embedding-3-large', dim: 3072 },
+] as const;
+
+export const LLM_PROVIDER_CATALOG: readonly LlmProviderEntry[] = [
+  {
+    id: 'ollama', label: 'Ollama', longLabel: 'Ollama (local/cloud)', blurb: 'Homelab box · no key',
+    group: 'network', kind: 'local',
+    cliLabel: 'Ollama — local homelab', cliHint: 'no API key — point at your homelab box',
+    // Ollama wants the short tag, not an HF/locca repo id (those 404). dim is
+    // shown so an already-tagged library can be matched.
+    embedding: {
+      defaultModel: 'nomic-embed-text',
+      suggestions: [
+        { id: 'nomic-embed-text', dim: 768 },
+        { id: 'mxbai-embed-large', dim: 1024 },
+        { id: 'bge-m3', dim: 1024 },
+        { id: 'all-minilm', dim: 384 },
+      ],
+    },
+  },
+  {
+    id: 'openai-compatible', label: 'OpenAI-compatible', longLabel: 'OpenAI-compatible (llama.cpp, vLLM, LM Studio)',
+    blurb: 'llama.cpp · vLLM · LM Studio', group: 'network', kind: 'self-hosted',
+    exampleModel: 'qwen3',
+    cliLabel: 'OpenAI-compatible — self-hosted', cliHint: 'llama.cpp, vLLM, LM Studio — your own server URL',
+    embedding: { defaultModel: 'text-embedding-3-small' },
+  },
+  {
+    id: 'locca', label: 'locca', longLabel: 'locca (local llama.cpp, host)', blurb: 'Local llama.cpp · no key',
+    group: 'network', kind: 'local',
+    exampleModel: 'qwen3',
+    cliLabel: 'locca — local llama.cpp', cliHint: 'no API key — defaults to the host locca server',
+    embedding: { defaultModel: 'nomic-embed-text' },
+  },
+  {
+    id: 'openrouter', label: 'OpenRouter', longLabel: 'OpenRouter (multi-vendor aggregator)', blurb: 'Multi-vendor aggregator',
+    group: 'gateway', kind: 'cloud', envVar: 'OPENROUTER_API_KEY', keyPlaceholder: 'sk-or-v1-...',
+    exampleModel: 'anthropic/claude-sonnet-4-5', cliLabel: 'OpenRouter — multi-vendor',
+    embedding: { defaultModel: 'openai/text-embedding-3-small', suggestions: VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS },
+  },
+  {
+    id: 'requesty', label: 'Requesty', longLabel: 'Requesty (multi-vendor aggregator)', blurb: 'Multi-vendor aggregator',
+    group: 'gateway', kind: 'cloud', envVar: 'REQUESTY_API_KEY', keyPlaceholder: 'Requesty API key',
+    exampleModel: 'openai/gpt-4o-mini', cliLabel: 'Requesty — multi-vendor',
+    openaiCompatible: { baseUrl: 'https://router.requesty.ai/v1', reasoning: 'minimalWhenOff' },
+    embedding: { defaultModel: 'openai/text-embedding-3-small', suggestions: VENDOR_PREFIXED_OPENAI_EMBEDDING_MODELS },
+  },
+  {
+    id: 'anthropic', label: 'Anthropic', longLabel: 'Anthropic (Claude)', blurb: 'Claude · cloud',
+    group: 'vendor', kind: 'cloud', envVar: 'ANTHROPIC_API_KEY', keyPlaceholder: 'sk-ant-...',
+    exampleModel: 'claude-sonnet-4-5', cliLabel: 'Anthropic — Claude',
+  },
+  {
+    id: 'openai', label: 'OpenAI', longLabel: 'OpenAI (GPT)', blurb: 'GPT · cloud',
+    group: 'vendor', kind: 'cloud', envVar: 'OPENAI_API_KEY', keyPlaceholder: 'sk-...',
+    exampleModel: 'gpt-4o-mini', cliLabel: 'OpenAI — GPT',
+    embedding: { defaultModel: 'text-embedding-3-small', suggestions: OPENAI_EMBEDDING_MODELS },
+  },
+  {
+    id: 'google', label: 'Google', longLabel: 'Google (Gemini)', blurb: 'Gemini · cloud',
+    group: 'vendor', kind: 'cloud', envVar: 'GOOGLE_GENERATIVE_AI_API_KEY', keyPlaceholder: 'AIza...',
+    exampleModel: 'gemini-2.5-flash', cliLabel: 'Google — Gemini',
+    embedding: { defaultModel: 'text-embedding-004', suggestions: [{ id: 'text-embedding-004', dim: 768 }] },
+  },
+  {
+    id: 'deepseek', label: 'DeepSeek', longLabel: 'DeepSeek', blurb: 'Chat & reasoner · cloud',
+    group: 'vendor', kind: 'cloud', envVar: 'DEEPSEEK_API_KEY', keyPlaceholder: 'sk-...',
+    exampleModel: 'deepseek-chat', cliLabel: 'DeepSeek',
+  },
+  {
+    id: 'gateway', label: 'AI Gateway', longLabel: 'Vercel AI Gateway (multi-vendor aggregator)', blurb: 'Vercel · multi-vendor',
+    group: 'gateway', kind: 'cloud', envVar: 'AI_GATEWAY_API_KEY', keyPlaceholder: 'gateway API key',
+    exampleModel: 'anthropic/claude-sonnet-4-5', cliLabel: 'Vercel AI Gateway — multi-vendor',
+  },
+];
+
+export const LLM_PROVIDER_IDS: readonly string[] = LLM_PROVIDER_CATALOG.map((p) => p.id);
+
+// The embedding-capable subset, in catalogue order.
+export const EMBEDDING_PROVIDER_IDS: readonly string[] = LLM_PROVIDER_CATALOG
+  .filter((p) => p.embedding)
+  .map((p) => p.id);
+
+// Every LLM provider key the secrets file may hold, in catalogue order.
+export const LLM_KEY_ENV_VARS: readonly string[] = LLM_PROVIDER_CATALOG
+  .flatMap((p) => (p.envVar ? [p.envVar] : []));
+
+export function llmProviderEntry(id: string | undefined): LlmProviderEntry | undefined {
+  return LLM_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+export type OpenAICompatibleGateway = LlmProviderEntry & {
+  envVar: string;
+  openaiCompatible: NonNullable<LlmProviderEntry['openaiCompatible']>;
+};
+
+// The catalogue entry when `id` is a fixed-endpoint OpenAI-compatible gateway.
+export function openaiCompatibleGateway(id: string | undefined): OpenAICompatibleGateway | undefined {
+  const p = llmProviderEntry(id);
+  return p?.openaiCompatible && p.envVar ? (p as OpenAICompatibleGateway) : undefined;
+}
+
+export const OPENAI_COMPATIBLE_GATEWAYS: readonly OpenAICompatibleGateway[] = LLM_PROVIDER_CATALOG
+  .flatMap((p) => {
+    const gw = openaiCompatibleGateway(p.id);
+    return gw ? [gw] : [];
+  });
+
+// ─── from controller/src/schemas/reasoning.ts ────────────────────────────
+
+// The reasoning level an LLM leg can ask for while `llm.reasoning` is on
+// (#2296), and the one predicate that says which legs can express a level.
+// Both sides read this: the controller's capability descriptors
+// (llm/internal/provider/capabilities.ts) and the admin form's picker, through
+// the web/lib/schemas.generated.ts mirror, so the picker is shown exactly where
+// the controller would send the level. Mirrored by `npm run gen:schemas`, so it
+// imports nothing.
+//
+// 'default' is today's "On", byte-identical on every provider: what the call
+// sends is decided by the descriptor alone, as before the field existed. A
+// level is only ever read while reasoning is on, and only on a leg
+// reasoningEffortOffered() accepts; anywhere else it is kept in settings but
+// sends nothing, so a saved level survives a provider switch and back.
+
+export const REASONING_EFFORTS = ['default', 'low', 'medium', 'high'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+  return typeof v === 'string' && (REASONING_EFFORTS as readonly string[]).includes(v);
+}
+
+/** Stored value → a level. Absent or unknown is 'default' (today's "On"). */
+export function normalizeReasoningEffort(v: unknown): ReasoningEffort {
+  return isReasoningEffort(v) ? v : 'default';
+}
+
+// Fixed thinking budgets for a manual-thinking Claude model (below), per level.
+// The SDK's own levels are a share of the model's max output (medium is 19,200
+// tokens on a 64k model) — far beyond a ~150-token DJ line — so a level the
+// operator picks is a small fixed budget instead (LiteLLM uses the same scale).
+// 'default' keeps the SDK's medium, unchanged.
+export const MANUAL_THINKING_BUDGETS = { low: 1024, medium: 2048, high: 4096 } as const;
+
+// A Claude model id, served only by Anthropic or a proxy/gateway in front of it.
+const CLAUDE_MODEL_RE = /(?:^|\/)claude-/i;
+export function claudeModelId(modelId: unknown): boolean {
+  return CLAUDE_MODEL_RE.test(String(modelId || ''));
+}
+
+// Gemma has no thinking mode; any reasoning field 400s it (#1044).
+const GEMMA_MODEL_RE = /(^|\/)gemma-/i;
+export function gemmaModelId(modelId: unknown): boolean {
+  return GEMMA_MODEL_RE.test(String(modelId || ''));
+}
+
+// OpenAI ids that take reasoning_effort; gpt-4-class models 400 on any effort.
+const OPENAI_REASONING_MODEL_RE = /^(o\d|gpt-5)/i;
+export function openaiReasoningModelId(modelId: unknown): boolean {
+  return OPENAI_REASONING_MODEL_RE.test(String(modelId || ''));
+}
+
+/**
+ * The SDK's max output for a Claude id that thinks on a manual budget
+ * (`supportsAdaptiveThinking: false` in @ai-sdk/anthropic's
+ * getModelCapabilities), or null for an adaptive id. Mirrors the SDK's checks
+ * in its order, so an id it treats as adaptive is never sent a budget (4.7+
+ * answer one with a 400), and any unknown `claude-*` id counts as adaptive, as
+ * the SDK does. A non-Claude id is null.
+ */
+export function manualThinkingClaudeMaxOutput(modelId: unknown): number | null {
+  const id = String(modelId || '');
+  if (!id.includes('claude-')) return null;
+  if (/claude-(?:sonnet-5|opus-5|fable-5|opus-4-8|opus-4-7|sonnet-4-6|opus-4-6)/.test(id)) return null;
+  if (/claude-(?:sonnet-4-5|opus-4-5|haiku-4-5)/.test(id)) return 64000;
+  if (id.includes('claude-opus-4-1')) return 32000;
+  if (/claude-sonnet-4(?:-|@)/.test(id)) return 64000;
+  if (/claude-opus-4(?:-|@)/.test(id)) return 32000;
+  if (id.includes('claude-3-haiku')) return 4096;
+  if (/claude-(?:instant(?:-|$)|v?2(?=$|[-.:])|3(?=$|[-.]))/.test(id)) return 4096;
+  return null;
+}
+
+export function manualThinkingClaudeModel(modelId: unknown): boolean {
+  return manualThinkingClaudeMaxOutput(modelId) != null;
+}
+
+/**
+ * The thinking budget the SDK gives a manual-thinking Claude model under
+ * 'default' (its medium: 30% of the model's max output, at least 1,024), for
+ * the picker's hint. null for any other id.
+ */
+export function manualThinkingDefaultBudget(modelId: unknown): number | null {
+  const max = manualThinkingClaudeMaxOutput(modelId);
+  return max == null ? null : Math.min(max, Math.max(1024, Math.round(max * 0.3)));
+}
+
+export interface ReasoningEffortLeg {
+  provider?: unknown;
+  model?: unknown;
+  compatibleMode?: unknown;
+}
+
+/**
+ * True when this leg can send a reasoning level, so the picker is shown and
+ * the descriptor reads it. `gatewayRule` is the catalogue's reasoning rule for
+ * a fixed-endpoint OpenAI-compatible gateway (Requesty and the like), looked up
+ * by the caller, since this module imports nothing.
+ *
+ * Not offered, where there is no portable level: Ollama (a level string 400s
+ * boolean-only models), local OpenAI-compatible and locca (llama.cpp/vLLM read
+ * chat_template_kwargs), a hosted OpenAI-compatible server that isn't a Claude
+ * proxy (its own thinking fields go in Request parameters, #2355), Gemma, and
+ * gpt-4-class OpenAI ids.
+ */
+export function reasoningEffortOffered(leg: ReasoningEffortLeg | null | undefined, gatewayRule?: string): boolean {
+  const provider = String(leg?.provider || '');
+  const model = leg?.model;
+  switch (provider) {
+    case 'anthropic':
+    case 'deepseek':
+    case 'openrouter':
+      return true;
+    case 'openai':
+      return openaiReasoningModelId(model);
+    case 'google':
+    case 'gateway':
+      return !gemmaModelId(model);
+    case 'openai-compatible':
+      return leg?.compatibleMode === 'hosted' && claudeModelId(model);
+    case 'ollama':
+    case 'locca':
+      return false;
+    default:
+      if (gatewayRule === 'openaiModels') return openaiReasoningModelId(model);
+      if (gatewayRule === 'minimalWhenOff') return true;
+      if (gatewayRule === 'vendorRouted') return !gemmaModelId(model);
+      return false;
+  }
+}
+
 // ─── from controller/src/schemas/request.ts ──────────────────────────────
 
 // Shared listener-request schema — POST /request's `{ text, name }`. Run at the
@@ -2462,6 +2961,9 @@ export const BEDS_TAIL_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 // the other side: past 30s an operator is describing a different problem
 // (a corrupt rip) than the one a cue point solves.
 export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
+// transitions.fadeAudibleEndDb: how far under the track's own loudness a fade
+// ending stops being audible (music/silence-trim.ts).
+export const FADE_AUDIBLE_END_DB_BOUNDS: SettingsNumericBound = { min: 15, max: 35 };
 
 /**
  * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
@@ -2658,6 +3160,21 @@ export function settingsTrimmedString(max: number, message: string) {
 }
 
 /**
+ * A control character (C0 or DEL) in a saved secret. No real key holds one, and
+ * fetch refuses a header value with a NUL, CR or LF in it, quoting the whole
+ * value in its error. Every save path strips them, as the admin form's inputs
+ * already do for line breaks, so a key pasted across a wrap through the API or
+ * a restored backup is joined rather than refused; the key probes refuse one
+ * instead (setup/secrets.ts secretValueIssue). The load path leaves a stored
+ * value alone. Defined here because a mirrored module may import only zod.
+ */
+export const SECRET_CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
+
+export function stripSecretControlChars(value: string): string {
+  return value.replace(new RegExp(SECRET_CONTROL_CHAR_RE.source, 'g'), '');
+}
+
+/**
  * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture.
  *
  * `null` becomes the four-character string 'null' and is STORED. That is not a
@@ -2707,6 +3224,32 @@ export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 /** At most this many custom headers per leg, and this long a value. */
 export const LLM_HEADERS_MAX = 10;
 export const LLM_HEADER_VALUE_MAX = 500;
+
+/**
+ * Free-form request-body rows, `{ key, value }`: the openai-compatible cloud
+ * TTS provider's `tts.cloud.compatParams` (#1317) and the chat legs'
+ * `llm.bodyParams` / `llm.toolCallBodyParams` (#2296). One row grammar for
+ * both, here so the admin form can pre-flight a row with the same rule the
+ * save path (`settings/compat-params.ts` `validateCompatParams`) enforces.
+ * A value that parses as a JSON literal is sent as one, anything else as a
+ * string.
+ */
+export const BODY_PARAM_KEY_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+export const BODY_PARAM_MAX_ENTRIES = 20;
+export const BODY_PARAM_KEY_MAX = 60;
+export const BODY_PARAM_VALUE_MAX = 400;
+
+/**
+ * Chat body fields the station sets on every request, refused in both LLM
+ * lists at save time and skipped at send time: overriding any of them could
+ * break a forced tool call, the output cap or the hosted #1693 pairing.
+ * `max_completion_tokens` is the output cap's other spelling: the SDK sends it
+ * only for OpenAI reasoning ids, and vLLM reads it ahead of `max_tokens`.
+ */
+export const LLM_BODY_PARAM_RESERVED_KEYS = [
+  'model', 'messages', 'tools', 'tool_choice', 'stream',
+  'max_tokens', 'max_completion_tokens', 'response_format', 'stream_options',
+];
 
 // Native Google safety flags are independent per LLM leg. Only a literal true
 // enables blocking; absent or malformed flags preserve the permissive default.
@@ -2797,7 +3340,90 @@ export const SETTINGS_LOUDNESS_SOURCES = [
   'measured',
 ] as const;
 
-export const SETTINGS_SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
+// The search Select's groups, in display order.
+export const SEARCH_PROVIDER_GROUPS = ['keyless', 'keyed', 'self-hosted'] as const;
+export type SearchProviderGroup = (typeof SEARCH_PROVIDER_GROUPS)[number];
+
+export interface SearchProviderEntry {
+  id: string;
+  group: SearchProviderGroup;
+  // The Settings → Web search dropdown label, and the hint under it.
+  label: string;
+  hint: string;
+  // How the backend takes the shared SEARCH_API_KEY: it needs one, it searches
+  // without one and a key raises its limits, or it takes none.
+  key: 'required' | 'optional' | 'none';
+  // The key field: whose key it is, its placeholder, and where to get one.
+  keyName?: string;
+  keyPlaceholder?: string;
+  keyUrl?: string;
+  // An optional key is sent only when it starts with this, so a key left in the
+  // shared slot by another provider is ignored rather than sent.
+  keyPrefix?: string;
+}
+
+// The web-search backends, one record each and data only, in the order
+// GET /settings serves them. Lives beside searchPatchSchema because a mirrored
+// module may not import a sibling. The backends themselves are
+// skills/web-search.ts and the key probes routes/settings/llm.ts.
+export const SEARCH_PROVIDER_CATALOG = [
+  {
+    id: 'duckduckgo', group: 'keyless', label: 'DuckDuckGo (free, no key)', key: 'none',
+    hint: 'DuckDuckGo Instant Answer, free and keyless. Useful for definitions and well-known entities; silent otherwise. The segment director treats silence as a valid outcome.',
+  },
+  {
+    id: 'tavily', group: 'keyed', label: 'Tavily (paid web search)', key: 'required',
+    keyName: 'Tavily', keyPlaceholder: 'tvly-…', keyUrl: 'https://app.tavily.com/home',
+    hint: 'Tavily, paid web search with full results and an answer summary. Needs an API key.',
+  },
+  {
+    id: 'brave', group: 'keyed', label: 'Brave Search (API key, free monthly credits)', key: 'required',
+    keyName: 'Brave Search', keyPlaceholder: 'BSA…', keyUrl: 'https://api-dashboard.search.brave.com/app/keys',
+    hint: 'Brave Search API: real web + news results for artist queries. Metered billing with $5/month in free credits (~1,000 queries; a card on file is required). SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'searxng', group: 'self-hosted', label: 'SearXNG (self-hosted)', key: 'none',
+    hint: 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed, just a running SearXNG instance.',
+  },
+  {
+    id: 'keenable', group: 'keyless', label: 'Keenable (free, no key needed)', key: 'optional',
+    keyName: 'Keenable', keyPlaceholder: 'keen_…', keyUrl: 'https://keenable.ai/console', keyPrefix: 'keen_',
+    hint: 'Keenable web search: real web results with no signup or API key, rate limited per IP. An optional Keenable key raises the limit. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'parallel', group: 'keyless', label: 'Parallel (no key needed)', key: 'none',
+    hint: 'Parallel web search via its anonymous MCP endpoint. No signup or key needed; free-tier rate limits apply. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'firecrawl', group: 'keyed', label: 'Firecrawl (API key)', key: 'required',
+    keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
+    hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
+    keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
+    hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'specstream', group: 'keyed', label: 'SpecStream (API key)', key: 'required',
+    keyName: 'SpecStream', keyPlaceholder: 'ss_live_…', keyUrl: 'https://specstream.ai/signup',
+    hint: 'SpecStream web search: real web results for artist queries. Needs an API key; a paid API at $1 per 1,000 searches. SUB/WAVE caches every search for 30 minutes.',
+  },
+] as const satisfies readonly SearchProviderEntry[];
+
+export const SETTINGS_SEARCH_PROVIDERS = SEARCH_PROVIDER_CATALOG.map((p) => p.id);
+
+// One catalogue row by id, or undefined for an id the catalogue doesn't list.
+export function searchProviderEntry(id: string | undefined): SearchProviderEntry | undefined {
+  return SEARCH_PROVIDER_CATALOG.find((p) => p.id === id);
+}
+
+// A key name with its indefinite article: "a Tavily", "an Outcrawl". Every
+// sentence that names a provider's key, in the controller and the admin UI,
+// takes its article from here, so the two can't disagree.
+export function withIndefiniteArticle(name: string): string {
+  return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
+}
 
 /**
  * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
@@ -2832,14 +3458,14 @@ export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 // on top of its own feature.
 export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
 
-// The process-minute stride the talk table's programme row samples the station
-// clock on, and therefore the width and alignment every station-clock beat
+// The station-minute stride the talk table's programme row is sampled on, and
+// therefore the width and alignment every station-clock beat
 // window must have. Lives here — with the bound it constrains — rather than as
 // a literal in the table, so the row and the operator's offset cannot drift
 // apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
 //
-// 5 works for every real IANA zone because every offset is a multiple of 15
-// minutes, so process and station minutes always agree modulo 5.
+// Every real IANA zone's offset is a multiple of 15 minutes, so process and
+// station minutes agree modulo 5 and the row lands on the same ticks either way.
 export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
@@ -2930,6 +3556,12 @@ export const jingleRatioSchema = settingsIntLike(
   JINGLE_RATIO_BOUNDS,
   `jingleRatio must be int in [${JINGLE_RATIO_BOUNDS.min}, ${JINGLE_RATIO_BOUNDS.max}]`,
 );
+
+export const JINGLE_PLACEMENTS = ['between', 'over', 'both'] as const;
+export type JinglePlacement = (typeof JINGLE_PLACEMENTS)[number];
+export const jinglePlacementSchema = z.enum(JINGLE_PLACEMENTS, {
+  error: `jinglePlacement must be one of ${JINGLE_PLACEMENTS.join(', ')}`,
+});
 
 /**
  * WHO counts the tracks between jingles (#1619).
@@ -3043,6 +3675,26 @@ export const transitionsPatchSchema = settingsBlockOf({
   // save-time refusal. Do not add one here.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
+  pickTimeStems: settingsBoolLike(),
+  equalPowerCrossfade: settingsBoolLike(),
+  // New keys, so no stored leniency to preserve: refused unless a real
+  // boolean / a real number in range (load() repairs a hand edit instead).
+  fadeAudibleEnd: settingsStrictOneOf([true, false], 'transitions.fadeAudibleEnd must be true or false'),
+  fadeAudibleEndDb: z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      if (
+        typeof raw !== 'number' || !Number.isFinite(raw)
+        || raw < FADE_AUDIBLE_END_DB_BOUNDS.min || raw > FADE_AUDIBLE_END_DB_BOUNDS.max
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `transitions.fadeAudibleEndDb must be number in [${FADE_AUDIBLE_END_DB_BOUNDS.min}, ${FADE_AUDIBLE_END_DB_BOUNDS.max}]`,
+        });
+      }
+    })
+    .transform((raw) => raw as number),
+  tailFromCurve: settingsStrictOneOf([true, false], 'transitions.tailFromCurve must be true or false'),
   effects: transitionEffectsPatchSchema,
 });
 
@@ -3139,13 +3791,26 @@ export const BACKUP_KEEP_DEFAULT = 7;
  * usual normalize-vs-validate split, neither restating the other's rule.
  */
 export function clampBackupKeep(raw: unknown): number {
-  // Absent and empty are NO answer, not zero. `Number(null)` and `Number('')`
-  // are both 0, which would clamp to the floor of 1 — the most destructive
-  // reading available — for a settings block that simply has no `keep` in it.
-  if (raw === null || raw === undefined || raw === '') return BACKUP_KEEP_DEFAULT;
+  return clampSettingsIntOr(raw, BACKUP_KEEP_BOUNDS, BACKUP_KEEP_DEFAULT);
+}
+
+/**
+ * The lenient integer reading behind clampBackupKeep and the scheduled
+ * tagger's `limit` (settings/normalize.ts): a number-like value floored and
+ * clamped into `bounds`, anything unreadable the `fallback`. Absent and empty
+ * are NO answer, not zero: `Number(null)` and `Number('')` are both 0, which
+ * would clamp to the floor (for `keep`, 1: the most destructive reading
+ * available) for a settings block that simply has no such field in it.
+ */
+export function clampSettingsIntOr(
+  raw: unknown,
+  bounds: { min: number; max: number },
+  fallback: number,
+): number {
+  if (raw === null || raw === undefined || raw === '') return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n)) return BACKUP_KEEP_DEFAULT;
-  return Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(n)));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(bounds.max, Math.max(bounds.min, Math.floor(n)));
 }
 
 export const backupsPatchSchema = settingsBlockOf({
@@ -3160,6 +3825,87 @@ export const backupsPatchSchema = settingsBlockOf({
     BACKUP_KEEP_BOUNDS,
     `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
   ),
+});
+
+// Scheduled tagging (#2282): a daily tagger run at a set station-clock time,
+// so new music reaches the air without an operator pressing Start. `off` is
+// the default and MUST be first: a station that upgrades and changes nothing
+// has no `tagger` block, reads as `off` and never starts a run on its own.
+// The decision lives in music/tag-schedule-policy.ts, the tick in
+// broadcast/tag-schedule.ts.
+export const SETTINGS_TAGGER_AUTO_MODES = ['off', 'daily'] as const;
+export type TaggerAutoMode = (typeof SETTINGS_TAGGER_AUTO_MODES)[number];
+
+// 24-hour `HH:MM` on the station clock.
+export const TAGGER_AUTO_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// The run's `--limit`: 0 = every untagged track, the Run tab's "all". The
+// ceiling only stops a typo; no library reaches it.
+export const TAGGER_AUTO_LIMIT_BOUNDS: SettingsNumericBound = { min: 0, max: 1_000_000 };
+
+// The Run tab's four step toggles, by the names POST /tag-library takes.
+export interface TaggerAutoSteps {
+  reconcile: boolean;
+  enrich: boolean;
+  tagMoods: boolean;
+  analyze: boolean;
+}
+export const TAGGER_AUTO_STEP_KEYS = ['reconcile', 'enrich', 'tagMoods', 'analyze'] as const;
+
+export interface TaggerAutoSettings {
+  mode: TaggerAutoMode;
+  time: string;
+  limit: number;
+  steps: TaggerAutoSteps;
+}
+
+// The shipped block: settings/defaults.ts DEFAULTS.tagger.auto, and the admin
+// card's form before its first read. Off, so an upgrade changes nothing.
+export const TAGGER_AUTO_DEFAULTS: Readonly<TaggerAutoSettings> = Object.freeze({
+  mode: 'off',
+  time: '02:30',
+  limit: 0,
+  steps: Object.freeze({ reconcile: true, enrich: true, tagMoods: true, analyze: true }),
+});
+
+export const taggerAutoTimeSchema = z
+  .unknown()
+  .superRefine((raw, ctx) => {
+    if (typeof raw !== 'string' || !TAGGER_AUTO_TIME_RE.test(raw)) {
+      ctx.addIssue({ code: 'custom', message: 'tagger.auto.time must be HH:MM (24-hour)' });
+    }
+  })
+  .transform((raw) => raw as string);
+
+// Each field schema is named once: the POST /settings patch (partial, with
+// settingsBlockOf's leniency) and the Run tab's form (the whole block, through
+// useZodForm) are both built from these, so neither restates a rule.
+const taggerAutoStepsShape = {
+  reconcile: settingsBoolLike(),
+  enrich: settingsBoolLike(),
+  tagMoods: settingsBoolLike(),
+  analyze: settingsBoolLike(),
+};
+const taggerAutoFieldsShape = {
+  mode: settingsStrictOneOf(
+    SETTINGS_TAGGER_AUTO_MODES,
+    `tagger.auto.mode must be one of: ${SETTINGS_TAGGER_AUTO_MODES.join(', ')}`,
+  ),
+  time: taggerAutoTimeSchema,
+  limit: settingsIntLike(
+    TAGGER_AUTO_LIMIT_BOUNDS,
+    `tagger.auto.limit must be int in [${TAGGER_AUTO_LIMIT_BOUNDS.min}, ${TAGGER_AUTO_LIMIT_BOUNDS.max}] (0 = all untagged)`,
+  ),
+};
+
+export const taggerPatchSchema = settingsBlockOf({
+  auto: settingsBlockOf({ ...taggerAutoFieldsShape, steps: settingsBlockOf(taggerAutoStepsShape) }),
+});
+
+/** The whole `tagger.auto` block, as the admin card edits and posts it. */
+export const taggerAutoFormSchema = z.object({
+  ...taggerAutoFieldsShape,
+  steps: z.object(taggerAutoStepsShape),
 });
 
 export const streamPatchSchema = settingsBlockOf({
@@ -3304,6 +4050,7 @@ export const djBehaviourPatchSchema = settingsBlockOf({
   showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
   previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
   sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  holdDuckBetweenSpeakers: z.boolean({ error: 'djBehaviour.holdDuckBetweenSpeakers must be a boolean' }),
   extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
   releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
     error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
@@ -3361,6 +4108,7 @@ export const audioPatchSchema = settingsBlockOf({
     { min: 1, max: 1000 },
     'audio.stemCacheGb must be between 1 and 1000',
   ),
+  stemOrphanPurgeEnabled: settingsBoolLike(),
   analyzeQuietMinutes: settingsNumberFloorLike(
     { min: 1, max: 120 },
     'audio.analyzeQuietMinutes must be between 1 and 120',
@@ -3396,6 +4144,22 @@ export const likesPatchSchema = settingsBlockOf({
   ),
 });
 
+// The listener Lyrics panel and its public read (`GET /lyrics/current`). On by
+// default, and an operator can switch it off: it republishes third-party lyric
+// text on an unauthenticated route and turns listener polling into calls
+// against the music server.
+export const lyricsPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  // The LRCLIB fallback for tracks with no timed lyrics on the music server.
+  // Its own switch, also on by default: it sends what the station plays to a
+  // third party.
+  lrclib: settingsBoolLike(),
+});
+
+export const musicSourcePatchSchema = settingsBlockOf({
+  reportRealPath: settingsBoolLike(),
+});
+
 export const searchPatchSchema = settingsBlockOf({
   provider: settingsStrictOneOf(
     SETTINGS_SEARCH_PROVIDERS,
@@ -3424,7 +4188,7 @@ export const searchPatchSchema = settingsBlockOf({
       }
     })
     .transform((raw) => String(raw).trim()),
-  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
+  apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars').transform(stripSecretControlChars),
   // Optional comma-separated SearXNG engine pin (#1353), appended as the
   // `engines=` query param when non-empty. New field, so it takes the trimmed
   // posture rather than search.apiKey's raw one — there is no stored behaviour
@@ -3438,15 +4202,15 @@ export const searchPatchSchema = settingsBlockOf({
 const scrobbleLastfmSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.lastfm.username must be 0-40 chars'),
-  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars'),
-  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars'),
-  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars'),
+  apiKey: settingsTrimmedString(200, 'scrobble.lastfm.apiKey must be 0-200 chars').transform(stripSecretControlChars),
+  apiSecret: settingsTrimmedString(200, 'scrobble.lastfm.apiSecret must be 0-200 chars').transform(stripSecretControlChars),
+  sessionKey: settingsTrimmedString(200, 'scrobble.lastfm.sessionKey must be 0-200 chars').transform(stripSecretControlChars),
 });
 
 const scrobbleListenbrainzSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   username: settingsTrimmedString(40, 'scrobble.listenbrainz.username must be 0-40 chars'),
-  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars'),
+  userToken: settingsTrimmedString(200, 'scrobble.listenbrainz.userToken must be 0-200 chars').transform(stripSecretControlChars),
   // No trailing-slash strip: the consumer appends /submit-listens.
   baseUrl: settingsUrlLike({
     max: 500,
@@ -4068,7 +4832,7 @@ export const preparationStatusSchema = z.discriminatedUnion('kind', [
 ]);
 export type PreparationStatus = z.output<typeof preparationStatusSchema>;
 
-export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional() })).default([]) });
+export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional(), artistId: z.string().nullish().catch(null) })).default([]) });
 export const preparationArtistCreditSchema = z.object({ id: z.string().min(1), name: z.string().optional() });
 export const preparationTrackSchema = z.object({
   id: z.string().min(1), artistId: z.string().nullable().optional(),
@@ -4130,6 +4894,31 @@ export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
 export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
+
+// What an era-suspect album IS, set (or confirmed) by the operator in Library →
+// Era and pre-filled from the title (music/album-kind.ts). Declared here, not
+// there, because a show can leave out whole kinds (`excludedAlbumKinds`) and
+// schema modules import only zod. Order is the admin dropdown's.
+export const ALBUM_KINDS = [
+  'best-of', 'themed', 'label', 'dj-mix', 'dj-choice', 'original-album', 'reissue',
+  'soundtrack', 'tribute', 'chart', 'live', 'box-set', 'sampler',
+] as const;
+export type AlbumKind = (typeof ALBUM_KINDS)[number];
+export const ALBUM_KIND_LABELS: Record<AlbumKind, string> = {
+  'best-of': 'Best Of',
+  themed: 'Themed Compilation',
+  label: 'Label Compilation',
+  'dj-mix': 'DJ Mix',
+  'dj-choice': 'DJ Choice',
+  'original-album': 'Original Album',
+  reissue: 'Reissue or Remaster',
+  soundtrack: 'Soundtrack',
+  tribute: 'Tribute or Covers',
+  chart: 'Chart or Dated Hits',
+  live: 'Live or Festival',
+  'box-set': 'Box Set',
+  sampler: 'Sampler or Promo',
+};
 
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
@@ -4485,6 +5274,18 @@ function showObjectSchema(ctx: ShowSchemaContext) {
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,
       }),
+      // A clean show: tracks tagged explicit stay off air (music/explicit-policy.ts).
+      // Stands alone, not one of the filters filtersStrict governs.
+      excludeExplicit: showBool(),
+      // Album kinds this show never plays (Library → Era sets a kind per album),
+      // e.g. 'dj-mix': a track cut out of a continuous mix starts and ends
+      // mid-blend. Hard-dropped with the excluded playlists
+      // (show-playlist.resolveExcludedPlaylistIds). [] = no constraint.
+      excludedAlbumKinds: showStringList({
+        max: ALBUM_KINDS.length,
+        values: ALBUM_KINDS,
+        overflowError: `must have at most ${ALBUM_KINDS.length} entries`,
+      }),
       // Organisation only, declared LAST so persisted key order is unchanged.
       // Unlike every other list here a bad entry is REFUSED rather than dropped:
       // a tag is typed by hand and must not vanish on save. The load twin
@@ -4642,6 +5443,12 @@ export function repairShowForLoad(
     // than failing the show. Non-array reads as absent (schema's [] default).
     tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
+    // An unknown kind is dropped, never fatal: a show that stops leaving one
+    // kind out beats a show that stops loading.
+    excludedAlbumKinds: repairShowStringList(raw.excludedAlbumKinds, {
+      max: ALBUM_KINDS.length,
+      values: ALBUM_KINDS,
+    }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,
     }),
@@ -4914,6 +5721,58 @@ const skillCohostsSchema = z.preprocess(
   z.boolean({ error: 'cohosts must be a boolean' }).default(false),
 );
 
+// A skill's own TTS voice override: the engine, voice and cloud provider of a
+// persona's voice slot. Gain and speed are not part of it, because they stay
+// the speaker's: an override changes whose voice is heard, never how loud or
+// how fast. Absent or null means the on-air DJ's voice.
+export interface SkillVoiceSlot {
+  engine: string;
+  voice: string;
+  cloudProvider: string;
+}
+
+// The per-engine voice rules live once, in persona.ts (ttsVoiceSlotSchema, and
+// repairTtsVoiceSlot for the disk read). This module may import only zod, so
+// it takes the slot schema as an argument: schemas/skill-server.ts passes
+// persona's for the routes, and the skill editor passes the mirrored copy.
+// What stays here is the skill's own posture around that slot: null is "no
+// override", and a missing provider is openai, as it is in SKILL.md.
+export function skillVoiceSchema(slot: z.ZodType<SkillVoiceSlot>) {
+  // `.optional()` so a body with no `voice` key at all (a community install, an
+  // older client) reaches the transform as "no override", where zod would
+  // otherwise refuse the missing key.
+  return z.unknown().optional().transform((raw, ctx): SkillVoiceSlot | null => {
+    if (raw == null) return null;
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      ctx.issues.push({ code: 'custom', input: raw, message: 'voice must be an object or null' });
+      return z.NEVER;
+    }
+    const t = raw as Record<string, unknown>;
+    const trim = (v: unknown) => (typeof v === 'string' ? v.trim() : v);
+    const parsed = slot.safeParse({
+      ...t,
+      engine: trim(t.engine),
+      cloudProvider: trim(t.cloudProvider) || 'openai',
+    });
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) {
+        ctx.issues.push({ code: 'custom', input: raw, message: issue.message });
+      }
+      return z.NEVER;
+    }
+    const { engine, voice, cloudProvider } = parsed.data;
+    return { engine, voice, cloudProvider };
+  });
+}
+
+/** A skill-file schema below with the voice override attached. */
+export function withSkillVoice<Shape extends z.ZodRawShape>(
+  schema: z.ZodObject<Shape>,
+  slot: z.ZodType<SkillVoiceSlot>,
+) {
+  return schema.extend({ voice: skillVoiceSchema(slot) });
+}
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
@@ -4945,8 +5804,10 @@ export const skillCreateSchema = customSkillFileSchema.extend({
   name: skillSlugSchema,
 });
 
+// The voice is attached by withSkillVoice, so it is optional here: a body
+// parsed without it (a community install) carries no override.
 export type SkillFileParsed = z.output<typeof builtinSkillFileSchema> &
-  Partial<z.output<typeof customSkillFileSchema>>;
+  Partial<z.output<typeof customSkillFileSchema>> & { voice?: SkillVoiceSlot | null };
 
 /**
  * Parsed body → the field object writeSkillFile consumes. The only real work
@@ -4968,6 +5829,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     requiresKey: parsed.requiresKey,
     tags: parsed.tags,
     brief: parsed.brief,
+    voice: parsed.voice ?? null,
   };
 }
 
@@ -5053,6 +5915,156 @@ export type StationCreate = z.output<typeof stationCreateSchema>;
 // Rename is display-name only — the slug and data folder stay put — so it
 // shares the name rule and nothing else.
 export const stationRenameSchema = z.object({ name: stationNameSchema });
+
+// ─── from controller/src/schemas/steer.ts ────────────────────────────────
+
+// A steer: the operator leans the music and the talk for a while, without
+// touching the schedule. Sibling of the takeover in schemas/schedule.ts and
+// shaped like it (an absolute window, `until` spent on the request), but it
+// never changes which show is on air.
+//
+// Zod only: this file is mirrored into the admin bundle.
+
+export const STEER_PROMPT_MAX = 500;
+// Restated from schedule.ts (OVERRIDE_MIN_MINUTES / OVERRIDE_MAX_MINUTES): a
+// mirrored schema file imports nothing but zod. Pinned equal by steer-schema.test.ts.
+export const STEER_MIN_MINUTES = 15;
+export const STEER_MAX_MINUTES = 720;
+
+export const STEER_UNTIL = ['once', 'fixed', 'schedule-change'] as const;
+export type SteerUntil = (typeof STEER_UNTIL)[number];
+
+export interface Steer {
+  /** Only this playlist plays while the steer runs, or null. */
+  playlistId: string | null;
+  /** The operator's direction, already trimmed. May be empty with a playlist. */
+  prompt: string;
+  startedAt: number;
+  expiresAt: number;
+}
+
+export interface SteerContext {
+  /** Epoch-ms "now", or null to not judge expiry (see ScheduleOverrideContext). */
+  now: number | null;
+}
+
+const collapse = (s: string) => s.replace(/\s+/g, ' ').trim();
+const NOTHING_TO_STEER = 'pick a playlist or say what to steer towards';
+
+export function steerSchema(ctx: SteerContext) {
+  return z
+    .object(
+      {
+        playlistId: z.string({ error: 'must be a playlist id' }).min(1, 'must be a playlist id').nullable().default(null),
+        prompt: z.string({ error: 'must be text' }).transform(collapse).pipe(
+          z.string().max(STEER_PROMPT_MAX, `must be at most ${STEER_PROMPT_MAX} characters`),
+        ),
+        startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
+        expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
+      },
+      { error: 'must be an object' },
+    )
+    .check((c) => {
+      const { playlistId, prompt, startedAt, expiresAt } = c.value;
+      if (!prompt && !playlistId) {
+        c.issues.push({ code: 'custom', input: prompt, path: ['prompt'], message: NOTHING_TO_STEER });
+      }
+      if (startedAt >= expiresAt) {
+        c.issues.push({ code: 'custom', input: expiresAt, path: ['expiresAt'], message: 'must be after startedAt' });
+      } else if (expiresAt - startedAt > STEER_MAX_MINUTES * 60_000) {
+        c.issues.push({
+          code: 'custom', input: expiresAt, path: ['expiresAt'],
+          message: `window must be at most ${STEER_MAX_MINUTES} minutes`,
+        });
+      }
+      if (ctx.now !== null && expiresAt <= ctx.now) {
+        c.issues.push({ code: 'custom', input: expiresAt, path: ['expiresAt'], message: 'window has already expired' });
+      }
+    });
+}
+
+const STEER_MINUTES_MESSAGE = `must be an integer between ${STEER_MIN_MINUTES} and ${STEER_MAX_MINUTES}`;
+
+/**
+ * POST /steer's body. `until` says how long it lasts: `'fixed'` for `minutes`,
+ * `'schedule-change'` to the next grid boundary, and `'once'` for a single
+ * track worked out under it and queued, with nothing stored and no steer left
+ * running. `minutes` is REQUIRED under `'fixed'` and REFUSED otherwise, the
+ * takeover's own posture.
+ */
+export const steerRequestSchema = z
+  .object({
+    playlistId: z.string({ error: 'must be a playlist id' }).min(1, 'must be a playlist id').nullable().default(null),
+    prompt: z.string({ error: 'must be text' }).transform(collapse).pipe(
+      z.string().max(STEER_PROMPT_MAX, `must be at most ${STEER_PROMPT_MAX} characters`),
+    ).default(''),
+    until: z.enum(STEER_UNTIL, { error: "must be 'once', 'fixed' or 'schedule-change'" }).default('fixed'),
+    minutes: z.coerce
+      .number({ error: STEER_MINUTES_MESSAGE })
+      .int(STEER_MINUTES_MESSAGE)
+      .min(STEER_MIN_MINUTES, STEER_MINUTES_MESSAGE)
+      .max(STEER_MAX_MINUTES, STEER_MINUTES_MESSAGE)
+      .optional(),
+    /** Also drop the picks already queued, so the steer applies at once. */
+    startNow: z.boolean({ error: 'must be true or false' }).default(false),
+    /** Have the host introduce the opening tracks with one link before the first. */
+    introduce: z.boolean({ error: 'must be true or false' }).default(false),
+  })
+  .check((c) => {
+    if (!c.value.prompt && !c.value.playlistId) {
+      c.issues.push({ code: 'custom', input: c.value.prompt, path: ['prompt'], message: NOTHING_TO_STEER });
+    }
+    if (c.value.until === 'fixed' && c.value.minutes == null) {
+      c.issues.push({ code: 'custom', input: c.value.minutes, path: ['minutes'], message: STEER_MINUTES_MESSAGE });
+    }
+    if (c.value.until !== 'fixed' && c.value.minutes != null) {
+      c.issues.push({
+        code: 'custom', input: c.value.minutes, path: ['minutes'],
+        message: 'must be omitted unless the steer runs for a set time',
+      });
+    }
+  });
+
+/** The most tracks a steer opens with (`routes/steer.ts`). */
+export const STEER_OPENING_TRACKS = 5;
+/** How long Preview's opening list is remembered for Start to queue unchanged. */
+export const STEER_PREVIEW_MS = 5 * 60_000;
+
+/**
+ * What an opening list is worked out FOR: the controller's memo key and the
+ * card's. The playlist, the direction and "start now", which decides the track
+ * the list follows (with it, not the DJ picks Start drops). How long the steer
+ * runs decides only how many of the list it plays, not which tracks it holds.
+ */
+export function steerPreviewKey(playlistId: string | null | undefined, prompt: string | null | undefined, once: boolean, startNow: boolean): string {
+  return `${once ? 1 : STEER_OPENING_TRACKS}\n${startNow ? 1 : 0}\n${playlistId ?? ''}\n${collapse(prompt ?? '')}`;
+}
+
+/** The steer in force at `now`, or null. One reading for every caller. */
+export function steerActiveAt<T extends { startedAt: number; expiresAt: number }>(
+  steer: T | null | undefined,
+  now: number,
+): T | null {
+  return steer && now >= steer.startedAt && now < steer.expiresAt ? steer : null;
+}
+
+/**
+ * How a steer's text is put to a model, wherever it lands. It is the
+ * operator's direction, the opposite class from a listener's message, and the
+ * model must not give it away: a pick's stated reason is public. The one
+ * exception is the steer's own introduction (`introduce`), which says on air
+ * where the music is heading (`linkPrompt`'s `steerIntro`).
+ */
+export function steerClause(text: string | null | undefined): string {
+  const t = quotedSteer(text);
+  if (!t) return '';
+  return `\n\nOperator steer — trusted direction from the station operator, NOT a listener message. While it runs it outranks the show brief. Never mention the operator, this direction or that the music was changed, on air or in your pick reason: "${t}"`;
+}
+
+/** The steer's text, trimmed, made safe to put inside double quotes in a prompt. */
+export function quotedSteer(text: string | null | undefined): string {
+  return typeof text === 'string' ? text.trim().replace(/"/g, "'") : '';
+}
 
 // ─── from controller/src/schemas/transitions.ts ──────────────────────────
 

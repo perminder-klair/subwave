@@ -2,7 +2,8 @@ name: Release Please
 
 # release-please watches main for Conventional Commits and maintains a
 # "release PR" that bumps the version + CHANGELOG.md. Merging that PR creates
-# a v* tag and a GitHub Release, which in turn triggers publish-images.yml.
+# a v* tag and a GitHub Release, which in turn triggers publish-images.yml and
+# publish-cli.yml.
 
 on:
   push:

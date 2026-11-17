@@ -29,8 +29,11 @@ const MB = 1024 ** 2;
 const HOUR = 3600_000;
 
 const readSnap = () => JSON.parse(readFileSync(snapFile, 'utf8'));
+// A snapshot written by hand is one from before the usage journal, as an
+// upgrade finds it: the journal goes too, and the next read stamps it.
 const writeSnap = (over: Record<string, unknown>) => {
   const now = new Date().toISOString();
+  rmSync(join(stateDir, 'stem-cache-usage.journal'), { force: true });
   writeFileSync(snapFile, JSON.stringify({ version: 1, root, bytes: 0, dirs: 0, measuredAt: now, updatedAt: now, ...over }));
 };
 const makeDir = (id: string, bytes: number) => {
@@ -143,6 +146,37 @@ test('settle without a pending mark of its own changes nothing', async () => {
   writeSnap({ bytes: 7, dirs: 1 });
   assert.equal(await stemCache.settlePassWrites(['x']), null);
   assert.equal(readSnap().bytes, 7);
+});
+
+// #2253: the figure the sweep records for folders it cannot delete is cleaned
+// once, here, so budgetVeto takes a plain number. The file is hand-editable.
+test('usage() cleans the stored unevictable figure; every writer cleans it against its new total', async () => {
+  rmSync(snapFile, { force: true });
+  makeDir('shrink', 5 * MB);
+  await stemCache.usage(); // a walk writes a trusted snapshot, so the reads below use the file
+  const stuckRead = async (over: Record<string, unknown>) => {
+    writeSnap({ bytes: 10 * MB, dirs: 2, ...over });
+    return (await stemCache.usage()).unevictableBytes;
+  };
+  assert.equal(await stuckRead({ unevictableBytes: 4 * MB }), 4 * MB);
+  assert.equal(await stuckRead({}), 0, 'absent: none known');
+  for (const bad of ['4194304', -1, 0, null, {}, true]) {
+    assert.equal(await stuckRead({ unevictableBytes: bad }), 0, JSON.stringify(bad));
+  }
+  assert.equal(await stuckRead({ unevictableBytes: 20 * MB }), 10 * MB, 'never more than the total it is part of');
+
+  // A writer that shrinks the total cleans the figure against the new one.
+  makeDir('shrink', 9 * MB);
+  writeSnap({ bytes: 10 * MB, dirs: 2, unevictableBytes: 8 * MB });
+  const writes = await stemCache.beginTrackWrite('shrink');
+  makeDir('shrink', 5 * MB); // the dir went from 9 MB to 5
+  await stemCache.settleTrackWrite('shrink', writes);
+  assert.deepEqual([readSnap().bytes, readSnap().unevictableBytes], [6 * MB, 6 * MB]);
+  // A malformed figure is dropped, not carried.
+  writeSnap({ bytes: 10 * MB, dirs: 2, unevictableBytes: 'x' });
+  await stemCache.markUsageStale();
+  assert.equal(readSnap().stale, true);
+  assert.equal('unevictableBytes' in readSnap(), false);
 });
 
 test.after(() => rmSync(stateDir, { recursive: true, force: true }));

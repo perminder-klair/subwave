@@ -9,6 +9,8 @@ interface Shortcut {
   label: string;
 }
 
+const LYRICS_LABEL = 'Show / hide lyrics';
+
 const SHORTCUTS: readonly Shortcut[] = [
   { keys: ['Space', 'K'], label: 'Tune in / out' },
   { keys: ['↑'], label: 'Volume up' },
@@ -18,6 +20,7 @@ const SHORTCUTS: readonly Shortcut[] = [
   { keys: ['2'], label: 'Open Booth feed' },
   { keys: ['3', 'R'], label: 'Make a request' },
   { keys: ['4'], label: 'Open Schedule' },
+  { keys: ['L'], label: LYRICS_LABEL },
   { keys: ['S'], label: 'Next player skin' },
   { keys: ['T'], label: 'Next theme' },
   { keys: ['?'], label: 'This shortcuts list' },
@@ -29,11 +32,14 @@ export interface ShortcutsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   container?: HTMLElement | null;
+  /** Whether the station offers lyrics. */
+  lyrics?: boolean;
 }
 
 /* Accepts `container` so it stays inside the frame in contained mode,
    matching FullDialog / Modal. */
-export default function ShortcutsDialog({ open, onOpenChange, container }: ShortcutsDialogProps) {
+export default function ShortcutsDialog({ open, onOpenChange, container, lyrics = false }: ShortcutsDialogProps) {
+  const shortcuts = lyrics ? SHORTCUTS : SHORTCUTS.filter(s => s.label !== LYRICS_LABEL);
   const contained = !!container;
   const pos = contained ? 'absolute' : 'fixed';
   return (
@@ -65,7 +71,7 @@ export default function ShortcutsDialog({ open, onOpenChange, container }: Short
 
           <div className="v3-scroll flex-1 overflow-auto px-6 py-3">
             <ul className="flex flex-col">
-              {SHORTCUTS.map((s) => (
+              {shortcuts.map((s) => (
                 <li
                   key={s.label}
                   className="flex items-center justify-between gap-4 border-b border-dashed border-separator-soft py-2.5"

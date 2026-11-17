@@ -55,6 +55,18 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
+// A bulk pass (the tagger child or a CLI run) holds the single-flight analyzer
+// worker for minutes, so a stem-blend render or a pick-time separation would
+// only queue behind it. The pidfile is that pass's own lock.
+export function bulkPassRunning(): boolean {
+  try {
+    const info = readPidfile();
+    return !!info && isPidAlive(info.pid);
+  } catch {
+    return false;
+  }
+}
+
 // Lock for a standalone CLI run. Returns whether this process owns the pidfile
 // and must clear it on exit: false when controller-spawned (the controller owns
 // and clears it), throws when a different live run holds it, otherwise claims it

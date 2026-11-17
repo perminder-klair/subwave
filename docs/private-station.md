@@ -50,7 +50,10 @@ every listener connect, so:
 > `docker-compose.byo.yml` with your own Traefik/nginx/Caddy, block that path
 > too — as a case-insensitive prefix, since the controller also answers a
 > trailing slash and any case
-> ([recipes](reverse-proxy.md#the-route-contract)). As backstops, the
+> ([recipes](reverse-proxy.md#the-route-contract)). Replicate
+> [the stream's 401 challenge](reverse-proxy.md#the-streams-401-challenge) rule
+> too, or listeners with an out-of-date password get the browser's native
+> "Sign in" dialog over the player. As backstops, the
 > controller refuses any call carrying a proxy's forwarding headers
 > (`X-Forwarded-For` and the like — Icecast's own call has none) and slows
 > repeated failed attempts (correct passwords are never delayed), but not
@@ -60,21 +63,52 @@ every listener connect, so:
 
 - **Web player** — asks for the password once and remembers it in the
   browser. If the private player is on too, the single prompt unlocks both the
-  interface and the audio. Under the hood it rides a `?auth=PASSWORD` token on
-  the stream URL (browsers can't attach basic auth to an `<audio>` element).
+  interface and the audio. Until the password is accepted, the player behind
+  the prompt ignores taps and keys, so the first tap can't tune in without it.
+  Under the hood it rides a `?auth=PASSWORD` token on the stream URL (Chromium
+  ignores a `user:pass@` login on an `<audio>` element).
+  A typed password is saved only when the station accepts it. The saved one is
+  checked again on each visit and forgotten only when the station itself
+  refuses it. If the check gets no answer from the station (a network blip, the
+  rate limit, a proxy's 401 or login page), the password is kept and the player
+  opens with it, because the stream still checks it on every connect. If the
+  player then can't connect, it asks the station again, at most every two
+  minutes, and waits out the rate limit. Once the station refuses the password,
+  usually because you changed it, the player stops and asks for the new one,
+  saying the saved password was not accepted. Anyone the prompt stopped mid-listen
+  goes straight back on air when they type the right password, with no second
+  press. Safari may still want that press on a private player, which gets a new
+  audio element. Changing the password never drops anyone who is already
+  listening; it reaches them the next time they reconnect.
+  The player can't answer the stream's password challenge, so the bundled proxy
+  holds it back from the station's own page, and the browser's own "Sign in"
+  dialog doesn't cover it.
 - **Radio apps / VLC / Sonos / hardware** — use a credentialed URL:
   `https://listener:PASSWORD@your-station.example/stream.mp3`
   (any username works; only the password is checked).
   Several listeners can use the same username at once.
+  Many of these send the password only after the stream challenges them, and it
+  does, so don't add `?auth=` to this kind of URL: a request with a token gets
+  no challenge, and the password in the address is never sent.
 - **Anything that can't do userinfo URLs** — append the token instead:
   `https://your-station.example/stream.mp3?auth=PASSWORD`.
+  A wrong token gets a plain 401, with no password prompt. Use this form for an
+  `<audio>` element on your own web page too: Chromium ignores a `user:pass@`
+  login there.
 - **SUB/WAVE app** — asks for the password when it opens a station with
   either lock on, checks it with the station, and keeps it in the device's
   secure storage (separate from any **Station login**). Like the web player it
   rides the stream as `?auth=`, so Google Cast works too. A listener who had
   followed earlier advice and typed the stream password into **Station login**
   is recognised and not asked again. If the password is later rotated, the app
-  asks again the next time the station is opened, or once playback stalls.
+  asks again the next time the station is opened, or once playback stalls, and
+  says the saved password was not accepted. While playback stays stalled it
+  checks every two minutes at most, because the station allows each address
+  20 password checks per 15 minutes. Only the station's own refusal counts: a
+  proxy in front of it that turns the check away with a 401 (oauth2-proxy,
+  Authelia) never makes the app forget the password. To clear a saved
+  password yourself, open **Stations**, then **Station login** on the station,
+  and tap **Forget station password**.
 
 While the password is on, `/listen.pls` and `/listen.m3u` return 403 — they
 would otherwise hand out credential-less URLs that no longer play.
@@ -94,21 +128,25 @@ controller.
 > below is about plain basic auth.
 
 Plain basic auth works in both mobile apps. Enter the public station address,
-open **Station login**, then fill in the username and password. The app takes
-two different routes with those credentials, which is worth knowing when
-something half-works:
+open **Station login**, then fill in the username and password. The app sends
+the login as an explicit `Authorization: Basic` header on everything it asks
+the station for, which is worth knowing when something half-works:
 
-- **API polls and cover artwork** receive an in-memory credentialed request URL.
-  RN's `fetch` and `<Image>` sit on NSURLSession / OkHttp, which answer the
-  server's basic-auth challenge from that userinfo.
-- **The audio stream** gets a credential-free URL plus an explicit
-  `Authorization: Basic` header, because **iOS's AVPlayer silently drops
-  `user:pass@` userinfo from a media URL** (and Android's player is no more
-  reliable about it). That is why a basic-auth station could report *Stream
-  Unreachable* / HTTP 401 in the app while the exact same URL played fine in a
-  browser, in VLC and via `curl` (#764).
+- **The audio stream** gets a credential-free URL plus the header, because
+  **iOS's AVPlayer silently drops `user:pass@` userinfo from a media URL** (and
+  Android's player is no more reliable about it). That is why a basic-auth
+  station could report *Stream Unreachable* / HTTP 401 in the app while the
+  exact same URL played fine in a browser, in VLC and via `curl` (#764).
+- **API polls** go the same way: a credential-free URL plus the header.
+  Android's `fetch` (OkHttp) never sends a login from URL userinfo, so before
+  #1873 an Android app never showed its login to a proxy guarding `/api`.
+- **Cover art and persona avatars** get the header too, and also keep the login
+  as `user:pass@` userinfo in their URL, because iOS loads the lock-screen
+  artwork with a request that cannot carry a header but does answer the
+  proxy's challenge from userinfo. Both carry the same login. An avatar on
+  another host never gets the login.
 
-Three things to know:
+Things to know:
 
 - **The station URL is stored without credentials.** The username and password
   live in this device's iOS Keychain or Android Keystore-backed secure storage.
@@ -123,6 +161,29 @@ Three things to know:
   entered at the app's private-station prompt, it rides the stream URL.
 - **Special characters need no percent-encoding in the fields.** Type the real
   username and password, including `@` or `:`.
+- **A saved login can be changed or removed.** In **Stations**, tap the key on
+  a saved station, or **Station login** on the station you're tuned in to. The
+  app checks a changed login with the station before saving it: a login the
+  proxy refuses is never saved, and one it couldn't check (the station is
+  unreachable, or its answer says nothing about the login) is saved only if
+  you tap **Save anyway**. On a station with the
+  stream password on and no proxy guarding `/api`, the login's password is
+  checked as the stream password. A refusal there offers **Save anyway** too:
+  a proxy that guards only the audio stream may still want that login, and the
+  app has no way to ask it.
+- **A login the station stops accepting stops the player.** When the proxy
+  answers the saved login with a 401 whose `WWW-Authenticate` challenge asks
+  for Basic (what an HTTP Basic Auth proxy sends for a wrong login), the player
+  stops reconnecting and says **Station login rejected**, with a button to the
+  same screen. Nothing else does this: not a network drop or a timeout, not a
+  challenge in another scheme (Bearer, Digest), which the login can't answer
+  whatever it is, and not a 403, which an IP allowlist, a WAF or a Cloudflare
+  challenge page sends whatever the login is. The edit screen reads
+  `/api/health` by the same rule: only a 401 asking for Basic there is the
+  proxy refusing a login, and any other failure leaves it unchecked.
+  The app finds out by asking `/api/health`, never the stream (that would count
+  a listener), so a proxy that guards only the audio stream and not `/api`
+  goes unnoticed.
 
 Older app versions accepted `https://user:pass@host` addresses. On upgrade,
 the app removes that userinfo from the saved station URL and migrates the

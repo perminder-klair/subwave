@@ -24,6 +24,8 @@ import { migrateImportedPersona } from '../personas/import-migration.js';
 import { requireAdmin } from '../middleware/auth.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as sfx from '../broadcast/sfx.js';
+import * as blocklist from '../music/blocklist.js';
+import { clearWalk } from '../music/library-walk.js';
 import {
   SKILL_BUNDLE_MAX_BYTES,
   restoreSkillMembers,
@@ -31,6 +33,7 @@ import {
   type SkillMember,
 } from '../skills/install.js';
 import { isSafeZipEntry, readZipEntryCapped } from '../util/zip-entry.js';
+import { stripManagedSettings } from '../setup/hosted.js';
 
 export const router = express.Router();
 
@@ -43,7 +46,9 @@ const RESTORABLE = new Set<string>([...INCLUDE_FILES, ...INCLUDE_DIRS]);
 // those modules apply to a bundled or uploaded file — and jingles.m3u is not
 // read at all: it is regenerated from the restored jingles.json. skills/** goes
 // through the skill import's guards, so any tool.mjs arrives quarantined.
-const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json']);
+// blocklist.json goes through blocklist.restore (the boot parser, and the live
+// in-memory list, which a file copy would leave stale until a restart).
+const ROUTED_FILES = new Set<string>(['jingles.json', 'jingles.m3u', 'sfx.json', 'blocklist.json']);
 
 // manifest.json, settings.json, a theme and a sidecar are read into memory, so
 // each is bounded by its DECLARED size before it is inflated. Generous: a
@@ -95,6 +100,8 @@ type RestoreOutcome =
     ok: true; status: 200; restored: string[]; requiresRestart: boolean;
     // Members left out by a guard, and skills whose code waits for review.
     skipped: string[]; skillsAwaitingReview: string[];
+    // Hosted: settings paths the box agent owns, left as they were (setup/hosted.ts).
+    managed: string[];
   }
   | { ok: false; status: number; error: string };
 
@@ -126,6 +133,7 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
 
   const settingsRead = readJsonMember(zip, 'settings.json');
   let settingsPatch: Record<string, unknown> | null = null;
+  let managed: string[] = [];
   if (settingsRead) {
     if ('error' in settingsRead) return { ok: false, status: 400, error: `${settingsRead.error} in backup` };
     const parsed = settingsRead.data;
@@ -136,6 +144,12 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     if (Array.isArray(settingsPatch.personas)) {
       settingsPatch.personas = settingsPatch.personas.map(migrateImportedPersona);
     }
+    // Hosted: a backup from a self-hosted station carries its own LLM route,
+    // voice engine, embedding route, persona engine pins and listener ceiling.
+    // Those are the box agent's, so they stay as they are, as on any other save.
+    ({ patch: settingsPatch, dropped: managed } = stripManagedSettings(settingsPatch, {
+      defaultEngine: settings.get()?.tts?.defaultEngine,
+    }));
     const themes = new Map<string, string>();
     for (const entry of zip.getEntries()) {
       const name = entry.entryName.replace(/\\/g, '/');
@@ -163,6 +177,17 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     if (!isSidecar(read.data)) return { ok: false, status: 400, error: `${file} in backup is not a sidecar` };
     sidecars.push({ file, data: read.data });
   }
+  // The never-play list, checked here for the same reason. A backup made
+  // before it was included has none, and the station's list is left alone.
+  let blocklistDoc: unknown = undefined;
+  const blocklistRead = readJsonMember(zip, 'blocklist.json');
+  if (blocklistRead) {
+    if ('error' in blocklistRead) return { ok: false, status: 400, error: `${blocklistRead.error} in backup` };
+    if (!blocklist.isStoreDocument(blocklistRead.data)) {
+      return { ok: false, status: 400, error: 'blocklist.json in backup is not a never-play list' };
+    }
+    blocklistDoc = blocklistRead.data;
+  }
   const skillMembers: SkillMember[] = [];
   const skipped: string[] = [];
   for (const entry of zip.getEntries()) {
@@ -181,6 +206,7 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
   const restored: string[] = [];
   let requiresRestart = false;
   let tmpDir: string | null = null;
+  let blocklistRestored = false;
   try {
     // 1) Media — must run BEFORE settings.update(): settings validation resolves
     //    theme.active / shows[].themeId against themes read from state/themes/,
@@ -208,6 +234,12 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       for (const name of dropped) skipped.push(`${file}: "${name}" is not a usable entry`);
       restored.push(file);
     }
+    if (blocklistDoc !== undefined) {
+      const { dropped } = await blocklist.restore(blocklistDoc);
+      if (dropped) skipped.push(`blocklist.json: ${dropped} unusable record(s)`);
+      restored.push('blocklist.json');
+      blocklistRestored = true;
+    }
 
     // 1c) Skills through the import's guards: any tool.mjs not already live
     //     (or shipped in this image) waits as tool.mjs.pending for review.
@@ -233,13 +265,26 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       tmpDir = await mkdtemp(join(tmpdir(), 'subwave-restore-'));
       const dbTmp = join(tmpDir, 'library.db');
       zip.extractEntryTo(dbEntry, tmpDir, false, true);
+      // The restored table is not the walk the stamp describes: hearts wait for
+      // the next clean walk (music/library-walk.ts). Cleared before the swap, so
+      // a swap that fails half-way still reads as unsettled.
+      clearWalk();
       await libraryDb.restoreFromFile(dbTmp);
       await library.reload();
       restored.push('library.db');
     }
 
-    return { ok: true, status: 200, restored, requiresRestart, skipped, skillsAwaitingReview };
+    return { ok: true, status: 200, restored, requiresRestart, skipped, skillsAwaitingReview, managed };
   } finally {
+    // As after any list edit, the queue and the coast playlist drop what the
+    // restored list blocks. Last, so the coast rebuilds with the restored
+    // settings and library.db, and in `finally`, so a later step that throws
+    // cannot leave a restored list live with its blocked tracks still queued.
+    // Loaded here, not at the top: blocklist-effects reaches the queue and the
+    // scheduler, whose settings watcher rebuilds the coast on every policy
+    // change, and a process that only loads this route must not start it
+    // (scripts/backup-route-imports.test.ts). Boot loads both anyway.
+    if (blocklistRestored) (await import('../broadcast/blocklist-effects.js')).applyBlocklistChange();
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -261,6 +306,7 @@ router.post(
         requiresRestart: outcome.requiresRestart,
         skipped: outcome.skipped,
         skillsAwaitingReview: outcome.skillsAwaitingReview,
+        ...(outcome.managed.length ? { managed: outcome.managed } : {}),
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -345,6 +391,7 @@ router.post('/backup/import-file', requireAdmin, async (req, res) => {
       requiresRestart: outcome.requiresRestart,
       skipped: outcome.skipped,
       skillsAwaitingReview: outcome.skillsAwaitingReview,
+      ...(outcome.managed.length ? { managed: outcome.managed } : {}),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

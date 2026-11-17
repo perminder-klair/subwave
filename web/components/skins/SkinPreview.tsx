@@ -256,38 +256,24 @@ function PlatterPreview() {
 }
 
 // The isometric stack in miniature, drawn from the skin's own geometry so the
-// card can't drift from the player, and finished as the skin is, in Unit
-// SW-9's hardware: metal units lit from above, the rack and the speaker
-// baffles in the keys' dark finish, the dial, display and counter as black
-// glass, a smoked dust cover. Shades of a dark part are mixed from its own
-// face (--mk), as the skin's are, so its sides stay darker on a dark theme
-// too. The record spins and the power ring blinks under the shared play-state
-// gate. Strokes don't scale with the drawing, so a hairline stays a hairline
-// at card size.
-const AXO_FINISH = {
-  metal: {
-    T: 'fill-[color-mix(in_oklab,var(--bg)_90%,#fff)]',
-    L: 'fill-[color-mix(in_oklab,var(--bg)_95%,#000)]',
-    R: 'fill-[color-mix(in_oklab,var(--bg)_76%,#000)]',
-  },
-  dark: {
-    T: 'fill-[color-mix(in_oklab,var(--mk)_90%,#fff)]',
-    L: 'fill-[var(--mk)]',
-    R: 'fill-[color-mix(in_oklab,var(--mk)_58%,#000)]',
-  },
-} as const;
-const AXO_GLASS = 'fill-[#0e0d0b] stroke-none';
-const AXO_VINYL = 'fill-[#121110] stroke-[#000]';
-const AXO_LID = 'fill-[rgba(24,21,18,0.14)]';
+// card can't drift from the player: speakers, receiver, tape deck, turntable,
+// every box as its three shaded faces with a heavier silhouette, beside the
+// column's brushed plate and its glass. The record spins and the power ring
+// blinks under the shared play-state gate. Strokes don't scale with the
+// drawing, so a hairline stays a hairline at card size.
+const AXO_TOP = 'fill-bg';
+const AXO_LEFT = 'fill-[color-mix(in_oklab,var(--ink)_4%,var(--bg))]';
+const AXO_RIGHT = 'fill-[color-mix(in_oklab,var(--ink)_10%,var(--bg))]';
+const AXO_WELL = 'fill-[color-mix(in_oklab,var(--ink)_16%,var(--bg))]';
+const AXO_LID = 'fill-[color-mix(in_oklab,var(--ink)_7%,transparent)]';
 
 /** One box: top (w×d), front-left (w×h) and front-right (d×h) faces. */
-function AxoBox({ b, finish = 'metal' }: { b: DrawnBlock; finish?: keyof typeof AXO_FINISH }) {
-  const f = AXO_FINISH[finish];
+function AxoBox({ b }: { b: DrawnBlock }) {
   return (
     <>
-      <rect transform={b.T} width={b.w} height={b.d} className={f.T} />
-      <rect transform={b.L} width={b.w} height={b.h} className={f.L} />
-      <rect transform={b.R} width={b.d} height={b.h} className={f.R} />
+      <rect transform={b.T} width={b.w} height={b.d} className={AXO_TOP} />
+      <rect transform={b.L} width={b.w} height={b.h} className={AXO_LEFT} />
+      <rect transform={b.R} width={b.d} height={b.h} className={AXO_RIGHT} />
     </>
   );
 }
@@ -297,29 +283,8 @@ function AxoBox({ b, finish = 'metal' }: { b: DrawnBlock; finish?: keyof typeof 
 function AxoBay({ level }: { level: RackLevel }) {
   return (
     <>
-      <AxoBox b={level.shelf} finish="dark" />
-      {level.back.map((p, i) => <AxoBox key={i} b={p} finish="dark" />)}
-    </>
-  );
-}
-
-/** A floor-standing speaker: a metal cabinet, its drivers in a dark baffle. */
-function AxoSpeaker({ b }: { b: DrawnBlock }) {
-  return (
-    <>
-      <rect transform={b.T} width={b.w} height={b.d} className={AXO_FINISH.metal.T} />
-      <rect transform={b.R} width={b.d} height={b.h} className={AXO_FINISH.metal.R} />
-      <g transform={b.L}>
-        <rect width={b.w} height={b.h} className={AXO_FINISH.dark.L} />
-        {([[36, 10], [92, 21], [178, 33]] as const).map(([cy, r]) => (
-          <g key={cy}>
-            <circle cx="40" cy={cy} r={r} className={AXO_FINISH.metal.T} />
-            <circle cx="40" cy={cy} r={r * 0.82} className="fill-[#151311] stroke-none" />
-            <circle cx="40" cy={cy} r={r * 0.3} className={cn(AXO_FINISH.metal.L, 'stroke-none')} />
-          </g>
-        ))}
-      </g>
-      <path d={b.sil} strokeWidth={1.2} />
+      <AxoBox b={level.shelf} />
+      {level.back.map((p, i) => <AxoBox key={i} b={p} />)}
     </>
   );
 }
@@ -341,44 +306,38 @@ function AxoPreview() {
       <div className="relative flex-1 bg-[radial-gradient(circle,var(--soft-border)_1px,transparent_1.5px)] bg-size-[9px_5.2px]">
         <svg
           viewBox="-250 -420 590 690"
-          className="absolute inset-0 size-full fill-none stroke-[color-mix(in_srgb,var(--ink)_70%,transparent)] [--mk:color-mix(in_oklab,var(--ink)_92%,var(--bg))] [&_*]:[vector-effect:non-scaling-stroke]"
-          strokeWidth={0.6}
+          className="absolute inset-0 size-full fill-none stroke-ink [&_*]:[vector-effect:non-scaling-stroke]"
+          strokeWidth={0.7}
           strokeLinejoin="round"
           aria-hidden="true"
         >
-          <AxoSpeaker b={AXO.spL} />
+          <AxoBox b={AXO.spL} />
+          <path d={AXO.spL.sil} strokeWidth={1.2} />
           <AxoBay level={bay0} />
           <AxoBox b={AXO.rcv} />
           <g transform={AXO.rcv.L}>
-            <rect x="12" y="10" width="112" height="26" className={AXO_GLASS} />
-            <rect x="12" y="42" width="112" height="20" className={AXO_GLASS} />
-            <rect x="18" y="49" width="70" height="6" className="fill-[#f4f0e6] stroke-none" />
-            <circle cx="186" cy="38" r="22" className={AXO_FINISH.dark.L} />
-            <circle cx="142" cy="24" r="9" className={AXO_FINISH.dark.L} />
+            <rect x="12" y="42" width="112" height="20" className="fill-ink" />
+            <circle cx="186" cy="38" r="22" className={AXO_WELL} />
             <circle
               cx="142"
               cy="24"
-              r="13"
+              r="12"
               strokeWidth={1.2}
               className={cn('stroke-vermilion', BLINK)}
             />
           </g>
           <path d={AXO.rcv.sil} strokeWidth={1.2} />
-          {bay0.front.map((p, i) => <AxoBox key={i} b={p} finish="dark" />)}
+          {bay0.front.map((p, i) => <AxoBox key={i} b={p} />)}
           <AxoBay level={bay1} />
           <AxoBox b={AXO.tape} />
           <g transform={AXO.tape.L}>
-            <rect x="12" y="8" width="110" height="46" className={AXO_FINISH.dark.L} />
-            <rect x="24" y="14" width="86" height="9" className="fill-[#efeadd] stroke-none" />
-            <rect x="28" y="26" width="78" height="17" className={AXO_GLASS} />
-            <circle cx="44" cy="34.5" r="7" className="fill-[#efeadd] stroke-none" />
-            <circle cx="90" cy="34.5" r="7" className="fill-[#efeadd] stroke-none" />
-            <rect x="134" y="8" width="44" height="14" className={AXO_GLASS} />
-            <rect x="134" y="30" width="44" height="16" className={AXO_FINISH.dark.L} />
-            <rect x="184" y="30" width="28" height="16" className={AXO_FINISH.dark.L} />
+            <rect x="12" y="8" width="110" height="46" className={AXO_WELL} />
+            <circle cx="44" cy="34" r="10" className="fill-bg" />
+            <circle cx="90" cy="34" r="10" className="fill-bg" />
+            <rect x="134" y="8" width="44" height="14" className="fill-ink" />
           </g>
           <path d={AXO.tape.sil} strokeWidth={1.2} />
-          {bay1.front.map((p, i) => <AxoBox key={i} b={p} finish="dark" />)}
+          {bay1.front.map((p, i) => <AxoBox key={i} b={p} />)}
           <AxoBay level={bay2} />
           <path d={AXO.lid.panel} className={AXO_LID} />
           <path d={AXO.lid.left} className={AXO_LID} />
@@ -387,17 +346,22 @@ function AxoPreview() {
           <path d={AXO.lid.sil} strokeWidth={1.2} />
           <AxoBox b={AXO.tt} />
           <g transform={AXO.tt.T}>
-            <circle cx="96" cy="66" r="57" className={AXO_FINISH.metal.L} />
+            <circle cx="96" cy="66" r="57" className={AXO_WELL} />
             <g className={cn('origin-center [transform-box:fill-box]', REEL)}>
-              <circle cx="96" cy="66" r="52" className={AXO_VINYL} />
-              <circle cx="96" cy="66" r="36" className="stroke-white/15" />
+              <circle cx="96" cy="66" r="52" className={AXO_LEFT} />
+              <circle cx="96" cy="66" r="36" />
               <circle cx="96" cy="66" r="18" className="fill-vermilion stroke-none" />
-              <line x1="96" y1="16" x2="96" y2="26" strokeWidth={1} className="stroke-white/30" />
+              <line x1="96" y1="16" x2="96" y2="26" strokeWidth={1} />
             </g>
-            <line x1="190" y1="24" x2="166" y2="98" strokeWidth={1.6} className="stroke-[color-mix(in_oklab,var(--bg)_90%,#fff)]" />
+            <line x1="190" y1="24" x2="166" y2="98" strokeWidth={1.6} />
           </g>
           <path d={AXO.tt.sil} strokeWidth={1.2} />
-          <AxoSpeaker b={AXO.spR} />
+          <AxoBox b={AXO.spR} />
+          <g transform={AXO.spR.L}>
+            <circle cx="40" cy="92" r="20" className={AXO_WELL} />
+            <circle cx="40" cy="178" r="31" className={AXO_WELL} />
+          </g>
+          <path d={AXO.spR.sil} strokeWidth={1.2} />
         </svg>
       </div>
     </div>

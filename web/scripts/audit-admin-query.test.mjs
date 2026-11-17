@@ -56,6 +56,14 @@ const validImperativeFixtures = {
   // admin-query-imperative: operator-api-command
   return adminResponse(adminFetch, relPath, { method: endpoint.method });
 }\n`,
+  'library/EraReviewSection.tsx': `export async function run(adminFetch) {
+  // admin-query-imperative: era-csv-export
+  return adminResponse(adminFetch, '/library/era/csv');
+}\n`,
+  'library/useTaggerRunLog.ts': `export async function run(adminFetch, id) {
+  // admin-query-imperative: tagger-log-download
+  return adminResponse(adminFetch, \`/library/tagger/logs/\${id}\`);
+}\n`,
   'personas/helpers.ts': `export async function run(style, seed, size) {
   // admin-query-imperative: random-avatar-download
   return fetch(\`https://api.dicebear.com/9.x/\${style}/png?seed=\${seed}&size=\${size}\`);

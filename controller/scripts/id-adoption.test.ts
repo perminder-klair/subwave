@@ -18,9 +18,9 @@
 
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { removeTempDir } from './test-utils/temp-dir.js';
 
 // Golden pairs from Navidrome PR #5824's own tests (pinned in
@@ -50,6 +50,7 @@ const stemCache = await import('../src/music/stem-cache.js');
 const rotation = await import('../src/music/id-rotation.js');
 const { ROTATION_PREFIX } = await import('../src/music/tagger-progress.js');
 const { checkFacets } = await import('../src/music/facet-check.js');
+const { soundWords, trackAcoustics } = await import('../src/music/sound-line.js');
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 const sql = db.requireDb();
 
@@ -68,7 +69,9 @@ db.upsertTrackAnalysis(OLD_HEX, {
 db.setOriginalYear(OLD_HEX, 1978); // MusicBrainz resolution — must outrank walk-time album-tag year
 // 1978 is the era the row resolves to at this point, so the write leaves
 // text_vector_dirty = 0 — the state the adoption must carry across.
-db.upsertTrackVector(OLD_HEX, [1, 2, 3, 4, 5, 6, 7, 8], 1978);
+// With the Sound: words it was built from (#2236), which describe the vector too.
+const OLD_SOUND = soundWords(trackAcoustics(db.getTrack(OLD_HEX)!));
+db.upsertTrackVector(OLD_HEX, [1, 2, 3, 4, 5, 6, 7, 8], 1978, OLD_SOUND);
 db.upsertTrackAudioVector(OLD_HEX, new Float32Array(512).fill(0.25));
 // …then something changed the row's era text, so the stored vector no longer
 // describes it (#1418 follow-up). The marker is NOT NULL DEFAULT 0, so a
@@ -86,6 +89,10 @@ writeFileSync(join(oldStemsDir, 'head-drums.flac'), Buffer.alloc(16));
 
 db.upsertTrackMeta(OLD_NANO, { title: 'Nano', artist: 'C', album: 'D', duration: 100 });
 db.upsertTrackTags(OLD_NANO, { moods: ['stale'], energy: 'low', source: 'llm' });
+// An album's one-year decision (Library → Era) wrote over a looked-up year; its
+// record of that year (era_forced_from) must travel with the year it describes.
+db.setOriginalYear(OLD_NANO, 1960);
+db.setDecisionOriginalYear(OLD_NANO, 1975, '\u0000d');
 
 db.upsertTrackMeta(KEEP, { title: 'Keeper', artist: 'E', album: 'F', duration: 90 });
 db.upsertTrackTags(KEEP, { moods: ['sunny'], energy: 'high', source: 'llm' });
@@ -188,6 +195,14 @@ await test('a carried MusicBrainz year outranks the walk-time album-tag year', (
   assert.equal(row.original_year_source, 'musicbrainz');
 });
 
+await test('an album decision\'s record of a track\'s year moves with that year', () => {
+  const row = sql.prepare('SELECT original_year, original_year_source FROM tracks WHERE id = ?').get(NEW_NANO) as Record<string, unknown>;
+  assert.deepEqual({ ...row }, { original_year: 1975, original_year_source: 'manual' });
+  assert.equal(db.restoreDecisionOriginalYear(NEW_NANO), true, 'removing the decision on the new id');
+  const back = sql.prepare('SELECT original_year, original_year_source FROM tracks WHERE id = ?').get(NEW_NANO) as Record<string, unknown>;
+  assert.deepEqual({ ...back }, { original_year: 1960, original_year_source: 'musicbrainz' }, 'gives back the looked-up year');
+});
+
 await test('text and audio vectors move to the new id', () => {
   assert.equal(db.hasVector(NEW_HEX), true);
   assert.equal(db.hasVector(OLD_HEX), false);
@@ -201,6 +216,11 @@ await test('the stale-vector marker rides with the vector it describes', () => {
   // Nothing moved onto NANO (neither side had a vector), so it keeps its own.
   const untouched = sql.prepare('SELECT text_vector_dirty FROM tracks WHERE id = ?').get(NEW_NANO) as { text_vector_dirty: number };
   assert.equal(untouched.text_vector_dirty, 0);
+  const sound = (id: string) =>
+    (sql.prepare('SELECT text_vector_sound AS s FROM tracks WHERE id = ?').get(id) as { s: string | null }).s;
+  assert.ok(OLD_SOUND.measured.length > 0, 'the fixture vector was built from some words');
+  assert.deepEqual(JSON.parse(sound(NEW_HEX) ?? 'null'), OLD_SOUND, 'and so do the words it was built from');
+  assert.equal(sound(NEW_NANO), null);
 });
 
 await test('play history follows the track', () => {
@@ -212,6 +232,19 @@ await test('the stems dir is renamed to the new id', () => {
   assert.equal(existsSync(stemCache.dirFor(NEW_HEX)), true);
   assert.equal(existsSync(oldStemsDir), false);
   assert.equal(existsSync(join(stemCache.dirFor(NEW_HEX), 'head-drums.flac')), true);
+});
+
+// The rename moves a stem dir under the stem cache's stored size. A walk
+// whose readdir listed the old name before the rename stored a trusted
+// figure one dir short; bracketed in the usage journal, such a walk measures
+// both names again (#2317, scripts/stem-usage-orderings.test.ts).
+await test('the stems rename is bracketed in the usage journal under both names', () => {
+  const text = readFileSync(join(stateDir, 'stem-cache-usage.journal'), 'utf8');
+  for (const id of [OLD_HEX, NEW_HEX]) {
+    const name = encodeURIComponent(basename(stemCache.dirFor(id)));
+    assert.match(text, new RegExp(`^\\+ \\S+ ${name} \\d+ \\d+$`, 'm'), `${id} opened`);
+    assert.match(text, new RegExp(`^= \\S+ ${name}$`, 'm'), `${id} closed`);
+  }
 });
 
 await test('a new row that already carries its own tags is not clobbered', () => {
@@ -242,7 +275,7 @@ await test('the journal records the confirmed map for the controller to apply', 
 
 await test('facet status follows the adopted track and its merged columns', () => {
   const facets = (id: string) => Object.fromEntries(
-    (sql.prepare('SELECT facet, status, attempts FROM track_facet_status WHERE track_id = ?').all(id) as
+    (sql.prepare('SELECT facet, status, attempts FROM track_facet_status WHERE track_id = ? AND facet <> \'year\'').all(id) as
       Array<{ facet: string; status: string; attempts: number }>)
       .map((r) => [r.facet, r.status === 'failed' ? `failed×${r.attempts}` : r.status]),
   );

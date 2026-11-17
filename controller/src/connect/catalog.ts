@@ -137,16 +137,63 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
       },
       {
         method: 'GET',
+        path: '/lyrics/current',
+        summary: 'Lyrics for the track a listener is hearing',
+        description:
+          'Lyrics for a library track, normalized from the music server\'s ' +
+          'structured lyrics, or from LRCLIB for a track the music server has no ' +
+          'timed lyrics for when the operator has that fallback on (`source` says ' +
+          'which; `pending: true` means a lookup is running, so ask again shortly). ' +
+          'A listener hears the stream a buffer behind the live ' +
+          'edge, so pass the `songId` the player is showing; the station answers ' +
+          'for the on-air track or one of the three before it, and 409s anything ' +
+          'older. Omit it for the on-air track. Timed lines carry `startMs` on the ' +
+          'PLAYED timeline (a trimmed silent head already taken off), so compare ' +
+          'them with elapsed time since the track started; untimed lines carry ' +
+          'null. `offsetMs` is the station\'s correction for this track: add it to ' +
+          'elapsed time before choosing the active line. Empty `lines` means the ' +
+          'track has no lyrics (or is not a library track). A 503 means the music ' +
+          'server did not answer — retry after `Retry-After`, never read it as "no ' +
+          'lyrics". 403 when the operator has the Lyrics panel switched off. ' +
+          'Station-gated like `/similar-tracks`: open on a public station.',
+        auth: 'station',
+        queryParams: [
+          {
+            name: 'songId',
+            description: 'The track the player is showing (now-playing\'s `subsonic_id`). Omit for the on-air track.',
+            example: 'a1b2c3',
+          },
+        ],
+        responseExample: {
+          songId: 'a1b2c3',
+          synced: true,
+          offsetMs: 0,
+          lines: [
+            { startMs: 12500, text: 'First lyric line' },
+            { startMs: 15300, text: 'Second lyric line' },
+          ],
+          source: 'music-server',
+          pending: false,
+        },
+      },
+      {
+        method: 'GET',
         path: '/state',
         summary: 'Queue & history',
         description:
           'The upcoming queue and recent play history, plus the active theme id and ' +
-          'station timezone. Polled by the web player every 5s alongside /now-playing. ' +
+          'station timezone. Current and upcoming items carry `duration` (playable seconds); ' +
+          'upcoming items carry `airsAt`, a live-edge forecast of when they start. Both are ' +
+          'absent when the station cannot measure them. ' +
+          'Polled by the web player every 5s alongside /now-playing. ' +
           'The DJ booth log is operator diagnostics and is not part of this read.',
         auth: 'none',
         responseExample: {
           current: { title: 'Midnight City', artist: 'M83', source: 'auto', startedAt: 1720000000000 },
-          upcoming: [{ title: 'Open Eye Signal', artist: 'Jon Hopkins', requestedBy: 'auto' }],
+          upcoming: [{
+            title: 'Open Eye Signal', artist: 'Jon Hopkins', requestedBy: 'auto',
+            duration: 468.2, airsAt: '2026-10-30T14:32:05.000Z',
+          }],
           history: [{ title: 'Nightcall', artist: 'Kavinsky' }],
           autoPick: true,
           autoLink: true,

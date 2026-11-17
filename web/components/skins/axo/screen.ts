@@ -49,12 +49,9 @@ const TITLE_FITS = [
 /** Progress segments in the bar. */
 export const SEGMENTS = 36;
 
-// Advance per character in ems. The title is set in the dot-matrix face,
-// which is monospaced at exactly 0.6; the rest are estimates that lean wide:
-// the display face's italic runs about half an em, the mono 0.6 plus its
-// tracking. The scene measures each row once drawn and squeezes any that
-// still overflow.
-const DOT_EM = 0.6;
+// Advance per character in ems. An estimate that leans wide: the display
+// face's italic runs about half an em, the mono 0.6 plus its tracking. The
+// scene measures each row once drawn and squeezes any that still overflow.
 const DISPLAY_EM = 0.52;
 const MONO_EM = 0.6;
 
@@ -91,11 +88,11 @@ export function wrapLines(text: string, maxChars: number, maxLines = Infinity): 
 /** The largest title size whose wrap fits its line budget. */
 export function titleFit(title: string): { size: number; lines: string[] } {
   for (const fit of TITLE_FITS.slice(0, -1)) {
-    const lines = wrapLines(title, charsAt(fit.size, DOT_EM));
+    const lines = wrapLines(title, charsAt(fit.size, DISPLAY_EM));
     if (lines.length <= fit.lines) return { size: fit.size, lines };
   }
   const last = TITLE_FITS[TITLE_FITS.length - 1]!;
-  return { size: last.size, lines: wrapLines(title, charsAt(last.size, DOT_EM), last.lines) };
+  return { size: last.size, lines: wrapLines(title, charsAt(last.size, DISPLAY_EM), last.lines) };
 }
 
 export interface ScreenRow { text: string; y: number }

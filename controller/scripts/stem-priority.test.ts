@@ -306,6 +306,26 @@ await test('an orphan dir with no catalogue row is evicted before anything real'
   assert.deepEqual(policy.stemEvictionOrder(dirs).map(d => d.dir), ['orphan', 'real-but-unblendable']);
 });
 
+await test('queued tracks go last, each group in its own order; no queue is the same array', () => {
+  const ordered = policy.stemEvictionOrder([
+    { dir: 'aired-old', mtimeMs: 1, priority: 320 },
+    { dir: 'held', mtimeMs: 999, priority: 200 },
+    { dir: 'aired-new', mtimeMs: 50, priority: 320 },
+    { dir: 'next', mtimeMs: 998, priority: 100 },
+  ]);
+  const id = (d: { dir: string }) => d.dir;
+  assert.deepEqual(ordered.map(id), ['next', 'held', 'aired-old', 'aired-new']);
+  assert.deepEqual(
+    policy.evictQueuedLast(ordered, new Set(['held', 'next']), id).map(id),
+    ['aired-old', 'aired-new', 'next', 'held'],
+  );
+  // Off (no set), an empty set, or a set naming nothing cached: the very same
+  // array, so the sweep is develop's.
+  assert.equal(policy.evictQueuedLast(ordered, undefined, id), ordered);
+  assert.equal(policy.evictQueuedLast(ordered, new Set(), id), ordered);
+  assert.equal(policy.evictQueuedLast(ordered, new Set(['not-cached']), id), ordered);
+});
+
 await test('the sweep keeps what the scan earned, not what was written last', async () => {
   // The inversion this fixes: the backfill writes the BEST tracks FIRST, so
   // under the old oldest-mtime-first sweep they were the first evicted — and

@@ -1,10 +1,33 @@
 // Use absolute-floor silence measurements for cues, never relative intro/outro estimates that
-// can mistake quiet music for silence. Bound trims with the minimum gap, edge margins, and
+// can mistake quiet music for silence. The whole-file `edges` facet (both ends of the WHOLE
+// decoded file, and its decoded length) outranks the head/tail window figures when measured. Bound trims with the minimum gap, edge margins, and
 // per-edge ceilings (MAX_LEAD_TRIM_SEC, MAX_TAIL_TRIM_SEC); unknown measurements preserve the
 // whole track.
+//
+// The one exception to "absolute floor only" is its own switch and its own
+// measurement: the AUDIBLE end of a FADE (transitions.fadeAudibleEnd). On a
+// fade the absolute floor lands seconds after the music stopped being
+// audible, so the exit crossfade overlapped a near-silent tail. With the
+// switch on, a fade whose tail carries a loudness curve (tail v3) is cut at
+// the last curve point within fadeAudibleEndDb of the track's own loudness —
+// a relative level, but read off a real R128 loudness measurement of the
+// tail, never off the intro/outro gates. It only ever moves the end EARLIER
+// than the trim would, never at/before cueIn + 1 s, applies with the silence
+// trim on or off, and reaches every consumer through resolveSilenceTrim /
+// playableSpanSec (one path, cutFrom). resolveAudibleEnd tells the queue the
+// cut applied, so the exit canvas is sized on it without re-deriving it.
+//
+// The whole-track fallback (the tail series never reaches the threshold: a
+// drone or room noise after the music keeps the whole tail window under it)
+// is bounded on its own: it may land only within WHOLE_CURVE_REACH_SEC before
+// the end the trim (or the file) gives. Past that, a quiet coda is far more
+// likely music than noise, so there is no cut and the track ends as it does
+// with the switch off.
 
 import * as settings from '../settings.js';
 import * as library from './library.js';
+import { audibleEndSec, parseLoudnessCurve, type LoudnessCurve } from './loudness-curve.js';
+import type { AudibleEnd } from './mix.js';
 
 // Keeps the cut off the attack or the decay's last ring; must clear the
 // analyzer's frame quantisation (~93ms at 22.05 kHz).
@@ -25,6 +48,12 @@ const MAX_LEAD_TRIM_SEC = 30;
 // header understates the decodable file by more than ~10 s.
 const MAX_TAIL_TRIM_SEC = 600;
 
+// How far before the end the trim (or the file) gives the audible-end cut may
+// land when it falls back to the whole-track series. The measured cases it
+// exists for (a drone or room noise after the music) ran 23-48 s past the
+// music; a fade-classified track whose quiet coda runs longer keeps its coda.
+export const WHOLE_CURVE_REACH_SEC = 60;
+
 export interface SilenceTrimTrack {
   id?: string | null;
   // Subsonic songs spell it `duration`, library rows `durationSec`; both seconds.
@@ -33,6 +62,18 @@ export interface SilenceTrimTrack {
   leadSilenceMs?: number | null;
   tailSilenceMs?: number | null;
   tailStartMs?: number | null;
+  // Whole-file facet `edges`. When measured (decodedDurationMs set) they
+  // replace the three window figures above as one set. A shape that carries
+  // the `decodedDurationMs` key, null included, answers for the edges itself
+  // (a library-row mapper writes it even when unmeasured); one without it
+  // has the stored row looked up.
+  edgeLeadMs?: number | null;
+  edgeTailMs?: number | null;
+  decodedDurationMs?: number | null;
+  // The audible-end cut (transitions.fadeAudibleEnd) reads the measured ending
+  // and the body loudness: track object first, else the library record.
+  outro?: { ending?: string | null; loudnessCurve?: unknown; wholeLoudnessCurve?: LoudnessCurve } | null;
+  loudnessLufs?: number | null;
 }
 
 export interface SilenceTrimResult {
@@ -54,7 +95,8 @@ function usableTrimSec(gapMs: number | null | undefined, minGapMs: number, maxSe
   return Math.min(maxSec, kept / 1000);
 }
 
-// Resolved in one library read. Track object first, else the library record,
+// Resolved in at most one library read, and none for a track object that
+// answers every field itself. Track object first, else the library record,
 // the same precedence queue.mixAnalysisFor uses.
 interface Measured {
   leadMs: number | null | undefined;
@@ -63,17 +105,43 @@ interface Measured {
   durSec: number;
 }
 
+const msOrNull = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+
+// The edges facet as one set, or null: lead, tail and the decoded length are
+// one measurement, never mixed with a window figure.
+function edgesOf(t: SilenceTrimTrack | null | undefined): { lead: number; tail: number; dur: number } | null {
+  const dur = msOrNull(t?.decodedDurationMs);
+  const lead = msOrNull(t?.edgeLeadMs);
+  const tail = msOrNull(t?.edgeTailMs);
+  return dur != null && dur > 0 && lead != null && tail != null ? { lead, tail, dur } : null;
+}
+
 function measure(track: SilenceTrimTrack): Measured {
+  let stored: SilenceTrimTrack | null | undefined;
+  const rec = (): SilenceTrimTrack | null => {
+    if (stored === undefined) stored = track.id ? (library.get(track.id) ?? null) : null;
+    return stored ?? null;
+  };
+  let durSec = Number(track.duration ?? track.durationSec) || 0;
+  // Edges on the track itself, else the stored ones: they outrank any window
+  // figure, which only ever saw the first ANALYZE_SECONDS and the last
+  // ANALYZE_OUTRO_SECONDS against a tagged duration. A shape carrying the key
+  // (null included) has already said whether there are any.
+  const edges = edgesOf(track) ?? (track.decodedDurationMs !== undefined ? null : edgesOf(rec()));
+  if (edges) {
+    if (durSec <= 0) durSec = Number(rec()?.durationSec) || 0;
+    return { leadMs: edges.lead, tailMs: edges.tail, tailStartMs: edges.dur - edges.tail, durSec };
+  }
   let leadMs = track.leadSilenceMs;
   let tailMs = track.tailSilenceMs;
   let tailStartMs = track.tailStartMs;
-  let durSec = Number(track.duration ?? track.durationSec) || 0;
-  if ((leadMs == null || tailMs == null || tailStartMs == null || durSec <= 0) && track.id) {
-    const rec = library.get(track.id);
-    if (leadMs == null) leadMs = rec?.leadSilenceMs ?? null;
-    if (tailMs == null) tailMs = rec?.tailSilenceMs ?? null;
-    if (tailStartMs == null) tailStartMs = rec?.tailStartMs ?? null;
-    if (durSec <= 0) durSec = rec?.durationSec ?? 0;
+  if (leadMs == null || tailMs == null || tailStartMs == null || durSec <= 0) {
+    const r = rec();
+    if (leadMs == null) leadMs = r?.leadSilenceMs ?? null;
+    if (tailMs == null) tailMs = r?.tailSilenceMs ?? null;
+    if (tailStartMs == null) tailStartMs = r?.tailStartMs ?? null;
+    if (durSec <= 0) durSec = Number(r?.durationSec) || 0;
   }
   return { leadMs, tailMs, tailStartMs, durSec };
 }
@@ -114,27 +182,96 @@ function minGapOf(cfg: { minGapMs?: unknown } | null | undefined): number {
   return Number.isFinite(cfg?.minGapMs as number) ? (cfg?.minGapMs as number) : Infinity;
 }
 
+// Where a FADE stops being audible, when transitions.fadeAudibleEnd is on and
+// that is before the end `cut` gives; null = no change. Needs a fade outro
+// with a valid loudness curve and a body loudness (track first, else the
+// library row, the same ladder as the queue's loudness gain).
+function audibleEndFor(track: SilenceTrimTrack, m: Measured, cut: SilenceTrimResult): number | null {
+  const tr = settings.get()?.transitions;
+  if (tr?.fadeAudibleEnd !== true) return null;
+  const rec = track.id && (track.outro == null || track.loudnessLufs == null) ? library.get(track.id) : null;
+  const outro = track.outro ?? rec?.outro ?? null;
+  if (outro?.ending !== 'fade') return null;
+  const curve = parseLoudnessCurve(outro.loudnessCurve);
+  if (!curve) return null;
+  const body = track.loudnessLufs ?? rec?.loudnessLufs ?? null;
+  // The dial is bounded by load() (repair) and update() (refusal); an
+  // unreadable one reads as no audible end, never as some other depth.
+  // When the tail never reaches it (a drone or room noise after the music
+  // fills the whole tail window), the whole-track series places the end; it
+  // is present only with transitions.tailFromCurve on (music/tail-levels.ts).
+  const otherwise = cut.cueOutSec ?? endReferenceSec(m);
+  if (otherwise == null) return null;
+  const dropDb = Number(tr.fadeAudibleEndDb);
+  const whole = outro.wholeLoudnessCurve;
+  let e = audibleEndSec(curve, body, dropDb);
+  if (e == null && whole) {
+    // The last qualifying whole-track point; one before the reach means no
+    // point inside it qualifies either.
+    const w = audibleEndSec(whole, body, dropDb);
+    e = w != null && w >= otherwise - WHOLE_CURVE_REACH_SEC ? w : null;
+  }
+  if (e == null) return null;
+  const endSec = Math.round(e * 1000) / 1000;
+  // Only ever earlier than the end the trim (or the file) gives…
+  if (endSec >= otherwise) return null;
+  // …and never an empty request: a cue_out at/before the cue_in + 1 s.
+  if (endSec <= (cut.cueInSec ?? 0) + 1) return null;
+  return endSec;
+}
+
+// The cue points and whether the audible-end cut set the end. The ONE path
+// resolveSilenceTrim, playableSpanSec and resolveAudibleEnd all read.
+function cutFrom(track: SilenceTrimTrack, m: Measured): SilenceTrimResult & { audibleEndSec: number | null } {
+  const cfg = settings.get()?.silenceTrim;
+  const cut = cfg?.enabled === true ? trimFrom(m, minGapOf(cfg)) : NONE;
+  const audible = audibleEndFor(track, m, cut);
+  return audible == null
+    ? { cueInSec: cut.cueInSec, cueOutSec: cut.cueOutSec, audibleEndSec: null }
+    : { cueInSec: cut.cueInSec, cueOutSec: audible, audibleEndSec: audible };
+}
+
+// The cue points and the audible-end cut from one resolution: the drain reads
+// both, and each resolution can read the library record (and, with
+// transitions.tailFromCurve on, the whole-file curve).
+export function resolveTrimAndAudibleEnd(
+  track: SilenceTrimTrack | null | undefined,
+): SilenceTrimResult & { audibleEnd: AudibleEnd | null } {
+  if (!track) return { ...NONE, audibleEnd: null };
+  // Both switches off: nothing to resolve (and no library read), as before.
+  const s = settings.get();
+  if (s?.silenceTrim?.enabled !== true && s?.transitions?.fadeAudibleEnd !== true) return { ...NONE, audibleEnd: null };
+  const r = cutFrom(track, measure(track));
+  return {
+    cueInSec: r.cueInSec,
+    cueOutSec: r.cueOutSec,
+    audibleEnd: r.audibleEndSec == null ? null : { endSec: r.audibleEndSec, cueInSec: r.cueInSec },
+  };
+}
+
 export function resolveSilenceTrim(
   track: SilenceTrimTrack | null | undefined,
 ): SilenceTrimResult {
-  if (!track) return NONE;
-  const cfg = settings.get()?.silenceTrim;
-  if (cfg?.enabled !== true) return NONE;
-  return trimFrom(measure(track), minGapOf(cfg));
+  const { cueInSec, cueOutSec } = resolveTrimAndAudibleEnd(track);
+  return { cueInSec, cueOutSec };
+}
+
+export function resolveAudibleEnd(track: SilenceTrimTrack | null | undefined): AudibleEnd | null {
+  return resolveTrimAndAudibleEnd(track).audibleEnd;
 }
 
 // Seconds this track will actually make sound. Null means "no answer", never
 // zero. Never subtract the cue points locally (#1594). The end is
 // `cueOutSec ?? endReferenceSec`, never the tagged duration, and excludes the
 // #447 length cap, which is an on-air cut its one caller is exempt from.
+// Trim off: the file plays whole (to the end reference) unless the
+// audible-end cut ends it earlier.
 export function playableSpanSec(
   track: SilenceTrimTrack | null | undefined,
 ): number | null {
   if (!track) return null;
   const m = measure(track);
-  const cfg = settings.get()?.silenceTrim;
-  // Trim off: the file plays whole, so the span is the end reference alone.
-  const { cueInSec, cueOutSec } = cfg?.enabled === true ? trimFrom(m, minGapOf(cfg)) : NONE;
+  const { cueInSec, cueOutSec } = cutFrom(track, m);
   const endSec = cueOutSec ?? endReferenceSec(m);
   if (endSec == null) return null;
   const span = endSec - (cueInSec ?? 0);
@@ -147,9 +284,17 @@ export function shiftOnsetMs(
   track: SilenceTrimTrack | null | undefined,
   onsetMs: number | null | undefined,
 ): number | null {
+  return shiftOnsetByCueMs(resolveSilenceTrim(track).cueInSec, onsetMs);
+}
+
+// shiftOnsetMs for a cue already resolved, for a reader that has the PLAY
+// rather than only the track: the cue a drained play was stamped with.
+export function shiftOnsetByCueMs(
+  cueInSec: number | null | undefined,
+  onsetMs: number | null | undefined,
+): number | null {
   if (onsetMs == null || !Number.isFinite(onsetMs)) return null;
-  const { cueInSec } = resolveSilenceTrim(track);
-  if (cueInSec == null) return onsetMs;
+  if (typeof cueInSec !== 'number' || !Number.isFinite(cueInSec)) return onsetMs;
   return Math.max(0, Math.round(onsetMs - cueInSec * 1000));
 }
 

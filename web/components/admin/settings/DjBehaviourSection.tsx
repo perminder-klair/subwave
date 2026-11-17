@@ -187,7 +187,7 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
         </div>
       </Card>
 
-      <Advanced note="the pause-and-talk threshold, prompt memory and what's coming">
+      <Advanced note="the pause-and-talk threshold, prompt memory, banter ducking and what's coming">
         <Card title="Pause-and-talk" sub="the length that earns a real pause">
           <div className="field" data-invalid={pauseTalkAria.invalid || undefined}>
             <Label {...pauseTalkAria.labelProps}>Minimum segment length (seconds)</Label>
@@ -244,6 +244,27 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
             and phrasing. Larger values use more model context. The session rolls after four hours;
             extended and storyteller segments keep their longer per-line detail automatically.
           </div>
+        </Card>
+
+        <Card title="Banter" sub="how the music sits under a multi-voice exchange">
+          <CueRow
+            id="dj-hold-duck-between-speakers"
+            label="Hold the music between presenters"
+            hint={form.djBehaviour.holdDuckBetweenSpeakers ? (
+              <>
+                On: one continuous duck for the whole back-and-forth. The music never lifts between
+                speakers, so the lines run together with no fade between them — the way a broadcast
+                station talks over a song.
+              </>
+            ) : (
+              <>
+                Off: the regular state. The music lifts as each line ends and ducks again for the next,
+                so a short fade sits between presenters. Choose On to remove that fade.
+              </>
+            )}
+            on={!!form.djBehaviour.holdDuckBetweenSpeakers}
+            onChange={on => setBehaviour({ holdDuckBetweenSpeakers: on })}
+          />
         </Card>
 
         <Card title="Extended Sleeve Notes" sub="coming soon">

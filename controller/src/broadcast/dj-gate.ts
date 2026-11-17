@@ -7,7 +7,7 @@ import * as settings from '../settings.js';
 import { zonedParts } from '../time.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { autoTimeCheckAllowed } from './clock-policy.js';
-import { talkSlot, openMinuteFor } from './talk-scheduler.js';
+import { talkSlot, openMinuteFor, talkMinute } from './talk-scheduler.js';
 
 export function shouldFire(kind, now = new Date()) {
   // Voice switch sits above the ladder: it isn't a cadence. Manual
@@ -16,7 +16,8 @@ export function shouldFire(kind, now = new Date()) {
 
   // effectiveFrequency bumps a DJ-mode persona one rung up the ladder.
   const f = settings.effectiveFrequency(settings.getEffectivePersona(now));
-  const m = now.getMinutes();
+  // The station minute, the one the slot table reads (talk-scheduler.ts).
+  const m = talkMinute(now);
 
   // 'silent' never auto-fires; manual triggers bypass this gate entirely.
   if (f === 'silent') return false;
@@ -38,7 +39,7 @@ export function shouldFire(kind, now = new Date()) {
     // operator's manual "Time check" pad keeps speaking the time.
     if (!autoTimeCheckAllowed()) return false;
     // Station-zone hour, so the every-other-hour cadence follows the
-    // operator's clock. Minute slots stay on process time to match the cron.
+    // operator's clock, like the slot's own minutes.
     if (f === 'quiet') return zonedParts(now).hour % 2 === 0;
     return true;
   }

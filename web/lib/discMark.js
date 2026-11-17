@@ -1,5 +1,5 @@
 // Shared SUB/WAVE disc mark for the favicons and PWA install icons. Kept in
-// lockstep with app/assets/icon.png and the .bs-wordmark-disc-face hover state
+// lockstep with getsubwave/app:assets/icon.png and the .bs-wordmark-disc-face hover state
 // in globals.css. Inline SVG so next/og (Satori) reproduces it at any size.
 
 const BG = '#100e0c'; // dark plate (--bg)

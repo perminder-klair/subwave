@@ -39,7 +39,7 @@ await settings.load();
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
-const { resolveSilenceTrim, shiftOnsetMs } = await import('../src/music/silence-trim.js');
+const { resolveSilenceTrim, shiftOnsetMs, playableSpanSec, resolveAudibleEnd } = await import('../src/music/silence-trim.js');
 
 await library.load();
 
@@ -95,4 +95,150 @@ test('a track object with its own fresh analysis outranks the stored row', () =>
   });
   assert.equal(t.cueInSec, 1.75);
   assert.equal(t.cueOutSec, null);
+});
+
+// The whole-file `edges` facet: the same absolute floor, but measured over
+// the whole decoded file rather than a 40 s head and a 20 s tail window, and
+// ended on the decoded length rather than the container tag.
+db.upsertTrackMeta('edged', { title: 'Edged', artist: 'A', album: 'Al', duration: 200 } as never);
+db.upsertTrackAnalysis('edged', {
+  bpm: 120, musicalKey: 'C', introMs: 8_000, confidence: 1,
+  leadSilenceMs: 6_000, tailSilenceMs: 9_000, tailStartMs: 191_000,
+});
+db.writeFacetResults('edged', { source: 'url', edges: { leadMs: 3_000, tailMs: 12_000, durationMs: 201_000 } });
+
+test('library.get exposes the edges facet', () => {
+  const rec = library.get('edged');
+  assert.equal(rec.edgeLeadMs, 3_000);
+  assert.equal(rec.edgeTailMs, 12_000);
+  assert.equal(rec.decodedDurationMs, 201_000);
+});
+
+test('stored edges outrank the window figures, ending on the decoded length', () => {
+  const t = resolveSilenceTrim({ id: 'edged', duration: 200 });
+  assert.equal(t.cueInSec, 2.75);
+  // 201 s decoded − 12 s of trailing silence, + the 250 ms margin.
+  assert.equal(t.cueOutSec, 189.25);
+  assert.equal(playableSpanSec({ id: 'edged', duration: 200 }), 186.5);
+});
+
+test('window figures on the track object do not beat stored edges', () => {
+  // A pick carrying the head/tail windows' answer is still the narrower
+  // measurement; only edges on the object itself outrank the stored ones.
+  const t = resolveSilenceTrim({
+    id: 'edged', duration: 200, leadSilenceMs: 2_000, tailSilenceMs: 0, tailStartMs: 200_000,
+  });
+  assert.equal(t.cueInSec, 2.75);
+  assert.equal(t.cueOutSec, 189.25);
+  const own = resolveSilenceTrim({
+    id: 'edged', duration: 200, edgeLeadMs: 2_000, edgeTailMs: 0, decodedDurationMs: 199_000,
+  });
+  assert.equal(own.cueInSec, 1.75);
+  assert.equal(own.cueOutSec, null);
+});
+
+test('a shape that carries the edges key answers for itself, so it is not looked up', () => {
+  // A library row read before the edges were measured: the mapper wrote the
+  // key as null, which says "no edges", so the resolver takes the window
+  // figures it carries rather than reading the stored row again.
+  const t = resolveSilenceTrim({
+    id: 'edged', duration: 200, leadSilenceMs: 2_000, tailSilenceMs: 0, tailStartMs: 200_000,
+    edgeLeadMs: null, edgeTailMs: null, decodedDurationMs: null,
+  });
+  assert.equal(t.cueInSec, 1.75);
+  assert.equal(t.cueOutSec, null);
+  // The library's own shape carries the key, and the stored edges with it.
+  const rec = library.get('edged');
+  assert.ok('decodedDurationMs' in rec);
+  assert.equal(resolveSilenceTrim(rec).cueOutSec, 189.25);
+});
+
+test('with the trim off, the playable span still ends on the decoded length', async () => {
+  await settings.update({ silenceTrim: { enabled: false } } as never);
+  try {
+    assert.equal(playableSpanSec({ id: 'edged', duration: 200 }), 201);
+  } finally {
+    await settings.update({ silenceTrim: { enabled: true, minGapMs: 1_500 } } as never);
+  }
+});
+
+// The audible-end cut of a fade (transitions.fadeAudibleEnd) reads the outro's
+// loudness curve and the body loudness off the same projection: a curve that
+// does not survive the write → outro_json → library.get round trip disables
+// the cut silently, exactly like a missing silence column.
+db.upsertTrackMeta('faded', { title: 'Faded', artist: 'A', album: 'Al', duration: 220 } as never);
+db.upsertTrackAnalysis('faded', {
+  bpm: 120, musicalKey: 'C', introMs: 8_000, confidence: 1, loudnessLufs: -10,
+  leadSilenceMs: 0, tailSilenceMs: 2_730, tailStartMs: 217_270,
+  outro: {
+    startMs: 205_300, ending: 'fade', lufs: -20, bpm: 120, beats: null, bars: null,
+    // -12 LUFS from 210.0 s, -30 at 211.0 s (body - 20), then gone.
+    loudnessCurve: { startMs: 210_000, stepMs: 500, lufs: [-120, -250, -300, -400, -500] },
+  },
+});
+
+test('the audible-end cut resolves through the library: curve and body loudness', async () => {
+  assert.deepEqual(library.get('faded')?.outro?.loudnessCurve,
+    { startMs: 210_000, stepMs: 500, lufs: [-120, -250, -300, -400, -500] });
+  assert.equal(resolveSilenceTrim({ id: 'faded', duration: 220 }).cueOutSec, 217.52, 'off: the trim alone');
+  await settings.update({ transitions: { fadeAudibleEnd: true, fadeAudibleEndDb: 20 } } as never);
+  try {
+    assert.equal(resolveSilenceTrim({ id: 'faded', duration: 220 }).cueOutSec, 211);
+    assert.deepEqual(resolveAudibleEnd({ id: 'faded', duration: 220 }), { endSec: 211, cueInSec: null });
+    assert.equal(playableSpanSec({ id: 'faded', duration: 220 }), 211);
+  } finally {
+    await settings.update({ transitions: { fadeAudibleEnd: false } } as never);
+  }
+});
+
+test('with tailFromCurve on, the curve outro is derived on its first read, not by every get()', async () => {
+  const sqlRun = (q: string, ...a: unknown[]) => db.requireDb().prepare(q).run(...a);
+  // A whole-file curve whose tail series fades from -10 LUFS (205 s) to -60
+  // (215 s): derivable, so it replaces the stored outro's level readings.
+  const tail: number[] = [];
+  for (let t = 190_000; t <= 216_000; t += 500) {
+    tail.push(t <= 205_000 ? -100 : t <= 215_000 ? Math.round(-100 - (500 * (t - 205_000)) / 10_000) : -1000);
+  }
+  const curve = JSON.stringify({
+    whole: { startMs: 3_000, stepMs: 1_000, lufs: [-100, -100] },
+    tail: { startMs: 190_000, stepMs: 500, lufs: tail },
+  });
+  sqlRun('UPDATE tracks SET loudness_curve_json = NULL WHERE id = ?', 'faded');
+  await settings.update({ transitions: { tailFromCurve: true } } as never);
+  try {
+    const rec = library.get('faded');
+    // Written after get(): an eager projection would already hold the stored outro.
+    sqlRun('UPDATE tracks SET loudness_curve_json = ? WHERE id = ?', curve, 'faded');
+    assert.equal(rec.outro.loudnessCurve.startMs, 190_000, 'the curve was read when outro was');
+    assert.equal(rec.outro.ending, 'fade');
+    assert.ok(rec.outro.wholeLoudnessCurve, 'the whole-track series rides along');
+    // The same value every read, through JSON and spreads too.
+    assert.equal(rec.outro, rec.outro);
+    assert.deepEqual(JSON.parse(JSON.stringify(rec)).outro.loudnessCurve, rec.outro.loudnessCurve);
+    assert.equal({ ...rec }.outro, rec.outro);
+    // Assignable, like any record field.
+    rec.outro = null;
+    assert.equal(rec.outro, null);
+    // Off: the stored outro, exactly as before.
+    await settings.update({ transitions: { tailFromCurve: false } } as never);
+    assert.equal(library.get('faded').outro.loudnessCurve.startMs, 210_000);
+  } finally {
+    await settings.update({ transitions: { tailFromCurve: false } } as never);
+    sqlRun('UPDATE tracks SET loudness_curve_json = NULL WHERE id = ?', 'faded');
+  }
+});
+
+test('the drain reads the cue points and the audible end from one resolution', async () => {
+  const { resolveTrimAndAudibleEnd } = await import('../src/music/silence-trim.js');
+  const t = { id: 'faded', duration: 220 };
+  assert.deepEqual(resolveTrimAndAudibleEnd(t), { cueInSec: null, cueOutSec: 217.52, audibleEnd: null });
+  await settings.update({ transitions: { fadeAudibleEnd: true, fadeAudibleEndDb: 20 } } as never);
+  try {
+    const r = resolveTrimAndAudibleEnd(t);
+    assert.deepEqual(r, { ...resolveSilenceTrim(t), audibleEnd: resolveAudibleEnd(t) });
+    assert.deepEqual(r, { cueInSec: null, cueOutSec: 211, audibleEnd: { endSec: 211, cueInSec: null } });
+  } finally {
+    await settings.update({ transitions: { fadeAudibleEnd: false } } as never);
+  }
+  assert.deepEqual(resolveTrimAndAudibleEnd(null), { cueInSec: null, cueOutSec: null, audibleEnd: null });
 });

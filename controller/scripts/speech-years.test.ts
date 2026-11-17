@@ -142,7 +142,9 @@ test('currency and units keep their existing expansions and numeric readings', (
   assert.equal(normalizeForSpeech('$1967.50'), '1967.50 dollars');
   assert.equal(normalizeForSpeech('$2000 million'), '2000 million dollars');
   assert.equal(normalizeForSpeech('$2000k'), '2000 thousand dollars');
-  assert.equal(normalizeForSpeech('£1967'), '£1967');
+  // £ mirrors $ since #2103: the digits stay numeric, the symbol becomes the unit.
+  assert.equal(normalizeForSpeech('£1967'), '1967 pounds');
+  assert.equal(normalizeForSpeech('€1967'), '1967 euros');
   assert.equal(normalizeForSpeech('1967%'), '1967 percent');
   assert.equal(normalizeForSpeech('1967°F'), '1967 degrees Fahrenheit');
   assert.equal(normalizeForSpeech('1967 mph'), '1967 miles per hour');
@@ -157,12 +159,25 @@ for (const unit of ['ms', 'g', 'm', 'W', 'mg', 'cm', 'ml', 'kW', 'kHz', 'rpm', '
   });
 }
 
-for (const symbol of ['₹', '₩', '₽', '₦', '₺', '€', '£', '¥']) {
+// £ and € now expand like $ (see speech-text.test.ts); the remaining currency
+// glyphs have no expansion and must never receive year readings.
+for (const symbol of ['₹', '₩', '₽', '₦', '₺', '¥']) {
   test(`${symbol} currency quantities never receive year readings`, () => {
     assert.equal(normalizeForSpeech(`${symbol}1967`), `${symbol}1967`);
     assert.equal(normalizeForSpeech(`${symbol} 1967`), `${symbol} 1967`);
     assert.equal(normalizeForSpeech(`1967 ${symbol}`), `1967 ${symbol}`);
     assert.equal(normalizeForSpeech(`${symbol}1967-1972`), `${symbol}1967-1972`);
+  });
+}
+
+// A glued £/€ amount gains its spoken unit, but every digit run stays numeric;
+// spaced or trailing symbols keep the engine's reading, as for the glyphs above.
+for (const [symbol, unit] of [['£', 'pounds'], ['€', 'euros']]) {
+  test(`${symbol} currency quantities never receive year readings`, () => {
+    assert.equal(normalizeForSpeech(`${symbol}1967`), `1967 ${unit}`);
+    assert.equal(normalizeForSpeech(`${symbol} 1967`), `${symbol} 1967`);
+    assert.equal(normalizeForSpeech(`1967 ${symbol}`), `1967 ${symbol}`);
+    assert.equal(normalizeForSpeech(`${symbol}1967-1972`), `1967 ${unit}-1972`);
   });
 }
 

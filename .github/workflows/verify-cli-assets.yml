@@ -1,11 +1,12 @@
 name: Verify CLI assets
 
-# Catches stale cli/src/assets.generated.ts. If a contributor edits one of
-# the source compose files but forgets to run `npm --prefix cli run
-# embed-assets`, the committed copy drifts and `subwave init` materialises
-# the wrong content until the next tag push. This workflow regenerates the
-# file in CI and diffs it against the committed version. Pure check —
-# never writes back.
+# Catches stale cli/src/assets.generated.ts and cli/src/providers.generated.ts.
+# If a contributor edits one of the source compose files or the provider
+# catalogue but forgets to run `npm --prefix cli run embed-assets`, the
+# committed copy drifts and `subwave init` materialises the wrong content (or
+# `subwave setup` offers the wrong providers) until the next tag push. This
+# workflow regenerates both files in CI and diffs them against the committed
+# versions. Pure check — never writes back.
 
 on:
   pull_request:
@@ -14,7 +15,9 @@ on:
       - "docker-compose.byo.yml"
       - "docker-compose.dev.yml"
       - ".env.example"
+      - "controller/src/schemas/providers.ts"
       - "cli/src/assets.generated.ts"
+      - "cli/src/providers.generated.ts"
       - "cli/scripts/embed-assets.ts"
   push:
     branches: [main]
@@ -23,7 +26,9 @@ on:
       - "docker-compose.byo.yml"
       - "docker-compose.dev.yml"
       - ".env.example"
+      - "controller/src/schemas/providers.ts"
       - "cli/src/assets.generated.ts"
+      - "cli/src/providers.generated.ts"
       - "cli/scripts/embed-assets.ts"
 
 permissions:
@@ -46,7 +51,7 @@ jobs:
         run: npm run embed-assets
       - name: Diff against committed copy
         run: |
-          if ! git diff --exit-code -- cli/src/assets.generated.ts; then
-            echo "::error::cli/src/assets.generated.ts is out of sync. Run \`npm --prefix cli run embed-assets\` locally and commit the result."
+          if ! git diff --exit-code -- cli/src/assets.generated.ts cli/src/providers.generated.ts; then
+            echo "::error::cli/src/assets.generated.ts or cli/src/providers.generated.ts is out of sync. Run \`npm --prefix cli run embed-assets\` locally and commit the result."
             exit 1
           fi

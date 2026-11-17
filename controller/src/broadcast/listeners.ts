@@ -13,6 +13,7 @@ let lastCount: number | null = null;        // null = unknown (not yet polled, o
 let lastGoodCount: number | null = null;    // last count actually read from Icecast; null until the first success
 let peakSeen = 0;                            // running max of the deduped count this process run
 let consecutiveStatusFailures = 0;          // resets to 0 on every successful poll
+let lastMp3Start: string | null = null;     // mp3MountStart() of the last committed poll; null if it failed
 
 // Cached stream status from the same poll as lastCount. Served to /now-playing
 // (polled by every listener every 5s) so N listeners cost one status fetch per
@@ -87,6 +88,36 @@ function audioParam(src: any, key: 'samplerate' | 'channels'): number | null {
   return m ? Number(m[1]) : null;
 }
 
+// Only our broadcast mounts count. Anything else (e.g. an /admin source) is
+// ignored so stray test mounts don't inflate the numbers. Shared by the poll and
+// the idle wake probe so the two can't disagree on what a listener is.
+function broadcastMountSources(ic: any): any[] {
+  const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
+  return sources.filter((s: any) =>
+    BROADCAST_MOUNTS.some(m => String(s?.listenurl || '').includes(m))
+  );
+}
+
+// Un-deduped socket sum. Dedupe only folds Safari's paired sockets, so this is
+// above zero exactly when the deduped count is.
+function rawListenerSum(sources: any[]): number {
+  return sources.reduce((sum: number, s: any) => sum + Number(s.listeners || 0), 0);
+}
+
+// Which MP3 mount is up, as Icecast's `stream_start` (#2072). Icecast sets it
+// when a source connects, so it changes whenever the mount is created anew: a
+// mixer or container restart, a source reconnect. Icecast-KH 2.4.0-kh22 gives
+// "29/Oct/2026:11:58:12 +0000". The web player's idle skip plays only the MP3
+// mount, so that is the mount the idle window is tied to (stream-idle.ts). null
+// when the mount is missing or the field absent or blank: unknown must never
+// read as unchanged.
+export function mp3MountStart(icestats: unknown): string | null {
+  const mp3 = broadcastMountSources(icestats).filter(s => String(s?.listenurl || '').includes('/stream.mp3'));
+  const starts = mp3.map(s => s?.stream_start);
+  if (!starts.length || !starts.every(v => typeof v === 'string' && v.trim())) return null;
+  return starts.join('|');
+}
+
 // Coalesce overlapping polls into one in-flight run.
 export function singleFlight<T>(run: () => Promise<T>): () => Promise<T> {
   let inFlight: Promise<T> | null = null;
@@ -97,10 +128,28 @@ export function singleFlight<T>(run: () => Promise<T>): () => Promise<T> {
 }
 
 // pollCount() commits module state and is driven from three cadences at once
-// (15s monitor, the idle monitor's forced 5s refresh, POST /request's
-// refresh()). Without the single-flight guard a slow doomed poll can commit
+// (15s monitor, the idle monitor's forced 5s refresh, brought forward when its
+// wake probe sees a listener, POST /request's refresh()). Without the
+// single-flight guard a slow doomed poll can commit
 // after a younger successful one and overwrite its fresh state.
-const fetchCount = singleFlight(() => pollCount(true));
+//
+// The wake probe never sends a status request while a committed poll's is in
+// flight either: two overlapping status reads are what blew the deadline in
+// #1256. A poll waits out a probe already in flight (bounded by
+// PEEK_TIMEOUT_MS), and a probe stands aside while a poll runs. That holds
+// client-side only, since Icecast may still be serving a probe that timed out,
+// so a timed-out probe also stops probing for a tick (PEEK_BACKOFF_MS).
+let polling = false;
+let peeking: Promise<unknown> | null = null;
+const fetchCount = singleFlight(async () => {
+  polling = true;
+  try {
+    if (peeking) await peeking;
+    return await pollCount(true);
+  } finally {
+    polling = false;
+  }
+});
 
 async function pollCount(persistHistory: boolean) {
   let online = false;
@@ -110,16 +159,10 @@ async function pollCount(persistHistory: boolean) {
   let rawCount = 0; // un-deduped status sum — the fallback when admin is unreachable
   try {
     const r = await fetchWithTimeout(config.icecast.statusUrl, { timeoutMs: STATUS_TIMEOUT_MS });
-    const ic = ((await r.json()) as any)?.icestats;
-    const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
-    // Only our two broadcast mounts count. Anything else (e.g. an /admin
-    // source) is ignored so stray test mounts don't inflate the numbers.
-    const broadcastSources = sources.filter((s: any) =>
-      BROADCAST_MOUNTS.some(m => String(s?.listenurl || '').includes(m))
-    );
+    const icestats = ((await r.json()) as any)?.icestats;
+    const broadcastSources = broadcastMountSources(icestats);
     online = broadcastSources.length > 0;
-    rawCount = broadcastSources.reduce(
-      (sum: number, s: any) => sum + Number(s.listeners || 0), 0);
+    rawCount = rawListenerSum(broadcastSources);
     // Describe the broadcast off the primary mount (/stream.mp3), not whichever
     // source Icecast listed first — Opus is a different encode and would
     // misreport the figures listeners actually receive.
@@ -144,11 +187,14 @@ async function pollCount(persistHistory: boolean) {
 
     lastCount = current;
     lastGoodCount = current;
+    lastMp3Start = mp3MountStart(icestats);
     peakSeen = Math.max(peakSeen, current);
     lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate, sampleRate, channels };
     consecutiveStatusFailures = 0;
   } catch {
     lastCount = null;
+    // Not "unchanged": the mounts may be restarting (#2072).
+    lastMp3Start = null;
     // A transient fetch failure means "unknown", not offline (#461).
     consecutiveStatusFailures += 1;
     lastStatus = statusAfterFailure(lastStatus, consecutiveStatusFailures, STALE_STATUS_LIMIT, peakSeen);
@@ -196,10 +242,56 @@ export function getStreamStatus(): StreamStatus {
   return lastStatus;
 }
 
+// The MP3 mount's identity as the last committed poll saw it (mp3MountStart),
+// null before the first poll and after a failed one. Committed polls only: the
+// wake probe reads the same status but commits nothing (#1256).
+export function broadcastMountStart(): string | null {
+  return lastMp3Start;
+}
+
 // Force an immediate poll. Used by the request route so a listener who just
 // connected isn't rejected on a stale cached value.
 export async function refresh() {
   return fetchCount();
+}
+
+// Deadline on the idle wake probe, body read included: one probe interval, so
+// a slow Icecast costs a probe, never a stuck one.
+const PEEK_TIMEOUT_MS = 1000;
+
+// No probe for one idle tick (stream-idle.ts TICK_MS) after one blows that
+// deadline. Icecast may still be serving the abandoned read, and a slow Icecast
+// gets back the single committed reader it had before the probe. A fast failure
+// (refused, non-OK) says nothing about load, so it doesn't back off.
+const PEEK_BACKOFF_MS = 5000;
+let peekBackoffUntil = 0;
+
+// The idle monitor's wake probe (#2072): the raw broadcast-mount sum off one
+// status read, null on any failure. It commits nothing, so it can bring a wake
+// forward but never moves the failure count, the cached status or the gated
+// count the fail-open gates read (#1256). Null without a request while a
+// committed poll or another probe is in flight, or during the backoff.
+export async function peekListeners(): Promise<number | null> {
+  if (polling || peeking || Date.now() < peekBackoffUntil) return null;
+  const read = (async () => {
+    try {
+      const r = await fetchWithTimeout(config.icecast.statusUrl, {
+        timeoutMs: PEEK_TIMEOUT_MS,
+        bodyDeadline: true,
+      });
+      return rawListenerSum(broadcastMountSources(((await r.json()) as any)?.icestats));
+    } catch (err) {
+      // The deadline rejects as AbortError, on the headers or the body.
+      if ((err as Error)?.name === 'AbortError') peekBackoffUntil = Date.now() + PEEK_BACKOFF_MS;
+      return null;
+    }
+  })();
+  peeking = read;
+  try {
+    return await read;
+  } finally {
+    peeking = null;
+  }
 }
 
 // Probe listener count for maintenance children without appending history, whose sole writer

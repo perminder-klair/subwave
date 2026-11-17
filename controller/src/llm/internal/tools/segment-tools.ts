@@ -1,10 +1,17 @@
 // Wrap each loaded skill tool as toolFn(ctx, state, services, config, input).
 // All skills run with a hard timeout and error recovery; failed tools return no data.
 // Built-ins and custom skills use the same state/skills loader path.
+//
+// Every tool gets settings.spokenContext(ctx), never the raw context: a
+// tool.mjs is self-contained and seeded into state/skills once, so the weather
+// tool a station booted with keeps returning `location: ctx.weather.location`.
+// Withholding the place here (#2099) reaches that copy, an edited one and a
+// custom skill alike, without replacing an operator-owned file.
 
 import { tool } from 'ai';
 import { z } from 'zod';
 import { buildStationServices } from './station-services.js';
+import { spokenContext } from '../../../settings.js';
 import { repairLegacySkillData } from '../../../skills/abstain-policy.js';
 
 // `onResult(kind, data)` reports what each tool handed back, including the
@@ -20,6 +27,7 @@ export function buildSegmentTools(
   { onResult }: { onResult?: (kind: string, data: any) => void } = {},
 ) {
   const services = buildStationServices();
+  const toolCtx = spokenContext(ctx);
   const tools: any = {};
 
   for (const cap of caps as any[]) {
@@ -40,7 +48,7 @@ export function buildSegmentTools(
       execute: async (input: any) => {
         let data: any;
         try {
-          const p = Promise.resolve(cap.toolFn(ctx, state, services, cap.config, input || {}));
+          const p = Promise.resolve(cap.toolFn(toolCtx, state, services, cap.config, input || {}));
           data = await withTimeout(p, 8000);
         } catch (err: any) {
           data = { error: err?.message || String(err) };
@@ -70,7 +78,7 @@ export async function fetchSegmentData(cap: any, ctx: any, state: any): Promise<
   if (typeof cap?.toolFn !== 'function') return null;
   const services = buildStationServices();
   try {
-    const p = Promise.resolve(cap.toolFn(ctx, state, services, cap.config, {}));
+    const p = Promise.resolve(cap.toolFn(spokenContext(ctx), state, services, cap.config, {}));
     return repairLegacySkillData(cap, await withTimeout(p, 8000));
   } catch (err: any) {
     return { error: err?.message || String(err) };

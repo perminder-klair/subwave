@@ -96,7 +96,8 @@ import {
   coerceMinTrackLengthSeconds,
   rawMaxTrackSec,
 } from './settings/defaults.js';
-import { validateCompatParams } from './settings/compat-params.js';
+import { validateCompatParams, normalizeLlmBodyParams } from './settings/compat-params.js';
+import { normalizeReasoningEffort } from './schemas/reasoning.js';
 // A bound on the engine's composed prompt, not a validated vocabulary — it lives
 // beside the engine that enforces it (web/lib/geminiLimits.ts mirrors it for the
 // admin field, pinned by scripts/gemini-tts-settings.test.ts).
@@ -119,15 +120,19 @@ import {
   normalizeGeminiLibraryLanguage,
   ttsVoiceLevellingSchema,
   type ScheduledBackupSettings,
+  type TaggerAutoSettings,
   type JingleRotateOwner,
   type TtsPatch,
+  stripSecretControlChars,
 } from './schemas/settings.js';
-import { jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
+import { jinglePlacement, jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
+import { scheduleArmChanged } from './music/tag-schedule-policy.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
   normalizeArchiveRetentionDays,
   normalizeBackups,
+  normalizeTaggerAuto,
   normalizeDjPrompts,
   normalizeDuckDepth,
   normalizeHandoverOffsetMinutes,
@@ -136,6 +141,7 @@ import {
   normalizeSchedule,
   normalizeScheduleOverride,
   normalizeShows,
+  normalizeSteer,
   normalizeWebhooks,
 } from './settings/normalize.js';
 import {
@@ -145,6 +151,7 @@ import {
   validateScheduleOverrideStrict,
   validateScheduleStrict,
   validateShowsStrict,
+  validateSteerStrict,
   validateTtsBlock,
   validateWebhooksStrict,
 } from './settings/validate.js';
@@ -157,6 +164,7 @@ import {
   LIQ_OPUS_ENABLED_PATH,
   LIQ_STREAM_BITRATE_PATH,
   LIQ_STREAM_BUFFER_SECONDS_PATH,
+  reconcileStreamMountFiles,
   writeLiquidsoapSettings,
 } from './settings/liquidsoap.js';
 
@@ -256,6 +264,7 @@ export {
   getActivePersona,
   getEffectivePersona,
   getOnAirRoster,
+  activeSteer,
   getScheduleOverride,
   guestEditorialNudge,
   guestEditorialNudgeFromGuests,
@@ -265,9 +274,12 @@ export {
   pickOnAirSpeaker,
   renderDjPrompt,
   resolveActiveShow,
+  resolvePickShow,
   resolveOnAirLocation,
   resolvePersonaById,
   resolveShowById,
+  spokenContext,
+  spokenOnAirLocation,
   spokenProperNounDirective,
 } from './settings/persona.js';
 export { writeLiquidsoapSettings } from './settings/liquidsoap.js';
@@ -472,7 +484,8 @@ export async function load() {
     // Repaired, never trusted: a hand-edited settings.json is load()'s input
     // and an unrecognised owner here would decide whether TWO rotates run.
     // Anything but the explicit opt-in reads as the mixer (#1619).
-    jingleRotate: jingleRotateOwner(stored),
+    jingleRotate: jingleRotateOwner({ jingleRotate: stored.jingleRotate }),
+    jinglePlacement: jinglePlacement(stored),
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
     // Bounded here as well as at the save path: a hand-edited settings.json is
     // load()'s input, so it repairs rather than throws — and an out-of-range `p`
@@ -508,6 +521,10 @@ export async function load() {
     // THREE edits), which for a cadence means backups silently stopping.
     // Pinned by a cold-load round trip in scripts/backup-schedule.test.ts.
     backups: normalizeBackups(stored.backups),
+    // Scheduled tagging (#2282): absent reads as `{ mode: 'off' }`, the
+    // pre-existing station. Composed explicitly like every block here; pinned
+    // by the cold-load round trip in scripts/tag-schedule.test.ts.
+    tagger: { auto: normalizeTaggerAuto(stored.tagger?.auto) },
     stream: {
       opusEnabled:
         typeof stored.stream?.opusEnabled === 'boolean'
@@ -664,6 +681,8 @@ export async function load() {
       sameHostAcknowledgement: typeof stored.djBehaviour?.sameHostAcknowledgement === 'boolean'
         ? stored.djBehaviour.sameHostAcknowledgement
         : DEFAULTS.djBehaviour.sameHostAcknowledgement,
+      holdDuckBetweenSpeakers: typeof stored.djBehaviour?.holdDuckBetweenSpeakers === 'boolean'
+        ? stored.djBehaviour.holdDuckBetweenSpeakers : DEFAULTS.djBehaviour.holdDuckBetweenSpeakers,
       extendedSleeveNotes: typeof stored.djBehaviour?.extendedSleeveNotes === 'boolean'
         ? stored.djBehaviour.extendedSleeveNotes : DEFAULTS.djBehaviour.extendedSleeveNotes,
       releaseYearMentions: ['regular', 'occasional', 'rare'].includes(stored.djBehaviour?.releaseYearMentions)
@@ -802,6 +821,7 @@ export async function load() {
     shows,
     schedule,
     scheduleOverride,
+    steer: normalizeSteer(stored.steer),
     tts: {
       voiceLevelling: ttsVoiceLevellingSchema.catch(DEFAULTS.tts.voiceLevelling).parse(stored.tts?.voiceLevelling),
       // Station-wide voice switch. Coerce missing/non-boolean (every settings.json
@@ -1006,12 +1026,17 @@ export async function load() {
       // settings.json written before the field existed loads as {}, which sends
       // no extra headers at all.
       headers: normalizeLlmHeaders(stored.llm?.headers),
+      // Extra request-body fields (#2296); same cold-load trap as headers.
+      bodyParams: normalizeLlmBodyParams(stored.llm?.bodyParams, 'llm.bodyParams'),
+      toolCallBodyParams: normalizeLlmBodyParams(stored.llm?.toolCallBodyParams, 'llm.toolCallBodyParams'),
       // A stored llm block without the key predates 'auto' and keeps the
       // historical 'local'; only a station with no llm block yet gets the
       // 'auto' default. Same rule for the fallback leg below.
       compatibleMode: storedCompatibleMode(stored.llm?.compatibleMode, !!stored.llm, DEFAULTS.llm.compatibleMode),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      // Absent or unknown → 'default', today's "On" (#2296).
+      reasoningEffort: normalizeReasoningEffort(stored.llm?.reasoningEffort),
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
       // pre-field settings.json) lands on the 'required' default. See issue #570.
       toolChoice: stored.llm?.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.toolChoice,
@@ -1118,9 +1143,12 @@ export async function load() {
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
           headers: normalizeLlmHeaders(fb.headers),
+          bodyParams: normalizeLlmBodyParams(fb.bodyParams, 'llm.fallback.bodyParams'),
+          toolCallBodyParams: normalizeLlmBodyParams(fb.toolCallBodyParams, 'llm.fallback.toolCallBodyParams'),
           compatibleMode: storedCompatibleMode(fb.compatibleMode, !!stored.llm?.fallback, DEFAULTS.llm.fallback.compatibleMode),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
+          reasoningEffort: normalizeReasoningEffort(fb.reasoningEffort),
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
           repeatPenalty: clampRepeatPenalty(fb.repeatPenalty, DEFAULTS.llm.fallback.repeatPenalty),
@@ -1192,6 +1220,16 @@ export async function load() {
         Number.isFinite(stored.embedding?.audioFusionWeight)
           ? clamp01(stored.embedding.audioFusionWeight)
           : DEFAULTS.embedding.audioFusionWeight,
+      audioEnergy: {
+        fillEmpty:
+          typeof stored.embedding?.audioEnergy?.fillEmpty === 'boolean'
+            ? stored.embedding.audioEnergy.fillEmpty
+            : DEFAULTS.embedding.audioEnergy.fillEmpty,
+        overruleLlm:
+          typeof stored.embedding?.audioEnergy?.overruleLlm === 'boolean'
+            ? stored.embedding.audioEnergy.overruleLlm
+            : DEFAULTS.embedding.audioEnergy.overruleLlm,
+      },
       batchSize:
         Number.isFinite(stored.embedding?.batchSize) && stored.embedding.batchSize >= 1
           ? Math.max(1, Math.min(50, Math.floor(stored.embedding.batchSize)))
@@ -1201,6 +1239,10 @@ export async function load() {
           typeof stored.embedding?.enrichment?.lastfmTags === 'boolean'
             ? stored.embedding.enrichment.lastfmTags
             : DEFAULTS.embedding.enrichment.lastfmTags,
+        lastfmTrackTags:
+          typeof stored.embedding?.enrichment?.lastfmTrackTags === 'boolean'
+            ? stored.embedding.enrichment.lastfmTrackTags
+            : DEFAULTS.embedding.enrichment.lastfmTrackTags,
         lyrics:
           typeof stored.embedding?.enrichment?.lyrics === 'boolean'
             ? stored.embedding.enrichment.lyrics
@@ -1227,6 +1269,10 @@ export async function load() {
       stemCacheGb: Number.isFinite(stored.audio?.stemCacheGb) && stored.audio.stemCacheGb > 0
         ? stored.audio.stemCacheGb
         : DEFAULTS.audio.stemCacheGb,
+      stemOrphanPurgeEnabled:
+        typeof stored.audio?.stemOrphanPurgeEnabled === 'boolean'
+          ? stored.audio.stemOrphanPurgeEnabled
+          : DEFAULTS.audio.stemOrphanPurgeEnabled,
       analyzeQuietOnly:
         typeof stored.audio?.analyzeQuietOnly === 'boolean'
           ? stored.audio.analyzeQuietOnly
@@ -1238,6 +1284,17 @@ export async function load() {
     transitions: {
       pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
+      pickTimeStems: typeof stored.transitions?.pickTimeStems === 'boolean' ? stored.transitions.pickTimeStems : DEFAULTS.transitions.pickTimeStems,
+      equalPowerCrossfade: typeof stored.transitions?.equalPowerCrossfade === 'boolean' ? stored.transitions.equalPowerCrossfade : DEFAULTS.transitions.equalPowerCrossfade,
+      fadeAudibleEnd: typeof stored.transitions?.fadeAudibleEnd === 'boolean' ? stored.transitions.fadeAudibleEnd : DEFAULTS.transitions.fadeAudibleEnd,
+      // A hand edit out of range (or not a number) repairs to the default.
+      fadeAudibleEndDb:
+        typeof stored.transitions?.fadeAudibleEndDb === 'number' &&
+        stored.transitions.fadeAudibleEndDb >= BOUNDS.fadeAudibleEndDb.min &&
+        stored.transitions.fadeAudibleEndDb <= BOUNDS.fadeAudibleEndDb.max
+          ? stored.transitions.fadeAudibleEndDb
+          : DEFAULTS.transitions.fadeAudibleEndDb,
+      tailFromCurve: typeof stored.transitions?.tailFromCurve === 'boolean' ? stored.transitions.tailFromCurve : DEFAULTS.transitions.tailFromCurve,
       // Per-effect kill switches (#1565) — same absent-means-default repair as
       // every sibling, and the default is `true`, so a stored block missing a
       // field (or missing entirely) normalises to the whole kit on.
@@ -1365,6 +1422,22 @@ export async function load() {
         ? Math.min(365, Math.max(0, Math.round(Number(stored.likes.windowDays))))
         : DEFAULTS.likes.windowDays,
     },
+    lyrics: {
+      enabled:
+        typeof stored.lyrics?.enabled === 'boolean'
+          ? stored.lyrics.enabled
+          : DEFAULTS.lyrics.enabled,
+      lrclib:
+        typeof stored.lyrics?.lrclib === 'boolean'
+          ? stored.lyrics.lrclib
+          : DEFAULTS.lyrics.lrclib,
+    },
+    musicSource: {
+      reportRealPath:
+        typeof stored.musicSource?.reportRealPath === 'boolean'
+          ? stored.musicSource.reportRealPath
+          : DEFAULTS.musicSource.reportRealPath,
+    },
   };
   setCache(loaded);
   if (typeof stored.timezone === 'string' && stored.timezone.trim() && !loaded.timezone) {
@@ -1374,7 +1447,7 @@ export async function load() {
   // Same shape, same reason (#1619): the queue subscribes to a real ownership
   // change so it can restart the rotate's boundary count, and it cannot be
   // called from here directly without closing a settings ↔ queue cycle.
-  setJingleRotateOwner(loaded.jingleRotate);
+  setJingleRotateOwner(jingleRotateOwner(loaded), loaded.jinglePlacement);
   return loaded;
 }
 
@@ -1407,6 +1480,13 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     const v = parseSettingsPatchKey<JingleRotateOwner>('jingleRotate', patch.jingleRotate);
     if (v !== cur.jingleRotate) {
       next.jingleRotate = v;
+      restart = true;
+    }
+  }
+  if ('jinglePlacement' in patch) {
+    const v = parseSettingsPatchKey<typeof cur.jinglePlacement>('jinglePlacement', patch.jinglePlacement);
+    if (v !== cur.jinglePlacement) {
+      next.jinglePlacement = v;
       restart = true;
     }
   }
@@ -1487,6 +1567,25 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     // tick rather than needing one.
     if (b.cadence !== undefined) next.backups.cadence = b.cadence;
     if (b.keep !== undefined) next.backups.keep = b.keep;
+  }
+  if ('tagger' in patch) {
+    const t = parseSettingsPatchKey<{
+      auto?: Partial<Omit<TaggerAutoSettings, 'steps'>> & { steps?: Partial<TaggerAutoSettings['steps']> };
+    }>('tagger', patch.tagger);
+    // Read live by the scheduler's tick: no Liquidsoap file, no restart.
+    const a = t.auto;
+    if (a) {
+      const auto = { ...next.tagger.auto, steps: { ...next.tagger.auto.steps } };
+      if (a.mode !== undefined) auto.mode = a.mode;
+      if (a.time !== undefined) auto.time = a.time;
+      if (a.limit !== undefined) auto.limit = a.limit;
+      if (a.steps) {
+        for (const [k, v] of Object.entries(a.steps)) {
+          if (v !== undefined) auto.steps[k as keyof TaggerAutoSettings['steps']] = v;
+        }
+      }
+      next.tagger = { ...next.tagger, auto };
+    }
   }
   if ('stream' in patch) {
     const st = parseSettingsPatchKey<Record<string, number | boolean | undefined>>(
@@ -1714,6 +1813,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       showWelcome?: boolean;
       previewNextShow?: boolean;
       sameHostAcknowledgement?: boolean;
+      holdDuckBetweenSpeakers?: boolean;
       extendedSleeveNotes?: boolean;
       releaseYearMentions?: string;
       recapLimit?: number;
@@ -1722,7 +1822,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     }>(
       'djBehaviour', patch.djBehaviour,
     );
-    for (const key of ['showWelcome', 'previewNextShow', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
+    for (const key of ['showWelcome', 'previewNextShow', 'sameHostAcknowledgement', 'holdDuckBetweenSpeakers', 'extendedSleeveNotes'] as const) {
       if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
     }
     if (behaviour.releaseYearMentions !== undefined) {
@@ -1759,6 +1859,9 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   }
   if ('scheduleOverride' in patch) {
     next.scheduleOverride = validateScheduleOverrideStrict(patch.scheduleOverride, next.shows);
+  }
+  if ('steer' in patch) {
+    next.steer = validateSteerStrict(patch.steer);
   }
   // In-use removal guard: run once the vocabulary AND any same-patch shows are
   // validated, so a mood dropped from the vocab is rejected only if something
@@ -1963,7 +2066,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       // 'set' is the redaction sentinel from getRedacted() — ignore it so a
       // round-tripped settings form doesn't overwrite the real key.
       if (c.apiKey !== undefined && c.apiKey !== 'set') {
-        next.tts.cloud.apiKey = String(c.apiKey);
+        next.tts.cloud.apiKey = stripSecretControlChars(String(c.apiKey));
       } else if (c.provider !== undefined && c.provider !== savedCloudProvider) {
         // The shared inline slot belongs to the provider that created it. A
         // provider transition without an explicit replacement must clear it,
@@ -1974,7 +2077,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       // Dedicated compatibility bearer. Unlike the legacy shared slot, this
       // may safely persist while another managed provider is selected globally.
       if (c.compatApiKey !== undefined && c.compatApiKey !== 'set') {
-        next.tts.cloud.compatApiKey = String(c.compatApiKey);
+        next.tts.cloud.compatApiKey = stripSecretControlChars(String(c.compatApiKey));
       }
       if (c.baseUrl !== undefined) {
         const v = String(c.baseUrl).trim();
@@ -2307,7 +2410,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       next.embedding.ollamaUrl = v.replace(/\/+$/, '');
     }
     if (e.apiKey !== undefined && e.apiKey !== 'set') {
-      const v = String(e.apiKey).trim();
+      const v = stripSecretControlChars(String(e.apiKey).trim());
       if (v.length > EMBEDDING_API_KEY_MAX) throw new Error(`embedding.apiKey must be 0-${EMBEDDING_API_KEY_MAX} chars`);
       next.embedding.apiKey = v;
     }
@@ -2356,6 +2459,17 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       }
       next.embedding.audioFusionWeight = v;
     }
+    if (e.audioEnergy !== undefined) {
+      const ae = e.audioEnergy;
+      if (!ae || typeof ae !== 'object' || Array.isArray(ae)) {
+        throw new Error('embedding.audioEnergy must be an object');
+      }
+      for (const key of ['fillEmpty', 'overruleLlm'] as const) {
+        if (ae[key] === undefined) continue;
+        if (typeof ae[key] !== 'boolean') throw new Error(`embedding.audioEnergy.${key} must be true or false`);
+        next.embedding.audioEnergy = { ...next.embedding.audioEnergy, [key]: ae[key] };
+      }
+    }
     // LLM tag batch size — how many tracks per tagging call. Weaker models
     // truncate/error on large batches, so operators can drop this. Clamp kept in
     // sync with the CLI --batch flag + load() normalisation (music/tag-library.ts).
@@ -2368,8 +2482,14 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     }
     if (e.enrichment !== undefined) {
       const en = e.enrichment || {};
+      // Tri-state, like the default: null is auto (on when a Last.fm key is set)
+      // and stays null. Coercing it with !! stored false, so a save that kept
+      // auto switched enrichment off (#2233).
       if (en.lastfmTags !== undefined) {
-        next.embedding.enrichment.lastfmTags = !!en.lastfmTags;
+        next.embedding.enrichment.lastfmTags = en.lastfmTags === null ? null : !!en.lastfmTags;
+      }
+      if (en.lastfmTrackTags !== undefined) {
+        next.embedding.enrichment.lastfmTrackTags = !!en.lastfmTrackTags;
       }
       if (en.lyrics !== undefined) {
         next.embedding.enrichment.lyrics = !!en.lyrics;
@@ -2428,14 +2548,25 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       'stemCacheGb',
       'analyzeQuietOnly',
       'analyzeQuietMinutes',
+      'stemOrphanPurgeEnabled',
     ] as const) {
       if (au[k] !== undefined) (next.audio as Record<string, unknown>)[k] = au[k];
     }
   }
   if ('transitions' in patch) {
     const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
-    for (const k of ['pairDrain', 'stemBlends'] as const) {
+    // fadeAudibleEnd(Db) are controller-side cue points read per queued track
+    // (music/silence-trim.ts), and tailFromCurve picks which measurement the
+    // queue reads (music/tail-levels.ts), so they need no mixer restart.
+    for (const k of ['pairDrain', 'stemBlends', 'pickTimeStems', 'fadeAudibleEnd', 'fadeAudibleEndDb', 'tailFromCurve'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
+    }
+    // Read once by the mixer at startup (liquidsoap_equal_power_crossfade.txt),
+    // so only an actual change costs a restart, as with crossfadeDuration: the
+    // admin form posts the whole block on every save.
+    if (tr.equalPowerCrossfade !== undefined && tr.equalPowerCrossfade !== cur.transitions.equalPowerCrossfade) {
+      next.transitions.equalPowerCrossfade = tr.equalPowerCrossfade as boolean;
+      restart = true;
     }
     // Nested block, so it needs its own per-field loop like scrobble.* does: the
     // flat copy above would replace the whole `effects` object, and a patch that
@@ -2626,6 +2757,16 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       if (lk[k] !== undefined) (next.likes as Record<string, unknown>)[k] = lk[k];
     }
   }
+  if ('lyrics' in patch) {
+    const ly = parseSettingsPatchKey<Record<string, unknown>>('lyrics', patch.lyrics);
+    if (ly.enabled !== undefined) next.lyrics.enabled = ly.enabled as boolean;
+    if (ly.lrclib !== undefined) next.lyrics.lrclib = ly.lrclib as boolean;
+  }
+
+  if ('musicSource' in patch) {
+    const ms = parseSettingsPatchKey<Record<string, unknown>>('musicSource', patch.musicSource);
+    if (ms.reportRealPath !== undefined) next.musicSource.reportRealPath = ms.reportRealPath as boolean;
+  }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may
   // have orphaned a show owner, a schedule slot, or the active persona.
@@ -2683,6 +2824,7 @@ export async function update(patch) {
     }
   }
 
+  const savedAt = new Date();
   setCache(next);
   // Applied-on-save, same pattern as the liquidsoap_*.txt files below —
   // minus the restart: the next zonedParts() call picks it up.
@@ -2690,7 +2832,7 @@ export async function update(patch) {
   // Applied-on-save too, and unlike the zone this one DOES also need the mixer
   // restart the flag above raises — the counter reset is only the controller's
   // half (#1619).
-  setJingleRotateOwner(next.jingleRotate);
+  setJingleRotateOwner(jingleRotateOwner(next), next.jinglePlacement);
   // shows + schedule are persisted to their own file (schedule.json); strip
   // them from the settings.json payload so legacy installs migrate forward
   // on the first write. The in-memory `cache` keeps the full shape so
@@ -2714,12 +2856,28 @@ export async function update(patch) {
     ),
   );
   await writeLiquidsoapSettings(next);
+  // Scheduled tagging (#2282): a save that turns the schedule on or moves its
+  // time stamps the moment, so a time already past today waits for tomorrow
+  // instead of starting within minutes. The schedule keeps it in its own
+  // record; a failed stamp only loses that, never the save.
+  if (scheduleArmChanged(cur.tagger?.auto, next.tagger?.auto)) {
+    try {
+      await (await import('./broadcast/tag-schedule.js')).scheduleArmed(savedAt);
+    } catch (err) {
+      console.warn(`[settings] could not note the tagging schedule change: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   return { saved: next, requiresRestart: restart };
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
-// them on its next start. Idempotent.
-export async function ensureLiquidsoapSettingsFile() {
+// them on its next start. Idempotent. A missing file writes them all; files
+// already there keep what they say (the jingle ratio's reason is in
+// broadcast/jingle-rotate.ts), except the six listener-mount files, which are
+// reconciled with the saved stream settings under a hosted station's ceiling
+// (settings/liquidsoap.ts reconcileStreamMountFiles). Returns the mount files
+// that boot rewrote, so the caller can say the mixer needs a restart.
+export async function ensureLiquidsoapSettingsFile(): Promise<{ rewroteMountFiles: string[] }> {
   const s = await load();
   if (
     !existsSync(LIQ_JINGLE_RATIO_PATH) ||
@@ -2732,5 +2890,7 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(ICECAST_LISTENER_AUTH_PATH)
   ) {
     await writeLiquidsoapSettings(s);
+    return { rewroteMountFiles: [] };
   }
+  return { rewroteMountFiles: await reconcileStreamMountFiles(s) };
 }

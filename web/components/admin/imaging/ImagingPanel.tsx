@@ -386,7 +386,7 @@ export default function ImagingPanel() {
             <p className="mt-1 max-w-[62ch] text-[11px] leading-[1.6] [text-wrap:pretty] text-muted">
               Everything your DJ slips between and over the music:{' '}
               <strong className="font-semibold text-ink">jingles</strong> are the station idents
-              between tracks, <strong className="font-semibold text-ink">SFX</strong> are the little
+              between or over songs, <strong className="font-semibold text-ink">SFX</strong> are the little
               stingers under the voice,{' '}
               <strong className="font-semibold text-ink">beds</strong> are instrumentals to talk
               over when a link runs long, and{' '}

@@ -12,6 +12,7 @@ import { queue } from '../broadcast/queue.js';
 import { recentRequests } from '../broadcast/request-log.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
 import * as db from '../music/library-db.js';
+import { weekRecap } from '../stats-recap.js';
 
 export const router = express.Router();
 
@@ -53,6 +54,16 @@ router.get('/stats', requireAdmin, (req, res) => {
       requests: summarizeRequests(recentRequests),
       transitions: transitionsOrNull(),
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin-gated GET /stats/week — the weekly recap and most-played lists, from the
+// durable records only (stats-recap.ts). Cached there; the page polls it slowly.
+router.get('/stats/week', requireAdmin, async (req, res) => {
+  try {
+    res.json(await weekRecap());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

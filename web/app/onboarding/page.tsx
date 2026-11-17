@@ -12,7 +12,7 @@ import WizardShell from '@/components/onboarding/WizardShell';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
-type Status = { needsSetup: boolean; setupCompletedAt: string | null };
+type Status = { needsSetup: boolean; setupCompletedAt: string | null; hosted?: boolean };
 
 // rerun=1 reopens the wizard; WizardShell and the save endpoint still require admin authentication.
 function SetupPageInner() {
@@ -38,7 +38,7 @@ function SetupPageInner() {
     );
   }
   if (!status) return <div role="status" className="p-8 text-sm text-ink/60">Loading…</div>;
-  if (status.needsSetup || rerun) return <WizardShell />;
+  if (status.needsSetup || rerun) return <WizardShell hosted={status.hosted === true} />;
 
   // Setup already complete.
   return (

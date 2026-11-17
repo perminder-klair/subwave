@@ -1,6 +1,8 @@
 // `subwave update` — refresh the running stack. A standalone install pulls fresh
 // GHCR images and never builds; a clone git-pulls and rebuilds locally, mirroring
 // scripts/update.sh. Replacing the binary is `subwave self-update`.
+// Any failed step, a failed image pull included, exits 1 so scripts and cron
+// can tell the update didn't land (#2205).
 
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -21,6 +23,7 @@ export async function runUpdateCommand(): Promise<void> {
   if (compose.env === 'down' || !compose.file) {
     warn('stack is not running.');
     muted('Bring it up first with `subwave start`, then re-run `subwave update`.');
+    process.exitCode = 1;
     await pauseForEnter();
     return;
   }
@@ -36,6 +39,7 @@ export async function runUpdateCommand(): Promise<void> {
     if (pullCode !== 0) {
       err(`git pull exited ${pullCode}`);
       muted('Resolve conflicts or detached state, then re-run `subwave update`.');
+      process.exitCode = 1;
       await pauseForEnter();
       return;
     }
@@ -50,7 +54,8 @@ export async function runUpdateCommand(): Promise<void> {
   const pullArgs = ['compose', ...composeFileArgs(compose.file), 'pull'];
   if (cloneMode) pullArgs.push('--ignore-buildable');
   const pullCode = await run('docker', pullArgs, home);
-  if (pullCode !== 0) {
+  const pullFailed = pullCode !== 0;
+  if (pullFailed) {
     warn(`docker compose pull exited ${pullCode} — continuing anyway.`);
   }
 
@@ -63,6 +68,7 @@ export async function runUpdateCommand(): Promise<void> {
     );
     if (buildCode !== 0) {
       err(`docker compose build exited ${buildCode}`);
+      process.exitCode = 1;
       await pauseForEnter();
       return;
     }
@@ -78,16 +84,24 @@ export async function runUpdateCommand(): Promise<void> {
   );
   if (upCode !== 0) {
     err(`docker compose up exited ${upCode}`);
+    process.exitCode = 1;
     await pauseForEnter();
     return;
   }
 
   console.log();
-  ok('update complete');
+  // Services were recreated, but on whatever images were already local.
+  if (pullFailed) {
+    warn('update finished, but `docker compose pull` failed — images may be stale.');
+    muted('  Re-run `subwave update` once the registry is reachable.');
+    process.exitCode = 1;
+  } else {
+    ok('update complete');
+  }
   muted('  `subwave status` to confirm services are healthy.');
   muted('  `subwave logs <service>` if anything looks off.');
   if (!cloneMode) {
-    muted('  `subwave self-update` to refresh the CLI binary itself.');
+    muted('  Next release: `subwave self-update`, `subwave sync`, then `subwave update`.');
   }
 
   // New services and changed env wiring don't ride an image bump; only
@@ -97,7 +111,7 @@ export async function runUpdateCommand(): Promise<void> {
     if (mode && hasDrift(detectDrift(home, mode))) {
       console.log();
       warn('your compose files are behind this CLI — new services / settings are missing.');
-      muted('  → run `subwave sync` to refresh them (backs up your current files first).');
+      muted('  → run `subwave sync` (backs up your current files first), then `subwave update` again.');
     }
   }
 
@@ -114,6 +128,10 @@ function moveVersionPin(home: string): void {
   const moved = movePinInEnv(readFileSync(envPath, 'utf8'), target);
   if (!moved) return;
   writeFileSync(envPath, moved.text);
+  // A compiled Bun binary loads the working directory's .env into process.env at
+  // boot, and compose prefers the environment over .env, so `pull` and `up` would
+  // get the old pin (#2196). A shell export of another version stays in charge.
+  if (process.env.SUBWAVE_VERSION === moved.from) process.env.SUBWAVE_VERSION = target;
   header('version pin');
   ok(`moved SUBWAVE_VERSION ${moved.from} → ${target} (matches this CLI)`);
   console.log();
