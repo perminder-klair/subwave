@@ -135,7 +135,9 @@ export function propagatedTracksWithAudioScores(): Array<{
 }
 
 // Scope of the empty-energy fill: tagged rows (moods present) that carry audio
-// scores and no energy at all, whoever wrote the moods. Never source = 'manual':
+// scores and no energy at all, whoever wrote the moods, propagation included
+// (a propagated row is empty when no voting neighbour had an energy). Never
+// source = 'manual':
 // an operator's own tags are never written by a pass. An untagged row has no
 // moods and stays out, so a fill never makes it read as tagged.
 export function emptyEnergyTracksWithAudioScores(): Array<{

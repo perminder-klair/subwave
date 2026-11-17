@@ -6,7 +6,10 @@
 // 2. FILL an empty energy (opt-in, `embedding.audioEnergy.fillEmpty`) on any
 //    tagged row but an operator's: the tagging model may answer moods with no
 //    energy, and an empty energy drops the track from every show with strict
-//    filters. With no value to protect, the middle band is 'medium'.
+//    filters. With no value to protect, the middle band is 'medium'. That
+//    includes a PROPAGATED row left empty (no voting neighbour had an energy):
+//    step 1 settles it where the audio is decisive, and step 2 fills the rest,
+//    the undecided middle as 'medium'.
 // 3. OVERRULE an LLM energy (opt-in, `embedding.audioEnergy.overruleLlm`) where
 //    the audio is STRONGLY decisive (ENERGY_OVERRULE_Z, far past step 1's
 //    threshold) and says otherwise.
@@ -143,7 +146,8 @@ export function runPropagatedEnergyPass(
   }
   db.setTrackEnergyBulk(updates);
 
-  // Step 2: a propagated row with no energy that step 1 settled is step 1's.
+  // Step 2: a propagated row with no energy that step 1 settled is step 1's;
+  // one step 1 left undecided stays in the fill's scope like any other.
   const settled = new Set(updates.map((u) => u.id));
   const fillRows = emptyRows.filter((r) => !settled.has(r.id));
   let filled = { ...none };

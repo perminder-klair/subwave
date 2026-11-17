@@ -360,6 +360,30 @@ test('a switch that is on says so even with nothing to do', () => {
   }
 });
 
+test('an empty propagated energy the correction leaves undecided is filled, and only with the switch on', () => {
+  const sql = db.requireDb();
+  // Inside a savepoint, so the row is gone again for the tests after this one.
+  sql.exec('SAVEPOINT prop_blank');
+  try {
+    db.upsertTrackMeta('propBlankMid', { title: 'propBlankMid', artist: 'Z', album: 'Z', duration: 300 });
+    db.upsertTrackTags('propBlankMid', { moods: ['evening'], energy: null, source: 'propagated', confidence: 0.4 });
+    db.setTrackAudioMoodScoresBulk([{ id: 'propBlankMid', scores: MIDDLING }]);
+    // offBlank is still empty here; hide it so this run's fill is this row alone.
+    sql.exec("UPDATE tracks SET audio_mood_scores_json = NULL WHERE id = 'offBlank'");
+    runPropagatedEnergyPass();
+    assert.equal(db.getTrack('propBlankMid')!.energy, null, 'switch off: the correction alone leaves it empty');
+    const on = runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false });
+    const t = db.getTrack('propBlankMid')!;
+    assert.equal(t.energy, 'medium', 'switch on: the undecided middle is filled as medium');
+    assert.equal(t.source, 'propagated', 'only the energy column moves');
+    assert.deepEqual(t.moods, ['evening']);
+    assert.deepEqual(on.filled, { high: 0, medium: 1, low: 0 });
+  } finally {
+    sql.exec('ROLLBACK TO prop_blank');
+    sql.exec('RELEASE prop_blank');
+  }
+});
+
 // Last, so its rows sit outside the idempotence check above. The fill reads its
 // scope once, before step 1 writes, so the run has two things to get right: a
 // propagated row step 1 settles is step 1's, never also in the fill's scope;
