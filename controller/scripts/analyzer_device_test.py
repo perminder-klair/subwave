@@ -16,7 +16,8 @@
 #   - only a missing kernel image is final. Any other failure (out of memory,
 #     a CUDA init error) retests at a later job's start, backing off, and a
 #     pass moves the worker to cuda with no restart; the warning's advice fits
-#     the cause (no driver advice for out of memory).
+#     the cause (no driver advice for out of memory);
+#   - a failed self-test drops its tensor and empties torch's cache.
 
 import gc
 import io
@@ -24,6 +25,7 @@ import json
 import os
 import sys
 import types
+import weakref
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import analyze_worker as aw  # noqa: E402
@@ -59,12 +61,15 @@ def fake_torch(
     which is exactly what a wheel without the card's arch does. `errors`, a
     list, scripts one self-test after another instead (None = that one
     passes; past the end the card works). `calls` counts how often the
-    self-test touched the card, `empty_cache` how often the cache was freed."""
+    self-test touched the card, `empty_cache` how often the cache was freed,
+    and `tensors` holds weak references to every tensor made."""
     calls = {"kernel": 0, "empty_cache": 0}
+    tensors = []
 
     class Tensor:
         def __init__(self, n):
             self.n, self.v = n, 1.0
+            tensors.append(weakref.ref(self))
 
         def mul_(self, k):
             i = calls["kernel"]
@@ -100,6 +105,7 @@ def fake_torch(
     mod = types.ModuleType("torch")
     mod.cuda = cuda
     mod.ones = ones
+    mod.tensors = tensors
     return mod, calls
 
 
@@ -262,6 +268,9 @@ def main():
     test("the move to cuda resets the armed idle window to cuda's", idle_window_moves)
     test("every model-capable request runs the retest first, under the lock", loop_retests)
 
+    # ── What a failed self-test leaves on the card ─────────────────────────
+    test("a failed self-test drops its tensor and empties the cache", self_test_releases)
+
     print("PASS" if failures == 0 else f"FAIL ({failures})")
     sys.exit(1 if failures else 0)
 
@@ -400,6 +409,19 @@ def loop_retests():
             else:
                 sys.modules[m] = v
     assert seen == [True, True, True], f"retest calls (lock held?): {seen}"
+
+
+def self_test_releases():
+    torch, calls = fake_torch(kernel_error=NO_KERNEL)
+    err = aw.cuda_self_test(torch)
+    assert err is not None
+    gc.collect()
+    assert torch.tensors and all(ref() is None for ref in torch.tensors), \
+        "the returned exception's traceback must not keep the tensor alive"
+    assert calls["empty_cache"] == 1, calls
+    ok, ok_calls = fake_torch(name="NVIDIA GeForce RTX 3060", capability=(8, 6))
+    assert aw.cuda_self_test(ok) is None
+    assert ok_calls["empty_cache"] == 0, "a passing self-test leaves the cache alone"
 
 
 if __name__ == "__main__":

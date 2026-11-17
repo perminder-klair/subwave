@@ -537,6 +537,7 @@ def cuda_self_test(torch):
     """Run one tiny real op on the card. Returns None when it works, else the
     exception. `is_available()` only says a device is visible; this says the
     wheel has a kernel image the card can execute."""
+    x = None
     try:
         x = torch.ones(8, device="cuda")
         x.mul_(2)
@@ -545,7 +546,16 @@ def cuda_self_test(torch):
             raise RuntimeError("CUDA self-test returned a wrong result")
         return None
     except Exception as ex:  # noqa: BLE001 — any failure means "not usable"
-        return ex
+        # Drop the tensor, hand its cached block back to the driver, and
+        # return the exception without its traceback, whose frames would
+        # keep the tensor alive. Only str(ex) is ever logged. The CUDA context
+        # itself stays until the process exits: torch cannot release it.
+        x = None
+        try:
+            torch.cuda.empty_cache()
+        except Exception:  # noqa: BLE001 — freeing is best-effort
+            pass
+        return ex.with_traceback(None)
 
 
 def _cuda_probe(torch):
