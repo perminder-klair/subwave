@@ -242,7 +242,7 @@ await test('the stems rename is bracketed in the usage journal under both names'
   const text = readFileSync(join(stateDir, 'stem-cache-usage.journal'), 'utf8');
   for (const id of [OLD_HEX, NEW_HEX]) {
     const name = encodeURIComponent(basename(stemCache.dirFor(id)));
-    assert.match(text, new RegExp(`^\\+ \\S+ ${name} \\d+ \\d+$`, 'm'), `${id} opened`);
+    assert.match(text, new RegExp(`^\\+ \\S+ ${name} \\d+ \\d+( \\d+)?$`, 'm'), `${id} opened`);
     assert.match(text, new RegExp(`^= \\S+ ${name}$`, 'm'), `${id} closed`);
   }
 });

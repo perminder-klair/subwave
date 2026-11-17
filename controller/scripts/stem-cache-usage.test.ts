@@ -393,11 +393,11 @@ test('a walk whose journal is lost and created again around its trim stores noth
       replaced = true;
       assert.equal(await journal.dropJournal(), true);
       const s = journal.newSessionId();
-      assert.equal(await journal.appendLines([policy.openLine(s, 'tj-b', Date.now(), process.pid)]), true);
+      assert.equal(await journal.appendLines([policy.openLine(s, 'tj-b', Date.now(), process.pid, null)]), true);
       rmSync(stemCache.dirFor('tj-b'), { recursive: true, force: true });
       assert.equal(await journal.appendLines([policy.closeLine(s, 'tj-b')]), true);
       for (let i = 0; i < pad; i += 1) {
-        assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), `tj-z${i}`, Date.now(), process.pid)]), true);
+        assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), `tj-z${i}`, Date.now(), process.pid, null)]), true);
       }
     });
     try {
@@ -690,5 +690,113 @@ test('a walk logs the reason its snapshot was refused, from the same cascade', a
   } finally {
     console.log = log;
     rmSync(snapFile, { force: true });
+  }
+});
+
+// #2352: a writer that dies between its change and its close leaves its
+// opening in the journal for good. The figure must stop being trusted as soon
+// as its process is gone (or its pid names another process, as under tini
+// after a restart), not at the next daily walk. A real child process stands
+// in for the writer (a separation in the controller, forgetStems in the
+// tagger child), so liveness and the start identity are read from /proc.
+const hasProc = existsSync('/proc/self/stat');
+
+async function withChildWriter(fn: (child: { pid: number; start: string; kill: () => Promise<void> }) => Promise<void>) {
+  const { spawn } = await import('node:child_process');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  const proc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const exited = new Promise(r => proc.once('exit', r));
+  try {
+    const pid = proc.pid!;
+    const start = policy.procStartTime(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    assert.ok(start);
+    await fn({ pid, start, kill: async () => { proc.kill('SIGKILL'); await exited; } });
+  } finally {
+    proc.kill('SIGKILL');
+    await exited;
+  }
+}
+
+async function freshRootMeasured(): Promise<void> {
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  seedDir('dw-0', 1000);
+  rmSync(snapFile, { force: true });
+  rmSync(journalFile, { force: true });
+  await stemCache.usage();
+  assert.equal((await stemCache.storedUsage())?.fresh, true, 'a trusted measurement to start from');
+}
+
+test('a writer that dies mid-change leaves the stored size untrusted at once (#2352)', { skip: !hasProc }, async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  try {
+    await freshRootMeasured();
+    await withChildWriter(async (child) => {
+      assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), 'dw-1', Date.now(), child.pid, child.start)]), true);
+      assert.equal((await stemCache.storedUsage())?.fresh, true, 'a write still running is trusted');
+      seedDir('dw-1', 1000); // its change lands, then it is killed before its close
+      await child.kill();
+      const u = await stemCache.storedUsage();
+      assert.equal(u?.fresh, false, 'a dead writer\'s opening vouches for nothing');
+      assert.equal(u?.stale, true);
+    });
+    const walks = stemCache._cacheWalksForTests();
+    const u = await stemCache.usage();
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the next read walks');
+    assert.deepEqual([u.bytes, u.dirs], [2000, 2]);
+    assert.equal((await stemCache.storedUsage())?.fresh, true, 'and that walk stores a trusted figure past the dead opening');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
+  }
+});
+
+test('an opening whose pid now names another process vouches for nothing (tini pid reuse, #2352)', { skip: !hasProc }, async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  const own = policy.procStartTime(readFileSync('/proc/self/stat', 'utf8'));
+  assert.ok(own);
+  try {
+    await freshRootMeasured();
+    assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), 'dw-1', Date.now(), process.pid, own)]), true);
+    assert.equal((await stemCache.storedUsage())?.fresh, true, 'this process, as it is');
+    // This process's pid, but a predecessor's start: a controller that died and
+    // was restarted under tini with the same pid.
+    assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), 'dw-2', Date.now(), process.pid, String(Number(own) - 1))]), true);
+    assert.equal((await stemCache.storedUsage())?.fresh, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
+  }
+});
+
+test('a walk that held a write open stops being trusted once that writer dies (#2352)', { skip: !hasProc }, async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  try {
+    await freshRootMeasured();
+    await withChildWriter(async (child) => {
+      const session = journal.newSessionId();
+      assert.equal(await journal.appendLines([policy.openLine(session, 'dw-1', Date.now(), child.pid, child.start)]), true);
+      seedDir('dw-1', 1000);
+      await new Promise(r => setTimeout(r, 5));
+      await stemCache.sweep(100 * GB, { force: true }); // stores the open write in inFlight
+      const snap = JSON.parse(readFileSync(snapFile, 'utf8'));
+      assert.equal(snap.inFlight?.[policy.inFlightKey(session, 'dw-1')], 1000, 'the walk holds what it counted for the open dir');
+      assert.equal((await stemCache.storedUsage())?.fresh, true);
+      writeFileSync(join(stemCache.dirFor('dw-1'), 'head-vocals.flac'), 'x'.repeat(1000)); // more lands, then it dies
+      await child.kill();
+      assert.equal((await stemCache.storedUsage())?.fresh, false, 'nothing past the position changed, but the held write will never settle');
+    });
+    const u = await stemCache.usage();
+    assert.deepEqual([u.bytes, u.dirs], [3000, 2], 'the next read walks to the disk\'s figure');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
   }
 });
