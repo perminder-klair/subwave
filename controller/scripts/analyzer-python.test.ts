@@ -35,6 +35,7 @@ const SUITES = [
   'analyzer_loudness_curve_test.py', // tail v3: short-term loudness curve (vs ffmpeg ebur128 where available)
   'analyzer_stems_marker_test.py', // no stem writes into an unmarked (unmounted) stems root
   'analyzer_shared_modes_test.py', // shared stems/transitions written 777/666 whatever the umask
+  'analyzer_device_test.py', // cuda self-test + cpu fallback (#2280)
   'analyzer_stem_provenance_test.py', // a stem window rewrite never leaves another recording's window (#2238)
 ];
 
