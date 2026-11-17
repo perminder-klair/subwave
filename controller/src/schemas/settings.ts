@@ -481,7 +481,7 @@ export const SEARCH_PROVIDER_CATALOG = [
   {
     id: 'specstream', group: 'keyed', label: 'SpecStream (API key)', key: 'required',
     keyName: 'SpecStream', keyPlaceholder: 'ss_live_…', keyUrl: 'https://specstream.ai/signup',
-    hint: 'SpecStream web search: real web results for artist queries, each with its source URL and snippet. Needs an API key; new accounts start with $10 of credit. SUB/WAVE caches every search for 30 minutes.',
+    hint: 'SpecStream web search: real web results for artist queries. Needs an API key; a paid API at $1 per 1,000 searches. SUB/WAVE caches every search for 30 minutes.',
   },
 ] as const satisfies readonly SearchProviderEntry[];
 

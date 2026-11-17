@@ -41,6 +41,18 @@ test('catalogue: the key link is a plain SpecStream page, with no tracking or re
   assert.equal(url.hash, '');
 });
 
+// The hint describes what the station uses (title and snippet, never the
+// source URL) and the cost, in the tone of the other keyed hints; no sign-up
+// offer that goes stale.
+test('catalogue: the hint names the cost and claims nothing the station does not use', () => {
+  const hint = catalogEntry()?.hint ?? '';
+  assert.match(hint, /Needs an API key/);
+  assert.match(hint, /\$1 per 1,000 searches/);
+  assert.match(hint, /caches every search for 30 minutes/);
+  assert.doesNotMatch(hint, /source URL/i);
+  assert.doesNotMatch(hint, /credit/i);
+});
+
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) =>
   JSON.parse(readFileSync(join(here, 'fixtures', name), 'utf8'));
