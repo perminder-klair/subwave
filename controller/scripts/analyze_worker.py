@@ -476,18 +476,14 @@ def capability_loss():
 # falling back costs nothing. The torch import stays lazy — only the heavy
 # code paths call this, so the librosa-only venv never needs torch.
 #
-# Only a missing kernel image is final: the card can never run this wheel, so
-# it is tested once per process and stays on cpu. Any other failure (the card
-# out of memory while a co-resident TTS or LLM holds it, a CUDA init race) may
-# pass later, so the worker tests the card again at the start of a later job
-# (retest_cuda_at_job_start), never mid-job, and moves to cuda once it passes.
-# The gap starts at CUDA_RETEST_MIN_S and doubles to CUDA_RETEST_MAX_S, so a
-# card that stays broken costs one tiny op an hour.
+# The card is tested once per process, and whatever that decides stays until
+# the worker exits. A failure that can clear (the card out of memory while a
+# co-resident TTS or LLM holds it) is not tested again mid-process: a tiny op
+# can pass while the real model still does not fit, and a model that fails to
+# load is lost for the run, which is worse than cpu. The warning says why the
+# test failed and, for out of memory, that restarting the analyzer once memory
+# is free puts it back on the GPU.
 _DEVICE = None
-CUDA_RETEST_MIN_S = 300.0
-CUDA_RETEST_MAX_S = 3600.0
-_cuda_retest_at = None  # when the next retest may run; None = never again
-_cuda_retest_gap = CUDA_RETEST_MIN_S
 
 # Compute capability → the CUDA image's architecture tag for that card. The
 # tag table in docs/internals/infrastructure.md (#aio-cuda-tags) is the one
@@ -521,7 +517,7 @@ def cuda_arch_covered(capability, arch_list):
     major at or below its minor (sm_60 runs on sm_61), or PTX at or below its
     capability, which the driver compiles. Advisory only: the self-test
     decides cuda or cpu, and this names a failure torch's message didn't
-    (cuda_failure_kind), which picks the warning and whether to retest."""
+    (cuda_failure_kind), which picks the warning's advice."""
     major, minor = capability
     for arch in arch_list or ():
         m = re.fullmatch(r"(sm|compute)_(\d+)(\d)[a-z]?", arch)
@@ -580,8 +576,8 @@ def _cuda_probe(torch):
 
 def cuda_failure_kind(error, cap, arch_list):
     """Why a self-test failed: "no_kernel" (the wheel has no kernel image for
-    this card, which no retry fixes), "oom", "driver" or "other". torch's own
-    message decides first; the arch list only names a card the message didn't."""
+    this card), "oom", "driver" or "other". torch's own message decides first;
+    the arch list only names a card the message didn't."""
     msg = str(error).lower()
     if "no kernel image" in msg:
         return "no_kernel"
@@ -594,10 +590,9 @@ def cuda_failure_kind(error, cap, arch_list):
     return "other"
 
 
-def _cuda_fallback_warning(probe, error, kind, retry_s):
+def _cuda_fallback_warning(probe, error, kind):
     """One warning naming the card, what the wheel was built for, the error,
-    and what to do about it. `retry_s` is the gap to the next retest, or None
-    when there is none."""
+    and what to do about it."""
     name, cap, arch_list = probe
     sm = f"sm_{cap[0]}{cap[1]}" if cap else "sm_unknown"
     detail = f"{name}, capability {sm}; this torch is built for {arch_list or 'an unknown arch list'}"
@@ -618,35 +613,20 @@ def _cuda_fallback_warning(probe, error, kind, retry_s):
             )
     elif kind == "oom":
         advice = (
-            "the card is out of memory, most likely held by another process on it "
-            "(a local TTS or LLM)"
+            "the card had no free memory when the analyzer started, most likely "
+            "held by another process on it (a local TTS or LLM); analysis runs on "
+            "cpu for now, and restarting the analyzer once that memory is free "
+            "puts it back on the GPU"
         )
     elif kind == "driver":
         advice = "check the NVIDIA driver supports this image's CUDA runtime"
     else:
         advice = "the card could not run a CUDA op"
-    if retry_s:
-        then = f"Using cpu and testing the card again in {int(retry_s)}s"
-    else:
-        then = "Falling back to cpu"
     return (
         f"CUDA self-test failed on {detail}: {type(error).__name__}: {error}. "
-        f"{advice}. {then}; CLAP and Demucs still run, but Demucs on cpu is slow "
+        f"{advice}. Falling back to cpu; CLAP and Demucs still run, but Demucs on cpu is slow "
         "(tens of seconds a track). Set ANALYZE_DEVICE=cpu to skip this check."
     )
-
-
-def _schedule_cuda_retest(kind):
-    """After a failed self-test: arm the next retest, backing off, unless the
-    failure is final. Returns the gap, or None when there is no retest."""
-    global _cuda_retest_at, _cuda_retest_gap
-    if kind == "no_kernel":
-        _cuda_retest_at = None
-        return None
-    gap = _cuda_retest_gap
-    _cuda_retest_at = time.time() + gap
-    _cuda_retest_gap = min(gap * 2, CUDA_RETEST_MAX_S)
-    return gap
 
 
 def resolve_device():
@@ -669,7 +649,7 @@ def resolve_device():
     if failed is not None:
         probe = _cuda_probe(torch)
         kind = cuda_failure_kind(failed, probe[1], probe[2])
-        log(_cuda_fallback_warning(probe, failed, kind, _schedule_cuda_retest(kind)))
+        log(_cuda_fallback_warning(probe, failed, kind))
     elif want == "cuda":
         log(
             "ANALYZE_DEVICE=cuda but torch sees no CUDA device "
@@ -679,33 +659,6 @@ def resolve_device():
     _DEVICE = "cpu"
     log("analysis device: cpu")
     return _DEVICE
-
-
-def retest_cuda_at_job_start():
-    """Called under _model_lock before a request that may load a model: when
-    an earlier self-test failed for a reason that can clear and the retest is
-    due, test the card again. On a pass the loaded cpu models are released, so
-    the next use reloads them onto the card; a device never changes mid-job,
-    because nothing else moves _DEVICE once it is set."""
-    global _DEVICE, _cuda_retest_at, _cuda_retest_gap, _idle_window_s
-    if _DEVICE != "cpu" or _cuda_retest_at is None or time.time() < _cuda_retest_at:
-        return
-    import torch
-
-    failed = cuda_self_test(torch)
-    if failed is not None:
-        probe = _cuda_probe(torch)
-        kind = cuda_failure_kind(failed, probe[1], probe[2])
-        log(_cuda_fallback_warning(probe, failed, kind, _schedule_cuda_retest(kind)))
-        return
-    _cuda_retest_at = None
-    _cuda_retest_gap = CUDA_RETEST_MIN_S
-    _DEVICE = "cuda"
-    _release_models()
-    if _idle_thread_started:
-        # The armed window was cpu's; cuda models release sooner.
-        _idle_window_s = _idle_unload_seconds()
-    log(f"CUDA self-test passed on retest; analysis device: cuda ({torch.cuda.get_device_name(0)})")
 
 
 # --- Idle model release (#1099 follow-up; CPU arming per #1204) -------------
@@ -742,7 +695,6 @@ _IDLE_UNLOAD_ENV = os.environ.get("ANALYZE_IDLE_UNLOAD_S", "").strip()
 _heavy_last_used = time.time()
 _model_lock = threading.Lock()  # held during request handling AND unload
 _idle_thread_started = False
-_idle_window_s = 0.0  # set when the thread arms; a cpu → cuda move resets it
 
 
 def _touch_heavy():
@@ -809,10 +761,9 @@ def _release_models(idle_s=None):
     )
 
 
-def _idle_release_loop():
+def _idle_release_loop(idle_s):
     while True:
         time.sleep(30)
-        idle_s = _idle_window_s
         if time.time() - _heavy_last_used < idle_s:
             continue
         with _model_lock:
@@ -825,16 +776,15 @@ def _idle_release_loop():
 def _maybe_start_idle_release():
     """Arm the idle-release thread — once, on either device (unload enabled).
     Called after a heavy model actually loads."""
-    global _idle_thread_started, _idle_window_s
+    global _idle_thread_started
     if _idle_thread_started:
         return
     idle_s = _idle_unload_seconds()
     if idle_s <= 0:
         return
     _idle_thread_started = True
-    _idle_window_s = idle_s
     threading.Thread(
-        target=_idle_release_loop, daemon=True, name="idle-release"
+        target=_idle_release_loop, args=(idle_s,), daemon=True, name="idle-release"
     ).start()
     log(f"idle model release armed — models unload after {int(idle_s)}s without heavy use")
 
@@ -3838,7 +3788,6 @@ def main():
                 emit({"id": rid, "ok": False, "error": "texts must be 1-64 non-empty strings"})
                 continue
             with _model_lock:
-                retest_cuda_at_job_start()
                 embedder = get_embedder(force=True)
                 if embedder is None:
                     emit({"id": rid, "ok": False, "error": "CLAP unavailable (load failed or libs absent)"})
@@ -3867,14 +3816,12 @@ def main():
             heavy_before = _heavy_last_used
             if req.get("facets") is not None:
                 with _model_lock:
-                    retest_cuda_at_job_start()
                     result = analyze_facet_request(librosa, req)
                     if _heavy_last_used != heavy_before:
                         _touch_heavy()
                 emit({"id": rid, "ok": True, **result})
                 continue
             with _model_lock:
-                retest_cuda_at_job_start()
                 result = analyze(
                     librosa, url=url, path=path,
                     embed=req.get("embed"), vocal=req.get("vocal"),

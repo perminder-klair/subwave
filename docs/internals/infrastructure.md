@@ -158,11 +158,12 @@ one place that maps a tag to a build; the README, `docs/unraid.md`,
 `docs/tts-heavy.md` and the in-app guides link here or name a tag by its card
 rather than restate it. The analyze worker names a card's tag too, when its
 CUDA self-test fails and it falls back to cpu (`cuda_arch_tag` in
-`analyze_worker.py`). Only a missing kernel image keeps it there for the life
-of the process. Any other failure, such as the card out of memory under a
-co-resident TTS or LLM, is tested again at the start of a later job, on a gap
-that doubles from 5 minutes to an hour, and a pass moves the worker to cuda
-without a restart (`retest_cuda_at_job_start`).
+`analyze_worker.py`). The card is tested once per worker process, and cpu
+stays until the process exits, whatever the failure. When the card was out of
+memory under a co-resident TTS or LLM, the warning says so: restarting the
+analyzer once that memory is free puts it back on the GPU. The worker never
+moves to cuda mid-process, because a tiny op can pass while the real model
+still does not fit.
 
 | Tag | GPU (compute capability) | For example | Build today |
 | --- | --- | --- | --- |

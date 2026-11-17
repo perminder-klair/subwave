@@ -13,13 +13,15 @@
 #     tag for that card, and that Demucs on cpu is slow;
 #   - a working card still gets cuda, `cpu` never touches the card, and the
 #     no-GPU fallback is unchanged;
-#   - only a missing kernel image is final. Any other failure (out of memory,
-#     a CUDA init error) retests at a later job's start, backing off, and a
-#     pass moves the worker to cuda with no restart; the warning's advice fits
-#     the cause (no driver advice for out of memory);
+#   - the card is tested once per process, whatever the failure: no request
+#     tests it again or moves the worker to cuda, however much later it comes;
+#   - the warning's advice fits the cause: out of memory gets neither the
+#     driver nor the image-tag advice, and says a restart once memory is free
+#     puts the analyzer back on the GPU;
 #   - a failed self-test drops its tensor and empties torch's cache.
 
 import gc
+import importlib.machinery
 import io
 import json
 import os
@@ -111,8 +113,6 @@ def fake_torch(
 
 def reset_device_state():
     aw._DEVICE = None
-    aw._cuda_retest_at = None
-    aw._cuda_retest_gap = aw.CUDA_RETEST_MIN_S
 
 
 def resolve(env, torch_mod):
@@ -261,12 +261,12 @@ def main():
 
     test("arch tag and coverage helpers", arch_helpers)
 
-    # ── A failure that can clear: retest at a later job, never mid-job ──────
-    test("out of memory falls back, retests at a later job and moves to cuda", oom_recovers)
-    test("a failure that persists retests on a doubling gap, capped", retest_backoff)
-    test("no kernel image is final: tested once per process, never again", no_kernel_final)
-    test("the move to cuda resets the armed idle window to cuda's", idle_window_moves)
-    test("every model-capable request runs the retest first, under the lock", loop_retests)
+    # ── One self-test per process, whatever the failure ────────────────────
+    test("out of memory: no driver or tag advice, and a restart puts it back on the GPU", oom_warning)
+    for label, err in (("no kernel image", NO_KERNEL), ("out of memory", OOM),
+                       ("an init error", INIT), ("a driver error", DRIVER)):
+        test(f"{label} at boot stays cpu for every later request, the card never retested",
+             lambda err=err: device_is_final(err))
 
     # ── What a failed self-test leaves on the card ─────────────────────────
     test("a failed self-test drops its tensor and empties the cache", self_test_releases)
@@ -278,128 +278,65 @@ def main():
 
 OOM = "CUDA out of memory. Tried to allocate 2.00 MiB (GPU 0; 5.93 GiB total capacity)"
 INIT = "CUDA error: initialization error"
+DRIVER = "CUDA driver version is insufficient for CUDA runtime version"
 
 
-class Rig:
-    """Drives resolve_device() and the per-job retest with a fake torch and a
-    fake clock, as the worker's request loop would."""
-
-    def __init__(self, torch_mod):
-        self.torch = torch_mod
-        self.lines = []
-        self.now = [1000.0]
-
-    def __enter__(self):
-        self.saved = (sys.modules.get("torch"), aw.log, aw.time, os.environ.get("ANALYZE_DEVICE"),
-                      aw._embedder, aw._vocal_detector, aw._idle_thread_started,
-                      aw._idle_window_s, aw._IDLE_UNLOAD_ENV)
-        sys.modules["torch"] = self.torch
-        aw.log = self.lines.append
-        aw.time = types.SimpleNamespace(time=lambda: self.now[0], sleep=lambda _s: None)
-        os.environ.pop("ANALYZE_DEVICE", None)
-        aw._IDLE_UNLOAD_ENV = ""
-        reset_device_state()
-        return self
-
-    def __exit__(self, *_exc):
-        (torch_prev, aw.log, aw.time, env_prev, aw._embedder, aw._vocal_detector,
-         aw._idle_thread_started, aw._idle_window_s, aw._IDLE_UNLOAD_ENV) = self.saved
-        if torch_prev is None:
-            sys.modules.pop("torch", None)
-        else:
-            sys.modules["torch"] = torch_prev
-        if env_prev is not None:
-            os.environ["ANALYZE_DEVICE"] = env_prev
-        reset_device_state()
-
-    def job_at(self, t):
-        """A request starting at t seconds after boot: the retest hook, then the
-        device the job's models would use."""
-        self.now[0] = 1000.0 + t
-        aw.retest_cuda_at_job_start()
-        return aw.resolve_device()
-
-
-def oom_recovers():
-    torch, calls = fake_torch(name="NVIDIA GeForce RTX 3060", capability=(8, 6), errors=[OOM])
-    with Rig(torch) as rig:
-        assert aw.resolve_device() == "cpu"
-        warn = next(l for l in rig.lines if "self-test failed" in l)
-        assert "out of memory" in warn and "RuntimeError" in warn, warn
-        assert "driver" not in warn, f"no driver advice for out of memory: {warn}"
-        assert "testing the card again in 300s" in warn, warn
-        aw._embedder = object()  # CLAP loaded on cpu for this job
-        assert rig.job_at(10) == "cpu" and calls["kernel"] == 1, "not due yet: no retest"
-        assert aw._embedder is not None, "a job before the retest keeps its cpu models"
-        assert rig.job_at(300) == "cuda", "the retest passed, so this job runs on cuda"
-        assert calls["kernel"] == 2
-        assert aw._embedder is None, "cpu models are released so they reload onto the card"
-        assert any("passed on retest" in l for l in rig.lines), rig.lines
-        assert rig.job_at(10_000) == "cuda" and calls["kernel"] == 2, "cuda is final once reached"
-
-
-def retest_backoff():
-    torch, calls = fake_torch(name="NVIDIA GeForce RTX 3060", capability=(8, 6), kernel_error=INIT)
-    with Rig(torch) as rig:
-        assert aw.resolve_device() == "cpu"
-        tested_at = []
-        for t in range(0, 4 * 3600 + 1, 60):
-            before = calls["kernel"]
-            assert rig.job_at(t) == "cpu"
-            if calls["kernel"] != before:
-                tested_at.append(t)
-        # Boot at 0, then 300, +600, +1200, +2400, then hourly.
-        assert tested_at[:5] == [300, 900, 2100, 4500, 8100], tested_at
-        gaps = [b - a for a, b in zip(tested_at, tested_at[1:])]
-        assert max(gaps) <= aw.CUDA_RETEST_MAX_S, gaps
-        warn = [l for l in rig.lines if "self-test failed" in l][-1]
-        assert "initialization error" in warn and "driver" not in warn, warn
-
-
-def no_kernel_final():
-    torch, calls = fake_torch(kernel_error=NO_KERNEL)
-    with Rig(torch) as rig:
-        assert aw.resolve_device() == "cpu"
-        warn = next(l for l in rig.lines if "self-test failed" in l)
-        assert "testing the card again" not in warn, warn
-        for t in (300, 3600, 86_400):
-            assert rig.job_at(t) == "cpu"
-        assert calls["kernel"] == 1, f"self-test ran {calls['kernel']} times"
-
-
-def idle_window_moves():
+def oom_warning():
     torch, _ = fake_torch(name="NVIDIA GeForce RTX 3060", capability=(8, 6), errors=[OOM])
-    with Rig(torch) as rig:
-        assert aw.resolve_device() == "cpu"
-        aw._idle_thread_started = True  # armed while on cpu
-        aw._idle_window_s = aw.IDLE_UNLOAD_CPU_S
-        assert rig.job_at(300) == "cuda"
-        assert aw._idle_window_s == aw.IDLE_UNLOAD_CUDA_S, aw._idle_window_s
+    device, lines = resolve(None, torch)
+    assert device == "cpu", device
+    warn = next(l for l in lines if "self-test failed" in l)
+    assert "out of memory" in warn and "RuntimeError" in warn, warn
+    assert "no free memory when the analyzer started" in warn, warn
+    assert "restarting the analyzer" in warn and "back on the GPU" in warn, \
+        f"the out-of-memory warning must say a restart recovers the GPU: {warn}"
+    for advice in ("driver", "no kernels", "ANALYZER_CUDA_TAG", ":ampere"):
+        assert advice not in warn, f"out of memory must not get {advice!r} advice: {warn}"
 
 
-def loop_retests():
-    """main()'s request loop calls the retest at the start of each request
-    that may load a model (texts, facets, analysis), and holds _model_lock
-    while it does; a transition render, which loads none, does not."""
+def device_is_final(err):
+    """The self-test fails at boot with `err`, then the card works. Days of
+    requests of every kind later, the worker is still on cpu and the card was
+    tested exactly once: nothing retests it or switches the device."""
+    torch, calls = fake_torch(name="NVIDIA GeForce RTX 3060", capability=(8, 6), errors=[err])
+    clock = [1000.0]
+
+    def tick():
+        clock[0] += 86_400.0  # every look at the clock is a day later
+        return clock[0]
+
     seen = []
-    names = ("retest_cuda_at_job_start", "get_embedder", "analyze_facet_request", "analyze", "emit")
+
+    def uses_device(*_a, **_k):
+        seen.append(aw.resolve_device())
+        return {}
+
+    names = ("log", "time", "get_embedder", "analyze_facet_request", "analyze", "emit")
     saved = {n: getattr(aw, n) for n in names}
-    saved_stdin, saved_mods = sys.stdin, {m: sys.modules.get(m) for m in ("librosa", "numpy")}
+    saved_stdin = sys.stdin
+    saved_mods = {m: sys.modules.get(m) for m in ("torch", "librosa", "numpy")}
+    saved_env = os.environ.pop("ANALYZE_DEVICE", None)
+    torch.__spec__ = importlib.machinery.ModuleSpec("torch", None)  # main() find_specs it
     try:
-        aw.retest_cuda_at_job_start = lambda: seen.append(aw._model_lock.locked())
-        aw.get_embedder = lambda force=False: None
-        aw.analyze_facet_request = lambda _l, _r: {}
-        aw.analyze = lambda *_a, **_k: {}
-        aw.emit = lambda _o: None
+        sys.modules["torch"] = torch
         sys.modules["librosa"] = types.ModuleType("librosa")
         sys.modules["numpy"] = sys.modules.get("numpy") or types.ModuleType("numpy")
-        sys.stdin = io.StringIO("\n".join(json.dumps(r) for r in (
-            {"id": 1, "texts": ["warm pads"]},
-            {"id": 2, "path": "/m/a.flac", "facets": ["edges"]},
-            {"id": 3, "path": "/m/a.flac"},
-            {"id": 4, "op": "render_transition"},
-        )) + "\n")
+        aw.log = lambda _m: None
+        aw.time = types.SimpleNamespace(time=tick, sleep=lambda _s: None)
+        reset_device_state()
+        assert aw.resolve_device() == "cpu"
+        aw.get_embedder = lambda force=False: uses_device()
+        aw.analyze_facet_request = uses_device
+        aw.analyze = uses_device
+        aw.emit = lambda _o: None
+        reqs = [{"id": 1, "texts": ["warm pads"]},
+                {"id": 2, "path": "/m/a.flac", "facets": ["edges"]},
+                {"id": 3, "path": "/m/a.flac"}] * 4
+        sys.stdin = io.StringIO("\n".join(json.dumps(r) for r in reqs) + "\n")
         aw.main()
+        assert seen and all(d == "cpu" for d in seen), f"device moved: {seen}"
+        assert aw._DEVICE == "cpu", aw._DEVICE
+        assert calls["kernel"] == 1, f"the card was tested {calls['kernel']} times"
     finally:
         for n, v in saved.items():
             setattr(aw, n, v)
@@ -409,7 +346,9 @@ def loop_retests():
                 sys.modules.pop(m, None)
             else:
                 sys.modules[m] = v
-    assert seen == [True, True, True], f"retest calls (lock held?): {seen}"
+        if saved_env is not None:
+            os.environ["ANALYZE_DEVICE"] = saved_env
+        reset_device_state()
 
 
 def self_test_releases():
@@ -436,7 +375,7 @@ def message_decides_kind():
     assert aw.cuda_failure_kind(OutOfMemoryError("2.00 MiB"), *covered) == "oom"
     assert aw.cuda_failure_kind(RuntimeError(INIT), *covered) == "other"
     probe = ("RTX 3060", (8, 6), CU128_ARCHES)
-    warn = aw._cuda_fallback_warning(probe, RuntimeError("CUDA error: 2 MiB"), "oom", 300)
+    warn = aw._cuda_fallback_warning(probe, RuntimeError("CUDA error: 2 MiB"), "oom")
     assert "held by another process" in warn and "driver" not in warn, warn
 
 
