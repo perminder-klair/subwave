@@ -25,12 +25,10 @@ export interface AudioEnergyOptions {
   overruleLlm: boolean;
 }
 
-// The pass's options from settings; absent or malformed reads as off, so an
-// upgrade runs exactly the correction it ran before.
-export function audioEnergyOptions(s: unknown): AudioEnergyOptions {
-  const ae = (s as { embedding?: { audioEnergy?: Partial<AudioEnergyOptions> } } | null | undefined)
-    ?.embedding?.audioEnergy;
-  return { fillEmpty: ae?.fillEmpty === true, overruleLlm: ae?.overruleLlm === true };
+// The pass's options from loaded settings. load() already reads anything but
+// a stored boolean as off (settings.ts), so this takes the block as it is.
+export function audioEnergyOptions(s: { embedding: { audioEnergy: AudioEnergyOptions } }): AudioEnergyOptions {
+  return { ...s.embedding.audioEnergy };
 }
 
 type Counts = { high: number; medium: number; low: number };

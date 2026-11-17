@@ -234,7 +234,7 @@ test('paging advances past a row whose score JSON is corrupt', () => {
   assert.equal(end.lastId, null, 'an exhausted walk reports done');
 });
 
-test('with both options off (the default) the pass only corrects propagated rows', () => {
+test('with both options off (the default) the pass only corrects propagated rows', async () => {
   db.upsertTrackMeta('offBlank', { title: 'offBlank', artist: 'N', album: 'O', duration: 300 });
   db.upsertTrackTags('offBlank', { moods: ['night'], energy: null, source: 'llm', confidence: 0.8 });
   db.setTrackAudioMoodScoresBulk([{ id: 'offBlank', scores: LOUD }]);
@@ -243,8 +243,8 @@ test('with both options off (the default) the pass only corrects propagated rows
   assert.equal(db.getTrack('judged')!.energy, 'low', 'no overrule unless the operator opted in');
   assert.equal(off.fillScope, 0);
   assert.equal(off.overruleScope, 0);
-  assert.deepEqual(audioEnergyOptions(undefined), { fillEmpty: false, overruleLlm: false });
-  assert.deepEqual(audioEnergyOptions({ embedding: { audioEnergy: { fillEmpty: 'yes' } } }), { fillEmpty: false, overruleLlm: false }, 'only a real true opts in');
+  const { DEFAULTS } = await import('../src/settings/defaults.js');
+  assert.deepEqual(audioEnergyOptions(DEFAULTS), { fillEmpty: false, overruleLlm: false }, 'off unless the operator opted in');
 });
 
 test('the overrule replaces an LLM energy only where the audio is strongly decisive', () => {
