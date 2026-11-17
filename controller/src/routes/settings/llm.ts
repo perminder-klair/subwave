@@ -237,12 +237,14 @@ async function probeKey(
         const { url, init } = buildSpecStreamRequest({ query: 'test', apiKey: value, limit: 1 });
         const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10000) });
         if (!r.ok) {
-          // SpecStream answers a missing or unknown key with 401, an empty
-          // balance or a reached monthly limit with 402, and a key that may not
-          // spend (no finds:spend scope, or over its own limit) with 403.
+          // SpecStream's public docs give no error body to read and no meaning
+          // for a keyed 401/403; a 402 is documented only for a keyless call and
+          // for a per-end-user cap this probe never sets. So the status alone
+          // decides, and neither 402 nor 403 calls the key valid: each names
+          // only what the status proves, a refused payment or a refused key.
           if (r.status === 401) return { ok: false, message: 'Key rejected — check it\'s correct and active' };
-          if (r.status === 402) return { ok: false, message: 'SpecStream key valid, but the account has no balance left or is at its monthly limit' };
-          if (r.status === 403) return { ok: false, message: 'SpecStream key valid, but it may not spend: it needs the finds:spend scope and room under its spending limit' };
+          if (r.status === 402) return { ok: false, message: 'SpecStream would not charge for the search (402) — check the account\'s balance and spending limits' };
+          if (r.status === 403) return { ok: false, message: 'SpecStream refused this key (403) — check it\'s active and allowed to spend' };
           return { ok: false, message: `Request failed (${r.status})` };
         }
         return { ok: true, message: '✓ SpecStream key valid' };

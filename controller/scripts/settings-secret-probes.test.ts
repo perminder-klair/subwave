@@ -321,7 +321,7 @@ test("Outcrawl: another provider's key is refused without a request", async (t) 
   assert.equal(outbound.length, 0);
 });
 
-test('SpecStream: a key is probed with a one-result search; 401 reads as rejected, 402 and 403 name the account', async (t) => {
+test('SpecStream: a key is probed with a one-result search; 401 reads as rejected, and 402 and 403 never call the key valid', async (t) => {
   const outbound = stubProvider(t, 200, { data: { sources: [] } });
   const r = await testKey({ key: 'SEARCH_API_KEY', value: 'ss_live_good', provider: 'specstream' });
   assert.equal(r.ok, true);
@@ -336,8 +336,8 @@ test('SpecStream: a key is probed with a one-result search; 401 reads as rejecte
 
   const cases: Array<[number, string]> = [
     [401, 'Key rejected — check it\'s correct and active'],
-    [402, 'SpecStream key valid, but the account has no balance left or is at its monthly limit'],
-    [403, 'SpecStream key valid, but it may not spend: it needs the finds:spend scope and room under its spending limit'],
+    [402, 'SpecStream would not charge for the search (402) — check the account\'s balance and spending limits'],
+    [403, 'SpecStream refused this key (403) — check it\'s active and allowed to spend'],
     [500, 'Request failed (500)'],
   ];
   for (const [status, message] of cases) {
@@ -345,6 +345,8 @@ test('SpecStream: a key is probed with a one-result search; 401 reads as rejecte
     const res = await testKey({ key: 'SEARCH_API_KEY', value: 'ss_live_any', provider: 'specstream' });
     assert.equal(res.ok, false, `${status}`);
     assert.equal(res.message, message, `${status}`);
+    // The status proves a refusal, not a valid key: no error message may say so.
+    assert.doesNotMatch(res.message, /valid/i, `${status}`);
     t.mock.restoreAll();
   }
 });
