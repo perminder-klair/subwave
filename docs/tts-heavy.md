@@ -352,7 +352,10 @@ So, on the GPU host:
 services:
   analyzer:
     # -heavy is CLAP + Demucs on the CPU, and is amd64-only. For the GPU, swap
-    # in subwave-analyzer-cuda and add the `deploy:` block below.
+    # in subwave-analyzer-cuda and add the `deploy:` block below. :latest
+    # needs Turing (RTX 20-series) or newer; an older card takes the tag named
+    # for its architecture, such as subwave-analyzer-cuda:pascal for a GTX
+    # 10-series (docs/internals/infrastructure.md#aio-cuda-tags).
     image: ghcr.io/perminder-klair/subwave-analyzer-heavy:latest
     restart: unless-stopped
     ports:
