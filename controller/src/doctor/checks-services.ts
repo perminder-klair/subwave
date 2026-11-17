@@ -14,7 +14,7 @@ import { realPathFinding } from '../music/navidrome-players-policy.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
-import { personaRescueSlot, sameTtsTarget, type RescueSlot } from '../audio/tts-fallback.js';
+import { personaRescueSlot, sameTtsTarget, type PersonaFallbackVoiceConfig, type RescueSlot } from '../audio/tts-fallback.js';
 import { resolvePersonaVoiceSlot } from '../schemas/persona.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { streamStatusFresh } from '../broadcast/liquidsoap-control.js';
@@ -430,7 +430,10 @@ export function coHostRescueFinding(
   const uncovered = (p: Host, rescue: RescueSlot | null): string | null => {
     if (!rescue) return 'no rescue voice';
     const provider = rescue.engine === 'cloud' ? (rescue.personaTts?.cloudProvider ?? null) : null;
-    const own = resolvePersonaVoiceSlot(p.tts as any, s?.tts as any);
+    const own = resolvePersonaVoiceSlot(
+      p.tts as Parameters<typeof resolvePersonaVoiceSlot>[0],
+      s?.tts as Parameters<typeof resolvePersonaVoiceSlot>[1],
+    );
     const ownTarget = { engine: own?.engine || s?.tts?.defaultEngine || 'piper', cloudProvider: own?.engine === 'cloud' ? (own.cloudProvider ?? null) : null };
     if (sameTtsTarget({ engine: rescue.engine, cloudProvider: provider }, ownTarget, defaultProvider)) {
       return `rescue on their own engine, ${rescue.engine}`;
@@ -459,7 +462,7 @@ export function coHostRescueFinding(
     const showName = show.name || 'Untitled show';
     const shared = new Map<string, { names: string[]; rescue: RescueSlot }>();
     for (const p of hosts) {
-      const rescue = personaRescueSlot(p.fallbackVoice as any, tts.ENGINES);
+      const rescue = personaRescueSlot(p.fallbackVoice as PersonaFallbackVoiceConfig | null, tts.ENGINES);
       const why = uncovered(p, rescue);
       if (why) {
         problems.push(`${showName}: ${label(p)} (${why})`);
