@@ -29,7 +29,9 @@ function Row({ title, summary, open, onToggle, action, last, children }: {
   return (
     <div className={last ? undefined : 'border-b border-ink'}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-[18px] py-3">
-        <span className={`${LABEL} min-w-[130px]`}>{title}</span>
+        {/* Wide enough for the longest title ("Context windows", 161 px in
+            LABEL) so every row's summary starts at the same x. */}
+        <span className={`${LABEL} min-w-[168px]`}>{title}</span>
         <span className="font-mono text-[12px] text-muted">{summary}</span>
         {action && <span className="ml-auto">{action}</span>}
         {onToggle && (

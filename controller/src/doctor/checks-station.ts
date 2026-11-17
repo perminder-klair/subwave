@@ -4,7 +4,7 @@
 // Part of the doctor/ split - see ../doctor.ts for the section runner.
 
 import { recentCalls } from '../llm/log.js';
-import { searchReady, searchWeb } from '../skills/web-search.js';
+import { searchKeyProblem, searchReady, searchWeb } from '../skills/web-search.js';
 import * as system from '../system.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
 import * as analyzer from '../music/analyzer.js';
@@ -13,6 +13,7 @@ import * as stemCache from '../music/stem-cache.js';
 import type { Finding, StationSettings } from './types.js';
 import { fmtTokens, isSchemaFailure } from './util.js';
 import { settingsAgentRoutes } from '../schemas/settings.js';
+import { advertisedMounts } from '../setup/hosted.js';
 import {
   AGENT_DEADLINE_WARN_RATIO, AGENT_NUM_CTX_FLOOR, agentDeadlineRatio, contextWindowTooSmall, latencyP90,
 } from './agent-fit.js';
@@ -20,8 +21,9 @@ import {
 export async function checkCapabilities(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  // Web search — backs the DJ's artist-news segments. DuckDuckGo and Keenable
-  // are keyless; Tavily and Brave need a key; SearXNG needs its server URL.
+  // Web search — backs the DJ's artist-news segments. DuckDuckGo, Keenable and
+  // Parallel are keyless; Tavily, Brave, Firecrawl, Outcrawl and SpecStream need a
+  // key; SearXNG needs its server URL.
   // Report config readiness, then do a short live probe so "is it actually
   // working?" is answered, not just "is it configured?".
   const provider = s?.search?.provider || 'duckduckgo';
@@ -29,11 +31,15 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
   try { ready = searchReady(); } catch { ready = true; }
 
   if (!ready) {
+    // "The key on file is …", lowercased to follow "selected but".
+    const wrongKey = searchKeyProblem();
     out.push({
       label: 'web search',
       status: 'warn',
-      detail: `${provider} selected but no ${provider === 'searxng' ? 'server URL' : 'API key'}`,
-      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily and Brave need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
+      detail: wrongKey
+        ? `${provider} selected but ${wrongKey.charAt(0).toLowerCase()}${wrongKey.slice(1)}`
+        : `${provider} selected but no ${provider === 'searxng' ? 'server URL' : 'API key'}`,
+      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily, Brave, Firecrawl, Outcrawl and SpecStream need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo, Keenable or Parallel (all keyless).',
     });
     return out;
   }
@@ -359,10 +365,13 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // Flag it only when several are on AND the host is already under pressure.
   try {
     const st: NonNullable<StationSettings['stream']> = s?.stream || {};
+    // The encoders the mixer runs: through a hosted station's ceiling, which can
+    // switch FLAC and AAC off whatever was saved.
+    const running = advertisedMounts(st);
     const extra: string[] = [];
-    if (st.opusEnabled) extra.push('opus');
-    if (st.flacEnabled) extra.push('flac');
-    if (st.aacEnabled) extra.push('aac');
+    if (running.opusEnabled) extra.push('opus');
+    if (running.flacEnabled) extra.push('flac');
+    if (running.aacEnabled) extra.push('aac');
     if (s?.archive?.enabled) extra.push('hourly archive');
     const encoderCount = 1 + extra.length; // /stream.mp3 always
     const sys = await system.summary();

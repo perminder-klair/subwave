@@ -154,6 +154,22 @@ test('the download route serves the run\'s file, from under a hidden state dir t
   }
 });
 
+test('a hold outlives the run that raised it, which ended ok, and the next run starts clean', async () => {
+  const hold = (text: string) => `'[event] ' + JSON.stringify(${JSON.stringify({ kind: 'warning', text, at: '2026-10-21T05:27:41.000Z', hold: true })})`;
+  const plain = `'[event] ' + JSON.stringify(${JSON.stringify({ kind: 'warning', text: 'not a hold', at: '2026-10-21T05:27:41.000Z' })})`;
+  childScript = `process.stdout.write([${hold('tracks held')}, ${plain}, ${hold('files held')}, ''].join('\\n'), () => process.exit(0));`;
+  await runOnce();
+  assert.equal(t.tagger.running, false);
+  assert.equal(t.tagger.lastRun?.outcome, 'ok');
+  assert.deepEqual(t.taggerView().holds, ['tracks held', 'files held']);
+
+  childScript = CHILD;
+  t.startReconcile();
+  assert.deepEqual(t.taggerView().holds, [], 'gone as the next run starts');
+  while (t.tagger.running) await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(t.taggerView().holds, []);
+});
+
 test('a log id outside the writer\'s pattern reads nothing', () => {
   assert.equal(t.taggerLogFile('../settings'), null);
   assert.equal(t.taggerLogFile('tagger-run-20261021-052741-other'), null);

@@ -4,6 +4,7 @@ import * as subsonic from '../../../../../music/subsonic.js';
 import * as library from '../../../../../music/library.js';
 import * as embeddings from '../../../../../music/embeddings.js';
 import { requestedRecording, type RequestedRecording } from '../../../../../music/request-match.js';
+import { withoutExplicit } from '../../../../../music/explicit-policy.js';
 import { definePickerTool, toolDeadlineResult } from '../defs.js';
 
 // A query is a name, a title or a few genre/vibe words. The cap bounds what one
@@ -34,7 +35,9 @@ export default definePickerTool({
 
     // Exact hits, in source order, for the head of the answer. searchPage has
     // already dropped blocked rows, so a blocked ask reads as not found and
-    // never as held. `held` counts exact hits that are not free to air: collect
+    // never as held, and what a clean show holds back goes the same way here:
+    // told "held", the model tells the listener it just played. `held` counts
+    // exact hits that are not free to air: collect
     // relaxes soft recency rather than starve, so a lone hit on cooldown or in
     // the queue comes back, and only the recency set can say so. It stays
     // offered, because the agent's cooldown and queue.push then refuse it by
@@ -48,7 +51,7 @@ export default definePickerTool({
           songCount: ASK_ROWS,
           signal: signal ? AbortSignal.any([deadline, signal]) : deadline,
         });
-        exact = ask.exactIn(songs);
+        exact = withoutExplicit(ask.exactIn(songs), scope.excludeExplicit);
       } catch {
         return NO_ASK;
       }

@@ -137,7 +137,7 @@ export async function buildPersonaBundle(personaId: string): Promise<BuildBundle
 }
 
 export type BundleImportResult =
-  | { ok: true; status: 200; personas: any[]; persona: any | null; voice: string | null; jingles: string[] }
+  | { ok: true; status: 200; personas: any[]; persona: any | null; voice: string | null; jingles: string[]; managed?: string[] }
   | { ok: false; status: number; error: string };
 
 function fail(status: number, error: string): BundleImportResult {
@@ -384,6 +384,7 @@ async function applyPersonaBundleLocked(body: Buffer): Promise<BundleImportResul
     persona: result.persona,
     voice: storedVoice,
     jingles: storedJingles,
+    ...(result.managed ? { managed: result.managed } : {}),
   };
 }
 

@@ -1,5 +1,5 @@
 // SOURCE OF TRUTH: web/lib/request-outcome.ts — mirrored byte for byte into
-// app/src/lib/request-outcome.ts (app/scripts/request-outcome.test.ts keeps
+// getsubwave/app:src/lib/request-outcome.ts (getsubwave/app:scripts/request-outcome.test.ts keeps
 // the copies identical). Both players describe the same controller outcomes,
 // including older controllers without the outcome field.
 import type { RequestResult } from './types';

@@ -25,6 +25,7 @@ import { cn } from '../../../lib/cn';
 import { fieldAria } from '@/lib/form';
 import { SelectField, SwitchField, TextField, TextareaField, ToggleGroupField } from '@/lib/form-fields';
 import {
+  ALBUM_KIND_OPTIONS,
   ANY_SENTINEL,
   INHERIT_SENTINEL,
   DECADES,
@@ -64,6 +65,7 @@ const FIELD_LABELS: Record<string, string> = {
   preparationSkill: 'episode preparation skill',
   playlistIds: 'playlists',
   excludedPlaylistIds: 'excluded playlists',
+  excludedAlbumKinds: 'album kinds left out',
 };
 
 // Some rules root on an ARRAY field (`eras.0.fromYear`), so walk down to the
@@ -796,6 +798,12 @@ export function ShowEditor({
             disabled={!hasAnyMusicFilter(show)}
             description="Hard-enforces every filter set above (mood, era, energy, genre); off-filter tracks play only as a last resort. When off, they're soft leans the DJ can break for flow. Needs at least one filter set."
           />
+          <SwitchField
+            control={control}
+            name={path('excludeExplicit')}
+            label="Clean show"
+            description="Keeps tracks tagged explicit off air during this show, listener requests included. Only tracks tagged explicit in your files are held back: an untagged track still plays, so this is only as good as your tags, and they are only read when you run Reconcile with Navidrome on the Library page. Anything you queue yourself still plays. If nothing else is left the station keeps playing rather than go silent, and the booth log says so."
+          />
         </ShowEditorSection>
 
         <ShowEditorSection
@@ -835,7 +843,7 @@ export function ShowEditor({
                   control={control}
                   name={path('playlistInOrder')}
                   label="Play in order"
-                  description="On: the pinned playlist(s) play top to bottom, several playlists back to back in the order you pinned them. The next airing picks up where this one left off, and the list loops at the end. Your order wins over the station's artist and album variety rules; blocked tracks, excluded playlists and this show's length limits still skip a track. Off: tracks are picked from the playlist in shuffled order."
+                  description="On: the pinned playlist(s) play top to bottom, several playlists back to back in the order you pinned them. The next airing picks up where this one left off, and the list loops at the end. Your order wins over the station's artist and album variety rules; blocked tracks, excluded playlists, a clean show's tagged tracks and this show's length limits still skip a track. Off: tracks are picked from the playlist in shuffled order."
                 />
               )}
 
@@ -879,6 +887,14 @@ export function ShowEditor({
                   </span>
                 </PlaylistIdsField>
               </Field>
+              <ToggleGroupField
+                control={control}
+                name={path('excludedAlbumKinds')}
+                label="album kinds left out"
+                description="Tracks from albums of these kinds never play during this show, like an excluded playlist. Each album's kind is set in Library → Era (pre-filled from its title). A track cut out of a DJ mix starts and ends mid-blend, so leave out DJ Mix for most shows."
+                multiple
+                options={ALBUM_KIND_OPTIONS}
+              />
             </div>
           </div>
           <Field>

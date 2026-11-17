@@ -4,7 +4,7 @@
 import { generateText, tool, isStepCount, ToolChoiceViolationError } from 'ai';
 import { perfOf, warningsOf, createUsageMeter } from '../core/pure.js';
 import type { UsageMeter } from '../core/pure.js';
-import { reasoningFor, forcedToolChoice, googleSafetyOptions } from '../provider/capabilities.js';
+import { llmCallOptions, forcedToolChoice } from '../provider/capabilities.js';
 
 // The TRANSPORT rule for this path, stated in the system channel because that
 // is where the model weighs it. It lives HERE, not in any caller's prompt, for
@@ -71,8 +71,7 @@ export async function objectViaToolCall(
       // emits via the tool; a miss throws below → caller's fallback.
       toolChoice: forcedToolChoice(leg.cfg),
       stopWhen: isStepCount(1),
-      reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
-      ...googleSafetyOptions(leg.cfg),
+      ...llmCallOptions(leg.cfg, { forceNoThink: true }),
       ...(signal ? { abortSignal: signal } : {}),
       onLanguageModelCallEnd: usage.onLanguageModelCallEnd,
     } as any);

@@ -14,6 +14,9 @@ export interface Skill {
   ready?: boolean;
   requiresKey?: string;
   keyUrl?: string;
+  // Set when a key is on file and the search provider refuses it, which no
+  // env var fixes. Absent from an older controller.
+  keyProblem?: string | null;
   cooldownMs?: number;
   custom?: boolean;
   tags?: string[];

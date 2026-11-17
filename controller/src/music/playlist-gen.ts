@@ -87,7 +87,7 @@ function clampCount(n: number): number {
 function norm(r: any, source: string, baseScore: number): PoolTrack {
   const instrumental =
     typeof r.instrumental === 'boolean' ? r.instrumental
-      : isInstrumental(r.vocalRanges, r.vocalRangesInvalid);
+      : isInstrumental(r);
   const yearNum = typeof r.year === 'number' ? r.year : parseInt(String(r.year ?? ''), 10);
   return {
     id: String(r.id),
@@ -258,6 +258,11 @@ export async function buildCandidatePool(
       if (t.durationSec == null && typeof tag.durationSec === 'number' && tag.durationSec > 0) t.durationSec = tag.durationSec;
       if (t.energy == null && tag.energy) t.energy = tag.energy;
       if (!t.moods?.length && Array.isArray(tag.moods) && tag.moods.length) t.moods = tag.moods;
+      // Tail evidence only: it can only say vocal, so a Subsonic or mood row can't
+      // slip tail-sung singing past instrumentalOnly as unknown. Filling these rows
+      // from the head too would change a station that has no tail measurements.
+      const { tailVocalRanges, tailVocalRangesInvalid } = tag;
+      if (t.instrumental == null) t.instrumental = isInstrumental({ tailVocalRanges, tailVocalRangesInvalid });
     }
   }
 

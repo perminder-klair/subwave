@@ -1,10 +1,13 @@
 'use client';
 
 // The Stats page's building blocks, after the "Stats Redesign" design: sections,
-// ink-ruled panels, mono eyebrow labels, share bars, LED ladders and a tuner
-// scale. Colours are theme tokens only (ink, the vermilion accent, danger),
-// corners stay square, and every computed length goes through useDynamicStyle
-// because the lint rule forbids `style={…}`.
+// ink-ruled panels, card-head labels, share bars, LED ladders and a tuner
+// scale. The words are set in the admin's sans scale rather than the theme's
+// display face, which is a condensed poster face on some themes: a section
+// head reads like a settings section's title, a panel's title and note like a
+// card head's. Figures and readouts stay mono. Colours are theme tokens only
+// (ink, the vermilion accent, danger), corners stay square, and every computed
+// length goes through useDynamicStyle because the lint rule forbids `style={…}`.
 
 import type { ReactNode } from 'react';
 import { useRef } from 'react';
@@ -12,8 +15,13 @@ import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { cn } from '../../../lib/cn';
 import type { Health } from '../../../lib/statsHealth';
 
-export const LABEL = 'font-mono text-[10px] font-bold uppercase tracking-[0.2em]';
-export const NOTE = 'font-mono text-[10px] uppercase tracking-[0.16em] text-muted';
+// A panel's title, and the label over a figure, fact, column or row (and the
+// header's live marker): the admin's card-head title (globals.css
+// .card-head .title). font-sans so it holds inside a mono line.
+export const LABEL = 'font-sans text-[11px] font-bold uppercase tracking-[0.25em]';
+// The note beside a LABEL: the card-head sub (globals.css .card-head .sub), so
+// a title and its note share one face.
+export const NOTE = 'font-sans text-[11px] uppercase tracking-[0.18em] text-muted';
 export const SUB = 'font-mono text-[11px] text-muted';
 export const FIGURE = 'font-mono text-[22px] font-bold leading-[1.1] tabular-nums';
 
@@ -33,7 +41,13 @@ export function Section({ title, sub, right, id, bare, children }: {
     <section id={id} aria-label={title} className="grid scroll-mt-[var(--stats-clearance,112px)] grid-cols-1 gap-3">
       {!bare && (
         <header className={cn('flex flex-wrap gap-x-4 gap-y-1', right ? 'items-center' : 'items-baseline')}>
-          <h2 className="m-0 font-display text-[30px] leading-[1.1] font-normal tracking-[-0.01em]">{title}</h2>
+          {/* A settings or imaging section's title (settings/shared.tsx
+              SectionHeader, imaging/parts.tsx SectionMasthead): sans, 22 px,
+              sentence case. The theme's display face is a poster face on some
+              themes, too loud for a heading that repeats down the page, and
+              an uppercase head would blur into the 11 px uppercase panel
+              titles under it. */}
+          <h2 className="m-0 text-[22px] leading-tight font-extrabold tracking-[-0.02em]">{title}</h2>
           {sub && <span className={cn(NOTE, 'sm:ml-auto')}>{sub}</span>}
           {right && <span className="ml-auto sm:ml-0">{right}</span>}
         </header>

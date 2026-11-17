@@ -75,8 +75,11 @@ every listener connect, so:
   player then can't connect, it asks the station again, at most every two
   minutes, and waits out the rate limit. Once the station refuses the password,
   usually because you changed it, the player stops and asks for the new one,
-  saying the saved password was not accepted. Changing the password never drops
-  anyone who is already listening; it reaches them the next time they reconnect.
+  saying the saved password was not accepted. Anyone the prompt stopped mid-listen
+  goes straight back on air when they type the right password, with no second
+  press. Safari may still want that press on a private player, which gets a new
+  audio element. Changing the password never drops anyone who is already
+  listening; it reaches them the next time they reconnect.
   The player can't answer the stream's password challenge, so the bundled proxy
   holds it back from the station's own page, and the browser's own "Sign in"
   dialog doesn't cover it.

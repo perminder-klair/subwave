@@ -8,7 +8,10 @@ import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Btn, Card } from '../ui';
 import { cn } from '../../../lib/cn';
-import { SectionHeader, SaveBar, type SettingsData } from './shared';
+import { SectionHeader, SaveBar, NowBanner, type SettingsData } from './shared';
+import { Button } from '../../ui/button';
+import { useHosted } from '../HostedContext';
+import { NavidromeRealPathCard } from './NavidromeRealPathCard';
 
 // Unlike the other sections this one does NOT ride the shared FormState /
 // saveSettings pair: Navidrome creds live in state/setup-config.json (the wizard's
@@ -31,6 +34,9 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
+  // Hosted with its own library (SUB/WAVE Cloud runs Navidrome + an upload box
+  // for this station and wires the connection in): there is nothing to set here.
+  const { hosted, musicUploadUrl, musicLibraryUrl } = useHosted();
 
   // These creds are section-local (setup-config.json, not settings.json), so
   // the panel cannot diff them for the sticky save bar — this section says so
@@ -104,6 +110,38 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
       wins on boot; remove it there to manage it here.
     </div>
   );
+
+  if (hosted && musicUploadUrl) {
+    return (
+      <>
+        <SectionHeader
+          eyebrow="music source"
+          title="Your music library."
+          sub={<>
+            SUB/WAVE Cloud hosts this station&apos;s library and keeps the DJ connected
+            to it. Upload music and it&apos;s picked up within a minute.
+          </>}
+        />
+        <Card title="Music library" sub="hosted for you">
+          <div className="grid gap-[18px]">
+            <NowBanner label={<>Music source · Managed by SUB/WAVE Cloud</>}>
+              Sign in with this station&apos;s admin username and password.
+            </NowBanner>
+            <div className="flex flex-wrap gap-3">
+              <Button asChild variant="solid">
+                <a href={musicUploadUrl} target="_blank" rel="noreferrer">Upload music</a>
+              </Button>
+              {musicLibraryUrl && (
+                <Button asChild variant="outline">
+                  <a href={musicLibraryUrl} target="_blank" rel="noreferrer">Browse library</a>
+                </Button>
+              )}
+            </div>
+          </div>
+        </Card>
+      </>
+    );
+  }
 
   return (
     <>
@@ -195,6 +233,8 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
           </div>
         </div>
       </Card>
+
+      <NavidromeRealPathCard adminFetch={adminFetch} />
 
       {allEnv ? (
         <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3 text-[12px] leading-[1.5] text-muted">

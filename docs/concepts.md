@@ -42,25 +42,27 @@ dial picks one of two style directives:
 | Dial | Low band says | High band says |
 | --- | --- | --- |
 | **Humour** | Play it straight; keep any wit rare and understated. | Lean into dry, playful wit; an aside or a wink is welcome. |
-| **Local Colour** | Keep it universal; skip local references and place-specific colour. | Lean on the local setting (the town, the weather, the hour) as texture. |
+| **Local Colour** | Keep it universal; skip local references and place-specific colour. | Lean on the local setting (the town, the hour) as texture. |
 | **Warmth** | Keep a cool, dry distance; let the music carry the warmth. | Be warm and earnest; speak to the listener like a friend. |
 
 **Local Colour specifically** governs how much the DJ reaches for *where and
-when you are* — your town, today's weather, the hour — as material. Turned up,
-links start with the drizzle outside; turned down, the same DJ could be
-broadcasting from anywhere.
+when you are* — your town and the hour — as material. Turned up, a link
+might open on the late hour or the town; turned down, the same DJ could be
+broadcasting from anywhere. It leaves the weather out on purpose: links,
+idents and handoffs are given no forecast, so a dial that asked for it got
+invented weather. The weather skill is where the forecast goes on air.
 
 Three things it does **not** do:
 
-- It doesn't add facts. The place name, weather and clock come from the station
-  context regardless; the dial only decides whether the DJ leans on them.
+- It doesn't add facts. The place name and the clock come from the station
+  context regardless, and the weather reaches only the segments given it (the
+  weather skill, or any skill whose `context:` lists it); the dial only decides whether the DJ leans on them.
 - It doesn't invent a second location. Exactly one place name reaches any
   prompt (the on-air location you set under Settings → Station). If the DJ names
   a different city, that's the model improvising, not the dial. Drop
   `{location}` from the DJ prompt template and the station hands that place to
   no prompt: the weather arrives without it, and every prompt tells the DJ not
-  to say where you are, so a high dial leans on the weather and the hour
-  instead.
+  to say where you are, so a high dial leans on the hour instead.
 - A persona left at the defaults renders a **byte-identical** prompt to a
   station that never had the dials, which is why upgrading changes nothing.
 

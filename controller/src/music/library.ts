@@ -9,6 +9,9 @@ import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
 import { artistRootKey, setKnownActsProvider, trackKey, type CandidateLike } from './recency.js';
 import { isInstrumental } from './lyric-vocal.js';
+import { curveOutro, tailFromCurveOn } from './tail-levels.js';
+import type { TrackOutro } from './library-db/types.js';
+import { clearWalk } from './library-walk.js';
 
 let loaded = false;
 
@@ -36,6 +39,9 @@ export async function reset() {
   loaded = false;
   invalidateAiredIndex();
   knownActsCache = null;
+  // The table is about to stop holding the last walk (music/library-walk.ts).
+  // Cleared first, so a reset that fails half-way still reads as unsettled.
+  clearWalk();
   await db.reset();
   await load();
 }
@@ -72,7 +78,7 @@ export function get(songId: string): any {
   if (!loaded) return null;
   const t = db.getTrack(songId);
   if (!t) return null;
-  return {
+  const rec = {
     title: t.title,
     artist: t.artist,
     album: t.album,
@@ -92,6 +98,8 @@ export function get(songId: string): any {
     // this projection for Subsonic-sourced rows.
     lastfmTags: t.lastfmTags,
     energy: t.energy,
+    // music/explicit-policy's fallback for a candidate that carries no tag field.
+    explicitStatus: t.explicitStatus,
     source: t.source,
     confidence: t.confidence,
     taggerVersion: t.taggerVersion,
@@ -110,18 +118,59 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // clean timing spans; classify through isInstrumental
     vocalRangesInvalid: t.vocalRangesInvalid,
+    tailVocalRanges: t.tailVocalRanges,
+    tailVocalRangesInvalid: t.tailVocalRangesInvalid,
     paceMean: paceMeanOf(t.pace),
     // Boundary keys for bpmKeyFor / queue.mixAnalysisFor.
     keyRanges: t.keyRanges,
     // Measured ending (fade vs cold, tail loudness/tempo/grid) for the queue's
-    // exit canvas + effect gating. null = no signal.
+    // exit canvas + effect gating. null = no signal. With
+    // transitions.tailFromCurve on, its level readings come from the
+    // whole-file loudness curve (music/tail-levels.ts, the one place), read
+    // on the first read of `outro` (curveOutroOnRead).
     outro: t.outro,
     // Edge dead air: music/silence-trim.ts resolves EVERY caller through this
     // projection, so dropping one disables the trim silently. null = no signal.
     leadSilenceMs: t.leadSilenceMs,
     tailSilenceMs: t.tailSilenceMs,
     tailStartMs: t.tailStartMs,
+    // The whole-file edges facet, which the resolver prefers over the three
+    // window figures above. Same rule: a missing field disables it silently.
+    edgeLeadMs: t.edgeLeadMs,
+    edgeTailMs: t.edgeTailMs,
+    decodedDurationMs: t.decodedDurationMs,
   };
+  if (tailFromCurveOn()) curveOutroOnRead(rec, songId, t);
+  return rec;
+}
+
+// `outro` with the curve's level readings, derived on its first read: most
+// get() callers (the show filters run one per candidate) never read it, and
+// the whole-file curve is a row read and a parse of up to ~120 KB (a DJ set).
+// The switch is judged at get() time, as before; the value, once read (or
+// assigned), is the record's.
+function curveOutroOnRead(
+  rec: { outro: unknown },
+  songId: string,
+  t: { outro: TrackOutro | null; decodedDurationMs?: number | null; edgeTailMs?: number | null },
+): void {
+  let value: unknown;
+  let resolved = false;
+  Object.defineProperty(rec, 'outro', {
+    enumerable: true,
+    configurable: true,
+    get() {
+      if (!resolved) {
+        value = curveOutro(t.outro, db.getLoudnessCurveJson(songId), { decodedDurationMs: t.decodedDurationMs, edgeTailMs: t.edgeTailMs });
+        resolved = true;
+      }
+      return value;
+    },
+    set(v: unknown) {
+      value = v;
+      resolved = true;
+    },
+  });
 }
 
 // A usable tempo, or null. Navidrome emits `bpm: 0` on files with no tempo
@@ -323,6 +372,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     // separate from the editorial `moods`.
     audioMoods: r.audioMoods,
     energy: r.energy,
+    // Inline, so a clean show's check needs no per-track DB lookup.
+    explicitStatus: r.explicitStatus,
     // Seconds, for the max-track-length cap (#447). null = unknown.
     durationSec: r.durationSec,
     // Acoustic analysis — null on un-analysed tracks, read as "no signal".
@@ -333,6 +384,8 @@ function slimTrack(r: db.EnergyPoolRecord) {
     structure: r.structure,
     vocalRanges: r.vocalRanges,
     vocalRangesInvalid: r.vocalRangesInvalid,
+    tailVocalRanges: r.tailVocalRanges,
+    tailVocalRangesInvalid: r.tailVocalRangesInvalid,
     // Scalar mean pace (0..1); the full curve stays in the record.
     paceMean: paceMeanOf(r.pace),
   };
@@ -727,7 +780,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       musicalKey: r.musicalKey,
       loudnessLufs: r.loudnessLufs,
       paceMean: paceMeanOf(r.pace),
-      instrumental: isInstrumental(r.vocalRanges, r.vocalRangesInvalid),
+      instrumental: isInstrumental(r),
     })),
   };
 }

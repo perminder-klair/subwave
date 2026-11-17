@@ -39,6 +39,10 @@ export interface OrphanReport {
   deletedNames: string[];
   agingCount: number;
   supersededCount: number;
+  /** Back in the library with the slot free, but not proven to be the same
+   *  recording (a different duration, or no tail stems to compare), so held
+   *  until it ages out. Absent from a controller that predates the check. */
+  mismatchedCount?: number;
   inFlight: number;
   failed: number;
   /** Everything in the quarantine, whatever a pass would do with it. */
@@ -131,7 +135,7 @@ const mb = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 const plural = (n: number, noun: string) => `${n.toLocaleString('en-GB')} ${noun}${n === 1 ? '' : 's'}`;
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
-export const ORPHAN_CARD_SUB = 'A track that leaves the library keeps its Demucs stem dirs until the byte budget evicts them. This finds those dirs, parks them in a quarantine for a week (a track that comes back gets them released, so its blends work again at once, though its first analysis as a new track still runs Demucs), and deletes what ages out.';
+export const ORPHAN_CARD_SUB = 'A track that leaves the library keeps its Demucs stem dirs until the byte budget evicts them. This finds those dirs, parks them in a quarantine for a week (a track that comes back as the same recording gets them released, so its blends work again at once, though its first analysis as a new track still runs Demucs), and deletes what ages out.';
 
 /** Everything a confirmed pass would do. The run button is live while it is not zero. */
 export function pendingWork(report: OrphanReport): number {
@@ -155,7 +159,7 @@ export function runDialog(report: OrphanReport): { title: string; description: s
     report.quarantined ? `${plural(report.quarantined, 'stem folder')} for tracks no longer in the library move into the quarantine.` : '',
     report.released.length ? `${plural(report.released.length, 'quarantined folder')} whose track is back return to the cache.` : '',
     report.deletedCount ? `${plural(report.deletedCount, 'quarantined folder')} past the week are deleted for good.` : '',
-    report.quarantined ? 'A track that comes back within a week gets its folder back on the next pass; after a week, the next pass deletes the rest for good. With the daily pass off, the next pass is this button.' : '',
+    report.quarantined ? 'A track that comes back within a week as the same recording gets its folder back on the next pass; after a week, the next pass deletes the rest for good. With the daily pass off, the next pass is this button.' : '',
   ].filter(Boolean);
   return {
     title: movesOnly ? 'Move orphan stems to the quarantine' : 'Run the orphan stems cleanup',
@@ -210,6 +214,9 @@ function DryRunSummary({ report }: { report: OrphanReport }) {
       )}
       {report.released.length > 0 && (
         <> <strong className="mono-num">{report.released.length}</strong> back in the library, ready to release.</>
+      )}
+      {(report.mismatchedCount ?? 0) > 0 && (
+        <> <strong className="mono-num">{report.mismatchedCount}</strong> back in the library but not proven the same recording, left to age out.</>
       )}
     </p>
   );

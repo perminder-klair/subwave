@@ -33,6 +33,7 @@ after(async () => {
 
 async function setup() {
   await settings.update({ personas: [outgoing, incoming], activePersonaId: outgoing.id,
+    djBehaviour: { holdDuckBetweenSpeakers: true },
     tts: { defaultEngine: 'gemini', speed: { gemini: 1 }, gainDb: { gemini: 0 } } });
   session.start({ at: new Date().toISOString(), time: { period: 'day', vibe: 'day', mood: 'calm' },
     weather: null, festival: null, dominantMood: 'calm', activeShow: null } as any);
@@ -55,10 +56,14 @@ test('two Gemini speakers retain gain and attribution, and only the final marker
     completed.push(result);
     return result;
   });
-  t.mock.method(queue as any, '_airVoice', async (_target: string, path: string, text: string, gain: number) => {
-    const voiceId = `line-${deliveries.length}`;
-    deliveries.push({ path, text, gain, voiceId });
-    return { voiceId, clipMs: 30_000, aired: awaitVoiceAir(voiceId) };
+  t.mock.method(queue as any, '_airExchange', async (_target: string,
+    clips: { wavPath: string; text: string; gainDb: number; onQueued?: (q: { voiceId: string; clipMs: number; estimatedAirInMs: number }) => void }[]) => {
+    return clips.map((clip, index) => {
+      const voiceId = `line-${index}`;
+      deliveries.push({ path: clip.wavPath, text: clip.text, gain: clip.gainDb, voiceId });
+      clip.onQueued?.({ voiceId, clipMs: 30_000, estimatedAirInMs: 0 });
+      return { voiceId, clipMs: 30_000, aired: awaitVoiceAir(voiceId) };
+    });
   });
   assert.equal(await queue.announceExchange(lines, 'handoff'), true);
   assert.equal(requests.length, 2);
@@ -101,7 +106,7 @@ test('failure on the second render publishes no partial exchange', async t => {
     if (++renders === 2) throw new Error('render failed');
     return wav;
   });
-  const air = t.mock.method(queue as any, '_airVoice', async () => { throw new Error('must not publish'); });
+  const air = t.mock.method(queue as any, '_airExchange', async () => { throw new Error('must not publish'); });
   assert.equal(await queue.announceExchange(lines), false);
   assert.equal(air.mock.callCount(), 0);
 });

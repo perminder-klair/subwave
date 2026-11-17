@@ -27,7 +27,7 @@ export interface TuneInGate {
 
 export function useTuneInGate(): TuneInGate {
   const { tunedIn, idleStopped } = usePlayerAudio();
-  const { tune } = usePlayerActions();
+  const { tune, play } = usePlayerActions();
   const { state } = usePlayerFeed();
   // Operator toggle (station-wide, live via /state). Default ON: only an
   // explicit false drops the full-bleed gate.
@@ -36,9 +36,11 @@ export function useTuneInGate(): TuneInGate {
   // skin switch, and a fresh instance during playback must not flash the gate.
   const [showTuneIn, setShowTuneIn] = useState(() => !tunedIn);
 
+  // play, not the tune toggle: an overlay stays under the pointer through its exit, so the second
+  // half of a double-click lands on it with the listener already on air.
   const tuneInFromOverlay = () => {
     setShowTuneIn(false);
-    tune();
+    play();
   };
 
   // Idle cutoff fired: bring the gate back as the one-tap resume and say why

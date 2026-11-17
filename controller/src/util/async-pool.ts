@@ -24,6 +24,21 @@ export async function mapPool<T, R>(
   return results;
 }
 
+// Run an async fn once, caching the in-flight PROMISE so concurrent first
+// callers share the one call instead of each starting their own. A rejection
+// clears it, so a failed first call can be retried by the next caller.
+export function onceAsync<R>(fn: () => Promise<R>): () => Promise<R> {
+  let p: Promise<R> | null = null;
+  return (): Promise<R> => {
+    if (!p) {
+      const mine = fn();
+      p = mine;
+      mine.catch(() => { if (p === mine) p = null; });
+    }
+    return p;
+  };
+}
+
 // Memoise an async fn by key, caching the in-flight PROMISE so concurrent
 // callers for one key share a single underlying call.
 export function memoizeByKey<R>(

@@ -8,6 +8,8 @@ import {
   exceedsAutoCeiling,
   isStemDirListing,
   AUTO_MAX_MIN_DIRS,
+  SAME_AUDIO_TOLERANCE_SEC,
+  sameAudio,
 } from '../src/music/orphan-purge-pure.js';
 
 const DAY = 86400_000;
@@ -41,16 +43,53 @@ test('an orphan that is in the library again is released back, not copied', () =
   // The live slot is free (the orphan copy was the only one): quarantine holds
   // the sole copy, so a re-appearing track id gets its stems back by moving.
   const plan = planQuarantinePurge(
-    [{ name: 'back-again', known: true, ageMs: 2 * DAY, liveSlotFree: true }],
+    [{ name: 'back-again', known: true, ageMs: 2 * DAY, liveSlotFree: true, sameAudio: true }],
     { confirm: true },
   );
   assert.deepEqual(plan.released, ['back-again']);
   assert.deepEqual(plan.deleted, []);
 });
 
+test('an id back with its slot free but not proven the same audio is held, and ages out (#2224)', () => {
+  // Navidrome derives the id from the path, so a different recording put back
+  // at the same path returns under the same id. Released, its blends would
+  // render the old recording's stems.
+  const young = planQuarantinePurge(
+    [{ name: 'other-recording', known: true, ageMs: 2 * DAY, liveSlotFree: true, sameAudio: false }],
+    { confirm: true },
+  );
+  assert.deepEqual(young.released, []);
+  assert.deepEqual(young.mismatched, ['other-recording']);
+  assert.deepEqual(young.superseded, []);
+  assert.deepEqual(young.aging.map(a => a.name), ['other-recording']);
+  const aged = planQuarantinePurge(
+    [{ name: 'other-recording', known: true, ageMs: QUARANTINE_GRACE_MS + 1, liveSlotFree: true, sameAudio: false }],
+    { confirm: true },
+  );
+  assert.deepEqual(aged.released, []);
+  assert.deepEqual(aged.deleted.map(d => d.name), ['other-recording']);
+});
+
+test('the same audio is judged on duration, inside the tolerance', () => {
+  // tail-meta.json holds the decoded duration, the row the Subsonic integer.
+  assert.equal(sameAudio(200.4, 200), true);
+  assert.equal(sameAudio(198.1, 200), true);
+  assert.equal(sameAudio(200 + SAME_AUDIO_TOLERANCE_SEC, 200), true);
+  assert.equal(sameAudio(200 + SAME_AUDIO_TOLERANCE_SEC + 0.5, 200), false);
+  assert.equal(sameAudio(200, 312), false, 'another recording at the same path');
+});
+
+test('the same audio fails closed: a side with no duration proves nothing', () => {
+  // A head-only set has no tail-meta.json; a server can leave the duration out.
+  for (const missing of [undefined, null, 0, -200, Number.NaN, Number.POSITIVE_INFINITY, '200', {}]) {
+    assert.equal(sameAudio(missing, 200), false, `stems ${String(missing)}`);
+    assert.equal(sameAudio(200, missing), false, `row ${String(missing)}`);
+  }
+});
+
 test('a superseded quarantine ages out and is deleted once aged, never merged over the new copy', () => {
   const plan = planQuarantinePurge(
-    [{ name: 're-analysed', known: true, ageMs: QUARANTINE_GRACE_MS + 1, liveSlotFree: false }],
+    [{ name: 're-analysed', known: true, ageMs: QUARANTINE_GRACE_MS + 1, liveSlotFree: false, sameAudio: false }],
     { confirm: true },
   );
   assert.deepEqual(plan.deleted.map(d => d.name), ['re-analysed']);
@@ -60,7 +99,7 @@ test('a superseded quarantine ages out and is deleted once aged, never merged ov
 
 test('a quarantine younger than the grace period stays put', () => {
   const plan = planQuarantinePurge(
-    [{ name: 'fresh-orphan', known: false, ageMs: QUARANTINE_GRACE_MS - DAY, liveSlotFree: true }],
+    [{ name: 'fresh-orphan', known: false, ageMs: QUARANTINE_GRACE_MS - DAY, liveSlotFree: true, sameAudio: false }],
     { confirm: true },
   );
   assert.deepEqual(plan.aging.map(a => a.name), ['fresh-orphan']);
@@ -70,7 +109,7 @@ test('a quarantine younger than the grace period stays put', () => {
 
 test('a quarantine older than the grace period is deleted once confirmed', () => {
   const plan = planQuarantinePurge(
-    [{ name: 'old-orphan', known: false, ageMs: QUARANTINE_GRACE_MS + 60_000, liveSlotFree: false }],
+    [{ name: 'old-orphan', known: false, ageMs: QUARANTINE_GRACE_MS + 60_000, liveSlotFree: false, sameAudio: false }],
     { confirm: true },
   );
   assert.deepEqual(plan.deleted.map(d => d.name), ['old-orphan']);
@@ -78,7 +117,7 @@ test('a quarantine older than the grace period is deleted once confirmed', () =>
 
 test('an unconfirmed quarantine pass is also a dry run', () => {
   const plan = planQuarantinePurge(
-    [{ name: 'old-orphan', known: false, ageMs: 9 * DAY, liveSlotFree: false }],
+    [{ name: 'old-orphan', known: false, ageMs: 9 * DAY, liveSlotFree: false, sameAudio: false }],
     { confirm: false },
   );
   assert.deepEqual(plan.deleted.map(d => d.name), ['old-orphan']);
@@ -102,7 +141,7 @@ test('an empty cache plans nothing', () => {
 
 test('a young superseded quarantine waits out the grace like any other, released under no condition', () => {
   const plan = planQuarantinePurge(
-    [{ name: 're-analysed-young', known: true, ageMs: DAY, liveSlotFree: false }],
+    [{ name: 're-analysed-young', known: true, ageMs: DAY, liveSlotFree: false, sameAudio: true }],
     { confirm: true },
   );
   assert.deepEqual(plan.released, []);

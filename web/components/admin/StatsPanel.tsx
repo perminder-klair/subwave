@@ -140,7 +140,7 @@ export default function StatsPanel() {
     // dial has to ride the whole page.
     <div>
       <header className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-2">
-        <h1 className="m-0 font-display text-[40px] leading-none font-normal tracking-[-0.02em]">Stats</h1>
+        <h1 className="m-0 text-[clamp(22px,3vw,34px)] leading-[1.06] font-extrabold tracking-[-0.025em]">Stats</h1>
         <span className={NOTE}>
           {[
             recap?.station,
@@ -151,7 +151,7 @@ export default function StatsPanel() {
           <span className={cn(LABEL, err ? 'text-[var(--danger)]' : paused ? 'text-muted' : 'text-vermilion')}>
             ● {err ? 'down' : paused ? 'paused' : 'live'}
           </span>
-          <span className="font-mono text-[10px] tracking-[0.2em] uppercase">refresh · 5s</span>
+          <span className="text-[11px] tracking-eyebrow uppercase">refresh · 5s</span>
           <span className={cn(NOTE, 'order-last w-full sm:order-none sm:w-auto')}>rollups since boot · listeners durable</span>
           <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
         </div>

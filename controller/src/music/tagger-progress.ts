@@ -48,6 +48,10 @@ export interface TaggerEvent {
   // Operator-facing sentence, composed at the call site.
   text: string;
   at: string;
+  // The run held something back for the operator (a mass removal, a mass
+  // replaced-file clear). Kept once the run ends (broadcast/tagger.ts `holds`),
+  // because such a run still exits 0 and nothing else would say so.
+  hold?: boolean;
 }
 
 export function reportEvent(e: Omit<TaggerEvent, 'at'>): void {
@@ -83,11 +87,11 @@ export function reportCatalogueReady(walked: number): void {
 // sentinel, so call sites stay one line. Both go to stdout back-to-back so the
 // capture side can drop the plain echo and keep only the structured entry.
 export function makeEventLogger(prefix: string) {
-  return (kind: TaggerEventKind, text: string): void => {
+  return (kind: TaggerEventKind, text: string, opts: { hold?: boolean } = {}): void => {
     // Collapse newlines: a multi-line echo defeats the controller's de-dup.
     const line = text.replace(/\s*\n\s*/g, ' ');
     console.log(`[${prefix}] ${line}`);
-    reportEvent({ kind, text: line });
+    reportEvent({ kind, text: line, ...opts });
   };
 }
 

@@ -3,8 +3,9 @@
 
 import * as library from '../../../../music/library.js';
 import * as embeddings from '../../../../music/embeddings.js';
-import { filterPickerCandidates } from '../../../../music/recency.js';
+import { filterPickerCandidates, trackKey } from '../../../../music/recency.js';
 import { applyStrictLocks, type VocalMode } from '../../../../music/show-filter.js';
+import { withoutExplicit } from '../../../../music/explicit-policy.js';
 import { applyKnownTrackCeiling } from '../../../../music/track-duration.js';
 import { applyTrackFloor } from '../../../../music/track-floor.js';
 import { freshnessBiasedOrder } from '../../../../music/airing.js';
@@ -46,6 +47,11 @@ export interface PickerScope {
   // null = no floor, and not set on the request path.
   minTrackSec: number | null;
   maxTrackSec: number | null;
+  // A clean show: tracks tagged explicit drop from every tool's results (music/
+  // explicit-policy.ts). NOT gated on filtersStrict, and the one show rule the
+  // request path keeps, because a listener's ask must not air what the operator
+  // ruled out. HARD here, like the excluded playlists.
+  excludeExplicit: boolean;
   // Union of a strict playlist-anchored show's pinned Navidrome playlists; every
   // tool's candidates are intersected with it, HARD with no never-starve to
   // off-playlist, because a playlist is an exact set and showPlaylistTracks is
@@ -102,6 +108,7 @@ const NO_SCOPE: PickerScope = {
   vocalLock: null,
   minTrackSec: null,
   maxTrackSec: null,
+  excludeExplicit: false,
   playlistLock: null,
   playlistTracks: null,
   showPool: null,
@@ -156,16 +163,25 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   const {
     recentIds, recentKeys, hardRecentIds, hardRecentKeys,
     genreLock, eraLock, moodLock, energyLock, vocalLock,
-    minTrackSec, maxTrackSec, playlistLock, excludedIds,
+    minTrackSec, maxTrackSec, excludeExplicit, playlistLock, excludedIds,
   } = scope;
 
   const seen = new Map<string, any>();
+  // Read from `seen` itself, not counted in collect(): a caller may merge
+  // another registry's candidates into this map (dj-agent's genre steer).
+  const holdsFresh = () => {
+    for (const [id, song] of seen) {
+      if (!recentIds.has(id) && !(song?.title && recentKeys.has(trackKey(song)))) return true;
+    }
+    return false;
+  };
 
   // #1655: only ~7% of the reported library passed instrumental + low energy.
   // A bounded 5x fetch gives the hard filters more neighbours to work with,
   // without increasing the model's cap or adding retries.
-  // Unlocked/request runs retain their historical source sizes.
-  const hasDiscoveryLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || vocalLock || playlistLock);
+  // Unlocked runs, and request runs outside a clean show, retain their historical
+  // source sizes.
+  const hasDiscoveryLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || vocalLock || excludeExplicit || playlistLock);
   const candidateLimit = (limit: number) => hasDiscoveryLock ? limit * 5 : limit;
 
   // Pushed into every KNN query so a heavily-aired cluster answers with its next
@@ -202,7 +218,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     const items: any[] = Array.isArray(list) ? list : [];
     const source = intersectEpisodeSource(items, scope.episodeSource);
     const ordered = opts.order === 'source' ? source : freshnessBiasedOrder(source, library.lastAiredInfo(), Date.now());
-    let pool = applyStrictLocks(ordered, {
+    let pool = applyStrictLocks(withoutExplicit(ordered, excludeExplicit), {
       genres: genreLock, eras: eraLock, moods: moodLock, energies: energyLock, vocals: vocalLock,
     }, { starve: true });
     // Minimum track length (#1573): hard, and BEFORE the playlist lock, so a
@@ -228,6 +244,10 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
       hardRecentIds,
       hardRecentKeys,
       seenIds: new Set(seen.keys()),
+      // Relax track recency for the list, not per source (#2320): once `seen`
+      // holds a fresh candidate, a source left with only just-played tracks
+      // contributes nothing rather than letting them in beside it.
+      allowTrackRelaxation: !holdsFresh(),
       maxPerArtist: scope.episodeSource ? Infinity : opts.maxPerArtist ?? (playlistLock ? Infinity : 3),
       cap,
     });
@@ -249,7 +269,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   // distinguish "nothing matches" from "matches exist but were all filtered" —
   // opposite next moves. A strict lock is anything that can drop a candidate the
   // source DID return, so all of them count here, not just recency.
-  const hasStrictLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || vocalLock || playlistLock || excludedIds || minTrackSec || maxTrackSec);
+  const hasStrictLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || vocalLock || playlistLock || excludedIds || minTrackSec || maxTrackSec || excludeExplicit);
   // The seed clause rides here as well as on the schema field (#1247): this is
   // the message in context at the moment the model fails, and "never invent a
   // song id" is satisfied by echoing the on-air seed. Wording from

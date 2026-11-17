@@ -2,6 +2,7 @@
 // is the most expensive read in this module.
 
 import { SQL_HAS_MOODS, getDbNonce, requireDb } from './handle.js';
+import { ERA_ALBUM_KEY_SQL } from '../era-album-key.js';
 import type { LibraryStats } from './types.js';
 
 // Aggregate scans, polled from several admin pages; uncached they block
@@ -167,6 +168,17 @@ const STATS_INDEXES: Array<[name: string, sql: string]> = [
   ['idx_tracks_vocal_measured', 'CREATE INDEX IF NOT EXISTS idx_tracks_vocal_measured ON tracks((vocal_ranges_json IS NOT NULL))'],
   ['idx_tracks_fail_count', 'CREATE INDEX IF NOT EXISTS idx_tracks_fail_count ON tracks(analyze_fail_count) WHERE analyze_fail_count IS NOT NULL'],
   ['idx_tracks_stats', 'CREATE INDEX IF NOT EXISTS idx_tracks_stats ON tracks(energy, source, tagged_at, artist, genres, moods) WHERE moods IS NOT NULL'],
+  // The era review (Library → Era). album_kind answers a show's
+  // excludedAlbumKinds on every pick (tracks.albumKindTrackIds); the album key
+  // answers each per-album read and write (era-review.ts). Both scanned the
+  // wide rows on the controller's thread. The key is an EXPRESSION index, so it
+  // is built on the very string every lookup uses (era-album-key.ts).
+  ['idx_tracks_album_kind', 'CREATE INDEX IF NOT EXISTS idx_tracks_album_kind ON tracks(album_kind)'],
+  ['idx_tracks_era_album_key', `CREATE INDEX IF NOT EXISTS idx_tracks_era_album_key ON tracks(${ERA_ALBUM_KEY_SQL})`],
+  // A prepared artist episode's mirror read (queries.artistCatalogue, #2333):
+  // `artist_id = ? OR album_artist_id = ?` runs as two index lookups only with
+  // this beside idx_tracks_artist_id; without it, the OR scans the table.
+  ['idx_tracks_album_artist_id', 'CREATE INDEX IF NOT EXISTS idx_tracks_album_artist_id ON tracks(album_artist_id)'],
 ];
 
 export function ensureStatsIndexes(): void {

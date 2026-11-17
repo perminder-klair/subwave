@@ -12,7 +12,7 @@ globalThis.fetch = async () => new Response('{}', { headers: { 'content-type': '
 const { getFullContext } = await import('../src/context.js');
 const context = await getFullContext();
 globalThis.fetch = realFetch;
-const { createShowPreparation, preparationGrounding } = await import('../src/broadcast/show-preparation.js');
+const { createShowPreparation, preparationGrounding, preparationSettled, preparationGreetingSubject, preparationPlanSubject } = await import('../src/broadcast/show-preparation.js');
 const { preparationStoreSchema, preparationResultSchema } = await import('../src/schemas/show-preparation.js');
 const { skillEligible } = await import('../src/skills/eligibility.js');
 after(async () => { await rm(root, { recursive: true, force: true }); });
@@ -37,6 +37,7 @@ function fixture(name: string) {
   };
   return { options, counts: () => ({ calls, sourceCalls }), move: (ms: number) => { clock += ms; },
     change: () => { snapshot = { ...snapshot, skill: 'replacement', configuration: 'changed' }; },
+    clearSkill: () => { snapshot = { ...snapshot, skill: '', configuration: 'cleared' }; },
     next: () => { snapshot = { ...snapshot, occurrence: { ...snapshot.occurrence, id: `${name}-next` } }; },
     catalogue: (fails: boolean) => { unavailable = fails; }, tool: (fails: boolean) => { invalid = fails; } };
 }
@@ -104,6 +105,101 @@ test('exhausted catalogue retries remain degraded after restart and allow an exp
   assert.deepEqual(f.counts(), { calls: 1, sourceCalls: 2 }, 'restart cannot reset automatic retry limits');
   assert.equal((await restarted.retry({ context })).status.kind, 'ready');
   assert.deepEqual(f.counts(), { calls: 1, sourceCalls: 3 }, 'explicit retry keeps the accepted subject');
+});
+
+test('a preparation is unsettled only while a retry is still due without grounding (#2321)', async () => {
+  const f = fixture('settled-catalogue');
+  f.catalogue(true);
+  const owner = createShowPreparation(f.options);
+  const first = await owner.ensure({ context });
+  assert.equal(first.status.kind, 'degraded');
+  assert.equal(first.editorial, '');
+  assert.equal(preparationSettled(first), false, 'a catalogue retry is still due, so nothing should be planned from this view');
+  assert.equal(preparationGreetingSubject(first), 'Artist', 'the skill already chose the subject, so the greeting may name it');
+  assert.equal(preparationPlanSubject(first).subject, '', 'an unsettled view gives the plan nothing');
+  assert.equal(preparationSettled(owner.read({ context })), false);
+  const restarted = createShowPreparation(f.options);
+  await restarted.recover();
+  assert.equal(preparationSettled(restarted.read({ context })), false, 'a restart keeps the pending retry');
+  f.move(60_001);
+  const exhausted = await owner.ensure({ context });
+  assert.equal(exhausted.status.kind, 'degraded');
+  assert.equal(preparationSettled(exhausted), true, 'no retry left: the plan goes ahead without the subject');
+  assert.equal(preparationGreetingSubject(exhausted), null, 'a settled view speaks through its plan, not the bare subject');
+  const bare = preparationPlanSubject(exhausted);
+  assert.equal(bare.subject, 'Artist', 'settled but ungrounded: the plan names the chosen subject');
+  assert.equal(bare.grounded, false);
+  assert.match(bare.editorial, /state no facts about it/);
+  assert.doesNotMatch(bare.editorial, /episode-source-data/);
+
+  const g = fixture('settled-ready');
+  g.catalogue(true);
+  const late = createShowPreparation(g.options);
+  assert.equal(preparationSettled(await late.ensure({ context })), false);
+  g.catalogue(false); g.move(60_001);
+  const ready = await late.ensure({ context });
+  assert.equal(ready.status.kind, 'ready');
+  assert.equal(preparationSettled(ready), true);
+  assert.equal(preparationGreetingSubject(ready), null, 'a ready view gives the greeting its editorial instead');
+  assert.deepEqual(preparationPlanSubject(ready), { subject: 'Artist', editorial: ready.editorial, grounded: true });
+  g.catalogue(true);
+  const kept = await late.ensure({ context });
+  assert.equal(kept.status.kind, 'degraded');
+  assert.equal(preparationSettled(kept), true, 'a ready record keeps its grounding through a later catalogue failure');
+
+  const t = fixture('settled-tool');
+  t.tool(true);
+  const tool = createShowPreparation(t.options);
+  const failed = await tool.ensure({ context });
+  assert.equal(failed.status.kind, 'failed');
+  assert.equal(preparationSettled(failed), false, 'the tool is retried once after a minute');
+  assert.equal(preparationGreetingSubject(failed), null, 'no subject chosen yet: the greeting names none');
+  t.move(60_001);
+  const failedTwice = await tool.ensure({ context });
+  assert.equal(failedTwice.status.kind, 'failed');
+  assert.equal(preparationSettled(failedTwice), true);
+  assert.equal(preparationPlanSubject(failedTwice).subject, '', 'a failed tool chose nothing for the plan either');
+
+  assert.equal(preparationSettled({ status: { kind: 'unconfigured' }, music: null, editorial: '', retryPending: false }), true);
+});
+
+test('a view that stops waiting on a retry tells observers, whether the retry worked or ran out (#2321)', async () => {
+  const f = fixture('settle-notify-catalogue');
+  f.catalogue(true);
+  let changes = 0;
+  const owner = createShowPreparation({ ...f.options, changed: () => { changes++; } });
+  await owner.ensure({ context });
+  assert.equal(changes, 0, 'a first failure with a retry due settles nothing');
+  f.move(60_001);
+  const spent = await owner.ensure({ context });
+  assert.equal(preparationSettled(spent), true);
+  assert.equal(changes, 1, 'the last catalogue retry failing settles the view: the held plan can go ahead');
+  await owner.ensure({ context });
+  assert.equal(changes, 1, 'once settled, repeat reads stay quiet');
+
+  const g = fixture('settle-notify-tool');
+  g.tool(true);
+  let toolChanges = 0;
+  const tool = createShowPreparation({ ...g.options, changed: () => { toolChanges++; } });
+  await tool.ensure({ context });
+  assert.equal(toolChanges, 0);
+  g.move(60_001);
+  await tool.ensure({ context });
+  assert.equal(toolChanges, 1, 'the tool failing for good settles the view too');
+});
+
+test('clearing the preparation skill after a failed attempt reads as ordinary at once (#2321)', async () => {
+  const f = fixture('cleared-skill');
+  f.tool(true);
+  const owner = createShowPreparation(f.options);
+  const failed = await owner.ensure({ context });
+  assert.equal(failed.status.kind, 'failed');
+  assert.equal(preparationSettled(failed), false);
+  f.clearSkill();
+  assert.equal((await owner.ensure({ context })).status.kind, 'unconfigured');
+  const view = owner.read({ context });
+  assert.equal(view.status.kind, 'unconfigured', 'the cached failed view must not outlive the cleared skill');
+  assert.equal(preparationSettled(view), true, 'nothing holds the plan pending any more');
 });
 
 test('invalid data fails open with bounded retries and permits explicit retry before acceptance', async () => {

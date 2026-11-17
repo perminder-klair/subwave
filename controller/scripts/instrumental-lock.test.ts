@@ -141,20 +141,20 @@ async function execute(name: string, input: unknown, scope: Partial<PickerScope>
 
 test('instrumental tolerance sums all sung ranges and keeps unknown distinct', () => {
   for (const c of cases) {
-    assert.equal(isInstrumental(c.ranges), c.expected, c.id);
+    assert.equal(isInstrumental({ vocalRanges: c.ranges }), c.expected, c.id);
     assert.equal(instrumentalFromJson(c.ranges == null ? null : JSON.stringify(c.ranges)), c.expected == null ? null : Number(c.expected), c.id);
   }
-  assert.equal(isInstrumental(undefined), null);
+  assert.equal(isInstrumental({}), null);
   assert.equal(instrumentalFromJson(' [ ] '), 1);
   assert.equal(instrumentalFromJson('broken json'), null);
   assert.equal(instrumentalFromJson('{}'), null);
-  assert.equal(isInstrumental([{}]), false, 'malformed spans cannot grant instrumental eligibility');
+  assert.equal(isInstrumental({ vocalRanges: [{}] }), false, 'malformed spans cannot grant instrumental eligibility');
 });
 
 test('lyric-derived classification agrees without erasing short measured phrases', () => {
   const derived = deriveVocalFromLyrics({ synced: true, lines: [{ startMs: 1200, text: 'a short sung phrase' }] });
   assert.ok(derived);
-  assert.equal(derived.instrumental, isInstrumental(derived.vocalRanges));
+  assert.equal(derived.instrumental, isInstrumental({ vocalRanges: derived.vocalRanges }));
   assert.equal(derived.instrumental, true);
   assert.deepEqual(derived.vocalRanges, [{ startMs: 1200, endMs: 5200 }]);
   assert.equal(derived.introMs, 1200, 'timing retains the measured onset');

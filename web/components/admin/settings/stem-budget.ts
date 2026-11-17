@@ -23,6 +23,8 @@ export interface StemUsage {
 export interface StemUsageResponse {
   usage: StemUsage | null;
   budgetBytes?: number;
+  /** Sent only while pick-time stems is on: how far over `budgetBytes` the cache may run by design. */
+  pickTimeOvershootBytes?: number;
 }
 
 export interface StemBudgetImpact {
@@ -42,6 +44,24 @@ export function stemBudgetImpact(usage: StemUsage | null | undefined, budgetGb: 
   return { deleteBytes, deleteTracks, keepTracks: Math.max(0, usage.dirs - deleteTracks) };
 }
 
+/**
+ * How far pick-time stems has taken the cache over the budget in force, when
+ * that is within the overshoot it is allowed by design. The next hourly sweep
+ * trims it, so the budget field says so instead of warning. Null when the
+ * feature is off (no `pickTimeOvershootBytes`), when the budget being typed is
+ * not the one in force (a cut deletes stems, and keeps the warning), or when
+ * the cache is past the designed overshoot (that is a fault).
+ */
+export function pickTimeOvershoot(resp: StemUsageResponse | null | undefined, budgetGb: number): number | null {
+  const usage = resp?.usage;
+  const allowed = resp?.pickTimeOvershootBytes;
+  const inForce = resp?.budgetBytes;
+  if (!usage || typeof allowed !== 'number' || typeof inForce !== 'number') return null;
+  if (!Number.isFinite(budgetGb) || budgetGb * GB !== inForce) return null;
+  const over = usage.bytes - inForce;
+  return over > 0 && over <= allowed ? over : null;
+}
+
 /** Why a stored figure is not the sweep's own, for the "measured" note. */
 export function usageCaveat(usage: StemUsage): string {
   if (usage.fresh) return '';
@@ -50,9 +70,15 @@ export function usageCaveat(usage: StemUsage): string {
   return ', over a day old';
 }
 
+/** GB to one decimal, whole GB from 10, and MB under 0.1 GB, where one
+ *  decimal of GB would read "0.0 GB" (a small pick-time overshoot). */
 export function fmtGb(bytes: number): string {
   const gb = bytes / GB;
   if (gb >= 10) return `${Math.round(gb).toLocaleString('en-GB')} GB`;
+  if (gb < 0.1) {
+    const mb = Math.round(bytes / 1024 ** 2);
+    return `${bytes > 0 ? Math.max(1, mb) : 0} MB`;
+  }
   return `${gb.toFixed(1)} GB`;
 }
 
@@ -62,4 +88,14 @@ export function fmtMeasured(iso: string | undefined): string | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   return d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+/** Whether a committed settings patch changes what GET /stem-cache/usage
+ *  answers: the budget it reports (`audio.stemCacheGb`), or whether it carries
+ *  the pick-time overshoot at all (`transitions.pickTimeStems`). The settings
+ *  save refetches it then, so the note under the budget field does not lag. */
+export function patchMovesStemUsage(patch: Record<string, unknown>): boolean {
+  const has = (section: unknown, key: string) =>
+    !!section && typeof section === 'object' && (section as Record<string, unknown>)[key] !== undefined;
+  return has(patch.audio, 'stemCacheGb') || has(patch.transitions, 'pickTimeStems');
 }

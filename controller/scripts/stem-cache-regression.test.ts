@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -164,6 +164,48 @@ test('a live pending pass keeps its dirs when its idle measurement expires', asy
   const swept = await cache.sweep(200);
   assert.equal(swept.skipped, 'pass-running');
   assert.equal(statSync(join(cache.dirFor('writing'), 'head-drums.flac')).size, 300);
+});
+
+// The end-of-pass sweep runs in the tagger's child process, which has no live
+// queue, so with pick-time stems on it reads the queue's snapshot (queue.json)
+// for the tracks still waiting to air and evicts their dirs last, as the
+// hourly sweep does (pick-stems-policy.ts sweepKeepLast). Off, it never reads
+// the file and the order is plain stem-priority, then mtime.
+async function passOverAQueuedDir(pickTimeStems: boolean): Promise<{ held: boolean; other: boolean }> {
+  await settings.update({ transitions: { pickTimeStems } });
+  const queueFile = join(stateDir, 'queue.json');
+  try {
+    // Two analysed, stamped tracks the pass leaves alone. Neither has a bar
+    // grid, so both score 0 and mtime decides: 'held' is the older.
+    for (const id of ['held', 'other']) {
+      addTrack(id);
+      db.upsertTrackAnalysis(id, { bpm: 120 });
+      db.stampStemsCached(id);
+    }
+    payload(cache.dirFor('held'), 'head', 300 * MB);
+    const t = (Date.now() - 2 * HOUR) / 1000;
+    utimesSync(join(cache.dirFor('held'), 'head-drums.flac'), t, t);
+    payload(cache.dirFor('other'), 'head', 300 * MB);
+    writeFileSync(queueFile, JSON.stringify({ upcoming: [{ track: { id: 'held', title: 'held' } }] }));
+    await cache.usage();
+    // The pass's one write takes the 1 GB cache to 1.2 GB: one 300 MB dir must go.
+    addTrack('new');
+    writeWindow = 'head';
+    writeBytes = 600 * MB;
+    assert.equal((await runPass()).analyzed, 1);
+    return { held: existsSync(cache.dirFor('held')), other: existsSync(cache.dirFor('other')) };
+  } finally {
+    rmSync(queueFile, { force: true });
+    await settings.update({ transitions: { pickTimeStems: false } });
+  }
+}
+
+test('with pick-time stems on, the end-of-pass sweep evicts a queued track\'s dir last', async () => {
+  assert.deepEqual(await passOverAQueuedDir(true), { held: true, other: false });
+});
+
+test('with pick-time stems off, the end-of-pass sweep ignores the queue', async () => {
+  assert.deepEqual(await passOverAQueuedDir(false), { held: false, other: true });
 });
 
 test('a successful no-work analysis pass leaves no pending snapshot marker', async () => {

@@ -10,8 +10,12 @@ import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
 import { recordHttpAttempt } from './subsonic-log.js';
-import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { warnLimiter } from '../util/warn-limiter.js';
+import { describeFetchError, fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
+import { parseLoudnessCurve, type LoudnessCurve } from './loudness-curve.js';
+import { parseWholeLoudnessCurve, type WholeLoudnessCurve } from './whole-loudness-curve.js';
+import { getDb, trackFileSize } from './library-db.js';
 
 // A structural span over the track, in ms. Contiguous over the analysed
 // window; the first is the intro/leading section.
@@ -67,6 +71,12 @@ export interface AnalysisResult {
   // true when head stems were written to the requested stems_dir. null = none
   // requested / backend predates the feature.
   stemsCached: boolean | null;
+  // Whether the tail stems (and their meta) landed (`tail_stems_landed`), said
+  // only when the tail was proven and asked for: false = a tail that could
+  // have landed did not (stem-stamp-policy.ts retries it). null/absent = no
+  // tail to cut, or an analyzer from before #2238. Not the facet's older
+  // `tail_stems`, which an older analyzer also sends false for an unproven tail.
+  tailStemsLanded?: boolean | null;
   // Dead-air gaps at the file's edges (ms), measured against an ABSOLUTE dBFS
   // floor — never the relative gates behind introMs / outro.startMs, which ask
   // where the MUSIC starts and would read a quiet intro as silence. The tail is
@@ -77,6 +87,27 @@ export interface AnalysisResult {
   // never reconstructs it as (tagged duration - gap); tag and decoded file
   // disagree often enough to move the cut. null whenever tailSilenceMs is.
   tailStartMs: number | null;
+  // Whole-file facets (absent on window answers and on older backends).
+  // `loudness`: which measurement loudnessLufs/peakDb are (2 = the whole file
+  // at its native rate, peakDb a true peak), with the same pass's sample peak
+  // and loudness range. `edges`: silence at each end against the absolute
+  // floor, and the decoded length.
+  loudnessVersion?: number | null;
+  samplePeakDb?: number | null;
+  loudnessRangeLu?: number | null;
+  // The same pass's short-term loudness curve (whole-loudness-curve.ts).
+  wholeLoudnessCurve?: WholeLoudnessCurve | null;
+  // Why a whole-file answer has no curve, when the analyzer ran and had none
+  // to give: its own reason, or 'rejected' for one this controller's parser
+  // refuses. null for an analyzer that predates the curve (it says nothing).
+  loudnessCurveUnavailable?: string | null;
+  edgeLeadMs?: number | null;
+  edgeTailMs?: number | null;
+  decodedDurationMs?: number | null;
+  // Tail facet: true when the analyzer placed the tail window from the
+  // `tailWindow` it was sent (it then ends where the music stops: tail v2, or
+  // v3 when its outro carries the loudness curve — facets.placedTailVersion).
+  tailPlaced?: boolean;
 }
 
 // The outgoing track's measured ending. Timestamps are absolute ms.
@@ -91,6 +122,9 @@ export interface OutroInfo {
   // (not null) when detection didn't run — outro_json is the JSON.stringify of
   // this object and the vocal backfill probes the raw text for '"vocalRanges"'.
   vocalRanges?: Section[];
+  // Short-term loudness of the tail window (tail v3, music/loudness-curve.ts).
+  // Omitted when not measured (an analyzer without pyloudnorm) or malformed.
+  loudnessCurve?: LoudnessCurve;
 }
 
 function parseFinite(v: unknown): number | null {
@@ -178,6 +212,7 @@ function parseOutro(v: unknown): OutroInfo | null {
   // Omit the key when not computed, so outro_json never carries a bare
   // "vocalRanges" for the backfill probe.
   const vocalRanges = parseVocalRanges(o?.vocalRanges);
+  const loudnessCurve = parseLoudnessCurve(o?.loudnessCurve);
   return {
     startMs: Math.round(startMs),
     ending,
@@ -186,6 +221,7 @@ function parseOutro(v: unknown): OutroInfo | null {
     beats: parseMsList(o?.beats),
     bars: parseMsList(o?.bars),
     ...(vocalRanges !== null ? { vocalRanges } : {}),
+    ...(loudnessCurve ? { loudnessCurve } : {}),
   };
 }
 
@@ -231,6 +267,24 @@ interface WorkerMessage {
   // Facet protocol (version signal): {"facets": [...]} requests. Absent on
   // workers that predate it.
   facets_capable?: boolean;
+  // Whole-file facets (loudness v2, edges): the worker has ffmpeg. Absent on
+  // workers that predate them.
+  whole_file_capable?: boolean;
+  // Whole-file loudness answers carry `loudness_curve`. Absent on workers
+  // that predate it.
+  loudness_curve_capable?: boolean;
+  // Tail answers carry the tail's short-term loudness curve (tail v3). Absent
+  // on workers that predate it.
+  tail_loudness_curve_capable?: boolean;
+  loudness_curve?: unknown;
+  loudness_curve_unavailable?: unknown;
+  loudness_version?: unknown;
+  sample_peak_db?: unknown;
+  lra_lu?: unknown;
+  edge_lead_ms?: unknown;
+  edge_tail_ms?: unknown;
+  decoded_duration_ms?: unknown;
+  tail_window?: unknown;
   // Facet-shape answer.
   facets?: Record<string, { status?: string; reason?: string; data?: WorkerMessage }>;
   source?: Record<string, unknown>;
@@ -256,6 +310,7 @@ interface WorkerMessage {
   tail_silence_ms?: unknown;
   tail_start_ms?: unknown;
   stems_cached?: boolean;
+  tail_stems_landed?: boolean;
   text_embeddings?: unknown;
   // render_transition op fields
   path?: string;
@@ -280,6 +335,9 @@ let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
 let _localTailVocalCapable: boolean | null = null;
 let _localFacetsCapable: boolean | null = null;
+let _localWholeFileCapable: boolean | null = null;
+let _localLoudnessCurveCapable: boolean | null = null;
+let _localTailCurveCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
 // Local twins of _sidecarAudioError / _sidecarVocalError — see there.
 let _localAudioError: string | null = null;
@@ -340,6 +398,9 @@ function startWorker(): Promise<void> {
           if (typeof msg.tail_vocal_capable === 'boolean' && _localVocalError === null) _localTailVocalCapable = msg.tail_vocal_capable;
           if (typeof msg.text_embedding_capable === 'boolean' && _localAudioError === null) _localTextCapable = msg.text_embedding_capable;
           _localFacetsCapable = msg.facets_capable === true;
+          _localWholeFileCapable = typeof msg.whole_file_capable === 'boolean' ? msg.whole_file_capable : null;
+          _localLoudnessCurveCapable = typeof msg.loudness_curve_capable === 'boolean' ? msg.loudness_curve_capable : null;
+          _localTailCurveCapable = typeof msg.tail_loudness_curve_capable === 'boolean' ? msg.tail_loudness_curve_capable : null;
         }
         // After the ready assignments, so a reported loss always wins.
         noteLocalCapabilityLoss(msg);
@@ -390,13 +451,30 @@ export interface AnalyzeRequestOpts {
   // machine refuse to write into its own unmounted share; an older backend
   // ignores the field.
   stems_require_marker?: boolean;
+  // The library's size for the file (tracks.file_size), set with stems_dir by
+  // withStemSource, never by a caller: the stamp the worker writes beside the
+  // stems (#2238). An older backend ignores it.
+  source_size?: number;
   // Baseline analysis is already current; compute only the CLAP vector.
   embedding_only?: boolean;
+  // Where the music stops (from the stored edges): the tail window ends there.
+  // `stream_url` is what the worker decodes that window from when the staged
+  // copy cannot prove it reaches it. Both from flatTailOpts().
+  tail_window?: { end_ms: number; duration_ms: number };
+  stream_url?: string;
+}
+
+// The flat request's tail placement for a track, or nothing when its edges
+// are not stored (the end-of-file window, as before).
+export function flatTailOpts(songId: string, tw: TailWindow | null): Pick<AnalyzeRequestOpts, 'tail_window' | 'stream_url'> {
+  if (!tw) return {};
+  return { tail_window: { end_ms: tw.endMs, duration_ms: tw.durationMs }, stream_url: subsonic.getRawStreamUrl(songId) };
 }
 
 // The flat field names (worker message, sidecar body, facet `data`) mapped to
 // an AnalysisResult; absent fields read null.
 function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
+  const curve = msg.loudness_curve == null ? null : parseWholeLoudnessCurve(msg.loudness_curve);
   return {
           bpm: msg.bpm ?? null,
           musicalKey: msg.key ?? null,
@@ -416,22 +494,34 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
           tailStartMs: parseSilenceMs(msg.tail_start_ms),
           stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
+          tailStemsLanded: typeof msg.tail_stems_landed === 'boolean' ? msg.tail_stems_landed : null,
+          loudnessVersion: parseFinite(msg.loudness_version),
+          samplePeakDb: parseFinite(msg.sample_peak_db),
+          loudnessRangeLu: parseFinite(msg.lra_lu),
+          wholeLoudnessCurve: curve,
+          loudnessCurveUnavailable: curve ? null
+            : msg.loudness_curve != null ? 'rejected'
+            : typeof msg.loudness_curve_unavailable === 'string' ? msg.loudness_curve_unavailable : null,
+          edgeLeadMs: parseSilenceMs(msg.edge_lead_ms),
+          edgeTailMs: parseSilenceMs(msg.edge_tail_ms),
+          decodedDurationMs: parseSilenceMs(msg.decoded_duration_ms),
+          tailPlaced: msg.tail_window === 'edges',
   };
 }
 
 // Carries either `url` (worker downloads) or `path` (already-local).
 function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
-  return localRequestRaw(req).then(toAnalysisResult);
+  return localRequestRaw(req, analyzeRequestTimeoutMs(req)).then(toAnalysisResult);
 }
 
 // The worker's raw answer (flat or facet shape), for the facet protocol.
-function localRequestRaw(req: object): Promise<WorkerMessage> {
+function localRequestRaw(req: object, timeoutMs = config.analyzer.requestTimeoutMs): Promise<WorkerMessage> {
   const id = `a${++reqSeq}`;
   return new Promise<WorkerMessage>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error('analyze request timed out'));
-    }, config.analyzer.requestTimeoutMs);
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     proc?.stdin.write(JSON.stringify({ id, ...req }) + '\n');
   });
@@ -496,6 +586,13 @@ let _sidecarVocalCapable: boolean | null = null;
 let _sidecarTailVocalCapable: boolean | null = null;
 // Facet protocol (version signal; null on old sidecars).
 let _sidecarFacetsCapable: boolean | null = null;
+let _sidecarWholeFileCapable: boolean | null = null;
+let _sidecarLoudnessCurveCapable: boolean | null = null;
+let _sidecarTailCurveCapable: boolean | null = null;
+let _sidecarWholeFileConcurrency: number | null = null;
+// The sidecar's analysis pool size (ANALYZE_CONCURRENCY); null on a sidecar
+// that predates the field.
+let _sidecarConcurrency: number | null = null;
 // The CLAP TEXT tower (embed-text).
 let _sidecarTextCapable: boolean | null = null;
 // Why a capability is false, when the cause is a failed model load rather than
@@ -509,7 +606,7 @@ let _sidecarBase = '';
 
 async function probeSidecar(url: string): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000 });
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000, retryStaleSocket: true });
     if (!res.ok) return false;
     const body = (await res.json()) as {
       ok?: boolean;
@@ -519,6 +616,11 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_tail_vocal_capable?: boolean | null;
       analyze_text_capable?: boolean | null;
       analyze_facets_capable?: boolean | null;
+      analyze_whole_file_capable?: boolean | null;
+      analyze_loudness_curve_capable?: boolean | null;
+      analyze_tail_loudness_curve_capable?: boolean | null;
+      analyze_whole_file_concurrency?: number | null;
+      analyze_concurrency?: number | null;
       analyze_audio_error?: string | null;
       analyze_vocal_error?: string | null;
     };
@@ -529,6 +631,13 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
       _sidecarTailVocalCapable = typeof body.analyze_tail_vocal_capable === 'boolean' ? body.analyze_tail_vocal_capable : null;
       _sidecarFacetsCapable = typeof body.analyze_facets_capable === 'boolean' ? body.analyze_facets_capable : null;
+      _sidecarWholeFileCapable = typeof body.analyze_whole_file_capable === 'boolean' ? body.analyze_whole_file_capable : null;
+      _sidecarLoudnessCurveCapable = typeof body.analyze_loudness_curve_capable === 'boolean' ? body.analyze_loudness_curve_capable : null;
+      _sidecarTailCurveCapable = typeof body.analyze_tail_loudness_curve_capable === 'boolean' ? body.analyze_tail_loudness_curve_capable : null;
+      _sidecarWholeFileConcurrency = Number.isInteger(body.analyze_whole_file_concurrency) && (body.analyze_whole_file_concurrency as number) > 0
+        ? (body.analyze_whole_file_concurrency as number) : null;
+      _sidecarConcurrency = Number.isInteger(body.analyze_concurrency) && (body.analyze_concurrency as number) > 0
+        ? (body.analyze_concurrency as number) : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
       _sidecarAudioError = typeof body.analyze_audio_error === 'string' ? body.analyze_audio_error : null;
       _sidecarVocalError = typeof body.analyze_vocal_error === 'string' ? body.analyze_vocal_error : null;
@@ -583,8 +692,9 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-    timeoutMs: config.analyzer.requestTimeoutMs,
+    timeoutMs: analyzeRequestTimeoutMs(body),
     bodyDeadline: true,
+    retryStaleSocket: true,
   });
   if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
@@ -608,6 +718,8 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
     tailStartMs: parseSilenceMs(resBody.tail_start_ms),
     stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
+    tailStemsLanded: typeof resBody.tail_stems_landed === 'boolean' ? resBody.tail_stems_landed : null,
+    tailPlaced: resBody.tail_window === 'edges',
   };
 }
 
@@ -683,6 +795,45 @@ export function vocalActivityError(): string | null {
 
 // Backends predating the feature never report it, so consumers must treat only
 // `=== true` as capable.
+// The whole-file facets (loudness v2, edges): the backend's worker has
+// ffmpeg. null = unknown (not probed, or a backend that predates them).
+export function wholeFileAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarWholeFileCapable;
+  if (_backend === 'local') return _localWholeFileCapable;
+  return null;
+}
+
+// Whole-file loudness answers carry the short-term curve. A v2 figure stored
+// without one is re-planned only on `=== true`: an analyzer that predates the
+// curve would answer without it again, every run.
+export function loudnessCurveAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarLoudnessCurveCapable;
+  if (_backend === 'local') return _localLoudnessCurveCapable;
+  return null;
+}
+
+// Tail answers carry the tail's short-term loudness curve (tail v3,
+// pyloudnorm). A placed tail stored without one is re-planned only on
+// `=== true`: an analyzer that cannot add it would answer without it again,
+// every run (acoustics-plan, `no-curve`).
+export function tailLoudnessCurveAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarTailCurveCapable;
+  if (_backend === 'local') return _localTailCurveCapable;
+  return null;
+}
+
+// How many whole-file requests the sidecar runs at once in its own lane.
+// null = not advertised (local backend, or an older sidecar).
+export function wholeFileConcurrency(): number | null {
+  return _backend === 'sidecar' ? _sidecarWholeFileConcurrency : null;
+}
+
+// How many analysis workers the sidecar's pool holds (its ANALYZE_CONCURRENCY).
+// null = not advertised (local backend, or a sidecar that predates the field).
+export function sidecarConcurrency(): number | null {
+  return _backend === 'sidecar' ? _sidecarConcurrency : null;
+}
+
 export function tailVocalAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarTailVocalCapable;
   if (_backend === 'local') return _localTailVocalCapable;
@@ -751,10 +902,25 @@ function localEmbedTexts(texts: string[], timeoutMs: number, signal?: AbortSigna
 
 // A deadline that expired mid-request, as opposed to a refused connection or a
 // capability 404/500.
-function isTimeoutError(err: unknown): boolean {
+export function isTimeoutError(err: unknown): boolean {
   const name = (err as { name?: unknown } | null)?.name;
   const message = (err as { message?: unknown } | null)?.message;
   return name === 'AbortError' || (typeof message === 'string' && message.includes('timed out'));
+}
+
+// An analyzer outage fails every embed call, and a tagger run makes hundreds:
+// name the cause at most once per EMBED_WARN_EVERY_MS, then say how many more
+// failed in between, so the log shows the outage without one line per track.
+export const EMBED_WARN_EVERY_MS = 60_000;
+const embedWarnings = warnLimiter(EMBED_WARN_EVERY_MS);
+
+export function warnEmbedFailure(cause: string, now: number = Date.now()): boolean {
+  return embedWarnings.warn(`[analyzer] text embedding failed: ${cause}`, now);
+}
+
+/** Test hook: forget the last warning. */
+export function _resetEmbedWarningsForTests(): void {
+  embedWarnings.reset();
 }
 
 // Embed texts through the CLAP text tower — 512-d L2-normalised vectors in the
@@ -784,6 +950,7 @@ export async function embedTexts(
         body: JSON.stringify({ texts }),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
         ...(signal ? { signal } : {}),
       });
       // 404 = pre-text-tower sidecar, 500 = lean build; both mean "no text
@@ -796,14 +963,20 @@ export async function embedTexts(
     if (signal?.aborted) return null;
     return await localEmbedTexts(texts, timeoutMs, signal);
   };
+  // A failure still degrades to null, but names its cause once: a caller's
+  // "text embedding failed" warning cannot see it.
+  const failed = (err: unknown): null => {
+    if (!signal?.aborted) warnEmbedFailure(describeFetchError(err));
+    return null;
+  };
   try {
     return await attempt();
   } catch (err) {
-    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return null;
+    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return failed(err);
     try {
       return await attempt();
-    } catch {
-      return null;
+    } catch (retryErr) {
+      return failed(retryErr);
     }
   }
 }
@@ -860,6 +1033,7 @@ export async function renderTransition(
         body: JSON.stringify(payload),
         timeoutMs,
         bodyDeadline: true,
+        retryStaleSocket: true,
       });
       if (!res.ok) return null; // 404 = pre-render sidecar — silently no blend
       const body = (await res.json()) as WorkerMessage & { ok?: boolean };
@@ -903,11 +1077,27 @@ function localRenderTransition(payload: RenderTransitionPayload, timeoutMs: numb
 
 // Analyse one track by id over the URL path (the backend fetches the audio).
 // Throws on failure — the caller leaves the row NULL and retries next run.
+// Stem provenance (#2238): a request that writes stems carries the library's
+// size for the file, which the worker stamps on each window it writes
+// (head-meta.json/tail-meta.json) and stem-cache.hasWindow checks against the
+// row. The raw stream's bytes are the file, so this is the size even when the
+// worker only holds a capped prefix (most lossless files) or cuts a placed
+// tail from the stream, where it could not measure one itself. Unknown (no
+// row size, no library open) sends nothing, and the worker falls back to what
+// it can prove.
+// One place, keyed on the song id, so no request path can leave it out.
+function withStemSource<T extends { stems_dir?: string }>(songId: string, opts: T): T & { source_size?: number } {
+  if (!opts.stems_dir) return opts;
+  const size = getDb() ? trackFileSize(songId) : null;
+  return size != null ? { ...opts, source_size: size } : opts;
+}
+
 export async function analyze(songId: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
   const url = subsonic.getRawStreamUrl(songId);
-  return backend === 'sidecar' ? analyzeViaSidecar(url, opts) : analyzeViaLocal(url, opts);
+  const req = withStemSource(songId, opts);
+  return backend === 'sidecar' ? analyzeViaSidecar(url, req) : analyzeViaLocal(url, req);
 }
 
 // Navidrome answers a request for a file missing on disk with an HTTP 200
@@ -1026,7 +1216,7 @@ export async function analyzePathWithUrlFallback(
   onUrlFallback?: () => void,
 ): Promise<AnalysisResult> {
   try {
-    return await analyzePath(localPath, opts);
+    return await analyzePath(localPath, withStemSource(songId, opts));
   } catch (err) {
     if (!(err instanceof AnalyzerPathUnavailableError)) throw err;
     if (!pathFallbackWarned) {
@@ -1037,9 +1227,12 @@ export async function analyzePathWithUrlFallback(
       );
     }
     const urlOpts = { ...opts };
+    // The url input IS the stream; the placement still applies.
+    delete urlOpts.stream_url;
     delete urlOpts.complete;
     delete urlOpts.stems_dir;
     delete urlOpts.stems_require_marker;
+    delete urlOpts.source_size;
     onUrlFallback?.();
     return analyze(songId, urlOpts);
   }
@@ -1051,7 +1244,30 @@ export async function analyzePathWithUrlFallback(
 // the backend advertises it; callers fall back to the flat request otherwise.
 // ---------------------------------------------------------------------------
 
-export type FacetName = 'head' | 'loudness' | 'tail' | 'clap' | 'vocal' | 'stems';
+export type FacetName = 'head' | 'loudness' | 'tail' | 'clap' | 'vocal' | 'stems' | 'edges';
+// Read off one decode of the WHOLE file (the stream URL, or a staged copy
+// known to be complete), not the analysis windows.
+export const WHOLE_FILE_FACET_NAMES: readonly FacetName[] = ['loudness', 'edges'];
+const readsWholeFile = (body: Record<string, unknown>) =>
+  Array.isArray(body.facets) && body.facets.some(f => (WHOLE_FILE_FACET_NAMES as readonly unknown[]).includes(f));
+// A placed tail window may be decoded from the stream URL (a capped copy cannot
+// reach it), so it needs the URL and the whole-file timeout too.
+const readsStream = (body: Record<string, unknown>) => readsWholeFile(body) || body.tail_window != null;
+
+// THE deadline of an analyze request, flat or facet, local worker or sidecar.
+// One that may decode from the stream URL (readsStream: the whole-file facets,
+// or a placed tail window) gets the whole-file deadline, which a caller's own
+// deadline can only lengthen. That includes a complete local copy read in
+// place: a damaged file's placed window falls back to an ffmpeg decode that
+// counts samples from the start (analyze_worker.py _placed_tail). Any other
+// request keeps the caller's deadline as given, shorter than the pass's
+// included (a pick-time separation's own budget, and the tests that shorten
+// it), else the pass's.
+export function analyzeRequestTimeoutMs(body: object, callerDeadlineMs?: number): number {
+  return readsStream(body as Record<string, unknown>)
+    ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs, callerDeadlineMs ?? 0)
+    : callerDeadlineMs ?? config.analyzer.requestTimeoutMs;
+}
 export type FacetAnswerStatus = 'ok' | 'unmeasurable' | 'unavailable' | 'failed';
 
 export interface FacetAnswer {
@@ -1074,12 +1290,50 @@ export interface FacetAnalysis {
   source: FacetSourceInfo;
 }
 
+// Where the music stops, from the stored edges: the tail window ends there
+// instead of at the end of the file.
+export interface TailWindow {
+  endMs: number;
+  durationMs: number;
+}
+
+// The facets the worker reads the tail window for: the tail itself, and the
+// Demucs tail pass behind vocal (tail vocal ranges) and stems (tail stems),
+// which separates that same window. A vocal- or stems-only request without the
+// placement had the worker find the end on its own copy: on a capped download
+// it never reached it, no tail vocals came back, and the vocal row stayed
+// head-only, re-planned on every run.
+export const TAIL_WINDOW_FACETS: readonly FacetName[] = ['tail', 'vocal', 'stems'];
+export const usesTailWindow = (facets: readonly string[]): boolean =>
+  facets.some(f => (TAIL_WINDOW_FACETS as readonly string[]).includes(f));
+
+// The placement the stored edges give, or null when they are unmeasured or
+// leave nothing to place (a wholly silent file).
+export function tailWindowFor(t: { edgeTailMs?: number | null; decodedDurationMs?: number | null } | null | undefined): TailWindow | null {
+  const dur = t?.decodedDurationMs;
+  const tail = t?.edgeTailMs;
+  if (dur == null || tail == null || !Number.isFinite(dur) || !Number.isFinite(tail)) return null;
+  const endMs = Math.round(dur - tail);
+  return endMs > 0 && endMs <= dur ? { endMs, durationMs: Math.round(dur) } : null;
+}
+
+export type StemWindow = 'head' | 'tail';
+
 export interface FacetRequestOpts {
   facets: FacetName[];
+  // Tail facet: place the window from the stored edges.
+  tailWindow?: TailWindow | null;
   // Tail facet also carries the outro's vocal ranges (Demucs on the tail only).
   tailVocals?: boolean;
   stems_dir?: string;
+  // Which windows the stems facet separates; omitted = both. Only sent with a
+  // stems_dir. A worker that predates it separates both (pick-stems-policy.ts
+  // stemsWindowsFor).
+  stems_windows?: StemWindow[];
   complete?: boolean;
+  // The request's deadline. Omitted, the pass's ANALYZE_REQUEST_TIMEOUT_MS. A
+  // pick-time separation passes its own longer one (pick-stems-policy.ts).
+  timeoutMs?: number;
 }
 
 // null = unknown (not probed / old backend). Callers use the facet protocol
@@ -1123,23 +1377,28 @@ export function parseFacetAnswer(msg: WorkerMessage): FacetAnalysis {
   };
 }
 
-async function facetRequest(body: Record<string, unknown>): Promise<FacetAnalysis> {
+async function facetRequest(
+  body: Record<string, unknown>,
+  deadlineMs?: number,
+): Promise<FacetAnalysis> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
+  const timeoutMs = analyzeRequestTimeoutMs(body, deadlineMs);
   let msg: WorkerMessage;
   if (backend === 'sidecar') {
     const res = await fetchWithTimeout(`${_sidecarBase}/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      timeoutMs: config.analyzer.requestTimeoutMs,
+      timeoutMs,
       bodyDeadline: true,
+      retryStaleSocket: true,
     });
     if (!res.ok) return sidecarFailure(res);
     msg = (await res.json()) as WorkerMessage;
   } else {
     if (!ready) await startWorker();
-    msg = await localRequestRaw(body);
+    msg = await localRequestRaw(body, timeoutMs);
   }
   if (!msg.ok) throw new Error(msg.error || 'analysis failed');
   return parseFacetAnswer(msg);
@@ -1157,21 +1416,34 @@ export async function analyzeFacets(
 ): Promise<FacetAnalysis> {
   const body: Record<string, unknown> = { facets: opts.facets };
   if (opts.tailVocals) body.tail_vocals = true;
-  const stems = opts.stems_dir ? { stems_dir: opts.stems_dir, stems_require_marker: true } : {};
+  if (opts.tailWindow && usesTailWindow(opts.facets)) {
+    body.tail_window = { end_ms: opts.tailWindow.endMs, duration_ms: opts.tailWindow.durationMs };
+  }
+  const stems = opts.stems_dir
+    ? withStemSource(songId, {
+        stems_dir: opts.stems_dir,
+        stems_require_marker: true,
+        ...(opts.stems_windows?.length ? { stems_windows: opts.stems_windows } : {}),
+      })
+    : {};
   const url = subsonic.getRawStreamUrl(songId);
-  if (!localPath) return facetRequest({ url, ...body, ...stems });
+  const timeoutMs = opts.timeoutMs; // undefined: facetRequest's default
+  if (!localPath) return facetRequest({ url, ...body, ...stems }, timeoutMs);
   try {
     return await facetRequest({
       path: localPath,
       ...body,
       ...(opts.complete !== undefined ? { complete: opts.complete } : {}),
+      // The whole-file facets read the stream URL unless the staged copy is
+      // known to be complete; the worker decides, never the sidecar.
+      ...(readsStream(body) ? { stream_url: url } : {}),
       ...stems,
-    });
+    }, timeoutMs);
   } catch (err) {
     if (!(err instanceof AnalyzerPathUnavailableError)) throw err;
     // Same degrade as analyzePathWithUrlFallback: no stems without shared state.
     const facets = opts.facets.filter(f => f !== 'stems');
-    return facets.length ? facetRequest({ url, ...body, facets })
+    return facets.length ? facetRequest({ url, ...body, facets }, timeoutMs)
       : { facets: {}, source: { kind: 'unknown', durationS: null, complete: null } };
   }
 }

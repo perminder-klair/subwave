@@ -120,6 +120,9 @@ def speak(req: SpeakRequest):
 Run it on the GPU box, point the station at it, done. Nothing about the DJ
 changes — this only swaps where the voice is rendered.
 
+`npm run tts-bench` in `controller/` measures a Remote server next to the
+bundled engines (`--engines remote:<voice> --remote-url …`).
+
 ---
 
 ## How it behaves when your server is down

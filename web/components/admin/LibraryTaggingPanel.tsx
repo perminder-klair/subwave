@@ -8,6 +8,7 @@ import { Btn, Eyebrow } from './ui';
 import { Input } from '../ui/input';
 import { cn } from '../../lib/cn';
 import LibraryTaggingModal from './LibraryTaggingModal';
+import RunHoldsBanner from './library/RunHoldsBanner';
 import SceneVocabSection from './library/SceneVocabSection';
 import { useTaggerRunLog } from './library/useTaggerRunLog';
 import { notify } from '../../lib/notify';
@@ -51,6 +52,13 @@ export interface Coverage {
   currentTextFormat?: number | null;
   embeddedVectors?: number | null;
   labelOnlyVectors?: number | null;
+  // Vectors whose Sound: line still carries mood words a vocabulary or calibration
+  // change moved, how many of those are already queued, and every queued vector
+  // (#2313). Counted at the last library count or mark; null/absent until then.
+  forgottenSoundVectors?: number | null;
+  forgottenSoundQueued?: number | null;
+  dirtyVectors?: number | null;
+  vectorsCountedAt?: string | null;
   // Why a capability is false when the model is INSTALLED and its load failed.
   // null/absent otherwise, including a lean image. Paired with the 'load-failed' status.
   audioAnalysisError?: string | null;
@@ -129,6 +137,8 @@ export interface TaggerState {
   lastRun?: TaggerLastRun | null;
   // The current (or last) run's full log id; null before this controller's first run.
   runLogId?: string | null;
+  // What the current (or last) run held back for the operator.
+  holds?: string[];
 }
 
 // Rides along on /settings, so it needs no extra request on any tab.
@@ -151,6 +161,8 @@ export type RescanOpts = {
   reEnrich?: boolean;
   reAnalyze?: boolean;
   upgrade?: boolean;
+  // With upgrade: re-decide only rows tagged before they were measured (--upgrade-blind).
+  upgradeBlind?: boolean;
   // false → --no-vocal (redo bpm/key + sounds-like, keep existing vocal ranges).
   vocal?: boolean;
   // After rebuilding vectors, forward-tag the untagged remainder in the same run. Only honoured when reseed is the sole pass.
@@ -188,6 +200,9 @@ interface TaggingPanelProps {
   // Count the library — the only expensive read on this page, and the operator asks for it (#1570).
   onCountLibrary: () => void;
   countingLibrary: boolean;
+  // Queue the vectors built from moods a relabel-all moved for the next run (#2313).
+  onMarkStaleSound: () => void;
+  markingStaleSound: boolean;
   // Wipes ALL tagging data and starts fresh, behind a typed confirmation.
   onReset: () => void;
   // sounds-like (CLAP) controls — null until the first settings poll lands.
@@ -463,6 +478,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
     labelOnlyShare != null &&
     labelOnlyShare < 1;
 
+  // Stale mood words (#2313): a soft advisory beside the format one, never a block.
+  const staleSound = p.coverage?.forgottenSoundVectors ?? 0;
+  const staleSoundUnqueued = Math.max(0, staleSound - (p.coverage?.forgottenSoundQueued ?? 0));
+
   // Comes from the tagger child, so it survives page reloads and runs started elsewhere.
   const progress = running ? (p.tagger?.progress ?? null) : null;
   const runPct = progress?.total
@@ -693,6 +712,30 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               >
                 Re-embed now →
               </button>
+            </div>
+          )}
+          {staleSound > 0 && !embeddingStale && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] text-ink">
+              <span>
+                <b>Some similarity vectors carry old audio moods.</b>{' '}
+                <b className="mono-num">{num(staleSound)}</b> tracks were embedded before their
+                audio moods last changed (an edit to the mood vocabulary or calibration, or a
+                library still under 200 tracks), so similarity still compares them on the old
+                moods.{' '}
+                {staleSoundUnqueued > 0
+                  ? 'Queue them and the next tagging run, or an Analyse run that measures new tracks, re-embeds just those.'
+                  : 'They are queued for the next tagging run, or an Analyse run that measures new tracks.'}
+              </span>
+              {staleSoundUnqueued > 0 && (
+                <button
+                  type="button"
+                  className="font-bold text-vermilion underline-offset-2 hover:underline disabled:opacity-50"
+                  onClick={p.onMarkStaleSound}
+                  disabled={p.busy || p.markingStaleSound}
+                >
+                  Queue {num(staleSoundUnqueued)} for re-embed →
+                </button>
+              )}
             </div>
           )}
           {embeddingMissing && !embeddingStale && (
@@ -999,6 +1042,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       )}
 
       <SceneVocabSection />
+
+      <RunHoldsBanner holds={p.tagger?.holds} onViewLog={() => p.setLogOpen(() => true)} />
 
       {showFailBanner && (
         <div className="mx-4 mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink sm:mx-6">
