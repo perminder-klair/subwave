@@ -68,6 +68,27 @@ export interface TtsFallbackConfig {
   cloudProvider?: string;
 }
 
+// An explicit rescue voice ({engine, voice, cloudProvider}) as a slot, or null
+// when absent or naming an engine this build doesn't know. The one builder for
+// both explicit rungs, so their shape and the `openai` provider default (unused
+// by every engine but cloud) live in one place.
+function explicitSlot(
+  voice: { engine?: string; voice?: string; cloudProvider?: string } | null | undefined,
+  engines: readonly string[],
+): RescueSlot | null {
+  if (!voice || typeof voice !== 'object') return null;
+  const engine = voice.engine || '';
+  if (!engines.includes(engine)) return null;
+  return {
+    engine,
+    personaTts: {
+      engine,
+      voice: voice.voice || '',
+      cloudProvider: voice.cloudProvider || 'openai',
+    },
+  };
+}
+
 // The operator's configured fallback (settings.tts.fallback) as a slot, or null
 // when absent, disabled, or naming an engine this build doesn't know. One
 // answer shared by the pre-flight reroute and the mid-render rescue.
@@ -75,17 +96,7 @@ export function configuredSlot(
   fallback: TtsFallbackConfig | null | undefined,
   engines: readonly string[],
 ): RescueSlot | null {
-  if (!fallback?.enabled) return null;
-  const engine = fallback.engine || '';
-  if (!engines.includes(engine)) return null;
-  return {
-    engine,
-    personaTts: {
-      engine,
-      voice: fallback.voice || '',
-      cloudProvider: fallback.cloudProvider || 'openai',
-    },
-  };
+  return fallback?.enabled ? explicitSlot(fallback, engines) : null;
 }
 
 export interface PersonaFallbackVoiceConfig {
@@ -102,17 +113,7 @@ export function personaRescueSlot(
   fallbackVoice: PersonaFallbackVoiceConfig | null | undefined,
   engines: readonly string[],
 ): RescueSlot | null {
-  if (!fallbackVoice || typeof fallbackVoice !== 'object') return null;
-  const engine = fallbackVoice.engine || '';
-  if (!engines.includes(engine)) return null;
-  return {
-    engine,
-    personaTts: {
-      engine,
-      voice: fallbackVoice.voice || '',
-      cloudProvider: fallbackVoice.cloudProvider || 'openai',
-    },
-  };
+  return explicitSlot(fallbackVoice, engines);
 }
 
 // Pure ordering for speak()'s runtime rescue chain, kept out of tts.ts so

@@ -138,6 +138,11 @@ test('pre-flight reroute takes the persona rescue too, and gain/pace agree with 
     assert.equal(tts.voiceGainDb('link', savedEmma()), 4, 'gain reads the engine that will speak');
     assert.equal(tts.voiceGainDb('link', savedTom()), -3);
     assert.equal(tts.voiceGainDb('default', savedEmma()), -3, 'global kinds ignore the persona rescue');
+    // Pace reads the same resolved engine. A live override of 1 isolates the
+    // engine term from the daypart's.
+    assert.equal(tts.speechPaceScale('link', savedEmma(), 1), 1, 'pace reads the engine that will speak');
+    assert.equal(tts.speechPaceScale('link', savedTom(), 1), 1.2);
+    assert.equal(tts.speechPaceScale('default', savedEmma(), 1), 1.2, 'global kinds ignore the persona rescue');
     await update({ personas: [tom, emma] });
     await tts.speak('Pre-flight rescue.', { kind: 'link', persona: savedEmma() });
     assert.deepEqual(geminiVoices, ['Kore']);
@@ -156,14 +161,4 @@ test('describeRouting reports the effective persona rescue voice', async () => {
     await update({ activePersonaId: tom.id });
   }
   assert.equal(tts.describeRouting().personaFallback, null);
-});
-
-test('every resolveEngine caller passes the gated persona rescue', () => {
-  const src = readFileSync(new URL('../src/audio/tts.ts', import.meta.url), 'utf8');
-  const calls = src.match(/resolveEngine\(personaTts[,)][^\n]*/g) || [];
-  assert.equal(calls.length, 4, `four persona resolveEngine callers: ${calls}`);
-  for (const c of calls) assert.match(c, /^resolveEngine\(personaTts, (rescue|personaRescue\(kind, persona\))\)/, c);
-  assert.match(src, /function personaRescue\(kind: string, persona\?: any\): RescueSlot \| null \{\s*if \(GLOBAL_VOICE_KINDS\.has\(kind\)\) return null;/);
-  // The one gated helper is the only place the slot is built.
-  assert.equal((src.match(/personaRescueSlot\(/g) || []).length, 1, 'personaRescueSlot is called only inside personaRescue()');
 });
