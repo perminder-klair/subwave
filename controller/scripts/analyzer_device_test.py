@@ -56,6 +56,7 @@ def fake_torch(
     arch_list=CU128_ARCHES,
     kernel_error=None,
     capability_raises=False,
+    arch_list_raises=False,
     errors=None,
 ):
     """A `torch` module shaped like the real one as far as resolve_device()
@@ -96,11 +97,16 @@ def fake_torch(
             raise RuntimeError("driver gone")
         return capability
 
+    def get_arch_list():
+        if arch_list_raises:
+            raise RuntimeError("arch list unavailable")
+        return list(arch_list)
+
     cuda = types.SimpleNamespace(
         is_available=lambda: available,
         get_device_name=lambda _i=0: name,
         get_device_capability=get_device_capability,
-        get_arch_list=lambda: list(arch_list),
+        get_arch_list=get_arch_list,
         synchronize=lambda: None,
         empty_cache=lambda: calls.__setitem__("empty_cache", calls["empty_cache"] + 1),
     )
@@ -271,6 +277,7 @@ def main():
     # ── What a failed self-test leaves on the card ─────────────────────────
     test("a failed self-test drops its tensor and empties the cache", self_test_releases)
     test("torch's message classifies the failure before the arch list does", message_decides_kind)
+    test("an arch list torch cannot report is unknown, not a missing kernel image", arch_list_unknown)
 
     print("PASS" if failures == 0 else f"FAIL ({failures})")
     sys.exit(1 if failures else 0)
@@ -377,6 +384,20 @@ def message_decides_kind():
     probe = ("RTX 3060", (8, 6), CU128_ARCHES)
     warn = aw._cuda_fallback_warning(probe, RuntimeError("CUDA error: 2 MiB"), "oom")
     assert "held by another process" in warn and "driver" not in warn, warn
+
+
+
+def arch_list_unknown():
+    torch, _ = fake_torch(name="NVIDIA GeForce RTX 3060", capability=(8, 6), kernel_error=INIT,
+                          arch_list_raises=True)
+    device, lines = resolve(None, torch)
+    assert device == "cpu", device
+    warn = next(l for l in lines if "self-test failed" in l)
+    assert "an unknown arch list" in warn, warn
+    for advice in ("no kernels", "ANALYZER_CUDA_TAG", ":ampere"):
+        assert advice not in warn, f"an unknown arch list read as no kernel image: {warn}"
+    assert aw.cuda_failure_kind(RuntimeError(INIT), (8, 6), None) == "other"
+    assert aw.cuda_failure_kind(RuntimeError(NO_KERNEL), (8, 6), None) == "no_kernel"
 
 
 if __name__ == "__main__":

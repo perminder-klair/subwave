@@ -558,7 +558,8 @@ def cuda_self_test(torch):
 
 def _cuda_probe(torch):
     """(name, capability, arch_list) for card 0. Every probe is guarded: a
-    broken CUDA stack must not turn the fallback into the failure."""
+    broken CUDA stack must not turn the fallback into the failure. An arch
+    list torch could not report is None (unknown), never an empty list."""
     try:
         name = torch.cuda.get_device_name(0)
     except Exception:  # noqa: BLE001
@@ -570,20 +571,21 @@ def _cuda_probe(torch):
     try:
         arch_list = list(torch.cuda.get_arch_list())
     except Exception:  # noqa: BLE001
-        arch_list = []
+        arch_list = None
     return name, cap, arch_list
 
 
 def cuda_failure_kind(error, cap, arch_list):
     """Why a self-test failed: "no_kernel" (the wheel has no kernel image for
     this card), "oom", "driver" or "other". torch's own message decides first;
-    the arch list only names a card the message didn't."""
+    the arch list only names a card the message didn't, and an unknown one
+    (None) names nothing."""
     msg = str(error).lower()
     if "no kernel image" in msg:
         return "no_kernel"
     if "out of memory" in msg or type(error).__name__ == "OutOfMemoryError":
         return "oom"
-    if cap and not cuda_arch_covered(cap, arch_list):
+    if cap and arch_list is not None and not cuda_arch_covered(cap, arch_list):
         return "no_kernel"
     if "driver" in msg:
         return "driver"
