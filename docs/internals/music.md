@@ -816,9 +816,16 @@ window it measures (absolute ms), values in tenths of a LUFS as ints (about 35
 small ints per track, held parsed for the whole library; digital silence at
 -1000). Without pyloudnorm the curve is omitted and nothing fails. A placed
 tail is stamped `tail_version = 3` only when its answer carries a valid curve
-(`facets.placedTailVersion`), so every v2 row (and a v2 answer from an analyzer
-without pyloudnorm) is re-planned by `--facets tail`; a silent file's tail
-still settles at the current version. With the switch on, `music/silence-trim.ts`
+(`facets.placedTailVersion`). A placed tail without the curve stays one
+version below with the reason `no-curve`, and, like the loudness facet's
+`no-curve`, is re-planned by `--facets tail` (or taken along by a vocal item)
+only on an analyzer that says it can add one: the worker's
+`tail_loudness_curve_capable` (pyloudnorm present and its meter exposing the
+K-weighting stages), relayed by the sidecar as
+`analyze_tail_loudness_curve_capable`. An analyzer without it would answer v2
+again, so those rows are skipped and counted rather than re-read every pass,
+and become due once when the analyzer gains it. A silent file's tail still
+settles at the current version. With the switch on, `music/silence-trim.ts`
 (still the one owner of every cue point) cuts a `fade` ending at E, the last
 curve point at or above the track's body loudness (`loudnessLufs`, track then
 library row) minus N dB — but only when E is BEFORE the end the trim (or the

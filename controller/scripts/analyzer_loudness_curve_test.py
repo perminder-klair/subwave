@@ -180,6 +180,47 @@ def case_without_pyloudnorm():
             sys.modules["pyloudnorm"] = saved
 
 
+def case_capability_with_pyloudnorm():
+    # The worker says it can attach the curve, so the controller re-plans a
+    # placed tail stored without one.
+    assert aw.tail_loudness_curve_capable() is True
+
+
+def case_capability_without_pyloudnorm():
+    saved = sys.modules.get("pyloudnorm")
+    sys.modules["pyloudnorm"] = None
+    try:
+        assert aw.tail_loudness_curve_capable() is False
+    finally:
+        if saved is None:
+            sys.modules.pop("pyloudnorm", None)
+        else:
+            sys.modules["pyloudnorm"] = saved
+
+
+def case_capability_without_the_filters():
+    # A pyloudnorm whose meter no longer exposes the K-weighting stages
+    # loudness_curve() applies cannot produce the curve: not capable.
+    class Meter:
+        def __init__(self, rate):
+            self.rate = rate
+
+    class Stub:
+        pass
+
+    stub = Stub()
+    stub.Meter = Meter
+    saved = sys.modules.get("pyloudnorm")
+    sys.modules["pyloudnorm"] = stub
+    try:
+        assert aw.tail_loudness_curve_capable() is False
+    finally:
+        if saved is None:
+            sys.modules.pop("pyloudnorm", None)
+        else:
+            sys.modules["pyloudnorm"] = saved
+
+
 class FakeLibrosa:
     @staticmethod
     def to_mono(buf):
@@ -235,6 +276,9 @@ test("digital silence reads at the floor", case_silence_floor, needs=("pyloudnor
 test("no pyloudnorm: no curve, no failure", case_without_pyloudnorm)
 test("facet_tail stores the curve in the outro", case_facet_tail_carries_curve, needs=("pyloudnorm",))
 test("facet_tail without pyloudnorm omits the curve", case_facet_tail_without_pyloudnorm)
+test("capable with pyloudnorm", case_capability_with_pyloudnorm, needs=("pyloudnorm",))
+test("not capable without pyloudnorm", case_capability_without_pyloudnorm)
+test("not capable when the meter lacks its filter stages", case_capability_without_the_filters)
 
 if failures:
     print(f"FAIL: {failures} case(s)")

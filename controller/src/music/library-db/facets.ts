@@ -323,7 +323,11 @@ export function deriveFacetRows(
   // An outro proves the tail was decoded, even when its window held no
   // silence edge (tail_silence_ms is then NULL by design).
   if (row.has_tail_silence || row.has_outro) {
-    ok('tail', null, silentFile ? FACET_VERSIONS.tail : tailVersionOf(row));
+    // A tail on the placed window without the loudness curve (v2) stays one
+    // version below: re-planned for the curve, but only on an analyzer that
+    // says it can add one (acoustics-plan, `no-curve`), like loudness above.
+    const v = silentFile ? FACET_VERSIONS.tail : tailVersionOf(row);
+    ok('tail', v === FACET_VERSIONS.tail - 1 && isPlacedTailStamp(v) ? 'no-curve' : null, v);
     out[out.length - 1]!.measuredVersion = true;
   }
   else if (analysed) unmeasurable('tail', opts.tailReason ?? 'tail-not-measured');
@@ -501,9 +505,9 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
     // re-measure the facet keeps it. Vocal reasons describe the current
     // columns instead, so a previously lost tail cannot retain a stale null
     // reason. A failure's reason is the latest error.
-    // An ok loudness row's reason (`no-curve`) describes the columns too.
+    // An ok loudness or tail row's reason (`no-curve`) describes the columns too.
     if (!isFresh && prev && prev.status === r.status && r.status !== 'failed' && r.facet !== 'vocal' && r.facet !== 'year' &&
-      !(r.facet === 'loudness' && r.status === 'ok')) r.reason = prev.reason;
+      !((r.facet === 'loudness' || r.facet === 'tail') && r.status === 'ok')) r.reason = prev.reason;
     // Measuring edges re-decides which window a stored tail sits on (the
     // tolerance in tailVersionOf), so that is taken as is too: otherwise every
     // track whose edges arrive after this table was derived stays planned for
@@ -560,9 +564,10 @@ export function facetDerivationStamp(): string {
   // reads the tail's version off its columns (tailVersionOf). Revision 4
   // re-opens a 'capped-download' tail an earlier derivation had settled.
   // Revision 5 settles the tail of a file the edges scan found silent.
+  // Revision 6 marks a placed tail without its loudness curve `no-curve`.
   // Adding a facet changes FACET_VERSIONS, so the year facet's rows were
   // derived for every track on the first open after it landed.
-  return JSON.stringify({ revision: 5, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
+  return JSON.stringify({ revision: 6, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
 }
 
 function readFacetStamp(d: Database.Database): string | null {

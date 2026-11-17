@@ -2434,6 +2434,21 @@ LOUDNESS_CURVE_STEP_MS = 500
 LOUDNESS_CURVE_FLOOR_TENTHS = -1000
 
 
+def tail_loudness_curve_capable():
+    """Whether this worker can attach the tail's loudness curve (tail v3):
+    pyloudnorm present, and its meter exposing the K-weighting stages
+    loudness_curve() applies (a private attribute, so probed, never assumed).
+    The controller re-plans a placed tail stored without a curve only on
+    `True`, so an analyzer that cannot add one never re-reads it for nothing."""
+    try:
+        import pyloudnorm as pyln
+
+        stages = getattr(pyln.Meter(44100), "_filters", None)
+        return bool(stages) and all(hasattr(s, "apply_filter") for s in stages.values())
+    except Exception:  # noqa: BLE001 — absent or changed: not capable
+        return False
+
+
 def loudness_curve(y, sr, offset):
     """{startMs, stepMs, lufs: [int tenths]} for a decoded window `y` (mono (n,)
     or librosa's (channels, n)) starting at `offset` seconds into the file, or
@@ -4163,6 +4178,10 @@ def main():
         # Older workers never emit the key; the controller re-plans a v2
         # figure stored without a curve only on `=== true`.
         "loudness_curve_capable": shutil.which("ffmpeg") is not None,
+        # Version signal: tail answers carry the short-term loudness curve
+        # (tail v3). Older workers never emit the key; the controller re-plans
+        # a placed tail stored without a curve only on `=== true`.
+        "tail_loudness_curve_capable": tail_loudness_curve_capable(),
     })
 
     for line in sys.stdin:

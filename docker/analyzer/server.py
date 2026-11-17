@@ -743,6 +743,11 @@ async def health():
         # Whole-file loudness answers carry the short-term loudness curve
         # (`loudness_curve`). None on older workers, which never emit the key.
         "analyze_loudness_curve_capable": analyzer_pool.capability("loudness_curve_capable", "whole_file"),
+        # Tail answers carry the tail's short-term loudness curve (tail v3).
+        # None on older workers, which never emit the key.
+        "analyze_tail_loudness_curve_capable": analyzer_pool.capability(
+            "tail_loudness_curve_capable", "tail_loudness_curve"
+        ),
         # How many whole-file requests this host runs at once (its own lane).
         "analyze_whole_file_concurrency": WHOLE_FILE_CONCURRENCY,
         # How many analysis workers this pool holds (ANALYZE_CONCURRENCY). The

@@ -16,7 +16,9 @@
 //     curve, 2 = placed without it — an analyzer without pyloudnorm), else 2
 //     when the stored edges show at most TAIL_PLACEMENT_TOLERANCE_MS of
 //     trailing silence (the old window then held the same music), else 1.
-//     Everything below v3 is due again for `--facets tail`;
+//     Everything below v3 is due again for `--facets tail`, but a placed v2
+//     (`no-curve`) only on an analyzer that says it can add the curve
+//     (`tailLoudnessCurve`), and a vocal item takes it along only then;
 //   - an unmeasurable tail without edges stays one version below, so it is
 //     retried once edges can place it;
 //   - measuring edges promotes an existing tail the tolerance covers, live
@@ -58,6 +60,7 @@ function handler(req: IncomingMessage, res: ServerResponse) {
     res.end(JSON.stringify({
       ok: true, engines: ['analyze'], analyze_audio_capable: false, analyze_vocal_capable: false,
       analyze_facets_capable: true, analyze_whole_file_capable: true,
+      analyze_tail_loudness_curve_capable: curveAnswer,
     }));
     return;
   }
@@ -169,11 +172,12 @@ const writeTail = (id: string, version?: number) =>
     tailSilenceMs: 500, tailStartMs: 213_500, ...(version ? { version } : {}) } });
 const writeEdges = (id: string, tailMs: number) =>
   db.writeFacetResults(id, { source: 'url', edges: { leadMs: 0, tailMs, durationMs: 214_000 } });
-const plan = (ids: string[]) => {
+// tailLoudnessCurve defaults to a shipped image's answer (it has pyloudnorm).
+const plan = (ids: string[], tailLoudnessCurve: boolean | null = true) => {
   const f = P.parseFacets('tail');
   return P.planAcoustics({
     ids, facets: f, where: { kind: 'needs' }, state: db.loadFacetState(f),
-    capabilities: { clap: false, demucs: false, tailVocal: false, wholeFile: true },
+    capabilities: { clap: false, demucs: false, tailVocal: false, wholeFile: true, tailLoudnessCurve },
   });
 };
 
@@ -205,13 +209,71 @@ test('a placed tail without the curve (v2) is re-planned for v3', () => {
   writeEdges('placed2', 12_000);
   writeTail('placed2', 2);
   assert.equal(tailVersionCol('placed2'), 2);
-  assert.deepEqual([tailRow('placed2')?.status, tailRow('placed2')?.version], ['ok', 2]);
+  assert.deepEqual(tailRow('placed2'), { status: 'ok', version: 2, reason: 'no-curve' });
   assert.ok(db.facetNeedsIds('tail').includes('placed2'));
   // …and a v2 row a whole-table re-derive meets stays v2, i.e. due.
   db.resyncAllFacets(db.requireDb());
   assert.equal(tailRow('placed2')?.version, 2);
   assert.ok(plan(['placed2']).items.some((i) => i.id === 'placed2'), 'planned by --facets tail');
   consistent();
+});
+
+test('a tail due only for its curve waits for an analyzer that can add one', () => {
+  // An analyzer without pyloudnorm (or one that predates the curve) would
+  // answer v2 again: the row is skipped and counted, never re-read for nothing.
+  track('nocurve');
+  writeEdges('nocurve', 12_000);
+  writeTail('nocurve', 2);
+  for (const cap of [null, false]) {
+    const p = plan(['nocurve'], cap);
+    assert.deepEqual(p.items, [], String(cap));
+    assert.equal(p.byFacet[0].skipped['no-curve'], 1, String(cap));
+  }
+  // The analyzer gains the capability: planned once, and the curve settles it.
+  assert.deepEqual(plan(['nocurve'], true).items.map((i) => i.id), ['nocurve']);
+  writeTail('nocurve', 3);
+  assert.deepEqual(tailRow('nocurve'), { status: 'ok', version: 3, reason: null });
+  assert.deepEqual(plan(['nocurve'], true).items, []);
+  // The reason describes the columns, so a whole-table re-derive keeps it.
+  writeTail('nocurve', 2);
+  db.resyncAllFacets(db.requireDb());
+  assert.deepEqual(tailRow('nocurve'), { status: 'ok', version: 2, reason: 'no-curve' });
+  // A v1 tail (not on the placed window) is due for placement whatever the
+  // curve capability says.
+  track('nocurve-v1');
+  writeEdges('nocurve-v1', 20_000);
+  writeTail('nocurve-v1');
+  assert.deepEqual(tailRow('nocurve-v1'), { status: 'ok', version: 1, reason: null });
+  assert.deepEqual(plan(['nocurve-v1'], false).items.map((i) => i.id), ['nocurve-v1']);
+  consistent();
+});
+
+test('a vocal plan takes a tail due only for its curve along only on a curve-capable analyzer', () => {
+  const vocalFacets = P.parseFacets('vocal');
+  const vocalPlanFor = (tailLoudnessCurve: boolean | null) => P.planAcoustics({
+    ids: ['nocurve-voc'], facets: vocalFacets, where: { kind: 'needs' }, state: db.loadFacetState(P.planStateFacets(vocalFacets)),
+    capabilities: { clap: false, demucs: true, tailVocal: true, wholeFile: true, tailLoudnessCurve },
+  });
+  track('nocurve-voc');
+  writeEdges('nocurve-voc', 12_000);
+  writeTail('nocurve-voc', 2);
+  db.writeFacetResults('nocurve-voc', { source: 'full', vocal: { vocalRanges: [], tailVocalRanges: null } });
+  assert.equal(vocalRowOf('nocurve-voc')?.reason, 'head-only', 'fixture: the vocal row is owed its tail');
+  assert.deepEqual(vocalPlanFor(false).items.map((i) => i.facets), [['vocal']]);
+  assert.deepEqual(vocalPlanFor(null).items.map((i) => i.facets), [['vocal']]);
+  assert.deepEqual(vocalPlanFor(true).items.map((i) => i.facets), [['tail', 'vocal']]);
+});
+
+test('the sidecar says whether its tail answers carry the curve', async () => {
+  try {
+    curveAnswer = false;
+    await analyzer.refreshCapabilities();
+    assert.equal(analyzer.tailLoudnessCurveAvailable(), false);
+  } finally {
+    curveAnswer = true;
+  }
+  await analyzer.refreshCapabilities();
+  assert.equal(analyzer.tailLoudnessCurveAvailable(), true);
 });
 
 test('placedTailVersion: v3 only with a valid curve', () => {
