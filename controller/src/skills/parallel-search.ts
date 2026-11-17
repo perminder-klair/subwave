@@ -110,6 +110,18 @@ export function parseParallelResponse(data: unknown): SearchResponse {
   return { answer: '', results };
 }
 
+// What a failed tool call said, as text and capped: the message lands in logs
+// and the booth log, and the server decides how long it is.
+const ERROR_TEXT_MAX = 200;
+
+function toolErrorText(content: { type: string; text?: unknown }[]): string {
+  const text = content
+    .map(c => (c.type === 'text' && typeof c.text === 'string' ? c.text : `[${c.type}]`))
+    .join(' ').replace(/\s+/g, ' ').trim();
+  if (!text) return 'no detail';
+  return text.length > ERROR_TEXT_MAX ? `${text.slice(0, ERROR_TEXT_MAX)}…` : text;
+}
+
 // One deadline for the whole search, the 30 s every other provider gets for
 // its one request: connect, the tool listing and the call all spend from it,
 // so a server that stalls at any step ends the search there, rather than each
@@ -149,7 +161,7 @@ export async function parallelSearch(
         search_queries: [query],
       },
     }, undefined, step));
-    if (result.isError) throw new Error(`Parallel search failed: ${JSON.stringify(result.content)}`);
+    if (result.isError) throw new Error(`Parallel search failed: ${toolErrorText(result.content)}`);
     let data: unknown = result.structuredContent;
     if (!data) {
       const text = result.content.find(c => c.type === 'text');

@@ -125,7 +125,7 @@ test('SDK wire path, headers, held-open replies, cleanup, errors and dispatcher 
       res.write(`event: message\r\ndata: ${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/message', params: { level: 'info', data: 'synthetic' } })}\r\n\r\n`);
       const response = failed
         ? { error: { code: -32042, message: 'synthetic primary error' } }
-        : { result: { isError: toolError, content: [{ type: 'text', text: toolError ? 'synthetic tool failure' : JSON.stringify(data) }] } };
+        : { result: { isError: toolError, content: [{ type: 'text', text: toolError ? `synthetic tool failure ${'x'.repeat(5_000)}` : JSON.stringify(data) }] } };
       res.write(`event: message\r\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: rpc.id, ...response })}\r\n\r\n`);
       // Never send EOF: successful resolution AND socket closure are required.
       res.on('close', () => { closed++; });
@@ -163,7 +163,13 @@ test('SDK wire path, headers, held-open replies, cleanup, errors and dispatcher 
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.equal(closed, 4, 'SDK close aborts every held-open POST body');
     toolError = true;
-    await assert.rejects(parallelSearch('tool failure'), /synthetic tool failure/);
+    // The server's error text leads the message, capped: a 5,000-character reply
+    // does not become a 5,000-character log line.
+    await assert.rejects(parallelSearch('tool failure'), (err: Error) => {
+      assert.match(err.message, /^Parallel search failed: synthetic tool failure x+…$/);
+      assert.ok(err.message.length <= 'Parallel search failed: '.length + 201, String(err.message.length));
+      return true;
+    });
     httpError = true;
     await assert.rejects(parallelSearch('rate limit'), /synthetic rate limit/);
     for (const method of ['initialize', 'notifications/initialized', 'tools/list', 'tools/call', 'DELETE', 'GET']) {
