@@ -191,8 +191,9 @@ export function overruleTrackEnergyBulk(rows: Array<{ id: string; from: string; 
   return changed;
 }
 
-// The fill's write: `energy` only, and only where it is STILL empty, so a tag
-// answer or an operator edit landing between the read and the write wins.
+// The fill's write: `energy` only, and only where the row is STILL in the
+// fill's scope (empty, tagged, not an operator's), so a tag answer, an operator
+// edit or an operator's clear landing between the read and the write wins.
 // Returns how many rows it filled with each value, counted from the writes
 // themselves, so a row another writer took first is not counted.
 export function fillEmptyTrackEnergyBulk(
@@ -201,7 +202,7 @@ export function fillEmptyTrackEnergyBulk(
   const filled = { high: 0, medium: 0, low: 0 };
   if (rows.length === 0) return filled;
   const d = requireDb();
-  const stmt = d.prepare(`UPDATE tracks SET energy = ? WHERE id = ? AND energy IS NULL AND ${SQL_NOT_MANUAL}`);
+  const stmt = d.prepare(`UPDATE tracks SET energy = ? WHERE id = ? AND energy IS NULL AND ${SQL_HAS_MOODS} AND ${SQL_NOT_MANUAL}`);
   d.transaction((rs: typeof rows) => {
     for (const r of rs) filled[r.energy] += stmt.run(r.energy, r.id).changes;
   })(rows);

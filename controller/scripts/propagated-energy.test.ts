@@ -420,3 +420,38 @@ test('the fill counts only its own writes, and never a row step 1 settled', () =
     sql.exec('DROP TRIGGER race_fill');
   }
 });
+
+// The fill reads its scope before step 1 and the baselines, so an operator's
+// "clear tags" from the controller process can land between that read and the
+// fill's write. The write must re-check the whole scope, moods included, or it
+// gives an energy to a row that is untagged again.
+test("the fill's write never gives an energy to a row whose tags were cleared after the read", () => {
+  const sql = db.requireDb();
+  sql.exec('SAVEPOINT cleared');
+  try {
+    const tagged = (id: string, source: TagSource, energy: 'low' | null) => {
+      db.upsertTrackMeta(id, { title: id, artist: 'X', album: 'Y', duration: 300 });
+      db.upsertTrackTags(id, { moods: ['night'], energy, source, confidence: 0.6 });
+      db.setTrackAudioMoodScoresBulk([{ id, scores: LOUD }]);
+    };
+    tagged('clearTrigger', 'propagated', 'low'); // step 1 corrects it to high
+    tagged('clearTarget', 'llm', null);          // in the fill's scope when read
+    // Another writer, landing inside the pass: step 1's write to clearTrigger
+    // clears clearTarget's tags the way markTrackUntaggable does.
+    sql.exec(`CREATE TEMP TRIGGER race_clear AFTER UPDATE OF energy ON tracks
+      WHEN NEW.id = 'clearTrigger'
+      BEGIN UPDATE tracks SET moods = NULL, energy = NULL, source = NULL WHERE id = 'clearTarget'; END`);
+    try {
+      const run = runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false });
+      assert.equal(db.getTrack('clearTrigger')!.energy, 'high', 'step 1 ran, so the other writer did too');
+      const t = db.getTrack('clearTarget')!;
+      assert.equal(t.energy, null, 'an untagged row is never filled');
+      assert.deepEqual(run.filled, { high: 0, medium: 0, low: 0 });
+    } finally {
+      sql.exec('DROP TRIGGER race_clear');
+    }
+  } finally {
+    sql.exec('ROLLBACK TO cleared');
+    sql.exec('RELEASE cleared');
+  }
+});
