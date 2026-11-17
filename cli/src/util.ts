@@ -62,6 +62,10 @@ export function parseEnvFile(path: string): Record<string, string> {
 // parseEnvFile keeps an inline comment (`CADDY_PORT=8080 # custom`), and then
 // leaves a quoted value quoted. Compose drops the comment and the quotes, so a
 // caller comparing or using the value as compose would runs it through this.
+// It covers the shapes a hand-edited version, port or path takes: `v`, `"v"`,
+// `'v'`, each with or without a trailing ` # comment`. It is not a full dotenv
+// parser: a ` #` inside quotes (`'/srv/a # b'`) is cut there, where compose
+// keeps it.
 export function stripEnvComment(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   let v = value.trim().replace(/\s+#.*$/, '');

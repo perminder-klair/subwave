@@ -138,8 +138,10 @@ export function runningImageRefs(file: ComposeFile): string[] {
 // Reads the same env vars the compose files bind with, so an operator who
 // overrides a host binding doesn't leave the CLI looking at the wrong port.
 // Same precedence as compose: the shell environment first, then the install's
-// .env, wherever the CLI runs from. Home resolution here never exits, so the
-// URL helpers still return the default port when no install resolves.
+// .env. The working directory's .env is never read as such; resolveSubwaveHome()
+// uses the cwd only when it holds a docker-compose.yml, and then the cwd is the
+// install. Home resolution here never exits, so the URL helpers still return
+// the default port when no install resolves.
 function byoPort(name: 'WEB_PORT' | 'CONTROLLER_PORT' | 'ICECAST_PORT' | 'CADDY_PORT', fallback: number): number {
   let raw = process.env[name]?.trim();
   if (!raw) {

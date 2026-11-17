@@ -7,14 +7,18 @@
 #
 # It covers the first `subwave update` after a new binary (it must reach compose
 # with the new version), the same update run from another project's directory,
-# and the ports `subwave listen prod` reads from the install's .env.
+# the ports `subwave listen prod` reads from the install's .env, and the values
+# the CLI reads from that .env with an inline comment (COMPOSE_FILE, and the pin
+# `subwave start` compares the running images against).
 #
 # Usage: cli/scripts/smoke-update-pin.sh <path-to-compiled-subwave>
 #
 # Never talks to a daemon or a real station: it uses a scratch install, a scratch
 # HOME, a fake `docker` and a fake browser opener first on PATH. The fake docker
 # applies compose's precedence itself (environment, then the last line in .env)
-# and records what `pull` and `up` would resolve. The fake opener records the URL.
+# and records what `pull` and `up` would resolve, and the arguments `pull` got.
+# It reports a running stack, whose image is $FAKE_IMAGE when set. The fake
+# opener records the URL.
 
 set -euo pipefail
 
@@ -50,7 +54,11 @@ cat >"$scratch/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
 case " $* " in
   *" ps -q "*) echo fake-container ;;
+  *" ps --format json "*)
+    [ -z "${FAKE_IMAGE:-}" ] || printf '{"Image":"%s"}\n' "$FAKE_IMAGE"
+    ;;
   *" pull "* | *" up "*)
+    case " $* " in *" pull "*) echo "args $*" >>"$SMOKE_LOG" ;; esac
     if [ -n "${SUBWAVE_VERSION+set}" ]; then
       resolved="$SUBWAVE_VERSION"
     else
@@ -176,8 +184,7 @@ check_first_run foreign-cwd "foreign cwd"
 # The URL the fake opener received. The opener is spawned detached, so give it a
 # moment to write after the binary exits.
 opened_by() { # opened_by <name>
-  local i
-  for i in $(seq 1 50); do
+  for _ in $(seq 1 50); do
     [ -s "$scratch/$1.log" ] && break
     sleep 0.1
   done
@@ -210,6 +217,31 @@ scaffold ports-comment "CADDY_PORT=7788 # custom"
 listen ports-comment "$scratch/empty" -- --home "$scratch/ports-comment" listen prod
 check "ports, inline comment: the comment is dropped" \
   "http://localhost:7788/listen" "$(opened_by ports-comment)"
+
+# A COMPOSE_FILE overlay in the install's .env can carry an inline comment,
+# which compose drops. update has to pass the overlay as `-f overlay.yml`, not
+# `-f 'overlay.yml # overlay'`.
+run_update compose-file-comment "SUBWAVE_VERSION=$old_pin
+COMPOSE_FILE=docker-compose.yml:overlay.yml # overlay"
+check "COMPOSE_FILE with a comment: pull gets the overlay without it" \
+  "compose -f docker-compose.yml -f overlay.yml pull" \
+  "$(sed -n 's/^args //p' "$scratch/compose-file-comment.log" | head -n 1)"
+
+# `subwave start` on a running stack compares the images' tag with the pin. A
+# pin with an inline comment must still match its own images, and a different
+# tag must still warn, which proves the comparison ran.
+mismatch_warning="but this install expects"
+scaffold start-match "SUBWAVE_VERSION=$old_pin # pinned"
+run_cli start-match "$scratch/empty" \
+  FAKE_IMAGE="ghcr.io/perminder-klair/subwave-controller:$old_pin" \
+  -- --home "$scratch/start-match" start || true
+check "start, commented pin: matching images don't warn" "no warning" \
+  "$(grep -q "$mismatch_warning" "$scratch/start-match.out" && echo warning || echo "no warning")"
+run_cli start-mismatch "$scratch/empty" \
+  FAKE_IMAGE="ghcr.io/perminder-klair/subwave-controller:$exported" \
+  -- --home "$scratch/start-match" start || true
+check "start, commented pin: other images still warn" "warning" \
+  "$(grep -q "$mismatch_warning" "$scratch/start-mismatch.out" && echo warning || echo "no warning")"
 
 if [ "$failures" -ne 0 ]; then
   echo

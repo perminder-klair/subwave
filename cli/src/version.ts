@@ -4,6 +4,7 @@
 // pinning to the CLI's own release keeps the two in lockstep.
 
 import { CLI_VERSION } from './assets.ts';
+import { stripEnvComment } from './util.ts';
 
 // publish-images.yml tags images with bare semver (git `v0.35.0` → image
 // `0.35.0`), which is what CLI_VERSION holds. Anything that doesn't look like a
@@ -31,13 +32,7 @@ export function movePinInEnv(
     if (!m) continue;
     // An inline comment goes first, as compose drops it: `from` is the version
     // compose was actually running, and it's what update.ts reports.
-    let current = (m[1] ?? '').trim().replace(/\s+#.*$/, '');
-    if (
-      (current.startsWith('"') && current.endsWith('"')) ||
-      (current.startsWith("'") && current.endsWith("'"))
-    ) {
-      current = current.slice(1, -1);
-    }
+    const current = stripEnvComment(m[1] ?? '') ?? '';
     // Only migrate a concrete version pin (`0.35.0`, `0.35`, `v0.35.0`).
     if (!/^v?\d+\.\d+/.test(current)) return null;
     if (current === target) return null;
