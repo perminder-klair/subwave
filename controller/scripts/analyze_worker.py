@@ -742,7 +742,10 @@ def _release_models(idle_s=None):
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            where = "GPU memory"
+            # A card that failed its self-test is visible too, but the models
+            # were on cpu: name where they actually were.
+            if _DEVICE == "cuda":
+                where = "GPU memory"
     except Exception:  # noqa: BLE001 — freeing is best-effort
         pass
     # Hand the freed tensor heap back to the OS. gc.collect() returns it to

@@ -278,6 +278,7 @@ def main():
     test("a failed self-test drops its tensor and empties the cache", self_test_releases)
     test("torch's message classifies the failure before the arch list does", message_decides_kind)
     test("an arch list torch cannot report is unknown, not a missing kernel image", arch_list_unknown)
+    test("releasing cpu models beside a visible card says system memory, not GPU", release_names_device)
 
     print("PASS" if failures == 0 else f"FAIL ({failures})")
     sys.exit(1 if failures else 0)
@@ -398,6 +399,28 @@ def arch_list_unknown():
         assert advice not in warn, f"an unknown arch list read as no kernel image: {warn}"
     assert aw.cuda_failure_kind(RuntimeError(INIT), (8, 6), None) == "other"
     assert aw.cuda_failure_kind(RuntimeError(NO_KERNEL), (8, 6), None) == "no_kernel"
+
+
+
+def release_names_device():
+    torch, _ = fake_torch(name="NVIDIA GeForce GTX 1060 6GB", kernel_error=NO_KERNEL)
+    saved = (sys.modules.get("torch"), aw.log, aw._DEVICE, aw._embedder, aw._vocal_detector)
+    lines = []
+    try:
+        sys.modules["torch"] = torch
+        aw.log = lines.append
+        for device, where in (("cpu", "system memory"), ("cuda", "GPU memory")):
+            aw._DEVICE = device
+            aw._embedder, aw._vocal_detector = object(), None
+            lines.clear()
+            aw._release_models()
+            assert len(lines) == 1 and f"released CLAP from {where}" in lines[0], (device, lines)
+    finally:
+        torch_prev, aw.log, aw._DEVICE, aw._embedder, aw._vocal_detector = saved
+        if torch_prev is None:
+            sys.modules.pop("torch", None)
+        else:
+            sys.modules["torch"] = torch_prev
 
 
 if __name__ == "__main__":
