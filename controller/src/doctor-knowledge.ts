@@ -107,8 +107,9 @@ that: give each host on a co-hosted show a Rescue voice that
   locally and are the safest choice),
 - sits on a different engine from the host's own voice (a rescue on the engine that
   just failed is skipped), and
-- differs from every co-host's (Piper with no voice picked is the same built-in voice
-  for everyone; pick a different Kokoro voice per host instead).
+- differs from every co-host's own voice and rescue voice (Piper with no voice picked
+  is the same built-in voice for everyone; pick a different Kokoro voice per host
+  instead).
 Credentials always come from Settings → TTS voice; a Rescue voice only picks the
 engine and voice.
 

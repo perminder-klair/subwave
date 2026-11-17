@@ -410,9 +410,9 @@ export type RescueUsable = (engine: string, cloudProvider: string | null) => boo
 //     that just failed" before it is tried;
 //   - one that can't speak (`usable`, e.g. a cloud provider with no key),
 //     skipped by the chain's probe.
-// And two hosts on one show whose rescue voices are the same target AND voice
-// (`piper` with no voice twice, say) are the original bug in a new place, so
-// that warns too. Static configuration only: nothing here judges whether two
+// And a rescue voice that is a co-host's own voice (same target AND voice), or
+// two hosts on one show whose rescue voices are the same (`piper` with no voice
+// twice, say), are the original bug in a new place, so those warn too. Static configuration only: nothing here judges whether two
 // DIFFERENT voices sound alike. Null when no show has two or more hosts, so a
 // solo station sees no new finding.
 export function coHostRescueFinding(
@@ -427,14 +427,24 @@ export function coHostRescueFinding(
 
   // Why this host's rescue voice can't help, or null when it can.
   type Host = NonNullable<StationSettings['personas']>[number];
-  const uncovered = (p: Host, rescue: RescueSlot | null): string | null => {
-    if (!rescue) return 'no rescue voice';
-    const provider = rescue.engine === 'cloud' ? (rescue.personaTts?.cloudProvider ?? null) : null;
+  // The host's own voice, `inherit` resolved to the station default engine.
+  const ownVoice = (p: Host) => {
     const own = resolvePersonaVoiceSlot(
       p.tts as Parameters<typeof resolvePersonaVoiceSlot>[0],
       s?.tts as Parameters<typeof resolvePersonaVoiceSlot>[1],
     );
-    const ownTarget = { engine: own?.engine || s?.tts?.defaultEngine || 'piper', cloudProvider: own?.engine === 'cloud' ? (own.cloudProvider ?? null) : null };
+    const engine = own?.engine || s?.tts?.defaultEngine || 'piper';
+    return {
+      engine,
+      cloudProvider: engine === 'cloud' ? (own?.cloudProvider ?? null) : null,
+      voice: own?.voice || '',
+    };
+  };
+  const uncovered = (p: Host, rescue: RescueSlot | null): string | null => {
+    if (!rescue) return 'no rescue voice';
+    const provider = rescue.engine === 'cloud' ? (rescue.personaTts?.cloudProvider ?? null) : null;
+    const own = ownVoice(p);
+    const ownTarget = { engine: own.engine, cloudProvider: own.cloudProvider };
     if (sameTtsTarget({ engine: rescue.engine, cloudProvider: provider }, ownTarget, defaultProvider)) {
       return `rescue on their own engine, ${rescue.engine}`;
     }
@@ -444,11 +454,12 @@ export function coHostRescueFinding(
     return null;
   };
   // Same engine, provider (cloud only) and voice: the one rescue voice.
-  const voiceKey = (rescue: RescueSlot) => [
-    rescue.engine,
-    rescue.engine === 'cloud' ? (rescue.personaTts?.cloudProvider || defaultProvider || '') : '',
-    (rescue.personaTts?.voice || '').trim(),
+  const voiceKey = (v: { engine: string; cloudProvider?: string | null; voice?: string }) => [
+    v.engine,
+    v.engine === 'cloud' ? (v.cloudProvider || defaultProvider || '') : '',
+    (v.voice || '').trim(),
   ].join('\u0000');
+  const rescueKey = (rescue: RescueSlot) => voiceKey({ engine: rescue.engine, ...rescue.personaTts });
 
   let coHosted = 0;
   const problems: string[] = [];
@@ -467,7 +478,13 @@ export function coHostRescueFinding(
       if (why) {
         problems.push(`${showName}: ${label(p)} (${why})`);
       } else if (rescue) {
-        const key = voiceKey(rescue);
+        const key = rescueKey(rescue);
+        // A rescue that IS a co-host's own voice airs this host as that co-host.
+        const twin = hosts.find((o) => o !== p && voiceKey(ownVoice(o)) === key);
+        if (twin) {
+          problems.push(`${showName}: ${label(p)} (rescue voice is ${label(twin)}'s own voice)`);
+          continue;
+        }
         const entry = shared.get(key) || { names: [], rescue };
         entry.names.push(label(p));
         shared.set(key, entry);
@@ -492,7 +509,7 @@ export function coHostRescueFinding(
     label: 'co-host rescue voices',
     status: 'warn',
     detail: problems.join('; '),
-    hint: "If a host's engine fails mid-render, their lines are rescued in the station's fallback voice — the same voice for every host, which can make one host sound like another. Give each host a Rescue voice in Personas → Voice that can speak, sits on a different engine from their own voice, and differs from their co-hosts' (Piper with no voice picked is the same built-in voice for everyone).",
+    hint: "If a host's engine fails mid-render, their lines are rescued in the station's fallback voice — the same voice for every host, which can make one host sound like another. Give each host a Rescue voice in Personas → Voice that can speak, sits on a different engine from their own voice, and differs from each co-host's own voice and rescue voice (Piper with no voice picked is the same built-in voice for everyone).",
   };
 }
 

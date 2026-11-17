@@ -5,7 +5,8 @@
 // only by a rescue voice the chain would actually reach: not one on the same
 // target as the host's own voice (sameTtsTarget drops it), and not one that
 // can't speak (the chain's probe skips it). Two hosts on one show with the
-// same rescue target and voice warn too, since that is the original bug again.
+// same rescue target and voice warn too, since that is the original bug again,
+// as does a rescue voice that is a co-host's own voice.
 // Run: npm test -- doctor-cohost-rescue
 
 import assert from 'node:assert/strict';
@@ -112,6 +113,38 @@ test('a rescue voice on the same target as the host\'s own voice does not count'
     shows: [show(['p_tom'])],
   });
   assert.equal(sameProvider?.status, 'warn');
+});
+
+test("a rescue voice that is a co-host's own voice warns: the #2029 symptom again", () => {
+  const bella = { engine: 'kokoro', cloudProvider: 'openai', voice: 'af_bella' };
+  const f = coHostRescueFinding({
+    personas: [
+      { ...tom, tts: { engine: 'kokoro', voice: 'af_bella' }, fallbackVoice: CHARON },
+      { ...emma, fallbackVoice: bella },
+    ],
+    shows: [show(['p_tom'])],
+  });
+  assert.equal(f?.status, 'warn');
+  assert.equal(f?.detail, "The Late Shift: Emma (rescue voice is Tom's own voice)");
+  // The co-host's `inherit` voice is resolved first: the station's Kokoro voice.
+  const inherit = coHostRescueFinding({
+    tts: { defaultEngine: 'kokoro' },
+    personas: [
+      { ...tom, tts: { engine: 'inherit', voice: 'af_bella' }, fallbackVoice: CHARON },
+      { ...emma, fallbackVoice: bella },
+    ],
+    shows: [show(['p_tom'])],
+  });
+  assert.equal(inherit?.detail, "The Late Shift: Emma (rescue voice is Tom's own voice)");
+  // Same engine, another voice: a distinct voice.
+  const other = coHostRescueFinding({
+    personas: [
+      { ...tom, tts: { engine: 'kokoro', voice: 'am_adam' }, fallbackVoice: CHARON },
+      { ...emma, fallbackVoice: bella },
+    ],
+    shows: [show(['p_tom'])],
+  });
+  assert.equal(other?.status, 'ok');
 });
 
 test('a rescue voice that cannot speak does not count, probed with its own provider', () => {
