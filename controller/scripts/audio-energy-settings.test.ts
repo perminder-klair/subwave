@@ -7,10 +7,10 @@
 
 import assert from 'node:assert/strict';
 import { coldLoadSettings } from './test-utils/settings.js';
-import { createTempDir } from './test-utils/temp-dir.js';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { after } from 'node:test';
 
 const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-audio-energy-settings-'));
 process.env.STATE_DIR = stateRoot;
@@ -18,6 +18,10 @@ process.env.STATE_DIR = stateRoot;
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const { DEFAULTS } = await import('../src/settings/defaults.js');
+
+after(async () => {
+  await removeTempDir(stateRoot);
+});
 
 test('both options are off by default', () => {
   assert.deepEqual(DEFAULTS.embedding.audioEnergy, { fillEmpty: false, overruleLlm: false });
