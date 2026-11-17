@@ -16,6 +16,13 @@
 // trim on or off, and reaches every consumer through resolveSilenceTrim /
 // playableSpanSec (one path, cutFrom). resolveAudibleEnd tells the queue the
 // cut applied, so the exit canvas is sized on it without re-deriving it.
+//
+// The whole-track fallback (the tail series never reaches the threshold: a
+// drone or room noise after the music keeps the whole tail window under it)
+// is bounded on its own: it may land only within WHOLE_CURVE_REACH_SEC before
+// the end the trim (or the file) gives. Past that, a quiet coda is far more
+// likely music than noise, so there is no cut and the track ends as it does
+// with the switch off.
 
 import * as settings from '../settings.js';
 import * as library from './library.js';
@@ -39,6 +46,12 @@ const MAX_LEAD_TRIM_SEC = 30;
 // measurement. It acts only when that window is raised past ~30 s, or a
 // header understates the decodable file by more than ~10 s.
 const MAX_TAIL_TRIM_SEC = 600;
+
+// How far before the end the trim (or the file) gives the audible-end cut may
+// land when it falls back to the whole-track series. The measured cases it
+// exists for (a drone or room noise after the music) ran 23-48 s past the
+// music; a fade-classified track whose quiet coda runs longer keeps its coda.
+export const WHOLE_CURVE_REACH_SEC = 60;
 
 export interface SilenceTrimTrack {
   id?: string | null;
@@ -186,14 +199,21 @@ function audibleEndFor(track: SilenceTrimTrack, m: Measured, cut: SilenceTrimRes
   // When the tail never reaches it (a drone or room noise after the music
   // fills the whole tail window), the whole-track series places the end; it
   // is present only with transitions.tailFromCurve on (music/tail-levels.ts).
+  const otherwise = cut.cueOutSec ?? endReferenceSec(m);
+  if (otherwise == null) return null;
+  const dropDb = Number(tr.fadeAudibleEndDb);
   const whole = outro.wholeLoudnessCurve;
-  const e = audibleEndSec(curve, body, Number(tr.fadeAudibleEndDb))
-    ?? (whole ? audibleEndSec(whole, body, Number(tr.fadeAudibleEndDb)) : null);
+  let e = audibleEndSec(curve, body, dropDb);
+  if (e == null && whole) {
+    // The last qualifying whole-track point; one before the reach means no
+    // point inside it qualifies either.
+    const w = audibleEndSec(whole, body, dropDb);
+    e = w != null && w >= otherwise - WHOLE_CURVE_REACH_SEC ? w : null;
+  }
   if (e == null) return null;
   const endSec = Math.round(e * 1000) / 1000;
   // Only ever earlier than the end the trim (or the file) gives…
-  const otherwise = cut.cueOutSec ?? endReferenceSec(m);
-  if (otherwise == null || endSec >= otherwise) return null;
+  if (endSec >= otherwise) return null;
   // …and never an empty request: a cue_out at/before the cue_in + 1 s.
   if (endSec <= (cut.cueInSec ?? 0) + 1) return null;
   return endSec;

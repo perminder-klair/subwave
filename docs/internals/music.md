@@ -870,7 +870,10 @@ series (`outro.wholeLoudnessCurve`, never stored), which the audible-end cut
 searches when the tail series never reaches its threshold: a drone or room
 noise after the music sits over the -50 dBFS floor, so the music's end, and the
 whole 20 s window, land on it (a measured case aired a 44 s drone). It moves the
-end only earlier, under the cut's usual bounds. `npm run curve-ab` lists every
+end only earlier, under the cut's usual bounds, and only within
+`WHOLE_CURVE_REACH_SEC` (60 s) before the end the trim or the file gives: a
+quiet coda longer than that is kept, with no cut, because past it a quiet
+passage is far more likely music than noise. `npm run curve-ab` lists every
 fade it would newly cut, because a quiet coda is music and only an ear can tell
 it from noise. Pinned by `scripts/tail-levels.test.ts`.
 

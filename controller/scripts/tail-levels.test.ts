@@ -9,7 +9,9 @@
 //     with no stored outro yields one with no grid and no vocals;
 //   - the audible-end cut (music/silence-trim.ts) searches the whole-track
 //     series only when the tail series never reaches the threshold, and the
-//     usual bounds (only earlier, never at/before cueIn + 1 s) still hold.
+//     usual bounds (only earlier, never at/before cueIn + 1 s) still hold,
+//     and it reaches back at most WHOLE_CURVE_REACH_SEC (a quiet coda past
+//     it is never cut at an earlier loud passage).
 
 import assert from 'node:assert/strict';
 import { createTempDir } from './test-utils/temp-dir.js';
@@ -159,4 +161,29 @@ test('the whole-series fallback keeps the bounds: never at or before cueIn + 1 s
   await coldLoadSettings({ silenceTrim: { enabled: true }, transitions: { fadeAudibleEnd: true, fadeAudibleEndDb: 20, tailFromCurve: true } });
   const r = resolveSilenceTrim(t);
   assert.ok(r.cueOutSec == null || r.cueOutSec > (r.cueInSec ?? 0) + 1, JSON.stringify(r));
+});
+
+// A quiet coda is music: loud (-10 LUFS) to 100 s, then a 90 s pianissimo
+// coda at -35 LUFS that fades to -60 by 200 s. The tail series never reaches
+// body - 20, and the last whole-track point that does sits 100 s before the
+// end, past WHOLE_CURVE_REACH_SEC: no cut, the coda airs.
+const CODA_END = 200_000;
+const codaLevel = (t: number) =>
+  t > CODA_END ? null
+    : t <= 100_000 ? -10
+      : t <= 190_000 ? -35 : -35 - (25 * (t - 190_000)) / 10_000;
+
+test('the whole-series fallback never cuts a quiet coda past its reach', async () => {
+  const { WHOLE_CURVE_REACH_SEC } = await import('../src/music/silence-trim.js');
+  const o = curveOutro(null, curveJson(CODA_END, codaLevel, 205_000), { decodedDurationMs: 205_000, edgeTailMs: 5_000 })!;
+  assert.equal(o.ending, 'fade', 'the coda tapers off, so it reads as a fade');
+  await coldLoadSettings({ transitions: { fadeAudibleEnd: true, fadeAudibleEndDb: 20, tailFromCurve: true } });
+  const t = { ...droneTrack(o), tailStartMs: CODA_END };
+  assert.equal(resolveAudibleEnd(t), null);
+  assert.equal(resolveSilenceTrim(t).cueOutSec, null, 'the track ends as it does with the switch off');
+  // The same shape with a coda shorter than the reach is cut where it ends.
+  const short = (s: number) => (s > CODA_END ? null : s <= CODA_END - (WHOLE_CURVE_REACH_SEC - 10) * 1000 ? -10 : codaLevel(Math.max(s, 190_000)));
+  const o2 = curveOutro(null, curveJson(CODA_END, short, 205_000), { decodedDurationMs: 205_000, edgeTailMs: 5_000 })!;
+  const cut = resolveAudibleEnd({ ...droneTrack(o2), tailStartMs: CODA_END });
+  assert.equal(cut?.endSec, CODA_END / 1000 - (WHOLE_CURVE_REACH_SEC - 10));
 });
