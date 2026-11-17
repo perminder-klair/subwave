@@ -102,8 +102,9 @@ export function earliestOriginalYear(
 //
 // The gate is era SUSPICION, not Navidrome's compilation flag (#1418) — the
 // reissue anthologies it exists for arrive as `isCompilation: false`.
-// `yearUntrusted` is composed once in the row mapper (flag OR derived
-// judgement); passing the raw flag would silently reopen the gap.
+// `yearUntrusted` is composed once in the row mapper (era-suspect
+// storedYearUntrusted: the walk's stored verdict once it has one, the raw flag
+// only before); passing the raw flag would silently reopen the gap.
 //
 // Any resolved year means there is nothing to ask. A checked-but-missed stamp
 // skips the track unless the operator asked for a re-enrich; a MANUAL answer is

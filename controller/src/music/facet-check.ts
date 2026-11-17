@@ -65,6 +65,10 @@ export function checkFacets(sample = 10): FacetCheckReport {
   const drift: FacetDrift[] = [];
   let driftCount = 0;
   const known = new Set<string>();
+  // Complete measurements taken under an older FACET_VERSIONS entry (a changed
+  // rule, such as vocal v2): due again in the facet scope, invisible to the
+  // legacy queries, which read only whether the columns are filled.
+  const outdated = new Map<db.Facet, Set<string>>();
   for (const t of tracks) {
     known.add(t.id);
     const have = stored.get(t.id);
@@ -78,6 +82,11 @@ export function checkFacets(sample = 10): FacetCheckReport {
     for (const facet of db.FACETS) {
       const a = have?.get(facet);
       const b = want.get(facet);
+      if (a?.status === 'ok' && b?.status === 'ok' && b.version === db.FACET_VERSIONS[facet] && a.version < b.version) {
+        let ids = outdated.get(facet);
+        if (!ids) outdated.set(facet, (ids = new Set()));
+        ids.add(t.id);
+      }
       // A tail's 'unmeasurable' reason depends on the pass that wrote it, so
       // status + attempts is the contract; reasons are informational.
       if (label(a) === label(b)) continue;
@@ -100,7 +109,8 @@ export function checkFacets(sample = 10): FacetCheckReport {
       return !(cell?.status === 'unmeasurable' && cell.unmeasurable_reason != null
         && cell.version >= db.FACET_VERSIONS[facet]);
     }));
-    const b = new Set(db.facetNeedsIds(facet));
+    // Nor a version bump: see `outdated` above.
+    const b = new Set(db.facetNeedsIds(facet).filter(id => !outdated.get(facet)?.has(id)));
     const onlyLegacy = [...a].filter(id => !b.has(id));
     const onlyFacet = [...b].filter(id => !a.has(id));
     return {

@@ -132,6 +132,9 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -218,6 +221,8 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -517,6 +522,9 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -596,6 +604,8 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -851,6 +861,9 @@ services:
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -1105,18 +1118,28 @@ export const COMPOSE_ANALYZER_GPU_YML = `# GPU opt-in overlay for the analyzer �
 #
 # Requirements: NVIDIA driver + Container Toolkit only (cu128 wheels vendor the
 # CUDA runtime). The worker picks the device itself (ANALYZE_DEVICE=auto: cuda
-# when torch sees a GPU, else cpu with a warning — a misconfigured host
-# degrades, not fails). ANALYZE_DEVICE=cpu in .env forces CPU without dropping
-# the overlay.
+# when torch sees a GPU and a test op runs on it, else cpu with a warning — a
+# misconfigured host, or a card this build has no kernels for, degrades, not
+# fails). An explicit ANALYZE_DEVICE=cuda falls back the same way, and
+# ANALYZE_DEVICE=cpu in .env forces CPU without dropping the overlay.
 #
 # After ~5 idle minutes the worker drops its models out of VRAM so a
 # co-resident TTS/LLM gets the card back (ANALYZE_IDLE_UNLOAD_S tunes it;
 # 0 keeps them resident). A few hundred MB of CUDA context remain until the
 # container stops.
+#
+# The image is built once per torch wheel (#2280). Unset, ANALYZER_CUDA_TAG
+# follows SUBWAVE_VERSION like every other image: the cu128 build, for Turing
+# (RTX 20-series, GTX 16-series) and newer. An older card needs the cu124
+# build: set ANALYZER_CUDA_TAG in .env to its architecture tag (maxwell,
+# pascal or volta), or to <version>-cu124 to pin a release. The tag table is in
+# docs/internals/infrastructure.md (#aio-cuda-tags).
 services:
   analyzer:
-    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:\${SUBWAVE_VERSION:-latest}
-    # Local build with this overlay applied mirrors the published cuda image.
+    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:\${ANALYZER_CUDA_TAG:-\${SUBWAVE_VERSION:-latest}}
+    # Local build with this overlay applied mirrors the published cu128 image,
+    # whatever ANALYZER_CUDA_TAG says; for the cu124 one, build with
+    # --build-arg TORCH_CUDA=cu124.
     build:
       args:
         WITH_CLAP: 1
@@ -1194,6 +1217,14 @@ SITE_URL=
 # release) and moves it forward on \`subwave update\`. Published tags are bare
 # semver (e.g. 0.35.0 or 0.35), plus \`latest\`.
 # SUBWAVE_VERSION=latest
+
+# The CUDA analyzer's tag, read only by docker-compose.analyzer-gpu.yml. Unset
+# follows SUBWAVE_VERSION: the cu128 build, for Turing (RTX 20-series, GTX
+# 16-series) and newer. A Maxwell, Pascal (GTX 10-series) or Volta card needs
+# the cu124 build: set its architecture tag, which moves with each release, or
+# <version>-cu124 to pin one (\`subwave update\` does not move that pin). Tags:
+# docs/internals/infrastructure.md#aio-cuda-tags.
+# ANALYZER_CUDA_TAG=pascal
 
 # ───────── Ports (byo-proxy compose only) ─────────
 # CADDY_PORT=7700
@@ -1342,11 +1373,20 @@ SITE_URL=
 # chat key. OpenRouter embeddings also fall back to OPENROUTER_API_KEY above.
 # EMBEDDING_API_KEY=
 
+# ───────── Last.fm (optional — also configurable in admin UI) ─────────
+# Tags need only the API key. Paste it in Settings → Listeners → Last.fm, or
+# set it here; from there Last.fm tags are on by default (Library tagger →
+# Advanced → Enrichment is Auto). Scrobbling is separate and stays off until
+# you enable it in that card; only then are the secret and session key needed.
+# LASTFM_API_KEY=
+# LASTFM_API_SECRET=                # scrobbling only
+# LASTFM_SESSION_KEY=               # scrobbling only; or use Connect in the card
+
 # ───────── Scrobbling (optional — also configurable in admin UI) ─────────
 # LISTENBRAINZ_USER_TOKEN=          # ListenBrainz or LB-compatible scrobbler token
 # LISTENBRAINZ_API_URL=             # optional full submit-listens URL override
 #                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
-#                                   # otherwise set base URL in admin → Settings → Scrobbling
+#                                   # otherwise set base URL in admin → Settings → Listeners → ListenBrainz
 
 # ───────── Original years (optional — also configurable in admin UI) ─────────
 # Era-bounded shows ask MusicBrainz (keyless) for the original year of reissues
@@ -1434,7 +1474,9 @@ SITE_URL=
 #                         # still found within this window. Lower it if you start
 #                         # analyzers by hand and want them picked up sooner.
 # ANALYZE_DEVICE=    # auto (default) / cpu / cuda — torch device for CLAP/Demucs;
-#                    # only meaningful on the cuda analyzer flavour
+#                    # only meaningful on the cuda analyzer flavour. auto and
+#                    # cuda both fall back to cpu, with a warning, when the card
+#                    # fails a one-op self-test (no GPU, or no kernels for it)
 # ANALYZE_IDLE_UNLOAD_S=  # seconds of no CLAP/Demucs use before the models are
 #                         # dropped (0 = keep resident). Defaults per device:
 #                         # 300 on cuda (frees the GPU for co-resident TTS/LLM
@@ -1463,13 +1505,15 @@ SITE_URL=
 # Building from source instead of pulling? \`docker compose build analyzer\` with
 # ANALYZER_HEAVY=1 bakes the stack (or pass WITH_CLAP=1 / WITH_DEMUCS=1 directly).
 #
-# Vocal-gate tuning (#1125). The Demucs vocal stem is thresholded against BOTH
-# its own loud level AND a fraction of the FULL-MIX loud level — the mix floor
-# stops separation bleed on instrumentals from reading as vocals. Raise the
-# floor if instrumentals still slip through (over-compressed masters leak more);
+# Vocal-gate tuning (#1125, #2237). The Demucs vocal stem is thresholded against
+# BOTH its own loud level AND a fraction of the FULL-MIX loud level — the mix
+# floor stops separation bleed on instrumentals from reading as vocals. Each
+# window has its own floor: the opening's was raised on real audio (#2237), the
+# ending's is unchanged. Raise a floor if instrumentals still slip through;
 # lower it if quiet vocals get dropped. Defaults shown.
-# VOCAL_MIX_FLOOR=0.06     # vocal stem must reach >=6% of the full-mix loud level
-# VOCAL_STEM_REL=0.15      # ...OR >=15% of the vocal stem's own loud level
+# VOCAL_HEAD_MIX_FLOOR=0.15  # opening: stem must reach >=15% of the mix's loud level
+# VOCAL_MIX_FLOOR=0.06       # ending: >=6%. Set alone, it sets the opening too
+# VOCAL_STEM_REL=0.15        # ...OR >=15% of the vocal stem's own loud level
 #
 # Optional model overrides (sensible defaults shown):
 # CLAP_MODEL=laion-clap
@@ -1575,6 +1619,15 @@ SITE_URL=
 # constrained host. TTS_HEAVY_MEM_LIMIT only matters with --profile tts-heavy.
 # ANALYZER_MEM_LIMIT=6g
 # TTS_HEAVY_MEM_LIMIT=10g
+#
+# JavaScript heap, in MB, for the Observatory's sound-map projection child.
+# Unset uses Node's default, which scales with the host's memory. The child
+# fits as many tracks as that heap holds (at most 40,000, about 52 KB each)
+# and places the rest, so a smaller heap fits a coarser map instead of running
+# out during the fit; loading and placing a very large library still need
+# room. Values below 512 are raised to 512. Raise this for a finer map on a
+# small host, or if the Observatory reports the run ran out of memory.
+# SUBWAVE_MAP_HEAP_MB=4096
 #
 # HuggingFace token — lets the tts-heavy sidecar lazily download gated model
 # weights at runtime (PocketTTS cloning weights; some CLAP/Demucs checkpoints).

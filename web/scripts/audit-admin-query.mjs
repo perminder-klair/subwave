@@ -181,6 +181,15 @@ const allowed = new Map([
   ['connect/Playground.tsx', new Map([
     ['operator-api-command', { callee: 'adminResponse', method: 'endpoint.method', path: /^relPath$/ }],
   ])],
+  ['library/EraReviewSection.tsx', new Map([
+    // Era review. The suspect-album listing as a one-shot CSV blob,
+    // like playback-failure-export next door; nothing cached reads it.
+    ['era-csv-export', {
+      callee: 'adminResponse',
+      method: 'GET',
+      path: /^\/library\/era\/csv$/,
+    }],
+  ])],
   ['library/useTaggerRunLog.ts', new Map([
     // One run's log file as a download, byte for byte; nothing cached reads it.
     ['tagger-log-download', {

@@ -21,7 +21,7 @@ subwave/
 ```
 
 Icon + screenshots are referenced by raw URL from existing in-repo assets
-(`app/assets/icon.png`, `web/public/screenshots/*.webp`) — nothing duplicated.
+(`assets/icon.png` in [getsubwave/app](https://github.com/getsubwave/app), `web/public/screenshots/*.webp`) — nothing duplicated.
 
 ## 1. Publish the `subwave-aio` image
 
@@ -97,7 +97,7 @@ then finish `/onboarding` against a real Navidrome.
 anything:
 
 ```bash
-curl -sI https://raw.githubusercontent.com/perminder-klair/subwave/main/app/assets/icon.png | head -1   # 200
+curl -sI https://raw.githubusercontent.com/getsubwave/app/main/assets/icon.png | head -1   # 200
 curl -sI https://ca.unraid.net/apps | grep -io "img-src[^;]*"
 ```
 

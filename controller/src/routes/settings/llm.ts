@@ -53,7 +53,8 @@ function briefLlmError(err: unknown): string {
 
 // Non-mutating probe of one secret; builds a one-off client and never writes
 // process.env or secrets.env. `hint` disambiguates a key shared by several
-// providers (SEARCH_API_KEY is Tavily, Brave, Keenable, Firecrawl, Outcrawl or SpecStream) because the UI tests before
+// providers (SEARCH_API_KEY is Tavily, Brave, Keenable, Firecrawl, Outcrawl or SpecStream;
+// DuckDuckGo, Parallel and SearXNG take none) because the UI tests before
 // saving, so the stored provider can't be trusted mid-edit; it falls back to
 // the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
 // Responses API rejects anything below 16.

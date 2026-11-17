@@ -88,7 +88,18 @@ def t_tail_meta():
     p = os.path.join(d, "tail-meta.json")
     assert mode(p) == 0o666, oct(mode(p))
     with open(p) as f:
-        assert json.load(f) == {"tail_start_sec": 181.25, "duration_sec": 200.0}
+        assert json.load(f) == {"tail_start_sec": 181.25, "duration_sec": 200.0, "file_size": None}
+
+
+def t_head_meta():
+    # The head window's provenance stamp (#2238) is shared like the stems.
+    d = os.path.join(root, "stems", "track-2h")
+    aw.write_stems({"drums": Stem()}, "head", d)
+    aw.write_head_meta(d, {"file_size": 1234, "duration_sec": 200.0})
+    p = os.path.join(d, "head-meta.json")
+    assert mode(p) == 0o666, oct(mode(p))
+    with open(p) as f:
+        assert json.load(f) == {"file_size": 1234, "duration_sec": 200.0}
 
 
 def t_existing_dir_reopened():
@@ -268,6 +279,7 @@ def t_transition_refused_chmod():
 print("analyzer_shared_modes_test.py")
 test("stems folder 777 and stem files 666 under umask 022", t_stems)
 test("tail-meta.json 666", t_tail_meta)
+test("head-meta.json 666", t_head_meta)
 test("a 755 folder from an older analyzer is opened up", t_existing_dir_reopened)
 test("a folder it cannot chmod still gets its files written", t_foreign_dir_tolerated)
 test("a file it cannot chmod is still published, logged once", t_file_chmod_refused)

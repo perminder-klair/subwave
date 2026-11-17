@@ -229,7 +229,7 @@ test('a backup restore keeps the managed settings and applies the rest, and says
   assert.equal(s.personas.find((p: any) => p.id === first.id).tts.engine, 'inherit');
 });
 
-test('the listener ceiling is the plan\'s: a hosted save drops stream.maxListeners, keeps the rest', async () => {
+test('the listener ceiling is the box agent\'s: a hosted save drops stream.maxListeners, keeps the rest', async () => {
   const before = stored().stream?.maxListeners;
   const r = await post('/settings', { stream: { maxListeners: 37, idleWhenEmpty: true } });
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -239,7 +239,7 @@ test('the listener ceiling is the plan\'s: a hosted save drops stream.maxListene
   assert.equal(st.idleWhenEmpty, true);
 });
 
-test('the plan\'s bitrate ceiling caps every listener mount and switches FLAC off', () => {
+test('the station\'s bitrate ceiling caps every listener mount and switches FLAC off', () => {
   const stream = { bitrate: 320, aacEnabled: true, aacBitrate: 256, opusEnabled: true, opusBitrate: 320, flacEnabled: true };
   assert.deepEqual(capStreamBitrates(stream, 192),
     { bitrate: 192, aacEnabled: true, aacBitrate: 192, opusEnabled: true, opusBitrate: 192, flacEnabled: false });

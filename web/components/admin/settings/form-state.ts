@@ -1,6 +1,7 @@
 import { normalizeStationLocale } from '../../../lib/format';
-import { normalizeGeminiSafety, SHORTLIST_PASSES_DEFAULT, TRANSITION_EFFECTS, ttsVoiceLevellingSchema, type TransitionEffect } from '../../../lib/schemas.generated';
+import { normalizeGeminiSafety, normalizeReasoningEffort, SHORTLIST_PASSES_DEFAULT, TRANSITION_EFFECTS, ttsVoiceLevellingSchema, type TransitionEffect } from '../../../lib/schemas.generated';
 import type { FormState, SettingsData, LlmHeaderRow } from './shared';
+import { bodyParamRows } from './llmBodyParams';
 
 // The single client-side copy, read by both form hydration and the dirty-check.
 // Must mirror DEFAULTS.tts.cloud in controller/src/settings.ts.
@@ -51,6 +52,9 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       stemBlends: v.transitions?.stemBlends ?? false,
       pickTimeStems: v.transitions?.pickTimeStems === true,
       equalPowerCrossfade: v.transitions?.equalPowerCrossfade === true,
+      fadeAudibleEnd: v.transitions?.fadeAudibleEnd === true,
+      fadeAudibleEndDb: String(v.transitions?.fadeAudibleEndDb ?? 20),
+      tailFromCurve: v.transitions?.tailFromCurve === true,
       // Absent reads as ON, matching the controller's resolver
       // (settings/transition-effects.ts) — a station that has never saved
       // this block has the whole kit.
@@ -220,8 +224,11 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
         return legacy ? { [prov]: legacy } : {};
       })(),
       headers: headerRows(v.llm?.headers),
+      bodyParams: bodyParamRows(v.llm?.bodyParams),
+      toolCallBodyParams: bodyParamRows(v.llm?.toolCallBodyParams),
       compatibleMode: compatibleModeOf(v.llm?.compatibleMode),
       reasoning: !!v.llm?.reasoning,
+      reasoningEffort: normalizeReasoningEffort(v.llm?.reasoningEffort),
       toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
       pickerAgent: !!v.llm?.pickerAgent,
       trackSelection: v.llm?.trackSelection === 'shortlist' ? 'shortlist' : 'agentic',
@@ -264,8 +271,11 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
           return legacy ? { [prov]: legacy } : {};
         })(),
         headers: headerRows(v.llm?.fallback?.headers),
+        bodyParams: bodyParamRows(v.llm?.fallback?.bodyParams),
+        toolCallBodyParams: bodyParamRows(v.llm?.fallback?.toolCallBodyParams),
         compatibleMode: compatibleModeOf(v.llm?.fallback?.compatibleMode),
         reasoning: !!v.llm?.fallback?.reasoning,
+        reasoningEffort: normalizeReasoningEffort(v.llm?.fallback?.reasoningEffort),
         toolChoice: v.llm?.fallback?.toolChoice === 'auto' ? 'auto' : 'required',
       },
     },
@@ -298,6 +308,10 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       confidenceThreshold: String(v.embedding?.confidenceThreshold ?? 0.35),
       maxActiveLearningRounds: String(v.embedding?.maxActiveLearningRounds ?? 3),
       audioFusionWeight: String(v.embedding?.audioFusionWeight ?? 0.5),
+      audioEnergy: {
+        fillEmpty: v.embedding?.audioEnergy?.fillEmpty === true,
+        overruleLlm: v.embedding?.audioEnergy?.overruleLlm === true,
+      },
       batchSize: String(v.embedding?.batchSize ?? 25),
       enrichment: {
         // Unset is auto, never off: loading it as false wrote false on the next
