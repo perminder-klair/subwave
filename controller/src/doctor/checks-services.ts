@@ -14,6 +14,8 @@ import { realPathFinding } from '../music/navidrome-players-policy.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
+import { personaRescueSlot, sameTtsTarget, type RescueSlot } from '../audio/tts-fallback.js';
+import { resolvePersonaVoiceSlot } from '../schemas/persona.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { streamStatusFresh } from '../broadcast/liquidsoap-control.js';
 import {
@@ -392,18 +394,61 @@ export async function checkBroadcast(): Promise<Finding[]> {
   return out;
 }
 
-// Co-hosted shows whose hosts have no rescue voice of their own (#2029). When a
-// host's engine fails mid-render the line is rescued in the station's fallback
-// voice — one voice for every host, so a co-host can air sounding like the
-// other. Static configuration only: nothing here knows whether a voice
-// "belongs" to another host. Null when no show has two or more hosts, so a solo
-// station sees no new finding.
-export function coHostRescueFinding(s: StationSettings | null): Finding | null {
+// Can this rescue engine speak right now, on this provider? checkTts passes
+// tts.engineUsable, the probe the rescue chain itself runs, so the Doctor and
+// the chain agree on what gets skipped.
+export type RescueUsable = (engine: string, cloudProvider: string | null) => boolean;
+
+// Co-hosted shows whose hosts have no rescue voice that would help (#2029).
+// When a host's engine fails mid-render the line is rescued in the station's
+// fallback voice — one voice for every host, so a co-host can air sounding like
+// the other. A host is covered only by a rescue voice of its own that the chain
+// would actually reach, so three things count as none:
+//   - no rescue voice at all;
+//   - one on the same target as the host's own voice (engine, plus provider for
+//     cloud: sameTtsTarget, the chain's own exclusion), dropped as "the thing
+//     that just failed" before it is tried;
+//   - one that can't speak (`usable`, e.g. a cloud provider with no key),
+//     skipped by the chain's probe.
+// And two hosts on one show whose rescue voices are the same target AND voice
+// (`piper` with no voice twice, say) are the original bug in a new place, so
+// that warns too. Static configuration only: nothing here judges whether two
+// DIFFERENT voices sound alike. Null when no show has two or more hosts, so a
+// solo station sees no new finding.
+export function coHostRescueFinding(
+  s: StationSettings | null,
+  usable: RescueUsable = () => true,
+): Finding | null {
   const personas = Array.isArray(s?.personas) ? s.personas : [];
   const shows = Array.isArray(s?.shows) ? s.shows : [];
   const byId = new Map(personas.filter((p) => p?.id).map((p) => [p.id, p]));
+  const defaultProvider = s?.tts?.cloud?.provider ?? null;
+  const label = (p: { id?: string; name?: string }) => p.name || p.id || 'unnamed';
+
+  // Why this host's rescue voice can't help, or null when it can.
+  type Host = NonNullable<StationSettings['personas']>[number];
+  const uncovered = (p: Host, rescue: RescueSlot | null): string | null => {
+    if (!rescue) return 'no rescue voice';
+    const provider = rescue.engine === 'cloud' ? (rescue.personaTts?.cloudProvider ?? null) : null;
+    const own = resolvePersonaVoiceSlot(p.tts as any, s?.tts as any);
+    const ownTarget = { engine: own?.engine || s?.tts?.defaultEngine || 'piper', cloudProvider: own?.engine === 'cloud' ? (own.cloudProvider ?? null) : null };
+    if (sameTtsTarget({ engine: rescue.engine, cloudProvider: provider }, ownTarget, defaultProvider)) {
+      return `rescue on their own engine, ${rescue.engine}`;
+    }
+    if (!usable(rescue.engine, provider)) {
+      return `rescue ${rescue.engine}${provider ? `/${provider}` : ''} can't speak`;
+    }
+    return null;
+  };
+  // Same engine, provider (cloud only) and voice: the one rescue voice.
+  const voiceKey = (rescue: RescueSlot) => [
+    rescue.engine,
+    rescue.engine === 'cloud' ? (rescue.personaTts?.cloudProvider || defaultProvider || '') : '',
+    (rescue.personaTts?.voice || '').trim(),
+  ].join('\u0000');
+
   let coHosted = 0;
-  const missing: string[] = [];
+  const problems: string[] = [];
   for (const show of shows) {
     const ids = [show?.personaId, ...(Array.isArray(show?.guestPersonaIds) ? show.guestPersonaIds : [])];
     const hosts = [...new Set(ids)]
@@ -411,24 +456,40 @@ export function coHostRescueFinding(s: StationSettings | null): Finding | null {
       .filter((p): p is NonNullable<typeof p> => !!p);
     if (hosts.length < 2) continue;
     coHosted++;
-    const bare = hosts.filter((p) => !p.fallbackVoice || typeof p.fallbackVoice !== 'object');
-    if (bare.length) {
-      missing.push(`${show.name || 'Untitled show'}: ${bare.map((p) => p.name || p.id).join(', ')}`);
+    const showName = show.name || 'Untitled show';
+    const shared = new Map<string, { names: string[]; rescue: RescueSlot }>();
+    for (const p of hosts) {
+      const rescue = personaRescueSlot(p.fallbackVoice as any, tts.ENGINES);
+      const why = uncovered(p, rescue);
+      if (why) {
+        problems.push(`${showName}: ${label(p)} (${why})`);
+      } else if (rescue) {
+        const key = voiceKey(rescue);
+        const entry = shared.get(key) || { names: [], rescue };
+        entry.names.push(label(p));
+        shared.set(key, entry);
+      }
+    }
+    for (const { names, rescue } of shared.values()) {
+      if (names.length < 2) continue;
+      const name = (rescue.personaTts?.voice || '').trim();
+      const voice = name ? ` ${name}` : '';
+      problems.push(`${showName}: ${names.join(', ')} share one rescue voice (${rescue.engine}${voice})`);
     }
   }
   if (!coHosted) return null;
-  if (!missing.length) {
+  if (!problems.length) {
     return {
       label: 'co-host rescue voices',
       status: 'ok',
-      detail: `every host on ${coHosted} co-hosted show${coHosted === 1 ? '' : 's'} has a rescue voice`,
+      detail: `every host on ${coHosted} co-hosted show${coHosted === 1 ? '' : 's'} has a rescue voice of their own`,
     };
   }
   return {
     label: 'co-host rescue voices',
     status: 'warn',
-    detail: `no rescue voice — ${missing.join('; ')}`,
-    hint: "If a host's engine fails mid-render, their lines are rescued in the station's fallback voice — the same voice for every host, which can make one host sound like another. Set a Rescue voice for each host in Personas → Voice.",
+    detail: problems.join('; '),
+    hint: "If a host's engine fails mid-render, their lines are rescued in the station's fallback voice — the same voice for every host, which can make one host sound like another. Give each host a Rescue voice in Personas → Voice that can speak, sits on a different engine from their own voice, and differs from their co-hosts' (Piper with no voice picked is the same built-in voice for everyone).",
   };
 }
 
@@ -474,7 +535,7 @@ export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
     });
   } catch { /* routing snapshot is best-effort */ }
 
-  const coHost = coHostRescueFinding(s);
+  const coHost = coHostRescueFinding(s, (engine, provider) => tts.engineUsable(engine, provider));
   if (coHost) out.push(coHost);
 
   return out;
