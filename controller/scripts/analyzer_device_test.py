@@ -270,6 +270,7 @@ def main():
 
     # ── What a failed self-test leaves on the card ─────────────────────────
     test("a failed self-test drops its tensor and empties the cache", self_test_releases)
+    test("torch's message classifies the failure before the arch list does", message_decides_kind)
 
     print("PASS" if failures == 0 else f"FAIL ({failures})")
     sys.exit(1 if failures else 0)
@@ -422,6 +423,21 @@ def self_test_releases():
     ok, ok_calls = fake_torch(name="NVIDIA GeForce RTX 3060", capability=(8, 6))
     assert aw.cuda_self_test(ok) is None
     assert ok_calls["empty_cache"] == 0, "a passing self-test leaves the cache alone"
+
+
+def message_decides_kind():
+    """torch's text wins over the advisory arch list: a missing kernel image on
+    a card the list claims (a PTX JIT that failed) is still final, and out of
+    memory is never final, by text or by torch's own exception type."""
+    covered = ((8, 6), CU128_ARCHES)
+    assert aw.cuda_failure_kind(RuntimeError(NO_KERNEL), *covered) == "no_kernel"
+    assert aw.cuda_failure_kind(RuntimeError(OOM), *covered) == "oom"
+    OutOfMemoryError = type("OutOfMemoryError", (RuntimeError,), {})
+    assert aw.cuda_failure_kind(OutOfMemoryError("2.00 MiB"), *covered) == "oom"
+    assert aw.cuda_failure_kind(RuntimeError(INIT), *covered) == "other"
+    probe = ("RTX 3060", (8, 6), CU128_ARCHES)
+    warn = aw._cuda_fallback_warning(probe, RuntimeError("CUDA error: 2 MiB"), "oom", 300)
+    assert "held by another process" in warn and "driver" not in warn, warn
 
 
 if __name__ == "__main__":
