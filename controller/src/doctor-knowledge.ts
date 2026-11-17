@@ -114,9 +114,10 @@ a self-hosted instance URL; 'keenable' is keyless web search, and a Keenable key
 SEARCH_API_KEY only raises its rate limit; 'parallel' uses anonymous MCP web search
 with no key (free-tier rate limits apply); 'firecrawl' is keyed web search
 (SEARCH_API_KEY) and takes only an fc- key; 'outcrawl' is keyed too and takes only an
-ock_ key. The key slot is shared, so a key left there by another provider counts as
-no key: Firecrawl and Outcrawl refuse anything but their own prefix, and Tavily and
-Brave refuse a key with another provider's prefix (fc-, keen_, ock_, tvly-). If a
+ock_ key; 'specstream' is keyed and takes only an ss_ key. The key slot is shared,
+so a key left there by another provider counts as no key: Firecrawl, Outcrawl and
+SpecStream refuse anything but their own prefix, and Tavily and Brave refuse a key
+with another provider's prefix (fc-, keen_, ock_, ss_, tvly-). If a
 keyed provider is selected without a
 key, news segments can't fetch — tell them to add the key or switch to
 DuckDuckGo, Keenable or Parallel (all keyless), or to a self-hosted SearXNG.

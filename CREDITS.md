@@ -192,7 +192,7 @@ and any OpenAI-compatible server.
 [Tavily](https://tavily.com), [DuckDuckGo](https://duckduckgo.com),
 [Keenable](https://keenable.ai), [SearXNG](https://github.com/searxng/searxng),
 [Firecrawl](https://www.firecrawl.dev), [Outcrawl](https://outcrawl.ai),
-[Parallel](https://parallel.ai), and
+[Parallel](https://parallel.ai), [SpecStream](https://specstream.ai), and
 [Wikimedia](https://api.wikimedia.org).
 
 **Edge and distribution.** [Cloudflare](https://www.cloudflare.com) for TLS in

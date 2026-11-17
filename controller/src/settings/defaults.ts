@@ -689,7 +689,7 @@ export const DEFAULTS = {
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
   // override here); `keenable` needs no key but uses a `keen_` one if set;
   // `parallel` needs no key and never sends one;
-  // `firecrawl` and `outcrawl` read SEARCH_API_KEY like Tavily and Brave.
+  // `firecrawl`, `outcrawl` and `specstream` read SEARCH_API_KEY like Tavily and Brave.
   search: {
     provider: 'duckduckgo',
     apiKey: '',
