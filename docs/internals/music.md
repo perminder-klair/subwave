@@ -867,7 +867,9 @@ loudness 90 % within 0.9 dB; the audible-end cut at the default 20 dB median
 airs as before; controller-side, no mixer restart). The decision is made once,
 in `music/tail-levels.ts`, and applied in `library.get()`'s `outro` projection,
 so the queue's ending and exit canvas, the stem blend and the audible-end cut
-all read the same readings. The curve replaces the four level readings; the
+all read the same readings. The projection derives it on the first read of
+`outro`, not on every `get()`: most callers (the show filters run one per
+candidate) never read it, and the whole-file curve is a row read and a parse. The curve replaces the four level readings; the
 tempo, grids and vocals stay the tail facet's; a track whose curve yields
 nothing keeps its stored outro, and one with a curve but no tail facet gets an
 outro of the curve's readings with no grid and no vocals. Listening on twelve

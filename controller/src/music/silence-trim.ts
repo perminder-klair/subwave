@@ -27,6 +27,7 @@
 import * as settings from '../settings.js';
 import * as library from './library.js';
 import { audibleEndSec, parseLoudnessCurve, type LoudnessCurve } from './loudness-curve.js';
+import type { AudibleEnd } from './mix.js';
 
 // Keeps the cut off the attack or the decay's last ring; must clear the
 // analyzer's frame quantisation (~93ms at 22.05 kHz).
@@ -230,27 +231,33 @@ function cutFrom(track: SilenceTrimTrack, m: Measured): SilenceTrimResult & { au
     : { cueInSec: cut.cueInSec, cueOutSec: audible, audibleEndSec: audible };
 }
 
+// The cue points and the audible-end cut from one resolution: the drain reads
+// both, and each resolution can read the library record (and, with
+// transitions.tailFromCurve on, the whole-file curve).
+export function resolveTrimAndAudibleEnd(
+  track: SilenceTrimTrack | null | undefined,
+): SilenceTrimResult & { audibleEnd: AudibleEnd | null } {
+  if (!track) return { ...NONE, audibleEnd: null };
+  // Both switches off: nothing to resolve (and no library read), as before.
+  const s = settings.get();
+  if (s?.silenceTrim?.enabled !== true && s?.transitions?.fadeAudibleEnd !== true) return { ...NONE, audibleEnd: null };
+  const r = cutFrom(track, measure(track));
+  return {
+    cueInSec: r.cueInSec,
+    cueOutSec: r.cueOutSec,
+    audibleEnd: r.audibleEndSec == null ? null : { endSec: r.audibleEndSec, cueInSec: r.cueInSec },
+  };
+}
+
 export function resolveSilenceTrim(
   track: SilenceTrimTrack | null | undefined,
 ): SilenceTrimResult {
-  if (!track) return NONE;
-  // Both switches off: nothing to resolve (and no library read), as before.
-  const s = settings.get();
-  if (s?.silenceTrim?.enabled !== true && s?.transitions?.fadeAudibleEnd !== true) return NONE;
-  const { cueInSec, cueOutSec } = cutFrom(track, measure(track));
+  const { cueInSec, cueOutSec } = resolveTrimAndAudibleEnd(track);
   return { cueInSec, cueOutSec };
 }
 
-// The audible-end cut, when it applies to this track: its end (absolute file
-// seconds, the cueOutSec resolveSilenceTrim gives) and the cue_in it was
-// bounded by. The queue sizes the exit canvas on it (mix.endingCrossSecondsFor)
-// without re-deriving the decision.
-export function resolveAudibleEnd(
-  track: SilenceTrimTrack | null | undefined,
-): { endSec: number; cueInSec: number | null } | null {
-  if (!track) return null;
-  const r = cutFrom(track, measure(track));
-  return r.audibleEndSec == null ? null : { endSec: r.audibleEndSec, cueInSec: r.cueInSec };
+export function resolveAudibleEnd(track: SilenceTrimTrack | null | undefined): AudibleEnd | null {
+  return resolveTrimAndAudibleEnd(track).audibleEnd;
 }
 
 // Seconds this track will actually make sound. Null means "no answer", never

@@ -1583,10 +1583,9 @@ class Queue {
         // exit canvas longer than the track has left.
         // A fade cut at its AUDIBLE end (transitions.fadeAudibleEnd) arrives
         // here as that cueOutSec, so the wind-down already ends at the cut;
-        // resolveAudibleEnd (decided once, in silence-trim) only tells
+        // the audible end (decided once, in silence-trim) only tells
         // endingCrossSecondsFor to size it by its own rule.
-        const trimEndSec = silenceTrim.resolveSilenceTrim(item.track).cueOutSec;
-        const audibleEnd = silenceTrim.resolveAudibleEnd(item.track);
+        const { cueOutSec: trimEndSec, audibleEnd } = silenceTrim.resolveTrimAndAudibleEnd(item.track);
         const endSec = trimEndSec != null && durSec > 0
           ? Math.min(durSec, trimEndSec)
           : (trimEndSec ?? durSec);

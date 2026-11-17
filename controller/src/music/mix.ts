@@ -301,6 +301,13 @@ export function vocalTailFor(
 // bar snap: those sized the overlap over a tail the cut has now removed, and
 // pulling it longer would put the overlap back over the near-silent end the
 // cut exists to drop (the operator's offline A/B approved exactly this).
+// The cut, from silence-trim: its end (absolute file seconds, the cueOutSec
+// the trim resolves) and the cue_in it was bounded by.
+export interface AudibleEnd {
+  endSec: number;
+  cueInSec: number | null;
+}
+
 export const AUDIBLE_END_CROSS_MIN_SECONDS = 6;
 export const AUDIBLE_END_CROSS_MAX_SECONDS = 12;
 
@@ -312,7 +319,7 @@ export function endingCrossSecondsFor(
     tailLufs?: number | null;
     bodyLufs?: number | null;
     vocalTail?: boolean | null;
-    audibleEnd?: { endSec: number; cueInSec: number | null } | null;
+    audibleEnd?: AudibleEnd | null;
   } = {},
 ): number | null {
   const ending = a.ending;
