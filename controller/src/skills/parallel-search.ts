@@ -4,10 +4,94 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
-import type { SearchResponse, SearchResult } from './search-snippet.js';
+import { cleanSnippet, type SearchResponse, type SearchResult } from './search-snippet.js';
 
 const ENDPOINT = 'https://mcp.parallel.ai/mcp';
 const USER_AGENT = 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)';
+
+// Parallel's excerpts are page text as markdown, and the first one often opens
+// with the page's chrome: a breadcrumb, a menu, "Search for:", a dateline, an
+// infobox. Cut at 300 characters as it came, a snippet could be all menu, and
+// that is what reached the DJ's prompt. So each line is read on its own:
+//   - plainly navigation (a short bare list item, a breadcrumb, a site label
+//     such as "Search for:" or "Share", a row of share buttons, the "..."
+//     between excerpts) is dropped wherever it is;
+//   - an excerpt's leading lines are skipped until its first line of prose (a
+//     sentence ending in . ! ? or a closing quote, or a line of 12 words or
+//     more; never a list item or a table row). An excerpt with no prose line
+//     is all chrome and is dropped, unless every excerpt is, when its
+//     non-navigation lines stand.
+// Then the same cleanup every provider gets (cleanSnippet, whitespace
+// collapsed) and the 300-character cut. An excerpt that is already prose comes
+// through unchanged apart from its whitespace.
+const LIST_ITEM = /^\s*(?:[*+\-\u2022]|\d+[.)])(?=\s|$)\s*/u;
+const SITE_LABEL = /^(?:search(?: for)?|skip to (?:main )?content|menu|share|appearance|now playing|advertisement|\.{3}|\u2026)\s*:?$/iu;
+const SHARE_BUTTONS = new Set(['twitter', 'x', 'facebook', 'pinterest', 'linkedin', 'reddit', 'whatsapp', 'email', 'bluesky', 'threads', 'tumblr']);
+const SENTENCE_END = /(?:[!?]|(?<!\.\.)\.|["\u201d\u2019'])$/u;
+
+function wordCount(line: string): number {
+  return (line.match(/[\p{L}\p{N}]+/gu) ?? []).length;
+}
+
+// Markdown down to its words: link and image syntax, heading and quote marks,
+// emphasis runs. The text the markup carried stays.
+function unmark(line: string): string {
+  return line
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s*(?:#{1,6}|>)\s*/, '')
+    .replace(/(?:\*\*|__|_{3,})/g, '')
+    .replace(/(?<![\p{L}\p{N}])[*_]([^*_]+)[*_](?![\p{L}\p{N}])/gu, '$1')
+    .trim();
+}
+
+function isShareRow(line: string): boolean {
+  return line.split(/\s+/).every(w => SHARE_BUTTONS.has(w.toLowerCase()));
+}
+
+function isNavigation(line: string, listItem: boolean): boolean {
+  if (!line || SITE_LABEL.test(line) || isShareRow(line)) return true;
+  if ((line.match(/ > /g) ?? []).length >= 2) return true; // breadcrumb
+  return listItem && wordCount(line) <= 5 && !SENTENCE_END.test(line);
+}
+
+// A line that opens in lower case continues the one above it (hard-wrapped
+// prose), so the two are judged as one.
+function unwrap(excerpt: string): string[] {
+  const lines: string[] = [];
+  for (const raw of excerpt.split(/\r?\n/)) {
+    const prev = lines.length - 1;
+    if (prev >= 0 && lines[prev].trim() && /^\s*\p{Ll}/u.test(raw)) lines[prev] += ` ${raw.trim()}`;
+    else lines.push(raw);
+  }
+  return lines;
+}
+
+function excerptLines(excerpt: string): { text: string; prose: boolean }[] {
+  const out: { text: string; prose: boolean }[] = [];
+  for (const raw of unwrap(excerpt)) {
+    const listItem = LIST_ITEM.test(raw);
+    const text = unmark(raw.replace(LIST_ITEM, ''));
+    if (isNavigation(text, listItem)) continue;
+    // A table row or a byline ("Published … | Editor …") is never the prose start.
+    const prose = !listItem && !/\s\|(?:\s|$)/.test(text)
+      && (SENTENCE_END.test(text) || wordCount(text) >= 12);
+    out.push({ text, prose });
+  }
+  return out;
+}
+
+export function parallelSnippet(excerpts: string[]): string {
+  const kept: string[] = [];
+  const fallback: string[] = [];
+  for (const excerpt of excerpts) {
+    const lines = excerptLines(excerpt);
+    fallback.push(...lines.map(l => l.text));
+    const first = lines.findIndex(l => l.prose);
+    if (first >= 0) kept.push(...lines.slice(first).map(l => l.text));
+  }
+  return cleanSnippet((kept.length ? kept : fallback).join(' ')).replace(/\s+/g, ' ').trim().slice(0, 300);
+}
 
 export function parseParallelResponse(data: unknown): SearchResponse {
   const raw = data && typeof data === 'object' ? (data as Record<string, unknown>).results : null;
@@ -15,9 +99,9 @@ export function parseParallelResponse(data: unknown): SearchResponse {
   for (const row of Array.isArray(raw) ? raw : []) {
     if (!row || typeof row !== 'object') continue;
     const r = row as Record<string, unknown>;
-    const title = typeof r.title === 'string' ? r.title.trim() : '';
+    const title = cleanSnippet(r.title).replace(/\s+/g, ' ').trim();
     const content = Array.isArray(r.excerpts)
-      ? r.excerpts.filter((v): v is string => typeof v === 'string').join('\n').trim().slice(0, 300)
+      ? parallelSnippet(r.excerpts.filter((v): v is string => typeof v === 'string'))
       : '';
     if (!title || !content) continue;
     results.push({ title, content });

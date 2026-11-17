@@ -5,22 +5,67 @@ import { createServer } from 'node:http';
 import * as settings from '../src/settings.js';
 import { setCache } from '../src/settings/store.js';
 import { searchReady, searchWeb } from '../src/skills/web-search.js';
-import { parallelSearch, parseParallelResponse } from '../src/skills/parallel-search.js';
+import { parallelSearch, parallelSnippet, parseParallelResponse } from '../src/skills/parallel-search.js';
 
 const UA = 'SUB-WAVE radio controller (https://github.com/perminder-klair/subwave)';
 const passage = 'A passage with \u0085 and \u2028 and \u2029 intact.';
+// What every provider's cleanup leaves of it: whitespace runs (U+2028 and
+// U+2029 among them) collapse to one space; U+0085 is not JS whitespace.
+const cleanPassage = 'A passage with \u0085 and and intact.';
 const data = { results: [{ title: 'Music source', url: 'https://example.org/music', excerpts: [passage] }] };
 
 test('parser preserves passages, limits results and tolerates malformed data', () => {
   // The shared SearchResult shape: { title, content } and nothing else, the
   // same as every other provider (the source URL is not part of the contract).
   assert.deepEqual(parseParallelResponse(data).results, [
-    { title: 'Music source', content: passage },
+    { title: 'Music source', content: cleanPassage },
   ]);
   assert.deepEqual(parseParallelResponse(null), { answer: '', results: [] });
   assert.deepEqual(parseParallelResponse({ results: [null, {}, 4] }).results, []);
   assert.equal(parseParallelResponse({ results: Array(10).fill(data.results[0]) }).results.length, 5);
   assert.equal(parseParallelResponse({ results: [{ title: 'A', excerpts: ['x'.repeat(900)] }] }).results[0].content.length, 300);
+});
+
+// The page chrome is the head of a real Parallel excerpt captured in review
+// (a music-review page); the article sentence after it is made up.
+const ARTICLE = 'There are few bands that live to become as iconic as this one, and the reissue proves it.';
+const REVIEW_PAGE = '15/11/2026\nFor the latest music reviews and interviews\nSearch for:\n* Home\n* Music\n'
+  + '* Album Review: Radiohead \u2013 OKNOTOK\n\nAlbum Review: Radiohead \u2013 OKNOTOK\n\nRachael Scarsbrook\n'
+  + `Photo: Tom Sheehan/Nasty Little Man\n${ARTICLE}`;
+
+test('a page-chrome excerpt yields article text: no newlines, bullets, menus or markdown', () => {
+  const content = parseParallelResponse({ results: [{ title: 'Album Review', excerpts: [REVIEW_PAGE] }] }).results[0].content;
+  assert.equal(content, ARTICLE);
+  assert.doesNotMatch(content, /\n|^\s*[*+-]\s|Search for/);
+
+  // A news page: a numbered link menu, a link-only breadcrumb, a markdown
+  // heading, a linked byline and emphasis.
+  const news = '6. [Interviews](nme.com/music-interviews)\n7. [Radar](nme.com/radar)\n\n'
+    + '[News](nme.com/news) [Music News](nme.com/news/music)\n\n'
+    + '# The band have \u201cnot even talked about another record\u201d\n\n'
+    + 'The guitarist told _the magazine_ the last one was **hard** to make, said [the band](x.com/b).';
+  assert.equal(parallelSnippet([news]),
+    'The band have \u201cnot even talked about another record\u201d The guitarist told the magazine the last one was hard to make, said the band.');
+
+  // An encyclopaedia infobox, a breadcrumb, a share row and the "..." Parallel
+  // puts between excerpts: none of them survive, and the prose in each excerpt does.
+  const infobox = '* Wikidata item\nAppearance\n* Start date | May 6, 2019\n* No. of shows | * 18 in North America\n'
+    + 'The tour was the eighth concert tour by the singer.';
+  const crumbs = 'You are here: Home > Music > News\nTwitter Facebook LinkedIn\n...\nShe spoke to us about the new record.';
+  assert.equal(parallelSnippet([infobox, crumbs]),
+    'The tour was the eighth concert tour by the singer. She spoke to us about the new record.');
+});
+
+test('a clean excerpt comes through unchanged apart from whitespace, and all-chrome is not lost', () => {
+  const prose = 'The band announced a  run of dates\nacross Europe next spring.\r\nTickets go on sale Friday.';
+  assert.equal(parallelSnippet([prose]), prose.replace(/\s+/g, ' '));
+  assert.equal(parallelSnippet([prose]), parallelSnippet([prose.replace(/\s+/g, ' ')]));
+  // Every excerpt is chrome: the non-navigation lines stand rather than an empty result.
+  assert.equal(parallelSnippet(['* Home\n* Music\nTour dates\nSearch for:']), 'Tour dates');
+  // Markup and entities get the same cleanup as every other provider.
+  assert.equal(parallelSnippet(['Rock &amp; roll <b>never</b> dies.']), 'Rock & roll never dies.');
+  assert.equal(parseParallelResponse({ results: [{ title: '\n   Exclusive  Interview\n ', excerpts: [prose] }] }).results[0].title,
+    'Exclusive Interview');
 });
 
 test('Parallel selection survives cold load; existing providers and credentials keep their policy', async () => {
@@ -100,14 +145,14 @@ test('SDK wire path, headers, held-open replies, cleanup, errors and dispatcher 
     const start = Date.now();
     const response = await searchWeb('Sabrina Carpenter artist tour news', { recency: 'week' });
     assert.ok(Date.now() - start < 3_000);
-    assert.equal(response.results[0].content, passage);
+    assert.equal(response.results[0].content, cleanPassage);
     assert.deepEqual(Object.keys(response.results[0]).sort(), ['content', 'title']);
     await searchWeb('Sabrina Carpenter artist tour news', { recency: 'week' });
     assert.equal(toolCalls, 1, 'dispatcher memo preserved');
     assert.match(String(bodies[0].objective), /past week/);
     assert.deepEqual(bodies[0].search_queries, ['Sabrina Carpenter artist tour news']);
     teardownFailed = true;
-    assert.equal((await parallelSearch('cleanup failure')).results[0].content, passage);
+    assert.equal((await parallelSearch('cleanup failure')).results[0].content, cleanPassage);
     failed = true;
     const errorStart = Date.now();
     await assert.rejects(searchWeb('uncached synthetic failure'), /synthetic primary error/);
