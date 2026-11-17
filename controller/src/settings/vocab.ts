@@ -599,6 +599,7 @@ export const TTS_CLOUD_PROVIDERS: readonly string[] = TTS_CLOUD_PROVIDER_VALUES;
 // entity/definition queries); `tavily` and `brave` read SEARCH_API_KEY;
 // `searxng` is keyless self-hosted meta-search via settings.search.baseUrl;
 // `keenable` is keyless, and a Keenable key in SEARCH_API_KEY raises its limit;
+// `parallel` is keyless (anonymous MCP) and never reads SEARCH_API_KEY;
 // `firecrawl` and `outcrawl` read SEARCH_API_KEY.
 export const SEARCH_PROVIDERS = SETTINGS_SEARCH_PROVIDERS;
 

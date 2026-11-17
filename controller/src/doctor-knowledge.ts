@@ -111,14 +111,15 @@ Backs the DJ's artist-news segments. 'duckduckgo' is the keyless default; 'tavil
 and 'brave' give richer results but need a key (SEARCH_API_KEY — Brave is metered
 with $5/mo free credits and requires a card on file); 'searxng' is keyless but needs
 a self-hosted instance URL; 'keenable' is keyless web search, and a Keenable key in
-SEARCH_API_KEY only raises its rate limit; 'firecrawl' is keyed web search
+SEARCH_API_KEY only raises its rate limit; 'parallel' uses anonymous MCP web search
+with no key (free-tier rate limits apply); 'firecrawl' is keyed web search
 (SEARCH_API_KEY) and takes only an fc- key; 'outcrawl' is keyed too and takes only an
 ock_ key. The key slot is shared, so a key left there by another provider counts as
 no key: Firecrawl and Outcrawl refuse anything but their own prefix, and Tavily and
 Brave refuse a key with another provider's prefix (fc-, keen_, ock_, tvly-). If a
 keyed provider is selected without a
 key, news segments can't fetch — tell them to add the key or switch to
-DuckDuckGo or Keenable (both keyless), or to a self-hosted SearXNG.
+DuckDuckGo, Keenable or Parallel (all keyless), or to a self-hosted SearXNG.
 
 ## Backups
 There is a Backup feature (Admin → Backup) that exports settings, personas, custom

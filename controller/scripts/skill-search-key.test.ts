@@ -207,3 +207,15 @@ test('a missing key names each keyed provider and links its key page, from the c
     assert.equal(row('web-search').keyUrl, null, provider);
   }
 });
+
+test('Parallel is ready without keys and keeps an explicit skill opt-out', async (t) => {
+  await setSearch(t, { provider: 'parallel', apiKey: 'fc-left-over' });
+  const original = structuredClone(settings.get().skills);
+  t.after(() => settings.update({ skills: original }));
+  assert.equal(row('web-search').ready, true);
+  assert.equal(row('web-search').requiresKey, null);
+  assert.equal(row('web-search').keyProblem, null);
+  assert.match(row('web-search').hint, /Parallel/);
+  await settings.update({ skills: { enabled: { 'web-search': false } } });
+  assert.equal(row('web-search').enabled, false);
+});
