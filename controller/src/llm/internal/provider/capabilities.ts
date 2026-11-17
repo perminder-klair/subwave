@@ -6,7 +6,7 @@
 import type { ProviderOptions } from '@ai-sdk/provider-utils';
 import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway, type GatewayReasoningRule, type OpenAICompatibleGateway } from '../../../schemas/providers.js';
 import {
-  MANUAL_THINKING_BUDGETS, claudeModelId, gemmaModelId, manualThinkingClaudeModel, normalizeReasoningEffort,
+  MANUAL_THINKING_BUDGETS, MANUAL_THINKING_DEFAULT_BUDGET, claudeModelId, gemmaModelId, manualThinkingClaudeModel, normalizeReasoningEffort,
   openaiReasoningModelId, reasoningEffortOffered, type ReasoningEffort,
 } from '../../../schemas/reasoning.js';
 
@@ -206,8 +206,8 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // (forcedToolChoice), so their floor is 'minimal' — adaptive thinking at
     // effort low, the cheapest setting they accept.
     // A level replaces 'medium' wherever "on" sends it. On a manual-thinking
-    // id the operator's level goes out as a fixed budget instead
-    // (anthropicThinkingBudget), never alongside this.
+    // id every level, Default included (#2357), goes out as a fixed budget
+    // instead (anthropicThinkingBudget), never alongside this.
     reasoningLevel: ({ modelId, reasoning, forceNoThink, effort }) => {
       if (thinkingMandatoryModel(modelId)) return reasoning ? onLevel(effort, 'medium') : 'minimal';
       return reasoning && !forceNoThink ? onLevel(effort, 'medium') : 'none';
@@ -475,11 +475,12 @@ export function reasoningFor(
 
 // The fixed thinking budget for a native-Anthropic, manual-thinking Claude leg
 // (manualThinkingClaudeModel) at the operator's level, or null. Only while
-// reasoning is on, the call isn't forcing a tool (forceNoThink wins, as
-// Claude rejects a forced tool while thinking), and the level isn't 'default'
-// (which keeps the SDK's own medium, 19,200 tokens on a 64k model). Never for
-// an adaptive id, which answers a budget with a 400, nor through a proxy,
-// which only takes reasoning_effort.
+// reasoning is on and the call isn't forcing a tool (forceNoThink wins, as
+// Claude rejects a forced tool while thinking). 'default' gets
+// MANUAL_THINKING_DEFAULT_BUDGET, not the SDK's medium (19,200 tokens on a 64k
+// model): the one place Default is not today's "On" (#2357). Never for an
+// adaptive id, which answers a budget with a 400, nor through a proxy, which
+// only takes reasoning_effort.
 export function anthropicThinkingBudget(
   cfg: any,
   { forceNoThink = false }: { forceNoThink?: boolean } = {},
@@ -487,7 +488,7 @@ export function anthropicThinkingBudget(
   if (cfg?.provider !== 'anthropic' || cfg?.reasoning !== true || forceNoThink) return null;
   if (!manualThinkingClaudeModel(cfg?.model)) return null;
   const effort = effectiveReasoningEffort(cfg);
-  return effort === 'default' ? null : MANUAL_THINKING_BUDGETS[effort];
+  return effort === 'default' ? MANUAL_THINKING_DEFAULT_BUDGET : MANUAL_THINKING_BUDGETS[effort];
 }
 
 // The construction-time reasoning effort for an OpenRouter leg with reasoning

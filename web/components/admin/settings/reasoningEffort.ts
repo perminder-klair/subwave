@@ -47,10 +47,10 @@ const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
 export function reasoningEffortHint(leg: ReasoningLegView): string {
   const defaultBudget = leg.provider === 'anthropic' ? manualThinkingDefaultBudget(leg.model) : null;
   if (defaultBudget != null) {
-    const { low, medium, high } = MANUAL_THINKING_BUDGETS;
-    return `Default: up to ~${kTokens(defaultBudget)} thinking tokens per reply on this model; `
-      + `Low ${kTokens(low)}, Medium ${kTokens(medium)}, High ${kTokens(high)}. A DJ line is about 150 tokens, `
-      + 'so Low is usually plenty.';
+    const { medium, high } = MANUAL_THINKING_BUDGETS;
+    return `Thinking tokens per reply on this model: Default and Low up to ~${kTokens(defaultBudget)}, `
+      + `Medium ${kTokens(medium)}, High ${kTokens(high)}. A DJ line is about 150 tokens, `
+      + 'so the default is usually plenty.';
   }
   const base = 'Default keeps what On has always sent. Low, Medium and High set the model’s reasoning effort.';
   if (leg.provider === 'deepseek') return `${base} DeepSeek treats Medium as High.`;

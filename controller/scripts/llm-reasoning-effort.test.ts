@@ -4,12 +4,15 @@
 // The rules pinned here:
 //   1. 'default' (and an absent or unknown value) is byte-identical to the
 //      per-call options develop sent before the field, on every provider, both
-//      reasoning states and forced/unforced calls (fixture snapshot);
+//      reasoning states and forced/unforced calls (fixture snapshot), with one
+//      announced exception (#2357): a native-Anthropic manual-thinking Claude
+//      leg with reasoning on and no forced tool sends the fixed
+//      MANUAL_THINKING_DEFAULT_BUDGET (1,024) instead of the SDK's medium;
 //   2. a leg that can't express a level sends exactly that too, whatever level
 //      is saved;
 //   3. each offered provider's level reaches the wire, in the SDK's own field;
 //   4. manual-thinking Claude (the SDK's supportsAdaptiveThinking:false set)
-//      takes a fixed 1,024 / 2,048 / 4,096 budget with top-level `reasoning`
+//      takes a fixed 1,024 (default and low) / 2,048 / 4,096 budget with top-level `reasoning`
 //      unset, adaptive and unknown ids take the effort, and a proxy never gets
 //      a budget;
 //   5. forceNoThink beats every level;
@@ -40,6 +43,7 @@ const { planLlmSwap } = await import('../src/settings/llm-swap.js');
 const { llmCallOptions, reasoningFor, anthropicThinkingBudget } = await import('../src/llm/internal/provider/capabilities.js');
 const {
   REASONING_EFFORTS, reasoningEffortOffered, manualThinkingClaudeModel, manualThinkingDefaultBudget,
+  MANUAL_THINKING_DEFAULT_BUDGET,
 } = await import('../src/schemas/reasoning.js');
 const { openaiCompatibleGateway } = await import('../src/schemas/providers.js');
 const { generateText } = await import('ai');
@@ -54,14 +58,56 @@ const rowCfg = (r: any[], extra: Record<string, unknown> = {}) => ({
   geminiSafety: { hateSpeech: true }, ...extra,
 });
 
-test('rule 1: default, absent and unknown levels send exactly what develop sent, on every row', () => {
+// The #2357 carve-out from the baseline: native Anthropic, a manual-thinking
+// id, reasoning on, no forced tool. Exactly these rows change, and only to the
+// fixed default budget.
+const lowersDefaultBudget = (r: any[]) =>
+  r[0] === 'anthropic' && manualThinkingClaudeModel(r[2]) && r[3] === 1 && r[4] === 0;
+const DEFAULT_BUDGET_OUT = { reasoning: undefined, providerOptions: { anthropic: { thinking: { type: 'enabled', budgetTokens: 1024 } } } };
+
+test('rule 1: default, absent and unknown levels send exactly what develop sent, on every row but the #2357 carve-out', () => {
   assert.ok(BASELINE.rows.length > 1000, 'the fixture covers the grid');
+  assert.equal(MANUAL_THINKING_DEFAULT_BUDGET, 1024);
+  let carved = 0;
   for (const r of BASELINE.rows) {
-    const want = ser(BASELINE.outputs[r[5]]);
+    const carve = lowersDefaultBudget(r);
+    if (carve) {
+      carved++;
+      // What Default used to send there: the SDK's medium, 30% of the model max.
+      assert.equal(ser(BASELINE.outputs[r[5]]), ser({ reasoning: 'medium' }), `${r.slice(0, 5).join(' | ')} was medium`);
+    }
+    const want = ser(carve ? DEFAULT_BUDGET_OUT : BASELINE.outputs[r[5]]);
     for (const extra of [{}, { reasoningEffort: 'default' }, { reasoningEffort: 'ultra' }, { reasoningEffort: 3 }]) {
       const got = ser(llmCallOptions(rowCfg(r, extra), { forceNoThink: r[4] === 1 }));
       assert.equal(got, want, `${r.slice(0, 5).join(' | ')} with ${JSON.stringify(extra)}`);
     }
+  }
+  assert.ok(carved > 0, 'the grid has manual-thinking Claude rows');
+});
+
+test('#2357: Default lowers only native manual-thinking Claude; adaptive ids, proxies, gateways and forced calls are unchanged', () => {
+  for (const model of ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-opus-4-1', 'claude-opus-4-20250514', 'claude-3-7-sonnet-latest']) {
+    for (const extra of [{}, { reasoningEffort: 'default' }]) {
+      const cfg = { provider: 'anthropic', model, reasoning: true, ...extra };
+      assert.deepEqual(llmCallOptions(cfg), DEFAULT_BUDGET_OUT, `${model} ${JSON.stringify(extra)}`);
+      assert.equal(anthropicThinkingBudget(cfg), 1024);
+      assert.deepEqual(llmCallOptions(cfg, { forceNoThink: true }), { reasoning: 'none' }, `${model}: forced stays off`);
+      assert.deepEqual(llmCallOptions({ ...cfg, reasoning: false }), { reasoning: 'none' }, `${model}: off stays off`);
+    }
+  }
+  const unchanged: [Record<string, unknown>, unknown][] = [
+    [{ provider: 'anthropic', model: 'claude-opus-4-7' }, { reasoning: 'medium' }],
+    [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }, { reasoning: 'medium' }],
+    [{ provider: 'anthropic', model: 'claude-sonnet-5-5' }, { reasoning: 'medium' }],
+    [{ provider: 'anthropic', model: 'claude-unknown-9' }, { reasoning: 'medium' }],
+    [{ provider: 'openai-compatible', compatibleMode: 'hosted', model: 'claude-sonnet-4-5' }, { reasoning: 'medium' }],
+    [{ provider: 'requesty', model: 'anthropic/claude-sonnet-4-5' }, { reasoning: undefined }],
+    [{ provider: 'gateway', model: 'anthropic/claude-sonnet-4.5' }, { reasoning: undefined }],
+  ];
+  for (const [leg, want] of unchanged) {
+    const cfg = { ...leg, reasoning: true, reasoningEffort: 'default' };
+    assert.deepEqual(llmCallOptions(cfg), want, JSON.stringify(leg));
+    assert.equal(anthropicThinkingBudget(cfg), null, `${JSON.stringify(leg)}: no budget`);
   }
 });
 
@@ -113,11 +159,12 @@ test('manual vs adaptive Claude ids mirror the SDK (unknown ids are adaptive; 3-
     'claude-unknown-9', 'claude-sonnet-4', 'gpt-5', ''];
   for (const id of manual) assert.equal(manualThinkingClaudeModel(id), true, id);
   for (const id of adaptive) assert.equal(manualThinkingClaudeModel(id), false, id);
-  // The hint's "default" numbers: the SDK's medium, 30% of the model max.
-  assert.equal(manualThinkingDefaultBudget('claude-sonnet-4-5'), 19200);
-  assert.equal(manualThinkingDefaultBudget('claude-opus-4-1'), 9600);
-  assert.equal(manualThinkingDefaultBudget('claude-3-7-sonnet-latest'), 1229);
+  // The hint's "default" number: the fixed default budget on every manual id (#2357).
+  assert.equal(manualThinkingDefaultBudget('claude-sonnet-4-5'), 1024);
+  assert.equal(manualThinkingDefaultBudget('claude-opus-4-1'), 1024);
+  assert.equal(manualThinkingDefaultBudget('claude-3-7-sonnet-latest'), 1024);
   assert.equal(manualThinkingDefaultBudget('claude-opus-4-7'), null);
+  assert.equal(manualThinkingDefaultBudget('gpt-5'), null);
 });
 
 test('rule 4: manual Claude takes fixed budgets with top-level reasoning unset; adaptive takes the level', () => {
@@ -232,9 +279,21 @@ test('rule 4 on the wire: manual Claude budgets, and forced calls switch thinkin
     const forced = await wireBody(cfg, true);
     assert.deepEqual(forced.body.thinking, { type: 'disabled' }, `${level}: forced`);
   }
-  // Default keeps the SDK's medium: 19,200 on a 64k model, exactly as today.
-  const { body } = await wireBody({ provider: 'anthropic', model: 'claude-sonnet-4-5', apiKey: 'k', reasoning: true, reasoningEffort: 'default' });
-  assert.deepEqual(body.thinking, { type: 'enabled', budget_tokens: 19200 });
+  // Default is the fixed 1,024 budget (#2357), never the SDK's 19,200 medium,
+  // whether the level is saved as default or absent (a pre-field "On").
+  for (const extra of [{ reasoningEffort: 'default' }, {}]) {
+    const cfg = { provider: 'anthropic', model: 'claude-sonnet-4-5', apiKey: 'k', reasoning: true, ...extra };
+    const { body } = await wireBody(cfg);
+    assert.deepEqual(body.thinking, { type: 'enabled', budget_tokens: 1024 }, JSON.stringify(extra));
+    assert.equal(body.max_tokens, 1124);
+    assert.equal(body.output_config, undefined);
+    const forced = await wireBody(cfg, true);
+    assert.deepEqual(forced.body.thinking, { type: 'disabled' }, 'default, forced');
+  }
+  // An adaptive id at Default keeps the SDK's adaptive medium effort.
+  const adaptive = await wireBody({ provider: 'anthropic', model: 'claude-opus-4-7', apiKey: 'k', reasoning: true, reasoningEffort: 'default' });
+  assert.equal(adaptive.body.thinking?.type, 'adaptive');
+  assert.equal(adaptive.body.output_config?.effort, 'medium');
 });
 
 test('rule 6: OpenRouter effort keys the client cache; default shares the old instance', () => {
