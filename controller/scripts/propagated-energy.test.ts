@@ -241,8 +241,11 @@ test('with both options off (the default) the pass only corrects propagated rows
   const off = runPropagatedEnergyPass();
   assert.equal(db.getTrack('offBlank')!.energy, null, 'no fill unless the operator opted in');
   assert.equal(db.getTrack('judged')!.energy, 'low', 'no overrule unless the operator opted in');
-  assert.equal(off.fillScope, 0);
-  assert.equal(off.overruleScope, 0);
+  assert.deepEqual(
+    Object.keys(off).sort(),
+    ['agreed', 'corrected', 'scope', 'skipped', 'undecided'],
+    "with both switches off the result is the correction's alone, as before the switches existed",
+  );
   const { DEFAULTS } = await import('../src/settings/defaults.js');
   assert.deepEqual(audioEnergyOptions(DEFAULTS), { fillEmpty: false, overruleLlm: false }, 'off unless the operator opted in');
 });
@@ -280,7 +283,81 @@ test('re-running is idempotent — nothing left to correct', () => {
   const again = runPropagatedEnergyPass();
   assert.equal(again.corrected, 0, 'the second pass changes nothing');
   assert.equal(again.agreed, 2, 'both decisive rows now agree with the audio');
-  assert.equal(again.fillScope, 0, 'every fillable empty energy was filled');
+  assert.deepEqual(
+    db.emptyEnergyTracksWithAudioScores().map((r) => r.id),
+    ['offBlank'],
+    'every fillable empty energy was filled, bar the one the switches-off run left',
+  );
+});
+
+// The pass's log lines, captured from its console output.
+function logsOf(run: () => void): string[] {
+  const lines: string[] = [];
+  const orig = console.log;
+  console.log = (...args: unknown[]) => {
+    const line = args.map(String).join(' ');
+    if (line.startsWith('[audio-energy] ')) lines.push(line.slice('[audio-energy] '.length));
+  };
+  try {
+    run();
+  } finally {
+    console.log = orig;
+  }
+  return lines;
+}
+
+// Runs fn against a library whose score maps are all hidden, then puts them
+// back: the case where the pass has nothing in any scope.
+function withNoScores<T>(fn: () => T): T {
+  const sql = db.requireDb();
+  sql.exec('SAVEPOINT no_scores');
+  try {
+    sql.exec('UPDATE tracks SET audio_mood_scores_json = NULL');
+    return fn();
+  } finally {
+    sql.exec('ROLLBACK TO no_scores');
+    sql.exec('RELEASE no_scores');
+  }
+}
+
+test('with both switches off, an empty library skips exactly as before the switches', () => {
+  let res!: ReturnType<typeof runPropagatedEnergyPass>;
+  const logs = logsOf(() => { res = withNoScores(() => runPropagatedEnergyPass()); });
+  assert.deepEqual(res, { scope: 0, corrected: 0, agreed: 0, undecided: 0, skipped: 'no propagated tracks with audio scores' });
+  assert.deepEqual(logs, [], 'and logs nothing, as before');
+});
+
+test('with both switches off, the log line is the correction sentence alone', () => {
+  const logs = logsOf(() => runPropagatedEnergyPass());
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^Audio-derived energy over \d+ propagated tracks — \d+ corrected, \d+ confirmed, \d+ left as-is \(audio not decisive\)$/);
+});
+
+test('a switch that is on says so even with nothing to do', () => {
+  let res!: ReturnType<typeof runPropagatedEnergyPass>;
+  const idle = logsOf(() => { res = withNoScores(() => runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: true })); });
+  assert.equal(res.skipped, 'no tracks with audio scores for this pass');
+  assert.equal(res.fillScope, 0);
+  assert.deepEqual(res.filled, { high: 0, medium: 0, low: 0 });
+  assert.equal(res.overruleScope, 0);
+  assert.equal(res.overruled, 0);
+  assert.equal(idle.length, 1);
+  assert.match(idle[0], /no empty energies to fill/);
+  assert.match(idle[0], /no LLM energies with audio scores to check/);
+
+  // With rows to correct but none to fill: on reads "nothing to fill", off says nothing.
+  const sql = db.requireDb();
+  sql.exec('SAVEPOINT no_blank');
+  try {
+    sql.exec("UPDATE tracks SET audio_mood_scores_json = NULL WHERE id = 'offBlank'");
+    const on = logsOf(() => runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false }));
+    assert.match(on.join('\n'), /; no empty energies to fill$/);
+    const off = logsOf(() => runPropagatedEnergyPass());
+    assert.doesNotMatch(off.join('\n'), /empty energ/);
+  } finally {
+    sql.exec('ROLLBACK TO no_blank');
+    sql.exec('RELEASE no_blank');
+  }
 });
 
 // Last, so its rows sit outside the idempotence check above. The fill reads its

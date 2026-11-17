@@ -33,28 +33,66 @@ export function audioEnergyOptions(s: { embedding: { audioEnergy: AudioEnergyOpt
 
 type Counts = { high: number; medium: number; low: number };
 
+// The correction's fields are the pass's result as it was before the two
+// switches existed. Each switch's fields are present only while it is on, so
+// with both off (the default) an upgraded station gets the same result, its
+// skip reason included, and a reader can tell "off" from "on, nothing to do".
 export interface PropagatedEnergyStats {
   scope: number;      // propagated tracks carrying audio scores
   corrected: number;  // rows whose energy the audio actually changed
   agreed: number;     // rows where the audio confirmed the propagated value
   undecided: number;  // rows where the audio had no decisive answer
-  fillScope: number;  // tagged rows with audio scores and no energy (0 when fill is off)
-  filled: Counts;     // empty energies given one
-  overruleScope: number; // LLM energies with audio scores (0 when overrule is off)
-  overruled: number;  // LLM energies the audio replaced
+  fillScope?: number;  // fillEmpty on: tagged rows with audio scores and no energy
+  filled?: Counts;     // fillEmpty on: empty energies given one, by value
+  overruleScope?: number; // overruleLlm on: LLM energies with audio scores
+  overruled?: number;  // overruleLlm on: LLM energies the audio replaced
   skipped: string | null;
 }
 
 const fmt = (n: number) => n.toLocaleString('en-GB');
 
+// The fields of the switches that are on, from what each step did.
+function switchStats(
+  opts: AudioEnergyOptions,
+  fillScope: number,
+  filled: Counts,
+  overruleScope: number,
+  overruled: number,
+): Partial<PropagatedEnergyStats> {
+  return {
+    ...(opts.fillEmpty ? { fillScope, filled } : {}),
+    ...(opts.overruleLlm ? { overruleScope, overruled } : {}),
+  };
+}
+
+// One log part per switch that is on, nothing for one that is off.
+function switchLogParts(stats: Partial<PropagatedEnergyStats>): string[] {
+  const parts: string[] = [];
+  if (stats.filled && stats.fillScope !== undefined) {
+    const f = stats.filled;
+    parts.push(
+      stats.fillScope === 0
+        ? 'no empty energies to fill'
+        : `${fmt(f.high + f.medium + f.low)} of ${fmt(stats.fillScope)} empty energies filled from the audio ` +
+            `(${fmt(f.high)} high, ${fmt(f.medium)} medium, ${fmt(f.low)} low)`,
+    );
+  }
+  if (stats.overruled !== undefined && stats.overruleScope !== undefined) {
+    parts.push(
+      stats.overruleScope === 0
+        ? 'no LLM energies with audio scores to check'
+        : `${fmt(stats.overruled)} of ${fmt(stats.overruleScope)} LLM energies overruled by strongly decisive audio`,
+    );
+  }
+  return parts;
+}
+
 export function runPropagatedEnergyPass(
   opts: AudioEnergyOptions = { fillEmpty: false, overruleLlm: false },
 ): PropagatedEnergyStats {
   const none: Counts = { high: 0, medium: 0, low: 0 };
-  const empty = {
-    scope: 0, corrected: 0, agreed: 0, undecided: 0,
-    fillScope: 0, filled: none, overruleScope: 0, overruled: 0,
-  };
+  const empty = { scope: 0, corrected: 0, agreed: 0, undecided: 0 };
+  const anySwitch = opts.fillEmpty || opts.overruleLlm;
 
   const rows = db.propagatedTracksWithAudioScores();
   // Each scope is read once. The fill's rows are read before step 1 writes,
@@ -63,7 +101,10 @@ export function runPropagatedEnergyPass(
   const emptyRows = opts.fillEmpty ? db.emptyEnergyTracksWithAudioScores() : [];
   const overruleRows = opts.overruleLlm ? db.llmEnergyTracksWithAudioScores() : [];
   if (rows.length === 0 && emptyRows.length === 0 && overruleRows.length === 0) {
-    return { ...empty, skipped: 'no tracks with audio scores for this pass' };
+    if (!anySwitch) return { ...empty, skipped: 'no propagated tracks with audio scores' };
+    const idle = switchStats(opts, 0, { ...none }, 0, 0);
+    logEvent('info', `Audio-derived energy: nothing to do — ${['no propagated tracks with audio scores', ...switchLogParts(idle)].join('; ')}`);
+    return { ...empty, ...idle, skipped: 'no tracks with audio scores for this pass' };
   }
 
   // Baselines come from the WHOLE library, never a subset (that would be a
@@ -77,7 +118,12 @@ export function runPropagatedEnergyPass(
     ),
   );
   if (!baselines) {
-    return { ...empty, scope: rows.length, skipped: 'library too small to calibrate against' };
+    return {
+      ...empty,
+      scope: rows.length,
+      ...switchStats(opts, 0, { ...none }, 0, 0),
+      skipped: 'library too small to calibrate against',
+    };
   }
 
   const updates: Array<{ id: string; energy: string }> = [];
@@ -120,19 +166,19 @@ export function runPropagatedEnergyPass(
     overruled = db.overruleTrackEnergyBulk(changes);
   }
 
-  const parts = [
-    `Audio-derived energy over ${fmt(rows.length)} propagated tracks — ` +
-      `${fmt(updates.length)} corrected, ${fmt(agreed)} confirmed, ` +
-      `${fmt(undecided)} left as-is (audio not decisive)`,
-  ];
-  if (fillRows.length > 0) {
-    parts.push(
-      `${fmt(filled.high + filled.medium + filled.low)} of ${fmt(fillRows.length)} empty energies filled from the audio ` +
-        `(${fmt(filled.high)} high, ${fmt(filled.medium)} medium, ${fmt(filled.low)} low)`,
+  const switched = switchStats(opts, fillRows.length, filled, overruleRows.length, overruled);
+  const parts = switchLogParts(switched);
+  // The correction's sentence is the one an upgraded station logged before the
+  // switches; with no propagated rows (only reached with a switch on) it says
+  // nothing, so it is left out.
+  if (rows.length > 0) {
+    parts.unshift(
+      `Audio-derived energy over ${fmt(rows.length)} propagated tracks — ` +
+        `${fmt(updates.length)} corrected, ${fmt(agreed)} confirmed, ` +
+        `${fmt(undecided)} left as-is (audio not decisive)`,
     );
-  }
-  if (overruleRows.length > 0) {
-    parts.push(`${fmt(overruled)} of ${fmt(overruleRows.length)} LLM energies overruled by strongly decisive audio`);
+  } else {
+    parts.unshift('Audio-derived energy: no propagated tracks with audio scores');
   }
   logEvent('success', parts.join('; '));
 
@@ -141,10 +187,7 @@ export function runPropagatedEnergyPass(
     corrected: updates.length,
     agreed,
     undecided,
-    fillScope: fillRows.length,
-    filled,
-    overruleScope: overruleRows.length,
-    overruled,
+    ...switched,
     skipped: null,
   };
 }
