@@ -57,9 +57,12 @@ export function runPropagatedEnergyPass(
   };
 
   const rows = db.propagatedTracksWithAudioScores();
-  const fillAny = opts.fillEmpty && db.emptyEnergyTracksWithAudioScores().length > 0;
+  // Each scope is read once. The fill's rows are read before step 1 writes,
+  // so the rows step 1 settles are taken out below, and the fill's write
+  // re-checks that each row is still empty.
+  const emptyRows = opts.fillEmpty ? db.emptyEnergyTracksWithAudioScores() : [];
   const overruleRows = opts.overruleLlm ? db.llmEnergyTracksWithAudioScores() : [];
-  if (rows.length === 0 && !fillAny && overruleRows.length === 0) {
+  if (rows.length === 0 && emptyRows.length === 0 && overruleRows.length === 0) {
     return { ...empty, skipped: 'no tracks with audio scores for this pass' };
   }
 
@@ -94,21 +97,17 @@ export function runPropagatedEnergyPass(
   }
   db.setTrackEnergyBulk(updates);
 
-  // Step 2 re-reads after step 1: a propagated row with no energy that the
-  // audio settled is step 1's.
-  const fillRows = opts.fillEmpty ? db.emptyEnergyTracksWithAudioScores() : [];
-  const filled = { ...none };
+  // Step 2: a propagated row with no energy that step 1 settled is step 1's.
+  const settled = new Set(updates.map((u) => u.id));
+  const fillRows = emptyRows.filter((r) => !settled.has(r.id));
+  let filled = { ...none };
   if (fillRows.length > 0) {
     const fills: Array<{ id: string; energy: keyof Counts }> = [];
     for (const row of fillRows) {
       const energy = audioEnergyFill(row.scores, baselines);
       if (energy) fills.push({ id: row.id, energy });
     }
-    if (db.fillEmptyTrackEnergyBulk(fills) > 0) {
-      // Counted from what is stored now, so a row a tag answer took first is
-      // not reported as filled.
-      for (const f of fills) if (db.getTrack(f.id)?.energy === f.energy) filled[f.energy] += 1;
-    }
+    filled = db.fillEmptyTrackEnergyBulk(fills);
   }
 
   let overruled = 0;

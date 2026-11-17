@@ -201,7 +201,7 @@ test('the fill never writes an operator row, an unscored row or an untagged row'
 test('the fill write loses to an energy that lands between the read and the write', () => {
   db.upsertTrackMeta('raced', { title: 'raced', artist: 'L', album: 'M', duration: 300 });
   db.upsertTrackTags('raced', { moods: ['night'], energy: 'low', source: 'llm', confidence: 0.8 });
-  assert.equal(db.fillEmptyTrackEnergyBulk([{ id: 'raced', energy: 'high' }]), 0);
+  assert.deepEqual(db.fillEmptyTrackEnergyBulk([{ id: 'raced', energy: 'high' }]), { high: 0, medium: 0, low: 0 });
   assert.equal(db.getTrack('raced')!.energy, 'low');
 });
 
@@ -281,4 +281,41 @@ test('re-running is idempotent — nothing left to correct', () => {
   assert.equal(again.corrected, 0, 'the second pass changes nothing');
   assert.equal(again.agreed, 2, 'both decisive rows now agree with the audio');
   assert.equal(again.fillScope, 0, 'every fillable empty energy was filled');
+});
+
+// Last, so its rows sit outside the idempotence check above. The fill reads its
+// scope once, before step 1 writes, so the run has two things to get right: a
+// propagated row step 1 settles is step 1's, never also in the fill's scope;
+// and a row another writer fills between that read and the fill's write is
+// not counted as filled, even when it got the very value the fill would have
+// written (the count comes from the write, not from what is stored after it).
+test('the fill counts only its own writes, and never a row step 1 settled', () => {
+  const tagged = (id: string, source: TagSource, energy: 'low' | null, scores: Record<string, number>) => {
+    db.upsertTrackMeta(id, { title: id, artist: 'X', album: 'Y', duration: 300 });
+    db.upsertTrackTags(id, { moods: ['night'], energy, source, confidence: 0.6 });
+    db.setTrackAudioMoodScoresBulk([{ id, scores }]);
+  };
+  tagged('raceTrigger', 'propagated', 'low', LOUD);   // step 1 corrects it to high
+  tagged('propBlank', 'propagated', null, LOUD);      // step 1 settles it: high
+  tagged('raceTarget', 'llm', null, LOUD);            // the fill would write high
+  tagged('raceOther', 'llm', null, QUIET);            // the fill writes low
+  const sql = db.requireDb();
+  // Another writer, landing inside the pass: step 1's write to raceTrigger
+  // fills raceTarget with exactly the fill's own verdict.
+  sql.exec(`CREATE TEMP TRIGGER race_fill AFTER UPDATE OF energy ON tracks
+    WHEN NEW.id = 'raceTrigger'
+    BEGIN UPDATE tracks SET energy = 'high' WHERE id = 'raceTarget'; END`);
+  try {
+    const run = runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false });
+    assert.equal(db.getTrack('raceTrigger')!.energy, 'high', 'step 1 ran, so the other writer did too');
+    assert.equal(db.getTrack('propBlank')!.energy, 'high');
+    assert.equal(db.getTrack('raceTarget')!.energy, 'high');
+    assert.equal(db.getTrack('raceOther')!.energy, 'low');
+    // offBlank (left empty by the switches-off test) is the third row in scope.
+    assert.equal(db.getTrack('offBlank')!.energy, 'high');
+    assert.equal(run.fillScope, 3, "a row step 1 settled is not in the fill's scope");
+    assert.deepEqual(run.filled, { high: 1, medium: 0, low: 1 }, 'only rows the fill itself wrote are counted');
+  } finally {
+    sql.exec('DROP TRIGGER race_fill');
+  }
 });
