@@ -27,7 +27,19 @@ const {
   searchKeyProblem, searchReady, searchWeb,
 } = await import('../src/skills/web-search.js');
 const { checkCapabilities } = await import('../src/doctor/checks-station.js');
+const { SEARCH_PROVIDER_CATALOG } = await import('../src/schemas/settings.js');
 await settings.load();
+
+const catalogEntry = () => SEARCH_PROVIDER_CATALOG.find((p) => p.id === 'specstream');
+
+test('catalogue: the key link is a plain SpecStream page, with no tracking or referral query', () => {
+  const entry = catalogEntry();
+  assert.ok(entry && 'keyUrl' in entry);
+  const url = new URL(entry.keyUrl);
+  assert.equal(url.origin, 'https://specstream.ai');
+  assert.equal(url.search, '', 'no query string on the key link');
+  assert.equal(url.hash, '');
+});
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) =>
