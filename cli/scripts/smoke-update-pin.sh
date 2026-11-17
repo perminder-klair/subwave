@@ -9,7 +9,8 @@
 # with the new version), the same update run from another project's directory,
 # the ports `subwave listen prod` reads from the install's .env, and the values
 # the CLI reads from that .env with an inline comment (COMPOSE_FILE, and the pin
-# `subwave start` compares the running images against).
+# `subwave start` compares the running images against), and the line shapes
+# compose reads that a simpler parser misses (`export `, CRLF, `"v"#comment`).
 #
 # Usage: cli/scripts/smoke-update-pin.sh <path-to-compiled-subwave>
 #
@@ -62,7 +63,7 @@ case " $* " in
     if [ -n "${SUBWAVE_VERSION+set}" ]; then
       resolved="$SUBWAVE_VERSION"
     else
-      resolved="$(sed -n 's/^SUBWAVE_VERSION=//p' .env | tail -n 1)"
+      resolved="$(sed -n 's/\r$//; s/^\(export \)\{0,1\}SUBWAVE_VERSION=//p' .env | tail -n 1)"
     fi
     verb=pull
     case " $* " in *" up "*) verb=up ;; esac
@@ -139,7 +140,7 @@ run_update() { # run_update <name> <pin line> [VAR=value...]
   fi
 }
 
-pin_in() { sed -n 's/^SUBWAVE_VERSION=//p' "$scratch/$1/.env" | tail -n 1; }
+pin_in() { sed -n 's/\r$//; s/^\(export \)\{0,1\}SUBWAVE_VERSION=//p' "$scratch/$1/.env" | tail -n 1; }
 resolved_by() { sed -n "s/^$2 //p" "$scratch/$1.log" 2>/dev/null || true; }
 
 check_first_run() { # check_first_run <name> <label>
@@ -217,6 +218,15 @@ scaffold ports-comment "CADDY_PORT=7788 # custom"
 listen ports-comment "$scratch/empty" -- --home "$scratch/ports-comment" listen prod
 check "ports, inline comment: the comment is dropped" \
   "http://localhost:7788/listen" "$(opened_by ports-comment)"
+# Compose reads an `export ` line, and ends a quoted value at its quote.
+scaffold ports-export "export CADDY_PORT=7788"
+listen ports-export "$scratch/empty" -- --home "$scratch/ports-export" listen prod
+check "ports, export prefix: listen reads the exported line" \
+  "http://localhost:7788/listen" "$(opened_by ports-export)"
+scaffold ports-quoted-hash 'CADDY_PORT="7788"#custom'
+listen ports-quoted-hash "$scratch/empty" -- --home "$scratch/ports-quoted-hash" listen prod
+check "ports, quoted value then #: the quote ends the value" \
+  "http://localhost:7788/listen" "$(opened_by ports-quoted-hash)"
 
 # A COMPOSE_FILE overlay in the install's .env can carry an inline comment,
 # which compose drops. update has to pass the overlay as `-f overlay.yml`, not
@@ -242,6 +252,22 @@ run_cli start-mismatch "$scratch/empty" \
   -- --home "$scratch/start-match" start || true
 check "start, commented pin: other images still warn" "warning" \
   "$(grep -q "$mismatch_warning" "$scratch/start-mismatch.out" && echo warning || echo "no warning")"
+
+# Compose reads an `export SUBWAVE_VERSION=` pin and a CRLF .env, so update has
+# to move those pins too, keeping the prefix and the line end.
+run_update export-pin "export SUBWAVE_VERSION=$old_pin"
+check_first_run export-pin "export pin"
+check "export pin: the prefix stays" "export SUBWAVE_VERSION=$target" \
+  "$(grep SUBWAVE_VERSION "$scratch/export-pin/.env")"
+scaffold crlf-pin "SUBWAVE_VERSION=$old_pin"
+sed -i 's/$/\r/' "$scratch/crlf-pin/.env"
+if ! run_cli crlf-pin "$scratch/crlf-pin" SUBWAVE_HOME="$scratch/crlf-pin" -- update; then
+  echo "FAIL - crlf-pin: subwave update exited non-zero"
+  failures=$((failures + 1))
+fi
+check_first_run crlf-pin "CRLF .env"
+check "CRLF .env: every line keeps its CR" "0" \
+  "$(grep -cv $'\r$' "$scratch/crlf-pin/.env" || true)"
 
 if [ "$failures" -ne 0 ]; then
   echo

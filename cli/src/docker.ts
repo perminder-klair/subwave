@@ -3,7 +3,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import type { ComposeFile } from './compose.ts';
-import { getRootEnv, getSubwaveHome, parseEnvFile, stripEnvComment } from './util.ts';
+import { getRootEnv, getSubwaveHome, readEnvValue } from './util.ts';
 
 function args(file: ComposeFile, rest: string[]): string[] {
   return ['compose', ...composeFileArgs(file), ...rest];
@@ -11,7 +11,7 @@ function args(file: ComposeFile, rest: string[]): string[] {
 /** Preserve a configured Compose overlay when the CLI must pass -f explicitly. */
 export function composeFileArgs(file: ComposeFile): string[] {
   const fromEnv =
-    process.env.COMPOSE_FILE?.trim() || stripEnvComment(parseEnvFile(getRootEnv()).COMPOSE_FILE);
+    process.env.COMPOSE_FILE?.trim() || readEnvValue(getRootEnv(), 'COMPOSE_FILE');
   if (!fromEnv) return ['-f', file.file];
   const configured = fromEnv.split(":").map((part) => part.trim()).filter(Boolean);
   const home = getSubwaveHome();

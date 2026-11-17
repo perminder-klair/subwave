@@ -59,23 +59,44 @@ export function parseEnvFile(path: string): Record<string, string> {
   return out;
 }
 
-// parseEnvFile keeps an inline comment (`CADDY_PORT=8080 # custom`), and then
-// leaves a quoted value quoted. Compose drops the comment and the quotes, so a
-// caller comparing or using the value as compose would runs it through this.
-// It covers the shapes a hand-edited version, port or path takes: `v`, `"v"`,
-// `'v'`, each with or without a trailing ` # comment`. It is not a full dotenv
-// parser: a ` #` inside quotes (`'/srv/a # b'`) is cut there, where compose
-// keeps it.
-export function stripEnvComment(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  let v = value.trim().replace(/\s+#.*$/, '');
-  if (
-    v.length >= 2 &&
-    ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))
-  ) {
-    v = v.slice(1, -1);
+// The text after `=` on a .env line, read as docker compose reads it. A quoted
+// value ends at its closing quote, so a ` # ` inside it stays and anything after
+// it (`"8080"#x`, `"8080" # x`) goes; `\"` is a literal quote inside double
+// quotes. An unquoted value is cut at its first ` #` (a space, not a tab, as
+// compose does) and trimmed. A trailing CR goes with the whitespace. Compose's
+// `${VAR}` interpolation is not done.
+export function envValue(raw: string): string {
+  const v = raw.trim();
+  const q = v[0];
+  if (q === '"' || q === "'") {
+    let out = '';
+    for (let i = 1; i < v.length; i++) {
+      const c = v[i] as string;
+      if (c === q) return out;
+      if (q === '"' && c === '\\' && v[i + 1] === '"') { out += '"'; i++; continue; }
+      out += c;
+    }
+    // Unterminated: compose refuses the file. Keep the text as written.
+    return v;
   }
-  return v;
+  const cut = v.indexOf(' #');
+  return (cut === -1 ? v : v.slice(0, cut)).trimEnd();
+}
+
+// One key from a .env file, as compose resolves it: the last assignment wins,
+// an `export ` prefix is allowed, and CRLF line ends work. parseEnvFile is not
+// that: it keeps an inline comment, unquotes a value only when the line ends in
+// its quote, and skips `export` and CRLF lines. A value the CLI compares with or
+// hands to compose is read through this. undefined when the file or key is
+// missing.
+export function readEnvValue(path: string, key: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  let found: string | undefined;
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/);
+    if (m && m[1] === key) found = envValue(m[2] ?? '');
+  }
+  return found;
 }
 
 // Quote a .env value so docker compose reads it literally. Compose interpolates

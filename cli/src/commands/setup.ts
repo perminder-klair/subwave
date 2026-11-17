@@ -10,7 +10,7 @@ import {
   getRootEnv,
   getRootEnvExample,
   parseEnvFile,
-  stripEnvComment,
+  readEnvValue,
   readSetupConfig,
   writeEnvFile,
   have,
@@ -477,7 +477,7 @@ async function runBashSetup(env: NodeJS.ProcessEnv): Promise<void> {
   // Same precedence as compose: a shell export, else the install's .env. A
   // relative path is relative to the install, as compose resolves it.
   const stateDirRaw =
-    env.STATE_DIR?.trim() || stripEnvComment(parseEnvFile(getRootEnv()).STATE_DIR);
+    env.STATE_DIR?.trim() || readEnvValue(getRootEnv(), 'STATE_DIR');
   const stateDir = resolve(getSubwaveHome(), stateDirRaw || 'state');
   if (!isCloneMode(getSubwaveHome())) {
     header('State directory perms (standalone install)');

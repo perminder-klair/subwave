@@ -13,7 +13,7 @@ import {
 import { composeUp, dockerSocketPermissionDenied } from '../docker.ts';
 import { waitForHealth, checkNeedsSetup } from '../api.ts';
 import { loadConfig, saveConfig } from '../config.ts';
-import { parseEnvFile, getRootEnv, stripEnvComment } from '../util.ts';
+import { getRootEnv, readEnvValue } from '../util.ts';
 import { ok, warn, err, info, muted, p, pc, pauseForEnter, header } from '../ui.ts';
 import { maybeStartWebDev } from '../web-dev.ts';
 
@@ -157,7 +157,7 @@ function warnIfVersionMismatch(file: ComposeFile | null): void {
   if (!expected) {
     // The comment and quotes go, as compose drops them, or a commented pin
     // reads as a mismatch on every start.
-    try { expected = stripEnvComment(parseEnvFile(getRootEnv()).SUBWAVE_VERSION); } catch { /* no .env yet */ }
+    try { expected = readEnvValue(getRootEnv(), 'SUBWAVE_VERSION'); } catch { /* no .env yet */ }
   }
   expected = expected || 'latest';
 

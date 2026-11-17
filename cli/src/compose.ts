@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { resolveSubwaveHome } from './home.ts';
-import { getSubwaveHome, parseEnvFile, stripEnvComment } from './util.ts';
+import { getSubwaveHome, readEnvValue } from './util.ts';
 
 // `prod-byo` is prod without the bundled Caddy: a prod sibling everywhere except
 // the URL helpers, which point at host-bound service ports, not the Caddy edge.
@@ -146,7 +146,7 @@ function byoPort(name: 'WEB_PORT' | 'CONTROLLER_PORT' | 'ICECAST_PORT' | 'CADDY_
   let raw = process.env[name]?.trim();
   if (!raw) {
     const r = resolveSubwaveHome();
-    raw = r ? stripEnvComment(parseEnvFile(resolve(r.home, '.env'))[name]) : undefined;
+    raw = r ? readEnvValue(resolve(r.home, '.env'), name) : undefined;
   }
   if (!raw) return fallback;
   const n = Number(raw);
