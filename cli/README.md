@@ -89,7 +89,7 @@ There are no unit tests, and CI does not typecheck this package — `lint.yml`
 covers `controller/`, `web/` and `mcp-subwave/` only. Run `npm run typecheck`
 yourself before pushing. Two CI jobs do look at `cli/`: the embedded-asset check
 below, and `cli-smoke.yml`, which compiles the binary on a pull request and runs
-`scripts/smoke-update-pin.sh` against it.
+`scripts/smoke-update-pin.sh` and `scripts/smoke-tty-prompt.sh` against it.
 
 ### Embedded assets
 
@@ -186,8 +186,10 @@ prompt sites (#2202). Any new build path must do both.
 
 Building needs Bun >= 1.3.3, the first release with the
 `--no-compile-autoload-dotenv` and `--no-compile-autoload-bunfig` flags the build
-scripts pass; an older Bun rejects them. CI pins Bun 1.4.4 in `publish-cli.yml`
-and `cli-smoke.yml`, and the two pins move together.
+scripts pass; an older Bun rejects them. CI pins Bun 1.3.3 in `publish-cli.yml`
+and `cli-smoke.yml`, and the two pins move together. Run all three smoke scripts
+on a new Bun before bumping the pin: a Bun 1.4.4 Linux binary cancels `init`'s
+first text prompt on Enter, which only `scripts/smoke-tty-prompt.sh` catches.
 
 ### Layout
 
