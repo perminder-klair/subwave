@@ -492,6 +492,8 @@ _cuda_retest_gap = CUDA_RETEST_MIN_S
 # Compute capability → the CUDA image's architecture tag for that card. The
 # tag table in docs/internals/infrastructure.md (#aio-cuda-tags) is the one
 # place that maps a tag to a build; this only names the card's row in it.
+# scripts/check-publish-matrix.test.ts pins these names to the publish
+# matrix's arch_tags, so the warning never names an unpublished tag.
 _ARCH_TAGS = (
     ((5, 0), "maxwell"),
     ((6, 0), "pascal"),

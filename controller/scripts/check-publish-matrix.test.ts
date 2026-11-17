@@ -11,6 +11,7 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import test from 'node:test';
 import { checkPublishMatrix, loadMatrix, WORKFLOW, type MatrixEntry } from './check-publish-matrix.js';
 
@@ -185,4 +186,24 @@ test('moving one tag in one image of the real workflow fails the check', () => {
   assert.deepEqual(checkPublishMatrix(include), [
     'subwave-aio-cuda:volta is on cu124 but subwave-analyzer-cuda:volta is on cu128; both CUDA images keep each tag on the same build',
   ]);
+});
+
+// The analyze worker names a card's tag in its fallback warning from its own
+// sm → tag table (_ARCH_TAGS in analyze_worker.py). A tag added to or renamed
+// in the matrix, or in that table, alone would have the warning point
+// operators at a tag that is never published.
+function workerArchTags(source: string): string[] {
+  const table = /^_ARCH_TAGS = \(\n([\s\S]*?)^\)/m.exec(source);
+  assert.ok(table, 'analyze_worker.py has an _ARCH_TAGS table');
+  return [...table[1].matchAll(/\(\(\d+, \d+\), "([a-z]+)"\)/g)].map((m) => m[1]);
+}
+
+test("the analyze worker's arch-tag table names exactly the published architecture tags", () => {
+  const worker = readFileSync(join(import.meta.dirname, 'analyze_worker.py'), 'utf8');
+  const fromWorker = workerArchTags(worker);
+  const published = loadMatrix(readFileSync(WORKFLOW, 'utf8'))
+    .filter((e) => e.image === 'subwave-analyzer-cuda')
+    .flatMap((e) => String(e.arch_tags ?? '').split(/\s+/).filter(Boolean));
+  assert.ok(fromWorker.length > 0, 'the table parsed');
+  assert.deepEqual([...fromWorker].sort(), [...published].sort());
 });
