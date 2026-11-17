@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-import { checkPublishMatrix, loadMatrix, WORKFLOW, type MatrixEntry } from './check-publish-matrix.js';
+import { checkPublishMatrix, loadMatrix, missingLockstepImages, WORKFLOW, type MatrixEntry } from './check-publish-matrix.js';
 
 // Today's shape: a single-build image beside the two subwave-aio-cuda builds.
 function matrix(): MatrixEntry[] {
@@ -185,6 +185,18 @@ test('moving one tag in one image of the real workflow fails the check', () => {
   cu128.arch_tags = `volta ${String(cu128.arch_tags)}`;
   assert.deepEqual(checkPublishMatrix(include), [
     'subwave-aio-cuda:volta is on cu124 but subwave-analyzer-cuda:volta is on cu128; both CUDA images keep each tag on the same build',
+  ]);
+});
+
+test('the real workflow builds both CUDA images, so the lockstep rule compares something', () => {
+  const include = loadMatrix(readFileSync(WORKFLOW, 'utf8'));
+  assert.deepEqual(missingLockstepImages(include), []);
+  const renamed = include.map((e) =>
+    e.image === 'subwave-analyzer-cuda' ? { ...e, image: 'subwave-analyzer-gpu' } : e,
+  );
+  assert.deepEqual(checkPublishMatrix(renamed), [], 'rule 3 alone passes a renamed image');
+  assert.deepEqual(missingLockstepImages(renamed), [
+    "no subwave-analyzer-cuda build, so the CUDA images' lockstep (rule 3) compares nothing",
   ]);
 });
 

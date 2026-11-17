@@ -154,12 +154,24 @@ export function checkPublishMatrix(include: MatrixEntry[]): string[] {
   return errors;
 }
 
+/**
+ * Rule 3 compares the CUDA images only when both are built, so the real
+ * workflow must build both: one renamed or dropped would otherwise pass the
+ * check with nothing compared. Fixtures that test one image alone skip this.
+ */
+export function missingLockstepImages(include: MatrixEntry[]): string[] {
+  const images = new Set(include.map((e) => text(e.image)));
+  return LOCKSTEP_IMAGES.filter((image) => !images.has(image)).map(
+    (image) => `no ${image} build, so the CUDA images' lockstep (rule 3) compares nothing`,
+  );
+}
+
 function main() {
   let errors: string[];
   let include: MatrixEntry[] = [];
   try {
     include = loadMatrix(readFileSync(WORKFLOW, 'utf8'));
-    errors = checkPublishMatrix(include);
+    errors = [...missingLockstepImages(include), ...checkPublishMatrix(include)];
   } catch (err) {
     errors = [(err as Error).message];
   }
