@@ -242,7 +242,10 @@ test('the count is written to state/library-count.json', async () => {
   assert.equal(stored.total, TOTAL_SONGS);
   assert.equal(stored.version, 1);
   assert.ok(stored.scannedAt);
-  assert.deepEqual(Object.keys(stored).sort(), ['scannedAt', 'total', 'version']);
+  // scanning/scanError describe this process and never persist. The vector
+  // freshness figures do (#2313), counted by the same refresh.
+  assert.deepEqual(Object.keys(stored).sort(), ['scannedAt', 'total', 'vectors', 'version']);
+  assert.deepEqual(Object.keys(stored.vectors).sort(), ['countedAt', 'dirty', 'forgottenSound', 'forgottenSoundQueued']);
 });
 
 test('a restarted controller serves the stored count, free, with its real age', async () => {

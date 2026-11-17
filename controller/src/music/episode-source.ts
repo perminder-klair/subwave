@@ -13,12 +13,17 @@ import { applyTrackFloor } from './track-floor.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
 import { mapPool } from '../util/async-pool.js';
 import { trackKey } from './recency.js';
+import { creditsArtist, songCredit } from './artist-credit.js';
 
 export interface ArtistEpisodeSource {
   kind: 'artist'; identity: string;
   artist: { id: string; name: string };
   tracks: PreparationTrack[];
   ids: Set<string>;
+  // When this airing of the episode began (the preparation occurrence's
+  // startsAt, epoch ms). The hard no-repeat guard holds what the airing has
+  // played since then (#2320); absent = unknown.
+  airingStartedAt?: number;
 }
 const catalogues = new Map<string, { at: number; artist: ArtistEpisodeSource['artist']; tracks: PreparationTrack[] }>();
 type EpisodeShow = NonNullable<ReturnType<typeof settings.resolveActiveShow>>;
@@ -33,18 +38,35 @@ export async function resolveArtistEpisodeSource(artistId: string, show: Episode
   if (!catalogue || Date.now() - catalogue.at > 60_000) {
     const artist = preparationArtistSchema.parse(await subsonic.getArtist(artistId));
     if (artist.id !== artistId) throw new Error('The preparation artist is not in this library');
-    const mirrored = db.tracksByArtistId(artistId);
+    const mirror = db.artistCatalogue(artistId, artist.album.map(album => album.id));
+    const mirrored = mirror.tracks;
     const expected = artist.album.reduce((n, album) => n + (album.songCount ?? 0), 0);
+    // Walked rows: like with like, the rows the mirror holds on the artist's
+    // albums against the songs Navidrome counts there. Any row it needs without
+    // album_artist_id (not walked since the column arrived) cannot be judged,
+    // so the rule before it stands, the artist's own rows against that count,
+    // and an upgraded station never does worse than before its next walk.
+    // Before the walk, only the artist's own rows count, as they did: a row the
+    // mirror holds only through a walked album_artist_id (a Trio record) must
+    // not make up for an own song the mirror never reached.
+    const covers = mirror.unwalked === 0 ? mirror.onAlbums >= expected
+      : mirrored.filter(track => track.artistId === artistId).length >= expected;
     let tracks: PreparationTrack[];
-    if (expected > 0 && artist.album.every(a => a.songCount != null) && mirrored.length >= expected) {
+    if (expected > 0 && artist.album.every(a => a.songCount != null) && covers) {
       tracks = mirrored;
     } else {
-      if (artist.album.length > 128) throw new Error('Artist catalogue is too large to fetch before playback; sync the library first');
+      if (artist.album.length > 128) throw new Error('Artist catalogue is too large to fetch before playback; run Library → Reconcile so the library mirror can answer it');
       const albums = await mapPool(artist.album, 4, async album => {
         const songs = z.array(preparationTrackSchema).parse(await subsonic.getAlbum(album.id));
-        return songs.filter(song => song.artistId === artistId || song.artists?.[0]?.id === artistId || song.albumArtists?.[0]?.id === artistId);
+        return songs.filter(song => creditsArtist(songCredit(song, album), artistId));
       });
-      tracks = albums.flat();
+      // The albums cover the records the artist is an album artist on; the
+      // mirror adds the tracks credited first to them on someone else's record,
+      // which getArtist does not list, so those survive either path (#2333).
+      // Both sides keep creditsArtist's set, so the merge adds no other kind.
+      const byId = new Map<string, PreparationTrack>();
+      for (const track of [...albums.flat(), ...mirrored]) if (!byId.has(track.id)) byId.set(track.id, track);
+      tracks = [...byId.values()];
     }
     catalogue = { at: Date.now(), artist: { id: artist.id, name: artist.name }, tracks };
     catalogues.set(artistId, catalogue);
@@ -56,6 +78,11 @@ export async function resolveArtistEpisodeSource(artistId: string, show: Episode
   if (show.playlistStrict && show.playlistIds.length) {
     const playlist = await resolveShowPlaylistPool(show);
     if (!playlist) throw new Error('The strict playlist could not be resolved for this artist episode');
+    // Judged on the whole catalogue, so the reason names the playlist only when
+    // it is the cause, not an exclusion or the blocklist that emptied it.
+    if (catalogue.tracks.length && !catalogue.tracks.some(t => playlist.ids.has(t.id))) {
+      throw new Error("None of this artist's tracks are in the show's playlists");
+    }
     tracks = tracks.filter(t => playlist.ids.has(t.id));
   }
   // Before the never-starve locks, so a lock that found only tagged tracks is

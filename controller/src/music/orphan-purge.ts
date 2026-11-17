@@ -49,9 +49,14 @@
 //   pass off the week only ends at the next manual pass.
 // - Delete failures are counted and reported, never thrown — a purge that
 //   cannot delete on a squashed share must keep running and keep saying so.
-// - Any mutation marks the usage snapshot stale (stem-cache's cached walk
-//   totals), so the next sweep re-measures instead of trusting those bytes,
-//   while the budget field keeps a flagged figure and its confirm.
+// - The moves keep the usage snapshot (stem-cache's cached walk totals) true:
+//   each moved dir is opened in the usage journal before its move and
+//   measured before and after (stemCache.StemDirWrites), and the totals move
+//   by exactly that, so the next read needs no walk of the cache. A walk that
+//   lands during the moves re-measures the dirs the journal names, and the
+//   pass settles against what that walk stored (music/stem-usage-policy.ts,
+//   #2317). Deletes from the quarantine change nothing there, since the
+//   quarantine is outside the total.
 // - One confirmed pass at a time (the cron, a manual confirm): a second one
 //   is refused while the first runs, so two never interleave their moves and
 //   each report is what its own pass did. A release that lands on a live slot
@@ -400,9 +405,15 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
   report.mismatchedCount = qplan.mismatched.length;
 
   if (opts.confirm) {
+    // What the moves add to or take off the cache total, measured the way its
+    // walk measures (the quarantine is outside that total, so a delete from
+    // it changes nothing there). Each dir is opened before its move, so a
+    // sweep or walk that lands during them knows to measure it again.
+    const usage = new stemCache.StemDirWrites();
     // 1. Releases first: an id that is both known now and sitting in the
     //    quarantine gets its copy back rather than being re-quarantined below.
     for (const name of toRelease) {
+      await usage.touch(name);
       try {
         await rename(path.join(qu, name), path.join(root, name));
       } catch { report.failed += 1; continue; }
@@ -447,6 +458,7 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
           report.freedBytes += stale.freedBytes;
           if (!stale.gone) { report.failed += 1; continue; }
         }
+        await usage.touch(name);
         try {
           await rename(from, to);
         } catch { report.failed += 1; continue; }
@@ -455,6 +467,8 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
         } catch {
           // Unstamped, the quarantine would have no age to keep it 7 days: undo
           // the move and leave the dir in the cache for the next pass.
+          // Stuck in the quarantine unstamped, it has left the cache total,
+          // which the settle measures either way.
           await rename(to, from).catch(() => {});
           report.failed += 1;
           continue;
@@ -463,11 +477,11 @@ async function purgePass(opts: Parameters<typeof runOrphanPurge>[0]): Promise<Pu
         report.quarantined += 1;
       }
     }
-    if (report.quarantined || report.deletedCount || report.released.length || report.freedBytes) {
-      // The usage snapshot cached the pre-purge totals; mark it so the next
-      // sweep walks again instead of trusting bytes that no longer exist.
-      await stemCache.markUsageStale();
-    }
+    // The usage snapshot cached the pre-purge totals. The moves were measured,
+    // so the totals move by exactly that and the next read needs no walk
+    // (stem-cache.ts, usage snapshot). Deleting aged quarantines alone touches
+    // nothing.
+    await usage.settle();
   } else {
     // Dry run: every count, zero mutations.
     report.quarantined = plan.quarantine.length;

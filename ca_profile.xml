@@ -26,6 +26,6 @@ port. After installing, finish setup in your browser at `/onboarding`
 > `docker-compose.yml` via the Compose Manager Plus plugin instead — see
 > docs/unraid.md.
   </Profile>
-  <Icon>https://raw.githubusercontent.com/perminder-klair/subwave/main/app/assets/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/getsubwave/app/main/assets/icon.png</Icon>
   <WebPage>https://github.com/perminder-klair/subwave</WebPage>
 </CommunityApplications>

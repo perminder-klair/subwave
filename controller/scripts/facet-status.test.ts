@@ -178,7 +178,9 @@ await test('a later full pass turns the tail ok at the current version', () => {
   });
   const r = rows('fresh');
   assert.equal(r.tail.status, 'ok');
-  assert.equal(r.tail.version, db.FACET_VERSIONS.tail);
+  // The end-of-file window: one below current until edges place it
+  // (tail-placement.test.ts).
+  assert.equal(r.tail.version, db.FACET_VERSIONS.tail - 1);
   assert.equal(r.tail.source, 'full');
 });
 
@@ -192,28 +194,30 @@ await test('a tail kept by COALESCE keeps the version it was measured at', () =>
     bpm: 128, musicalKey: 'F', source: 'full',
     outro: { startMs: 220_000, ending: 'cold' } as never, tailSilenceMs: 500, tailStartMs: 239_500,
   });
-  assert.equal(rows('fresh').tail.version, db.FACET_VERSIONS.tail);
+  assert.equal(rows('fresh').tail.version, db.FACET_VERSIONS.tail - 1, 'the end-of-file window');
 });
 
 await test('a tail version bump settles for a track whose tail is still unmeasurable', () => {
   db.upsertTrackMeta('notail', { title: 'notail', artist: 'A', album: 'B', duration: 240 });
+  // With edges stored, an unmeasurable answer is the placed window's own.
+  db.writeFacetResults('notail', { source: 'url', edges: { leadMs: 0, tailMs: 400, durationMs: 240_000 } });
   db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'full' });
   assert.equal(rows('notail').tail.status, 'unmeasurable');
   // Simulate FACET_VERSIONS.tail being bumped past the stored row.
   d.prepare(`UPDATE track_facet_status SET version = ? WHERE track_id = 'notail' AND facet = 'tail'`)
     .run(db.FACET_VERSIONS.tail - 1);
   assert.ok(db.facetNeedsIds('tail').includes('notail'));
-  // The retry still cannot measure the tail: that answer is the new version's.
-  db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'full' });
+  // The retry, placed from the edges, still cannot measure the tail: that
+  // answer is the new version's.
+  db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'full', tailVersion: 2 });
   const t = rows('notail').tail;
   assert.deepEqual([t.status, t.version, t.reason, t.source],
     ['unmeasurable', db.FACET_VERSIONS.tail, 'tail-not-measured', 'full']);
   assert.ok(!db.facetNeedsIds('tail').includes('notail'), 'a settled tail must leave the needs scope');
-  // Same for a capped retry: terminal, with the capped reason.
-  d.prepare(`UPDATE track_facet_status SET version = ? WHERE track_id = 'notail' AND facet = 'tail'`)
-    .run(db.FACET_VERSIONS.tail - 1);
+  // A capped retry read the end-of-file window, not the placed one: it keeps
+  // the capped reason and stays due (tail-placement.test.ts).
   db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'capped' });
-  assert.deepEqual([rows('notail').tail.version, rows('notail').tail.reason], [db.FACET_VERSIONS.tail, 'capped-download']);
+  assert.deepEqual([rows('notail').tail.version, rows('notail').tail.reason], [db.FACET_VERSIONS.tail - 1, 'capped-download']);
   assertConsistent();
 });
 
@@ -328,8 +332,12 @@ for (const facet of ['tail', 'loudness'] as const) {
 
   await test(`a first ${facet}-only unmeasurable answer survives resync and reopening`, async () => {
     const id = `terminal-${facet}`;
-    const reason = facet === 'tail' ? 'capped-download' : 'no-loudness-meter';
+    // A placed tail window is never refused for the cap, so a terminal tail
+    // answer is one the placed window gave.
+    const reason = facet === 'tail' ? 'tail-not-reached' : 'no-loudness-meter';
     db.upsertTrackMeta(id, { title: id, duration: 240 });
+    // A tail answer settles only once edges can place the window.
+    if (facet === 'tail') db.writeFacetResults(id, { source: 'url', edges: { leadMs: 0, tailMs: 400, durationMs: 240_000 } });
     db.writeFacetResults(id, { source: 'capped', [facet]: { unmeasurable: reason } });
     const expected = { status: 'unmeasurable', reason, version: db.FACET_VERSIONS[facet] };
     const answer = () => {

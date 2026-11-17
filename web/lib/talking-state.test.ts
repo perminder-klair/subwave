@@ -2,7 +2,7 @@
 // window opens when the listener HEARS a line — its live-edge stamp plus their
 // buffer (#1114/#1382) — and lasts the clip's length. Counted from the stamp
 // alone for 15s, it closed before a word was heard under the default 22s
-// buffer. Mirrors app/scripts/voice-turn.test.ts.
+// buffer. Mirrors getsubwave/app:scripts/voice-turn.test.ts.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';

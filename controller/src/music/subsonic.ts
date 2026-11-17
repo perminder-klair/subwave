@@ -15,6 +15,7 @@ import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 import { libraryMountProven } from './library-mount.js';
 import { STALE_SOCKET_RETRY_MS } from '../util/fetch-timeout.js';
 import { fileTitle, MAX_REPORTED_TITLE_BYTES, normalizeTitle, titleVerdict } from './tag-title.js';
+import { firstAlbumArtistId } from './artist-credit.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -860,16 +861,32 @@ export async function* iterateAllSongs({ requireComplete = false } = {}) {
           // station-archive entry inflating the album into a false anthology.
           trackArtists: songs.map((s) => s.artist),
         });
+        // What decides whether the album is filed under a label (album-kind
+        // labelOwner, applied by the walk with the library's artist index):
+        // one object, shared by every song of the album.
+        const albumOwner = suspicion.suspect
+          ? {
+              albumArtist: r.album?.artist ?? album.artist ?? null,
+              path: songs.find((s) => s.path)?.path ?? null,
+              trackArtists: songs.map((s) => s.artist),
+            }
+          : null;
         for (const s of songs) {
           yield {
             ...s,
             // A Child's albumId is optional in the spec; the album being
             // iterated is the authoritative fallback.
             albumId: s.albumId ?? r.album?.id ?? album.id ?? null,
+            // The album artist the era judgement keyed on, stored per track
+            // so the era review can key overrides without Navidrome.
+            albumArtist: r.album?.artist ?? album.artist ?? null,
+            // Its id, by the rule a prepared artist episode reads (#2333).
+            albumArtistId: firstAlbumArtistId(s, r.album ?? album),
             albumIsCompilation: isCompilation,
             albumOriginalYear: originalYear,
             albumEraUntrusted: suspicion.suspect,
             albumEraReason: suspicion.reason,
+            albumOwner,
           };
         }
       } catch (err) {

@@ -43,6 +43,7 @@ import {
 } from './settings/registry';
 import { Advanced, SectionChromeProvider } from './settings/section-chrome';
 import { SettingsSearch, type SettingsJump } from './settings/SettingsSearch';
+import { deepLinkJump, type SettingsQuery } from './settings/settings-link';
 import { TtsSection } from './settings/TtsSection';
 import { DjBehaviourSection } from './settings/DjBehaviourSection';
 import { LlmSection } from './settings/LlmSection';
@@ -459,6 +460,22 @@ export default function SettingsPanel({ djBrainEnabled = false, hosted = false }
     };
     window.requestAnimationFrame(settle);
   }, [sections]);
+
+  // `?section=…&card=…` deep-links to one card (settings-link.ts), opening the
+  // section's Advanced disclosure when the card sits behind it: once the cards
+  // exist, then drops `card` from the address so the next click on the link is
+  // a new URL and nothing later can jump again (deepLinkJump has why).
+  // history.replaceState, not router.replace: Next syncs useSearchParams from
+  // it without a server round trip on this force-dynamic page.
+  const jumpedForRef = useRef<SettingsQuery | null>(null);
+  const cardsReady = !!data && !!form;
+  useEffect(() => {
+    const step = deepLinkJump(searchParams, cardsReady, id => sections.some(s => s.id === id), jumpedForRef.current);
+    if (!step) return;
+    jumpedForRef.current = searchParams;
+    jumpTo(step.jump);
+    window.history.replaceState(null, '', `${window.location.pathname}${step.search}${window.location.hash}`);
+  }, [searchParams, sections, jumpTo, cardsReady]);
 
   const chrome = useMemo(() => ({
     saveSlot,

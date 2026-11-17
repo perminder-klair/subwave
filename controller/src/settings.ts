@@ -96,7 +96,8 @@ import {
   coerceMinTrackLengthSeconds,
   rawMaxTrackSec,
 } from './settings/defaults.js';
-import { validateCompatParams } from './settings/compat-params.js';
+import { validateCompatParams, normalizeLlmBodyParams } from './settings/compat-params.js';
+import { normalizeReasoningEffort } from './schemas/reasoning.js';
 // A bound on the engine's composed prompt, not a validated vocabulary — it lives
 // beside the engine that enforces it (web/lib/geminiLimits.ts mirrors it for the
 // admin field, pinned by scripts/gemini-tts-settings.test.ts).
@@ -1025,12 +1026,17 @@ export async function load() {
       // settings.json written before the field existed loads as {}, which sends
       // no extra headers at all.
       headers: normalizeLlmHeaders(stored.llm?.headers),
+      // Extra request-body fields (#2296); same cold-load trap as headers.
+      bodyParams: normalizeLlmBodyParams(stored.llm?.bodyParams, 'llm.bodyParams'),
+      toolCallBodyParams: normalizeLlmBodyParams(stored.llm?.toolCallBodyParams, 'llm.toolCallBodyParams'),
       // A stored llm block without the key predates 'auto' and keeps the
       // historical 'local'; only a station with no llm block yet gets the
       // 'auto' default. Same rule for the fallback leg below.
       compatibleMode: storedCompatibleMode(stored.llm?.compatibleMode, !!stored.llm, DEFAULTS.llm.compatibleMode),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      // Absent or unknown → 'default', today's "On" (#2296).
+      reasoningEffort: normalizeReasoningEffort(stored.llm?.reasoningEffort),
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
       // pre-field settings.json) lands on the 'required' default. See issue #570.
       toolChoice: stored.llm?.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.toolChoice,
@@ -1137,9 +1143,12 @@ export async function load() {
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
           headers: normalizeLlmHeaders(fb.headers),
+          bodyParams: normalizeLlmBodyParams(fb.bodyParams, 'llm.fallback.bodyParams'),
+          toolCallBodyParams: normalizeLlmBodyParams(fb.toolCallBodyParams, 'llm.fallback.toolCallBodyParams'),
           compatibleMode: storedCompatibleMode(fb.compatibleMode, !!stored.llm?.fallback, DEFAULTS.llm.fallback.compatibleMode),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
+          reasoningEffort: normalizeReasoningEffort(fb.reasoningEffort),
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
           repeatPenalty: clampRepeatPenalty(fb.repeatPenalty, DEFAULTS.llm.fallback.repeatPenalty),

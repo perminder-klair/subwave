@@ -139,8 +139,13 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  // Extra request-body fields (#2296), per leg like headers.
+  bodyParams: { key: string; value: string }[];
+  toolCallBodyParams: { key: string; value: string }[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // The level On asks for, per leg (#2296); read only where the leg can express one.
+  reasoningEffort: 'default' | 'low' | 'medium' | 'high';
   // Per-leg, like the primary's: a swap moves it between the legs.
   toolChoice: string;
   discoverySteps: number;
@@ -161,8 +166,12 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  bodyParams: { key: string; value: string }[];
+  toolCallBodyParams: { key: string; value: string }[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // The level On asks for, per leg (#2296); read only where the leg can express one.
+  reasoningEffort: 'default' | 'low' | 'medium' | 'high';
   toolChoice: string;
   pickerAgent: boolean;
   trackSelection: 'agentic' | 'shortlist';

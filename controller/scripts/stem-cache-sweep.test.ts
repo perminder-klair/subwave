@@ -118,6 +118,60 @@ async function main() {
     assert.deepEqual([...(await stemCache.cachedTrackIdSet())].sort(), ['mid', 'new']);
   });
 
+  await test('a sweep whose walk overlapped another writer: a journaled change is re-measured, an unknown one leaves it stale', async () => {
+    // The walk is minutes on a share. A purge or forgetStems that changed a
+    // dir meanwhile may or may not be in what the walk counted. Before the
+    // usage journal (#2317) the sweep could only flag its figure stale; now the
+    // writer's bracket names the dir, the sweep measures it again, and its
+    // figure is trusted and right. A change of unknown size still flags it.
+    const snapFile = join(stateDir, 'stem-cache-usage.json');
+    // keepLast is read after the walk, before the snapshot is written: the
+    // other writer lands there.
+    class Landing extends Set<string> {
+      landed = false;
+      constructor(private readonly land: () => Promise<void>, ids: string[]) { super(ids); }
+      override has(v: string) {
+        if (!this.landed) {
+          this.landed = true;
+          this.pending = this.land();
+        }
+        return super.has(v);
+      }
+      pending: Promise<void> = Promise.resolve();
+    }
+    const seed = async () => {
+      resetCache();
+      for (let i = 0; i < 4; i++) makeDir(`w${i}`, 10 * MB, 4000 - i * 1000);
+      await stemCache.usage(); // a stored, trusted measurement
+    };
+    await seed();
+    // A real writer: has() is synchronous, so the drop is started there and
+    // finished before the sweep stores (its eviction awaits run after it).
+    let dropped: Promise<unknown> = Promise.resolve();
+    const keep = new Landing(async () => { dropped = stemCache.forgetStems(['w3']); await dropped; }, ['not-cached']);
+    const sweeping = stemCache.sweep(25 * MB, { force: true, keepLast: keep });
+    await sweeping;
+    await dropped;
+    assert.equal(keep.landed, true);
+    let after = JSON.parse(readFileSync(snapFile, 'utf8'));
+    assert.equal(after.stale, undefined, 'a journaled change is re-measured, not a reason to distrust the walk');
+    assert.equal((await stemCache.storedUsage())?.fresh, true);
+    assert.deepEqual([after.bytes, after.dirs], [10 * MB, 1], 'the disk\'s figure: w0 and w1 evicted, w3 dropped');
+
+    await seed();
+    const unknown = new Landing(() => stemCache.markUsageStale(), ['not-cached']);
+    await stemCache.sweep(25 * MB, { force: true, keepLast: unknown });
+    await unknown.pending;
+    after = JSON.parse(readFileSync(snapFile, 'utf8'));
+    assert.equal(after.stale, true, 'a change of unknown size: re-measured next read');
+    assert.equal(after.bytes, 20 * MB, 'the walk\'s own figure is kept for the budget field');
+    // Untouched in between, the sweep's figure is trusted as before.
+    await seed();
+    await stemCache.sweep(25 * MB, { force: true, keepLast: new Set() });
+    assert.equal(JSON.parse(readFileSync(snapFile, 'utf8')).stale, undefined);
+    resetCache();
+  });
+
   await test('no keep-last set, or an empty one, evicts exactly as before', async () => {
     // What a station with pick-time stems off gets (pick-stems-policy.ts
     // sweepKeepLast returns no set): the same dirs in the same order.
@@ -270,7 +324,7 @@ async function main() {
     };
     // One pick-time separation, settled the way pick-stems.ts settles it.
     const pickTimeWrite = async (id: string) => {
-      const before = await stemCache.trackDirBytes(id);
+      const before = await stemCache.beginTrackWrite(id);
       sparseDir(id, 0);
       await stemCache.settleTrackWrite(id, before);
     };

@@ -132,6 +132,9 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -218,6 +221,8 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -517,6 +522,9 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -596,6 +604,8 @@ services:
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
     container_name: sub-wave-web
     restart: unless-stopped
+    # tini as PID 1, as on the controller: reaps orphaned children.
+    init: true
     logging: *default-logging
     depends_on:
       # The homepage renders per-request against the controller — starting web
@@ -851,6 +861,9 @@ services:
     platform: linux/amd64
     container_name: sub-wave-controller
     restart: unless-stopped
+    # tini as PID 1: reaps orphans (a health-check curl killed on timeout, a
+    # \`docker exec … tsx\` helper) that Node would leave as zombies.
+    init: true
     logging: *default-logging
     depends_on:
       broadcast:
@@ -1341,11 +1354,20 @@ SITE_URL=
 # chat key. OpenRouter embeddings also fall back to OPENROUTER_API_KEY above.
 # EMBEDDING_API_KEY=
 
+# ───────── Last.fm (optional — also configurable in admin UI) ─────────
+# Tags need only the API key. Paste it in Settings → Listeners → Last.fm, or
+# set it here; from there Last.fm tags are on by default (Library tagger →
+# Advanced → Enrichment is Auto). Scrobbling is separate and stays off until
+# you enable it in that card; only then are the secret and session key needed.
+# LASTFM_API_KEY=
+# LASTFM_API_SECRET=                # scrobbling only
+# LASTFM_SESSION_KEY=               # scrobbling only; or use Connect in the card
+
 # ───────── Scrobbling (optional — also configurable in admin UI) ─────────
 # LISTENBRAINZ_USER_TOKEN=          # ListenBrainz or LB-compatible scrobbler token
 # LISTENBRAINZ_API_URL=             # optional full submit-listens URL override
 #                                   # e.g. http://koito:4110/apis/listenbrainz/1/submit-listens
-#                                   # otherwise set base URL in admin → Settings → Scrobbling
+#                                   # otherwise set base URL in admin → Settings → Listeners → ListenBrainz
 
 # ───────── Original years (optional — also configurable in admin UI) ─────────
 # Era-bounded shows ask MusicBrainz (keyless) for the original year of reissues
@@ -1576,6 +1598,15 @@ SITE_URL=
 # constrained host. TTS_HEAVY_MEM_LIMIT only matters with --profile tts-heavy.
 # ANALYZER_MEM_LIMIT=6g
 # TTS_HEAVY_MEM_LIMIT=10g
+#
+# JavaScript heap, in MB, for the Observatory's sound-map projection child.
+# Unset uses Node's default, which scales with the host's memory. The child
+# fits as many tracks as that heap holds (at most 40,000, about 52 KB each)
+# and places the rest, so a smaller heap fits a coarser map instead of running
+# out during the fit; loading and placing a very large library still need
+# room. Values below 512 are raised to 512. Raise this for a finer map on a
+# small host, or if the Observatory reports the run ran out of memory.
+# SUBWAVE_MAP_HEAP_MB=4096
 #
 # HuggingFace token — lets the tts-heavy sidecar lazily download gated model
 # weights at runtime (PocketTTS cloning weights; some CLAP/Demucs checkpoints).

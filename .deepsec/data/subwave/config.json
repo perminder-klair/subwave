@@ -8,8 +8,6 @@
     "**/state/**",
     "**/node_modules/**",
     "**/.next/**",
-    "app/ios/**",
-    "app/android/**",
     ".claude/**"
   ],
   "priorityPaths": [

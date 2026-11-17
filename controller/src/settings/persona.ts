@@ -298,6 +298,10 @@ function resolveShowShape(show, s) {
     // A clean show: read off the RESOLVED show by music/explicit-policy.ts, so a
     // missing line here is the #779 no-op again.
     excludeExplicit: show.excludeExplicit === true,
+    // Album kinds left out (Library → Era): read off the RESOLVED show by the
+    // same resolveExcludedPlaylistIds, so omitting it here would be the #779
+    // no-op on every pick path.
+    excludedAlbumKinds: Array.isArray(show.excludedAlbumKinds) ? show.excludedAlbumKinds.filter((v: unknown) => typeof v === 'string') : [],
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.
