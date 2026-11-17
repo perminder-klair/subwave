@@ -798,6 +798,29 @@ function vecCount(d: Database.Database): number {
 //     under this stamp: propagated or manual tags, and every row tagged before
 //     the column existed, whose prompt carried no measurements at all.
 //     Re-decide's blind scope reads it (blindTaggedIds).
+//   - Era review (music/era-review.ts): the walk stores WHY it distrusts an
+//     album (`era_reason`, the era-suspect.ts marker), the album artist the
+//     judgement keyed on (`album_artist`, not the per-track artist) and the
+//     album's effective kind (`album_kind`: the operator's, else the title's
+//     suggestion, which a show's excludedAlbumKinds reads). Its table,
+//     `era_override`, is created here too (ensureEraOverrideTable): one operator
+//     record per album, keyed the way era-review.albumEraKey folds (album
+//     artist, album), an optional decision (`verdict`: 'trusted' = the album
+//     year is right, 'year' = one year for every track in `forced_year`,
+//     'suspect' = per-track years) and/or the operator's `kind`. A 'year'
+//     decision records on each track it writes what that track held before
+//     (`era_forced_from`: its original year, source and checked stamp, as
+//     JSON), so removing the decision puts exactly that back; NULL means the
+//     decision did not write this track's year (tracks.setDecisionOriginalYear).
+//   - `album_artist_id`: the first album artist's Subsonic id, written by the
+//     walks beside artist_id (#2333, music/artist-credit.ts). It lets the
+//     mirror answer an artist episode's group-credited records. NULL = not
+//     walked since, or a server that reported no album artist id; either way
+//     episode-source cannot judge the row's credit and keeps the pre-column
+//     rule. Its index is a read accelerator (stats.ts STATS_INDEXES).
+//   - `stems_tail_misses`: stem passes in a row whose proven tail did not land
+//     (#2238, music/stem-stamp-policy.ts). Such a pass leaves stems_at unset so
+//     the backfill tries again, up to a bound. NULL = none; reset with stems_at.
 //
 // Several processes open this DB, and two can both find a column missing on the
 // first open after an upgrade, so the ALTERs re-read under the write lock. The
@@ -807,15 +830,42 @@ function vecCount(d: Database.Database): number {
 // the error there.
 function ensureNamedColumns(d: Database.Database): void {
   const wanted: Array<[string, string]> = [
+    // Which window outro_json/tail_silence_ms/tail_start_ms were measured on:
+    // NULL = the file's last ANALYZE_OUTRO_SECONDS, 2 = a window ending where
+    // the music stops, placed from the stored edges and confirmed by the
+    // analyzer (library-db/facets.ts tailVersionOf).
+    ['tail_version', 'INTEGER'],
     ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
     ['untaggable_key', 'TEXT'], ['tagged_measured', 'INTEGER'],
+    ['era_reason', 'TEXT'], ['album_artist', 'TEXT'], ['album_kind', 'TEXT'], ['era_forced_from', 'TEXT'],
+    ['stems_tail_misses', 'INTEGER'],
+    // The first album artist's Subsonic id (artist-credit.firstAlbumArtistId),
+    // so a prepared artist episode reads the same set from the mirror as from
+    // the artist's albums (#2333). NULL = not walked since this column arrived.
+    ['album_artist_id', 'TEXT'],
   ];
   const missing = () => {
     const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));
     return wanted.filter(([name]) => !have.has(name));
   };
+  ensureEraOverrideTable(d);
   if (missing().length === 0) return;
   d.transaction(() => {
     for (const [name, type] of missing()) runDdl(d, `ALTER TABLE tracks ADD COLUMN ${name} ${type}`);
   }).immediate();
+}
+
+// The era review's per-album record (see ensureNamedColumns). By name, like
+// the columns, for the same reason: no user_version to collide over.
+function ensureEraOverrideTable(d: Database.Database): void {
+  if (d.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='era_override'`).get()) return;
+  runDdl(d, `
+    CREATE TABLE IF NOT EXISTS era_override (
+      album_key   TEXT PRIMARY KEY,
+      verdict     TEXT CHECK (verdict IS NULL OR verdict IN ('trusted','suspect','year')),
+      forced_year INTEGER,
+      kind        TEXT,
+      set_at      TEXT NOT NULL
+    );
+  `);
 }

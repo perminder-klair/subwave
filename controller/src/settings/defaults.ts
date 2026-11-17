@@ -26,6 +26,7 @@ import {
   type JinglePlacement,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
+import type { ReasoningEffort } from '../schemas/reasoning.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
 import {
   AAC_BITRATES,
@@ -439,6 +440,13 @@ export const DEFAULTS = {
     // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
     // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
+    // Extra request-body fields for an openai-compatible / locca leg (#2296),
+    // `{ key, value }` rows like tts.cloud.compatParams. `bodyParams` go on
+    // every call; `toolCallBodyParams` are laid over them on forced-tool and
+    // structured calls only, where a `null` value removes a key. Empty by
+    // default, so an untouched station sends exactly what it did before.
+    bodyParams: [] as { key: string; value: string }[],
+    toolCallBodyParams: [] as { key: string; value: string }[],
     // How an openai-compatible connection is driven: 'local' for a self-hosted
     // server (llama.cpp, LM Studio, vLLM, Ollama /v1), 'hosted' for a cloud API
     // or proxy, 'auto' to detect it (llm/internal/provider/compat-detect.ts).
@@ -449,6 +457,10 @@ export const DEFAULTS = {
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
     reasoning: false,
+    // The level "On" asks for, where the leg can express one
+    // (schemas/reasoning.ts). 'default' is the provider's own "on", exactly as
+    // before the field existed (#2296).
+    reasoningEffort: 'default' as ReasoningEffort,
     // How the structured-output paths force a tool call. 'required' is the
     // reliable path for local models that ignore JSON mode. Switch to 'auto' ONLY
     // if your server crashes on tool_choice:"required" — recent vLLM implements it
@@ -585,8 +597,12 @@ export const DEFAULTS = {
       // Per-leg like providerBaseUrls: the backup may be a different gateway
       // with its own routing header.
       headers: {} as Record<string, string>,
+      // Per-leg too: the backup's server has its own dialect (#2296).
+      bodyParams: [] as { key: string; value: string }[],
+      toolCallBodyParams: [] as { key: string; value: string }[],
       compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
       reasoning: false,
+      reasoningEffort: 'default' as ReasoningEffort,
       toolChoice: 'required',
       numCtx: 16384,
       repeatPenalty: 1.15,

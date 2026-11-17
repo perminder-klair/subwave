@@ -354,14 +354,22 @@ export const hostedFlagSchema = z
   .transform((v) => (HOSTED_FLAG_ON as readonly string[]).includes(v));
 
 /**
- * The lowest stream ceiling a plan can have. MP3 is always served and its
+ * The lowest stream ceiling a station can have. MP3 is always served and its
  * lowest bitrate is 64 (SETTINGS_MP3_BITRATES, pinned by hosted-mode.test.ts),
  * so a ceiling under it could not be honoured: the MP3 mount would air above it.
  */
 export const HOSTED_MIN_BITRATE = 64;
 const HOSTED_MAX_BITRATE_LIMIT = 10_000;
 
-/** SUBWAVE_MAX_BITRATE: the plan's stream ceiling, whole kbps. */
+/**
+ * SUBWAVE_MAX_BITRATE: this station's stream ceiling, whole kbps. An
+ * unpublished hosting ceiling the box agent sets to guard the box's shared
+ * port, not a plan limit (plans sell listening hours).
+ *
+ * The box's listener ceiling (SUBWAVE_LISTENER_CAP) has no parser here on
+ * purpose: Icecast enforces it through the ICECAST_MAX_CLIENTS the box agent
+ * sets, and nothing in the controller or the admin reads or shows it.
+ */
 export const hostedMaxBitrateSchema = z
   .string()
   .transform((v) => v.trim())
@@ -372,16 +380,6 @@ export const hostedMaxBitrateSchema = z
     .int()
     .min(HOSTED_MIN_BITRATE, `must be at least ${HOSTED_MIN_BITRATE} kbps, MP3's lowest bitrate`)
     .max(HOSTED_MAX_BITRATE_LIMIT, `must be at most ${HOSTED_MAX_BITRATE_LIMIT} kbps`));
-
-const HOSTED_LISTENER_CAP_LIMIT = 10_000;
-
-/** SUBWAVE_LISTENER_CAP: the plan's concurrent-listener ceiling. */
-export const hostedListenerCapSchema = z
-  .string()
-  .transform((v) => v.trim())
-  .pipe(z.string().regex(/^\d+$/, 'is not a whole number'))
-  .transform(Number)
-  .pipe(z.number().int().min(1, 'must be at least 1').max(HOSTED_LISTENER_CAP_LIMIT, `must be at most ${HOSTED_LISTENER_CAP_LIMIT}`));
 
 /**
  * SUBWAVE_MUSIC_UPLOAD_URL / SUBWAVE_MUSIC_LIBRARY_URL: https only, so a stray
@@ -608,10 +606,23 @@ export function manualTagSchema(ctx: ManualTagContext) {
 /** Floor for a plausible recording year. Mirrors musicbrainz.ts MIN_YEAR. */
 export const ORIGINAL_YEAR_MIN = 1900;
 
+/** The latest plausible recording year: next year (a pre-release), in UTC.
+ *  Read per call, not at module load, so it moves with the calendar. One window
+ *  for every year an operator types: the per-track override below, the Era
+ *  tab's one-year decision (eraOverrideSchema) and its web inputs. */
+export function originalYearMax(now: Date = new Date()): number {
+  return now.getUTCFullYear() + 1;
+}
+
+/** A whole year inside [ORIGINAL_YEAR_MIN, originalYearMax()]. */
+export function isValidOriginalYear(n: unknown, now: Date = new Date()): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= ORIGINAL_YEAR_MIN && n <= originalYearMax(now);
+}
+
 export function originalYearSchema() {
   // Per request, not at module load: a schema frozen at boot starts refusing
   // next January.
-  const max = new Date().getUTCFullYear() + 1;
+  const max = originalYearMax();
   return z.object({
     // Same wording and blank-string refusal as manualTagSchema: one editor
     // posts to both routes.
@@ -722,6 +733,39 @@ export interface SceneReference {
   /** The REST of this filter's own list. Empty means the orphaned values were
    *  all it had — NOT a claim that the filter now matches no tracks. */
   remaining: string[];
+}
+
+// POST /library/era/override: the Era tab's decision for one album. The album
+// is named as { album, albumArtist? } and checked by the route (which keys it
+// and refuses an unscanned album); this owns the decision and its year.
+export const ERA_VERDICTS = ['trusted', 'year', 'suspect'] as const;
+/** The three ways out of the Era list (era_override.verdict). */
+export type EraVerdict = (typeof ERA_VERDICTS)[number];
+
+export function eraOverrideSchema() {
+  return z.object({
+    album: z.unknown(),
+    albumArtist: z.unknown().optional(),
+    verdict: z.unknown().transform((raw, c) => {
+      if (raw === null || (typeof raw === 'string' && (ERA_VERDICTS as readonly string[]).includes(raw))) {
+        return raw as EraVerdict | null;
+      }
+      c.addIssue({ code: 'custom', message: "verdict must be 'trusted', 'year', 'suspect' or null" });
+      return z.NEVER;
+    }),
+    year: z.unknown().optional(),
+  }).transform((b, c) => {
+    if (b.verdict !== 'year') return { ...b, year: null };
+    if (!isValidOriginalYear(b.year)) {
+      c.addIssue({
+        code: 'custom',
+        path: ['year'],
+        message: `year must be a whole year between ${ORIGINAL_YEAR_MIN} and ${originalYearMax()}`,
+      });
+      return z.NEVER;
+    }
+    return { ...b, year: b.year };
+  });
 }
 
 // ─── from controller/src/schemas/lyrics.ts ───────────────────────────────
@@ -2272,6 +2316,138 @@ export const OPENAI_COMPATIBLE_GATEWAYS: readonly OpenAICompatibleGateway[] = LL
     return gw ? [gw] : [];
   });
 
+// ─── from controller/src/schemas/reasoning.ts ────────────────────────────
+
+// The reasoning level an LLM leg can ask for while `llm.reasoning` is on
+// (#2296), and the one predicate that says which legs can express a level.
+// Both sides read this: the controller's capability descriptors
+// (llm/internal/provider/capabilities.ts) and the admin form's picker, through
+// the web/lib/schemas.generated.ts mirror, so the picker is shown exactly where
+// the controller would send the level. Mirrored by `npm run gen:schemas`, so it
+// imports nothing.
+//
+// 'default' is today's "On", byte-identical on every provider: what the call
+// sends is decided by the descriptor alone, as before the field existed. A
+// level is only ever read while reasoning is on, and only on a leg
+// reasoningEffortOffered() accepts; anywhere else it is kept in settings but
+// sends nothing, so a saved level survives a provider switch and back.
+
+export const REASONING_EFFORTS = ['default', 'low', 'medium', 'high'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+  return typeof v === 'string' && (REASONING_EFFORTS as readonly string[]).includes(v);
+}
+
+/** Stored value → a level. Absent or unknown is 'default' (today's "On"). */
+export function normalizeReasoningEffort(v: unknown): ReasoningEffort {
+  return isReasoningEffort(v) ? v : 'default';
+}
+
+// Fixed thinking budgets for a manual-thinking Claude model (below), per level.
+// The SDK's own levels are a share of the model's max output (medium is 19,200
+// tokens on a 64k model) — far beyond a ~150-token DJ line — so a level the
+// operator picks is a small fixed budget instead (LiteLLM uses the same scale).
+// 'default' keeps the SDK's medium, unchanged.
+export const MANUAL_THINKING_BUDGETS = { low: 1024, medium: 2048, high: 4096 } as const;
+
+// A Claude model id, served only by Anthropic or a proxy/gateway in front of it.
+const CLAUDE_MODEL_RE = /(?:^|\/)claude-/i;
+export function claudeModelId(modelId: unknown): boolean {
+  return CLAUDE_MODEL_RE.test(String(modelId || ''));
+}
+
+// Gemma has no thinking mode; any reasoning field 400s it (#1044).
+const GEMMA_MODEL_RE = /(^|\/)gemma-/i;
+export function gemmaModelId(modelId: unknown): boolean {
+  return GEMMA_MODEL_RE.test(String(modelId || ''));
+}
+
+// OpenAI ids that take reasoning_effort; gpt-4-class models 400 on any effort.
+const OPENAI_REASONING_MODEL_RE = /^(o\d|gpt-5)/i;
+export function openaiReasoningModelId(modelId: unknown): boolean {
+  return OPENAI_REASONING_MODEL_RE.test(String(modelId || ''));
+}
+
+/**
+ * The SDK's max output for a Claude id that thinks on a manual budget
+ * (`supportsAdaptiveThinking: false` in @ai-sdk/anthropic's
+ * getModelCapabilities), or null for an adaptive id. Mirrors the SDK's checks
+ * in its order, so an id it treats as adaptive is never sent a budget (4.7+
+ * answer one with a 400), and any unknown `claude-*` id counts as adaptive, as
+ * the SDK does. A non-Claude id is null.
+ */
+export function manualThinkingClaudeMaxOutput(modelId: unknown): number | null {
+  const id = String(modelId || '');
+  if (!id.includes('claude-')) return null;
+  if (/claude-(?:sonnet-5|opus-5|fable-5|opus-4-8|opus-4-7|sonnet-4-6|opus-4-6)/.test(id)) return null;
+  if (/claude-(?:sonnet-4-5|opus-4-5|haiku-4-5)/.test(id)) return 64000;
+  if (id.includes('claude-opus-4-1')) return 32000;
+  if (/claude-sonnet-4(?:-|@)/.test(id)) return 64000;
+  if (/claude-opus-4(?:-|@)/.test(id)) return 32000;
+  if (id.includes('claude-3-haiku')) return 4096;
+  if (/claude-(?:instant(?:-|$)|v?2(?=$|[-.:])|3(?=$|[-.]))/.test(id)) return 4096;
+  return null;
+}
+
+export function manualThinkingClaudeModel(modelId: unknown): boolean {
+  return manualThinkingClaudeMaxOutput(modelId) != null;
+}
+
+/**
+ * The thinking budget the SDK gives a manual-thinking Claude model under
+ * 'default' (its medium: 30% of the model's max output, at least 1,024), for
+ * the picker's hint. null for any other id.
+ */
+export function manualThinkingDefaultBudget(modelId: unknown): number | null {
+  const max = manualThinkingClaudeMaxOutput(modelId);
+  return max == null ? null : Math.min(max, Math.max(1024, Math.round(max * 0.3)));
+}
+
+export interface ReasoningEffortLeg {
+  provider?: unknown;
+  model?: unknown;
+  compatibleMode?: unknown;
+}
+
+/**
+ * True when this leg can send a reasoning level, so the picker is shown and
+ * the descriptor reads it. `gatewayRule` is the catalogue's reasoning rule for
+ * a fixed-endpoint OpenAI-compatible gateway (Requesty and the like), looked up
+ * by the caller, since this module imports nothing.
+ *
+ * Not offered, where there is no portable level: Ollama (a level string 400s
+ * boolean-only models), local OpenAI-compatible and locca (llama.cpp/vLLM read
+ * chat_template_kwargs), a hosted OpenAI-compatible server that isn't a Claude
+ * proxy (its own thinking fields go in Request parameters, #2355), Gemma, and
+ * gpt-4-class OpenAI ids.
+ */
+export function reasoningEffortOffered(leg: ReasoningEffortLeg | null | undefined, gatewayRule?: string): boolean {
+  const provider = String(leg?.provider || '');
+  const model = leg?.model;
+  switch (provider) {
+    case 'anthropic':
+    case 'deepseek':
+    case 'openrouter':
+      return true;
+    case 'openai':
+      return openaiReasoningModelId(model);
+    case 'google':
+    case 'gateway':
+      return !gemmaModelId(model);
+    case 'openai-compatible':
+      return leg?.compatibleMode === 'hosted' && claudeModelId(model);
+    case 'ollama':
+    case 'locca':
+      return false;
+    default:
+      if (gatewayRule === 'openaiModels') return openaiReasoningModelId(model);
+      if (gatewayRule === 'minimalWhenOff') return true;
+      if (gatewayRule === 'vendorRouted') return !gemmaModelId(model);
+      return false;
+  }
+}
+
 // ─── from controller/src/schemas/request.ts ──────────────────────────────
 
 // Shared listener-request schema — POST /request's `{ text, name }`. Run at the
@@ -2990,6 +3166,32 @@ export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 /** At most this many custom headers per leg, and this long a value. */
 export const LLM_HEADERS_MAX = 10;
 export const LLM_HEADER_VALUE_MAX = 500;
+
+/**
+ * Free-form request-body rows, `{ key, value }`: the openai-compatible cloud
+ * TTS provider's `tts.cloud.compatParams` (#1317) and the chat legs'
+ * `llm.bodyParams` / `llm.toolCallBodyParams` (#2296). One row grammar for
+ * both, here so the admin form can pre-flight a row with the same rule the
+ * save path (`settings/compat-params.ts` `validateCompatParams`) enforces.
+ * A value that parses as a JSON literal is sent as one, anything else as a
+ * string.
+ */
+export const BODY_PARAM_KEY_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+export const BODY_PARAM_MAX_ENTRIES = 20;
+export const BODY_PARAM_KEY_MAX = 60;
+export const BODY_PARAM_VALUE_MAX = 400;
+
+/**
+ * Chat body fields the station sets on every request, refused in both LLM
+ * lists at save time and skipped at send time: overriding any of them could
+ * break a forced tool call, the output cap or the hosted #1693 pairing.
+ * `max_completion_tokens` is the output cap's other spelling: the SDK sends it
+ * only for OpenAI reasoning ids, and vLLM reads it ahead of `max_tokens`.
+ */
+export const LLM_BODY_PARAM_RESERVED_KEYS = [
+  'model', 'messages', 'tools', 'tool_choice', 'stream',
+  'max_tokens', 'max_completion_tokens', 'response_format', 'stream_options',
+];
 
 // Native Google safety flags are independent per LLM leg. Only a literal true
 // enables blocking; absent or malformed flags preserve the permissive default.
@@ -4545,7 +4747,7 @@ export const preparationStatusSchema = z.discriminatedUnion('kind', [
 ]);
 export type PreparationStatus = z.output<typeof preparationStatusSchema>;
 
-export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional() })).default([]) });
+export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional(), artistId: z.string().nullish().catch(null) })).default([]) });
 export const preparationArtistCreditSchema = z.object({ id: z.string().min(1), name: z.string().optional() });
 export const preparationTrackSchema = z.object({
   id: z.string().min(1), artistId: z.string().nullable().optional(),
@@ -4607,6 +4809,31 @@ export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
 export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
+
+// What an era-suspect album IS, set (or confirmed) by the operator in Library →
+// Era and pre-filled from the title (music/album-kind.ts). Declared here, not
+// there, because a show can leave out whole kinds (`excludedAlbumKinds`) and
+// schema modules import only zod. Order is the admin dropdown's.
+export const ALBUM_KINDS = [
+  'best-of', 'themed', 'label', 'dj-mix', 'dj-choice', 'original-album', 'reissue',
+  'soundtrack', 'tribute', 'chart', 'live', 'box-set', 'sampler',
+] as const;
+export type AlbumKind = (typeof ALBUM_KINDS)[number];
+export const ALBUM_KIND_LABELS: Record<AlbumKind, string> = {
+  'best-of': 'Best Of',
+  themed: 'Themed Compilation',
+  label: 'Label Compilation',
+  'dj-mix': 'DJ Mix',
+  'dj-choice': 'DJ Choice',
+  'original-album': 'Original Album',
+  reissue: 'Reissue or Remaster',
+  soundtrack: 'Soundtrack',
+  tribute: 'Tribute or Covers',
+  chart: 'Chart or Dated Hits',
+  live: 'Live or Festival',
+  'box-set': 'Box Set',
+  sampler: 'Sampler or Promo',
+};
 
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
@@ -4965,6 +5192,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // A clean show: tracks tagged explicit stay off air (music/explicit-policy.ts).
       // Stands alone, not one of the filters filtersStrict governs.
       excludeExplicit: showBool(),
+      // Album kinds this show never plays (Library → Era sets a kind per album),
+      // e.g. 'dj-mix': a track cut out of a continuous mix starts and ends
+      // mid-blend. Hard-dropped with the excluded playlists
+      // (show-playlist.resolveExcludedPlaylistIds). [] = no constraint.
+      excludedAlbumKinds: showStringList({
+        max: ALBUM_KINDS.length,
+        values: ALBUM_KINDS,
+        overflowError: `must have at most ${ALBUM_KINDS.length} entries`,
+      }),
       // Organisation only, declared LAST so persisted key order is unchanged.
       // Unlike every other list here a bad entry is REFUSED rather than dropped:
       // a tag is typed by hand and must not vanish on save. The load twin
@@ -5122,6 +5358,12 @@ export function repairShowForLoad(
     // than failing the show. Non-array reads as absent (schema's [] default).
     tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
+    // An unknown kind is dropped, never fatal: a show that stops leaving one
+    // kind out beats a show that stops loading.
+    excludedAlbumKinds: repairShowStringList(raw.excludedAlbumKinds, {
+      max: ALBUM_KINDS.length,
+      values: ALBUM_KINDS,
+    }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,
     }),

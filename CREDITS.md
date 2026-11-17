@@ -209,7 +209,7 @@ the documented deployment and Workers for the CLI installer,
 | `eslint-config-next`, `eslint-config-expo`, `eslint-plugin-react`, `eslint-plugin-better-tailwindcss` | Framework lint rules | MIT |
 | [DefinitelyTyped](https://github.com/DefinitelyTyped/DefinitelyTyped) (`@types/*`) | Type definitions | MIT |
 | `babel-preset-expo` | App build transform | MIT |
-| [patch-package](https://github.com/ds300/patch-package) | Patches to app dependencies (`app/patches/`) | MIT |
+| [patch-package](https://github.com/ds300/patch-package) | Patches to app dependencies (`patches/` in getsubwave/app) | MIT |
 | [Playwright](https://playwright.dev) | Browser checks in `web/scripts/verify-*.py` | Apache-2.0 |
 | [deepsec](https://www.npmjs.com/package/deepsec) | Security scanning (`.deepsec/`) | Apache-2.0 |
 | [GitHub Actions](https://github.com/features/actions): `actions/checkout`, `actions/setup-node`, `actions/upload-artifact`, `actions/download-artifact` | CI | MIT |

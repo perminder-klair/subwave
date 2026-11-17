@@ -364,7 +364,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // Flag it only when several are on AND the host is already under pressure.
   try {
     const st: NonNullable<StationSettings['stream']> = s?.stream || {};
-    // The encoders the mixer runs: through a hosted plan's ceiling, which can
+    // The encoders the mixer runs: through a hosted station's ceiling, which can
     // switch FLAC and AAC off whatever was saved.
     const running = advertisedMounts(st);
     const extra: string[] = [];

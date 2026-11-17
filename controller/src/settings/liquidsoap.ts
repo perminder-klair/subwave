@@ -11,7 +11,7 @@ import { STATE_DIR } from '../config.js';
 import { DEFAULTS } from './defaults.js';
 // Pure policy module — no settings import of its own, so this stays acyclic.
 import { mixerJingleRatioFile } from '../broadcast/jingle-rotate.js';
-// Hosted stations: the plan's bitrate ceiling (SUBWAVE_MAX_BITRATE).
+// Hosted stations: the station's bitrate ceiling (SUBWAVE_MAX_BITRATE).
 import { capStreamBitrates } from '../setup/hosted.js';
 
 export const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
@@ -43,7 +43,7 @@ const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 export const ICECAST_LISTENER_AUTH_PATH = `${STATE_DIR}/icecast_listener_auth.txt`;
 
 // The six listener-mount files, as the encoders must get them: the saved
-// stream settings through a hosted plan's bitrate ceiling. The archive is a
+// stream settings through a hosted station's bitrate ceiling. The archive is a
 // local recording, not served to listeners, so it isn't capped. One list for
 // the save below and the boot reconcile after it, so the two can't disagree.
 function streamMountFiles(saved): [path: string, contents: string][] {
@@ -59,13 +59,13 @@ function streamMountFiles(saved): [path: string, contents: string][] {
 }
 
 // Boot (settings.ensureLiquidsoapSettingsFile): rewrite each listener-mount
-// file that disagrees with streamMountFiles(). A hosted plan's ceiling is env,
-// so it changes with no save to write it: a downgrade must not leave 320 kbps
-// and FLAC on disk, nor an upgrade the old cap. Self-hosted, the files only
-// disagree after a hand edit of settings.json, which this now carries through
-// as a save would. These six only: the jingle ratio keeps its only-if-missing
-// rule (broadcast/jingle-rotate.ts says why). The mixer reads them at its next
-// start. Returns the basenames it rewrote.
+// file that disagrees with streamMountFiles(). A hosted station's ceiling is
+// env, so it changes with no save to write it: a lowered ceiling must not leave
+// 320 kbps and FLAC on disk, nor a raised one the old cap. Self-hosted, the
+// files only disagree after a hand edit of settings.json, which this now
+// carries through as a save would. These six only: the jingle ratio keeps its
+// only-if-missing rule (broadcast/jingle-rotate.ts says why). The mixer reads
+// them at its next start. Returns the basenames it rewrote.
 export async function reconcileStreamMountFiles(s): Promise<string[]> {
   const rewrote: string[] = [];
   for (const [path, contents] of streamMountFiles(s.stream)) {
@@ -97,7 +97,7 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_EQUAL_POWER_CROSSFADE_PATH, String(s.transitions?.equalPowerCrossfade === true));
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
-  // The listener-facing mounts, under a hosted plan's bitrate ceiling.
+  // The listener-facing mounts, under a hosted station's bitrate ceiling.
   for (const [path, contents] of streamMountFiles(s.stream)) await writeFile(path, contents);
   await writeFile(LIQ_OGG_ICY_METADATA_PATH, s.stream.oggIcyMetadata ? 'true' : 'false');
   await writeFile(LIQ_STREAM_BUFFER_SECONDS_PATH, String(s.stream.bufferSeconds));

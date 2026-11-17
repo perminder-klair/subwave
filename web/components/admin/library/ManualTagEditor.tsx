@@ -15,14 +15,21 @@ const ENERGY_SEG: { id: string; label: string }[] = [
   { id: 'high', label: 'high' },
 ];
 
+// Browser half of era-suspect.storedYearUntrusted: the walk's verdict wins once
+// known (an operator's Trust override stores it as false on a flagged
+// compilation), and Navidrome's raw flag decides only for an unwalked row.
+function yearSuspect(track: Track): boolean {
+  return track.eraUntrusted != null ? !!track.eraUntrusted : !!track.isCompilation;
+}
+
 // Browser half of show-filter.resolveEraYear, mirrored (the resolver is not a
 // schema, so not in the generated mirror). Keep the precedence in step.
 function eraYearOf(track: Track): number | null {
   const oy = Number(track.originalYear);
   if (Number.isFinite(oy) && oy > 0) return oy;
-  // Either signal is enough: isCompilation is unset on the reissue anthologies
-  // eraUntrusted exists to catch (#1418).
-  if (track.isCompilation || track.eraUntrusted) return null;
+  // isCompilation is unset on the reissue anthologies eraUntrusted exists to
+  // catch (#1418), so the composed verdict decides.
+  if (yearSuspect(track)) return null;
   const y = Number(track.year);
   return Number.isFinite(y) && y > 0 ? y : null;
 }
@@ -32,7 +39,7 @@ function eraYearOf(track: Track): number | null {
 function eraSourceNote(track: Track): string {
   const era = eraYearOf(track);
   if (era == null) {
-    return track.isCompilation || track.eraUntrusted
+    return yearSuspect(track)
       ? 'no era year — the album’s date is the release’s, and the real one is unresolved, so era-bounded shows skip this track'
       : 'no era year — this track is invisible to era-bounded shows';
   }

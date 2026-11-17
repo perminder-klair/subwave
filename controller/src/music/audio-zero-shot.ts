@@ -50,6 +50,11 @@ export interface ZeroShotSpec {
   // set it because their labels are words in the embed text, which a new track
   // was embedded without (#2236); a relabel-all never comes this way.
   writeNewLabels?(rows: Array<{ id: string; labels: string[] }>): void;
+  // A relabel-all's write for the rows that had no labels before the pass (a new
+  // track, on a pass that relabels the library). Defaults to writeLabels. Moods
+  // set it so a new track's first moods still mark the vector built without them
+  // (#2313); the rest of the relabel forgets, as writeLabels does.
+  writeRelabelledNewLabels?(rows: Array<{ id: string; labels: string[] }>): void;
   select(scores: Record<string, number>, baselines: MoodBaselines | null): string[];
   // select() returns nothing without baselines, so a library still under the
   // floor has no labels to re-derive. Moods fall back to raw and leave this off.
@@ -88,19 +93,23 @@ function loadBaselines(spec: ZeroShotSpec): MoodBaselines | null {
 // scores, and the CLAP text tower is opt-in (ANALYZER_HEAVY).
 // PAGED, not streamed: better-sqlite3 refuses a write while a read cursor is
 // open on the same connection, and this loop writes as it walks.
+// `unlabelled` names the rows that had no labels before this pass, read before
+// anything was written, and they take writeRelabelledNewLabels.
 export function relabelAllFromStoredScores(
   spec: ZeroShotSpec,
   baselines: MoodBaselines | null,
+  unlabelled: ReadonlySet<string> = new Set(),
 ): number {
   const PAGE = 500;
+  const writeNew = spec.writeRelabelledNewLabels ?? spec.writeLabels;
   let done = 0;
   let cursor = '';
   for (;;) {
     const { items, lastId } = spec.pageScores(cursor, PAGE);
     if (lastId == null) break;
-    spec.writeLabels(
-      items.map(({ id, scores }) => ({ id, labels: spec.select(scores, baselines) })),
-    );
+    const rows = items.map(({ id, scores }) => ({ id, labels: spec.select(scores, baselines) }));
+    spec.writeLabels(rows.filter(r => !unlabelled.has(r.id)));
+    writeNew(rows.filter(r => unlabelled.has(r.id)));
     done += items.length;
     cursor = lastId;
   }
@@ -165,6 +174,9 @@ export async function runZeroShotPass(spec: ZeroShotSpec): Promise<ZeroShotStats
   // being written right now. Score maps are held only on an incremental pass
   // (bounded by the new tracks); a full re-score relabels from disk in phase 3.
   const relabelAll = vocabChanged || action === 'relabel';
+  // Judged before the first write: these rows take the relabel's marking writer.
+  // On an incremental relabel `ids` is already that set.
+  const unlabelled = relabelAll ? new Set(vocabChanged ? spec.idsNeedingScores() : ids) : undefined;
   const scoredRows: ScoreRow[] = [];
   let scored = 0;
   let batch: ScoreRow[] = [];
@@ -196,7 +208,7 @@ export async function runZeroShotPass(spec: ZeroShotSpec): Promise<ZeroShotStats
   // new tracks cannot shift a library-wide distribution.
   let relabelled = 0;
   if (relabelAll) {
-    relabelled = relabelAllFromStoredScores(spec, baselines);
+    relabelled = relabelAllFromStoredScores(spec, baselines, unlabelled);
   } else {
     const writeNew = spec.writeNewLabels ?? spec.writeLabels;
     let batchLabels: Array<{ id: string; labels: string[] }> = [];

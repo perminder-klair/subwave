@@ -8,6 +8,16 @@
 # NOT take the station off the air. The broadcast pair is launched as a unit
 # (mirroring docker/broadcast-entrypoint.sh): if either dies both are bounced.
 #
+# Every pair launch re-runs link_liquidsoap_log (prepare_broadcast_state), not
+# just the boot. The pair relaunches inside a running container (a station
+# switch, Restart mixer), and anything that moved <state>/logs in between left
+# /var/log/liquidsoap dangling: radio.liq opens its log first, so the mixer
+# crash-looped until the container restarted (#2349, a multi-station
+# conversion). docker/broadcast-entrypoint.sh has no twin of this on purpose:
+# compose bind-mounts <state>/logs over /var/log/liquidsoap, the mixer restart
+# restarts the whole container, and dockerd recreates a missing bind source on
+# every start, so there is no link to dangle.
+#
 # Bash (not /bin/sh) for `wait -n`.
 set -u
 
@@ -17,7 +27,8 @@ RENDERED=/etc/icecast2/icecast.xml
 RADIO_LIQ=/etc/liquidsoap/radio.liq
 
 # Multi-station pointer (kept in lockstep with docker/broadcast-entrypoint.sh).
-# Called at the top of run_broadcast so every mixer relaunch re-resolves.
+# Called by prepare_broadcast_state, at the top of run_broadcast, so every
+# mixer relaunch re-resolves.
 #
 # Both paths are env-overridable so scripts/aio-log-link.test.ts can drive
 # link_liquidsoap_log() against a scratch dir; neither var is set in the image.
@@ -982,8 +993,10 @@ render_icecast() {
 # loop can restart it. Do NOT `exec` — that would replace the loop.
 # ---------------------------------------------------------------------------
 
-# icecast2 + liquidsoap as a unit; returns when either dies.
-run_broadcast() {
+# The state half of every pair launch, split out so
+# scripts/aio-log-link.test.ts can drive the relaunch path without starting
+# icecast or liquidsoap.
+prepare_broadcast_state() {
 	# Re-resolve the active station on every pair launch — this is how a
 	# station switch takes effect in the AIO without a container bounce.
 	resolve_state_dir
@@ -993,6 +1006,16 @@ run_broadcast() {
 	# root is passed as the root so a station dir gets 777, not the root's
 	# 1777, exactly as the entrypoint does.
 	bootstrap_state_dirs "$STATE_ROOT" "$STATE_DIR"
+
+	# Re-make <root>/logs and re-point /var/log/liquidsoap at it before
+	# liquidsoap opens radio.log (see the header, #2349). Idempotent: on a
+	# healthy install it re-creates the same link and the probe passes.
+	link_liquidsoap_log
+}
+
+# icecast2 + liquidsoap as a unit; returns when either dies.
+run_broadcast() {
+	prepare_broadcast_state
 
 	render_icecast
 	log "starting icecast2"
