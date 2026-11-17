@@ -3,7 +3,9 @@
 // own entry, so "one primary per image" and "each floating tag on one entry"
 // can only be checked across the matrix. Breaking either races two builds for
 // one tag on a release: two primaries race for :latest, two owners of
-// :pascal race for :pascal, and whichever job finishes last owns it.
+// :pascal race for :pascal, and whichever job finishes last owns it. The two
+// CUDA images must also agree tag for tag, or one card gets a different wheel
+// on the AIO and on the split stack.
 //
 // Run: `npm test -- check-publish-matrix`.
 
@@ -116,4 +118,71 @@ test('an entry with no image fails', () => {
 test('a workflow without the matrix fails instead of passing with nothing checked', () => {
   assert.throws(() => loadMatrix('jobs:\n  build:\n    runs-on: ubuntu-latest\n'), /no jobs\.build\.strategy\.matrix\.include/);
   assert.throws(() => loadMatrix('jobs:\n  build:\n    strategy:\n      matrix:\n        include: []\n'), /no jobs/);
+});
+
+// Both CUDA images, in lockstep: the analyzer's two builds mirror the AIO's.
+function lockstep(): MatrixEntry[] {
+  return [
+    ...matrix(),
+    {
+      image: 'subwave-analyzer-cuda',
+      cuda_family: 'cu128',
+      primary: true,
+      arch_tags: 'turing ampere ada hopper blackwell',
+    },
+    { image: 'subwave-analyzer-cuda', cuda_family: 'cu124', primary: false, arch_tags: 'maxwell pascal volta' },
+  ];
+}
+
+test('both CUDA images with the same tags on the same builds pass', () => {
+  assert.deepEqual(checkPublishMatrix(lockstep()), []);
+});
+
+test('a tag moved to another build in one CUDA image only fails', () => {
+  const m = lockstep();
+  m[3].arch_tags = 'pascal turing ampere ada hopper blackwell';
+  m[4].arch_tags = 'maxwell volta';
+  assert.deepEqual(checkPublishMatrix(m), [
+    'subwave-aio-cuda:pascal is on cu124 but subwave-analyzer-cuda:pascal is on cu128; both CUDA images keep each tag on the same build',
+  ]);
+});
+
+test('a tag one CUDA image carries and the other lacks fails', () => {
+  const m = lockstep();
+  m[4].arch_tags = 'maxwell pascal';
+  assert.deepEqual(checkPublishMatrix(m), [
+    'subwave-aio-cuda:volta has no subwave-analyzer-cuda:volta; both CUDA images carry the same tags',
+  ]);
+});
+
+test('the two CUDA images must give :latest the same primary wheel', () => {
+  const m = lockstep();
+  m[3].primary = false;
+  m[4].primary = true;
+  assert.deepEqual(checkPublishMatrix(m), [
+    'subwave-aio-cuda:latest is on cu128 but subwave-analyzer-cuda:latest is on cu124; both CUDA images keep each tag on the same build',
+  ]);
+});
+
+test('a CUDA image left as one plain build is out of lockstep', () => {
+  const m = [...matrix(), { image: 'subwave-analyzer-cuda' }];
+  const errors = checkPublishMatrix(m);
+  assert.ok(
+    errors.includes('subwave-aio-cuda:pascal has no subwave-analyzer-cuda:pascal; both CUDA images carry the same tags'),
+    errors.join('\n'),
+  );
+  assert.ok(errors.some((e) => e.startsWith('subwave-aio-cuda:latest is on cu128 but subwave-analyzer-cuda:latest')), errors.join('\n'));
+});
+
+test('moving one tag in one image of the real workflow fails the check', () => {
+  const include = loadMatrix(readFileSync(WORKFLOW, 'utf8'));
+  const analyzer = include.filter((e) => e.image === 'subwave-analyzer-cuda');
+  const cu124 = analyzer.find((e) => e.cuda_family === 'cu124');
+  const cu128 = analyzer.find((e) => e.cuda_family === 'cu128');
+  assert.ok(cu124 && cu128, 'the real workflow has both analyzer builds');
+  cu124.arch_tags = 'maxwell pascal';
+  cu128.arch_tags = `volta ${String(cu128.arch_tags)}`;
+  assert.deepEqual(checkPublishMatrix(include), [
+    'subwave-aio-cuda:volta is on cu124 but subwave-analyzer-cuda:volta is on cu128; both CUDA images keep each tag on the same build',
+  ]);
 });

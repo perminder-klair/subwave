@@ -1,8 +1,8 @@
 // Whole-matrix check for .github/workflows/publish-images.yml (#2265).
 //
 // An image built by more than one matrix entry (today subwave-aio-cuda and
-// subwave-analyzer-cuda, one entry per torch wheel) carries two rules that no single job can check,
-// because each job sees only its own entry:
+// subwave-analyzer-cuda, one entry per torch wheel) carries rules that no
+// single job can check, because each job sees only its own entry:
 //   1. Exactly one entry is primary. The primary alone takes :latest, the plain
 //      version tags and the plain sha- tag, so two primaries race for :latest
 //      on every release and whichever job finishes last owns it; none leaves
@@ -12,6 +12,11 @@
 //      for it the same way. An architecture tag points at the newest build that
 //      still supports its GPU (the CUDA tag table in
 //      docs/internals/infrastructure.md).
+//   3. The two CUDA images (LOCKSTEP_IMAGES) carry the same tags on the same
+//      builds: :latest on the same primary wheel, and each build and
+//      architecture tag on the same cuda_family in both. An operator's card
+//      names one tag for the AIO and the split stack alike, so a tag moved in
+//      one image only would send the same card to different wheels.
 // The workflow's tagplan step checks only what one entry can show (a
 // cuda_family build says primary: true or false; arch_tags needs a
 // cuda_family). This checks the rest, from the controller leg of lint.yml:
@@ -47,6 +52,28 @@ export function loadMatrix(source: string): MatrixEntry[] {
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+/** The images that keep the same tags on the same builds (rule 3). */
+export const LOCKSTEP_IMAGES = ['subwave-aio-cuda', 'subwave-analyzer-cuda'] as const;
+
+/**
+ * Each tag an image's builds carry → the build that carries it: every
+ * cuda_family and arch_tags name, plus `latest` for the primary. A single
+ * build with no cuda_family stands as `(single build)`.
+ */
+function tagBuilds(entries: MatrixEntry[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const e of entries) {
+    const family = text(e.cuda_family);
+    if (!family) {
+      map.set('latest', '(single build)');
+      continue;
+    }
+    if (e.primary === true) map.set('latest', family);
+    for (const tag of [family, ...text(e.arch_tags).split(/\s+/).filter(Boolean)]) map.set(tag, family);
+  }
+  return map;
 }
 
 /** Every whole-matrix rule the entries break, one message each; empty when they pass. */
@@ -105,6 +132,25 @@ export function checkPublishMatrix(include: MatrixEntry[]): string[] {
       }
     }
   }
+
+  const [a, b] = LOCKSTEP_IMAGES;
+  const aEntries = byImage.get(a);
+  const bEntries = byImage.get(b);
+  if (aEntries && bEntries) {
+    const aTags = tagBuilds(aEntries);
+    const bTags = tagBuilds(bEntries);
+    for (const tag of new Set([...aTags.keys(), ...bTags.keys()])) {
+      const onA = aTags.get(tag);
+      const onB = bTags.get(tag);
+      if (onA === onB) continue;
+      if (!onA || !onB) {
+        const [has, lacks] = onA ? [a, b] : [b, a];
+        errors.push(`${has}:${tag} has no ${lacks}:${tag}; both CUDA images carry the same tags`);
+      } else {
+        errors.push(`${a}:${tag} is on ${onA} but ${b}:${tag} is on ${onB}; both CUDA images keep each tag on the same build`);
+      }
+    }
+  }
   return errors;
 }
 
@@ -124,7 +170,7 @@ function main() {
   const multi = [...new Set(include.filter((e) => text(e.cuda_family)).map((e) => text(e.image)))];
   console.log(
     `publish-images.yml: ${include.length} builds pass` +
-      (multi.length ? ` (one primary and one owner per tag for ${multi.join(', ')})` : ''),
+      (multi.length ? ` (one primary and one owner per tag for ${multi.join(', ')}; ${LOCKSTEP_IMAGES.join(' and ')} in lockstep)` : ''),
   );
 }
 

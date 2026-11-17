@@ -190,8 +190,8 @@ never fold several GPUs into one tag.
 `publish-images.yml` encodes this per matrix entry. Each `subwave-aio-cuda`
 and `subwave-analyzer-cuda` entry sets `cuda_family`, `primary` and
 `arch_tags`, so moving a GPU to another build moves one word between two
-`arch_tags` lines (do it on both images together, or the AIO and the split
-stack disagree about a card). `cuda_family` is also the wheel: the build step
+`arch_tags` lines, on both images together: otherwise the AIO and the split
+stack disagree about a card. `cuda_family` is also the wheel: the build step
 passes it to `Dockerfile.aio` or `Dockerfile.analyzer` as `TORCH_CUDA`, whose
 `case` fails on a family it has no index for, so a build's tags and its
 wheel can't disagree. Each job sees only its own entry, so the `tagplan` step
@@ -199,7 +199,9 @@ checks only that entry's shape (a `cuda_family` build says `primary: true` or
 `false`, and `arch_tags` needs a `cuda_family`). The rules across entries run
 in `lint.yml` on every PR: `controller/scripts/check-publish-matrix.ts` fails an
 image with no primary or two, and a build or architecture tag on more than one
-entry, because either races two jobs for one tag on a release. Only the
+entry, because either races two jobs for one tag on a release. It also fails
+the two CUDA images out of lockstep: a tag one carries and the other lacks, or
+a tag (`:latest` included) on a different `cuda_family` in each. Only the
 primary build takes `:latest`, the plain version tags and the plain `sha-`
 commit tag; another build's commit tag is `sha-<family>-`. A non-primary build
 also sets the metadata-action flavor `latest=false`. The action adds `:latest`
