@@ -178,9 +178,9 @@ await test('a later full pass turns the tail ok at the current version', () => {
   });
   const r = rows('fresh');
   assert.equal(r.tail.status, 'ok');
-  // The end-of-file window: one below current until edges place it
-  // (tail-placement.test.ts).
-  assert.equal(r.tail.version, db.FACET_VERSIONS.tail - 1);
+  // The end-of-file window is v1 until edges place it (v2) and the placed
+  // window carries its loudness curve (v3; tail-placement.test.ts).
+  assert.equal(r.tail.version, 1);
   assert.equal(r.tail.source, 'full');
 });
 
@@ -194,7 +194,7 @@ await test('a tail kept by COALESCE keeps the version it was measured at', () =>
     bpm: 128, musicalKey: 'F', source: 'full',
     outro: { startMs: 220_000, ending: 'cold' } as never, tailSilenceMs: 500, tailStartMs: 239_500,
   });
-  assert.equal(rows('fresh').tail.version, db.FACET_VERSIONS.tail - 1, 'the end-of-file window');
+  assert.equal(rows('fresh').tail.version, 1, 'the end-of-file window (v1)');
 });
 
 await test('a tail version bump settles for a track whose tail is still unmeasurable', () => {
