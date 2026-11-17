@@ -110,22 +110,37 @@ export function parseParallelResponse(data: unknown): SearchResponse {
   return { answer: '', results };
 }
 
+// One deadline for the whole search, the 30 s every other provider gets for
+// its one request: connect, the tool listing and the call all spend from it,
+// so a server that stalls at any step ends the search there, rather than each
+// step running its own 30 s. Closing the session afterwards is bounded apart
+// (2 s) and never replaces the search's own outcome.
+const SEARCH_DEADLINE_MS = 30_000;
+const TEARDOWN_TIMEOUT_MS = 2_000;
+
 export async function parallelSearch(
   query: string,
   recency?: 'day' | 'week' | 'month',
+  { deadlineMs = SEARCH_DEADLINE_MS }: { deadlineMs?: number } = {}, // test seam
 ): Promise<SearchResponse> {
+  const deadline = AbortSignal.timeout(deadlineMs);
+  const step = { signal: deadline, timeout: deadlineMs };
   const transport = new StreamableHTTPClientTransport(new URL(ENDPOINT), {
     requestInit: { headers: { 'User-Agent': USER_AGENT } },
     // Global fetch owns the connection pool; this adapter owns no dispatcher.
-    // Bound teardown too, without allowing it to replace the search outcome.
-    fetch: (input, init) => fetchWithTimeout(input, {
-      ...init, timeoutMs: init?.method === 'DELETE' ? 2_000 : 30_000, bodyDeadline: true,
-    }),
+    fetch: (input, init) => init?.method === 'DELETE'
+      ? fetchWithTimeout(input, { ...init, timeoutMs: TEARDOWN_TIMEOUT_MS, bodyDeadline: true })
+      : fetchWithTimeout(input, {
+        ...init,
+        signal: init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
+        timeoutMs: deadlineMs,
+        bodyDeadline: true,
+      }),
   });
   const client = new Client({ name: 'subwave', version: '1.0.0' });
   try {
-    await client.connect(transport, { timeout: 30_000 });
-    const tools = await client.listTools({}, { timeout: 30_000 });
+    await client.connect(transport, step);
+    const tools = await client.listTools({}, step);
     if (!tools.tools.some(t => t.name === 'web_search')) throw new Error('Parallel web_search unavailable');
     const result = CallToolResultSchema.parse(await client.callTool({
       name: 'web_search',
@@ -133,7 +148,7 @@ export async function parallelSearch(
         objective: recency ? `${query}\nPrefer sources from the past ${recency}.` : query,
         search_queries: [query],
       },
-    }, undefined, { timeout: 30_000 }));
+    }, undefined, step));
     if (result.isError) throw new Error(`Parallel search failed: ${JSON.stringify(result.content)}`);
     let data: unknown = result.structuredContent;
     if (!data) {
@@ -141,6 +156,9 @@ export async function parallelSearch(
       if (text?.type === 'text') data = JSON.parse(text.text);
     }
     return parseParallelResponse(data);
+  } catch (err) {
+    if (deadline.aborted) throw new Error(`Parallel search timed out after ${deadlineMs / 1000}s`, { cause: err });
+    throw err;
   } finally {
     try { if (transport.sessionId) await transport.terminateSession(); } catch { /* best effort */ }
     await client.close();

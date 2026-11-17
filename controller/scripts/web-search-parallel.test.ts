@@ -176,3 +176,58 @@ test('SDK wire path, headers, held-open replies, cleanup, errors and dispatcher 
     await settings.update({ search: original });
   }
 });
+
+test('one deadline covers the whole search: a stall at any step ends it there, and the session still closes', async () => {
+  const realFetch = globalThis.fetch;
+  let stallAt = '';
+  let held: Promise<void> = Promise.resolve();
+  const deletes: string[] = [];
+  const server = createServer(async (req, res) => {
+    if (req.method === 'GET') { res.writeHead(405).end(); return; }
+    if (req.method === 'DELETE') { deletes.push(stallAt); res.writeHead(200).end(); return; }
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const rpc = JSON.parse(body);
+    if (!('id' in rpc)) { res.writeHead(202).end(); return; }
+    if (rpc.method === stallAt) {
+      // Never answer: only the client giving up ends this request.
+      held = new Promise(resolve => res.on('close', () => resolve()));
+      return;
+    }
+    let result: unknown;
+    if (rpc.method === 'initialize') {
+      result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'synthetic', version: '1' } };
+      res.setHeader('mcp-session-id', 'stall-session');
+    } else if (rpc.method === 'tools/list') {
+      result = { tools: [{ name: 'web_search', inputSchema: { type: 'object' } }] };
+    } else {
+      result = { content: [{ type: 'text', text: JSON.stringify(data) }] };
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+  globalThis.fetch = ((_input, init) => realFetch(`http://127.0.0.1:${port}/mcp`, init)) as typeof fetch;
+  try {
+    for (const step of ['initialize', 'tools/list', 'tools/call']) {
+      stallAt = step;
+      const start = Date.now();
+      await assert.rejects(parallelSearch(`stall at ${step}`, undefined, { deadlineMs: 400 }), /timed out after 0\.4s/, step);
+      const took = Date.now() - start;
+      // The deadline, not a per-step 30 s, ended it (the server answers DELETE at once).
+      assert.ok(took >= 350 && took < 2_000, `${step}: ${took}ms`);
+      // The stalled request was torn down, not left open on the server.
+      await held;
+    }
+    // A session that existed was closed; the stall at initialize never had one.
+    assert.deepEqual(deletes, ['tools/list', 'tools/call']);
+    // The same server answers a search that stalls nowhere.
+    stallAt = '';
+    assert.equal((await parallelSearch('no stall', undefined, { deadlineMs: 2_000 })).results[0].content, cleanPassage);
+  } finally {
+    globalThis.fetch = realFetch;
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
