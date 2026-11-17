@@ -135,10 +135,11 @@ cu124 wheel still ships Maxwell (sm_50), Pascal (sm_60) and Volta (sm_70)
 SASS. cu128 dropped those three, and CUDA 13 cannot emit them. The split
 stack's cu124 build came after the AIO's (#2280). Both indexes publish cp313
 wheels for the AIO's system Python 3.13 and cp311 for the standalone image.
-The two Dockerfiles share one `TORCH_CUDA` case. Keep the shared pins in lockstep (Demucs 4.0.1, diffq 0.2.4,
-transformers 5.13.0, CPU onnxruntime 1.27.0); the cu124 torch pin is the one
-exception. Chatterbox runs in a separate venv with its
-own upstream torch pin and Blackwell override, described in `docs/gpu-tts.md`.
+The two Dockerfiles share one `TORCH_CUDA` case. Keep the shared pins in
+lockstep (Demucs 4.0.1, diffq 0.2.4, transformers 5.13.0, CPU onnxruntime
+1.27.0); the cu124 torch pin is the one exception. Chatterbox runs in a
+separate venv with its own upstream torch pin and Blackwell override,
+described in `docs/gpu-tts.md`.
 The AIO appends `/opt/analyzer/venv/bin` to PATH so `docker exec subwave pip`
 targets analyzer packages while system `python3` keeps precedence. Its analyzer
 and Kokoro workers use explicit interpreter paths. The standalone analyzer
@@ -180,8 +181,9 @@ the plain `:<version>` tags follow the **primary** build, today cu128, so they
 work only on Turing and newer. An architecture tag floats with each stable
 release, so `subwave update` needs nothing more; a `:<version>-cu124` pin in
 `ANALYZER_CUDA_TAG` stays where it is until the operator moves it. An
-architecture tag points at the newest build that still supports its GPU, which is why each GPU has its own: a later wheel
-can move one without the others (a cu130 that only adds Blackwell moves
+architecture tag points at the newest build that still supports its GPU,
+which is why each GPU has its own: a later wheel can move one without the
+others (a cu130 that only adds Blackwell moves
 `:blackwell` and leaves `:hopper` on cu128), whereas a tag shared by several
 GPUs, or `:latest`, would strand the older cards the day a newer wheel drops
 them. Never point an architecture tag at a build that dropped its GPU, and

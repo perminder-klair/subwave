@@ -166,8 +166,8 @@ ANALYZER_HEAVY=1`}</CodeBlock>
           named for its architecture to <code className="bs-code-inline">.env</code>,
           such as <code className="bs-code-inline">ANALYZER_CUDA_TAG=pascal</code> for a
           GTX 10-series, and the overlay pulls the build that still supports it. The
-          worker runs
-          one small test op on the card first: if the GPU isn&rsquo;t visible, or the
+          worker runs one small test op on the card first: if the GPU isn&rsquo;t
+          visible, or the
           image has no kernels for it, it logs a warning naming the card and the image
           tag that suits it, then falls back to CPU (even with{' '}
           <code className="bs-code-inline">ANALYZE_DEVICE=cuda</code>); analysis never
