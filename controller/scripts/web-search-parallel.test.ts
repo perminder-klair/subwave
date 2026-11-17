@@ -68,6 +68,36 @@ test('a clean excerpt comes through unchanged apart from whitespace, and all-chr
     'Exclusive Interview');
 });
 
+test('a result that is only a list, or CJK prose, keeps its text', () => {
+  // Tour dates, a discography and a tracklist: lists end to end, no prose line.
+  assert.equal(parallelSnippet(['* May 3 \u2014 London, O2 Academy\n* May 5 \u2014 Paris, Olympia']),
+    'May 3 \u2014 London, O2 Academy May 5 \u2014 Paris, Olympia');
+  assert.equal(parallelSnippet(['* Pablo Honey (1993)\n* The Bends (1995)']), 'Pablo Honey (1993) The Bends (1995)');
+  assert.equal(parallelSnippet(['1. Airbag\n2. Paranoid Android\n3. Let Down']), 'Airbag Paranoid Android Let Down');
+  // Dates under a prose line are data, not a menu.
+  assert.equal(parallelSnippet(['Here are the dates.\n* May 3 London\n* May 5 Paris']), 'Here are the dates. May 3 London May 5 Paris');
+  // CJK has no spaces: a long list item is a sentence, and 。 ends one, so a
+  // Japanese excerpt is not dropped beside an English one.
+  const ja = '\u5b87\u591a\u7530\u30d2\u30ab\u30eb\u304c\u65b0\u3057\u3044\u30a2\u30eb\u30d0\u30e0\u3092\u6765\u6708\u767a\u58f2\u3059\u308b\u3053\u3068\u3092\u767a\u8868\u3057\u307e\u3057\u305f';
+  assert.equal(parallelSnippet([`* ${ja}`]), ja);
+  assert.equal(parallelSnippet(['* Home\n* Music\nShe released a new album this year.', `${ja}\u3002`]),
+    `She released a new album this year. ${ja}\u3002`);
+});
+
+test('the cleanup stays linear on hostile page text', () => {
+  // Each of these took 2 to 12 seconds of blocked event loop with quadratic regexes
+  // or line joining; linear, each is a few milliseconds.
+  const hostile = ['['.repeat(100_000), '!['.repeat(50_000), '[a]('.repeat(25_000), '[('.repeat(50_000),
+    '<'.repeat(100_000), 'a\n'.repeat(200_000), `A\n${'b\n'.repeat(200_000)}`];
+  for (const text of hostile) {
+    const start = performance.now();
+    parallelSnippet([text]);
+    parseParallelResponse({ results: [{ title: text, excerpts: [text] }] });
+    const took = performance.now() - start;
+    assert.ok(took < 1_000, `${JSON.stringify(text.slice(0, 8))}: ${Math.round(took)}ms`);
+  }
+});
+
 test('Parallel selection survives cold load; existing providers and credentials keep their policy', async () => {
   const original = structuredClone(settings.get().search);
   try {

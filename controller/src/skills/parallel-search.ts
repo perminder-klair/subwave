@@ -13,32 +13,45 @@ const USER_AGENT = 'SUB-WAVE radio controller (https://github.com/perminder-klai
 // with the page's chrome: a breadcrumb, a menu, "Search for:", a dateline, an
 // infobox. Cut at 300 characters as it came, a snippet could be all menu, and
 // that is what reached the DJ's prompt. So each line is read on its own:
-//   - plainly navigation (a short bare list item, a breadcrumb, a site label
-//     such as "Search for:" or "Share", a row of share buttons, the "..."
-//     between excerpts) is dropped wherever it is;
+//   - plainly navigation (a short bare list item with no figure in it, a
+//     breadcrumb, a site label such as "Search for:" or "Share", a row of share
+//     buttons, the "..." between excerpts) is dropped wherever it is;
 //   - an excerpt's leading lines are skipped until its first line of prose (a
 //     sentence ending in . ! ? or a closing quote, or a line of 12 words or
 //     more; never a list item or a table row). An excerpt with no prose line
 //     is all chrome and is dropped, unless every excerpt is, when its
-//     non-navigation lines stand.
+//     non-navigation lines stand, and if there are none of those either (a
+//     result that is only a list: a tracklist, a discography) its short list
+//     items do, rather than the result being lost.
+// CJK text has no spaces, so each two Han or kana characters count as a word
+// (Japanese averages about two a word), and
+// 。！？ and closing 」』 end a sentence.
 // Then the same cleanup every provider gets (cleanSnippet, whitespace
-// collapsed) and the 300-character cut. An excerpt that is already prose comes
+// collapsed) and the 300-character cut. Every regex here runs on page text,
+// so each stays linear: bracket and paren runs stop at the next opener, and
+// the shared cleanup sees a bounded head of the text, never the whole page. An excerpt that is already prose comes
 // through unchanged apart from its whitespace.
 const LIST_ITEM = /^\s*(?:[*+\-\u2022]|\d+[.)])(?=\s|$)\s*/u;
 const SITE_LABEL = /^(?:search(?: for)?|skip to (?:main )?content|menu|share|appearance|now playing|advertisement|\.{3}|\u2026)\s*:?$/iu;
 const SHARE_BUTTONS = new Set(['twitter', 'x', 'facebook', 'pinterest', 'linkedin', 'reddit', 'whatsapp', 'email', 'bluesky', 'threads', 'tumblr']);
-const SENTENCE_END = /(?:[!?]|(?<!\.\.)\.|["\u201d\u2019'])$/u;
+const SENTENCE_END = /(?:[!?\u3002\uff01\uff1f]|(?<!\.\.)\.|["\u201d\u2019'\u300d\u300f])$/u;
+const CJK_CHAR = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu;
+// Text past this many characters cannot reach a 300-character snippet once
+// the cleanup has removed markup, and it bounds the shared cleanup's cost.
+const CLEANUP_INPUT_MAX = 2_000;
 
 function wordCount(line: string): number {
-  return (line.match(/[\p{L}\p{N}]+/gu) ?? []).length;
+  let n = 0;
+  for (const word of line.match(/[\p{L}\p{N}]+/gu) ?? []) n += Math.ceil((word.match(CJK_CHAR) ?? []).length / 2) || 1;
+  return n;
 }
 
 // Markdown down to its words: link and image syntax, heading and quote marks,
 // emphasis runs. The text the markup carried stays.
 function unmark(line: string): string {
   return line
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/!\[[^\][]*\]\((?:[^()]|\([^()]*\))*\)/g, '')
+    .replace(/\[([^\][]*)\]\((?:[^()]|\([^()]*\))*\)/g, '$1')
     .replace(/^\s*(?:#{1,6}|>)\s*/, '')
     .replace(/(?:\*\*|__|_{3,})/g, '')
     .replace(/(?<![\p{L}\p{N}])[*_]([^*_]+)[*_](?![\p{L}\p{N}])/gu, '$1')
@@ -49,34 +62,41 @@ function isShareRow(line: string): boolean {
   return line.split(/\s+/).every(w => SHARE_BUTTONS.has(w.toLowerCase()));
 }
 
-function isNavigation(line: string, listItem: boolean): boolean {
-  if (!line || SITE_LABEL.test(line) || isShareRow(line)) return true;
-  if ((line.match(/ > /g) ?? []).length >= 2) return true; // breadcrumb
-  return listItem && wordCount(line) <= 5 && !SENTENCE_END.test(line);
+// 'chrome' is dropped outright; 'short-item' (a short bare list item, a menu
+// entry or a track title alike) is kept only when nothing else is left.
+function navigation(line: string, listItem: boolean): 'chrome' | 'short-item' | null {
+  if (!line || SITE_LABEL.test(line) || isShareRow(line)) return 'chrome';
+  if ((line.match(/ > /g) ?? []).length >= 2) return 'chrome'; // breadcrumb
+  // A figure (a date, a year, a chart place) is data, not a menu entry.
+  if (listItem && wordCount(line) <= 5 && !SENTENCE_END.test(line) && !/\p{N}/u.test(line)) return 'short-item';
+  return null;
 }
 
 // A line that opens in lower case continues the one above it (hard-wrapped
 // prose), so the two are judged as one.
+// Each line's parts are joined once at the end: appending to a growing string
+// and re-reading it per line is quadratic in a page of short lines.
 function unwrap(excerpt: string): string[] {
-  const lines: string[] = [];
+  const lines: string[][] = [];
+  let prevHasText = false;
   for (const raw of excerpt.split(/\r?\n/)) {
-    const prev = lines.length - 1;
-    if (prev >= 0 && lines[prev].trim() && /^\s*\p{Ll}/u.test(raw)) lines[prev] += ` ${raw.trim()}`;
-    else lines.push(raw);
+    if (prevHasText && /^\s*\p{Ll}/u.test(raw)) lines[lines.length - 1].push(raw.trim());
+    else { lines.push([raw]); prevHasText = /\S/.test(raw); }
   }
-  return lines;
+  return lines.map(parts => parts.join(' '));
 }
 
-function excerptLines(excerpt: string): { text: string; prose: boolean }[] {
-  const out: { text: string; prose: boolean }[] = [];
+function excerptLines(excerpt: string): { text: string; prose: boolean; shortItem: boolean }[] {
+  const out: { text: string; prose: boolean; shortItem: boolean }[] = [];
   for (const raw of unwrap(excerpt)) {
     const listItem = LIST_ITEM.test(raw);
     const text = unmark(raw.replace(LIST_ITEM, ''));
-    if (isNavigation(text, listItem)) continue;
+    const nav = navigation(text, listItem);
+    if (nav === 'chrome') continue;
     // A table row or a byline ("Published … | Editor …") is never the prose start.
-    const prose = !listItem && !/\s\|(?:\s|$)/.test(text)
+    const prose = !nav && !listItem && !/\s\|(?:\s|$)/.test(text)
       && (SENTENCE_END.test(text) || wordCount(text) >= 12);
-    out.push({ text, prose });
+    out.push({ text, prose, shortItem: nav === 'short-item' });
   }
   return out;
 }
@@ -84,13 +104,19 @@ function excerptLines(excerpt: string): { text: string; prose: boolean }[] {
 export function parallelSnippet(excerpts: string[]): string {
   const kept: string[] = [];
   const fallback: string[] = [];
+  const shortItems: string[] = [];
   for (const excerpt of excerpts) {
     const lines = excerptLines(excerpt);
-    fallback.push(...lines.map(l => l.text));
+    for (const l of lines) (l.shortItem ? shortItems : fallback).push(l.text);
     const first = lines.findIndex(l => l.prose);
-    if (first >= 0) kept.push(...lines.slice(first).map(l => l.text));
+    if (first >= 0) kept.push(...lines.slice(first).filter(l => !l.shortItem).map(l => l.text));
   }
-  return cleanSnippet((kept.length ? kept : fallback).join(' ')).replace(/\s+/g, ' ').trim().slice(0, 300);
+  const text = (kept.length ? kept : fallback.length ? fallback : shortItems).join(' ');
+  return cleanText(text.replace(/\s+/g, ' ').slice(0, CLEANUP_INPUT_MAX)).slice(0, 300);
+}
+
+function cleanText(raw: string): string {
+  return cleanSnippet(raw).replace(/\s+/g, ' ').trim();
 }
 
 export function parseParallelResponse(data: unknown): SearchResponse {
@@ -99,7 +125,7 @@ export function parseParallelResponse(data: unknown): SearchResponse {
   for (const row of Array.isArray(raw) ? raw : []) {
     if (!row || typeof row !== 'object') continue;
     const r = row as Record<string, unknown>;
-    const title = cleanSnippet(r.title).replace(/\s+/g, ' ').trim();
+    const title = typeof r.title === 'string' ? cleanText(r.title.replace(/\s+/g, ' ').slice(0, CLEANUP_INPUT_MAX)) : '';
     const content = Array.isArray(r.excerpts)
       ? parallelSnippet(r.excerpts.filter((v): v is string => typeof v === 'string'))
       : '';
