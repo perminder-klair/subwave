@@ -47,8 +47,13 @@ const kTokens = (n: number) => `${Math.round(n / 1000)}k`;
 export function reasoningEffortHint(leg: ReasoningLegView): string {
   const defaultBudget = leg.provider === 'anthropic' ? manualThinkingDefaultBudget(leg.model) : null;
   if (defaultBudget != null) {
-    const { medium, high } = MANUAL_THINKING_BUDGETS;
-    return `Thinking tokens per reply on this model: Default and Low up to ~${kTokens(defaultBudget)}, `
+    const { low, medium, high } = MANUAL_THINKING_BUDGETS;
+    // Read both numbers off the constants, so the copy can't claim Default
+    // equals Low after one of them moves.
+    const lead = defaultBudget === low
+      ? `Default and Low up to ~${kTokens(low)}`
+      : `Default up to ~${kTokens(defaultBudget)}, Low ${kTokens(low)}`;
+    return `Thinking tokens per reply on this model: ${lead}, `
       + `Medium ${kTokens(medium)}, High ${kTokens(high)}. A DJ line is about 150 tokens, `
       + 'so the default is usually plenty.';
   }
