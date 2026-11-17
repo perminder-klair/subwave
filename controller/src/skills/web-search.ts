@@ -9,6 +9,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { BoundedKeyMap } from '../util/bounded-key-map.js';
+import { cleanSnippet, type SearchResponse, type SearchResult } from './search-snippet.js';
 import {
   searchKeyFits, searchKeyMismatch, searchKeyRequired, searchProvidersRefusing,
 } from './search-key-policy.js';
@@ -19,9 +20,6 @@ const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const KEENABLE_ENDPOINT = 'https://api.keenable.ai/v1/search';
 const FIRECRAWL_ENDPOINT = 'https://api.firecrawl.dev/v2/search';
 const OUTCRAWL_ENDPOINT = 'https://api.outcrawl.ai/v1/search';
-
-type SearchResult = { title: string; content: string };
-type SearchResponse = { answer: string; results: SearchResult[] };
 
 // 30-min TTL cache keyed by `${provider}:${query}`. BOUNDED: the request path's
 // identifyRequestedTrack searches on a listener's free-text description, so the
@@ -276,28 +274,6 @@ export async function braveSearch(
   if (!res.ok) throw new Error(`Brave Search HTTP ${res.status}`);
   const data = await res.json();
   return parseBraveResponse(data);
-}
-
-// Strips residual markup from a search snippet. Brave and Firecrawl both pass
-// through page descriptions, which can carry entities (&#x27; etc.) and the
-// occasional stray tag depending on the source page, even with Brave's
-// text_decorations=0 removing the highlighting.
-function cleanSnippet(raw: unknown): string {
-  if (typeof raw !== 'string') return '';
-  return raw
-    .replace(/<[^>]+>/g, '')
-    .replace(/&#(x?)([0-9a-fA-F]+);/g, (whole, x: string, digits: string) => {
-      const code = parseInt(digits, x ? 16 : 10);
-      return Number.isFinite(code) && code > 0 && code <= 0x10ffff
-        ? String.fromCodePoint(code)
-        : whole;
-    })
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .trim();
 }
 
 // Pure parser for Brave's web-search JSON. Maps the Brave shape (web.results[],

@@ -12,8 +12,10 @@ const passage = 'A passage with \u0085 and \u2028 and \u2029 intact.';
 const data = { results: [{ title: 'Music source', url: 'https://example.org/music', excerpts: [passage] }] };
 
 test('parser preserves passages, limits results and tolerates malformed data', () => {
+  // The shared SearchResult shape: { title, content } and nothing else, the
+  // same as every other provider (the source URL is not part of the contract).
   assert.deepEqual(parseParallelResponse(data).results, [
-    { title: 'Music source', content: passage, url: 'https://example.org/music' },
+    { title: 'Music source', content: passage },
   ]);
   assert.deepEqual(parseParallelResponse(null), { answer: '', results: [] });
   assert.deepEqual(parseParallelResponse({ results: [null, {}, 4] }).results, []);
@@ -99,7 +101,7 @@ test('SDK wire path, headers, held-open replies, cleanup, errors and dispatcher 
     const response = await searchWeb('Sabrina Carpenter artist tour news', { recency: 'week' });
     assert.ok(Date.now() - start < 3_000);
     assert.equal(response.results[0].content, passage);
-    assert.equal((response.results[0] as { url?: string }).url, 'https://example.org/music');
+    assert.deepEqual(Object.keys(response.results[0]).sort(), ['content', 'title']);
     await searchWeb('Sabrina Carpenter artist tour news', { recency: 'week' });
     assert.equal(toolCalls, 1, 'dispatcher memo preserved');
     assert.match(String(bodies[0].objective), /past week/);
