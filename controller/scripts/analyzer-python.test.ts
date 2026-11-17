@@ -33,6 +33,7 @@ const SUITES = [
   'analyzer_whole_file_test.py', // loudness v2 + edges: one whole-file decode, absolute floor
   'analyzer_stems_marker_test.py', // no stem writes into an unmarked (unmounted) stems root
   'analyzer_shared_modes_test.py', // shared stems/transitions written 777/666 whatever the umask
+  'analyzer_device_test.py', // cuda self-test + cpu fallback (#2280)
 ];
 
 const probe = spawnSync('python3', ['--version'], { stdio: 'ignore' });
