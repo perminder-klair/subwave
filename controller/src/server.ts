@@ -211,10 +211,10 @@ app.listen(config.server.port, async (err?: Error) => {
     await settings.load();
     const s = settings.get();
     const { rewroteMountFiles } = await settings.ensureLiquidsoapSettingsFile();
-    // A plan change (or a hand edit) reached the mount files at boot; the
+    // A ceiling change (or a hand edit) reached the mount files at boot; the
     // running mixer still has the old ones until it restarts.
     if (rewroteMountFiles.length) {
-      const line = `[settings] stream mounts updated to match the saved settings${hostedMaxBitrate() ? ` and this plan's ${hostedMaxBitrate()} kbps ceiling` : ''} (${rewroteMountFiles.join(', ')}); they take effect when the mixer next restarts`;
+      const line = `[settings] stream mounts updated to match the saved settings${hostedMaxBitrate() ? ` and this station's ${hostedMaxBitrate()} kbps ceiling` : ''} (${rewroteMountFiles.join(', ')}); they take effect when the mixer next restarts`;
       console.log(line);
       queue.log('scheduler', line);
     }
@@ -260,6 +260,17 @@ app.listen(config.server.port, async (err?: Error) => {
   } catch (err: any) {
     console.error('[id-rotation] boot apply failed (will retry next boot):', err.message);
   }
+
+  // Hearts whose file came back under a new id (a re-import) follow it. Never
+  // fatal: a miss leaves the heart where it was, for the next boot or tag run.
+  // Not awaited: a planned move asks Navidrome first (music/heart-follow.ts), and
+  // a server still starting must not hold the boot behind its timeout. Nothing
+  // else in the boot depends on where a heart sits.
+  void import('./music/heart-follow.js')
+    .then(({ followMovedHearts }) => followMovedHearts())
+    .catch((err: unknown) => {
+      console.error('[likes] following moved hearts failed (will retry):', err instanceof Error ? err.message : err);
+    });
 
   // Start the remote-TTS /health probe loop now that settings are loaded — its
   // URL lives in settings (not env), so it can't self-start at import time the

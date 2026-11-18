@@ -128,7 +128,7 @@ export function renderSettingsSnapshot(): string {
   try { s = settings.get(); } catch { return ''; }
   const llm: NonNullable<StationSettings['llm']> = s?.llm || {};
   const st: NonNullable<StationSettings['stream']> = s?.stream || {};
-  // Through a hosted plan's ceiling, as the mixer files get them.
+  // Through a hosted station's ceiling, as the mixer files get them.
   const running = advertisedMounts(st);
   const mounts = ['mp3'];
   if (running.opusEnabled) mounts.push('opus');

@@ -251,6 +251,7 @@ export default function PersonasPanel() {
       voiceStyle: '',
       avatar: '',
       tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
+      fallbackVoice: null,
       skills: (data?.skills?.catalog || []).map(s => s.name),
       tags: [],
     });
@@ -547,6 +548,15 @@ export default function PersonasPanel() {
               // Rate multiplier; server clamps to 0.5–2.0×.
               speed: p.tts.speed ?? 1,
             },
+            // Listed explicitly like every field here: leaving it out would
+            // erase the persona's rescue voice on every save.
+            fallbackVoice: p.fallbackVoice
+              ? {
+                  engine: p.fallbackVoice.engine,
+                  cloudProvider: p.fallbackVoice.cloudProvider,
+                  voice: voiceForSave(p.fallbackVoice.engine, p.fallbackVoice.voice.trim()),
+                }
+              : null,
             skills: p.skills,
             tags: p.tags || [],
           })),

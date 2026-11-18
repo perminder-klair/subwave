@@ -9,6 +9,7 @@ import {
   slugifyStationName,
   duplicateAction,
   conversionAction,
+  conversionLogAction,
 } from '../src/stations/pure.js';
 
 // The per-install station ceiling — the manager, the route's `limit` field,
@@ -67,7 +68,16 @@ for (const f of [
 // --- conversion classification (spec §6) --------------------------------------
 for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found'])
   assert.equal(conversionAction(f), 'keep', f);
-for (const f of ['settings.json', 'library.db', 'jingles', 'logs', 'archive', 'session.json', 'show-preparations.json'])
+for (const f of ['settings.json', 'library.db', 'jingles', 'archive', 'session.json', 'show-preparations.json'])
   assert.equal(conversionAction(f), 'move', f);
+// `logs` is split (#2349): liquidsoap's radio.log, which the AIO links and
+// compose mounts at the root, stays; the station's own history moves with it.
+assert.equal(conversionAction('logs'), 'split');
+for (const f of ['radio.log', 'radio.log.old', '.write-probe', 'web-dev.log', 'web-dev.pid'])
+  assert.equal(conversionLogAction(f), 'keep', f);
+for (const f of [
+  'events-2026-11-15.jsonl', 'requests.log', 'subsonic.log', 'picks.log', 'llm-debug.log',
+  'radio.logx', 'my-radio.log', 'web-dev.log.1',
+]) assert.equal(conversionLogAction(f), 'move', f);
 
 console.log('stations-pure.test: OK');

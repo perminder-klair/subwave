@@ -4,6 +4,8 @@
 
 import type { ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { parseOutroVocalJson, parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
+import { parseLoudnessCurve } from '../loudness-curve.js';
+import { storedYearUntrusted } from '../era-suspect.js';
 
 export function rowToTrack(row: TrackRow): TrackRecord {
   return {
@@ -19,12 +21,10 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     originalYearCheckedAt: row.original_year_checked_at ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
     eraUntrusted: row.era_untrusted == null ? null : !!row.era_untrusted,
-    // The composed answer every era consumer reads. OR, not COALESCE: the two
-    // columns are independent evidence and either alone is enough. A row not yet
-    // re-walked since the #1418 migration behaves exactly as it did under #842.
-    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
-      ? true
-      : (row.is_compilation == null && row.era_untrusted == null ? null : false),
+    // The composed answer every era consumer reads (era-suspect's stored
+    // verdict: the walk's, else the raw flag on a row not yet re-walked since
+    // the #1418 migration, which behaves exactly as it did under #842).
+    yearUntrusted: storedYearUntrusted(row.is_compilation, row.era_untrusted),
     genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre,
     durationSec: row.duration_sec,
@@ -93,6 +93,9 @@ export function parseOutroJson(s: string): TrackOutro | null {
         if (Number.isFinite(s) && Number.isFinite(e) && e > s) vocalRanges.push({ startMs: s, endMs: e });
       }
     }
+    // The tail's loudness curve (tail v3): kept when valid, ABSENT when
+    // missing or malformed (a bad point would shift every later one).
+    const loudnessCurve = parseLoudnessCurve(v?.loudnessCurve);
     return {
       startMs: Math.round(startMs),
       ending,
@@ -101,6 +104,7 @@ export function parseOutroJson(s: string): TrackOutro | null {
       beats: msList(v?.beats),
       bars: msList(v?.bars),
       vocalRanges,
+      ...(loudnessCurve ? { loudnessCurve } : {}),
     };
   } catch {
     return null;
@@ -226,8 +230,7 @@ export function rowToEnergyPool(row: EnergyPoolRow): EnergyPoolRecord {
     ...rowToMoodPool(row),
     originalYear: row.original_year ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
-    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
-      ? true : (row.is_compilation == null && row.era_untrusted == null ? null : false),
+    yearUntrusted: storedYearUntrusted(row.is_compilation, row.era_untrusted),
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     bpm: row.bpm ?? null, musicalKey: row.musical_key ?? null,
     introMs: row.intro_ms ?? null, loudnessLufs: row.loudness_lufs ?? null,

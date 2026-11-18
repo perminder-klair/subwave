@@ -39,7 +39,7 @@ await settings.load();
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
-const { resolveSilenceTrim, shiftOnsetMs, playableSpanSec } = await import('../src/music/silence-trim.js');
+const { resolveSilenceTrim, shiftOnsetMs, playableSpanSec, resolveAudibleEnd } = await import('../src/music/silence-trim.js');
 
 await library.load();
 
@@ -160,4 +160,112 @@ test('with the trim off, the playable span still ends on the decoded length', as
   } finally {
     await settings.update({ silenceTrim: { enabled: true, minGapMs: 1_500 } } as never);
   }
+});
+
+// The audible-end cut of a fade (transitions.fadeAudibleEnd) reads the outro's
+// loudness curve and the body loudness off the same projection: a curve that
+// does not survive the write → outro_json → library.get round trip disables
+// the cut silently, exactly like a missing silence column.
+db.upsertTrackMeta('faded', { title: 'Faded', artist: 'A', album: 'Al', duration: 220 } as never);
+db.upsertTrackAnalysis('faded', {
+  bpm: 120, musicalKey: 'C', introMs: 8_000, confidence: 1, loudnessLufs: -10,
+  leadSilenceMs: 0, tailSilenceMs: 2_730, tailStartMs: 217_270,
+  outro: {
+    startMs: 205_300, ending: 'fade', lufs: -20, bpm: 120, beats: null, bars: null,
+    // -12 LUFS from 210.0 s, -30 at 211.0 s (body - 20), then gone.
+    loudnessCurve: { startMs: 210_000, stepMs: 500, lufs: [-120, -250, -300, -400, -500] },
+  },
+});
+
+test('the audible-end cut resolves through the library: curve and body loudness', async () => {
+  assert.deepEqual(library.get('faded')?.outro?.loudnessCurve,
+    { startMs: 210_000, stepMs: 500, lufs: [-120, -250, -300, -400, -500] });
+  assert.equal(resolveSilenceTrim({ id: 'faded', duration: 220 }).cueOutSec, 217.52, 'off: the trim alone');
+  await settings.update({ transitions: { fadeAudibleEnd: true, fadeAudibleEndDb: 20 } } as never);
+  try {
+    assert.equal(resolveSilenceTrim({ id: 'faded', duration: 220 }).cueOutSec, 211);
+    assert.deepEqual(resolveAudibleEnd({ id: 'faded', duration: 220 }), { endSec: 211, cueInSec: null });
+    assert.equal(playableSpanSec({ id: 'faded', duration: 220 }), 211);
+  } finally {
+    await settings.update({ transitions: { fadeAudibleEnd: false } } as never);
+  }
+});
+
+test('with tailFromCurve on, the curve outro is derived on its first read, not by every get()', async () => {
+  const sqlRun = (q: string, ...a: unknown[]) => db.requireDb().prepare(q).run(...a);
+  // A whole-file curve whose tail series fades from -10 LUFS (205 s) to -60
+  // (215 s): derivable, so it replaces the stored outro's level readings.
+  const tail: number[] = [];
+  for (let t = 190_000; t <= 216_000; t += 500) {
+    tail.push(t <= 205_000 ? -100 : t <= 215_000 ? Math.round(-100 - (500 * (t - 205_000)) / 10_000) : -1000);
+  }
+  const curve = JSON.stringify({
+    whole: { startMs: 3_000, stepMs: 1_000, lufs: [-100, -100] },
+    tail: { startMs: 190_000, stepMs: 500, lufs: tail },
+  });
+  sqlRun('UPDATE tracks SET loudness_curve_json = NULL WHERE id = ?', 'faded');
+  await settings.update({ transitions: { tailFromCurve: true } } as never);
+  try {
+    const rec = library.get('faded');
+    // Written after get(): an eager projection would already hold the stored outro.
+    sqlRun('UPDATE tracks SET loudness_curve_json = ? WHERE id = ?', curve, 'faded');
+    assert.equal(rec.outro.loudnessCurve.startMs, 190_000, 'the curve was read when outro was');
+    assert.equal(rec.outro.ending, 'fade');
+    assert.ok(rec.outro.wholeLoudnessCurve, 'the whole-track series rides along');
+    // The same value every read, through JSON and spreads too.
+    assert.equal(rec.outro, rec.outro);
+    assert.deepEqual(JSON.parse(JSON.stringify(rec)).outro.loudnessCurve, rec.outro.loudnessCurve);
+    assert.equal({ ...rec }.outro, rec.outro);
+    // Assignable, like any record field.
+    rec.outro = null;
+    assert.equal(rec.outro, null);
+    // Off: the stored outro, exactly as before.
+    await settings.update({ transitions: { tailFromCurve: false } } as never);
+    assert.equal(library.get('faded').outro.loudnessCurve.startMs, 210_000);
+  } finally {
+    await settings.update({ transitions: { tailFromCurve: false } } as never);
+    sqlRun('UPDATE tracks SET loudness_curve_json = NULL WHERE id = ?', 'faded');
+  }
+});
+
+test('the stem blend reads the outgoing tail through the same projection', async () => {
+  const { blendSides } = await import('../src/broadcast/stem-blend.js');
+  db.upsertTrackMeta('next-in', { title: 'Next', artist: 'B', album: 'Bl', duration: 200 } as never);
+  const sqlRun = (q: string, ...a: unknown[]) => db.requireDb().prepare(q).run(...a);
+  const tail: number[] = [];
+  for (let t = 190_000; t <= 216_000; t += 500) {
+    tail.push(t <= 205_000 ? -100 : t <= 215_000 ? Math.round(-100 - (500 * (t - 205_000)) / 10_000) : -1000);
+  }
+  sqlRun('UPDATE tracks SET loudness_curve_json = ? WHERE id = ?', JSON.stringify({
+    whole: { startMs: 3_000, stepMs: 1_000, lufs: [-100, -100] },
+    tail: { startMs: 190_000, stepMs: 500, lufs: tail },
+  }), 'faded');
+  try {
+    // Off: the stored outro, as the blend read it before.
+    assert.equal(blendSides('faded', 'next-in')!.out.outro!.startMs, 205_300);
+    await settings.update({ transitions: { tailFromCurve: true } } as never);
+    const on = blendSides('faded', 'next-in')!;
+    // On: the curve's readings, exactly what library.get() gives every other consumer.
+    assert.deepEqual(on.out.outro, library.get('faded').outro);
+    assert.notEqual(on.out.outro!.startMs, 205_300);
+    assert.equal(blendSides('missing', 'next-in'), null);
+  } finally {
+    await settings.update({ transitions: { tailFromCurve: false } } as never);
+    sqlRun('UPDATE tracks SET loudness_curve_json = NULL WHERE id = ?', 'faded');
+  }
+});
+
+test('the drain reads the cue points and the audible end from one resolution', async () => {
+  const { resolveTrimAndAudibleEnd } = await import('../src/music/silence-trim.js');
+  const t = { id: 'faded', duration: 220 };
+  assert.deepEqual(resolveTrimAndAudibleEnd(t), { cueInSec: null, cueOutSec: 217.52, audibleEnd: null });
+  await settings.update({ transitions: { fadeAudibleEnd: true, fadeAudibleEndDb: 20 } } as never);
+  try {
+    const r = resolveTrimAndAudibleEnd(t);
+    assert.deepEqual(r, { ...resolveSilenceTrim(t), audibleEnd: resolveAudibleEnd(t) });
+    assert.deepEqual(r, { cueInSec: null, cueOutSec: 211, audibleEnd: { endSec: 211, cueInSec: null } });
+  } finally {
+    await settings.update({ transitions: { fadeAudibleEnd: false } } as never);
+  }
+  assert.deepEqual(resolveTrimAndAudibleEnd(null), { cueInSec: null, cueOutSec: null, audibleEnd: null });
 });

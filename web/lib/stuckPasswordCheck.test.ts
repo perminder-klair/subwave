@@ -1,5 +1,5 @@
 // Asking again about the stored station password while the player is stuck connecting (#2176),
-// mirroring app/scripts/stuck-password-check.test.ts: a stall that starts soon after a check waits
+// mirroring getsubwave/app:scripts/stuck-password-check.test.ts: a stall that starts soon after a check waits
 // out the gap rather than going unchecked, a network drop does not use up the check before the
 // controller denies a rotated password, and nothing asks faster than one check per
 // RECHECK_MIN_GAP_MS, since /station-auth is rate-limited per household. A 429's Retry-After holds

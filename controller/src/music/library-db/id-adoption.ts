@@ -7,6 +7,7 @@ import { WHOLE_FILE_LOUDNESS_EXTRAS, moveFacetRows, syncTrackFacets } from './fa
 import { touchGenreInputs } from './genre-inputs.js';
 import { canonicalId } from '../id-canonical.js';
 import { SEARCH_KEY_DDL } from './search-keys.js';
+import { yearSourceKept } from '../original-year-policy.js';
 
 // Carry physical track columns by default, excluding ID/generated columns and walk-owned
 // metadata. columnPlan and the drift test require every column to be classified.
@@ -22,10 +23,14 @@ const NEVER_WRITTEN = ['id', 'genre'];
 // adoption carries tags onto it), so the next search re-keys it from the merged
 // sources. Carrying them could leave old keys marked fresh.
 const WALK_OWNED = [
-  'title', 'artist', 'album', 'album_id', 'artist_id', 'year',
+  'title', 'artist', 'album', 'album_id', 'artist_id', 'album_artist_id', 'year',
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
   'explicit_status',
   ...SEARCH_KEY_DDL.columns,
+  // The era reason and album artist ride the same verdict: the walk
+  // re-derives all three together, and an old id's pair is what its own walk
+  // said about a file that may have moved.
+  'era_reason', 'album_kind', 'album_artist',
   // The file as Navidrome reports it (walkFileInfo): the new id's own walk
   // writes them, and an old id's path may name a file that moved.
   'file_path', 'file_suffix', 'file_size', 'bit_rate',
@@ -57,6 +62,12 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
   },
   // The whole-file edges facet: one measurement, carried as a set.
   { anchor: 'decoded_duration_ms', cols: ['edge_lead_ms', 'edge_tail_ms', 'decoded_duration_ms'] },
+  // Which window the outro was measured on: it follows the outro it describes
+  // (outro_json itself is carried new ?? old, so this takes the same side).
+  { anchor: 'outro_json', cols: ['tail_version'] },
+  // The stem-stamp policy's miss count (#2238) describes the stems_at
+  // decision, so it takes the same side (stems_at is carried new ?? old).
+  { anchor: 'stems_at', cols: ['stems_tail_misses'] },
   { anchor: 'audio_moods', cols: ['audio_moods', 'audio_mood_scores_json'] },
   { anchor: 'audio_descriptors', cols: ['audio_descriptors', 'audio_descriptor_scores_json'] },
   { anchor: 'map_x', cols: ['map_x', 'map_y'] },
@@ -64,7 +75,7 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
 
 // Columns whose value can't be decided by "is it null" alone. Each is handled
 // explicitly in mergeRow(); listed here so columnPlan() can account for them.
-const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty', 'text_vector_sound'];
+const SPECIAL = ['original_year', 'original_year_source', 'era_forced_from', 'text_vector_dirty', 'text_vector_sound'];
 
 // Default carried values to new ?? old. This list documents an explicit choice for columnPlan;
 // unlisted carried columns use the same behavior.
@@ -146,14 +157,18 @@ function mergeRow(plan: ColumnPlan, oldRow: Row, newRow: Row, movedTextVector: b
   }
   for (const c of plan.coalesced) merged[c] = newRow[c] ?? oldRow[c];
 
-  // Mirror upsertTrackMeta's precedence: a per-track 'musicbrainz' or 'manual'
-  // resolution on the old row outranks the walk-time album-tag year the new
-  // row just got. 'manual' is the operator reading the sleeve (#1418) and
-  // outranks both, so it must not be dropped here either.
-  const resolved = oldRow.original_year_source === 'musicbrainz' || oldRow.original_year_source === 'manual';
+  // Mirror upsertTrackMeta's precedence: a per-track looked-up ('musicbrainz',
+  // 'discogs') or 'manual' resolution on the old row outranks the walk-time
+  // album-tag year the new row just got. 'manual' is the operator reading the
+  // sleeve (#1418), so it must not be dropped here either. One list for both
+  // (original-year-policy.KEPT_YEAR_SOURCES).
+  const resolved = yearSourceKept(oldRow.original_year_source as string | null);
   const oldWins = resolved || newRow.original_year == null;
   merged.original_year = oldWins ? oldRow.original_year : newRow.original_year;
   merged.original_year_source = oldWins ? oldRow.original_year_source : newRow.original_year_source;
+  // An album decision's record (era_forced_from, tracks.setDecisionOriginalYear)
+  // describes the year beside it, so it goes wherever that year goes.
+  merged.era_forced_from = oldWins ? (oldRow.era_forced_from ?? null) : (newRow.era_forced_from ?? null);
 
   // text_vector_dirty is NOT NULL DEFAULT 0, so the null-anchor and COALESCE
   // rules both read a fresh row's 0 as a real answer and would drop the marker.

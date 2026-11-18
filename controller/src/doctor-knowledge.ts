@@ -96,6 +96,23 @@ when a control is hidden.
 - Rule of thumb: tight resources → Piper (maybe Kokoro). GPU box → Chatterbox via the
   sidecar. Want best quality, happy to pay → Cloud.
 
+## Rescue voices (Personas → Voice → Rescue voice; Settings → TTS voice → Fallback voice)
+When a host's own voice engine fails mid-line, the line is re-rendered rather than
+dropped: first in that persona's own Rescue voice (if set), then the station-wide
+Fallback voice, then the default engine, Piper and Kokoro. The station Fallback voice
+is ONE voice for every persona, so on a show with co-hosts a rescued line can air in
+a voice that sounds like the other host. The "co-host rescue voices" finding flags
+that: give each host on a co-hosted show a Rescue voice that
+- can speak (a cloud rescue needs that provider's key; Kokoro or Piper always work
+  locally and are the safest choice),
+- sits on a different engine from the host's own voice (a rescue on the engine that
+  just failed is skipped), and
+- differs from every co-host's own voice and rescue voice (Piper with no voice picked
+  is the same built-in voice for everyone; pick a different Kokoro voice per host
+  instead).
+Credentials always come from Settings → TTS voice; a Rescue voice only picks the
+engine and voice.
+
 ## Pause DJ when empty (Settings → LLM provider → Idle behaviour)
 Optional setting: when listeners hit zero it stops the AI work (picks, links, IDs)
 while a fallback playlist keeps music flowing, then wakes the DJ when someone tunes
@@ -111,14 +128,16 @@ Backs the DJ's artist-news segments. 'duckduckgo' is the keyless default; 'tavil
 and 'brave' give richer results but need a key (SEARCH_API_KEY — Brave is metered
 with $5/mo free credits and requires a card on file); 'searxng' is keyless but needs
 a self-hosted instance URL; 'keenable' is keyless web search, and a Keenable key in
-SEARCH_API_KEY only raises its rate limit; 'firecrawl' is keyed web search
+SEARCH_API_KEY only raises its rate limit; 'parallel' uses anonymous MCP web search
+with no key (free-tier rate limits apply); 'firecrawl' is keyed web search
 (SEARCH_API_KEY) and takes only an fc- key; 'outcrawl' is keyed too and takes only an
-ock_ key. The key slot is shared, so a key left there by another provider counts as
-no key: Firecrawl and Outcrawl refuse anything but their own prefix, and Tavily and
-Brave refuse a key with another provider's prefix (fc-, keen_, ock_, tvly-). If a
+ock_ key; 'specstream' is keyed and takes only an ss_ key. The key slot is shared,
+so a key left there by another provider counts as no key: Firecrawl, Outcrawl and
+SpecStream refuse anything but their own prefix, and Tavily and Brave refuse a key
+with another provider's prefix (fc-, keen_, ock_, ss_, tvly-). If a
 keyed provider is selected without a
 key, news segments can't fetch — tell them to add the key or switch to
-DuckDuckGo or Keenable (both keyless), or to a self-hosted SearXNG.
+DuckDuckGo, Keenable or Parallel (all keyless), or to a self-hosted SearXNG.
 
 ## Backups
 There is a Backup feature (Admin → Backup) that exports settings, personas, custom
@@ -186,8 +205,13 @@ regular cadence — it's cheap insurance.
     (\`docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d\`;
     \`ANALYZER_HEAVY\` is irrelevant while it's applied), or on non-compose installs
     point the container at \`ghcr.io/perminder-klair/subwave-analyzer-cuda\` with GPU
-    passthrough (\`--gpus all\`). Needs the NVIDIA driver + Container Toolkit; without
-    a visible GPU the worker logs a warning and runs on CPU.
+    passthrough (\`--gpus all\`). Its default build needs Turing / RTX 20-series or
+    newer; an older card takes the tag named for its architecture (\`:pascal\` for a
+    GTX 10-series), which on compose is \`ANALYZER_CUDA_TAG=pascal\` in .env.
+    Needs the NVIDIA driver + Container Toolkit; without
+    a visible GPU, or on a card the image has no kernels for (a "CUDA self-test
+    failed" log line naming the card and its image tag), the worker logs a warning
+    and runs on CPU.
   - **All-in-one image** (\`analyzer local\` — the AIO bundles the analyzer
     in-process): switch the single container's image to
     \`ghcr.io/perminder-klair/subwave-aio-heavy\`, or on an NVIDIA host

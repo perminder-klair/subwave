@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // Types only, erased at build time, so nothing loads before STATE_DIR is set.
 import type { TalkKind, TalkPlan } from '../src/broadcast/talk-scheduler.js';
+import type { PendingTalk } from '../src/broadcast/queue/kinds.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-talk-'));
 process.env.STATE_DIR = root;
@@ -51,8 +52,8 @@ function makeReplay(opts: {
   lastTalkBreakAt?: number;
   feedback?: boolean;
   // A function when the clip's presence has to change mid-hour.
-  pendingTalk?: { kind: string; queuedAt: number } | null
-    | ((now: Date) => { kind: string; queuedAt: number } | null);
+  pendingTalk?: PendingTalk | null
+    | ((now: Date) => PendingTalk | null);
   betweenTracksOnly?: boolean;
   eligible?: (kind: TalkKind, now: Date) => boolean;
   externalSlot?: (kind: TalkKind, now: Date) => string | null;
@@ -392,6 +393,19 @@ test('a segment waiting for a track boundary holds every gap-gated row', () => {
   const after = makeReplay({ eligible: kind => kind === 'banter' });
   after.tick(at(21));
   assert.deepEqual(after.minutesOf('banter'), [21]);
+});
+
+test('a cron claim that has not rendered yet holds the row, and says it is being written', () => {
+  // A cron fire claims the boundary before it generates (#2259); talkTick passes
+  // the claim as pending speech marked `generating`. Same hold, honest wording.
+  const r = makeReplay({
+    pendingTalk: { kind: 'news', queuedAt: clockAt(15), generating: true },
+    eligible: kind => kind === 'banter',
+  });
+  r.tick(at(20));
+  assert.deepEqual(r.minutesOf('banter'), [], 'a claimed boundary is still taken');
+  assert.equal(r.logs.length, 1);
+  assert.match(r.logs[0], /^\[banter\] stood down at :20 — a news is being written for the next track boundary \(retrying until :29\)$/);
 });
 
 test('a pending segment fresh enough to outlast a window holds it — and says so', () => {
