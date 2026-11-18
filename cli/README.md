@@ -125,7 +125,8 @@ install's pin and ports, and handed compose a stale copy of the install's own
 and `--no-compile-autoload-bunfig`, so the CLI never reads the working
 directory's `.env`. It reads the install's `.env` explicitly, with a shell export
 still winning, as in compose. Only a build can show whether the flags took, so
-the regression check runs against a compiled binary:
+the regression check runs against a compiled binary, in `cli-smoke.yml` on a pull
+request and on the linux-x64 release build in `publish-cli.yml`:
 
 ```bash
 npm run build:linux-x64
@@ -186,7 +187,11 @@ prompt sites (#2202). Any new build path must do both.
 
 Building needs Bun >= 1.3.3, the first release with the
 `--no-compile-autoload-dotenv` and `--no-compile-autoload-bunfig` flags the build
-scripts pass; an older Bun rejects them. CI pins Bun 1.3.3 in `publish-cli.yml`
+scripts pass. An older Bun doesn't reject them: it ignores them and compiles a
+binary that loads the working directory's `.env`, with no error. So
+`scripts/check-bun-version.mjs` fails the build on an older Bun first: `prebuild`
+runs it for every `build:*` target, and both workflows run it before their own
+`bun build`. CI pins Bun 1.3.3 in `publish-cli.yml`
 and `cli-smoke.yml`, and the two pins move together. Run all three smoke scripts
 on a new Bun before bumping the pin: a Bun 1.4.4 Linux binary cancels `init`'s
 first text prompt on Enter, which only `scripts/smoke-tty-prompt.sh` catches.

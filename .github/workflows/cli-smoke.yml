@@ -49,6 +49,10 @@ jobs:
         working-directory: cli
         run: |
           bun install --frozen-lockfile || bun install
+          # The workflow calls `bun build` directly, so package.json's
+          # `prebuild` check never runs: a Bun older than 1.3.3 ignores the
+          # --no-compile-autoload-* flags below without an error (#2203).
+          node scripts/check-bun-version.mjs
           bun run patch-clack
           mkdir -p dist
           bun build src/cli.ts \
