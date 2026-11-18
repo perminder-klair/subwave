@@ -122,6 +122,7 @@ export function PersonaIdentityCard({
             <div className="field-hint">
               For a bilingual DJ: languages mixed <em>into</em> the one above, comma-separated,
               each written in its own script. Needs a voice that can read them all.
+              A custom DJ prompt that says &ldquo;exclusively in {'{language}'}&rdquo; will contradict the mix.
               <span className="ml-2 text-muted">{persona.alsoSpeaks.trim().length} / {LANGUAGE_MAX}</span>
             </div>
           </div>
