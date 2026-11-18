@@ -15,6 +15,8 @@ import TransportBar from './TransportBar';
 import TuneInOverlay from './TuneInOverlay';
 import DotRail from './DotRail';
 import CoverAmbient from './CoverAmbient';
+import CoverZoom from './CoverZoom';
+import { coverZoomDismissed, skinShortcutsDisabled } from './coverZoom';
 import AmbientLyrics from './AmbientLyrics';
 import CommandPalette, { type PlayerDrawer } from './CommandPalette';
 import ShortcutsDialog from './ShortcutsDialog';
@@ -74,6 +76,10 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   const [requesterName, setRequesterName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [drawer, setDrawer] = useState<PlayerDrawer | null>(null);
+  // The enlarged cover (CoverZoom): the thumbnail it grows out of while open.
+  const [zoomFrom, setZoomFrom] = useState<HTMLElement | null>(null);
+  const openCover = useCallback((thumbnail: HTMLElement) => setZoomFrom(thumbnail), []);
+  const closeCover = useCallback(() => setZoomFrom(null), []);
 
   // Stable handlers + counts for the memoized layout components, so a feed
   // update that doesn't touch them costs no re-render.
@@ -100,6 +106,11 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   const [tickerOn, setTickerOn] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Nothing left to show (off air, no art), or a drawer or the palette opening
+  // over it: the enlarged cover simply goes (coverZoomDismissed).
+  useEffect(() => {
+    if (coverZoomDismissed({ hasCover: !!coverSrc, offline, drawerOpen: drawer != null, paletteOpen })) setZoomFrom(null);
+  }, [coverSrc, offline, drawer, paletteOpen]);
 
   // Lyrics show on the stage itself (AmbientLyrics), never in a drawer. The
   // operator's switch rides GET /state; within it, L toggles this listener's
@@ -169,7 +180,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
       '?': () => setShortcutsOpen(true),
       'mod+k': () => setPaletteOpen(o => !o),
     },
-    { disabled: paletteOpen || shortcutsOpen },
+    { disabled: skinShortcutsDisabled({ paletteOpen, shortcutsOpen, coverOpen: zoomFrom != null }) },
   );
 
   // The controller returns a request id immediately; matching runs in the booth
@@ -216,6 +227,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         lyrics={stageLyrics}
         onOpenBooth={openBooth}
         onOpenTimeline={openTimeline}
+        onOpenCover={openCover}
       />
 
       {showLyrics && (
@@ -274,6 +286,17 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         )}
         {drawer === 'schedule' && <ScheduleDrawer activeShow={activeShow} context={context} />}
       </Sheet>
+
+      {zoomFrom && coverSrc && !offline && (
+        <CoverZoom
+          src={coverSrc}
+          title={nowPlaying?.title}
+          artist={nowPlaying?.artist}
+          album={nowPlaying?.album}
+          origin={zoomFrom}
+          onClosed={closeCover}
+        />
+      )}
 
       <AnimatePresence>
         {showOverlay && !offline && (
