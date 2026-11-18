@@ -471,10 +471,11 @@ export async function speak(
     : '';
   // A rescue voice (the persona's own fallbackVoice, the station fallback or a
   // hardcoded rung) is not the one the mix was written for: judge the script
-  // by the primary language alone, exactly as a one-language persona is. That
-  // keeps kana away from a local English voice when an ENGLISH primary's cloud
-  // voice is down; a Japanese primary rescued onto an English voice still
-  // carries its script, as a Japanese persona always has.
+  // by the primary language alone, exactly as a one-language persona is, and
+  // send it no mix. That keeps kana away from a local English
+  // voice when an ENGLISH primary's cloud voice is down; a Japanese primary
+  // rescued onto an English voice still carries its script, as a Japanese
+  // persona always has.
   const rescueText = fallbackTextFor(
     requested,
     cloudCueFamily,
@@ -499,7 +500,10 @@ export async function speak(
     persona: GLOBAL_VOICE_KINDS.has(kind) ? null : (personaFor(persona)?.name || null),
   };
   try {
-    const result = await speakWith(primary, primaryText, { outPath, speedScale: scale, language, alsoSpeaks, soul, voiceStyle }, primaryPersonaTts);
+    // A pre-flight reroute is a rescue too: rescue text, and no mix.
+    const result = await speakWith(primary, primaryText, {
+      outPath, speedScale: scale, language, ...(primaryFellBack ? {} : { alsoSpeaks }), soul, voiceStyle,
+    }, primaryPersonaTts);
     // Bake 40ms edge fades in so hard file boundaries never reach the broadcast
     // compressor as a click. Render time is the only place the tail can be
     // faded. Best-effort: non-WAV output (cloud mp3) is left as-is.
@@ -532,8 +536,10 @@ export async function speak(
         // the slot's own override: the persona's explicit rescue voice
         // (fallbackVoice, #2029), the operator's engine+voice for the station
         // fallback, or null for the hardcoded rungs, so probe and call agree.
-        // A rescue voice is voice identity only; keys stay station-wide.
-        const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, alsoSpeaks, soul, voiceStyle }, slot.personaTts);
+        // A rescue voice is voice identity only; keys stay station-wide. It
+        // also takes no language mix: rescueText was judged by the primary
+        // language alone, so the hint must be the one-language one.
+        const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, soul, voiceStyle }, slot.personaTts);
         if (typeof result === 'string') await finishClip(result, kind);
         recordTts({
           ...callBase, engine: fallback, fellBack: true,
