@@ -23,6 +23,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempDir } from './test-utils/temp-dir.js';
+import type { TagSource } from '../src/music/library-db/types.js';
 
 // Loud and quiet ends of the arousal axis, well clear of the decision
 // threshold in both directions.
@@ -46,7 +47,7 @@ const stateDir = mkdtempSync(join(tmpdir(), 'subwave-audio-energy-'));
 process.env.STATE_DIR = stateDir;
 
 const db = await import('../src/music/library-db.js');
-const { runPropagatedEnergyPass } = await import('../src/music/propagated-energy.js');
+const { audioEnergyOptions, runAudioEnergyPass } = await import('../src/music/propagated-energy.js');
 await db.open({ embeddingDim: 768, adoptStoredDim: true });
 
 after(async () => {
@@ -116,9 +117,25 @@ function seedCorrectionFixtures(): void {
   db.upsertTrackMeta('mid', { title: 'Mid', artist: 'F', album: 'G', duration: 300 });
   db.upsertTrackTags('mid', { moods: ['evening'], energy: 'medium', source: 'propagated', confidence: 0.5 });
   db.setTrackAudioMoodScoresBulk([{ id: 'mid', scores: MIDDLING }]);
+
+  // Tagged tracks whose answer carried moods and no energy: the fill's scope.
+  const blank = (id: string, source: TagSource, scores: Record<string, number> | null) => {
+    db.upsertTrackMeta(id, { title: id, artist: 'H', album: 'I', duration: 300 });
+    db.upsertTrackTags(id, { moods: ['night'], energy: null, source, confidence: 0.8 });
+    if (scores) db.setTrackAudioMoodScoresBulk([{ id, scores }]);
+  };
+  blank('blankLoud', 'llm', LOUD);
+  blank('blankQuiet', 'uncertain-llm', QUIET);
+  blank('blankMid', 'llm', MIDDLING);
+  // Out of the fill's scope: an operator's own tags, and a row never scored.
+  blank('blankManual', 'manual', LOUD);
+  blank('blankUnscored', 'llm', null);
+  // An untagged row (no moods) with scores stays untagged.
+  db.upsertTrackMeta('untagged', { title: 'untagged', artist: 'J', album: 'K', duration: 300 });
+  db.setTrackAudioMoodScoresBulk([{ id: 'untagged', scores: LOUD }]);
 }
 
-let stats: ReturnType<typeof runPropagatedEnergyPass>;
+let stats: ReturnType<typeof runAudioEnergyPass>;
 
 test('the correction scope is propagated rows carrying audio scores', () => {
   seedCorrectionFixtures();
@@ -127,7 +144,7 @@ test('the correction scope is propagated rows carrying audio scores', () => {
 });
 
 test('a misjudged propagated track is corrected from its audio', () => {
-  stats = runPropagatedEnergyPass();
+  stats = runAudioEnergyPass({ fillEmpty: true, overruleLlm: false });
   assert.equal(db.getTrack('loud')!.energy, 'high', 'the reported failure case flips low → high');
 });
 
@@ -156,6 +173,36 @@ test('the pass reports what it did', () => {
   assert.equal(stats.skipped, null);
   assert.equal(stats.scope, 3);
   assert.equal(stats.corrected, 1);
+});
+
+test('an empty energy on a tagged track is filled from its audio, the middle band as medium', () => {
+  assert.equal(db.getTrack('blankLoud')!.energy, 'high');
+  assert.equal(db.getTrack('blankQuiet')!.energy, 'low');
+  assert.equal(db.getTrack('blankMid')!.energy, 'medium', 'with no guess to keep, the measured middle is medium');
+  assert.equal(stats.fillScope, 3);
+  assert.deepEqual(stats.filled, { high: 1, medium: 1, low: 1 });
+});
+
+test('a fill writes ONLY the energy column', () => {
+  const t = db.getTrack('blankLoud')!;
+  assert.equal(t.source, 'llm');
+  assert.deepEqual(t.moods, ['night']);
+  assert.equal(t.confidence, 0.8);
+});
+
+test('the fill never writes an operator row, an unscored row or an untagged row', () => {
+  assert.equal(db.getTrack('blankManual')!.energy, null, "an operator's own tags are never written by a pass");
+  assert.equal(db.getTrack('blankUnscored')!.energy, null, 'no audio scores, no evidence');
+  const u = db.getTrack('untagged')!;
+  assert.equal(u.energy, null, 'an energy alone would make an untagged row read as tagged');
+  assert.deepEqual(u.moods ?? [], [], 'still no moods');
+});
+
+test('the fill write loses to an energy that lands between the read and the write', () => {
+  db.upsertTrackMeta('raced', { title: 'raced', artist: 'L', album: 'M', duration: 300 });
+  db.upsertTrackTags('raced', { moods: ['night'], energy: 'low', source: 'llm', confidence: 0.8 });
+  assert.deepEqual(db.fillEmptyTrackEnergyBulk([{ id: 'raced', energy: 'high' }]), { high: 0, medium: 0, low: 0 });
+  assert.equal(db.getTrack('raced')!.energy, 'low');
 });
 
 test('a relabel spanning more than one write batch completes', async () => {
@@ -187,8 +234,224 @@ test('paging advances past a row whose score JSON is corrupt', () => {
   assert.equal(end.lastId, null, 'an exhausted walk reports done');
 });
 
+test('with both options off (the default) the pass only corrects propagated rows', async () => {
+  db.upsertTrackMeta('offBlank', { title: 'offBlank', artist: 'N', album: 'O', duration: 300 });
+  db.upsertTrackTags('offBlank', { moods: ['night'], energy: null, source: 'llm', confidence: 0.8 });
+  db.setTrackAudioMoodScoresBulk([{ id: 'offBlank', scores: LOUD }]);
+  const off = runAudioEnergyPass();
+  assert.equal(db.getTrack('offBlank')!.energy, null, 'no fill unless the operator opted in');
+  assert.equal(db.getTrack('judged')!.energy, 'low', 'no overrule unless the operator opted in');
+  assert.deepEqual(
+    Object.keys(off).sort(),
+    ['agreed', 'corrected', 'scope', 'skipped', 'undecided'],
+    "with both switches off the result is the correction's alone, as before the switches existed",
+  );
+  const { DEFAULTS } = await import('../src/settings/defaults.js');
+  assert.deepEqual(audioEnergyOptions(DEFAULTS), { fillEmpty: false, overruleLlm: false }, 'off unless the operator opted in');
+});
+
+test('the overrule replaces an LLM energy only where the audio is strongly decisive', () => {
+  db.upsertTrackMeta('llmMid', { title: 'llmMid', artist: 'P', album: 'Q', duration: 300 });
+  db.upsertTrackTags('llmMid', { moods: ['night'], energy: 'high', source: 'llm', confidence: 0.8 });
+  db.setTrackAudioMoodScoresBulk([{ id: 'llmMid', scores: MIDDLING }]);
+  db.upsertTrackMeta('llmQuietWrong', { title: 'llmQuietWrong', artist: 'R', album: 'S', duration: 300 });
+  db.upsertTrackTags('llmQuietWrong', { moods: ['night'], energy: 'medium', source: 'uncertain-llm', confidence: 0.8 });
+  db.setTrackAudioMoodScoresBulk([{ id: 'llmQuietWrong', scores: QUIET }]);
+  db.upsertTrackMeta('mine', { title: 'mine', artist: 'T', album: 'U', duration: 300 });
+  db.upsertTrackTags('mine', { moods: ['night'], energy: 'low', source: 'manual', confidence: 1 });
+  db.setTrackAudioMoodScoresBulk([{ id: 'mine', scores: LOUD }]);
+
+  const run = runAudioEnergyPass({ fillEmpty: false, overruleLlm: true });
+  assert.equal(db.getTrack('judged')!.energy, 'high', 'an LLM low on strongly loud audio is overruled');
+  assert.equal(db.getTrack('judged')!.source, 'llm', 'only the energy column moves');
+  assert.equal(db.getTrack('llmQuietWrong')!.energy, 'low', "an LLM medium on strongly quiet audio too");
+  assert.equal(db.getTrack('llmMid')!.energy, 'high', 'audio short of the strong band never overrules');
+  assert.equal(db.getTrack('mine')!.energy, 'low', "an operator's energy is never overruled");
+  assert.equal(db.getTrack('offBlank')!.energy, null, 'the overrule never fills');
+  assert.equal(run.overruled, 2);
+  assert.equal(runAudioEnergyPass({ fillEmpty: false, overruleLlm: true }).overruled, 0, 'idempotent');
+});
+
+test('the overrule write loses to an energy changed between the read and the write', () => {
+  db.upsertTrackMeta('moved', { title: 'moved', artist: 'V', album: 'W', duration: 300 });
+  db.upsertTrackTags('moved', { moods: ['night'], energy: 'medium', source: 'llm', confidence: 0.8 });
+  assert.equal(db.overruleTrackEnergyBulk([{ id: 'moved', from: 'low', energy: 'high' }]), 0);
+  assert.equal(db.getTrack('moved')!.energy, 'medium');
+});
+
 test('re-running is idempotent — nothing left to correct', () => {
-  const again = runPropagatedEnergyPass();
+  const again = runAudioEnergyPass();
   assert.equal(again.corrected, 0, 'the second pass changes nothing');
   assert.equal(again.agreed, 2, 'both decisive rows now agree with the audio');
+  assert.deepEqual(
+    db.emptyEnergyTracksWithAudioScores().map((r) => r.id),
+    ['offBlank'],
+    'every fillable empty energy was filled, bar the one the switches-off run left',
+  );
+});
+
+// The pass's log lines, captured from its console output.
+function logsOf(run: () => void): string[] {
+  const lines: string[] = [];
+  const orig = console.log;
+  console.log = (...args: unknown[]) => {
+    const line = args.map(String).join(' ');
+    if (line.startsWith('[audio-energy] ')) lines.push(line.slice('[audio-energy] '.length));
+  };
+  try {
+    run();
+  } finally {
+    console.log = orig;
+  }
+  return lines;
+}
+
+// Runs fn against a library whose score maps are all hidden, then puts them
+// back: the case where the pass has nothing in any scope.
+function withNoScores<T>(fn: () => T): T {
+  const sql = db.requireDb();
+  sql.exec('SAVEPOINT no_scores');
+  try {
+    sql.exec('UPDATE tracks SET audio_mood_scores_json = NULL');
+    return fn();
+  } finally {
+    sql.exec('ROLLBACK TO no_scores');
+    sql.exec('RELEASE no_scores');
+  }
+}
+
+test('with both switches off, an empty library skips exactly as before the switches', () => {
+  let res!: ReturnType<typeof runAudioEnergyPass>;
+  const logs = logsOf(() => { res = withNoScores(() => runAudioEnergyPass()); });
+  assert.deepEqual(res, { scope: 0, corrected: 0, agreed: 0, undecided: 0, skipped: 'no propagated tracks with audio scores' });
+  assert.deepEqual(logs, [], 'and logs nothing, as before');
+});
+
+test('with both switches off, the log line is the correction sentence alone', () => {
+  const logs = logsOf(() => runAudioEnergyPass());
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /^Audio-derived energy over \d+ propagated tracks — \d+ corrected, \d+ confirmed, \d+ left as-is \(audio not decisive\)$/);
+});
+
+test('a switch that is on says so even with nothing to do', () => {
+  let res!: ReturnType<typeof runAudioEnergyPass>;
+  const idle = logsOf(() => { res = withNoScores(() => runAudioEnergyPass({ fillEmpty: true, overruleLlm: true })); });
+  assert.equal(res.skipped, 'no tracks with audio scores for this pass');
+  assert.equal(res.fillScope, 0);
+  assert.deepEqual(res.filled, { high: 0, medium: 0, low: 0 });
+  assert.equal(res.overruleScope, 0);
+  assert.equal(res.overruled, 0);
+  assert.equal(idle.length, 1);
+  assert.match(idle[0], /no empty energies to fill/);
+  assert.match(idle[0], /no LLM energies with audio scores to check/);
+
+  // With rows to correct but none to fill: on reads "nothing to fill", off says nothing.
+  const sql = db.requireDb();
+  sql.exec('SAVEPOINT no_blank');
+  try {
+    sql.exec("UPDATE tracks SET audio_mood_scores_json = NULL WHERE id = 'offBlank'");
+    const on = logsOf(() => runAudioEnergyPass({ fillEmpty: true, overruleLlm: false }));
+    assert.match(on.join('\n'), /; no empty energies to fill$/);
+    const off = logsOf(() => runAudioEnergyPass());
+    assert.doesNotMatch(off.join('\n'), /empty energ/);
+  } finally {
+    sql.exec('ROLLBACK TO no_blank');
+    sql.exec('RELEASE no_blank');
+  }
+});
+
+test('an empty propagated energy the correction leaves undecided is filled, and only with the switch on', () => {
+  const sql = db.requireDb();
+  // Inside a savepoint, so the row is gone again for the tests after this one.
+  sql.exec('SAVEPOINT prop_blank');
+  try {
+    db.upsertTrackMeta('propBlankMid', { title: 'propBlankMid', artist: 'Z', album: 'Z', duration: 300 });
+    db.upsertTrackTags('propBlankMid', { moods: ['evening'], energy: null, source: 'propagated', confidence: 0.4 });
+    db.setTrackAudioMoodScoresBulk([{ id: 'propBlankMid', scores: MIDDLING }]);
+    // offBlank is still empty here; hide it so this run's fill is this row alone.
+    sql.exec("UPDATE tracks SET audio_mood_scores_json = NULL WHERE id = 'offBlank'");
+    runAudioEnergyPass();
+    assert.equal(db.getTrack('propBlankMid')!.energy, null, 'switch off: the correction alone leaves it empty');
+    const on = runAudioEnergyPass({ fillEmpty: true, overruleLlm: false });
+    const t = db.getTrack('propBlankMid')!;
+    assert.equal(t.energy, 'medium', 'switch on: the undecided middle is filled as medium');
+    assert.equal(t.source, 'propagated', 'only the energy column moves');
+    assert.deepEqual(t.moods, ['evening']);
+    assert.deepEqual(on.filled, { high: 0, medium: 1, low: 0 });
+  } finally {
+    sql.exec('ROLLBACK TO prop_blank');
+    sql.exec('RELEASE prop_blank');
+  }
+});
+
+// Last, so its rows sit outside the idempotence check above. The fill reads its
+// scope once, before step 1 writes, so the run has two things to get right: a
+// propagated row step 1 settles is step 1's, never also in the fill's scope;
+// and a row another writer fills between that read and the fill's write is
+// not counted as filled, even when it got the very value the fill would have
+// written (the count comes from the write, not from what is stored after it).
+test('the fill counts only its own writes, and never a row step 1 settled', () => {
+  const tagged = (id: string, source: TagSource, energy: 'low' | null, scores: Record<string, number>) => {
+    db.upsertTrackMeta(id, { title: id, artist: 'X', album: 'Y', duration: 300 });
+    db.upsertTrackTags(id, { moods: ['night'], energy, source, confidence: 0.6 });
+    db.setTrackAudioMoodScoresBulk([{ id, scores }]);
+  };
+  tagged('raceTrigger', 'propagated', 'low', LOUD);   // step 1 corrects it to high
+  tagged('propBlank', 'propagated', null, LOUD);      // step 1 settles it: high
+  tagged('raceTarget', 'llm', null, LOUD);            // the fill would write high
+  tagged('raceOther', 'llm', null, QUIET);            // the fill writes low
+  const sql = db.requireDb();
+  // Another writer, landing inside the pass: step 1's write to raceTrigger
+  // fills raceTarget with exactly the fill's own verdict.
+  sql.exec(`CREATE TEMP TRIGGER race_fill AFTER UPDATE OF energy ON tracks
+    WHEN NEW.id = 'raceTrigger'
+    BEGIN UPDATE tracks SET energy = 'high' WHERE id = 'raceTarget'; END`);
+  try {
+    const run = runAudioEnergyPass({ fillEmpty: true, overruleLlm: false });
+    assert.equal(db.getTrack('raceTrigger')!.energy, 'high', 'step 1 ran, so the other writer did too');
+    assert.equal(db.getTrack('propBlank')!.energy, 'high');
+    assert.equal(db.getTrack('raceTarget')!.energy, 'high');
+    assert.equal(db.getTrack('raceOther')!.energy, 'low');
+    // offBlank (left empty by the switches-off test) is the third row in scope.
+    assert.equal(db.getTrack('offBlank')!.energy, 'high');
+    assert.equal(run.fillScope, 3, "a row step 1 settled is not in the fill's scope");
+    assert.deepEqual(run.filled, { high: 1, medium: 0, low: 1 }, 'only rows the fill itself wrote are counted');
+  } finally {
+    sql.exec('DROP TRIGGER race_fill');
+  }
+});
+
+// The fill reads its scope before step 1 and the baselines, so an operator's
+// "clear tags" from the controller process can land between that read and the
+// fill's write. The write must re-check the whole scope, moods included, or it
+// gives an energy to a row that is untagged again.
+test("the fill's write never gives an energy to a row whose tags were cleared after the read", () => {
+  const sql = db.requireDb();
+  sql.exec('SAVEPOINT cleared');
+  try {
+    const tagged = (id: string, source: TagSource, energy: 'low' | null) => {
+      db.upsertTrackMeta(id, { title: id, artist: 'X', album: 'Y', duration: 300 });
+      db.upsertTrackTags(id, { moods: ['night'], energy, source, confidence: 0.6 });
+      db.setTrackAudioMoodScoresBulk([{ id, scores: LOUD }]);
+    };
+    tagged('clearTrigger', 'propagated', 'low'); // step 1 corrects it to high
+    tagged('clearTarget', 'llm', null);          // in the fill's scope when read
+    // Another writer, landing inside the pass: step 1's write to clearTrigger
+    // clears clearTarget's tags the way markTrackUntaggable does.
+    sql.exec(`CREATE TEMP TRIGGER race_clear AFTER UPDATE OF energy ON tracks
+      WHEN NEW.id = 'clearTrigger'
+      BEGIN UPDATE tracks SET moods = NULL, energy = NULL, source = NULL WHERE id = 'clearTarget'; END`);
+    try {
+      const run = runAudioEnergyPass({ fillEmpty: true, overruleLlm: false });
+      assert.equal(db.getTrack('clearTrigger')!.energy, 'high', 'step 1 ran, so the other writer did too');
+      const t = db.getTrack('clearTarget')!;
+      assert.equal(t.energy, null, 'an untagged row is never filled');
+      assert.deepEqual(run.filled, { high: 0, medium: 0, low: 0 });
+    } finally {
+      sql.exec('DROP TRIGGER race_clear');
+    }
+  } finally {
+    sql.exec('ROLLBACK TO cleared');
+    sql.exec('RELEASE cleared');
+  }
 });

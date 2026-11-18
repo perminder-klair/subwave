@@ -28,6 +28,7 @@ import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { forgetDiscogsRefusal } from '../../music/discogs.js';
 import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { scheduledTagView } from '../../broadcast/tag-schedule.js';
@@ -208,7 +209,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // The same answer for Firecrawl; null with a key on file means that key
         // is another provider's, and searches refuse it.
         firecrawlKeySource: firecrawlKeySource(),
-        // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl) that would refuse the
+        // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl, SpecStream) that would refuse the
         // key on file, so the page can warn for whichever one is picked.
         keyRefusedBy: searchKeyRefusedBy(),
       },
@@ -394,6 +395,8 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       return res.json({ saved: [], ...managed });
     }
     await saveSecrets(allowed);
+    // A saved Discogs token is asked again, even one Discogs refused before.
+    if ('DISCOGS_TOKEN' in allowed) forgetDiscogsRefusal();
     res.json({ saved: Object.keys(allowed), ...managed });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);

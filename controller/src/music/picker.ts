@@ -710,6 +710,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       show: activeShow,
       playlistTracks: playlistPool?.tracks ?? null,
       episodeTracks: episodeSource?.tracks,
+      episodeAiringStartedAt: episodeSource?.airingStartedAt,
       excludedIds,
       resolvedGenres: strictGenreResolution.genres,
       minTrackSec,

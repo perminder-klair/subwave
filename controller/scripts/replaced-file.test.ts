@@ -118,6 +118,24 @@ test('a held candidate keeps its old size, so the next walk finds it again', () 
   consistent();
 });
 
+test('a failed year lookup outlives a replaced file: its attempt count is not an audio fact', () => {
+  db.upsertTrackMeta('lookup', { ...meta(1_000), isCompilation: true });
+  db.recordOriginalYearOutcome('lookup', { kind: 'error', reason: 'MusicBrainz HTTP 503' });
+  const year = () => sql(`SELECT status, attempts, at FROM track_facet_status WHERE track_id = 'lookup' AND facet = 'year'`).get() as
+    { status: string; attempts: number; at: string } | undefined;
+  assert.deepEqual([year()?.status, year()?.attempts], ['failed', 1]);
+  sql(`UPDATE track_facet_status SET at = '2026-09-01T00:00:00Z' WHERE track_id = 'lookup' AND facet = 'year'`).run();
+  // Nor is it a measurement: a track with only its year row was never measured.
+  assert.equal(db.lastMeasuredAt('lookup'), null);
+  db.clearTrackAudio('lookup', 2_000);
+  assert.deepEqual([year()?.status, year()?.attempts], ['failed', 1], 'the retry schedule is kept');
+  // Accepting the file restamps its measurements, never the lookup's clock,
+  // which the retry delays count from.
+  db.acceptReplacedFiles(new Map<string, number | null>([['lookup', 2_000]]));
+  assert.equal(year()?.at, '2026-09-01T00:00:00Z');
+  consistent();
+});
+
 test('lastMeasuredAt reads the oldest analysis row: one fresh facet says nothing about the rest', () => {
   measured('when');
   sql(`UPDATE track_facet_status SET at = '2026-10-01T00:00:00Z' WHERE track_id = 'when'`).run();
@@ -157,18 +175,29 @@ test('a failed attempt measures nothing: a kept measurement keeps its date, and 
 test('an accepted file keeps its analysis, stores its size, and is not found again', () => {
   measured('accepted');
   measured('dated');
+  sql(`UPDATE tracks SET stems_tail_misses = 2 WHERE id = 'accepted'`).run();
   sql(`UPDATE track_facet_status SET at = '2026-10-01T00:00:00Z' WHERE track_id IN ('accepted', 'dated')`).run();
   const changed = '2026-10-28T15:01:20Z';
   assert.equal(db.upsertTrackMeta('accepted', meta(4_000)), true);
   assert.ok(policy.changedAfterMeasure(changed, db.lastMeasuredAt('dated')));
 
   // The walk's candidates: the size signal's size, and null from the change time.
-  db.acceptReplacedFiles(new Map<string, number | null>([['accepted', 4_000], ['dated', null]]));
+  assert.equal(db.acceptReplacedFiles(new Map<string, number | null>([['accepted', 4_000], ['dated', null]])), 1);
 
   const t = sql(`SELECT file_size, bpm, stems_at FROM tracks WHERE id = 'accepted'`).get() as Record<string, unknown>;
   assert.equal(t.file_size, 4_000);
   assert.equal(t.bpm, 100);
-  assert.equal(t.stems_at, '2026-10-01T00:00:00Z');
+  // Its stems were stamped with the old size, so they are separated again
+  // (#2238): left stamped, no backfill would ever redo them.
+  assert.equal(t.stems_at, null);
+  assert.equal(db.trackStemTailMisses('accepted'), null);
+  assert.ok(!rows('accepted').some(r => r.startsWith('stems:')), 'the stems facet is due again');
+  assert.ok(db.needsStemsIds().includes('accepted'), 'back in the stem backfill');
+  // A change-time candidate keeps its row size, so its stamps still match:
+  // its stems stand, never separated again for nothing.
+  assert.ok(!db.needsStemsIds().includes('dated'), 'same size: its stems stand');
+  assert.equal(sql(`SELECT stems_at FROM tracks WHERE id = 'dated'`).get()!.stems_at, '2026-10-01T00:00:00Z');
+  assert.ok(rows('dated').includes('stems:ok'));
   assert.equal(sql(`SELECT file_size FROM tracks WHERE id = 'dated'`).get()!.file_size, 1_000, 'no size to store: the old one stands');
   assert.equal(db.upsertTrackMeta('accepted', meta(4_000)), false, 'the size signal is answered');
   for (const id of ['accepted', 'dated']) {
@@ -245,7 +274,8 @@ test('a replaced file: its audio analysis is due again, its metadata and year st
   assert.equal(t.title, 'T');
   assert.equal(t.original_year, 1999, 'the year is not an audio measurement');
   assert.equal(sql('SELECT COUNT(*) AS n FROM track_audio_vectors WHERE id = ?').get('swap')!.n, 0);
-  assert.deepEqual(rows('swap'), [], 'no analysis row: every facet is due');
+  // The year row is the era's, not an audio measurement, so it stays.
+  assert.deepEqual(rows('swap'), ['year:ok'], 'no analysis row: every facet is due');
   assert.ok(db.needsAnalysisIds().includes('swap'), 'the next analysis run takes it');
   consistent();
 });

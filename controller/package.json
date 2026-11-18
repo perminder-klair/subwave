@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "1.29.0",
+  "version": "1.31.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "tag": "tsx src/music/tag-library.ts",
     "analyze": "tsx src/music/analyze-library.ts",
     "facets": "tsx src/music/facets-cli.ts",
+    "curve-ab": "tsx src/music/curve-ending-ab.ts",
     "lastfm-session": "tsx scripts/lastfm-session.ts",
     "test:embed": "tsx scripts/embedding-preflight-test.ts",
     "test:llm": "tsx scripts/run-tests.ts llm-pure.test.ts",

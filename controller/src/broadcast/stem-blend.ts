@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as analyzer from '../music/analyzer.js';
 import * as db from '../music/library-db.js';
+import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
 import * as loudness from '../music/loudness.js';
 import * as stemCache from '../music/stem-cache.js';
@@ -41,7 +42,18 @@ function transitionsDir(): string {
 }
 
 // bars/outro/lufs are never on the slim track objects, so they resolve from
-// library.db here.
+// library.db here. The outgoing `outro` comes from library.get()'s projection,
+// the one place music/tail-levels.ts applies transitions.tailFromCurve, so the
+// blend reads the same tail level readings (`startMs`, `lufs`) as the queue's
+// ending, exit canvas and audible-end cut. Off, that projection is the stored
+// outro, so a blend reads exactly what it did.
+export function blendSides(outId: string, inId: string) {
+  const out = db.getTrack(outId);
+  const inn = db.getTrack(inId);
+  if (!out || !inn) return null;
+  return { out: { ...out, outro: library.get(outId)?.outro ?? out.outro }, inn };
+}
+
 export async function maybeRenderBlend(
   outTrack: BlendTrack,
   inTrack: BlendTrack,
@@ -62,9 +74,9 @@ export async function maybeRenderBlend(
   // only time out behind it. The pidfile is that pass's own lock.
   if (bulkPassRunning()) return null;
 
-  const out = db.getTrack(outTrack.id);
-  const inn = db.getTrack(inTrack.id);
-  if (!out || !inn) return null;
+  const sides = blendSides(outTrack.id, inTrack.id);
+  if (!sides) return null;
+  const { out, inn } = sides;
   // Alignment data both sides. The render re-checks all of it; these gates only
   // avoid pointless round-trips.
   if (!out.outro?.bars?.length || !out.durationSec || !inn.bars?.length) return null;

@@ -96,7 +96,8 @@ import {
   coerceMinTrackLengthSeconds,
   rawMaxTrackSec,
 } from './settings/defaults.js';
-import { validateCompatParams } from './settings/compat-params.js';
+import { validateCompatParams, normalizeLlmBodyParams } from './settings/compat-params.js';
+import { normalizeReasoningEffort } from './schemas/reasoning.js';
 // A bound on the engine's composed prompt, not a validated vocabulary — it lives
 // beside the engine that enforces it (web/lib/geminiLimits.ts mirrors it for the
 // admin field, pinned by scripts/gemini-tts-settings.test.ts).
@@ -683,6 +684,8 @@ export async function load() {
       sameHostAcknowledgement: typeof stored.djBehaviour?.sameHostAcknowledgement === 'boolean'
         ? stored.djBehaviour.sameHostAcknowledgement
         : DEFAULTS.djBehaviour.sameHostAcknowledgement,
+      holdDuckBetweenSpeakers: typeof stored.djBehaviour?.holdDuckBetweenSpeakers === 'boolean'
+        ? stored.djBehaviour.holdDuckBetweenSpeakers : DEFAULTS.djBehaviour.holdDuckBetweenSpeakers,
       extendedSleeveNotes: typeof stored.djBehaviour?.extendedSleeveNotes === 'boolean'
         ? stored.djBehaviour.extendedSleeveNotes : DEFAULTS.djBehaviour.extendedSleeveNotes,
       releaseYearMentions: ['regular', 'occasional', 'rare'].includes(stored.djBehaviour?.releaseYearMentions)
@@ -1027,12 +1030,17 @@ export async function load() {
       // settings.json written before the field existed loads as {}, which sends
       // no extra headers at all.
       headers: normalizeLlmHeaders(stored.llm?.headers),
+      // Extra request-body fields (#2296); same cold-load trap as headers.
+      bodyParams: normalizeLlmBodyParams(stored.llm?.bodyParams, 'llm.bodyParams'),
+      toolCallBodyParams: normalizeLlmBodyParams(stored.llm?.toolCallBodyParams, 'llm.toolCallBodyParams'),
       // A stored llm block without the key predates 'auto' and keeps the
       // historical 'local'; only a station with no llm block yet gets the
       // 'auto' default. Same rule for the fallback leg below.
       compatibleMode: storedCompatibleMode(stored.llm?.compatibleMode, !!stored.llm, DEFAULTS.llm.compatibleMode),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      // Absent or unknown → 'default', today's "On" (#2296).
+      reasoningEffort: normalizeReasoningEffort(stored.llm?.reasoningEffort),
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
       // pre-field settings.json) lands on the 'required' default. See issue #570.
       toolChoice: stored.llm?.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.toolChoice,
@@ -1139,9 +1147,12 @@ export async function load() {
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
           headers: normalizeLlmHeaders(fb.headers),
+          bodyParams: normalizeLlmBodyParams(fb.bodyParams, 'llm.fallback.bodyParams'),
+          toolCallBodyParams: normalizeLlmBodyParams(fb.toolCallBodyParams, 'llm.fallback.toolCallBodyParams'),
           compatibleMode: storedCompatibleMode(fb.compatibleMode, !!stored.llm?.fallback, DEFAULTS.llm.fallback.compatibleMode),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
+          reasoningEffort: normalizeReasoningEffort(fb.reasoningEffort),
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
           repeatPenalty: clampRepeatPenalty(fb.repeatPenalty, DEFAULTS.llm.fallback.repeatPenalty),
@@ -1213,6 +1224,16 @@ export async function load() {
         Number.isFinite(stored.embedding?.audioFusionWeight)
           ? clamp01(stored.embedding.audioFusionWeight)
           : DEFAULTS.embedding.audioFusionWeight,
+      audioEnergy: {
+        fillEmpty:
+          typeof stored.embedding?.audioEnergy?.fillEmpty === 'boolean'
+            ? stored.embedding.audioEnergy.fillEmpty
+            : DEFAULTS.embedding.audioEnergy.fillEmpty,
+        overruleLlm:
+          typeof stored.embedding?.audioEnergy?.overruleLlm === 'boolean'
+            ? stored.embedding.audioEnergy.overruleLlm
+            : DEFAULTS.embedding.audioEnergy.overruleLlm,
+      },
       batchSize:
         Number.isFinite(stored.embedding?.batchSize) && stored.embedding.batchSize >= 1
           ? Math.max(1, Math.min(50, Math.floor(stored.embedding.batchSize)))
@@ -1272,6 +1293,15 @@ export async function load() {
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
       pickTimeStems: typeof stored.transitions?.pickTimeStems === 'boolean' ? stored.transitions.pickTimeStems : DEFAULTS.transitions.pickTimeStems,
       equalPowerCrossfade: typeof stored.transitions?.equalPowerCrossfade === 'boolean' ? stored.transitions.equalPowerCrossfade : DEFAULTS.transitions.equalPowerCrossfade,
+      fadeAudibleEnd: typeof stored.transitions?.fadeAudibleEnd === 'boolean' ? stored.transitions.fadeAudibleEnd : DEFAULTS.transitions.fadeAudibleEnd,
+      // A hand edit out of range (or not a number) repairs to the default.
+      fadeAudibleEndDb:
+        typeof stored.transitions?.fadeAudibleEndDb === 'number' &&
+        stored.transitions.fadeAudibleEndDb >= BOUNDS.fadeAudibleEndDb.min &&
+        stored.transitions.fadeAudibleEndDb <= BOUNDS.fadeAudibleEndDb.max
+          ? stored.transitions.fadeAudibleEndDb
+          : DEFAULTS.transitions.fadeAudibleEndDb,
+      tailFromCurve: typeof stored.transitions?.tailFromCurve === 'boolean' ? stored.transitions.tailFromCurve : DEFAULTS.transitions.tailFromCurve,
       // Per-effect kill switches (#1565) — same absent-means-default repair as
       // every sibling, and the default is `true`, so a stored block missing a
       // field (or missing entirely) normalises to the whole kit on.
@@ -1790,6 +1820,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       showWelcome?: boolean;
       previewNextShow?: boolean;
       sameHostAcknowledgement?: boolean;
+      holdDuckBetweenSpeakers?: boolean;
       extendedSleeveNotes?: boolean;
       releaseYearMentions?: string;
       recapLimit?: number;
@@ -1798,7 +1829,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     }>(
       'djBehaviour', patch.djBehaviour,
     );
-    for (const key of ['showWelcome', 'previewNextShow', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
+    for (const key of ['showWelcome', 'previewNextShow', 'sameHostAcknowledgement', 'holdDuckBetweenSpeakers', 'extendedSleeveNotes'] as const) {
       if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
     }
     if (behaviour.releaseYearMentions !== undefined) {
@@ -2445,6 +2476,17 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       }
       next.embedding.audioFusionWeight = v;
     }
+    if (e.audioEnergy !== undefined) {
+      const ae = e.audioEnergy;
+      if (!ae || typeof ae !== 'object' || Array.isArray(ae)) {
+        throw new Error('embedding.audioEnergy must be an object');
+      }
+      for (const key of ['fillEmpty', 'overruleLlm'] as const) {
+        if (ae[key] === undefined) continue;
+        if (typeof ae[key] !== 'boolean') throw new Error(`embedding.audioEnergy.${key} must be true or false`);
+        next.embedding.audioEnergy = { ...next.embedding.audioEnergy, [key]: ae[key] };
+      }
+    }
     // LLM tag batch size — how many tracks per tagging call. Weaker models
     // truncate/error on large batches, so operators can drop this. Clamp kept in
     // sync with the CLI --batch flag + load() normalisation (music/tag-library.ts).
@@ -2530,7 +2572,10 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   }
   if ('transitions' in patch) {
     const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
-    for (const k of ['pairDrain', 'stemBlends', 'pickTimeStems'] as const) {
+    // fadeAudibleEnd(Db) are controller-side cue points read per queued track
+    // (music/silence-trim.ts), and tailFromCurve picks which measurement the
+    // queue reads (music/tail-levels.ts), so they need no mixer restart.
+    for (const k of ['pairDrain', 'stemBlends', 'pickTimeStems', 'fadeAudibleEnd', 'fadeAudibleEndDb', 'tailFromCurve'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
     }
     // Read once by the mixer at startup (liquidsoap_equal_power_crossfade.txt),
@@ -2846,7 +2891,7 @@ export async function update(patch) {
 // them on its next start. Idempotent. A missing file writes them all; files
 // already there keep what they say (the jingle ratio's reason is in
 // broadcast/jingle-rotate.ts), except the six listener-mount files, which are
-// reconciled with the saved stream settings under a hosted plan's ceiling
+// reconciled with the saved stream settings under a hosted station's ceiling
 // (settings/liquidsoap.ts reconcileStreamMountFiles). Returns the mount files
 // that boot rewrote, so the caller can say the mixer needs a restart.
 export async function ensureLiquidsoapSettingsFile(): Promise<{ rewroteMountFiles: string[] }> {

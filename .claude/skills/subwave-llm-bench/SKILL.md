@@ -93,7 +93,7 @@ Flags:
 - `--models` (required) — comma list of `provider:model`, split on the FIRST
   colon, so Ollama tags keep theirs (`ollama:qwen3:8b`). Providers: ollama |
   openai-compatible | anthropic | openai | google | deepseek | openrouter |
-  requesty | gateway.
+  requesty | cheaperinference | gateway.
 - `--kinds` — groups (`pick,segment,request,scripts,banter,programme`) or
   exact kind names. Default: all.
 - `--modes` — `pool,agent,shortlist` (default all three). Mode-independent

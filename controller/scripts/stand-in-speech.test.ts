@@ -109,10 +109,15 @@ test('an empty line is the callers\' own "no line" case, not a stand-in', () => 
 
 // ── the speech paths ─────────────────────────────────────────────────────────
 
-type Seams = { _speak: (text: string) => Promise<string>; _airVoice: () => Promise<boolean> };
+type Seams = {
+  _speak: (text: string) => Promise<string>;
+  _airVoice: () => Promise<boolean>;
+  _airExchange: (file: string, clips: { wavPath: string; text: string }[]) => Promise<{ voiceId: string; clipMs: number; aired: Promise<null> }[]>;
+};
 const seams = queue as unknown as Seams;
 const realSpeak = seams._speak;
 const realAirVoice = seams._airVoice;
+const realAirExchange = seams._airExchange;
 const realForcedRun = forcedDirectorAgent.run;
 const template = settings.get().personas[0];
 const HOST = { ...template, id: 'p_host', name: 'Manolo X', language: '' };
@@ -134,6 +139,8 @@ beforeEach(async () => {
   queue._pendingVoice = null;
   seams._speak = async (text: string) => { spoken.push(text); return wav; };
   seams._airVoice = async () => true;
+  seams._airExchange = async (_file, clips) =>
+    clips.map((_clip, index) => ({ voiceId: `line-${index}`, clipMs: 100, aired: Promise.resolve(null) }));
   forcedDirectorAgent.run = realForcedRun;
   await settings.update({
     personas: [HOST, GUEST], activePersonaId: HOST.id,
@@ -142,6 +149,7 @@ beforeEach(async () => {
     tts: { enabled: true },
     skills: { enabled: { 'forced-words': true } },
     sfx: { enabled: false },
+    djBehaviour: { holdDuckBetweenSpeakers: true },
   } as never);
   session.start({
     at: new Date().toISOString(),
@@ -154,6 +162,7 @@ beforeEach(async () => {
 after(async () => {
   seams._speak = realSpeak;
   seams._airVoice = realAirVoice;
+  seams._airExchange = realAirExchange;
   forcedDirectorAgent.run = realForcedRun;
   queue.senderBusy = false;
   await new Promise(resolve => setTimeout(resolve, 1_100));

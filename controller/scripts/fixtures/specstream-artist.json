@@ -1,0 +1,60 @@
+{
+  "data": {
+    "id": "849620bd4e264c3dbf87dcb302b61ef6",
+    "request_id": "849620bd4e264c3dbf87dcb302b61ef6",
+    "query": "Phoebe Bridgers musician latest news",
+    "kind": "list",
+    "columns": [],
+    "answer": null,
+    "rows": [],
+    "sources": [
+      {
+        "url": "https://en.wikipedia.org/wiki/Phoebe_Bridgers",
+        "title": "Phoebe Bridgers",
+        "site": "en.wikipedia.org",
+        "snippet": "Oct 15, 2023 - Privately educated musiciansAmerican musician (born 1994) Phoebe Waller-Bridge August 2021​...Know the End http://www.undertheradarmag.com/news/phoebe_bridgers_shares_video_for_i_know_...​ · Phoebe Lucille Bridgers (born August 17, 1994) is an American singer-songwriter, record producer, and actress. · In December 2020, she released a music video for the song \"Savior Complex\", directed by Phoebe Waller-Bridge and starring Paul Mescal. · Bridgers, Fiona Apple,",
+        "cited": false,
+        "read_at": "2026-11-10T20:03:39+00:00"
+      },
+      {
+        "url": "https://phoebefuckingbridgers.com/",
+        "title": "Phoebe Bridgers",
+        "site": "phoebefuckingbridgers.com",
+        "snippet": "We will use the information below to send you timely updates on new music, videos, merchandise and events in your local area.",
+        "cited": false,
+        "read_at": "2026-11-10T20:03:39+00:00"
+      },
+      {
+        "url": "https://www.npr.org/artists/519693526/phoebe-bridgers",
+        "title": "npr phoebe bridgers",
+        "site": "npr.org",
+        "snippet": "",
+        "cited": false,
+        "read_at": "2026-11-10T20:03:39+00:00"
+      },
+      {
+        "url": "https://www.last.fm/music/Phoebe+Bridgers",
+        "title": "Phoebe Bridgers music, videos, stats, and photos | Last.fm",
+        "site": "last.fm",
+        "snippet": "Phoebe Bridgers Join others and track this artist Scrobble, find and rediscover music with a Last.fm account Phoebe Lucille Bridgers (born August 17, 1994) is an American indie mus...​",
+        "cited": false,
+        "read_at": "2026-11-10T20:03:39+00:00"
+      },
+      {
+        "url": "https://pitchfork.com/artists/phoebe-bridgers/",
+        "title": "Phoebe Bridgers - Albums, Songs, and News | Pitchfork",
+        "site": "pitchfork.com",
+        "snippet": "Phoebe Bridgers News ( 50+ ) Show All Rob Moose and Phoebe Bridgers Share New Song “Wasted” by: Allison Hussey May 12 2023 Arlo Parks and Phoebe Bridgers Share Video for New Song...​",
+        "cited": false,
+        "read_at": "2026-11-10T20:03:39+00:00"
+      }
+    ],
+    "handoff": null,
+    "took_ms": 1024,
+    "price_usd": 0.005,
+    "read_at": "2026-11-10T20:03:39+00:00",
+    "corrected_query": "phoebe bridges musician latest news",
+    "page": 1,
+    "next_page": 2
+  }
+}

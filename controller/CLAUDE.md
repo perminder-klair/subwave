@@ -50,6 +50,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 ## TTS (`audio/`)
 
 - `audio/tts.ts` dispatches every voice, and callers use `tts.speak(text, {kind})`. A persona slot may name `inherit` (`PERSONA_TTS_INHERIT`, deliberately not in `TTS_ENGINES`): resolve it once where the slot is read (`resolvePersonaVoiceSlot`). The lenient load path repairs a bad engine to `piper`, never to `inherit`. The per-engine voice rules live once, in `schemas/persona.ts`.
+- The rescue chain after a failed render is: the persona's own `fallbackVoice` (#2029) → `settings.tts.fallback` → `defaultEngine` → piper → kokoro (`audio/tts-fallback.ts`). The persona rescue is gated on `GLOBAL_VOICE_KINDS` and passed to every `resolveEngine()` caller. It carries voice identity only: never forward the persona's own `tts` to a rescue (#1793); credentials stay station-wide.
 - Chatterbox and PocketTTS run in the `tts-heavy` sidecar (`--profile tts-heavy`) when `TTS_HEAVY_URL` is set, else as local Python workers; both paths must keep working.
 - The clone-reference folder (`audio/voice-library.ts`) has no JSON sidecar on purpose: operators drop files into it by hand, and a sidecar would hold no entry for those. Bracket cues (`[laugh]`) are offered to the model only for an engine that renders them, judged on the resolved slot.
 
@@ -63,7 +64,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 ## Backup and personas
 
-- `backup/zip.ts` is the one archive assembly. Retention may only name the anchored `subwave-auto-backup-…` grammar (`backup/pure.ts`), because `GET /backup/restorable` lists every `*.zip` in the state dir. Restore routes sidecars through their owners (`jingles.restoreMeta`, `sfx.restoreMeta`, `skills/install.ts`).
+- `backup/zip.ts` is the one archive assembly. Retention may only name the anchored `subwave-auto-backup-…` grammar (`backup/pure.ts`), because `GET /backup/restorable` lists every `*.zip` in the state dir. Restore routes sidecars through their owners (`jingles.restoreMeta`, `sfx.restoreMeta`, `blocklist.restore`, `skills/install.ts`).
 - `personas/install.ts` is the one path for a community install and a bundle import (the admin roster still adds through `settings.update()`). A bundle import reserves its filenames and dry-runs validation before writing a byte. A clashing audio filename is suffixed and the persona re-pointed at it, never overwritten.
 
 ## HTTP
