@@ -39,4 +39,16 @@ assert.equal(
   'a multilingual persona keeps the script it mixes in',
 );
 
+// The scrub stands down only for a mix language written in CJK script.
+assert.equal(cjkUnsafeForSpokenLanguage('English', ['Spanish']), true, 'English + Spanish keeps the CJK net');
+assert.equal(
+  scrubCjkForSpeech('Next up, ウルフルズ — vamos.', 'English', ['Spanish']),
+  'Next up, — vamos.',
+  'English + Spanish on an English voice still loses leaked kana',
+);
+assert.equal(cjkUnsafeForSpokenLanguage('English', ['Spanish', 'Korean']), false, 'one CJK language in the mix stands it down');
+assert.equal(cjkUnsafeForSpokenLanguage('English', ['日本語']), false, 'a native-script language name counts');
+assert.equal(cjkUnsafeForSpokenLanguage('English', ['Chinese (Traditional)']), false, 'a labelled Chinese counts');
+assert.equal(cjkUnsafeForSpokenLanguage('French', ['Spanish']), false, 'a non-English primary stays untouched, mix or not');
+
 console.log('spoken-script-policy.test.ts: all assertions passed');
