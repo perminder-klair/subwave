@@ -45,6 +45,12 @@
 #       still choke the outgoing's highs. Lifts both sweep blocks from radio.liq.
 #       A sweep seam never takes the equal-power curve, so the reference is the
 #       linear fade.
+#   scripts/fx-render-test.sh orphans
+#       Regression check — jingle seams must not leave never-started clocks
+#       behind (a_source/b_source built but unused on a jingle seam leaked ~3
+#       clocks per jingle on air). Lifts the a_source / b_source / seam blocks
+#       from radio.liq, plays tracks and jingles for ORPHANS_SECS (default 60 s,
+#       capped at 0.5 CPU) and counts `ticks: 0` clocks over the telnet.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
@@ -1169,8 +1175,98 @@ sweepstep() {
   return "$fail"
 }
 
+orphans() {
+  # Liquidsoap 2.4.6 never frees an operator that was built and never wired in:
+  # it stays as its own never-started clock (`ticks: 0` in `clock.dump`) and the
+  # stream clock scans it every frame. A jingle seam reads the raw a.source /
+  # b.source, so dj_transition must not build the faded/effected a_source /
+  # b_source for it. This plays tracks and jingles through a cross with the
+  # a_source / b_source / seam blocks LIFTED from radio.liq, then counts the
+  # orphan clocks over the telnet `clock.dump` after a full GC. Before the fix
+  # this left several (1,478 on air after 8 days); after it must be zero.
+  local secs="${ORPHANS_SECS:-60}" rounds="${ORPHANS_ROUNDS:-3}" rl="$HERE/../liquidsoap/radio.liq" mark
+  [ -f "$WORK/ot.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=4" -af volume=-12dB -ar 44100 -ac 2 "$WORK/ot.wav"
+  [ -f "$WORK/oj.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=1000:duration=1.2" -af volume=-12dB -ar 44100 -ac 2 "$WORK/oj.wav"
+  printf '/work/ot.wav\n' > "$WORK/orph-tracks.m3u"
+  printf '/work/oj.wav\n' > "$WORK/orph-jingles.m3u"
+  grep -E '^  (boundary_fading|jingle_out|jingle_in|washing|looping|sweeping|dissolving|chopping|blending) = ' "$rl" > "$WORK/orph-arming.liq"
+  awk '/^half_pi = /{on=1} on{print} on&&/^end$/{exit}' "$rl" > "$WORK/orph-eqfade.liq"
+  awk '/^  def flagged\(m, k\)/{on=1} on{print} on&&/liq_blend"\)$/{exit}' "$rl" > "$WORK/orph-eqrule.liq"
+  awk '/^  a_source =$/{n++} n==1{print} n==1&&/^    end$/{exit}' "$rl" > "$WORK/orph-a.liq"
+  # The first b_source is either one line (`b_source = fade.in(...)`) or an if-block.
+  awk '/^  b_source =/{ if ($0 ~ /fade\.in/) {print; exit} on=1 } on{print} on&&/^    end$/{exit}' "$rl" > "$WORK/orph-b.liq"
+  awk '/^  seam =$/{on=1} on{print} on&&/^    end$/{exit}' "$rl" > "$WORK/orph-seam.liq"
+  mark=$(grep -m1 -oE 'metadata\.map\(update=true, fun \(_\) -> \[\("subwave_jingle", "true"\)\]' "$rl")
+  [ "$(wc -l < "$WORK/orph-arming.liq")" = 9 ] && [ -n "$mark" ] && [ -s "$WORK/orph-a.liq" ] \
+    && grep -q 'def equal_power_fade' "$WORK/orph-eqfade.liq" && grep -q 'equal_power_seam =' "$WORK/orph-eqrule.liq" \
+    && grep -q "fade.in" "$WORK/orph-b.liq" && grep -q "jingle_in" "$WORK/orph-seam.liq" \
+    || { echo "ORPHANS FAIL — could not lift the arming lines / a_source / b_source / seam blocks from radio.liq"; return 1; }
+  {
+    cat <<'LIQ'
+settings.log.stdout := true
+settings.log.level := 2
+settings.server.telnet := true
+settings.server.telnet.bind_addr := "127.0.0.1"
+settings.server.telnet.port := 1234
+tracks = playlist(mode="randomize", reload_mode="never", "/work/orph-tracks.m3u")
+LIQ
+    echo "jingles = ${mark}, playlist(mode=\"randomize\", reload_mode=\"never\", \"/work/orph-jingles.m3u\"))"
+    cat <<'LIQ'
+music = rotate(weights=[1, 2], [jingles, tracks])
+jseams = ref(0)
+equal_power_crossfade = ref(true)
+%include "/work/orph-eqfade.liq"
+def t(a, b) =
+%include "/work/orph-arming.liq"
+%include "/work/orph-eqrule.liq"
+  if jingle_in or jingle_out then jseams := jseams() + 1 end
+  d = min(source.remaining(a.source), source.remaining(b.source))
+  a_fade = d
+  b_fade = d
+%include "/work/orph-a.liq"
+%include "/work/orph-b.liq"
+%include "/work/orph-seam.liq"
+  seam
+end
+music = amplify(override="liq_amplify", 1., music)
+music = cross(duration=0.5, persist_override=true, t, music)
+output.dummy(fallible=true, music)
+clock.assign_new(sync="none", [music])
+server.register("jseams", fun (_) -> string(jseams()))
+LIQ
+  } > "$WORK/orph.liq"
+  cat > "$WORK/orph-probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+# runs INSIDE the liquidsoap container: orph-probe.sh <seconds>
+liquidsoap /work/orph.liq > /work/orph.log 2>&1 &
+P=$!
+q() { exec 3<>/dev/tcp/127.0.0.1/1234; printf '%s\nquit\n' "$1" >&3; timeout 20 cat <&3; exec 3>&-; }
+sleep "$1"
+q runtime.gc.full_major >/dev/null; sleep 2
+D=$(q clock.dump)
+echo "ORPHANS_RESULT jingle_seams=$(q jseams | head -1) clocks=$(grep -c 'ticks: ' <<<"$D") orphans=$(grep -c 'source.dynamic.*ticks: 0,' <<<"$D")"
+kill $P
+PROBE
+  # The leak is probabilistic (an unused operator is only left behind some of the
+  # time, 1 to 10 clocks per 200 seams measured), so one clean run proves little:
+  # run several rounds, each in its own liquidsoap, and fail if ANY round leaks.
+  local out n js r total=0 leaked=0
+  for r in $(seq 1 "$rounds"); do
+    out=$(docker run --rm --cpus 0.5 --user "$(id -u):$(id -g)" -v "$WORK":/work --entrypoint bash "$IMAGE" /work/orph-probe.sh "$secs" 2>&1) || { echo "$out"; return 1; }
+    echo "round $r: $(grep ORPHANS_RESULT <<<"$out")"
+    n=$(sed -n 's/.*orphans=\([0-9]*\).*/\1/p' <<<"$out" | tail -1)
+    js=$(sed -n 's/.*jingle_seams=\([0-9]*\).*/\1/p' <<<"$out" | tail -1)
+    [ "${js:-0}" -ge 20 ] || { echo "ORPHANS FAIL — only ${js:-0} jingle seams played in ${secs}s, the check did not exercise the leak"; return 1; }
+    total=$((total + js))
+    [ "${n:-1}" = 0 ] || leaked=$((leaked + n))
+  done
+  [ "$leaked" = 0 ] || { echo "ORPHANS FAIL — ${leaked} never-started clock(s) left behind after ${total} jingle seams in ${rounds} rounds (a jingle seam builds an operator it never uses)"; return 1; }
+  echo "ORPHANS PASS — ${total} jingle seams over ${rounds} rounds left no orphaned clocks"
+}
+
 case "${1:-}" in
   probe)  probe ;;
+  orphans) orphans ;;
   render) shift; render "$@" ;;
   loopcheck) loopcheck ;;
   loopgaps) loopgaps ;;
@@ -1181,5 +1277,5 @@ case "${1:-}" in
   sweepstep) sweepstep ;;
   xdur)   xdur ;;
   xchain) xchain ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | ampgain | sweepstep | xdur | xchain"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | ampgain | sweepstep | orphans | xdur | xchain"; exit 2 ;;
 esac
