@@ -12,6 +12,42 @@
   independent. Operators who already reconfigured profiles under #1777 must
   mark those profiles before upgrading. See [upgrade and recovery steps](docs/multi-station.md#upgrading-existing-profiles).
 
+## [1.33.0](https://github.com/perminder-klair/subwave/compare/v1.32.0...v1.33.0) (2026-11-18)
+
+
+### Features
+
+* add Cheaper Inference as an OpenAI-compatible LLM provider ([#2097](https://github.com/perminder-klair/subwave/issues/2097)) ([3d2c92a](https://github.com/perminder-klair/subwave/commit/3d2c92a71802e15aea5e99afd2b17de18511ad5a))
+* **llm:** reasoning levels per leg ([#2356](https://github.com/perminder-klair/subwave/issues/2356)) ([76c344a](https://github.com/perminder-klair/subwave/commit/76c344ac067727f4c8d41e51b8cfe706c7ae5c7c)), closes [#2296](https://github.com/perminder-klair/subwave/issues/2296)
+* **llm:** request parameters and tool-call overrides for OpenAI-compatible legs ([#2355](https://github.com/perminder-klair/subwave/issues/2355)) ([ee27d73](https://github.com/perminder-klair/subwave/commit/ee27d73e712da6115e6eb8a65e278b02d5295e15)), closes [#2296](https://github.com/perminder-klair/subwave/issues/2296)
+* **search:** add Parallel as a keyless web-search provider ([#2278](https://github.com/perminder-klair/subwave/issues/2278)) ([f449e8a](https://github.com/perminder-klair/subwave/commit/f449e8abaa932fcdcef17bb9b1f0c270c8787b7c))
+* **search:** SpecStream as a web-search backend ([#2346](https://github.com/perminder-klair/subwave/issues/2346)) ([8fd4285](https://github.com/perminder-klair/subwave/commit/8fd428525e5433a5eaebdad661795d058996fa8c))
+* **tagging:** energy from the audio for LLM-tagged tracks: fill an empty one, overrule a clearly wrong one (both opt-in) ([#2315](https://github.com/perminder-klair/subwave/issues/2315)) ([207f92d](https://github.com/perminder-klair/subwave/commit/207f92d3205ef2523480168bcbc4cda4ae0d7fc6))
+* **transitions:** cut a fade ending at its audible end, read off a loudness curve ([#2332](https://github.com/perminder-klair/subwave/issues/2332)) ([3c54c38](https://github.com/perminder-klair/subwave/commit/3c54c3850a2e69aa8a8b682095f75f3ff0866d86))
+
+
+### Bug Fixes
+
+* **analysis:** Sound: line vector follow-ups from [#2240](https://github.com/perminder-klair/subwave/issues/2240) ([#2354](https://github.com/perminder-klair/subwave/issues/2354)) ([857e622](https://github.com/perminder-klair/subwave/commit/857e6223181d1a50b293028bc692d10054d1df6a)), closes [#2313](https://github.com/perminder-klair/subwave/issues/2313)
+* **analyzer:** a tail whose curve meter failed settles instead of re-reading every pass ([#2360](https://github.com/perminder-klair/subwave/issues/2360)) ([5e56a6f](https://github.com/perminder-klair/subwave/commit/5e56a6f5c408aea9752eb3915f0aab69126c93cb))
+* **analyzer:** drop diffq; a quantised DEMUCS_MODEL loads htdemucs ([#2243](https://github.com/perminder-klair/subwave/issues/2243)) ([62e7fdd](https://github.com/perminder-klair/subwave/commit/62e7fdd9ed81a8e1e66071d07cbc8bbf1d1938f5)), closes [#2198](https://github.com/perminder-klair/subwave/issues/2198)
+* **analyzer:** fall back to cpu when the GPU can't run a kernel, and publish a cu124 analyzer build ([#2311](https://github.com/perminder-klair/subwave/issues/2311)) ([77ce5e0](https://github.com/perminder-klair/subwave/commit/77ce5e076a38c4a5c1afce6a22b27e19ac61a027)), closes [#2280](https://github.com/perminder-klair/subwave/issues/2280)
+* **cli:** stop compiled binaries loading the working directory's .env ([#2207](https://github.com/perminder-klair/subwave/issues/2207)) ([07ba00b](https://github.com/perminder-klair/subwave/commit/07ba00bb10b11ef0cc83a3f27a1dd66a5db869ea))
+* **compose:** run the controller and web under tini (init: true) ([#2344](https://github.com/perminder-klair/subwave/issues/2344)) ([50efadd](https://github.com/perminder-klair/subwave/commit/50efadd6f44b2df6bd3c5f9925d82c2615450ecc))
+* **liquidsoap:** drop a coast request resolved from a replaced auto.m3u, and warn on an off-coast play ([#2364](https://github.com/perminder-klair/subwave/issues/2364)) ([2cd1c11](https://github.com/perminder-klair/subwave/commit/2cd1c1149cbbe3ec17a2d20f07830675c618529b)), closes [#2213](https://github.com/perminder-klair/subwave/issues/2213)
+* **llm:** Default reasoning on manual-thinking Claude thinks on a fixed 1,024-token budget ([#2363](https://github.com/perminder-klair/subwave/issues/2363)) ([d3bc501](https://github.com/perminder-klair/subwave/commit/d3bc50108eba891541ee51fe57f172312bf55b51)), closes [#2357](https://github.com/perminder-klair/subwave/issues/2357)
+* **stations:** creating a second station no longer takes the AIO off the air ([#2350](https://github.com/perminder-klair/subwave/issues/2350)) ([dc68bac](https://github.com/perminder-klair/subwave/commit/dc68bac14c3d85539c65e76eb4bc932ec89dff21))
+* **stems:** a usage journal keeps the stored cache size true across a walk ([#2351](https://github.com/perminder-klair/subwave/issues/2351)) ([9d7b9ab](https://github.com/perminder-klair/subwave/commit/9d7b9ab581d67170a33f6eb0268c75473430d32a)), closes [#2317](https://github.com/perminder-klair/subwave/issues/2317)
+* **stems:** a writer that dies mid-change stops the stored cache size being trusted ([#2362](https://github.com/perminder-klair/subwave/issues/2362)) ([c9c4523](https://github.com/perminder-klair/subwave/commit/c9c4523a1d18dd9f119e62a0efec682a3eebdfb2)), closes [#2352](https://github.com/perminder-klair/subwave/issues/2352)
+* **transitions:** the stem blend reads the outgoing tail through the projection ([#2359](https://github.com/perminder-klair/subwave/issues/2359)) ([e0676be](https://github.com/perminder-klair/subwave/commit/e0676beb9408a4097334c606a8f479ccbba09ba2))
+* **tts:** rescue each persona in its own voice when its engine fails ([#2089](https://github.com/perminder-klair/subwave/issues/2089)) ([9ad51b2](https://github.com/perminder-klair/subwave/commit/9ad51b2305602beecf181c4fd497b273f6b60996))
+* **ui:** make Last.fm tags work without scrobbling obvious ([#2316](https://github.com/perminder-klair/subwave/issues/2316)) ([c382ac8](https://github.com/perminder-klair/subwave/commit/c382ac8547fd6f48b1a2709594d67c86c1efc254))
+
+
+### Refactors
+
+* **library:** name the audio-energy pass for what it does ([#2361](https://github.com/perminder-klair/subwave/issues/2361)) ([06a49c4](https://github.com/perminder-klair/subwave/commit/06a49c43c67ef441db3e629bf82eeec693122cee))
+
 ## [1.32.0](https://github.com/perminder-klair/subwave/compare/v1.31.0...v1.32.0) (2026-11-13)
 
 
