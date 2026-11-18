@@ -16,24 +16,39 @@
 //
 // So each writer brackets each dir it changes in the journal, one session per
 // writer:
-//   `+ <session> <dir> <ms>`  before its first change to the dir (it then
+//   `+ <session> <dir> <ms> <pid> <start>`
+//                             before its first change to the dir (it then
 //                             measures the dir: its base);
 //   `= <session> <dir>`       after its last change (it then measures again:
 //                             its final, and settles);
 //   `* <session>`             a change of unknown size (a delete refused
 //                             part-way, a separation that timed out);
-//   `+ <session> * <ms> <pid>` an analysis pass writing dirs nobody names
+//   `+ <session> * <ms> <pid> <start>`
+//                             an analysis pass writing dirs nobody names
 //                             (closed by `= <session> *` when it settles):
 //                             no walk stores a trusted figure while one is
 //                             open or across one that opened or closed.
-// Every opening carries its writer's pid: one whose process is gone is a
-// writer that died, and nothing waits on it.
+// Every opening carries its writer's pid and the writer's start identity (the
+// process start time from /proc/<pid>/stat, in clock ticks since host boot):
+// an opening whose process is gone, or whose pid now names another process, is
+// a writer that died, and nothing waits on it. The start identity is what
+// tells the two apart under tini, where a restarted controller usually gets
+// the pid its dead predecessor had (#2352). It is left off where /proc cannot
+// be read; a 5-field opening (one so written, or from before #2352) is judged
+// on pid and age alone. A reader from before #2352 parses a 6-field opening as
+// `*`, a change of unknown size, so it trusts nothing past it and its walks
+// store stale: the new line fails safe on an old reader.
+// An opening is live (openingLive) while its writer is and it is younger than
+// OPEN_MAX_AGE_MS (a pass's, PASS_OPEN_MAX_AGE_MS). Only a live opening is a
+// write still running; a dead or old one is a change nobody will settle.
 // A snapshot records the journal position it accounts for (`journal`: the
 // file's id and a byte offset) and, for each bracket still open there, what it
 // counted for that dir (`inFlight`). Then:
 // - a reader trusts the snapshot only while every entry past that position
-//   opens a bracket (journalAccounts): a change the snapshot does not hold
-//   leaves an `=` or `*` past it, so it is never trusted and wrong;
+//   is a live opening, and every bracket it holds in `inFlight` still has one
+//   (journalAccounts): a change the snapshot does not hold leaves an `=` or
+//   `*` past it, or an opening whose writer died before it could close, so it
+//   is never trusted and wrong for longer than OPEN_MAX_AGE_MS;
 // - a walk, at its end, re-measures every dir a bracket names after the
 //   position it started from, and every dir still open, and stores its figure
 //   at the journal's end (walkReconcile); only a `*`, a journal that was
@@ -53,10 +68,11 @@ export const JOURNAL_FORMAT = 'subwave-stem-journal';
 export const JOURNAL_VERSION = 1;
 
 // An opening older than this is a writer that died (a controller restart
-// mid-separation): a walk counts its dir as it finds it and keeps no in-flight
-// figure for it, and a trim drops it. A writer that settles later than this is
-// refused, which leaves the snapshot untrusted, never wrong. A separation's
-// request deadline is minutes.
+// mid-separation whose pid was reused): a walk counts its dir as it finds it
+// and keeps no in-flight figure for it, a trim drops it, and a reader stops
+// trusting a snapshot it lies past or holds open. A writer that settles later
+// than this is refused, which leaves the snapshot untrusted, never wrong. A
+// separation's request deadline is minutes.
 export const OPEN_MAX_AGE_MS = 6 * 3600_000;
 // An analysis pass runs for hours; its pending mark is trusted for as long
 // (stem-cache.ts PENDING_MAX_AGE_MS), and its journal opening the same.
@@ -65,7 +81,12 @@ export const PASS_OPEN_MAX_AGE_MS = 48 * 3600_000;
 export const UNNAMED_DIRS = '*';
 
 export type JournalEntry =
-  | { kind: '+'; session: string; dir: string; atMs: number; pid: number; offset: number; end: number; line: string }
+  | {
+    kind: '+'; session: string; dir: string; atMs: number; pid: number;
+    /** The writer's start identity; absent on a 5-field opening, judged on pid and age alone. */
+    start?: string;
+    offset: number; end: number; line: string;
+  }
   | { kind: '='; session: string; dir: string; offset: number; end: number; line: string }
   | { kind: '*'; session: string; offset: number; end: number; line: string };
 
@@ -104,13 +125,29 @@ export function headerLine(id: string, createdMs: number): string {
   return `${JOURNAL_FORMAT} ${JOURNAL_VERSION} ${id} ${Math.round(createdMs)}\n`;
 }
 
-export function openLine(session: string, dir: string, atMs: number, pid: number): string {
-  return `+ ${session} ${encodeURIComponent(dir)} ${Math.round(atMs)} ${pid}\n`;
+// `start` is the writer's start identity, null where it cannot be read (the
+// line then has 5 fields, judged on pid and age alone).
+function startField(start: string | null): string {
+  return start !== null && START.test(start) ? ` ${start}` : '';
+}
+
+// The start identity in a /proc/<pid>/stat line: field 22, starttime, in
+// clock ticks since host boot. Counted after the last ')', since the command
+// name in field 2 may hold spaces and parentheses. Null when it does not parse.
+export function procStartTime(stat: string): string | null {
+  const close = stat.lastIndexOf(')');
+  if (close < 0) return null;
+  const start = stat.slice(close + 1).trim().split(/\s+/)[19];
+  return start !== undefined && START.test(start) ? start : null;
+}
+
+export function openLine(session: string, dir: string, atMs: number, pid: number, start: string | null): string {
+  return `+ ${session} ${encodeURIComponent(dir)} ${Math.round(atMs)} ${pid}${startField(start)}\n`;
 }
 
 /** An analysis pass starting to write dirs it does not name. */
-export function passOpenLine(session: string, atMs: number, pid: number): string {
-  return `+ ${session} ${UNNAMED_DIRS} ${Math.round(atMs)} ${pid}\n`;
+export function passOpenLine(session: string, atMs: number, pid: number, start: string | null): string {
+  return `+ ${session} ${UNNAMED_DIRS} ${Math.round(atMs)} ${pid}${startField(start)}\n`;
 }
 
 export function closeLine(session: string, dir: string): string {
@@ -122,6 +159,8 @@ export function unknownLine(session: string): string {
 }
 
 const SESSION = /^[A-Za-z0-9_-]{1,64}$/;
+/** A start identity: /proc's starttime, a decimal count of clock ticks. */
+const START = /^[0-9]{1,20}$/;
 
 function decodeDir(s: string | undefined): string | null {
   if (!s) return null;
@@ -163,8 +202,12 @@ export function parseJournal(text: string): Journal | null {
     const dir = decodeDir(f[2]);
     const atMs = Number(f[3]);
     const pid = Number(f[4]);
-    if (f[0] === '+' && f.length === 5 && session !== '?' && dir && Number.isFinite(atMs) && Number.isInteger(pid) && pid > 0) {
-      entries.push({ kind: '+', session, dir, atMs, pid, offset, end, line });
+    const start = f.length === 6 && START.test(f[5]) ? f[5] : undefined;
+    if (f[0] === '+' && (f.length === 5 || start !== undefined) && session !== '?' && dir && Number.isFinite(atMs)
+      && Number.isInteger(pid) && pid > 0) {
+      entries.push(start === undefined
+        ? { kind: '+', session, dir, atMs, pid, offset, end, line }
+        : { kind: '+', session, dir, atMs, pid, start, offset, end, line });
     } else if (f[0] === '=' && f.length === 3 && session !== '?' && dir) {
       entries.push({ kind: '=', session, dir, offset, end, line });
     } else {
@@ -175,11 +218,65 @@ export function parseJournal(text: string): Journal | null {
   return { id: head[2], createdMs, headerEnd, end: offset, entries };
 }
 
-/** Does a snapshot at `mark` hold every change the journal records? Openings past it are writes still running. */
-export function journalAccounts(mark: JournalMark | undefined, j: Journal | null): boolean {
+// Whether a writer is still running: its pid names a live process and, when
+// the opening carries one, that process has the same start identity. The I/O
+// side passes the real check (stem-cache.ts writerAlive).
+export type WriterAlive = (pid: number, start: string | undefined) => boolean;
+
+type Opening = Extract<JournalEntry, { kind: '+' }>;
+
+// The one liveness rule for an opening, shared by every reader of the journal
+// (openWrites for a walk and a trim, journalAccounts for a read): its writer
+// is still running and it is young enough to settle (OPEN_MAX_AGE_MS; a
+// pass's, PASS_OPEN_MAX_AGE_MS).
+export function openingLive(e: Opening, nowMs: number, alive: WriterAlive): boolean {
+  const maxAge = e.dir === UNNAMED_DIRS ? PASS_OPEN_MAX_AGE_MS : OPEN_MAX_AGE_MS;
+  return nowMs - e.atMs <= maxAge && alive(e.pid, e.start);
+}
+
+// One answer per writer for one reading of the journal: the I/O side's check
+// reads /proc synchronously, and a journal between walks holds thousands of
+// openings from a handful of writers.
+function memoAlive(alive: WriterAlive): WriterAlive {
+  const seen = new Map<string, boolean>();
+  return (pid, start) => {
+    const key = `${pid} ${start ?? ''}`;
+    let v = seen.get(key);
+    if (v === undefined) seen.set(key, v = alive(pid, start));
+    return v;
+  };
+}
+
+// Does a snapshot at `mark`, holding `inFlight`, hold every change the
+// journal records? Every entry past the position must be a live opening (a
+// write still running), and every bracket the snapshot holds open must still
+// have one: a writer that died between its change and its close leaves its
+// opening for good, and the dir changed under the figure (#2352).
+export function journalAccounts(
+  mark: JournalMark | undefined,
+  j: Journal | null,
+  live: { inFlight: InFlight | undefined; nowMs: number; alive: WriterAlive },
+): boolean {
   if (!mark || !j || mark.id !== j.id) return false;
   if (!Number.isInteger(mark.upTo) || mark.upTo < j.headerEnd || mark.upTo > j.end) return false;
-  return j.entries.every(e => e.offset < mark.upTo || e.kind === '+');
+  const held = live.inFlight ?? {};
+  const alive = memoAlive(live.alive);
+  const liveKeys = new Set<string>();
+  for (const e of j.entries) {
+    if (e.kind !== '+') {
+      if (e.offset >= mark.upTo) return false;
+      continue;
+    }
+    // Only an opening past the position, or one the snapshot holds open, is
+    // judged: the rest are brackets the snapshot measured after.
+    const key = inFlightKey(e.session, e.dir);
+    const past = e.offset >= mark.upTo;
+    if (!past && !(key in held)) continue;
+    const ok = openingLive(e, live.nowMs, alive);
+    if (past && !ok) return false;
+    if (ok) liveKeys.add(key);
+  }
+  return Object.keys(held).every(key => liveKeys.has(key));
 }
 
 export interface OpenWrite {
@@ -189,14 +286,11 @@ export interface OpenWrite {
   line: string;
 }
 
-/** Whether a pid names a running process; the I/O side passes the real check. */
-export type PidAlive = (pid: number) => boolean;
-
 // Brackets opened and not closed anywhere in the journal (a trim may copy a
-// close ahead of its opening, so order is not used), whose writer is still
-// running and young enough to settle (OPEN_MAX_AGE_MS; a pass's,
-// PASS_OPEN_MAX_AGE_MS).
-export function openWrites(j: Journal, nowMs: number, alive: PidAlive): OpenWrite[] {
+// close ahead of its opening, so order is not used) whose opening is live
+// (openingLive).
+export function openWrites(j: Journal, nowMs: number, writerAlive: WriterAlive): OpenWrite[] {
+  const alive = memoAlive(writerAlive);
   const closed = new Set<string>();
   for (const e of j.entries) if (e.kind === '=') closed.add(inFlightKey(e.session, e.dir));
   const seen = new Set<string>();
@@ -206,8 +300,7 @@ export function openWrites(j: Journal, nowMs: number, alive: PidAlive): OpenWrit
     const key = inFlightKey(e.session, e.dir);
     if (closed.has(key) || seen.has(key)) continue;
     seen.add(key);
-    const maxAge = e.dir === UNNAMED_DIRS ? PASS_OPEN_MAX_AGE_MS : OPEN_MAX_AGE_MS;
-    if (nowMs - e.atMs > maxAge || !alive(e.pid)) continue;
+    if (!openingLive(e, nowMs, alive)) continue;
     out.push({ session: e.session, dir: e.dir, line: e.line });
   }
   return out;
@@ -229,7 +322,7 @@ export function walkReconcile(
   from: number,
   now: Journal | null,
   nowMs: number,
-  alive: PidAlive,
+  alive: WriterAlive,
 ): WalkReconcile {
   if (startId === null || !now) return { ok: false, reason: 'the usage journal could not be read' };
   if (now.id !== startId) return { ok: false, reason: 'the usage journal was replaced during the walk' };

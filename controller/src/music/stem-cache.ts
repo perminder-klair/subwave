@@ -2,6 +2,7 @@
 // paths and evicts by the same priority the backfill uses.
 
 import { access, constants, readdir, stat, rm, readFile, mkdir, chmod, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
@@ -16,7 +17,7 @@ import {
   _journalStepsForTests, appendLines, dropJournal, ensureJournal, newSessionId, readJournal, trimJournal, type JournalRead,
 } from './stem-usage-journal.js';
 import {
-  closeLine, inFlightKey, journalAccounts, openLine, passOpenLine, settleDecision, unknownLine, walkReconcile,
+  closeLine, inFlightKey, journalAccounts, openLine, passOpenLine, procStartTime, settleDecision, unknownLine, walkReconcile,
   UNNAMED_DIRS, type InFlight, type JournalMark, type SessionDir, type WalkReconcile,
 } from './stem-usage-policy.js';
 
@@ -381,6 +382,12 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 //   separation that timed out with the worker perhaps still writing) marks it
 //   `stale` (markUsageStale): the next read walks, and until then the figure
 //   stays readable for the budget field;
+// - a writer that dies between its change and its close (a controller
+//   restart mid-separation, a tagger child killed mid-forgetStems) leaves its
+//   opening for good; the snapshot stops being trusted as soon as that
+//   opening is not live (writerAlive: its pid gone, or reused by a process
+//   with another start identity; or past OPEN_MAX_AGE_MS), whether it lies
+//   past the position or the snapshot holds it in `inFlight` (#2352);
 // - anything else (dirs deleted or copied in by hand, a pass that died before
 //   settling) is caught by a full walk at least every SNAPSHOT_MAX_AGE_MS.
 //
@@ -429,8 +436,13 @@ export interface UsageSnapshot {
   // Last FULL walk; the snapshot is stale once this is older than the max age.
   measuredAt: string;
   updatedAt: string;
-  // An analysis pass that may be writing stem dirs right now.
-  pending?: { pid: number; since: string };
+  // An analysis pass that may be writing stem dirs right now. `start` is its
+  // process's start identity (as on a journal opening, writerAlive): a pid
+  // reused after the pass died, as under tini after a restart, must not keep
+  // the pass "running" (and the hourly sweep standing down) for
+  // PENDING_MAX_AGE_MS. A mark without one (written before #2352, or where
+  // /proc cannot be read) is judged on its pid alone.
+  pending?: { pid: number; since: string; start?: string };
   // The cache changed outside the pass and the sweep: these are last-known totals.
   stale?: boolean;
   // Bytes in `bytes` the last over-budget sweep could not delete (folders this
@@ -606,11 +618,11 @@ async function readUsageState(): Promise<UsageState> {
     snap,
     root: stemsRoot(),
     nowMs: Date.now(),
-    pendingAlive: snap?.pending ? pidAlive(snap.pending.pid) : false,
+    pendingAlive: snap?.pending ? writerAlive(snap.pending.pid, snap.pending.start) : false,
   });
   let { verdict, reason } = judged;
   const ownVerdict = snapshotUntrusted && verdict === 'use' ? 'walk' : verdict;
-  if (verdict === 'use' && !journalAccounts(snap?.journal, journal)) {
+  if (verdict === 'use' && !journalAccounts(snap?.journal, journal, { inFlight: snap?.inFlight, nowMs: Date.now(), alive: writerAlive })) {
     verdict = 'walk';
     reason = journal ? 'the cache changed in ways the stored size does not hold' : 'the usage journal could not be read';
   }
@@ -685,7 +697,7 @@ export class StemDirWrites {
   /** Open `name` (a dir directly under the cache root) before its first change. */
   async touch(name: string): Promise<void> {
     if (this.base.has(name)) return;
-    if (!(await appendLines([openLine(this.session, name, Date.now(), process.pid)]))) this.recorded = false;
+    if (!(await appendLines([openLine(this.session, name, Date.now(), process.pid, OWN_START)]))) this.recorded = false;
     await step('write:opened');
     this.base.set(name, await measuredDirBytes(path.join(stemsRoot(), name)));
     await step('write:based');
@@ -770,6 +782,44 @@ export class StemDirWrites {
   }
 }
 
+// A process's start identity (stem-usage-policy.ts procStartTime), or null
+// where /proc cannot be read (not Linux, or the process is gone).
+function processStart(pid: number | 'self'): string | null {
+  try {
+    return procStartTime(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+// This process's start identity, carried on each journal opening it writes.
+// Read once: a process's start time never changes.
+const OWN_START = processStart('self');
+
+// Is the writer of an opening still running? Its pid must name a live process
+// and, when the opening carries a start identity, that process must have it:
+// under tini a restarted controller usually gets its dead predecessor's pid,
+// this process included, so the pid alone would call that writer alive
+// (#2352). An identity that cannot be read back is not a match.
+function writerAlive(pid: number, start: string | undefined): boolean {
+  if (!pidAlive(pid)) return false;
+  if (start === undefined) return true;
+  const actual = pid === process.pid ? OWN_START : processStart(pid);
+  return actual !== null && actual === start;
+}
+
+// The pending mark this process writes, and whether a mark is this process's
+// own: its pid, and its start identity when the mark carries one, so a
+// restarted process with its predecessor's pid never takes that pass's mark
+// for its own.
+function ownPendingMark(): NonNullable<UsageSnapshot['pending']> {
+  return { pid: process.pid, since: new Date().toISOString(), ...(OWN_START !== null ? { start: OWN_START } : {}) };
+}
+
+function isOwnPending(p: UsageSnapshot['pending']): boolean {
+  return p?.pid === process.pid && (p.start === undefined || p.start === OWN_START);
+}
+
 function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   if (pid === process.pid) return true;
@@ -824,7 +874,7 @@ async function finishWalk(o: {
   let plan: WalkReconcile = { ok: false, reason: 'the cache kept changing while it was re-measured' };
   let stable = false;
   for (let round = 0; round < 3 && !stable; round += 1) {
-    plan = walkReconcile(start?.id ?? null, start?.end ?? 0, read, Date.now(), pidAlive);
+    plan = walkReconcile(start?.id ?? null, start?.end ?? 0, read, Date.now(), writerAlive);
     if (!plan.ok) break;
     for (const name of plan.remeasure) o.byName.set(name, await measuredDirBytes(path.join(stemsRoot(), name)));
     await step('walk:remeasured');
@@ -916,7 +966,7 @@ export async function storedUsage(): Promise<StoredUsage | null> {
     updatedAt: snap.updatedAt,
     fresh: verdict === 'use',
     passRunning: verdict === 'pass-running',
-    stale: snap.stale === true || !journalAccounts(snap.journal, journal),
+    stale: snap.stale === true || !journalAccounts(snap.journal, journal, { inFlight: snap.inFlight, nowMs: Date.now(), alive: writerAlive }),
   };
 }
 
@@ -932,7 +982,7 @@ let passSession: string | null = null;
 // is no pending mark to stop one, and a walk would store a partial figure.
 export async function markPassPending(): Promise<boolean> {
   passSession = newSessionId();
-  const recorded = await appendLines([passOpenLine(passSession, Date.now(), process.pid)]);
+  const recorded = await appendLines([passOpenLine(passSession, Date.now(), process.pid, OWN_START)]);
   return underUsageLock(async () => {
     const { snap, verdict } = await readUsageState();
     if (!recorded || verdict !== 'use' || !snap) {
@@ -941,7 +991,7 @@ export async function markPassPending(): Promise<boolean> {
       return false;
     }
     return writeSnapshot(buildSnapshot(
-      { ...snap, pending: { pid: process.pid, since: new Date().toISOString() }, updatedAt: new Date().toISOString() },
+      { ...snap, pending: ownPendingMark(), updatedAt: new Date().toISOString() },
       unevictableOf(snap),
     ));
   });
@@ -980,7 +1030,7 @@ export async function settlePassWrites(
     if (!closed) await journalLost();
     const snap = await readSnapshot();
     const journal = await readJournal();
-    const mine = snap?.pending?.pid === process.pid;
+    const mine = isOwnPending(snap?.pending);
     const base = snapshotVerdict({ snap, root: stemsRoot(), nowMs: Date.now(), pendingAlive: true });
     if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running' || snap.stale || !session || !closed) {
       snapshotUntrusted = true;
@@ -1175,7 +1225,7 @@ export async function sweep(
   await step('walk:start');
   const before = await snapshotState();
   // The pass's own end-of-pass sweep is not "a pass running elsewhere".
-  if (before.verdict === 'pass-running' && before.snap?.pending?.pid !== process.pid) {
+  if (before.verdict === 'pass-running' && !isOwnPending(before.snap?.pending)) {
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0, skipped: 'pass-running' };
   }
   if (!force && before.verdict === 'use' && before.snap && before.snap.bytes <= budget) {
@@ -1208,7 +1258,7 @@ export async function sweep(
   for (const d of ordered.filter((_, i) => canGo[i])) {
     if (total - unevictable <= budget) break;
     const name = path.basename(d.dir);
-    if (!(await appendLines([openLine(session, name, Date.now(), process.pid)]))) recorded = false;
+    if (!(await appendLines([openLine(session, name, Date.now(), process.pid, OWN_START)]))) recorded = false;
     try {
       await rm(d.dir, { recursive: true, force: true });
       total -= d.bytes;
