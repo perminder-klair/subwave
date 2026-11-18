@@ -29,7 +29,7 @@ import {
 
 // _agent.ts pulls the settings/queue chain at module scope; the runner's
 // STATE_DIR is already set by then.
-const { skillVoiceFor } = await import('../src/skills/_agent.js');
+const { skillVoiceFor, simpleSystem, forcedSystem, directorSystem } = await import('../src/skills/_agent.js');
 
 const strictVoice = (voice: unknown) => builtinSkillFileBodySchema.safeParse({ brief: 'Say things.', voice });
 const issues = (r: ReturnType<typeof strictVoice>) => (r.success ? [] : r.error.issues.map(i => i.message));
@@ -256,6 +256,30 @@ test('skillVoiceFor: an override drops the speaker\'s language mix, and only an 
   assert.doesNotMatch(spoken(pinned), /こんばんは/, 'a pinned voice never receives the second script');
   const own = skillVoiceFor({ kind: 'news', voice: null }, speaker).persona;
   assert.equal(spoken(own), line, "the speaker's own voice keeps the mix");
+});
+
+// Write time agrees with speak time: the prompt that writes a pinned-voice
+// skill's segment carries no mix directive, because the voice will scrub it.
+test('a pinned-voice skill is written without the mix; an unpinned one keeps it', () => {
+  const speaker = { id: 'p_x', name: 'Nova', soul: 'warm', language: 'English', alsoSpeaks: 'Japanese', tts: { engine: 'cloud', voice: 'v', cloudProvider: 'openai' } };
+  const pinnedCap = { kind: 'news', desc: 'Headlines.', voice: { engine: 'piper', voice: '', cloudProvider: 'openai' } };
+  const ownCap = { kind: 'weather', desc: 'The sky.', voice: null };
+  const MIX = /Japanese/;
+  assert.doesNotMatch(simpleSystem(speaker, pinnedCap, 'moderate', []), MIX, 'pool path, pinned');
+  assert.doesNotMatch(forcedSystem(speaker, pinnedCap, []), MIX, 'forced path, pinned');
+  assert.match(simpleSystem(speaker, ownCap, 'moderate', []), /native speaker of English and Japanese/, 'pool path, own voice');
+  assert.match(forcedSystem(speaker, ownCap, []), /Japanese woven in/, 'forced path, own voice');
+  // The director writes before it picks: every offered kind pinned → no mix.
+  assert.doesNotMatch(directorSystem(speaker, [pinnedCap], 'moderate', []), MIX, 'director, all pinned');
+  // Mixed offer: the mix stays, and the pinned kind is named as primary-only.
+  const mixed = directorSystem(speaker, [pinnedCap, ownCap], 'moderate', []);
+  assert.match(mixed, /native speaker of English and Japanese/);
+  assert.match(mixed, /Exception: news airs in a different voice that reads only English/);
+  assert.doesNotMatch(directorSystem(speaker, [ownCap], 'moderate', []), /Exception:/, 'no pinned kind, no exception');
+  // A one-language speaker's prompts are untouched by any of this.
+  const solo = { ...speaker, alsoSpeaks: '' };
+  assert.equal(simpleSystem(solo, pinnedCap, 'moderate', []), simpleSystem(solo, ownCap, 'moderate', []).replace('"weather"', '"news"').replace('The sky.', 'Headlines.'));
+  assert.doesNotMatch(directorSystem(solo, [pinnedCap, ownCap], 'moderate', []), /Exception:/);
 });
 
 test('skillVoiceFor: a missing speaker does not throw', () => {
