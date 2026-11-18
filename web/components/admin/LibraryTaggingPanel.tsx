@@ -11,7 +11,7 @@ import LibraryTaggingModal from './LibraryTaggingModal';
 import RunHoldsBanner from './library/RunHoldsBanner';
 import SceneVocabSection from './library/SceneVocabSection';
 import { useTaggerRunLog } from './library/useTaggerRunLog';
-import { LibraryCounts, type LibraryOverview } from './library/LibraryCounts';
+import { LibraryCounts, share, type LibraryOverview } from './library/LibraryCounts';
 import type { Tab } from './library/types';
 import { notify } from '../../lib/notify';
 
@@ -632,7 +632,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
             <span className="mono-num text-[12px] font-bold text-[var(--accent)]">
               {overview && overview.canAir > 0
-                ? `DJ-ready: ${Math.floor((overview.djReady / overview.canAir) * 100)}% of what can air`
+                ? `DJ-ready: ${share(overview.djReady, overview.canAir)} of what can air`
                 : pct != null ? `${pct}% tagged` : '—'}
             </span>
           </div>

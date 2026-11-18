@@ -31,7 +31,12 @@ export interface LibraryOverview {
 }
 
 const num = (n: number | null | undefined) => (n == null ? '…' : n.toLocaleString('en-GB'));
-const share = (n: number, of: number) => (of > 0 ? `${((n / of) * 100).toFixed(1)} %` : '—');
+// A share to one decimal, rounded DOWN: 99.96 % reads 99.9 %, so 100.0 % means
+// every one. Rounding to nearest showed "100.0 % DJ-ready" beside a heading
+// that, flooring to whole percent, said 99 %. Integer arithmetic, so n === of
+// is exactly 100.0 and never 99.9 through a float. The heading uses it too.
+export const share = (n: number, of: number) =>
+  (of > 0 ? `${(Math.floor((Math.max(0, n) * 1000) / of) / 10).toFixed(1)} %` : '—');
 const plural = (n: number, one: string, many = `${one}s`) => `${num(n)} ${n === 1 ? one : many}`;
 
 function dayLabel(iso: string | null): string {
