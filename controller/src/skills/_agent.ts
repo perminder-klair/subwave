@@ -246,9 +246,13 @@ function frequencyFloorMs(freq: string) {
 // the same rule a rescue voice gets (audio/tts.ts). The prompt that WRITES the
 // segment follows the same rule (skillWriterFor), so write time and speak time
 // agree: a mix written for a voice that then scrubs it airs with holes.
+// A co-hosted skill never pins: it is written by skills/cohosted.ts and each
+// line airs in its own roster voice, so its `voice` never reaches speech.
 export function skillPinsVoice(cap): boolean {
-  return Boolean(cap?.voice?.engine);
+  return Boolean(cap?.voice?.engine) && !cap?.cohosts;
 }
+
+const andList = new Intl.ListFormat('en', { type: 'conjunction' });
 
 // The persona a skill's segment prompt is written as: the speaker, minus its
 // language mix when the skill pins a voice. A speaker with no mix comes back
@@ -330,7 +334,7 @@ export function directorSystem(speaker, caps, freq: string, sfxCatalog) {
   const allPinned = pinned.length > 0 && pinned.length === caps.length;
   const persona = allPinned && speaker ? { ...speaker, alsoSpeaks: '' } : speaker;
   const pinnedClause = pinned.length && !allPinned
-    ? `\n\nException: ${pinned.join(', ')} air${pinned.length === 1 ? 's' : ''} in a different voice that reads only ${primary}. If you pick ${pinned.length === 1 ? 'it' : 'one of those'}, write the "text" line entirely in ${primary}, with no other language and no script ${primary} does not use.`
+    ? `\n\nException: ${andList.format(pinned)} air${pinned.length === 1 ? 's' : ''} in a different voice that reads only ${primary}. If you pick ${pinned.length === 1 ? 'it' : 'one of those'}, write the "text" line entirely in ${primary}, with no other language and no script ${primary} does not use.`
     : '';
 
   return `${settings.agentPersonaPreamble(persona)}

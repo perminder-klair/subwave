@@ -276,6 +276,23 @@ test('a pinned-voice skill is written without the mix; an unpinned one keeps it'
   assert.match(mixed, /native speaker of English and Japanese/);
   assert.match(mixed, /Exception: news airs in a different voice that reads only English/);
   assert.doesNotMatch(directorSystem(speaker, [ownCap], 'moderate', []), /Exception:/, 'no pinned kind, no exception');
+  // Two pinned kinds read as a list, not a comma splice.
+  const bulletinCap = { kind: 'bulletin', desc: 'Bulletin.', voice: { engine: 'kokoro', voice: 'bf_isabella', cloudProvider: 'openai' } };
+  assert.match(
+    directorSystem(speaker, [pinnedCap, bulletinCap, ownCap], 'moderate', []),
+    /Exception: news and bulletin air in a different voice that reads only English\. If you pick one of those/,
+  );
+  // A co-hosted skill airs in roster voices, so a voice set on it pins nothing.
+  const cohostCap = { kind: 'debate', desc: 'Hosts argue.', cohosts: true, voice: { engine: 'piper', voice: '', cloudProvider: 'openai' } };
+  assert.doesNotMatch(directorSystem(speaker, [cohostCap, ownCap], 'moderate', []), /Exception:/, 'co-hosted kind is not listed');
+  const onlyCohost = directorSystem(speaker, [cohostCap], 'moderate', []);
+  assert.match(onlyCohost, /native speaker of English and Japanese/, 'a co-hosted kind alone keeps the mix');
+  assert.doesNotMatch(onlyCohost, /Exception:/);
+  assert.match(
+    directorSystem(speaker, [pinnedCap, cohostCap], 'moderate', []),
+    /Exception: news airs in a different voice/,
+    'with a co-hosted kind beside it, one pinned kind is not "every kind": mix kept, news excepted',
+  );
   // A one-language speaker's prompts are untouched by any of this.
   const solo = { ...speaker, alsoSpeaks: '' };
   assert.equal(simpleSystem(solo, pinnedCap, 'moderate', []), simpleSystem(solo, ownCap, 'moderate', []).replace('"weather"', '"news"').replace('The sky.', 'Headlines.'));
