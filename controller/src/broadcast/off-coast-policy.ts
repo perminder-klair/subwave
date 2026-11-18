@@ -20,7 +20,8 @@
 //   - a track from the file the last write replaced, inside the moment the
 //     reload takes to land, or for as long as the mixer has not confirmed the
 //     reload of the newer file (an unconfirmed reload leaves an off-air
-//     playlist on the older file until the next one);
+//     playlist on the older file until the next one), and a file replaced
+//     inside that moment, since a show boundary writes twice in a second;
 //   - a match by `title|artist` as well as by id, so a duplicate rip of a
 //     coasted song is the coast's.
 // Jingles, beds and pause-talk never reach the untracked branch: radio.liq
@@ -95,12 +96,15 @@ function mergeContents(a: CoastContents | 'unknown' | null, b: CoastContents): C
 }
 
 // A new write. The file it replaces joins what the mixer may still hold; files
-// older than that stay in it only while the write they were replaced by was
-// never confirmed, since a confirmed reload dropped them.
+// older than that stay in it while the write they were replaced by was never
+// confirmed, since a confirmed reload dropped them, and while their own grace
+// still runs: two writes inside one now-playing poll (a show boundary's two
+// refreshes) leave a track the mixer took before the first reload unseen until
+// after the second.
 export function ledgerAfterWrite(ledger: CoastLedger, contents: CoastContents, now: number): CoastLedger {
   const prev = ledger.current;
   if (!prev) return { current: { contents, writtenAt: now, reloaded: null }, replaced: 'unknown', replacedUntil: now + REPLACED_COAST_GRACE_MS };
-  const keepOlder = prev.reloaded !== true && ledger.replaced;
+  const keepOlder = (prev.reloaded !== true || now < ledger.replacedUntil) && ledger.replaced;
   return {
     current: { contents, writtenAt: now, reloaded: null },
     replaced: keepOlder ? mergeContents(ledger.replaced, prev.contents) : prev.contents,

@@ -68,6 +68,30 @@ test('while the newest reload is unconfirmed or in flight, the replaced file sta
   assert.deepEqual(verdict(after3, t('old1'), inGrace + REPLACED_COAST_GRACE_MS), { warn: true });
 });
 
+test('two confirmed writes inside one grace keep the file before both: its track can surface after the second', () => {
+  // A show boundary's two refreshes, a second apart. The mixer took `old1` just
+  // before the first reload; the controller sees it a poll later.
+  const oldFile = coastContents([t('old1')], T0);
+  const first = coastContents([t('new1')], T0 + 60_000);
+  const second = coastContents([t('new2')], T0 + 61_000);
+  let ledger = ledgerAfterReload(ledgerAfterWrite(empty, oldFile, T0), oldFile, true);
+  ledger = ledgerAfterReload(ledgerAfterWrite(ledger, first, T0 + 60_000), first, true);
+  ledger = ledgerAfterReload(ledgerAfterWrite(ledger, second, T0 + 61_000), second, true);
+  assert.deepEqual(verdict(ledger, t('old1'), T0 + 61_500), { warn: false, why: 'replaced-coast' });
+  assert.deepEqual(verdict(ledger, t('new1'), T0 + 61_500), { warn: false, why: 'replaced-coast' });
+  // The grace runs from the newest write, and the merged files leave with it.
+  assert.deepEqual(verdict(ledger, t('old1'), T0 + 61_000 + REPLACED_COAST_GRACE_MS), { warn: true });
+  // A first write's unknown predecessor survives a quick second write too.
+  let boot = ledgerAfterReload(ledgerAfterWrite(empty, first, T0), first, true);
+  boot = ledgerAfterReload(ledgerAfterWrite(boot, second, T0 + 1_000), second, true);
+  assert.deepEqual(verdict(boot, t('prior'), T0 + 1_500), { warn: false, why: 'replaced-coast' });
+  // Past the grace, a confirmed write drops what came before the file it replaced.
+  let spaced = ledgerAfterReload(ledgerAfterWrite(empty, oldFile, T0), oldFile, true);
+  spaced = ledgerAfterReload(ledgerAfterWrite(spaced, first, T0 + 60_000), first, true);
+  spaced = ledgerAfterReload(ledgerAfterWrite(spaced, second, T0 + 60_000 + REPLACED_COAST_GRACE_MS), second, true);
+  assert.deepEqual(verdict(spaced, t('old1'), T0 + 60_000 + REPLACED_COAST_GRACE_MS + 1), { warn: true });
+});
+
 test('a stale reload answer never confirms a newer write', () => {
   const a = coastContents([t('a')], T0);
   const b = coastContents([t('b')], T0 + 1);
