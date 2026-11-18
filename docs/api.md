@@ -44,6 +44,14 @@ an admin credential:
   than `activePersonaId` behind the mic).
 - `GET /now-playing` — the current track, plus `context.activeShow` with the
   live show's host and guests already hydrated.
+
+**Show text for listeners.** A show carries two pieces of text. `description`
+(up to 300 characters, `''` when the operator has not set one) is written for
+listeners. `topic` is the DJ's brief: instructions written for the model, often
+long. Show `description` when it is non-empty and fall back to `topic` when it is
+empty, which is what the web player does. Both `/schedule`'s shows and
+`/now-playing`'s `context.activeShow` carry both fields; `description` is absent
+from an older controller, so treat a missing key as empty.
 - `GET /lyrics/current` — lyrics for the track a listener is hearing, when the
   operator has the Lyrics panel on (see **Lyrics** below).
 

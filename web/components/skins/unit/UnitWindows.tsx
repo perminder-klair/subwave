@@ -15,6 +15,7 @@ import styles from './Unit.module.css';
 import { usePlayerFeed } from '@/components/player/PlayerCore';
 import { useStationClient } from '@/lib/stationClient';
 import { cn } from '@/lib/cn';
+import { showBlurb } from '@/lib/showBlurb';
 import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 import { normalizeStationLocale, zonedDayHour } from '@/lib/format';
 import type { SchedulePayload, ScheduleShow, StationLocale } from '@/lib/types';
@@ -289,7 +290,7 @@ export function TimelineWindow({ onClose }: { onClose: () => void }) {
           </div>
           <div className="font-display text-[17px] leading-[1.45] text-[#b8b1a4] italic">
             {selected?.show
-              ? selected.show.topic ||
+              ? showBlurb(selected.show) ||
                 'No episode notes — the booth plays it by ear.'
               : 'No host this block — the station picks on its own from the time of day, the weather, and whatever the calendar suggests.'}
           </div>
