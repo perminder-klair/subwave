@@ -59,44 +59,134 @@ export function parseEnvFile(path: string): Record<string, string> {
   return out;
 }
 
-// The text after `=` on a .env line, read as docker compose reads it. A quoted
-// value ends at its closing quote, so a ` # ` inside it stays and anything after
-// it (`"8080"#x`, `"8080" # x`) goes; `\"` is a literal quote inside double
-// quotes. An unquoted value is cut at its first ` #` (a space, not a tab, as
-// compose does) and trimmed. A trailing CR goes with the whitespace. Compose's
-// `${VAR}` interpolation is not done.
-export function envValue(raw: string): string {
-  const v = raw.trim();
-  const q = v[0];
-  if (q === '"' || q === "'") {
-    let out = '';
-    for (let i = 1; i < v.length; i++) {
-      const c = v[i] as string;
-      if (c === q) return out;
-      if (q === '"' && c === '\\' && v[i + 1] === '"') { out += '"'; i++; continue; }
-      out += c;
-    }
-    // Unterminated: compose refuses the file. Keep the text as written.
-    return v;
-  }
-  const cut = v.indexOf(' #');
-  return (cut === -1 ? v : v.slice(0, cut)).trimEnd();
+// One assignment in a .env file, read the way docker compose reads it (checked
+// against `docker compose config`): an `export ` prefix and CRLF line ends are
+// allowed, and the last assignment of a key wins.
+// - A quoted value ends at its closing quote, which may sit on a later line, so
+//   the lines between belong to the value and are never assignments of their
+//   own. Anything after the closing quote (`"8080"#x`, `"8080" # x`) goes.
+// - Single quotes are literal. Inside double quotes `\\`, `\"`, `\$`, `\n`,
+//   `\r` and `\t` are escapes; any other backslash stays as written.
+// - An unquoted value is cut at its first ` #` (a space, not a tab) and trimmed.
+// - Outside single quotes, `$$` is a literal `$`, and `$VAR`, `${VAR}`,
+//   `${VAR:-x}`, `${VAR-x}`, `${VAR:+x}`, `${VAR+x}` expand from the shell
+//   environment first, then from the assignments above it in the file.
+//   (`${VAR:?}` and nested `${A:-${B}}` are not handled; compose refuses an
+//   unset `:?` anyway.)
+// `line` is the index of the assignment's first line and `lines` how many lines
+// it spans; `raw` is its text after `=`, before any of the above.
+export interface EnvAssignment {
+  key: string;
+  value: string;
+  raw: string;
+  line: number;
+  lines: number;
 }
 
-// One key from a .env file, as compose resolves it: the last assignment wins,
-// an `export ` prefix is allowed, and CRLF line ends work. parseEnvFile is not
-// that: it keeps an inline comment, unquotes a value only when the line ends in
-// its quote, and skips `export` and CRLF lines. A value the CLI compares with or
-// hands to compose is read through this. undefined when the file or key is
-// missing.
+const ENV_LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/;
+
+export function envAssignments(
+  text: string,
+  shell: (name: string) => string | undefined = (n) => process.env[n],
+): EnvAssignment[] {
+  const crlf = text.split('\n');
+  const lines = crlf.map((l) => l.replace(/\r$/, ''));
+  const out: EnvAssignment[] = [];
+  const seen = new Map<string, string>();
+  const lookup = (name: string) => shell(name) ?? seen.get(name);
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = (lines[i] as string).match(ENV_LINE);
+    if (!m) continue;
+    const key = m[1] as string;
+    let raw = m[2] ?? '';
+    const start = i;
+    const q = raw.trimStart()[0];
+    let value: string;
+    if (q === '"' || q === "'") {
+      // Pull in following lines until the quote closes.
+      let close = closingQuote(raw.trimStart(), q);
+      while (close === -1 && i + 1 < lines.length) {
+        // A CR inside a quoted value is part of it, as compose keeps it.
+        raw += `${(crlf[i] as string).endsWith('\r') ? '\r' : ''}\n${lines[i + 1] as string}`;
+        i++;
+        close = closingQuote(raw.trimStart(), q);
+      }
+      const body = raw.trimStart();
+      if (close === -1) {
+        // Unterminated: compose refuses the file. Keep the text as written.
+        value = body.trimEnd();
+      } else {
+        const inner = body.slice(1, close);
+        value = q === "'" ? inner : expand(inner, lookup, true);
+      }
+    } else {
+      const v = raw.trim();
+      const cut = v.indexOf(' #');
+      value = expand((cut === -1 ? v : v.slice(0, cut)).trimEnd(), lookup, false);
+    }
+    seen.set(key, value);
+    out.push({ key, value, raw, line: start, lines: i - start + 1 });
+  }
+  return out;
+}
+
+// Index of the quote that closes `v` (which starts with `q`), or -1.
+function closingQuote(v: string, q: string): number {
+  for (let i = 1; i < v.length; i++) {
+    if (q === '"' && v[i] === '\\') { i++; continue; }
+    if (v[i] === q) return i;
+  }
+  return -1;
+}
+
+const ESCAPES: Record<string, string> = { '\\': '\\', '"': '"', $: '$', n: '\n', r: '\r', t: '\t' };
+
+function expand(v: string, lookup: (name: string) => string | undefined, dq: boolean): string {
+  let out = '';
+  for (let i = 0; i < v.length; i++) {
+    const c = v[i] as string;
+    if (dq && c === '\\' && i + 1 < v.length) {
+      const e = ESCAPES[v[i + 1] as string];
+      if (e !== undefined) { out += e; i++; continue; }
+      out += c;
+      continue;
+    }
+    if (c !== '$') { out += c; continue; }
+    const next = v[i + 1];
+    if (next === '$') { out += '$'; i++; continue; }
+    if (next === '{') {
+      const end = v.indexOf('}', i + 2);
+      if (end === -1) { out += c; continue; }
+      const m = v.slice(i + 2, end).match(/^([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-+])(.*))?$/s);
+      if (!m) { out += v.slice(i, end + 1); i = end; continue; }
+      const val = lookup(m[1] as string);
+      const op = m[2];
+      const arg = m[3] ?? '';
+      if (op === ':-') out += val ? val : arg;
+      else if (op === '-') out += val ?? arg;
+      else if (op === ':+') out += val ? arg : '';
+      else if (op === '+') out += val !== undefined ? arg : '';
+      else out += val ?? '';
+      i = end;
+      continue;
+    }
+    const name = v.slice(i + 1).match(/^[A-Za-z_][A-Za-z0-9_]*/);
+    if (name) { out += lookup(name[0]) ?? ''; i += name[0].length; continue; }
+    out += c;
+  }
+  return out;
+}
+
+// One key from a .env file, as compose resolves it (see envAssignments).
+// parseEnvFile is not that: it keeps an inline comment, unquotes a value only
+// when the line ends in its quote, skips `export` and CRLF lines, and reads a
+// line inside a multi-line value as an assignment. A value the CLI compares
+// with or hands to compose is read through this. undefined when the file or key
+// is missing.
 export function readEnvValue(path: string, key: string): string | undefined {
   if (!existsSync(path)) return undefined;
-  let found: string | undefined;
-  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/);
-    if (m && m[1] === key) found = envValue(m[2] ?? '');
-  }
-  return found;
+  return envAssignments(readFileSync(path, 'utf8')).filter((a) => a.key === key).pop()?.value;
 }
 
 // Quote a .env value so docker compose reads it literally. Compose interpolates

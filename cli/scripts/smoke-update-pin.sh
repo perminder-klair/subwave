@@ -10,7 +10,8 @@
 # the ports `subwave listen prod` reads from the install's .env, and the values
 # the CLI reads from that .env with an inline comment (COMPOSE_FILE, and the pin
 # `subwave start` compares the running images against), and the line shapes
-# compose reads that a simpler parser misses (`export `, CRLF, `"v"#comment`).
+# compose reads that a simpler parser misses (`export `, CRLF, `"v"#comment`,
+# `${VAR}` interpolation, a quoted value spanning lines).
 #
 # Usage: cli/scripts/smoke-update-pin.sh <path-to-compiled-subwave>
 #
@@ -268,6 +269,29 @@ fi
 check_first_run crlf-pin "CRLF .env"
 check "CRLF .env: every line keeps its CR" "0" \
   "$(grep -cv $'\r$' "$scratch/crlf-pin/.env" || true)"
+
+# Compose interpolates the install's .env (the shell first, then lines above)
+# and reads a quoted value across lines. The CLI has to do the same, or it hands
+# compose a literal `-f ${OVERLAY}`, shows the default port, or moves a line
+# inside another key's value while the real pin stays behind.
+run_update compose-file-interp "SUBWAVE_VERSION=$old_pin
+OVERLAY=overlay.yml
+COMPOSE_FILE=docker-compose.yml:\${OVERLAY}"
+check "COMPOSE_FILE with \${VAR}: pull gets the expanded overlay" \
+  "compose -f docker-compose.yml -f overlay.yml pull" \
+  "$(sed -n 's/^args //p' "$scratch/compose-file-interp.log" | head -n 1)"
+scaffold ports-interp 'CADDY_PORT=${SMOKE_UNSET_PORT:-7788}'
+listen ports-interp "$scratch/empty" -- --home "$scratch/ports-interp" listen prod
+check "ports, \${VAR:-default}: listen expands it" \
+  "http://localhost:7788/listen" "$(opened_by ports-interp)"
+run_update multiline-value "SUBWAVE_VERSION=$old_pin
+NOTES=\"pinned by hand
+SUBWAVE_VERSION=0.0.9
+\""
+check "multi-line value: the real pin moves" "SUBWAVE_VERSION=$target" \
+  "$(sed -n 3p "$scratch/multiline-value/.env")"
+check "multi-line value: the line inside it is left alone" "SUBWAVE_VERSION=0.0.9" \
+  "$(sed -n 5p "$scratch/multiline-value/.env")"
 
 if [ "$failures" -ne 0 ]; then
   echo
