@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # Unit test for the vocal gate (analyze_worker.vocal_ranges_from_rms) — the
 # mix-anchored floor that fixes the #1125 mass false-positive, split per window
-# in #2237 (case 7) — plus the DEMUCS_OVERLAP knob. Cases 1-5 are pure numpy: no torch, no demucs, no
-# audio, so they run anywhere. Feeds synthesized RMS envelopes (the exact
-# inputs the Demucs path produces) and asserts the floor behaves.
+# in #2237 (case 8) — plus the DEMUCS_OVERLAP and DEMUCS_MODEL knobs. Cases 1-6
+# are pure numpy or stdlib: no torch, no demucs, no audio, so they run anywhere.
+# Feeds synthesized RMS envelopes (the exact inputs the Demucs path produces)
+# and asserts the floor behaves.
 # Run: `python3 scripts/vocal_gate_test.py` (exit 0 = pass).
 #
-# Case 6 is the exception: it checks separate() hands DEMUCS_OVERLAP and
-# shifts=0 to apply_model (#2237: one file, one verdict), and that needs torch. It runs only where torch is installed,
+# Case 7 is the exception: it checks separate() hands DEMUCS_OVERLAP and
+# shifts=0 to apply_model (#2237: one file, one verdict), and that needs torch.
+# It runs only where torch is installed,
 # i.e. inside the subwave-analyzer-heavy image, and skips everywhere else,
 # including `npm test` — so after touching separate(), run this file in that
 # image.
@@ -137,14 +139,79 @@ finally:
         else:
             os.environ[k] = v
 
-# ── Case 6: separate() hands DEMUCS_OVERLAP to apply_model ───────────────────
+# ── Case 6: a quantised DEMUCS_MODEL falls back to htdemucs ──────────────────
+# The heavy images don't ship diffq, so a *_q checkpoint can't load. Without the
+# fallback demucs fatal()s at load and vocal activity goes off for the run. With
+# diffq installed (a worker run outside the images) the name is honoured.
+saved_model = os.environ.get("DEMUCS_MODEL")
+try:
+    os.environ.pop("DEMUCS_MODEL", None)
+    assert aw.demucs_model() == "htdemucs"
+    for have_diffq in (False, True):
+        def read(have_diffq=have_diffq):
+            return aw.demucs_model(have_diffq=have_diffq)
+
+        for raw, want in [("", "htdemucs"), ("htdemucs", "htdemucs"),
+                          ("htdemucs_6s", "htdemucs_6s"), ("mdx_extra", "mdx_extra")]:
+            got, warned = read_with_env("DEMUCS_MODEL", raw, read)
+            assert got == want and not warned, f"DEMUCS_MODEL={raw!r}: {got}, warned {warned}"
+    for raw in ["mdx_q", "mdx_extra_q", " mdx_extra_q "]:
+        got, warned = read_with_env("DEMUCS_MODEL", raw, lambda: aw.demucs_model(have_diffq=False))
+        assert got == "htdemucs", f"DEMUCS_MODEL={raw!r} without diffq: {got} != htdemucs"
+        assert len(warned) == 1, f"DEMUCS_MODEL={raw!r}: want one line, got {warned}"
+        assert repr(raw.strip()) in warned[0] and "diffq" in warned[0], warned[0]
+        got, warned = read_with_env("DEMUCS_MODEL", raw, lambda: aw.demucs_model(have_diffq=True))
+        assert got == raw.strip() and not warned, f"DEMUCS_MODEL={raw!r} with diffq: {got}, warned {warned}"
+finally:
+    if saved_model is None:
+        os.environ.pop("DEMUCS_MODEL", None)
+    else:
+        os.environ["DEMUCS_MODEL"] = saved_model
+
+# The env is read once, at import, so drive a fresh worker end to end: a _q
+# station's detector loads htdemucs instead of failing. demucs.pretrained is
+# stubbed (no torch, no download), diffq is blocked (a None entry in sys.modules
+# is how the import system spells "not installed"), and the idle release is off
+# because arming it would import torch.
+import subprocess  # noqa: E402
+
+probe = r"""
+import os, sys, types
+sys.path.insert(0, sys.argv[1])
+sys.modules["diffq"] = None
+seen = []
+class FakeModel:
+    sources = ["drums", "bass", "other", "vocals"]
+    def eval(self):
+        return self
+def get_model(name):
+    seen.append(name)
+    return FakeModel()
+pretrained = types.ModuleType("demucs.pretrained")
+pretrained.get_model = get_model
+sys.modules["demucs"] = types.ModuleType("demucs")
+sys.modules["demucs.pretrained"] = pretrained
+import analyze_worker as aw
+assert aw.get_vocal_detector(force=True) is not None, aw._vocal_error
+assert seen == ["htdemucs"], seen
+"""
+run = subprocess.run(
+    [sys.executable, "-c", probe, os.path.dirname(os.path.abspath(__file__))],
+    env={**os.environ, "DEMUCS_MODEL": "mdx_extra_q", "ANALYZE_IDLE_UNLOAD_S": "0"},
+    capture_output=True, text=True, timeout=60,
+)
+assert run.returncode == 0, f"fresh worker with DEMUCS_MODEL=mdx_extra_q:\n{run.stderr}"
+fallback_lines = [line for line in run.stderr.splitlines() if "DEMUCS_MODEL" in line]
+assert len(fallback_lines) == 1 and "diffq" in fallback_lines[0], run.stderr
+
+# ── Case 7: separate() hands DEMUCS_OVERLAP to apply_model ───────────────────
 # Needs torch (heavy image); demucs itself is stubbed, so no model download.
 try:
     import torch
 except ImportError:
     torch = None
 if torch is None:
-    print("  (case 6 skipped: torch not installed)")
+    print("  (case 7 skipped: torch not installed)")
 else:
     import types
 
@@ -177,7 +244,7 @@ else:
             else:
                 sys.modules[k] = v
 
-# ── Case 7: each window gates at its own mix floor (#2237) ──────────────────
+# ── Case 8: each window gates at its own mix floor (#2237) ──────────────────
 # The head reads HEAD_VOCAL_MIX_FLOOR with no absolute floor; the tail reads
 # TAIL_VOCAL_MIX_FLOOR plus TAIL_VOCAL_MIN_LOUD. A fake detector records what
 # each caller hands detect(), through the real demucs_head / demucs_tail.
@@ -224,7 +291,7 @@ sung = const(40, 0.3)
 assert len(aw.vocal_ranges_from_rms(sung, mix_loud4, SR, HOP, aw.HEAD_VOCAL_MIX_FLOOR)) > 0
 
 
-# ── Case 8: the two env knobs ────────────────────────────────────────────────
+# ── Case 9: the two env knobs ────────────────────────────────────────────────
 # Read in a fresh interpreter: the values are module constants.
 import subprocess  # noqa: E402
 
