@@ -1352,7 +1352,7 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
     a ranged read). `offset` is the window's absolute start in seconds and
     `duration_s` the file's duration. Returns
       {startMs, ending: 'fade'|'cold', lufs?, bpm?, beats?, bars?,
-       loudnessCurve?, tail_silence_ms?, tail_start_ms?}
+       loudnessCurve?, tail_curve_unavailable?, tail_silence_ms?, tail_start_ms?}
     with all timestamps ABSOLUTE, or None when nothing is measurable.
     `loudnessCurve` (loudness_curve) is the window's short-term loudness, for
     the controller's audible-end cut of a fade; omitted without pyloudnorm.
@@ -1458,6 +1458,13 @@ def facet_tail(y_src, sr, offset, duration_s, librosa):
         out["bars"] = bars_ms
     if curve is not None:
         out["loudnessCurve"] = curve
+    elif tail_loudness_curve_capable():
+        # Said, not left out (like loudness_curve_unavailable): an analyzer
+        # that cannot make the curve leaves it out, and the controller re-plans
+        # the tail when one can. This one could and its meter failed on this
+        # file, so asking again would only re-read it on every `--facets tail`
+        # pass. Lifted out of the outro below.
+        out["tail_curve_unavailable"] = "meter-failed"
     return out
 
 
@@ -3762,6 +3769,8 @@ def analyze(
     # tail measured on that window (library-db upsertTrackAnalysis).
     if tail_span:
         result["tail_window"] = "edges"
+    if outro is not None and "tail_curve_unavailable" in outro:
+        result["tail_curve_unavailable"] = outro.pop("tail_curve_unavailable")
     if outro is not None and "tail_silence_ms" in outro:
         result["tail_silence_ms"] = outro.pop("tail_silence_ms")
         if "tail_start_ms" in outro:
@@ -4191,6 +4200,8 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                 lifted["tail_silence_ms"] = data.pop("tail_silence_ms")
                 if "tail_start_ms" in data:
                     lifted["tail_start_ms"] = data.pop("tail_start_ms")
+            if "tail_curve_unavailable" in data:
+                lifted["tail_curve_unavailable"] = data.pop("tail_curve_unavailable")
             if tail_span:
                 lifted["tail_window"] = "edges"
             out["tail"] = _ok({**lifted, **({"outro": data} if data else {})})

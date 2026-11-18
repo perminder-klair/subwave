@@ -901,6 +901,7 @@ async def analyze(req: AnalyzeRequest):
         "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
         "tail_stems_landed",
         "lead_silence_ms", "tail_silence_ms", "tail_start_ms", "tail_window",
+        "tail_curve_unavailable",
     ):
         if k in msg:
             out[k] = msg[k]

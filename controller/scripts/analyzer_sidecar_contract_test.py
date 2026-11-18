@@ -424,7 +424,7 @@ async def test_facet_contract():
     async def flat_request(payload):
         worker_calls.append(payload)
         return {"ok": True, "bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0, "tail_window": "edges",
-                "tail_start_ms": 180000}
+                "tail_start_ms": 180000, "tail_curve_unavailable": "meter-failed"}
 
     server.analyzer_pool.request = flat_request
     with tempfile.NamedTemporaryFile() as audio:
@@ -436,6 +436,8 @@ async def test_facet_contract():
     assert worker_calls[0].get("tail_window") == {"end_ms": 180000, "duration_ms": 200000}, worker_calls
     assert worker_calls[0].get("stream_url") == "http://navi/stream", worker_calls
     assert flat.get("tail_window") == "edges" and flat.get("tail_start_ms") == 180000, flat
+    # A capable meter that failed says so, or the tail is re-read every pass.
+    assert flat.get("tail_curve_unavailable") == "meter-failed", flat
     # The stem outcome passes through, tail_stems_landed included (#2238): the
     # controller's stems_at decision reads it.
     async def stems_request(payload):

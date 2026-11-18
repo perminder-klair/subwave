@@ -108,6 +108,19 @@ export interface AnalysisResult {
   // `tailWindow` it was sent (it then ends where the music stops: tail v2, or
   // v3 when its outro carries the loudness curve — facets.placedTailVersion).
   tailPlaced?: boolean;
+  // Why a placed tail has no loudness curve, when the analyzer could make one
+  // and had none to give: its own reason, or 'rejected' for one this
+  // controller's parser refuses. null for an analyzer that cannot make the
+  // curve (it says nothing): that tail waits for one that can.
+  tailCurveUnavailable?: string | null;
+}
+
+// Settled-without-a-curve reason for a tail answer: the worker's own, or
+// 'rejected' when it sent a curve parseOutro would not keep.
+function tailCurveUnavailableOf(rawOutro: unknown, outro: OutroInfo | null, said: unknown): string | null {
+  if (outro?.loudnessCurve) return null;
+  if ((rawOutro as Record<string, unknown> | null)?.loudnessCurve != null) return 'rejected';
+  return typeof said === 'string' ? said : null;
 }
 
 // The outgoing track's measured ending. Timestamps are absolute ms.
@@ -285,6 +298,7 @@ interface WorkerMessage {
   edge_tail_ms?: unknown;
   decoded_duration_ms?: unknown;
   tail_window?: unknown;
+  tail_curve_unavailable?: unknown;
   // Facet-shape answer.
   facets?: Record<string, { status?: string; reason?: string; data?: WorkerMessage }>;
   source?: Record<string, unknown>;
@@ -475,6 +489,7 @@ export function flatTailOpts(songId: string, tw: TailWindow | null): Pick<Analyz
 // an AnalysisResult; absent fields read null.
 function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
   const curve = msg.loudness_curve == null ? null : parseWholeLoudnessCurve(msg.loudness_curve);
+  const outro = parseOutro(msg.outro);
   return {
           bpm: msg.bpm ?? null,
           musicalKey: msg.key ?? null,
@@ -489,7 +504,7 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           bars: parseMsList(msg.bars),
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
-          outro: parseOutro(msg.outro),
+          outro,
           leadSilenceMs: parseSilenceMs(msg.lead_silence_ms),
           tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
           tailStartMs: parseSilenceMs(msg.tail_start_ms),
@@ -506,6 +521,7 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           edgeTailMs: parseSilenceMs(msg.edge_tail_ms),
           decodedDurationMs: parseSilenceMs(msg.decoded_duration_ms),
           tailPlaced: msg.tail_window === 'edges',
+          tailCurveUnavailable: tailCurveUnavailableOf(msg.outro, outro, msg.tail_curve_unavailable),
   };
 }
 
@@ -699,6 +715,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
   if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
   if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
+  const outro = parseOutro(resBody.outro);
   return {
     bpm: resBody.bpm ?? null,
     musicalKey: resBody.key ?? null,
@@ -713,13 +730,14 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     bars: parseMsList(resBody.bars),
     keyRanges: parseKeyRanges(resBody.key_ranges),
     audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
-    outro: parseOutro(resBody.outro),
+    outro,
     leadSilenceMs: parseSilenceMs(resBody.lead_silence_ms),
     tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
     tailStartMs: parseSilenceMs(resBody.tail_start_ms),
     stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
     tailStemsLanded: typeof resBody.tail_stems_landed === 'boolean' ? resBody.tail_stems_landed : null,
     tailPlaced: resBody.tail_window === 'edges',
+    tailCurveUnavailable: tailCurveUnavailableOf(resBody.outro, outro, resBody.tail_curve_unavailable),
   };
 }
 

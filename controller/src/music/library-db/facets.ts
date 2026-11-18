@@ -136,11 +136,16 @@ export function tailVersionOf(row: Pick<FacetSourceRow, 'tail_version' | 'has_ed
 // The `tail_version` stamp for a tail the analyzer confirmed it PLACED: 3 when
 // its outro carries a valid loudness curve (an analyzer with pyloudnorm), else
 // 2 (an older analyzer, or one without pyloudnorm: due again). A placed answer
-// with no outro has no curve to carry, so it is complete at 3. Mark the
-// answer, not the request: an unplaced tail gets no stamp at all.
-export function placedTailVersion(outro: { loudnessCurve?: unknown } | null | undefined): number {
+// with no outro has no curve to carry, so it is complete at 3, and so is one
+// whose analyzer could make the curve and said it had none to give
+// (`curveUnavailable`: the meter failed, or the curve was rejected; a window
+// too short for a reading gives an empty curve, which is a curve): asking
+// again would only re-read the file, on every `--facets tail` pass. Mark the answer, not the request: an unplaced tail
+// gets no stamp at all.
+export function placedTailVersion(outro: { loudnessCurve?: unknown } | null | undefined, curveUnavailable?: string | null): number {
   if (outro == null) return 3;
-  return parseLoudnessCurve(outro.loudnessCurve) ? 3 : 2;
+  if (parseLoudnessCurve(outro.loudnessCurve)) return 3;
+  return curveUnavailable ? 3 : 2;
 }
 
 // Does a tail with this stamp sit on the window that ends where the music

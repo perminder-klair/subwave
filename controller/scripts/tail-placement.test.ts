@@ -282,6 +282,11 @@ test('placedTailVersion: v3 only with a valid curve', () => {
   assert.equal(db.placedTailVersion({}), 2, 'no curve: an analyzer without pyloudnorm');
   assert.equal(db.placedTailVersion({ loudnessCurve: { ...CURVE, lufs: [1, 'x'] } }), 2, 'malformed');
   assert.equal(db.placedTailVersion(null), 3, 'no outro: nothing to carry a curve');
+  // A curve-capable analyzer that said why it had none settles the tail, so a
+  // failed meter is not re-read on every `--facets tail` pass.
+  assert.equal(db.placedTailVersion({}, 'meter-failed'), 3);
+  assert.equal(db.placedTailVersion({ loudnessCurve: { ...CURVE, lufs: [1, 'x'] } }, 'rejected'), 3);
+  assert.equal(db.placedTailVersion({}, null), 2, 'said nothing: waits for a capable analyzer');
 });
 
 test('an end-of-file tail is v1 unless the edges show the window held the same music (v2, still due for v3)', () => {
