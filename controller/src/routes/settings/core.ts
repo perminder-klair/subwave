@@ -28,8 +28,10 @@ import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { forgetDiscogsRefusal } from '../../music/discogs.js';
 import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
+import { scheduledTagView } from '../../broadcast/tag-schedule.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
 import { firecrawlKeySource, keenableKeySource, searchKeyRefusedBy } from '../../skills/web-search.js';
@@ -72,6 +74,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
       jingles: await jingles.list(),
       libraryStats: library.stats(),
       tagger: taggerView(),
+      // The scheduled run's own record (#2282): last start, outcome, a hold.
+      taggerSchedule: await scheduledTagView().catch(() => null),
       // Daily-token-budget tier (normal|soft|hard); 'normal' when the cap is off.
       budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
@@ -106,6 +110,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
         archive: s.archive,
         // Edited from the Backup panel, but saved through POST /settings.
         backups: s.backups,
+        // Scheduled tagging (#2282), edited on the Library Tagger's Run tab.
+        tagger: s.tagger,
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
@@ -202,7 +208,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // The same answer for Firecrawl; null with a key on file means that key
         // is another provider's, and searches refuse it.
         firecrawlKeySource: firecrawlKeySource(),
-        // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl) that would refuse the
+        // The keyed providers (Tavily, Brave, Firecrawl, Outcrawl, SpecStream) that would refuse the
         // key on file, so the page can warn for whichever one is picked.
         keyRefusedBy: searchKeyRefusedBy(),
       },
@@ -380,6 +386,8 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       return res.json({ saved: [], ...managed });
     }
     await saveSecrets(allowed);
+    // A saved Discogs token is asked again, even one Discogs refused before.
+    if ('DISCOGS_TOKEN' in allowed) forgetDiscogsRefusal();
     res.json({ saved: Object.keys(allowed), ...managed });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);

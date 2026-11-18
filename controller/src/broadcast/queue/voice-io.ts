@@ -1,15 +1,16 @@
 // Serialize handoff writes per file until Liquidsoap consumes them. airVoice also serializes
 // playback across voice channels and waits for active jingles. #140, #310, #997.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import { config } from '../../config.js';
 import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
 import { sleep, type Interposed } from './pure.js';
-import { awaitVoiceAir } from './voice-marker.js';
-import { measuredClipDurationMs, wavDurationMs } from '../../audio/clip-duration.js';
+import { awaitVoiceAir, markerFilePresent, VOICE_AIR_TIMEOUT_MS, VOICE_MARKER_POLL_MS } from './voice-marker.js';
+import { mpegLayer3Frame, mp3FrameOffset } from '../../audio/mp3-frames.js';
 import { levelledGainDb, voiceLevellingEnabled } from '../../audio/clip-level.js';
 
 const _handoffChains: Map<string, Promise<void>> = new Map();
@@ -66,7 +67,9 @@ let _voiceChain: Promise<void> = Promise.resolve();
 let _voiceHolders = 0;
 export function voiceBusy(): boolean { return _voiceHolders > 0; }
 
-export const VOICE_LEADIN_MS = 800;   // /sounds/leadin.wav pushed before each spoken clip
+// /sounds/leadin.wav, pushed before every spoken clip except a batched exchange's
+// continuation line (subwave_no_leadin, see airVoiceExchange).
+export const VOICE_LEADIN_MS = 800;
 const VOICE_TAIL_MS = 700;     // duck ramp-back + poll/scheduling slack
 // Forecast-only delay covers mixer polling and the silent lead-in. Actual air time comes
 // from the marker. #1382.
@@ -131,9 +134,6 @@ export class SpeechPublicationCancelled extends Error {
   constructor() { super('Speech cancelled before broadcast publication'); }
 }
 
-// Preserve the shared measured-duration helper for upstream overlay callers.
-export { measuredClipDurationMs } from '../../audio/clip-duration.js';
-
 interface AirVoiceOptions {
   // Fired SYNCHRONOUSLY, before this clip joins the voice chain — the early
   // half of the lifecycle a consumer needs in order to prepare for speech
@@ -166,9 +166,8 @@ export async function airVoice(
   const clipMs = clipDurationMs(wavPath, text);
   const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + VOICE_LEADIN_MS + VOICE_TAIL_MS);
   const voiceId = stableVoiceId || mintVoiceId();
-  // Add this take's trim only while the operator has levelling enabled.
-  const gain = voiceLevellingEnabled() ? levelledGainDb(wavPath, gainDb) : gainDb;
-  const uri = voiceUri(wavPath, gain, voiceId, pauseDeliveryId, jingleOverlay, jingleOverlayTrackAt);
+  const gain = annotatedGainDb(wavPath, gainDb);
+  const uri = voiceUri(wavPath, gain, voiceId, pauseDeliveryId, { jingleOverlay, jingleOverlayTrackAt });
   const now = Date.now();
   const jingle = jingleWindow();
   const { waitMs, estimatedAirInMs } = airInEstimate({
@@ -214,11 +213,169 @@ export async function airVoice(
   };
   _voiceChain = turn.then(hold)
     .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
-  if (!await turn) {
-    if (skipIfBusy) return null;
-    throw new SpeechPublicationCancelled();
-  }
+  if (!await turn) return null;
   return { voiceId, clipMs, aired };
+}
+
+// One line of a prepared exchange: its own clip, gain and early warning, so
+// batching cannot merge two speakers into one indistinguishable segment.
+export interface ExchangeClip {
+  wavPath: string;
+  text: string;
+  gainDb: number;
+  onQueued?: (q: QueuedVoice) => void;
+}
+
+interface AirExchangeOptions {
+  // Consulted before each line, exactly as airVoice's is: a claimed show
+  // boundary stops the rest of the conversation.
+  beforeWrite?: () => boolean;
+  // Called once, when the opening line's handoff lands (not when the whole
+  // conversation is written) — the deferred path starts its stinger here.
+  onFirstWritten?: () => void;
+  // A write that throws stops the exchange at that line; the caller still gets
+  // the handoffs that did land, so it can log what aired.
+  onWriteError?: (err: unknown, index: number) => void;
+}
+
+// Whether a multi-voice exchange goes to the mixer as one batch
+// (airVoiceExchange) or one line at a time (airVoice per line, the established
+// delivery). Both exchange call sites ask here, so the rule lives once. The
+// batch is the operator's opt-in (`djBehaviour.holdDuckBetweenSpeakers`), and
+// it also needs a mixer that writes voice markers. With no voice-playing.json
+// (a mixer that has not spoken since it started, or one older than #1382),
+// every line's `aired` resolves null the moment it is handed over. A batch
+// hands every line over within a second, so all of their bookkeeping would run
+// together: a handoff settled and the incoming presenter announced while the
+// outgoing one is still in their lead-in. Per-line delivery spaces that
+// bookkeeping by each line's playback hold, as it always has, and the first
+// clip it airs writes the file, so the next exchange batches.
+export function batchExchangeDelivery(): boolean {
+  return settings.get().djBehaviour.holdDuckBetweenSpeakers === true && markerFilePresent();
+}
+
+// Air a prepared multi-voice exchange back-to-back on one voice channel.
+//
+// Every line keeps its own clip, gain, id and air marker. The one difference
+// from N airVoice calls is WHEN each handoff is written: as soon as Liquidsoap
+// consumes the previous one, not when the previous clip finishes playing. The
+// mixer's request queue therefore never empties, so smooth_add holds the music
+// ducked for the whole conversation; written any later it drains between every
+// line and the music ramps up and back down — the audible pump this exists to
+// remove. Continuation lines also skip the silent lead-in (subwave_no_leadin):
+// it exists only to complete the duck ramp before the FIRST word, and theirs is
+// already down, so the gap between two speakers is just the clips' own padding.
+//
+// One exception keeps a continuation's lead-in: a line after a SHORT one. With
+// no lead-in, line N's voice marker is on voice-playing.json only while N's own
+// WAV plays (line N+1's marker replaces it the moment N ends), and the reader
+// polls that one file every VOICE_MARKER_POLL_MS. A shorter window can fall
+// between two polls, and the line then waits out its whole air timeout and
+// appends its session turn after the speakers who followed it. The lead-in
+// keeps N's marker up for another VOICE_LEADIN_MS, which no poll can miss, so a
+// line skips it only when the line before it has a MEASURED length of at least
+// CONTINUATION_MIN_PREV_MS (two polls, one spare for a busy event loop). An
+// estimated length keeps the lead-in: the safe direction is 800 ms of air.
+const CONTINUATION_MIN_PREV_MS = 2 * VOICE_MARKER_POLL_MS;
+
+export async function airVoiceExchange(
+  path: string,
+  clips: readonly ExchangeClip[],
+  { beforeWrite = () => true, onFirstWritten, onWriteError }: AirExchangeOptions = {},
+): Promise<(VoiceHandoff | null)[]> {
+  const prepared = clips.map((clip, index) => {
+    const clipMs = clipDurationMs(clip.wavPath, clip.text);
+    const prevMeasuredMs = index > 0 ? measuredClipDurationMs(clips[index - 1].wavPath) : null;
+    const continuation = prevMeasuredMs != null && prevMeasuredMs >= CONTINUATION_MIN_PREV_MS;
+    const leadinMs = continuation ? 0 : VOICE_LEADIN_MS;
+    const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + leadinMs + VOICE_TAIL_MS);
+    const voiceId = mintVoiceId();
+    const gain = annotatedGainDb(clip.wavPath, clip.gainDb);
+    return {
+      clip, clipMs, leadinMs, holdMs, voiceId,
+      uri: voiceUri(clip.wavPath, gain, voiceId, null, { noLeadin: continuation }),
+      leadinUri: voiceUri(clip.wavPath, gain, voiceId),
+    };
+  });
+  const totalHoldMs = prepared.reduce((sum, p) => sum + p.holdMs, 0);
+  const now = Date.now();
+  const jingle = jingleWindow();
+  const { waitMs, estimatedAirInMs } = airInEstimate({
+    now, chainFreeAt: _chainFreeAt,
+    jingleClearAt: jingle.clearAtMs, jingleWindowMs: jingle.windowMs,
+  });
+  // One reservation for the whole conversation: the next caller waits for all
+  // of it, not for the first line's handoff.
+  _chainFreeAt = now + waitMs + totalHoldMs;
+  _voiceHolders++;
+  // Every line is announced up front on its own forecast. Preceding lines are
+  // queued rather than airing. The first line's lead-in is already in
+  // estimatedAirInMs; a continuation starts the moment the previous clip ends,
+  // because the queue never drains, and a line after a short one waits for its
+  // own lead-in too.
+  let precedingMs = 0;
+  for (const [index, p] of prepared.entries()) {
+    if (index > 0) precedingMs += p.leadinMs;
+    if (p.clip.onQueued) {
+      // A misbehaving consumer must not take the air path down with it.
+      try {
+        p.clip.onQueued({
+          voiceId: p.voiceId, clipMs: p.clipMs, estimatedAirInMs: estimatedAirInMs + precedingMs,
+        });
+      } catch { /* ignore */ }
+    }
+    precedingMs += p.clipMs;
+  }
+  const handoffs: (VoiceHandoff | null)[] = prepared.map(() => null);
+  // Only lines that reached the mixer hold the voice chain. A boundary that
+  // stops the conversation must not make the next segment — the handoff that
+  // claimed it — wait out speech that never existed.
+  let landedMs = 0;
+  const turn = _voiceChain
+    .catch(() => undefined)
+    .then(async () => {
+      await waitForJingleClear();
+      for (const [index, p] of prepared.entries()) {
+        let written: boolean;
+        let restoredLeadinMs = 0;
+        try {
+          // The gate rides writeHandoff so it is asked again after the wait for
+          // Liquidsoap to consume the previous line, where the boundary can be
+          // claimed. Checking it out here would leave that window open.
+          //
+          // The URI is chosen at write time, after that wait. A handoff file
+          // still on disk means the mixer never took the previous line and
+          // writeHandoff is about to replace it: this line then reaches an
+          // EMPTY voice queue with the music still up, so it must keep the
+          // lead-in that completes the duck before its first word.
+          written = await writeHandoff(path, () => {
+            if (p.leadinMs > 0 || !existsSync(path)) return p.uri;
+            restoredLeadinMs = VOICE_LEADIN_MS;
+            return p.leadinUri;
+          }, { beforeWrite });
+        } catch (err) {
+          onWriteError?.(err, index);
+          break;
+        }
+        if (!written) break;
+        landedMs += p.holdMs + restoredLeadinMs;
+        // Registered before this line can air: the mixer plays queued lines in
+        // order, so the last one may wait a whole conversation. A marker that
+        // still arrives early is buffered briefly by the reader.
+        const aired = awaitVoiceAir(p.voiceId, VOICE_AIR_TIMEOUT_MS + totalHoldMs);
+        handoffs[index] = { voiceId: p.voiceId, clipMs: p.clipMs, aired };
+        if (index === 0) {
+          try { onFirstWritten?.(); } catch { /* ignore */ }
+        }
+      }
+      return handoffs.some(Boolean);
+    });
+  // Same hold shape as airVoice, over the conversation that actually landed: the
+  // shared lock stays until the last written line's speech and duck tail are done.
+  _voiceChain = turn.then(anyWritten => anyWritten ? sleep(landedMs) : undefined)
+    .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
+  await turn;
+  return handoffs;
 }
 
 // Short, URI-safe, and unique per clip — the whole job is telling one segment's
@@ -351,18 +508,33 @@ async function waitForJingleClear() {
   if (waitMs > 0) await sleep(waitMs);
 }
 
+// The gain a voice clip's liq_amplify carries: the caller's, plus this take's
+// levelling trim only while the operator has levelling enabled. Every voice
+// handoff (airVoice, airVoiceExchange) takes its gain from here, so the
+// levelling decision is made once.
+function annotatedGainDb(wavPath: string, gainDb: number): number {
+  return voiceLevellingEnabled() ? levelledGainDb(wavPath, gainDb) : gainDb;
+}
+
+interface VoiceUriFlags {
+  jingleOverlay?: boolean;
+  jingleOverlayTrackAt?: number;
+  noLeadin?: boolean;
+}
+
 // Annotate every voice clip with liq_amplify for gain and subwave_voice for marker matching.
 // Leave the separate silent lead-in unannotated so it cannot produce the clip's air marker.
-// #1382.
+// subwave_no_leadin tells the mixer to skip that lead-in: the clip queues behind another
+// whose duck is already down, so the pre-roll would be dead air. #1382.
 export function voiceUri(
   wavPath: string,
   gainDb: number,
   voiceId: string,
   pauseDeliveryId: string | null = null,
-  jingleOverlay = false,
-  jingleOverlayTrackAt?: number,
+  { jingleOverlay = false, jingleOverlayTrackAt, noLeadin = false }: VoiceUriFlags = {},
 ): string {
   const meta = [`subwave_voice="${voiceId}"`];
+  if (noLeadin) meta.push('subwave_no_leadin="true"');
   if (jingleOverlay) meta.push('subwave_jingle_overlay="true"');
   if (jingleOverlayTrackAt != null) meta.push(`subwave_overlay_track_at="${Math.floor(jingleOverlayTrackAt / 1000)}"`);
   if (pauseDeliveryId) meta.push(`subwave_pause_delivery="${pauseDeliveryId}"`);
@@ -379,8 +551,14 @@ export function clipDurationMs(wavPath: string, text: string): number {
   return measuredClipDurationMs(wavPath) ?? estimateSpeechMs(text);
 }
 
-// The clip plus the lead-in and duck-tail padding: what the voice chain holds
-// its lock for, and what the drain budgets a segment at.
+export function measuredClipDurationMs(path: string): number | null {
+  return wavDurationMs(path) ?? mp3DurationMs(path);
+}
+
+// The clip plus the lead-in and duck-tail padding: what airVoice holds the voice
+// chain for, and what the drain budgets a segment at. A batched exchange's
+// continuation line skips its lead-in, so budgeting every line at this figure
+// over-estimates such an exchange, the safe direction.
 export function speechDurationMs(wavPath: string, text: string): number {
   return clipDurationMs(wavPath, text) + VOICE_LEADIN_MS + VOICE_TAIL_MS;
 }
@@ -391,4 +569,123 @@ export function speechDurationMs(wavPath: string, text: string): number {
 function estimateSpeechMs(text: string): number {
   const words = (text || '').trim().split(/\s+/).filter(Boolean).length;
   return Math.ceil((words / 2.3) * 1000);
+}
+
+// Keep trailer parsing bounded, but size alone is never evidence of metadata.
+const MP3_TRAILER_MAX_BYTES = 4096;
+
+function hasValidMp3Trailer(buf: Buffer, off: number): boolean {
+  let end = buf.length;
+  if (end - off > MP3_TRAILER_MAX_BYTES) return false;
+  // ID3v1/1.1 has no length field: its signature and fixed 128-byte extent
+  // must occupy the end of the file, with no junk between it and the audio.
+  if (end - off >= 128 && buf.toString('latin1', end - 128, end - 125) === 'TAG') end -= 128;
+  if (end === off) return true;
+  if (end - off < 32) return false;
+
+  const footer = end - 32;
+  if (buf.toString('latin1', footer, footer + 8) !== 'APETAGEX') return false;
+  const version = buf.readUInt32LE(footer + 8);
+  const size = buf.readUInt32LE(footer + 12);
+  const count = buf.readUInt32LE(footer + 16);
+  const flags = buf.readUInt32LE(footer + 20);
+  if ((version !== 1000 && version !== 2000) || size < 32 || size > end - off
+      || (flags !== 0 && flags !== 0x80000000)
+      || (version === 1000 && flags !== 0)
+      || buf.subarray(footer + 24, end).some(byte => byte !== 0)) return false;
+
+  // APE's size includes the footer and items, but excludes its optional
+  // header. Both records must agree, and every item must fit before the footer.
+  let item = end - size;
+  if (flags === 0x80000000) {
+    if (item - 32 !== off
+        || !buf.subarray(off, off + 20).equals(buf.subarray(footer, footer + 20))
+        || buf.readUInt32LE(off + 20) !== 0xa0000000
+        || buf.subarray(off + 24, off + 32).some(byte => byte !== 0)) return false;
+  } else if (item !== off) return false;
+  const keys = new Set<string>();
+  for (let i = 0; i < count; i++) {
+    if (item + 8 > footer) return false;
+    const valueSize = buf.readUInt32LE(item);
+    const itemFlags = buf.readUInt32LE(item + 4);
+    if ((itemFlags & ~7) !== 0 || (itemFlags & 6) === 6) return false;
+    item += 8;
+    const keyEnd = buf.indexOf(0, item);
+    if (keyEnd < item || keyEnd >= footer) return false;
+    const key = buf.toString('latin1', item, keyEnd);
+    if (!/^[\x20-\x7e]{2,255}$/.test(key) || ['OggS', 'TAG', 'ID3', 'MP+'].includes(key)) return false;
+    const folded = key.toLowerCase();
+    if (keys.has(folded)) return false;
+    keys.add(folded);
+    const valueStart = keyEnd + 1;
+    item = valueStart + valueSize;
+    if (item > footer || ((itemFlags & 6) !== 2 && !isUtf8(buf.subarray(valueStart, item)))) return false;
+  }
+  return item === footer;
+}
+
+// Duration of an mp3 clip (ElevenLabs, Fish, openai-compatible) without
+// decoding it: walk the frame headers and add up what each frame holds. That
+// stays exact on variable bitrate, where file size over bitrate can come out
+// seconds short, and short is the direction that lets the next line talk over
+// this one. Returns null, so the caller falls back to the estimate, for
+// anything that is not Layer III or that the walk cannot follow to the end.
+function mp3DurationMs(path: string): number | null {
+  try {
+    const buf = readFileSync(path);
+    let off = mp3FrameOffset(buf);
+    if (off == null) return null;
+    let seconds = 0;
+    let frames = 0;
+    for (let frame = mpegLayer3Frame(buf, off); frame && off + frame.length <= buf.length; frame = mpegLayer3Frame(buf, off)) {
+      seconds += frame.seconds;
+      frames += 1;
+      off += frame.length;
+    }
+    if (frames < 2 || !hasValidMp3Trailer(buf, off)) return null;
+    return Math.ceil(seconds * 1000);
+  } catch {
+    return null;
+  }
+}
+
+// Duration from a WAV header (byteRate from `fmt `, byte count from `data`).
+// Returns null for non-WAV or anything it can't parse, so the caller tries the
+// mp3 reader and then the word-count estimate. Reads only the first 4KB —
+// headers are tiny.
+function wavDurationMs(path: string): number | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, 'r');
+    const head = Buffer.alloc(4096);
+    const n = readSync(fd, head, 0, head.length, 0);
+    if (n < 12 || head.toString('ascii', 0, 4) !== 'RIFF'
+        || head.toString('ascii', 8, 12) !== 'WAVE') return null;
+    let byteRate = 0;
+    let dataSize = 0;
+    let off = 12;
+    while (off + 8 <= n) {
+      const id = head.toString('ascii', off, off + 4);
+      const size = head.readUInt32LE(off + 4);
+      if (id === 'fmt ') {
+        byteRate = head.readUInt32LE(off + 8 + 8);   // fmt body offset 8 → byteRate
+      } else if (id === 'data') {
+        dataSize = size;
+        break;
+      }
+      off += 8 + size + (size % 2);   // chunks are word-aligned
+    }
+    if (!byteRate) return null;
+    // Streamed WAVs sometimes write a bogus/placeholder data size — fall back
+    // to the real file size minus the header we walked.
+    if (!dataSize || dataSize > 0x7fffffff) {
+      dataSize = Math.max(0, statSync(path).size - (off + 8));
+    }
+    if (!dataSize) return null;
+    return Math.ceil((dataSize / byteRate) * 1000);
+  } catch {
+    return null;
+  } finally {
+    if (fd != null) closeSync(fd);
+  }
 }

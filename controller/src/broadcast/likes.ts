@@ -124,9 +124,11 @@ export async function load({ readOnly = false }: { readOnly?: boolean } = {}): P
   return loadPromise;
 }
 
-// Rewrite record ids after a Navidrome ID rotation (music/id-rotation.ts),
-// via the adoption-confirmed old→new map only. The airingKey keeps its
-// `${songId}|${startedAt}` shape (split at the FIRST `|` — startedAt is an ISO
+// Rewrite record ids through an old→new map, from its two callers: an id
+// rotation (music/id-rotation.ts), with the walk's adoption-confirmed map, and a
+// heart following its file (music/heart-follow.ts), with the moves its policy
+// planned and Navidrome confirmed. Nothing else picks the ids. The airingKey
+// keeps its `${songId}|${startedAt}` shape (split at the FIRST `|` — startedAt is an ISO
 // timestamp and never contains one before the offset marker — which also keeps
 // the operator heart's synthetic `${songId}|operator` key intact). Flushes
 // through flushStrict: the caller deletes the rotation manifest right after, so
@@ -159,6 +161,17 @@ export async function remapTrackIds(trackMap: ReadonlyMap<string, string>): Prom
     }
     if (touched) changed++;
   }
+  // Two old ids can land on one new id (hearts on two copies of a re-imported
+  // song, music/heart-follow.ts): keep one operator heart per song, so
+  // operatorLike stays idempotent and an unlike leaves no second heart behind.
+  // Listener likes all stay, each its own airing.
+  const operatorSongs = new Set<string>();
+  records = records.filter((r) => {
+    if (!isOperator(r)) return true;
+    if (operatorSongs.has(r.songId)) return false;
+    operatorSongs.add(r.songId);
+    return true;
+  });
   // Retry the write even when an earlier attempt already changed the cache.
   await flushStrict();
   return changed;

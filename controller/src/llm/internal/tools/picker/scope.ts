@@ -3,7 +3,7 @@
 
 import * as library from '../../../../music/library.js';
 import * as embeddings from '../../../../music/embeddings.js';
-import { filterPickerCandidates } from '../../../../music/recency.js';
+import { filterPickerCandidates, trackKey } from '../../../../music/recency.js';
 import { applyStrictLocks, type VocalMode } from '../../../../music/show-filter.js';
 import { withoutExplicit } from '../../../../music/explicit-policy.js';
 import { applyKnownTrackCeiling } from '../../../../music/track-duration.js';
@@ -167,6 +167,14 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   } = scope;
 
   const seen = new Map<string, any>();
+  // Read from `seen` itself, not counted in collect(): a caller may merge
+  // another registry's candidates into this map (dj-agent's genre steer).
+  const holdsFresh = () => {
+    for (const [id, song] of seen) {
+      if (!recentIds.has(id) && !(song?.title && recentKeys.has(trackKey(song)))) return true;
+    }
+    return false;
+  };
 
   // #1655: only ~7% of the reported library passed instrumental + low energy.
   // A bounded 5x fetch gives the hard filters more neighbours to work with,
@@ -236,6 +244,10 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
       hardRecentIds,
       hardRecentKeys,
       seenIds: new Set(seen.keys()),
+      // Relax track recency for the list, not per source (#2320): once `seen`
+      // holds a fresh candidate, a source left with only just-played tracks
+      // contributes nothing rather than letting them in beside it.
+      allowTrackRelaxation: !holdsFresh(),
       maxPerArtist: scope.episodeSource ? Infinity : opts.maxPerArtist ?? (playlistLock ? Infinity : 3),
       cap,
     });

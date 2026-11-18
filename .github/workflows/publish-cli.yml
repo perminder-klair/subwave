@@ -60,8 +60,11 @@ jobs:
         with:
           # Pinned: this exact Bun version compiles the binaries we ship, so
           # keep it fixed (bump deliberately, not via `latest`) to avoid a
-          # silent toolchain drift changing the released artifacts.
-          bun-version: 1.2.19
+          # silent toolchain drift changing the released artifacts. Moves
+          # together with the pin in cli-smoke.yml. Needs Bun >= 1.3.3 for
+          # --no-compile-autoload-dotenv/-bunfig below (#2203); not 1.4.4,
+          # whose Linux binaries cancel init's first text prompt on Enter.
+          bun-version: 1.3.3
 
       - name: Refresh embedded assets
         # The embed-assets script regenerates cli/src/assets.generated.ts
@@ -83,6 +86,13 @@ jobs:
         working-directory: cli
         run: bun run patch-clack
 
+      - name: Check the Bun version
+        # The release build calls `bun build` directly, so package.json's
+        # `prebuild` check never runs here. A Bun older than 1.3.3 ignores the
+        # --no-compile-autoload-* flags below without an error (#2203).
+        working-directory: cli
+        run: node scripts/check-bun-version.mjs
+
       - name: Compile binary
         working-directory: cli
         env:
@@ -92,6 +102,8 @@ jobs:
           mkdir -p dist
           bun build src/cli.ts \
             --compile \
+            --no-compile-autoload-dotenv \
+            --no-compile-autoload-bunfig \
             --target="$TARGET" \
             --outfile="dist/$ASSET"
 
@@ -107,13 +119,17 @@ jobs:
         # The linux-x64 binary is the only one that runs natively on this amd64
         # runner, so smoke it inline for fast feedback. The other three targets
         # are cross-compiled here and exercised by the `smoke-*` jobs below
-        # (native macOS / Rosetta / QEMU).
+        # (native macOS / Rosetta / QEMU). smoke-update-pin.sh checks the
+        # binary never reads the working directory's .env (#2196, #2203), the
+        # check cli-smoke.yml runs on pull requests, so a release build that
+        # lost the --no-compile-autoload-* flags fails here too.
         if: matrix.target == 'bun-linux-x64'
         env:
           ASSET: ${{ matrix.asset }}
         run: |
           chmod +x "cli/dist/$ASSET"
           "cli/dist/$ASSET" --version
+          cli/scripts/smoke-update-pin.sh "cli/dist/$ASSET"
 
       - name: Upload binary artifact
         # Share every built binary (not just on tags) so the smoke jobs can

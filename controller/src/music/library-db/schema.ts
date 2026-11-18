@@ -576,7 +576,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
   if (ensureSearchKeys(d) && userVersion < 29) fillSearchKeys();
   ensureSearchIndex(d);
 
-  ensureFileInfoColumns(d);
+  ensureNamedColumns(d);
 
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
@@ -782,26 +782,91 @@ function vecCount(d: Database.Database): number {
   return (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as { n: number }).n;
 }
 
-// The file as Navidrome reports it, kept by the library walks: path, format,
-// size in bytes and bitrate in kbps. Added by name when missing rather than as
-// a numbered migration, so it can't collide with a user_version a parallel
-// change claims; idempotent, and a few MB on a 76k-track library.
+// Columns added by name when missing rather than as a numbered migration, so
+// they can't collide with a user_version a parallel change claims: on a database
+// that already ran someone else's step N, an addColumnsOnce(d, N, …) of ours
+// would return early and the column would never exist. Idempotent.
+//   - The file as Navidrome reports it, kept by the library walks: path,
+//     format, size in bytes and bitrate in kbps. A few MB on a 76k-track library.
+//   - `untaggable_key`, the tagger's memory of a track the LLM could not tag
+//     (#2283): a hash of what it was asked, under which prompt stamp and model
+//     (music/tag-library/tag-input.ts). Set only on an untagged row, cleared by
+//     every tag write.
+//   - `tagged_measured`: whether the LLM heard measurements of the track's
+//     audio when it decided the row's tags (#2281, sound-line.ts
+//     hasTaggerSoundWords): 1 = measured, 0 = blind. NULL = not an LLM decision
+//     under this stamp: propagated or manual tags, and every row tagged before
+//     the column existed, whose prompt carried no measurements at all.
+//     Re-decide's blind scope reads it (blindTaggedIds).
+//   - Era review (music/era-review.ts): the walk stores WHY it distrusts an
+//     album (`era_reason`, the era-suspect.ts marker), the album artist the
+//     judgement keyed on (`album_artist`, not the per-track artist) and the
+//     album's effective kind (`album_kind`: the operator's, else the title's
+//     suggestion, which a show's excludedAlbumKinds reads). Its table,
+//     `era_override`, is created here too (ensureEraOverrideTable): one operator
+//     record per album, keyed the way era-review.albumEraKey folds (album
+//     artist, album), an optional decision (`verdict`: 'trusted' = the album
+//     year is right, 'year' = one year for every track in `forced_year`,
+//     'suspect' = per-track years) and/or the operator's `kind`. A 'year'
+//     decision records on each track it writes what that track held before
+//     (`era_forced_from`: its original year, source and checked stamp, as
+//     JSON), so removing the decision puts exactly that back; NULL means the
+//     decision did not write this track's year (tracks.setDecisionOriginalYear).
+//   - `album_artist_id`: the first album artist's Subsonic id, written by the
+//     walks beside artist_id (#2333, music/artist-credit.ts). It lets the
+//     mirror answer an artist episode's group-credited records. NULL = not
+//     walked since, or a server that reported no album artist id; either way
+//     episode-source cannot judge the row's credit and keeps the pre-column
+//     rule. Its index is a read accelerator (stats.ts STATS_INDEXES).
+//   - `stems_tail_misses`: stem passes in a row whose proven tail did not land
+//     (#2238, music/stem-stamp-policy.ts). Such a pass leaves stems_at unset so
+//     the backfill tries again, up to a bound. NULL = none; reset with stems_at.
 //
 // Several processes open this DB, and two can both find a column missing on the
 // first open after an upgrade, so the ALTERs re-read under the write lock. The
 // read before it keeps every later open off that lock. Unlike the never-throws
-// helpers in migrate(), a failure here throws: upsertTrackMeta names these
-// columns on every write, so swallowing it would only move the error there.
-function ensureFileInfoColumns(d: Database.Database): void {
+// helpers in migrate(), a failure here throws: upsertTrackMeta and the tag
+// writers name these columns on every write, so swallowing it would only move
+// the error there.
+function ensureNamedColumns(d: Database.Database): void {
   const wanted: Array<[string, string]> = [
+    // Which window outro_json/tail_silence_ms/tail_start_ms were measured on:
+    // NULL = the file's last ANALYZE_OUTRO_SECONDS, 2 = a window ending where
+    // the music stops, placed from the stored edges and confirmed by the
+    // analyzer, 3 = placed with the loudness curve (library-db/facets.ts
+    // tailVersionOf, placedTailVersion).
+    ['tail_version', 'INTEGER'],
     ['file_path', 'TEXT'], ['file_suffix', 'TEXT'], ['file_size', 'INTEGER'], ['bit_rate', 'INTEGER'],
+    ['untaggable_key', 'TEXT'], ['tagged_measured', 'INTEGER'],
+    ['era_reason', 'TEXT'], ['album_artist', 'TEXT'], ['album_kind', 'TEXT'], ['era_forced_from', 'TEXT'],
+    ['stems_tail_misses', 'INTEGER'],
+    // The first album artist's Subsonic id (artist-credit.firstAlbumArtistId),
+    // so a prepared artist episode reads the same set from the mirror as from
+    // the artist's albums (#2333). NULL = not walked since this column arrived.
+    ['album_artist_id', 'TEXT'],
   ];
   const missing = () => {
     const have = new Set((d.pragma('table_info(tracks)') as Array<{ name: string }>).map((c) => c.name));
     return wanted.filter(([name]) => !have.has(name));
   };
+  ensureEraOverrideTable(d);
   if (missing().length === 0) return;
   d.transaction(() => {
     for (const [name, type] of missing()) runDdl(d, `ALTER TABLE tracks ADD COLUMN ${name} ${type}`);
   }).immediate();
+}
+
+// The era review's per-album record (see ensureNamedColumns). By name, like
+// the columns, for the same reason: no user_version to collide over.
+function ensureEraOverrideTable(d: Database.Database): void {
+  if (d.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='era_override'`).get()) return;
+  runDdl(d, `
+    CREATE TABLE IF NOT EXISTS era_override (
+      album_key   TEXT PRIMARY KEY,
+      verdict     TEXT CHECK (verdict IS NULL OR verdict IN ('trusted','suspect','year')),
+      forced_year INTEGER,
+      kind        TEXT,
+      set_at      TEXT NOT NULL
+    );
+  `);
 }

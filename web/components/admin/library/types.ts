@@ -10,7 +10,7 @@ export interface Track {
   year?: number | string | null;
   // Era surface (#842/#1418). `year` is the FILE's year (a reissue's date on an
   // anthology); `originalYear` is the resolved recording year and
-  // `originalYearSource` is 'album-tag' | 'musicbrainz' | 'manual' (manual wins).
+  // `originalYearSource` is 'album-tag' | 'musicbrainz' | 'discogs' | 'manual' (manual wins).
   // Absent on an older controller.
   originalYear?: number | null;
   originalYearSource?: string | null;
@@ -197,7 +197,7 @@ export interface SettingsResponse {
   budget?: { mode: BudgetMode };
 }
 
-export type Tab = 'tracks' | 'browse' | 'search' | 'history' | 'blocked';
+export type Tab = 'tracks' | 'browse' | 'search' | 'era' | 'history' | 'blocked';
 // TableVariant keys TrackTable's per-view behaviour (empty-state copy, accent Tag
 // button) on what's actually shown, independent of the tab's All / Needs-tags toggle.
 export type TrackMode = 'all' | 'needs' | 'liked';
@@ -213,7 +213,7 @@ export type SearchMode = 'library' | 'sound';
 export const PAGE_SIZE = 50;
 export const SEARCH_PAGE = 30;
 
-export const TABS: Tab[] = ['tracks', 'browse', 'search', 'history', 'blocked'];
+export const TABS: Tab[] = ['tracks', 'browse', 'search', 'era', 'history', 'blocked'];
 export const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
 
 

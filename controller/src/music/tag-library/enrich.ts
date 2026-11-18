@@ -4,11 +4,12 @@
 
 import * as subsonic from '../subsonic.js';
 import * as lastfm from '../lastfm.js';
-import * as musicbrainz from '../musicbrainz.js';
+import { runYearLookups } from '../original-year.js';
 import * as db from '../library-db.js';
 import * as settings from '../../settings.js';
 import { createLastfmPacer, type LastfmPacer } from '../lastfm-pacer.js';
 import { selectTrackTagIds } from '../enrich-scope.js';
+import { listAfterArtistLookup } from '../lastfm-tag-policy.js';
 import { reportProgress } from '../tagger-progress.js';
 import { mapPool, memoizeByKey } from '../../util/async-pool.js';
 import { logEvent } from './log.js';
@@ -27,7 +28,7 @@ export async function phaseEnrich(
   const lyricsEnabled = enrichCfg.lyrics !== false;
   // Scoped in SQL, not by the tagger's untagged/enriched id set: gating on the
   // enrich scope would never backfill an already-tagged library.
-  const yearIds = pendingOriginalYearIds(reEnrich);
+  const yearIds = pendingOriginalYearIds(reEnrich, ids);
   const trackTagIds = trackTagsOn
     ? selectTrackTagIds({ reEnrich, limit, ids, owed: db.idsNeedingLastfmTrackTags() })
     : [];
@@ -75,10 +76,15 @@ export async function phaseEnrich(
     // list still gets the artist's, as it would with track tags off. The pass can
     // end short of it, this write marks it enriched so no later run fills it, and
     // a never-play rule on the act would miss it. The pass adds to what it finds.
-    let lastfmTags: string[] | null = trackTagsOn ? t.lastfmTags : null;
-    if (lastfmEnabled && t.artist && !lastfmTags?.length) {
+    // With track tags off the artist is asked every time the row is visited, and only tags replace
+    // the list (listAfterArtistLookup, Retag's rule too): an outage, an empty
+    // answer or Last.fm tags off leave it as it was (#2295).
+    let lastfmTags: string[] | null = t.lastfmTags;
+    let fetchedTags = false;
+    if (lastfmEnabled && t.artist && (!trackTagsOn || !lastfmTags?.length)) {
       const tags = await artistTags(t.artist);
-      if (tags.length) lastfmTags = tags;
+      fetchedTags = tags.length > 0;
+      lastfmTags = listAfterArtistLookup(lastfmTags, tags);
     }
 
     let lyricExcerpt: string | null = null;
@@ -93,7 +99,7 @@ export async function phaseEnrich(
 
     db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
     enrichedTracks += 1;
-    if (!trackTagsOn && lastfmTags && lastfmTags.length) enrichedTags += 1;
+    if (!trackTagsOn && fetchedTags) enrichedTags += 1;
     if (lyricExcerpt) enrichedLyrics += 1;
     if (enrichedTracks % 100 === 0) {
       console.log(
@@ -164,46 +170,36 @@ export async function backfillLastfmTrackTags(
   return listed;
 }
 
-// Ids still owed a MusicBrainz original-year lookup (#842). Keyless, so default-on;
+// Ids owed a MusicBrainz original-year lookup (#842). Keyless, so default-on;
 // [] when settings.embedding.enrichment.originalYear is false.
-export function pendingOriginalYearIds(retryMisses: boolean): string[] {
+//
+// Always the year facet's due set: tracks never asked, and failed lookups past
+// their retry delay (original-year-policy.ts), library-wide. An answered "not
+// found" is settled and is re-asked only by `--facets year --where
+// unmeasurable` — or, with `retryMisses` (--re-enrich), for the misses inside
+// `scope`, the run's own tracks. With --limit that is a bounded set; without
+// it the run's scope is the whole library, and so are its misses.
+export function pendingOriginalYearIds(retryMisses: boolean, scope: readonly string[] = []): string[] {
   const enrichCfg = (settings.get() as any).embedding?.enrichment ?? {};
   if (enrichCfg.originalYear === false) return [];
-  return db.idsNeedingOriginalYear(retryMisses);
+  const due = db.yearLookupDueIds(Date.now());
+  if (!retryMisses) return due;
+  const inScope = new Set(scope);
+  const seen = new Set(due);
+  const misses = db.idsNeedingOriginalYear(true).filter(id => inScope.has(id) && !seen.has(id));
+  return [...due, ...misses];
 }
 
 // Original-year backfill (#842) for era-suspect tracks whose `year` is the
-// reissue's release date. Effectively serial whatever the pool width (MusicBrainz
-// throttles to 1 req/s), so every track gets a checked_at stamp on hit OR miss to
-// keep later passes cheap. Also run by --reconcile-only: that walk stamps
-// era_untrusted and clears stale album-tag years, so it must re-answer them
-// (#1418). Returns the number of years resolved.
+// reissue's release date. Also run by --reconcile-only: that walk stamps
+// era_untrusted and clears stale album-tag years, so it must answer the tracks
+// it has just made suspect (#1418). `retryMisses` lets the run's own misses be
+// asked again (see pendingOriginalYearIds). Returns the number resolved.
 export async function backfillOriginalYears(
   yearIds: string[],
   retryMisses: boolean,
   concurrency: number,
 ): Promise<number> {
-  if (!yearIds.length) return 0;
-  let resolvedYears = 0;
-  console.log(`[tag] original years: ${yearIds.length} era-suspect tracks to resolve via MusicBrainz (~1/s)`);
-  reportProgress({ phase: 'enrich', label: 'Resolving original years', done: 0, total: yearIds.length });
-  let checkedYears = 0;
-  await mapPool(yearIds, Math.min(concurrency, 4), async (id) => {
-    const t = db.getTrack(id);
-    if (!t || !musicbrainz.needsOriginalYearLookup(t, retryMisses)) return;
-    let mbid: string | null = null;
-    try {
-      mbid = (await subsonic.getSong(id))?.musicBrainzId || null;
-    } catch { /* MBID is optional — the search path covers it */ }
-    const year = await musicbrainz.lookupOriginalYear({ title: t.title, artist: t.artist, mbid, year: t.year });
-    db.setOriginalYear(id, year);
-    if (year != null) resolvedYears += 1;
-    checkedYears += 1;
-    if (checkedYears % 25 === 0) {
-      console.log(`[tag] original years ${checkedYears}/${yearIds.length} (${resolvedYears} resolved)`);
-      reportProgress({ phase: 'enrich', label: 'Resolving original years', done: checkedYears, total: yearIds.length });
-    }
-  });
-  return resolvedYears;
+  const stats = await runYearLookups(yearIds, { force: retryMisses, concurrency });
+  return stats.found;
 }
-

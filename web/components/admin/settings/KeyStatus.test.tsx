@@ -1,5 +1,5 @@
-// The key banner under Settings → Web search. Tavily, Brave, Firecrawl and
-// Outcrawl searches refuse a key left in the shared slot by another provider, so it has
+// The key banner under Settings → Web search. Tavily, Brave, Firecrawl,
+// Outcrawl and SpecStream searches refuse a key left in the shared slot by another provider, so it has
 // to read as missing, not as "ready to use". The controller says which providers
 // refuse the key on file (keyRefusedBy). The banner is rendered to static
 // markup, because web has no DOM harness.
@@ -35,6 +35,7 @@ test("the foreign-key banner names the picked provider's key with the right arti
   assert.match(outcrawl, /Paste an Outcrawl key in the field above and save\.$/);
   assert.match(foreignSearchKeyDetail('Tavily'), /not a Tavily key.*Paste a Tavily key/);
   assert.match(foreignSearchKeyDetail('Brave Search'), /not a Brave Search key.*Paste a Brave Search key/);
+  assert.match(foreignSearchKeyDetail('SpecStream'), /not a SpecStream key.*Paste a SpecStream key/);
   const html = renderToStaticMarkup(createElement(KeyStatus, {
     envVar: 'SEARCH_API_KEY', present: false, detail: outcrawl,
   }));

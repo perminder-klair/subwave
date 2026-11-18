@@ -98,9 +98,10 @@ generated-by footers, session links).
 
 Two things survive the cut: a `Co-Authored-By:` line you are deliberately
 keeping to credit a genuine human co-author, and a `BREAKING CHANGE:` footer the
-change actually needs. The release PR is merged rather than squashed, for
-reasons of its own — see
-[`.claude/skills/subwave-release-pr/SKILL.md`](.claude/skills/subwave-release-pr/SKILL.md).
+change actually needs. The release PR (`develop` → `main`) is merged with a merge commit, never
+squashed: release-please bumps the version from the individual `feat:` / `fix:`
+commits it finds on `main`, and a squash leaves it only a `release: …` commit,
+which it skips.
 
 ## Releases
 

@@ -170,14 +170,14 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # host. See docs/unraid.md.
 #
 # Pins mirror docker/Dockerfile.analyzer — keep the two in lockstep. The one
-# exception is TORCH_CUDA=cu124, the AIO's second CUDA build, which pins torch
-# 2.6.0 because its cu124 wheel still ships sm_50, sm_60 and sm_70: cu128
-# dropped those three, and CUDA 13 cannot emit them. The analyzer image has no
-# cu124 build. This venv runs on the system python3 (trixie → 3.13, unlike the
-# analyzer image's 3.11). WITH_CUDA=1 defaults to the cu128 index (sm_75
-# through sm_120). publish-images.yml passes each build's cuda_family as
-# TORCH_CUDA; which tags each build publishes under is the AIO CUDA tag table
-# in docs/internals/infrastructure.md.
+# exception is TORCH_CUDA=cu124, the second CUDA build of this image and of
+# subwave-analyzer-cuda (#2280, from the same case), which pins torch 2.6.0
+# because its cu124 wheel still ships sm_50, sm_60 and sm_70: cu128 dropped
+# those three, and CUDA 13 cannot emit them. This venv runs on the system
+# python3 (trixie → 3.13, unlike the analyzer image's 3.11). WITH_CUDA=1
+# defaults to the cu128 index (sm_75 through sm_120). publish-images.yml
+# passes each build's cuda_family as TORCH_CUDA; which tags each build
+# publishes under is the CUDA tag table in docs/internals/infrastructure.md.
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
@@ -204,16 +204,12 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
-      # diffq ships sdist-only: lend it a toolchain and purge in the SAME
-      # layer (see docker/Dockerfile.analyzer). Unlike that image, this base's
-      # apt python3 has no headers — python3-dev supplies Python.h.
-      apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev python3-dev && \
+      # No diffq, so no build toolchain — see docker/Dockerfile.analyzer.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==$TORCH_VER torchaudio==$TORCH_VER demucs==4.0.1 diffq==0.2.4 && \
-      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs, diffq" && \
-      apt-get purge -y gcc libc6-dev python3-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
+        torch==$TORCH_VER torchaudio==$TORCH_VER demucs==4.0.1 && \
+      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs" ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
 # ANALYZE_PYTHON flips on the controller's local analyze backend; HF_HOME puts

@@ -1,7 +1,7 @@
 // Every keyed web-search backend reads one shared key slot (settings.search.apiKey,
 // else SEARCH_API_KEY), so switching provider without replacing the key leaves
 // another provider's key in it (#2223). search-key-policy.ts decides which key
-// each provider may send: Firecrawl, Keenable and Outcrawl only their own prefix,
+// each provider may send: Firecrawl, Keenable, Outcrawl and SpecStream only their own prefix,
 // Tavily and Brave anything but another provider's known prefix, because their formats
 // aren't confirmed. This pins that rule and every surface that asks it: the two
 // searchers refuse before sending, searchReady(), searchKeyProblem(), the doctor
@@ -59,7 +59,7 @@ function stubSearch(t: TestContext) {
 
 test('searchKeyFits: each provider takes its own key and refuses the others', () => {
   const table: Array<[string, string, boolean]> = [
-    // Firecrawl, Keenable and Outcrawl: only their own prefix.
+    // Firecrawl, Keenable, Outcrawl and SpecStream: only their own prefix.
     ['firecrawl', 'fc-abc', true],
     ['firecrawl', 'tvly-abc', false],
     ['firecrawl', 'BSAabc', false],
@@ -75,6 +75,12 @@ test('searchKeyFits: each provider takes its own key and refuses the others', ()
     ['outcrawl', 'legacy-unprefixed', false],
     ['outcrawl', 'OCK_abc.def', false],
     ['outcrawl', 'xock_abc.def', false],
+    ['specstream', 'ss_live_abc', true],
+    ['specstream', 'ss_test_abc', true],
+    ['specstream', 'ock_abc.def', false],
+    ['specstream', 'tvly-abc', false],
+    ['specstream', 'legacy-unprefixed', false],
+    ['specstream', 'SS_live_abc', false],
     // Tavily: anything but another provider's known prefix.
     ['tavily', 'tvly-abc', true],
     ['tavily', 'legacy-unprefixed', true],
@@ -82,6 +88,7 @@ test('searchKeyFits: each provider takes its own key and refuses the others', ()
     ['tavily', 'fc-abc', false],
     ['tavily', 'keen_abc', false],
     ['tavily', 'ock_abc.def', false],
+    ['tavily', 'ss_live_abc', false],
     // Brave: the same, and a Tavily key is foreign too.
     ['brave', 'BSAabc', true],
     ['brave', 'legacy-unprefixed', true],
@@ -89,12 +96,13 @@ test('searchKeyFits: each provider takes its own key and refuses the others', ()
     ['brave', 'keen_abc', false],
     ['brave', 'tvly-abc', false],
     ['brave', 'ock_abc.def', false],
+    ['brave', 'ss_live_abc', false],
   ];
   for (const [provider, key, fits] of table) {
     assert.equal(searchKeyFits(provider, key), fits, `${provider} ${key}`);
     assert.equal(searchKeyFits(provider, ` ${key} `), fits, `${provider} ${key}, padded`);
   }
-  for (const provider of ['tavily', 'brave', 'firecrawl', 'keenable', 'outcrawl']) {
+  for (const provider of ['tavily', 'brave', 'firecrawl', 'keenable', 'outcrawl', 'specstream']) {
     assert.equal(searchKeyFits(provider, ''), false, `${provider} empty`);
     assert.equal(searchKeyFits(provider, '   '), false, `${provider} blank`);
   }
@@ -110,6 +118,9 @@ test('searchKeyMismatch names whose key it is, and an empty key is not a mismatc
   assert.equal(searchKeyMismatch('tavily', 'ock_abc.def'), 'an Outcrawl key, not a Tavily key');
   assert.equal(searchKeyMismatch('brave', 'ock_abc.def'), 'an Outcrawl key, not a Brave Search key');
   assert.equal(searchKeyMismatch('outcrawl', 'ock_abc.def'), null);
+  assert.equal(searchKeyMismatch('specstream', 'ock_abc.def'), 'not a SpecStream key (they start with ss_)');
+  assert.equal(searchKeyMismatch('tavily', 'ss_live_abc'), 'a SpecStream key, not a Tavily key');
+  assert.equal(searchKeyMismatch('specstream', 'ss_live_abc'), null);
   assert.equal(searchKeyMismatch('tavily', 'tvly-abc'), null);
   assert.equal(searchKeyMismatch('tavily', ''), null);
 });
@@ -133,11 +144,12 @@ test('withIndefiniteArticle and searchProviderEntry read the catalogue', () => {
 });
 
 test('searchProvidersRefusing lists the keyed providers that would refuse a key', () => {
-  assert.deepEqual(searchProvidersRefusing('fc-abc'), ['tavily', 'brave', 'outcrawl']);
-  assert.deepEqual(searchProvidersRefusing('tvly-abc'), ['brave', 'firecrawl', 'outcrawl']);
-  assert.deepEqual(searchProvidersRefusing('keen_abc'), ['tavily', 'brave', 'firecrawl', 'outcrawl']);
-  assert.deepEqual(searchProvidersRefusing('BSAabc'), ['firecrawl', 'outcrawl']);
-  assert.deepEqual(searchProvidersRefusing('ock_abc.def'), ['tavily', 'brave', 'firecrawl']);
+  assert.deepEqual(searchProvidersRefusing('fc-abc'), ['tavily', 'brave', 'outcrawl', 'specstream']);
+  assert.deepEqual(searchProvidersRefusing('tvly-abc'), ['brave', 'firecrawl', 'outcrawl', 'specstream']);
+  assert.deepEqual(searchProvidersRefusing('keen_abc'), ['tavily', 'brave', 'firecrawl', 'outcrawl', 'specstream']);
+  assert.deepEqual(searchProvidersRefusing('BSAabc'), ['firecrawl', 'outcrawl', 'specstream']);
+  assert.deepEqual(searchProvidersRefusing('ock_abc.def'), ['tavily', 'brave', 'firecrawl', 'specstream']);
+  assert.deepEqual(searchProvidersRefusing('ss_live_abc'), ['tavily', 'brave', 'firecrawl', 'outcrawl']);
   assert.deepEqual(searchProvidersRefusing(''), []);
   assert.equal(searchKeyRequired('tavily'), true);
   assert.equal(searchKeyRequired('keenable'), false);
@@ -152,6 +164,8 @@ const FOREIGN: Array<[provider: 'tavily' | 'brave', key: string, sentence: strin
   ['brave', 'tvly-tavily-secret', 'The key on file is a Tavily key, not a Brave Search key'],
   ['brave', 'keen_keenable-secret', 'The key on file is a Keenable key, not a Brave Search key'],
   ['brave', 'ock_outcrawl.secret', 'The key on file is an Outcrawl key, not a Brave Search key'],
+  ['tavily', 'ss_live_specstream-secret', 'The key on file is a SpecStream key, not a Tavily key'],
+  ['brave', 'ss_live_specstream-secret', 'The key on file is a SpecStream key, not a Brave Search key'],
 ];
 const searcher = { tavily: tavilySearch, brave: braveSearch };
 
@@ -237,9 +251,9 @@ test('searchKeyRefusedBy follows the key on file, saved or env', async (t) => {
   await settings.update({ search: { provider: 'duckduckgo', apiKey: '' } });
   assert.deepEqual(searchKeyRefusedBy(), []);
   process.env.SEARCH_API_KEY = 'fc-env';
-  assert.deepEqual(searchKeyRefusedBy(), ['tavily', 'brave', 'outcrawl']);
+  assert.deepEqual(searchKeyRefusedBy(), ['tavily', 'brave', 'outcrawl', 'specstream']);
   await settings.update({ search: { apiKey: 'tvly-saved' } });
-  assert.deepEqual(searchKeyRefusedBy(), ['brave', 'firecrawl', 'outcrawl']);
+  assert.deepEqual(searchKeyRefusedBy(), ['brave', 'firecrawl', 'outcrawl', 'specstream']);
 });
 
 test('GET /settings serves keyRefusedBy', async (t) => {
@@ -254,5 +268,5 @@ test('GET /settings serves keyRefusedBy', async (t) => {
   const { server, url } = await listenHttp(app);
   server.unref();
   const body = await (await fetch(`${url}/settings`)).json() as { search: { keyRefusedBy: unknown } };
-  assert.deepEqual(body.search.keyRefusedBy, ['tavily', 'brave', 'outcrawl']);
+  assert.deepEqual(body.search.keyRefusedBy, ['tavily', 'brave', 'outcrawl', 'specstream']);
 });

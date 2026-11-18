@@ -19,6 +19,13 @@ export function withTalkAir<T>(air: TalkAir, fn: () => Promise<T>): Promise<T> {
   return als.run(air, fn);
 }
 
+// Placement for automatic speech with no row in the slot table — the per-skill
+// `cron:` timers. On, a fire waits for the next track boundary; off, it airs at
+// once. The row-driven scheduler passes its own `plan.air` instead.
+export function scheduledTalkAir(): TalkAir {
+  return talkOnlyBetweenTracks() ? 'next-track' : 'immediate';
+}
+
 // 'immediate' outside any scope: manual triggers, track-tied links, request intros.
 export function currentTalkAir(): TalkAir {
   return als.getStore() ?? 'immediate';
