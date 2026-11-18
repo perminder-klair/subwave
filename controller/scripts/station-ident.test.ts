@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, beforeEach } from 'node:test';
-import ts from 'typescript';
 import { normalizeForDisplay } from '../src/audio/speech-text.js';
 import { createStationIdPicker } from '../src/broadcast/station-ident.js';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
@@ -15,7 +14,7 @@ process.env.STATE_DIR = root;
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
-const { runStationId } = await import('../src/broadcast/scheduler.js');
+const { runStationId, createStationIdRunner } = await import('../src/broadcast/scheduler.js');
 const { VERBATIM_META, withheldFromPrompts } = await import('../src/broadcast/prompt-memory.js');
 const { writeSilentWav } = await import('../src/audio/wav-silence.js');
 
@@ -85,30 +84,29 @@ test('absent, invalid and improvise modes leave the random sequence untouched', 
   assert.equal(pick({ ...persona, identLines: [' ', '\t'] }), null);
 });
 
-// Exercise the actual gate-free runner with its imports injected. This seam
-// needs neither a model provider nor TTS/native SQLite, and cannot air anything.
-const scheduler = readFileSync(new URL('../src/broadcast/scheduler.ts', import.meta.url), 'utf8');
-const runnerSource = scheduler.match(/export (async function runStationId\([\s\S]*?)\n\/\/ TALK TICK/)?.[1];
-assert.ok(runnerSource, 'station-ident runner must exist');
-
+// Exercise the actual gate-free runner with its dependencies injected
+// (createStationIdRunner). This seam needs neither a model provider nor
+// TTS/native SQLite, and cannot air anything.
 function fixture(speaker = persona, owner = speaker, delivery: Promise<void> | (() => void | Promise<void>) = Promise.resolve(), generation = Promise.resolve()) {
   let accepted = true;
   const context = { clock: { spokenDaypart: 'in the afternoon' } };
   const calls: any[] = [];
+  const contextFetches = { count: 0 };
   const recap = 'Fixture recap';
   const openers = ['Recent opener'];
   const hostSpeech = { session: 'fixture' };
-  const run = new Function('withTrace', 'prepareEpisodeContext', 'getFullContext', 'settings', 'session', 'pickStationId', 'stationIdDaypartStamp', 'speakClockAllowed', 'dj', 'queue', 'VERBATIM_META', ts.transpileModule(`return (${runnerSource});`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(
-    (_trace, fn) => fn(),
-    async ctx => ctx,
-    async () => context,
-    { pickOnAirSpeaker: () => speaker },
-    { captureAutomaticHostSpeech: () => ({ persona: owner, hostSpeech }) },
-    createStationIdPicker(() => 0),
-    (daypart, allowed) => allowed ? daypart : null,
-    () => true,
-    { generateStationId: async args => { calls.push({ kind: 'model', args }); await generation; return 'Improvised fixture.'; } },
-    {
+  const pickStationId = createStationIdPicker(() => 0);
+  const run = createStationIdRunner(() => ({
+    withTrace: (_trace, fn) => fn(),
+    prepareEpisodeContext: async ctx => ctx,
+    getFullContext: async () => { contextFetches.count++; return context; },
+    settings: { pickOnAirSpeaker: () => speaker },
+    session: { captureAutomaticHostSpeech: () => ({ persona: owner, hostSpeech }) },
+    pickStationId,
+    stationIdDaypartStamp: (daypart, allowed) => allowed ? daypart : null,
+    speakClockAllowed: () => true,
+    dj: { generateStationId: async args => { calls.push({ kind: 'model', args }); await generation; return 'Improvised fixture.'; } },
+    queue: {
       getDjRecap: () => recap,
       getRecentOpeners: () => openers,
       announce: async (script, kind, opts) => {
@@ -122,9 +120,8 @@ function fixture(speaker = persona, owner = speaker, delivery: Promise<void> | (
         return accepted;
       },
     },
-    VERBATIM_META,
-  );
-  return { run, calls, context, recap, openers, hostSpeech, accept: value => { accepted = value; }, setSpeaker: value => { speaker = value; } };
+  }) as any);
+  return { run, calls, contextFetches, context, recap, openers, hostSpeech, accept: value => { accepted = value; }, setSpeaker: value => { speaker = value; } };
 }
 
 test('manual verbatim ident never calls generateStationId and keeps its voice and queue kind', async () => {
@@ -134,6 +131,17 @@ test('manual verbatim ident never calls generateStationId and keeps its voice an
     kind: 'immediate', script: 'First ident.', segment: 'station-id',
     opts: { persona, daypart: null, noClockClaim: true, hostSpeech: null, meta: { personaId: persona.id, personaName: persona.name, verbatim: true } },
   }]);
+});
+
+test('a verbatim ident never fetches the context an improvised one needs', async () => {
+  for (const atNextTrack of [false, true]) {
+    const { run, contextFetches } = fixture();
+    assert.equal(await run({ atNextTrack }), 'First ident.');
+    assert.equal(contextFetches.count, 0);
+  }
+  const improvised = fixture({ ...persona, identMode: 'improvise' });
+  assert.equal(await improvised.run(), 'Improvised fixture.');
+  assert.equal(improvised.contextFetches.count, 1);
 });
 
 test('automatic verbatim ident uses the captured speaker and next-track timing without a daypart claim', async () => {
