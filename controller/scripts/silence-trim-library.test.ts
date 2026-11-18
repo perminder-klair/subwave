@@ -228,6 +228,33 @@ test('with tailFromCurve on, the curve outro is derived on its first read, not b
   }
 });
 
+test('the stem blend reads the outgoing tail through the same projection', async () => {
+  const { blendSides } = await import('../src/broadcast/stem-blend.js');
+  db.upsertTrackMeta('next-in', { title: 'Next', artist: 'B', album: 'Bl', duration: 200 } as never);
+  const sqlRun = (q: string, ...a: unknown[]) => db.requireDb().prepare(q).run(...a);
+  const tail: number[] = [];
+  for (let t = 190_000; t <= 216_000; t += 500) {
+    tail.push(t <= 205_000 ? -100 : t <= 215_000 ? Math.round(-100 - (500 * (t - 205_000)) / 10_000) : -1000);
+  }
+  sqlRun('UPDATE tracks SET loudness_curve_json = ? WHERE id = ?', JSON.stringify({
+    whole: { startMs: 3_000, stepMs: 1_000, lufs: [-100, -100] },
+    tail: { startMs: 190_000, stepMs: 500, lufs: tail },
+  }), 'faded');
+  try {
+    // Off: the stored outro, as the blend read it before.
+    assert.equal(blendSides('faded', 'next-in')!.out.outro!.startMs, 205_300);
+    await settings.update({ transitions: { tailFromCurve: true } } as never);
+    const on = blendSides('faded', 'next-in')!;
+    // On: the curve's readings, exactly what library.get() gives every other consumer.
+    assert.deepEqual(on.out.outro, library.get('faded').outro);
+    assert.notEqual(on.out.outro!.startMs, 205_300);
+    assert.equal(blendSides('missing', 'next-in'), null);
+  } finally {
+    await settings.update({ transitions: { tailFromCurve: false } } as never);
+    sqlRun('UPDATE tracks SET loudness_curve_json = NULL WHERE id = ?', 'faded');
+  }
+});
+
 test('the drain reads the cue points and the audible end from one resolution', async () => {
   const { resolveTrimAndAudibleEnd } = await import('../src/music/silence-trim.js');
   const t = { id: 'faded', duration: 220 };
