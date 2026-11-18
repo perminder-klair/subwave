@@ -234,6 +234,19 @@ export function openingLive(e: Opening, nowMs: number, alive: WriterAlive): bool
   return nowMs - e.atMs <= maxAge && alive(e.pid, e.start);
 }
 
+// One answer per writer for one reading of the journal: the I/O side's check
+// reads /proc synchronously, and a journal between walks holds thousands of
+// openings from a handful of writers.
+function memoAlive(alive: WriterAlive): WriterAlive {
+  const seen = new Map<string, boolean>();
+  return (pid, start) => {
+    const key = `${pid} ${start ?? ''}`;
+    let v = seen.get(key);
+    if (v === undefined) seen.set(key, v = alive(pid, start));
+    return v;
+  };
+}
+
 // Does a snapshot at `mark`, holding `inFlight`, hold every change the
 // journal records? Every entry past the position must be a live opening (a
 // write still running), and every bracket the snapshot holds open must still
@@ -246,17 +259,24 @@ export function journalAccounts(
 ): boolean {
   if (!mark || !j || mark.id !== j.id) return false;
   if (!Number.isInteger(mark.upTo) || mark.upTo < j.headerEnd || mark.upTo > j.end) return false;
+  const held = live.inFlight ?? {};
+  const alive = memoAlive(live.alive);
   const liveKeys = new Set<string>();
   for (const e of j.entries) {
     if (e.kind !== '+') {
       if (e.offset >= mark.upTo) return false;
       continue;
     }
-    const ok = openingLive(e, live.nowMs, live.alive);
-    if (e.offset >= mark.upTo && !ok) return false;
-    if (ok) liveKeys.add(inFlightKey(e.session, e.dir));
+    // Only an opening past the position, or one the snapshot holds open, is
+    // judged: the rest are brackets the snapshot measured after.
+    const key = inFlightKey(e.session, e.dir);
+    const past = e.offset >= mark.upTo;
+    if (!past && !(key in held)) continue;
+    const ok = openingLive(e, live.nowMs, alive);
+    if (past && !ok) return false;
+    if (ok) liveKeys.add(key);
   }
-  return Object.keys(live.inFlight ?? {}).every(key => liveKeys.has(key));
+  return Object.keys(held).every(key => liveKeys.has(key));
 }
 
 export interface OpenWrite {
@@ -269,7 +289,8 @@ export interface OpenWrite {
 // Brackets opened and not closed anywhere in the journal (a trim may copy a
 // close ahead of its opening, so order is not used) whose opening is live
 // (openingLive).
-export function openWrites(j: Journal, nowMs: number, alive: WriterAlive): OpenWrite[] {
+export function openWrites(j: Journal, nowMs: number, writerAlive: WriterAlive): OpenWrite[] {
+  const alive = memoAlive(writerAlive);
   const closed = new Set<string>();
   for (const e of j.entries) if (e.kind === '=') closed.add(inFlightKey(e.session, e.dir));
   const seen = new Set<string>();

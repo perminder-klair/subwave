@@ -255,3 +255,25 @@ test('the start identity is /proc stat field 22, read after the command name', (
   assert.equal(p.procStartTime('42 (node) S 1'), null, 'cut short');
   assert.equal(p.procStartTime('garbage'), null);
 });
+
+// The I/O side's liveness check reads /proc synchronously, and between walks
+// the journal holds thousands of settled brackets from a handful of writers:
+// a read judges only what it must (openings past the position, and those it
+// holds open), once per writer (#2352).
+test('a read asks after each writer once, and only for openings that still matter', () => {
+  const lines: string[] = [];
+  for (let i = 0; i < 500; i += 1) lines.push(p.openLine(`s${i}`, `d${i}`, NOW, 7, '100'), p.closeLine(`s${i}`, `d${i}`));
+  lines.push(p.openLine('held', 'h', NOW, 9, '300'));
+  const settled = journalOf(lines);
+  const tail = journalOf([...lines, p.openLine('t1', 'x', NOW, 7, '100'), p.openLine('t2', 'y', NOW, 7, '100')]);
+  const held: p.InFlight = { [p.inFlightKey('held', 'h')]: 'base' };
+  let calls = 0;
+  const counted: p.WriterAlive = () => { calls += 1; return true; };
+  assert.equal(p.journalAccounts({ id: 'J1', upTo: settled.end }, settled, live({}, counted)), true);
+  assert.equal(calls, 0, 'settled brackets before the position are history');
+  assert.equal(p.journalAccounts({ id: 'J1', upTo: settled.end }, tail, live(held, counted)), true);
+  assert.equal(calls, 2, 'one held writer and one writer past the position, each asked once');
+  calls = 0;
+  assert.equal(p.openWrites(tail, NOW, counted).length, 3);
+  assert.equal(calls, 2, 'a walk asks once per writer too');
+});
