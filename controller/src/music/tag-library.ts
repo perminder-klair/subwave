@@ -56,7 +56,7 @@ import {
 } from './tag-library/flags.js';
 import { llmTagInBatches, resolveTagConsumers } from './tag-library/tag.js';
 import { rememberedUntaggable, tagPromptStamp } from './tag-library/tag-input.js';
-import { audioEnergyOptions, runPropagatedEnergyPass } from './propagated-energy.js';
+import { audioEnergyOptions, runAudioEnergyPass } from './propagated-energy.js';
 
 
 // Close (TRUNCATE-checkpoints the WAL) on every exit path; this CLI bails via
@@ -523,7 +523,7 @@ async function main() {
     // analysis pass (a library can gain audio scores long after tagging).
     // Best-effort: never fails the run.
     try {
-      runPropagatedEnergyPass(audioEnergyOptions(settings.get()));
+      runAudioEnergyPass(audioEnergyOptions(settings.get()));
     } catch (err: any) {
       console.log(`[tag] audio energy pass failed: ${err?.message || err}`);
     }
@@ -623,7 +623,7 @@ async function main() {
         }
         console.log(`[tag] re-voted ${changed}/${revote.length} propagated tracks over their analysed vectors`);
         // The vote rewrote their energy, so the audio correction runs over it again.
-        if (changed > 0) runPropagatedEnergyPass();
+        if (changed > 0) runAudioEnergyPass();
       } catch (err: any) {
         logEvent('warning', `Re-voting analysed tracks failed (non-fatal): ${err?.message || err}`);
       }
