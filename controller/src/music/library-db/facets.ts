@@ -138,9 +138,9 @@ export function tailVersionOf(row: Pick<FacetSourceRow, 'tail_version' | 'has_ed
 // 2 (an older analyzer, or one without pyloudnorm: due again). A placed answer
 // with no outro has no curve to carry, so it is complete at 3, and so is one
 // whose analyzer could make the curve and said it had none to give
-// (`curveUnavailable`: the meter failed, the window was too short, or the
-// curve was rejected): asking again would only re-read the file, on every
-// `--facets tail` pass. Mark the answer, not the request: an unplaced tail
+// (`curveUnavailable`: the meter failed, or the curve was rejected; a window
+// too short for a reading gives an empty curve, which is a curve): asking
+// again would only re-read the file, on every `--facets tail` pass. Mark the answer, not the request: an unplaced tail
 // gets no stamp at all.
 export function placedTailVersion(outro: { loudnessCurve?: unknown } | null | undefined, curveUnavailable?: string | null): number {
   if (outro == null) return 3;

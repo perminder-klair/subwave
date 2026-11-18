@@ -843,9 +843,9 @@ tail is stamped `tail_version = 3` only when its answer carries a valid curve
 none (`tail_curve_unavailable`: its meter failed on the file, or `rejected`
 for a curve the controller's parser refuses), the tail counterpart of the
 loudness facet's `loudness_curve_unavailable`: asking again would only re-read
-the file every pass. A placed tail without the curve and without that answer stays one
-version below with the reason `no-curve`, and, like the loudness facet's
-`no-curve`, is re-planned by `--facets tail` (or taken along by a vocal item)
+the file every pass. A placed tail without the curve and without that answer
+stays one version below with the reason `no-curve`, and, like the loudness
+facet's `no-curve`, is re-planned by `--facets tail` (or taken along by a vocal item)
 only on an analyzer that says it can add one: the worker's
 `tail_loudness_curve_capable` (pyloudnorm present and its meter exposing the
 K-weighting stages), relayed by the sidecar as
