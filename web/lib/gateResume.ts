@@ -1,5 +1,5 @@
 // Tuning a listener back in after the station gate took them off the air, the web twin of
-// app/src/lib/gate-resume.ts: no package here imports another, so the rules are mirrored, and a
+// getsubwave/app:src/lib/gate-resume.ts: no package here imports another, so the rules are mirrored, and a
 // change to them goes in both. The gate stops the audio when its prompt comes up, and the listener
 // types the password to keep listening, so the right one puts them back on air with no second press.
 //

@@ -360,6 +360,9 @@ const DAY_S = 86_400;
 // the default), so the pass's headroom is 0 for good.
 function fullSnapshot(bytes = stemCache.budgetBytes(), dirs = 600): void {
   const now = new Date().toISOString();
+  // Written by hand, as from before the usage journal: the journal goes too,
+  // and the next read stamps it.
+  rmSync(path.join(stateRoot, 'stem-cache-usage.journal'), { force: true });
   writeFileSync(snapFile, JSON.stringify({
     version: 1, root: stemCache.stemsRoot(), bytes, dirs, measuredAt: now, updatedAt: now,
   }));

@@ -13,6 +13,7 @@ import { recordHttpAttempt } from './subsonic-log.js';
 import { warnLimiter } from '../util/warn-limiter.js';
 import { describeFetchError, fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
+import { parseLoudnessCurve, type LoudnessCurve } from './loudness-curve.js';
 import { parseWholeLoudnessCurve, type WholeLoudnessCurve } from './whole-loudness-curve.js';
 import { getDb, trackFileSize } from './library-db.js';
 
@@ -104,7 +105,8 @@ export interface AnalysisResult {
   edgeTailMs?: number | null;
   decodedDurationMs?: number | null;
   // Tail facet: true when the analyzer placed the tail window from the
-  // `tailWindow` it was sent (it then ends where the music stops: tail v2).
+  // `tailWindow` it was sent (it then ends where the music stops: tail v2, or
+  // v3 when its outro carries the loudness curve — facets.placedTailVersion).
   tailPlaced?: boolean;
 }
 
@@ -120,6 +122,9 @@ export interface OutroInfo {
   // (not null) when detection didn't run — outro_json is the JSON.stringify of
   // this object and the vocal backfill probes the raw text for '"vocalRanges"'.
   vocalRanges?: Section[];
+  // Short-term loudness of the tail window (tail v3, music/loudness-curve.ts).
+  // Omitted when not measured (an analyzer without pyloudnorm) or malformed.
+  loudnessCurve?: LoudnessCurve;
 }
 
 function parseFinite(v: unknown): number | null {
@@ -207,6 +212,7 @@ function parseOutro(v: unknown): OutroInfo | null {
   // Omit the key when not computed, so outro_json never carries a bare
   // "vocalRanges" for the backfill probe.
   const vocalRanges = parseVocalRanges(o?.vocalRanges);
+  const loudnessCurve = parseLoudnessCurve(o?.loudnessCurve);
   return {
     startMs: Math.round(startMs),
     ending,
@@ -215,6 +221,7 @@ function parseOutro(v: unknown): OutroInfo | null {
     beats: parseMsList(o?.beats),
     bars: parseMsList(o?.bars),
     ...(vocalRanges !== null ? { vocalRanges } : {}),
+    ...(loudnessCurve ? { loudnessCurve } : {}),
   };
 }
 
@@ -266,6 +273,9 @@ interface WorkerMessage {
   // Whole-file loudness answers carry `loudness_curve`. Absent on workers
   // that predate it.
   loudness_curve_capable?: boolean;
+  // Tail answers carry the tail's short-term loudness curve (tail v3). Absent
+  // on workers that predate it.
+  tail_loudness_curve_capable?: boolean;
   loudness_curve?: unknown;
   loudness_curve_unavailable?: unknown;
   loudness_version?: unknown;
@@ -327,6 +337,7 @@ let _localTailVocalCapable: boolean | null = null;
 let _localFacetsCapable: boolean | null = null;
 let _localWholeFileCapable: boolean | null = null;
 let _localLoudnessCurveCapable: boolean | null = null;
+let _localTailCurveCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
 // Local twins of _sidecarAudioError / _sidecarVocalError — see there.
 let _localAudioError: string | null = null;
@@ -389,6 +400,7 @@ function startWorker(): Promise<void> {
           _localFacetsCapable = msg.facets_capable === true;
           _localWholeFileCapable = typeof msg.whole_file_capable === 'boolean' ? msg.whole_file_capable : null;
           _localLoudnessCurveCapable = typeof msg.loudness_curve_capable === 'boolean' ? msg.loudness_curve_capable : null;
+          _localTailCurveCapable = typeof msg.tail_loudness_curve_capable === 'boolean' ? msg.tail_loudness_curve_capable : null;
         }
         // After the ready assignments, so a reported loss always wins.
         noteLocalCapabilityLoss(msg);
@@ -576,6 +588,7 @@ let _sidecarTailVocalCapable: boolean | null = null;
 let _sidecarFacetsCapable: boolean | null = null;
 let _sidecarWholeFileCapable: boolean | null = null;
 let _sidecarLoudnessCurveCapable: boolean | null = null;
+let _sidecarTailCurveCapable: boolean | null = null;
 let _sidecarWholeFileConcurrency: number | null = null;
 // The sidecar's analysis pool size (ANALYZE_CONCURRENCY); null on a sidecar
 // that predates the field.
@@ -605,6 +618,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       analyze_facets_capable?: boolean | null;
       analyze_whole_file_capable?: boolean | null;
       analyze_loudness_curve_capable?: boolean | null;
+      analyze_tail_loudness_curve_capable?: boolean | null;
       analyze_whole_file_concurrency?: number | null;
       analyze_concurrency?: number | null;
       analyze_audio_error?: string | null;
@@ -619,6 +633,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarFacetsCapable = typeof body.analyze_facets_capable === 'boolean' ? body.analyze_facets_capable : null;
       _sidecarWholeFileCapable = typeof body.analyze_whole_file_capable === 'boolean' ? body.analyze_whole_file_capable : null;
       _sidecarLoudnessCurveCapable = typeof body.analyze_loudness_curve_capable === 'boolean' ? body.analyze_loudness_curve_capable : null;
+      _sidecarTailCurveCapable = typeof body.analyze_tail_loudness_curve_capable === 'boolean' ? body.analyze_tail_loudness_curve_capable : null;
       _sidecarWholeFileConcurrency = Number.isInteger(body.analyze_whole_file_concurrency) && (body.analyze_whole_file_concurrency as number) > 0
         ? (body.analyze_whole_file_concurrency as number) : null;
       _sidecarConcurrency = Number.isInteger(body.analyze_concurrency) && (body.analyze_concurrency as number) > 0
@@ -794,6 +809,16 @@ export function wholeFileAvailable(): boolean | null {
 export function loudnessCurveAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarLoudnessCurveCapable;
   if (_backend === 'local') return _localLoudnessCurveCapable;
+  return null;
+}
+
+// Tail answers carry the tail's short-term loudness curve (tail v3,
+// pyloudnorm). A placed tail stored without one is re-planned only on
+// `=== true`: an analyzer that cannot add it would answer without it again,
+// every run (acoustics-plan, `no-curve`).
+export function tailLoudnessCurveAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarTailCurveCapable;
+  if (_backend === 'local') return _localTailCurveCapable;
   return null;
 }
 

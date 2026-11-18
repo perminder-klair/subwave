@@ -2316,6 +2316,138 @@ export const OPENAI_COMPATIBLE_GATEWAYS: readonly OpenAICompatibleGateway[] = LL
     return gw ? [gw] : [];
   });
 
+// ─── from controller/src/schemas/reasoning.ts ────────────────────────────
+
+// The reasoning level an LLM leg can ask for while `llm.reasoning` is on
+// (#2296), and the one predicate that says which legs can express a level.
+// Both sides read this: the controller's capability descriptors
+// (llm/internal/provider/capabilities.ts) and the admin form's picker, through
+// the web/lib/schemas.generated.ts mirror, so the picker is shown exactly where
+// the controller would send the level. Mirrored by `npm run gen:schemas`, so it
+// imports nothing.
+//
+// 'default' is today's "On", byte-identical on every provider: what the call
+// sends is decided by the descriptor alone, as before the field existed. A
+// level is only ever read while reasoning is on, and only on a leg
+// reasoningEffortOffered() accepts; anywhere else it is kept in settings but
+// sends nothing, so a saved level survives a provider switch and back.
+
+export const REASONING_EFFORTS = ['default', 'low', 'medium', 'high'] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
+export function isReasoningEffort(v: unknown): v is ReasoningEffort {
+  return typeof v === 'string' && (REASONING_EFFORTS as readonly string[]).includes(v);
+}
+
+/** Stored value → a level. Absent or unknown is 'default' (today's "On"). */
+export function normalizeReasoningEffort(v: unknown): ReasoningEffort {
+  return isReasoningEffort(v) ? v : 'default';
+}
+
+// Fixed thinking budgets for a manual-thinking Claude model (below), per level.
+// The SDK's own levels are a share of the model's max output (medium is 19,200
+// tokens on a 64k model) — far beyond a ~150-token DJ line — so a level the
+// operator picks is a small fixed budget instead (LiteLLM uses the same scale).
+// 'default' keeps the SDK's medium, unchanged.
+export const MANUAL_THINKING_BUDGETS = { low: 1024, medium: 2048, high: 4096 } as const;
+
+// A Claude model id, served only by Anthropic or a proxy/gateway in front of it.
+const CLAUDE_MODEL_RE = /(?:^|\/)claude-/i;
+export function claudeModelId(modelId: unknown): boolean {
+  return CLAUDE_MODEL_RE.test(String(modelId || ''));
+}
+
+// Gemma has no thinking mode; any reasoning field 400s it (#1044).
+const GEMMA_MODEL_RE = /(^|\/)gemma-/i;
+export function gemmaModelId(modelId: unknown): boolean {
+  return GEMMA_MODEL_RE.test(String(modelId || ''));
+}
+
+// OpenAI ids that take reasoning_effort; gpt-4-class models 400 on any effort.
+const OPENAI_REASONING_MODEL_RE = /^(o\d|gpt-5)/i;
+export function openaiReasoningModelId(modelId: unknown): boolean {
+  return OPENAI_REASONING_MODEL_RE.test(String(modelId || ''));
+}
+
+/**
+ * The SDK's max output for a Claude id that thinks on a manual budget
+ * (`supportsAdaptiveThinking: false` in @ai-sdk/anthropic's
+ * getModelCapabilities), or null for an adaptive id. Mirrors the SDK's checks
+ * in its order, so an id it treats as adaptive is never sent a budget (4.7+
+ * answer one with a 400), and any unknown `claude-*` id counts as adaptive, as
+ * the SDK does. A non-Claude id is null.
+ */
+export function manualThinkingClaudeMaxOutput(modelId: unknown): number | null {
+  const id = String(modelId || '');
+  if (!id.includes('claude-')) return null;
+  if (/claude-(?:sonnet-5|opus-5|fable-5|opus-4-8|opus-4-7|sonnet-4-6|opus-4-6)/.test(id)) return null;
+  if (/claude-(?:sonnet-4-5|opus-4-5|haiku-4-5)/.test(id)) return 64000;
+  if (id.includes('claude-opus-4-1')) return 32000;
+  if (/claude-sonnet-4(?:-|@)/.test(id)) return 64000;
+  if (/claude-opus-4(?:-|@)/.test(id)) return 32000;
+  if (id.includes('claude-3-haiku')) return 4096;
+  if (/claude-(?:instant(?:-|$)|v?2(?=$|[-.:])|3(?=$|[-.]))/.test(id)) return 4096;
+  return null;
+}
+
+export function manualThinkingClaudeModel(modelId: unknown): boolean {
+  return manualThinkingClaudeMaxOutput(modelId) != null;
+}
+
+/**
+ * The thinking budget the SDK gives a manual-thinking Claude model under
+ * 'default' (its medium: 30% of the model's max output, at least 1,024), for
+ * the picker's hint. null for any other id.
+ */
+export function manualThinkingDefaultBudget(modelId: unknown): number | null {
+  const max = manualThinkingClaudeMaxOutput(modelId);
+  return max == null ? null : Math.min(max, Math.max(1024, Math.round(max * 0.3)));
+}
+
+export interface ReasoningEffortLeg {
+  provider?: unknown;
+  model?: unknown;
+  compatibleMode?: unknown;
+}
+
+/**
+ * True when this leg can send a reasoning level, so the picker is shown and
+ * the descriptor reads it. `gatewayRule` is the catalogue's reasoning rule for
+ * a fixed-endpoint OpenAI-compatible gateway (Requesty and the like), looked up
+ * by the caller, since this module imports nothing.
+ *
+ * Not offered, where there is no portable level: Ollama (a level string 400s
+ * boolean-only models), local OpenAI-compatible and locca (llama.cpp/vLLM read
+ * chat_template_kwargs), a hosted OpenAI-compatible server that isn't a Claude
+ * proxy (its own thinking fields go in Request parameters, #2355), Gemma, and
+ * gpt-4-class OpenAI ids.
+ */
+export function reasoningEffortOffered(leg: ReasoningEffortLeg | null | undefined, gatewayRule?: string): boolean {
+  const provider = String(leg?.provider || '');
+  const model = leg?.model;
+  switch (provider) {
+    case 'anthropic':
+    case 'deepseek':
+    case 'openrouter':
+      return true;
+    case 'openai':
+      return openaiReasoningModelId(model);
+    case 'google':
+    case 'gateway':
+      return !gemmaModelId(model);
+    case 'openai-compatible':
+      return leg?.compatibleMode === 'hosted' && claudeModelId(model);
+    case 'ollama':
+    case 'locca':
+      return false;
+    default:
+      if (gatewayRule === 'openaiModels') return openaiReasoningModelId(model);
+      if (gatewayRule === 'minimalWhenOff') return true;
+      if (gatewayRule === 'vendorRouted') return !gemmaModelId(model);
+      return false;
+  }
+}
+
 // ─── from controller/src/schemas/request.ts ──────────────────────────────
 
 // Shared listener-request schema — POST /request's `{ text, name }`. Run at the
@@ -2774,6 +2906,9 @@ export const BEDS_TAIL_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 // the other side: past 30s an operator is describing a different problem
 // (a corrupt rip) than the one a cue point solves.
 export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
+// transitions.fadeAudibleEndDb: how far under the track's own loudness a fade
+// ending stops being audible (music/silence-trim.ts).
+export const FADE_AUDIBLE_END_DB_BOUNDS: SettingsNumericBound = { min: 15, max: 35 };
 
 /**
  * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
@@ -3035,6 +3170,32 @@ export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 export const LLM_HEADERS_MAX = 10;
 export const LLM_HEADER_VALUE_MAX = 500;
 
+/**
+ * Free-form request-body rows, `{ key, value }`: the openai-compatible cloud
+ * TTS provider's `tts.cloud.compatParams` (#1317) and the chat legs'
+ * `llm.bodyParams` / `llm.toolCallBodyParams` (#2296). One row grammar for
+ * both, here so the admin form can pre-flight a row with the same rule the
+ * save path (`settings/compat-params.ts` `validateCompatParams`) enforces.
+ * A value that parses as a JSON literal is sent as one, anything else as a
+ * string.
+ */
+export const BODY_PARAM_KEY_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+export const BODY_PARAM_MAX_ENTRIES = 20;
+export const BODY_PARAM_KEY_MAX = 60;
+export const BODY_PARAM_VALUE_MAX = 400;
+
+/**
+ * Chat body fields the station sets on every request, refused in both LLM
+ * lists at save time and skipped at send time: overriding any of them could
+ * break a forced tool call, the output cap or the hosted #1693 pairing.
+ * `max_completion_tokens` is the output cap's other spelling: the SDK sends it
+ * only for OpenAI reasoning ids, and vLLM reads it ahead of `max_tokens`.
+ */
+export const LLM_BODY_PARAM_RESERVED_KEYS = [
+  'model', 'messages', 'tools', 'tool_choice', 'stream',
+  'max_tokens', 'max_completion_tokens', 'response_format', 'stream_options',
+];
+
 // Native Google safety flags are independent per LLM leg. Only a literal true
 // enables blocking; absent or malformed flags preserve the permissive default.
 const geminiSafetyFlagSchema = z.unknown().transform((raw) => raw === true).default(false);
@@ -3175,6 +3336,10 @@ export const SEARCH_PROVIDER_CATALOG = [
     hint: 'Keenable web search: real web results with no signup or API key, rate limited per IP. An optional Keenable key raises the limit. SUB/WAVE caches every search for 30 minutes.',
   },
   {
+    id: 'parallel', group: 'keyless', label: 'Parallel (no key needed)', key: 'none',
+    hint: 'Parallel web search via its anonymous MCP endpoint. No signup or key needed; free-tier rate limits apply. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
     id: 'firecrawl', group: 'keyed', label: 'Firecrawl (API key)', key: 'required',
     keyName: 'Firecrawl', keyPlaceholder: 'fc-…', keyUrl: 'https://www.firecrawl.dev/app/api-keys',
     hint: 'Firecrawl web search: real web results for artist queries. Needs an API key. SUB/WAVE caches every search for 30 minutes.',
@@ -3183,6 +3348,11 @@ export const SEARCH_PROVIDER_CATALOG = [
     id: 'outcrawl', group: 'keyed', label: 'Outcrawl (API key, free monthly credits)', key: 'required',
     keyName: 'Outcrawl', keyPlaceholder: 'ock_…', keyUrl: 'https://outcrawl.ai/console',
     hint: 'Outcrawl web search: real web results for artist queries. Needs an API key; the free tier includes 1,000 credits a month. SUB/WAVE caches every search for 30 minutes.',
+  },
+  {
+    id: 'specstream', group: 'keyed', label: 'SpecStream (API key)', key: 'required',
+    keyName: 'SpecStream', keyPlaceholder: 'ss_live_…', keyUrl: 'https://specstream.ai/signup',
+    hint: 'SpecStream web search: real web results for artist queries. Needs an API key; a paid API at $1 per 1,000 searches. SUB/WAVE caches every search for 30 minutes.',
   },
 ] as const satisfies readonly SearchProviderEntry[];
 
@@ -3452,6 +3622,24 @@ export const transitionsPatchSchema = settingsBlockOf({
   stemBlends: settingsBoolLike(),
   pickTimeStems: settingsBoolLike(),
   equalPowerCrossfade: settingsBoolLike(),
+  // New keys, so no stored leniency to preserve: refused unless a real
+  // boolean / a real number in range (load() repairs a hand edit instead).
+  fadeAudibleEnd: settingsStrictOneOf([true, false], 'transitions.fadeAudibleEnd must be true or false'),
+  fadeAudibleEndDb: z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      if (
+        typeof raw !== 'number' || !Number.isFinite(raw)
+        || raw < FADE_AUDIBLE_END_DB_BOUNDS.min || raw > FADE_AUDIBLE_END_DB_BOUNDS.max
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `transitions.fadeAudibleEndDb must be number in [${FADE_AUDIBLE_END_DB_BOUNDS.min}, ${FADE_AUDIBLE_END_DB_BOUNDS.max}]`,
+        });
+      }
+    })
+    .transform((raw) => raw as number),
+  tailFromCurve: settingsStrictOneOf([true, false], 'transitions.tailFromCurve must be true or false'),
   effects: transitionEffectsPatchSchema,
 });
 

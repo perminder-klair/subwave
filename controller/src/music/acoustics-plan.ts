@@ -56,6 +56,10 @@ export interface PlanCapabilities {
   // without one (`no-curve`) is re-planned only on `=== true`: an analyzer that
   // predates the curve would answer without it again, every run.
   loudnessCurve?: boolean | null;
+  // Tail answers carry the tail's loudness curve (tail v3). A placed tail
+  // stored without one (`no-curve`) is re-planned only on `=== true`, the
+  // same rule as loudness.
+  tailLoudnessCurve?: boolean | null;
   // MusicBrainz year lookups (settings.embedding.enrichment.originalYear).
   // Absent = on, the setting's own default.
   yearLookups?: boolean;
@@ -177,9 +181,19 @@ const FULL_PASS: readonly Facet[] = ['head', 'loudness', 'tail'];
 // redo does not force a tail, and a tail out of retries is left alone.
 // Placeable = an edges row measured ok; without one the window is the file's
 // end, the tail stays due, and adding it would buy nothing.
-function tailWithVocal(state: TrackFacets, now: number): boolean {
+// A tail due only for its loudness curve already sits on the placed window,
+// so it is taken along only when the analyzer can add the curve.
+function tailWithVocal(state: TrackFacets, now: number, capabilities: PlanCapabilities): boolean {
   if (state.get('edges')?.status !== 'ok') return false;
-  return matchesWhere(state.get('tail'), 'tail', { kind: 'needs' }, now);
+  const tail = state.get('tail');
+  if (tailCurveHeld(tail, capabilities)) return false;
+  return matchesWhere(tail, 'tail', { kind: 'needs' }, now);
+}
+
+// A placed tail stored without the loudness curve (`no-curve`, one version
+// below) waits for an analyzer that says it can add one.
+function tailCurveHeld(cell: FacetCell | undefined, capabilities: PlanCapabilities): boolean {
+  return cell?.reason === 'no-curve' && capabilities.tailLoudnessCurve !== true;
 }
 
 // The facet rows planAcoustics reads for `facets`: a vocal plan also judges
@@ -221,6 +235,7 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
     // (still due) and `edges` not at all: a guaranteed no-op.
     if (WHOLE_FILE_FACETS.includes(f) && input.capabilities.wholeFile === false) return 'no-whole-file';
     if (f === 'loudness' && cell?.reason === 'no-curve' && input.capabilities.loudnessCurve !== true) return 'no-curve';
+    if (f === 'tail' && tailCurveHeld(cell, input.capabilities)) return 'no-curve';
     if (f === 'year' && input.capabilities.yearLookups === false) return 'year-off';
     if (f === 'year' && cell?.status === 'ok') return 'year-known';
     return null;
@@ -250,7 +265,7 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
       continue;
     }
     for (const f of picked) counts.get(f)!.planned += 1;
-    if (!facets.includes('tail') && picked.includes('vocal') && tailWithVocal(state, now)) {
+    if (!facets.includes('tail') && picked.includes('vocal') && tailWithVocal(state, now, input.capabilities)) {
       picked.splice(picked.findIndex((f) => FACETS.indexOf(f) > FACETS.indexOf('tail')), 0, 'tail');
       addedTail += 1;
     }

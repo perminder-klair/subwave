@@ -29,8 +29,11 @@ const MB = 1024 ** 2;
 const HOUR = 3600_000;
 
 const readSnap = () => JSON.parse(readFileSync(snapFile, 'utf8'));
+// A snapshot written by hand is one from before the usage journal, as an
+// upgrade finds it: the journal goes too, and the next read stamps it.
 const writeSnap = (over: Record<string, unknown>) => {
   const now = new Date().toISOString();
+  rmSync(join(stateDir, 'stem-cache-usage.journal'), { force: true });
   writeFileSync(snapFile, JSON.stringify({ version: 1, root, bytes: 0, dirs: 0, measuredAt: now, updatedAt: now, ...over }));
 };
 const makeDir = (id: string, bytes: number) => {
@@ -163,8 +166,11 @@ test('usage() cleans the stored unevictable figure; every writer cleans it again
   assert.equal(await stuckRead({ unevictableBytes: 20 * MB }), 10 * MB, 'never more than the total it is part of');
 
   // A writer that shrinks the total cleans the figure against the new one.
+  makeDir('shrink', 9 * MB);
   writeSnap({ bytes: 10 * MB, dirs: 2, unevictableBytes: 8 * MB });
-  await stemCache.settleTrackWrite('shrink', { bytes: 9 * MB, since: readSnap().measuredAt }); // the dir went from 9 MB to 5
+  const writes = await stemCache.beginTrackWrite('shrink');
+  makeDir('shrink', 5 * MB); // the dir went from 9 MB to 5
+  await stemCache.settleTrackWrite('shrink', writes);
   assert.deepEqual([readSnap().bytes, readSnap().unevictableBytes], [6 * MB, 6 * MB]);
   // A malformed figure is dropped, not carried.
   writeSnap({ bytes: 10 * MB, dirs: 2, unevictableBytes: 'x' });

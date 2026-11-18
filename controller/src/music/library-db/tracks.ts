@@ -31,6 +31,15 @@ export function getTrack(id: string): TrackRecord | null {
   return row ? rowToTrack(row) : null;
 }
 
+// The raw whole-file loudness curve (loudness_curve_json), or null. Read on
+// its own so rowToTrack never carries it: a DJ set's runs to ~120 KB.
+export function getLoudnessCurveJson(id: string): string | null {
+  const row = requireDb()
+    .prepare(`SELECT loudness_curve_json FROM tracks WHERE id = ?`)
+    .get(id) as { loudness_curve_json: string | null } | undefined;
+  return row?.loudness_curve_json ?? null;
+}
+
 // Whether a row exists for this id, without reading the row itself.
 export function trackExists(id: string): boolean {
   return requireDb().prepare('SELECT 1 FROM tracks WHERE id = ?').get(id) !== undefined;
@@ -285,11 +294,75 @@ export function markTextVectorDirtyIfSoundChanged(id: string, parts: readonly So
 // later. So the relabel forgets the part where it moved the vector's words, and
 // that part stays unknown until the vector is rebuilt.
 export function forgetVectorSoundIfMoved(id: string, part: SoundPart): void {
-  const s = soundAgainstVector(id);
+  forgetMoved(id, soundAgainstVector(id), part);
+}
+
+function forgetMoved(id: string, s: ReturnType<typeof soundAgainstVector>, part: SoundPart): void {
   if (!s || s.built[part] == null || sameWords(s.now[part], s.built[part])) return;
   requireDb()
     .prepare(`UPDATE tracks SET text_vector_sound = ? WHERE id = ?`)
     .run(JSON.stringify({ ...s.built, [part]: null }), id);
+}
+
+// A relabel-all's write for a row that had no mood labels before the pass (#2313):
+// a new track scored for the first time by a pass that relabels the library (a
+// first pass, a vocabulary edit, crossing the floor, or any pass below it). Its
+// vector was built before it had moods, so they landed late, exactly as on the
+// incremental branch, and mark it. Only a vector built with no mood words counts:
+// one that carries some (labels cleared by a re-analyze or a replaced file) holds
+// words the relabel moved like any other row's, and forgets, or a vocabulary edit
+// followed by a re-analyze would mark the whole library.
+export function markVectorIfMoodsLandedElseForget(id: string): void {
+  const s = soundAgainstVector(id);
+  if (s?.built.moods?.length === 0) {
+    if (s.now.moods.length > 0) markTextVectorDirty(id);
+    return;
+  }
+  forgetMoved(id, s, 'moods');
+}
+
+// A vector with a forgotten Sound: part (forgetVectorSoundIfMoved): a relabel-all
+// moved words it was built from, so its Sound: line carries the old ones (#2313).
+// NULL (a vector from before migration 36) is not counted: that is every vector on
+// an upgraded station, and the upgrade must not raise a notice. CASE, so an
+// unreadable value never reaches json_type.
+const FORGOTTEN_SOUND_SQL = `CASE WHEN json_valid(t.text_vector_sound)
+  THEN json_type(t.text_vector_sound, '$.moods') = 'null' OR json_type(t.text_vector_sound, '$.measured') = 'null'
+  ELSE 0 END`;
+
+export interface VectorFreshnessCounts {
+  // Vectors with a forgotten Sound: part, and how many of them are already marked.
+  forgottenSound: number;
+  forgottenSoundQueued: number;
+  // Every vector marked for the next phaseEmbed, for whatever reason.
+  dirty: number;
+}
+
+// One scan of the vector-carrying rows. Library coverage counts this only in
+// refresh(), never on the read path (#1570).
+export function vectorFreshnessCounts(): VectorFreshnessCounts {
+  const row = requireDb()
+    .prepare(
+      `SELECT COALESCE(SUM(${FORGOTTEN_SOUND_SQL}), 0) AS forgotten,
+              COALESCE(SUM((${FORGOTTEN_SOUND_SQL}) AND t.text_vector_dirty = 1), 0) AS queued,
+              COALESCE(SUM(t.text_vector_dirty = 1), 0) AS dirty
+         FROM tracks t JOIN track_vectors v ON v.id = t.id`,
+    )
+    .get() as { forgotten: number; queued: number; dirty: number };
+  return { forgottenSound: row.forgotten, forgottenSoundQueued: row.queued, dirty: row.dirty };
+}
+
+// The operator's answer to that notice: mark just those vectors, so the next
+// phaseEmbed (a tag run, or an Analyse run that re-embeds) rebuilds them from the
+// row's words now. Returns how many it marked.
+export function markForgottenSoundVectorsDirty(): number {
+  return requireDb()
+    .prepare(
+      `UPDATE tracks AS t SET text_vector_dirty = 1
+        WHERE t.text_vector_dirty = 0 AND (${FORGOTTEN_SOUND_SQL})
+          AND EXISTS (SELECT 1 FROM track_vectors WHERE id = t.id)`,
+    )
+    .run().changes;
 }
 
 // Existing vectors whose source text changed: an era edit, (opt-in) the track's
@@ -1005,9 +1078,10 @@ interface TrackAnalysisWrite {
   leadSilenceMs?: number | null;
   tailSilenceMs?: number | null;
   tailStartMs?: number | null;
-  // 2 = the analyzer placed the tail window from the stored edges; it then
-  // replaces whatever tail is stored. Absent = the end-of-file window, which
-  // never replaces a placed tail.
+  // 2 = the analyzer placed the tail window from the stored edges, 3 = placed
+  // with the loudness curve (facets.placedTailVersion); it then replaces
+  // whatever tail is stored and is stamped as given. Absent = the end-of-file
+  // window, which never replaces a placed tail.
   tailVersion?: number | null;
   // true stamps stems_at so the backfill scope drops the track. Pass true for a
   // MISS too: the stamp records the attempt, not disk presence (migration 17).
@@ -1150,7 +1224,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         tail_start_ms       = CASE WHEN ${SQL_PLACED_TAIL_STAMP} AND ? = 0 THEN tail_start_ms ELSE COALESCE(?, tail_start_ms) END,
         -- An end-of-file outro written over a tail marked for re-planning (1)
         -- is the end-of-file window again: back to NULL.
-        tail_version        = CASE WHEN ? = 1 THEN ${PLACED_TAIL_STAMP}
+        tail_version        = CASE WHEN ? = 1 THEN ?
                                    WHEN NOT ${SQL_PLACED_TAIL_STAMP} AND ? IS NOT NULL THEN NULL
                                    ELSE tail_version END,
         -- A pass with the stem cache off passes null and must not clear an
@@ -1183,7 +1257,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       placed, outro != null ? JSON.stringify(outro) : null,
       placed, Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
       placed, Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
-      placed, outro != null ? 1 : null,
+      placed, placed ? Math.round(a.tailVersion as number) : null, outro != null ? 1 : null,
       a.stemsAttempted ? new Date().toISOString() : null,
       a.stemsTailMisses !== undefined ? 1 : 0, a.stemsTailMisses ?? null,
       ANALYSIS_VERSION,
@@ -1257,8 +1331,9 @@ export interface FacetWrite {
     // unavailable marker, which settles it (unavailableCurveJson).
     curveUnavailable?: string | null;
   } | { unmeasurable: string };
-  // `version` 2 = the analyzer placed the window from the stored edges; absent
-  // = the end-of-file window (an older analyzer, or no edges to place it).
+  // `version` 2 = the analyzer placed the window from the stored edges (3 with
+  // the loudness curve, facets.placedTailVersion); absent = the end-of-file
+  // window (an older analyzer, or no edges to place it).
   tail?: { outro: TrackOutro | null; tailSilenceMs: number | null; tailStartMs: number | null; version?: number | null }
     | { unmeasurable: string };
   clap?: number[];

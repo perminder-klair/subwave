@@ -12,7 +12,7 @@ import { OPENAI_COMPATIBLE_GATEWAYS, openaiCompatibleGateway } from '../../schem
 import { applyCustomHeadersPatch } from '../../settings/vocab.js';
 import type { EmbeddingCfg } from '../../llm/provider.js';
 import { listenbrainzApiBase } from '../../broadcast/scrobble.js';
-import { buildOutcrawlRequest, isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
+import { buildOutcrawlRequest, buildSpecStreamRequest, isFirecrawlKey, isKeenableKey } from '../../skills/web-search.js';
 import { searchKeyMismatch } from '../../skills/search-key-policy.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
@@ -53,7 +53,8 @@ function briefLlmError(err: unknown): string {
 
 // Non-mutating probe of one secret; builds a one-off client and never writes
 // process.env or secrets.env. `hint` disambiguates a key shared by several
-// providers (SEARCH_API_KEY is Tavily, Brave, Keenable, Firecrawl or Outcrawl) because the UI tests before
+// providers (SEARCH_API_KEY is Tavily, Brave, Keenable, Firecrawl, Outcrawl or SpecStream;
+// DuckDuckGo, Parallel and SearXNG take none) because the UI tests before
 // saving, so the stored provider can't be trusted mid-edit; it falls back to
 // the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
 // Responses API rejects anything below 16.
@@ -228,6 +229,26 @@ async function probeKey(
           return { ok: false, message: `Request failed (${r.status})` };
         }
         return { ok: true, message: '✓ Outcrawl key valid' };
+      }
+      if (provider === 'specstream') {
+        // SpecStream searches refuse anything but an ss_ key, so the probe does too.
+        const refusal = refused('specstream');
+        if (refusal) return refusal;
+        // A one-result search, the cheapest call that proves the key.
+        const { url, init } = buildSpecStreamRequest({ query: 'test', apiKey: value, limit: 1 });
+        const r = await fetch(url, { ...init, signal: AbortSignal.timeout(10000) });
+        if (!r.ok) {
+          // SpecStream's public docs give no error body to read and no meaning
+          // for a keyed 401/403; a 402 is documented only for a keyless call and
+          // for a per-end-user cap this probe never sets. So the status alone
+          // decides, and neither 402 nor 403 calls the key valid: each names
+          // only what the status proves, a refused payment or a refused key.
+          if (r.status === 401) return { ok: false, message: 'Key rejected — check it\'s correct and active' };
+          if (r.status === 402) return { ok: false, message: 'SpecStream would not charge for the search (402) — check the account\'s balance and spending limits' };
+          if (r.status === 403) return { ok: false, message: 'SpecStream refused this key (403) — check it\'s active and allowed to spend' };
+          return { ok: false, message: `Request failed (${r.status})` };
+        }
+        return { ok: true, message: '✓ SpecStream key valid' };
       }
       const refusal = refused('tavily');
       if (refusal) return refusal;
