@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cjkUnsafeForSpokenLanguage, scrubCjkForSpeech } from '../src/audio/spoken-script-policy.js';
+import { cjkUnsafeForSpokenLanguage, cjkWrittenLanguage, scrubCjkForSpeech } from '../src/audio/spoken-script-policy.js';
 
 assert.equal(cjkUnsafeForSpokenLanguage(''), true, 'unset persona language follows the English default');
 assert.equal(cjkUnsafeForSpokenLanguage('English'), true, 'English is protected');
@@ -32,5 +32,40 @@ assert.equal(
   'Björk and Rosalía — unchanged.',
   'Latin-script names and accents remain untouched',
 );
+assert.equal(cjkUnsafeForSpokenLanguage('', ['English (UK)']), true, 'an all-English mix is still protected');
+assert.equal(
+  scrubCjkForSpeech('Next up, ウルフルズ — やばい tune, ね。', 'English', ['Japanese']),
+  'Next up, ウルフルズ — やばい tune, ね。',
+  'a multilingual persona keeps the script it mixes in',
+);
+
+// The scrub stands down only for a mix language written in CJK script.
+assert.equal(cjkUnsafeForSpokenLanguage('English', ['Spanish']), true, 'English + Spanish keeps the CJK net');
+assert.equal(
+  scrubCjkForSpeech('Next up, ウルフルズ — vamos.', 'English', ['Spanish']),
+  'Next up, — vamos.',
+  'English + Spanish on an English voice still loses leaked kana',
+);
+assert.equal(cjkUnsafeForSpokenLanguage('English', ['Spanish', 'Korean']), false, 'one CJK language in the mix stands it down');
+assert.equal(cjkUnsafeForSpokenLanguage('English', ['日本語']), false, 'a native-script language name counts');
+assert.equal(cjkUnsafeForSpokenLanguage('English', ['Chinese (Traditional)']), false, 'a labelled Chinese counts');
+assert.equal(cjkUnsafeForSpokenLanguage('French', ['Spanish']), false, 'a non-English primary stays untouched, mix or not');
+
+// A CJK language named anywhere as a whole word, or a whole-entry code.
+for (const lang of [
+  'Japanese', 'Korean', 'Cantonese', 'Chinese (Traditional)', '日本語', 'Japanese_JP', 'korean-seoul',
+  'Traditional Chinese', 'Simplified Chinese', 'Mandarin Chinese', 'Taiwanese Mandarin',
+  'zh', 'ja', 'ko', 'ZH', 'zh-CN', 'zh-TW', 'zh-Hant', 'zh_Hans_CN', 'ja-JP', 'ko-KR',
+]) {
+  assert.equal(cjkWrittenLanguage(lang), true, `${lang} is CJK-written`);
+  assert.equal(cjkUnsafeForSpokenLanguage('English', [lang]), false, `English + ${lang} keeps its script`);
+}
+for (const lang of [
+  'Vietnamese', 'Hindi', 'Thai', 'Spanish', 'Klingon', 'Japanes', 'Koreanish',
+  'jazz', 'kongo', 'zhuang', 'Japan-ish', 'en', 'es-ES', 'vi', 'th', 'hi',
+]) {
+  assert.equal(cjkWrittenLanguage(lang), false, `${lang} is not CJK-written`);
+  assert.equal(cjkUnsafeForSpokenLanguage('English', [lang]), true, `English + ${lang} keeps the scrub`);
+}
 
 console.log('spoken-script-policy.test.ts: all assertions passed');

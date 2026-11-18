@@ -250,6 +250,7 @@ export default function PersonasPanel() {
       humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '', musicLean: '',
       language: '',
       voiceStyle: '',
+      alsoSpeaks: '',
       avatar: '',
       tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
       fallbackVoice: null,
@@ -539,6 +540,7 @@ export default function PersonasPanel() {
             musicLean: p.musicLean.trim(),
             language: p.language.trim(),
             voiceStyle: p.voiceStyle?.trim() || '',
+            alsoSpeaks: p.alsoSpeaks.trim(),
             avatar: p.avatar || '',
             tts: {
               engine: p.tts.engine,
