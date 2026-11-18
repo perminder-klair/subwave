@@ -14,11 +14,12 @@
 //   measured, so the next read needs no walk; a drop that cannot be counted
 //   (refused part-way) marks it stale instead;
 // - a stale snapshot still reports, flagged (`stale: true`), and the sweep
-//   re-measures it rather than trusting it; adjustUsage never moves one;
+//   re-measures it rather than trusting it; a writer never moves one;
 // - a walk in flight when stems are dropped never stores a trusted figure that
-//   counts them, whatever state the snapshot was in (the change token);
-// - a pick-time settle counts against the measurement it started from, so a
-//   walk mid-separation never has the dir's growth laid over it;
+//   counts them, whatever state the snapshot was in (the usage journal, #2317);
+// - a pick-time settle counts against what the snapshot holds for its dir, so
+//   a walk mid-separation never has the dir's growth laid over it, and the
+//   walk's figure is not left stale for it;
 // - no snapshot, another root, or a malformed one reports null;
 // - GET /stem-cache/usage carries it plus the budget in force.
 //
@@ -26,7 +27,7 @@
 
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listen } from './test-utils/http.js';
@@ -45,8 +46,12 @@ const root = stemCache.stemsRoot();
 const snapFile = join(stateDir, 'stem-cache-usage.json');
 const GB = 1024 ** 3;
 const HOUR = 3600_000;
+// A snapshot written by hand is one from before the usage journal, as an
+// upgrade finds it: the journal goes too, and the next read stamps it.
+const journalFile = join(stateDir, 'stem-cache-usage.journal');
 const writeSnap = (over: Record<string, unknown>) => {
   const now = new Date().toISOString();
+  rmSync(journalFile, { force: true });
   writeFileSync(snapFile, JSON.stringify({ version: 1, root, bytes: 0, dirs: 0, measuredAt: now, updatedAt: now, ...over }));
 };
 
@@ -178,58 +183,326 @@ test('stems that refuse to go part-way keep the figure, flagged, and the next re
   }
 });
 
-test('adjustUsage moves only a snapshot the next read would use as is', async () => {
+// One writer's change to one dir (StemDirWrites), as forgetStems, the purge
+// and a pick-time separation make it: open, change, settle.
+const dropOne = async (id: string) => {
+  const writes = new stemCache.StemDirWrites();
+  await writes.touch(id);
+  rmSync(stemCache.dirFor(id), { recursive: true, force: true });
+  return writes.settle();
+};
+const seedDir = (id: string, bytes: number) => {
+  mkdirSync(stemCache.dirFor(id), { recursive: true });
+  writeFileSync(join(stemCache.dirFor(id), 'head-drums.flac'), 'x'.repeat(bytes));
+};
+
+test('a writer moves only a snapshot the next read would use as is', async () => {
   writeSnap({ bytes: 80 * GB, dirs: 4000 });
-  assert.equal(await stemCache.adjustUsage({ bytes: 0, dirs: 0 }), 'unchanged');
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'adjusted');
-  assert.deepEqual([(await stemCache.storedUsage())?.bytes, (await stemCache.storedUsage())?.dirs], [79 * GB, 3990]);
+  assert.equal(await new stemCache.StemDirWrites().settle(), 'unchanged', 'nothing touched');
+  seedDir('w-0', 1000);
+  assert.equal(await dropOne('w-0'), 'adjusted');
+  assert.deepEqual([(await stemCache.storedUsage())?.bytes, (await stemCache.storedUsage())?.dirs], [80 * GB - 1000, 3999]);
+  assert.equal((await stemCache.storedUsage())?.fresh, true);
   // A stale one is owed a walk: a delta onto it would launder the flag, so it
   // is left to that walk as it is.
   await stemCache.markUsageStale();
-  const staleBefore = readFileSync(snapFile, 'utf8');
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'unchanged');
-  assert.equal(readFileSync(snapFile, 'utf8'), staleBefore, 'not touched');
+  const staleBefore = JSON.parse(readFileSync(snapFile, 'utf8'));
+  seedDir('w-1', 1000);
+  assert.equal(await dropOne('w-1'), 'untrusted');
+  assert.deepEqual([JSON.parse(readFileSync(snapFile, 'utf8')).bytes, JSON.parse(readFileSync(snapFile, 'utf8')).updatedAt],
+    [staleBefore.bytes, staleBefore.updatedAt], 'not touched');
   assert.equal((await stemCache.storedUsage())?.stale, true);
   // Nothing stored stays nothing.
   rmSync(snapFile, { force: true });
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'unchanged');
+  seedDir('w-2', 1000);
+  assert.equal(await dropOne('w-2'), 'untrusted');
   assert.equal(await stemCache.storedUsage(), null);
-  // Too old to use: also the walk's, and not flagged stale by a writer that
-  // only had a delta (the walk is owed for its age, not for a change).
+  // Too old to use: also the walk's; the figure is left as it was.
   const old = new Date(Date.now() - 2 * 24 * HOUR).toISOString();
   writeSnap({ bytes: 80 * GB, dirs: 4000, measuredAt: old });
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }), 'unchanged', 'too old to move');
-  assert.equal((await stemCache.storedUsage())?.stale, false);
+  seedDir('w-3', 1000);
+  assert.equal(await dropOne('w-3'), 'untrusted', 'too old to move');
   assert.equal((await stemCache.storedUsage())?.bytes, 80 * GB);
+  assert.equal((await stemCache.storedUsage())?.fresh, false);
 });
 
-test('adjustUsage with a pass writing marks the snapshot stale, so the pass settles by a walk', async () => {
+test('a writer with a pass writing leaves the figure, flagged stale, so the pass settles by a walk', async () => {
   writeSnap({ bytes: 80 * GB, dirs: 4000, pending: { pid: process.pid, since: new Date().toISOString() } });
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -10 }), 'stale');
+  seedDir('w-4', 1000);
+  assert.equal(await dropOne('w-4'), 'untrusted');
   assert.equal((await stemCache.storedUsage())?.stale, true);
   assert.equal((await stemCache.storedUsage())?.bytes, 80 * GB);
 });
 
-test('adjustUsage applies a delta only to the measurement it was counted from (compare-and-set on measuredAt)', async () => {
+test('a walk between a writer\'s open and its settle: the settle counts against what the walk held (#2317)', async () => {
+  // Before the journal this was a compare-and-set on measuredAt, and a walk in
+  // between left the snapshot stale. The walk now re-measures the open dir and
+  // records what it counted, and the settle counts its final against that.
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  seedDir('w-5', 1000);
   writeSnap({ bytes: 80 * GB, dirs: 4000 });
-  const since = await stemCache.usageBase();
-  assert.equal(typeof since, 'string');
-  // Nothing walked in between: the delta lands.
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }, { since }), 'adjusted');
-  assert.equal((await stemCache.storedUsage())?.bytes, 79 * GB);
-  // A pick-time settle in between is additive and keeps measuredAt: still lands.
-  writeSnap({ bytes: 79 * GB, dirs: 3999, measuredAt: since, updatedAt: new Date().toISOString() });
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }, { since }), 'adjusted');
-  // A walk in between wrote a new measurement, which may already leave the
-  // moved dirs out: the delta would count them twice. Stale, and the walk's
-  // figure stays as it measured it.
-  writeSnap({ bytes: 70 * GB, dirs: 3500, measuredAt: new Date(Date.now() + 1000).toISOString() });
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }, { since }), 'stale');
-  assert.equal((await stemCache.storedUsage())?.bytes, 70 * GB);
-  assert.equal((await stemCache.storedUsage())?.stale, true);
-  // No snapshot when the writer started, one now (a walk wrote it): stale too.
-  writeSnap({ bytes: 70 * GB, dirs: 3500 });
-  assert.equal(await stemCache.adjustUsage({ bytes: -GB, dirs: -1 }, { since: null }), 'stale');
+  const writes = new stemCache.StemDirWrites();
+  await writes.touch('w-5');
+  rmSync(stemCache.dirFor('w-5'), { recursive: true, force: true });
+  await stemCache.sweep(100 * GB, { force: true });
+  const walked = await freshTotals();
+  assert.equal((await stemCache.storedUsage())?.fresh, true, 'the walk stored a trusted figure');
+  seedDir('w-5', 3000); // the writer goes on: the dir comes back bigger
+  assert.equal(await writes.settle(), 'adjusted');
+  const stored = await stemCache.storedUsage();
+  assert.equal(stored?.fresh, true);
+  assert.deepEqual([stored?.bytes, stored?.dirs], [walked.bytes + 3000, walked.dirs + 1], 'the disk\'s figure');
+  rmSync(root, { recursive: true, force: true });
+  rmSync(snapFile, { force: true });
+});
+
+// What a fresh walk of the cache finds, leaving the stored figure as it was.
+async function freshTotals(): Promise<{ bytes: number; dirs: number }> {
+  let bytes = 0;
+  let dirs = 0;
+  const { readdirSync, statSync } = await import('node:fs');
+  for (const name of readdirSync(root)) {
+    if (name.startsWith('.')) continue;
+    dirs += 1;
+    for (const f of readdirSync(join(root, name))) bytes += statSync(join(root, name, f)).size;
+  }
+  return { bytes, dirs };
+}
+
+// An analysis pass refused its pending mark (the snapshot was untrusted
+// already) writes with no mark to hold off a walk in the other process, so
+// that walk stored what it found mid-pass as trusted, short of what the pass
+// went on to write. The pass's journal opening now holds it off either way.
+test('a pass refused its mark still keeps a walk from trusting what it finds mid-pass (#2317)', async () => {
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  seedDir('pass-0', 1000);
+  writeSnap({ bytes: 80 * GB, dirs: 4000, stale: true });
+  assert.equal(await stemCache.markPassPending(), false, 'refused: the snapshot was not trusted');
+  let wrote = false;
+  stemCache._duringWalkForTests(async () => {
+    if (wrote) return;
+    wrote = true;
+    seedDir('pass-1', 1000); // the pass goes on writing while the walk runs
+  });
+  try {
+    await stemCache.usage();
+  } finally {
+    stemCache._duringWalkForTests(null);
+  }
+  assert.equal(wrote, true);
+  assert.notEqual((await stemCache.storedUsage())?.fresh, true, 'no trusted figure while the pass writes');
+  // Settled, the next read walks and trusts what it finds.
+  assert.equal(await stemCache.settlePassWrites([]), null);
+  const u = await stemCache.usage();
+  assert.deepEqual([u.bytes, u.dirs], [2000, 2]);
+  assert.equal((await stemCache.storedUsage())?.fresh, true);
+  rmSync(root, { recursive: true, force: true });
+  rmSync(snapFile, { force: true });
+});
+
+// An upgrade finds the build-before-#2317 files: the snapshot (no journal
+// position) and its change token, and no journal. The first sweep must be no
+// worse than before: it reuses the snapshot with no walk.
+test('an upgrade from the change token: the first sweep reuses the stored size, and the token goes', async () => {
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  writeSnap({ bytes: 5 * GB, dirs: 400 });
+  const token = join(stateDir, 'stem-cache-usage.changes');
+  writeFileSync(token, 'a1b2c3d4-0000-4000-8000-000000000000\n');
+  const walks = stemCache._cacheWalksForTests();
+  const swept = await stemCache.sweep(100 * GB);
+  assert.equal(swept.skipped, 'snapshot', 'inside its budget: no walk');
+  assert.equal(stemCache._cacheWalksForTests(), walks);
+  assert.equal(existsSync(token), false, 'the old token is removed');
+  assert.ok(existsSync(journalFile), 'the journal is created');
+  assert.equal((await stemCache.storedUsage())?.fresh, true);
+  // And a writer after it counts as before.
+  seedDir('up-0', 1000);
+  assert.equal(await dropOne('up-0'), 'adjusted');
+  assert.equal((await stemCache.storedUsage())?.bytes, 5 * GB - 1000);
+  rmSync(root, { recursive: true, force: true });
+  rmSync(snapFile, { force: true });
+});
+
+// A journal that cannot be read for what it is vouches for nothing: no
+// trusted figure, whatever the snapshot says, and a walk stores stale, as a
+// walk overlapped by a change did before the journal.
+test('a journal that is not a journal: nothing is trusted until the next walk, which replaces it', async () => {
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  seedDir('nj-0', 1000);
+  rmSync(snapFile, { force: true });
+  await stemCache.usage(); // a trusted figure at a journal position
+  assert.equal((await stemCache.storedUsage())?.fresh, true);
+  // What a crash can leave of it (an empty file), or another version's.
+  for (const bad of ['', 'not a journal\n']) {
+    writeFileSync(journalFile, bad);
+    assert.equal((await stemCache.storedUsage())?.fresh, false);
+    assert.equal((await stemCache.storedUsage())?.stale, true);
+    const walks = stemCache._cacheWalksForTests();
+    await stemCache.headroomTracks(100 * GB);
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the read walks');
+    // Left in place, it would vouch for nothing ever again: every read a walk.
+    assert.equal((await stemCache.storedUsage())?.fresh, true, 'the walk stored a trusted figure in a new journal');
+    await stemCache.headroomTracks(100 * GB);
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'and the next read needs no walk');
+    assert.match(readFileSync(journalFile, 'utf8'), /^subwave-stem-journal 1 \S+ 0\n/, 'dated 0: no snapshot stamps into trust');
+  }
+  rmSync(journalFile, { force: true });
+  rmSync(root, { recursive: true, force: true });
+  rmSync(snapFile, { force: true });
+});
+
+// The other process can lose the journal at any moment (an append that fails
+// drops it) and a writer there create a new one and log a whole change in it.
+// A walk that trims must then not take the new file for its own:
+// - lost before the trim opens it, the new file is not the one the walk read,
+//   though it can be given that one's inode number: the trim copied only its
+//   lines past the old end and dropped the rest, the change among them;
+// - lost after the trim renamed its own into place, the position the trim
+//   returns was taken in a file it never wrote, past the change.
+// Either way the walk stored a trusted figure that missed the change. The trim
+// now checks each file by its id, and stands down; the walk's figure, at the
+// old journal's position, then vouches for nothing.
+test('a walk whose journal is lost and created again around its trim stores nothing trusted', async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  // `pad`: openings logged after the change, so the new file reaches past the
+  // trim's position (it carries three openings) and a reader would trust it.
+  for (const [point, pad] of [['walk:store', 0], ['trim:renamed', 2]] as const) {
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+    seedDir('tj-b', 1000);
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
+    await stemCache.usage();
+    // Writers still running at the store: the trim carries their openings.
+    const running = ['tj-y1', 'tj-y2', 'tj-y3'].map(() => new stemCache.StemDirWrites());
+    for (const [i, w] of running.entries()) {
+      seedDir(`tj-y${i + 1}`, 500);
+      await w.touch(`tj-y${i + 1}`);
+    }
+    let replaced = false;
+    journal._trimAboveBytesForTests(0);
+    stemCache._usageStepsForTests(async (step) => {
+      if (step !== point || replaced) return;
+      replaced = true;
+      assert.equal(await journal.dropJournal(), true);
+      const s = journal.newSessionId();
+      assert.equal(await journal.appendLines([policy.openLine(s, 'tj-b', Date.now(), process.pid, null)]), true);
+      rmSync(stemCache.dirFor('tj-b'), { recursive: true, force: true });
+      assert.equal(await journal.appendLines([policy.closeLine(s, 'tj-b')]), true);
+      for (let i = 0; i < pad; i += 1) {
+        assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), `tj-z${i}`, Date.now(), process.pid, null)]), true);
+      }
+    });
+    try {
+      await stemCache.sweep(100 * GB, { force: true });
+      stemCache._usageStepsForTests(null);
+      assert.equal(replaced, true, `${point}: the journal was replaced`);
+      const stored = await stemCache.storedUsage();
+      const truth = await freshTotals();
+      if (stored?.fresh) {
+        assert.deepEqual([stored.bytes, stored.dirs], [truth.bytes, truth.dirs], `${point}: a trusted figure must be the disk's`);
+      }
+      const u = await stemCache.usage();
+      assert.deepEqual([u.bytes, u.dirs], [truth.bytes, truth.dirs], `${point}: the next read`);
+    } finally {
+      stemCache._usageStepsForTests(null);
+      journal._trimAboveBytesForTests(null);
+      for (const w of running) await w.abandon();
+      rmSync(journalFile, { force: true });
+      rmSync(root, { recursive: true, force: true });
+      rmSync(snapFile, { force: true });
+    }
+  }
+});
+
+// An append checks that the path still names the file it wrote to, and goes
+// again if not. Checked after closing that file, the check could pass on a
+// new journal given the gone one's inode number (the other process dropped it
+// and created another), and the line was lost while the writer counted it
+// written. It is checked with the file still open now.
+test('an append whose journal is lost and created again before its check still lands', async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  rmSync(journalFile, { force: true });
+  assert.ok(await journal.ensureJournal());
+  const line = policy.closeLine(journal.newSessionId(), 'ap-0');
+  let replaced = false;
+  journal._journalStepsForTests(async (step) => {
+    if (step !== 'append:written' || replaced) return;
+    replaced = true;
+    assert.equal(await journal.dropJournal(), true);
+    assert.ok(await journal.ensureJournal());
+  });
+  try {
+    assert.equal(await journal.appendLines([line]), true);
+    assert.equal(replaced, true);
+    const j = await journal.readJournal();
+    assert.ok(j?.entries.some(e => e.line === line), 'a line reported written is in the journal');
+  } finally {
+    journal._journalStepsForTests(null);
+    rmSync(journalFile, { force: true });
+  }
+});
+
+// A state dir on a filesystem without hard links (FAT/exFAT, some FUSE and SMB
+// mounts) could never create the journal, which is put in place by a link: no
+// figure was ever trusted again, and every read walked the cache, for good.
+// It is renamed into place there instead, under the trim lock, so two
+// processes creating it at once end with one journal holding both's lines.
+test('a filesystem without hard links still gets a journal, and reads trust it after one walk', async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  journal._linkForTests(async () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); });
+  try {
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+    seedDir('nl-0', 1000);
+    seedDir('nl-1', 1000);
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
+    const walks = stemCache._cacheWalksForTests();
+    await stemCache.headroomTracks(100 * GB);
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'one walk');
+    assert.ok(existsSync(journalFile), 'the journal is created');
+    assert.equal((await stemCache.storedUsage())?.fresh, true);
+    await stemCache.headroomTracks(100 * GB);
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'and the next read needs none');
+    assert.equal(await dropOne('nl-0'), 'adjusted');
+    assert.equal((await stemCache.storedUsage())?.bytes, 1000);
+    // Two writers creating it at once: the first is held at its link while the
+    // second creates the journal and writes to it. The first must then find
+    // that journal, not put its own over it and lose the second's line.
+    let release!: () => void;
+    const held = new Promise<void>(r => { release = r; });
+    let links = 0;
+    journal._linkForTests(async () => {
+      links += 1;
+      if (links === 1) await held;
+      throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+    });
+    rmSync(journalFile, { force: true });
+    const [first, second] = [0, 1].map(() => policy.closeLine(journal.newSessionId(), 'nl-1'));
+    const firstDone = journal.appendLines([first]);
+    while (links === 0) await new Promise(r => setImmediate(r));
+    assert.equal(await journal.appendLines([second]), true);
+    release();
+    assert.equal(await firstDone, true);
+    const j = await journal.readJournal();
+    for (const l of [first, second]) assert.ok(j?.entries.some(e => e.line === l), 'a line reported written is in the journal');
+  } finally {
+    journal._linkForTests(null);
+    rmSync(journalFile, { force: true });
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+  }
 });
 
 test('a stale snapshot is still reported, flagged, and never walked for', async () => {
@@ -368,7 +641,6 @@ test('a pick-time settle never adds growth a walk mid-separation already counted
     rmSync(snapFile, { force: true });
     await stemCache.usage(); // a trusted measurement of the two dirs
     const base = await stemCache.beginTrackWrite('separating');
-    assert.equal(base.bytes, null);
     // Half the set is written when the sweep's walk lands, and it stores what it found.
     mkdirSync(stemCache.dirFor('separating'), { recursive: true });
     writeFileSync(join(stemCache.dirFor('separating'), 'head-drums.flac'), 'x'.repeat(1000));
@@ -418,5 +690,113 @@ test('a walk logs the reason its snapshot was refused, from the same cascade', a
   } finally {
     console.log = log;
     rmSync(snapFile, { force: true });
+  }
+});
+
+// #2352: a writer that dies between its change and its close leaves its
+// opening in the journal for good. The figure must stop being trusted as soon
+// as its process is gone (or its pid names another process, as under tini
+// after a restart), not at the next daily walk. A real child process stands
+// in for the writer (a separation in the controller, forgetStems in the
+// tagger child), so liveness and the start identity are read from /proc.
+const hasProc = existsSync('/proc/self/stat');
+
+async function withChildWriter(fn: (child: { pid: number; start: string; kill: () => Promise<void> }) => Promise<void>) {
+  const { spawn } = await import('node:child_process');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  const proc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  const exited = new Promise(r => proc.once('exit', r));
+  try {
+    const pid = proc.pid!;
+    const start = policy.procStartTime(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    assert.ok(start);
+    await fn({ pid, start, kill: async () => { proc.kill('SIGKILL'); await exited; } });
+  } finally {
+    proc.kill('SIGKILL');
+    await exited;
+  }
+}
+
+async function freshRootMeasured(): Promise<void> {
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, stemCache.STEMS_MARKER), '{}');
+  seedDir('dw-0', 1000);
+  rmSync(snapFile, { force: true });
+  rmSync(journalFile, { force: true });
+  await stemCache.usage();
+  assert.equal((await stemCache.storedUsage())?.fresh, true, 'a trusted measurement to start from');
+}
+
+test('a writer that dies mid-change leaves the stored size untrusted at once (#2352)', { skip: !hasProc }, async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  try {
+    await freshRootMeasured();
+    await withChildWriter(async (child) => {
+      assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), 'dw-1', Date.now(), child.pid, child.start)]), true);
+      assert.equal((await stemCache.storedUsage())?.fresh, true, 'a write still running is trusted');
+      seedDir('dw-1', 1000); // its change lands, then it is killed before its close
+      await child.kill();
+      const u = await stemCache.storedUsage();
+      assert.equal(u?.fresh, false, 'a dead writer\'s opening vouches for nothing');
+      assert.equal(u?.stale, true);
+    });
+    const walks = stemCache._cacheWalksForTests();
+    const u = await stemCache.usage();
+    assert.equal(stemCache._cacheWalksForTests(), walks + 1, 'the next read walks');
+    assert.deepEqual([u.bytes, u.dirs], [2000, 2]);
+    assert.equal((await stemCache.storedUsage())?.fresh, true, 'and that walk stores a trusted figure past the dead opening');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
+  }
+});
+
+test('an opening whose pid now names another process vouches for nothing (tini pid reuse, #2352)', { skip: !hasProc }, async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  const own = policy.procStartTime(readFileSync('/proc/self/stat', 'utf8'));
+  assert.ok(own);
+  try {
+    await freshRootMeasured();
+    assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), 'dw-1', Date.now(), process.pid, own)]), true);
+    assert.equal((await stemCache.storedUsage())?.fresh, true, 'this process, as it is');
+    // This process's pid, but a predecessor's start: a controller that died and
+    // was restarted under tini with the same pid.
+    assert.equal(await journal.appendLines([policy.openLine(journal.newSessionId(), 'dw-2', Date.now(), process.pid, String(Number(own) - 1))]), true);
+    assert.equal((await stemCache.storedUsage())?.fresh, false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
+  }
+});
+
+test('a walk that held a write open stops being trusted once that writer dies (#2352)', { skip: !hasProc }, async () => {
+  const journal = await import('../src/music/stem-usage-journal.js');
+  const policy = await import('../src/music/stem-usage-policy.js');
+  try {
+    await freshRootMeasured();
+    await withChildWriter(async (child) => {
+      const session = journal.newSessionId();
+      assert.equal(await journal.appendLines([policy.openLine(session, 'dw-1', Date.now(), child.pid, child.start)]), true);
+      seedDir('dw-1', 1000);
+      await new Promise(r => setTimeout(r, 5));
+      await stemCache.sweep(100 * GB, { force: true }); // stores the open write in inFlight
+      const snap = JSON.parse(readFileSync(snapFile, 'utf8'));
+      assert.equal(snap.inFlight?.[policy.inFlightKey(session, 'dw-1')], 1000, 'the walk holds what it counted for the open dir');
+      assert.equal((await stemCache.storedUsage())?.fresh, true);
+      writeFileSync(join(stemCache.dirFor('dw-1'), 'head-vocals.flac'), 'x'.repeat(1000)); // more lands, then it dies
+      await child.kill();
+      assert.equal((await stemCache.storedUsage())?.fresh, false, 'nothing past the position changed, but the held write will never settle');
+    });
+    const u = await stemCache.usage();
+    assert.deepEqual([u.bytes, u.dirs], [3000, 2], 'the next read walks to the disk\'s figure');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(snapFile, { force: true });
+    rmSync(journalFile, { force: true });
   }
 });

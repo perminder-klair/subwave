@@ -344,8 +344,8 @@ test('a tail-only plan asks for exactly the tail and writes only the tail', asyn
   assert.equal(t.loudnessLufs, -8, 'a tail-only answer must not rewrite loudness');
   const row = facetRow('t1', 'tail')!;
   assert.equal(row.status, 'ok');
-  // No edges stored, so no placement: the end-of-file window's version.
-  assert.equal(row.version, db.FACET_VERSIONS.tail - 1);
+  // No edges stored, so no placement: the end-of-file window (v1).
+  assert.equal(row.version, 1);
 });
 
 test('with vocal activity on, a tail-only request asks for the tail vocals and stores them', async () => {

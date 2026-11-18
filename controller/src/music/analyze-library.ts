@@ -1,6 +1,9 @@
 // Standalone acoustic-analysis CLI — `npm run analyze`. Runs the analysis pass
 // (bpm / key / intro) alone; the same pass is the final phase of `npm run tag`.
-// With no analyzer backend the pass is a no-op.
+// With no analyzer backend the pass is a no-op. Afterwards it re-embeds just the
+// text vectors its measurements marked, when the embedding provider answers with
+// the index's own model (tag-library/embed.ts reembedNewlyMarked); otherwise the
+// marks wait for the next tag run.
 //
 //   --limit N      cap tracks analysed this run
 //   --re-analyze   drop existing analysis and redo everything
@@ -47,6 +50,7 @@ import { analysisPart, formatPlan, parseFacets, parseWhere, planAcoustics, planS
 import { runYearLookups } from './original-year.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
 import { walkFileInfo } from './tag-library/flags.js';
+import { reembedNewlyMarked } from './tag-library/embed.js';
 
 const logEvent = makeEventLogger('analyze');
 
@@ -129,6 +133,7 @@ async function buildFacetPlan(args: string[], limit: number | undefined): Promis
       tailVocal: available ? analyzer.tailVocalAvailable() : null,
       wholeFile: available ? analyzer.wholeFileAvailable() : null,
       loudnessCurve: available ? analyzer.loudnessCurveAvailable() : null,
+      tailLoudnessCurve: available ? analyzer.tailLoudnessCurveAvailable() : null,
       yearLookups: enrichCfg.originalYear !== false,
     },
     limit,
@@ -195,9 +200,11 @@ async function main() {
     }
     // Audio first, then the MusicBrainz lookups: two independent passes.
     const audio = analysisPart(plan);
+    const dirtyBefore = new Set(db.textVectorDirtyIds());
     const stats = audio ? await runAnalysisPass({ plan: audio }) : null;
     analyzer.shutdown();
     if (stats) console.log('[analyze] stats:', JSON.stringify(stats));
+    await reembedNewlyMarked(dirtyBefore, logEvent);
     const yearIds = yearPart(plan);
     if (yearIds.length) {
       // Planned means due: a not-found re-asked by --where unmeasurable/all is
@@ -291,9 +298,14 @@ async function main() {
     }
   }
 
+  const dirtyBefore = new Set(db.textVectorDirtyIds());
   const stats = await runAnalysisPass({ limit, reAnalyze, audioBackfill, vocalBackfill });
   analyzer.shutdown();
   console.log('[analyze] stats:', JSON.stringify(stats));
+  // The vectors this pass's measurements marked (#2236) get their Sound: line now,
+  // not at the next tag run (#2313). Skipped, with the marks kept, unless the
+  // embedding provider answers with the index's own model.
+  await reembedNewlyMarked(dirtyBefore, logEvent);
   process.exit(stats.available ? 0 : 0);
 }
 

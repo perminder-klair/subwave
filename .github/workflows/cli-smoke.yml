@@ -1,8 +1,10 @@
 name: CLI smoke
 
-# Compiles the CLI and runs cli/scripts/smoke-update-pin.sh against the binary.
-# The bug it guards against (#2196) only exists in a compiled binary, so a `tsx`
-# run can't catch it.
+# Compiles the CLI and runs the smoke scripts against the binary:
+# smoke-update-pin.sh (#2196, #2203: the binary reading the working directory's
+# .env) and smoke-tty-prompt.sh (#2262: Linux prompts that crash on the first
+# key; a Bun 1.4.4 build cancelled them on Enter). These bugs only exist in a
+# compiled binary, so a `tsx` run can't catch them.
 #
 # Like publish-cli.yml, it runs patch-clack after `bun install` and checks the
 # compiled binary still forwards the /dev/tty `input` to its prompts (#2202).
@@ -37,17 +39,26 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           # Moves together with the pin in publish-cli.yml: this has to compile
-          # with the same toolchain that builds the released binaries.
-          bun-version: 1.2.19
+          # with the same toolchain that builds the released binaries. Needs Bun
+          # >= 1.3.3 for --no-compile-autoload-dotenv/-bunfig below (#2203).
+          # Not 1.4.4: its Linux binaries cancel init's first text prompt on
+          # Enter, which smoke-tty-prompt.sh catches.
+          bun-version: 1.3.3
 
       - name: Compile binary
         working-directory: cli
         run: |
           bun install --frozen-lockfile || bun install
+          # The workflow calls `bun build` directly, so package.json's
+          # `prebuild` check never runs: a Bun older than 1.3.3 ignores the
+          # --no-compile-autoload-* flags below without an error (#2203).
+          node scripts/check-bun-version.mjs
           bun run patch-clack
           mkdir -p dist
           bun build src/cli.ts \
             --compile \
+            --no-compile-autoload-dotenv \
+            --no-compile-autoload-bunfig \
             --target=bun-linux-x64 \
             --outfile=dist/subwave-linux-x64
 
@@ -57,3 +68,8 @@ jobs:
 
       - name: Smoke test the first update
         run: cli/scripts/smoke-update-pin.sh cli/dist/subwave-linux-x64
+
+      - name: Smoke test prompts under a pty
+        # util-linux `script`, which the hosted Ubuntu runner ships, gives the
+        # binary a pty.
+        run: cli/scripts/smoke-tty-prompt.sh cli/dist/subwave-linux-x64

@@ -21,11 +21,13 @@ import {
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
+  FADE_AUDIBLE_END_DB_BOUNDS,
   normalizeGeminiSafety,
   type JingleRotateOwner,
   type JinglePlacement,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
+import type { ReasoningEffort } from '../schemas/reasoning.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
 import {
   AAC_BITRATES,
@@ -439,6 +441,13 @@ export const DEFAULTS = {
     // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
     // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
+    // Extra request-body fields for an openai-compatible / locca leg (#2296),
+    // `{ key, value }` rows like tts.cloud.compatParams. `bodyParams` go on
+    // every call; `toolCallBodyParams` are laid over them on forced-tool and
+    // structured calls only, where a `null` value removes a key. Empty by
+    // default, so an untouched station sends exactly what it did before.
+    bodyParams: [] as { key: string; value: string }[],
+    toolCallBodyParams: [] as { key: string; value: string }[],
     // How an openai-compatible connection is driven: 'local' for a self-hosted
     // server (llama.cpp, LM Studio, vLLM, Ollama /v1), 'hosted' for a cloud API
     // or proxy, 'auto' to detect it (llm/internal/provider/compat-detect.ts).
@@ -449,6 +458,10 @@ export const DEFAULTS = {
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
     reasoning: false,
+    // The level "On" asks for, where the leg can express one
+    // (schemas/reasoning.ts). 'default' is the provider's own "on", exactly as
+    // before the field existed (#2296).
+    reasoningEffort: 'default' as ReasoningEffort,
     // How the structured-output paths force a tool call. 'required' is the
     // reliable path for local models that ignore JSON mode. Switch to 'auto' ONLY
     // if your server crashes on tool_choice:"required" — recent vLLM implements it
@@ -585,8 +598,12 @@ export const DEFAULTS = {
       // Per-leg like providerBaseUrls: the backup may be a different gateway
       // with its own routing header.
       headers: {} as Record<string, string>,
+      // Per-leg too: the backup's server has its own dialect (#2296).
+      bodyParams: [] as { key: string; value: string }[],
+      toolCallBodyParams: [] as { key: string; value: string }[],
       compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
       reasoning: false,
+      reasoningEffort: 'default' as ReasoningEffort,
       toolChoice: 'required',
       numCtx: 16384,
       repeatPenalty: 1.15,
@@ -634,6 +651,16 @@ export const DEFAULTS = {
     // signal for instrumentals and thin-metadata tracks, and CLAP neighbours don't
     // cluster by album. 0 = text-only; 1 = trust audio as much as text.
     audioFusionWeight: 0.5,
+    // Energy from the audio the analyzer heard (music/propagated-energy.ts),
+    // beyond the always-on correction of a propagated guess. Both opt-in.
+    // fillEmpty: a tagged track the LLM gave moods and no energy gets one from
+    //   its audio (the middle band is medium), so strict shows stop dropping it.
+    // overruleLlm: an LLM energy is replaced where the audio is strongly
+    //   decisive (ENERGY_OVERRULE_Z) and says otherwise. Never an operator's.
+    audioEnergy: {
+      fillEmpty: false,
+      overruleLlm: false,
+    },
     batchSize: 25,
     enrichment: {
       // Last.fm crowd tags. Tri-state: true = always fetch, false = never, null =
@@ -661,7 +688,8 @@ export const DEFAULTS = {
   // Web-search backend for the segment director's web-search capability.
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
   // override here); `keenable` needs no key but uses a `keen_` one if set;
-  // `firecrawl` and `outcrawl` read SEARCH_API_KEY like Tavily and Brave.
+  // `parallel` needs no key and never sends one;
+  // `firecrawl`, `outcrawl` and `specstream` read SEARCH_API_KEY like Tavily and Brave.
   search: {
     provider: 'duckduckgo',
     apiKey: '',
@@ -724,6 +752,19 @@ export const DEFAULTS = {
     // and beds keep their own curves. Read once by the mixer at startup, so a
     // change needs a restart.
     equalPowerCrossfade: false,
+    // Cut a FADE ending where it stops being audible instead of at the silence
+    // trim's absolute floor (-50 dBFS), which on a fade lands seconds after the
+    // music did: the tail's loudness curve (tail v3) is read for the last point
+    // within fadeAudibleEndDb of the track's own loudness (music/silence-trim.ts).
+    // Off = today's cut. A controller-side cue point, so no mixer restart: it
+    // applies from the next queued track; tracks without a curve keep today's cut.
+    fadeAudibleEnd: false,
+    fadeAudibleEndDb: 20,
+    // Read the tail's level readings (fade or cold, wind-down start, tail
+    // loudness, the audible-end curve) off the whole-file loudness curve
+    // instead of the librosa tail facet (music/tail-levels.ts). Off = today's
+    // readings. Controller-side, so no mixer restart.
+    tailFromCurve: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
     // and lose all six. Resolved through settings/transition-effects.ts, which
@@ -895,6 +936,7 @@ export const BOUNDS = {
   // reason. Far lower than the cap's — see SHOW_MIN_TRACK_LENGTH_MAX.
   minTrackLengthSeconds: { min: 0, max: SHOW_MIN_TRACK_LENGTH_MAX, type: 'int' },
   silenceTrimMinGapMs: { ...SILENCE_TRIM_MIN_GAP_MS_BOUNDS, type: 'int' },
+  fadeAudibleEndDb: { ...FADE_AUDIBLE_END_DB_BOUNDS, type: 'float' },
   backupsKeep: { ...BACKUP_KEEP_BOUNDS, type: 'int' },
   loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
   loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },

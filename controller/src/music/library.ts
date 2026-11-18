@@ -9,6 +9,8 @@ import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
 import { artistRootKey, setKnownActsProvider, trackKey, type CandidateLike } from './recency.js';
 import { isInstrumental } from './lyric-vocal.js';
+import { curveOutro, tailFromCurveOn } from './tail-levels.js';
+import type { TrackOutro } from './library-db/types.js';
 import { clearWalk } from './library-walk.js';
 
 let loaded = false;
@@ -76,7 +78,7 @@ export function get(songId: string): any {
   if (!loaded) return null;
   const t = db.getTrack(songId);
   if (!t) return null;
-  return {
+  const rec = {
     title: t.title,
     artist: t.artist,
     album: t.album,
@@ -122,7 +124,10 @@ export function get(songId: string): any {
     // Boundary keys for bpmKeyFor / queue.mixAnalysisFor.
     keyRanges: t.keyRanges,
     // Measured ending (fade vs cold, tail loudness/tempo/grid) for the queue's
-    // exit canvas + effect gating. null = no signal.
+    // exit canvas + effect gating. null = no signal. With
+    // transitions.tailFromCurve on, its level readings come from the
+    // whole-file loudness curve (music/tail-levels.ts, the one place), read
+    // on the first read of `outro` (curveOutroOnRead).
     outro: t.outro,
     // Edge dead air: music/silence-trim.ts resolves EVERY caller through this
     // projection, so dropping one disables the trim silently. null = no signal.
@@ -135,6 +140,37 @@ export function get(songId: string): any {
     edgeTailMs: t.edgeTailMs,
     decodedDurationMs: t.decodedDurationMs,
   };
+  if (tailFromCurveOn()) curveOutroOnRead(rec, songId, t);
+  return rec;
+}
+
+// `outro` with the curve's level readings, derived on its first read: most
+// get() callers (the show filters run one per candidate) never read it, and
+// the whole-file curve is a row read and a parse of up to ~120 KB (a DJ set).
+// The switch is judged at get() time, as before; the value, once read (or
+// assigned), is the record's.
+function curveOutroOnRead(
+  rec: { outro: unknown },
+  songId: string,
+  t: { outro: TrackOutro | null; decodedDurationMs?: number | null; edgeTailMs?: number | null },
+): void {
+  let value: unknown;
+  let resolved = false;
+  Object.defineProperty(rec, 'outro', {
+    enumerable: true,
+    configurable: true,
+    get() {
+      if (!resolved) {
+        value = curveOutro(t.outro, db.getLoudnessCurveJson(songId), { decodedDurationMs: t.decodedDurationMs, edgeTailMs: t.edgeTailMs });
+        resolved = true;
+      }
+      return value;
+    },
+    set(v: unknown) {
+      value = v;
+      resolved = true;
+    },
+  });
 }
 
 // A usable tempo, or null. Navidrome emits `bpm: 0` on files with no tempo

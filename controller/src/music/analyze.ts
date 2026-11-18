@@ -13,7 +13,7 @@ import { deriveVocalFromLyrics, clipRangesToTail, type LyricVocalResult } from '
 import { stemStampDecision } from './stem-stamp-policy.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { runAudioDescriptorPass } from './audio-descriptor-pass.js';
-import { runPropagatedEnergyPass } from './propagated-energy.js';
+import { audioEnergyOptions, runAudioEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { quietAfterMinutes, quietGateDecision, quietOnlyEnabled, type QuietState } from './analyze-quiet-pure.js';
 import { dispatchAnalysis, type DispatchOutcome } from './analyze-dispatch.js';
@@ -188,7 +188,7 @@ async function scoreAudioMoods(): Promise<void> {
   // Must run AFTER the mood pass, which writes the cosines it calibrates
   // against. Separately wrapped so a failure here doesn't cost the mood labels.
   try {
-    runPropagatedEnergyPass();
+    runAudioEnergyPass(audioEnergyOptions(settings.get()));
   } catch (err: any) {
     console.error(`[audio-energy] pass failed (non-fatal): ${err?.message || err}`);
   }
@@ -739,7 +739,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         w.edges = { leadMs: r.edgeLeadMs, tailMs: r.edgeTailMs, durationMs: r.decodedDurationMs };
       } else if (f === 'tail') {
         w.tail = { outro: r.outro, tailSilenceMs: r.tailSilenceMs, tailStartMs: r.tailStartMs,
-          version: r.tailPlaced ? db.PLACED_TAIL_STAMP : null };
+          version: r.tailPlaced ? db.placedTailVersion(r.outro, r.tailCurveUnavailable) : null };
       } else if (f === 'clap' && r.audioEmbedding?.length === db.AUDIO_EMBEDDING_DIM) {
         w.clap = r.audioEmbedding;
         wroteClap = true;
@@ -891,7 +891,7 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
           tailStartMs: a.tailStartMs,
-          tailVersion: a.tailPlaced ? db.PLACED_TAIL_STAMP : null,
+          tailVersion: a.tailPlaced ? db.placedTailVersion(outro, a.tailCurveUnavailable) : null,
           stemsAttempted: stemStamp.stamp,
           stemsTailMisses: stemStamp.tailMisses,
           // Recorded on the facet rows; 'capped' explains a missing tail.

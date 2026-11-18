@@ -61,6 +61,40 @@ test('gateway is tested against Vercel AI Gateway, not the Ollama default', asyn
   }
 });
 
+// A fixed-endpoint gateway takes the one generic branch, on its catalogue
+// base URL with the typed key; with no entry it would fall to the Ollama default.
+test('a fixed-endpoint gateway is tested at its own base URL, not the Ollama default', async (t) => {
+  const realFetch = globalThis.fetch;
+  for (const [provider, model, prefix] of [
+    ['requesty', 'openai/gpt-4o-mini', 'https://router.requesty.ai/v1/'],
+    ['cheaperinference', 'gpt-5.4-mini', 'https://api.cheaperinference.com/v1/'],
+  ] as const) {
+    const outbound: { url: string; auth: string | null }[] = [];
+    t.mock.method(globalThis, 'fetch', (async (url: string | URL | Request, init?: RequestInit) => {
+      const target = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      if (target.startsWith(base)) return realFetch(url, init);
+      outbound.push({ url: target, auth: new Headers(init?.headers).get('authorization') });
+      return new Response(JSON.stringify({ error: { message: 'Invalid API key.', type: 'authentication_error', code: 'invalid_api_key' } }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as typeof fetch);
+    const res = await fetch(`${base}/onboarding/test-llm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider, model, apiKey: `${provider}-typed` }),
+    });
+    t.mock.restoreAll();
+    assert.equal(res.status, 200);
+    assert.equal((await res.json() as { ok: boolean }).ok, false, provider);
+    assert.ok(outbound.length > 0, `${provider}: the test reached no provider`);
+    for (const call of outbound) {
+      assert.ok(call.url.startsWith(prefix), `${provider}: ${call.url}`);
+      assert.equal(call.auth, `Bearer ${provider}-typed`, provider);
+    }
+  }
+});
+
 // fetch rejects a header value with a line break in it, and every SDK passes
 // its error on, quoting the whole header: the key would come back on screen.
 test('a key with a control character is refused before any call, without echoing it', async (t) => {

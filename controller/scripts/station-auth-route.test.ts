@@ -3,7 +3,7 @@
 // HTTP layer, through a real Express app. Both keep a saved password unless
 // they hear the controller itself, and tell the controller from whatever sits
 // in front of it by these exact shapes (stationAuthResult, one copy each in
-// app/src/lib/station-password.ts and web/lib/stationAuth.ts):
+// getsubwave/app:src/lib/station-password.ts and web/lib/stationAuth.ts):
 //
 // - 200 {"ok":true} proves the password. A login page's 200 does not.
 // - 401 {"ok":false} with no WWW-Authenticate is a wrong password. A proxy's

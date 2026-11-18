@@ -33,7 +33,7 @@ here stays complete and free either way.
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
 - **Demo player** — [getsubwave.com/listen](https://www.getsubwave.com/listen)
-- **Mobile apps** — native players — [iOS on the App Store](https://apps.apple.com/app/sub-wave/id6778786696), [Android on Google Play](https://play.google.com/store/apps/details?id=com.getsubwave.app)
+- **Mobile apps** — native players — [iOS on the App Store](https://apps.apple.com/app/sub-wave/id6778786696), [Android on Google Play](https://play.google.com/store/apps/details?id=com.getsubwave.app) ([source](https://github.com/getsubwave/app))
 - **Desktop app** — native macOS / Windows / Linux player — [latest release](https://github.com/getsubwave/subwave-desktop/releases/latest) ([source](https://github.com/getsubwave/subwave-desktop))
 - **Setup walkthrough** — [getsubwave.com/setup](https://www.getsubwave.com/setup)
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
@@ -71,11 +71,11 @@ here stays complete and free either way.
 - **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
 - **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
-- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
+- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Cheaper Inference, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
 - **Six TTS engines.** Piper and Kokoro (multilingual) in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 24 in the roster, each with its own voice and writing style. A show can seat up to three guest co-hosts who trade scripted banter with the host, and ready-made personas install from the [community catalog](https://www.getsubwave.com/personas).
 - **Multi-format broadcast.** MP3 always served (configurable bitrate) for Sonos, hardware radios, and cars; optional Opus, AAC, and lossless FLAC mounts, each toggleable from the admin UI. The web player picks automatically.
-- **Native apps and PWA.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — a [native desktop player](https://github.com/getsubwave/subwave-desktop) for macOS / Windows / Linux with a menu-bar mini player and live spectrum, plus an installable PWA on phone and desktop.
+- **Native apps and PWA.** [Native iOS and Android players](https://github.com/getsubwave/app) (on the App Store and Google Play) — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — a [native desktop player](https://github.com/getsubwave/subwave-desktop) for macOS / Windows / Linux with a menu-bar mini player and live spectrum, plus an installable PWA on phone and desktop.
 - **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills, or anchors to a Navidrome playlist. Ready-made show templates install from the [community catalog](https://www.getsubwave.com/shows).
 - **Programmes.** A show can air as a produced episode: the DJ drafts a per-episode plan — an angle, one feature beat each hour, an intro and an outro — so a three-hour slot hangs together instead of being three hours of unrelated links.
 - **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it — or write one in the admin UI's built-in editor, or install one other operators shared on the [community exchange](https://www.getsubwave.com/skills). See [`docs/custom-skills.md`](docs/custom-skills.md).
@@ -203,10 +203,12 @@ setting, so it does nothing on the all-in-one image, which runs the analyzer
 in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
 
 Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. The
-split-stack CUDA analyzer uses torch/torchaudio 2.7.1 with CUDA 12.8 wheels,
-which cover Turing (RTX 20-series) through RTX 50-series Blackwell GPUs; older
-cards have no split-stack CUDA build. For a one-off run, layer the
-`docker-compose.analyzer-gpu.yml` overlay:
+split-stack CUDA analyzer's default build uses torch/torchaudio 2.7.1 with
+CUDA 12.8 wheels, which cover Turing (RTX 20-series) through RTX 50-series
+Blackwell GPUs. An older card (a GTX 10-series, say) needs the cu124 build:
+add `ANALYZER_CUDA_TAG=pascal` to `.env`, or the tag named for your card's
+architecture ([every tag](docs/internals/infrastructure.md#aio-cuda-tags)).
+For a one-off run, layer the `docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d

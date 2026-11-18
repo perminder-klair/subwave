@@ -18,9 +18,9 @@
 
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { removeTempDir } from './test-utils/temp-dir.js';
 
 // Golden pairs from Navidrome PR #5824's own tests (pinned in
@@ -232,6 +232,24 @@ await test('the stems dir is renamed to the new id', () => {
   assert.equal(existsSync(stemCache.dirFor(NEW_HEX)), true);
   assert.equal(existsSync(oldStemsDir), false);
   assert.equal(existsSync(join(stemCache.dirFor(NEW_HEX), 'head-drums.flac')), true);
+});
+
+// The rename moves a stem dir under the stem cache's stored size. A walk
+// whose readdir listed the old name before the rename stored a trusted
+// figure one dir short; bracketed in the usage journal, such a walk measures
+// both names again (#2317, scripts/stem-usage-orderings.test.ts).
+await test('the stems rename is bracketed in the usage journal under both names', () => {
+  const text = readFileSync(join(stateDir, 'stem-cache-usage.journal'), 'utf8');
+  // Opened by this process: its pid, and its start identity where /proc can
+  // be read (#2352), so a reader can tell it from a later process on that pid.
+  const statText = existsSync('/proc/self/stat') ? readFileSync('/proc/self/stat', 'utf8') : null;
+  const start = statText ? statText.slice(statText.lastIndexOf(')') + 1).trim().split(/\s+/)[19] : null;
+  const writer = `${process.pid}${start ? ` ${start}` : ''}`;
+  for (const id of [OLD_HEX, NEW_HEX]) {
+    const name = encodeURIComponent(basename(stemCache.dirFor(id)));
+    assert.match(text, new RegExp(`^\\+ \\S+ ${name} \\d+ ${writer}$`, 'm'), `${id} opened`);
+    assert.match(text, new RegExp(`^= \\S+ ${name}$`, 'm'), `${id} closed`);
+  }
 });
 
 await test('a new row that already carries its own tags is not clobbered', () => {

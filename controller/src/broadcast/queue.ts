@@ -180,6 +180,7 @@ import {
 import { awaitIntroRender, IntroRenderTracker } from './queue/intro-render.js';
 import { notifyQueued, notifySpoken } from './voice-events.js';
 import { createHandoverEdge, notifyCoastHandover, type HandoverReason } from './coast-handover.js';
+import { coastLedger, offCoastVerdict, offCoastWarning } from './off-coast-policy.js';
 import { picksAllowed } from './dj-budget.js';
 
 const NOW_PLAYING_POLL_MS = 1500;
@@ -1581,7 +1582,11 @@ class Queue {
         // decay into silence reads as a fade), so an untrimmed durSec counts
         // the silence we are about to cut as part of the ramp and sizes the
         // exit canvas longer than the track has left.
-        const trimEndSec = silenceTrim.resolveSilenceTrim(item.track).cueOutSec;
+        // A fade cut at its AUDIBLE end (transitions.fadeAudibleEnd) arrives
+        // here as that cueOutSec, so the wind-down already ends at the cut;
+        // the audible end (decided once, in silence-trim) only tells
+        // endingCrossSecondsFor to size it by its own rule.
+        const { cueOutSec: trimEndSec, audibleEnd } = silenceTrim.resolveTrimAndAudibleEnd(item.track);
         const endSec = trimEndSec != null && durSec > 0
           ? Math.min(durSec, trimEndSec)
           : (trimEndSec ?? durSec);
@@ -1596,12 +1601,13 @@ class Queue {
         const exitSecs = mix.endingCrossSecondsFor(
           { bpm: outro.bpm ?? next.bpm, key: next.key, ending: outro.ending },
           windDownSec,
-          { maxSec, tailLufs: outro.lufs ?? null, bodyLufs, vocalTail: next.vocalTail },
+          { maxSec, tailLufs: outro.lufs ?? null, bodyLufs, vocalTail: next.vocalTail, audibleEnd },
         );
         if (exitSecs != null) {
           item.track.crossSec = exitSecs;
           const sung = next.vocalTail === true ? ', vocal tail' : '';
-          this.log('mix', `exit canvas ${exitSecs}s (${outro.ending} ending${sung}) → ${item.track.title}`);
+          const cut = audibleEnd != null && outro.ending === 'fade' ? `, cut at audible end ${audibleEnd.endSec}s` : '';
+          this.log('mix', `exit canvas ${exitSecs}s (${outro.ending} ending${sung}${cut}) → ${item.track.title}`);
         }
       }
     }
@@ -4004,8 +4010,15 @@ class Queue {
       // If we see untracked plays while there are sent items in `upcoming`,
       // those items might no longer be in Liquidsoap's dj_queue (e.g. after a restart).
       // Reconcile with the live dj_queue to clean up any stale entries.
-      if (this.upcoming.some(i => i.sent)) {
+      const handedOverPending = this.upcoming.some(i => i.sent);
+      if (handedOverPending) {
         void this.reconcileWithDjQueue();
+      }
+      // Was it the coast the controller wrote? Warn only, never skip (#2213).
+      const play = { id: np.subsonic_id || null, title: np.title, artist: np.artist || null };
+      if (offCoastVerdict({ play, ledger: coastLedger(), handedOverPending, now: Date.now() }).warn) {
+        const show = settings.resolveActiveShow();
+        this.log('scheduler', offCoastWarning(play, show?.name ?? null, !!(show?.playlistStrict && show.playlistIds?.length)));
       }
       this.current = {
         track: {

@@ -325,3 +325,84 @@ test('the advertised mounts follow the ceiling the mixer files get', () => {
   assert.deepEqual(advertisedMounts(stream), { opusEnabled: true, flacEnabled: true, aacEnabled: true });
   assert.deepEqual(advertisedMounts(undefined), { opusEnabled: false, flacEnabled: false, aacEnabled: false });
 });
+
+// A persona's rescue voice (persona.fallbackVoice, #2029) is a voice field too,
+// so the hosted engine rule covers it on every write path. A rescue cannot
+// `inherit`, so an engine the box doesn't run drops it to null ("none").
+test('the rescue-voice engine rule: a box engine stays, any other drops to null', () => {
+  const personas = [
+    { id: 'a', tts: { engine: 'kokoro', voice: 'bm_george' }, fallbackVoice: { engine: 'piper', cloudProvider: 'openai', voice: '' } },
+    { id: 'b', tts: { engine: 'kokoro', voice: 'bm_george' }, fallbackVoice: { engine: 'chatterbox', cloudProvider: 'openai', voice: 'clip.wav' } },
+    { id: 'c', tts: { engine: 'gemini', voice: 'Kore' }, fallbackVoice: { engine: 'cloud', cloudProvider: 'openai', voice: 'alloy' } },
+    { id: 'd', tts: { engine: 'kokoro', voice: 'bm_george' }, fallbackVoice: null },
+  ];
+  const base = stripManagedSettings({ personas }, { defaultEngine: 'kokoro' });
+  assert.deepEqual(base.patch.personas.map((p: any) => p.fallbackVoice?.engine ?? null), ['piper', null, null, null]);
+  assert.deepEqual(base.dropped, ['personas.b.fallbackVoice', 'personas.c.tts.engine', 'personas.c.fallbackVoice']);
+  assert.equal(personas[1].fallbackVoice?.engine, 'chatterbox'); // never mutates the input
+  const premium = stripManagedSettings({ personas }, { defaultEngine: 'cloud' });
+  assert.deepEqual(premium.patch.personas.map((p: any) => p.fallbackVoice?.engine ?? null), ['piper', null, 'cloud', null]);
+  delete process.env.SUBWAVE_HOSTED;
+  try {
+    assert.deepEqual(stripManagedSettings({ personas }, { defaultEngine: 'kokoro' }).dropped, []);
+  } finally {
+    process.env.SUBWAVE_HOSTED = '1';
+  }
+});
+
+test('a settings save and the wizard drop a rescue voice on an engine the box does not run', async () => {
+  for (const route of ['/settings', '/onboarding/save'] as const) {
+    const [first, second, ...rest] = (settings.get() as any).personas;
+    const personas = [
+      { ...first, fallbackVoice: { engine: 'gemini', cloudProvider: 'openai', voice: 'Kore' } },
+      { ...second, fallbackVoice: { engine: 'kokoro', cloudProvider: 'openai', voice: 'bm_george' } },
+      ...rest,
+    ];
+    const body = route === '/settings' ? { personas } : { navidrome: { url: '', user: '', pass: '' }, personas };
+    const r = await post(route, body);
+    assert.equal(r.status, 200, `${route}: ${JSON.stringify(r.body)}`);
+    assert.deepEqual(r.body.managed, [`personas.${first.id}.fallbackVoice`], route);
+    const s = stored();
+    assert.equal(s.personas.find((p: any) => p.id === first.id).fallbackVoice, null, route);
+    assert.equal(s.personas.find((p: any) => p.id === second.id).fallbackVoice.engine, 'kokoro', route);
+    await settings.load();
+  }
+});
+
+test('a backup restore drops a rescue voice on an engine the box does not run', async () => {
+  const [first, ...rest] = (settings.get() as any).personas;
+  const zip = new AdmZip();
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify({ format: BACKUP_FORMAT, version: BACKUP_VERSION })));
+  zip.addFile('settings.json', Buffer.from(JSON.stringify({
+    station: 'Rescued FM',
+    personas: [{ ...first, fallbackVoice: { engine: 'chatterbox', cloudProvider: 'openai', voice: 'clip.wav' } }, ...rest],
+  })));
+  const res = await fetch(`${base}/backup/import`, { method: 'POST', body: new Uint8Array(zip.toBuffer()) });
+  const body = await res.json() as any;
+  assert.equal(res.status, 200, JSON.stringify(body));
+  assert.ok(body.managed.includes(`personas.${first.id}.fallbackVoice`), JSON.stringify(body.managed));
+  const s = stored();
+  assert.equal(s.station, 'Rescued FM');
+  assert.equal(s.personas.find((p: any) => p.id === first.id).fallbackVoice, null);
+  await settings.load();
+});
+
+test('an installed or imported persona gets the rescue-voice rule too', async () => {
+  const { id: _id, ...stock } = (settings.get() as any).personas[0];
+  const r = await installPersona({
+    ...stock,
+    name: 'Rescue Bundle DJ',
+    tts: { ...stock.tts, engine: 'chatterbox', voice: 'clip.wav' },
+    fallbackVoice: { engine: 'pocket-tts', cloudProvider: 'openai', voice: 'alba' },
+  });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(r.ok && r.managed, ['tts.engine', 'fallbackVoice']);
+  const p = stored().personas.find((x: any) => x.name === 'Rescue Bundle DJ');
+  assert.equal(p.tts.engine, 'inherit');
+  assert.equal(p.fallbackVoice, null);
+  // A box engine rides through untouched.
+  const kept = await installPersona({ ...stock, name: 'Kept Rescue DJ', fallbackVoice: { engine: 'piper', cloudProvider: 'openai', voice: '' } });
+  assert.equal(kept.ok, true, JSON.stringify(kept));
+  assert.equal(kept.ok && kept.managed, undefined);
+  assert.equal(stored().personas.find((x: any) => x.name === 'Kept Rescue DJ').fallbackVoice.engine, 'piper');
+});
