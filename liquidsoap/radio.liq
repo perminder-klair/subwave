@@ -407,12 +407,37 @@ jingle_now_queue.on_metadata(synchronous=false, fun (_) -> jingle_now_on_air := 
 # every instance would register auto.skip/auto.next/auto.uri again (nothing
 # calls them); radio.liq registers auto.reload and auto.ready below.
 auto_m3u = "#{state_dir}/auto.m3u"
+
+# Reload generations (#2213). A reload in place empties the playlist's queue,
+# but a request its `next()` is still resolving (a subhttp: download takes
+# seconds) is appended after the reload returns: on the stock 2.4.6 playlist the
+# old file's track then airs next on the coast, after any number of DJ picks in
+# between, unless an off-air reload replaces the instance first. So every
+# reload bumps `auto_generation`, and `check_next` (asked before the resolve)
+# stamps each request with the generation it was chosen under. A request whose
+# stamp is older than the current generation came from a file the controller
+# has since replaced. Residual: a `next()` that read the old file a moment
+# before the bump and reached `check_next` after it carries the new stamp.
+auto_generation = ref(0)
+# [(request id, generation)], newest first. Bounded: the queue holds a request
+# or two, so only the newest stamps are ever asked about.
+auto_request_generations = ref([])
+def stamp_auto_request(r) =
+  auto_request_generations := list.prefix(32, [(request.id(r), auto_generation()), ...auto_request_generations()])
+  true
+end
+# An unstamped request counts as current: drop only what is proven stale.
+def auto_request_stale(r) =
+  list.assoc(default=auto_generation(), request.id(r), auto_request_generations()) < auto_generation()
+end
+
 def make_auto_playlist() =
   playlist(
     id="auto",
     register_server_commands=false,
     reload_mode="never",
     mode="randomize",
+    check_next=stamp_auto_request,
     auto_m3u
   )
 end
@@ -453,6 +478,77 @@ def read_auto_m3u() =
 end
 auto_m3u_loaded = ref(read_auto_m3u())
 
+# Drops a stale request (#2213) once a current one is queued behind it, for as
+# long after an in-place reload as a resolve that was in flight can still land
+# (`settings.request.timeout`, plus a margin). Never drops the last request it
+# has: with nothing current resolved, the stale track airs rather than dead air,
+# so the starve guard sees exactly what it saw before. The playlist will not
+# fetch while the stale request fills its queue (`fetch()` is a no-op at the
+# prefetch depth, measured on 2.4.6), so once per generation one entry of the
+# file just loaded is resolved and added beside it, on a slow thread; if that
+# fails, the stale request stays. Same read/set/destroy order as the stdlib's
+# own reload, and never the request on air. Never raises: it runs in thread.run.
+auto_purge_fetched = ref(-1)
+def add_current_auto_request(p) =
+  try
+    entries = list.filter(fun (l) -> l != "" and not string.contains(prefix="#", l),
+      list.map(string.trim, string.split(separator="\n", auto_m3u_loaded())))
+    if list.length(entries) > 0 then
+      uri = list.nth(entries, random.int(min=0, max=list.length(entries)))
+      # Stamped like the playlist's own requests: a reload that lands while
+      # this resolves makes it stale too, or it would air from a replaced file.
+      r = request.create(uri)
+      ignore(stamp_auto_request(r))
+      if not p.add(r) then
+        log(label="subwave", "auto: could not resolve #{redact_subhttp_uri(uri)} to replace a stale request; the stale one stays (#2213)")
+      end
+    end
+  catch err do
+    log(label="subwave", "auto: adding a current request failed (#{err})")
+  end
+end
+def purge_stale_auto() =
+  try
+    p = auto_playlist()
+    q = p.queue()
+    stale = list.filter(auto_request_stale, q)
+    current = list.filter(fun (r) -> not auto_request_stale(r), q)
+    if list.length(stale) > 0 then
+      if list.length(current) > 0 then
+        p.set_queue(current)
+        on_air_rid = null.get(default=-1, null.map(request.id, p.current()))
+        list.iter(fun (r) -> begin
+          log(label="subwave", "auto: dropped #{redact_subhttp_uri(request.uri(r))}, resolved from a fallback a reload replaced (#2213)")
+          if on_air_rid != request.id(r) then request.destroy(r) end
+        end, stale)
+      elsif auto_purge_fetched() != auto_generation() then
+        auto_purge_fetched := auto_generation()
+        thread.run(fast=false, fun () -> add_current_auto_request(p))
+      end
+    end
+  catch err do
+    log(label="subwave", "auto: stale-request purge failed (#{err})")
+  end
+end
+
+# Every in-place reload: bump the generation first, so the reload's own fetch
+# is stamped current, then watch for a request the old file still had in flight.
+# One watcher per reload; a later reload's watcher takes over from it.
+def reload_auto_in_place() =
+  auto_generation := auto_generation() + 1
+  generation = auto_generation()
+  auto_playlist().reload()
+  until = time() + settings.request.timeout() + 5.
+  thread.run.recurrent(delay=0.25, fun () -> begin
+    if auto_generation() == generation and time() < until then
+      purge_stale_auto()
+      0.25
+    else
+      -1.
+    end
+  end)
+end
+
 server.register(
   namespace="auto",
   "reload",
@@ -461,7 +557,7 @@ server.register(
   fun (_) -> begin
     auto_m3u_loaded := read_auto_m3u()
     if auto_on_air() then
-      auto_playlist().reload()
+      reload_auto_in_place()
     else
       fresh = make_auto_playlist()
       auto_playlist := fresh
@@ -482,14 +578,15 @@ server.register(
 # first track after auto.reload, and the controller waits for it before a resume
 # skip, or the skip would air the emergency loop until it arrives. Reloaded in
 # place (on air), the playlist is ready only for the track it is playing: wait
-# for the next one in its queue (queued requests are resolved).
+# for the next one in its queue (queued requests are resolved), and only one
+# chosen from the file just loaded: a stale request (#2213) is not the new show.
 server.register(
   namespace="auto",
   "ready",
   description="Report whether the fallback has a track ready: ready / pending",
   usage="ready",
   fun (_) -> begin
-    ready = if auto_on_air() then list.length(auto_playlist().queue()) > 0 else auto_slot.is_ready() end
+    ready = if auto_on_air() then list.exists(fun (r) -> not auto_request_stale(r), auto_playlist().queue()) else auto_slot.is_ready() end
     ready ? "ready" : "pending"
   end
 )
@@ -517,7 +614,7 @@ def auto_m3u_changed() =
           then
             auto_m3u_loaded := contents
             try
-              auto_playlist().reload()
+              reload_auto_in_place()
             catch err do
               log(label="subwave", "auto.m3u watch reload failed (#{err})")
             end

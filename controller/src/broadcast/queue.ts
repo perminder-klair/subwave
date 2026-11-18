@@ -180,6 +180,7 @@ import {
 import { awaitIntroRender, IntroRenderTracker } from './queue/intro-render.js';
 import { notifyQueued, notifySpoken } from './voice-events.js';
 import { createHandoverEdge, notifyCoastHandover, type HandoverReason } from './coast-handover.js';
+import { coastLedger, offCoastVerdict, offCoastWarning } from './off-coast-policy.js';
 import { picksAllowed } from './dj-budget.js';
 
 const NOW_PLAYING_POLL_MS = 1500;
@@ -4009,8 +4010,15 @@ class Queue {
       // If we see untracked plays while there are sent items in `upcoming`,
       // those items might no longer be in Liquidsoap's dj_queue (e.g. after a restart).
       // Reconcile with the live dj_queue to clean up any stale entries.
-      if (this.upcoming.some(i => i.sent)) {
+      const handedOverPending = this.upcoming.some(i => i.sent);
+      if (handedOverPending) {
         void this.reconcileWithDjQueue();
+      }
+      // Was it the coast the controller wrote? Warn only, never skip (#2213).
+      const play = { id: np.subsonic_id || null, title: np.title, artist: np.artist || null };
+      if (offCoastVerdict({ play, ledger: coastLedger(), handedOverPending, now: Date.now() }).warn) {
+        const show = settings.resolveActiveShow();
+        this.log('scheduler', offCoastWarning(play, show?.name ?? null, !!(show?.playlistStrict && show.playlistIds?.length)));
       }
       this.current = {
         track: {

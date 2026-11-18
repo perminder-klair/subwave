@@ -23,7 +23,7 @@ import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, prefe
 import { freshnessBiasedOrder } from '../music/airing.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
-import { explicitGate } from '../music/explicit-policy.js';
+import { explicitGate, withoutExplicit } from '../music/explicit-policy.js';
 import { allowsMoodPlaylistDiscovery } from '../music/discovery-policy.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -37,6 +37,7 @@ import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-s
 import { createAutoPlaylistRefresh, type RefreshResult } from './auto-playlist-refresh.js';
 import { coastContents, coastRepeats, HANDOVER_REASON_TEXT, onCoastHandover, type CoastContents, type HandoverReason } from './coast-handover.js';
 import { isIdle } from './stream-idle.js';
+import { noteCoastReloaded, noteCoastWritten } from './off-coast-policy.js';
 import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
@@ -582,10 +583,25 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   }
 
   // Strict playlist: drop every off-playlist track, but never-starve to the
-  // unfiltered pool if not one survived (dead-air guard).
+  // unfiltered pool if not one survived (dead-air guard). That fall-through
+  // airs off-playlist tracks under a strict show's name, so it says so, loudly
+  // (#2213): it happens when every pinned track is held back by another rule
+  // (a clean show, the length limits) while other sources still have tracks.
+  let strictUnenforced = false;
   if (strictPlaylist) {
     const inPl = pool.filter((t: any) => t?.id && playlistPool!.ids.has(t.id));
     if (inPl.length) replacePool(inPl);
+    else if (pool.length) {
+      strictUnenforced = true;
+      // What held the pinned tracks back: the two rules a source applies
+      // before take() (the clean show and the hard maximum length).
+      const pinned = playlistPool!.tracks;
+      const heldBy = [
+        clean.on ? `${pinned.length - withoutExplicit(pinned, true).length} tagged explicit on a clean show` : '',
+        selectionMaxSec ? `${pinned.length - applyKnownTrackCeiling(pinned, selectionMaxSec).length} over the ${selectionMaxSec}s maximum length` : '',
+      ].filter(Boolean).join(', ');
+      queue.log('scheduler', `Auto-playlist: STRICT playlist for show "${show?.name}" left nothing that may air (${pinned.length} pinned${heldBy ? `: ${heldBy}` : ''}) — coasting on ${pool.length} off-playlist track(s) so the station stays on air; the strict lock is NOT enforced until the show's rules let a pinned track through`);
+    }
   }
 
   // Strict music filters on the FINAL pool: enforce() only hard-drops
@@ -665,12 +681,16 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Small IPC file: synchronous atomic commit leaves no policy-change gap
   // between the freshness check and rename. Catalogue work stays asynchronous.
   writeFileAtomicSync(config.liquidsoap.autoPlaylist, lines.join('\n'));
-  coastOnDisk = coastContents(pool, builtAt);
+  const written = coastContents(pool, builtAt);
+  coastOnDisk = written;
+  // What an untracked play is checked against (#2213), stamped with the write.
+  noteCoastWritten(written);
   // Reload over telnet; radio.liq's file watch only re-reads a write this
   // reload never reached. Off air, radio.liq replaces the playlist, dropping a
   // track the old one had already prepared; best-effort, so an unreachable
   // mixer never fails the refresh.
   const reloaded = await reloadAutoPlaylist();
+  noteCoastReloaded(written, reloaded);
   if (!reloaded) queue.log('scheduler', 'Auto-playlist written but the mixer did not confirm the reload — the file watch re-reads it; an off-air playlist is replaced on the next refresh');
 
   // Surface a silently-degraded strict genre and a too-thin strict pool (#629).
@@ -696,7 +716,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
       (showGenres.length ? ` genre=${(genreNames.length ? genreNames : showGenres).join(',')}` : '') +
       (eraTag ? ` year=${eraTag}` : '') +
       (showEnergies.length ? ` energy=${showEnergies.join(',')}` : '') +
-      (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? 'strict' : 'soft'})` : '') +
+      (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? (strictUnenforced ? 'strict, unenforced' : 'strict') : 'soft'})` : '') +
       (clean.on ? ` clean=${clean.held().length} held back` : '')
     : '';
   queue.log('scheduler',

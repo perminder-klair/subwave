@@ -4,7 +4,7 @@
 
 ## Pipeline, in order
 
-1. `music` = `fallback([dj_queue, auto_slot])`: controller requests first, else the `auto.m3u` coast. `auto_slot` is a `source.dynamic`. The `auto.reload` telnet command reloads the on-air playlist in place or replaces an off-air one, and `auto.ready` reports whether it has a track. One radio.liq-owned file watch reloads in place only contents no reload has read yet; it never replaces the instance.
+1. `music` = `fallback([dj_queue, auto_slot])`: controller requests first, else the `auto.m3u` coast. `auto_slot` is a `source.dynamic`. The `auto.reload` telnet command reloads the on-air playlist in place or replaces an off-air one, and `auto.ready` reports whether it has a track. One radio.liq-owned file watch reloads in place only contents no reload has read yet; it never replaces the instance. Every in-place reload bumps a generation that `check_next` stamps on each request, and a short-lived watcher drops a request resolved from a replaced file once a current one is queued behind it, never the last one (#2213, `docs/internals/broadcast.md`).
 2. No cut stage: `liq_cue_in`/`liq_cue_out` (the length cap, the silence trim, the show-boundary fade, a stem blend's cut) apply at request resolution. `cue_cut` is a deprecated no-op on 2.4.x, so the script does not call it.
 3. `music_meta`: the pre-cross capture that `on_meta` (`now-playing.json`, the ICY title) and the starve guard read.
 4. The automatic jingle `rotate` (built only when `jingle_ratio` > 0), then the track-sensitive `music_with_jingle_now` switch, with the on-demand `jingle_now_queue` as its first choice.
