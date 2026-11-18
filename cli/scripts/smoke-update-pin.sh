@@ -11,7 +11,8 @@
 # the CLI reads from that .env with an inline comment (COMPOSE_FILE, and the pin
 # `subwave start` compares the running images against), and the line shapes
 # compose reads that a simpler parser misses (`export `, CRLF, `"v"#comment`,
-# `${VAR}` interpolation, a quoted value spanning lines).
+# `${VAR}` interpolation, a quoted value spanning lines), and a long .env with
+# an unterminated quote, which must not stall the CLI.
 #
 # Usage: cli/scripts/smoke-update-pin.sh <path-to-compiled-subwave>
 #
@@ -107,7 +108,8 @@ COMPOSE
 
 # Runs the binary from <cwd> with a scratch HOME and the fakes first on PATH.
 # VAR=value pairs before `--` go into the run's environment; the rest are the
-# subwave arguments. Returns the binary's exit status.
+# subwave arguments. Returns the binary's exit status (124 if cli_timeout, in
+# seconds, is set and runs out).
 run_cli() { # run_cli <name> <cwd> [VAR=value...] -- <subwave args...>
   local name="$1" cwd="$2"
   shift 2
@@ -124,7 +126,7 @@ run_cli() { # run_cli <name> <cwd> [VAR=value...] -- <subwave args...>
       XDG_CONFIG_HOME="$scratch/home/.config" \
       PATH="$scratch/bin:$PATH" \
       SMOKE_LOG="$scratch/$name.log" \
-      ${vars[@]+"${vars[@]}"} "$binary" "$@"
+      ${vars[@]+"${vars[@]}"} timeout "${cli_timeout:-0}" "$binary" "$@"
   ) </dev/null >"$scratch/$name.out" 2>&1
 }
 
@@ -292,6 +294,18 @@ check "multi-line value: the real pin moves" "SUBWAVE_VERSION=$target" \
   "$(sed -n 3p "$scratch/multiline-value/.env")"
 check "multi-line value: the line inside it is left alone" "SUBWAVE_VERSION=0.0.9" \
   "$(sed -n 5p "$scratch/multiline-value/.env")"
+
+# An unterminated quote takes the rest of the file into its value (compose
+# refuses such a file). The CLI must still answer at once: rescanning the value
+# for each line it takes in made a 1 MB .env cost over a minute.
+scaffold unterminated-quote 'NOTES="never closed'
+awk 'BEGIN { for (i = 0; i < 60000; i++) print "K" i "=value" i }' \
+  >>"$scratch/unterminated-quote/.env"
+rc=0
+cli_timeout=15 run_cli unterminated-quote "$scratch/empty" \
+  -- --home "$scratch/unterminated-quote" listen prod || rc=$?
+check "unterminated quote in a long .env: listen finishes" "finished" \
+  "$([ "$rc" -ne 124 ] && echo finished || echo "still running after 15s")"
 
 if [ "$failures" -ne 0 ]; then
   echo

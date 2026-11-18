@@ -104,15 +104,24 @@ export function envAssignments(
     const q = raw.trimStart()[0];
     let value: string;
     if (q === '"' || q === "'") {
-      // Pull in following lines until the quote closes.
-      let close = closingQuote(raw.trimStart(), q);
-      while (close === -1 && i + 1 < lines.length) {
+      // Pull in following lines until the quote closes. Each added line is
+      // scanned once, from where the last scan stopped, so an unterminated quote
+      // at the top of a long file costs one pass, not one pass per line.
+      const parts = [raw.trimStart()];
+      const scan = { escaped: false };
+      let at = closeIn(parts[0] as string, q, 1, scan);
+      let offset = 0;
+      while (at === -1 && i + 1 < lines.length) {
+        offset += (parts[parts.length - 1] as string).length;
         // A CR inside a quoted value is part of it, as compose keeps it.
-        raw += `${(crlf[i] as string).endsWith('\r') ? '\r' : ''}\n${lines[i + 1] as string}`;
+        const more = `${(crlf[i] as string).endsWith('\r') ? '\r' : ''}\n${lines[i + 1] as string}`;
+        parts.push(more);
         i++;
-        close = closingQuote(raw.trimStart(), q);
+        at = closeIn(more, q, 0, scan);
       }
-      const body = raw.trimStart();
+      const body = parts.join('');
+      raw += parts.slice(1).join('');
+      const close = at === -1 ? -1 : offset + at;
       if (close === -1) {
         // Unterminated: compose refuses the file. Keep the text as written.
         value = body.trimEnd();
@@ -131,11 +140,14 @@ export function envAssignments(
   return out;
 }
 
-// Index of the quote that closes `v` (which starts with `q`), or -1.
-function closingQuote(v: string, q: string): number {
-  for (let i = 1; i < v.length; i++) {
-    if (q === '"' && v[i] === '\\') { i++; continue; }
-    if (v[i] === q) return i;
+// Index in `chunk`, from `from`, of the quote that closes a quoted value, or -1.
+// In double quotes a backslash escapes the next character, which may be the
+// first of the next chunk, so `scan.escaped` carries it over.
+function closeIn(chunk: string, q: string, from: number, scan: { escaped: boolean }): number {
+  for (let i = from; i < chunk.length; i++) {
+    if (scan.escaped) { scan.escaped = false; continue; }
+    if (q === '"' && chunk[i] === '\\') { scan.escaped = true; continue; }
+    if (chunk[i] === q) return i;
   }
   return -1;
 }
