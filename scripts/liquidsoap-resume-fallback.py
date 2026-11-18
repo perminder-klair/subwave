@@ -38,6 +38,10 @@ comes before that settle and an emptied queue stays empty long enough to see.
   keepstale the inflight reload, but the new show's tracks cannot be fetched
           and no DJ pick follows: the replaced download still airs after the
           track on air, rather than dead air.
+  chain   (#2213) the inflight reload, then, while the fallback is resolving a
+          current track to stand beside the replaced download, a third reload
+          onto another show: nothing from the first two files may air, neither
+          the replaced download nor the track resolved for the second file.
   starve  a reload in place to tracks that cannot be fetched, nothing else to
           play: once the track on air ends, the dead-air guard must switch to
           the emergency loop, and the starve guard must latch
@@ -130,8 +134,11 @@ class Origin:
         self.server.shutdown()
 
 
-LOCAL = {"old_a": 330, "old_b": 300, "dj": 440, "kept": 500}
-REMOTE = {"new_a": 660, "new_b": 700, "third_a": 880, "third_b": 940, "slow_old": 360}
+LOCAL = {"old_a": 330, "old_b": 300, "dj": 440, "kept": 500, "long": 250}
+# Seconds of each local tone; the rest run 10 s.
+LOCAL_SECONDS = {"dj": 20, "long": 60}
+REMOTE = {"new_a": 660, "new_b": 700, "third_a": 880, "third_b": 940, "slow_old": 360,
+          "slow_b": 380, "slow_c": 390}
 # Listed in auto.m3u but never served: the origin answers 404.
 GONE = ("gone_a", "gone_b")
 
@@ -145,7 +152,7 @@ class Station:
         media = base / "media"
         media.mkdir()
         for name, freq in LOCAL.items():
-            tone(self.state / f"{name}.wav", freq, 20 if name == "dj" else 10)
+            tone(self.state / f"{name}.wav", freq, LOCAL_SECONDS.get(name, 10))
         for name, freq in REMOTE.items():
             mp3_tone(media / f"{name}.mp3", freq, 10)
         self.origin = Origin(media)
@@ -282,6 +289,29 @@ def keepstale(station):
     return station.wait_for(lambda c: c not in (None, "old_a"), "the track after old_a", timeout=30)
 
 
+def chain(station):
+    # A long coast track on air, so all three reloads land in place.
+    skip_when_ready(station, station.rebuild(["long"]))
+    station.wait_for(lambda c: c == "long", "the long coast track on air", timeout=30)
+    station.rebuild(["slow_old"])
+    time.sleep(1)
+    station.rebuild(["slow_b", "slow_c"])  # slow_old in flight: stale once it lands
+    # slow_old lands after SLOW_DELAY; a slow_b/slow_c resolve then starts beside it.
+    time.sleep(SLOW_DELAY + 0.5)
+    station.rebuild(["new_a", "new_b"])  # lands during that resolve
+    time.sleep(SLOW_DELAY + 2)
+    station.telnet("skip")
+    station.wait_for(lambda c: c not in (None, "long"), "the track after the long one", timeout=30)
+    aired, deadline = [], time.monotonic() + 3 * 10
+    while time.monotonic() < deadline:
+        current = station.on_air()
+        if current and (not aired or aired[-1] != current):
+            aired.append(current)
+        time.sleep(0.2)
+    stale = [c for c in aired if c in ("slow_old", "slow_b", "slow_c")]
+    return ",".join(stale) if stale else "new_only"
+
+
 def starve(station):
     station.rebuild(list(GONE))
     deadline = time.monotonic() + 90
@@ -306,6 +336,8 @@ def run(image, crossfade, case, radio_liq=None):
             result = inflight(station)
         elif case == "keepstale":
             result = keepstale(station)
+        elif case == "chain":
+            result = chain(station)
         elif case == "starve":
             result = starve(station)
         elif case == "onair":
@@ -327,7 +359,7 @@ def main():
     parser.add_argument("image")
     parser.add_argument("--crossfade", type=int, default=4)
     parser.add_argument("--case", action="append",
-                        choices=["dj", "auto", "kept", "onair", "inflight", "keepstale", "starve"],
+                        choices=["dj", "auto", "kept", "onair", "inflight", "keepstale", "chain", "starve"],
                         help="run only this case (repeatable); every case by default")
     parser.add_argument("--radio-liq", help="mount this radio.liq over the image's own")
     args = parser.parse_args()
@@ -342,6 +374,8 @@ def main():
                      lambda r: r.startswith("new_")),
         "keepstale": ("with nothing new to fetch, the replaced download airs rather than dead air",
                       lambda r: r == "slow_old"),
+        "chain": ("a reload during the replacement's resolve airs only the newest show",
+                  lambda r: r == "new_only"),
         "starve": ("with nothing to play, the starve guard latches", lambda r: r == "starved"),
     }
     # The cases that must reach dead air, where the guard switching is the point.

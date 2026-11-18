@@ -495,7 +495,11 @@ def add_current_auto_request(p) =
       list.map(string.trim, string.split(separator="\n", auto_m3u_loaded())))
     if list.length(entries) > 0 then
       uri = list.nth(entries, random.int(min=0, max=list.length(entries)))
-      if not p.add(request.create(uri)) then
+      # Stamped like the playlist's own requests: a reload that lands while
+      # this resolves makes it stale too, or it would air from a replaced file.
+      r = request.create(uri)
+      ignore(stamp_auto_request(r))
+      if not p.add(r) then
         log(label="subwave", "auto: could not resolve #{redact_subhttp_uri(uri)} to replace a stale request; the stale one stays (#2213)")
       end
     end
