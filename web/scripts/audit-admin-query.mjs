@@ -190,6 +190,15 @@ const allowed = new Map([
       path: /^\/library\/era\/csv$/,
     }],
   ])],
+  ['library/LibraryCounts.tsx', new Map([
+    // The tracks behind Needs you as a one-shot CSV blob, like era-csv-export;
+    // nothing cached reads it.
+    ['needs-you-csv-export', {
+      callee: 'adminResponse',
+      method: 'GET',
+      path: /^\/library\/attention\/csv$/,
+    }],
+  ])],
   ['library/useTaggerRunLog.ts', new Map([
     // One run's log file as a download, byte for byte; nothing cached reads it.
     ['tagger-log-download', {

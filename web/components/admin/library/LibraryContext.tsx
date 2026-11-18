@@ -20,6 +20,7 @@ import type {
   BlockRef, BlockType, BrowseResponse, LikeIndex, QueueBlockKind, QueueBlockResult, Track,
 } from './types';
 import { refreshPlaylistCatalogues } from '../playlist-cache';
+import { coveragePollMs } from './coverage-poll';
 import {
   deleteBlockEntry, liftedText, notifyBlockedWithUndo, postBlock, reconcileBlockCaches,
   restampCachedBlockMarks,
@@ -123,9 +124,10 @@ export function LibraryProvider({
   const tagger = taggerQuery.data ?? null;
 
   // GET /library/coverage is a cheap read (DB counts plus the last-known
-  // Navidrome total), so it runs on mount. It must NOT run on a timer: the total
-  // behind it is a full album-by-album walk of Navidrome (#1570). The count is
-  // now the operator's own press (useTaggerControls' countLibrary).
+  // Navidrome total), so it runs on mount. It must NOT run on an idle timer:
+  // the total behind it is a full album-by-album walk of Navidrome (#1570). The
+  // count is now the operator's own press (useTaggerControls' countLibrary).
+  // When it does poll is coverage-poll.ts (a run, a count, a cold controller).
   // No `staleTime` key on purpose: an explicit `staleTime: 0` made this refetch
   // on every remount, so the client's 30s default is left alone.
   const coverageQuery = useQuery({
@@ -134,11 +136,11 @@ export function LibraryProvider({
       adminFetch, '/library/coverage', undefined, signal,
     ),
     enabled: ready,
-    // The two live states only: a tagging run whose % must climb, and a count
-    // the operator just asked for. Idle, nothing polls.
-    refetchInterval: q => (
-      tagger?.running || q.state.data?.scanning ? 3_000 : false
-    ),
+    refetchInterval: q => coveragePollMs({
+      taggerRunning: !!tagger?.running,
+      data: q.state.data,
+      reads: q.state.dataUpdateCount,
+    }),
   });
   const coverage = coverageQuery.data ?? null;
   const reloadCoverage = useCallback(
