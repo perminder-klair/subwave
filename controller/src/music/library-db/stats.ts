@@ -190,13 +190,10 @@ const STATS_INDEXES: Array<[name: string, sql: string]> = [
   ['idx_tracks_overview', 'CREATE INDEX IF NOT EXISTS idx_tracks_overview ON tracks(id, album_id, artist_id, artist, album, title, genres, moods, audio_moods, lastfm_tags, duration_sec, bpm, musical_key, loudness_lufs, loudness_version)'],
   ['idx_tracks_era_open', 'CREATE INDEX IF NOT EXISTS idx_tracks_era_open ON tracks(era_untrusted, album_artist, album, original_year)'],
 ];
-// Replaced by one of the above; dropped at open so it stops costing writes.
-const RETIRED_STATS_INDEXES = ['idx_tracks_era_review'];
 
 export function ensureStatsIndexes(): void {
   const d = requireDb();
   try {
-    for (const name of RETIRED_STATS_INDEXES) d.prepare(`DROP INDEX IF EXISTS ${name}`).run();
     const names = STATS_INDEXES.map(([name]) => name);
     const present = new Set((d.prepare(
       `SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (${names.map(() => '?').join(', ')})`,

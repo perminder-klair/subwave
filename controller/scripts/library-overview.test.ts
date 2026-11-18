@@ -148,7 +148,8 @@ test('the needs-you sum adds analysis failures, settled unmeasurable facets (not
   assert.equal(a.remeasure, 1, 'a measurement still due is counted apart, never as an unreadable file');
   assert.equal(a.yearFailed, 1);
   assert.equal(a.damaged, 2, 'a burst far over full scale, never a loud master');
-  assert.equal(a.total, a.eraAlbums + a.unmeasurable + a.remeasure + a.yearFailed + a.analysisFailed + a.damaged);
+  assert.equal(a.total, a.eraAlbums + a.unmeasurable + a.yearFailed + a.analysisFailed + a.damaged,
+    'a measurement still due is shown, never summed: the next run takes it by itself');
 
   // The CSV lists exactly the tracks the tile counts, one row per track and issue.
   d().prepare(`UPDATE track_facet_status SET unmeasurable_reason = 'silent' WHERE track_id = 'x' AND facet = 'loudness'`).run();
@@ -168,6 +169,68 @@ test('the needs-you sum adds analysis failures, settled unmeasurable facets (not
   assert.match(body.find(l => l.startsWith('re-measure'))!, /tail: capped-download/);
   assert.match(body[0], /decode error \(99 failures\)/);
   assert.ok(!body.some(l => l.includes(',y,')), 'a year nobody knows is the Era tab\'s, not this list\'s');
+});
+
+test('only re-measures due is all clear: the tile is not raised for what a run takes by itself', () => {
+  track('z');
+  d().exec('DELETE FROM track_facet_status');
+  d().prepare(`INSERT INTO track_facet_status (track_id, facet, status, version, attempts, at) VALUES ('z', 'tail', 'unmeasurable', ?, 1, '2026-10-27')`)
+    .run(db.FACET_VERSIONS.tail - 1);
+  const a = ov.computeOverview(NOW).attention;
+  assert.equal(a.remeasure, 1);
+  assert.equal(a.total, 0);
+});
+
+test('a mood or tag rule answers from the row pass: no per-row track lookup', async () => {
+  // Loaded, so show-filter's fallback (library.get, a SELECT * per track)
+  // would really run if a row reached it: the case a station is in.
+  const library = await import('../src/music/library.js');
+  await library.load();
+  // Untagged, no audio moods, no Last.fm tags: every tag column NULL.
+  for (const id of ['a', 'b', 'c', 'd']) track(id, { moods: null, audio_moods: null, lastfm_tags: null });
+  track('calm', { audio_moods: null, lastfm_tags: null });
+  track('polka', { moods: null, audio_moods: null, lastfm_tags: '["polka"]' });
+  await blocklist.addRule({ label: 'No calm', field: 'mood', values: ['calm'] });
+  await blocklist.addRule({ label: 'No polka', field: 'tag', values: ['polka'] });
+  const conn = d();
+  const prepare = conn.prepare.bind(conn);
+  let lookups = 0;
+  conn.prepare = ((sql: string) => {
+    if (/SELECT \* FROM tracks WHERE id = \?/.test(sql)) lookups++;
+    return prepare(sql);
+  }) as typeof conn.prepare;
+  try {
+    const o = ov.computeOverview(NOW);
+    assert.equal(o.blocked.rule, 2, 'both rules still match from the row');
+    assert.equal(o.canAir, 4);
+  } finally {
+    conn.prepare = prepare;
+  }
+  assert.equal(lookups, 0, 'no row fell back to a wide-row lookup by id');
+});
+
+test('Recount forces the row pass even when nothing in its key moved', async () => {
+  track('a');
+  track('b');
+  await ov.refreshOverview('h');
+  assert.equal(ov.getOverview('h', Date.now())!.taggedCanAir, 2);
+  // A change the row key cannot see (same shape, same hint, same list).
+  d().prepare('UPDATE tracks SET moods = NULL WHERE id = ?').run('a');
+  await ov.refreshOverview('h');
+  assert.equal(ov.getOverview('h', Date.now())!.taggedCanAir, 2, 'an ordinary refresh reuses the row pass');
+  await ov.refreshOverview('h', { force: true });
+  assert.equal(ov.getOverview('h', Date.now())!.taggedCanAir, 1, 'a forced one reads the rows again');
+});
+
+test('a forced refresh that finds one running runs again after it', async () => {
+  track('a');
+  await ov.refreshOverview('h');
+  const running = ov.refreshOverview('h');
+  d().prepare('UPDATE tracks SET moods = NULL WHERE id = ?').run('a');
+  const forced = ov.refreshOverview('h', { force: true });
+  await running;
+  await forced;
+  assert.equal(ov.getOverview('h', Date.now())!.taggedCanAir, 0);
 });
 
 test('the page never waits: the first read is null and starts a refresh, later reads serve the snapshot', async () => {

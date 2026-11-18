@@ -201,11 +201,26 @@ async function doScan() {
   }
 }
 
+// The counts it hands library-overview, so a tagging or analysis run is
+// noticed without a scan there. One spelling for get() and refresh().
+const overviewHintOf = (tagged: number, analysed: number) => `${tagged}.${analysed}`;
+function overviewHint(): string {
+  try {
+    const { tagged, analysed } = readDbCounts();
+    return overviewHintOf(tagged, analysed);
+  } catch {
+    return '';
+  }
+}
+
 // Non-blocking; callers poll get() until `scanning` flips false. A failure lands
 // on `scanError` and leaves the previous total and scannedAt in place.
 export function refresh() {
-  // The operator's Recount also recounts the counts line, in the background.
-  void refreshOverview();
+  // The operator's Recount also recounts the counts line, in the background:
+  // forced, so its row pass runs again even when nothing in its key moved, and
+  // keyed on the same hint get() hands getOverview(), so the next poll does
+  // not take the hint's change for a library change and recount once more.
+  void refreshOverview(overviewHint(), { force: true });
   if (!inflight) inflight = doScan().catch(err => {
     cache.scanError = err?.message || String(err);
     console.error('[library-coverage] scan failed:', cache.scanError);
@@ -320,6 +335,6 @@ export async function get() {
     vocalStatus,
     // The Library page's counts line (library-overview.ts); null when the
     // library cannot be read, and the line then hides.
-    overview: getOverview(`${tagged}.${analysed}`),
+    overview: getOverview(overviewHintOf(tagged, analysed)),
   };
 }

@@ -41,7 +41,7 @@ export interface LibraryOverview {
   lengthLimits: { show: string | null; minSec: number | null; maxSec: number | null; within: number } | null;
   /** Distinct canAir tracks in the play history. */
   aired: { windowDays: number; recent: number; ever: number; never: number; since: string | null };
-  /** What only the operator can settle. */
+  /** What only the operator can settle (`total`), and the re-measures a run takes on its own (`remeasure`, outside `total`). */
   attention: { eraAlbums: number; unmeasurable: number; remeasure: number; yearFailed: number; analysisFailed: number; damaged: number; total: number };
   computedAt: string;
 }
@@ -139,22 +139,30 @@ export function overviewRowsSql(): string {
 
 function readRows(): OverviewRow[] {
   const raw = db.requireDb().prepare(overviewRowsSql()).all() as Array<Record<string, any>>;
-  return raw.map(r => ({
-    id: r.id,
-    title: r.title ?? null,
-    artist: r.artist ?? null,
-    album: r.album ?? null,
-    albumId: r.album_id ?? null,
-    artistId: r.artist_id ?? null,
-    genres: parseList(r.genres),
-    genre: parseList(r.genres)?.[0] ?? null,
-    moods: parseList(r.moods),
-    audioMoods: parseList(r.audio_moods),
-    lastfmTags: parseList(r.lastfm_tags),
-    durationSec: typeof r.duration_sec === 'number' ? r.duration_sec : null,
-    tagged: r.tagged === 1,
-    ready: r.ready === 1,
-  }));
+  return raw.map(r => {
+    const genres = parseList(r.genres);
+    return {
+      id: r.id,
+      title: r.title ?? null,
+      artist: r.artist ?? null,
+      album: r.album ?? null,
+      albumId: r.album_id ?? null,
+      artistId: r.artist_id ?? null,
+      genres,
+      genre: genres?.[0] ?? null,
+      // Every tag column this pass selects answers as an array, [] when
+      // unknown: show-filter's trackMoods/trackAllTags (a `mood` or `tag`
+      // never-play rule) trust a row that carries arrays and look anything
+      // else up by id, a wide-row read per track on the controller's only
+      // thread (the row-mapper rule, docs/internals/music.md).
+      moods: parseList(r.moods) ?? [],
+      audioMoods: parseList(r.audio_moods) ?? [],
+      lastfmTags: parseList(r.lastfm_tags) ?? [],
+      durationSec: typeof r.duration_sec === 'number' ? r.duration_sec : null,
+      tagged: r.tagged === 1,
+      ready: r.ready === 1,
+    };
+  });
 }
 
 function readAired(canAirIds: Set<string>, now: number): LibraryOverview['aired'] {
@@ -284,7 +292,10 @@ function readAttention(eraAlbums: number): LibraryOverview['attention'] {
   ).get() as { n: number }).n);
   const analysisFailed = safeCount(() => db.analysisFailedCount());
   const damaged = safeCount(() => db.damagedDecodeCount());
-  return { eraAlbums, unmeasurable, remeasure, yearFailed, analysisFailed, damaged, total: eraAlbums + unmeasurable + remeasure + yearFailed + analysisFailed + damaged };
+  // `remeasure` is shown but left out of `total`: the next run takes those
+  // tracks again and the operator has nothing to do, so a healthy library
+  // between runs is not flagged.
+  return { eraAlbums, unmeasurable, remeasure, yearFailed, analysisFailed, damaged, total: eraAlbums + unmeasurable + yearFailed + analysisFailed + damaged };
 }
 
 function activeLimits(): { show: string | null; minSec: number | null; maxSec: number | null } {
@@ -345,6 +356,8 @@ interface Snapshot {
 }
 let snap: Snapshot | null = null;
 let inflight: Promise<void> | null = null;
+// The operator's Recount asked for the row pass whatever its key says.
+let forceRows = false;
 
 const yieldTurn = () => new Promise<void>(resolve => setImmediate(resolve));
 
@@ -361,7 +374,10 @@ async function refresh(hint: string): Promise<void> {
   const context = contextKey();
   const rowsKey = `${shape}|${context}`;
   let rows = snap?.rows;
-  if (!rows || rows.key !== rowsKey || now - rows.at > SLOW_TTL_MS) {
+  // Taken at the start, so an ask that lands while this pass runs gets a pass of its own.
+  const force = forceRows;
+  forceRows = false;
+  if (force || !rows || rows.key !== rowsKey || now - rows.at > SLOW_TTL_MS) {
     rows = { key: rowsKey, context, at: now, limits, summary: summariseRows(readRows(), r => blocklist.hitOf(r), limits) };
     await yieldTurn();
   }
@@ -396,9 +412,18 @@ function contextKey(): string {
   return `${blocklist.stateKey()}|${l.minSec}|${l.maxSec}|${l.show}`;
 }
 
-/** Start (or join) a background refresh. Exported for tests and the recount button. */
-export function refreshOverview(hint = ''): Promise<void> {
+/**
+ * Start (or join) a background refresh. Exported for tests and the recount
+ * button. `force` (Recount) reruns the row pass even when its key is unchanged;
+ * a forced ask that finds a refresh running runs once more after it, since
+ * that one may have read the rows before the ask.
+ */
+export function refreshOverview(hint = '', opts: { force?: boolean } = {}): Promise<void> {
   if (!db.getDb()) return Promise.resolve();
+  if (opts.force) {
+    forceRows = true;
+    if (inflight) return inflight.then(() => refreshOverview(hint, opts));
+  }
   if (!inflight) {
     inflight = refresh(hint)
       .catch(err => { console.warn(`[library-overview] refresh failed: ${(err as Error)?.message || err}`); })
@@ -415,4 +440,5 @@ export function _settled(): Promise<void> {
 /** Test hook. */
 export function _resetOverviewCache(): void {
   snap = null;
+  forceRows = false;
 }
