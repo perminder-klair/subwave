@@ -117,6 +117,43 @@ test('a pass that died before settling forces a walk', async () => {
   assert.equal(readSnap().pending, undefined, 'the walk clears the dead mark');
 });
 
+// #2352: under tini a pass's process that died can have its pid reused (by a
+// restarted controller or tagger child). A pid alone would keep the pass
+// "running", and the hourly sweep standing down, for up to two days; the mark
+// carries the pass's start identity, as a journal opening does.
+const hasProc = (() => { try { readFileSync('/proc/self/stat'); return true; } catch { return false; } })();
+test('a pass mark whose pid now names another process is a pass that died (#2352)', { skip: !hasProc }, async () => {
+  const { procStartTime } = await import('../src/music/stem-usage-policy.js');
+  const ppidStart = procStartTime(readFileSync(`/proc/${process.ppid}/stat`, 'utf8'));
+  const ownStart = procStartTime(readFileSync('/proc/self/stat', 'utf8'));
+  assert.ok(ppidStart && ownStart);
+  const since = new Date().toISOString();
+  // The live process, as it is: still running, the sweep leaves the cache to it.
+  writeSnap({ bytes: 3 * MB, dirs: 1, pending: { pid: process.ppid, since, start: ppidStart } });
+  assert.equal((await stemCache.sweep(1)).skipped, 'pass-running');
+  // Its pid, another start: the pass died and the pid was reused.
+  for (const pid of [process.ppid, process.pid]) {
+    reset();
+    makeDir('reused', 2 * MB);
+    writeSnap({ bytes: 3 * MB, dirs: 1, pending: { pid, since, start: String(Number(pid === process.pid ? ownStart : ppidStart) - 1) } });
+    assert.equal((await stemCache.storedUsage())?.passRunning, false, `pid ${pid === process.pid ? 'self' : 'ppid'}: not running`);
+    const r = await stemCache.sweep(100 * MB);
+    assert.equal(r.skipped, undefined, 'the sweep walks instead of standing down');
+    assert.equal(readSnap().pending, undefined, 'and the walk clears the dead mark');
+    assert.equal(readSnap().bytes, 2 * MB);
+  }
+});
+
+test('a pass mark carries this process\'s start identity (#2352)', { skip: !hasProc }, async () => {
+  const { procStartTime } = await import('../src/music/stem-usage-policy.js');
+  reset();
+  makeDir('old', 2 * MB);
+  await stemCache.usage();
+  await stemCache.markPassPending();
+  assert.equal(readSnap().pending.start, procStartTime(readFileSync('/proc/self/stat', 'utf8')));
+  assert.ok(await stemCache.settlePassWrites([], 100 * MB), 'its own mark, so it settles');
+});
+
 test('a pass: mark pending, then settle adds only its new dirs and clears the mark', async () => {
   reset();
   makeDir('old', 2 * MB);

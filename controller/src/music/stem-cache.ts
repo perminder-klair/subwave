@@ -436,8 +436,13 @@ export interface UsageSnapshot {
   // Last FULL walk; the snapshot is stale once this is older than the max age.
   measuredAt: string;
   updatedAt: string;
-  // An analysis pass that may be writing stem dirs right now.
-  pending?: { pid: number; since: string };
+  // An analysis pass that may be writing stem dirs right now. `start` is its
+  // process's start identity (as on a journal opening, writerAlive): a pid
+  // reused after the pass died, as under tini after a restart, must not keep
+  // the pass "running" (and the hourly sweep standing down) for
+  // PENDING_MAX_AGE_MS. A mark without one (written before #2352, or where
+  // /proc cannot be read) is judged on its pid alone.
+  pending?: { pid: number; since: string; start?: string };
   // The cache changed outside the pass and the sweep: these are last-known totals.
   stale?: boolean;
   // Bytes in `bytes` the last over-budget sweep could not delete (folders this
@@ -613,7 +618,7 @@ async function readUsageState(): Promise<UsageState> {
     snap,
     root: stemsRoot(),
     nowMs: Date.now(),
-    pendingAlive: snap?.pending ? pidAlive(snap.pending.pid) : false,
+    pendingAlive: snap?.pending ? writerAlive(snap.pending.pid, snap.pending.start) : false,
   });
   let { verdict, reason } = judged;
   const ownVerdict = snapshotUntrusted && verdict === 'use' ? 'walk' : verdict;
@@ -803,6 +808,18 @@ function writerAlive(pid: number, start: string | undefined): boolean {
   return actual !== null && actual === start;
 }
 
+// The pending mark this process writes, and whether a mark is this process's
+// own: its pid, and its start identity when the mark carries one, so a
+// restarted process with its predecessor's pid never takes that pass's mark
+// for its own.
+function ownPendingMark(): NonNullable<UsageSnapshot['pending']> {
+  return { pid: process.pid, since: new Date().toISOString(), ...(OWN_START !== null ? { start: OWN_START } : {}) };
+}
+
+function isOwnPending(p: UsageSnapshot['pending']): boolean {
+  return p?.pid === process.pid && (p.start === undefined || p.start === OWN_START);
+}
+
 function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   if (pid === process.pid) return true;
@@ -974,7 +991,7 @@ export async function markPassPending(): Promise<boolean> {
       return false;
     }
     return writeSnapshot(buildSnapshot(
-      { ...snap, pending: { pid: process.pid, since: new Date().toISOString() }, updatedAt: new Date().toISOString() },
+      { ...snap, pending: ownPendingMark(), updatedAt: new Date().toISOString() },
       unevictableOf(snap),
     ));
   });
@@ -1013,7 +1030,7 @@ export async function settlePassWrites(
     if (!closed) await journalLost();
     const snap = await readSnapshot();
     const journal = await readJournal();
-    const mine = snap?.pending?.pid === process.pid;
+    const mine = isOwnPending(snap?.pending);
     const base = snapshotVerdict({ snap, root: stemsRoot(), nowMs: Date.now(), pendingAlive: true });
     if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running' || snap.stale || !session || !closed) {
       snapshotUntrusted = true;
@@ -1208,7 +1225,7 @@ export async function sweep(
   await step('walk:start');
   const before = await snapshotState();
   // The pass's own end-of-pass sweep is not "a pass running elsewhere".
-  if (before.verdict === 'pass-running' && before.snap?.pending?.pid !== process.pid) {
+  if (before.verdict === 'pass-running' && !isOwnPending(before.snap?.pending)) {
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0, skipped: 'pass-running' };
   }
   if (!force && before.verdict === 'use' && before.snap && before.snap.bytes <= budget) {
