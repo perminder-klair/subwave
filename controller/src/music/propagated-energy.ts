@@ -40,7 +40,7 @@ type Counts = { high: number; medium: number; low: number };
 // switches existed. Each switch's fields are present only while it is on, so
 // with both off (the default) an upgraded station gets the same result, its
 // skip reason included, and a reader can tell "off" from "on, nothing to do".
-export interface PropagatedEnergyStats {
+export interface AudioEnergyStats {
   scope: number;      // propagated tracks carrying audio scores
   corrected: number;  // rows whose energy the audio actually changed
   agreed: number;     // rows where the audio confirmed the propagated value
@@ -61,7 +61,7 @@ function switchStats(
   filled: Counts,
   overruleScope: number,
   overruled: number,
-): Partial<PropagatedEnergyStats> {
+): Partial<AudioEnergyStats> {
   return {
     ...(opts.fillEmpty ? { fillScope, filled } : {}),
     ...(opts.overruleLlm ? { overruleScope, overruled } : {}),
@@ -69,7 +69,7 @@ function switchStats(
 }
 
 // One log part per switch that is on, nothing for one that is off.
-function switchLogParts(stats: Partial<PropagatedEnergyStats>): string[] {
+function switchLogParts(stats: Partial<AudioEnergyStats>): string[] {
   const parts: string[] = [];
   if (stats.filled && stats.fillScope !== undefined) {
     const f = stats.filled;
@@ -90,9 +90,9 @@ function switchLogParts(stats: Partial<PropagatedEnergyStats>): string[] {
   return parts;
 }
 
-export function runPropagatedEnergyPass(
+export function runAudioEnergyPass(
   opts: AudioEnergyOptions = { fillEmpty: false, overruleLlm: false },
-): PropagatedEnergyStats {
+): AudioEnergyStats {
   const none: Counts = { high: 0, medium: 0, low: 0 };
   const empty = { scope: 0, corrected: 0, agreed: 0, undecided: 0 };
   const anySwitch = opts.fillEmpty || opts.overruleLlm;

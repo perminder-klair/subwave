@@ -47,7 +47,7 @@ const stateDir = mkdtempSync(join(tmpdir(), 'subwave-audio-energy-'));
 process.env.STATE_DIR = stateDir;
 
 const db = await import('../src/music/library-db.js');
-const { audioEnergyOptions, runPropagatedEnergyPass } = await import('../src/music/propagated-energy.js');
+const { audioEnergyOptions, runAudioEnergyPass } = await import('../src/music/propagated-energy.js');
 await db.open({ embeddingDim: 768, adoptStoredDim: true });
 
 after(async () => {
@@ -135,7 +135,7 @@ function seedCorrectionFixtures(): void {
   db.setTrackAudioMoodScoresBulk([{ id: 'untagged', scores: LOUD }]);
 }
 
-let stats: ReturnType<typeof runPropagatedEnergyPass>;
+let stats: ReturnType<typeof runAudioEnergyPass>;
 
 test('the correction scope is propagated rows carrying audio scores', () => {
   seedCorrectionFixtures();
@@ -144,7 +144,7 @@ test('the correction scope is propagated rows carrying audio scores', () => {
 });
 
 test('a misjudged propagated track is corrected from its audio', () => {
-  stats = runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false });
+  stats = runAudioEnergyPass({ fillEmpty: true, overruleLlm: false });
   assert.equal(db.getTrack('loud')!.energy, 'high', 'the reported failure case flips low → high');
 });
 
@@ -238,7 +238,7 @@ test('with both options off (the default) the pass only corrects propagated rows
   db.upsertTrackMeta('offBlank', { title: 'offBlank', artist: 'N', album: 'O', duration: 300 });
   db.upsertTrackTags('offBlank', { moods: ['night'], energy: null, source: 'llm', confidence: 0.8 });
   db.setTrackAudioMoodScoresBulk([{ id: 'offBlank', scores: LOUD }]);
-  const off = runPropagatedEnergyPass();
+  const off = runAudioEnergyPass();
   assert.equal(db.getTrack('offBlank')!.energy, null, 'no fill unless the operator opted in');
   assert.equal(db.getTrack('judged')!.energy, 'low', 'no overrule unless the operator opted in');
   assert.deepEqual(
@@ -261,7 +261,7 @@ test('the overrule replaces an LLM energy only where the audio is strongly decis
   db.upsertTrackTags('mine', { moods: ['night'], energy: 'low', source: 'manual', confidence: 1 });
   db.setTrackAudioMoodScoresBulk([{ id: 'mine', scores: LOUD }]);
 
-  const run = runPropagatedEnergyPass({ fillEmpty: false, overruleLlm: true });
+  const run = runAudioEnergyPass({ fillEmpty: false, overruleLlm: true });
   assert.equal(db.getTrack('judged')!.energy, 'high', 'an LLM low on strongly loud audio is overruled');
   assert.equal(db.getTrack('judged')!.source, 'llm', 'only the energy column moves');
   assert.equal(db.getTrack('llmQuietWrong')!.energy, 'low', "an LLM medium on strongly quiet audio too");
@@ -269,7 +269,7 @@ test('the overrule replaces an LLM energy only where the audio is strongly decis
   assert.equal(db.getTrack('mine')!.energy, 'low', "an operator's energy is never overruled");
   assert.equal(db.getTrack('offBlank')!.energy, null, 'the overrule never fills');
   assert.equal(run.overruled, 2);
-  assert.equal(runPropagatedEnergyPass({ fillEmpty: false, overruleLlm: true }).overruled, 0, 'idempotent');
+  assert.equal(runAudioEnergyPass({ fillEmpty: false, overruleLlm: true }).overruled, 0, 'idempotent');
 });
 
 test('the overrule write loses to an energy changed between the read and the write', () => {
@@ -280,7 +280,7 @@ test('the overrule write loses to an energy changed between the read and the wri
 });
 
 test('re-running is idempotent — nothing left to correct', () => {
-  const again = runPropagatedEnergyPass();
+  const again = runAudioEnergyPass();
   assert.equal(again.corrected, 0, 'the second pass changes nothing');
   assert.equal(again.agreed, 2, 'both decisive rows now agree with the audio');
   assert.deepEqual(
@@ -321,21 +321,21 @@ function withNoScores<T>(fn: () => T): T {
 }
 
 test('with both switches off, an empty library skips exactly as before the switches', () => {
-  let res!: ReturnType<typeof runPropagatedEnergyPass>;
-  const logs = logsOf(() => { res = withNoScores(() => runPropagatedEnergyPass()); });
+  let res!: ReturnType<typeof runAudioEnergyPass>;
+  const logs = logsOf(() => { res = withNoScores(() => runAudioEnergyPass()); });
   assert.deepEqual(res, { scope: 0, corrected: 0, agreed: 0, undecided: 0, skipped: 'no propagated tracks with audio scores' });
   assert.deepEqual(logs, [], 'and logs nothing, as before');
 });
 
 test('with both switches off, the log line is the correction sentence alone', () => {
-  const logs = logsOf(() => runPropagatedEnergyPass());
+  const logs = logsOf(() => runAudioEnergyPass());
   assert.equal(logs.length, 1);
   assert.match(logs[0], /^Audio-derived energy over \d+ propagated tracks — \d+ corrected, \d+ confirmed, \d+ left as-is \(audio not decisive\)$/);
 });
 
 test('a switch that is on says so even with nothing to do', () => {
-  let res!: ReturnType<typeof runPropagatedEnergyPass>;
-  const idle = logsOf(() => { res = withNoScores(() => runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: true })); });
+  let res!: ReturnType<typeof runAudioEnergyPass>;
+  const idle = logsOf(() => { res = withNoScores(() => runAudioEnergyPass({ fillEmpty: true, overruleLlm: true })); });
   assert.equal(res.skipped, 'no tracks with audio scores for this pass');
   assert.equal(res.fillScope, 0);
   assert.deepEqual(res.filled, { high: 0, medium: 0, low: 0 });
@@ -350,9 +350,9 @@ test('a switch that is on says so even with nothing to do', () => {
   sql.exec('SAVEPOINT no_blank');
   try {
     sql.exec("UPDATE tracks SET audio_mood_scores_json = NULL WHERE id = 'offBlank'");
-    const on = logsOf(() => runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false }));
+    const on = logsOf(() => runAudioEnergyPass({ fillEmpty: true, overruleLlm: false }));
     assert.match(on.join('\n'), /; no empty energies to fill$/);
-    const off = logsOf(() => runPropagatedEnergyPass());
+    const off = logsOf(() => runAudioEnergyPass());
     assert.doesNotMatch(off.join('\n'), /empty energ/);
   } finally {
     sql.exec('ROLLBACK TO no_blank');
@@ -370,9 +370,9 @@ test('an empty propagated energy the correction leaves undecided is filled, and 
     db.setTrackAudioMoodScoresBulk([{ id: 'propBlankMid', scores: MIDDLING }]);
     // offBlank is still empty here; hide it so this run's fill is this row alone.
     sql.exec("UPDATE tracks SET audio_mood_scores_json = NULL WHERE id = 'offBlank'");
-    runPropagatedEnergyPass();
+    runAudioEnergyPass();
     assert.equal(db.getTrack('propBlankMid')!.energy, null, 'switch off: the correction alone leaves it empty');
-    const on = runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false });
+    const on = runAudioEnergyPass({ fillEmpty: true, overruleLlm: false });
     const t = db.getTrack('propBlankMid')!;
     assert.equal(t.energy, 'medium', 'switch on: the undecided middle is filled as medium');
     assert.equal(t.source, 'propagated', 'only the energy column moves');
@@ -407,7 +407,7 @@ test('the fill counts only its own writes, and never a row step 1 settled', () =
     WHEN NEW.id = 'raceTrigger'
     BEGIN UPDATE tracks SET energy = 'high' WHERE id = 'raceTarget'; END`);
   try {
-    const run = runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false });
+    const run = runAudioEnergyPass({ fillEmpty: true, overruleLlm: false });
     assert.equal(db.getTrack('raceTrigger')!.energy, 'high', 'step 1 ran, so the other writer did too');
     assert.equal(db.getTrack('propBlank')!.energy, 'high');
     assert.equal(db.getTrack('raceTarget')!.energy, 'high');
@@ -442,7 +442,7 @@ test("the fill's write never gives an energy to a row whose tags were cleared af
       WHEN NEW.id = 'clearTrigger'
       BEGIN UPDATE tracks SET moods = NULL, energy = NULL, source = NULL WHERE id = 'clearTarget'; END`);
     try {
-      const run = runPropagatedEnergyPass({ fillEmpty: true, overruleLlm: false });
+      const run = runAudioEnergyPass({ fillEmpty: true, overruleLlm: false });
       assert.equal(db.getTrack('clearTrigger')!.energy, 'high', 'step 1 ran, so the other writer did too');
       const t = db.getTrack('clearTarget')!;
       assert.equal(t.energy, null, 'an untagged row is never filled');
