@@ -1357,7 +1357,7 @@ async function enqueueSelected(
   result: { song: any; reason?: string | null; source?: string | null; transition?: string | null },
   { wantLink, pickAnchor, showAt = null }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null },
 ): Promise<'queued' | 'collision'> {
-  if (result.source !== 'show-playlist-order' && (result.song.subFlow || subFlows.list().some(flow => flow.enabled && flow.tracks.some(track => track.id === result.song.id)))) {
+  if (result.song.subFlow || subFlows.list().some(flow => flow.enabled && flow.tracks.some(track => track.id === result.song.id))) {
     const { scope } = await livePickerScope(queue, { showAt, context: ctx });
     const resolved = selectionFlows([result.song], scope)[0];
     if (!resolved) return 'collision';

@@ -22,6 +22,7 @@ const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { runTrackEvent } = await import('../src/broadcast/dj-agent.js');
 const { pickViaPool } = await import('../src/music/picker.js');
+const { clearPlaylistCache } = await import('../src/music/show-playlist.js');
 const { enqueuePick } = await import('../src/broadcast/dj-agent/enqueue.js');
 const { discardFlow, expectFlowPlayback } = await import('../src/music/sub-flow-playback.js');
 const { config } = await import('../src/config.js');
@@ -67,6 +68,8 @@ test.before(async () => {
       if (endpoint === 'stream') return new Response(audio[songs.findIndex(song => song.id === id)], { headers: { 'content-type': 'audio/wav' } });
       const data = endpoint === 'getRandomSongs' ? { randomSongs: { song: [songs[discovered]] } }
         : endpoint === 'getStarred2' ? { starred2: { song: [songs[discovered]] } }
+          : endpoint === 'getPlaylists' ? { playlists: { playlist: [{ id: 'flow-list', name: 'Flow list' }] } }
+            : endpoint === 'getPlaylist' ? { playlist: { entry: songs } }
           : endpoint === 'getAlbumList2' ? { albumList2: { album: [{ id: 'album' }] } }
             : endpoint === 'getSong' ? { song: songs.find(song => song.id === id) }
               : endpoint === 'getAlbum' ? { album: { id: 'album', songCount: 3, song: songs } } : {};
@@ -146,6 +149,28 @@ test('the Agentic tool loop also sees and queues the ordered unit when discovery
     assert.ok(modelPayloads.some(payload => payload.includes('randomSongs')), 'Agentic discovery actually ran');
     assert.ok(modelPayloads.some(payload => payload.includes('Three parts')));
   } finally {
+    if (q._persistTimer) clearTimeout(q._persistTimer);
+    if (q.upcoming[0]?.flow) await discardFlow(q.upcoming[0].flow);
+    expectFlowPlayback(false);
+  }
+});
+
+test('an in-order automatic pick of a saved Flow member queues the full Flow', async () => {
+  clearPlaylistCache();
+  const now = Date.now();
+  await settings.update({
+    shows: [{ id: 's_flow_order', name: 'Flow order', personaId: settings.get().personas[0].id,
+      playlistIds: ['flow-list'], playlistStrict: true, playlistInOrder: true }],
+    scheduleOverride: { showId: 's_flow_order', startedAt: now - 60_000, expiresAt: now + 3_600_000 },
+  } as never);
+  const q = snapshot();
+  try {
+    session.start(context as any);
+    await runTrackEvent(q, context, { wantLink: false });
+    assert.deepEqual(q.upcoming.map((item: any) => item.track.id), songs.map(song => song.id));
+    assert.ok(q.upcoming.every((item: any) => item.flow && item.aiPicked));
+  } finally {
+    clearPlaylistCache();
     if (q._persistTimer) clearTimeout(q._persistTimer);
     if (q.upcoming[0]?.flow) await discardFlow(q.upcoming[0].flow);
     expectFlowPlayback(false);
