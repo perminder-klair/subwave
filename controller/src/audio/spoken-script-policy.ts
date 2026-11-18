@@ -11,12 +11,16 @@
 
 const CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
 const ENGLISH_RE = /^english(?:\b|\s|[-_(])/i;
-const CJK_LANGUAGE_RE = /^(?:japanese|nihongo|chinese|mandarin|cantonese|putonghua|taiwanese|hokkien|hakka|shanghainese|korean|hangugeo)(?:\b|\s|[-_(]|$)/i;
+// A CJK language named anywhere in the entry, as a whole word ("Traditional
+// Chinese", "Mandarin Chinese"), or a whole-entry code with an optional region
+// or script subtag (`zh`, `zh-TW`, `zh-Hant`, `ja-JP`, `ko_KR`). No misspellings.
+const CJK_LANGUAGE_RE = /(?<![a-z])(?:japanese|nihongo|chinese|mandarin|cantonese|putonghua|taiwanese|hokkien|hakka|shanghainese|korean|hangugeo)(?![a-z])/i;
+const CJK_CODE_RE = /^(?:zh|ja|ko)(?:[-_][a-z0-9]{2,8})*$/i;
 const CJK_NAME_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 export function cjkWrittenLanguage(language: unknown): boolean {
   const lang = String(language || '').trim();
-  return CJK_LANGUAGE_RE.test(lang) || CJK_NAME_RE.test(lang);
+  return CJK_LANGUAGE_RE.test(lang) || CJK_CODE_RE.test(lang) || CJK_NAME_RE.test(lang);
 }
 
 export function cjkUnsafeForSpokenLanguage(language: unknown, mix: readonly unknown[] = []): boolean {
