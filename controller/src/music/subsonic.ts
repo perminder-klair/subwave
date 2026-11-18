@@ -837,8 +837,13 @@ export async function getStructuredLyrics(
 // owns the judgement; this only feeds it.
 // `includeBlocked` is for the music-server COUNT only (library-coverage.ts):
 // what the server holds, never-play list included, so it compares with the
-// library mirror, which keeps blocked rows. Every walk that tags, analyses or
-// airs takes the default and never sees a blocked song.
+// library mirror, which keeps blocked rows. The default rejects blocked songs
+// only in a process that has loaded the blocklist (the main one). The tag and
+// analyse walks run in child processes (broadcast/tagger.ts) that never load
+// it, so they DO see blocked songs: that is why blocked rows stay in the
+// mirror and pruneMissingTracks() keeps them (scripts/walk-keeps-blocked-rows
+// .test.ts). Loading the blocklist in a walk child would prune every blocked
+// row on the next run.
 export async function* iterateAllSongs({ requireComplete = false, includeBlocked = false } = {}) {
   let offset = 0;
   const BATCH = 500;
