@@ -506,6 +506,23 @@ test('the count reaches the snapshot, so the next boot can restore it', async ()
   assert.equal(snap.tracksSinceJingle, 1, 'the absolute count is written, not only derived');
 });
 
+test('operator press ignores the show jingle list', async () => {
+  const { setCache } = await import('../src/settings/store.js');
+  const settings = await import('../src/settings.js');
+  const at = Date.now();
+  setCache({
+    ...settings.get(),
+    shows: [{ id: 's_lunch', name: 'The lunch show', personaId: settings.get().personas[0].id, allowedJingles: [filename] }],
+    scheduleOverride: { showId: 's_lunch', startedAt: at - 60_000, expiresAt: at + 3600_000 },
+  });
+  assert.deepEqual(await queue.playJingle(other), { ok: true });
+  assert.equal(
+    readFileSync(join(STATE, 'jingle-now.txt'), 'utf8'),
+    `annotate:subwave_kind="jingle":${join(jingleDir, other)}`,
+  );
+  await markAired(other);
+});
+
 test.after(() => {
   if (existsSync(STATE)) rmSync(STATE, { recursive: true, force: true });
 });

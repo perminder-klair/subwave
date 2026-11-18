@@ -52,6 +52,18 @@ broadcast image and a mixer restart: an old, unreachable or still-rotating mixer
 cannot prove safety, so no overlays are sent. The default `between` mode keeps
 the existing station behavior.
 
+## Jingles and beds per show
+
+A show can list the jingles and the beds it allows (`allowedJingles`,
+`allowedBeds`), under Imaging in the show editor. An empty list allows every
+jingle or bed, as before. A non-empty list is strict: while that show is on air,
+the automatic rotate, the over-music ID and the link bed draw only from it. If
+none of the listed entries exists any more, the jingle slot is skipped or the
+link airs without a bed, and the editor and the doctor say so. Pressing play on
+a jingle ignores the list. Jingle lists need the controller to count the rotate
+(Imaging → Jingles → counted by: Controller, then restart the mixer); the
+mixer's own rotate cannot see which show is on air.
+
 ## Audio imports
 
 With ffmpeg installed, Imaging uploads convert to 16-bit PCM WAV at 44.1 kHz

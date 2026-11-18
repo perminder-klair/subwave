@@ -302,6 +302,11 @@ function resolveShowShape(show, s) {
     // same resolveExcludedPlaylistIds, so omitting it here would be the #779
     // no-op on every pick path.
     excludedAlbumKinds: Array.isArray(show.excludedAlbumKinds) ? show.excludedAlbumKinds.filter((v: unknown) => typeof v === 'string') : [],
+    // Imaging allowlists, read off the RESOLVED show by the jingle rotate, the
+    // over-music ID and the bed pick (broadcast/show-allowlist.ts). Omitting
+    // them here is the #779 no-op again.
+    allowedJingles: Array.isArray(show.allowedJingles) ? show.allowedJingles.filter((v: unknown) => typeof v === 'string') : [],
+    allowedBeds: Array.isArray(show.allowedBeds) ? show.allowedBeds.filter((v: unknown) => typeof v === 'string') : [],
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.

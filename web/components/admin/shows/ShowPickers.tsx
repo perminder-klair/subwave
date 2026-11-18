@@ -8,6 +8,7 @@ import { SkeletonText } from '../../ui/skeleton';
 import { Input } from '../../ui/input';
 import { SWATCH_KEYS } from '../../../lib/theme-tokens.generated';
 import type { PlaylistIndexStatus } from './types';
+import { allowlistSkipNotice } from './lib';
 
 interface PersonaOpt {
   id: string;
@@ -155,6 +156,63 @@ interface PlaylistOpt {
   songCount: number | null;
 }
 
+// The picker's words. The default is the Navidrome playlist wording; the
+// show's Imaging lists reuse the same picker over the jingle and bed library.
+interface PickerCopy {
+  loading: string;
+  unreachable: string;
+  empty: string;
+  find: string;
+  missingLabel: string;
+  missingHint: string;
+  missingTitle: (id: string) => string;
+  noMatch: string;
+}
+
+const PLAYLIST_PICKER_COPY: PickerCopy = {
+  loading: 'Loading Navidrome playlists',
+  unreachable: "Couldn't reach Navidrome to list playlists, so this show's pinned playlists are left as they are. Reopen this panel to try again.",
+  empty: 'No Navidrome playlists found yet. Create some in Navidrome, then reopen this panel.',
+  find: 'Find a playlist…',
+  missingLabel: '(missing)',
+  missingHint: 'deleted in Navidrome',
+  missingTitle: id => `Playlist ${id} no longer exists in Navidrome. Uncheck to remove it from this show.`,
+  noMatch: 'No playlists match this search.',
+};
+
+export const IMAGING_PICKER_COPY: PickerCopy = {
+  loading: 'Loading the imaging library',
+  unreachable: "Couldn't load the imaging library, so this show's list is left as it is. Reopen this panel to try again.",
+  empty: 'Nothing in the library yet. Add some under Imaging, then reopen this panel.',
+  find: 'Find…',
+  missingLabel: '(deleted)',
+  missingHint: 'deleted from the library',
+  missingTitle: id => `${id} no longer exists in the library. Uncheck to remove it from this show.`,
+  noMatch: 'Nothing matches this search.',
+};
+
+// Under a show's jingle or bed picker: why its draws are skipped, if they are.
+export function AllowlistSkipNotice(props: {
+  kind: 'jingle' | 'bed';
+  listed: readonly string[];
+  libraryIds: readonly string[];
+  status: PlaylistIndexStatus;
+}) {
+  const text = allowlistSkipNotice(props.kind, props.listed, props.libraryIds, props.status);
+  return text ? <span role="status" className="field-hint text-vermilion">{text}</span> : null;
+}
+
+// Under a show's jingle picker: the mixer's own rotate cannot see the show.
+export function JingleMixerNotice({ ignored, listed }: { ignored: boolean; listed: readonly string[] }) {
+  if (!ignored || !listed.length) return null;
+  return (
+    <span role="status" className="field-hint text-vermilion">
+      The mixer counts the jingle rotate, and its rotate ignores this list. Switch Imaging → Jingles → counted by to
+      Controller, then restart the mixer.
+    </span>
+  );
+}
+
 // Checkbox list for the show's playlist anchor / exclusion sets.
 //
 // Pinned ids that no longer resolve get a row of their own: a playlist deleted
@@ -173,6 +231,7 @@ export function PlaylistPicker({
   max,
   onChange,
   searchLabel,
+  copy = PLAYLIST_PICKER_COPY,
 }: {
   playlists: PlaylistOpt[];
   status: PlaylistIndexStatus;
@@ -180,6 +239,7 @@ export function PlaylistPicker({
   max: number;
   onChange: (next: string[]) => void;
   searchLabel: string;
+  copy?: PickerCopy;
 }) {
   const [search, setSearch] = useState('');
   const missing = status === 'ready' ? selected.filter(id => !playlists.some(p => p.id === id)) : [];
@@ -188,7 +248,7 @@ export function PlaylistPicker({
   if (status === 'loading') {
     return (
       <div className="grid max-h-44 gap-1 overflow-y-auto border border-ink bg-[var(--ink-softer)] p-2">
-        <SkeletonText lines={4} label="Loading Navidrome playlists" />
+        <SkeletonText lines={4} label={copy.loading} />
       </div>
     );
   }
@@ -198,18 +258,13 @@ export function PlaylistPicker({
   // exists to remove. Say the index is unavailable and leave the config alone.
   if (status === 'error') {
     return (
-      <span className="field-hint opacity-60">
-        Couldn&apos;t reach Navidrome to list playlists, so this show&apos;s pinned playlists are left as they are.
-        Reopen this panel to try again.
-      </span>
+      <span className="field-hint opacity-60">{copy.unreachable}</span>
     );
   }
 
   if (!playlists.length && !missing.length) {
     return (
-      <span className="field-hint opacity-60">
-        No Navidrome playlists found yet. Create some in Navidrome, then reopen this panel.
-      </span>
+      <span className="field-hint opacity-60">{copy.empty}</span>
     );
   }
 
@@ -223,7 +278,7 @@ export function PlaylistPicker({
         <Input
           type="search"
           aria-label={searchLabel}
-          placeholder="Find a playlist…"
+          placeholder={copy.find}
           value={search}
           onChange={event => setSearch(event.target.value)}
         />
@@ -255,14 +310,14 @@ export function PlaylistPicker({
           <label
             key={id}
             className="flex cursor-pointer items-center gap-2 text-sm opacity-70"
-            title={`Playlist ${id} no longer exists in Navidrome. Uncheck to remove it from this show.`}
+            title={copy.missingTitle(id)}
           >
             <input type="checkbox" checked onChange={() => onChange(selected.filter(x => x !== id))} />
-            <span className="truncate">(missing) {id}</span>
-            <span className="field-hint">deleted in Navidrome</span>
+            <span className="truncate">{copy.missingLabel} {id}</span>
+            <span className="field-hint">{copy.missingHint}</span>
           </label>
         ))}
-        {matching.length === 0 && <p className="p-2 text-xs text-muted">No playlists match this search.</p>}
+        {matching.length === 0 && <p className="p-2 text-xs text-muted">{copy.noMatch}</p>}
       </div>
     </div>
   );
