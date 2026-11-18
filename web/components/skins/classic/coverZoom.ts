@@ -1,5 +1,5 @@
-// The classic skin's cover zoom: the two decisions it makes, kept pure so they
-// are pinned without a DOM (cover-zoom.test.ts).
+// The classic skin's cover zoom: the decisions it makes, kept pure so they
+// are pinned without a DOM (cover-zoom.test.tsx).
 //
 // A press on the stage's cover enlarges it while there is a cover to show and
 // opens the timeline as before when there is none (no art yet, off air), so
@@ -13,6 +13,32 @@ export type CoverPress = 'zoom' | 'timeline';
 
 export function coverPressAction(hasArt: boolean): CoverPress {
   return hasArt ? 'zoom' : 'timeline';
+}
+
+/** Whether the enlarged cover goes. It goes when there is nothing left to show
+ *  (no art, off air) or another layer opens over it: a drawer, or the command
+ *  palette. The palette is the one layer that can open over it (⌘K works
+ *  while the skin's bare-key shortcuts are off), and leaving the cover under
+ *  it would let one Escape close both. */
+export function coverZoomDismissed(s: {
+  hasCover: boolean;
+  offline: boolean;
+  drawerOpen: boolean;
+  paletteOpen: boolean;
+}): boolean {
+  return !s.hasCover || s.offline || s.drawerOpen || s.paletteOpen;
+}
+
+/** Whether the skin's bare-key shortcuts are off. They are while a dialog owns
+ *  the keys: the palette, the shortcuts help, or the enlarged cover, so a key
+ *  (Space on its close button included) never acts on the player behind it.
+ *  The cover closes on Escape through its own listener. */
+export function skinShortcutsDisabled(s: {
+  paletteOpen: boolean;
+  shortcutsOpen: boolean;
+  coverOpen: boolean;
+}): boolean {
+  return s.paletteOpen || s.shortcutsOpen || s.coverOpen;
 }
 
 export interface Box {

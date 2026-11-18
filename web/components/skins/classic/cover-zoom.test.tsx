@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import CoverZoom from './CoverZoom';
-import { coverPressAction, zoomFrom, zoomTransform } from './coverZoom';
+import { coverPressAction, coverZoomDismissed, skinShortcutsDisabled, zoomFrom, zoomTransform } from './coverZoom';
 
 test('a press on the cover enlarges it when there is art, and opens the timeline when there is none', () => {
   assert.equal(coverPressAction(true), 'zoom');
@@ -59,4 +59,21 @@ test('with no title or album the caption shows only what it has', () => {
   assert.match(html, /aria-label="Album cover"/);
   assert.match(html, />Someone</);
   assert.doesNotMatch(html, /·/);
+});
+
+test('while the large cover is open the skin\'s bare-key shortcuts are off, so no key acts on the player behind it', () => {
+  const closed = { paletteOpen: false, shortcutsOpen: false, coverOpen: false };
+  assert.equal(skinShortcutsDisabled(closed), false);
+  assert.equal(skinShortcutsDisabled({ ...closed, coverOpen: true }), true);
+  assert.equal(skinShortcutsDisabled({ ...closed, paletteOpen: true }), true);
+  assert.equal(skinShortcutsDisabled({ ...closed, shortcutsOpen: true }), true);
+});
+
+test('the large cover goes when the palette opens over it, so one Escape never closes two layers', () => {
+  const showing = { hasCover: true, offline: false, drawerOpen: false, paletteOpen: false };
+  assert.equal(coverZoomDismissed(showing), false);
+  assert.equal(coverZoomDismissed({ ...showing, paletteOpen: true }), true);
+  assert.equal(coverZoomDismissed({ ...showing, drawerOpen: true }), true);
+  assert.equal(coverZoomDismissed({ ...showing, hasCover: false }), true);
+  assert.equal(coverZoomDismissed({ ...showing, offline: true }), true);
 });
