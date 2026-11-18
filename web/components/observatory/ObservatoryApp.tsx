@@ -653,6 +653,17 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
                       SOUND MAP OUT OF DATE
                     </span>
                   )}
+                  {proj.lastError && (
+                    <span className="t-caption rail-proj-error" role="status">
+                      LAST RUN FAILED: {proj.lastError}
+                      {proj.bootRetryHeld && (
+                        <span className="ad-muted">
+                          {' '}
+                          · not retried on boot until the library or SUBWAVE_MAP_HEAP_MB changes
+                        </span>
+                      )}
+                    </span>
+                  )}
                   <button className="flt-tog wide" onClick={startProjection} disabled={projBusy}>
                     {projBusy ? 'STARTING…' : proj.meta ? 'RE-PROJECT SOUND MAP' : 'PROJECT SOUND MAP'}
                   </button>

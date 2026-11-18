@@ -37,6 +37,35 @@ test('every interval 2..60 preserves legacy cadence across hours without :00 or 
   }
 });
 
+test("a whole-hour station's schedule is unchanged by the station-boundary minute", () => {
+  for (let interval = 1; interval <= 60; interval++) {
+    assert.equal(autoPlaylistRefreshCron(interval, 0), autoPlaylistRefreshCron(interval), `interval ${interval}`);
+  }
+});
+
+test("a fractional-offset station's refresh keeps off its :00 too, wherever a rotation allows", () => {
+  // The station's :00 sits at process :15, :30 or :45 (time.ts
+  // stationHourStartProcessMinute). An every-2 refresh cannot miss :00, :02 and
+  // a :15 or :45 boundary, and keeps the legacy schedule instead.
+  for (const boundary of [15, 30, 45]) {
+    for (let interval = 2; interval <= 60; interval++) {
+      const expr = autoPlaylistRefreshCron(interval, boundary);
+      assert.ok(cron.validate(expr), expr);
+      const minutes = expr.split(' ')[0].split(',').map(Number);
+      const legacy = Array.from({ length: 60 }, (_, m) => m).filter(m => m % interval === 0);
+      assert.equal(minutes.length, legacy.length, expr);
+      assert.ok(!minutes.includes(0) && !minutes.includes(2), expr);
+      assert.deepEqual(gaps(minutes), gaps(legacy), expr);
+      const avoidable = !(interval === 2 && boundary !== 30);
+      if (avoidable) assert.ok(!minutes.includes(boundary), `interval ${interval}, boundary :${boundary}: ${expr}`);
+      else assert.equal(expr, autoPlaylistRefreshCron(interval), `interval ${interval}, boundary :${boundary} falls back`);
+    }
+  }
+  // The issue's example: every 8 minutes from :07 reaches :15, a Nepal station's :00.
+  assert.ok(autoPlaylistRefreshCron(8).split(' ')[0].split(',').includes('15'));
+  assert.ok(!autoPlaylistRefreshCron(8, 15).split(' ')[0].split(',').includes('15'));
+});
+
 
 
 test('idle periodic work starts, repeated busy slots skip without catch-up', async () => {
@@ -91,7 +120,9 @@ test('only the periodic cron uses scheduled admission; startup and the exported 
   assert.match(scheduler, /export async function refreshAutoPlaylist\(\{ automatic = false \} = \{\}\) \{\s*return playlistRefresh\.request\(\{ automatic \}\);/);
   assert.match(scheduler, /createAutoPlaylistRefreshRunner\(async \(\) => \{\s*await refreshAutoPlaylist\(\{ automatic: true \}\);\s*\}, playlistRefresh\.isBusy\)/);
   assert.match(scheduler, /export function startScheduler\(\) \{\s*refreshAutoPlaylist\(\{ automatic: true \}\)\.catch/);
-  assert.match(scheduler, /const refreshCron = autoPlaylistRefreshCron\(config\.show\.autoQueueRefreshMinutes\);\s*cron\.schedule\(refreshCron, async \(\) => \{/);
+  assert.match(scheduler, /const expr = autoPlaylistRefreshCron\(config\.show\.autoQueueRefreshMinutes, stationHourStartProcessMinute\(\)\);\s*autoPlaylistRefreshTask\?\.destroy\(\);\s*autoPlaylistRefreshTask = cron\.schedule\(expr, async \(\) => \{/);
+  // A zone change moves the station's :00, so the task follows it.
+  assert.match(scheduler, /let refreshCron = scheduleAutoPlaylistRefresh\(\);\s*onStationTimezoneChange\(\(\) => \{\s*const next = scheduleAutoPlaylistRefresh\(\);/);
   assert.match(scheduler, /await autoPlaylistRefresh\.refreshScheduled\(\)/);
   assert.match(scheduler, /Auto-playlist periodic refresh skipped/);
   assert.match(scheduler, /Periodic playlist failed/);
@@ -100,8 +131,8 @@ test('only the periodic cron uses scheduled admission; startup and the exported 
 
 test('maintenance leaves talk, session and programme sequencing on their existing clock', () => {
   assert.match(scheduler, /cron\.schedule\('\* \* \* \* \*', talkTick\);/);
-  // The roll's :00 is the station clock's since #2234 (station-hour-roll.test.ts).
-  assert.match(scheduler, /if \(isStationHourStart\(now\)\) \{[\s\S]*?await rollSessionNow\(\{ airHandoff: false, reason: 'scheduled boundary' \}\)/);
+  // The roll follows the station hour and show (#2234, #2254; station-hour-roll.test.ts).
+  assert.match(scheduler, /if \(sessionRollDue\(lastTickPosition\(\), position\)\) \{[\s\S]*?await rollSessionNow\(\{ airHandoff: false, reason: 'scheduled boundary' \}\)/);
   assert.ok(scheduler.indexOf('await programme.ensurePlan(ctx);') < scheduler.indexOf('await djAgent.runPersonaHandoff(queue, ctx);'));
   assert.match(scheduler, /cron\.schedule\('23 \* \* \* \*', scheduledBackupTick\);/);
   assert.match(scheduler, /cron\.schedule\('17 4 \* \* \*', nightlyDoctor\);/);

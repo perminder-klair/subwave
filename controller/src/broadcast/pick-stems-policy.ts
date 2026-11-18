@@ -97,12 +97,22 @@ export function trackNeed(t: PickStemsTrackFacts): PickStemsNeed | PickStemsVeto
 }
 
 // After the capped download. The worker separates no tail from a truncated
-// file (no outro to align to), and it always separates the head, so when the
-// tail is all that is missing a truncated file would spend a head separation
-// rewriting stems already on disk.
+// file (no outro to align to), so when the tail is all that is missing a
+// truncated file has nothing to give: a worker that honours stems_windows
+// would answer unmeasurable, and an older one, which always separates the
+// head, would spend a head separation rewriting stems already on disk.
 export function afterDownload(need: PickStemsNeed, complete: boolean): PickStemsVeto | null {
   if (need.head) return null;
   return need.tail && complete ? null : 'truncated';
+}
+
+// The windows the request asks the worker to separate (`stems_windows`).
+// With the head already cached, only the tail (#2253): the head separation is
+// about half the request's Demucs time, spent rewriting stems on disk. A head
+// to fill asks for both, as before (undefined: the field is not sent), since
+// the worker only ever reaches this with a window it can use missing.
+export function stemsWindowsFor(need: PickStemsNeed): ['tail'] | undefined {
+  return !need.head && need.tail ? ['tail'] : undefined;
 }
 
 export function describeNeed(need: PickStemsNeed): string {
@@ -160,9 +170,27 @@ export function designedOvershootBytes(budgetBytes: number, estTrackBytes: numbe
 // finds its staging file gone and writes nothing, so the worst case is one dir
 // more; with a sidecar pool each member can hold one such orphan, so it is up
 // to ANALYZE_CONCURRENCY (at most 8) dirs more.
-export function budgetVeto(u: { usedBytes: number; budgetBytes: number; estTrackBytes: number }): PickStemsVeto | null {
+//
+// The rule judges the bytes the sweep can evict. Folders this user cannot
+// delete (stem-cache.ts sweep, a share's permissions) leave the sweep's own
+// budget check, so it stops evicting once the rest fits. Counted here, they
+// kept the cache "full" for good once they exceeded the allowance: one pick was
+// admitted, every later one was turned away, and the notice's "until the hourly
+// sweep makes room" never came true, because the sweep had nothing left to do
+// (#2253). `unevictableBytes` is what the last over-budget sweep found, as
+// stem-cache.ts usage() cleans it (0 when unknown, as after a walk, which is
+// the old rule). So with stuck folders the
+// cache can sit over budget by their size plus the allowance, and the sweep
+// still takes the evictable part back down to the budget.
+export function budgetVeto(u: {
+  usedBytes: number;
+  budgetBytes: number;
+  estTrackBytes: number;
+  unevictableBytes: number;
+}): PickStemsVeto | null {
   const ceiling = u.budgetBytes + overshootAllowanceBytes(u.budgetBytes, u.estTrackBytes);
-  return u.usedBytes < ceiling ? null : 'budget-full';
+  const evictable = Math.max(0, u.usedBytes - u.unevictableBytes);
+  return evictable < ceiling ? null : 'budget-full';
 }
 
 // ---- the sweep ------------------------------------------------------------
@@ -221,16 +249,29 @@ export function requestDeadlineMs(passTimeoutMs: number): number {
 // the blend anyway and hold the sender for the whole budget first. A sidecar
 // pool with a spare member serves the render at once.
 //
-// The controller knows the pool only from its own ANALYZE_CONCURRENCY: the
-// sidecar's /health does not report it. The compose files hand both services
-// the same root .env value, and a remote analyzer is told to match it
-// (docs/tts-heavy.md). A controller set higher than its sidecar costs one
-// render that waits out its budget and falls back to the plain crossfade,
-// bounded by the drain's hard deadline. A local ANALYZE_PYTHON worker is
-// single-flight whatever the setting.
-export function renderStandsDown(r: { separating: boolean; backend: string; concurrency: number }): boolean {
+// The pool is the smaller of the controller's own ANALYZE_CONCURRENCY and the
+// sidecar's, which its /health reports (`analyze_concurrency`, #2253). The
+// controller's figure alone let a controller set higher than a remote sidecar
+// skip the stand-down with no spare member: the render waited out its budget
+// behind the separation, holding the sender, and fell back to the plain
+// crossfade. A sidecar that predates the field reports null, and the
+// controller's figure stands alone, as before. A local ANALYZE_PYTHON worker
+// is single-flight whatever the setting.
+export function renderPoolSize(r: { concurrency: number; sidecarConcurrency?: number | null }): number {
+  const sidecar = r.sidecarConcurrency;
+  return typeof sidecar === 'number' && Number.isInteger(sidecar) && sidecar > 0
+    ? Math.min(r.concurrency, sidecar)
+    : r.concurrency;
+}
+
+export function renderStandsDown(r: {
+  separating: boolean;
+  backend: string;
+  concurrency: number;
+  sidecarConcurrency?: number | null;
+}): boolean {
   if (!r.separating) return false;
-  return !(r.backend === 'sidecar' && r.concurrency >= 2);
+  return !(r.backend === 'sidecar' && renderPoolSize(r) >= 2);
 }
 
 // ---- notices --------------------------------------------------------------

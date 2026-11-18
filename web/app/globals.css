@@ -5316,6 +5316,13 @@ html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"],
     overflow: hidden;
 }
 .observatory-root button { font-family: inherit; }
+/* The Observatory sits outside .admin-root, so it gets its own --danger (the
+   rail's "LAST RUN FAILED" line). The admin's #c5302a, lifted for dark. */
+.observatory-root { --danger: #c5302a; }
+:root[data-theme="dark"] .observatory-root { --danger: #ff6b5e; }
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .observatory-root { --danger: #ff6b5e; }
+}
 
 /* Landing-page embed. The box owns the aspect ratio; observatory-root fills it as
    two columns — the constellation stage and the right rail — stacked on phones. */
@@ -5650,6 +5657,7 @@ html.lite .observatory-root .cmap-galaxy { --gx-glass: var(--bg); }
 .observatory-root .rail-proj { display: flex; flex-direction: column; gap: 6px; }
 .observatory-root .rail-proj-live { display: flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 700; }
 .observatory-root .rail-proj-log { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: 0.04em; }
+.observatory-root .rail-proj-error { color: var(--danger); text-transform: none; letter-spacing: 0.04em; overflow-wrap: anywhere; }
 
 /* dossier queue-on-air */
 .observatory-root .dossier-queue { margin-top: 12px; width: 100%; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; padding: 9px 0; cursor: pointer; transition: background 0.12s, color 0.12s; }

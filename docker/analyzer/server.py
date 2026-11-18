@@ -743,8 +743,18 @@ async def health():
         # Whole-file loudness answers carry the short-term loudness curve
         # (`loudness_curve`). None on older workers, which never emit the key.
         "analyze_loudness_curve_capable": analyzer_pool.capability("loudness_curve_capable", "whole_file"),
+        # Tail answers carry the tail's short-term loudness curve (tail v3).
+        # None on older workers, which never emit the key.
+        "analyze_tail_loudness_curve_capable": analyzer_pool.capability(
+            "tail_loudness_curve_capable", "tail_loudness_curve"
+        ),
         # How many whole-file requests this host runs at once (its own lane).
         "analyze_whole_file_concurrency": WHOLE_FILE_CONCURRENCY,
+        # How many analysis workers this pool holds (ANALYZE_CONCURRENCY). The
+        # controller's blend render reads it to tell whether a spare member can
+        # serve it while a pick-time separation holds one (#2253), and uses the
+        # smaller of this and its own setting.
+        "analyze_concurrency": ANALYZE_CONCURRENCY,
         # Best-effort residency (#1204): whether CLAP/Demucs are believed
         # loaded right now — lets an operator confirm the idle release
         # without grepping logs. None while the worker is down.
@@ -804,6 +814,20 @@ class AnalyzeRequest(BaseModel):
     # (loudness v2, edges) read when `path` is a capped copy. Never fetched
     # here; the worker's ffmpeg streams it.
     stream_url: str | None = None
+    # Facet requests only: where the music stops ({end_ms, duration_ms}, from
+    # the stored edges), so the tail window ends there instead of at the end
+    # of the file. Passed through as is; the worker validates it.
+    tail_window: dict[str, Any] | None = None
+    # Facet requests only: which windows the `stems` facet separates ("head",
+    # "tail"). Absent = both. Pick-time stems asks for the tail alone when the
+    # head is cached (#2253); a worker that predates the field separates both.
+    # Untyped here: the worker's parse_stems_windows judges it, and a malformed
+    # value separates both windows there rather than a 422 refusing the request.
+    stems_windows: Any = None
+    # With stems_dir: the library's size for the file, which the worker stamps
+    # on the stem windows it writes (#2238). Untyped like stems_windows: the
+    # worker judges it, and a bad value stamps unknown rather than a 422.
+    source_size: Any = None
 
 
 @app.post("/analyze")
@@ -836,8 +860,16 @@ async def analyze(req: AnalyzeRequest):
         payload["stems_dir"] = req.stems_dir
     if req.stems_require_marker is not None:
         payload["stems_require_marker"] = req.stems_require_marker
+    if req.stems_dir is not None and req.source_size is not None:
+        payload["source_size"] = req.source_size
     if req.embedding_only:
         payload["embedding_only"] = True
+    # A placed tail window (flat and facet requests alike) and the stream URL
+    # the worker reads it from when the staged copy cannot prove it reaches it.
+    if req.tail_window is not None:
+        payload["tail_window"] = req.tail_window
+        if req.stream_url and "url" not in payload:
+            payload["stream_url"] = req.stream_url
     facets = getattr(req, "facets", None)
     if facets is not None:
         payload["facets"] = facets
@@ -845,6 +877,8 @@ async def analyze(req: AnalyzeRequest):
             payload["tail_vocals"] = True
         if req.stream_url and "url" not in payload:
             payload["stream_url"] = req.stream_url
+        if req.stems_windows is not None:
+            payload["stems_windows"] = req.stems_windows
     if facets and all(f in WHOLE_FILE_FACETS for f in facets):
         msg = await run_whole_file_once(payload)
     else:
@@ -865,7 +899,9 @@ async def analyze(req: AnalyzeRequest):
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
         "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
-        "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
+        "tail_stems_landed",
+        "lead_silence_ms", "tail_silence_ms", "tail_start_ms", "tail_window",
+        "tail_curve_unavailable",
     ):
         if k in msg:
             out[k] = msg[k]

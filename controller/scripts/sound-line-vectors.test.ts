@@ -46,6 +46,9 @@ const heads = new Map<string, { bpm: number; key: string }>();
 const DEFAULT_HEAD = { bpm: 124, key: '8A' };
 // Runs while an embedding request is in flight, before it is answered.
 let duringEmbed: (() => void) | null = null;
+// Runs at the first analyze request of a pass: after a --re-analyze's clear,
+// before any track is written again.
+let duringAnalyze: (() => void) | null = null;
 
 const requestSchema = z.object({ path: z.string().optional(), url: z.string().optional(), embed: z.boolean().optional() });
 function trackIdOf(r: z.infer<typeof requestSchema>): string {
@@ -81,6 +84,9 @@ const server = createServer(async (req, res) => {
     return json({ ok: true, embeddings: texts.map(seededVector) });
   }
   if (req.url?.startsWith('/analyze')) {
+    const hook = duringAnalyze;
+    duringAnalyze = null;
+    hook?.();
     const r = requestSchema.parse(JSON.parse(raw));
     const id = trackIdOf(r);
     const head = heads.get(id) ?? DEFAULT_HEAD;
@@ -114,6 +120,7 @@ const { formatTrackText, soundWords, trackAcoustics } = await import('../src/mus
 const { phaseEmbed } = await import('../src/music/tag-library/embed.js');
 const { runAnalysisPass } = await import('../src/music/analyze.js');
 const { runAudioMoodPass } = await import('../src/music/audio-moods.js');
+const { isInstrumental } = await import('../src/music/lyric-vocal.js');
 
 const open = () => db.open({ embeddingDim: DIM, adoptStoredDim: true });
 await settings.load();
@@ -307,6 +314,68 @@ test('a late tail measurement that removes "instrumental" embeds once', async ()
   assert.match(once[0], /\nSound: upbeat tempo, minor key$/m);
   await reembedMarked();
   assert.deepEqual(drain(), [], 'then never again');
+});
+
+// #2237: the head's vocal rule changed (vocal facet v2), so `--facets vocal`
+// re-measures rows taken at v1. Bleed that v1 read as 26 s of singing comes
+// back empty, and the vector gains "instrumental" through the same mark as any
+// other measured word; a re-measure that agrees marks nothing.
+test('a vocal re-measure under the new head rule marks only a moved verdict', async () => {
+  const outro = { startMs: 220_000, ending: 'cold', vocalRanges: [] } as never;
+  for (const id of ['bleed', 'singer']) {
+    addTrack(id);
+    db.upsertTrackAnalysis(id, { bpm: 124, musicalKey: '8A', vocalRanges: [{ startMs: 2_000, endMs: 28_000 }],
+      outro, source: 'full' });
+    db.requireDb().prepare("UPDATE track_facet_status SET version = ? WHERE track_id = ? AND facet = 'vocal'")
+      .run(db.FACET_VERSIONS.vocal - 1, id);
+  }
+  await phaseEmbed(['bleed', 'singer'], 8, 'plain');
+  for (const text of drain()) assert.match(text, /\nSound: upbeat tempo, minor key$/m);
+  assert.ok(['bleed', 'singer'].every(id => db.facetNeedsIds('vocal').includes(id)), 'v1 rows are due');
+
+  db.writeFacetResults('bleed', { source: 'full', vocal: { vocalRanges: [], tailVocalRanges: [] } });
+  db.writeFacetResults('singer', { source: 'full',
+    vocal: { vocalRanges: [{ startMs: 3_000, endMs: 27_000 }], tailVocalRanges: [] } });
+  assert.deepEqual(dirty(), ['bleed'], 'only the row whose verdict moved');
+  assert.ok(!db.facetNeedsIds('vocal').includes('bleed') && !db.facetNeedsIds('vocal').includes('singer'),
+    'both settle at the current version');
+  await reembedMarked();
+  const once = drain();
+  assert.equal(once.length, 1);
+  assert.match(once[0], /\nSound: upbeat tempo, minor key, instrumental$/m);
+});
+
+// #2255: a vocal-off --re-analyze kept the head's vocal ranges but cleared
+// outro_json, and with it the tail's. 'tail' has an instrumental head and a sung
+// tail, so it read as instrumental from the clear on, was marked for a wrong
+// "instrumental" word, and the next vocal-on pass measured it and marked it back.
+test('a vocal-off re-analyze keeps a sung tail: no flip, no mark, no re-measure', async () => {
+  const sungTail = [{ startMs: 200_000, endMs: 215_000 }];
+  // Its CLAP vector and moods first, so their own mark is paid before the re-analyze.
+  await analyse();
+  await reembedMarked();
+  drain();
+  assert.deepEqual(dirty(), []);
+  const before = textOf('tail');
+  assert.equal(isInstrumental(db.getTrack('tail')), false);
+  let midPass: boolean | null | undefined;
+  duringAnalyze = () => { midPass = isInstrumental(db.getTrack('tail')); };
+
+  // The fake analyzer answers every outro without vocalRanges, as a vocal-off pass does.
+  await analyse({ reAnalyze: true });
+  assert.equal(midPass, false, 'still vocal straight after the clear');
+  const t = db.getTrack('tail')!;
+  assert.equal(isInstrumental(t), false, 'still vocal after the re-write');
+  assert.deepEqual(t.tailVocalRanges, sungTail, 'the stored tail ranges carried forward');
+  assert.equal(t.outro?.startMs, 190_000, 'onto the freshly measured outro');
+  assert.equal(textOf('tail'), before);
+  assert.deepEqual(dirty(), [], 'nothing marked');
+
+  // So a vocal-on pass has nothing to measure again for it.
+  assert.ok(!db.needsVocalIds(undefined, true).includes('tail'));
+  assert.ok(!db.facetNeedsIds('vocal').includes('tail'));
+  await reembedMarked();
+  assert.deepEqual(drain(), [], 'no embed call');
 });
 
 test('a stems-only or loudness-only write never marks, even after a replaced file', async () => {

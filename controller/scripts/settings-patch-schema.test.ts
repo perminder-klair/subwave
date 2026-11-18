@@ -568,7 +568,7 @@ test('the converted keys are exactly the ones with schemas', () => {
     'picker',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',
     'sfx', 'shows', 'silenceTrim', 'station', 'stationDescription', 'steer', 'stream',
-    'theme', 'timezone', 'transitions', 'tts', 'ui', 'weather', 'weatherMoods',
+    'tagger', 'theme', 'timezone', 'transitions', 'tts', 'ui', 'weather', 'weatherMoods',
     'webhooks', 'webhooksPolicy',
   ]);
 });

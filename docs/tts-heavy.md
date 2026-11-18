@@ -231,12 +231,27 @@ GPU overlay must not be enabled by default on CPU-only hosts.
 
 That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
 torch/torchaudio 2.7.1 cu128 wheels, including RTX 50-series Blackwell support)
-and hands it the GPU. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
+and hands it the GPU. Those wheels start at Turing (RTX 20-series, GTX
+16-series). For an older card, a GTX 10-series for example, add the tag named
+for its architecture to `.env`, which picks the cu124 build (torch 2.6.0):
+
+```dotenv
+ANALYZER_CUDA_TAG=pascal
+```
+
+[The tag table](internals/infrastructure.md#aio-cuda-tags) lists every card's
+tag. Leave it unset on a newer card: the overlay then follows
+`SUBWAVE_VERSION` like every other image. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
 Requirements: the NVIDIA driver +
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 — nothing else; the CUDA runtime rides inside the image. The worker picks the
-device itself (`ANALYZE_DEVICE=auto`): if the GPU isn't actually visible it logs
-a warning and falls back to CPU rather than failing the pass. `ANALYZER_HEAVY`
+device itself (`ANALYZE_DEVICE=auto`): it runs one small test op on the card
+first, and if the GPU isn't visible, or the image has no kernels for it (a
+GTX 10-series card on the cu128 build reports "no kernel image"), it logs a
+warning naming the card and the image tag that suits it, then falls back to
+CPU rather than failing the pass. An explicit `ANALYZE_DEVICE=cuda` falls back
+the same way. CPU still runs CLAP and Demucs, but Demucs on CPU is slow (tens of
+seconds a track), so treat that warning as something to fix. `ANALYZER_HEAVY`
 is irrelevant while the overlay is applied — the image is overridden outright.
 
 Running the **all-in-one** container instead? It has no `analyzer` service to
@@ -314,13 +329,17 @@ Each sidecar worker is an independent Python process and may load its own CLAP
 and Demucs models, so raising the value increases CPU, RAM and VRAM use as well
 as network and Navidrome/source-server demand. For the analysis pass a mismatch
 is safe, and effective parallelism is limited by the smaller usable side. With
-pick-time stems on (Settings → Stems), the controller's value also decides
-whether a stem-blend render may run while a separation holds a worker: at 2 or
-more it goes ahead, expecting a free member. A controller set higher than its
-sidecar therefore costs one render per separation that waits out its budget
-(up to 60 s, holding the track sender) and falls back to the plain crossfade,
-so keep the two equal. This is an operator tuning trade-off, not a guaranteed
-speedup.
+pick-time stems on (Settings → Stems), the pool size also decides whether a
+stem-blend render may run while a separation holds a worker: at 2 or more it
+goes ahead, expecting a free member. The controller takes the smaller of its
+own value and the one the sidecar reports on `/health` (`analyze_concurrency`),
+so a controller set higher than its sidecar no longer sends a render to wait
+behind the separation. An analyzer image from before that field reports
+nothing, and there the controller's value stands alone: a controller set
+higher costs one render per separation that waits out its budget (up to 60 s,
+holding the track sender) and falls back to the plain crossfade, so keep the
+two equal, or update the analyzer. This is an operator tuning trade-off, not a
+guaranteed speedup.
 
 A same-path state mount is therefore **recommended for throughput, but required
 only for stem caching**. Stem rendering writes into `state/stems/`; a remote
@@ -333,7 +352,10 @@ So, on the GPU host:
 services:
   analyzer:
     # -heavy is CLAP + Demucs on the CPU, and is amd64-only. For the GPU, swap
-    # in subwave-analyzer-cuda and add the `deploy:` block below.
+    # in subwave-analyzer-cuda and add the `deploy:` block below. :latest
+    # needs Turing (RTX 20-series) or newer; an older card takes the tag named
+    # for its architecture, such as subwave-analyzer-cuda:pascal for a GTX
+    # 10-series (docs/internals/infrastructure.md#aio-cuda-tags).
     image: ghcr.io/perminder-klair/subwave-analyzer-heavy:latest
     restart: unless-stopped
     ports:

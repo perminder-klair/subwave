@@ -1,5 +1,5 @@
 // Asking again about the stored station password while the player is stuck connecting (#2176), the
-// web twin of app/src/lib/stuck-password-check.ts: no package here imports another, so the rules
+// web twin of getsubwave/app:src/lib/stuck-password-check.ts: no package here imports another, so the rules
 // are mirrored, and a change to them goes in both. Icecast refuses a stale password without saying
 // so, as far as the player can tell: it just keeps reconnecting. So useStationAuth asks the
 // controller's fail-closed POST /station-auth.

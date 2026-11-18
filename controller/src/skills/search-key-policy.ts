@@ -6,8 +6,8 @@
 // searchReady(), searchKeyProblem(), the doctor, the admin "Test key" probe and
 // the Settings → Web search warning.
 //
-// Firecrawl, Keenable and Outcrawl publish a prefix and take only a key that carries it:
-// Firecrawl and Outcrawl refuse anything else, Keenable runs keyless instead. Tavily's and
+// Firecrawl, Keenable, Outcrawl and SpecStream publish a prefix and take only a key that carries it:
+// Firecrawl, Outcrawl and SpecStream refuse anything else, Keenable runs keyless instead. Tavily's and
 // Brave's key formats aren't confirmed, so an allowlist could lock out a working
 // key. They refuse only a key carrying another provider's known prefix, and any
 // other key still goes through.
@@ -22,11 +22,12 @@ const KEY_PREFIX: Readonly<Record<string, string>> = {
   firecrawl: 'fc-',
   keenable: 'keen_',
   outcrawl: 'ock_',
+  specstream: 'ss_',
   tavily: 'tvly-',
 };
 
 // Providers that take only a key carrying their own prefix.
-const PREFIX_REQUIRED: ReadonlySet<string> = new Set(['firecrawl', 'keenable', 'outcrawl']);
+const PREFIX_REQUIRED: ReadonlySet<string> = new Set(['firecrawl', 'keenable', 'outcrawl', 'specstream']);
 
 function keyName(provider: string): string {
   return searchProviderEntry(provider)?.keyName || provider;

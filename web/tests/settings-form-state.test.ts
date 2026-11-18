@@ -125,6 +125,36 @@ test('provider dirtiness and discard do not own selection or segment runtime', (
   assert.equal(restored.llm.segmentRuntime, 'direct');
 });
 
+test('the audible-end controls hydrate, save and dirty the Broadcast section only by their own paths', () => {
+  // Absent (an older station) hydrates to today's behaviour: off, 20 dB.
+  const baseline = settingsForm({ crossfadeDuration: 10 });
+  assert.equal(baseline.transitions.fadeAudibleEnd, false);
+  assert.equal(baseline.transitions.fadeAudibleEndDb, '20');
+  const stored = settingsForm({ transitions: { fadeAudibleEnd: true, fadeAudibleEndDb: 27.5 } });
+  assert.equal(stored.transitions.fadeAudibleEnd, true);
+  assert.equal(stored.transitions.fadeAudibleEndDb, '27.5');
+
+  const form = structuredClone(baseline);
+  form.transitions.fadeAudibleEnd = true;
+  form.transitions.fadeAudibleEndDb = '25';
+  const danger = dangerSavePayload(form);
+  assert.equal(danger.patch.transitions.fadeAudibleEnd, true);
+  assert.equal(danger.patch.transitions.fadeAudibleEndDb, 25);
+  form.transitions.fadeAudibleEndDb = '';
+  assert.deepEqual(dangerSavePayload(form).fieldErrors, { 'transitions.fadeAudibleEndDb': 'enter a number' });
+
+  // The Crossfade card lives in Broadcast & mixer while `transitions` belongs
+  // to Stems: its fields are owned there by path, or editing one alone never
+  // shows the Broadcast save bar.
+  const keys = sectionById('broadcast')?.formKeys ?? [];
+  for (const path of ['transitions.equalPowerCrossfade', 'transitions.fadeAudibleEnd', 'transitions.fadeAudibleEndDb']) {
+    const edited = structuredClone(baseline);
+    const leaf = path.split('.')[1] as 'equalPowerCrossfade' | 'fadeAudibleEnd' | 'fadeAudibleEndDb';
+    (edited.transitions as unknown as Record<string, unknown>)[leaf] = leaf === 'fadeAudibleEndDb' ? '30' : true;
+    assert.deepEqual(dirtyPaths(edited, baseline, keys), [path], path);
+  }
+});
+
 test('Last.fm track tags hydrate off, and read as unavailable without what they need', () => {
   assert.equal(settingsForm({}).embedding.enrichment.lastfmTrackTags, false);
   assert.equal(settingsForm({ embedding: { enrichment: { lastfmTrackTags: true } } }).embedding.enrichment.lastfmTrackTags, true);
@@ -212,7 +242,7 @@ test('the Stems save and the Broadcast save post disjoint fields, so neither com
   const danger = dangerSavePayload(form).patch;
   assert.deepEqual(Object.keys(stems.transitions).sort(), ['pairDrain', 'pickTimeStems', 'stemBlends']);
   assert.deepEqual(Object.keys(stems.audio).sort(), ['stemCache', 'stemCacheGb']);
-  assert.deepEqual(Object.keys(danger.transitions).sort(), ['effects', 'equalPowerCrossfade']);
+  assert.deepEqual(Object.keys(danger.transitions).sort(), ['effects', 'equalPowerCrossfade', 'fadeAudibleEnd', 'fadeAudibleEndDb', 'tailFromCurve']);
   assert.equal('audio' in danger, false);
   assert.deepEqual(Object.keys(stems).sort(), ['audio', 'transitions']);
 });

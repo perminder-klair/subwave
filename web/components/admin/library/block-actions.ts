@@ -60,7 +60,9 @@ export async function restampCachedBlockMarks(qc: QueryClient, fetcher: AdminFet
     for (const t of rowsOf(data)) if (t?.id && !byId.has(t.id)) byId.set(t.id, t);
   }
   if (byId.size === 0) return;
-  const rows = [...byId.values()].map(t => ({ id: t.id, artist: t.artist, album: t.album }));
+  // The title rides along: a blocked track that came back under a new id
+  // matches on its full (title, artist, album) snapshot (music/blocklist.ts).
+  const rows = [...byId.values()].map(t => ({ id: t.id, title: t.title, artist: t.artist, album: t.album }));
   try {
     const marks: Record<string, BlockRef | null> = {};
     // Chunked to stay under the endpoint's per-call cap.

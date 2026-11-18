@@ -12,7 +12,7 @@ import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError, createUsageMeter, endOnUserTurn } from '../core/pure.js';
 import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage, UsageMeter } from '../core/pure.js';
-import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, nativeFirstStepToolChoice, runDiscoverySteps, googleSafetyOptions } from '../provider/capabilities.js';
+import { needsToolCallObject, llmCallOptions, samplingWithLocalKnobs, forcedToolChoice, nativeFirstStepToolChoice, runDiscoverySteps } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
@@ -163,10 +163,9 @@ function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefi
     stopWhen: [isStepCount(2), hasToolCall('done')],
     temperature,
     maxOutputTokens,
-    ...googleSafetyOptions(leg.cfg),
     // Recovery forces done-only every step, so it has the same
     // Anthropic/DeepSeek thinking conflict as the main run — suppress here too.
-    reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
+    ...llmCallOptions(leg.cfg, { forceNoThink: true }),
     toolChoice: forcedChoice,
     prepareStep: async () => ({ activeTools: ['done'], toolChoice: forcedChoice }),
   } as any);
@@ -355,11 +354,10 @@ export async function djAgent({
               stopWhen: [isStepCount(nativeCap)],
               temperature,
               maxOutputTokens,
-              ...googleSafetyOptions(leg.cfg),
               timeout: { toolMs: TOOL_TIMEOUT_MS },
               // Thinking off — the pick is structured extraction; djText's
               // free text still reasons.
-              reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
+              ...llmCallOptions(leg.cfg, { forceNoThink: true }),
               output: Output.object({ schema: schema! }),
               // The schema rides every step, so an open step 0 lets the model
               // answer before it has explored; that run is discarded below and
@@ -464,10 +462,9 @@ export async function djAgent({
           stopWhen: [isStepCount(effectiveMaxSteps), hasToolCall('done')],
           temperature,
           maxOutputTokens,
-          ...googleSafetyOptions(leg.cfg),
           timeout: { toolMs: TOOL_TIMEOUT_MS },
           // Suppress thinking on providers that reject forced tools mid-reasoning.
-          reasoning: reasoningFor(leg.cfg, { forceNoThink: useDoneTool }),
+          ...llmCallOptions(leg.cfg, { forceNoThink: useDoneTool }),
           ...(useDoneTool ? { toolChoice: forcedChoice } : {}),
           ...(prepareStep ? { prepareStep } : {}),
           // On the done-tool path the schema lives on `done`, so no agent output.

@@ -11,8 +11,8 @@ process.env.STATE_DIR = root;
 const settings = await import('../src/settings.js');
 const { setCache } = await import('../src/settings/store.js');
 const { validateSettingsPatch } = await import('../src/settings/patch-registry.js');
-const { levelTrimDb, measureClipLevel } = await import('../src/audio/clip-level.js');
-const { airVoice, voiceUri } = await import('../src/broadcast/queue/voice-io.js');
+const { levelTrimDb, levelledGainDb, measureClipLevel } = await import('../src/audio/clip-level.js');
+const { airVoice, airVoiceExchange, voiceUri } = await import('../src/broadcast/queue/voice-io.js');
 const tts = await import('../src/audio/tts.js');
 const remote = await import('../src/audio/remoteTts.js');
 const ffmpeg = spawnSync('/bin/sh', ['-c', 'command -v ffmpeg']);
@@ -126,4 +126,20 @@ test('cold-loaded absent, malformed and false preserve the exact old URI despite
     voiceId: 'disabled', airMarkerPromise: Promise.resolve(null),
   });
   assert.equal(readFileSync(handoff, 'utf8'), voiceUri(fixture, 0, 'disabled'), 'turning off also restores the zero-gain URI');
+});
+
+// Last in the file: an exchange holds the shared voice chain for its playback,
+// which would make every later airVoice here wait it out.
+test('an exchange line is levelled exactly as a single clip is', audioTest, async () => {
+  await measureClipLevel(fixture);
+  for (const on of [true, false]) {
+    await settings.update({ tts: { voiceLevelling: on } });
+    const handoff = join(root, `say-exchange-${on}.txt`);
+    await airVoiceExchange(handoff, [{ wavPath: fixture, text: 'A quiet spoken take.', gainDb: 6 }]);
+    const expected = on ? levelledGainDb(fixture, 6) : 6;
+    assert.ok(!on || expected > 6, 'the quiet take gets a lift');
+    assert.match(readFileSync(handoff, 'utf8'), new RegExp(`^annotate:liq_amplify="${expected} dB",`),
+      on ? 'levelling on adds the take\'s trim' : 'levelling off keeps the operator gain');
+    rmSync(handoff);
+  }
 });

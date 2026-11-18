@@ -1,5 +1,5 @@
 // Tuning a listener back in after the station gate took them off the air, mirroring
-// app/scripts/gate-resume.test.ts. Each walk below is the hook's sequence of gate states, one
+// getsubwave/app:scripts/gate-resume.test.ts. Each walk below is the hook's sequence of gate states, one
 // effect run per step, so a test reads as what happened to the listener.
 
 import assert from 'node:assert/strict';

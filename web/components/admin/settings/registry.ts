@@ -39,7 +39,8 @@ export interface SectionSpec {
 
 export const LLM_PROVIDER_FORM_KEYS = [
   'llm.provider', 'llm.model', 'llm.ollamaUrl', 'llm.numCtx', 'llm.repeatPenalty',
-  'llm.providerBaseUrls', 'llm.headers', 'llm.compatibleMode', 'llm.reasoning',
+  'llm.providerBaseUrls', 'llm.headers', 'llm.bodyParams', 'llm.toolCallBodyParams', 'llm.compatibleMode', 'llm.reasoning',
+  'llm.reasoningEffort',
   'llm.toolChoice', 'llm.pauseWhenEmpty', 'llm.dailyTokenCap', 'llm.budgetSoftPct',
   'llm.exemptRequests', 'llm.maxOutputTokens', 'llm.geminiSafety', 'llm.fallback',
 ] as const;
@@ -151,9 +152,15 @@ export const SECTIONS = [
     // list is what drives the dirty-check that decides whether the save bar
     // shows at all. Without it, toggling "Fade out at a show change" alone
     // never registers as a change and the save prompt never appears.
-    // The stem fields of 'transitions' moved to the Stems section with their
-    // card; the crossfade curve and the effects stay here with theirs.
-    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'transitions.equalPowerCrossfade', 'transitions.effects', 'stream', 'loudness'],
+    // 'transitions' is split at the leaf: its stem fields moved to the Stems
+    // section with their card; the Crossfade card's own fields and the DJ
+    // transition effects stay here by path, or editing them alone never shows
+    // this section's save bar.
+    formKeys: [
+      'crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'stream', 'loudness',
+      'transitions.equalPowerCrossfade', 'transitions.fadeAudibleEnd', 'transitions.fadeAudibleEndDb',
+      'transitions.tailFromCurve', 'transitions.effects',
+    ],
   },
 ] as const satisfies readonly SectionSpec[];
 
@@ -200,7 +207,7 @@ export const RESTART_PATHS: readonly string[] = [
 export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   station: ['listener-requests', 'public-api'],
   selection: ['agent-deadline', 'repeat-variety', 'minimum-track-length', 'guest-musical-leanings'],
-  behaviour: ['pause-and-talk', 'prompt-memory', 'extended-sleeve-notes'],
+  behaviour: ['pause-and-talk', 'prompt-memory', 'banter', 'extended-sleeve-notes'],
   llm: ['fallback', 'reasoning', 'idle-behaviour', 'daily-token-budget'],
   tts: ['fallback-voice'],
   library: ['seed-phase', 'propagation', 'enrichment'],
@@ -307,6 +314,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Lookback window', section: 'behaviour', card: 'Prompt memory', keywords: 'minutes recap repeat anti-repeat context history' },
   { label: 'Characters per line', section: 'behaviour', card: 'Prompt memory', keywords: 'chars length recap tokens context' },
   { label: 'Show changes', section: 'behaviour', card: 'Show changes', keywords: 'handoff presenter same host acknowledgement shift transition programme' },
+  { label: 'Hold the music between presenters', section: 'behaviour', card: 'Banter', keywords: 'air gap duck music between speakers banter exchange fade multi-voice' },
   { label: 'Extended Sleeve Notes', section: 'behaviour', card: 'Extended Sleeve Notes', keywords: 'source backed editorial provenance provider credits artist context coming soon' },
   { label: 'Link style', section: 'behaviour', card: 'Link style', keywords: 'release year regular occasional rare metadata sleeve notes' },
 
@@ -328,8 +336,8 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Lyrics', section: 'library', card: 'Enrichment', keywords: 'lyrics embed text' },
 
   // ── web search ─────────────────────────────────────────────────────────────
-  { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng keenable firecrawl outcrawl live facts' },
-  { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave keenable firecrawl outcrawl token search_api_key' },
+  { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng keenable parallel firecrawl outcrawl specstream live facts' },
+  { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave keenable firecrawl outcrawl specstream token search_api_key' },
   { label: 'SearXNG URL', section: 'search', card: 'Provider', keywords: 'self hosted meta search json' },
   { label: 'Engines', section: 'search', card: 'Provider', keywords: 'searxng engines pin restrict google duckduckgo wikipedia' },
 
@@ -373,6 +381,8 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Stem-blend seams', section: 'stems', card: 'Stem transitions', keywords: 'drums carry under intro blend' },
   { label: 'Orphan stems cleanup', section: 'stems', card: 'Orphan stems cleanup', keywords: 'quarantine purge deleted tracks left library reclaim disk daily pass' },
   { label: 'Crossfade curve', section: 'broadcast', card: 'Crossfade', keywords: 'equal power linear dip fade shape' },
+  { label: 'Cut fade endings at their audible end', section: 'broadcast', card: 'Crossfade', keywords: 'fade out ending tail silence quiet inaudible cue out exit overlap' },
+  { label: 'Audible end (dB under the track\'s loudness)', section: 'broadcast', card: 'Crossfade', keywords: 'fade ending threshold db lufs quiet inaudible cut earlier' },
   { label: 'Sweep', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect filter gear change clash dj mode' },
   { label: 'Washout', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect echo tail dub exit length cap dj mode' },
   { label: 'Blend', section: 'broadcast', card: 'DJ transition effects', keywords: 'transition effect spectral handover locked pair dj mode' },
