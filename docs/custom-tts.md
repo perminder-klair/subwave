@@ -129,9 +129,14 @@ bundled engines (`--engines remote:<voice> --remote-url …`).
 
 Remote participates in the **rescue chain** like any other engine
 (`audio/tts-fallback.ts`): if it's unreachable at dispatch time, or fails
-mid-render, the station falls through to your configured fallback voice, then
-`defaultEngine` → `piper` → `kokoro`. **The DJ never goes silent because your
-box is rebooting.** The Voices settings panel shows a warning while the endpoint
+mid-render, the station falls through to the speaking persona's own **Rescue
+voice** (Personas → Voice, if set), then your configured station fallback
+voice, then `defaultEngine` → `piper` → `kokoro`. **The DJ never goes silent
+because your box is rebooting.** The station fallback is one voice for every
+persona, so on a show with co-hosts give each host a Rescue voice of their own,
+on another engine and different from each other's voices and rescue voices; otherwise a rescued line can
+air sounding like the other host. DJ Doc's `co-host rescue voices` finding
+names hosts that need one. The Voices settings panel shows a warning while the endpoint
 is unreachable, and a rescue is recorded as `fellBack` in admin → Stats — worth
 checking there first if a persona ever sounds like the wrong voice.
 

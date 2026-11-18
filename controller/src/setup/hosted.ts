@@ -11,7 +11,8 @@
 // provider config; and the embedding route (provider, model, endpoint, key),
 // which also goes through the brain. A persona or jingle voice slot may only
 // pin an engine the box runs (or the brain's cloud voice on a premium
-// station); any other pin becomes `inherit`. Still the operator's: whether the
+// station); any other pin becomes `inherit`, and a persona rescue voice
+// (`fallbackVoice`) on one becomes null. Still the operator's: whether the
 // DJ speaks, the Kokoro voice and language, gain/speed, voice levelling,
 // pronunciation corrections, personas (bar that engine rule), the tagger's
 // tuning (on/off, seed count, propagation, enrichment), and every non-voice
@@ -126,15 +127,56 @@ export function advertisedMounts(stream: unknown): AdvertisedMounts {
 // LLM, voice and embedding provider keys; LLM ones come from the provider table.
 const HOSTED_SECRET_KEYS = new Set<string>([...LLM_KEY_ENV_VARS, 'ELEVENLABS_API_KEY', 'FISH_API_KEY', 'EMBEDDING_API_KEY']);
 
+// Does the box run `engine`? The hosted engine rule itself, asked by every
+// voice field below, so a persona voice, a persona rescue voice and a jingle
+// voice can never disagree about it. Always true self-hosted.
+function hostedEngineAllowed(engine: string, defaultEngine: unknown): boolean {
+  return !isHosted() || hostedPersonaEngines(defaultEngine).includes(engine);
+}
+
 // One voice slot ({ engine, voice, ... }) under the hosted engine rule: an
 // engine the box doesn't run becomes `inherit`, everything else in the slot
-// stays. The one copy of the rule, for personas and jingles alike.
+// stays. For a persona's or a jingle's own voice.
 export function hostedVoiceSlot<S>(slot: S, defaultEngine: unknown): { slot: S; changed: boolean } {
   const engine = (slot as { engine?: unknown } | null | undefined)?.engine;
-  if (!isHosted() || typeof engine !== 'string' || hostedPersonaEngines(defaultEngine).includes(engine)) {
+  if (typeof engine !== 'string' || hostedEngineAllowed(engine, defaultEngine)) {
     return { slot, changed: false };
   }
   return { slot: { ...slot, engine: 'inherit' }, changed: true };
+}
+
+// A persona's rescue voice (persona.fallbackVoice, #2029) under the same rule.
+// A rescue cannot `inherit` (the schema refuses it: it would name the rung
+// below), so an engine the box doesn't run drops the rescue voice to null —
+// "none", the station Fallback voice then applies.
+export function hostedRescueVoice<V>(voice: V, defaultEngine: unknown): { voice: V | null; changed: boolean } {
+  const engine = (voice as { engine?: unknown } | null | undefined)?.engine;
+  if (typeof engine !== 'string' || hostedEngineAllowed(engine, defaultEngine)) {
+    return { voice, changed: false };
+  }
+  return { voice: null, changed: true };
+}
+
+// Both of a persona's voice fields under the hosted engine rule, and the paths
+// (relative to the persona) it changed. The one persona entry point, shared by
+// a settings save, the wizard, a backup restore (stripManagedSettings) and a
+// community install or bundle import (personas/install.ts). Never mutates.
+export function hostedPersona<P>(persona: P, defaultEngine: unknown): { persona: P; changed: string[] } {
+  if (!persona || typeof persona !== 'object') return { persona, changed: [] };
+  const p = persona as Record<string, unknown>;
+  const changed: string[] = [];
+  let out: Record<string, unknown> = p;
+  const tts = hostedVoiceSlot(p.tts, defaultEngine);
+  if (tts.changed) {
+    out = { ...out, tts: tts.slot };
+    changed.push('tts.engine');
+  }
+  const rescue = hostedRescueVoice(p.fallbackVoice, defaultEngine);
+  if (rescue.changed) {
+    out = { ...out, fallbackVoice: rescue.voice };
+    changed.push('fallbackVoice');
+  }
+  return { persona: out as P, changed };
 }
 
 // A copy of `block` without `keys`, the dropped ones recorded as `prefix.key`.
@@ -181,10 +223,9 @@ export function stripManagedSettings(
   stripBlock(out, 'embedding', HOSTED_EMBEDDING_KEYS, dropped);
   if (Array.isArray(out.personas)) {
     out.personas = out.personas.map((p: any, i: number) => {
-      const { slot, changed } = hostedVoiceSlot(p?.tts, defaultEngine);
-      if (!changed) return p;
-      dropped.push(`personas.${p?.id ?? i}.tts.engine`);
-      return { ...p, tts: slot };
+      const { persona, changed } = hostedPersona(p, defaultEngine);
+      for (const field of changed) dropped.push(`personas.${p?.id ?? i}.${field}`);
+      return persona;
     });
   }
   return { patch: out, dropped };
