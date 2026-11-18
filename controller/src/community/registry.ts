@@ -36,7 +36,7 @@ import {
 // Caps come from the shared show schema, not local literals — a hardcoded 60
 // here silently diverged the moment SHOW_NAME_MAX became the one rule the
 // validator, the loader and the admin form all run.
-import { SHOW_NAME_MAX, SHOW_SEGMENT_SKILL_MAX, repairEraWindow } from '../schemas/show.js';
+import { SHOW_DESCRIPTION_MAX, SHOW_NAME_MAX, SHOW_SEGMENT_SKILL_MAX, repairEraWindow } from '../schemas/show.js';
 import { FEED_MAX_ITEMS_KEY, FEED_MAX_ITEMS_LIMIT, FEED_URL_KEY, resolveFeedConfig } from '../skills/feed.js';
 
 // Slug rule shared by every community artifact — lowercase, starts alphanumeric,
@@ -110,6 +110,8 @@ export interface CommunityShow {
   slug: string;
   name: string;
   topic: string;
+  /** Listener blurb (#2358). '' = unset; an entry predating it carries none. */
+  description: string;
   moods: string[];
   genres: string[];
   eras: EraWindow[];
@@ -284,6 +286,7 @@ function normalizeShow(raw: any): CommunityShow | null {
     slug,
     name,
     topic: str(raw?.topic).slice(0, SHOW_TOPIC_MAX),
+    description: str(raw?.description).slice(0, SHOW_DESCRIPTION_MAX),
     // Same cap the show validator enforces — a hardcoded 6 here would silently
     // truncate a catalog show that legitimately pins more (the cap is 15 now).
     moods: strList(raw?.moods, SHOW_FILTER_VALUES_MAX).filter(m => (SHOW_MOODS as string[]).includes(m)),
