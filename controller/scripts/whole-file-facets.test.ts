@@ -238,6 +238,16 @@ test('the answer says why a curve is missing; a curve the parser refuses counts 
   assert.equal(result({ ...figures, loudness_curve: CURVE }).loudnessCurveUnavailable, null);
 });
 
+test('a tail answer says why its curve is missing, lifted out of the outro', async () => {
+  const analyzer = await import('../src/music/analyzer.js');
+  const tail = (data: Record<string, unknown>) =>
+    analyzer.parseFacetAnswer({ facets: { tail: { status: 'ok', data } } } as never).facets.tail!.result;
+  const outro = { startMs: 180_000, ending: 'fade' };
+  assert.equal(tail({ tail_window: 'edges', outro, tail_curve_unavailable: 'meter-failed' }).tailCurveUnavailable, 'meter-failed');
+  assert.equal(tail({ tail_window: 'edges', outro: { ...outro, loudnessCurve: { tail: { startMs: 1, stepMs: 500, lufs: [1, 'x'] } } } }).tailCurveUnavailable, 'rejected');
+  assert.equal(tail({ tail_window: 'edges', outro }).tailCurveUnavailable, null, 'an analyzer that cannot make the curve says nothing');
+});
+
 test('a v2 figure stored before the curve existed is re-derived one version below', () => {
   // The station that ran the whole-file pass before the curve: column v2, no
   // curve, facet row at v2. A table re-derive reopens it for the curve.

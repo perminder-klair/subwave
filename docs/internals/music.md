@@ -839,7 +839,11 @@ window it measures (absolute ms), values in tenths of a LUFS as ints (about 35
 small ints per track, held parsed for the whole library; digital silence at
 -1000). Without pyloudnorm the curve is omitted and nothing fails. A placed
 tail is stamped `tail_version = 3` only when its answer carries a valid curve
-(`facets.placedTailVersion`). A placed tail without the curve stays one
+(`facets.placedTailVersion`), or when a curve-capable analyzer said why it had
+none (`tail_curve_unavailable`: its meter failed on the file, or `rejected`
+for a curve the controller's parser refuses), the tail counterpart of the
+loudness facet's `loudness_curve_unavailable`: asking again would only re-read
+the file every pass. A placed tail without the curve and without that answer stays one
 version below with the reason `no-curve`, and, like the loudness facet's
 `no-curve`, is re-planned by `--facets tail` (or taken along by a vocal item)
 only on an analyzer that says it can add one: the worker's
