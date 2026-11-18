@@ -65,8 +65,12 @@ export function parseEnvFile(path: string): Record<string, string> {
 // - A quoted value ends at its closing quote, which may sit on a later line, so
 //   the lines between belong to the value and are never assignments of their
 //   own. Anything after the closing quote (`"8080"#x`, `"8080" # x`) goes.
-// - Single quotes are literal. Inside double quotes `\\`, `\"`, `\$`, `\n`,
-//   `\r` and `\t` are escapes; any other backslash stays as written.
+// - In either quote a backslash escapes the next character when finding the
+//   closing quote, so `'abc\'` does not close there and runs on to the next `'`,
+//   on a later line if need be (compose v5). Inside single quotes nothing is
+//   expanded, except that `\'` reads as `'`; every other backslash stays as
+//   written. Inside double quotes `\\`, `\"`, `\$`, `\n`, `\r` and `\t` are
+//   escapes; any other backslash stays as written.
 // - An unquoted value is cut at its first ` #` (a space, not a tab) and trimmed.
 // - Outside single quotes, `$$` is a literal `$`, and `$VAR`, `${VAR}`,
 //   `${VAR:-x}`, `${VAR-x}`, `${VAR:+x}`, `${VAR+x}` expand from the shell
@@ -127,7 +131,7 @@ export function envAssignments(
         value = body.trimEnd();
       } else {
         const inner = body.slice(1, close);
-        value = q === "'" ? inner : expand(inner, lookup, true);
+        value = q === "'" ? inner.replaceAll("\\'", "'") : expand(inner, lookup, true);
       }
     } else {
       const v = raw.trim();
@@ -141,12 +145,12 @@ export function envAssignments(
 }
 
 // Index in `chunk`, from `from`, of the quote that closes a quoted value, or -1.
-// In double quotes a backslash escapes the next character, which may be the
-// first of the next chunk, so `scan.escaped` carries it over.
+// In either quote a backslash escapes the next character, as compose scans it,
+// which may be the first of the next chunk, so `scan.escaped` carries it over.
 function closeIn(chunk: string, q: string, from: number, scan: { escaped: boolean }): number {
   for (let i = from; i < chunk.length; i++) {
     if (scan.escaped) { scan.escaped = false; continue; }
-    if (q === '"' && chunk[i] === '\\') { scan.escaped = true; continue; }
+    if (chunk[i] === '\\') { scan.escaped = true; continue; }
     if (chunk[i] === q) return i;
   }
   return -1;

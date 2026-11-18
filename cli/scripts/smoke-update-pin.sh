@@ -11,7 +11,8 @@
 # the CLI reads from that .env with an inline comment (COMPOSE_FILE, and the pin
 # `subwave start` compares the running images against), and the line shapes
 # compose reads that a simpler parser misses (`export `, CRLF, `"v"#comment`,
-# `${VAR}` interpolation, a quoted value spanning lines), and a long .env with
+# `${VAR}` interpolation, a quoted value spanning lines, `\'` inside single
+# quotes), and a long .env with
 # an unterminated quote, which must not stall the CLI.
 #
 # Usage: cli/scripts/smoke-update-pin.sh <path-to-compiled-subwave>
@@ -294,6 +295,27 @@ check "multi-line value: the real pin moves" "SUBWAVE_VERSION=$target" \
   "$(sed -n 3p "$scratch/multiline-value/.env")"
 check "multi-line value: the line inside it is left alone" "SUBWAVE_VERSION=0.0.9" \
   "$(sed -n 5p "$scratch/multiline-value/.env")"
+
+# Compose v5 lets a backslash escape the quote inside single quotes too, so
+# `'abc\'` does not close there: the value runs on to the next `'`, taking the
+# lines between with it. A password ending in `\` written that way leaves
+# compose without the CADDY_PORT below it, so the CLI must not read one either.
+scaffold ports-sq-escape "ADMIN_PASS='abc\\'
+CADDY_PORT=7788
+SITE_URL='https://x y'"
+listen ports-sq-escape "$scratch/empty" -- --home "$scratch/ports-sq-escape" listen prod
+check "ports, \\' in single quotes: the line it swallows is not a port" \
+  "http://localhost:7700/listen" "$(opened_by ports-sq-escape)"
+# The same rule decides which line holds the pin: one inside a single-quoted
+# value that runs past an escaped quote is not the pin, so the real one moves.
+run_update sq-escape-pin "SUBWAVE_VERSION=$old_pin
+NOTES='it\\'s pinned by hand
+SUBWAVE_VERSION=0.0.9
+'"
+check "\\' in single quotes: the real pin moves" "SUBWAVE_VERSION=$target" \
+  "$(sed -n 3p "$scratch/sq-escape-pin/.env")"
+check "\\' in single quotes: the line inside the value is left alone" \
+  "SUBWAVE_VERSION=0.0.9" "$(sed -n 5p "$scratch/sq-escape-pin/.env")"
 
 # An unterminated quote takes the rest of the file into its value (compose
 # refuses such a file). The CLI must still answer at once: rescanning the value
