@@ -72,6 +72,11 @@ const CASES: Record<string, Case> = {
     on: ['2026-07-04'],
     off: ['2026-07-03', '2026-07-05'],
   },
+  'a one-day Feb 29 range rolls to Mar 1 in a common year, like a single day': {
+    f: { month: 2, day: 29, endMonth: 2, endDay: 29, windowDays: 2 },
+    on: ['2028-02-29', '2027-03-01'],
+    off: ['2027-02-28', '2027-03-02', '2028-02-28', '2028-03-01'],
+  },
   'half-set end reads as a single day with its window': {
     f: { month: 12, day: 25, windowDays: 1, endMonth: 1 },
     on: ['2026-12-24', '2026-12-26'],

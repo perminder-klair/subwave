@@ -1675,7 +1675,7 @@ const FESTIVAL_DAY_MS = 24 * 60 * 60 * 1000;
  * year boundaries, and a Feb 29 date rolls to Mar 1 in a common year
  * (Date.UTC). A ranged one compares month/day keys like the blocklist's
  * seasonal window: a Feb 29 start begins Mar 1 in a common year, and a Feb 29
- * end ends on Feb 28.
+ * end ends on Feb 28. A range of one day is that single day, window ignored.
  */
 export function festivalActiveOn(
   f: { month: number; day: number; windowDays?: number; endMonth?: unknown; endDay?: unknown },
@@ -1686,9 +1686,12 @@ export function festivalActiveOn(
     const k = today.month * 100 + today.day;
     const from = f.month * 100 + f.day;
     const to = end.month * 100 + end.day;
-    return from <= to ? k >= from && k <= to : k >= from || k <= to;
+    // A one-day range is that day with no window, judged below like any
+    // single day: a Feb 29 → Feb 29 range would otherwise start Mar 1 and end
+    // Feb 28, and never be on in a common year.
+    if (from !== to) return from <= to ? k >= from && k <= to : k >= from || k <= to;
   }
-  const window = f.windowDays || 0;
+  const window = end ? 0 : f.windowDays || 0;
   const t = Date.UTC(today.year, today.month - 1, today.day);
   // Adjacent years cover a window reaching across Dec 31 / Jan 1.
   for (const yy of [today.year - 1, today.year, today.year + 1]) {
